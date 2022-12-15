@@ -34,10 +34,17 @@ public:
             string paramName = "In";
             if(i > 0) paramName += ofToString(i+1);
             addParameter(p.set(paramName, std::make_pair(nullptr, nullptr)), ofxOceanodeParameterFlags_DisableOutConnection);
-            listeners.push(p.newListener([this, paramName](std::pair<ofxSCBus*, ofxSCSynth*> &pair){
+            listeners.push(p.newListener([this](std::pair<ofxSCBus*, ofxSCSynth*> &pair){
                 if(pair.first != nullptr){
-                    synth->order(3, pair.second->nodeID);
-                    synth->set(ofToLower(paramName), pair.first->index);
+                    for(int i = ins-1; i >= 0; i--){
+                        string paramName = "In";
+                        if(i > 0) paramName += ofToString(i+1);
+                        auto p = getParameter<std::pair<ofxSCBus*, ofxSCSynth*>>(paramName);
+                        if(p->first != nullptr){
+                            synth->order(3, p->second->nodeID);
+                            synth->set(ofToLower(paramName), p->first->index);
+                        }
+                    }
                     for(int i = 0; i < outs; i++){
                         busesParams[i] = busesParams[i];
                     }
