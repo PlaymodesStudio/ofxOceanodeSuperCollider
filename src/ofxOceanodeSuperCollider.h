@@ -38,10 +38,15 @@ static void registerModels(ofxOceanode &o){
     }
 }
 static void registerType(ofxOceanode &o){
-    o.registerType<std::pair<ofxSCBus*, ofxSCSynth*>>("ScBus");
+    o.registerType<std::pair<ofxSCBus*, scSynthdef*>>("ScBus");
 }
 static void registerScope(ofxOceanode &o){
-    
+    o.registerScope<std::pair<ofxSCBus*, scSynthdef*>>([](ofxOceanodeAbstractParameter *p, ImVec2 size){
+        auto pair = p->cast<std::pair<ofxSCBus*, scSynthdef*>>().getParameter().get();
+        auto size2 = ImGui::GetContentRegionAvail();
+
+        ImGui::Text("%i, %s", pair.first->index, pair.second->nodeName().c_str());
+        });
 }
 static void registerCollection(ofxOceanode &o){
     registerModels(o);

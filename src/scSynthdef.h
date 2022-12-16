@@ -30,18 +30,18 @@ public:
         synth->create();
         
         for(int i = 0; i < ins; i++){
-            ofParameter<std::pair<ofxSCBus*, ofxSCSynth*>> p;
+            ofParameter<std::pair<ofxSCBus*, scSynthdef*>> p;
             string paramName = "In";
             if(i > 0) paramName += ofToString(i+1);
             addParameter(p.set(paramName, std::make_pair(nullptr, nullptr)), ofxOceanodeParameterFlags_DisableOutConnection);
-            listeners.push(p.newListener([this](std::pair<ofxSCBus*, ofxSCSynth*> &pair){
+            listeners.push(p.newListener([this](std::pair<ofxSCBus*, scSynthdef*> &pair){
                 if(pair.first != nullptr){
                     for(int i = ins-1; i >= 0; i--){
                         string paramName = "In";
                         if(i > 0) paramName += ofToString(i+1);
-                        auto p = getParameter<std::pair<ofxSCBus*, ofxSCSynth*>>(paramName);
+                        auto p = getParameter<std::pair<ofxSCBus*, scSynthdef*>>(paramName);
                         if(p->first != nullptr){
-                            synth->order(3, p->second->nodeID);
+                            synth->order(3, getRecursiveIDs(false));
                             synth->set(ofToLower(paramName), p->first->index);
                         }
                     }
@@ -59,7 +59,7 @@ public:
             string paramName = "Out";
             if(i > 0) paramName += ofToString(i+1);
             synth->set(ofToLower(paramName), buses[i]->index);
-            addOutputParameter(busesParams[i].set(paramName, std::make_pair(buses.back(), synth)));
+            addOutputParameter(busesParams[i].set(paramName, std::make_pair(buses.back(), this)));
         }
     }
     
@@ -103,11 +103,35 @@ public:
         }
     }
     
+    vector<int> getRecursiveIDs(bool itself = true){
+        vector<int> ids;
+        for(int i = ins-1; i >= 0; i--){
+            string paramName = "In";
+            if(i > 0) paramName += ofToString(i+1);
+            auto p = getParameter<std::pair<ofxSCBus*, scSynthdef*>>(paramName);
+            if(p->first != nullptr){
+                vector<int> newIds = p->second->getRecursiveIDs(true);
+                ids.insert(ids.end(), newIds.begin(), newIds.end());
+            }
+        }
+        
+        if(itself) ids.push_back(synth->nodeID);
+        
+        vector<int> uniqueIds;
+        for(auto &i : ids){
+            if(std::find(uniqueIds.begin(), uniqueIds.end(), i) == uniqueIds.end()){
+                uniqueIds.push_back(i);
+            }
+        }
+        
+        return uniqueIds;
+    }
+    
 private:
     ofEventListeners listeners;
     
     vector<ofxSCBus*> buses;
-    vector<ofParameter<std::pair<ofxSCBus*, ofxSCSynth*>>> busesParams;
+    vector<ofParameter<std::pair<ofxSCBus*, scSynthdef*>>> busesParams;
     
     std::string synthdefName;
     int size;

@@ -27,9 +27,9 @@ public:
         synth = new ofxSCSynth("output", server);
         synth->addToTail();
         
-        ofParameter<std::pair<ofxSCBus*, ofxSCSynth*>> p;
+        ofParameter<std::pair<ofxSCBus*, scSynthdef*>> p;
         addParameter(p.set("In", std::make_pair(nullptr, nullptr)), ofxOceanodeParameterFlags_DisableOutConnection);
-        listeners.push(p.newListener([this](std::pair<ofxSCBus*, ofxSCSynth*> &pair){
+        listeners.push(p.newListener([this](std::pair<ofxSCBus*, scSynthdef*> &pair){
             if(pair.first != nullptr){
                 synth->set("in", pair.first->index);
             }
