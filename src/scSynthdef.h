@@ -13,7 +13,7 @@
 
 class scSynthdef : public ofxOceanodeNodeModel {
 public:
-    scSynthdef(std::string name, int _size, std::string _params, int _ins = 0, int _outs = 1, ofxSCServer *_server = ofxSCServer::local()) : synthdefName(name), size(_size), params(_params), ins(_ins), outs(_outs), ofxOceanodeNodeModel("SC " + name){
+    scSynthdef(std::string name, int _inSize, int _outSize, std::string _params, int _ins = 0, int _outs = 1, int _bufs = 0, ofxSCServer *_server = ofxSCServer::local()) : synthdefName(name), inSize(_inSize), outSize(_outSize), params(_params), ins(_ins), outs(_outs), bufs(_bufs), ofxOceanodeNodeModel("SC " + name){
         server = _server;
         synth = nullptr;
     };
@@ -51,11 +51,33 @@ public:
                 }
             }));
         }
+        
+        buffersParams.resize(bufs);
+        for(int i = 0; i < bufs; i++){
+            ofParameter<vector<ofxSCBuffer*>> p;
+            string paramName = "Buf";
+            if(i > 0) paramName += ofToString(i+1);
+            addParameter(p.set(paramName, {}), ofxOceanodeParameterFlags_DisableOutConnection);
+            listeners.push(p.newListener([this, i](vector<ofxSCBuffer*> &buffers){
+                if(buffers.size() != 0){
+                    vector<int> indexs(buffers.size());
+                    for(int j = 0; j < buffers.size(); j++){
+                        indexs[j] = buffers[j]->index;
+                    }
+                    string bufnumName = "bufnum";
+                    if(i > 0) bufnumName += ofToString(i+1);
+                    if(indexs.size() == 1) synth->set(bufnumName, vector<int>(inSize, indexs[0]));
+                    synth->set(bufnumName, indexs);
+                }else{
+//                    synth->set(ofToLower(paramName), -1);
+                }
+            }));
+        }
         addParameters();
         buses.resize(outs);
         busesParams.resize(outs);
         for(int i = 0; i < outs; i++){
-            buses[i] = new ofxSCBus(RATE_AUDIO, size, server);
+            buses[i] = new ofxSCBus(RATE_AUDIO, outSize, server);
             string paramName = "Out";
             if(i > 0) paramName += ofToString(i+1);
             synth->set(ofToLower(paramName), buses[i]->index);
@@ -79,7 +101,7 @@ public:
                 addParameter(vf.set(ss[1], vector<float>(1, ofToFloat(ss[2])), vector<float>(1, ofToFloat(ss[3])), vector<float>(1, ofToFloat(ss[4]))));
                 string toSendName = ofToLower(ss[1]);
                 listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
-                    if(vf_.size() == 1) synth->set(toSendName, vector<float>(size, vf_[0]));
+                    if(vf_.size() == 1) synth->set(toSendName, vector<float>(inSize, vf_[0]));
                     else synth->set(toSendName, vf_);
                 }));
             }
@@ -96,7 +118,7 @@ public:
                 addParameter(vi.set(ss[1], vector<int>(1, ofToInt(ss[2])), vector<int>(1, ofToInt(ss[3])), vector<int>(1, ofToInt(ss[4]))));
                 string toSendName = ofToLower(ss[1]);
                 listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
-                    if(vi_.size() == 1) synth->set(toSendName, vector<int>(size, vi_[0]));
+                    if(vi_.size() == 1) synth->set(toSendName, vector<int>(inSize, vi_[0]));
                     else synth->set(toSendName, vi_);
                 }));
             }
@@ -133,11 +155,15 @@ private:
     vector<ofxSCBus*> buses;
     vector<ofParameter<std::pair<ofxSCBus*, scSynthdef*>>> busesParams;
     
+    vector<ofParameter<vector<ofxSCBuffer*>>> buffersParams;
+    
     std::string synthdefName;
-    int size;
+    int inSize;
+    int outSize;
     std::string params;
     int ins;
     int outs;
+    int bufs;
     
     ofxSCSynth *synth;
     ofxSCServer *server;

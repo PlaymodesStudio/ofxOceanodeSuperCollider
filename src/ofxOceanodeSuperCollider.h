@@ -13,6 +13,7 @@
 #include "scSynthdef.h"
 #include "scOut.h"
 #include "scTonal.h"
+#include "scBuffer.h"
 
 //TODO: Add a controller for changing parameters
 
@@ -24,21 +25,25 @@ static void registerModels(ofxOceanode &o){
     if(scServer == nullptr) ofLog() << "ERROR - Call start before registering";
     o.registerModel<scPitch>("SuperCollider");
     o.registerModel<scChord>("SuperCollider");
-    o.registerModel<scOut>("Supercollider", scServer);
+    o.registerModel<scOut>("SuperCollider", scServer);
+    o.registerModel<scBuffer>("SuperCollider", scServer);
     
     ofJson json = ofLoadJson("Synthdefs.json");
     for(ofJson::iterator it = json.begin(); it != json.end(); it++){
         o.registerModel<scSynthdef>("SuperCollider",
                                     it.key(),
-                                    it.value()["Size"],
+                                    it.value()["In_Size"],
+                                    it.value()["Out_Size"],
                                     it.value()["Params"],
                                     it.value()["In"],
                                     it.value()["Out"],
+                                    it.value()["Buf"],
                                     scServer);
     }
 }
 static void registerType(ofxOceanode &o){
     o.registerType<std::pair<ofxSCBus*, scSynthdef*>>("ScBus");
+    o.registerType<vector<ofxSCBuffer*>>("ScBuffer");
 }
 static void registerScope(ofxOceanode &o){
     o.registerScope<std::pair<ofxSCBus*, scSynthdef*>>([](ofxOceanodeAbstractParameter *p, ImVec2 size){
