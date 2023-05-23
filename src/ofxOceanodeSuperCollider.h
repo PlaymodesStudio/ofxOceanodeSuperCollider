@@ -1,12 +1,12 @@
 //
-//  ofxOceanodePlaymodes.h
+//  ofxOceanodeSuperCollider.h
 //
 //
 //  Created by Eduard Frigola Bagué on 14/01/2022.
 //
 
-#ifndef ofxOceanodePlaymodes_h
-#define ofxOceanodePlaymodes_h
+#ifndef ofxOceanodeSuperCollider_h
+#define ofxOceanodeSuperCollider_h
 
 #include "ofxOceanode.h"
 #include "scStart.h"
@@ -87,4 +87,4 @@ static void kill(){
 }
 }
 
-#endif /* ofxOceanodePlaymodes_h */
+#endif /* ofxOceanodeSuperCollider_h */
