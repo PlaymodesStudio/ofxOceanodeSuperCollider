@@ -16,13 +16,19 @@ public:
     scSynthdef(std::string name, int _inSize, int _outSize, std::string _params, int _ins = 0, int _outs = 1, int _bufs = 0, ofxSCServer *_server = ofxSCServer::local()) : synthdefName(name), inSize(_inSize), outSize(_outSize), params(_params), ins(_ins), outs(_outs), bufs(_bufs), ofxOceanodeNodeModel("SC " + name){
         server = _server;
         synth = nullptr;
+        isPresetLoading = false;
+//        cout << "Created " << this << endl;
     };
     ~scSynthdef(){
         if(synth != nullptr){
             synth->free();
             delete synth;
         }
-        for(auto b : buses) b->free();
+        for(auto &b : buses) b->free();
+        for(auto &b : busesParams){
+            b = make_pair(nullptr, nullptr);
+        }
+//        cout << "Destroyed " << this << endl;
     }
     
     void setup(){
@@ -35,7 +41,7 @@ public:
             if(i > 0) paramName += ofToString(i+1);
             addParameter(p.set(paramName, std::make_pair(nullptr, nullptr)), ofxOceanodeParameterFlags_DisableOutConnection);
             listeners.push(p.newListener([this](std::pair<ofxSCBus*, scSynthdef*> &pair){
-                if(pair.first != nullptr){
+                if(pair.first != nullptr && !isPresetLoading){
                     for(int i = ins-1; i >= 0; i--){
                         string paramName = "In";
                         if(i > 0) paramName += ofToString(i+1);
@@ -101,7 +107,7 @@ public:
                 addParameter(vf.set(ss[1], vector<float>(1, ofToFloat(ss[2])), vector<float>(1, ofToFloat(ss[3])), vector<float>(1, ofToFloat(ss[4]))));
                 string toSendName = ofToLower(ss[1]);
                 listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
-                    if(vf_.size() == 1) synth->set(toSendName, vector<float>(inSize, vf_[0]));
+                    if(vf_.size() == 1) synth->setMultiple(toSendName, vf_[0], inSize);
                     else synth->set(toSendName, vf_);
                 }));
             }
@@ -118,7 +124,7 @@ public:
                 addParameter(vi.set(ss[1], vector<int>(1, ofToInt(ss[2])), vector<int>(1, ofToInt(ss[3])), vector<int>(1, ofToInt(ss[4]))));
                 string toSendName = ofToLower(ss[1]);
                 listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
-                    if(vi_.size() == 1) synth->set(toSendName, vector<int>(inSize, vi_[0]));
+                    if(vi_.size() == 1) synth->setMultiple(toSendName, vi_[0], inSize);
                     else synth->set(toSendName, vi_);
                 }));
             }
@@ -149,6 +155,42 @@ public:
         return uniqueIds;
     }
     
+    
+    void triggerNodeOrder(){
+        for(int i = ins-1; i >= 0; i--){
+            string paramName = "In";
+            if(i > 0) paramName += ofToString(i+1);
+            auto p = getParameter<std::pair<ofxSCBus*, scSynthdef*>>(paramName);
+            if(p->first != nullptr){
+                synth->order(3, getRecursiveIDs(false));
+                synth->set(ofToLower(paramName), p->first->index);
+            }
+        }
+        for(int i = 0; i < outs; i++){
+            busesParams[i] = busesParams[i];
+        }
+    }
+    
+    void presetWillBeLoaded() override{
+        isPresetLoading = true;
+    }
+    
+    void activateConnections() override{
+//        isPresetLoading = false;
+    }
+    
+    void presetHasLoaded() override{
+        isPresetLoading = false;
+    }
+    
+    void activate() override{
+        synth->run(true);
+    }
+    
+    void deactivate() override{
+        synth->run(false);
+    }
+    
 private:
     ofEventListeners listeners;
     
@@ -164,6 +206,9 @@ private:
     int ins;
     int outs;
     int bufs;
+    
+    bool isSetup;
+    bool isPresetLoading;
     
     ofxSCSynth *synth;
     ofxSCServer *server;
