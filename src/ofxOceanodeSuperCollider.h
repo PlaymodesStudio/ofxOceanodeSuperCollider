@@ -14,6 +14,7 @@
 #include "scOut.h"
 #include "scTonal.h"
 #include "scBuffer.h"
+#include "scInfo.h"
 
 //TODO: Add a controller for changing parameters
 
@@ -27,6 +28,7 @@ static void registerModels(ofxOceanode &o){
     o.registerModel<scChord>("SuperCollider");
     o.registerModel<scOut>("SuperCollider", scServer);
     o.registerModel<scBuffer>("SuperCollider", scServer);
+    o.registerModel<scInfo>("SuperCollider", scServer);
     
     ofJson json = ofLoadJson("Synthdefs.json");
     for(ofJson::iterator it = json.begin(); it != json.end(); it++){
