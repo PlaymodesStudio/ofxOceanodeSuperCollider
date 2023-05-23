@@ -9,17 +9,24 @@
 #define scOut_h
 
 #include "ofxOceanodeNodeModel.h"
+#include "ofxOceanodeSuperColliderController.h"
+#include "scSynthdef.h"
 
 class scOut : public ofxOceanodeNodeModel {
 public:
-    scOut(ofxSCServer *_server = ofxSCServer::local()) : ofxOceanodeNodeModel("SC Output"){
+    scOut(ofxSCServer *_server = ofxSCServer::local(), ofxOceanodeSuperColliderController *_controller = nullptr) : ofxOceanodeNodeModel("SC Output"){
         server = _server;
+        controller = _controller;
         synth = nullptr;
+        triggerOrderInNextCycle = false;
     };
     ~scOut(){
         if(synth != nullptr){
             synth->free();
             delete synth;
+        }
+        if(controller != nullptr){
+            controller->removeOutput(this);
         }
     }
     
@@ -38,6 +45,32 @@ public:
         listeners.push(outputChannel.newListener([this](int &ch){
             synth->set("out", ch);
         }));
+        
+        if(controller != nullptr){
+            controller->addOutput(this);
+        }
+    }
+    
+    void update(ofEventArgs &a) override{
+        if(triggerOrderInNextCycle){
+            auto p = getParameter<std::pair<ofxSCBus*, scSynthdef*>>("In");
+            if(p->first != nullptr){
+                p->second->triggerNodeOrder();
+            }
+        }
+        triggerOrderInNextCycle = false;
+    }
+    
+    void setVolume(float volume){
+        synth->set("levels", volume);
+    }
+    
+    void setDelay(int delay){
+        synth->set("delay", delay);
+    }
+    
+    void presetHasLoaded() override{
+        triggerOrderInNextCycle = true;
     }
     
 private:
@@ -52,6 +85,8 @@ private:
     
     ofxSCSynth *synth;
     ofxSCServer *server;
+    ofxOceanodeSuperColliderController *controller;
+    bool triggerOrderInNextCycle;
 };
 
 #endif /* scOut_h */
