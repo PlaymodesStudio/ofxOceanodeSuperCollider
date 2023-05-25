@@ -121,11 +121,11 @@ public:
         json["ugensPlugins"] = ugensPlugins;
         json["autoStart"] = autoStart;
         
-        ofSavePrettyJson(ofToDataPath("Supercollider_config.json"), json);
+        ofSavePrettyJson(ofToDataPath("Supercollider/Supercollider_config.json"), json);
     }
     
     void loadConfig(){
-        ofJson json = ofLoadJson(ofToDataPath("Supercollider_config.json"));
+        ofJson json = ofLoadJson(ofToDataPath("Supercollider/Supercollider_config.json"));
         if(!json.empty()){
             udpPort = json["udpPort"];
             bindAddress = json["bindAddress"];

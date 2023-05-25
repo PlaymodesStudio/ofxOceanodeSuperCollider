@@ -39,7 +39,7 @@ void ofxOceanodeSuperColliderController::draw(){
         
         ofxOscMessage m;
         m.setAddress("/d_loadDir");
-        m.addStringArg(ofToDataPath("Synthdefs", true));
+        m.addStringArg(ofToDataPath("Supercollider/Synthdefs", true));
         m.addIntArg(0);
         scServer->sendMsg(m);
     }
@@ -59,7 +59,7 @@ void ofxOceanodeSuperColliderController::draw(){
     if(ImGui::Button("Load Defs")){
         ofxOscMessage m;
         m.setAddress("/d_loadDir");
-        m.addStringArg(ofToDataPath("Synthdefs", true));
+        m.addStringArg(ofToDataPath("Supercollider/Synthdefs", true));
         m.addIntArg(0);
         scServer->sendMsg(m);
     }

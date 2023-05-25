@@ -37,7 +37,7 @@ public:
     
     void setup(){
         ofFile file;
-        file.open("scales.txt");
+        file.open("Supercollider/Pitchclass/scales.txt");
         
         ofBuffer buffer = file.readToBuffer();
         vector<string> names;
@@ -94,7 +94,7 @@ public:
     
     void setup(){
         ofFile file;
-        file.open("chords.txt");
+        file.open("Supercollider/Pitchclass/chords.txt");
         
         ofBuffer buffer = file.readToBuffer();
         vector<string> names;

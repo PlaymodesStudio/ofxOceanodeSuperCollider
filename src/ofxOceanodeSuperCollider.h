@@ -36,7 +36,7 @@ static void registerModels(ofxOceanode &o){
     o.registerModel<scBuffer>("SuperCollider", scServer);
     o.registerModel<scInfo>("SuperCollider", scServer);
     
-    ofJson json = ofLoadJson("Synthdefs.json");
+    ofJson json = ofLoadJson("Supercollider/Synthdefs.json");
     for(ofJson::iterator it = json.begin(); it != json.end(); it++){
         o.registerModel<scSynthdef>("SuperCollider",
                                     it.key(),
@@ -67,7 +67,7 @@ static void registerCollection(ofxOceanode &o){
     registerScope(o);
 }
 
-static void setup(bool local = true, std::string ip = "127.0.0.1", int port = 57110, string synthdefsPath = ofToDataPath("Synthdefs", true)){
+static void setup(bool local = true, std::string ip = "127.0.0.1", int port = 57110, string synthdefsPath = ofToDataPath("Supercollider/Synthdefs", true)){
     
     scServer = new ofxSCServer(ip, port);
     
@@ -89,7 +89,7 @@ static void setup(bool local = true, std::string ip = "127.0.0.1", int port = 57
         {
             if (procTranslated == 1)
             {
-                sc.setup(ofToDataPath("Scsynth/aarch/bin/scsynth", true));
+                sc.setup(ofToDataPath("Supercollider/Scsynth/aarch/bin/scsynth", true));
             }
             else
             {
@@ -98,7 +98,7 @@ static void setup(bool local = true, std::string ip = "127.0.0.1", int port = 57
         }
         else if (typeWithABIInfoRemoved == CPU_TYPE_ARM)
         {
-            sc.setup(ofToDataPath("Scsynth/aarch/bin/scsynth", true));
+            sc.setup(ofToDataPath("Supercollider/Scsynth/aarch/bin/scsynth", true));
         }
         sleep(5);
         
