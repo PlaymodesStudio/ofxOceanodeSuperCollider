@@ -8,7 +8,7 @@
 #include "scStart.h"
 #include "ofxSCServer.h"
 #include "imgui.h"
-#include "scOut.h"
+#include "scServer.h"
 
 ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOceanodeBaseController("SuperCollider"){
     audioDevice = 0;
@@ -22,8 +22,8 @@ void ofxOceanodeSuperColliderController::setScEngine(scStart* _scEngine){
     sc = _scEngine;
 }
 
-void ofxOceanodeSuperColliderController::setScServer(ofxSCServer* _scServer){
-    scServer = _scServer;
+void ofxOceanodeSuperColliderController::setScServer(ofxSCServer* _server){
+    server = _server;
 }
 
 void ofxOceanodeSuperColliderController::draw(){
@@ -35,20 +35,20 @@ void ofxOceanodeSuperColliderController::draw(){
         m2.addIntArg(1);
         m2.addIntArg(0);
         m2.addIntArg(0);
-        scServer->sendMsg(m2);
+        server->sendMsg(m2);
         
         ofxOscMessage m;
         m.setAddress("/d_loadDir");
         m.addStringArg(ofToDataPath("Supercollider/Synthdefs", true));
         m.addIntArg(0);
-        scServer->sendMsg(m);
+        server->sendMsg(m);
     }
     
     ImGui::SameLine();
     if(ImGui::Button("Kill Server")){
         ofxOscMessage m;
         m.setAddress("/quit");
-        scServer->sendMsg(m);
+        server->sendMsg(m);
         sc->killServer();
     }
     
@@ -61,13 +61,13 @@ void ofxOceanodeSuperColliderController::draw(){
         m.setAddress("/d_loadDir");
         m.addStringArg(ofToDataPath("Supercollider/Synthdefs", true));
         m.addIntArg(0);
-        scServer->sendMsg(m);
+        server->sendMsg(m);
     }
     
     ImGui::Separator();
     
     if(ImGui::SliderFloat("Volume", &volume, 0, 1)){
-        for(auto &n : outputNodes){
+        for(auto &n : outputServers){
             n->setVolume(volume);
         }
     }
@@ -75,14 +75,14 @@ void ofxOceanodeSuperColliderController::draw(){
     ImGui::SameLine();
     
     if(ImGui::Checkbox("Mute", &mute)){
-        for(auto &n : outputNodes){
+        for(auto &n : outputServers){
             if(mute) n->setVolume(0);
             else n->setVolume(volume);
         }
     }
     
     if(ImGui::SliderInt("Delay", &delay, 0, 5000)){
-        for(auto &n : outputNodes){
+        for(auto &n : outputServers){
             n->setDelay(delay);
         }
     }
@@ -157,7 +157,7 @@ void ofxOceanodeSuperColliderController::draw(){
         m.setAddress("/dumpOSC");
         if(dumpOsc) m.addIntArg(1);
         else m.addIntArg(0);
-        scServer->sendMsg(m);
+        server->sendMsg(m);
     }
     
     if(ImGui::Button("Save Settings")){
@@ -173,14 +173,15 @@ void ofxOceanodeSuperColliderController::reloadAudioDevices(){
     for(auto &d : devices) audioDeviceNames.push_back(d.name);
 }
 
-void ofxOceanodeSuperColliderController::addOutput(scOut* node){
-    outputNodes.push_back(node);
-    if(mute) node->setVolume(0);
-    else node->setVolume(volume);
-    node->setDelay(delay);
+
+void ofxOceanodeSuperColliderController::addServer(scServer* server){
+    outputServers.push_back(server);
+    if(mute) server->setVolume(0);
+    else server->setVolume(volume);
+    server->setDelay(delay);
 }
 
-void ofxOceanodeSuperColliderController::removeOutput(scOut* node){
-    outputNodes.erase(std::remove(outputNodes.begin(), outputNodes.end(), node), outputNodes.end());
+void ofxOceanodeSuperColliderController::removeServer(scServer* server){
+    outputServers.erase(std::remove(outputServers.begin(), outputServers.end(), server), outputServers.end());
 
 }

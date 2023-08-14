@@ -7,11 +7,12 @@
 #ifndef ofxOceanodeSuperColliderController_h
 #define ofxOceanodeSuperColliderController_h
 
+
 #include "ofxOceanodeBaseController.h"
 
 class scStart;
 class ofxSCServer;
-class scOut;
+class scServer;
 
 class ofxOceanodeSuperColliderController : public ofxOceanodeBaseController{
 public:
@@ -22,8 +23,8 @@ public:
     void setScServer(ofxSCServer* _scServer);
     void draw();
     
-    void addOutput(scOut* node);
-    void removeOutput(scOut* node);
+    void addServer(scServer* server);
+    void removeServer(scServer* server);
     
 private:
     
@@ -36,8 +37,8 @@ private:
     bool dumpOsc = false;
     vector<string> audioDeviceNames;
     scStart* sc;
-    ofxSCServer* scServer;
-    vector<scOut*> outputNodes;
+    ofxSCServer* server;
+    vector<scServer*> outputServers;
 };
 
 #endif /* ofxOceanodeSuperColliderController_h */
