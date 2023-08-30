@@ -15,6 +15,24 @@ scSynthdef::scSynthdef(synthdefDesc _description) : description(_description), s
 void scSynthdef::setup(){
     scNode::addInputs(description.numInputs);
     addParameter(numChannels.set("N Chan", 1, 1, 100));
+    
+    buffers.resize(description.numBuffers);
+    for(int i = 0; i < buffers.size(); i++){
+        string paramName = "Buf";
+        if(i > 0) paramName += ofToString(i+1);
+        addParameter(buffers[i].set(paramName, {0}, {0}, {INT_MAX}), ofxOceanodeParameterFlags_DisableOutConnection);
+        listeners.push(buffers[i].newListener([this, i, paramName](vector<int> &buffs){
+            for(auto synthServer : synths){
+                if(buffs.size() != 0){
+                    for(int i = 0; i < synthServer.second.size(); i++){
+                        if(buffs.size() == 1) synthServer.second[i]->set(ofToLower(paramName), buffs[0]);
+                        else synthServer.second[i]->set(ofToLower(paramName), buffs[i]);
+                    }
+                }
+            }
+        }));
+    }
+    
     oldNumChannels = numChannels;
     listeners.push(numChannels.newListener([this](int &i){
         if(oldNumChannels != numChannels){
@@ -600,8 +618,8 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     currentDescription.name = getStringFromData(pdata[1]["name"]);
     currentDescription.type = getStringFromData(pdata[1]["type"]);
     currentDescription.numInputs = ofToInt(getStringFromData(pdata[1]["numInputs"]));
+    currentDescription.numBuffers = ofToInt(getStringFromData(pdata[1]["numBuffers"]));
     if(pdata.size() > 5){
-        auto specsList = pdata[5];//getMapFromData(pdata[1]["specs"]);
         for(auto spec : specsList){
             currentDescription.params[spec.first] = getMapFromData(spec.second);
         }

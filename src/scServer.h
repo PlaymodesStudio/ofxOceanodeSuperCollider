@@ -13,12 +13,13 @@
 
 class ofxSCServer;
 class ofxSCSynth;
+class ofxSCBuffer;
 class scNode;
 class ofxOceanodeSuperColliderController;
 
 class scServer : public ofxOceanodeNodeModel {
 public:
-    scServer(ofxSCServer *_server, ofxOceanodeSuperColliderController *_controller, int index);
+    scServer(ofxSCServer *_server, ofxOceanodeSuperColliderController *_controller, int index, vector<string> wavs = {});
     ~scServer();
     
     void setup() override;
@@ -46,6 +47,9 @@ private:
     std::map<scNode*, std::map<int, vector<ofxSCSynth*>>> synthMap;
     
     vector<ofxSCBus*> busses;
+    
+    std::map<string, ofxSCBuffer*> buffers;
+    vector<string> wavs;
     ofxOceanodeSuperColliderController *controller;
 };
 

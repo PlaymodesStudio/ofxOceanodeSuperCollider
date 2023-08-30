@@ -15,7 +15,7 @@
 #include "scSynthdef.h"
 //#include "scOut.h"
 //#include "scTonal.h"
-//#include "scBuffer.h"
+#include "scBuffer.h"
 //#include "scInfo.h"
 #include "scServer.h"
 #include "scNode.h"
@@ -34,9 +34,7 @@ static void registerModels(ofxOceanode &o){
 //    o.registerModel<scPitch>("SuperCollider");
 //    o.registerModel<scChord>("SuperCollider");
 //    o.registerModel<scOut>("SuperCollider", scServer, controller.get());
-//    o.registerModel<scBuffer>("SuperCollider", scServer);
 //    o.registerModel<scInfo>("SuperCollider", scServer);
-    o.registerModel<scServer>("Supercollider", server, controller.get(), 1);
 //    o.registerModel<scNode>("Supercollider", "test");
 //    o.registerModel<scSynthdef>("Supercollider", "Simple", "vf:Pitch:40:0:127, vf:Level:0:0:1");
 //    o.registerModel<scSynthdef>("Supercollider", "Filter", "vf:Pitch:127:0:127, vf:Q:1:0:1");
@@ -62,18 +60,40 @@ static void registerModels(ofxOceanode &o){
     }else{
         dir.create();
     }
-//    ofJson json = ofLoadJson("Supercollider/Synthdefs.json");
-//    for(ofJson::iterator it = json.begin(); it != json.end(); it++){
-//        o.registerModel<scSynthdef>("SuperCollider",
-//                                    it.key(),
-//                                    it.value()["In_Size"],
-//                                    it.value()["Out_Size"],
-//                                    it.value()["Params"],
-//                                    it.value()["In"],
-//                                    it.value()["Out"],
-//                                    it.value()["Buf"]
-//                                    );
-//    }
+    
+    std::function<vector<string>(ofDirectory dir)> readWavsInDirectory = [&o, &readWavsInDirectory](ofDirectory dir){
+        vector<string> wavs;
+        for(auto f : dir.getFiles()){
+            if(f.isDirectory()){
+                ofDirectory dir2(f.path());
+                dir2.sort();
+                vector<string> newWavs = readWavsInDirectory(dir2);
+                wavs.insert(wavs.end(), newWavs.begin(), newWavs.end());
+            }else{
+                //Get synthdefs
+                string wavPath = f.getAbsolutePath();
+                ofStringReplace(wavPath, ofToDataPath("Supercollider/Samples", true), "");
+                wavs.push_back(wavPath);
+            }
+        }
+        return wavs;
+    };
+    
+    ofDirectory dir2("Supercollider/Samples");
+    dir2.sort();
+    vector<string> wavs;
+    if(dir2.exists()){
+        wavs = readWavsInDirectory(dir2);
+    }else{
+        dir2.create();
+    }
+
+    int z = 0;
+    z = z+1;
+    
+    
+    o.registerModel<scBuffer>("SuperCollider", wavs);
+    o.registerModel<scServer>("Supercollider", server, controller.get(), 1, wavs);
 }
 static void registerType(ofxOceanode &o){
     o.registerType<scNode*>("ScBus");

@@ -20,6 +20,7 @@ struct synthdefDesc{
     string name;
     string type;
     int numInputs;
+    int numBuffers;
     map<string, map<string, string>> params;
 };
 
@@ -75,6 +76,8 @@ private:
     int oldNumChannels;
     std::map<ofxSCServer*, int> outputBus;
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
+    
+    vector<ofParameter<vector<int>>> buffers;
     
     ofParameter<bool> doNotDistributeInputs;
     ofParameter<bool> doNotDistributeOutputs;

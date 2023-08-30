@@ -11,10 +11,11 @@
 #include "ofxSuperCollider.h"
 #include "scNode.h"
 
-scServer::scServer(ofxSCServer *_server, ofxOceanodeSuperColliderController *_controller, int index) : ofxOceanodeNodeModel("SC Server " + ofToString(index)){
+scServer::scServer(ofxSCServer *_server, ofxOceanodeSuperColliderController *_controller, int index, vector<string> _wavs) : ofxOceanodeNodeModel("SC Server " + ofToString(index)){
     server = _server;
     controller = _controller;
     synth = nullptr;
+    wavs = _wavs;
 };
 
 scServer::~scServer(){
@@ -43,6 +44,11 @@ void scServer::setup(){
     
     if(controller != nullptr){
         controller->addServer(this);
+    }
+    
+    for(auto &w : wavs){
+        buffers[w] = new ofxSCBuffer(0, 0, server);
+        buffers[w]->readChannel(ofToDataPath("Supercollider/Samples/" + w, true), {0});
     }
 }
 
