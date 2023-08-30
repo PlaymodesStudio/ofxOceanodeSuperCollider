@@ -603,11 +603,11 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     std::function<std::map<string, string>(string)> getMapFromData = [odata, pdata, &getMapFromData](string checkvalue) -> std::map<string, string>{
         if(ofStringTimesInString(checkvalue, "o[")){
             checkvalue.erase(0, 2); //remove o[
-            checkvalue.erase(1); //remove ]
+            checkvalue.erase(checkvalue.length()-1); //remove ]
             return getMapFromData(odata[ofToInt(checkvalue)]);
         }else if(ofStringTimesInString(checkvalue, "p[")){
             checkvalue.erase(0, 2); //remove o[
-            checkvalue.erase(1); //remove ]
+            checkvalue.erase(checkvalue.length()-1); //remove ]
             return pdata[ofToInt(checkvalue)];
         }
         return map<string, string>();
@@ -620,6 +620,13 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     currentDescription.numInputs = ofToInt(getStringFromData(pdata[1]["numInputs"]));
     currentDescription.numBuffers = ofToInt(getStringFromData(pdata[1]["numBuffers"]));
     if(pdata.size() > 5){
+        auto specsPos = pdata[1]["specs"];
+        specsPos.erase(0, 2); //remove o[
+        specsPos.erase(1); //remove ]
+        specsPos = pdata[ofToInt(specsPos)]["array"];
+        specsPos.erase(0, 2); //remove o[
+        specsPos.erase(1); //remove ]
+        auto specsList = pdata[ofToInt(specsPos)];//getMapFromData(pdata[1]["specs"]);
         for(auto spec : specsList){
             currentDescription.params[spec.first] = getMapFromData(spec.second);
         }
