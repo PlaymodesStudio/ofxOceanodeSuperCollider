@@ -16,6 +16,7 @@
 //#include "scOut.h"
 //#include "scTonal.h"
 #include "scBuffer.h"
+#include "scCustomBuffer.h"
 //#include "scInfo.h"
 #include "scServer.h"
 #include "scNode.h"
@@ -93,6 +94,7 @@ static void registerModels(ofxOceanode &o){
     
     
     o.registerModel<scBuffer>("SuperCollider", wavs);
+    o.registerModel<scCustomBuffer>("SuperCollider", server);
     o.registerModel<scServer>("Supercollider", server, controller.get(), 1, wavs);
 }
 static void registerType(ofxOceanode &o){
