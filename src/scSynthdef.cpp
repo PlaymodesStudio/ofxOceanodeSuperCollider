@@ -454,6 +454,17 @@ void scSynthdef::setup(){
         
     }));
     
+    listeners.push(resendParams.newListener([this](){
+        for(auto synthServer : synths){
+            for(int b = 0; b < buffers.size(); b++){
+                for(int i = 0; i < synthServer.second.size(); i++){
+                    if(buffers[b]->size() == 1) synthServer.second[i]->set(ofToLower(buffers[b].getName()), buffers[b]->at(0));
+                    else synthServer.second[i]->set(ofToLower(buffers[b].getName()), buffers[b]->at(i));
+                }
+            }
+        }
+    }));
+    
     scNode::addOutput();
 }
 
