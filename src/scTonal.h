@@ -11,25 +11,6 @@
 #include "ofxOceanodeNodeModel.h"
 #include "ofxSuperCollider.h"
 
-//class scTonal : public ofxOceanodeNodeModel{
-//public:
-//    scTonal() : ofxOCeanodeNodeModel("SC Tonal"){}
-//    
-//    void setup(){
-//        
-//    }
-//    
-//private:
-//    template <typename T>
-//    auto getValueForPosition(const vector<T> &param, int index) -> T{
-//        if(param.size() == 1 || param.size() <= index){
-//            return param[0];
-//        }
-//        else{
-//            return param[index];
-//        }
-//    };
-//};
 
 class scPitch : public ofxOceanodeNodeModel{
 public:
@@ -53,21 +34,9 @@ public:
         }
         
         
-        //addParameter(input.set("Input", {0}, {0}, {INT_MAX}));
         addParameterDropdown(mode, "Class", 0, names);
         addOutputParameter(modeSize.set("Size", 5, 0, INT_MAX));
         addOutputParameter(output.set("Output", {0}, {0}, {INT_MAX}));
-        
-        listeners.push(input.newListener([this](vector<int> &v){
-//            tempOut = v;
-//            for(int i = 0; i < tempOut.size(); i++){
-//                int nota = scales[mode].second[tempOut[i] % scales[mode].second.size()];
-//                int octava = tempOut[i] / scales[mode].second.size();
-//                int scaleNumOctaves = floor(scales[mode].second.back() / 12) + 1;
-//                tempOut[i] = nota + (octava * 12 * scaleNumOctaves);
-//            }
-//            output = tempOut;
-        }));
         
         listeners.push(mode.newListener([this](int &m){
             modeSize = scales[mode].second.size();
@@ -76,7 +45,6 @@ public:
     }
     
 private:
-    ofParameter<vector<int>> input;
     ofParameter<int>    mode;
     ofParameter<int>    modeSize;
     ofParameter<vector<int>> output;
@@ -110,23 +78,10 @@ public:
         }
         
         
-        //addParameter(input.set("Input", {0}, {0}, {INT_MAX}));
         addParameterDropdown(mode, "Chord", 0, names);
         addParameter(fold.set("Fold", false));
         addOutputParameter(modeSize.set("Size", 5, 0, INT_MAX));
         addOutputParameter(output.set("Output", {0}, {0}, {INT_MAX}));
-        
-        listeners.push(input.newListener([this](vector<int> &v){
-//            tempOut = v;
-//            //TODO: Acords de mes de una octava
-//            for(int i = 0; i < tempOut.size(); i++){
-//                int nota = chords[mode].second[tempOut[i] % chords[mode].second.size()];
-//                int octava = tempOut[i] / chords[mode].second.size();
-//                int scaleNumOctaves = floor(chords[mode].second.back() / 12) + 1;
-//                tempOut[i] = nota + (octava * 12 * scaleNumOctaves);
-//            }
-//            output = tempOut;
-        }));
         
         listeners.push(mode.newListener([this](int &m){
             compute();
@@ -150,7 +105,6 @@ public:
     }
     
 private:
-    ofParameter<vector<int>> input;
     ofParameter<int>    mode;
     ofParameter<int>    modeSize;
     ofParameter<vector<int>> output;

@@ -76,6 +76,7 @@ void scServer::recomputeGraph(){
         if(input.get() != nullptr)
             while(input.get()->appendOrderedNodes(newNodesList, nodeChilds));
         
+        //TODO: Only delete non existing nodes
         for(auto node : nodesList){
 //            if(std::find(newNodesList.begin(), newNodesList.end(), node) == newNodesList.end()){
                 node->free(server);
@@ -85,18 +86,9 @@ void scServer::recomputeGraph(){
         }
         
         nodesList = newNodesList;
-    //    ofLog() << " ----- Server " << getNumIdentifier() << " -----";
-//        for(auto n : nodesList) ofLog() << n->getNumIdentifier();
-    //    ofLog() << " -------------------";
         
         std::map<scNode*, vector<scNode*>> connections;
-//        for(auto n : nodesList){
-//            n->getConnections(connections);
-//        }
-        
-//        for(auto n : nodesList){
-//            n->createSynth(server);
-//        }
+
         for (auto it = nodesList.rbegin(); it != nodesList.rend(); ++it) {
             (*it)->getConnections(connections);
             (*it)->createSynth(server);
@@ -113,15 +105,7 @@ void scServer::recomputeGraph(){
             c.first->setOutputBus(server, busref->index);
             for(auto &dest : c.second){
                 dest->setInputBus(server, c.first, busref->index);
-    //            ofLog() << c.first->getNumIdentifier() << " ---- " << dest->getNumIdentifier();
             }
         }
     }
-    
-    
-    
-    
-    
-    int x = 0;
-    x+1;
 }

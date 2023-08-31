@@ -12,8 +12,6 @@
 
 class scServer;
 class ofxSCServer;
-class scSynth;
-class ofxSCSynth;
 
 class scNode : public ofxOceanodeNodeModel {
 public:

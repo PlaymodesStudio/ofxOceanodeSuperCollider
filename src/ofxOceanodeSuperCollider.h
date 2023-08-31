@@ -36,10 +36,6 @@ static void registerModels(ofxOceanode &o){
 //    o.registerModel<scChord>("SuperCollider");
 //    o.registerModel<scOut>("SuperCollider", scServer, controller.get());
 //    o.registerModel<scInfo>("SuperCollider", scServer);
-//    o.registerModel<scNode>("Supercollider", "test");
-//    o.registerModel<scSynthdef>("Supercollider", "Simple", "vf:Pitch:40:0:127, vf:Level:0:0:1");
-//    o.registerModel<scSynthdef>("Supercollider", "Filter", "vf:Pitch:127:0:127, vf:Q:1:0:1");
-//    o.registerModel<scSynthdef>("Supercollider", "Stereomix", "");
     
     
     std::function<void(ofDirectory dir)> readSynthdefsInDirectory = [&o, &readSynthdefsInDirectory](ofDirectory dir){
