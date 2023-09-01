@@ -12,6 +12,8 @@
 #include <vector>
 #include <map>
 #include <string>
+#include <ofConstants.h>
+#include <ofEvent.h>
 
 class ofxSCServer;
 class ofxSCSynth;
@@ -65,8 +67,10 @@ public:
     void setAudioDevices(std::vector<std::string> audioDevices){audioDeviceNames = audioDevices;}
     
     ofxSCServer* getServer(){return server;}
+    int getOutputBusForNode(scNode* node);
     
     scPreferences preferences;
+    ofEvent<void> graphComputed;
 private:
 
     std::vector<scNode*> connectedNodes; //List of all nodes
@@ -78,6 +82,8 @@ private:
     std::map<scNode*, std::map<int, std::vector<ofxSCSynth*>>> synthMap;
     
     std::vector<ofxSCBus*> busses;
+    std::map<scNode*, ofxSCBus*> outputBussesRefToNode;
+    std::map<scNode*, std::vector<ofxSCBus*>> inputBussesRefToNode;
     
     std::map<std::string, ofxSCBuffer*> buffers;
     std::vector<std::string> wavs;

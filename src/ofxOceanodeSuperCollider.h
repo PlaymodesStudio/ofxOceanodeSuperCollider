@@ -17,7 +17,7 @@
 //#include "scTonal.h"
 #include "scBuffer.h"
 #include "scCustomBuffer.h"
-//#include "scInfo.h"
+#include "scInfo.h"
 #include "scServer.h"
 #include "scNode.h"
 #include "ofxOceanodeSuperColliderController.h"
@@ -59,7 +59,6 @@ static void registerModels(ofxOceanode &o, vector<string> wavs){
 //    o.registerModel<scPitch>("SuperCollider");
 //    o.registerModel<scChord>("SuperCollider");
 //    o.registerModel<scOut>("SuperCollider", scServer, controller.get());
-//    o.registerModel<scInfo>("SuperCollider", scServer);
     
     
     std::function<void(ofDirectory dir)> readSynthdefsInDirectory = [&o, &readSynthdefsInDirectory](ofDirectory dir){
@@ -91,6 +90,7 @@ static void registerModels(ofxOceanode &o, vector<string> wavs){
     
     auto controller = o.getController<ofxOceanodeSuperColliderController>();
 
+    o.registerModel<scInfo>("SuperCollider", controller->getServers());
     o.registerModel<scBuffer>("SuperCollider", wavs);
     o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
     o.registerModel<scServer>("SuperCollider", controller->getServers());

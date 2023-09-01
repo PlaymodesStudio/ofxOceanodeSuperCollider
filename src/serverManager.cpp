@@ -248,16 +248,31 @@ void serverManager::recomputeGraph(scNode* firstNode){
         
         for(auto b : busses) b->free();
         busses.clear();
+        outputBussesRefToNode.clear();
+        inputBussesRefToNode.clear();
         
         auto busref = busses.emplace_back(new ofxSCBus(RATE_AUDIO, MAX_NODE_CHANNELS, server)); //From server to first node
         firstNode->setOutputBus(server, busref->index);
+        outputBussesRefToNode[firstNode] = busref;
         synth->set("in", busref->index);
         for(auto &c : connections){
             busref = busses.emplace_back(new ofxSCBus(RATE_AUDIO, MAX_NODE_CHANNELS, server));
             c.first->setOutputBus(server, busref->index);
+            outputBussesRefToNode[c.first] = busref;
             for(auto &dest : c.second){
                 dest->setInputBus(server, c.first, busref->index);
+                inputBussesRefToNode[dest].push_back(busref);
             }
         }
+    }
+    graphComputed.notify();
+}
+
+int serverManager::getOutputBusForNode(scNode* node){
+    if(outputBussesRefToNode.count(node) == 1){
+        return outputBussesRefToNode[node]->index;
+    }
+    else{
+        return -1;
     }
 }
