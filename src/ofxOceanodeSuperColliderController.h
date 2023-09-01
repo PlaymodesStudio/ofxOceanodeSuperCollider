@@ -12,33 +12,34 @@
 
 class scStart;
 class ofxSCServer;
-class scServer;
+class serverManager;
+class scPreferences;
 
 class ofxOceanodeSuperColliderController : public ofxOceanodeBaseController{
 public:
     ofxOceanodeSuperColliderController();
     ~ofxOceanodeSuperColliderController(){};
     
-    void setScEngine(scStart* _scEngine);
-    void setScServer(ofxSCServer* _scServer);
+    void createServers(vector<string> wavs);
+    
+    void setup();
     void draw();
     
-    void addServer(scServer* server);
-    void removeServer(scServer* server);
+    void killServers();
+
+    void saveConfig(std::string filepath, scPreferences prefs);
+    void loadConfig(std::string filepath, scPreferences &prefs);
     
+    vector<serverManager*> getServers(){return outputServers;}
 private:
     
     void reloadAudioDevices();
     
-    int audioDevice;
     float volume;
     bool mute;
     int delay;
-    bool dumpOsc = false;
     vector<string> audioDeviceNames;
-    scStart* sc;
-    ofxSCServer* server;
-    vector<scServer*> outputServers;
+    vector<serverManager*> outputServers;
 };
 
 #endif /* ofxOceanodeSuperColliderController_h */

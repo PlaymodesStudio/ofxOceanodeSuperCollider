@@ -8,65 +8,58 @@
 #include "scStart.h"
 #include "ofxSCServer.h"
 #include "imgui.h"
-#include "scServer.h"
+#include "serverManager.h"
 
 ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOceanodeBaseController("SuperCollider"){
-    audioDevice = 0;
     volume = 0;
     mute = false;
     delay = 0;
     reloadAudioDevices();
 }
 
-void ofxOceanodeSuperColliderController::setScEngine(scStart* _scEngine){
-    sc = _scEngine;
+void ofxOceanodeSuperColliderController::createServers(vector<string> wavs){
+    ofDirectory dir;
+    dir.open(ofToDataPath("Supercollider/Config/"));
+    if(dir.exists()){
+        dir.sort();
+        for(auto f : dir.getFiles()){
+            outputServers.push_back(new serverManager(wavs));
+            loadConfig(f.getAbsolutePath(), outputServers.back()->preferences);
+            outputServers.back()->setAudioDevices(audioDeviceNames);
+        }
+    }else{
+        dir.createDirectory("Supercollider/Config/");
+    }
+    //If no config found, create just one server with default settings
+    if(outputServers.size() == 0){
+        outputServers.push_back(new serverManager());
+        outputServers.back()->setAudioDevices(audioDeviceNames);
+    }
 }
 
-void ofxOceanodeSuperColliderController::setScServer(ofxSCServer* _server){
-    server = _server;
+void ofxOceanodeSuperColliderController::setup(){
+    for(auto s : outputServers) s->setup();
 }
 
 void ofxOceanodeSuperColliderController::draw(){
-    if(ImGui::Button("Boot Server")){
-        sc->start();
-        sleep(5);
-        ofxOscMessage m2;
-        m2.setAddress("/g_new");
-        m2.addIntArg(1);
-        m2.addIntArg(0);
-        m2.addIntArg(0);
-        server->sendMsg(m2);
-        
-        ofxOscMessage m;
-        m.setAddress("/d_loadDir");
-        m.addStringArg(ofToDataPath("Supercollider/Synthdefs", true));
-        m.addIntArg(0);
-        server->sendMsg(m);
+    if(ImGui::Button("Boot Servers")){
+        for(auto s : outputServers) s->boot();
     }
     
     ImGui::SameLine();
     if(ImGui::Button("Kill Server")){
-        ofxOscMessage m;
-        m.setAddress("/quit");
-        server->sendMsg(m);
-        sc->killServer();
+        for(auto s : outputServers) s->kill();
     }
     
     ImGui::SameLine();
     
-    ImGui::Checkbox("AutoStart", &sc->autoStart);
-    
     if(ImGui::Button("Load Defs")){
-        ofxOscMessage m;
-        m.setAddress("/d_loadDir");
-        m.addStringArg(ofToDataPath("Supercollider/Synthdefs", true));
-        m.addIntArg(0);
-        server->sendMsg(m);
+        for(auto s : outputServers) s->loadDefs();
     }
     
     ImGui::Separator();
     
-    if(ImGui::SliderFloat("Volume", &volume, 0, 1)){
+    if(ImGui::SliderFloat("Master Volume", &volume, 0, 1)){
         for(auto &n : outputServers){
             n->setVolume(volume);
         }
@@ -74,14 +67,14 @@ void ofxOceanodeSuperColliderController::draw(){
     
     ImGui::SameLine();
     
-    if(ImGui::Checkbox("Mute", &mute)){
+    if(ImGui::Checkbox("Master Mute", &mute)){
         for(auto &n : outputServers){
             if(mute) n->setVolume(0);
             else n->setVolume(volume);
         }
     }
     
-    if(ImGui::SliderInt("Delay", &delay, 0, 5000)){
+    if(ImGui::SliderInt("Master Delay", &delay, 0, 5000)){
         for(auto &n : outputServers){
             n->setDelay(delay);
         }
@@ -89,80 +82,22 @@ void ofxOceanodeSuperColliderController::draw(){
     
     ImGui::Separator();
     
-    ImGui::InputInt("Udp Port", &sc->udpPort);
-    
-    
-    int intaddress[4] = {0, 0, 0, 0};
-    vector<string> splitAddress = ofSplitString(sc->bindAddress, ".");
-    for(int i = 0; i < 4; i++){
-        intaddress[i] = ofToInt(splitAddress[i]);
-    }
-    if(ImGui::InputInt4("Bind Address", &intaddress[0])){
-        string newAddress = ofToString(intaddress[0]) + "."
-                            + ofToString(intaddress[1]) + "."
-                            + ofToString(intaddress[2]) + "."
-                            + ofToString(intaddress[3]) + ".";
-        sc->bindAddress = newAddress;
-    }
-    
-    ImGui::InputInt("Audio Busses", &sc->numAudioBusChannels);
-    ImGui::InputInt("Control Busses", &sc->numControlBusChannels);
-    ImGui::InputInt("Input Channels", &sc->numInputBusChannels);
-    ImGui::InputInt("Output Channels", &sc->numOutputBusChannels);
-    ImGui::InputInt("Block Size", &sc->blockSize);
-    ImGui::InputInt("Buffer Size", &sc->hardwareBufferSize);
-    ImGui::InputInt("Sampling Rate", &sc->hardwareSampleRate);
-    ImGui::InputInt("Num Buffers", &sc->numBuffers);
-    ImGui::InputInt("Max Nodes", &sc->maxNodes);
-    ImGui::InputInt("Max Synthdefs", &sc->maxSynthDefs);
-    ImGui::InputInt("Mem Size", &sc->memSize);
-    ImGui::InputInt("Num Wire Bufs", &sc->numWireBufs);
-    ImGui::InputInt("Num R Gens", &sc->numRGens);
-    ImGui::InputInt("Max Logins", &sc->maxLogins);
-    ImGui::InputFloat("Safety Clip Th", &sc->safetyClipThreshold);
-    
-    auto vector_getter = [](void* vec, int idx, const char** out_text)
-    {
-        auto& vector = *static_cast<std::vector<std::string>*>(vec);
-        if (idx < 0 || idx >= static_cast<int>(vector.size())) { return false; }
-        *out_text = vector.at(idx).c_str();
-        return true;
-    };
-    
-    if(ImGui::Combo("Audio Device", &audioDevice, vector_getter, static_cast<void*>(&audioDeviceNames), audioDeviceNames.size())){
-        if(audioDevice == 0){
-            sc->deviceName = "nil";
-        }else{
-            sc->deviceName = audioDeviceNames[audioDevice];
+    for(int i = 0; i < outputServers.size(); i++){
+        if(ImGui::TreeNode(("Server " + ofToString(i)).c_str())){
+            outputServers[i]->draw();
+            ImGui::TreePop();
         }
     }
     
-    //Device name;
-    bool verb = sc->verbosity;
-    if(ImGui::Checkbox("Verbosity", &verb)){
-        if(verb) sc->verbosity = 1;
-        else sc->verbosity = 0;
-    }
-
-    bool localUgens = (sc->ugensPlugins != "");
-    if(ImGui::Checkbox("LocalUgens", &localUgens)){
-        if(localUgens)
-            sc->ugensPlugins = ofToDataPath("Supercollider/Ugens", true);
-        else
-            sc->ugensPlugins = "";
-    }
-    
-    if(ImGui::Checkbox("Dump Osc", &dumpOsc)){
-        ofxOscMessage m;
-        m.setAddress("/dumpOSC");
-        if(dumpOsc) m.addIntArg(1);
-        else m.addIntArg(0);
-        server->sendMsg(m);
-    }
-    
     if(ImGui::Button("Save Settings")){
-        sc->saveConfig();
+        for(int i = 0; i < outputServers.size(); i++){
+            saveConfig("Supercollider/Config/ServerPreferences_" + ofToString(i) + ".json", outputServers[i]->preferences);
+        }
     }
+}
+
+void ofxOceanodeSuperColliderController::killServers(){
+    for(auto s : outputServers) s->kill();
 }
 
 
@@ -174,14 +109,56 @@ void ofxOceanodeSuperColliderController::reloadAudioDevices(){
 }
 
 
-void ofxOceanodeSuperColliderController::addServer(scServer* server){
-    outputServers.push_back(server);
-    if(mute) server->setVolume(0);
-    else server->setVolume(volume);
-    server->setDelay(delay);
+void ofxOceanodeSuperColliderController::saveConfig(std::string filepath, scPreferences prefs){
+    ofJson json;
+    json["local"] = prefs.local;
+    json["udpPort"] = prefs.udpPort;
+    json["bindAddress"] = prefs.bindAddress;
+    json["numControlBusChannels"] = prefs.numControlBusChannels;
+    json["numAudioBusChannels"] = prefs.numAudioBusChannels;
+    json["numInputBusChannels"] = prefs.numInputBusChannels;
+    json["numOutputBusChannels"] = prefs.numOutputBusChannels;
+    json["blockSize"] = prefs.blockSize;
+    json["hardwareBufferSize"] = prefs.hardwareBufferSize;
+    json["hardwareSampleRate"] = prefs.hardwareSampleRate;
+    json["numBuffers"] = prefs.numBuffers;
+    json["maxNodes"] = prefs.maxNodes;
+    json["maxSynthDefs"] = prefs.maxSynthDefs;
+    json["memSize"] = prefs.memSize;
+    json["numWireBufs"] = prefs.numWireBufs;
+    json["numRGens"] = prefs.numRGens;
+    json["maxLogins"] = prefs.maxLogins;
+    json["safetyClipThreshold"] = prefs.safetyClipThreshold;
+    json["deviceName"] = prefs.deviceName;
+    json["verbosity"] = prefs.verbosity;
+    json["ugensPlugins"] = prefs.ugensPlugins;
+    
+    ofSavePrettyJson(filepath, json);
 }
 
-void ofxOceanodeSuperColliderController::removeServer(scServer* server){
-    outputServers.erase(std::remove(outputServers.begin(), outputServers.end(), server), outputServers.end());
-
+void ofxOceanodeSuperColliderController::loadConfig(std::string filepath, scPreferences &prefs){
+    ofJson json = ofLoadJson(filepath);
+    if(!json.empty()){
+        prefs.local = json["local"];
+        prefs.udpPort = json["udpPort"];
+        prefs.bindAddress = json["bindAddress"];
+        prefs.numControlBusChannels = json["numControlBusChannels"];
+        prefs.numAudioBusChannels = json["numAudioBusChannels"];
+        prefs.numInputBusChannels = json["numInputBusChannels"];
+        prefs.numOutputBusChannels = json["numOutputBusChannels"];
+        prefs.blockSize = json["blockSize"];
+        prefs.hardwareBufferSize = json["hardwareBufferSize"];
+        prefs.hardwareSampleRate = json["hardwareSampleRate"];
+        prefs.numBuffers = json["numBuffers"];
+        prefs.maxNodes = json["maxNodes"];
+        prefs.maxSynthDefs = json["maxSynthDefs"];
+        prefs.memSize = json["memSize"];
+        prefs.numWireBufs = json["numWireBufs"];
+        prefs.numRGens = json["numRGens"];
+        prefs.maxLogins = json["maxLogins"];
+        prefs.safetyClipThreshold = json["safetyClipThreshold"];
+        prefs.deviceName = json["deviceName"];
+        prefs.verbosity = json["verbosity"];
+        prefs.ugensPlugins = json["ugensPlugins"];
+    }
 }

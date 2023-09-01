@@ -10,12 +10,12 @@
 
 #include "ofxOceanodeNodeModel.h"
 
-class ofxSCServer;
 class ofxSCBuffer;
+class serverManager;
 
 class scCustomBuffer : public ofxOceanodeNodeModel {
 public:
-    scCustomBuffer(ofxSCServer *_server);
+    scCustomBuffer(vector<serverManager*> outputServers);
     ~scCustomBuffer();
     
     void setup();
@@ -28,7 +28,7 @@ private:
     ofParameter<vector<float>> input;
     ofParameter<vector<int>> buffersParam;
     
-    vector<ofxSCServer*> servers;
+    vector<serverManager*> servers;
     vector<ofxSCBuffer*> buffers;
     
     int oldNumBuffers;

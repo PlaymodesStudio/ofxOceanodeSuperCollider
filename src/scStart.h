@@ -9,18 +9,21 @@
 #define scStart_h
 
 #include "ofThread.h"
+#include "serverManager.h"
 
 // this needs to be threaded otherwise it blocks the main thread
 class scStart : public ofThread{
   
 public:
-    scStart(){}
-      
-    void setup(string scPath_){
-        loadConfig();
-        scPath = scPath_;
-        if(autoStart){
-            startThread();
+    scStart(scPreferences _prefs){
+        prefs = _prefs;
+        
+        if(ofDirectory::doesDirectoryExist(ofToDataPath("Supercollider/Scsynth/bin/"))){
+            scPath = ofToDataPath("Supercollider/Scsynth/bin/scsynth", true);
+        }else if(ofDirectory::doesDirectoryExist("/Applications/SuperCollider.app/Contents/Resources/")){
+            scPath = "/Applications/SuperCollider.app/Contents/Resources/scsynth";
+        }else{
+            ofLog() << "No ScSynth found on the system";
         }
     }
     
@@ -29,31 +32,27 @@ public:
     }
       
     void threadedFunction(){
-        
         string termcmd = scPath;
-        termcmd += " -u " + ofToString(udpPort);
-        termcmd += " -B " + bindAddress;
-        termcmd += " -c " + ofToString(numControlBusChannels);
-        termcmd += " -a " + ofToString(numAudioBusChannels);
-        termcmd += " -i " + ofToString(numInputBusChannels);
-        termcmd += " -o " + ofToString(numOutputBusChannels);
-        termcmd += " -z " + ofToString(blockSize);
-        termcmd += " -Z " + ofToString(hardwareBufferSize);
-        termcmd += " -S " + ofToString(hardwareSampleRate);
-        termcmd += " -b " + ofToString(numBuffers);
-        termcmd += " -n " + ofToString(maxNodes);
-        termcmd += " -d " + ofToString(maxSynthDefs);
-        termcmd += " -m " + ofToString(memSize);
-        termcmd += " -w " + ofToString(numWireBufs);
-        termcmd += " -r " + ofToString(numRGens);
-        termcmd += " -l " + ofToString(maxLogins);
-        termcmd += " -s " + ofToString(safetyClipThreshold);
-        termcmd += " -H " + deviceName;
-        if(ugensPlugins != "") termcmd += " -U " + ugensPlugins;
+        termcmd += " -u " + ofToString(prefs.udpPort);
+        termcmd += " -B " + prefs.bindAddress;
+        termcmd += " -c " + ofToString(prefs.numControlBusChannels);
+        termcmd += " -a " + ofToString(prefs.numAudioBusChannels);
+        termcmd += " -i " + ofToString(prefs.numInputBusChannels);
+        termcmd += " -o " + ofToString(prefs.numOutputBusChannels);
+        termcmd += " -z " + ofToString(prefs.blockSize);
+        termcmd += " -Z " + ofToString(prefs.hardwareBufferSize);
+        termcmd += " -S " + ofToString(prefs.hardwareSampleRate);
+        termcmd += " -b " + ofToString(prefs.numBuffers);
+        termcmd += " -n " + ofToString(prefs.maxNodes);
+        termcmd += " -d " + ofToString(prefs.maxSynthDefs);
+        termcmd += " -m " + ofToString(prefs.memSize);
+        termcmd += " -w " + ofToString(prefs.numWireBufs);
+        termcmd += " -r " + ofToString(prefs.numRGens);
+        termcmd += " -l " + ofToString(prefs.maxLogins);
+        termcmd += " -s " + ofToString(prefs.safetyClipThreshold);
+        termcmd += " -H " + prefs.deviceName;
+        if(prefs.ugensPlugins != "") termcmd += " -U " + prefs.ugensPlugins;
  
-//        string termcmd = scPath + " -u 57110 -z 64 -Z 512 -w 2048 -a 1024 -n 16384 -m 65536 -i 2 -o 2 -R 0 -l 1";
-          
-//        cout << ofSystem(termcmd);
         FILE * ret = nullptr;
     #ifdef TARGET_WIN32
         ret = _popen(termcmd.c_str(),"r");
@@ -70,7 +69,6 @@ public:
             c = fgetc (ret);
             string line;
             while (c != EOF) {
-    //            std::cout << (char)c;
                 strret += c;
                 c = fgetc (ret);
                 if(c != '\n'){
@@ -97,87 +95,9 @@ public:
         waitForThread(true);
     }
     
-    void saveConfig(){
-        ofJson json;
-        json["udpPort"] = udpPort;
-        json["bindAddress"] = bindAddress;
-        json["numControlBusChannels"] = numControlBusChannels;
-        json["numAudioBusChannels"] = numAudioBusChannels;
-        json["numInputBusChannels"] = numInputBusChannels;
-        json["numOutputBusChannels"] = numOutputBusChannels;
-        json["blockSize"] = blockSize;
-        json["hardwareBufferSize"] = hardwareBufferSize;
-        json["hardwareSampleRate"] = hardwareSampleRate;
-        json["numBuffers"] = numBuffers;
-        json["maxNodes"] = maxNodes;
-        json["maxSynthDefs"] = maxSynthDefs;
-        json["memSize"] = memSize;
-        json["numWireBufs"] = numWireBufs;
-        json["numRGens"] = numRGens;
-        json["maxLogins"] = maxLogins;
-        json["safetyClipThreshold"] = safetyClipThreshold;
-        json["deviceName"] = deviceName;
-        json["verbosity"] = verbosity;
-        json["ugensPlugins"] = ugensPlugins;
-        json["autoStart"] = autoStart;
-        
-        ofSavePrettyJson(ofToDataPath("Supercollider/Supercollider_config.json"), json);
-    }
-    
-    void loadConfig(){
-        ofJson json = ofLoadJson(ofToDataPath("Supercollider/Supercollider_config.json"));
-        if(!json.empty()){
-            udpPort = json["udpPort"];
-            bindAddress = json["bindAddress"];
-            numControlBusChannels = json["numControlBusChannels"];
-            numAudioBusChannels = json["numAudioBusChannels"];
-            numInputBusChannels = json["numInputBusChannels"];
-            numOutputBusChannels = json["numOutputBusChannels"];
-            blockSize = json["blockSize"];
-            hardwareBufferSize = json["hardwareBufferSize"];
-            hardwareSampleRate = json["hardwareSampleRate"];
-            numBuffers = json["numBuffers"];
-            maxNodes = json["maxNodes"];
-            maxSynthDefs = json["maxSynthDefs"];
-            memSize = json["memSize"];
-            numWireBufs = json["numWireBufs"];
-            numRGens = json["numRGens"];
-            maxLogins = json["maxLogins"];
-            safetyClipThreshold = json["safetyClipThreshold"];
-            deviceName = json["deviceName"];
-            verbosity = json["verbosity"];
-            ugensPlugins = json["ugensPlugins"];
-            autoStart = json["autoStart"];
-        }
-    }
-      
-    int udpPort = 57110; //u (0-65535)
-    string bindAddress = "127.0.0.1"; //-B (set to 0.0.0.0 to listen to all)
-    int numControlBusChannels = 16384; //c
-    int numAudioBusChannels = 4096; //a
-    int numInputBusChannels = 2; //i
-    int numOutputBusChannels = 16; //o
-    int blockSize = 64; //z
-    int hardwareBufferSize = 64; //Z
-    int hardwareSampleRate = 44100; //S
-    int numBuffers = 1024; //b
-    int maxNodes = 1024; //n
-    int maxSynthDefs = 1024; //d
-    int memSize = 2048576; //m
-    int numWireBufs = 8192; //w
-    int numRGens = 64; //r
-    int maxLogins = 1; //l
-    float safetyClipThreshold = 1.26; //s
-    std::string deviceName = "nil"; //H
-    int verbosity = 0;
-    string ugensPlugins = ""; //-U (list of paths separated by :)
-    
-    
-    bool autoStart;
-    
 private:
     string scPath = "";
-
+    scPreferences prefs;
 };
 
 #endif /* scStart_h */

@@ -6,11 +6,12 @@
 //
 
 #include "scCustomBuffer.h"
-#include "ofxSuperCollider.h"
+#include "serverManager.h"
+#include "ofxSCBuffer.h"
+#include "ofxSCServer.h"
 
-scCustomBuffer::scCustomBuffer(ofxSCServer *_server) : ofxOceanodeNodeModel("SC Custom Buffer"){
-    servers.resize(1);
-    servers[0] = _server;
+scCustomBuffer::scCustomBuffer(vector<serverManager*> outputServers) : ofxOceanodeNodeModel("SC Custom Buffer"){
+    servers = outputServers;
 }
 
 scCustomBuffer::~scCustomBuffer(){
@@ -21,7 +22,7 @@ scCustomBuffer::~scCustomBuffer(){
 
 void scCustomBuffer::setup(){
     buffers.resize(1);
-    buffers[0] = new ofxSCBuffer(1024, 1, servers[0]);
+    buffers[0] = new ofxSCBuffer(1024, 1, servers[0]->getServer());
     buffers[0]->alloc();
     
     addParameter(numBuffers.set("Num Bufs", 1, 1, INT_MAX));
@@ -42,7 +43,7 @@ void scCustomBuffer::setup(){
                     m.addFloatArg((vf[i + (n * 1024)] * 2) - 1); //Sample value
                 }
                 
-                servers[0]->sendMsg(m);
+                servers[0]->getServer()->sendMsg(m);
             }
         }
     });
@@ -60,7 +61,7 @@ void scCustomBuffer::setup(){
             }else{
                 buffers.resize(numBuffers);
                 for(int j = oldNumBuffers; j < numBuffers; j++){
-                    buffers[j] = new ofxSCBuffer(1024, 1, servers[0]);
+                    buffers[j] = new ofxSCBuffer(1024, 1, servers[0]->getServer());
                     buffers[j]->alloc();
                 }
             }

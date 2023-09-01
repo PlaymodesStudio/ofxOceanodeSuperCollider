@@ -24,41 +24,9 @@
 #include "ofxSCServer.h"
 
 namespace ofxOceanodeSuperCollider{
-static ofxSCServer* server = nullptr;
-static scStart  sc;
 
-static void registerModels(ofxOceanode &o){
-    if(server == nullptr) ofLog() << "ERROR - Call start before registering";
-    auto controller = o.addController<ofxOceanodeSuperColliderController>();
-    controller->setScEngine(&sc);
-    controller->setScServer(server);
-//    o.registerModel<scPitch>("SuperCollider");
-//    o.registerModel<scChord>("SuperCollider");
-//    o.registerModel<scOut>("SuperCollider", scServer, controller.get());
-//    o.registerModel<scInfo>("SuperCollider", scServer);
-    
-    
-    std::function<void(ofDirectory dir)> readSynthdefsInDirectory = [&o, &readSynthdefsInDirectory](ofDirectory dir){
-        for(auto f : dir.getFiles()){
-            if(f.isDirectory()){
-                readSynthdefsInDirectory(ofDirectory(f.path()));
-            }else{
-                //Get synthdefs
-                if(f.getExtension() == "txarcmeta"){
-                    o.registerModel<scSynthdef>("Supercollider", scSynthdef::readAndCreateSynthdef(f.getAbsolutePath()));
-                }
-            }
-        }
-    };
-    
-    ofDirectory dir("Supercollider/Synthdefs");
-    if(dir.exists()){
-        readSynthdefsInDirectory(dir);
-    }else{
-        dir.create();
-    }
-    
-    std::function<vector<string>(ofDirectory dir)> readWavsInDirectory = [&o, &readWavsInDirectory](ofDirectory dir){
+static vector<string> loadSamples(){
+    std::function<vector<string>(ofDirectory dir)> readWavsInDirectory = [&readWavsInDirectory](ofDirectory dir){
         vector<string> wavs;
         for(auto f : dir.getFiles()){
             if(f.isDirectory()){
@@ -76,26 +44,59 @@ static void registerModels(ofxOceanode &o){
         return wavs;
     };
     
-    ofDirectory dir2("Supercollider/Samples");
-    dir2.sort();
+    ofDirectory dir("Supercollider/Samples");
+    dir.sort();
     vector<string> wavs;
-    if(dir2.exists()){
-        wavs = readWavsInDirectory(dir2);
+    if(dir.exists()){
+        wavs = readWavsInDirectory(dir);
     }else{
-        dir2.create();
+        dir.create();
     }
+    return wavs;
+}
 
-    int z = 0;
-    z = z+1;
+static void registerModels(ofxOceanode &o, vector<string> wavs){
+//    o.registerModel<scPitch>("SuperCollider");
+//    o.registerModel<scChord>("SuperCollider");
+//    o.registerModel<scOut>("SuperCollider", scServer, controller.get());
+//    o.registerModel<scInfo>("SuperCollider", scServer);
     
     
+    std::function<void(ofDirectory dir)> readSynthdefsInDirectory = [&o, &readSynthdefsInDirectory](ofDirectory dir){
+        for(auto f : dir.getFiles()){
+            if(f.isDirectory()){
+                readSynthdefsInDirectory(ofDirectory(f.path()));
+            }else{
+                //Get synthdefs
+                if(f.getExtension() == "txarcmeta"){
+                    auto desc = scSynthdef::readAndCreateSynthdef(f.getAbsolutePath());
+                    if(desc.type == "multi"){
+                        
+                    }else if(desc.type == "events"){
+                        
+                    }else{
+                        o.registerModel<scSynthdef>("Supercollider", desc);
+                    }
+                }
+            }
+        }
+    };
+    
+    ofDirectory dir("Supercollider/Synthdefs");
+    if(dir.exists()){
+        readSynthdefsInDirectory(dir);
+    }else{
+        dir.create();
+    }
+    
+    auto controller = o.getController<ofxOceanodeSuperColliderController>();
+
     o.registerModel<scBuffer>("SuperCollider", wavs);
-    o.registerModel<scCustomBuffer>("SuperCollider", server);
-    o.registerModel<scServer>("Supercollider", server, controller.get(), 1, wavs);
+    o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
+    o.registerModel<scServer>("SuperCollider", controller->getServers());
 }
 static void registerType(ofxOceanode &o){
     o.registerType<scNode*>("ScBus");
-    //o.registerType<vector<ofxSCBuffer*>>("ScBuffer");
 }
 static void registerScope(ofxOceanode &o){
 //    o.registerScope<std::pair<ofxSCBus*, scSynthdef*>>([](ofxOceanodeAbstractParameter *p, ImVec2 size){
@@ -106,45 +107,22 @@ static void registerScope(ofxOceanode &o){
 //        });
 }
 static void registerCollection(ofxOceanode &o){
-    registerModels(o);
+    auto controller = o.addController<ofxOceanodeSuperColliderController>();
+    
+    vector<string> wavs = loadSamples();
+    controller->createServers(wavs);
+    
+    registerModels(o, wavs);
     registerType(o);
     registerScope(o);
 }
 
-static void setup(bool local = true, std::string ip = "127.0.0.1", int port = 57110, string synthdefsPath = ofToDataPath("Supercollider/Synthdefs", true)){
-    
-    server = new ofxSCServer(ip, port);
-    
-    if(local){
-        if(ofDirectory::doesDirectoryExist(ofToDataPath("Supercollider/Scsynth/bin/"))){
-            sc.setup(ofToDataPath("Supercollider/Scsynth/bin/scsynth", true));
-        }else if(ofDirectory::doesDirectoryExist("/Applications/SuperCollider.app/Contents/Resources/")){
-            sc.setup("/Applications/SuperCollider.app/Contents/Resources/scsynth");
-        }else{
-            ofLog() << "No ScSynth found on the system";
-        }
-        sleep(5);
-        
-        ofxOscMessage m2;
-        m2.setAddress("/g_new");
-        m2.addIntArg(1);
-        m2.addIntArg(0);
-        m2.addIntArg(0);
-        server->sendMsg(m2);
-    }
-    
-    ofxOscMessage m;
-    m.setAddress("/d_loadDir");
-    m.addStringArg(synthdefsPath);
-    m.addIntArg(0);
-    server->sendMsg(m);
+static void setup(ofxOceanode &o){
+    o.getController<ofxOceanodeSuperColliderController>()->setup();
 }
 
-static void kill(){
-    ofxOscMessage m;
-    m.setAddress("/quit");
-    server->sendMsg(m);
-    sleep(1);
+static void kill(ofxOceanode& o){
+    o.getController<ofxOceanodeSuperColliderController>()->killServers();
 }
 }
 

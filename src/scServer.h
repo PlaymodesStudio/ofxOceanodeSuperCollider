@@ -9,17 +9,13 @@
 #define scServer_h
 
 #include "ofxOceanodeNodeModel.h"
-#include "ofxSCBus.h"
 
-class ofxSCServer;
-class ofxSCSynth;
-class ofxSCBuffer;
 class scNode;
-class ofxOceanodeSuperColliderController;
+class serverManager;
 
 class scServer : public ofxOceanodeNodeModel {
 public:
-    scServer(ofxSCServer *_server, ofxOceanodeSuperColliderController *_controller, int index, vector<string> wavs = {});
+    scServer(vector<serverManager*> outputServers);
     ~scServer();
     
     void setup() override;
@@ -31,26 +27,13 @@ public:
     void presetHasLoaded() override;
     
 private:
-    void recomputeGraph();
-
     ofEventListeners listeners;
     
     ofParameter<int> outputChannel;
+    ofParameter<int> serverIndex;
     ofParameter<scNode*> input;
-    vector<scNode*> connectedNodes; //List of all nodes
     
-    ofxSCSynth *synth;
-    ofxSCServer *server;
-    
-    
-    vector<scNode*> nodesList;
-    std::map<scNode*, std::map<int, vector<ofxSCSynth*>>> synthMap;
-    
-    vector<ofxSCBus*> busses;
-    
-    std::map<string, ofxSCBuffer*> buffers;
-    vector<string> wavs;
-    ofxOceanodeSuperColliderController *controller;
+    vector<serverManager*> outputServers;
 };
 
 #endif /* scServer_h */
