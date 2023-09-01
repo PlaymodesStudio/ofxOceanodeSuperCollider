@@ -112,9 +112,9 @@ void scSynthdef::setup(){
         }else{
             ofParameter<vector<float>> vf;
             addParameter(vf.set(paramName,
-                                vector<float>(1, ofToInt(specMap["default"])),
-                                vector<float>(1, ofToInt(specMap["minval"])),
-                                vector<float>(1, ofToInt(specMap["maxval"]))));
+                                vector<float>(1, ofToFloat(specMap["default"])),
+                                vector<float>(1, ofToFloat(specMap["minval"])),
+                                vector<float>(1, ofToFloat(specMap["maxval"]))));
             string toSendName = spec.first;
             listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
                 for(auto synthServer : synths){
@@ -325,11 +325,11 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     std::function<string(string)> getStringFromData = [odata, pdata, &getStringFromData](string checkvalue) -> string{
         if(ofStringTimesInString(checkvalue, "o[")){
             checkvalue.erase(0, 2); //remove o[
-            checkvalue.erase(1); //remove ]
+            checkvalue.erase(checkvalue.length()-1); //remove ]
             return getStringFromData(odata[ofToInt(checkvalue)]);
         }else if(ofStringTimesInString(checkvalue, "p[")){
             checkvalue.erase(0, 2); //remove o[
-            checkvalue.erase(1); //remove ]
+            checkvalue.erase(checkvalue.length()-1); //remove ]
             return "";
         }
         return checkvalue;
