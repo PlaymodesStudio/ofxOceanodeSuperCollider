@@ -92,7 +92,7 @@ public:
     }
     
     void killServer(){
-        waitForThread(true);
+        ofSystem("killall scsynth");
     }
     
 private:
