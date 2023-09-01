@@ -53,7 +53,7 @@ void serverManager::draw(){
     
     if(ImGui::Checkbox("Local", &preferences.local)){
         if(!preferences.local){
-            kill();
+            sc->killServer();
             delete sc;
         }else{
             sc = new scStart(preferences);
@@ -190,6 +190,7 @@ void serverManager::kill(){
         ofxOscMessage m;
         m.setAddress("/quit");
         server->sendMsg(m);
+        sleep(1);
         sc->killServer();
     }
 }
