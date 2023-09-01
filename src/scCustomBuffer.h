@@ -26,10 +26,11 @@ private:
     
     ofParameter<int> numBuffers;
     ofParameter<vector<float>> input;
+    ofParameter<bool> rescale;
     ofParameter<vector<int>> buffersParam;
     
     vector<serverManager*> servers;
-    vector<ofxSCBuffer*> buffers;
+    vector<vector<ofxSCBuffer*>> buffers;
     
     int oldNumBuffers;
 };
