@@ -1,0 +1,42 @@
+{
+    "Indexer_1": {
+        "Output": {
+            "Random_Generator_1": {
+                "Index": null
+            }
+        }
+    },
+    "Phasor_1": {
+        "Phase": {
+            "Random_Generator_1": {
+                "Phase": null
+            }
+        }
+    },
+    "Random_Generator_1": {
+        "Output": {
+            "SC_Simple_1": {
+                "Pitch": null
+            }
+        }
+    },
+    "SC_Filter_1": {
+        "Out": {
+            "SC_Server_1": {
+                "In": null
+            }
+        }
+    },
+    "SC_Simple_1": {
+        "N Chan": {
+            "SC_Filter_1": {
+                "N Chan": null
+            }
+        },
+        "Out": {
+            "SC_Filter_1": {
+                "In": null
+            }
+        }
+    }
+}

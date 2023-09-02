@@ -1,0 +1,26 @@
+{
+    "Comments": [
+        {
+            "Color": {
+                "B": 1.0,
+                "G": 1.0,
+                "R": 1.0
+            },
+            "Pos": {
+                "X": -204.0,
+                "Y": -135.5
+            },
+            "Size": {
+                "X": 308.0,
+                "Y": 21.0
+            },
+            "Text": "Be Aware Inspector parameter (NOT Dist Out)",
+            "TextColor": {
+                "B": 0.0,
+                "G": 0.0,
+                "R": 0.0
+            }
+        }
+    ],
+    "NumComments": 1
+}

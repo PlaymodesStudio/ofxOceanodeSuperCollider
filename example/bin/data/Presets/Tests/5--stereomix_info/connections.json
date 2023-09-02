@@ -1,0 +1,54 @@
+{
+    "Indexer_1": {
+        "Output": {
+            "Oscillator_1": {
+                "Index": null
+            }
+        }
+    },
+    "Oscillator_1": {
+        "Output": {
+            "SC_Simple_1": {
+                "Level": null
+            }
+        }
+    },
+    "Phasor_1": {
+        "Phase": {
+            "Oscillator_1": {
+                "Phase": null
+            }
+        }
+    },
+    "SC_Simple_1": {
+        "N Chan": {
+            "Indexer_1": {
+                "Size": null
+            },
+            "SC_Info_1": {
+                "N Chan": null
+            },
+            "SC_Stereomix_1": {
+                "N Chan": null
+            }
+        },
+        "Out": {
+            "SC_Info_1": {
+                "In": null
+            },
+            "SC_Stereomix_1": {
+                "In": null
+            }
+        }
+    },
+    "SC_Stereomix_1": {
+        "Out": {
+            "SC_Info_2": {
+                "In": null
+            },
+            "SC_Server_1": {
+                "In": null
+            }
+        }
+    }
+}

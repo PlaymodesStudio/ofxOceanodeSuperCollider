@@ -1,0 +1,15 @@
+{
+    "Comb": "0",
+    "Discrete": "0",
+    "Invert": "0",
+    "Modulo": "3",
+    "NWaves": "1",
+    "Norm": "0",
+    "Offset": "0",
+    "Quant": "3",
+    "Random": "0",
+    "Shuffle": "0",
+    "Size": "3",
+    "Sym": "0",
+    "expanded": true
+}
