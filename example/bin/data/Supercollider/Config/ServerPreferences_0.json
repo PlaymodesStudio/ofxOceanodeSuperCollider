@@ -1,0 +1,23 @@
+{
+    "bindAddress": "127.0.0.1",
+    "blockSize": 64,
+    "deviceName": "nil",
+    "hardwareBufferSize": 64,
+    "hardwareSampleRate": 44100,
+    "local": true,
+    "maxLogins": 1,
+    "maxNodes": 1024,
+    "maxSynthDefs": 1024,
+    "memSize": 2048576,
+    "numAudioBusChannels": 4096,
+    "numBuffers": 1024,
+    "numControlBusChannels": 16384,
+    "numInputBusChannels": 2,
+    "numOutputBusChannels": 16,
+    "numRGens": 64,
+    "numWireBufs": 8192,
+    "safetyClipThreshold": 1.2599999904632568,
+    "udpPort": 57110,
+    "ugensPlugins": "",
+    "verbosity": 0
+}
