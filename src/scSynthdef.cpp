@@ -23,11 +23,21 @@ void scSynthdef::setup(){
         addParameter(buffers[i].set(paramName, {0}, {0}, {INT_MAX}), ofxOceanodeParameterFlags_DisableOutConnection);
         listeners.push(buffers[i].newListener([this, i, paramName](vector<int> &buffs){
             for(auto synthServer : synths){
+                bool serverWaitToSendWasTrue = false;
+                if(synthServer.first->getWaitToSend()){
+                    serverWaitToSendWasTrue = true;
+                }else{
+                    synthServer.first->setWaitToSend(true);
+                }
                 if(buffs.size() != 0){
                     for(int i = 0; i < synthServer.second.size(); i++){
                         if(buffs.size() == 1) synthServer.second[i]->set(ofToLower(paramName), buffs[0]);
                         else synthServer.second[i]->set(ofToLower(paramName), buffs[i]);
                     }
+                }
+                if(!serverWaitToSendWasTrue){
+                    synthServer.first->sendStoredBundle();
+                    synthServer.first->setWaitToSend(false);
                 }
             }
         }));
@@ -36,14 +46,42 @@ void scSynthdef::setup(){
     oldNumChannels = numChannels;
     listeners.push(numChannels.newListener([this](int &i){
         if(oldNumChannels != numChannels){
+            std::map<ofxSCServer*, bool> serverWaitToSendWasTrue;
+            for(auto server : synths){
+                if(server.first->getWaitToSend()){
+                    serverWaitToSendWasTrue[server.first] = true;
+                }else{
+                    serverWaitToSendWasTrue[server.first] = false;
+                    server.first->setWaitToSend(true);
+                }
+            }
+            
+            
             bool remove = oldNumChannels > numChannels;
             
             if(remove){
-                for(int j = oldNumChannels-1; j >= numChannels; j--){
-                    for(auto &synthServer : synths){
+//                for(int j = oldNumChannels-1; j >= numChannels; j--){
+//                    for(auto &synthServer : synths){
+//                        synthServer.second.back()->free();
+//                        synthServer.second.pop_back();
+//                    }
+//                }
+                
+                for(auto &synthServer : synths){
+//                    bool serverWaitToSendWasTrue = false;
+//                    if(synthServer.first->getWaitToSend()){
+//                        serverWaitToSendWasTrue = true;
+//                    }else{
+//                        synthServer.first->setWaitToSend(true);
+//                    }
+                    for(int j = oldNumChannels-1; j >= numChannels; j--){
                         synthServer.second.back()->free();
                         synthServer.second.pop_back();
                     }
+//                    if(!serverWaitToSendWasTrue){
+//                        synthServer.first->sendStoredBundle();
+//                        synthServer.first->setWaitToSend(false);
+//                    }
                 }
             }else{
                 for(auto &synthServer : synths){
@@ -51,10 +89,20 @@ void scSynthdef::setup(){
                     for(int j = 0; j < numChannels-oldNumChannels; j++){
                         synthServer.second.emplace_back(new ofxSCSynth(ofToLower(synthdefName), synthServer.first))->create(2, lastSynthId); //put node just before last one;
                     }
+//                    if(!serverWaitToSendWasTrue){
+//                        synthServer.first->sendStoredBundle();
+//                        synthServer.first->setWaitToSend(false);
+//                    }
                 }
             }
             
             for(auto synthServer : synths){
+//                bool serverWaitToSendWasTrue = false;
+//                if(synthServer.first->getWaitToSend()){
+//                    serverWaitToSendWasTrue = true;
+//                }else{
+//                    synthServer.first->setWaitToSend(true);
+//                }
                 for(int j = 0; j < synthServer.second.size(); j++){
                     if(synthServer.second[j] != nullptr){
                         synthServer.second[j]->set("out", outputBus[synthServer.first] + (doNotDistributeOutputs ? 0 : j));
@@ -71,10 +119,20 @@ void scSynthdef::setup(){
                         }
                     }
                 }
-                
+//                if(!serverWaitToSendWasTrue){
+//                    synthServer.first->sendStoredBundle();
+//                    synthServer.first->setWaitToSend(false);
+//                }
             }
             
             resendParams.notify();
+            
+            for(auto server : synths){
+                if(!serverWaitToSendWasTrue[server.first]){
+                    server.first->sendStoredBundle();
+                    server.first->setWaitToSend(false);
+                }
+            }
         }
         oldNumChannels = numChannels;
     }));
@@ -95,17 +153,37 @@ void scSynthdef::setup(){
             string toSendName = spec.first;
             listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
                 for(auto synthServer : synths){
+                    bool serverWaitToSendWasTrue = false;
+                    if(synthServer.first->getWaitToSend()){
+                        serverWaitToSendWasTrue = true;
+                    }else{
+                        synthServer.first->setWaitToSend(true);
+                    }
                     for(int i = 0; i < synthServer.second.size(); i++){
                         if(vi_.size() == 1) synthServer.second[i]->set(toSendName, vi_[0]);
                         else synthServer.second[i]->set(toSendName, vi_[i]);
+                    }
+                    if(!serverWaitToSendWasTrue){
+                        synthServer.first->sendStoredBundle();
+                        synthServer.first->setWaitToSend(false);
                     }
                 }
             }));
             listeners.push(resendParams.newListener([this, vi, toSendName]{
                 for(auto synthServer : synths){
+                    bool serverWaitToSendWasTrue = false;
+                    if(synthServer.first->getWaitToSend()){
+                        serverWaitToSendWasTrue = true;
+                    }else{
+                        synthServer.first->setWaitToSend(true);
+                    }
                     for(int i = 0; i < synthServer.second.size(); i++){
                         if(vi->size() == 1) synthServer.second[i]->set(toSendName, vi->at(0));
                         else synthServer.second[i]->set(toSendName, vi->at(i));
+                    }
+                    if(!serverWaitToSendWasTrue){
+                        synthServer.first->sendStoredBundle();
+                        synthServer.first->setWaitToSend(false);
                     }
                 }
             }));
@@ -118,17 +196,37 @@ void scSynthdef::setup(){
             string toSendName = spec.first;
             listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
                 for(auto synthServer : synths){
+                    bool serverWaitToSendWasTrue = false;
+                    if(synthServer.first->getWaitToSend()){
+                        serverWaitToSendWasTrue = true;
+                    }else{
+                        synthServer.first->setWaitToSend(true);
+                    }
                     for(int i = 0; i < synthServer.second.size(); i++){
                         if(vf_.size() == 1) synthServer.second[i]->set(toSendName, vf_[0]);
                         else synthServer.second[i]->set(toSendName, vf_[i]);
+                    }
+                    if(!serverWaitToSendWasTrue){
+                        synthServer.first->sendStoredBundle();
+                        synthServer.first->setWaitToSend(false);
                     }
                 }
             }));
             listeners.push(resendParams.newListener([this, vf, toSendName]{
                 for(auto synthServer : synths){
+                    bool serverWaitToSendWasTrue = false;
+                    if(synthServer.first->getWaitToSend()){
+                        serverWaitToSendWasTrue = true;
+                    }else{
+                        synthServer.first->setWaitToSend(true);
+                    }
                     for(int i = 0; i < synthServer.second.size(); i++){
                         if(i >= vf->size()) synthServer.second[i]->set(toSendName, vf->at(0));
                         else synthServer.second[i]->set(toSendName, vf->at(i));
+                    }
+                    if(!serverWaitToSendWasTrue){
+                        synthServer.first->sendStoredBundle();
+                        synthServer.first->setWaitToSend(false);
                     }
                 }
             }));
@@ -140,6 +238,12 @@ void scSynthdef::setup(){
     
     listeners.push(doNotDistributeInputs.newListener([this](bool &b){
         for(auto synthServer : synths){
+            bool serverWaitToSendWasTrue = false;
+            if(synthServer.first->getWaitToSend()){
+                serverWaitToSendWasTrue = true;
+            }else{
+                synthServer.first->setWaitToSend(true);
+            }
             for(int j = 0; j < synthServer.second.size(); j++){
                 for(int i = 0; i < inputs.size(); i++){
                     if(inputBuses[synthServer.first].count(inputs[i].get()) == 1){
@@ -153,38 +257,72 @@ void scSynthdef::setup(){
                     }
                 }
             }
+            if(!serverWaitToSendWasTrue){
+                synthServer.first->sendStoredBundle();
+                synthServer.first->setWaitToSend(false);
+            }
         }
     }));
         
     listeners.push(doNotDistributeOutputs.newListener([this](bool &b){
         for(auto synthServer : synths){
+            bool serverWaitToSendWasTrue = false;
+            if(synthServer.first->getWaitToSend()){
+                serverWaitToSendWasTrue = true;
+            }else{
+                synthServer.first->setWaitToSend(true);
+            }
             for(int j = 0; j < synthServer.second.size(); j++){
                 if(synthServer.second[j] != nullptr){
                     synthServer.second[j]->set("out", outputBus[synthServer.first] + (doNotDistributeOutputs ? 0 : j));
                 }
+            }
+            if(!serverWaitToSendWasTrue){
+                synthServer.first->sendStoredBundle();
+                synthServer.first->setWaitToSend(false);
             }
         }
     }));
     
     listeners.push(resendParams.newListener([this](){
         for(auto synthServer : synths){
+            bool serverWaitToSendWasTrue = false;
+            if(synthServer.first->getWaitToSend()){
+                serverWaitToSendWasTrue = true;
+            }else{
+                synthServer.first->setWaitToSend(true);
+            }
             for(int j = 0; j < synthServer.second.size(); j++){
                 if(synthServer.second[j] != nullptr){
                     synthServer.second[j]->set("inChannels", numChannels);
                     synthServer.second[j]->set("index", j);
                 }
             }
+            if(!serverWaitToSendWasTrue){
+                synthServer.first->sendStoredBundle();
+                synthServer.first->setWaitToSend(false);
+            }
         }
         
     }));
     
     listeners.push(resendParams.newListener([this](){
         for(auto synthServer : synths){
+            bool serverWaitToSendWasTrue = false;
+            if(synthServer.first->getWaitToSend()){
+                serverWaitToSendWasTrue = true;
+            }else{
+                synthServer.first->setWaitToSend(true);
+            }
             for(int b = 0; b < buffers.size(); b++){
                 for(int i = 0; i < synthServer.second.size(); i++){
                     if(buffers[b]->size() == 1) synthServer.second[i]->set(ofToLower(buffers[b].getName()), buffers[b]->at(0));
                     else synthServer.second[i]->set(ofToLower(buffers[b].getName()), buffers[b]->at(i));
                 }
+            }
+            if(!serverWaitToSendWasTrue){
+                synthServer.first->sendStoredBundle();
+                synthServer.first->setWaitToSend(false);
             }
         }
     }));

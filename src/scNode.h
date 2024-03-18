@@ -27,6 +27,7 @@ public:
     
     virtual void createSynth(ofxSCServer* server){};
     virtual void free(ofxSCServer* server){};
+    virtual void runSynth(ofxSCServer* server){};
     virtual void setOutputBus(ofxSCServer* server, int bus){};
     virtual void setInputBus(ofxSCServer* server, scNode* node, int bus){};
     

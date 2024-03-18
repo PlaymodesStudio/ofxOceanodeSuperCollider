@@ -23,6 +23,10 @@ serverManager::serverManager(std::vector<std::string> _wavs){
 };
 
 serverManager::~serverManager(){
+    for(auto node : nodesList) node->free(server);
+    nodesList.clear();
+    for(auto b : busses) b->free();
+    busses.clear();
     if(synth != nullptr){
         synth->free();
         delete synth;
@@ -224,6 +228,7 @@ void serverManager::recomputeGraph(scNode* firstNode){
         for(auto b : busses) b->free();
         busses.clear();
     }else{
+        server->setWaitToSend(true);
         std::vector<scNode*> newNodesList;
         std::map<scNode*, std::pair<int, std::vector<int>>> nodeChilds;
         if(firstNode != nullptr)
@@ -265,6 +270,8 @@ void serverManager::recomputeGraph(scNode* firstNode){
                 inputBussesRefToNode[dest].push_back(busref);
             }
         }
+        server->sendStoredBundle();
+        server->setWaitToSend(false);
     }
     graphComputed.notify();
 }
