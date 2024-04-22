@@ -14,7 +14,7 @@
 #include "scStart.h"
 #include "scSynthdef.h"
 //#include "scOut.h"
-//#include "scTonal.h"
+#include "scTonal.h"
 #include "scBuffer.h"
 #include "scCustomBuffer.h"
 #include "scInfo.h"
@@ -120,6 +120,8 @@ static void registerModels(ofxOceanode &o, vector<string> wavs){
     o.registerModel<scBuffer>("SuperCollider", wavs);
     o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
     o.registerModel<scServer>("SuperCollider", controller->getServers());
+    o.registerModel<scPitch>("SuperCollider");
+    o.registerModel<scChord>("SuperCollider");
 }
 static void registerType(ofxOceanode &o){
     o.registerType<scNode*>("ScBus");
