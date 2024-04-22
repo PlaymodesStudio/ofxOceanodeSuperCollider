@@ -14,11 +14,11 @@ scSynthdef::scSynthdef(synthdefDesc _description) : description(_description), s
 
 void scSynthdef::setup(){
     scNode::addInputs(description.numInputs);
-    addParameter(numChannels.set("N Chan", 1, 1, 100));
+    numChannels = description.numChannels;
     
     buffers.resize(description.numBuffers);
     for(int i = 0; i < buffers.size(); i++){
-        string paramName = "Buf";
+        string paramName = "Bufnum";
         if(i > 0) paramName += ofToString(i+1);
         addParameter(buffers[i].set(paramName, {0}, {0}, {INT_MAX}), ofxOceanodeParameterFlags_DisableOutConnection);
         listeners.push(buffers[i].newListener([this, i, paramName](vector<int> &buffs){
@@ -30,10 +30,8 @@ void scSynthdef::setup(){
                     synthServer.first->setWaitToSend(true);
                 }
                 if(buffs.size() != 0){
-                    for(int i = 0; i < synthServer.second.size(); i++){
-                        if(buffs.size() == 1) synthServer.second[i]->set(ofToLower(paramName), buffs[0]);
-                        else synthServer.second[i]->set(ofToLower(paramName), buffs[i]);
-                    }
+                    if(buffs.size() == 1) synthServer.second->setMultiple(ofToLower(paramName), buffs[0], numChannels);
+                    else synthServer.second->set(ofToLower(paramName), buffs);
                 }
                 if(!serverWaitToSendWasTrue){
                     synthServer.first->sendStoredBundle();
@@ -43,106 +41,10 @@ void scSynthdef::setup(){
         }));
     }
     
-    oldNumChannels = numChannels;
-    listeners.push(numChannels.newListener([this](int &i){
-        if(oldNumChannels != numChannels){
-            std::map<ofxSCServer*, bool> serverWaitToSendWasTrue;
-            for(auto server : synths){
-                if(server.first->getWaitToSend()){
-                    serverWaitToSendWasTrue[server.first] = true;
-                }else{
-                    serverWaitToSendWasTrue[server.first] = false;
-                    server.first->setWaitToSend(true);
-                }
-            }
-            
-            
-            bool remove = oldNumChannels > numChannels;
-            
-            if(remove){
-//                for(int j = oldNumChannels-1; j >= numChannels; j--){
-//                    for(auto &synthServer : synths){
-//                        synthServer.second.back()->free();
-//                        synthServer.second.pop_back();
-//                    }
-//                }
-                
-                for(auto &synthServer : synths){
-//                    bool serverWaitToSendWasTrue = false;
-//                    if(synthServer.first->getWaitToSend()){
-//                        serverWaitToSendWasTrue = true;
-//                    }else{
-//                        synthServer.first->setWaitToSend(true);
-//                    }
-                    for(int j = oldNumChannels-1; j >= numChannels; j--){
-                        synthServer.second.back()->free();
-                        synthServer.second.pop_back();
-                    }
-//                    if(!serverWaitToSendWasTrue){
-//                        synthServer.first->sendStoredBundle();
-//                        synthServer.first->setWaitToSend(false);
-//                    }
-                }
-            }else{
-                for(auto &synthServer : synths){
-                    int lastSynthId = synthServer.second.back()->nodeID;
-                    for(int j = 0; j < numChannels-oldNumChannels; j++){
-                        synthServer.second.emplace_back(new ofxSCSynth(ofToLower(synthdefName), synthServer.first))->create(2, lastSynthId); //put node just before last one;
-                    }
-//                    if(!serverWaitToSendWasTrue){
-//                        synthServer.first->sendStoredBundle();
-//                        synthServer.first->setWaitToSend(false);
-//                    }
-                }
-            }
-            
-            for(auto synthServer : synths){
-//                bool serverWaitToSendWasTrue = false;
-//                if(synthServer.first->getWaitToSend()){
-//                    serverWaitToSendWasTrue = true;
-//                }else{
-//                    synthServer.first->setWaitToSend(true);
-//                }
-                for(int j = 0; j < synthServer.second.size(); j++){
-                    if(synthServer.second[j] != nullptr){
-                        synthServer.second[j]->set("out", outputBus[synthServer.first] + (doNotDistributeOutputs ? 0 : j));
-                    }
-                    for(int i = 0; i < inputs.size(); i++){
-                        if(inputBuses[synthServer.first].count(inputs[i].get()) == 1){
-                            string paramName = "in";
-                            if(i > 0) paramName += ofToString(i+1);
-                            for(int j = 0; j < synthServer.second.size(); j++){
-                                if(synthServer.second[j] != nullptr){
-                                    synthServer.second[j]->set(paramName, inputBuses[synthServer.first][inputs[i].get()] + (doNotDistributeInputs ? 0 : j));
-                                }
-                            }
-                        }
-                    }
-                }
-//                if(!serverWaitToSendWasTrue){
-//                    synthServer.first->sendStoredBundle();
-//                    synthServer.first->setWaitToSend(false);
-//                }
-            }
-            
-            resendParams.notify();
-            
-            for(auto server : synths){
-                if(!serverWaitToSendWasTrue[server.first]){
-                    server.first->sendStoredBundle();
-                    server.first->setWaitToSend(false);
-                }
-            }
-        }
-        oldNumChannels = numChannels;
-    }));
-    
-    
-    
     for(auto spec : description.params){
         auto specMap = spec.second;
         string paramName = spec.first;
-        paramName[0] = toupper(paramName[0]);
+//        paramName[0] = toupper(paramName[0]);
         if(ofToFloat(specMap["step"]) == 1.0){
             ofParameter<vector<int>> vi;
             
@@ -150,7 +52,7 @@ void scSynthdef::setup(){
                                 vector<int>(1, ofToInt(specMap["default"])),
                                 vector<int>(1, ofToInt(specMap["minval"])),
                                 vector<int>(1, ofToInt(specMap["maxval"]))));
-            string toSendName = spec.first;
+            string toSendName = ofToLower(spec.first);
             listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
                 for(auto synthServer : synths){
                     bool serverWaitToSendWasTrue = false;
@@ -159,10 +61,8 @@ void scSynthdef::setup(){
                     }else{
                         synthServer.first->setWaitToSend(true);
                     }
-                    for(int i = 0; i < synthServer.second.size(); i++){
-                        if(vi_.size() == 1) synthServer.second[i]->set(toSendName, vi_[0]);
-                        else synthServer.second[i]->set(toSendName, vi_[i]);
-                    }
+                    if(vi_.size() == 1) synthServer.second->setMultiple(toSendName, vi_[0], numChannels);
+                    else synthServer.second->set(toSendName, vi_);
                     if(!serverWaitToSendWasTrue){
                         synthServer.first->sendStoredBundle();
                         synthServer.first->setWaitToSend(false);
@@ -177,10 +77,8 @@ void scSynthdef::setup(){
                     }else{
                         synthServer.first->setWaitToSend(true);
                     }
-                    for(int i = 0; i < synthServer.second.size(); i++){
-                        if(vi->size() == 1) synthServer.second[i]->set(toSendName, vi->at(0));
-                        else synthServer.second[i]->set(toSendName, vi->at(i));
-                    }
+                    if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
+                    else synthServer.second->set(toSendName, vi);
                     if(!serverWaitToSendWasTrue){
                         synthServer.first->sendStoredBundle();
                         synthServer.first->setWaitToSend(false);
@@ -193,7 +91,7 @@ void scSynthdef::setup(){
                                 vector<float>(1, ofToFloat(specMap["default"])),
                                 vector<float>(1, ofToFloat(specMap["minval"])),
                                 vector<float>(1, ofToFloat(specMap["maxval"]))));
-            string toSendName = spec.first;
+            string toSendName = ofToLower(spec.first);
             listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
                 for(auto synthServer : synths){
                     bool serverWaitToSendWasTrue = false;
@@ -202,10 +100,8 @@ void scSynthdef::setup(){
                     }else{
                         synthServer.first->setWaitToSend(true);
                     }
-                    for(int i = 0; i < synthServer.second.size(); i++){
-                        if(vf_.size() == 1) synthServer.second[i]->set(toSendName, vf_[0]);
-                        else synthServer.second[i]->set(toSendName, vf_[i]);
-                    }
+                    if(vf_.size() == 1) synthServer.second->setMultiple(toSendName, vf_[0], numChannels);
+                    else synthServer.second->set(toSendName, vf_);
                     if(!serverWaitToSendWasTrue){
                         synthServer.first->sendStoredBundle();
                         synthServer.first->setWaitToSend(false);
@@ -220,10 +116,8 @@ void scSynthdef::setup(){
                     }else{
                         synthServer.first->setWaitToSend(true);
                     }
-                    for(int i = 0; i < synthServer.second.size(); i++){
-                        if(i >= vf->size()) synthServer.second[i]->set(toSendName, vf->at(0));
-                        else synthServer.second[i]->set(toSendName, vf->at(i));
-                    }
+                    if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
+                    else synthServer.second->set(toSendName, vf);
                     if(!serverWaitToSendWasTrue){
                         synthServer.first->sendStoredBundle();
                         synthServer.first->setWaitToSend(false);
@@ -244,16 +138,12 @@ void scSynthdef::setup(){
             }else{
                 synthServer.first->setWaitToSend(true);
             }
-            for(int j = 0; j < synthServer.second.size(); j++){
-                for(int i = 0; i < inputs.size(); i++){
-                    if(inputBuses[synthServer.first].count(inputs[i].get()) == 1){
-                        string paramName = "in";
-                        if(i > 0) paramName += ofToString(i+1);
-                        for(int j = 0; j < synthServer.second.size(); j++){
-                            if(synthServer.second[j] != nullptr){
-                                synthServer.second[j]->set(paramName, inputBuses[synthServer.first][inputs[i].get()] + (doNotDistributeInputs ? 0 : j));
-                            }
-                        }
+            for(int i = 0; i < inputs.size(); i++){
+                if(inputBuses[synthServer.first].count(inputs[i].get()) == 1){
+                    string paramName = "in";
+                    if(i > 0) paramName += ofToString(i+1);
+                    if(synthServer.second != nullptr){
+                        synthServer.second->set(paramName, inputBuses[synthServer.first][inputs[i].get()]);
                     }
                 }
             }
@@ -272,10 +162,8 @@ void scSynthdef::setup(){
             }else{
                 synthServer.first->setWaitToSend(true);
             }
-            for(int j = 0; j < synthServer.second.size(); j++){
-                if(synthServer.second[j] != nullptr){
-                    synthServer.second[j]->set("out", outputBus[synthServer.first] + (doNotDistributeOutputs ? 0 : j));
-                }
+            if(synthServer.second != nullptr){
+                synthServer.second->set("out", outputBus[synthServer.first]);
             }
             if(!serverWaitToSendWasTrue){
                 synthServer.first->sendStoredBundle();
@@ -292,11 +180,8 @@ void scSynthdef::setup(){
             }else{
                 synthServer.first->setWaitToSend(true);
             }
-            for(int j = 0; j < synthServer.second.size(); j++){
-                if(synthServer.second[j] != nullptr){
-                    synthServer.second[j]->set("inChannels", numChannels);
-                    synthServer.second[j]->set("index", j);
-                }
+            if(synthServer.second != nullptr){
+                synthServer.second->set("inChannels", numChannels);
             }
             if(!serverWaitToSendWasTrue){
                 synthServer.first->sendStoredBundle();
@@ -315,10 +200,8 @@ void scSynthdef::setup(){
                 synthServer.first->setWaitToSend(true);
             }
             for(int b = 0; b < buffers.size(); b++){
-                for(int i = 0; i < synthServer.second.size(); i++){
-                    if(buffers[b]->size() == 1) synthServer.second[i]->set(ofToLower(buffers[b].getName()), buffers[b]->at(0));
-                    else synthServer.second[i]->set(ofToLower(buffers[b].getName()), buffers[b]->at(i));
-                }
+                if(buffers[b]->size() == 1) synthServer.second->set(ofToLower(buffers[b].getName()), buffers[b]->at(0));
+                else synthServer.second->set(ofToLower(buffers[b].getName()), buffers[b]);
             }
             if(!serverWaitToSendWasTrue){
                 synthServer.first->sendStoredBundle();
@@ -332,25 +215,20 @@ void scSynthdef::setup(){
 
 
 void scSynthdef::createSynth(ofxSCServer* server){
-    for(int i = 0; i < numChannels; i++){
-        synths[server].emplace_back(new ofxSCSynth(ofToLower(synthdefName), server))->create();
-    }
+    synths[server] = new ofxSCSynth(ofToLower(synthdefName), server);
+    synths[server]->create();
     resendParams.notify();
 }
 
 void scSynthdef::free(ofxSCServer* server){
-    for(auto s : synths[server]){
-        s->free();
-    }
+    synths[server]->free();
     synths.erase(server);
 }
 
 void scSynthdef::setOutputBus(ofxSCServer* server, int bus){
     outputBus[server] = bus;
-    for(int i = 0; i < synths[server].size(); i++){
-        if(synths[server][i] != nullptr){
-            synths[server][i]->set("out", bus + (doNotDistributeOutputs ? 0 : i));
-        }
+    if(synths[server] != nullptr){
+        synths[server]->set("out", bus);
     }
 }
 
@@ -360,10 +238,8 @@ void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
         if(inputs[i].get() == node){
             string paramName = "in";
             if(i > 0) paramName += ofToString(i+1);
-            for(int j = 0; j < synths[server].size(); j++){
-                if(synths[server][j] != nullptr){
-                    synths[server][j]->set(paramName, bus + (doNotDistributeInputs ? 0 : j));
-                }
+            if(synths[server] != nullptr){
+                synths[server]->set(paramName, bus);
             }
         }
     }

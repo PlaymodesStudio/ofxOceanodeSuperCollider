@@ -61,32 +61,58 @@ static void registerModels(ofxOceanode &o, vector<string> wavs){
 //    o.registerModel<scOut>("SuperCollider", scServer, controller.get());
     
     
-    std::function<void(ofDirectory dir)> readSynthdefsInDirectory = [&o, &readSynthdefsInDirectory](ofDirectory dir){
-        for(auto f : dir.getFiles()){
-            if(f.isDirectory()){
-                readSynthdefsInDirectory(ofDirectory(f.path()));
-            }else{
-                //Get synthdefs
-                if(f.getExtension() == "txarcmeta"){
-                    auto desc = scSynthdef::readAndCreateSynthdef(f.getAbsolutePath());
-                    if(desc.type == "multi"){
-                        
-                    }else if(desc.type == "events"){
-                        
-                    }else{
-                        o.registerModel<scSynthdef>("Supercollider", desc);
-                    }
-                }
+//    std::function<void(ofDirectory dir)> readSynthdefsInDirectory = [&o, &readSynthdefsInDirectory](ofDirectory dir){
+//        for(auto f : dir.getFiles()){
+//            if(f.isDirectory()){
+//                readSynthdefsInDirectory(ofDirectory(f.path()));
+//            }else{
+//                //Get synthdefs
+//                if(f.getExtension() == "txarcmeta"){
+//                    auto desc = scSynthdef::readAndCreateSynthdef(f.getAbsolutePath());
+//                    if(desc.type == "multi"){
+//
+//                    }else if(desc.type == "events"){
+//
+//                    }else{
+//                        o.registerModel<scSynthdef>("Supercollider", desc);
+//                    }
+//                }
+//            }
+//        }
+//    };
+//
+//    ofDirectory dir("Supercollider/Synthdefs");
+//    if(dir.exists()){
+//        readSynthdefsInDirectory(dir);
+//    }else{
+//        dir.create();
+//    }
+    
+    ofJson json = ofLoadJson("Supercollider/Synthdefs.json");
+    for(ofJson::iterator it = json.begin(); it != json.end(); it++){
+        synthdefDesc currentDescription;
+        currentDescription.name = it.key();
+        currentDescription.numInputs = it.value()["In"];
+        currentDescription.numBuffers = it.value()["Buf"];
+        currentDescription.numChannels = it.value()["Out_Size"];
+        std::string params = it.value()["Params"];
+        if(params != ""){
+        std::vector<std::string> splittedParams = ofSplitString(params, ", ");
+            for(string &s : splittedParams){
+                vector<string> ss = ofSplitString(s, ":");
+                if(ss[0] == "vi") currentDescription.params[ss[1]]["step"] = 1.0;
+                else currentDescription.params[ss[1]]["step"] = 0.0;
+                currentDescription.params[ss[1]]["default"] = ss[2];
+                currentDescription.params[ss[1]]["minval"] = ss[3];
+                currentDescription.params[ss[1]]["maxval"] = ss[4];
             }
         }
-    };
-    
-    ofDirectory dir("Supercollider/Synthdefs");
-    if(dir.exists()){
-        readSynthdefsInDirectory(dir);
-    }else{
-        dir.create();
+        
+        
+        o.registerModel<scSynthdef>("SuperCollider",
+                                    currentDescription);
     }
+    
     
     auto controller = o.getController<ofxOceanodeSuperColliderController>();
 

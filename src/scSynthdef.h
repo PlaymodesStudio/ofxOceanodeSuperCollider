@@ -21,6 +21,7 @@ struct synthdefDesc{
     string type;
     int numInputs;
     int numBuffers;
+    int numChannels;
     map<string, map<string, string>> params;
 };
 
@@ -67,13 +68,12 @@ public:
 private:
     ofEventListeners listeners;
     
-    std::map<ofxSCServer*, vector<ofxSCSynth*>> synths;
+    std::map<ofxSCServer*, ofxSCSynth*> synths;
     
     synthdefDesc description;
     std::string synthdefName;
     string file;
     ofParameter<int> numChannels;
-    int oldNumChannels;
     std::map<ofxSCServer*, int> outputBus;
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
     
