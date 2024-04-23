@@ -25,7 +25,7 @@ serverManager::serverManager(std::vector<std::string> _wavs){
 serverManager::~serverManager(){
     for(auto node : nodesList) node->free(server);
     nodesList.clear();
-    for(auto b : busses) b->free();
+    for(auto &b : busses) b.free();
     busses.clear();
     if(synth != nullptr){
         synth->free();
@@ -225,7 +225,7 @@ void serverManager::recomputeGraph(scNode* firstNode){
     if(firstNode == nullptr){
         for(auto node : nodesList) node->free(server);
         nodesList.clear();
-        for(auto b : busses) b->free();
+        for(auto &b : busses) b.free();
         busses.clear();
     }else{
         server->setWaitToSend(true);
@@ -252,22 +252,24 @@ void serverManager::recomputeGraph(scNode* firstNode){
             (*it)->createSynth(server);
         }
         
-        for(auto b : busses) b->free();
+        for(auto &b : busses) b.free();
         busses.clear();
         outputBussesRefToNode.clear();
         inputBussesRefToNode.clear();
         
-        auto busref = busses.emplace_back(new ofxSCBus(RATE_AUDIO, MAX_NODE_CHANNELS, server)); //From server to first node
-        firstNode->setOutputBus(server, busref->index);
-        outputBussesRefToNode[firstNode] = busref;
-        synth->set("in", busref->index);
+        busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server); //From server to first node
+        int busindex = busses.back().index;
+        firstNode->setOutputBus(server, busindex);
+        outputBussesRefToNode[firstNode] = busindex;
+        synth->set("in", busindex);
         for(auto &c : connections){
-            busref = busses.emplace_back(new ofxSCBus(RATE_AUDIO, MAX_NODE_CHANNELS, server));
-            c.first->setOutputBus(server, busref->index);
-            outputBussesRefToNode[c.first] = busref;
+            busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server);
+            busindex = busses.back().index;
+            c.first->setOutputBus(server, busindex);
+            outputBussesRefToNode[c.first] = busindex;
             for(auto &dest : c.second){
-                dest->setInputBus(server, c.first, busref->index);
-                inputBussesRefToNode[dest].push_back(busref);
+                dest->setInputBus(server, c.first, busindex);
+                inputBussesRefToNode[dest].push_back(busindex);
             }
         }
         server->sendStoredBundle();
@@ -278,7 +280,7 @@ void serverManager::recomputeGraph(scNode* firstNode){
 
 int serverManager::getOutputBusForNode(scNode* node){
     if(outputBussesRefToNode.count(node) == 1){
-        return outputBussesRefToNode[node]->index;
+        return outputBussesRefToNode[node];
     }
     else{
         return -1;

@@ -81,9 +81,9 @@ private:
     std::vector<scNode*> nodesList;
     std::map<scNode*, std::map<int, std::vector<ofxSCSynth*>>> synthMap;
     
-    std::vector<ofxSCBus*> busses;
-    std::map<scNode*, ofxSCBus*> outputBussesRefToNode;
-    std::map<scNode*, std::vector<ofxSCBus*>> inputBussesRefToNode;
+    std::vector<ofxSCBus> busses;
+    std::map<scNode*, int> outputBussesRefToNode;
+    std::map<scNode*, std::vector<int>> inputBussesRefToNode;
     
     std::map<std::string, ofxSCBuffer*> buffers;
     std::vector<std::string> wavs;
