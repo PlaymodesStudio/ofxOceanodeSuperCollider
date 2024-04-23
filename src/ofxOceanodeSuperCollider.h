@@ -100,8 +100,9 @@ static void registerModels(ofxOceanode &o, vector<string> wavs){
         std::vector<std::string> splittedParams = ofSplitString(params, ", ");
             for(string &s : splittedParams){
                 vector<string> ss = ofSplitString(s, ":");
-                if(ss[0] == "vi") currentDescription.params[ss[1]]["step"] = 1.0;
-                else currentDescription.params[ss[1]]["step"] = 0.0;
+//                if(ss[0] == "vi") currentDescription.params[ss[1]]["step"] = 1.0;
+//                else currentDescription.params[ss[1]]["step"] = 0.0;
+                currentDescription.params[ss[1]]["type"] = ss[0];
                 currentDescription.params[ss[1]]["default"] = ss[2];
                 currentDescription.params[ss[1]]["minval"] = ss[3];
                 currentDescription.params[ss[1]]["maxval"] = ss[4];

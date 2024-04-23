@@ -45,7 +45,7 @@ void scSynthdef::setup(){
         auto specMap = spec.second;
         string paramName = spec.first;
 //        paramName[0] = toupper(paramName[0]);
-        if(ofToFloat(specMap["step"]) == 1.0){
+        if(specMap["type"] == "vi"){
             ofParameter<vector<int>> vi;
             
             addParameter(vi.set(paramName,
@@ -85,7 +85,7 @@ void scSynthdef::setup(){
                     }
                 }
             }));
-        }else{
+        }else if(specMap["type"] == "vf"){
             ofParameter<vector<float>> vf;
             addParameter(vf.set(paramName,
                                 vector<float>(1, ofToFloat(specMap["default"])),
@@ -118,6 +118,81 @@ void scSynthdef::setup(){
                     }
                     if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
                     else synthServer.second->set(toSendName, vf);
+                    if(!serverWaitToSendWasTrue){
+                        synthServer.first->sendStoredBundle();
+                        synthServer.first->setWaitToSend(false);
+                    }
+                }
+            }));
+        }else if(specMap["type"] == "i"){
+            ofParameter<int> i;
+            
+            addParameter(i.set(paramName,
+                                ofToInt(specMap["default"]),
+                                ofToInt(specMap["minval"]),
+                                ofToInt(specMap["maxval"])));
+            string toSendName = ofToLower(spec.first);
+            listeners.push(i.newListener([this, toSendName](int &i_){
+                for(auto synthServer : synths){
+                    bool serverWaitToSendWasTrue = false;
+                    if(synthServer.first->getWaitToSend()){
+                        serverWaitToSendWasTrue = true;
+                    }else{
+                        synthServer.first->setWaitToSend(true);
+                    }
+                    synthServer.second->set(toSendName, i_);
+                    if(!serverWaitToSendWasTrue){
+                        synthServer.first->sendStoredBundle();
+                        synthServer.first->setWaitToSend(false);
+                    }
+                }
+            }));
+            listeners.push(resendParams.newListener([this, i, toSendName]{
+                for(auto synthServer : synths){
+                    bool serverWaitToSendWasTrue = false;
+                    if(synthServer.first->getWaitToSend()){
+                        serverWaitToSendWasTrue = true;
+                    }else{
+                        synthServer.first->setWaitToSend(true);
+                    }
+                    synthServer.second->set(toSendName, i);
+                    if(!serverWaitToSendWasTrue){
+                        synthServer.first->sendStoredBundle();
+                        synthServer.first->setWaitToSend(false);
+                    }
+                }
+            }));
+        }else if(specMap["type"] == "f"){
+            ofParameter<float> f;
+            addParameter(f.set(paramName,
+                                ofToFloat(specMap["default"]),
+                                ofToFloat(specMap["minval"]),
+                                ofToFloat(specMap["maxval"])));
+            string toSendName = ofToLower(spec.first);
+            listeners.push(f.newListener([this, toSendName](float &f_){
+                for(auto synthServer : synths){
+                    bool serverWaitToSendWasTrue = false;
+                    if(synthServer.first->getWaitToSend()){
+                        serverWaitToSendWasTrue = true;
+                    }else{
+                        synthServer.first->setWaitToSend(true);
+                    }
+                    synthServer.second->set(toSendName, f_);
+                    if(!serverWaitToSendWasTrue){
+                        synthServer.first->sendStoredBundle();
+                        synthServer.first->setWaitToSend(false);
+                    }
+                }
+            }));
+            listeners.push(resendParams.newListener([this, f, toSendName]{
+                for(auto synthServer : synths){
+                    bool serverWaitToSendWasTrue = false;
+                    if(synthServer.first->getWaitToSend()){
+                        serverWaitToSendWasTrue = true;
+                    }else{
+                        synthServer.first->setWaitToSend(true);
+                    }
+                    synthServer.second->set(toSendName, f);
                     if(!serverWaitToSendWasTrue){
                         synthServer.first->sendStoredBundle();
                         synthServer.first->setWaitToSend(false);
