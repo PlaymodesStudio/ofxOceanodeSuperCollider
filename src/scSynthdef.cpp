@@ -222,6 +222,7 @@ void scSynthdef::createSynth(ofxSCServer* server){
 
 void scSynthdef::free(ofxSCServer* server){
     synths[server]->free();
+    delete synths[server];
     synths.erase(server);
 }
 
