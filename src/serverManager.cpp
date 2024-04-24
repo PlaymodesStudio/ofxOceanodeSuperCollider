@@ -15,7 +15,7 @@
 serverManager::serverManager(std::vector<std::string> _wavs){
     synth = nullptr;
     wavs = _wavs;
-    volume = 0;
+    volume = 1;
     mute = false;
     delay = 0;
     audioDevice = 0;

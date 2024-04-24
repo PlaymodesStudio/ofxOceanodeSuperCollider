@@ -11,7 +11,7 @@
 #include "serverManager.h"
 
 ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOceanodeBaseController("SuperCollider"){
-    volume = 0;
+    volume = 1;
     mute = false;
     delay = 0;
     reloadAudioDevices();
