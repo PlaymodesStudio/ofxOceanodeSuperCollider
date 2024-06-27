@@ -75,6 +75,7 @@ private:
     std::string synthdefName;
     string file;
     ofParameter<int> numChannels;
+    int oldNumChannels;
     std::map<ofxSCServer*, int> outputBus;
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
     

@@ -14,7 +14,35 @@ scSynthdef::scSynthdef(synthdefDesc _description) : description(_description), s
 
 void scSynthdef::setup(){
     scNode::addInputs(description.numInputs);
-    numChannels = description.numChannels;
+    addParameter(numChannels.set("N Chan", 1, 1, 100));
+    
+    oldNumChannels = numChannels;
+    listeners.push(numChannels.newListener([this](int &i){
+        if(oldNumChannels != numChannels){
+            for(auto &synth : synths){
+                ofxSCSynth *newSynth = new ofxSCSynth(synthdefName + ofToString(numChannels), synth.first);
+                newSynth->create(4, synth.second->nodeID); //replace synth
+                delete synth.second;
+                synth.second = newSynth;
+            }
+            resendParams.notify();
+            for(auto synthServer : synths){
+                if(synthServer.second != nullptr){
+                    synthServer.second->set("out", outputBus[synthServer.first]);
+                }
+                for(int i = 0; i < inputs.size(); i++){
+                    if(inputBuses[synthServer.first].count(inputs[i].get()) == 1){
+                        string paramName = "in";
+                        if(i > 0) paramName += ofToString(i+1);
+                        if(synthServer.second != nullptr){
+                            synthServer.second->set(paramName, inputBuses[synthServer.first][inputs[i].get()]);
+                        }
+                    }
+                }
+            }
+        }
+        oldNumChannels = numChannels;
+    }));
     
     buffers.resize(description.numBuffers);
     for(int i = 0; i < buffers.size(); i++){
@@ -34,7 +62,10 @@ void scSynthdef::setup(){
     for(auto spec : description.params){
         auto specMap = spec.second;
         string paramName = spec.first;
-//        paramName[0] = toupper(paramName[0]);
+        //Modify name to have capital letters
+        //TODO: make pattern like master_level be converted to Master Level
+        paramName[0] = toupper(paramName[0]);
+        
         if(specMap["type"] == "vi"){
             ofParameter<vector<int>> vi;
             
@@ -55,7 +86,7 @@ void scSynthdef::setup(){
                     else synthServer.second->set(toSendName, vi);
                 }
             }));
-        }else if(specMap["type"] == "vf"){
+        }else if(specMap["units"] == "vf"){
             ofParameter<vector<float>> vf;
             addParameter(vf.set(paramName,
                                 vector<float>(1, ofToFloat(specMap["default"])),
@@ -74,7 +105,7 @@ void scSynthdef::setup(){
                     else synthServer.second->set(toSendName, vf);
                 }
             }));
-        }else if(specMap["type"] == "i"){
+        }else if(specMap["units"] == "i"){
             ofParameter<int> i;
             
             addParameter(i.set(paramName,
@@ -92,7 +123,7 @@ void scSynthdef::setup(){
                     synthServer.second->set(toSendName, i);
                 }
             }));
-        }else if(specMap["type"] == "f"){
+        }else if(specMap["units"] == "f"){
             ofParameter<float> f;
             addParameter(f.set(paramName,
                                 ofToFloat(specMap["default"]),
@@ -110,6 +141,8 @@ void scSynthdef::setup(){
                 }
             }));
         }
+        //Split with : for dropdown
+        
     }
     
     addInspectorParameter(doNotDistributeInputs.set("Not Dist In", false));
@@ -159,7 +192,7 @@ void scSynthdef::setup(){
 
 
 void scSynthdef::createSynth(ofxSCServer* server){
-    synths[server] = new ofxSCSynth(ofToLower(synthdefName), server);
+    synths[server] = new ofxSCSynth(synthdefName + ofToString(numChannels), server);
     synths[server]->create();
     resendParams.notify();
 }
@@ -330,6 +363,8 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
         auto specsList = pdata[ofToInt(specsPos)];//getMapFromData(pdata[1]["specs"]);
         for(auto spec : specsList){
             currentDescription.params[spec.first] = getMapFromData(spec.second);
+            // replace units for text in odata.
+            currentDescription.params[spec.first]["units"] = getStringFromData(currentDescription.params[spec.first]["units"]);
         }
     }
     return currentDescription;

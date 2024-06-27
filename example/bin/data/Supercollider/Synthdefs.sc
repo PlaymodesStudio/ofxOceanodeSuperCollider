@@ -4,100 +4,21 @@ s.options.memSize = 2097152
 ~maxValue = 2147483647;
 d = thisProcess.nowExecutingPath.dirname ++ "/Synthdefs";
 
-(
-SynthDef.new("simple", {
-	arg out;
-	var p,level, sig;
-	p=\pitch.kr(40,  spec: ControlSpec(0, 127, default: 36));
-	level = \level.kr(0, 1/30, fixedLag:true,  spec: ControlSpec(0, 1, default: 0));
-	sig = Saw.ar(p.midicps, mul: level);
-	Out.ar(out, sig);
-}, metadata: (name: "Simple", type: "source", numInputs: 0, numOutputs: 1,  numBuffers: 0)).writeDefFile(d);
-)
-
+//EXEMPLE 6 juny
 (
 SynthDef.new(\filter, {
-	arg in,out=0;
-	var input,filters,filtered,freq,res,type;
-	input = In.ar(in, 1);
-	freq=\pitch.kr(127, 0.05, fixedLag:true, spec: ControlSpec(0, 127, default: 127)).midicps;
+	arg source,out=0;
+	var in, input,filters,filtered,freq,res,type;
+	input = \source.ar(0, spec: ControlSpec(units: "input")); //posar en funcio que lectura sigui mes facil tipu: "createInput("source");
+	buf = \buffer.kr(0, spec: ControlSpec(units: "buffer")); //CreateBuffer("buffer");
+	// input = In.ar(source, 1);
+	freq=\pitch.ar(127, 0.05, fixedLag:true, spec: ControlSpec(0, 127, default: 127, units: "vf")).midicps;
 	res=\q.kr(1,  spec: ControlSpec(0, 1, default: 1));
 
-	Out.ar(out, RLPF.ar(input,freq,res,1,0),);
-}, metadata: (name: "Filter", type: "effect", numInputs: 1, numOutputs: 1,  numBuffers: 0)).writeDefFile(d);
+	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), RLPF.ar(input,freq,res,1,0),);
+}, metadata: (name: "Filter", type: "effect",  numBuffers: 0)).writeDefFile(d);
 )
-
-(// samples
-SynthDef(\sampler,
-	{
-		arg out=0, buf;
-		var t, signal, spd,bucle, start, gain;
-		t=\trigger.kr(0, spec: ControlSpec(0, 1, step: 1.0, default: 0));
-		gain=\levels.kr(0, 1/30, fixedLag:true, spec: ControlSpec(0, 1, default: 0));
-		//buf=\bufnum.kr(0!78);
-		spd=\speed.kr(1, spec: ControlSpec(-32, 32, default: 1));
-		bucle=\loop.kr(0, spec: ControlSpec(0, 1, step: 1.0, default: 0));
-		start=\startpos.kr(0, spec: ControlSpec(0, 1, default: 0))*BufFrames.kr(buf);
-		signal=PlayBuf.ar(1, buf, spd, t, start,bucle)*gain;
-		Out.ar(out, signal);
-}, metadata: (name: "Sampler", type: "source", numInputs: 0, numBuffers: 1)).writeDefFile(d);
-)
-
-(///// GranularSampler
-SynthDef(\grainsampler,
-	{
-		arg out=0, buf=0;
-		var t, signal, spd,bucle, start, gain,dur, envbuf;
-		t=\trigger.kr(0, spec: ControlSpec(0, 1, step: 1.0, default: 0));
-		gain=\levels.kr(0, 1/30, fixedLag:true, spec: ControlSpec(0, 1, default: 0));
-		spd=\speed.kr(1, spec: ControlSpec(-32, 32, default: 1));
-		start=\startpos.kr(0, spec: ControlSpec(0, 1, default: 0));
-		dur=\grainsize.kr(0.1, spec: ControlSpec(0.00001, 2, default: 0.1));
-		envbuf=\envbuf.kr(-1, spec: ControlSpec(-1, ~maxValue, step: 1.0, default: -1));
-		signal=GrainBuf.ar(1, t, dur, buf, spd, start,2,0, envbuf,1024)*gain;
-		Out.ar(out, signal);
-}, metadata: (name: "GrainSampler", type: "source", numInputs: 0, numBuffers: 1)).writeDefFile(d);
-)
-
-(//stereo downmixer
-SynthDef.new(\stereomix, {
-	arg in, out, inChannels, outChannels, index=0, spread = 1, center = 0;
-	var sig, size, position;
-	sig = In.ar(in, 1);
-	size = max(2, inChannels) - 1;
-	position = (index * (2 / size) - 1) * spread + center;
-	sig=Pan2.ar(sig, position);
-	Out.ar(out, sig);
-}, metadata: (name: "Stereomix", type: "mixdown", numInputs: 1, numOutputs: 1,  numBuffers: 0)).writeDefFile(d);
-)
-
-//Helper funtion to create panners
-(
-~variChannelEffect = {|name, func, minChannels = 1, maxChannels = 100|
-	File.mkdir(d ++ "/" ++ name);
-	(minChannels..maxChannels).do({arg n;
-		SynthDef.new(name ++ (n).asSymbol, {
-			arg in, out, inChannels, index;
-			var sig;
-			sig = SynthDef.wrap(func, prependArgs: [in, out, inChannels, index, n]);
-			Out.ar(out, sig);
-		}, metadata: (name: name[0].toUpper ++ name[1..], type: "multi", numInputs: 1, numOutputs: 1, numBuffers: 0)).writeDefFile(d ++ "/" ++ name);
-	});
-};
-)
-
-//Creation of Panners, from Pan2 to Pan4 in this example
-(
-~variChannelEffect.value("pan", {|in, out, inChannels, index, n|
-	var sig, size, position, w;
-	w = \width.kr(2, spec: ControlSpec(0, n, default: 2));
-	sig = In.ar(in, 1);
-	size = max(n, inChannels) - 1;
-	position = (index * (2 / size) - 1);
-	sig = PanX.ar(n, sig, position, 1.0, w);
-}, minChannels: 2, maxChannels: 4);
-)
-
+/////
 
 //Infos
 (
@@ -143,5 +64,72 @@ SynthDef.new(\mixer, {
 	finalsig=finalsig*\masterlevel.kr(1, 1/30, fixedLag:true, spec: ControlSpec(0, 1, default: 1));
 	Out.ar(out, finalsig);
 }, metadata: (name: "Mixer", type: "mixdown", numInputs: 8, numOutputs: 1,  numBuffers: 0)).writeDefFile(d);
+)
+
+
+//Helper funtion to create synths
+(
+~synthCreator = {|name, func, numInputs|
+	File.mkdir(d ++ "/" ++ name);
+	//Create first synth for metadata.
+	SynthDef.new(name, {
+			var sig = SynthDef.wrap(func, prependArgs: [1]);
+}, metadata: (name: name, type: "source", numInputs: numInputs, numOutputs: 1, numBuffers: 0)).writeDefFile(d ++ "/" ++ name);
+	//Create array of synths without metadata
+	(1..100).do({arg n;
+		SynthDef.new(name ++ (n).asSymbol, {
+			var sig = SynthDef.wrap(func, prependArgs: [n]);
+		}).writeDefFile(d ++ "/" ++ name, mdPlugin: AbstractMDPlugin); //AbstractMDPlugin to disable metadata
+	});
+};
+)
+
+//Simple synth
+(
+~synthCreator.value("Simple", {|n, out|
+	var pitch,level, sig;
+	pitch =\pitch.kr(40!n,  spec: ControlSpec(0, 127, default: 36, units: "vf"));
+	level = \level.kr(0!n, 1/30, fixedLag:true,  spec: ControlSpec(0, 1, default: 0, units: "vf"));
+	sig = Saw.ar(pitch.midicps, mul: level);
+	Out.ar(out, sig);
+}, numInputs: 0);
+)
+
+//Simple filter
+(
+~synthCreator.value("Filter", {|n, in, out|
+	var input, freq, res;
+	input = In.ar(in, n);
+	freq=\pitch.kr(127!n, 0.05, fixedLag:true, spec: ControlSpec(0, 127, default: 127, units: "vf")).midicps;
+	res=\q.kr(1!n,  spec: ControlSpec(0, 1, default: 1, units: "vf"));
+
+	Out.ar(out, RLPF.ar(input,freq,res,1,0),);
+}, numInputs: 1);
+)
+
+//stereo downmixer
+(
+~sourceCreator.value("StereoMix", {|n, in, out|
+	var sig;
+	sig = In.ar(in, n);
+	sig=Splay.ar(sig,1,1,0);
+	Out.ar(out, sig);
+}, numInputs: 1);
+)
+
+(// samples
+SynthDef(\sampler,
+	{
+		arg out=0, buf;
+		var t, signal, spd,bucle, start, gain;
+		t=\trigger.kr(0, spec: ControlSpec(0, 1, step: 1.0, default: 0));
+		gain=\levels.kr(0, 1/30, fixedLag:true, spec: ControlSpec(0, 1, default: 0));
+		//buf=\bufnum.kr(0!78);
+		spd=\speed.kr(1, spec: ControlSpec(-32, 32, default: 1));
+		bucle=\loop.kr(0, spec: ControlSpec(0, 1, step: 1.0, default: 0));
+		start=\startpos.kr(0, spec: ControlSpec(0, 1, default: 0))*BufFrames.kr(buf);
+		signal=PlayBuf.ar(1, buf, spd, t, start,bucle)*gain;
+		Out.ar(out, signal);
+}, metadata: (name: "Sampler", type: "source", numInputs: 0, numBuffers: 1)).writeDefFile(d);
 )
 
