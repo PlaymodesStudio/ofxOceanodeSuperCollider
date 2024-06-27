@@ -51,7 +51,7 @@ public:
         termcmd += " -l " + ofToString(prefs.maxLogins);
         termcmd += " -s " + ofToString(prefs.safetyClipThreshold);
         termcmd += " -H " + prefs.deviceName;
-        if(prefs.ugensPlugins != "") termcmd += " -U " + prefs.ugensPlugins;
+        if(prefs.ugensPlugins != "") termcmd += " -U " + ofToString("\"") + ofToDataPath(prefs.ugensPlugins, true) + ofToString(":") + ofToDataPath("Supercollider/scsynth/aarch/bin", true) + ofToString("\"");
  
         FILE * ret = nullptr;
     #ifdef TARGET_WIN32
