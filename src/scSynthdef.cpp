@@ -296,9 +296,16 @@ void scSynthdef::createSynth(ofxSCServer* server){
 }
 
 void scSynthdef::free(ofxSCServer* server){
-    synths[server]->free();
-    delete synths[server];
-    synths.erase(server);
+    if(synths.count(server) == 1){
+        synths[server]->free();
+        delete synths[server];
+        synths.erase(server);
+    }
+}
+
+void scSynthdef::freeAll(){
+    for(auto &synth : synths) synth.second->free();
+    synths.clear();
 }
 
 void scSynthdef::setOutputBus(ofxSCServer* server, int bus){

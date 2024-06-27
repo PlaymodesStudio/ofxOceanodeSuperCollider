@@ -18,7 +18,7 @@
 #include "scBuffer.h"
 #include "scCustomBuffer.h"
 #include "scInfo.h"
-#include "scServer.h"
+#include "scOutput.h"
 #include "scNode.h"
 #include "ofxOceanodeSuperColliderController.h"
 #include "ofxSCServer.h"
@@ -120,7 +120,7 @@ static void registerModels(ofxOceanode &o, vector<string> wavs){
     o.registerModel<scInfo>("SuperCollider", controller->getServers());
     o.registerModel<scBuffer>("SuperCollider", wavs);
     o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
-    o.registerModel<scServer>("SuperCollider", controller->getServers());
+    o.registerModel<scOutput>("SuperCollider", controller->getServers());
     o.registerModel<scPitch>("SuperCollider");
     o.registerModel<scChord>("SuperCollider");
 }

@@ -29,7 +29,7 @@ class scSynthdef : public scNode {
 public:
     scSynthdef(synthdefDesc description);
     ~scSynthdef(){
-        
+        freeAll();
     }
     
     void setup() override;
@@ -57,6 +57,7 @@ public:
     
     void createSynth(ofxSCServer* server) override;
     void free(ofxSCServer* server) override;
+    void freeAll();
     
     void setOutputBus(ofxSCServer* server, int bus) override;
     void setInputBus(ofxSCServer* server, scNode* node, int bus) override;

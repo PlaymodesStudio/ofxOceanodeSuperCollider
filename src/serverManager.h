@@ -21,6 +21,7 @@ class ofxSCBuffer;
 class ofxSCBus;
 class scNode;
 class scStart;
+class scOutput;
 
 struct scPreferences{
     bool local = true;
@@ -62,12 +63,27 @@ public:
     void setDelay(int delay);
     
     void setOutputChannel(int channel);
-    void recomputeGraph(scNode* firstNode);
+    void recomputeGraph();
+    
+    void addOutput(scOutput* output);
+    void removeOutput(scOutput* output);
     
     void setAudioDevices(std::vector<std::string> audioDevices){audioDeviceNames = audioDevices;}
     
     ofxSCServer* getServer(){return server;}
     int getOutputBusForNode(scNode* node);
+    
+    void recomputeGraphOnce(){
+        numRecomputeGraphOnce++;
+        if(numRecomputeGraphOnce == outputs.size()){
+            recomputeGraph();
+            numRecomputeGraphOnce = 0;
+        }
+    }
+    
+    void resetRecomputeGraphOnce(){
+        numRecomputeGraphOnce = 0;
+    }
     
     scPreferences preferences;
     ofEvent<void> graphComputed;
@@ -75,9 +91,12 @@ private:
 
     std::vector<scNode*> connectedNodes; //List of all nodes
     
+    ofEventListeners listeners;
+    
     ofxSCSynth *synth;
     ofxSCServer *server;
     
+    std::vector<scOutput*> outputs;
     std::vector<scNode*> nodesList;
     std::map<scNode*, std::map<int, std::vector<ofxSCSynth*>>> synthMap;
     
@@ -95,6 +114,8 @@ private:
     bool dumpOsc;
     std::vector<std::string> audioDeviceNames;
     scStart* sc;
+    
+    int numRecomputeGraphOnce;
 };
 
 #endif /* serverManager_h */

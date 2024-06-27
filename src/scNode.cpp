@@ -45,7 +45,7 @@ bool scNode::appendOrderedNodes(vector<scNode*> &nodesList, map<scNode*, std::pa
            std::find(parents.begin(), parents.end(), inputs[i].get()) == parents.end() &&
            inputs[i].get()->appendOrderedNodes(nodesList, visitedNodeChilds, parents)){
             visitedNodeChilds[this].first = (visitedNodeChilds[this].first+1) % inputs.size();
-            return true;
+//            return true;
         }else if(std::find(visitedNodeChilds[this].second.begin(), visitedNodeChilds[this].second.end(), i) == visitedNodeChilds[this].second.end()){
             visitedNodeChilds[this].second.push_back(i);
         }

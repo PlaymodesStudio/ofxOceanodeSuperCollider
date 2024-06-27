@@ -11,26 +11,24 @@
 #include "ofxSuperCollider.h"
 #include "scNode.h"
 #include "scStart.h"
+#include "scOutput.h"
+#include "ofxOceanodeShared.h"
 
 serverManager::serverManager(std::vector<std::string> _wavs){
-    synth = nullptr;
     wavs = _wavs;
     volume = 1;
     mute = false;
     delay = 0;
     audioDevice = 0;
     dumpOsc = false;
+    numRecomputeGraphOnce = 0;
 };
 
 serverManager::~serverManager(){
     for(auto node : nodesList) node->free(server);
     nodesList.clear();
-    for(auto &b : busses) b.free();
+    for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
     busses.clear();
-    if(synth != nullptr){
-        synth->free();
-        delete synth;
-    }
 }
 
 void serverManager::setup(){
@@ -39,6 +37,17 @@ void serverManager::setup(){
         sc = new scStart(preferences);
     }
     boot();
+    
+    listeners.push(ofxOceanodeShared::getPresetWillBeLoadedEvent().newListener([this](){
+        for(auto node : nodesList) node->free(server);
+        nodesList.clear();
+        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
+        busses.clear();
+    }));
+    
+    listeners.push(ofxOceanodeShared::getPresetHasLoadedEvent().newListener([this](){
+        recomputeGraph();
+    }));
 }
 
 void serverManager::draw(){
@@ -162,7 +171,7 @@ void serverManager::draw(){
 void serverManager::boot(){
     if(preferences.local){
         sc->start();
-        sleep(5);
+        sleep(7);
     }
     ofxOscMessage m2;
     m2.setAddress("/g_new");
@@ -177,9 +186,6 @@ void serverManager::boot(){
     m.addIntArg(0);
     server->sendMsg(m);
     
-    sleep(1);
-    synth = new ofxSCSynth("output", server);
-    synth->addToTail();
     setVolume(volume);
     setDelay(delay);
     
@@ -209,71 +215,85 @@ void serverManager::loadDefs(){
 
 void serverManager::setVolume(float _volume){
     volume = _volume;
-    synth->set("levels", volume);
+    for(auto &o : outputs) o->setVolume(volume);
+    
 }
 
 void serverManager::setDelay(int _delay){
     delay = _delay;
-    synth->set("delay", delay);
+    for(auto &o : outputs) o->setDelay(delay);
 }
 
-void serverManager::setOutputChannel(int channel){
-    synth->set("out", channel);
+void serverManager::addOutput(scOutput *output){
+    outputs.push_back(output);
+    setVolume(volume);
+    setDelay(delay);
 }
 
-void serverManager::recomputeGraph(scNode* firstNode){
-    if(firstNode == nullptr){
+void serverManager::removeOutput(scOutput *output){
+    outputs.erase(std::remove(outputs.begin(), outputs.end(), output), outputs.end());
+    recomputeGraph();
+}
+
+void serverManager::recomputeGraph(){
+    if(ofxOceanodeShared::isPresetLoading()) return;
+//    ofLog() << "Recompute Graph";
+    if(outputs.size() == 0){
         for(auto node : nodesList) node->free(server);
         nodesList.clear();
-        for(auto &b : busses) b.free();
+        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
         busses.clear();
     }else{
-        server->setWaitToSend(true);
-        std::vector<scNode*> newNodesList;
-        std::map<scNode*, std::pair<int, std::vector<int>>> nodeChilds;
-        if(firstNode != nullptr)
-            while(firstNode->appendOrderedNodes(newNodesList, nodeChilds));
+//        server->setWaitToSend(true);
         
         //TODO: Only delete non existing nodes
         for(auto node : nodesList){
-//            if(std::find(newNodesList.begin(), newNodesList.end(), node) == newNodesList.end()){
+            if(node != nullptr)
                 node->free(server);
-//            }else{
-//                newNodesList.erase(std::remove(newNodesList.begin(), newNodesList.end(), node), newNodesList.end());
-//            }
         }
+        nodesList.clear();
         
-        nodesList = newNodesList;
-        
-        std::map<scNode*, std::vector<scNode*>> connections;
-
-        for (auto it = nodesList.rbegin(); it != nodesList.rend(); ++it) {
-            (*it)->getConnections(connections);
-            (*it)->createSynth(server);
-        }
-        
-        for(auto &b : busses) b.free();
+//        for(auto &b : busses) b.free();
+        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
         busses.clear();
         outputBussesRefToNode.clear();
         inputBussesRefToNode.clear();
         
-        busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server); //From server to first node
-        int busindex = busses.back().index;
-        firstNode->setOutputBus(server, busindex);
-        outputBussesRefToNode[firstNode] = busindex;
-        synth->set("in", busindex);
-        for(auto &c : connections){
-            busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server);
-            busindex = busses.back().index;
-            c.first->setOutputBus(server, busindex);
-            outputBussesRefToNode[c.first] = busindex;
-            for(auto &dest : c.second){
-                dest->setInputBus(server, c.first, busindex);
-                inputBussesRefToNode[dest].push_back(busindex);
+        std::vector<scNode*> newNodesList;
+        std::map<scNode*, std::pair<int, std::vector<int>>> nodeChilds;
+        for(int i = 0; i < outputs.size(); i++){
+            if(outputs[i]->isInputConnected()){
+                outputs[i]->getInputNode()->appendOrderedNodes(newNodesList, nodeChilds);
             }
         }
-        server->sendStoredBundle();
-        server->setWaitToSend(false);
+        for(int i = 0; i < outputs.size(); i++){
+            if(outputs[i]->isInputConnected()){
+                newNodesList.push_back(outputs[i]);
+            }
+        }
+            
+            std::map<scNode*, std::vector<scNode*>> connections;
+            
+            for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
+                (*it)->getConnections(connections);
+                (*it)->createSynth(server);
+            }
+            
+            for(auto &c : connections){
+                busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server);
+                int busindex = busses.back().index;
+                c.first->setOutputBus(server, busindex);
+                outputBussesRefToNode[c.first] = busindex;
+                for(auto &dest : c.second){
+                    dest->setInputBus(server, c.first, busindex);
+                    inputBussesRefToNode[dest].push_back(busindex);
+                }
+            }
+        nodesList = newNodesList;
+//            nodesList.insert(nodesList.end(), newNodesList.begin(), newNodesList.end());
+//        }
+//        server->sendStoredBundle();
+//        server->setWaitToSend(false);
     }
     graphComputed.notify();
 }
