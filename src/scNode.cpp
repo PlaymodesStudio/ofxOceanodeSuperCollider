@@ -6,7 +6,6 @@
 //
 
 #include "scNode.h"
-#include "scServer.h"
 #include "ofxSuperCollider.h"
 
 scNode::scNode(std::string name) : ofxOceanodeNodeModel("SC " + name){
