@@ -66,7 +66,7 @@ void scSynthdef::setup(){
         //TODO: make pattern like master_level be converted to Master Level
         paramName[0] = toupper(paramName[0]);
         
-        if(specMap["type"] == "vi"){
+        if(specMap["units"] == "vi"){
             ofParameter<vector<int>> vi;
             
             addParameter(vi.set(paramName,
