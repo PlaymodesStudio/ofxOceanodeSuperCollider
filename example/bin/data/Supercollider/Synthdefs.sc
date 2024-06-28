@@ -69,12 +69,12 @@ SynthDef.new(\mixer, {
 
 //Helper funtion to create synths
 (
-~synthCreator = {|name, func, numInputs|
+~synthCreator = {|name, func|
 	File.mkdir(d ++ "/" ++ name);
 	//Create first synth for metadata.
 	SynthDef.new(name, {
 			var sig = SynthDef.wrap(func, prependArgs: [1]);
-}, metadata: (name: name, type: "source", numInputs: numInputs, numOutputs: 1, numBuffers: 0)).writeDefFile(d ++ "/" ++ name);
+}, metadata: (name: name, type: "source")).writeDefFile(d ++ "/" ++ name);
 	//Create array of synths without metadata
 	(1..100).do({arg n;
 		SynthDef.new(name ++ (n).asSymbol, {
@@ -86,50 +86,64 @@ SynthDef.new(\mixer, {
 
 //Simple synth
 (
-~synthCreator.value("Simple", {|n, out|
+~synthCreator.value("Simple", {|n|
 	var pitch,level, sig;
-	pitch =\pitch.kr(40!n,  spec: ControlSpec(0, 127, default: 36, units: "vf"));
+	pitch = \pitch.kr(40!n,  spec: ControlSpec(0, 127, default: 36, units: "vf"));
 	level = \level.kr(0!n, 1/30, fixedLag:true,  spec: ControlSpec(0, 1, default: 0, units: "vf"));
 	sig = Saw.ar(pitch.midicps, mul: level);
-	Out.ar(out, sig);
-}, numInputs: 0);
+	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), sig);
+});
 )
 
 //Simple filter
 (
-~synthCreator.value("Filter", {|n, in, out|
+~synthCreator.value("Filter", {|n|
 	var input, freq, res;
-	input = In.ar(in, n);
+	input = In.ar(\dry.kr(0, spec: ControlSpec(units: "input")), n);
 	freq=\pitch.kr(127!n, 0.05, fixedLag:true, spec: ControlSpec(0, 127, default: 127, units: "vf")).midicps;
 	res=\q.kr(1!n,  spec: ControlSpec(0, 1, default: 1, units: "vf"));
 
-	Out.ar(out, RLPF.ar(input,freq,res,1,0),);
-}, numInputs: 1);
+	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), RLPF.ar(input,freq,res,1,0),);
+});
 )
 
 //stereo downmixer
 (
-~sourceCreator.value("StereoMix", {|n, in, out|
+~sourceCreator.value("StereoMix", {|n|
 	var sig;
-	sig = In.ar(in, n);
+	sig = In.ar(\in.kr(0, spec: ControlSpec(units: "input")), n);
 	sig=Splay.ar(sig,1,1,0);
-	Out.ar(out, sig);
-}, numInputs: 1);
+	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), sig);
+});
 )
 
-(// samples
-SynthDef(\sampler,
+//Sampler
+(
+~synthCreator.value("Sampler", {|n|
+	var tr, signal, spd, bucle, start, gain, buf;
+	tr=\trigger.kr(0!n, spec: ControlSpec(0, 1, step: 1.0, default: 0, units: "vi"));
+	gain=\levels.kr(0!n, 1/30, fixedLag:true, spec: ControlSpec(0, 1, default: 0, units: "vf"));
+	buf=\bufnum.kr(0!n, spec: ControlSpec(units: "buffer"));
+	spd=\speed.kr(1!n, spec: ControlSpec(-32, 32, default: 1, units: "vf"));
+	bucle=\loop.kr(0!n, spec: ControlSpec(0, 1, step: 1.0, default: 0, units: "vi"));
+	start=\startpos.kr(0!n, spec: ControlSpec(0, 1, default: 0, units: "vf"))*BufFrames.kr(buf);
+	signal=PlayBuf.ar(1, buf, spd, tr, start,bucle)*gain;
+	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), signal);
+});
+)
+
+(///// GranularSampler
+SynthDef(\grainsampler,
 	{
-		arg out=0, buf;
-		var t, signal, spd,bucle, start, gain;
+		arg out=0, buf=0;
+		var t, signal, spd,bucle, start, gain,dur, envbuf;
 		t=\trigger.kr(0, spec: ControlSpec(0, 1, step: 1.0, default: 0));
 		gain=\levels.kr(0, 1/30, fixedLag:true, spec: ControlSpec(0, 1, default: 0));
-		//buf=\bufnum.kr(0!78);
 		spd=\speed.kr(1, spec: ControlSpec(-32, 32, default: 1));
-		bucle=\loop.kr(0, spec: ControlSpec(0, 1, step: 1.0, default: 0));
-		start=\startpos.kr(0, spec: ControlSpec(0, 1, default: 0))*BufFrames.kr(buf);
-		signal=PlayBuf.ar(1, buf, spd, t, start,bucle)*gain;
+		start=\startpos.kr(0, spec: ControlSpec(0, 1, default: 0));
+		dur=\grainsize.kr(0.1, spec: ControlSpec(0.00001, 2, default: 0.1));
+		envbuf=\envbuf.kr(-1, spec: ControlSpec(-1, ~maxValue, step: 1.0, default: -1));
+		signal=GrainBuf.ar(1, t, dur, buf, spd, start,2,0, envbuf,1024)*gain;
 		Out.ar(out, signal);
-}, metadata: (name: "Sampler", type: "source", numInputs: 0, numBuffers: 1)).writeDefFile(d);
+}, metadata: (name: "GrainSampler", type: "source", numInputs: 0, numBuffers: 1)).writeDefFile(d);
 )
-

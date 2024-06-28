@@ -272,20 +272,27 @@ void serverManager::recomputeGraph(){
             }
         }
             
-            std::map<scNode*, std::vector<scNode*>> connections;
+            std::map<nodePort, std::vector<scNode*>> connections;
             
             for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
                 (*it)->getConnections(connections);
                 (*it)->createSynth(server);
             }
-            
-            for(auto &c : connections){
+                
+        //Create outputBusses for all nodes except scOutput
+        for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
+            for(int i = 0; i < (*it)->getNumOutputs() ; i++){
                 busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server);
                 int busindex = busses.back().index;
-                c.first->setOutputBus(server, busindex);
-                outputBussesRefToNode[c.first] = busindex;
+                (*it)->setOutputBus(server, i, busindex);
+                outputBussesRefToNode[(*it)][i] = busindex;
+            }
+        }
+        
+            for(auto &c : connections){
                 for(auto &dest : c.second){
-                    dest->setInputBus(server, c.first, busindex);
+                    int busindex = outputBussesRefToNode[c.first.getNodeRef()][c.first.getIndex()];
+                    dest->setInputBus(server, c.first.getNodeRef(), busindex);
                     inputBussesRefToNode[dest].push_back(busindex);
                 }
             }
@@ -298,11 +305,11 @@ void serverManager::recomputeGraph(){
     graphComputed.notify();
 }
 
-int serverManager::getOutputBusForNode(scNode* node){
-    if(outputBussesRefToNode.count(node) == 1){
-        return outputBussesRefToNode[node];
-    }
-    else{
-        return -1;
-    }
-}
+//int serverManager::getOutputBusForNode(scNode* node){
+//    if(outputBussesRefToNode.count(node) == 1){
+//        return outputBussesRefToNode[node];
+//    }
+//    else{
+//        return -1;
+//    }
+//}

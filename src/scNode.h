@@ -12,23 +12,46 @@
 
 class scServer;
 class ofxSCServer;
+class scNode;
+
+class nodePort{
+public:
+    nodePort() = default;
+    nodePort(int _index, scNode* _nodeRef) : index(_index), nodeRef(_nodeRef){};
+    
+    int getIndex() const {return index;};
+    scNode* getNodeRef() const {return nodeRef;};
+    
+    // Define the less-than operator for nodePort
+    bool operator<(const nodePort& other) const {
+        if (index != other.index) {
+            return index < other.index;
+        }
+        return nodeRef < other.nodeRef;
+    }
+private:
+    int index = -1;
+    scNode* nodeRef = nullptr;
+};
 
 class scNode : public ofxOceanodeNodeModel {
 public:
     scNode(std::string name);
     ~scNode();
     
-    void addInputs(int numInputs);
-    void addOutput();
+    void addInput(std::string name);
+    void addOutput(std::string name);
     
     bool appendOrderedNodes(vector<scNode*> &nodesList, map<scNode*, std::pair<int, vector<int>>> &visitedNodeChilds, vector<scNode*> parents = {});
     
-    void getConnections(std::map<scNode*, vector<scNode*>> &connections);
+    void getConnections(std::map<nodePort, vector<scNode*>> &connections);
+    
+    int getNumOutputs(){return outputs.size();};
     
     virtual void createSynth(ofxSCServer* server){};
     virtual void free(ofxSCServer* server){};
     virtual void runSynth(ofxSCServer* server){};
-    virtual void setOutputBus(ofxSCServer* server, int bus){};
+    virtual void setOutputBus(ofxSCServer* server, int index, int bus){};
     virtual void setInputBus(ofxSCServer* server, scNode* node, int bus){};
     
     ofEvent<int> createdSynth;
@@ -36,8 +59,8 @@ public:
 protected:
     ofEventListeners listeners;
     
-    vector<ofParameter<scNode*>> inputs;
-    ofParameter<scNode*> output;
+    vector<ofParameter<nodePort>> inputs;
+    vector<ofParameter<nodePort>> outputs;
     
     int ins;
     int outs;

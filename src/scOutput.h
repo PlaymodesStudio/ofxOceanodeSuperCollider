@@ -28,8 +28,8 @@ public:
     void createSynth(ofxSCServer* server) override;
     void free(ofxSCServer* server) override;
     
-    bool isInputConnected(){return inputs[0].get() != nullptr;}
-    scNode* getInputNode(){return inputs[0].get();}
+    bool isInputConnected(){return inputs[0]->getNodeRef() != nullptr;}
+    scNode* getInputNode(){return inputs[0]->getNodeRef();}
     
     void setInputBus(ofxSCServer* server, scNode* node, int bus) override;
     

@@ -23,8 +23,8 @@ scOutput::~scOutput(){
 }
 
 void scOutput::setup(){
-    scNode::addInputs(1);
-    listeners.push(inputs[0].newListener([this](scNode* &node){
+    scNode::addInput("In");
+    listeners.push(inputs[0].newListener([this](nodePort &port){
         outputServers[serverIndex]->recomputeGraph();
     }));
     
@@ -83,7 +83,7 @@ void scOutput::free(ofxSCServer* server){
 }
 
 void scOutput::setInputBus(ofxSCServer* server, scNode* node, int bus){
-    if(synth != nullptr && inputs[0].get() == node){
+    if(synth != nullptr && inputs[0]->getNodeRef() == node){
         synth->set("in", bus);
     }
 }

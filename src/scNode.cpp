@@ -16,20 +16,17 @@ scNode::~scNode(){
     
 };
 
-void scNode::addInputs(int numInputs){
-    inputs.resize(numInputs);
-    for(int i = 0; i < inputs.size(); i++){
-        string paramName = "In";
-        if(i > 0) paramName += ofToString(i+1);
-        addParameter(inputs[i].set(paramName, nullptr), ofxOceanodeParameterFlags_DisableOutConnection);
-        listeners.push(inputs[i].newListener([this, i](scNode* node){
-            output = output;
-        }));
-    }
+void scNode::addInput(std::string name){
+    inputs.emplace_back(name, nodePort());
+    addParameter(inputs.back());
+    listeners.push(inputs.back().newListener([this](nodePort &port){
+        for(auto &output : outputs) output = output;
+    }));
 }
 
-void scNode::addOutput(){
-    addOutputParameter(output.set("Out", this));
+void scNode::addOutput(std::string name){
+    outputs.emplace_back(name, nodePort(outputs.size(), this));
+    addOutputParameter(outputs.back());
 }
 
 //DIY Implementation of BFS https://www.geeksforgeeks.org/breadth-first-search-or-bfs-for-a-graph/
@@ -40,10 +37,11 @@ bool scNode::appendOrderedNodes(vector<scNode*> &nodesList, map<scNode*, std::pa
     parents.push_back(this);
     int i = visitedNodeChilds[this].first;
     while(visitedNodeChilds[this].second.size() < inputs.size()){
-        if(inputs[i].get() != nullptr &&
-           std::find(parents.begin(), parents.end(), inputs[i].get()) == parents.end() &&
-           inputs[i].get()->appendOrderedNodes(nodesList, visitedNodeChilds, parents)){
+        if(inputs[i]->getNodeRef() != nullptr &&
+           std::find(parents.begin(), parents.end(), inputs[i]->getNodeRef()) == parents.end() &&
+           inputs[i]->getNodeRef()->appendOrderedNodes(nodesList, visitedNodeChilds, parents)){
             visitedNodeChilds[this].first = (visitedNodeChilds[this].first+1) % inputs.size();
+//            nodesList.push_back(this);
 //            return true;
         }else if(std::find(visitedNodeChilds[this].second.begin(), visitedNodeChilds[this].second.end(), i) == visitedNodeChilds[this].second.end()){
             visitedNodeChilds[this].second.push_back(i);
@@ -58,9 +56,9 @@ bool scNode::appendOrderedNodes(vector<scNode*> &nodesList, map<scNode*, std::pa
 }
 
 
-void scNode::getConnections(std::map<scNode*, vector<scNode*>> &connections){
+void scNode::getConnections(std::map<nodePort, vector<scNode*>> &connections){
     for(int i = 0; i < inputs.size(); i++){
-        if(inputs[i].get() != nullptr)
+        if(inputs[i]->getNodeRef() != nullptr)
             connections[inputs[i].get()].push_back(this);
     }
 }

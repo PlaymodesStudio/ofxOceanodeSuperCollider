@@ -71,7 +71,7 @@ public:
     void setAudioDevices(std::vector<std::string> audioDevices){audioDeviceNames = audioDevices;}
     
     ofxSCServer* getServer(){return server;}
-    int getOutputBusForNode(scNode* node);
+//    int getOutputBusForNode(scNode* node);
     
     void recomputeGraphOnce(){
         numRecomputeGraphOnce++;
@@ -101,7 +101,7 @@ private:
     std::map<scNode*, std::map<int, std::vector<ofxSCSynth*>>> synthMap;
     
     std::vector<ofxSCBus> busses;
-    std::map<scNode*, int> outputBussesRefToNode;
+    std::map<scNode*, std::map<int, int>> outputBussesRefToNode;
     std::map<scNode*, std::vector<int>> inputBussesRefToNode;
     
     std::map<std::string, ofxSCBuffer*> buffers;

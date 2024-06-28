@@ -13,7 +13,18 @@ scSynthdef::scSynthdef(synthdefDesc _description) : description(_description), s
 }
 
 void scSynthdef::setup(){
-    scNode::addInputs(description.numInputs);
+    //First check for inputs
+    for(auto spec : description.params){
+        auto specMap = spec.second;
+        if(specMap["units"] == "input"){
+            string paramName = spec.first;
+            //Modify name to have capital letters
+            //TODO: make pattern like master_level be converted to Master Level
+            paramName[0] = toupper(paramName[0]);
+            scNode::addInput(paramName);
+        }
+    }
+    
     addParameter(numChannels.set("N Chan", 1, 1, 100));
     
     oldNumChannels = numChannels;
@@ -27,15 +38,19 @@ void scSynthdef::setup(){
             }
             resendParams.notify();
             for(auto synthServer : synths){
-                if(synthServer.second != nullptr){
-                    synthServer.second->set("out", outputBus[synthServer.first]);
+                for(int i = 0; i < inputs.size(); i++){
+                    if(inputBuses[synthServer.first].count(inputs[i]->getNodeRef()) == 1){
+                        string paramName = ofToLower(inputs[i].getName());
+                        if(synthServer.second != nullptr){
+                            synthServer.second->set(paramName, inputBuses[synthServer.first][inputs[i]->getNodeRef()]);
+                        }
+                    }
                 }
                 for(int i = 0; i < inputs.size(); i++){
-                    if(inputBuses[synthServer.first].count(inputs[i].get()) == 1){
-                        string paramName = "in";
-                        if(i > 0) paramName += ofToString(i+1);
+                    if(outputBuses[synthServer.first].count(outputs[i]->getIndex()) == 1){
+                        string paramName = ofToLower(outputs[i].getName());
                         if(synthServer.second != nullptr){
-                            synthServer.second->set(paramName, inputBuses[synthServer.first][inputs[i].get()]);
+                            synthServer.second->set(paramName, outputBuses[synthServer.first][outputs[i]->getIndex()]);
                         }
                     }
                 }
@@ -44,20 +59,6 @@ void scSynthdef::setup(){
         oldNumChannels = numChannels;
     }));
     
-    buffers.resize(description.numBuffers);
-    for(int i = 0; i < buffers.size(); i++){
-        string paramName = "Bufnum";
-        if(i > 0) paramName += ofToString(i+1);
-        addParameter(buffers[i].set(paramName, {0}, {0}, {INT_MAX}), ofxOceanodeParameterFlags_DisableOutConnection);
-        listeners.push(buffers[i].newListener([this, i, paramName](vector<int> &buffs){
-            for(auto synthServer : synths){
-                if(buffs.size() != 0){
-                    if(buffs.size() == 1) synthServer.second->setMultiple(ofToLower(paramName), buffs[0], numChannels);
-                    else synthServer.second->set(ofToLower(paramName), buffs);
-                }
-            }
-        }));
-    }
     
     for(auto spec : description.params){
         auto specMap = spec.second;
@@ -140,35 +141,26 @@ void scSynthdef::setup(){
                     synthServer.second->set(toSendName, f);
                 }
             }));
+        }else if(specMap["units"] == "buffer"){
+            ofParameter<vector<int>> vi;
+            addParameter(vi.set(paramName, {0}, {0}, {INT_MAX}));
+            string toSendName = ofToLower(spec.first);
+            listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
+                for(auto synthServer : synths){
+                    if(vi_.size() == 1) synthServer.second->setMultiple(toSendName, vi_[0], numChannels);
+                    else synthServer.second->set(toSendName, vi_);
+                }
+            }));
+            listeners.push(resendParams.newListener([this, vi, toSendName]{
+                for(auto synthServer : synths){
+                    if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
+                    else synthServer.second->set(toSendName, vi);
+                }
+            }));
         }
         //Split with : for dropdown
         
     }
-    
-    addInspectorParameter(doNotDistributeInputs.set("Not Dist In", false));
-    addInspectorParameter(doNotDistributeOutputs.set("Not Dist Out", false));
-    
-    listeners.push(doNotDistributeInputs.newListener([this](bool &b){
-        for(auto synthServer : synths){
-            for(int i = 0; i < inputs.size(); i++){
-                if(inputBuses[synthServer.first].count(inputs[i].get()) == 1){
-                    string paramName = "in";
-                    if(i > 0) paramName += ofToString(i+1);
-                    if(synthServer.second != nullptr){
-                        synthServer.second->set(paramName, inputBuses[synthServer.first][inputs[i].get()]);
-                    }
-                }
-            }
-        }
-    }));
-        
-    listeners.push(doNotDistributeOutputs.newListener([this](bool &b){
-        for(auto synthServer : synths){
-            if(synthServer.second != nullptr){
-                synthServer.second->set("out", outputBus[synthServer.first]);
-            }
-        }
-    }));
     
     listeners.push(resendParams.newListener([this](){
         for(auto synthServer : synths){
@@ -187,7 +179,17 @@ void scSynthdef::setup(){
         }
     }));
     
-    scNode::addOutput();
+    //Last check for outputs
+    for(auto spec : description.params){
+        auto specMap = spec.second;
+        if(specMap["units"] == "output"){
+            string paramName = spec.first;
+            //Modify name to have capital letters
+            //TODO: make pattern like master_level be converted to Master Level
+            paramName[0] = toupper(paramName[0]);
+            scNode::addOutput(paramName);
+        }
+    }
 }
 
 
@@ -210,19 +212,23 @@ void scSynthdef::freeAll(){
     synths.clear();
 }
 
-void scSynthdef::setOutputBus(ofxSCServer* server, int bus){
-    outputBus[server] = bus;
-    if(synths[server] != nullptr){
-        synths[server]->set("out", bus);
+void scSynthdef::setOutputBus(ofxSCServer* server, int index, int bus){
+    outputBuses[server][index] = bus;
+    for(int i = 0; i < outputs.size(); i++){
+        if(outputs[i]->getIndex() == index){
+            string paramName = ofToLower(outputs[i].getName());
+            if(synths[server] != nullptr){
+                synths[server]->set(paramName, bus);
+            }
+        }
     }
 }
 
 void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
     inputBuses[server][node] = bus;
     for(int i = 0; i < inputs.size(); i++){
-        if(inputs[i].get() == node){
-            string paramName = "in";
-            if(i > 0) paramName += ofToString(i+1);
+        if(inputs[i]->getNodeRef() == node){
+            string paramName = ofToLower(inputs[i].getName());
             if(synths[server] != nullptr){
                 synths[server]->set(paramName, bus);
             }
@@ -351,8 +357,6 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     synthdefDesc currentDescription;
     currentDescription.name = getStringFromData(pdata[1]["name"]);
     currentDescription.type = getStringFromData(pdata[1]["type"]);
-    currentDescription.numInputs = ofToInt(getStringFromData(pdata[1]["numInputs"]));
-    currentDescription.numBuffers = ofToInt(getStringFromData(pdata[1]["numBuffers"]));
     if(pdata.size() > 5){
         auto specsPos = pdata[1]["specs"];
         specsPos.erase(0, 2); //remove o[

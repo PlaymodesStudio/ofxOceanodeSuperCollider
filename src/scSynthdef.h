@@ -19,9 +19,6 @@ struct synthdefDesc{
     string filepath;
     string name;
     string type;
-    int numInputs;
-    int numBuffers;
-    int numChannels;
     map<string, map<string, string>> params;
 };
 
@@ -59,7 +56,7 @@ public:
     void free(ofxSCServer* server) override;
     void freeAll();
     
-    void setOutputBus(ofxSCServer* server, int bus) override;
+    void setOutputBus(ofxSCServer* server, int index, int bus) override;
     void setInputBus(ofxSCServer* server, scNode* node, int bus) override;
     
     ofEvent<void> resendParams;
@@ -76,7 +73,7 @@ private:
     string file;
     ofParameter<int> numChannels;
     int oldNumChannels;
-    std::map<ofxSCServer*, int> outputBus;
+    std::map<ofxSCServer*, std::map<int, int>> outputBuses;
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
     
     vector<ofParameter<vector<int>>> buffers;

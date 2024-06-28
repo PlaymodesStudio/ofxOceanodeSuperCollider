@@ -93,7 +93,7 @@ static void registerModels(ofxOceanode &o, vector<string> wavs){
     o.registerModel<scChord>("SuperCollider");
 }
 static void registerType(ofxOceanode &o){
-    o.registerType<scNode*>("ScBus");
+    o.registerType<nodePort>("ScBus");
 }
 static void registerScope(ofxOceanode &o){
 //    o.registerScope<std::pair<ofxSCBus*, scSynthdef*>>([](ofxOceanodeAbstractParameter *p, ImVec2 size){
