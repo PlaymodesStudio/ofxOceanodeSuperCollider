@@ -99,11 +99,12 @@ SynthDef.new(\mixer, {
 (
 ~synthCreator.value("Filter", {|n|
 	var input, freq, res;
-	input = In.ar(\dry.kr(0, spec: ControlSpec(units: "input")), n);
+	input = In.ar(\in.kr(0, spec: ControlSpec(units: "input")), n);
 	freq=\pitch.kr(127!n, 0.05, fixedLag:true, spec: ControlSpec(0, 127, default: 127, units: "vf")).midicps;
 	res=\q.kr(1!n,  spec: ControlSpec(0, 1, default: 1, units: "vf"));
 
-	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), RLPF.ar(input,freq,res,1,0),);
+	Out.ar(\dry.kr(0, spec: ControlSpec(units: "output")), input);
+	Out.ar(\wet.kr(0, spec: ControlSpec(units: "output")), RLPF.ar(input,freq,res,1,0),);
 });
 )
 
