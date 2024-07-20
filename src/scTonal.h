@@ -3,7 +3,6 @@
 //  ofxOceanodeSuperCollider
 //
 //  Created by Eduard Frigola Bagué on 25/11/2022.
-//
 
 #ifndef scTonal_h
 #define scTonal_h
@@ -11,8 +10,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "ofxSuperCollider.h"
 
-
-class scPitch : public ofxOceanodeNodeModel{
+class scPitch : public ofxOceanodeNodeModel {
 public:
     scPitch() : ofxOceanodeNodeModel("SC Pitch"){}
     
@@ -33,14 +31,15 @@ public:
             names.push_back(split[0]);
         }
         
-        
         addParameterDropdown(mode, "Class", 0, names);
         addOutputParameter(modeSize.set("Size", 5, 0, INT_MAX));
         addOutputParameter(output.set("Output", {0}, {0}, {INT_MAX}));
+        addOutputParameter(nameOutput.set("Name", ""));
         
         listeners.push(mode.newListener([this](int &m){
             modeSize = scales[mode].second.size();
             output = scales[mode].second;
+            nameOutput = scales[mode].first;
         }));
     }
     
@@ -48,6 +47,7 @@ private:
     ofParameter<int>    mode;
     ofParameter<int>    modeSize;
     ofParameter<vector<int>> output;
+    ofParameter<string> nameOutput;
     
     vector<pair<string, vector<int>>> scales;
     
@@ -56,7 +56,7 @@ private:
     ofEventListeners listeners;
 };
 
-class scChord : public ofxOceanodeNodeModel{
+class scChord : public ofxOceanodeNodeModel {
 public:
     scChord() : ofxOceanodeNodeModel("SC Chord"){}
     
@@ -77,11 +77,11 @@ public:
             names.push_back(split[0]);
         }
         
-        
         addParameterDropdown(mode, "Chord", 0, names);
         addParameter(fold.set("Fold", false));
         addOutputParameter(modeSize.set("Size", 5, 0, INT_MAX));
         addOutputParameter(output.set("Output", {0}, {0}, {INT_MAX}));
+        addOutputParameter(nameOutput.set("Name", ""));
         
         listeners.push(mode.newListener([this](int &m){
             compute();
@@ -102,6 +102,7 @@ public:
         }else{
             output = chords[mode].second;
         }
+        nameOutput = chords[mode].first;
     }
     
 private:
@@ -109,6 +110,7 @@ private:
     ofParameter<int>    modeSize;
     ofParameter<vector<int>> output;
     ofParameter<bool> fold;
+    ofParameter<string> nameOutput;
     
     vector<pair<string, vector<int>>> chords;
     
