@@ -69,7 +69,11 @@ static void registerModels(ofxOceanode &o, vector<string> wavs){
                     }else if(desc.type == "events"){
 
                     }else{
-                        o.registerModel<scSynthdef>("Supercollider", desc);
+                        if(desc.category != ""){
+                            o.registerModel<scSynthdef>("SuperCollider/" + desc.category, desc);
+                        }else{
+                            o.registerModel<scSynthdef>("SuperCollider", desc);
+                        }
                     }
                 }
             }

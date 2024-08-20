@@ -21,6 +21,7 @@ struct synthdefDesc{
     string type;
     map<string, map<string, string>> params;
     string description;
+    string category;
 };
 
 class scSynthdef : public scNode {

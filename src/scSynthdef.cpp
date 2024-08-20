@@ -376,6 +376,7 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     currentDescription.type = getStringFromData(pdata[1]["type"]);
     currentDescription.description = getStringFromData(pdata[1]["description"]);
     ofStringReplace(currentDescription.description, "_", " ");
+    currentDescription.category = getStringFromData(pdata[1]["category"]);
     if(pdata.size() > 5){
         auto specsPos = pdata[1]["specs"];
         specsPos.erase(0, 2); //remove o[

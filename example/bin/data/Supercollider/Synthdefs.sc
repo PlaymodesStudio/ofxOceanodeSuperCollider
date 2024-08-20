@@ -69,13 +69,13 @@ SynthDef.new(\mixer, {
 
 //Helper funtion to create synths
 (
-~synthCreator = {|name, func, description = ""|
+~synthCreator = {|name, func, description = "", category = ""|
 	File.mkdir(d ++ "/" ++ name);
 	description = description.replace(" ", "_");
 	//Create first synth for metadata.
 	SynthDef.new(name, {
 			var sig = SynthDef.wrap(func, prependArgs: [1]);
-}, metadata: (name: name, type: "source", description: description)).writeDefFile(d ++ "/" ++ name);
+}, metadata: (name: name, type: "source", description: description, category: category)).writeDefFile(d ++ "/" ++ name);
 	//Create array of synths without metadata
 	(1..100).do({arg n;
 		SynthDef.new(name ++ (n).asSymbol, {
@@ -93,7 +93,7 @@ SynthDef.new(\mixer, {
 	level = \level.kr(0!n, 1/30, fixedLag:true,  spec: ControlSpec(0, 1, default: 0, units: "vf"));
 	sig = Saw.ar(pitch.midicps, mul: level);
 	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), sig);
-}, description: "This is a simple synth with a simple saw wave");
+}, description: "This is a simple synth with a simple saw wave", category: "Source/Oscillator"
 )
 
 //Simple filter
@@ -116,7 +116,7 @@ SynthDef.new(\mixer, {
 
 	Out.ar(\dry.kr(0, spec: ControlSpec(units: "output")), input);
 	Out.ar(\wet.kr(0, spec: ControlSpec(units: "output")), filtered);
-});
+}, category: "Effect/Filter");
 )
 
 //stereo downmixer
@@ -126,7 +126,7 @@ SynthDef.new(\mixer, {
 	sig = In.ar(\in.kr(0, spec: ControlSpec(units: "input")), n);
 	sig=Splay.ar(sig,1,1,0);
 	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), sig);
-});
+}, category: "Effect/Downmixer");
 )
 
 //Sampler
@@ -141,7 +141,7 @@ SynthDef.new(\mixer, {
 	start=\startpos.kr(0!n, spec: ControlSpec(0, 1, default: 0, units: "vf"))*BufFrames.kr(buf);
 	signal=PlayBuf.ar(1, buf, spd, tr, start,bucle)*gain;
 	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), signal);
-});
+}, category: "Source/Sampling");
 )
 
 (///// GranularSampler
