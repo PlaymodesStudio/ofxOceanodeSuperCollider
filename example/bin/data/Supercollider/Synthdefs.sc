@@ -98,13 +98,23 @@ SynthDef.new(\mixer, {
 //Simple filter
 (
 ~synthCreator.value("Filter", {|n|
-	var input, freq, res;
+	var input, freq, res, filtered, filters;
 	input = In.ar(\in.kr(0, spec: ControlSpec(units: "input")), n);
 	freq=\pitch.kr(127!n, 0.05, fixedLag:true, spec: ControlSpec(0, 127, default: 127, units: "vf")).midicps;
 	res=\q.kr(1!n,  spec: ControlSpec(0, 1, default: 1, units: "vf"));
 
+	filters=[
+		RLPF.ar(input,freq,res,1,0),
+		RHPF.ar(input,freq,res,1,0),
+		BPF.ar(input,freq,res,1,0),
+		BRF.ar(input,freq,res,1,0),
+		BPeakEQ.ar(input,freq,1,res*12,1,0)
+	];
+
+	filtered=Select.ar(\type.kr(0, spec: ControlSpec(default: 0, units: "d:Low Pass:High Pass:Band Pass:Band Reject:Parametric")),filters);
+
 	Out.ar(\dry.kr(0, spec: ControlSpec(units: "output")), input);
-	Out.ar(\wet.kr(0, spec: ControlSpec(units: "output")), RLPF.ar(input,freq,res,1,0),);
+	Out.ar(\wet.kr(0, spec: ControlSpec(units: "output")), filtered);
 });
 )
 

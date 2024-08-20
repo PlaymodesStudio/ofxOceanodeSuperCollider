@@ -158,7 +158,24 @@ void scSynthdef::setup(){
                 }
             }));
         }
-        //Split with : for dropdown
+        else if(ofStringTimesInString(specMap["units"], "d:") == 1){ //Is dropdown
+            ofParameter<int> i;
+            vector<string> splitString = ofSplitString(specMap["units"], ":");
+            splitString.erase(splitString.begin());
+//            vector<string> options = ofSplitString(splitString[1], ", ");
+            addParameterDropdown(i, paramName, ofToInt(specMap["default"]), splitString);
+            string toSendName = ofToLower(spec.first);
+            listeners.push(i.newListener([this, toSendName](int &i_){
+                for(auto synthServer : synths){
+                    synthServer.second->set(toSendName, i_);
+                }
+            }));
+            listeners.push(resendParams.newListener([this, i, toSendName]{
+                for(auto synthServer : synths){
+                    synthServer.second->set(toSendName, i);
+                }
+            }));
+        }
         
     }
     
