@@ -69,13 +69,13 @@ SynthDef.new(\mixer, {
 
 //Helper funtion to create synths
 (
-~synthCreator = {|name, func, desc = ""|
+~synthCreator = {|name, func, description = ""|
 	File.mkdir(d ++ "/" ++ name);
-	desc.findReplace(" ", "_");
+	description = description.replace(" ", "_");
 	//Create first synth for metadata.
 	SynthDef.new(name, {
 			var sig = SynthDef.wrap(func, prependArgs: [1]);
-}, metadata: (name: name, type: "source", description: desc)).writeDefFile(d ++ "/" ++ name);
+}, metadata: (name: name, type: "source", description: description)).writeDefFile(d ++ "/" ++ name);
 	//Create array of synths without metadata
 	(1..100).do({arg n;
 		SynthDef.new(name ++ (n).asSymbol, {
@@ -93,7 +93,7 @@ SynthDef.new(\mixer, {
 	level = \level.kr(0!n, 1/30, fixedLag:true,  spec: ControlSpec(0, 1, default: 0, units: "vf"));
 	sig = Saw.ar(pitch.midicps, mul: level);
 	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), sig);
-}, "This is a simple synth with a simple saw wave");
+}, description: "This is a simple synth with a simple saw wave");
 )
 
 //Simple filter
