@@ -20,6 +20,7 @@ struct synthdefDesc{
     string name;
     string type;
     map<string, map<string, string>> params;
+    string description;
 };
 
 class scSynthdef : public scNode {
@@ -68,7 +69,7 @@ private:
     
     std::map<ofxSCServer*, ofxSCSynth*> synths;
     
-    synthdefDesc description;
+    synthdefDesc synthDescription;
     std::string synthdefName;
     string file;
     ofParameter<int> numChannels;

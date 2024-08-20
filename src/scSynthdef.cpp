@@ -8,13 +8,13 @@
 #include "scSynthdef.h"
 #include "ofxSCSynth.h"
 
-scSynthdef::scSynthdef(synthdefDesc _description) : description(_description), synthdefName(_description.name), scNode(_description.name){
-    
+scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synthDescription), synthdefName(_synthDescription.name), scNode(_synthDescription.name){
+    description = synthDescription.description;
 }
 
 void scSynthdef::setup(){
     //First check for inputs
-    for(auto spec : description.params){
+    for(auto spec : synthDescription.params){
         auto specMap = spec.second;
         if(specMap["units"] == "input"){
             string paramName = spec.first;
@@ -60,7 +60,7 @@ void scSynthdef::setup(){
     }));
     
     
-    for(auto spec : description.params){
+    for(auto spec : synthDescription.params){
         auto specMap = spec.second;
         string paramName = spec.first;
         //Modify name to have capital letters
@@ -197,7 +197,7 @@ void scSynthdef::setup(){
     }));
     
     //Last check for outputs
-    for(auto spec : description.params){
+    for(auto spec : synthDescription.params){
         auto specMap = spec.second;
         if(specMap["units"] == "output"){
             string paramName = spec.first;
@@ -374,6 +374,8 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     synthdefDesc currentDescription;
     currentDescription.name = getStringFromData(pdata[1]["name"]);
     currentDescription.type = getStringFromData(pdata[1]["type"]);
+    currentDescription.description = getStringFromData(pdata[1]["description"]);
+    ofStringReplace(currentDescription.description, "_", " ");
     if(pdata.size() > 5){
         auto specsPos = pdata[1]["specs"];
         specsPos.erase(0, 2); //remove o[
