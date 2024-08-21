@@ -100,13 +100,17 @@ void scSynthdef::setup(){
                     for(auto &output : outputs) output = output;
                 });
                 
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>> bussesPair){
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
                     if(availableInput->getNodeRef() != nullptr){
-                        synths[bussesPair.first]->set(toSendName + "_sel", 1);
-                        synths[bussesPair.first]->mapan(toSendName + "_ar", bussesPair.second.at(availableInput->getNodeRef()).at(availableInput->getIndex()), numChannels);
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 1);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), numChannels);
+                        }
                     }else{
-                        synths[bussesPair.first]->set(toSendName + "_sel", 0);
-                        synths[bussesPair.first]->mapan(toSendName + "_ar", -1, numChannels);
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 0);
+                            synthServer.second->mapan(toSendName + "_ar", -1, numChannels);
+                        }
                     }
                 }));
             }
@@ -142,13 +146,17 @@ void scSynthdef::setup(){
                     for(auto &output : outputs) output = output;
                 });
                 
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>> bussesPair){
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
                     if(availableInput->getNodeRef() != nullptr){
-                        synths[bussesPair.first]->set(toSendName + "_sel", 1);
-                        synths[bussesPair.first]->mapan(toSendName + "_ar", bussesPair.second.at(availableInput->getNodeRef()).at(availableInput->getIndex()), numChannels);
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 1);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), numChannels);
+                        }
                     }else{
-                        synths[bussesPair.first]->set(toSendName + "_sel", 0);
-                        synths[bussesPair.first]->mapan(toSendName + "_ar", -1, numChannels);
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 0);
+                            synthServer.second->mapan(toSendName + "_ar", -1, numChannels);
+                        }
                     }
                 }));
             }
@@ -183,13 +191,17 @@ void scSynthdef::setup(){
                     for(auto &output : outputs) output = output;
                 });
                 
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>> bussesPair){
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
                     if(availableInput->getNodeRef() != nullptr){
-                        synths[bussesPair.first]->set(toSendName + "_sel", 1);
-                        synths[bussesPair.first]->mapan(toSendName + "_ar", bussesPair.second.at(availableInput->getNodeRef()).at(availableInput->getIndex()), numChannels);
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 1);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), numChannels);
+                        }
                     }else{
-                        synths[bussesPair.first]->set(toSendName + "_sel", 0);
-                        synths[bussesPair.first]->mapan(toSendName + "_ar", -1, numChannels);
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 0);
+                            synthServer.second->mapan(toSendName + "_ar", -1, numChannels);
+                        }
                     }
                 }));
             }
@@ -223,13 +235,17 @@ void scSynthdef::setup(){
                     for(auto &output : outputs) output = output;
                 });
                 
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>> bussesPair){
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
                     if(availableInput->getNodeRef() != nullptr){
-                        synths[bussesPair.first]->set(toSendName + "_sel", 1);
-                        synths[bussesPair.first]->mapan(toSendName + "_ar", bussesPair.second.at(availableInput->getNodeRef()).at(availableInput->getIndex()), numChannels);
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 1);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), numChannels);
+                        }
                     }else{
-                        synths[bussesPair.first]->set(toSendName + "_sel", 0);
-                        synths[bussesPair.first]->mapan(toSendName + "_ar", -1, numChannels);
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 0);
+                            synthServer.second->mapan(toSendName + "_ar", -1, numChannels);
+                        }
                     }
                 }));
             }
@@ -321,11 +337,6 @@ void scSynthdef::freeAll(){
     synths.clear();
 }
 
-void scSynthdef::assignBussesToControls(ofxSCServer* server, const std::map<scNode*, std::map<int, int>> &outputBussesRefToNode){
-    std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>> newPair(server, outputBussesRefToNode);
-    reassignAudioControls.notify(this, newPair);
-}
-
 void scSynthdef::setOutputBus(ofxSCServer* server, int index, int bus){
     outputBuses[server][index] = bus;
     for(int i = 0; i < outputs.size(); i++){
@@ -348,6 +359,10 @@ void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
             }
         }
     }
+}
+
+int scSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
+    return outputBuses[server][index];
 }
 
 synthdefDesc scSynthdef::readAndCreateSynthdef(string file){

@@ -22,6 +22,8 @@ public:
     int getIndex() const {return index;};
     scNode* getNodeRef() const {return nodeRef;};
     
+    int getBusIndex(ofxSCServer* server) const;
+    
     // Define the less-than operator for nodePort
     bool operator<(const nodePort& other) const {
         if (index != other.index) {
@@ -54,9 +56,10 @@ public:
     virtual void setOutputBus(ofxSCServer* server, int index, int bus){};
     virtual void setInputBus(ofxSCServer* server, scNode* node, int bus){};
     
-    virtual void assignBussesToControls(ofxSCServer* server, const std::map<scNode*, std::map<int, int>> &outputBussesRefToNode){};
+    virtual int getOutputBusIndex(ofxSCServer* server, int index){return -1;};
     
     ofEvent<int> createdSynth;
+    ofEvent<void> reassignAudioControls;
     
 protected:
     ofEventListeners listeners;

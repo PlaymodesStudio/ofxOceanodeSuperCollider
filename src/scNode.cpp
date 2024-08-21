@@ -8,6 +8,11 @@
 #include "scNode.h"
 #include "ofxSuperCollider.h"
 
+int nodePort::getBusIndex(ofxSCServer* server) const{
+    if(nodeRef == nullptr) return -1;
+    return nodeRef->getOutputBusIndex(server, index);
+}
+
 scNode::scNode(std::string name) : ofxOceanodeNodeModel("SC " + name){
     
 };

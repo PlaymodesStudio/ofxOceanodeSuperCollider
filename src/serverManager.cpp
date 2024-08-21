@@ -298,7 +298,7 @@ void serverManager::recomputeGraph(){
             }
         
         for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
-            (*it)->assignBussesToControls(server, outputBussesRefToNode);
+            (*it)->reassignAudioControls.notify();
         }
         
         nodesList = newNodesList;
