@@ -46,7 +46,7 @@ void scSynthdef::setup(){
                         }
                     }
                 }
-                for(int i = 0; i < inputs.size(); i++){
+                for(int i = 0; i < outputs.size(); i++){
                     if(outputBuses[synthServer.first].count(outputs[i]->getIndex()) == 1){
                         string paramName = ofToLower(outputs[i].getName());
                         if(synthServer.second != nullptr){
