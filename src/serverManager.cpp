@@ -296,6 +296,11 @@ void serverManager::recomputeGraph(){
                     inputBussesRefToNode[dest].push_back(busindex);
                 }
             }
+        
+        for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
+            (*it)->assignBussesToControls(server, outputBussesRefToNode);
+        }
+        
         nodesList = newNodesList;
 //            nodesList.insert(nodesList.end(), newNodesList.begin(), newNodesList.end());
 //        }

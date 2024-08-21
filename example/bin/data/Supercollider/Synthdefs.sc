@@ -85,15 +85,46 @@ SynthDef.new(\mixer, {
 };
 )
 
+//Make shure you have OceanodeParameter pseudo-Ugen in user extensions folder
+Platform.userExtensionDir;
+//You should have a class containing the file oceanodeParameter.sc with the following contents:
+
+/*
+OceanodeParameter {
+	*ar {arg name, default, size, min, max, units;
+		^Select.ar(
+			(name ++ "_sel").asSymbol.kr(0),
+			[
+				K2A.ar(name.asSymbol.kr(default!size, spec: ControlSpec(min, max, default: default, units: units))),
+				(name ++ "_ar").asSymbol.ar(default!size);
+			]
+		)
+	}
+}
+
+OceanodeParameterLag {
+	*ar {arg name, default, size, min, max, units, lagtime = 0, fixedLag = false;
+		^Select.ar(
+			(name ++ "_sel").asSymbol.kr(0),
+			[
+				K2A.ar(name.asSymbol.kr(default!size, lag: lagtime, fixedLag: fixedLag, spec: ControlSpec(min, max, default: default, units: units))),
+				(name ++ "_ar").asSymbol.ar(default!size);
+			]
+		)
+	}
+}
+*/
+
 //Simple synth
 (
 ~synthCreator.value("Simple", {|n|
 	var pitch,level, sig;
-	pitch = \pitch.kr(40!n,  spec: ControlSpec(0, 127, default: 36, units: "vf"));
-	level = \level.kr(0!n, 1/30, fixedLag:true,  spec: ControlSpec(0, 1, default: 0, units: "vf"));
+	pitch = OceanodeParameter.ar(\pitch, 40, n, 0, 127, "vf");
+	level = OceanodeParameterLag.ar(\level, default: 0, size: n, min: 0, max: 1, units: "vf", lagtime: 1/30, fixedLag: true);
 	sig = Saw.ar(pitch.midicps, mul: level);
 	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), sig);
 }, description: "This is a simple synth with a simple saw wave", category: "Source/Oscillator"
+);
 )
 
 //Simple filter
@@ -101,8 +132,8 @@ SynthDef.new(\mixer, {
 ~synthCreator.value("Filter", {|n|
 	var input, freq, res, filtered, filters;
 	input = In.ar(\in.kr(0, spec: ControlSpec(units: "input")), n);
-	freq=\pitch.kr(127!n, 0.05, fixedLag:true, spec: ControlSpec(0, 127, default: 127, units: "vf")).midicps;
-	res=\q.kr(1!n,  spec: ControlSpec(0, 1, default: 1, units: "vf"));
+	freq = OceanodeParameterLag.ar(\pitch, 127, n, 0, 127, "vf", 0.05, true).midicps;
+	res = OceanodeParameter.ar(\q, 1, n, 0, 1, "vf");
 
 	filters=[
 		RLPF.ar(input,freq,res,1,0),
@@ -142,6 +173,18 @@ SynthDef.new(\mixer, {
 	signal=PlayBuf.ar(1, buf, spd, tr, start,bucle)*gain;
 	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), signal);
 }, category: "Source/Sampling");
+)
+
+//Mapper for audio signals
+(
+~synthCreator.value("Mapper", {|n|
+	var input, sig, min, max;
+	input = In.ar(\in.kr(0, spec: ControlSpec(units: "input")), n);
+	min = OceanodeParameter.ar(\min, 0, n, -1000, 1000, "vf");
+	max = OceanodeParameter.ar(\max, 1, n, -1000, 1000, "vf");
+	sig = LinLin.ar(input, -1, 1, min, max);
+	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), sig);
+});
 )
 
 (///// GranularSampler

@@ -58,10 +58,13 @@ public:
     void free(ofxSCServer* server) override;
     void freeAll();
     
+    void assignBussesToControls(ofxSCServer* server, const std::map<scNode*, std::map<int, int>> &outputBussesRefToNode) override;
+    
     void setOutputBus(ofxSCServer* server, int index, int bus) override;
     void setInputBus(ofxSCServer* server, scNode* node, int bus) override;
     
     ofEvent<void> resendParams;
+    ofEvent<std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>>> reassignAudioControls;
     
     static synthdefDesc readAndCreateSynthdef(string file);
     

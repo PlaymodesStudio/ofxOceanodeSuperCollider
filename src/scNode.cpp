@@ -19,7 +19,9 @@ scNode::~scNode(){
 void scNode::addInput(std::string name){
     inputs.emplace_back(name, nodePort());
     addParameter(inputs.back());
-    listeners.push(inputs.back().newListener([this](nodePort &port){
+    auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>(inputs.back().get()));
+    listeners.push(inputs.back().newListener([this, availableInput](nodePort &port){
+        *availableInput = port;
         for(auto &output : outputs) output = output;
     }));
 }
@@ -36,17 +38,17 @@ bool scNode::appendOrderedNodes(vector<scNode*> &nodesList, map<scNode*, std::pa
     }
     parents.push_back(this);
     int i = visitedNodeChilds[this].first;
-    while(visitedNodeChilds[this].second.size() < inputs.size()){
-        if(inputs[i]->getNodeRef() != nullptr &&
-           std::find(parents.begin(), parents.end(), inputs[i]->getNodeRef()) == parents.end() &&
-           inputs[i]->getNodeRef()->appendOrderedNodes(nodesList, visitedNodeChilds, parents)){
-            visitedNodeChilds[this].first = (visitedNodeChilds[this].first+1) % inputs.size();
+    while(visitedNodeChilds[this].second.size() < availableInputs.size()){
+        if(availableInputs[i]->getNodeRef() != nullptr &&
+           std::find(parents.begin(), parents.end(), availableInputs[i]->getNodeRef()) == parents.end() &&
+           availableInputs[i]->getNodeRef()->appendOrderedNodes(nodesList, visitedNodeChilds, parents)){
+            visitedNodeChilds[this].first = (visitedNodeChilds[this].first+1) % availableInputs.size();
 //            nodesList.push_back(this);
 //            return true;
         }else if(std::find(visitedNodeChilds[this].second.begin(), visitedNodeChilds[this].second.end(), i) == visitedNodeChilds[this].second.end()){
             visitedNodeChilds[this].second.push_back(i);
         }
-        i = (i+1) % inputs.size();
+        i = (i+1) % availableInputs.size();
     }
     if(std::find(nodesList.begin(), nodesList.end(), this) == nodesList.end()){
         nodesList.push_back(this);
@@ -57,9 +59,9 @@ bool scNode::appendOrderedNodes(vector<scNode*> &nodesList, map<scNode*, std::pa
 
 
 void scNode::getConnections(std::map<nodePort, vector<scNode*>> &connections){
-    for(int i = 0; i < inputs.size(); i++){
-        if(inputs[i]->getNodeRef() != nullptr)
-            connections[inputs[i].get()].push_back(this);
+    for(int i = 0; i < availableInputs.size(); i++){
+        if(availableInputs[i]->getNodeRef() != nullptr)
+            connections[*availableInputs[i]].push_back(this);
     }
 }
 

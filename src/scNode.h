@@ -54,6 +54,8 @@ public:
     virtual void setOutputBus(ofxSCServer* server, int index, int bus){};
     virtual void setInputBus(ofxSCServer* server, scNode* node, int bus){};
     
+    virtual void assignBussesToControls(ofxSCServer* server, const std::map<scNode*, std::map<int, int>> &outputBussesRefToNode){};
+    
     ofEvent<int> createdSynth;
     
 protected:
@@ -61,6 +63,8 @@ protected:
     
     vector<ofParameter<nodePort>> inputs;
     vector<ofParameter<nodePort>> outputs;
+    
+    vector<std::shared_ptr<nodePort>> availableInputs;
     
     int ins;
     int outs;

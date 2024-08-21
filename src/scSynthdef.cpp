@@ -67,10 +67,10 @@ void scSynthdef::setup(){
         //TODO: make pattern like master_level be converted to Master Level
         paramName[0] = toupper(paramName[0]);
         
-        if(specMap["units"] == "vi"){
+        if(specMap["units"] == "vi" || specMap["units"] == "avi"){
             ofParameter<vector<int>> vi;
             
-            addParameter(vi.set(paramName,
+            auto paramRef = addParameter(vi.set(paramName,
                                 vector<int>(1, ofToInt(specMap["default"])),
                                 vector<int>(1, ofToInt(specMap["minval"])),
                                 vector<int>(1, ofToInt(specMap["maxval"]))));
@@ -87,9 +87,32 @@ void scSynthdef::setup(){
                     else synthServer.second->set(toSendName, vi);
                 }
             }));
-        }else if(specMap["units"] == "vf"){
+            
+            if(specMap["units"] == "avi"){ //Can be audio rate
+                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
+                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
+                    //TODO: Check why it triggers to times
+                    *availableInput = port;
+                    for(auto &output : outputs) output = output;
+                });
+                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
+                    *availableInput = nodePort();
+                    for(auto &output : outputs) output = output;
+                });
+                
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>> bussesPair){
+                    if(availableInput->getNodeRef() != nullptr){
+                        synths[bussesPair.first]->set(toSendName + "_sel", 1);
+                        synths[bussesPair.first]->mapan(toSendName + "_ar", bussesPair.second.at(availableInput->getNodeRef()).at(availableInput->getIndex()), numChannels);
+                    }else{
+                        synths[bussesPair.first]->set(toSendName + "_sel", 0);
+                        synths[bussesPair.first]->mapan(toSendName + "_ar", -1, numChannels);
+                    }
+                }));
+            }
+        }else if(specMap["units"] == "vf" || specMap["units"] == "avf"){
             ofParameter<vector<float>> vf;
-            addParameter(vf.set(paramName,
+            auto paramRef = addParameter(vf.set(paramName,
                                 vector<float>(1, ofToFloat(specMap["default"])),
                                 vector<float>(1, ofToFloat(specMap["minval"])),
                                 vector<float>(1, ofToFloat(specMap["maxval"]))));
@@ -106,10 +129,33 @@ void scSynthdef::setup(){
                     else synthServer.second->set(toSendName, vf);
                 }
             }));
-        }else if(specMap["units"] == "i"){
+            
+            if(specMap["units"] == "avf"){ //Can be audio rate
+                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
+                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
+                    //TODO: Check why it triggers to times
+                    *availableInput = port;
+                    for(auto &output : outputs) output = output;
+                });
+                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
+                    *availableInput = nodePort();
+                    for(auto &output : outputs) output = output;
+                });
+                
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>> bussesPair){
+                    if(availableInput->getNodeRef() != nullptr){
+                        synths[bussesPair.first]->set(toSendName + "_sel", 1);
+                        synths[bussesPair.first]->mapan(toSendName + "_ar", bussesPair.second.at(availableInput->getNodeRef()).at(availableInput->getIndex()), numChannels);
+                    }else{
+                        synths[bussesPair.first]->set(toSendName + "_sel", 0);
+                        synths[bussesPair.first]->mapan(toSendName + "_ar", -1, numChannels);
+                    }
+                }));
+            }
+        }else if(specMap["units"] == "i" || specMap["units"] == "ai"){
             ofParameter<int> i;
             
-            addParameter(i.set(paramName,
+            auto paramRef = addParameter(i.set(paramName,
                                 ofToInt(specMap["default"]),
                                 ofToInt(specMap["minval"]),
                                 ofToInt(specMap["maxval"])));
@@ -124,9 +170,32 @@ void scSynthdef::setup(){
                     synthServer.second->set(toSendName, i);
                 }
             }));
-        }else if(specMap["units"] == "f"){
+            
+            if(specMap["units"] == "ai"){ //Can be audio rate
+                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
+                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
+                    //TODO: Check why it triggers to times
+                    *availableInput = port;
+                    for(auto &output : outputs) output = output;
+                });
+                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
+                    *availableInput = nodePort();
+                    for(auto &output : outputs) output = output;
+                });
+                
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>> bussesPair){
+                    if(availableInput->getNodeRef() != nullptr){
+                        synths[bussesPair.first]->set(toSendName + "_sel", 1);
+                        synths[bussesPair.first]->mapan(toSendName + "_ar", bussesPair.second.at(availableInput->getNodeRef()).at(availableInput->getIndex()), numChannels);
+                    }else{
+                        synths[bussesPair.first]->set(toSendName + "_sel", 0);
+                        synths[bussesPair.first]->mapan(toSendName + "_ar", -1, numChannels);
+                    }
+                }));
+            }
+        }else if(specMap["units"] == "f" || specMap["units"] == "af"){
             ofParameter<float> f;
-            addParameter(f.set(paramName,
+            auto paramRef = addParameter(f.set(paramName,
                                 ofToFloat(specMap["default"]),
                                 ofToFloat(specMap["minval"]),
                                 ofToFloat(specMap["maxval"])));
@@ -141,6 +210,29 @@ void scSynthdef::setup(){
                     synthServer.second->set(toSendName, f);
                 }
             }));
+            
+            if(specMap["units"] == "af"){ //Can be audio rate
+                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
+                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
+                    //TODO: Check why it triggers to times
+                    *availableInput = port;
+                    for(auto &output : outputs) output = output;
+                });
+                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
+                    *availableInput = nodePort();
+                    for(auto &output : outputs) output = output;
+                });
+                
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>> bussesPair){
+                    if(availableInput->getNodeRef() != nullptr){
+                        synths[bussesPair.first]->set(toSendName + "_sel", 1);
+                        synths[bussesPair.first]->mapan(toSendName + "_ar", bussesPair.second.at(availableInput->getNodeRef()).at(availableInput->getIndex()), numChannels);
+                    }else{
+                        synths[bussesPair.first]->set(toSendName + "_sel", 0);
+                        synths[bussesPair.first]->mapan(toSendName + "_ar", -1, numChannels);
+                    }
+                }));
+            }
         }else if(specMap["units"] == "buffer"){
             ofParameter<vector<int>> vi;
             addParameter(vi.set(paramName, {0}, {0}, {INT_MAX}));
@@ -227,6 +319,11 @@ void scSynthdef::free(ofxSCServer* server){
 void scSynthdef::freeAll(){
     for(auto &synth : synths) synth.second->free();
     synths.clear();
+}
+
+void scSynthdef::assignBussesToControls(ofxSCServer* server, const std::map<scNode*, std::map<int, int>> &outputBussesRefToNode){
+    std::pair<ofxSCServer*, const std::map<scNode*, std::map<int, int>>> newPair(server, outputBussesRefToNode);
+    reassignAudioControls.notify(this, newPair);
 }
 
 void scSynthdef::setOutputBus(ofxSCServer* server, int index, int bus){
