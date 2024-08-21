@@ -55,6 +55,7 @@ void scSynthdef::setup(){
                     }
                 }
             }
+            reassignAudioControls.notify();
         }
         oldNumChannels = numChannels;
     }));
@@ -104,12 +105,12 @@ void scSynthdef::setup(){
                     if(availableInput->getNodeRef() != nullptr){
                         for(auto synthServer : synths){
                             synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), numChannels);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
                         }
                     }else{
                         for(auto synthServer : synths){
                             synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, numChannels);
+                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
                         }
                     }
                 }));
@@ -150,12 +151,12 @@ void scSynthdef::setup(){
                     if(availableInput->getNodeRef() != nullptr){
                         for(auto synthServer : synths){
                             synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), numChannels);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
                         }
                     }else{
                         for(auto synthServer : synths){
                             synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, numChannels);
+                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
                         }
                     }
                 }));
@@ -195,12 +196,12 @@ void scSynthdef::setup(){
                     if(availableInput->getNodeRef() != nullptr){
                         for(auto synthServer : synths){
                             synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), numChannels);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
                         }
                     }else{
                         for(auto synthServer : synths){
                             synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, numChannels);
+                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
                         }
                     }
                 }));
@@ -239,12 +240,12 @@ void scSynthdef::setup(){
                     if(availableInput->getNodeRef() != nullptr){
                         for(auto synthServer : synths){
                             synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), numChannels);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
                         }
                     }else{
                         for(auto synthServer : synths){
                             synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, numChannels);
+                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
                         }
                     }
                 }));
