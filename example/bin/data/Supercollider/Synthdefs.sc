@@ -70,15 +70,16 @@ SynthDef.new(\mixer, {
 //Helper funtion to create synths
 (
 ~synthCreator = {|name, func, description = "", category = "", variables, variableDimensions|
-	var createSynths, variableNames, variableDimensions, placeholderArgs;
+	var createSynths, variableNames, variableDimensionString, placeholderArgs;
 	("Writing Synth " ++ name ++ " --------------------------").postln;
 	File.mkdir(d ++ "/" ++ name);
 	description = description.replace(" ", "_");
 	if(variables.size == 0){
 		variableNames = "";
-		variableDimensions = "";
+		variableDimensionString = "";
 	}{
 		variableNames = variables.join(":");
+		variableDimensionString = variableDimensions.collect(_.asString).join(":");
 	};
 	//Create first synth for metadata.
 	(1..variables.size).do{
@@ -86,7 +87,7 @@ SynthDef.new(\mixer, {
 	};
 	SynthDef.new(name, {
 			var sig = SynthDef.wrap(func, prependArgs: [1, placeholderArgs]);
-	}, metadata: (name: name, type: "source", description: description, category: category, variables: variableNames, variableDimensions: variableDimensions)).writeDefFile(d ++ "/" ++ name);
+	}, metadata: (name: name, type: "source", description: description, category: category, variables: variableNames, variableDimensions: variableDimensionString)).writeDefFile(d ++ "/" ++ name);
 
 	 // Recursive function to handle variable number of variables
     createSynths = { |n, vars, varDim, args|
