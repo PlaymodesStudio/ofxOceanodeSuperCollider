@@ -10,6 +10,7 @@
 
 scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synthDescription), synthdefName(_synthDescription.name), scNode(_synthDescription.name){
     description = synthDescription.description;
+    variableChanged = false;
 }
 
 void scSynthdef::setup(){
@@ -29,9 +30,9 @@ void scSynthdef::setup(){
     
     oldNumChannels = numChannels;
     listeners.push(numChannels.newListener([this](int &i){
-        if(oldNumChannels != numChannels){
+        if(oldNumChannels != numChannels || variableChanged){
             for(auto &synth : synths){
-                ofxSCSynth *newSynth = new ofxSCSynth(synthdefName + ofToString(numChannels), synth.first);
+                ofxSCSynth *newSynth = new ofxSCSynth(getSynthdefFilename(), synth.first);
                 newSynth->create(4, synth.second->nodeID); //replace synth
                 delete synth.second;
                 synth.second = newSynth;
@@ -58,7 +59,23 @@ void scSynthdef::setup(){
             reassignAudioControls.notify();
         }
         oldNumChannels = numChannels;
+        variableChanged = false;
     }));
+    
+    
+    for(auto variable : synthDescription.variables){
+        ofParameter<int> var;
+        addParameter(var.set(variable.first, 1, 1, variable.second));
+        shared_ptr<int> oldVar(new int(var));
+        
+        listeners.push(var.newListener([this, oldVar](int &i){
+            if(*oldVar != i){
+                variableChanged = true;
+                numChannels = numChannels; //To trigger recreation of synth
+            }
+            *oldVar = i;
+        }));
+    }
     
     
     for(auto spec : synthDescription.params){
@@ -320,7 +337,7 @@ void scSynthdef::setup(){
 
 
 void scSynthdef::createSynth(ofxSCServer* server){
-    synths[server] = new ofxSCSynth(synthdefName + ofToString(numChannels), server);
+    synths[server] = new ofxSCSynth(getSynthdefFilename(), server);
     synths[server]->create();
     resendParams.notify();
 }
@@ -490,6 +507,14 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     currentDescription.description = getStringFromData(pdata[1]["description"]);
     ofStringReplace(currentDescription.description, "_", " ");
     currentDescription.category = getStringFromData(pdata[1]["category"]);
+    vector<string> variableNames = ofSplitString(getStringFromData(pdata[1]["variables"]), ":");
+    vector<string> variableDimensions = ofSplitString(getStringFromData(pdata[1]["variableDimensions"]), ":");
+    if(variableNames.size() == variableDimensions.size() && variableNames[0] != ""){
+        currentDescription.variables.resize(variableNames.size());
+        for(int i = 0; i < currentDescription.variables.size(); i++){
+            currentDescription.variables[i] = std::make_pair(variableNames[i], ofToInt(variableDimensions[i]));
+        }
+    }
     if(pdata.size() > 5){
         auto specsPos = pdata[1]["specs"];
         specsPos.erase(0, 2); //remove o[
@@ -505,4 +530,12 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
         }
     }
     return currentDescription;
+}
+
+string scSynthdef::getSynthdefFilename(){
+    string filename = synthdefName + ofToString(numChannels);
+    for(auto variable : synthDescription.variables){
+        filename += "_" + ofToString(getParameter<int>(variable.first));
+    }
+    return filename;
 }

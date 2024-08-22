@@ -69,19 +69,57 @@ SynthDef.new(\mixer, {
 
 //Helper funtion to create synths
 (
-~synthCreator = {|name, func, description = "", category = ""|
+~synthCreator = {|name, func, description = "", category = "", variables, variableDimensions|
+	var createSynths, variableNames, variableDimensions, placeholderArgs;
+	("Writing Synth " ++ name ++ " --------------------------").postln;
 	File.mkdir(d ++ "/" ++ name);
 	description = description.replace(" ", "_");
+	if(variables.size == 0){
+		variableNames = "";
+		variableDimensions = "";
+	}{
+		variableNames = variables.join(":");
+	};
 	//Create first synth for metadata.
+	(1..variables.size).do{
+		placeholderArgs = placeholderArgs.add(1);
+	};
 	SynthDef.new(name, {
-			var sig = SynthDef.wrap(func, prependArgs: [1]);
-}, metadata: (name: name, type: "source", description: description, category: category)).writeDefFile(d ++ "/" ++ name);
-	//Create array of synths without metadata
-	(1..100).do({arg n;
-		SynthDef.new(name ++ (n).asSymbol, {
-			var sig = SynthDef.wrap(func, prependArgs: [n]);
-		}).writeDefFile(d ++ "/" ++ name, mdPlugin: AbstractMDPlugin); //AbstractMDPlugin to disable metadata
-	});
+			var sig = SynthDef.wrap(func, prependArgs: [1, placeholderArgs]);
+	}, metadata: (name: name, type: "source", description: description, category: category, variables: variableNames, variableDimensions: variableDimensions)).writeDefFile(d ++ "/" ++ name);
+
+	 // Recursive function to handle variable number of variables
+    createSynths = { |n, vars, varDim, args|
+		var synthdefName = name ++ (n).asSymbol;
+        if (args.size == vars.size) {
+            // Base case: No more variables to process
+			if(args.size > 0){
+				(1..args.size).do{|a|
+					synthdefName = synthdefName ++ "_" ++ (args[a-1]).asSymbol;
+				};
+			}{};
+		    synthdefName.postln;
+            SynthDef.new(synthdefName, {
+                var sig = SynthDef.wrap(func, prependArgs: [n, args]);
+            }).writeDefFile(d ++ "/" ++ name, mdPlugin: AbstractMDPlugin); //AbstractMDPlugin to disable metadata
+			args = [];
+		}{
+            // Recursive case: Process current variable and call next
+			args = args.add(1);
+			(1..varDim[args.size-1]).do { |varValue|
+                // Recurse to handle the next variable
+				args[args.size-1] = varValue;
+				createSynths.(n, vars, varDim, args);
+            };
+			args = args.removeAt(args.size-1);
+        };
+    };
+
+    // Create synths for each voice number
+    (1..100).do { |n|
+        createSynths.(n, variables, variableDimensions);
+    };
+	"Writing finished".postln;
 };
 )
 
@@ -201,4 +239,19 @@ SynthDef(\grainsampler,
 		signal=GrainBuf.ar(1, t, dur, buf, spd, start,2,0, envbuf,1024)*gain;
 		Out.ar(out, signal);
 }, metadata: (name: "GrainSampler", type: "source", numInputs: 0, numBuffers: 1)).writeDefFile(d);
+)
+
+//Panner
+(
+~synthCreator.value("Panner", {|n, variables|
+	var source, signal, position, level, width, numSpeakers;
+	numSpeakers = variables[0];
+	position = OceanodeParameterLag.ar(\position, 0, n, 0, 1, "vf", 1/30, true);
+	level = OceanodeParameter.ar(\level, 1, n, 0, 1, "vf");
+	width = OceanodeParameter.ar(\width, 2, n, 0, 2, "vf");
+	source = In.ar(\in.kr(0, spec: ControlSpec(units: "input")), n);
+	source = source.asArray;
+	signal = PanX.ar(numSpeakers, source, position, level, width).flop.collect(Mix(_));
+	Out.ar(\out.kr(0, spec: ControlSpec(units: "output")), signal);
+}, category: "Effect/Downmixer", variables: ["NumSpeakers"], variableDimensions: [10]);
 )

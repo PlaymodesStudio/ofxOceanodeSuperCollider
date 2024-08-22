@@ -22,6 +22,7 @@ struct synthdefDesc{
     map<string, map<string, string>> params;
     string description;
     string category;
+    vector<std::pair<string, int>> variables;
 };
 
 class scSynthdef : public scNode {
@@ -68,6 +69,9 @@ public:
     static synthdefDesc readAndCreateSynthdef(string file);
     
 private:
+    
+    string getSynthdefFilename();
+    
     ofEventListeners listeners;
     
     std::map<ofxSCServer*, ofxSCSynth*> synths;
@@ -77,6 +81,7 @@ private:
     string file;
     ofParameter<int> numChannels;
     int oldNumChannels;
+    bool variableChanged;
     std::map<ofxSCServer*, std::map<int, int>> outputBuses;
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
     
