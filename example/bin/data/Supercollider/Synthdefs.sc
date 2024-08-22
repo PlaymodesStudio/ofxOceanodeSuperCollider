@@ -22,16 +22,16 @@ SynthDef.new(\filter, {
 
 //Infos
 (
-File.mkdir(d ++ "/" ++ "info");
+File.mkdir(d ++ "/" ++ "Info");
 (1..100).do({arg n;
 	var numChan = n;
-	SynthDef.new(\info ++ (numChan).asSymbol, {
+	SynthDef.new("Info" ++ (numChan).asSymbol, {
 		arg in, amp, peak, lagTime = 0.2, decay = 0.99;
 		var sig;
 		sig = In.ar(in, numChan);
 		Out.kr(amp, Lag.kr(Amplitude.kr(sig), lagTime));
 		Out.kr(peak, PeakFollower.kr(sig, decay));
-	}).writeDefFile(d ++ "/info");
+	}).writeDefFile(d ++ "/Info");
 })
 )
 

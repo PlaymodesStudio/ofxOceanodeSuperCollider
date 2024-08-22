@@ -9,6 +9,7 @@
 #define scInfo_h
 
 #include "ofxOceanodeNodeModel.h"
+#include "scNode.h"
 
 class scInfo : public ofxOceanodeNodeModel {
 public:
@@ -24,11 +25,11 @@ public:
             delete synth;
         }
         if(ampBus != nullptr){
-//            ampBus->free();
+            ampBus->free();
             delete ampBus;
         }
         if(peakBus != nullptr){
-//            peakBus->free();
+            peakBus->free();
             delete peakBus;
         }
     }
@@ -36,12 +37,12 @@ public:
     void setup(){
         addParameter(showWindow.set("Show", false));
         
-        addParameter(input.set("In", nullptr), ofxOceanodeParameterFlags_DisableOutConnection);
+        addParameter(input.set("In", nodePort()), ofxOceanodeParameterFlags_DisableOutConnection);
         addParameter(serverIndex.set("Server", 0, 0, servers.size()-1));
         addParameter(numChannels.set("N Chan", 1, 1, 100));
         
-        listeners.push(input.newListener([this](scNode* node){
-            if(node != nullptr){
+        listeners.push(input.newListener([this](nodePort &port){
+            if(port.getNodeRef() != nullptr){
                 recreateSynth();
             }else{
                 if(synth != nullptr){
@@ -50,12 +51,12 @@ public:
                     synth = nullptr;
                 }
                 if(ampBus != nullptr){
-//                    ampBus->free();
+                    ampBus->free();
                     delete ampBus;
                     ampBus = nullptr;
                 }
                 if(peakBus != nullptr){
-//                    peakBus->free();
+                    peakBus->free();
                     delete peakBus;
                     peakBus = nullptr;
                 }
@@ -63,17 +64,17 @@ public:
         }));
     
         listeners.push(serverIndex.newListener([this](int &i){
-            if(input.get() != nullptr){
+            if(input->getNodeRef() != nullptr){
                 recreateSynth();
             }
-//            serverGraphListener.unsubscribe();
+            serverGraphListener.unsubscribe();
             serverGraphListener = servers[serverIndex]->graphComputed.newListener([this](){
                 recreateSynth();
             });
         }));
         
         listeners.push(numChannels.newListener([this](int &i){
-            if(input.get() != nullptr){
+            if(input->getNodeRef() != nullptr){
                 recreateSynth();
             }
         }));
@@ -123,8 +124,8 @@ public:
                     
                     
                     ImGui::PlotLines("", &peakValues[0], peakValues.size(), 0, NULL, 0, 1, size);
-//                    ampBus->requestValues();
-//                    peakBus->requestValues();
+                    ampBus->requestValues();
+                    peakBus->requestValues();
                 }
             }
             ImGui::End();
@@ -139,23 +140,22 @@ public:
             synth = nullptr;
         }
         if(ampBus != nullptr){
-//            ampBus->free();
+            ampBus->free();
             delete ampBus;
             ampBus = nullptr;
         }
         if(peakBus != nullptr){
-//            peakBus->free();
+            peakBus->free();
             delete peakBus;
             peakBus = nullptr;
         }
-        int busIndex = servers[serverIndex]->getOutputBusForNode(input.get());
-        if(busIndex != -1){
-            synth = new ofxSCSynth("info" + ofToString(numChans), servers[serverIndex]->getServer());
+        if(input->getNodeRef() != nullptr){
+            synth = new ofxSCSynth("Info" + ofToString(numChans), servers[serverIndex]->getServer());
             synth->addToTail();
             ampBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
             peakBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
             
-            synth->set("in", busIndex);
+            synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));
             synth->set("lagTime", lagTime);
             synth->set("decay", decay);
             synth->set("amp", ampBus->index);
@@ -171,7 +171,7 @@ private:
     ofParameter<float> decay;
     ofParameter<bool> showWindow;
     
-    ofParameter<scNode*> input;
+    ofParameter<nodePort> input;
     ofParameter<int> serverIndex;
     ofParameter<int> numChannels;
     
