@@ -25,37 +25,7 @@
 
 namespace ofxOceanodeSuperCollider{
 
-static vector<string> loadSamples(){
-    std::function<vector<string>(ofDirectory dir)> readWavsInDirectory = [&readWavsInDirectory](ofDirectory dir){
-        vector<string> wavs;
-        for(auto f : dir.getFiles()){
-            if(f.isDirectory()){
-                ofDirectory dir2(f.path());
-                dir2.sort();
-                vector<string> newWavs = readWavsInDirectory(dir2);
-                wavs.insert(wavs.end(), newWavs.begin(), newWavs.end());
-            }else{
-                //Get synthdefs
-                string wavPath = f.getAbsolutePath();
-                ofStringReplace(wavPath, ofToDataPath("Supercollider/Samples", true), "");
-                wavs.push_back(wavPath);
-            }
-        }
-        return wavs;
-    };
-    
-    ofDirectory dir("Supercollider/Samples");
-    dir.sort();
-    vector<string> wavs;
-    if(dir.exists()){
-        wavs = readWavsInDirectory(dir);
-    }else{
-        dir.create();
-    }
-    return wavs;
-}
-
-static void registerModels(ofxOceanode &o, vector<string> wavs){
+static void registerModels(ofxOceanode &o){
     std::function<void(ofDirectory dir)> readSynthdefsInDirectory = [&o, &readSynthdefsInDirectory](ofDirectory dir){
         for(auto f : dir.getFiles()){
             if(f.isDirectory()){
@@ -90,7 +60,7 @@ static void registerModels(ofxOceanode &o, vector<string> wavs){
     auto controller = o.getController<ofxOceanodeSuperColliderController>();
 
     o.registerModel<scInfo>("SuperCollider", controller->getServers());
-    o.registerModel<scBuffer>("SuperCollider", wavs);
+    o.registerModel<scBuffer>("SuperCollider", controller->getServers());
     o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
     o.registerModel<scOutput>("SuperCollider", controller->getServers());
     o.registerModel<scPitch>("SuperCollider");
@@ -110,10 +80,9 @@ static void registerScope(ofxOceanode &o){
 static void registerCollection(ofxOceanode &o){
     auto controller = o.addController<ofxOceanodeSuperColliderController>();
     
-    vector<string> wavs = loadSamples();
-    controller->createServers(wavs);
+    controller->createServers();
     
-    registerModels(o, wavs);
+    registerModels(o);
     registerType(o);
     registerScope(o);
 }

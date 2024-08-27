@@ -17,7 +17,6 @@
 
 class ofxSCServer;
 class ofxSCSynth;
-class ofxSCBuffer;
 class ofxSCBus;
 class scNode;
 class scStart;
@@ -49,7 +48,7 @@ struct scPreferences{
 
 class serverManager{
 public:
-    serverManager(std::vector<std::string> wavs = {});
+    serverManager();
     ~serverManager();
     
     void setup();
@@ -103,9 +102,6 @@ private:
     std::vector<ofxSCBus> busses;
     std::map<scNode*, std::map<int, int>> outputBussesRefToNode;
     std::map<scNode*, std::vector<int>> inputBussesRefToNode;
-    
-    std::map<std::string, ofxSCBuffer*> buffers;
-    std::vector<std::string> wavs;
     
     float volume;
     bool mute;

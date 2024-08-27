@@ -20,7 +20,7 @@ public:
     ofxOceanodeSuperColliderController();
     ~ofxOceanodeSuperColliderController(){};
     
-    void createServers(vector<string> wavs);
+    void createServers();
     
     void setup();
     void draw();

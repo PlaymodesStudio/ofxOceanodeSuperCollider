@@ -14,8 +14,7 @@
 #include "scOutput.h"
 #include "ofxOceanodeShared.h"
 
-serverManager::serverManager(std::vector<std::string> _wavs){
-    wavs = _wavs;
+serverManager::serverManager(){
     volume = 1;
     mute = false;
     delay = 0;
@@ -188,11 +187,6 @@ void serverManager::boot(){
     
     setVolume(volume);
     setDelay(delay);
-    
-    for(auto &w : wavs){
-        buffers[w] = new ofxSCBuffer(0, 0, server);
-        buffers[w]->readChannel(ofToDataPath("Supercollider/Samples/" + w, true), {0});
-    }
 }
 
 void serverManager::kill(){

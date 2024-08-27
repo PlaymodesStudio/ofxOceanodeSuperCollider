@@ -17,13 +17,13 @@ ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOc
     reloadAudioDevices();
 }
 
-void ofxOceanodeSuperColliderController::createServers(vector<string> wavs){
+void ofxOceanodeSuperColliderController::createServers(){
     ofDirectory dir;
     dir.open(ofToDataPath("Supercollider/Config/"));
     if(dir.exists()){
         dir.sort();
         for(auto f : dir.getFiles()){
-            outputServers.push_back(new serverManager(wavs));
+            outputServers.push_back(new serverManager());
             loadConfig(f.getAbsolutePath(), outputServers.back()->preferences);
             outputServers.back()->setAudioDevices(audioDeviceNames);
         }
