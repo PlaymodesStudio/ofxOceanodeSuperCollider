@@ -171,7 +171,7 @@ void serverManager::draw(){
 void serverManager::boot(){
     if(preferences.local){
         sc->start();
-        sleep(7);
+        sleep(10);
     }
     ofxOscMessage m2;
     m2.setAddress("/g_new");
@@ -277,6 +277,7 @@ void serverManager::recomputeGraph(){
             for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
                 (*it)->getConnections(connections);
                 (*it)->createSynth(server);
+                (*it)->setOutputBus(server, 1000);
             }
             
             for(auto &c : connections){
