@@ -62,6 +62,9 @@ public:
     void setVolume(float volume);
     void setDelay(int delay);
     
+    void setStereoMix(bool stereomix);
+    void setStereoMixSize(int stereomixSize);
+    
     void setOutputChannel(int channel);
     void recomputeGraph();
     
@@ -107,6 +110,8 @@ private:
     float volume;
     bool mute;
     int delay;
+    bool stereomix;
+    int stereomixSize;
     int audioDevice;
     bool dumpOsc;
     std::vector<std::string> audioDeviceNames;
