@@ -38,6 +38,8 @@ private:
     float volume;
     bool mute;
     int delay;
+    bool stereomix;
+    int stereomixSize;
     vector<string> audioDeviceNames;
     vector<serverManager*> outputServers;
 };

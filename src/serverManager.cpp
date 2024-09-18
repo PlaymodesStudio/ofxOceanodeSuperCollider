@@ -19,6 +19,8 @@ serverManager::serverManager(std::vector<std::string> _wavs){
     volume = 1;
     mute = false;
     delay = 0;
+    stereomix = false;
+    stereomixSize = 2;
     audioDevice = 0;
     dumpOsc = false;
     numRecomputeGraphOnce = 0;
@@ -188,6 +190,8 @@ void serverManager::boot(){
     
     setVolume(volume);
     setDelay(delay);
+    setStereoMix(stereomix);
+    setStereoMixSize(stereomixSize);
     
     for(auto &w : wavs){
         buffers[w] = new ofxSCBuffer(0, 0, server);
@@ -224,10 +228,22 @@ void serverManager::setDelay(int _delay){
     for(auto &o : outputs) o->setDelay(delay);
 }
 
+void serverManager::setStereoMix(bool _stereomix){
+    stereomix = _stereomix;
+    for(auto &o : outputs) o->setStereoMix(stereomix);
+}
+
+void serverManager::setStereoMixSize(int _stereomixSize){
+    stereomixSize = _stereomixSize;
+    for(auto &o : outputs) o->setStereoMixSize(stereomixSize);
+}
+
 void serverManager::addOutput(scOutput *output){
     outputs.push_back(output);
     setVolume(volume);
     setDelay(delay);
+    setStereoMix(stereomix);
+    setStereoMixSize(stereomixSize);
 }
 
 void serverManager::removeOutput(scOutput *output){

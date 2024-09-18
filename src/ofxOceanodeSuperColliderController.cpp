@@ -14,6 +14,8 @@ ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOc
     volume = 1;
     mute = false;
     delay = 0;
+    stereomix = false;
+    stereomixSize = 2;
     reloadAudioDevices();
 }
 
@@ -77,6 +79,20 @@ void ofxOceanodeSuperColliderController::draw(){
     if(ImGui::SliderInt("Master Delay", &delay, 0, 5000)){
         for(auto &n : outputServers){
             n->setDelay(delay);
+        }
+    }
+    
+    if(ImGui::Checkbox("StereoMix", &stereomix)){
+        for(auto &n : outputServers){
+            n->setStereoMix(stereomix);
+        }
+    }
+    
+    ImGui::SameLine();
+    
+    if(ImGui::SliderInt("StereoMix Size", &stereomixSize, 2, 100)){
+        for(auto &n : outputServers){
+            n->setStereoMixSize(stereomixSize);
         }
     }
     

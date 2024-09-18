@@ -25,6 +25,9 @@ public:
     
     void setDelay(int delay);
     
+    void setStereoMix(bool stereomix);
+    void setStereoMixSize(int stereomixSize);
+    
     void createSynth(ofxSCServer* server) override;
     void free(ofxSCServer* server) override;
     
@@ -45,6 +48,8 @@ private:
     
     float volume;
     int delay;
+    bool stereomix;
+    int stereomixSize;
     
     int lastServerIndex;
     

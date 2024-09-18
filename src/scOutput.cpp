@@ -14,6 +14,8 @@ scOutput::scOutput(vector<serverManager*> _outputServers) : scNode("Output"){
     synth = nullptr;
     volume = 0;
     delay = 0;
+    stereomix = false;
+    stereomixSize = 2;
     serverIndex = -1;
 }
 
@@ -61,6 +63,20 @@ void scOutput::setDelay(int _delay){
     delay = _delay;
     if(synth != nullptr){
         synth->set("delay", delay);
+    }
+}
+
+void scOutput::setStereoMix(bool _stereomix){
+    stereomix = _stereomix;
+    if(synth != nullptr){
+        synth->set("stereomix", stereomix);
+    }
+}
+
+void scOutput::setStereoMixSize(int _stereomixSize){
+    stereomixSize = _stereomixSize;
+    if(synth != nullptr){
+        synth->set("stereomixsize", stereomixSize);
     }
 }
 
