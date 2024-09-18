@@ -24,11 +24,11 @@ public:
             delete synth;
         }
         if(ampBus != nullptr){
-//            ampBus->free();
+            ampBus->free();
             delete ampBus;
         }
         if(peakBus != nullptr){
-//            peakBus->free();
+            peakBus->free();
             delete peakBus;
         }
     }
@@ -50,12 +50,12 @@ public:
                     synth = nullptr;
                 }
                 if(ampBus != nullptr){
-//                    ampBus->free();
+                    ampBus->free();
                     delete ampBus;
                     ampBus = nullptr;
                 }
                 if(peakBus != nullptr){
-//                    peakBus->free();
+                    peakBus->free();
                     delete peakBus;
                     peakBus = nullptr;
                 }
@@ -66,7 +66,7 @@ public:
             if(input.get() != nullptr){
                 recreateSynth();
             }
-//            serverGraphListener.unsubscribe();
+            serverGraphListener.unsubscribe();
             serverGraphListener = servers[serverIndex]->graphComputed.newListener([this](){
                 recreateSynth();
             });
@@ -123,8 +123,8 @@ public:
                     
                     
                     ImGui::PlotLines("", &peakValues[0], peakValues.size(), 0, NULL, 0, 1, size);
-//                    ampBus->requestValues();
-//                    peakBus->requestValues();
+                    ampBus->requestValues();
+                    peakBus->requestValues();
                 }
             }
             ImGui::End();
@@ -139,23 +139,22 @@ public:
             synth = nullptr;
         }
         if(ampBus != nullptr){
-//            ampBus->free();
+            ampBus->free();
             delete ampBus;
             ampBus = nullptr;
         }
         if(peakBus != nullptr){
-//            peakBus->free();
+            peakBus->free();
             delete peakBus;
             peakBus = nullptr;
         }
-        int busIndex = servers[serverIndex]->getOutputBusForNode(input.get());
-        if(busIndex != -1){
+        if(input.get() != nullptr){
             synth = new ofxSCSynth("info" + ofToString(numChans), servers[serverIndex]->getServer());
             synth->addToTail();
             ampBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
             peakBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
             
-            synth->set("in", busIndex);
+            synth->set("in", servers[serverIndex]->getOutputBusForNode(input.get()));
             synth->set("lagTime", lagTime);
             synth->set("decay", decay);
             synth->set("amp", ampBus->index);
