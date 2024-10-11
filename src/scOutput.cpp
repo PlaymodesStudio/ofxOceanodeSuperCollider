@@ -87,6 +87,8 @@ void scOutput::createSynth(ofxSCServer* server){
         synth->set("out", outputChannel);
         synth->set("levels", volume);
         synth->set("delay", delay);
+        synth->set("stereomix", stereomix);
+        synth->set("stereomixsize", stereomixSize);
     }
 }
 
