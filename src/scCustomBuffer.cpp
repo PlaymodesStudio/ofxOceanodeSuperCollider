@@ -35,7 +35,7 @@ void scCustomBuffer::setup(){
     addParameter(numBuffers.set("Num Bufs", 1, 1, INT_MAX));
     addParameter(input.set("Input", {0}, {0}, {1}));
     addParameter(rescale.set("Rescale", false));
-    addOutputParameter(buffersParam.set("Buffer", {buffers[0][0]->index}, {0}, {INT_MAX}));
+    addOutputParameter(buffersParam.set("Buffer", {buffers[0][0]->index}, {0}, {INT_MAX}), ofxOceanodeParameterFlags_DisableSavePreset);
     
     oldNumBuffers = numBuffers;
     listener = input.newListener([this](vector<float> &vf){
@@ -72,9 +72,9 @@ void scCustomBuffer::setup(){
                     for(int j = oldNumBuffers-1; j >= numBuffers; j--){
                         buffers[i][j]->free();
                     }
-                    buffers.resize(numBuffers);
+                    buffers[i].resize(numBuffers);
                 }else{
-                    buffers.resize(numBuffers);
+                    buffers[i].resize(numBuffers);
                     for(int j = oldNumBuffers; j < numBuffers; j++){
                         buffers[i][j] = new ofxSCBuffer(1024, 1, servers[i]->getServer());
                         buffers[i][j]->alloc();
