@@ -178,7 +178,7 @@ void scOldSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
 }
 
 int scOldSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
-    return 0; //Only one output in this type
+    return outputBus[server]; //Only one output in this type
 }
 
 oldSynthdefDesc scOldSynthdef::readAndCreateSynthdef(string file){
