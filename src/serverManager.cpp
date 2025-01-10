@@ -170,7 +170,7 @@ void serverManager::draw(){
 void serverManager::boot(){
     if(preferences.local){
         sc->start();
-        sleep(7);
+        std::this_thread::sleep_for(std::chrono::milliseconds(7000));
     }
     ofxOscMessage m2;
     m2.setAddress("/g_new");
@@ -194,8 +194,7 @@ void serverManager::kill(){
         ofxOscMessage m;
         m.setAddress("/quit");
         server->sendMsg(m);
-        sleep(1);
-        sc->killServer();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));     sc->killServer();
     }
 }
 
