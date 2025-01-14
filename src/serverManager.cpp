@@ -237,6 +237,7 @@ void serverManager::recomputeGraph(){
         for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
         busses.clear();
     }else{
+        server->setBLatency(true);
 //        server->setWaitToSend(true);
         
         //TODO: Only delete non existing nodes
@@ -299,6 +300,7 @@ void serverManager::recomputeGraph(){
 //        }
 //        server->sendStoredBundle();
 //        server->setWaitToSend(false);
+        server->setBLatency(false);
     }
     graphComputed.notify();
 }
