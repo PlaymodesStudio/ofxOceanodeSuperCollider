@@ -20,7 +20,6 @@
 #include "scCustomBuffer.h"
 #include "scRecordBuffer.h"
 #include "scInfo.h"
-#include "scBeatTracker.h"
 #include "scPitchTracker.h"
 #include "scRave.h"
 //#include "scWaveform.h"
@@ -101,7 +100,6 @@ static void registerModels(ofxOceanode &o){
     o.registerModel<scPitch>("SuperCollider");
     o.registerModel<scChord>("SuperCollider");
     //o.registerModel<scTestLFO>("SuperCollider", controller->getServers());
-    o.registerModel<scBeatTracker>("SuperCollider", controller->getServers());
     o.registerModel<scPitchTracker>("SuperCollider", controller->getServers());
     o.registerModel<scRecordBuffer>("SuperCollider", controller->getServers());
     o.registerModel<scRave>("SuperCollider", controller->getServers());
