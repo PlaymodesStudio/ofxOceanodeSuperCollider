@@ -338,6 +338,7 @@ void scSynthdef::setup(){
 
 void scSynthdef::createSynth(ofxSCServer* server){
     synths[server] = new ofxSCSynth(getSynthdefFilename(), server);
+    synths[server]->set("out", 64);
     synths[server]->create();
     resendParams.notify();
 }
