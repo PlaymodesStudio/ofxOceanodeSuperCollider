@@ -55,6 +55,7 @@ public:
     void draw();
     
     void boot();
+    void initialize();
     void kill();
     void loadDefs();
     

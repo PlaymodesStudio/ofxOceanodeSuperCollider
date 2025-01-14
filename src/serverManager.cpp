@@ -47,6 +47,13 @@ void serverManager::setup(){
     listeners.push(ofxOceanodeShared::getPresetHasLoadedEvent().newListener([this](){
         recomputeGraph();
     }));
+    
+    listeners.push(server->serverBootedEvent.newListener([this](){
+        initialize();
+    }));
+    listeners.push(server->serverInitializedEvent.newListener([this](){
+        recomputeGraph();
+    }));
 }
 
 void serverManager::draw(){
@@ -170,8 +177,12 @@ void serverManager::draw(){
 void serverManager::boot(){
     if(preferences.local){
         sc->start();
-        std::this_thread::sleep_for(std::chrono::milliseconds(7000));
     }
+}
+
+void serverManager::initialize(){
+    server->notify();
+    
     ofxOscMessage m2;
     m2.setAddress("/g_new");
     m2.addIntArg(1);
@@ -179,11 +190,7 @@ void serverManager::boot(){
     m2.addIntArg(0);
     server->sendMsg(m2);
     
-    ofxOscMessage m;
-    m.setAddress("/d_loadDir");
-    m.addStringArg(ofToDataPath("Supercollider/Synthdefs", true));
-    m.addIntArg(0);
-    server->sendMsg(m);
+    loadDefs();
     
     setVolume(volume);
     setDelay(delay);
@@ -194,7 +201,7 @@ void serverManager::kill(){
         ofxOscMessage m;
         m.setAddress("/quit");
         server->sendMsg(m);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));     sc->killServer();
+        sc->killServer();
     }
 }
 
