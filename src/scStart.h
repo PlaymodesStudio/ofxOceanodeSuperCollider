@@ -33,7 +33,7 @@ public:
       
     void threadedFunction(){
         while(reboot){
-            string termcmd = scPath;
+            string termcmd = "\"" + scPath + "\"";
             termcmd += " -u " + ofToString(prefs.udpPort);
             termcmd += " -B " + prefs.bindAddress;
             termcmd += " -c " + ofToString(prefs.numControlBusChannels);
@@ -52,8 +52,8 @@ public:
             termcmd += " -l " + ofToString(prefs.maxLogins);
             termcmd += " -s " + ofToString(prefs.safetyClipThreshold);
             termcmd += " -H " + prefs.deviceName;
-            //        if(prefs.ugensPlugins != "") termcmd += " -U " + ofToString("\"") + ofToDataPath(prefs.ugensPlugins, true).string() + ofToString(":") + ofToDataPath("Supercollider/scsynth/aarch/bin", true).string() + ofToString("\"");
-            if(prefs.ugensPlugins != "") termcmd += " -U " + ofToString("\"") + ofToDataPath(prefs.ugensPlugins, true) + ofToString(":") + ofToDataPath("Supercollider/scsynth/aarch/bin", true) + ofToString("\"");
+            std::string pluginsPath = scPath.substr(0, scPath.size()-7);
+            if(prefs.ugensPlugins != "") termcmd += " -U " + ofToString("\"") + ofToDataPath(prefs.ugensPlugins, true) + ofToString(":") + pluginsPath + ofToString("\"");
             
             
 #ifdef TARGET_WIN32
