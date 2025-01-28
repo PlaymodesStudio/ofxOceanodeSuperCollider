@@ -47,12 +47,13 @@ public:
         addParameter(openFileDialog.set("Open"));
         addOutputParameter(buffersParam.set("Buffer", {0}, {0}, {INT_MAX}));
         addOutputParameter(durationsMs.set("Duration", {0}, {0}, {FLT_MAX}));
+        addOutputParameter(sampleRates.set("Sample Rate", {0}, {0}, {FLT_MAX})); // New sample rate output
 
         addInspectorParameter(filenamesList.set([this](){
             int i = 0;
             for(auto &file : files){
                 for(int j = 0; j < file.second; j++){
-                    ImGui::Text((ofToString(i) + " // " + file.first + " // ch" + ofToString(j+1) + " // " + ofToString(durations[i]) + "ms").c_str());
+                    ImGui::Text((ofToString(i) + " // " + file.first + " // ch" + ofToString(j+1) + " // " + ofToString(durations[i]) + "ms // " + ofToString(sampleRates.get()[i]) + "Hz").c_str());
                     i++;
                 }
             }
@@ -70,7 +71,9 @@ public:
         listener3 = path.newListener([this](string &s){
             vector<int> newIndices;
             vector<float> newDurations;
+            vector<float> newSampleRates; // New vector for sample rates
             durations.clear();
+            sampleRates.set(vector<float>()); // Clear previous sample rates using set()
 
             if(s != ""){
                 // Clear previous buffers
@@ -95,6 +98,7 @@ public:
                     ofLogError("scBuffer") << "Path does not exist: " << absolutePath;
                     buffersParam = newIndices;
                     durationsMs = newDurations;
+                    sampleRates = newSampleRates; // Update sample rates
                     return;
                 }
 
@@ -108,7 +112,8 @@ public:
                                 string wavPath = f->getAbsolutePath();
                                 int numChannels = 0;
                                 float durationMs = 0;
-                                getFileInfo(wavPath, numChannels, durationMs);
+                                float sampleRate = 0; // New variable for sample rate
+                                getFileInfo(wavPath, numChannels, durationMs, sampleRate); // Updated call
                                 
                                 if(numChannels > 0){
                                     for(int i = 0; i < numChannels; i++){
@@ -118,6 +123,7 @@ public:
                                             buffers.push_back(bufref);
                                             newIndices.push_back(bufref->index);
                                             newDurations.push_back(durationMs);
+                                            newSampleRates.push_back(sampleRate); // Add sample rate
                                             durations.push_back(durationMs);
                                         }
                                         catch(const std::exception& e){
@@ -134,7 +140,8 @@ public:
                     of::filesystem::path wavPath = absolutePath;
                     int numChannels = 0;
                     float durationMs = 0;
-                    getFileInfo(wavPath, numChannels, durationMs);
+                    float sampleRate = 0; // New variable for sample rate
+                    getFileInfo(wavPath, numChannels, durationMs, sampleRate); // Updated call
                     
                     if(numChannels > 0){
                         for(int i = 0; i < numChannels; i++){
@@ -144,6 +151,7 @@ public:
                                 buffers.push_back(bufref);
                                 newIndices.push_back(bufref->index);
                                 newDurations.push_back(durationMs);
+                                newSampleRates.push_back(sampleRate); // Add sample rate
                                 durations.push_back(durationMs);
                             }
                             catch(const std::exception& e){
@@ -156,6 +164,7 @@ public:
                 }
                 buffersParam = newIndices;
                 durationsMs = newDurations;
+                sampleRates = newSampleRates; // Update sample rates
             }
         });
     }
@@ -183,9 +192,10 @@ private:
         return false;
     }
 
-    void getFileInfo(string filepath, int &numChannels, float &durationMs) {
+    void getFileInfo(string filepath, int &numChannels, float &durationMs, float &sampleRate) { // Updated signature
         numChannels = 0;
         durationMs = 0;
+        sampleRate = 0; // Initialize sample rate
         
         ofFile file(filepath, ofFile::ReadOnly, true);
         if(!file.is_open()) {
@@ -211,6 +221,9 @@ private:
         // Store number of channels
         numChannels = header.channels;
 
+        // Store sample rate
+        sampleRate = (float)header.sample_rate; // Extract sample rate
+
         // Find the actual data chunk and its size
         uint32_t actualDataSize;
         if(!findDataChunk(file, actualDataSize)) {
@@ -227,7 +240,7 @@ private:
             
             ofLogNotice("scBuffer") << "File info for: " << filepath;
             ofLogNotice("scBuffer") << "  Channels: " << numChannels;
-            ofLogNotice("scBuffer") << "  Sample Rate: " << header.sample_rate;
+            ofLogNotice("scBuffer") << "  Sample Rate: " << sampleRate;
             ofLogNotice("scBuffer") << "  Bits per Sample: " << header.bits_per_sample;
             ofLogNotice("scBuffer") << "  Data Size: " << actualDataSize;
             ofLogNotice("scBuffer") << "  Duration (ms): " << durationMs;
@@ -241,6 +254,7 @@ private:
     ofEventListener listener3;
     ofParameter<vector<int>> buffersParam;
     ofParameter<vector<float>> durationsMs;
+    ofParameter<vector<float>> sampleRates; // New sample rate parameter
     vector<float> durations;  // Store durations for inspector display
     
     vector<serverManager*> servers;
