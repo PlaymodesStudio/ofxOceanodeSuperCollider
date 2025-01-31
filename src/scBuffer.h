@@ -125,6 +125,12 @@ public:
                                             newDurations.push_back(durationMs);
                                             newSampleRates.push_back(sampleRate); // Add sample rate
                                             durations.push_back(durationMs);
+                                            //Add to all other servers (the info will be the same)
+                                            for(int j = 1; j < servers.size(); j++){
+                                                auto bufref_temp = new ofxSCBuffer(0, 0, servers[j]->getServer());
+                                                bufref_temp->readChannel(wavPath, {i});
+                                                buffers.push_back(bufref_temp);
+                                            }
                                         }
                                         catch(const std::exception& e){
                                             ofLogError("scBuffer") << "Exception reading file: " << e.what();
@@ -153,6 +159,11 @@ public:
                                 newDurations.push_back(durationMs);
                                 newSampleRates.push_back(sampleRate); // Add sample rate
                                 durations.push_back(durationMs);
+                                for(int j = 1; j < servers.size(); j++){
+                                    auto bufref_temp = new ofxSCBuffer(0, 0, servers[j]->getServer());
+                                    bufref_temp->readChannel(wavPath, {i});
+                                    buffers.push_back(bufref_temp);
+                                }
                             }
                             catch(const std::exception& e){
                                 ofLogError("scBuffer") << "Exception reading file: " << e.what();
