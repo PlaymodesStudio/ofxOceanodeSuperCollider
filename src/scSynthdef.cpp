@@ -285,6 +285,25 @@ void scSynthdef::setup(){
             }));
         }
         else if(ofStringTimesInString(specMap["units"], "d:") == 1){ //Is dropdown
+            ofParameter<vector<int>> vi;
+            vector<string> splitString = ofSplitString(specMap["units"], ":");
+            splitString.erase(splitString.begin());
+            addParameterDropdown(vi, paramName, ofToInt(specMap["default"]), splitString);
+            string toSendName = ofToLower(spec.first);
+            listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
+                for(auto synthServer : synths){
+                    if(vi_.size() == 1) synthServer.second->setMultiple(toSendName, vi_[0], numChannels);
+                    else synthServer.second->set(toSendName, vi_);
+                }
+            }));
+            listeners.push(resendParams.newListener([this, vi, toSendName]{
+                for(auto synthServer : synths){
+                    if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
+                    else synthServer.second->set(toSendName, vi);
+                }
+            }));
+        }
+        else if(ofStringTimesInString(specMap["units"], "df:") == 1){ //Is dropdown
             ofParameter<vector<float>> vf;
             vector<string> splitString = ofSplitString(specMap["units"], ":");
             splitString.erase(splitString.begin());
