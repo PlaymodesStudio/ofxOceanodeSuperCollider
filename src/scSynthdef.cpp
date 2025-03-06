@@ -285,20 +285,22 @@ void scSynthdef::setup(){
             }));
         }
         else if(ofStringTimesInString(specMap["units"], "d:") == 1){ //Is dropdown
-            ofParameter<int> i;
+            ofParameter<vector<float>> vf;
             vector<string> splitString = ofSplitString(specMap["units"], ":");
             splitString.erase(splitString.begin());
 //            vector<string> options = ofSplitString(splitString[1], ", ");
-            addParameterDropdown(i, paramName, ofToInt(specMap["default"]), splitString);
+            addParameterDropdown(vf, paramName, ofToInt(specMap["default"]), splitString);
             string toSendName = ofToLower(spec.first);
-            listeners.push(i.newListener([this, toSendName](int &i_){
+            listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
                 for(auto synthServer : synths){
-                    synthServer.second->set(toSendName, i_);
+                    if(vf_.size() == 1) synthServer.second->setMultiple(toSendName, vf_[0], numChannels);
+                    else synthServer.second->set(toSendName, vf_);
                 }
             }));
-            listeners.push(resendParams.newListener([this, i, toSendName]{
+            listeners.push(resendParams.newListener([this, vf, toSendName]{
                 for(auto synthServer : synths){
-                    synthServer.second->set(toSendName, i);
+                    if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
+                    else synthServer.second->set(toSendName, vf);
                 }
             }));
         }
