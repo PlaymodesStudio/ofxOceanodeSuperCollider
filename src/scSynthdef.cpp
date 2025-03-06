@@ -8,7 +8,7 @@
 #include "scSynthdef.h"
 #include "ofxSCSynth.h"
 
-scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synthDescription), synthdefName(_synthDescription.name), scNode(_synthDescription.name){
+scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synthDescription), synthdefName(_synthDescription.name), scNode(_synthDescription.name + "*"){
     description = synthDescription.description;
     variableChanged = false;
 }
