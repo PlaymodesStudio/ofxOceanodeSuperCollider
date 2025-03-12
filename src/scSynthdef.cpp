@@ -623,6 +623,7 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     currentDescription.type = getStringFromData(pdata[1]["type"]);
     currentDescription.description = getStringFromData(pdata[1]["description"]);
     ofStringReplace(currentDescription.description, "_", " ");
+    ofStringReplace(currentDescription.description, "|", ",");
     currentDescription.category = getStringFromData(pdata[1]["category"]);
     vector<string> variableNames = ofSplitString(getStringFromData(pdata[1]["variables"]), ":");
     vector<string> variableDimensions = ofSplitString(getStringFromData(pdata[1]["variableDimensions"]), ":");
