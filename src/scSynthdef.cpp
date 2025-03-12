@@ -267,6 +267,50 @@ void scSynthdef::setup(){
                     }
                 }));
             }
+        }else if(specMap["units"] == "b" || specMap["units"] == "ab"){
+            ofParameter<bool> b;
+            auto paramRef = addParameter(b.set(paramName,
+                                ofToBool(specMap["default"]),
+                                ofToBool(specMap["minval"]),
+                                ofToBool(specMap["maxval"])));
+            string toSendName = ofToLower(spec.first);
+            listeners.push(b.newListener([this, toSendName](bool &b_){
+                for(auto synthServer : synths){
+                    synthServer.second->set(toSendName, b_);
+                }
+            }));
+            listeners.push(resendParams.newListener([this, b, toSendName]{
+                for(auto synthServer : synths){
+                    synthServer.second->set(toSendName, b);
+                }
+            }));
+            
+            if(specMap["units"] == "ab"){ //Can be audio rate
+                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
+                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
+                    //TODO: Check why it triggers to times
+                    *availableInput = port;
+                    for(auto &output : outputs) output = output;
+                });
+                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
+                    *availableInput = nodePort();
+                    for(auto &output : outputs) output = output;
+                });
+                
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
+                    if(availableInput->getNodeRef() != nullptr){
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 1);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
+                        }
+                    }else{
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 0);
+                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
+                        }
+                    }
+                }));
+            }
         }else if(specMap["units"] == "buffer"){
             ofParameter<vector<int>> vi;
             addParameter(vi.set(paramName, {0}, {0}, {INT_MAX}));
