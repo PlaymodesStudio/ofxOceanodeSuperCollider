@@ -284,7 +284,7 @@ void scSynthdef::setup(){
                 }
             }));
         }
-        else if(ofStringTimesInString(specMap["units"], "d:") == 1){ //Is dropdown
+        else if(specMap["units"].substr(0, 2) == "d:" || specMap["units"].substr(0, 3) == "ad:"){ //Is dropdown
             ofParameter<vector<int>> vi;
             vector<string> splitString = ofSplitString(specMap["units"], ":");
             splitString.erase(splitString.begin());
@@ -303,7 +303,7 @@ void scSynthdef::setup(){
                 }
             }));
         }
-        else if(ofStringTimesInString(specMap["units"], "df:") == 1){ //Is dropdown
+        else if(specMap["units"].substr(0, 3) == "df:" || specMap["units"].substr(0, 4) == "adf:"){ //Is dropdown
             ofParameter<vector<float>> vf;
             vector<string> splitString = ofSplitString(specMap["units"], ":");
             splitString.erase(splitString.begin());
