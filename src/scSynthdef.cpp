@@ -288,7 +288,7 @@ void scSynthdef::setup(){
             ofParameter<vector<int>> vi;
             vector<string> splitString = ofSplitString(specMap["units"], ":");
             splitString.erase(splitString.begin());
-            addParameterDropdown(vi, paramName, ofToInt(specMap["default"]), splitString);
+            auto paramRef = addParameterDropdown(vi, paramName, ofToInt(specMap["default"]), splitString);
             string toSendName = ofToLower(spec.first);
             listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
                 for(auto synthServer : synths){
@@ -302,13 +302,39 @@ void scSynthdef::setup(){
                     else synthServer.second->set(toSendName, vi);
                 }
             }));
+            if(specMap["units"].substr(0, 3) == "ad:"){
+                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
+                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
+                    //TODO: Check why it triggers to times
+                    *availableInput = port;
+                    for(auto &output : outputs) output = output;
+                });
+                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
+                    *availableInput = nodePort();
+                    for(auto &output : outputs) output = output;
+                });
+                
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
+                    if(availableInput->getNodeRef() != nullptr){
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 1);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
+                        }
+                    }else{
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 0);
+                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
+                        }
+                    }
+                }));
+            }
         }
         else if(specMap["units"].substr(0, 3) == "df:" || specMap["units"].substr(0, 4) == "adf:"){ //Is dropdown
             ofParameter<vector<float>> vf;
             vector<string> splitString = ofSplitString(specMap["units"], ":");
             splitString.erase(splitString.begin());
 //            vector<string> options = ofSplitString(splitString[1], ", ");
-            addParameterDropdown(vf, paramName, ofToInt(specMap["default"]), splitString);
+            auto paramRef = addParameterDropdown(vf, paramName, ofToInt(specMap["default"]), splitString);
             string toSendName = ofToLower(spec.first);
             listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
                 for(auto synthServer : synths){
@@ -322,8 +348,33 @@ void scSynthdef::setup(){
                     else synthServer.second->set(toSendName, vf);
                 }
             }));
+            if(specMap["units"].substr(0, 4) == "adf:"){
+                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
+                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
+                    //TODO: Check why it triggers to times
+                    *availableInput = port;
+                    for(auto &output : outputs) output = output;
+                });
+                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
+                    *availableInput = nodePort();
+                    for(auto &output : outputs) output = output;
+                });
+                
+                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
+                    if(availableInput->getNodeRef() != nullptr){
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 1);
+                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
+                        }
+                    }else{
+                        for(auto synthServer : synths){
+                            synthServer.second->set(toSendName + "_sel", 0);
+                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
+                        }
+                    }
+                }));
+            }
         }
-        
     }
     
     listeners.push(resendParams.newListener([this](){
