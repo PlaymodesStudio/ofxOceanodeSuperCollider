@@ -18,6 +18,7 @@ public:
         synth = nullptr;
         ampBus = nullptr;
         peakBus = nullptr;
+        valueBus = nullptr;
     };
     ~scInfo(){
         if(synth != nullptr){
@@ -31,6 +32,10 @@ public:
         if(peakBus != nullptr){
             peakBus->free();
             delete peakBus;
+        }
+        if(valueBus != nullptr){
+            valueBus->free();
+            delete valueBus;
         }
     }
     
@@ -59,6 +64,11 @@ public:
                     peakBus->free();
                     delete peakBus;
                     peakBus = nullptr;
+                }
+                if(valueBus != nullptr){
+                    valueBus->free();
+                    delete valueBus;
+                    valueBus = nullptr;
                 }
             }
         }));
@@ -95,14 +105,17 @@ public:
         
         addOutputParameter(amps.set("Amps", {0}, {0}, {1}));
         addOutputParameter(peaks.set("Peaks", {0}, {0}, {1}));
+        addOutputParameter(values.set("Values", {0}, {-FLT_MAX}, {FLT_MAX}));
     }
     
     void update(ofEventArgs &args) override{
         if(synth != nullptr){
             amps = ampBus->readValues;
             peaks = peakBus->readValues;
+            values = valueBus->readValues;
             ampBus->requestValues();
             peakBus->requestValues();
+            valueBus->requestValues();
         }
     }
     
@@ -149,17 +162,23 @@ public:
             delete peakBus;
             peakBus = nullptr;
         }
+        if(valueBus != nullptr){
+            valueBus->free();
+            delete valueBus;
+        }
         if(input->getNodeRef() != nullptr){
             synth = new ofxSCSynth("Info" + ofToString(numChans), servers[serverIndex]->getServer());
             synth->addToTail();
             ampBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
             peakBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
+            valueBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
             
             synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));
             synth->set("lagTime", lagTime);
             synth->set("decay", decay);
             synth->set("amp", ampBus->index);
             synth->set("peak", peakBus->index);
+            synth->set("value", valueBus->index);
         }
     }
     
@@ -177,9 +196,11 @@ private:
     
     ofParameter<vector<float>> amps;
     ofParameter<vector<float>> peaks;
+    ofParameter<vector<float>> values;
     
     ofxSCBus* ampBus;
     ofxSCBus* peakBus;
+    ofxSCBus* valueBus;
     
     ofxSCSynth *synth;
     vector<serverManager*> servers;
