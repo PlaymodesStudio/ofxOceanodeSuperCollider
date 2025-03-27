@@ -64,6 +64,8 @@ public:
     int getOutputBusIndex(ofxSCServer* server, int index) override;
     
     int getLastSynthID(ofxSCServer* server) override;
+    
+    int getNodeID(ofxSCServer* server) override;
 
     ofEvent<void> resendParams;
 

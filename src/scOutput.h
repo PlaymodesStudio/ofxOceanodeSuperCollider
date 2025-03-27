@@ -44,6 +44,8 @@ public:
     
     int getLastSynthID(ofxSCServer* server) override;
     
+    int getNodeID(ofxSCServer* server) override;
+    
 //    void presetRecallBeforeSettingParameters(ofJson &json) override;
 //
 //    void presetHasLoaded() override;

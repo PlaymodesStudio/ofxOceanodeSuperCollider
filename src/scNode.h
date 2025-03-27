@@ -67,6 +67,8 @@ public:
     
     virtual int getLastSynthID(ofxSCServer* server){return -1;};
     
+    virtual int getNodeID(ofxSCServer* server){return -1;};
+    
     ofEvent<int> createdSynth;
     ofEvent<void> destroyedNode;
     

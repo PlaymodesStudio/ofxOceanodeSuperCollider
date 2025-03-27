@@ -148,6 +148,13 @@ int scOutput::getLastSynthID(ofxSCServer* server){
     return -1;
 }
 
+int scOutput::getNodeID(ofxSCServer* server){
+    if(synth != nullptr){
+        return synth->nodeID;
+    }
+    return -1;
+}
+
 //void scOutput::presetWillBeLoaded(){
 //    isLoadingPreset = true;
 //    outputServers[serverIndex]->resetRecomputeGraphOnce();

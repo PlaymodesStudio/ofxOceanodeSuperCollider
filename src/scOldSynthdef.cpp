@@ -252,6 +252,13 @@ int scOldSynthdef::getLastSynthID(ofxSCServer* server){
     return synths[server]->nodeID;
 }
 
+int scOldSynthdef::getNodeID(ofxSCServer* server){
+    if(synths[server] != nullptr){
+        return synths[server]->nodeID;
+    }
+    return -1;
+}
+
 oldSynthdefDesc scOldSynthdef::readAndCreateSynthdef(string file){
     ofBuffer fileBuffer = ofBufferFromFile(file);
     

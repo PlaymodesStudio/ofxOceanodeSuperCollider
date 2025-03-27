@@ -65,6 +65,8 @@ public:
     
     int getLastSynthID(ofxSCServer* server) override;
     
+    int getNodeID(ofxSCServer* server) override;
+    
     ofEvent<void> resendParams;
     
     static synthdefDesc readAndCreateSynthdef(string file);
