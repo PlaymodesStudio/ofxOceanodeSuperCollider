@@ -390,6 +390,92 @@ void serverManager::recomputeGraph(){
 //        server->sendStoredBundle();
 //        server->setWaitToSend(false);
         server->setBLatency(false);
+        
+        
+        auto getNodeNameid = [](scNode* node) -> std::string {
+            std::string result = node->getParameterGroup().getName();
+            std::string parents = node->getParents();
+            if(parents != "Canvas"){
+                result = result + " " + parents;
+            }
+            ofStringReplace(result, " ", "_");
+            ofStringReplace(result, "_/_", "_");
+            return result;
+        };
+        
+        auto returnReplaceSpaces = [](std::string s) -> std::string {
+            ofStringReplace(s, " ", "_");
+            return s;
+        };
+    
+        if(nodesList.size() != 0){ //Create graphvix diagram
+            cout << "-------------- Begin Dot --------------" << endl;
+            cout << "digraph G {" << endl;
+            cout << "rankdir=\"LR\";" << endl;
+            cout << "node [ shape = rectangle ]" << endl;
+            cout << "graph [ splines=polyline ]" << endl;
+            cout << endl;
+            
+            struct macromap{
+                std::map<std::string, macromap> childs;
+                std::vector<std::string> elements;
+            };
+            macromap mm;
+            std::map<std::string, std::string> nodesMap;
+            int i = nodesList.size();
+            for(auto &node : nodesList){
+                std::string nodename = node->getParameterGroup().getName();
+                int nodeOrder = i;
+                int nodeInServerId = node->getNodeID(server);
+                std::string nodeid = getNodeNameid(node);
+                std::string nodeelement = nodeid + " [label=\"" + nodename + " \\n Order: " + ofToString(i, 2, '0') + " \\n ID: " + ofToString(nodeInServerId) + "\"]";
+                std::string parents = node->getParents();
+                if(parents == "Canvas"){
+                    mm.elements.push_back(nodeelement);
+                }else{
+                    std::vector<std::string> splittedParents = ofSplitString(parents, " / ");
+                    macromap* mm_ref = &mm;
+                    for(auto &parent : splittedParents){
+                        mm_ref = &mm_ref->childs[parent];
+                    }
+                    mm_ref->elements.push_back(nodeelement);
+                }
+                i--;
+            }
+            
+            int clusterid = 0;
+            
+            std::function<void(macromap)> printAllElements = [&printAllElements, &clusterid](macromap mm){
+                for(auto &e : mm.elements){
+                    cout << e << endl;
+                }
+                for(auto &c : mm.childs){
+                    std::string childname = c.first;
+                    cout << "subgraph cluster_" << clusterid++ << " {" << endl;
+                    cout << "style=filled;" << endl;
+                    cout << "node [style=filled,color=white];" << endl;
+                    printAllElements(c.second);
+                    cout << "label = \"" << childname << "\"" << endl;
+                    cout << "}" << endl;
+                }
+            };
+            
+            printAllElements(mm);
+            
+            cout << endl;
+            
+            for(auto &c : connections){
+                std::string fromnodeid = getNodeNameid(c.first.getNodeRef());
+                for(auto &dest : c.second){
+                    int busindex = outputBussesRefToNode[c.first.getNodeRef()][c.first.getIndex()];
+                    std::string tonodeid = getNodeNameid(dest);
+                    cout << fromnodeid << " -> " << tonodeid << " [label = \"" << busindex << "\"]" << endl;
+                }
+            }
+            cout << "}" << endl;
+            cout << "-------------- End Dot --------------" << endl;
+        }
+        
     }
     graphComputed.notify();
 }
