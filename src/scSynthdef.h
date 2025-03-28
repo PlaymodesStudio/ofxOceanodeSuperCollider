@@ -85,8 +85,6 @@ private:
     std::map<ofxSCServer*, std::map<int, int>> outputBuses;
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
     
-    vector<ofParameter<vector<int>>> buffers;
-    
     ofParameter<bool> doNotDistributeInputs;
     ofParameter<bool> doNotDistributeOutputs;
 };

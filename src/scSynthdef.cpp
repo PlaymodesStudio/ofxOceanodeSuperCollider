@@ -429,15 +429,6 @@ void scSynthdef::setup(){
         }
     }));
     
-    listeners.push(resendParams.newListener([this](){
-        for(auto synthServer : synths){
-            for(int b = 0; b < buffers.size(); b++){
-                if(buffers[b]->size() == 1) synthServer.second->set(ofToLower(buffers[b].getName()), buffers[b]->at(0));
-                else synthServer.second->set(ofToLower(buffers[b].getName()), buffers[b]);
-            }
-        }
-    }));
-    
     //Last check for outputs
     for(auto spec : synthDescription.params){
         auto specMap = spec.second;
