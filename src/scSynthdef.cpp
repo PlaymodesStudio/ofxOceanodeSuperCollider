@@ -38,24 +38,6 @@ void scSynthdef::setup(){
                 synth.second = newSynth;
             }
             resendParams.notify();
-            for(auto synthServer : synths){
-                for(int i = 0; i < inputs.size(); i++){
-                    if(inputBuses[synthServer.first].count(inputs[i]->getNodeRef()) == 1){
-                        string paramName = ofToLower(inputs[i].getName());
-                        if(synthServer.second != nullptr){
-                            synthServer.second->set(paramName, inputBuses[synthServer.first][inputs[i]->getNodeRef()]);
-                        }
-                    }
-                }
-                for(int i = 0; i < outputs.size(); i++){
-                    if(outputBuses[synthServer.first].count(outputs[i]->getIndex()) == 1){
-                        string paramName = ofToLower(outputs[i].getName());
-                        if(synthServer.second != nullptr){
-                            synthServer.second->set(paramName, outputBuses[synthServer.first][outputs[i]->getIndex()]);
-                        }
-                    }
-                }
-            }
             reassignAudioControls.notify();
         }
         oldNumChannels = numChannels;
@@ -81,350 +63,213 @@ void scSynthdef::setup(){
     for(auto spec : synthDescription.params){
         auto specMap = spec.second;
         string paramName = spec.first;
+        string toSendName = ofToLower(paramName);
         //Modify name to have capital letters
         //TODO: make pattern like master_level be converted to Master Level
         paramName[0] = toupper(paramName[0]);
         
-        if(specMap["units"] == "vi" || specMap["units"] == "avi"){
+        bool hasAudioRate = false;
+        string unitWithoutAudio = specMap["units"];
+        shared_ptr<ofxOceanodeAbstractParameter> parameterReference = nullptr;
+        if(specMap["units"][0] == 'a'){ //Audio rate
+            unitWithoutAudio = specMap["units"].substr(1, specMap["units"].size()-1);
+            hasAudioRate = true;
+        }
+        
+        std::function<void()> setValuesToSynths;
+        
+        if(unitWithoutAudio == "vi"){
             ofParameter<vector<int>> vi;
             
-            auto paramRef = addParameter(vi.set(paramName,
+            parameterReference = addParameter(vi.set(paramName,
                                 vector<int>(1, ofToInt(specMap["default"])),
                                 vector<int>(1, ofToInt(specMap["minval"])),
                                 vector<int>(1, ofToInt(specMap["maxval"]))));
-            string toSendName = ofToLower(spec.first);
-            listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
-                for(auto synthServer : synths){
-                    if(vi_.size() == 1) synthServer.second->setMultiple(toSendName, vi_[0], numChannels);
-                    else synthServer.second->set(toSendName, vi_);
-                }
-            }));
-            listeners.push(resendParams.newListener([this, vi, toSendName]{
+            
+            setValuesToSynths = [this, toSendName, vi](){
                 for(auto synthServer : synths){
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
                 }
-            }));
+            };
             
-            if(specMap["units"] == "avi"){ //Can be audio rate
-                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
-                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
-                    //TODO: Check why it triggers to times
-                    *availableInput = port;
-                    for(auto &output : outputs) output = output;
-                });
-                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
-                    *availableInput = nodePort();
-                    for(auto &output : outputs) output = output;
-                });
-                
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
-                    if(availableInput->getNodeRef() != nullptr){
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
-                        }
-                    }else{
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
-                        }
-                    }
-                }));
-            }
-        }else if(specMap["units"] == "vf" || specMap["units"] == "avf"){
+            listeners.push(vi.newListener([setValuesToSynths](vector<int> &vi_){
+                setValuesToSynths();
+            }));
+        }
+        else if(unitWithoutAudio == "vf"){
             ofParameter<vector<float>> vf;
-            auto paramRef = addParameter(vf.set(paramName,
+            parameterReference = addParameter(vf.set(paramName,
                                 vector<float>(1, ofToFloat(specMap["default"])),
                                 vector<float>(1, ofToFloat(specMap["minval"])),
                                 vector<float>(1, ofToFloat(specMap["maxval"]))));
-            string toSendName = ofToLower(spec.first);
-            listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
-                for(auto synthServer : synths){
-                    if(vf_.size() == 1) synthServer.second->setMultiple(toSendName, vf_[0], numChannels);
-                    else synthServer.second->set(toSendName, vf_);
-                }
-            }));
-            listeners.push(resendParams.newListener([this, vf, toSendName]{
+            
+            setValuesToSynths = [this, toSendName, vf](){
                 for(auto synthServer : synths){
                     if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
                     else synthServer.second->set(toSendName, vf);
                 }
-            }));
+            };
             
-            if(specMap["units"] == "avf"){ //Can be audio rate
-                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
-                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
-                    //TODO: Check why it triggers to times
-                    *availableInput = port;
-                    for(auto &output : outputs) output = output;
-                });
-                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
-                    *availableInput = nodePort();
-                    for(auto &output : outputs) output = output;
-                });
-                
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
-                    if(availableInput->getNodeRef() != nullptr){
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
-                        }
-                    }else{
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
-                        }
-                    }
-                }));
-            }
-        }else if(specMap["units"] == "i" || specMap["units"] == "ai"){
+            listeners.push(vf.newListener([setValuesToSynths](vector<float> &vf_){
+                setValuesToSynths();
+            }));
+        }
+        else if(unitWithoutAudio == "i"){
             ofParameter<int> i;
             
-            auto paramRef = addParameter(i.set(paramName,
+            parameterReference = addParameter(i.set(paramName,
                                 ofToInt(specMap["default"]),
                                 ofToInt(specMap["minval"]),
                                 ofToInt(specMap["maxval"])));
-            string toSendName = ofToLower(spec.first);
-            listeners.push(i.newListener([this, toSendName](int &i_){
-                for(auto synthServer : synths){
-                    synthServer.second->set(toSendName, i_);
-                }
-            }));
-            listeners.push(resendParams.newListener([this, i, toSendName]{
+            
+            setValuesToSynths = [this, toSendName, i](){
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, i);
                 }
-            }));
+            };
             
-            if(specMap["units"] == "ai"){ //Can be audio rate
-                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
-                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
-                    //TODO: Check why it triggers to times
-                    *availableInput = port;
-                    for(auto &output : outputs) output = output;
-                });
-                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
-                    *availableInput = nodePort();
-                    for(auto &output : outputs) output = output;
-                });
-                
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
-                    if(availableInput->getNodeRef() != nullptr){
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
-                        }
-                    }else{
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
-                        }
-                    }
-                }));
-            }
-        }else if(specMap["units"] == "f" || specMap["units"] == "af"){
+            listeners.push(i.newListener([setValuesToSynths](int &i_){
+                setValuesToSynths();
+            }));
+        }
+        else if(unitWithoutAudio == "f"){
             ofParameter<float> f;
-            auto paramRef = addParameter(f.set(paramName,
+            parameterReference = addParameter(f.set(paramName,
                                 ofToFloat(specMap["default"]),
                                 ofToFloat(specMap["minval"]),
                                 ofToFloat(specMap["maxval"])));
-            string toSendName = ofToLower(spec.first);
-            listeners.push(f.newListener([this, toSendName](float &f_){
-                for(auto synthServer : synths){
-                    synthServer.second->set(toSendName, f_);
-                }
-            }));
-            listeners.push(resendParams.newListener([this, f, toSendName]{
+            
+            setValuesToSynths = [this, toSendName, f](){
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, f);
                 }
-            }));
+            };
             
-            if(specMap["units"] == "af"){ //Can be audio rate
-                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
-                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
-                    //TODO: Check why it triggers to times
-                    *availableInput = port;
-                    for(auto &output : outputs) output = output;
-                });
-                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
-                    *availableInput = nodePort();
-                    for(auto &output : outputs) output = output;
-                });
-                
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
-                    if(availableInput->getNodeRef() != nullptr){
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
-                        }
-                    }else{
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
-                        }
-                    }
-                }));
-            }
-        }else if(specMap["units"] == "b" || specMap["units"] == "ab"){
+            listeners.push(f.newListener([setValuesToSynths](float &f_){
+                setValuesToSynths();
+            }));
+        }
+        else if(unitWithoutAudio == "b"){
             ofParameter<bool> b;
-            auto paramRef = addParameter(b.set(paramName,
+            parameterReference = addParameter(b.set(paramName,
                                 ofToBool(specMap["default"]),
                                 ofToBool(specMap["minval"]),
                                 ofToBool(specMap["maxval"])));
-            string toSendName = ofToLower(spec.first);
-            listeners.push(b.newListener([this, toSendName](bool &b_){
-                for(auto synthServer : synths){
-                    synthServer.second->set(toSendName, b_);
-                }
-            }));
-            listeners.push(resendParams.newListener([this, b, toSendName]{
+            
+            setValuesToSynths = [this, toSendName, b](){
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, b);
                 }
-            }));
+            };
             
-            if(specMap["units"] == "ab"){ //Can be audio rate
-                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
-                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
-                    //TODO: Check why it triggers to times
-                    *availableInput = port;
-                    for(auto &output : outputs) output = output;
-                });
-                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
-                    *availableInput = nodePort();
-                    for(auto &output : outputs) output = output;
-                });
-                
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
-                    if(availableInput->getNodeRef() != nullptr){
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
-                        }
-                    }else{
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
-                        }
-                    }
-                }));
-            }
-        }else if(specMap["units"] == "buffer"){
+            listeners.push(b.newListener([this, setValuesToSynths](bool &b_){
+                setValuesToSynths();
+            }));
+        }
+        else if(unitWithoutAudio == "buffer"){
             ofParameter<vector<int>> vi;
             addParameter(vi.set(paramName, {0}, {0}, {INT_MAX}));
-            string toSendName = ofToLower(spec.first);
-            listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
-                for(auto synthServer : synths){
-                    if(vi_.size() == 1) synthServer.second->setMultiple(toSendName, vi_[0], numChannels);
-                    else synthServer.second->set(toSendName, vi_);
-                }
-            }));
-            listeners.push(resendParams.newListener([this, vi, toSendName]{
+            
+            setValuesToSynths = [this, toSendName, vi](){
                 for(auto synthServer : synths){
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
                 }
+            };
+            
+            listeners.push(vi.newListener([setValuesToSynths](vector<int> &vi_){
+                setValuesToSynths();
             }));
         }
-        else if(specMap["units"].substr(0, 2) == "d:" || specMap["units"].substr(0, 3) == "ad:"){ //Is dropdown
+        else if(unitWithoutAudio.substr(0, 2) == "d:"){ //Is dropdown
             ofParameter<vector<int>> vi;
             vector<string> splitString = ofSplitString(specMap["units"], ":");
             splitString.erase(splitString.begin());
-            auto paramRef = addParameterDropdown(vi, paramName, ofToInt(specMap["default"]), splitString);
-            string toSendName = ofToLower(spec.first);
-            listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
-                for(auto synthServer : synths){
-                    if(vi_.size() == 1) synthServer.second->setMultiple(toSendName, vi_[0], numChannels);
-                    else synthServer.second->set(toSendName, vi_);
-                }
-            }));
-            listeners.push(resendParams.newListener([this, vi, toSendName]{
+            parameterReference = addParameterDropdown(vi, paramName, ofToInt(specMap["default"]), splitString);
+            
+            setValuesToSynths = [this, toSendName, vi](){
                 for(auto synthServer : synths){
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
                 }
+            };
+            
+            listeners.push(vi.newListener([this, setValuesToSynths](vector<int> &vi_){
+                setValuesToSynths();
             }));
-            if(specMap["units"].substr(0, 3) == "ad:"){
-                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
-                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
-                    //TODO: Check why it triggers to times
-                    *availableInput = port;
-                    for(auto &output : outputs) output = output;
-                });
-                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
-                    *availableInput = nodePort();
-                    for(auto &output : outputs) output = output;
-                });
-                
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
-                    if(availableInput->getNodeRef() != nullptr){
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
-                        }
-                    }else{
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
-                        }
-                    }
-                }));
-            }
         }
-        else if(specMap["units"].substr(0, 3) == "df:" || specMap["units"].substr(0, 4) == "adf:"){ //Is dropdown
+        else if(unitWithoutAudio.substr(0, 3) == "df:"){ //Is dropdown
             ofParameter<vector<float>> vf;
             vector<string> splitString = ofSplitString(specMap["units"], ":");
             splitString.erase(splitString.begin());
 //            vector<string> options = ofSplitString(splitString[1], ", ");
-            auto paramRef = addParameterDropdown(vf, paramName, ofToInt(specMap["default"]), splitString);
-            string toSendName = ofToLower(spec.first);
-            listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
-                for(auto synthServer : synths){
-                    if(vf_.size() == 1) synthServer.second->setMultiple(toSendName, vf_[0], numChannels);
-                    else synthServer.second->set(toSendName, vf_);
-                }
-            }));
-            listeners.push(resendParams.newListener([this, vf, toSendName]{
+            parameterReference = addParameterDropdown(vf, paramName, ofToInt(specMap["default"]), splitString);
+            
+            setValuesToSynths = [this, toSendName, vf](){
                 for(auto synthServer : synths){
                     if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
                     else synthServer.second->set(toSendName, vf);
                 }
+            };
+            
+            listeners.push(vf.newListener([this, setValuesToSynths](vector<float> &vf_){
+                setValuesToSynths();
             }));
-            if(specMap["units"].substr(0, 4) == "adf:"){
-                auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
-                paramRef->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
-                    //TODO: Check why it triggers to times
-                    *availableInput = port;
-                    for(auto &output : outputs) output = output;
-                });
-                paramRef->addDisconnectFunc([this, toSendName, availableInput](){
-                    *availableInput = nodePort();
-                    for(auto &output : outputs) output = output;
-                });
-                
-                listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
-                    if(availableInput->getNodeRef() != nullptr){
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 1);
-                            synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
-                        }
-                    }else{
-                        for(auto synthServer : synths){
-                            synthServer.second->set(toSendName + "_sel", 0);
-                            synthServer.second->mapan(toSendName + "_ar", -1, 100);
-                        }
-                    }
-                }));
-            }
         }
+        if(hasAudioRate && parameterReference != nullptr){
+            auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
+            parameterReference->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
+                //TODO: Check why it triggers to times
+                *availableInput = port;
+                for(auto &output : outputs) output = output;
+            });
+            parameterReference->addDisconnectFunc([this, toSendName, availableInput](){
+                *availableInput = nodePort();
+                for(auto &output : outputs) output = output;
+            });
+            
+            listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
+                if(availableInput->getNodeRef() != nullptr){
+                    for(auto synthServer : synths){
+                        synthServer.second->set(toSendName + "_sel", 1);
+                        synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
+                    }
+                }else{
+                    for(auto synthServer : synths){
+                        synthServer.second->set(toSendName + "_sel", 0);
+                        synthServer.second->mapan(toSendName + "_ar", -1, 100);
+                    }
+                }
+            }));
+        }
+        listeners.push(resendParams.newListener([setValuesToSynths]{
+            setValuesToSynths();
+        }));
     }
     
     listeners.push(resendParams.newListener([this](){
         for(auto synthServer : synths){
             if(synthServer.second != nullptr){
                 synthServer.second->set("inChannels", numChannels);
+            }
+        }
+        for(auto synthServer : synths){
+            for(int i = 0; i < inputs.size(); i++){
+                if(inputBuses[synthServer.first].count(inputs[i]->getNodeRef()) == 1){
+                    string paramName = ofToLower(inputs[i].getName());
+                    if(synthServer.second != nullptr){
+                        synthServer.second->set(paramName, inputBuses[synthServer.first][inputs[i]->getNodeRef()]);
+                    }
+                }
+            }
+            for(int i = 0; i < outputs.size(); i++){
+                if(outputBuses[synthServer.first].count(outputs[i]->getIndex()) == 1){
+                    string paramName = ofToLower(outputs[i].getName());
+                    if(synthServer.second != nullptr){
+                        synthServer.second->set(paramName, outputBuses[synthServer.first][outputs[i]->getIndex()]);
+                    }
+                }
             }
         }
     }));
