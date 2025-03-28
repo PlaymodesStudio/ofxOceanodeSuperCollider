@@ -137,12 +137,13 @@ void scOldSynthdef::setup(){
     scNode::addOutput("Out");
 }
 
+void scOldSynthdef::buildSynth(ofxSCServer* server){
+    synths[server] = new ofxSCSynth(ofToLower(synthdefName), server);
+}
 
 void scOldSynthdef::createSynth(ofxSCServer* server){
-    synths[server] = new ofxSCSynth(ofToLower(synthdefName), server);
-    synths[server]->set("out", 64);
-    synths[server]->create();
     resendParams.notify();
+    synths[server]->create();
 }
 
 void scOldSynthdef::free(ofxSCServer* server){

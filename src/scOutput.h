@@ -28,6 +28,7 @@ public:
     void setStereoMix(bool stereomix);
     void setStereoMixSize(int stereomixSize);
     
+    void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;
     void free(ofxSCServer* server) override;
     
@@ -54,6 +55,7 @@ private:
     int lastServerIndex;
     
     vector<serverManager*> outputServers;
+    std::map<ofxSCServer*, int> inputBus;
     
     ofxSCSynth* synth;
 //    bool isLoadingPreset;

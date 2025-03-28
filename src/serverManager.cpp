@@ -293,7 +293,7 @@ void serverManager::recomputeGraph(){
             
             for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
                 (*it)->getConnections(connections);
-                (*it)->createSynth(server);
+                (*it)->buildSynth(server);
             }
                 
         //Create outputBusses for all nodes except scOutput
@@ -315,7 +315,7 @@ void serverManager::recomputeGraph(){
             }
         
         for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
-            (*it)->reassignAudioControls.notify();
+            (*it)->createSynth(server);
         }
         
         nodesList = newNodesList;

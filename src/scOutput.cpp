@@ -80,15 +80,21 @@ void scOutput::setStereoMixSize(int _stereomixSize){
     }
 }
 
-void scOutput::createSynth(ofxSCServer* server){
+void scOutput::buildSynth(ofxSCServer *server){
     if(server == outputServers[serverIndex]->getServer()){
         synth = new ofxSCSynth("output", server);
-        synth->create();
+    }
+}
+
+void scOutput::createSynth(ofxSCServer* server){
+    if(server == outputServers[serverIndex]->getServer()){
         synth->set("out", outputChannel);
         synth->set("levels", volume);
         synth->set("delay", delay);
         synth->set("stereomix", stereomix);
         synth->set("stereomixsize", stereomixSize);
+        synth->set("in", inputBus[server]);
+        synth->create();
     }
 }
 
@@ -101,6 +107,7 @@ void scOutput::free(ofxSCServer* server){
 }
 
 void scOutput::setInputBus(ofxSCServer* server, scNode* node, int bus){
+    inputBus[server] = bus;
     if(synth != nullptr && inputs[0]->getNodeRef() == node){
         synth->set("in", bus);
     }

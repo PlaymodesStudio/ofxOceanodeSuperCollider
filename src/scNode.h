@@ -50,6 +50,7 @@ public:
     
     int getNumOutputs(){return outputs.size();};
     
+    virtual void buildSynth(ofxSCServer* server){};
     virtual void createSynth(ofxSCServer* server){};
     virtual void free(ofxSCServer* server){};
     virtual void runSynth(ofxSCServer* server){};
@@ -59,7 +60,6 @@ public:
     virtual int getOutputBusIndex(ofxSCServer* server, int index){return -1;};
     
     ofEvent<int> createdSynth;
-    ofEvent<void> reassignAudioControls;
     
 protected:
     ofEventListeners listeners;

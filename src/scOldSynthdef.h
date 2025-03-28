@@ -55,6 +55,7 @@ public:
         //        synth->run(false);
     }
 
+    void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;
     void free(ofxSCServer* server) override;
     void freeAll();

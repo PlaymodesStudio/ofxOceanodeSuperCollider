@@ -38,7 +38,6 @@ void scSynthdef::setup(){
                 synth.second = newSynth;
             }
             resendParams.notify();
-            reassignAudioControls.notify();
         }
         oldNumChannels = numChannels;
         variableChanged = false;
@@ -229,7 +228,7 @@ void scSynthdef::setup(){
                 for(auto &output : outputs) output = output;
             });
             
-            listeners.push(reassignAudioControls.newListener([this, toSendName, availableInput]{
+            listeners.push(resendParams.newListener([this, toSendName, availableInput]{
                 if(availableInput->getNodeRef() != nullptr){
                     for(auto synthServer : synths){
                         synthServer.second->set(toSendName + "_sel", 1);
@@ -287,12 +286,13 @@ void scSynthdef::setup(){
     }
 }
 
+void scSynthdef::buildSynth(ofxSCServer* server){
+    synths[server] = new ofxSCSynth(getSynthdefFilename(), server);
+}
 
 void scSynthdef::createSynth(ofxSCServer* server){
-    synths[server] = new ofxSCSynth(getSynthdefFilename(), server);
-    synths[server]->set("out", 64);
-    synths[server]->create();
     resendParams.notify();
+    synths[server]->create();
 }
 
 void scSynthdef::free(ofxSCServer* server){
