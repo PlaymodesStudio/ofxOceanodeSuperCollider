@@ -60,7 +60,7 @@ public:
         }));
 
         listener2 = openFileDialog.newListener([this]{
-            auto result = ofSystemLoadDialog("Select sample file or folder", true, ofToDataPath("Supercollider/Samples", true));
+            auto result = ofSystemLoadDialog("Select sample file or folder", false, ofToDataPath("Supercollider/Samples", true));
             if(result.bSuccess){
                 string pathWidthData = result.getPath();
                 ofStringReplace(pathWidthData, ofToDataPath("Supercollider/Samples/", true), "");
