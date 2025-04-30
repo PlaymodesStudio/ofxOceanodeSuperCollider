@@ -583,12 +583,14 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
                 if(split[0] != "nil")
                     pdata[i][split[0]] = split[1];
              }
-        }else{
+        }else if (pStringData[i].size()>=2) //
+		{
             for(int j = 0; j < pStringData[i].size(); j = j+2){
                 if(pStringData[i][j] != "nil")
                     pdata[i][pStringData[i][j]] = pStringData[i][j+1];
             }
         }
+		else ofLog()<< "readAndCreateSynthdef : Error in file : " << file;
     }
     
     std::function<string(string)> getStringFromData = [odata, pdata, &getStringFromData](string checkvalue) -> string{
