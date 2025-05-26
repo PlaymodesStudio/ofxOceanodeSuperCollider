@@ -17,13 +17,12 @@
 //#include "scOut.h"
 #include "scTonal.h"
 #include "scBuffer.h"
+#include "scFreezer.h"
 #include "scCustomBuffer.h"
 #include "scRecordBuffer.h"
 #include "scInfo.h"
 #include "scPitchTracker.h"
 #include "scRave.h"
-//#include "scWaveform.h"
-//#include "scTestLFO.h"
 #include "scOutput.h"
 #include "scNode.h"
 #include "ofxOceanodeSuperColliderController.h"
@@ -87,7 +86,7 @@ static void registerModels(ofxOceanode &o){
             }
             
             
-            o.registerModel<scOldSynthdef>("SuperCollider",
+            o.registerModel<scOldSynthdef>("SuperCollider/Old",
                                         currentDescription);
         }
     
@@ -103,6 +102,7 @@ static void registerModels(ofxOceanode &o){
     o.registerModel<scPitchTracker>("SuperCollider", controller->getServers());
     o.registerModel<scRecordBuffer>("SuperCollider", controller->getServers());
     o.registerModel<scRave>("SuperCollider", controller->getServers());
+	o.registerModel<scFreezer>("SuperCollider");
 
     //o.registerModel<scWaveform>("SuperCollider", controller->getServers());
 }
