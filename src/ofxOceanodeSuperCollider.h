@@ -23,7 +23,9 @@
 #include "scCustomBuffer.h"
 #include "scBufferAllocator.h"
 #include "scInfo.h"
+#include "scA2K.h"
 #include "scPitchTracker.h"
+#include "scBeatTracker.h"
 #include "scRave.h"
 #include "scWavescope.h"
 #include "scOutput.h"
@@ -108,6 +110,8 @@ static void registerModels(ofxOceanode &o){
     o.registerModel<scRave>("SuperCollider", controller->getServers());
 	o.registerModel<scFreezer>("SuperCollider");
 	o.registerModel<scWavescope>("SuperCollider", controller->getServers());
+	o.registerModel<scA2k>("SuperCollider", controller->getServers());
+	o.registerModel<scBeatTracker>("SuperCollider", controller->getServers());
 
 }
 static void registerType(ofxOceanode &o){
