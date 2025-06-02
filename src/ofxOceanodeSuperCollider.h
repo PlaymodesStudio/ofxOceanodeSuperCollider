@@ -17,12 +17,15 @@
 //#include "scOut.h"
 #include "scTonal.h"
 #include "scBuffer.h"
+#include "scRecbuf.h"
+#include "scBufferScope.h"
 #include "scFreezer.h"
 #include "scCustomBuffer.h"
-#include "scRecordBuffer.h"
+#include "scBufferAllocator.h"
 #include "scInfo.h"
 #include "scPitchTracker.h"
 #include "scRave.h"
+#include "scWavescope.h"
 #include "scOutput.h"
 #include "scNode.h"
 #include "ofxOceanodeSuperColliderController.h"
@@ -95,16 +98,17 @@ static void registerModels(ofxOceanode &o){
     o.registerModel<scInfo>("SuperCollider", controller->getServers());
     o.registerModel<scBuffer>("SuperCollider", controller->getServers());
     o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
+	o.registerModel<scRecbuf>("SuperCollider", controller->getServers());
+	o.registerModel<scBufferAllocator>("SuperCollider", controller->getServers());
+	o.registerModel<scBufferscope>("SuperCollider", controller->getServers());
     o.registerModel<scOutput>("SuperCollider", controller->getServers());
     o.registerModel<scPitch>("SuperCollider");
     o.registerModel<scChord>("SuperCollider");
-    //o.registerModel<scTestLFO>("SuperCollider", controller->getServers());
     o.registerModel<scPitchTracker>("SuperCollider", controller->getServers());
-    o.registerModel<scRecordBuffer>("SuperCollider", controller->getServers());
     o.registerModel<scRave>("SuperCollider", controller->getServers());
 	o.registerModel<scFreezer>("SuperCollider");
+	o.registerModel<scWavescope>("SuperCollider", controller->getServers());
 
-    //o.registerModel<scWaveform>("SuperCollider", controller->getServers());
 }
 static void registerType(ofxOceanode &o){
     o.registerType<nodePort>("ScBus");
