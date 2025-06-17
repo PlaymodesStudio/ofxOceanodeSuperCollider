@@ -19,7 +19,7 @@ namespace fs = std::filesystem;
 class scRecbuf : public ofxOceanodeNodeModel{
 public:
 	explicit scRecbuf(std::vector<serverManager*> outputServers) :
-		ofxOceanodeNodeModel("RecBuf"),
+		ofxOceanodeNodeModel("Sc RecBuf"),
 		servers(std::move(outputServers)),
 		recordBuf(nullptr),
 		recSynth(nullptr),
