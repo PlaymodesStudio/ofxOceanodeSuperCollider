@@ -313,7 +313,7 @@ void scSynthdef::setup(){
             }
         }else if(specMap["units"] == "buffer"){
             ofParameter<vector<int>> vi;
-            addParameter(vi.set(paramName, {0}, {0}, {INT_MAX}));
+            addParameter(vi.set(paramName, {-1}, {-1}, {INT_MAX}));
             string toSendName = ofToLower(spec.first);
             listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
                 for(auto synthServer : synths){
