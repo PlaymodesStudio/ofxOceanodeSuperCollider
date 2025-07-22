@@ -24,99 +24,110 @@
 #include "scBufferAllocator.h"
 #include "scInfo.h"
 #include "scA2K.h"
+#include "scConvolution.h"
 #include "scPitchTracker.h"
 #include "scBeatTracker.h"
 #include "scRave.h"
 #include "scWavescope.h"
+#include "scWavescope2.h"
 #include "scOutput.h"
 #include "scNode.h"
 #include "ofxOceanodeSuperColliderController.h"
 #include "ofxSCServer.h"
 
+#include "scVST.h"
+#include "scVSTI.h"
+
 namespace ofxOceanodeSuperCollider{
 
 static void registerModels(ofxOceanode &o){
-    std::function<void(ofDirectory dir)> readSynthdefsInDirectory = [&o, &readSynthdefsInDirectory](ofDirectory dir){
-        for(auto f : dir.getFiles()){
-            if(f.isDirectory()){
-                readSynthdefsInDirectory(ofDirectory(f.path()));
-            }else{
-                //Get synthdefs
-                if(f.getExtension() == "txarcmeta"){
-                    auto desc = scSynthdef::readAndCreateSynthdef(f.getAbsolutePath());
-                    if(desc.type == "multi"){
+	std::function<void(ofDirectory dir)> readSynthdefsInDirectory = [&o, &readSynthdefsInDirectory](ofDirectory dir){
+		for(auto f : dir.getFiles()){
+			if(f.isDirectory()){
+				readSynthdefsInDirectory(ofDirectory(f.path()));
+			}else{
+				//Get synthdefs
+				if(f.getExtension() == "txarcmeta"){
+					auto desc = scSynthdef::readAndCreateSynthdef(f.getAbsolutePath());
+					if(desc.type == "multi"){
 
-                    }else if(desc.type == "events"){
+					}else if(desc.type == "events"){
 
-                    }else{
-                        if(desc.category != ""){
-                            o.registerModel<scSynthdef>("SuperCollider/" + desc.category, desc);
-                        }else{
-                            o.registerModel<scSynthdef>("SuperCollider", desc);
-                        }
-                    }
-                }
-            }
-        }
-    };
+					}else{
+						if(desc.category != ""){
+							o.registerModel<scSynthdef>("SuperCollider/" + desc.category, desc);
+						}else{
+							o.registerModel<scSynthdef>("SuperCollider", desc);
+						}
+					}
+				}
+			}
+		}
+	};
 
-    ofDirectory dir("Supercollider/Synthdefs");
-    if(dir.exists()){
-        readSynthdefsInDirectory(dir);
-    }else{
-        dir.create();
-    }
-    
-    
-    //Register old synthdef format
-    ofJson json = ofLoadJson("Supercollider/Synthdefs.json");
-        for(ofJson::iterator it = json.begin(); it != json.end(); it++){
-            oldSynthdefDesc currentDescription;
-            currentDescription.name = it.key();
-            currentDescription.numInputs = it.value()["In"];
-            currentDescription.numBuffers = it.value()["Buf"];
-            currentDescription.numChannels = it.value()["Out_Size"];
-            std::string params = it.value()["Params"];
-            if(params != ""){
-            std::vector<std::string> splittedParams = ofSplitString(params, ", ");
-                for(string &s : splittedParams){
-                    vector<string> ss = ofSplitString(s, ":");
-    //                if(ss[0] == "vi") currentDescription.params[ss[1]]["step"] = 1.0;
-    //                else currentDescription.params[ss[1]]["step"] = 0.0;
-                    currentDescription.params[ss[1]]["type"] = ss[0];
-                    currentDescription.params[ss[1]]["default"] = ss[2];
-                    currentDescription.params[ss[1]]["minval"] = ss[3];
-                    currentDescription.params[ss[1]]["maxval"] = ss[4];
-                }
-            }
-            
-            
-            o.registerModel<scOldSynthdef>("SuperCollider/Old",
-                                        currentDescription);
-        }
-    
-    auto controller = o.getController<ofxOceanodeSuperColliderController>();
+	ofDirectory dir("Supercollider/Synthdefs");
+	if(dir.exists()){
+		readSynthdefsInDirectory(dir);
+	}else{
+		dir.create();
+	}
+	
+	
+	//Register old synthdef format
+	ofJson json = ofLoadJson("Supercollider/Synthdefs.json");
+		for(ofJson::iterator it = json.begin(); it != json.end(); it++){
+			oldSynthdefDesc currentDescription;
+			currentDescription.name = it.key();
+			currentDescription.numInputs = it.value()["In"];
+			currentDescription.numBuffers = it.value()["Buf"];
+			currentDescription.numChannels = it.value()["Out_Size"];
+			std::string params = it.value()["Params"];
+			if(params != ""){
+			std::vector<std::string> splittedParams = ofSplitString(params, ", ");
+				for(string &s : splittedParams){
+					vector<string> ss = ofSplitString(s, ":");
+	//                if(ss[0] == "vi") currentDescription.params[ss[1]]["step"] = 1.0;
+	//                else currentDescription.params[ss[1]]["step"] = 0.0;
+					currentDescription.params[ss[1]]["type"] = ss[0];
+					currentDescription.params[ss[1]]["default"] = ss[2];
+					currentDescription.params[ss[1]]["minval"] = ss[3];
+					currentDescription.params[ss[1]]["maxval"] = ss[4];
+				}
+			}
+			
+			
+			o.registerModel<scOldSynthdef>("SuperCollider/Old",
+										currentDescription);
+		}
+	
+	auto controller = o.getController<ofxOceanodeSuperColliderController>();
 
-    o.registerModel<scInfo>("SuperCollider", controller->getServers());
-    o.registerModel<scBuffer>("SuperCollider", controller->getServers());
-    o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
+	o.registerModel<scInfo>("SuperCollider", controller->getServers());
+	o.registerModel<scBuffer>("SuperCollider", controller->getServers());
+	o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
 	o.registerModel<scRecbuf>("SuperCollider", controller->getServers());
 	o.registerModel<scBufferAllocator>("SuperCollider", controller->getServers());
 	o.registerModel<scBufferscope>("SuperCollider", controller->getServers());
-    o.registerModel<scOutput>("SuperCollider", controller->getServers());
-    o.registerModel<scPitch>("SuperCollider");
-    o.registerModel<scChord>("SuperCollider");
-    o.registerModel<scPitchTracker>("SuperCollider", controller->getServers());
-    o.registerModel<scRave>("SuperCollider", controller->getServers());
+	o.registerModel<scOutput>("SuperCollider", controller->getServers());
+	o.registerModel<scPitch>("SuperCollider");
+	o.registerModel<scChord>("SuperCollider");
+	o.registerModel<scPitchTracker>("SuperCollider", controller->getServers());
+	o.registerModel<scRave>("SuperCollider", controller->getServers());
 	o.registerModel<scFreezer>("SuperCollider");
 	o.registerModel<scWavescope>("SuperCollider", controller->getServers());
+	o.registerModel<scWavescope2>("SuperCollider", controller->getServers());
 	o.registerModel<scA2k>("SuperCollider", controller->getServers());
+	o.registerModel<scConvolution>("SuperCollider", controller->getServers());
 	o.registerModel<scBeatTracker>("SuperCollider", controller->getServers());
+	o.registerModel<scVSTI>("SuperCollider");
+	o.registerModel<scVST>("SuperCollider");
 
 }
+
 static void registerType(ofxOceanode &o){
-    o.registerType<nodePort>("ScBus");
+	o.registerType<nodePort>("ScBus");
 }
+
 static void registerScope(ofxOceanode &o){
 //    o.registerScope<std::pair<ofxSCBus*, scSynthdef*>>([](ofxOceanodeAbstractParameter *p, ImVec2 size){
 //        auto pair = p->cast<std::pair<ofxSCBus*, scSynthdef*>>().getParameter().get();
@@ -125,23 +136,27 @@ static void registerScope(ofxOceanode &o){
 //        ImGui::Text("%i, %s", pair.first->index, pair.second->nodeName().c_str());
 //        });
 }
+
 static void registerCollection(ofxOceanode &o){
-    auto controller = o.addController<ofxOceanodeSuperColliderController>();
-    
-    controller->createServers();
-    
-    registerModels(o);
-    registerType(o);
-    registerScope(o);
+	auto controller = o.addController<ofxOceanodeSuperColliderController>();
+	
+	controller->createServers();
+	
+	registerModels(o);
+	registerType(o);
+	registerScope(o);
 }
 
+
 static void setup(ofxOceanode &o){
-    o.getController<ofxOceanodeSuperColliderController>()->setup();
+	auto controller = o.getController<ofxOceanodeSuperColliderController>();
+	controller->setup();
 }
 
 static void kill(ofxOceanode& o){
-    o.getController<ofxOceanodeSuperColliderController>()->killServers();
+	o.getController<ofxOceanodeSuperColliderController>()->killServers();
 }
+
 }
 
 #endif /* ofxOceanodeSuperCollider_h */
