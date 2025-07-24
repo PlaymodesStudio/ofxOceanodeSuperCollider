@@ -168,7 +168,7 @@ void scSynthdef::setup(){
         }
         else if(unitWithoutAudio == "buffer"){
             ofParameter<vector<int>> vi;
-            addParameter(vi.set(paramName, {0}, {0}, {INT_MAX}));
+            addParameter(vi.set(paramName, {-1}, {-1}, {INT_MAX}));
             
             setValuesToSynths = [this, toSendName, vi](){
                 for(auto synthServer : synths){

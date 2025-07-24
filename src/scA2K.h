@@ -1,19 +1,18 @@
-#ifndef scPitchTracker_h
-#define scPitchTracker_h
+#ifndef scA2k_h
+#define scA2k_h
 
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
 
-class scPitchTracker : public ofxOceanodeNodeModel {
+class scA2k : public ofxOceanodeNodeModel {
 public:
-	scPitchTracker(vector<serverManager*> outputServers) : ofxOceanodeNodeModel("SC PitchTracker") {
+	scA2k(vector<serverManager*> outputServers) : ofxOceanodeNodeModel("SC A2k") {
 		servers = outputServers;
 		synth = nullptr;
-		freqBus = nullptr;
-		confBus = nullptr;
+		valueBus = nullptr;
 	}
 
-	~scPitchTracker() {
+	~scA2k() {
 		clearSynth();
 	}
 
@@ -21,8 +20,7 @@ public:
 		addParameter(input.set("In", nodePort()), ofxOceanodeParameterFlags_DisableOutConnection);
 		addParameter(serverIndex.set("Server", 0, 0, servers.size() - 1));
 		addParameter(numChannels.set("N Chan", 1, 1, 100));
-		addOutputParameter(frequencies.set("Frequencies", {0}, {0}, {22000}));
-		addOutputParameter(confidences.set("Confidence", {0}, {0}, {1}));
+		addOutputParameter(values.set("Values", {0}, {-FLT_MAX}, {FLT_MAX}));
 
 		listeners.push(input.newListener([this](nodePort &port){
 			if(port.getNodeRef() != nullptr){
@@ -51,29 +49,22 @@ public:
 
 	void update(ofEventArgs &args) override {
 		if(synth != nullptr){
-			frequencies = freqBus->readValues;
-			confidences = confBus->readValues;
-			freqBus->requestValues();
-			confBus->requestValues();
+			values = valueBus->readValues;
+			valueBus->requestValues();
 		}
 	}
-
-	
 
 private:
 	void recreateSynth(){
 		clearSynth();
 		if(input->getNodeRef() != nullptr){
-			string defName = "pitchTracker" + ofToString(numChannels);
+			string defName = "a2k" + ofToString(numChannels);
 			synth = new ofxSCSynth(defName, servers[serverIndex]->getServer());
 			synth->addToTail();
 
-			freqBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
-			confBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
-
+			valueBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
 			synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));
-			synth->set("freq", freqBus->index);
-			synth->set("hasFreq", confBus->index);
+			synth->set("value", valueBus->index);
 		}
 	}
 
@@ -83,15 +74,10 @@ private:
 			delete synth;
 			synth = nullptr;
 		}
-		if(freqBus != nullptr){
-			freqBus->free();
-			delete freqBus;
-			freqBus = nullptr;
-		}
-		if(confBus != nullptr){
-			confBus->free();
-			delete confBus;
-			confBus = nullptr;
+		if(valueBus != nullptr){
+			valueBus->free();
+			delete valueBus;
+			valueBus = nullptr;
 		}
 	}
 
@@ -101,15 +87,11 @@ private:
 	ofParameter<nodePort> input;
 	ofParameter<int> serverIndex;
 	ofParameter<int> numChannels;
+	ofParameter<vector<float>> values;
 
-	ofParameter<vector<float>> frequencies;
-	ofParameter<vector<float>> confidences;
-
-	ofxSCBus* freqBus;
-	ofxSCBus* confBus;
+	ofxSCBus* valueBus;
 	ofxSCSynth* synth;
 	vector<serverManager*> servers;
 };
 
-#endif /* scPitchTracker_h */
-
+#endif /* scA2k_h */
