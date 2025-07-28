@@ -3,10 +3,17 @@
 //  ofxOceanodeSupercollider
 //
 //  Created by Eduard Frigola on 23/8/24.
+//  Extended by Santi Vilanova on 25/7/25.
 //
 
 #include "scVST.h"
 #include "ofxSCSynth.h"
+#include "imgui.h"
+#include <set>
+#include <unordered_set>
+#include <vector>
+#include <fstream>
+
 
 scVST::scVST() : scNode("VST") {
 	isPresetLoading = false;
@@ -14,22 +21,28 @@ scVST::scVST() : scNode("VST") {
 	hasPendingPresetData = false;
 	parameterTimerActive = false;
 	lastTouchedIndex = -1;
+	waitingForSyncFXPSave = false;
+	syncSourceNodeID = -1;
+	syncInProgress = false;
 }
-
-// Add this to the setup() method after the other parameters:
 
 void scVST::setup(){
 	
-	scNode::addInput("in");
+	// Initialize FXP-related variables
+	hasSavedFXPData = false;
+	waitingForFXPSave = false;
+	waitingForFXPLoad = false;
+	
+	scNode::addInput("In");
 	
 	// Basic parameters
 	addParameter(numChannels.set("N Chan", 2, 1, 100));
 	
-	// MIDI parameters (integrated from scVSTI)
-	addParameter(gate.set("Gate", {0}, {0}, {1}));
-	addParameter(pitch.set("Pitch", {60}, {0}, {127}));
-	addParameter(velocity.set("Velocity", {0.5}, {0}, {1}));
-	addParameter(midiChannel.set("MIDI Chan", 1, 1, 16));
+	// Thick separator after VST controls
+	addCustomRegion(
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
+	);
 	
 	// Search for VST plugins on setup
 	searchForVSTPlugins();
@@ -45,57 +58,88 @@ void scVST::setup(){
 		addParameterDropdown(pluginSelector, "Plugin", 0, availablePlugins);
 	}
 	
-	// VST Program parameter - NOT SAVED IN PRESETS
-	// Use special flags to exclude it from preset saving
-	auto programParam = addParameter(vstProgram.set("Program", 0, 0, 127),
-									ofxOceanodeParameterFlags_DisableSavePreset |
-									ofxOceanodeParameterFlags_DisableSaveProject);
 	
 	// VST control parameters
 	addParameter(openEditor.set("Editor"));
 	addParameter(addLastTouched.set("Add Last"));
+	addParameter(propagateParams.set("Propagate"));
+	
+	
+	// Thick separator after basic parameters
+	addCustomRegion(
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
+	);
+	
+	// MIDI parameters (integrated from scVSTI)
+	// VST Program parameter - NOT SAVED IN PRESETS
+	auto programParam = addParameter(vstProgram.set("Program", 0, 0, 127),
+									ofxOceanodeParameterFlags_DisableSavePreset |
+									ofxOceanodeParameterFlags_DisableSaveProject);
+	
+	addParameter(gate.set("Gate", {0}, {0}, {1}));
+	addParameter(pitch.set("Pitch", {60}, {0}, {127}));
+	addParameter(velocity.set("Velocity", {0.5}, {0}, {1}));
+	addParameter(midiChannel.set("MIDI Chan", 1, 1, 16));
+	addParameter(instance.set("Instance", {0}, {0}, {64})); // NEW: Instance routing
+	
+	// Thick separator after MIDI parameters
+	addCustomRegion(
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
+	);
+	
+	
 	
 	// Inspector parameters
 	addInspectorParameter(enableMultithreading.set("Multithreading", false));
+	addInspectorParameter(monoInstancing.set("Mono Instancing", false)); // NEW: Mono/Stereo instancing
 	addInspectorParameter(removeAllParams.set("Remove All Params"));
-	
-	// Add button to refresh VST parameters
-	ofParameter<void> refreshParams;
-	addInspectorParameter(refreshParams.set("Refresh VST Params"));
 
-	// Add button to capture current VST state
-	ofParameter<void> captureState;
-	addInspectorParameter(captureState.set("Capture VST State"));
-
-	// Add button to query VST programs (optional, for program names)
-	ofParameter<void> queryPrograms;
-	addInspectorParameter(queryPrograms.set("Query VST Programs"));
 	
-	listeners.push(refreshParams.newListener([this]{
-		ofLogNotice("scVST") << "Manual VST parameter refresh requested";
-		queryAllVSTParameters();
-	}));
-	
-	listeners.push(captureState.newListener([this]{
-		ofLogNotice("scVST") << "Manual VST state capture requested";
-		captureCurrentVSTState();
-	}));
-	
-	listeners.push(queryPrograms.newListener([this]{
-		ofLogNotice("scVST") << "Querying VST programs";
-		queryVSTPrograms();
-	}));
-	
-	// VST Program change listener
 	listeners.push(vstProgram.newListener([this](int &programIndex){
-		if(!isPresetLoading) {  // Only respond to user changes, not preset loading
-			setVSTProgram(programIndex);
+		try {
+			if(this == nullptr) {
+				ofLogError("scVST") << "VST program listener called on null object";
+				return;
+			}
+			
+			if(!isPresetLoading) {  // Only respond to user changes, not preset loading
+				if(synthInstances.empty()) {
+					ofLogWarning("scVST") << "Cannot set VST program: no instances available";
+					return;
+				}
+				
+				setVSTProgram(programIndex);
+			}
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error in VST program listener: " << e.what();
+		} catch(...) {
+			ofLogError("scVST") << "Unknown error in VST program listener";
 		}
 	}));
 	
-	// Set up other listeners...
 	listeners.push(numChannels.newListener([this](int &i){
 		ofLogNotice("scVST") << "Channels changed to " << i << ", will need " << calculateNumInstances() << " instances";
+		resendParams.notify();
+	}));
+	
+	listeners.push(monoInstancing.newListener([this](bool &mono){
+		ofLogNotice("scVST") << "Instancing mode changed to " << (mono ? "mono" : "stereo")
+							<< ", will need " << calculateNumInstances() << " instances";
+		
+		// Need to recreate instances with new channel configuration
+		for(auto& serverInstances : synthInstances) {
+			if(serverInstances.first != nullptr) {
+				// Free existing instances
+				freeVSTInstances(serverInstances.first);
+				
+				// Create new instances with correct configuration
+				createVSTInstances(serverInstances.first);
+				createSynth(serverInstances.first);
+			}
+		}
+		
 		resendParams.notify();
 	}));
 	
@@ -125,19 +169,40 @@ void scVST::setup(){
 		}
 	}));
 	
+	listeners.push(propagateParams.newListener([this]{
+		ofLogNotice("scVST") << "Propagating first instance parameters to all others";
+		propagateFirstInstanceToAll();
+	}));
+	
 	listeners.push(removeAllParams.newListener([this]{
 		removeAllDynamicParameters();
 	}));
 	
-	// Plugin selector listener
+	// FIXED: Plugin selector listener with preset loading check
 	listeners.push(pluginSelector.newListener([this](int &selection){
+		ofLogNotice("scVST") << "🔍 Plugin selector changed to " << selection
+							<< " (isPresetLoading = " << (isPresetLoading ? "TRUE" : "FALSE") << ")";
+		
+		// CRITICAL: Don't load plugin during preset loading!
+		if(isPresetLoading) {
+			ofLogNotice("scVST") << "🔒 Preset loading in progress - deferring plugin load";
+			// Just update the path, don't load yet
+			if (selection >= 0 && selection < pluginPaths.size()) {
+				currentPluginPath = pluginPaths[selection];
+				ofLogNotice("scVST") << "📝 Updated plugin path to: " << currentPluginPath;
+			}
+			return; // Don't load the plugin yet
+		}
+		
+		// Normal operation - load the plugin immediately
 		if (selection >= 0 && selection < pluginPaths.size()) {
 			currentPluginPath = pluginPaths[selection];
+			ofLogNotice("scVST") << "🔄 Loading selected plugin: " << currentPluginPath;
 			loadSelectedPlugin();
 		}
 	}));
 	
-	// MIDI gate listener (integrated from scVSTI)
+	// MIDI gate listener
 	listeners.push(gate.newListener([this](vector<int> &gates){
 		processGates(gates);
 	}));
@@ -153,25 +218,55 @@ void scVST::setup(){
 		}
 	}));
 	
-	scNode::addOutput("out");
+	scNode::addOutput("Out");
 	
-	// Set up update listener for parameter timer
+	addCustomRegion(
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
+	);
+	
 	listeners.push(ofEvents().update.newListener([this](ofEventArgs&) {
+		// Parameter timer logic - NOW ONLY FOR TIMEOUT PROTECTION
 		if(parameterTimerActive) {
 			uint64_t currentTime = ofGetElapsedTimeMillis();
 			if(currentTime - parameterTimerStart >= parameterTimerDelay) {
 				parameterTimerActive = false;
-				ofLogNotice("scVST") << "Timer finished, applying parameters now";
-				applyPendingPresetData();
+				ofLogWarning("scVST") << "⏰ Parameter timer timeout - applying preset data anyway";
+				// Only apply if we still have pending data (might have been applied already by VST open event)
+				if(hasPendingPresetData) {
+					applyPendingPresetData();
+				}
 			}
+		}
+		
+		// Feedback clearing logic (keep existing)
+		uint64_t currentTime = ofGetElapsedTimeMillis();
+		std::vector<int> toRemove;
+		
+		{
+			std::lock_guard<std::mutex> lock(feedbackMutex);
+			for(auto& pair : feedbackClearTimes) {
+				if(currentTime >= pair.second) {
+					suppressingFeedback.erase(pair.first);
+					toRemove.push_back(pair.first);
+				}
+			}
+		}
+		
+		for(int paramIndex : toRemove) {
+			feedbackClearTimes.erase(paramIndex);
 		}
 	}));
 }
 
 int scVST::calculateNumInstances() const {
-	// Each instance handles 2 channels (stereo pair)
-	// For odd numbers, we create an extra instance and use only its left channel
-	return (numChannels.get() + 1) / 2;
+	if (monoInstancing.get()) {
+		// In mono mode, each instance handles 1 channel
+		return numChannels.get();
+	} else {
+		// In stereo mode, each instance handles 2 channels (stereo pair)
+		return (numChannels.get() + 1) / 2;
+	}
 }
 
 void scVST::searchForVSTPlugins() {
@@ -234,20 +329,43 @@ void scVST::searchForVSTPlugins() {
 }
 
 void scVST::loadSelectedPlugin() {
-	if (currentPluginPath.empty() || isPresetLoading) return;
+	ofLogNotice("scVST") << "🔍 loadSelectedPlugin() called - isPresetLoading = "
+						<< (isPresetLoading ? "TRUE" : "FALSE")
+						<< ", currentPluginPath = " << currentPluginPath;
 	
+	if (currentPluginPath.empty()) {
+		ofLogWarning("scVST") << "❌ No plugin path set, skipping load";
+		return;
+	}
+	
+	if (isPresetLoading) {
+		ofLogNotice("scVST") << "⏳ Preset loading in progress, skipping parameter removal and query";
+	}
+
 	ofLogNotice("scVST") << "Loading plugin: " << currentPluginPath;
-	
+
 	// Clear existing parameter mappings
 	parameterInfoMap.clear();
+
+	// ONLY remove dynamic parameters if NOT during preset loading
+	if(!isPresetLoading) {
+		ofLogNotice("scVST") << "🗑️ Removing existing GUI parameters (not preset loading)";
+		removeAllDynamicParameters();
+	} else {
+		ofLogNotice("scVST") << "🔒 Keeping existing GUI parameters (preset loading in progress)";
+	}
+
+	// Clear readiness tracking
+	readyInstances.clear();
 	
-	// Remove dynamic parameters from GUI
-	removeAllDynamicParameters();
+	int totalInstances = 0;
 	
 	// Load plugin on all instances
 	for(auto& serverInstances : synthInstances) {
 		for(auto synth : serverInstances.second) {
 			if(synth != nullptr) {
+				totalInstances++;
+				
 				// Close current plugin if any
 				ofxOscMessage closeMsg;
 				closeMsg.setAddress("/u_cmd");
@@ -255,6 +373,9 @@ void scVST::loadSelectedPlugin() {
 				closeMsg.addIntArg(2);
 				closeMsg.addStringArg("/close");
 				serverInstances.first->sendMsg(closeMsg);
+				
+				// Small delay between close and open
+				ofSleepMillis(50);
 				
 				// Open new plugin with multithreading setting
 				ofxOscMessage openMsg;
@@ -267,26 +388,92 @@ void scVST::loadSelectedPlugin() {
 				openMsg.addIntArg(enableMultithreading.get() ? 1 : 0); // Multithreading setting
 				openMsg.addIntArg(0); // Normal mode
 				serverInstances.first->sendMsg(openMsg);
+				
+				ofLogNotice("scVST") << "Opening plugin on instance " << synth->nodeID;
 			}
-		}
-		
-		// Query parameters from first instance only (they should all be the same)
-		if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
-			ofLogNotice("scVST") << "Querying initial parameters after plugin load";
-			
-			// Use the efficient /param_query method to get ALL parameters at once
-			ofxOscMessage paramQueryMsg;
-			paramQueryMsg.setAddress("/u_cmd");
-			paramQueryMsg.addIntArg(serverInstances.second[0]->nodeID);
-			paramQueryMsg.addIntArg(2);
-			paramQueryMsg.addStringArg("/param_query");
-			paramQueryMsg.addIntArg(0);    // Start parameter index
-			paramQueryMsg.addIntArg(-1);   // -1 means query ALL parameters
-			serverInstances.first->sendMsg(paramQueryMsg);
 		}
 	}
 	
+	ofLogNotice("scVST") << "Sent open commands to " << totalInstances << " instances";
+	
+	// Wait for all instances to be ready before querying parameters
+	if(waitForAllInstancesReady(10000)) { // 10 second timeout
+		ofLogNotice("scVST") << "All instances ready";
+		
+		// ONLY query parameters if NOT during preset loading
+		if(!isPresetLoading) {
+			ofLogNotice("scVST") << "🔍 Querying initial parameters after plugin load";
+			
+			// Query parameters from first instance only
+			for(auto& serverInstances : synthInstances) {
+				if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
+					ofxOscMessage paramQueryMsg;
+					paramQueryMsg.setAddress("/u_cmd");
+					paramQueryMsg.addIntArg(serverInstances.second[0]->nodeID);
+					paramQueryMsg.addIntArg(2);
+					paramQueryMsg.addStringArg("/param_query");
+					paramQueryMsg.addIntArg(0);    // Start parameter index
+					paramQueryMsg.addIntArg(-1);   // -1 means query ALL parameters
+					serverInstances.first->sendMsg(paramQueryMsg);
+					break; // Only query from first server
+				}
+			}
+		} else {
+			ofLogNotice("scVST") << "🔒 Skipping parameter query (preset loading - will restore from preset)";
+		}
+	} else {
+		ofLogError("scVST") << "Timeout waiting for all VST instances to be ready!";
+	}
+
 	pluginLoaded = true;
+}
+
+bool scVST::waitForAllInstancesReady(int timeoutMs) {
+	int expectedInstances = 0;
+	
+	// Count expected instances
+	for(auto& serverInstances : synthInstances) {
+		expectedInstances += serverInstances.second.size();
+	}
+	
+	if(expectedInstances == 0) return true;
+	
+	ofLogNotice("scVST") << "Waiting for " << expectedInstances << " instances to be ready...";
+	
+	auto startTime = ofGetElapsedTimeMillis();
+	
+	while((ofGetElapsedTimeMillis() - startTime) < timeoutMs) {
+		// Process OSC messages to receive /vst_open responses
+		for(auto& serverInstances : synthInstances) {
+			serverInstances.first->process();
+		}
+		
+		if(readyInstances.size() >= expectedInstances) {
+			ofLogNotice("scVST") << "All " << expectedInstances << " instances ready in "
+								<< (ofGetElapsedTimeMillis() - startTime) << "ms";
+			return true;
+		}
+		
+		// Log progress every 2 seconds
+		if((ofGetElapsedTimeMillis() - startTime) % 2000 < 50) {
+			ofLogNotice("scVST") << "Readiness: " << readyInstances.size()
+								<< "/" << expectedInstances << " instances";
+		}
+		
+		ofSleepMillis(50);
+	}
+	
+	ofLogWarning("scVST") << "Timeout! Only " << readyInstances.size()
+						 << "/" << expectedInstances << " instances ready";
+	return false;
+}
+
+bool scVST::areAllInstancesReady() {
+	int expectedInstances = 0;
+	for(auto& serverInstances : synthInstances) {
+		expectedInstances += serverInstances.second.size();
+	}
+	return readyInstances.size() >= expectedInstances;
 }
 
 void scVST::handleVSTParam(ofxOscMessage& msg) {
@@ -298,23 +485,28 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 		// Verify this is our VST instance
 		if (!isMyVSTInstance(nodeID)) return;
 		
-		ofLogNotice("scVST") << "VST Parameter " << paramIndex << " = " << value;
+		ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
+							 << " from node " << nodeID;
 		
 		// Update parameter info
 		if(parameterInfoMap.count(paramIndex) == 0) {
 			VSTParameterInfo info;
 			info.index = paramIndex;
-			info.displayName = "Param" + ofToString(paramIndex); // Use simple default name
+			info.displayName = "Param" + ofToString(paramIndex);
 			info.value = value;
 			parameterInfoMap[paramIndex] = info;
 		} else {
 			parameterInfoMap[paramIndex].value = value;
-			// NEVER overwrite user-defined parameter names
-			// The displayName should only be changed by the user via the inspector
 		}
 		
-		// Update GUI parameter if it exists
-		updateParameterValue(paramIndex, value);
+		// Update GUI parameter if it exists (but prevent recursion)
+		updateParameterValueFromVST(paramIndex, value, nodeID);
+		
+		// ONLY propagate if this change came from GUI interaction on the first instance
+		// AND we don't have a vector parameter controlling this parameter
+		if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
+			propagateParameterToOtherInstances(nodeID, paramIndex, value);
+		}
 	}
 }
 
@@ -327,7 +519,8 @@ void scVST::handleVSTAuto(ofxOscMessage& msg) {
 		// Verify this is our VST instance
 		if (!isMyVSTInstance(nodeID)) return;
 		
-		ofLogNotice("scVST") << "VST Parameter " << paramIndex << " automated to " << value;
+		ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " automated to " << value
+							 << " from node " << nodeID;
 		
 		// Update last touched parameter
 		lastTouchedIndex = paramIndex;
@@ -344,8 +537,224 @@ void scVST::handleVSTAuto(ofxOscMessage& msg) {
 		}
 		
 		// Update GUI parameter if it exists
-		updateParameterValue(paramIndex, value);
+		updateParameterValueFromVST(paramIndex, value, nodeID);
+		
+		// ONLY propagate automation from the first instance if no vector parameter exists
+		if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
+			propagateParameterToOtherInstances(nodeID, paramIndex, value);
+		}
 	}
+}
+
+void scVST::updateParameterValueFromVST(int paramIndex, float value, int sourceNodeID) {
+	// Update vector parameter if it exists
+	if(dynamicVectorParameters.count(paramIndex) > 0) {
+		auto currentValues = dynamicVectorParameters[paramIndex]->getParameter().get();
+		
+		if(currentValues.size() == 1) {
+			// Scalar mode - update the single value
+			dynamicVectorParameters[paramIndex]->getParameter().setWithoutEventNotifications({value});
+			ofLogVerbose("scVST") << "Updated scalar vector param " << paramIndex << " to " << value;
+		} else {
+			// Vector mode - only update if this came from the corresponding instance
+			int instanceIndex = getInstanceIndexFromNodeID(sourceNodeID);
+			if(instanceIndex >= 0 && instanceIndex < currentValues.size()) {
+				currentValues[instanceIndex] = value;
+				dynamicVectorParameters[paramIndex]->getParameter().setWithoutEventNotifications(currentValues);
+				ofLogVerbose("scVST") << "Updated vector param " << paramIndex
+									 << " instance " << instanceIndex << " to " << value;
+			}
+		}
+	}
+	
+	// Update scalar parameter if it exists (legacy support)
+	if(dynamicParameters.count(paramIndex) > 0) {
+		dynamicParameters[paramIndex]->getParameter().setWithoutEventNotifications(value);
+	}
+	
+	// Always update parameter info
+	if(parameterInfoMap.count(paramIndex) > 0) {
+		parameterInfoMap[paramIndex].value = value;
+	}
+}
+
+int scVST::getInstanceIndexFromNodeID(int nodeID) {
+	int instanceIndex = 0;
+	for(auto& serverInstances : synthInstances) {
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				if(synth->nodeID == nodeID) {
+					return instanceIndex;
+				}
+				instanceIndex++;
+			}
+		}
+	}
+	return -1; // Not found
+}
+
+void scVST::propagateParameterToOtherInstances(int sourceNodeID, int paramIndex, float value) {
+	// Check if we should propagate (redundant check for safety)
+	if(!shouldPropagateFromVSTGUI(paramIndex, sourceNodeID)) {
+		return;
+	}
+	
+	// Check if we're suppressing feedback for this parameter
+	{
+		std::lock_guard<std::mutex> lock(feedbackMutex);
+		if(suppressingFeedback.count(paramIndex) > 0) {
+			ofLogVerbose("scVST") << "Suppressing propagation feedback for parameter " << paramIndex;
+			return;
+		}
+		suppressingFeedback.insert(paramIndex);
+	}
+	
+	ofLogNotice("scVST") << "Propagating parameter " << paramIndex << " = " << value
+						<< " from node " << sourceNodeID << " to other instances (GUI-initiated)";
+	
+	// Apply to all OTHER instances (not the source)
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr && synth->nodeID != sourceNodeID) { // Skip source instance
+				try {
+					ofxOscMessage setMsg;
+					setMsg.setAddress("/u_cmd");
+					setMsg.addIntArg(synth->nodeID);
+					setMsg.addIntArg(2);
+					setMsg.addStringArg("/set");
+					setMsg.addIntArg(paramIndex);
+					setMsg.addFloatArg(value);
+					serverInstances.first->sendMsg(setMsg);
+					
+					ofLogVerbose("scVST") << "Propagated to instance " << synth->nodeID;
+				} catch(const std::exception& e) {
+					ofLogError("scVST") << "Error propagating parameter to synth " << synth->nodeID << ": " << e.what();
+				}
+			}
+		}
+	}
+	
+	// Set up a delayed task to clear the feedback suppression
+	auto clearTime = ofGetElapsedTimeMillis() + 50; // 50ms delay
+	feedbackClearTimes[paramIndex] = clearTime;
+}
+
+bool scVST::shouldPropagateFromVSTGUI(int paramIndex, int sourceNodeID) {
+	// Don't propagate if we're currently suppressing feedback for this parameter
+	{
+		std::lock_guard<std::mutex> lock(feedbackMutex);
+		if(suppressingFeedback.count(paramIndex) > 0) {
+			ofLogVerbose("scVST") << "Not propagating param " << paramIndex << " - feedback suppressed";
+			return false;
+		}
+	}
+	
+	// Check if this is the first instance (only first instance GUI changes should propagate)
+	bool isFirstInstance = false;
+	for(auto& serverInstances : synthInstances) {
+		if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
+			if(serverInstances.second[0]->nodeID == sourceNodeID) {
+				isFirstInstance = true;
+				break;
+			}
+		}
+	}
+	
+	if(!isFirstInstance) {
+		ofLogVerbose("scVST") << "Not propagating param " << paramIndex << " - not from first instance";
+		return false;
+	}
+	
+	// Check if we have a vector parameter controlling this parameter
+	if(dynamicVectorParameters.count(paramIndex) > 0) {
+		auto values = dynamicVectorParameters[paramIndex]->getParameter().get();
+		
+		// If vector has more than 1 value, user wants per-instance control
+		if(values.size() > 1) {
+			ofLogVerbose("scVST") << "Not propagating param " << paramIndex
+								 << " - user has per-instance control (vector size " << values.size() << ")";
+			return false;
+		}
+		
+		// If vector has 1 value, it's a scalar broadcast - allow propagation
+		ofLogVerbose("scVST") << "Allowing propagation of param " << paramIndex
+							 << " - scalar broadcast mode";
+		return true;
+	}
+	
+	// No vector parameter exists, allow propagation
+	ofLogVerbose("scVST") << "Allowing propagation of param " << paramIndex
+						 << " - no vector parameter exists";
+	return true;
+}
+
+
+
+void scVST::handleInstanceAwareParameterChange(int paramIndex, const vector<float>& values) {
+	// Prevent feedback loops
+	{
+		std::lock_guard<std::mutex> lock(feedbackMutex);
+		if(suppressingFeedback.count(paramIndex) > 0) {
+			ofLogVerbose("scVST") << "Suppressing feedback for parameter " << paramIndex;
+			return;
+		}
+		suppressingFeedback.insert(paramIndex);
+	}
+	
+	ofLogNotice("scVST") << "Instance-aware parameter change: param " << paramIndex
+						<< " with " << values.size() << " values (USER-initiated)";
+	
+	// Apply parameter values to specific instances
+	int instanceIndex = 0;
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				try {
+					float value;
+					
+					if(values.size() == 1) {
+						// Scalar value - broadcast to all instances
+						value = values[0];
+						ofLogVerbose("scVST") << "Broadcasting scalar value " << value
+											<< " to instance " << instanceIndex << " (node " << synth->nodeID << ")";
+					}
+					else if(instanceIndex < values.size()) {
+						// Vector value - use specific value for this instance
+						value = values[instanceIndex];
+						ofLogVerbose("scVST") << "Setting instance " << instanceIndex
+											<< " (node " << synth->nodeID << ") to value " << value;
+					}
+					else {
+						// Vector is shorter than number of instances - use last value
+						value = values.back();
+						ofLogVerbose("scVST") << "Using last value " << value
+											<< " for instance " << instanceIndex << " (node " << synth->nodeID << ")";
+					}
+					
+					ofxOscMessage setMsg;
+					setMsg.setAddress("/u_cmd");
+					setMsg.addIntArg(synth->nodeID);
+					setMsg.addIntArg(2);
+					setMsg.addStringArg("/set");
+					setMsg.addIntArg(paramIndex);
+					setMsg.addFloatArg(value);
+					serverInstances.first->sendMsg(setMsg);
+					
+				} catch(const std::exception& e) {
+					ofLogError("scVST") << "Error setting parameter on synth " << synth->nodeID << ": " << e.what();
+				}
+			}
+			instanceIndex++;
+		}
+	}
+	
+	// Set up delayed clearing of feedback suppression
+	auto clearTime = ofGetElapsedTimeMillis() + 100; // Longer delay for user-initiated changes
+	feedbackClearTimes[paramIndex] = clearTime;
 }
 
 void scVST::handleVSTOpen(ofxOscMessage& msg) {
@@ -360,14 +769,90 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 		
 		ofLogNotice("scVST") << "VST Plugin opened - Success: " << success
 							<< ", Has Editor: " << hasEditor
-							<< ", Latency: " << latency;
+							<< ", Latency: " << latency
+							<< " (Node " << nodeID << ")";
 		
-		if(success && hasPendingPresetData) {
-			ofLogNotice("scVST") << "Plugin ready, applying pending preset data";
-			// Cancel any pending timer since we got the event
-			parameterTimerActive = false;
-			applyPendingPresetData();
+		if(success) {
+			readyInstances.insert(nodeID);
+			ofLogNotice("scVST") << "Instance " << nodeID << " ready ("
+								<< readyInstances.size() << " total ready)";
+			
+			// Apply FXP data to this instance if we have it
+			if(hasSavedFXPData && fxpAppliedInstances.count(nodeID) == 0) {
+				applyFXPToInstance(nodeID);
+			}
+			
+			// Check if ALL instances are now ready and we have pending preset data
+			if(hasPendingPresetData && areAllInstancesReady()) {
+				// Wait a bit for all FXP applications to complete
+				ofSleepMillis(500);
+				
+				ofLogNotice("scVST") << "🎯 All VST instances ready and FXP applied! Applying GUI parameters now.";
+				
+				// Apply the GUI parameters after FXP data
+				applyPendingPresetData();
+			}
+		} else {
+			ofLogError("scVST") << "VST Plugin failed to open on node " << nodeID;
 		}
+	}
+}
+
+void scVST::applyFXPToInstance(int nodeID) {
+	if(!hasSavedFXPData) {
+		ofLogWarning("scVST") << "No FXP data to apply to instance " << nodeID;
+		return;
+	}
+	
+	// Find the server for this nodeID
+	ofxSCServer* targetServer = nullptr;
+	for(auto& serverInstances : synthInstances) {
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr && synth->nodeID == nodeID) {
+				targetServer = serverInstances.first;
+				break;
+			}
+		}
+		if(targetServer) break;
+	}
+	
+	if(!targetServer) {
+		ofLogError("scVST") << "Could not find server for node " << nodeID;
+		return;
+	}
+	
+	ofLogNotice("scVST") << "Applying FXP preset to instance " << nodeID
+						<< " (" << savedFXPData.size() << " bytes)";
+	
+	try {
+		// Create temporary file with FXP data
+		tempFXPPath = createTempFXPPath();
+		
+		std::ofstream fxpFile(tempFXPPath, std::ios::binary);
+		if(fxpFile.is_open()) {
+			fxpFile.write(reinterpret_cast<const char*>(savedFXPData.data()), savedFXPData.size());
+			fxpFile.close();
+			
+			// Send program_read command to VST
+			waitingForFXPLoad = true;
+			
+			ofxOscMessage readMsg;
+			readMsg.setAddress("/u_cmd");
+			readMsg.addIntArg(nodeID);
+			readMsg.addIntArg(2);
+			readMsg.addStringArg("/program_read");
+			readMsg.addStringArg(tempFXPPath);
+			readMsg.addIntArg(1); // async = true
+			targetServer->sendMsg(readMsg);
+			
+			ofLogNotice("scVST") << "Sent FXP load command to instance " << nodeID;
+			
+		} else {
+			ofLogError("scVST") << "Could not create temporary FXP file: " << tempFXPPath;
+		}
+		
+	} catch(const std::exception& e) {
+		ofLogError("scVST") << "Error applying FXP to instance " << nodeID << ": " << e.what();
 	}
 }
 
@@ -378,12 +863,23 @@ void scVST::addParameterToGUI(int paramIndex) {
 		return;
 	}
 	
-	if(dynamicParameters.count(paramIndex) > 0) {
-		// Parameter already exists, just update its value
+	if(dynamicParameters.count(paramIndex) > 0 || dynamicVectorParameters.count(paramIndex) > 0) {
+		// Parameter already exists, just update its value AND send to VST
 		if(parameterInfoMap.count(paramIndex) > 0) {
-			dynamicParameters[paramIndex]->getParameter().setWithoutEventNotifications(parameterInfoMap[paramIndex].value);
+			if(dynamicParameters.count(paramIndex) > 0) {
+				float value = parameterInfoMap[paramIndex].value;
+				dynamicParameters[paramIndex]->getParameter().setWithoutEventNotifications(value);
+				// Send to VST
+				setVSTParameter(paramIndex, value);
+			}
+			if(dynamicVectorParameters.count(paramIndex) > 0) {
+				float value = parameterInfoMap[paramIndex].value;
+				dynamicVectorParameters[paramIndex]->getParameter().setWithoutEventNotifications({value});
+				// Send to VST
+				setVSTParameter(paramIndex, value);
+			}
 		}
-		ofLogNotice("scVST") << "Parameter " << paramIndex << " already exists in GUI";
+		ofLogNotice("scVST") << "Parameter " << paramIndex << " already exists in GUI, updated value";
 		return;
 	}
 	
@@ -397,10 +893,10 @@ void scVST::addParameterToGUI(int paramIndex) {
 		ofLogNotice("scVST") << "Created parameter info for index " << paramIndex;
 	}
 	
-	// Create new parameter
+	// Create new parameter - now as VECTOR parameter to support both scalar and vector values
 	string paramName = parameterInfoMap[paramIndex].displayName;
 	
-	// Ensure parameter name is unique to avoid conflicts
+	// Ensure parameter name is unique
 	string uniqueParamName = paramName;
 	int nameCounter = 1;
 	while(getParameterGroup().contains(uniqueParamName)) {
@@ -408,27 +904,57 @@ void scVST::addParameterToGUI(int paramIndex) {
 		nameCounter++;
 	}
 	
-	// Create parameter directly in the parameters group to avoid scope issues
-	auto newParam = std::make_shared<ofParameter<float>>();
-	newParam->set(uniqueParamName, parameterInfoMap[paramIndex].value, 0.0f, 1.0f);
+	// Create VECTOR parameter instead of scalar
+	auto newParam = std::make_shared<ofParameter<vector<float>>>();
+	newParam->set(uniqueParamName, {parameterInfoMap[paramIndex].value}, {0.0f}, {1.0f});
 	
 	// Store the parameter to keep it alive BEFORE adding to GUI
-	dynamicFloatParameters[paramIndex] = newParam;
+	dynamicVectorFloatParameters[paramIndex] = newParam;
 	
 	try {
 		auto oceanodeParam = addParameter(*newParam);
-		dynamicParameters[paramIndex] = oceanodeParam;
+		dynamicVectorParameters[paramIndex] = oceanodeParam;
 		
-		ofLogNotice("scVST") << "Successfully added parameter " << uniqueParamName << " to GUI";
+		ofLogNotice("scVST") << "Successfully added vector parameter " << uniqueParamName << " to GUI";
 		
-		// Set up listener for this parameter with better error handling
-		listeners.push(newParam->newListener([this, paramIndex](float &value) -> void {
+		// Set up listener for this parameter with vector handling
+		listeners.push(newParam->newListener([this, paramIndex](vector<float> &values) -> void {
 			try {
-				if(this == nullptr) return; // Safety check
-				if(!isPresetLoading && parameterInfoMap.count(paramIndex) > 0) {
-					setVSTParameter(paramIndex, value);
-					parameterInfoMap[paramIndex].value = value;
+				if(this == nullptr) return;
+				
+				// Always update parameter info regardless of state
+				if(parameterInfoMap.count(paramIndex) > 0 && !values.empty()) {
+					parameterInfoMap[paramIndex].value = values[0];
 				}
+				
+				// Check if this parameter should be converted from vector to scalar
+				checkAndConvertVectorToScalar(paramIndex);
+				
+				// Only send to VST if conditions are met
+				if(!isPresetLoading &&
+				   !synthInstances.empty() &&
+				   areAllInstancesReady() &&
+				   parameterInfoMap.count(paramIndex) > 0) {
+					
+					ofLogNotice("scVST") << "🎛️ GUI parameter " << paramIndex
+										<< " changed by user - sending to VST ("
+										<< values.size() << " values)";
+					handleDynamicParameterChange(paramIndex, values);
+					
+				} else {
+					// Log why we're not sending
+					if(isPresetLoading) {
+						ofLogVerbose("scVST") << "⏳ GUI parameter " << paramIndex
+											 << " changed during preset loading - not sending to VST yet";
+					} else if(synthInstances.empty()) {
+						ofLogVerbose("scVST") << "❌ GUI parameter " << paramIndex
+											 << " changed but no VST instances available";
+					} else if(!areAllInstancesReady()) {
+						ofLogVerbose("scVST") << "⏳ GUI parameter " << paramIndex
+											 << " changed but VST instances not ready yet";
+					}
+				}
+				
 			} catch(const std::exception& e) {
 				ofLogError("scVST") << "Error in parameter listener for index " << paramIndex << ": " << e.what();
 			} catch(...) {
@@ -436,78 +962,132 @@ void scVST::addParameterToGUI(int paramIndex) {
 			}
 		}));
 		
-		// Add name editor to inspector
-		string inspectorName = uniqueParamName + "_Name";
-		// Ensure inspector parameter name is also unique
-		int inspectorCounter = 1;
-		while(getInspectorParameterGroup().contains(inspectorName)) {
-			inspectorName = uniqueParamName + "_Name_" + ofToString(inspectorCounter);
-			inspectorCounter++;
+		// IMPORTANT: Send the initial value to the VST after creating the GUI parameter
+		float initialValue = parameterInfoMap[paramIndex].value;
+		if(initialValue != 0.0f || !isPresetLoading) { // Always send during preset loading
+			ofLogNotice("scVST") << "Sending initial value " << initialValue
+								<< " for parameter " << paramIndex << " to VST";
+			setVSTParameter(paramIndex, initialValue);
+		}
+		
+		// ADD NAME EDITOR TO INSPECTOR
+		string nameEditorName = uniqueParamName + "_Name";
+		string uniqueNameEditorName = nameEditorName;
+		int nameEditorCounter = 1;
+		while(getInspectorParameterGroup().contains(uniqueNameEditorName)) {
+			uniqueNameEditorName = nameEditorName + "_" + ofToString(nameEditorCounter);
+			nameEditorCounter++;
 		}
 		
 		auto nameEditor = std::make_shared<ofParameter<string>>();
-		nameEditor->set(inspectorName, uniqueParamName);
+		nameEditor->set(uniqueNameEditorName, parameterInfoMap[paramIndex].displayName);
 		
-		// Store the name editor parameter to keep it alive BEFORE adding to inspector
+		// Store the name editor to keep it alive
 		dynamicStringParameters[paramIndex] = nameEditor;
 		
+		// Add to inspector
 		addInspectorParameter(*nameEditor);
 		
-		// Set up listener for name changes with better error handling
+		// Set up name change listener
 		listeners.push(nameEditor->newListener([this, paramIndex](string &newName) -> void {
-			try {
-				if(this == nullptr) return; // Safety check
-				if(!newName.empty() && parameterInfoMap.count(paramIndex) > 0 &&
-				   newName != parameterInfoMap[paramIndex].displayName) {
-					// Update the parameter info
-					parameterInfoMap[paramIndex].displayName = newName;
+			if(this == nullptr) return; // Safety check
+			
+			if(!newName.empty() && parameterInfoMap.count(paramIndex) > 0) {
+				string oldName = parameterInfoMap[paramIndex].displayName;
+				parameterInfoMap[paramIndex].displayName = newName;
+				
+				ofLogNotice("scVST") << "Renamed parameter " << paramIndex << " from '" << oldName << "' to '" << newName << "'";
+				
+				// Update the actual parameter name in the GUI
+				if(dynamicVectorParameters.count(paramIndex) > 0) {
+					// We need to remove and re-add the parameter with the new name
+					// This is tricky because we need to preserve the value and connections
 					
-					// Update the main parameter name
-					if(dynamicParameters.count(paramIndex) > 0) {
-						dynamicParameters[paramIndex]->getParameter().setName(newName);
+					// Get current value
+					vector<float> currentValue = dynamicVectorParameters[paramIndex]->getParameter().get();
+					
+					// Remove the old parameter
+					try {
+						removeParameter(oldName);
+					} catch(...) {
+						// If removal fails, try with various suffixes that might have been added
+						for(int suffix = 1; suffix <= 10; suffix++) {
+							try {
+								removeParameter(oldName + "_" + ofToString(suffix));
+								break;
+							} catch(...) {
+								continue;
+							}
+						}
+					}
+					
+					// Create new parameter with the new name
+					string newUniqueName = newName;
+					int counter = 1;
+					while(getParameterGroup().contains(newUniqueName)) {
+						newUniqueName = newName + "_" + ofToString(counter);
+						counter++;
+					}
+					
+					auto newParam = std::make_shared<ofParameter<vector<float>>>();
+					newParam->set(newUniqueName, currentValue, {0.0f}, {1.0f});
+					
+					// Store the new parameter
+					dynamicVectorFloatParameters[paramIndex] = newParam;
+					
+					try {
+						auto oceanodeParam = addParameter(*newParam);
+						dynamicVectorParameters[paramIndex] = oceanodeParam;
+						
+						// Re-setup the parameter listener
+						listeners.push(newParam->newListener([this, paramIndex](vector<float> &values) -> void {
+							if(this == nullptr) return;
+							if(!isPresetLoading && parameterInfoMap.count(paramIndex) > 0) {
+								handleDynamicParameterChange(paramIndex, values);
+								if(!values.empty()) {
+									parameterInfoMap[paramIndex].value = values[0];
+								}
+							}
+						}));
+						
+						ofLogNotice("scVST") << "Successfully renamed parameter to " << newUniqueName;
+						
+					} catch(const std::exception& e) {
+						ofLogError("scVST") << "Error re-adding parameter with new name: " << e.what();
 					}
 				}
-			} catch(const std::exception& e) {
-				ofLogError("scVST") << "Error in name editor listener for index " << paramIndex << ": " << e.what();
-			} catch(...) {
-				ofLogError("scVST") << "Unknown error in name editor listener for index " << paramIndex;
 			}
 		}));
 		
-		// Add remove button to inspector
-		string buttonName = "Remove " + uniqueParamName;
-		// Ensure button name is also unique
-		int buttonCounter = 1;
-		while(getInspectorParameterGroup().contains(buttonName)) {
-			buttonName = "Remove " + uniqueParamName + "_" + ofToString(buttonCounter);
-			buttonCounter++;
+		// ADD INDIVIDUAL REMOVAL BUTTON TO INSPECTOR
+		string removeButtonName = "Remove " + uniqueParamName;
+		string uniqueRemoveButtonName = removeButtonName;
+		int removeNameCounter = 1;
+		while(getInspectorParameterGroup().contains(uniqueRemoveButtonName)) {
+			uniqueRemoveButtonName = removeButtonName + "_" + ofToString(removeNameCounter);
+			removeNameCounter++;
 		}
 		
 		auto removeButton = std::make_shared<ofParameter<void>>();
-		removeButton->set(buttonName);
+		removeButton->set(uniqueRemoveButtonName);
 		
-		// Store the remove button parameter to keep it alive BEFORE adding to inspector
+		// Store the button to keep it alive
 		dynamicRemovalButtons[paramIndex] = removeButton;
 		
+		// Add to inspector
 		addInspectorParameter(*removeButton);
 		
-		// Set up listener for removal button with better error handling
-		listeners.push(removeButton->newListener([this, paramIndex]() -> void {
-			try {
-				if(this == nullptr) return; // Safety check
-				removeParameterFromGUI(paramIndex);
-			} catch(const std::exception& e) {
-				ofLogError("scVST") << "Error in removal button listener for index " << paramIndex << ": " << e.what();
-			} catch(...) {
-				ofLogError("scVST") << "Unknown error in removal button listener for index " << paramIndex;
-			}
+		// Set up removal listener
+		listeners.push(removeButton->newListener([this, paramIndex](){
+			ofLogNotice("scVST") << "Removing parameter " << paramIndex << " via individual button";
+			removeParameterFromGUI(paramIndex);
 		}));
 		
 	} catch(const std::exception& e) {
 		ofLogError("scVST") << "Error adding parameter to GUI: " << e.what();
 		// Clean up on error
-		dynamicFloatParameters.erase(paramIndex);
-		dynamicParameters.erase(paramIndex);
+		dynamicVectorFloatParameters.erase(paramIndex);
+		dynamicVectorParameters.erase(paramIndex);
 	}
 }
 
@@ -522,10 +1102,9 @@ void scVST::removeParameterFromGUI(int paramIndex) {
 	
 	string paramName = parameterInfoMap[paramIndex].displayName;
 	
-	// Remove main parameter
+	// Remove main parameter (scalar)
 	if(dynamicParameters.count(paramIndex) > 0) {
 		try {
-			// Try to find the actual parameter name in the group
 			string actualParamName = paramName;
 			if(!getParameterGroup().contains(actualParamName)) {
 				// Parameter might have been renamed with a suffix, search for it
@@ -540,12 +1119,37 @@ void scVST::removeParameterFromGUI(int paramIndex) {
 			
 			if(getParameterGroup().contains(actualParamName)) {
 				removeParameter(actualParamName);
-				ofLogNotice("scVST") << "Removed main parameter: " << actualParamName;
+				ofLogNotice("scVST") << "Removed main scalar parameter: " << actualParamName;
 			}
 		} catch(const std::exception& e) {
-			ofLogError("scVST") << "Error removing main parameter: " << e.what();
+			ofLogError("scVST") << "Error removing scalar parameter: " << e.what();
 		}
 		dynamicParameters.erase(paramIndex);
+	}
+	
+	// Remove main parameter (vector)
+	if(dynamicVectorParameters.count(paramIndex) > 0) {
+		try {
+			string actualParamName = paramName;
+			if(!getParameterGroup().contains(actualParamName)) {
+				// Parameter might have been renamed with a suffix, search for it
+				for(int i = 0; i < getParameterGroup().size(); i++) {
+					string currentName = getParameterGroup().get(i).getName();
+					if(currentName.find(paramName) == 0) {
+						actualParamName = currentName;
+						break;
+					}
+				}
+			}
+			
+			if(getParameterGroup().contains(actualParamName)) {
+				removeParameter(actualParamName);
+				ofLogNotice("scVST") << "Removed main vector parameter: " << actualParamName;
+			}
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error removing vector parameter: " << e.what();
+		}
+		dynamicVectorParameters.erase(paramIndex);
 	}
 	
 	// Remove stored float parameter
@@ -553,10 +1157,14 @@ void scVST::removeParameterFromGUI(int paramIndex) {
 		dynamicFloatParameters.erase(paramIndex);
 	}
 	
+	// Remove stored vector float parameter
+	if(dynamicVectorFloatParameters.count(paramIndex) > 0) {
+		dynamicVectorFloatParameters.erase(paramIndex);
+	}
+	
 	// Remove name editor from inspector
 	if(dynamicStringParameters.count(paramIndex) > 0) {
 		try {
-			// Try multiple possible names for the name editor
 			vector<string> possibleNames = {
 				paramName + "_Name",
 				paramName + "_Name_1",
@@ -585,7 +1193,6 @@ void scVST::removeParameterFromGUI(int paramIndex) {
 	// Remove removal button from inspector
 	if(dynamicRemovalButtons.count(paramIndex) > 0) {
 		try {
-			// Try multiple possible names for the removal button
 			vector<string> possibleNames = {
 				"Remove " + paramName,
 				"Remove " + paramName + "_1",
@@ -620,8 +1227,17 @@ void scVST::removeAllDynamicParameters() {
 	try {
 		// Create a copy of the keys to avoid iterator invalidation
 		vector<int> paramIndices;
+		
+		// Collect scalar parameter indices
 		for(auto& param : dynamicParameters) {
 			paramIndices.push_back(param.first);
+		}
+		
+		// Collect vector parameter indices
+		for(auto& param : dynamicVectorParameters) {
+			if(std::find(paramIndices.begin(), paramIndices.end(), param.first) == paramIndices.end()) {
+				paramIndices.push_back(param.first);
+			}
 		}
 		
 		// Remove each parameter individually using the safe removal function
@@ -640,17 +1256,10 @@ void scVST::removeAllDynamicParameters() {
 		// Force clear all maps as a safety measure
 		try {
 			dynamicParameters.clear();
-		} catch(...) {}
-		
-		try {
+			dynamicVectorParameters.clear();
 			dynamicFloatParameters.clear();
-		} catch(...) {}
-		
-		try {
+			dynamicVectorFloatParameters.clear();
 			dynamicStringParameters.clear();
-		} catch(...) {}
-		
-		try {
 			dynamicRemovalButtons.clear();
 		} catch(...) {}
 		
@@ -664,8 +1273,14 @@ void scVST::removeAllDynamicParameters() {
 }
 
 void scVST::updateParameterValue(int paramIndex, float value) {
+	// Update scalar parameter if it exists (without triggering events)
 	if(dynamicParameters.count(paramIndex) > 0) {
 		dynamicParameters[paramIndex]->getParameter().setWithoutEventNotifications(value);
+	}
+	
+	// Update vector parameter if it exists (set as single-element vector, without triggering events)
+	if(dynamicVectorParameters.count(paramIndex) > 0) {
+		dynamicVectorParameters[paramIndex]->getParameter().setWithoutEventNotifications({value});
 	}
 	
 	if(parameterInfoMap.count(paramIndex) > 0) {
@@ -683,6 +1298,16 @@ void scVST::setVSTParameter(int paramIndex, float value) {
 	if(synthInstances.empty()) {
 		ofLogWarning("scVST") << "No VST instances available to set parameter";
 		return;
+	}
+	
+	// Prevent feedback loops
+	{
+		std::lock_guard<std::mutex> lock(feedbackMutex);
+		if(suppressingFeedback.count(paramIndex) > 0) {
+			ofLogVerbose("scVST") << "Suppressing feedback for parameter " << paramIndex;
+			return;
+		}
+		suppressingFeedback.insert(paramIndex);
 	}
 	
 	ofLogNotice("scVST") << "Setting VST parameter " << paramIndex << " to " << value << " on all instances";
@@ -708,6 +1333,10 @@ void scVST::setVSTParameter(int paramIndex, float value) {
 			}
 		}
 	}
+	
+	// Set up delayed clearing of feedback suppression
+	auto clearTime = ofGetElapsedTimeMillis() + 50; // 50ms delay
+	feedbackClearTimes[paramIndex] = clearTime;
 }
 
 bool scVST::isMyVSTInstance(int nodeID) const {
@@ -721,15 +1350,6 @@ bool scVST::isMyVSTInstance(int nodeID) const {
 	return false;
 }
 
-void scVST::restoreAllParameterValues() {
-	for(auto& param : dynamicParameters) {
-		int paramIndex = param.first;
-		float value = param.second->getParameter().get();
-		setVSTParameter(paramIndex, value);
-	}
-}
-
-// MIDI functionality (integrated from scVSTI)
 void scVST::processGates(vector<int>& gates) {
 	// Ensure we have enough space in our tracking vectors
 	if (previousGates.size() != gates.size()) {
@@ -737,9 +1357,10 @@ void scVST::processGates(vector<int>& gates) {
 		activeNotes.resize(gates.size(), -1); // -1 means no active note
 	}
 	
-	// Get current pitch and velocity vectors
+	// Get current pitch, velocity, and instance vectors
 	auto currentPitch = pitch.get();
 	auto currentVelocity = velocity.get();
+	auto currentInstance = instance.get();
 	
 	// Process each gate
 	for (int i = 0; i < gates.size(); i++) {
@@ -748,821 +1369,863 @@ void scVST::processGates(vector<int>& gates) {
 		
 		// Rising edge - gate went from 0 to 1
 		if (currentGate == 1 && previousGate == 0) {
-			// Get pitch for this index (with bounds checking)
+			// Get pitch for this index
 			int noteNumber = 60; // Default middle C
 			if (i < currentPitch.size()) {
 				noteNumber = ofClamp(currentPitch[i], 0, 127);
 			} else if (!currentPitch.empty()) {
-				noteNumber = ofClamp(currentPitch[0], 0, 127); // Use first pitch if index out of bounds
+				noteNumber = ofClamp(currentPitch[0], 0, 127);
 			}
 			
-			// Get velocity for this index (with bounds checking)
+			// Get velocity for this index
 			float vel = 0.5; // Default velocity
 			if (i < currentVelocity.size()) {
 				vel = ofClamp(currentVelocity[i], 0.0, 1.0);
 			} else if (!currentVelocity.empty()) {
-				vel = ofClamp(currentVelocity[0], 0.0, 1.0); // Use first velocity if index out of bounds
+				vel = ofClamp(currentVelocity[0], 0.0, 1.0);
+			}
+			
+			// Get instance for this index
+			int targetInstance = 0; // Default to all instances
+			if (i < currentInstance.size()) {
+				targetInstance = ofClamp(currentInstance[i], 0, 64);
+			} else if (!currentInstance.empty()) {
+				targetInstance = ofClamp(currentInstance[0], 0, 64);
 			}
 			
 			// Convert velocity to MIDI range (0-127)
 			int midiVelocity = int(vel * 127);
 			
-			// Send note on
-			sendMidiNoteOn(midiChannel.get(), noteNumber, midiVelocity);
+			// Send note on with instance routing
+			sendMidiNoteOn(midiChannel.get(), noteNumber, midiVelocity, targetInstance);
 			
 			// Store the active note
 			activeNotes[i] = noteNumber;
 		}
 		
 		// Falling edge - gate went from 1 to 0
-				 else if (currentGate == 0 && previousGate == 1) {
-			   // Send note off for the previously active note
-			   if (i < activeNotes.size() && activeNotes[i] >= 0) {
-				   sendMidiNoteOff(midiChannel.get(), activeNotes[i]);
-				   activeNotes[i] = -1; // Clear active note
-			   }
-		   }
-	   }
-	   
-	   // Update previous gates for next comparison
-	   previousGates = gates;
-   }
-
-   void scVST::sendMidiNoteOn(int channel, int pitch, int velocity) {
-	   for(auto& serverInstances : synthInstances){
-		   for(auto synth : serverInstances.second){
-			   if(synth != nullptr){
-				   ofxOscMessage m;
-				   m.setAddress("/u_cmd");
-				   m.addIntArg(synth->nodeID);
-				   m.addIntArg(2); // VSTPlugin synthIndex
-				   m.addStringArg("/midi_msg"); // MIDI command
-				   
-				   // Create MIDI note on message [status, data1, data2]
-				   std::vector<int8_t> midiData;
-				   midiData.push_back(0x90 | ((channel - 1) & 0x0F)); // Note on + channel (0-based)
-				   midiData.push_back(pitch & 0x7F); // Note number
-				   midiData.push_back(velocity & 0x7F); // Velocity
-				   
-				   // Convert to ofBuffer for blob
-				   ofBuffer buffer;
-				   buffer.set((char*)midiData.data(), midiData.size());
-				   m.addBlobArg(buffer);
-				   m.addFloatArg(0.0f); // detune
-				   serverInstances.first->sendMsg(m);
-			   }
-		   }
-	   }
-   }
-
-   void scVST::sendMidiNoteOff(int channel, int pitch) {
-	   for(auto& serverInstances : synthInstances){
-		   for(auto synth : serverInstances.second){
-			   if(synth != nullptr){
-				   ofxOscMessage m;
-				   m.setAddress("/u_cmd");
-				   m.addIntArg(synth->nodeID);
-				   m.addIntArg(2); // VSTPlugin synthIndex
-				   m.addStringArg("/midi_msg"); // MIDI command
-				   
-				   // Create MIDI note off message [status, data1, data2]
-				   std::vector<int8_t> midiData;
-				   midiData.push_back(0x80 | ((channel - 1) & 0x0F)); // Note off + channel (0-based)
-				   midiData.push_back(pitch & 0x7F); // Note number
-				   midiData.push_back(0x40); // Release velocity (64)
-				   
-				   // Convert to ofBuffer for blob
-				   ofBuffer buffer;
-				   buffer.set((char*)midiData.data(), midiData.size());
-				   m.addBlobArg(buffer);
-				   m.addFloatArg(0.0f); // detune
-				   serverInstances.first->sendMsg(m);
-			   }
-		   }
-	   }
-   }
-
-   void scVST::queryAllVSTParameters() {
-	   ofLogNotice("scVST") << "Querying all VST parameters before saving preset";
-	   
-	   // Query parameters from the first instance of each server (they should all have same values)
-	   for(auto& serverInstances : synthInstances) {
-		   if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
-			   ofLogNotice("scVST") << "Using alternative approach: query VST program data directly";
-			   
-			   // Alternative approach: Instead of trying to query individual parameters,
-			   // let's use the VST's built-in program/preset system which captures ALL internal state
-			   // This is much more reliable for complex synths like Diva
-			   
-			   // First, try to get the current program data (this includes ALL parameter states)
-			   ofxOscMessage getProgramMsg;
-			   getProgramMsg.setAddress("/u_cmd");
-			   getProgramMsg.addIntArg(serverInstances.second[0]->nodeID);
-			   getProgramMsg.addIntArg(2);
-			   getProgramMsg.addStringArg("/program_write");
-			   getProgramMsg.addStringArg("temp_preset_capture.fxp");  // Temporary file
-			   getProgramMsg.addIntArg(1); // Asynchronous
-			   serverInstances.first->sendMsg(getProgramMsg);
-			   
-			   // Also try a comprehensive parameter range query as backup
-			   // Query in smaller, more reliable chunks
-			   for(int startParam = 0; startParam < 512; startParam += 32) {
-				   ofxOscMessage getParamsMsg;
-				   getParamsMsg.setAddress("/u_cmd");
-				   getParamsMsg.addIntArg(serverInstances.second[0]->nodeID);
-				   getParamsMsg.addIntArg(2);
-				   getParamsMsg.addStringArg("/getn");
-				   getParamsMsg.addIntArg(startParam);
-				   getParamsMsg.addIntArg(32);
-				   serverInstances.first->sendMsg(getParamsMsg);
-				   
-				   ofSleepMillis(5); // Small delay between queries
-			   }
-			   
-			   // We only need to query from one server since all instances should have the same parameter values
-			   break;
-		   }
-	   }
-	   
-	   // Give VST time to respond
-	   ofLogNotice("scVST") << "Waiting for parameter responses...";
-	   
-	   int initialParamCount = parameterInfoMap.size();
-	   
-	   // Shorter wait time since we're not expecting hundreds of individual responses
-	   for(int i = 0; i < 50; i++) {
-		   ofSleepMillis(30);
-		   
-		   if(i % 10 == 0) {
-			   int currentParamCount = parameterInfoMap.size();
-			   ofLogNotice("scVST") << "Parameter query progress: " << currentParamCount << " parameters (iteration " << i << ")";
-		   }
-	   }
-	   
-	   ofLogNotice("scVST") << "Parameter query complete. Total parameters now tracked: " << parameterInfoMap.size();
-   }
-
-   void scVST::queryAllVSTParametersSync() {
-	   ofLogNotice("scVST") << "Performing comprehensive synchronous parameter query";
-	   
-	   for(auto& serverInstances : synthInstances) {
-		   if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
-			   // Try multiple approaches to get as many parameters as possible
-			   
-			   // Approach 1: Individual parameter queries for known parameters
-			   for(int paramIndex = 0; paramIndex < 256; paramIndex++) {
-				   ofxOscMessage getParamMsg;
-				   getParamMsg.setAddress("/u_cmd");
-				   getParamMsg.addIntArg(serverInstances.second[0]->nodeID);
-				   getParamMsg.addIntArg(2);
-				   getParamMsg.addStringArg("/get");
-				   getParamMsg.addIntArg(paramIndex);
-				   serverInstances.first->sendMsg(getParamMsg);
-				   
-				   if(paramIndex % 10 == 0) {
-					   ofSleepMillis(10); // Small delays to avoid overwhelming
-				   }
-			   }
-			   
-			   // Approach 2: Bulk queries in small chunks
-			   for(int startParam = 0; startParam < 1024; startParam += 16) {
-				   ofxOscMessage getBulkMsg;
-				   getBulkMsg.setAddress("/u_cmd");
-				   getBulkMsg.addIntArg(serverInstances.second[0]->nodeID);
-				   getBulkMsg.addIntArg(2);
-				   getBulkMsg.addStringArg("/getn");
-				   getBulkMsg.addIntArg(startParam);
-				   getBulkMsg.addIntArg(16);
-				   serverInstances.first->sendMsg(getBulkMsg);
-				   
-				   ofSleepMillis(5);
-			   }
-			   
-			   break;
-		   }
-	   }
-	   
-	   // Wait for responses
-	   ofLogNotice("scVST") << "Waiting for comprehensive parameter responses...";
-	   
-	   int initialCount = parameterInfoMap.size();
-	   for(int i = 0; i < 100; i++) {
-		   ofSleepMillis(20);
-		   
-		   if(i % 20 == 0) {
-			   int currentCount = parameterInfoMap.size();
-			   ofLogNotice("scVST") << "Comprehensive query progress: " << currentCount << " parameters";
-			   
-			   if(currentCount > initialCount + 50) {
-				   ofLogNotice("scVST") << "Found significant parameters, continuing...";
-				   initialCount = currentCount;
-			   }
-		   }
-	   }
-	   
-	   ofLogNotice("scVST") << "Comprehensive parameter query complete. Total: " << parameterInfoMap.size();
-   }
-
-   void scVST::captureCurrentVSTState() {
-	   ofLogNotice("scVST") << "Capturing current VST state by querying all parameters individually";
-	   
-	   for(auto& serverInstances : synthInstances) {
-		   if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
-			   
-			   // Query a large range of parameters individually
-			   // This is more reliable than bulk queries for some VSTs
-			   for(int paramIndex = 0; paramIndex < 512; paramIndex++) {
-				   ofxOscMessage getParamMsg;
-				   getParamMsg.setAddress("/u_cmd");
-				   getParamMsg.addIntArg(serverInstances.second[0]->nodeID);
-				   getParamMsg.addIntArg(2);
-				   getParamMsg.addStringArg("/get");
-				   getParamMsg.addIntArg(paramIndex);
-				   serverInstances.first->sendMsg(getParamMsg);
-				   
-				   // Small delay every 20 parameters to avoid overwhelming
-				   if(paramIndex % 20 == 0) {
-					   ofSleepMillis(10);
-				   }
-			   }
-			   
-			   break;
-		   }
-	   }
-	   
-	   // Wait for responses
-	   ofLogNotice("scVST") << "Waiting for individual parameter responses...";
-	   
-	   int initialCount = parameterInfoMap.size();
-	   for(int i = 0; i < 150; i++) {  // Longer wait for individual queries
-		   ofSleepMillis(20);
-		   
-		   if(i % 30 == 0) {
-			   int currentCount = parameterInfoMap.size();
-			   ofLogNotice("scVST") << "State capture progress: " << currentCount << " parameters (iteration " << i << ")";
-		   }
-	   }
-	   
-	   int finalCount = parameterInfoMap.size();
-	   ofLogNotice("scVST") << "VST state capture complete. Captured " << (finalCount - initialCount) << " new parameters. Total: " << finalCount;
-   }
-
-   void scVST::handleParameterQueryResponse(ofxOscMessage& msg) {
-	   // Handle bulk parameter query responses from /getn command
-	   // The /getn response format might be: nodeID, synthIndex, startIndex, numParams, value1, value2, ...
-	   // OR it might be: nodeID, synthIndex, param1Index, param1Value, param2Index, param2Value, ...
-	   
-	   if (msg.getNumArgs() >= 4) {
-		   int nodeID = msg.getArgAsInt32(0);
-		   
-		   // Verify this is our VST instance
-		   if (!isMyVSTInstance(nodeID)) return;
-		   
-		   ofLogNotice("scVST") << "Received bulk parameter response with " << msg.getNumArgs() << " arguments";
-		   
-		   // Try to parse as continuous values format: nodeID, synthIndex, startIndex, numParams, values...
-		   if(msg.getNumArgs() >= 5) {
-			   int startIndex = (int)msg.getArgAsFloat(2);
-			   int numParams = (int)msg.getArgAsFloat(3);
-			   
-			   ofLogNotice("scVST") << "Parsing as continuous format: startIndex=" << startIndex << ", numParams=" << numParams;
-			   
-			   // Check if we have enough arguments for this format
-			   if((4 + numParams) <= msg.getNumArgs()) {
-				   // Process each parameter value in the response
-				   for(int i = 0; i < numParams; i++) {
-					   int paramIndex = startIndex + i;
-					   float value = msg.getArgAsFloat(4 + i);
-					   
-					   // Only process non-zero values or if we don't have this parameter yet
-					   if(value != 0.0f || parameterInfoMap.count(paramIndex) == 0) {
-						   // Update or create parameter info
-						   if(parameterInfoMap.count(paramIndex) == 0) {
-							   VSTParameterInfo info;
-							   info.index = paramIndex;
-							   info.displayName = "Param" + ofToString(paramIndex);
-							   info.value = value;
-							   parameterInfoMap[paramIndex] = info;
-						   } else {
-							   parameterInfoMap[paramIndex].value = value;
-						   }
-						   
-						   // Update GUI parameter if it exists
-						   updateParameterValue(paramIndex, value);
-						   
-						   if(i < 10 || value != 0.0f) { // Log first 10 or non-zero values
-							   ofLogNotice("scVST") << "Updated param " << paramIndex << " = " << value;
-						   }
-					   }
-				   }
-				   
-				   ofLogNotice("scVST") << "Updated " << numParams << " parameters from bulk query";
-				   return;
-			   }
-		   }
-		   
-		   // Try to parse as index-value pairs: nodeID, synthIndex, index1, value1, index2, value2, ...
-		   ofLogNotice("scVST") << "Trying to parse as index-value pairs";
-		   int processedParams = 0;
-		   for(int i = 2; i < msg.getNumArgs() - 1; i += 2) {
-			   try {
-				   int paramIndex = (int)msg.getArgAsFloat(i);
-				   float value = msg.getArgAsFloat(i + 1);
-				   
-				   // Sanity check for parameter index
-				   if(paramIndex >= 0 && paramIndex < 4096) {
-					   // Update or create parameter info
-					   if(parameterInfoMap.count(paramIndex) == 0) {
-						   VSTParameterInfo info;
-						   info.index = paramIndex;
-						   info.displayName = "Param" + ofToString(paramIndex);
-						   info.value = value;
-						   parameterInfoMap[paramIndex] = info;
-					   } else {
-						   parameterInfoMap[paramIndex].value = value;
-					   }
-					   
-					   // Update GUI parameter if it exists
-					   updateParameterValue(paramIndex, value);
-					   
-					   if(processedParams < 10 || value != 0.0f) {
-						   ofLogNotice("scVST") << "Updated param " << paramIndex << " = " << value;
-					   }
-					   processedParams++;
-				   }
-			   } catch(const std::exception& e) {
-				   ofLogError("scVST") << "Error parsing parameter at position " << i << ": " << e.what();
-				   break;
-			   }
-		   }
-		   
-		   ofLogNotice("scVST") << "Processed " << processedParams << " parameters from index-value pairs";
-	   }
-   }
-
-   void scVST::saveCurrentVSTProgram(ofJson &json) {
-	   ofLogNotice("scVST") << "Saving current VST program data";
-	   
-	   // Use the VST plugin's built-in program save functionality
-	   // This captures the complete internal state much more reliably than individual parameters
-	   
-	   for(auto& serverInstances : synthInstances) {
-		   if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
-			   // Create a unique temporary file name for this preset
-			   string tempFileName = "oceanode_vst_temp_" + ofToString(ofGetElapsedTimeMillis()) + ".fxp";
-			   
-			   // Save current program to a temporary file
-			   ofxOscMessage saveProgramMsg;
-			   saveProgramMsg.setAddress("/u_cmd");
-			   saveProgramMsg.addIntArg(serverInstances.second[0]->nodeID);
-			   saveProgramMsg.addIntArg(2);
-			   saveProgramMsg.addStringArg("/program_write");
-			   saveProgramMsg.addStringArg(tempFileName);
-			   saveProgramMsg.addIntArg(0); // Synchronous (changed from async to ensure completion)
-			   serverInstances.first->sendMsg(saveProgramMsg);
-			   
-			   // Wait longer for the save to complete
-			   ofLogNotice("scVST") << "Waiting for VST program write to complete...";
-			   ofSleepMillis(500); // Increased wait time
-			   
-			   // Try to read the file and store it as binary data in JSON
-			   string tempFilePath = ofToDataPath(tempFileName, true);
-			   ofFile tempFile(tempFilePath);
-			   
-			   ofLogNotice("scVST") << "Looking for VST program file at: " << tempFilePath;
-			   
-			   if(tempFile.exists()) {
-				   ofBuffer programData = tempFile.readToBuffer();
-				   if(programData.size() > 0) {
-					   // Store the binary data as a vector of integers (simpler than base64)
-					   vector<int> binaryData;
-					   const char* data = programData.getData();
-					   for(size_t i = 0; i < programData.size(); i++) {
-						   binaryData.push_back((unsigned char)data[i]);
-					   }
-					   
-					   json["vstProgramData"] = binaryData;
-					   json["vstDataSize"] = (int)programData.size();
-					   
-					   ofLogNotice("scVST") << "Successfully saved VST program data (" << programData.size() << " bytes)";
-					   
-					   // Clean up temporary file
-					   tempFile.remove();
-					   return; // Success, we can return early
-				   } else {
-					   ofLogError("scVST") << "VST program file exists but is empty";
-				   }
-			   } else {
-				   ofLogWarning("scVST") << "VST program file was not created at expected location";
-				   
-				   // Try alternative approaches
-				   // Method 1: Try using a buffer instead of file
-				   ofLogNotice("scVST") << "Trying alternative method: save to buffer";
-				   
-				   // Create a temporary buffer number (using a high number to avoid conflicts)
-				   int tempBufferNum = 9999;
-				   
-				   ofxOscMessage saveToBufMsg;
-				   saveToBufMsg.setAddress("/u_cmd");
-				   saveToBufMsg.addIntArg(serverInstances.second[0]->nodeID);
-				   saveToBufMsg.addIntArg(2);
-				   saveToBufMsg.addStringArg("/program_write");
-				   saveToBufMsg.addIntArg(tempBufferNum); // Try buffer instead of file
-				   saveToBufMsg.addIntArg(0); // Synchronous
-				   serverInstances.first->sendMsg(saveToBufMsg);
-				   
-				   ofSleepMillis(300);
-				   
-				   // Method 2: Try comprehensive parameter query as fallback
-				   ofLogNotice("scVST") << "Fallback: attempting comprehensive parameter query";
-				   queryAllVSTParametersSync();
-			   }
-			   
-			   // Only need to try from one instance
-			   break;
-		   }
-	   }
-	   
-	   // If we reach here, program save didn't work
-	   ofLogWarning("scVST") << "VST program save failed, relying on individual parameter capture";
-   }
-
-   void scVST::restoreVSTProgram(ofJson &json) {
-	   ofLogNotice("scVST") << "Restoring VST program data";
-	   
-	   // Check if we have program data to restore
-	   if(!json.contains("vstProgramData") || json["vstProgramData"].is_null()) {
-		   ofLogNotice("scVST") << "No VST program data found, will restore individual parameters";
-		   return;
-	   }
-	   
-	   try {
-		   // Restore the binary data from the vector of integers
-		   vector<int> binaryData = json["vstProgramData"];
-		   
-		   if(binaryData.size() > 0) {
-			   // Convert back to binary buffer
-			   ofBuffer programData;
-			   string dataStr;
-			   for(int value : binaryData) {
-				   dataStr += (char)(value & 0xFF);
-			   }
-			   programData.set(dataStr.c_str(), dataStr.size());
-			   
-			   // Create a temporary file with the program data
-			   string tempFileName = "oceanode_vst_restore_" + ofToString(ofGetElapsedTimeMillis()) + ".fxp";
-			   string tempFilePath = ofToDataPath(tempFileName, true);
-			   
-			   ofFile tempFile(tempFilePath, ofFile::WriteOnly, true);
-			   tempFile.writeFromBuffer(programData);
-			   tempFile.close();
-			   
-			   // Load the program data into all VST instances
-			   for(auto& serverInstances : synthInstances) {
-				   for(auto synth : serverInstances.second) {
-					   if(synth != nullptr) {
-						   ofxOscMessage loadProgramMsg;
-						   loadProgramMsg.setAddress("/u_cmd");
-						   loadProgramMsg.addIntArg(synth->nodeID);
-						   loadProgramMsg.addIntArg(2);
-						   loadProgramMsg.addStringArg("/program_read");
-						   loadProgramMsg.addStringArg(tempFileName);
-						   loadProgramMsg.addIntArg(1); // Asynchronous
-						   serverInstances.first->sendMsg(loadProgramMsg);
-					   }
-				   }
-			   }
-			   
-			   // Wait for the load to complete
-			   ofSleepMillis(200);
-			   
-			   // Clean up temporary file
-			   ofFile(tempFilePath).remove();
-			   
-			   ofLogNotice("scVST") << "Restored VST program data (" << programData.size() << " bytes)";
-		   }
-		   
-	   } catch(const std::exception& e) {
-		   ofLogError("scVST") << "Error restoring VST program data: " << e.what();
-	   }
-   }
-
-void scVST::presetSave(ofJson &json) {
-	ofLogNotice("scVST") << "=== PRESET SAVE ===";
-	ofLogNotice("scVST") << "Dynamic parameters count: " << dynamicParameters.size();
-	ofLogNotice("scVST") << "Parameter info map count (before capture): " << parameterInfoMap.size();
+		else if (currentGate == 0 && previousGate == 1) {
+			// Send note off for the previously active note
+			if (i < activeNotes.size() && activeNotes[i] >= 0) {
+				// Get instance for this index for note off
+				int targetInstance = 0;
+				if (i < currentInstance.size()) {
+					targetInstance = ofClamp(currentInstance[i], 0, 64);
+				} else if (!currentInstance.empty()) {
+					targetInstance = ofClamp(currentInstance[0], 0, 64);
+				}
+				
+				sendMidiNoteOff(midiChannel.get(), activeNotes[i], targetInstance);
+				activeNotes[i] = -1; // Clear active note
+			}
+		}
+	}
 	
-	try {
-		// AUTOMATICALLY capture current VST state before saving
-		ofLogNotice("scVST") << "Automatically capturing current VST state for preset save...";
-		
-		// Store initial count to track progress
-		int initialParamCount = parameterInfoMap.size();
-		
-		// Query all VST parameters synchronously
-		for(auto& serverInstances : synthInstances) {
-			if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
-				
-				// Use a more targeted approach - query parameters in smaller batches
-				// and force OSC processing between batches
-				
-				// Method 1: Query individual parameters with forced OSC processing
-				for(int paramIndex = 0; paramIndex < 256; paramIndex++) {
-					ofxOscMessage getParamMsg;
-					getParamMsg.setAddress("/u_cmd");
-					getParamMsg.addIntArg(serverInstances.second[0]->nodeID);
-					getParamMsg.addIntArg(2);
-					getParamMsg.addStringArg("/get");
-					getParamMsg.addIntArg(paramIndex);
-					serverInstances.first->sendMsg(getParamMsg);
-					
-					// Force OSC processing every few parameters
-					if(paramIndex % 10 == 0) {
-						// Force the server to process OSC messages
-						serverInstances.first->process();
-						ofSleepMillis(5);
+	// Update previous gates for next comparison
+	previousGates = gates;
+}
+
+void scVST::sendMidiNoteOn(int channel, int pitch, int velocity, int instanceIndex) {
+	if(instanceIndex == 0) {
+		// Route to all instances
+		for(auto& serverInstances : synthInstances){
+			for(auto synth : serverInstances.second){
+				if(synth != nullptr){
+					sendMidiToInstance(serverInstances.first, synth, channel, 0x90, pitch, velocity);
+				}
+			}
+		}
+	} else if(instanceIndex > 0) {
+		// Route to specific instance
+		int currentInstance = 1;
+		for(auto& serverInstances : synthInstances){
+			for(auto synth : serverInstances.second){
+				if(synth != nullptr){
+					if(currentInstance == instanceIndex) {
+						sendMidiToInstance(serverInstances.first, synth, channel, 0x90, pitch, velocity);
+						return;
 					}
-				}
-				
-				// Method 2: Try bulk queries with OSC processing
-				for(int startParam = 0; startParam < 256; startParam += 16) {
-					ofxOscMessage getBulkMsg;
-					getBulkMsg.setAddress("/u_cmd");
-					getBulkMsg.addIntArg(serverInstances.second[0]->nodeID);
-					getBulkMsg.addIntArg(2);
-					getBulkMsg.addStringArg("/getn");
-					getBulkMsg.addIntArg(startParam);
-					getBulkMsg.addIntArg(16);
-					serverInstances.first->sendMsg(getBulkMsg);
-					
-					// Force OSC processing after each bulk query
-					serverInstances.first->process();
-					ofSleepMillis(10);
-				}
-				
-				break; // Only need to query from one server
-			}
-		}
-		
-		// Now wait for responses while actively processing OSC messages
-		ofLogNotice("scVST") << "Waiting for VST parameter responses while processing OSC...";
-		
-		int maxWaitIterations = 100; // 2 seconds total
-		for(int i = 0; i < maxWaitIterations; i++) {
-			// Actively process OSC messages during wait
-			for(auto& serverInstances : synthInstances) {
-				if(serverInstances.first != nullptr) {
-					serverInstances.first->process();
-				}
-			}
-			
-			ofSleepMillis(20);
-			
-			// Check progress every 25 iterations (500ms)
-			if(i % 25 == 0) {
-				int currentCount = parameterInfoMap.size();
-				ofLogNotice("scVST") << "Parameter capture progress: " << currentCount << " parameters (iteration " << i << ")";
-				
-				// If we've captured a good number of parameters, we can reduce wait time
-				if(currentCount > initialParamCount + 30) {
-					ofLogNotice("scVST") << "Good parameter capture progress, reducing wait time";
-					maxWaitIterations = i + 25; // Wait just a bit more
+					currentInstance++;
 				}
 			}
 		}
-		
-		// Final OSC processing burst
-		for(int i = 0; i < 10; i++) {
-			for(auto& serverInstances : synthInstances) {
-				if(serverInstances.first != nullptr) {
-					serverInstances.first->process();
-				}
-			}
-			ofSleepMillis(10);
-		}
-		
-		int finalParamCount = parameterInfoMap.size();
-		ofLogNotice("scVST") << "VST state capture complete. Captured " << (finalParamCount - initialParamCount)
-							<< " new parameters. Total: " << finalParamCount;
-		
-		// Now save all the parameters we have
-		ofJson vstParams = ofJson::object();
-		
-		// Save parameters that are in the GUI
-		for(auto& param : dynamicParameters) {
-			try {
-				int paramIndex = param.first;
-				ofJson paramData = ofJson::object();
-				paramData["value"] = param.second->getParameter().get();
-				paramData["name"] = parameterInfoMap[paramIndex].displayName;
-				paramData["inGUI"] = true;  // Mark as being in GUI
-				vstParams[ofToString(paramIndex)] = paramData;
-				
-				ofLogNotice("scVST") << "Saving GUI param " << paramIndex << ": " << param.second->getParameter().get();
-			} catch(const std::exception& e) {
-				ofLogError("scVST") << "Error saving GUI parameter " << param.first << ": " << e.what();
-			}
-		}
-		
-		// Save parameters that are NOT in the GUI but have been captured
-		for(auto& info : parameterInfoMap) {
-			try {
-				int paramIndex = info.first;
-				// Skip if already saved above
-				if(dynamicParameters.count(paramIndex) == 0) {
-					ofJson paramData = ofJson::object();
-					paramData["value"] = info.second.value;
-					paramData["name"] = info.second.displayName;
-					paramData["inGUI"] = false;  // Mark as NOT in GUI
-					vstParams[ofToString(paramIndex)] = paramData;
-					
-					// Only log non-zero values to reduce spam
-					if(info.second.value != 0.0f) {
-						ofLogNotice("scVST") << "Saving non-GUI param " << paramIndex << ": " << info.second.value;
-					}
-				}
-			} catch(const std::exception& e) {
-				ofLogError("scVST") << "Error saving non-GUI parameter " << info.first << ": " << e.what();
-			}
-		}
-		
-		json["vstParameters"] = vstParams;
-		json["currentPluginPath"] = currentPluginPath;
-		json["enableMultithreading"] = enableMultithreading.get();
-		
-		ofLogNotice("scVST") << "Total parameters saved: " << vstParams.size();
-		
-		// Log a few example saved parameters for debugging
-		int logCount = 0;
-		for(auto& item : vstParams.items()) {
-			if(logCount++ < 5) {
-				ofLogNotice("scVST") << "Example saved param: " << item.key() << " = " << item.value()["value"];
-			}
-		}
-		
-	} catch(const std::exception& e) {
-		ofLogError("scVST") << "Error during preset save: " << e.what();
+		ofLogWarning("scVST") << "Instance " << instanceIndex << " not found for MIDI note on";
 	}
 }
 
-   void scVST::presetRecallAfterSettingParameters(ofJson &json) {
-	   ofLogNotice("scVST") << "=== PRESET RECALL CALLED ===";
-	   
-	   // Clear any existing pending data first
-	   hasPendingPresetData = false;
-	   pendingPresetData.clear();
-	   
-	   // Store the preset data to apply after plugin loads (make a deep copy)
-	   try {
-		   pendingPresetData = json; // ofJson handles deep copying automatically
-		   hasPendingPresetData = true;
-	   } catch(const std::exception& e) {
-		   ofLogError("scVST") << "Error copying preset data: " << e.what();
-		   hasPendingPresetData = false;
-		   return;
-	   }
-	   
-	   // Restore multithreading setting if saved
-	   if(json.contains("enableMultithreading") && !json["enableMultithreading"].is_null()) {
-		   try {
-			   enableMultithreading = static_cast<bool>(json["enableMultithreading"]);
-		   } catch(const std::exception& e) {
-			   ofLogError("scVST") << "Error restoring multithreading setting: " << e.what();
-		   }
-	   }
-	   
-	   // Handle plugin path change
-	   if(json.contains("currentPluginPath") && !json["currentPluginPath"].is_null()) {
-		   try {
-			   string savedPluginPath = static_cast<string>(json["currentPluginPath"]);
-			   ofLogNotice("scVST") << "Saved plugin path: " << savedPluginPath;
-			   ofLogNotice("scVST") << "Current plugin path: " << currentPluginPath;
-			   
-			   if(savedPluginPath != currentPluginPath) {
-				   // Find the plugin in our available plugins
-				   for(int i = 0; i < pluginPaths.size(); i++) {
-					   if(pluginPaths[i] == savedPluginPath) {
-						   ofLogNotice("scVST") << "Changing plugin to: " << savedPluginPath;
-						   pluginSelector = i;
-						   currentPluginPath = savedPluginPath;
-						   loadSelectedPlugin();
-						   setupParameterTimer(3000); // 3 second fallback timer
-						   return;
-					   }
-				   }
-			   }
-		   } catch(const std::exception& e) {
-			   ofLogError("scVST") << "Error handling plugin path change: " << e.what();
-		   }
-	   }
-	   
-	   // If same plugin, apply parameters with a delay since we might still be reloading
-	   ofLogNotice("scVST") << "Same plugin, applying parameters with delay";
-	   setupParameterTimer(1000); // 1 second delay for same plugin
-   }
+void scVST::sendMidiNoteOff(int channel, int pitch, int instanceIndex) {
+	if(instanceIndex == 0) {
+		// Route to all instances
+		for(auto& serverInstances : synthInstances){
+			for(auto synth : serverInstances.second){
+				if(synth != nullptr){
+					sendMidiToInstance(serverInstances.first, synth, channel, 0x80, pitch, 0x40);
+				}
+			}
+		}
+	} else if(instanceIndex > 0) {
+		// Route to specific instance
+		int currentInstance = 1;
+		for(auto& serverInstances : synthInstances){
+			for(auto synth : serverInstances.second){
+				if(synth != nullptr){
+					if(currentInstance == instanceIndex) {
+						sendMidiToInstance(serverInstances.first, synth, channel, 0x80, pitch, 0x40);
+						return;
+					}
+					currentInstance++;
+				}
+			}
+		}
+		ofLogWarning("scVST") << "Instance " << instanceIndex << " not found for MIDI note off";
+	}
+}
+  
 
-   void scVST::setupParameterTimer(int delayMs) {
-	   parameterTimerStart = ofGetElapsedTimeMillis();
-	   parameterTimerDelay = delayMs;
-	   parameterTimerActive = true;
-	   
-	   ofLogNotice("scVST") << "Set up parameter timer for " << delayMs << "ms";
-   }
 
-   void scVST::applyPendingPresetData() {
-	   if(!hasPendingPresetData) return;
-	   
-	   ofLogNotice("scVST") << "=== APPLYING PRESET DATA ===";
-	   
-	   // Make a local copy and clear the pending data immediately to avoid issues during destruction
-	   ofJson json;
-	   try {
-		   json = pendingPresetData; // Deep copy
-		   hasPendingPresetData = false;
-		   pendingPresetData.clear(); // Clear immediately
-	   } catch(const std::exception& e) {
-		   ofLogError("scVST") << "Error copying pending preset data: " << e.what();
-		   hasPendingPresetData = false;
-		   pendingPresetData.clear();
-		   return;
-	   }
-	   
-	   // Restore VST parameters using INDICES only
-	   if(json.contains("vstParameters") && json["vstParameters"].is_object()) {
-		   ofLogNotice("scVST") << "Found vstParameters in preset data";
-		   
-		   try {
-			   for(auto& item : json["vstParameters"].items()) {
-				   try {
-					   int paramIndex = ofToInt(item.key());
-					   
-					   // Check if the item value has the expected structure
-					   if(item.value().is_object() && item.value().contains("value")) {
-						   
-						   float value = item.value()["value"];
-						   string name = item.value().contains("name") ?
-							   static_cast<string>(item.value()["name"]) :
-							   ("Param" + ofToString(paramIndex));
-						   bool wasInGUI = item.value().contains("inGUI") ?
-							   static_cast<bool>(item.value()["inGUI"]) :
-							   false;
-						   
-						   ofLogNotice("scVST") << "Restoring param " << paramIndex << " (" << name << ") = " << value << " (inGUI: " << wasInGUI << ")";
-						   
-						   // Create/update parameter info - preserve user-defined names
-						   if(parameterInfoMap.count(paramIndex) == 0) {
-							   VSTParameterInfo info;
-							   info.index = paramIndex;
-							   info.displayName = name;  // Use the saved name
-							   info.value = value;
-							   parameterInfoMap[paramIndex] = info;
-						   } else {
-							   // Only update value, preserve existing display name if user changed it
-							   parameterInfoMap[paramIndex].value = value;
-							   // Only update name if it's still the default
-							   if(parameterInfoMap[paramIndex].displayName == "Param" + ofToString(paramIndex)) {
-								   parameterInfoMap[paramIndex].displayName = name;
-							   }
-						   }
-						   
-						   // Set the actual VST parameter value using INDEX (for ALL instances)
-						   setVSTParameter(paramIndex, value);
-						   
-						   // Only add to GUI if it was previously in the GUI
-						   if(wasInGUI) {
-							   addParameterToGUI(paramIndex);
-						   }
-					   }
-				   } catch(const std::exception& e) {
-					   ofLogError("scVST") << "Error restoring individual parameter: " << e.what();
-					   continue; // Skip this parameter but continue with others
-				   }
-			   }
-		   } catch(const std::exception& e) {
-			   ofLogError("scVST") << "Error iterating through vstParameters: " << e.what();
-		   }
-	   } else {
-		   ofLogWarning("scVST") << "No vstParameters found in preset data";
-	   }
-   }
+void scVST::presetSave(ofJson &json) {
+	ofLogNotice("scVST") << "=== PRESET SAVE (WITH FXP DATA) ===";
+	
+	// Save metadata
+	json["currentPluginPath"] = currentPluginPath;
+	json["enableMultithreading"] = enableMultithreading.get();
+	json["monoInstancing"] = monoInstancing.get();
+	
+	// Save FXP data from first instance if available
+	if(!synthInstances.empty()) {
+		ofxSCSynth* firstInstance = nullptr;
+		ofxSCServer* firstServer = nullptr;
+		
+		// Find first instance
+		for(auto& serverInstances : synthInstances) {
+			if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
+				firstInstance = serverInstances.second[0];
+				firstServer = serverInstances.first;
+				break;
+			}
+		}
+		
+		if(firstInstance && firstServer) {
+			ofLogNotice("scVST") << "Saving FXP preset from first instance (node " << firstInstance->nodeID << ")";
+			
+			// Create temporary file for FXP data
+			tempFXPPath = createTempFXPPath();
+			waitingForFXPSave = true;
+			
+			// Request VST to write preset to file
+			ofxOscMessage writeMsg;
+			writeMsg.setAddress("/u_cmd");
+			writeMsg.addIntArg(firstInstance->nodeID);
+			writeMsg.addIntArg(2);
+			writeMsg.addStringArg("/program_write");
+			writeMsg.addStringArg(tempFXPPath);
+			writeMsg.addIntArg(1); // async = true
+			firstServer->sendMsg(writeMsg);
+			
+			// Wait for write completion with timeout
+			int maxWait = 50; // 5 seconds
+			int waitCount = 0;
+			
+			while(waitingForFXPSave && waitCount < maxWait) {
+				firstServer->process();
+				ofSleepMillis(100);
+				waitCount++;
+			}
+			
+			if(!waitingForFXPSave) {
+				// Successfully saved, read the file into memory
+				try {
+					std::ifstream file(tempFXPPath, std::ios::binary | std::ios::ate);
+					if(file.is_open()) {
+						std::streamsize size = file.tellg();
+						file.seekg(0, std::ios::beg);
+						
+						std::vector<uint8_t> buffer(size);
+						if(file.read(reinterpret_cast<char*>(buffer.data()), size)) {
+							// Store as base64 encoded string in JSON
+							string base64Data = base64Encode(buffer);
+							json["fxpData"] = base64Data;
+							json["fxpDataSize"] = size;
+							
+							ofLogNotice("scVST") << "Saved FXP data (" << size << " bytes)";
+							
+							// Store in memory for later use
+							savedFXPData = buffer;
+							hasSavedFXPData = true;
+						} else {
+							ofLogError("scVST") << "Error reading FXP file content";
+						}
+						file.close();
+					} else {
+						ofLogError("scVST") << "FXP file not found after write: " << tempFXPPath;
+					}
+				} catch(const std::exception& e) {
+					ofLogError("scVST") << "Error reading FXP file: " << e.what();
+				}
+				
+				// Clean up temp file
+				cleanupTempFXPFile();
+			} else {
+				ofLogError("scVST") << "Timeout waiting for FXP save";
+				waitingForFXPSave = false;
+				cleanupTempFXPFile();
+			}
+		}
+	}
+	
+	// Save GUI parameter structure and values
+	if(!dynamicVectorParameters.empty() || !dynamicParameters.empty()) {
+		json["vstParameters"] = ofJson::object();
+		
+		// Save vector parameters
+		for(auto& param : dynamicVectorParameters) {
+			int paramIndex = param.first;
+			try {
+				ofJson paramData;
+				paramData["index"] = paramIndex;
+				paramData["isVector"] = true;
+				paramData["vectorValue"] = param.second->getParameter().get();
+				
+				if(parameterInfoMap.count(paramIndex) > 0) {
+					paramData["name"] = parameterInfoMap[paramIndex].displayName;
+				} else {
+					paramData["name"] = "Param" + ofToString(paramIndex);
+				}
+				
+				if(!paramData["vectorValue"].empty()) {
+					paramData["value"] = paramData["vectorValue"][0];
+				}
+				
+				json["vstParameters"][ofToString(paramIndex)] = paramData;
+				
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Error saving vector parameter " << paramIndex << ": " << e.what();
+			}
+		}
+		
+		// Save scalar parameters (legacy support)
+		for(auto& param : dynamicParameters) {
+			int paramIndex = param.first;
+			if(dynamicVectorParameters.count(paramIndex) == 0) {
+				try {
+					ofJson paramData;
+					paramData["index"] = paramIndex;
+					paramData["isVector"] = false;
+					paramData["value"] = param.second->getParameter().get();
+					
+					if(parameterInfoMap.count(paramIndex) > 0) {
+						paramData["name"] = parameterInfoMap[paramIndex].displayName;
+					} else {
+						paramData["name"] = "Param" + ofToString(paramIndex);
+					}
+					
+					json["vstParameters"][ofToString(paramIndex)] = paramData;
+					
+				} catch(const std::exception& e) {
+					ofLogError("scVST") << "Error saving scalar parameter " << paramIndex << ": " << e.what();
+				}
+			}
+		}
+		
+		json["vstDataType"] = "fxp_plus_gui_parameters";
+	} else {
+		json["vstDataType"] = "fxp_only";
+	}
+}
 
-   void scVST::createVSTInstances(ofxSCServer* server) {
-	   int numInstances = calculateNumInstances();
-	   
-	   ofLogNotice("scVST") << "Creating " << numInstances << " VST instances for " << numChannels.get() << " channels";
-	   
-	   // Clear existing instances
-	   freeVSTInstances(server);
-	   
-	   // Create new instances
-	   synthInstances[server].resize(numInstances);
-	   for(int i = 0; i < numInstances; i++) {
-		   synthInstances[server][i] = new ofxSCSynth("vst", server);
-		   // Note: Don't call create() here - that's done in createSynth()
-		   
-		   ofLogNotice("scVST") << "Created VST instance " << i;
-	   }
-   }
+void scVST::loadBeforeConnections(ofJson &json) {
+	ofLogNotice("scVST") << "=== LOAD BEFORE CONNECTIONS (CREATE GUI PARAMETERS) ===";
+	
+	// FIRST: Set the loading flag to prevent plugin selector from triggering
+	isPresetLoading = true;
+	ofLogNotice("scVST") << "🔒 Set isPresetLoading = TRUE to prevent plugin selector triggering";
+	
+	// Deserialize basic parameters first
+	deserializeParameter(json, enableMultithreading);
+	deserializeParameter(json, monoInstancing);
+	
+	// IMPORTANT: Deserialize plugin selector AFTER setting isPresetLoading = true
+	// This will change the pluginSelector value but the listener won't load the plugin
+	if(json.contains("currentPluginPath") && !json["currentPluginPath"].is_null()) {
+		string savedPluginPath = static_cast<string>(json["currentPluginPath"]);
+		
+		// Find the plugin in our available plugins and set the selector
+		for(int i = 0; i < pluginPaths.size(); i++) {
+			if(pluginPaths[i] == savedPluginPath) {
+				ofLogNotice("scVST") << "🔧 Setting plugin selector to " << i
+									<< " (" << savedPluginPath << ") during preset loading";
+				pluginSelector.setWithoutEventNotifications(i); // Use this to avoid triggering listener
+				currentPluginPath = savedPluginPath;
+				break;
+			}
+		}
+	}
+	
+	// Load FXP data if available (but don't apply yet)
+	if(json.contains("fxpData") && !json["fxpData"].is_null()) {
+		try {
+			string base64Data = json["fxpData"];
+			savedFXPData = base64Decode(base64Data);
+			hasSavedFXPData = true;
+			
+			ofLogNotice("scVST") << "Loaded FXP data for later application (" << savedFXPData.size() << " bytes)";
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error loading FXP data: " << e.what();
+			hasSavedFXPData = false;
+		}
+	} else {
+		hasSavedFXPData = false;
+	}
+	
+	// Debug the JSON structure
+	if(json.contains("vstParameters") && !json["vstParameters"].is_null()) {
+		ofLogNotice("scVST") << "📄 JSON contains " << json["vstParameters"].size() << " parameters to restore";
+		
+		// Create GUI parameters immediately so connections can be restored
+		ofLogNotice("scVST") << "🔧 Creating GUI parameters for connection restoration";
+		
+		int createdCount = 0;
+		int skippedCount = 0;
+		
+		for(auto& item : json["vstParameters"].items()) {
+			try {
+				int paramIndex = ofToInt(item.key());
+				if(item.value().is_object()) {
+					
+					// Skip if parameter already exists
+					if(dynamicVectorParameters.count(paramIndex) > 0 ||
+					   dynamicParameters.count(paramIndex) > 0) {
+						skippedCount++;
+						ofLogVerbose("scVST") << "⏭️ Skipping existing parameter " << paramIndex;
+						continue;
+					}
+					
+					// Extract parameter info from preset
+					string paramName = "Param" + ofToString(paramIndex);
+					if(item.value().contains("name") && !item.value()["name"].is_null()) {
+						paramName = item.value()["name"];
+					}
+					
+					vector<float> initialValues = {0.0f};
+					if(item.value().contains("isVector") && static_cast<bool>(item.value()["isVector"])) {
+						if(item.value().contains("vectorValue") && !item.value()["vectorValue"].empty()) {
+							// Fix JSON to vector conversion
+							auto jsonArray = item.value()["vectorValue"];
+							initialValues.clear();
+							for(auto& val : jsonArray) {
+								initialValues.push_back(static_cast<float>(val));
+							}
+						}
+					} else if(item.value().contains("value")) {
+						initialValues = {static_cast<float>(item.value()["value"])};
+					}
+					
+					ofLogNotice("scVST") << "🔧 Creating parameter " << paramIndex
+										<< " (" << paramName << ") with " << initialValues.size()
+										<< " values, first = " << initialValues[0];
+					
+					// Create/update parameter info
+					if(parameterInfoMap.count(paramIndex) == 0) {
+						VSTParameterInfo info;
+						info.index = paramIndex;
+						info.displayName = paramName;
+						info.value = initialValues[0];
+						parameterInfoMap[paramIndex] = info;
+					} else {
+						parameterInfoMap[paramIndex].displayName = paramName;
+						parameterInfoMap[paramIndex].value = initialValues[0];
+					}
+					
+					// Create GUI parameter with the loaded values
+					createGUIParameterWithValues(paramIndex, paramName, initialValues);
+					
+					// Verify it was created
+					if(dynamicVectorParameters.count(paramIndex) > 0) {
+						createdCount++;
+						ofLogNotice("scVST") << "✅ Successfully created parameter " << paramIndex;
+					} else {
+						ofLogError("scVST") << "❌ Failed to create parameter " << paramIndex;
+					}
+				}
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Error creating GUI parameter " << item.key() << ": " << e.what();
+			}
+		}
+		
+		ofLogNotice("scVST") << "✅ Created " << createdCount << " GUI parameters ("
+							<< skippedCount << " skipped, " << dynamicVectorParameters.size()
+							<< " total in GUI)";
+	} else {
+		ofLogWarning("scVST") << "❌ No vstParameters found in JSON!";
+	}
+	
+	// Store the full preset data for later VST synchronization
+	pendingPresetData = json;
+	hasPendingPresetData = true;
+	fxpAppliedInstances.clear();
+}
+
+void scVST::presetRecallAfterSettingParameters(ofJson &json) {
+	ofLogNotice("scVST") << "=== PRESET RECALL AFTER SETTING PARAMETERS ===";
+	
+	// Now we can safely load the plugin if it changed
+	if(json.contains("currentPluginPath") && !json["currentPluginPath"].is_null()) {
+		string savedPluginPath = static_cast<string>(json["currentPluginPath"]);
+		
+		if(savedPluginPath != currentPluginPath) {
+			ofLogError("scVST") << "Plugin path mismatch! This shouldn't happen.";
+		}
+		
+		// Load the plugin now (isPresetLoading is still true, so it will preserve parameters)
+		ofLogNotice("scVST") << "🔄 Loading plugin after parameter creation: " << currentPluginPath;
+		loadSelectedPlugin();
+		setupParameterTimer(5000);
+	} else {
+		// If plugin didn't change, still set up timer for VST synchronization
+		setupParameterTimer(3000);
+	}
+}
+
+void scVST::setupParameterTimer(int delayMs) {
+	// Now this timer is just a backup timeout protection
+	int timeoutDelay = delayMs * 2; // Give more time since we're primarily waiting for the event
+	if(timeoutDelay < 2000) timeoutDelay = 2000;   // Minimum 2s timeout
+	if(timeoutDelay > 10000) timeoutDelay = 10000; // Maximum 10s timeout
+	
+	parameterTimerStart = ofGetElapsedTimeMillis();
+	parameterTimerDelay = timeoutDelay;
+	parameterTimerActive = true;
+	
+	ofLogNotice("scVST") << "Set up parameter timeout protection for " << timeoutDelay << "ms (will wait for VST open confirmation)";
+}
+
+void scVST::createGUIParameterWithValues(int paramIndex, const string& paramName, const vector<float>& values) {
+	// Ensure parameter name is unique
+	string uniqueParamName = paramName;
+	int nameCounter = 1;
+	while(getParameterGroup().contains(uniqueParamName)) {
+		uniqueParamName = paramName + "_" + ofToString(nameCounter);
+		nameCounter++;
+	}
+	
+	// Create VECTOR parameter with the loaded values
+	auto newParam = std::make_shared<ofParameter<vector<float>>>();
+	newParam->set(uniqueParamName, values, {0.0f}, {1.0f});
+	
+	// Store the parameter to keep it alive BEFORE adding to GUI
+	dynamicVectorFloatParameters[paramIndex] = newParam;
+	
+	try {
+		auto oceanodeParam = addParameter(*newParam);
+		dynamicVectorParameters[paramIndex] = oceanodeParam;
+		
+		ofLogVerbose("scVST") << "Created GUI parameter " << uniqueParamName
+							 << " (index " << paramIndex << ") with " << values.size() << " values";
+		
+		// IMPROVED listener logic - check for VST instances AND preset loading state
+		listeners.push(newParam->newListener([this, paramIndex](vector<float> &values) -> void {
+			try {
+				if(this == nullptr) return;
+				
+				// Always update parameter info regardless of state
+				if(parameterInfoMap.count(paramIndex) > 0 && !values.empty()) {
+					parameterInfoMap[paramIndex].value = values[0];
+				}
+				
+				// Only send to VST if:
+				// 1. Not during preset loading
+				// 2. We have VST instances
+				// 3. VST instances are ready
+				if(!isPresetLoading &&
+				   !synthInstances.empty() &&
+				   areAllInstancesReady() &&
+				   parameterInfoMap.count(paramIndex) > 0) {
+					
+					ofLogNotice("scVST") << "🎛️ GUI parameter " << paramIndex
+										<< " changed by user - sending to VST ("
+										<< values.size() << " values)";
+					handleDynamicParameterChange(paramIndex, values);
+					
+				} else {
+					// Log why we're not sending
+					if(isPresetLoading) {
+						ofLogVerbose("scVST") << "⏳ GUI parameter " << paramIndex
+											 << " changed during preset loading - not sending to VST yet";
+					} else if(synthInstances.empty()) {
+						ofLogVerbose("scVST") << "❌ GUI parameter " << paramIndex
+											 << " changed but no VST instances available";
+					} else if(!areAllInstancesReady()) {
+						ofLogVerbose("scVST") << "⏳ GUI parameter " << paramIndex
+											 << " changed but VST instances not ready yet";
+					}
+				}
+				
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Error in parameter listener for index " << paramIndex << ": " << e.what();
+			} catch(...) {
+				ofLogError("scVST") << "Unknown error in parameter listener for index " << paramIndex;
+			}
+		}));
+		
+		// Add name editor and removal button
+		addParameterNameEditor(paramIndex, uniqueParamName);
+		addParameterRemovalButton(paramIndex, uniqueParamName);
+		
+	} catch(const std::exception& e) {
+		ofLogError("scVST") << "Error adding GUI parameter: " << e.what();
+		dynamicVectorFloatParameters.erase(paramIndex);
+		dynamicVectorParameters.erase(paramIndex);
+	}
+}
+
+void scVST::addParameterNameEditor(int paramIndex, const string& paramName) {
+	string nameEditorName = paramName + "_Name";
+	string uniqueNameEditorName = nameEditorName;
+	int nameEditorCounter = 1;
+	while(getInspectorParameterGroup().contains(uniqueNameEditorName)) {
+		uniqueNameEditorName = nameEditorName + "_" + ofToString(nameEditorCounter);
+		nameEditorCounter++;
+	}
+	
+	auto nameEditor = std::make_shared<ofParameter<string>>();
+	nameEditor->set(uniqueNameEditorName, parameterInfoMap[paramIndex].displayName);
+	
+	dynamicStringParameters[paramIndex] = nameEditor;
+	addInspectorParameter(*nameEditor);
+	
+	// Set up name change listener (simplified)
+	listeners.push(nameEditor->newListener([this, paramIndex](string &newName) -> void {
+		if(this == nullptr) return;
+		
+		if(!newName.empty() && parameterInfoMap.count(paramIndex) > 0) {
+			parameterInfoMap[paramIndex].displayName = newName;
+			ofLogNotice("scVST") << "Renamed parameter " << paramIndex << " to '" << newName << "'";
+		}
+	}));
+}
+
+void scVST::addParameterRemovalButton(int paramIndex, const string& paramName) {
+	string removeButtonName = "Remove " + paramName;
+	string uniqueRemoveButtonName = removeButtonName;
+	int removeNameCounter = 1;
+	while(getInspectorParameterGroup().contains(uniqueRemoveButtonName)) {
+		uniqueRemoveButtonName = removeButtonName + "_" + ofToString(removeNameCounter);
+		removeNameCounter++;
+	}
+	
+	auto removeButton = std::make_shared<ofParameter<void>>();
+	removeButton->set(uniqueRemoveButtonName);
+	
+	dynamicRemovalButtons[paramIndex] = removeButton;
+	addInspectorParameter(*removeButton);
+	
+	listeners.push(removeButton->newListener([this, paramIndex](){
+		ofLogNotice("scVST") << "Removing parameter " << paramIndex << " via individual button";
+		removeParameterFromGUI(paramIndex);
+	}));
+}
+
+void scVST::applyPendingPresetData() {
+	if(!hasPendingPresetData) return;
+	
+	ofLogNotice("scVST") << "=== APPLYING PENDING PRESET DATA (SYNC TO VST) ===";
+	
+	// Check if all VST instances are ready
+	if(!areAllInstancesReady()) {
+		ofLogNotice("scVST") << "Not all VST instances ready yet, will wait for VST open confirmation";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "All VST instances ready, syncing GUI parameters to VST and activating bindings";
+	
+	ofJson json = pendingPresetData;
+	hasPendingPresetData = false;
+	pendingPresetData.clear();
+	
+	// Stop the parameter timer since we're applying now
+	parameterTimerActive = false;
+	
+	// Wait a bit more to ensure all FXP data has been applied
+	ofSleepMillis(1000);
+	
+	// Phase 1: Send current GUI parameter values to VST (while listeners are still disabled)
+	if(json.contains("vstParameters")) {
+		syncGUIParametersToVST(json);
+	}
+	
+	// Phase 2: Wait a bit for all VST messages to be processed
+	for(int i = 0; i < 10; i++) {
+		for(auto& serverInstances : synthInstances) {
+			serverInstances.first->process();
+		}
+		ofSleepMillis(50);
+	}
+	
+	// Phase 3: Activate parameter bindings for future changes
+	activateParameterBindings();
+	
+	// Phase 4: Final verification - trigger presetHasLoaded to ensure state is consistent
+	presetHasLoaded();
+	
+	ofLogNotice("scVST") << "🎉 Preset restoration complete - GUI parameters now bound to VST";
+}
+
+
+void scVST::activateParameterBindings() {
+	ofLogNotice("scVST") << "🔗 Activating GUI parameter bindings to VST";
+	
+	// CRITICAL: Now we can finally set preset loading to false
+	isPresetLoading = false;
+	ofLogNotice("scVST") << "🔓 Set isPresetLoading = FALSE - parameter listeners now active";
+	
+	// Small delay to ensure the flag change is processed
+	ofSleepMillis(100);
+	
+	// Test the bindings
+	int testParameterIndex = -1;
+	for(auto& param : dynamicVectorParameters) {
+		testParameterIndex = param.first;
+		break;
+	}
+	
+	if(testParameterIndex >= 0) {
+		ofLogNotice("scVST") << "🧪 Testing parameter binding on parameter " << testParameterIndex;
+		
+		auto currentValues = dynamicVectorParameters[testParameterIndex]->getParameter().get();
+		if(!currentValues.empty()) {
+			float testValue = currentValues[0];
+			
+			// Trigger the listener
+			dynamicVectorParameters[testParameterIndex]->getParameter().set(currentValues);
+			
+			ofLogNotice("scVST") << "🧪 Triggered test change on parameter " << testParameterIndex
+								<< " with value " << testValue;
+		}
+	}
+	
+	// Log final status
+	int boundParameters = 0;
+	for(auto& param : dynamicVectorParameters) {
+		int paramIndex = param.first;
+		if(parameterInfoMap.count(paramIndex) > 0) {
+			vector<float> currentValues = param.second->getParameter().get();
+			ofLogVerbose("scVST") << "Parameter " << paramIndex << " bound with "
+								 << currentValues.size() << " values";
+			boundParameters++;
+		}
+	}
+	
+	ofLogNotice("scVST") << "✅ " << boundParameters << " GUI parameters now bound to VST";
+}
+
+// First, let's add debugging to see what's happening:
+
+void scVST::syncGUIParametersToVST(ofJson &json) {
+	ofLogNotice("scVST") << "🎯 Syncing GUI parameter values to loaded VST";
+	
+	if(!json.contains("vstParameters") || json["vstParameters"].is_null()) {
+		ofLogWarning("scVST") << "❌ No vstParameters found in JSON!";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "📄 JSON contains " << json["vstParameters"].size() << " saved parameters";
+	ofLogNotice("scVST") << "🎛️ Currently have " << dynamicVectorParameters.size() << " GUI vector parameters";
+	ofLogNotice("scVST") << "🎛️ Currently have " << dynamicParameters.size() << " GUI scalar parameters";
+	
+	// Clear feedback suppression
+	{
+		std::lock_guard<std::mutex> lock(feedbackMutex);
+		suppressingFeedback.clear();
+		feedbackClearTimes.clear();
+	}
+	
+	int sentCount = 0;
+	int skippedCount = 0;
+	
+	for(auto& item : json["vstParameters"].items()) {
+		try {
+			int paramIndex = ofToInt(item.key());
+			if(item.value().is_object()) {
+				
+				// Check if GUI parameter exists
+				if(dynamicVectorParameters.count(paramIndex) > 0) {
+					vector<float> currentValues = dynamicVectorParameters[paramIndex]->getParameter().get();
+					
+					ofLogNotice("scVST") << "✅ Found GUI parameter " << paramIndex
+										<< " with " << currentValues.size() << " values";
+					
+					if(currentValues.size() == 1) {
+						// Scalar mode - send to all instances
+						float value = currentValues[0];
+						ofLogNotice("scVST") << "📤 Sending scalar parameter " << paramIndex
+											<< " = " << value << " to all VST instances";
+						setVSTParameterDirectToAll(paramIndex, value);
+					} else {
+						// Vector mode - send per-instance values
+						ofLogNotice("scVST") << "📤 Sending vector parameter " << paramIndex
+											<< " with " << currentValues.size() << " values to VST instances";
+						setVSTParameterVectorDirectToAll(paramIndex, currentValues);
+					}
+					
+					sentCount++;
+				} else {
+					// Parameter should have been created in loadBeforeConnections()
+					// If it's missing, that's an error in the preset loading process
+					ofLogError("scVST") << "❌ Parameter " << paramIndex
+									   << " exists in JSON but not in GUI! This shouldn't happen during preset loading.";
+					skippedCount++;
+				}
+				
+				// Small delay between parameters
+				if(sentCount % 5 == 0) {
+					for(auto& serverInstances : synthInstances) {
+						serverInstances.first->process();
+					}
+					ofSleepMillis(50);
+				}
+			}
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error syncing parameter " << item.key() << " to VST: " << e.what();
+		}
+	}
+	
+	ofLogNotice("scVST") << "✅ Synced " << sentCount << " GUI parameter values to VST";
+	if(skippedCount > 0) {
+		ofLogWarning("scVST") << "⚠️ Skipped " << skippedCount << " missing parameters";
+	}
+	
+	// Final processing burst
+	for(int i = 0; i < 5; i++) {
+		for(auto& serverInstances : synthInstances) {
+			serverInstances.first->process();
+		}
+		ofSleepMillis(100);
+	}
+	
+	// Clear feedback suppression after delay
+	auto clearTime = ofGetElapsedTimeMillis() + 200;
+	for(auto& item : json["vstParameters"].items()) {
+		try {
+			int paramIndex = ofToInt(item.key());
+			feedbackClearTimes[paramIndex] = clearTime;
+		} catch(...) {}
+	}
+}
+
+void scVST::setVSTParameterDirectToAll(int paramIndex, float value) {
+	// Safety checks
+	if(paramIndex < 0) {
+		ofLogError("scVST") << "Invalid parameter index: " << paramIndex;
+		return;
+	}
+	
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available to set parameter";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "Setting VST parameter " << paramIndex << " = " << value << " on all instances (direct)";
+	
+	// Apply parameter change to ALL instances WITHOUT feedback suppression
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				try {
+					ofxOscMessage setMsg;
+					setMsg.setAddress("/u_cmd");
+					setMsg.addIntArg(synth->nodeID);
+					setMsg.addIntArg(2);
+					setMsg.addStringArg("/set");
+					setMsg.addIntArg(paramIndex);
+					setMsg.addFloatArg(value);
+					serverInstances.first->sendMsg(setMsg);
+					
+					ofLogVerbose("scVST") << "Sent to instance " << synth->nodeID;
+				} catch(const std::exception& e) {
+					ofLogError("scVST") << "Error setting parameter on synth " << synth->nodeID << ": " << e.what();
+				}
+			}
+		}
+	}
+}
+
+void scVST::setVSTParameterVectorDirectToAll(int paramIndex, const vector<float>& values) {
+	// Safety checks
+	if(paramIndex < 0) {
+		ofLogError("scVST") << "Invalid parameter index: " << paramIndex;
+		return;
+	}
+	
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available to set parameter";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "Setting VST parameter " << paramIndex << " with vector of size " << values.size() << " (direct)";
+	
+	// Apply parameter changes to instances based on vector indices
+	int instanceIndex = 0;
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				try {
+					float value;
+					if(instanceIndex < values.size()) {
+						// Use specific value for this instance
+						value = values[instanceIndex];
+					} else if(!values.empty()) {
+						// Use last value if vector is shorter than number of instances
+						value = values.back();
+					} else {
+						// Fallback to 0 if vector is empty
+						value = 0.0f;
+					}
+					
+					ofxOscMessage setMsg;
+					setMsg.setAddress("/u_cmd");
+					setMsg.addIntArg(synth->nodeID);
+					setMsg.addIntArg(2);
+					setMsg.addStringArg("/set");
+					setMsg.addIntArg(paramIndex);
+					setMsg.addFloatArg(value);
+					serverInstances.first->sendMsg(setMsg);
+					
+					ofLogVerbose("scVST") << "Instance " << instanceIndex << " set to " << value;
+				} catch(const std::exception& e) {
+					ofLogError("scVST") << "Error setting parameter on synth " << synth->nodeID << ": " << e.what();
+				}
+			}
+			instanceIndex++;
+		}
+	}
+}
+
+
+
+void scVST::createVSTInstances(ofxSCServer* server) {
+	int numInstances = calculateNumInstances();
+	
+	ofLogNotice("scVST") << "Creating " << numInstances << " VST instances for "
+						<< numChannels.get() << " channels (mono: "
+						<< monoInstancing.get() << ")";
+	
+	// Clear existing instances
+	freeVSTInstances(server);
+	
+	// Create new instances with appropriate SynthDef
+	synthInstances[server].resize(numInstances);
+	for(int i = 0; i < numInstances; i++) {
+		// Choose the appropriate SynthDef based on instancing mode
+		string synthDefName = monoInstancing.get() ? "vstMono" : "vstStereo";
+		synthInstances[server][i] = new ofxSCSynth(synthDefName, server);
+		
+		ofLogNotice("scVST") << "Created VST instance " << i << " using " << synthDefName;
+	}
+}
 
 void scVST::freeVSTInstances(ofxSCServer* server) {
 	if(!server) {
@@ -1686,32 +2349,44 @@ void scVST::free(ofxSCServer* server) {
 
 	   // Set up OSC feedback listeners for each synth instance
 	   for(auto synth : synthInstances[server]) {
-		   if(synth != nullptr) {
-			   listeners.push(synth->newFeedbackMessage.newListener([this](ofxOscMessage& msg) -> void {
-				   if(this == nullptr) return;
-				   
-				   try {
-					   // Handle VST-specific OSC messages
-					   if (msg.getAddress() == "/vst_param") {
-						   this->handleVSTParam(msg);
-					   }
-					   else if (msg.getAddress() == "/vst_auto") {
-						   this->handleVSTAuto(msg);
-					   }
-					   else if (msg.getAddress() == "/vst_open") {
-						   this->handleVSTOpen(msg);
-					   }
-					   else if (msg.getAddress() == "/vst_program") {
-						   // Optional: Handle program information messages for display purposes
-						   this->handleVSTProgram(msg);
-					   }
-					   // Remove /vst_program_index handling since MIDI doesn't provide feedback
-					   else if (msg.getAddress() == "/vst_set") {
-						   // Handle parameter query responses
-						   if (msg.getNumArgs() >= 4) {
-							   if(msg.getNumArgs() > 4) {
-								   this->handleParameterQueryResponse(msg);
-							   } else {
+			   if(synth != nullptr) {
+				   listeners.push(synth->newFeedbackMessage.newListener([this](ofxOscMessage& msg) -> void {
+					   if(this == nullptr) return;
+					   
+					   try {
+						   string address = msg.getAddress();
+						   
+						   if (address == "/vst_param") {
+							   this->handleVSTParam(msg);
+						   }
+						   else if (address == "/vst_auto") {
+							   this->handleVSTAuto(msg);
+						   }
+						   else if (address == "/vst_open") {
+							   this->handleVSTOpen(msg);
+						   }
+						   else if (address == "/vst_program_index") {
+							   // Handle program index changes
+							   if (msg.getNumArgs() >= 3) {
+								   int nodeID = msg.getArgAsInt32(0);
+								   int programIndex = (int)msg.getArgAsFloat(2);
+								   if (this->isMyVSTInstance(nodeID)) {
+									   ofLogNotice("scVST") << "VST program changed to " << programIndex << " on node " << nodeID;
+									   if(!this->isPresetLoading) {
+										   this->vstProgram.setWithoutEventNotifications(programIndex);
+									   }
+								   }
+							   }
+						   }
+						   else if (address == "/vst_program_write") {
+							   this->handleVSTPresetWrite(msg);
+						   }
+						   else if (address == "/vst_program_read") {
+							   this->handleVSTPresetRead(msg);
+						   }
+						   else if (address == "/vst_set") {
+							   // Handle simple parameter responses
+							   if (msg.getNumArgs() >= 4) {
 								   int paramIndex = (int)msg.getArgAsFloat(2);
 								   float value = msg.getArgAsFloat(3);
 								   
@@ -1728,88 +2403,290 @@ void scVST::free(ofxSCServer* server) {
 								   this->updateParameterValue(paramIndex, value);
 							   }
 						   }
+						   else if (address == "/vst_update") {
+							   ofLogNotice("scVST") << "VST update notification received - parameters changed internally";
+							   this->handleVSTUpdate(msg);
+
+							   if (msg.getNumArgs() >= 2) {
+								   int nodeID = msg.getArgAsInt32(0);
+								   if (this->isMyVSTInstance(nodeID)) {
+									   this->queryVSTParametersAfterUpdate(nodeID);
+								   }
+							   }
+						   }
+						   
+					   } catch(const std::exception& e) {
+						   ofLogError("scVST") << "Error in OSC feedback listener: " << e.what();
+					   } catch(...) {
+						   ofLogError("scVST") << "Unknown error in OSC feedback listener";
 					   }
-				   } catch(const std::exception& e) {
-					   ofLogError("scVST") << "Error in OSC feedback listener: " << e.what();
-				   } catch(...) {
-					   ofLogError("scVST") << "Unknown error in OSC feedback listener";
-				   }
-			   }));
+				   }));
 		   }
 	   }
    }
 
-   void scVST::createSynth(ofxSCServer* server){
-	   // Phase 2: Actually create the synths on the server and configure them
-	   if(synthInstances.count(server) == 0) return;
-	   
-	   for(int i = 0; i < synthInstances[server].size(); i++) {
-		   if(synthInstances[server][i] != nullptr) {
-			   // Now actually create the synth on the server
-			   synthInstances[server][i]->create();
-			   
-			   ofLogNotice("scVST") << "Created VST instance " << i << " with nodeID " << synthInstances[server][i]->nodeID;
-		   }
-	   }
-	   
-	   // Load the selected plugin on all instances
-	   if (!currentPluginPath.empty()) {
-		   for(int i = 0; i < synthInstances[server].size(); i++) {
-			   if(synthInstances[server][i] != nullptr) {
-				   ofxOscMessage m;
-				   m.setAddress("/u_cmd");
-				   m.addIntArg(synthInstances[server][i]->nodeID);
-				   m.addIntArg(2);
-				   m.addStringArg("/open");
-				   m.addStringArg(currentPluginPath);
-				   m.addIntArg(1); // Request GUI editor
-				   m.addIntArg(enableMultithreading.get() ? 1 : 0); // Multithreading setting
-				   m.addIntArg(0); // Normal mode
-				   server->sendMsg(m);
-			   }
-		   }
-		   
-		   pluginLoaded = true;
-	   }
-	   
-	   resendParams.notify();
-   }
+void scVST::handleVSTPresetWrite(ofxOscMessage& msg) {
+	if (msg.getNumArgs() >= 3) {
+		int nodeID = msg.getArgAsInt32(0);
+		bool success = msg.getArgAsFloat(2) > 0.5f;
+		
+		if (!isMyVSTInstance(nodeID)) return;
+		
+		// Handle regular preset save (existing functionality)
+		if(waitingForFXPSave) {
+			waitingForFXPSave = false;
+			ofLogNotice("scVST") << "VST preset write " << (success ? "succeeded" : "failed")
+								<< " on node " << nodeID;
+			return;
+		}
+		
+		// Handle sync FXP save
+		if(waitingForSyncFXPSave && nodeID == syncSourceNodeID) {
+			waitingForSyncFXPSave = false;
+			
+			ofLogNotice("scVST") << "🎯 FXP sync save " << (success ? "succeeded" : "failed")
+								<< " from node " << nodeID;
+			
+			if(success) {
+				// Now load this FXP into all OTHER instances
+				applySyncFXPToAllOtherInstances();
+			} else {
+				ofLogError("scVST") << "❌ FXP sync save failed - aborting sync";
+				
+				// Reset sync state on failure
+				instancesBeingSynced.clear();
+				syncInProgress = false;
+				
+				cleanupTempSyncFXPFile();
+			}
+		}
+	}
+}
 
-   void scVST::setOutputBus(ofxSCServer* server, int index, int bus){
-	   outputBuses[server][index] = bus;
-	   
-	   // Route each VST instance to its appropriate channel pair in the output bus
-	   if(synthInstances.count(server) > 0) {
-		   int numInstances = synthInstances[server].size();
-		   
-		   for(int i = 0; i < numInstances; i++) {
-			   if(synthInstances[server][i] != nullptr) {
-				   // Each instance outputs to a stereo pair starting at bus + (i * 2)
-				   int instanceOutputBus = bus + (i * 2);
-				   synthInstances[server][i]->set("out", instanceOutputBus);
-				   
-				   ofLogNotice("scVST") << "Instance " << i << " routed to bus " << instanceOutputBus;
-			   }
-		   }
-	   }
-   }
+void scVST::handleVSTPresetRead(ofxOscMessage& msg) {
+	if (msg.getNumArgs() >= 3) {
+		int nodeID = msg.getArgAsInt32(0);
+		bool success = msg.getArgAsFloat(2) > 0.5f;
+		
+		if (!isMyVSTInstance(nodeID)) return;
+		
+		ofLogNotice("scVST") << "VST preset read " << (success ? "succeeded" : "failed")
+							<< " on node " << nodeID;
+		
+		if(success) {
+			fxpAppliedInstances.insert(nodeID);
+			ofLogNotice("scVST") << "FXP successfully applied to instance " << nodeID
+								<< " (" << fxpAppliedInstances.size() << "/"
+								<< readyInstances.size() << " instances have FXP)";
+		}
+		
+		if(waitingForFXPLoad) {
+			waitingForFXPLoad = false;
+		}
+		
+		if(!tempSyncFXPPath.empty()) {
+			ofLogNotice("scVST") << "🎯 Sync FXP load " << (success ? "succeeded" : "failed")
+			<< " on instance " << nodeID;
+			
+			if(success) {
+				syncFXPAppliedInstances.insert(nodeID);
+				
+				// Check if all instances have been synchronized
+				int expectedInstances = 0;
+				for(auto& serverInstances : synthInstances) {
+					expectedInstances += serverInstances.second.size();
+				}
+				expectedInstances--; // Subtract 1 for the source instance
+				
+				ofLogNotice("scVST") << "📊 Sync progress: " << syncFXPAppliedInstances.size()
+				<< "/" << expectedInstances << " instances synchronized";
+				
+				if(syncFXPAppliedInstances.size() >= expectedInstances) {
+					ofLogNotice("scVST") << "🎉 All instances synchronized via FXP!";
+					
+					// Optional: Update GUI parameters to reflect the new state
+					queryVSTParametersAfterSync();
+					
+					// Clean up and reset sync state
+					cleanupTempSyncFXPFile();
+					syncFXPAppliedInstances.clear();
+					instancesBeingSynced.clear();
+					syncSourceNodeID = -1;
+					
+					// CRITICAL: Mark sync as complete
+					syncInProgress = false;
+					
+					ofLogNotice("scVST") << "🔓 Sync complete - feedback protection disabled";
+				}
+			} else {
+				ofLogError("scVST") << "❌ Sync FXP load failed on instance " << nodeID;
+			}
+		}
+		
+		
+		
+		// Clean up temp file after a delay
+		if(success) {
+			// Use a timer to clean up the file after a short delay
+			auto cleanupTime = ofGetElapsedTimeMillis() + 1000; // 1 second delay
+			// Note: You might want to implement a cleanup timer or just clean up immediately
+			cleanupTempFXPFile();
+		}
+	}
+}
 
-   void scVST::setInputBus(ofxSCServer* server, scNode* node, int bus){
-	   inputBuses[server][node] = bus;
-	   
-	   // Route input bus to all VST instances
-	   if(synthInstances.count(server) > 0) {
-		   for(int i = 0; i < synthInstances[server].size(); i++) {
-			   if(synthInstances[server][i] != nullptr) {
-				   // Each instance gets input from bus + (i * 2) for its stereo pair
-				   int instanceInputBus = bus + (i * 2);
-				   synthInstances[server][i]->set("in", instanceInputBus);
-				   
-				   ofLogNotice("scVST") << "Instance " << i << " input from bus " << instanceInputBus;
-			   }
-		   }
-	   }
-   }
+std::string scVST::createTempFXPPath() {
+	// Create a unique temporary file path
+	std::string tempDir = ofFilePath::getUserHomeDir() + "/.tmp/";
+	ofDirectory::createDirectory(tempDir, true, true);
+	
+	std::string filename = "oceanode_vst_" + ofToString(ofGetElapsedTimeMillis()) + ".fxp";
+	return tempDir + filename;
+}
+
+void scVST::cleanupTempFXPFile() {
+	if(!tempFXPPath.empty()) {
+		try {
+			ofFile::removeFile(tempFXPPath);
+			ofLogVerbose("scVST") << "Cleaned up temporary FXP file: " << tempFXPPath;
+		} catch(const std::exception& e) {
+			ofLogWarning("scVST") << "Could not remove temporary FXP file: " << e.what();
+		}
+		tempFXPPath.clear();
+	}
+}
+
+void scVST::queryVSTParametersAfterUpdate(int nodeID) {
+	// Find the server for this nodeID
+	ofxSCServer* targetServer = nullptr;
+	for(auto& serverInstances : synthInstances) {
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr && synth->nodeID == nodeID) {
+				targetServer = serverInstances.first;
+				break;
+			}
+		}
+		if(targetServer) break;
+	}
+	
+	if(!targetServer) return;
+	
+	ofLogNotice("scVST") << "Querying parameters after VST update on node " << nodeID;
+	
+	// Query a reasonable range of parameters to capture the preset changes
+	ofxOscMessage paramQueryMsg;
+	paramQueryMsg.setAddress("/u_cmd");
+	paramQueryMsg.addIntArg(nodeID);
+	paramQueryMsg.addIntArg(2);
+	paramQueryMsg.addStringArg("/param_query");
+	paramQueryMsg.addIntArg(0);    // Start parameter index
+	paramQueryMsg.addIntArg(128);  // Query first 128 parameters (reasonable for most VSTs)
+	targetServer->sendMsg(paramQueryMsg);
+}
+
+void scVST::createSynth(ofxSCServer* server){
+	if(synthInstances.count(server) == 0) return;
+	
+	for(int i = 0; i < synthInstances[server].size(); i++) {
+		if(synthInstances[server][i] != nullptr) {
+			// Create the synth on the server (no need to set channel params since they're fixed in the SynthDef)
+			synthInstances[server][i]->create();
+			
+			ofLogNotice("scVST") << "Created VST instance " << i
+							   << " with nodeID " << synthInstances[server][i]->nodeID
+							   << " (" << (monoInstancing.get() ? "mono" : "stereo") << ")";
+		}
+	}
+	
+	// Load the selected plugin on all instances
+	if (!currentPluginPath.empty()) {
+		for(int i = 0; i < synthInstances[server].size(); i++) {
+			if(synthInstances[server][i] != nullptr) {
+				// Open the VST plugin
+				ofxOscMessage openMsg;
+				openMsg.setAddress("/u_cmd");
+				openMsg.addIntArg(synthInstances[server][i]->nodeID);
+				openMsg.addIntArg(2); // Keep synthIndex as 2 per Oceanode requirements
+				openMsg.addStringArg("/open");
+				openMsg.addStringArg(currentPluginPath);
+				openMsg.addIntArg(1); // Request GUI editor
+				openMsg.addIntArg(enableMultithreading.get() ? 1 : 0);
+				openMsg.addIntArg(0); // Normal mode
+				server->sendMsg(openMsg);
+				
+				ofLogNotice("scVST") << "Opened plugin on instance " << i;
+			}
+		}
+		
+		pluginLoaded = true;
+	}
+	
+	resendParams.notify();
+}
+
+void scVST::setOutputBus(ofxSCServer* server, int index, int bus){
+	outputBuses[server][index] = bus;
+	
+	if(synthInstances.count(server) > 0) {
+		int numInstances = synthInstances[server].size();
+		
+		for(int i = 0; i < numInstances; i++) {
+			if(synthInstances[server][i] != nullptr) {
+				int instanceOutputBus;
+				int channelsPerInstance;
+				
+				if(monoInstancing.get()) {
+					// Mono mode: each instance outputs to a single channel
+					instanceOutputBus = bus + i;
+					channelsPerInstance = 1;
+				} else {
+					// Stereo mode: each instance outputs to a stereo pair
+					instanceOutputBus = bus + (i * 2);
+					channelsPerInstance = 2;
+				}
+				
+				// Set the output bus and channel count
+				synthInstances[server][i]->set("out", instanceOutputBus);
+				synthInstances[server][i]->set("outChannels", channelsPerInstance);
+				
+				ofLogNotice("scVST") << "Instance " << i << " routed to bus "
+								   << instanceOutputBus << " ("
+								   << channelsPerInstance << " channels)";
+			}
+		}
+	}
+}
+
+void scVST::setInputBus(ofxSCServer* server, scNode* node, int bus){
+	inputBuses[server][node] = bus;
+	
+	if(synthInstances.count(server) > 0) {
+		for(int i = 0; i < synthInstances[server].size(); i++) {
+			if(synthInstances[server][i] != nullptr) {
+				int instanceInputBus;
+				int channelsPerInstance;
+				
+				if(monoInstancing.get()) {
+					// Mono mode: each instance gets input from a single channel
+					instanceInputBus = bus + i;
+					channelsPerInstance = 1;
+				} else {
+					// Stereo mode: each instance gets input from a stereo pair
+					instanceInputBus = bus + (i * 2);
+					channelsPerInstance = 2;
+				}
+				
+				// Set the input bus and channel count
+				synthInstances[server][i]->set("in", instanceInputBus);
+				synthInstances[server][i]->set("inChannels", channelsPerInstance);
+				
+				ofLogNotice("scVST") << "Instance " << i << " input from bus "
+								   << instanceInputBus << " ("
+								   << channelsPerInstance << " channels)";
+			}
+		}
+	}
+}
 
    int scVST::getOutputBusIndex(ofxSCServer* server, int index){
 	   if(outputBuses.count(server) > 0 && outputBuses[server].count(index) > 0) {
@@ -1818,105 +2695,670 @@ void scVST::free(ofxSCServer* server) {
 	   return -1;
    }
 
-// Add these methods to your scVST class:
-
-// Replace the setVSTProgram method with this simpler MIDI-based version:
-
 void scVST::setVSTProgram(int programIndex) {
 	if(synthInstances.empty()) {
-		ofLogWarning("scVST") << "No VST instances available to set program";
+		ofLogWarning("scVST") << "No VST instances available";
 		return;
 	}
 	
-	// Clamp program index to valid MIDI range (0-127)
 	programIndex = ofClamp(programIndex, 0, 127);
 	
-	ofLogNotice("scVST") << "Sending MIDI program change to " << programIndex << " on all instances";
+	ofLogNotice("scVST") << "=== CHANGING PROGRAM TO " << programIndex << " ===";
 	
-	// Send MIDI program change to ALL instances
+	// Method 1: Try MIDI program change first (like most VST instruments expect)
+	ofLogNotice("scVST") << "Trying MIDI program change...";
 	for(auto& serverInstances : synthInstances) {
 		if(serverInstances.first == nullptr) continue;
 		
 		for(auto synth : serverInstances.second) {
 			if(synth != nullptr) {
-				try {
-					sendMidiProgramChange(midiChannel.get(), programIndex, serverInstances.first, synth);
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error sending MIDI program change to synth " << synth->nodeID << ": " << e.what();
-				}
+				sendMidiProgramChange(midiChannel.get(), programIndex, serverInstances.first, synth);
 			}
 		}
 	}
+	
+	// Method 2: ALSO try direct VST program set (some VSTs might prefer this)
+	ofLogNotice("scVST") << "Also trying direct VST program set...";
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				ofxOscMessage m;
+				m.setAddress("/u_cmd");
+				m.addIntArg(synth->nodeID);
+				m.addIntArg(2);
+				m.addStringArg("/program_set"); // Direct VST program change
+				m.addIntArg(programIndex);
+				serverInstances.first->sendMsg(m);
+				
+				ofLogNotice("scVST") << "VST program_set: " << programIndex
+									<< " -> Node" << synth->nodeID;
+			}
+		}
+	}
+	
+	ofLogNotice("scVST") << "=== PROGRAM CHANGE COMPLETE ===";
 }
 
-// Add this new method for sending MIDI program changes:
 void scVST::sendMidiProgramChange(int channel, int program, ofxSCServer* server, ofxSCSynth* synth) {
+	if(!server || !synth || synth->nodeID <= 0) {
+		ofLogError("scVST") << "Invalid server/synth for MIDI program change";
+		return;
+	}
+	
+	try {
+		ofxOscMessage m;
+		m.setAddress("/u_cmd");
+		m.addIntArg(synth->nodeID);
+		m.addIntArg(2); // synthIndex
+		m.addStringArg("/midi_msg");
+		
+		// Follow SuperCollider's exact approach: Int8Array with 3 bytes
+		// Even for program change, SC sends 3 bytes with the third as 0
+		std::vector<int8_t> midiData;
+		midiData.push_back(0xC0 | ((channel - 1) & 0x0F)); // Program change + channel
+		midiData.push_back(program & 0x7F);                // Program number
+		midiData.push_back(0);                              // Third byte (unused but sent)
+		
+		// Convert to the format VST expects (similar to SC's Int8Array)
+		ofBuffer buffer;
+		buffer.set(reinterpret_cast<const char*>(midiData.data()), midiData.size());
+		m.addBlobArg(buffer);
+		m.addFloatArg(0.0f); // detune
+		
+		server->sendMsg(m);
+		
+		ofLogNotice("scVST") << "Sent MIDI program change: CH" << channel
+							<< " PRG" << program << " -> Node" << synth->nodeID;
+		
+	} catch(const std::exception& e) {
+		ofLogError("scVST") << "MIDI program change error: " << e.what();
+	}
+}
+
+void scVST::sendMidiToInstance(ofxSCServer* server, ofxSCSynth* synth, int channel, int status, int data1, int data2) {
 	ofxOscMessage m;
 	m.setAddress("/u_cmd");
 	m.addIntArg(synth->nodeID);
 	m.addIntArg(2); // VSTPlugin synthIndex
 	m.addStringArg("/midi_msg"); // MIDI command
 	
-	// Create MIDI program change message [status, data1]
-	// Program change messages only have 2 bytes: status and program number
-	std::vector<int8_t> midiData;
-	midiData.push_back(0xC0 | ((channel - 1) & 0x0F)); // Program change + channel (0-based)
-	midiData.push_back(program & 0x7F); // Program number (0-127)
+	// Create MIDI message
+	vector<uint8_t> midiBytes;
+	midiBytes.push_back(status | ((channel - 1) & 0x0F)); // Status + channel (0-based)
+	midiBytes.push_back(data1 & 0x7F); // Data 1
+	if(status != 0xC0 && status != 0xD0) { // Program change and channel pressure have only 2 bytes
+		midiBytes.push_back(data2 & 0x7F); // Data 2
+	}
 	
-	// Convert to ofBuffer for blob
+	// Convert to buffer
 	ofBuffer buffer;
-	buffer.set((char*)midiData.data(), midiData.size());
+	buffer.set(reinterpret_cast<const char*>(midiBytes.data()), midiBytes.size());
 	m.addBlobArg(buffer);
-	m.addFloatArg(0.0f); // detune (not used for program change)
+	m.addFloatArg(0.0f); // detune
 	server->sendMsg(m);
-	
-	ofLogNotice("scVST") << "Sent MIDI program change: channel " << channel << ", program " << program << " to node " << synth->nodeID;
 }
 
-// Simplify the queryVSTPrograms method (or remove it entirely since we're using MIDI):
-void scVST::queryVSTPrograms() {
-	ofLogNotice("scVST") << "MIDI program changes don't require querying - programs 0-127 are available";
+void scVST::handleDynamicParameterChange(int paramIndex, const vector<float>& values) {
+	// Prevent feedback loops
+	{
+		std::lock_guard<std::mutex> lock(feedbackMutex);
+		if(suppressingFeedback.count(paramIndex) > 0) {
+			ofLogVerbose("scVST") << "Suppressing feedback for parameter " << paramIndex;
+			return;
+		}
+		suppressingFeedback.insert(paramIndex);
+	}
 	
-	// Optional: You could still query VST programs for display purposes
+	if(values.size() == 1) {
+		// Scalar value - broadcast to all instances
+		ofLogNotice("scVST") << "Setting scalar parameter " << paramIndex << " = " << values[0];
+		// Use direct method to avoid double feedback suppression
+		setVSTParameterDirectToAll(paramIndex, values[0]);
+	} else {
+		// Vector value - send per-instance values
+		ofLogNotice("scVST") << "Setting vector parameter " << paramIndex
+							<< " with " << values.size() << " values";
+		setVSTParameterVectorDirectToAll(paramIndex, values);
+	}
+	
+	// Set up delayed clearing of feedback suppression
+	auto clearTime = ofGetElapsedTimeMillis() + 100;
+	feedbackClearTimes[paramIndex] = clearTime;
+}
+
+void scVST::propagateFirstInstanceToAll() {
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available for propagation";
+		return;
+	}
+	
+	// Find first instance
+	ofxSCSynth* firstInstance = nullptr;
+	ofxSCServer* firstServer = nullptr;
+	
 	for(auto& serverInstances : synthInstances) {
 		if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
-			
-			// Query program names for reference (optional)
-			ofxOscMessage queryProgramsMsg;
-			queryProgramsMsg.setAddress("/u_cmd");
-			queryProgramsMsg.addIntArg(serverInstances.second[0]->nodeID);
-			queryProgramsMsg.addIntArg(2);
-			queryProgramsMsg.addStringArg("/program_query");
-			queryProgramsMsg.addIntArg(0);   // Start program index
-			queryProgramsMsg.addIntArg(32);  // Query first 32 programs for reference
-			serverInstances.first->sendMsg(queryProgramsMsg);
-			
-			ofLogNotice("scVST") << "Queried VST program names for reference";
+			firstInstance = serverInstances.second[0];
+			firstServer = serverInstances.first;
 			break;
 		}
 	}
+	
+	if(!firstInstance || !firstServer) {
+		ofLogError("scVST") << "Could not find first VST instance for propagation";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "=== PROPAGATING FROM INSTANCE " << firstInstance->nodeID << " ===";
+	
+	// Capture parameters using the same proven method as presetSave
+	int initialParamCount = parameterInfoMap.size();
+	
+	// Method 1: Individual parameter queries (most reliable)
+	for(int paramIndex = 0; paramIndex < 256; paramIndex++) {
+		ofxOscMessage getParamMsg;
+		getParamMsg.setAddress("/u_cmd");
+		getParamMsg.addIntArg(firstInstance->nodeID);
+		getParamMsg.addIntArg(2);
+		getParamMsg.addStringArg("/get");
+		getParamMsg.addIntArg(paramIndex);
+		firstServer->sendMsg(getParamMsg);
+		
+		// Essential: Force OSC processing regularly
+		if(paramIndex % 10 == 0) {
+			firstServer->process();
+			ofSleepMillis(5);
+		}
+	}
+	
+	// Method 2: Bulk queries for efficiency
+	for(int startParam = 0; startParam < 256; startParam += 16) {
+		ofxOscMessage getBulkMsg;
+		getBulkMsg.setAddress("/u_cmd");
+		getBulkMsg.addIntArg(firstInstance->nodeID);
+		getBulkMsg.addIntArg(2);
+		getBulkMsg.addStringArg("/getn");
+		getBulkMsg.addIntArg(startParam);
+		getBulkMsg.addIntArg(16);
+		firstServer->sendMsg(getBulkMsg);
+		
+		firstServer->process();
+		ofSleepMillis(10);
+	}
+	
+	// Wait for responses with active OSC processing
+	ofLogNotice("scVST") << "Capturing parameter state...";
+	for(int i = 0; i < 100; i++) {
+		firstServer->process();
+		ofSleepMillis(20);
+		
+		// Check progress periodically
+		if(i % 25 == 0) {
+			int currentCount = parameterInfoMap.size();
+			if(currentCount > initialParamCount + 20) {
+				ofLogNotice("scVST") << "Good progress, finishing capture early";
+				break;
+			}
+		}
+	}
+	
+	// Final processing burst
+	for(int i = 0; i < 10; i++) {
+		firstServer->process();
+		ofSleepMillis(10);
+	}
+	
+	// Collect all parameters to propagate
+	std::map<int, float> parametersToPropagate;
+	
+	// Priority 1: GUI parameters (user is actively controlling these)
+	for(auto& param : dynamicVectorParameters) {
+		int paramIndex = param.first;
+		auto values = param.second->getParameter().get();
+		if(!values.empty()) {
+			parametersToPropagate[paramIndex] = values[0];
+		}
+	}
+	
+	for(auto& param : dynamicParameters) {
+		int paramIndex = param.first;
+		parametersToPropagate[paramIndex] = param.second->getParameter().get();
+	}
+	
+	// Priority 2: Captured parameters from VST
+	for(auto& info : parameterInfoMap) {
+		int paramIndex = info.first;
+		if(parametersToPropagate.count(paramIndex) == 0) {
+			parametersToPropagate[paramIndex] = info.second.value;
+		}
+	}
+	
+	ofLogNotice("scVST") << "Propagating " << parametersToPropagate.size() << " parameters";
+	
+	if(parametersToPropagate.empty()) {
+		ofLogError("scVST") << "No parameters to propagate";
+		return;
+	}
+	
+	// Apply to all other instances
+	{
+		std::lock_guard<std::mutex> lock(feedbackMutex);
+		for(auto& param : parametersToPropagate) {
+			suppressingFeedback.insert(param.first);
+		}
+	}
+	
+	bool skipFirst = true;
+	int appliedCount = 0;
+	
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				if(skipFirst) {
+					skipFirst = false;
+					continue;
+				}
+				
+				// Apply all parameters to this instance
+				for(auto& param : parametersToPropagate) {
+					ofxOscMessage setMsg;
+					setMsg.setAddress("/u_cmd");
+					setMsg.addIntArg(synth->nodeID);
+					setMsg.addIntArg(2);
+					setMsg.addStringArg("/set");
+					setMsg.addIntArg(param.first);
+					setMsg.addFloatArg(param.second);
+					serverInstances.first->sendMsg(setMsg);
+				}
+				
+				appliedCount++;
+				ofSleepMillis(50); // Small delay between instances
+			}
+		}
+	}
+	
+	// Clear feedback suppression
+	auto clearTime = ofGetElapsedTimeMillis() + 200;
+	{
+		std::lock_guard<std::mutex> lock(feedbackMutex);
+		for(auto& param : parametersToPropagate) {
+			feedbackClearTimes[param.first] = clearTime;
+		}
+	}
+	
+	ofLogNotice("scVST") << "Successfully propagated to " << appliedCount << " instances";
 }
 
-// Remove the testVSTProgram method since we don't need it anymore
-// Remove the handleVSTProgramIndex method since MIDI doesn't give us feedback
-// Keep handleVSTProgram for optional program name display
+void scVST::drawSeparator() {
+	// Get the current cursor position in screen coordinates
+	ImVec2 p = ImGui::GetCursorScreenPos();
 
-void scVST::handleVSTProgram(ofxOscMessage& msg) {
-	// Handle /vst_program messages that contain program information
-	if (msg.getNumArgs() >= 4) {
+	// Draw a 1px-thick horizontal line exactly 240px long
+	ImGui::GetWindowDrawList()->AddLine(
+		ImVec2(p.x,     p.y),
+		ImVec2(p.x + 240, p.y),
+		IM_COL32(200, 200, 200, 255),
+		1.0f
+	);
+
+	// Add a little vertical spacing so subsequent widgets aren't jammed against the line
+	ImGui::Dummy(ImVec2(0, 4));
+}
+
+
+
+std::string scVST::base64Encode(const std::vector<uint8_t>& data) {
+	const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	std::string result;
+	int val = 0, valb = -6;
+	
+	for (uint8_t c : data) {
+		val = (val << 8) + c;
+		valb += 8;
+		while (valb >= 0) {
+			result.push_back(chars[(val >> valb) & 0x3F]);
+			valb -= 6;
+		}
+	}
+	
+	if (valb > -6) {
+		result.push_back(chars[((val << 8) >> (valb + 8)) & 0x3F]);
+	}
+	
+	while (result.size() % 4) {
+		result.push_back('=');
+	}
+	
+	return result;
+}
+
+std::vector<uint8_t> scVST::base64Decode(const std::string& encoded) {
+	const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	std::vector<uint8_t> result;
+	int val = 0, valb = -8;
+	
+	for (char c : encoded) {
+		if (c == '=') break;
+		auto pos = chars.find(c);
+		if (pos == std::string::npos) continue;
+		
+		val = (val << 6) + pos;
+		valb += 6;
+		if (valb >= 0) {
+			result.push_back(char((val >> valb) & 0xFF));
+			valb -= 8;
+		}
+	}
+	
+	return result;
+}
+
+void scVST::presetWillBeLoaded(){
+	isPresetLoading = true;
+	ofLogNotice("scVST") << "🔒 Preset loading started - isPresetLoading = TRUE";
+}
+
+void scVST::activateConnections(){
+	// CRITICAL: Keep preset loading active - don't change the flag here!
+	// The base class might be expecting us to change it, but we need it to stay true
+	// until VST synchronization is complete
+	ofLogNotice("scVST") << "🔗 Connections activated - keeping isPresetLoading = TRUE until VST sync";
+	// DO NOT SET isPresetLoading = false here!
+}
+
+void scVST::presetHasLoaded(){
+	// Still keep preset loading active if we have pending VST data
+	if(!hasPendingPresetData) {
+		isPresetLoading = false;
+		ofLogNotice("scVST") << "🎉 Preset loading complete - isPresetLoading = FALSE (no VST data pending)";
+	} else {
+		ofLogNotice("scVST") << "⏳ Preset loaded but VST sync pending - keeping isPresetLoading = TRUE";
+		// Keep isPresetLoading = true until VST sync is done
+	}
+}
+
+void scVST::handleVSTUpdate(ofxOscMessage& msg) {
+	if (msg.getNumArgs() >= 2) {
 		int nodeID = msg.getArgAsInt32(0);
 		
 		// Verify this is our VST instance
 		if (!isMyVSTInstance(nodeID)) return;
 		
-		int programIndex = (int)msg.getArgAsFloat(2);
+		// CRITICAL: Ignore /vst_update if we're currently syncing
+		if (syncInProgress) {
+			ofLogNotice("scVST") << "🔒 Ignoring /vst_update from node " << nodeID
+								<< " - sync already in progress (preventing feedback loop)";
+			return;
+		}
 		
-		// The program name is encoded as floats (Pascal string format)
-		// Skip for now - we're mainly interested in the program index
+		// CRITICAL: Ignore /vst_update from instances we're currently loading FXP into
+		if (instancesBeingSynced.count(nodeID) > 0) {
+			ofLogNotice("scVST") << "🔒 Ignoring /vst_update from node " << nodeID
+								<< " - this instance is being synced (preventing feedback loop)";
+			return;
+		}
 		
-		ofLogNotice("scVST") << "Received VST program info: index " << programIndex;
+		ofLogNotice("scVST") << "=== VST UPDATE RECEIVED ===";
+		ofLogNotice("scVST") << "VST internal state changed on node " << nodeID
+							<< " (probably preset loaded in GUI)";
 		
-		// You could store program names here if needed for a dropdown
-		// but since you just want a simple int parameter, we'll keep it simple
+		// Check if this is the first instance (we only sync FROM the first instance)
+		bool isFirstInstance = false;
+		for(auto& serverInstances : synthInstances) {
+			if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
+				if(serverInstances.second[0]->nodeID == nodeID) {
+					isFirstInstance = true;
+					break;
+				}
+			}
+		}
+		
+		if(isFirstInstance) {
+			ofLogNotice("scVST") << "🎯 Update came from first instance - syncing to all others via FXP";
+			syncFirstInstanceToAllViaFXP(nodeID);
+		} else {
+			ofLogNotice("scVST") << "ℹ️ Update came from non-first instance (node " << nodeID
+								<< ") - ignoring to avoid conflicts";
+		}
+	}
+}
+
+void scVST::syncFirstInstanceToAllViaFXP(int sourceNodeID) {
+	// Prevent multiple concurrent syncs
+	if (syncInProgress) {
+		ofLogWarning("scVST") << "⚠️ Sync already in progress - ignoring new sync request";
+		return;
+	}
+	
+	// Find the first instance and its server
+	ofxSCSynth* firstInstance = nullptr;
+	ofxSCServer* firstServer = nullptr;
+	
+	for(auto& serverInstances : synthInstances) {
+		if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
+			if(serverInstances.second[0]->nodeID == sourceNodeID) {
+				firstInstance = serverInstances.second[0];
+				firstServer = serverInstances.first;
+				break;
+			}
+		}
+	}
+	
+	if(!firstInstance || !firstServer) {
+		ofLogError("scVST") << "Could not find first instance for FXP sync";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "🔄 Starting FXP sync from instance " << sourceNodeID;
+	
+	// Mark sync as in progress
+	syncInProgress = true;
+	
+	// Create temporary FXP file for sync
+	tempSyncFXPPath = createTempSyncFXPPath();
+	waitingForSyncFXPSave = true;
+	syncSourceNodeID = sourceNodeID;
+	syncFXPAppliedInstances.clear();
+	instancesBeingSynced.clear();
+	
+	// Pre-populate the list of instances that will receive the FXP
+	bool skipFirst = true;
+	for(auto& serverInstances : synthInstances) {
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				if(skipFirst) {
+					skipFirst = false;
+					continue;
+				}
+				instancesBeingSynced.insert(synth->nodeID);
+			}
+		}
+	}
+	
+	ofLogNotice("scVST") << "🔒 Marked " << instancesBeingSynced.size()
+						<< " instances as being synced (feedback protection)";
+	
+	// Request first instance to save its current state to FXP
+	ofxOscMessage writeMsg;
+	writeMsg.setAddress("/u_cmd");
+	writeMsg.addIntArg(firstInstance->nodeID);
+	writeMsg.addIntArg(2);
+	writeMsg.addStringArg("/program_write");
+	writeMsg.addStringArg(tempSyncFXPPath);
+	writeMsg.addIntArg(1); // async = true
+	firstServer->sendMsg(writeMsg);
+	
+	ofLogNotice("scVST") << "📝 Requested FXP save from first instance";
+}
+
+
+
+void scVST::applySyncFXPToAllOtherInstances() {
+	ofLogNotice("scVST") << "🔄 Applying sync FXP to all other instances";
+	
+	int appliedCount = 0;
+	bool skipFirst = true;
+	
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				// Skip the first instance (source of the sync)
+				if(skipFirst) {
+					skipFirst = false;
+					ofLogVerbose("scVST") << "⏭️ Skipping source instance " << synth->nodeID;
+					continue;
+				}
+				
+				ofLogNotice("scVST") << "📤 Applying FXP to instance " << synth->nodeID;
+				
+				// Send program_read command to load the FXP
+				ofxOscMessage readMsg;
+				readMsg.setAddress("/u_cmd");
+				readMsg.addIntArg(synth->nodeID);
+				readMsg.addIntArg(2);
+				readMsg.addStringArg("/program_read");
+				readMsg.addStringArg(tempSyncFXPPath);
+				readMsg.addIntArg(1); // async = true
+				serverInstances.first->sendMsg(readMsg);
+				
+				appliedCount++;
+			}
+		}
+	}
+	
+	ofLogNotice("scVST") << "✅ Sent FXP load commands to " << appliedCount << " instances";
+	
+	if(appliedCount == 0) {
+		// No other instances to sync to - clean up immediately and reset sync state
+		instancesBeingSynced.clear();
+		syncInProgress = false;
+		cleanupTempSyncFXPFile();
+		
+		ofLogNotice("scVST") << "🔓 No instances to sync - feedback protection disabled";
+	}
+	// Otherwise, cleanup will happen when all instances confirm they've loaded
+}
+
+
+
+void scVST::queryVSTParametersAfterSync() {
+	// Query parameters from first instance to update GUI
+	for(auto& serverInstances : synthInstances) {
+		if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
+			ofxOscMessage paramQueryMsg;
+			paramQueryMsg.setAddress("/u_cmd");
+			paramQueryMsg.addIntArg(serverInstances.second[0]->nodeID);
+			paramQueryMsg.addIntArg(2);
+			paramQueryMsg.addStringArg("/param_query");
+			paramQueryMsg.addIntArg(0);    // Start parameter index
+			paramQueryMsg.addIntArg(128);  // Query first 128 parameters
+			serverInstances.first->sendMsg(paramQueryMsg);
+			
+			ofLogNotice("scVST") << "🔍 Querying parameters after FXP sync to update GUI";
+			break; // Only query from first server
+		}
+	}
+}
+
+std::string scVST::createTempSyncFXPPath() {
+	std::string tempDir = ofFilePath::getUserHomeDir() + "/.tmp/";
+	ofDirectory::createDirectory(tempDir, true, true);
+	
+	std::string filename = "oceanode_vst_sync_" + ofToString(ofGetElapsedTimeMillis()) + ".fxp";
+	return tempDir + filename;
+}
+
+void scVST::cleanupTempSyncFXPFile() {
+	if(!tempSyncFXPPath.empty()) {
+		try {
+			ofFile::removeFile(tempSyncFXPPath);
+			ofLogVerbose("scVST") << "🗑️ Cleaned up temporary sync FXP file: " << tempSyncFXPPath;
+		} catch(const std::exception& e) {
+			ofLogWarning("scVST") << "Could not remove temporary sync FXP file: " << e.what();
+		}
+		tempSyncFXPPath.clear();
+	}
+}
+
+void scVST::checkAndConvertVectorToScalar(int paramIndex) {
+	if(dynamicVectorParameters.count(paramIndex) == 0) return;
+	
+	auto vectorParam = dynamicVectorParameters[paramIndex];
+	auto currentValues = vectorParam->getParameter().get();
+	
+	// Check if this parameter has any connections
+	bool hasConnections = vectorParam->hasInConnection();
+	
+	// Track connection state
+	bool hadConnection = parameterHasVectorConnection[paramIndex];
+	parameterHasVectorConnection[paramIndex] = hasConnections;
+	
+	// If parameter was disconnected (had connection but now doesn't)
+	if(hadConnection && !hasConnections) {
+		ofLogNotice("scVST") << "🔄 Vector parameter " << paramIndex
+							<< " disconnected - converting to scalar mode";
+		
+		// Get the current first value to use as scalar
+		float scalarValue = currentValues.empty() ? 0.0f : currentValues[0];
+		
+		// Convert to scalar (single-element vector) and propagate to all instances
+		convertVectorParameterToScalar(paramIndex, scalarValue);
+	}
+	
+	// If parameter has multiple values but no connections, also convert to scalar
+	else if(!hasConnections && currentValues.size() > 1) {
+		ofLogNotice("scVST") << "🔄 Vector parameter " << paramIndex
+							<< " has multiple values but no connections - converting to scalar";
+		
+		float scalarValue = currentValues[0];
+		convertVectorParameterToScalar(paramIndex, scalarValue);
+	}
+}
+
+// Add this method declaration to scVST.h
+void convertVectorParameterToScalar(int paramIndex, float scalarValue);
+
+// Implementation of vector-to-scalar conversion
+void scVST::convertVectorParameterToScalar(int paramIndex, float scalarValue) {
+	if(dynamicVectorParameters.count(paramIndex) == 0) {
+		ofLogWarning("scVST") << "Cannot convert parameter " << paramIndex << " - not found";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "Converting parameter " << paramIndex
+						<< " from vector to scalar with value " << scalarValue;
+	
+	// Update the vector parameter to single-element (scalar mode)
+	try {
+		// Set as single-element vector (this is scalar mode for our system)
+		vector<float> scalarVector = {scalarValue};
+		dynamicVectorParameters[paramIndex]->getParameter().setWithoutEventNotifications(scalarVector);
+		
+		// Update parameter info
+		if(parameterInfoMap.count(paramIndex) > 0) {
+			parameterInfoMap[paramIndex].value = scalarValue;
+		}
+		
+		// Propagate this scalar value to ALL VST instances
+		if(!synthInstances.empty() && areAllInstancesReady()) {
+			ofLogNotice("scVST") << "📡 Broadcasting scalar value " << scalarValue
+								<< " to all VST instances";
+			
+			// Use direct method to ensure all instances get the same value
+			setVSTParameterDirectToAll(paramIndex, scalarValue);
+		}
+		
+		ofLogNotice("scVST") << "✅ Successfully converted parameter " << paramIndex
+							<< " to scalar mode and propagated to all instances";
+		
+	} catch(const std::exception& e) {
+		ofLogError("scVST") << "Error converting parameter " << paramIndex
+						   << " to scalar: " << e.what();
 	}
 }
