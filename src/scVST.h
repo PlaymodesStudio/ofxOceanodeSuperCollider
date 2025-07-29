@@ -33,9 +33,21 @@ class scVST: public scNode {
 public:
 	scVST();
 	~scVST(){
-		ofLogNotice("scVST") << "Starting scVST destructor";
+		string nodeKey = "";
+		try {
+			nodeKey = getParameterGroup().getName();
+		} catch(...) {
+			nodeKey = "unknown";
+		}
+		
+		ofLogNotice("scVST") << "Starting scVST destructor for node '" << nodeKey << "'";
 		
 		try {
+			// FIRST: Save current cache to global storage before cleanup
+			if(fxpCacheValid && !cachedFXP.empty()) {
+				saveCacheToGlobal();
+			}
+			
 			// Clear pending preset data first to avoid JSON destruction issues
 			hasPendingPresetData = false;
 			try {
@@ -95,7 +107,7 @@ public:
 			ofLogError("scVST") << "Unknown error in scVST destructor";
 		}
 		
-		ofLogNotice("scVST") << "Finished scVST destructor";
+		ofLogNotice("scVST") << "Finished scVST destructor for node '" << nodeKey << "'";
 	}
 	
 	void setup();
@@ -223,7 +235,37 @@ private:
 	void checkAndConvertVectorToScalar(int paramIndex);
 	void convertVectorParameterToScalar(int paramIndex, float scalarValue);
 	std::map<int, bool> parameterHasVectorConnection;
+	
+	void saveFXPToUserChosenPath();
+	ofParameter<void> saveFXPToDisk;
+	
+	// Periodic FXP caching for state preservation during graph recomputation
+	 std::vector<uint8_t> cachedFXP;
+	 bool fxpCacheValid;
+	 uint64_t fxpCacheScheduledTime;
+	 bool fxpCacheScheduled;
+	 
+	// Per-plugin FXP caching for BOTH preset saving AND graph recomputation
+	std::map<std::string, std::vector<uint8_t>> cachedFXPs;        // pluginPath -> FXP data
+		
+		// Methods for FXP management
+		void scheduleImmediateFXPCache();
+		void scheduleDebouncedFXPCache(int delayMs = 5000);
+		void updateFXPCacheIfNeeded();
+		void saveFXPToCache();
+		
+		// Helper methods
+		std::string getPluginCacheKey() const { return currentPluginPath; }
 
+	// Add these static members for global FXP caching
+	static std::map<std::string, std::vector<uint8_t>> globalFXPCache;  // nodeName -> FXP data
+	static std::map<std::string, bool> globalFXPCacheValid;            // nodeName -> validity
+	static std::mutex globalCacheMutex;                                // Thread safety
+
+	// Add these helper methods
+	std::string getNodeCacheKey();
+	void loadCacheFromGlobal();
+	void saveCacheToGlobal();
 
 
 	static void drawSeparator();
