@@ -97,7 +97,24 @@ void scVST::setup(){
 					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
 					);
 	
+	addParameter(transportPlay.set("Play", false));
+	addParameter(transportPosition.set("Position", 0.0f, 0.0f, 1000.0f));
+	addParameter(transportReset.set("Reset"));
+	addParameter(tempo.set("BPM", 120.0f, 60.0f, 200.0f));
+	addInspectorParameter(timeSignatureNum.set("TimeSig Num", 4, 1, 16));
+	addInspectorParameter(timeSignatureDenom.set("TimeSig Denom", 4, 1, 16));
+	addInspectorParameter(queryTransportPos.set("QueryPosition"));
+
+	// Initialize transport state
+	transportFeedbackSuppressed = false;
+	transportFeedbackClearTime = 0;
+	lastKnownPosition = 0.0f;
+	isTransportQuerying = false;
 	
+	addCustomRegion(
+					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
+					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
+					);
 	
 	// Inspector parameters
 	addInspectorParameter(enableMultithreading.set("Multithreading", false));
@@ -105,6 +122,46 @@ void scVST::setup(){
 	addInspectorParameter(removeAllParams.set("Remove All Params"));
 	addInspectorParameter(saveFXPToDisk.set("Save FXP to Disk"));
 	
+	// Transport parameter listeners
+	listeners.push(transportPlay.newListener([this](bool &playing){
+		if(!transportFeedbackSuppressed && !isPresetLoading) {
+			setTransportPlay(playing);
+		}
+	}));
+
+	listeners.push(transportPosition.newListener([this](float &position){
+		if(!transportFeedbackSuppressed && !isPresetLoading) {
+			setTransportPosition(position);
+		}
+	}));
+
+	listeners.push(transportReset.newListener([this]{
+		if(!isPresetLoading) {
+			resetTransport();
+		}
+	}));
+
+	listeners.push(tempo.newListener([this](float &bpm){
+		if(!isPresetLoading) {
+			setTempo(bpm);
+		}
+	}));
+
+	listeners.push(timeSignatureNum.newListener([this](int &num){
+		if(!isPresetLoading) {
+			setTimeSignature(num, timeSignatureDenom.get());
+		}
+	}));
+
+	listeners.push(timeSignatureDenom.newListener([this](int &denom){
+		if(!isPresetLoading) {
+			setTimeSignature(timeSignatureNum.get(), denom);
+		}
+	}));
+
+	listeners.push(queryTransportPos.newListener([this]{
+		queryTransportPosition();
+	}));
 	
 	listeners.push(saveFXPToDisk.newListener([this]{
 		saveFXPToUserChosenPath();
@@ -194,6 +251,9 @@ void scVST::setup(){
 	
 	// FIXED: Plugin selector listener with preset loading check
 	listeners.push(pluginSelector.newListener([this](int &selection){
+		ofLogNotice("scVST") << "🔍 Plugin selector changed to " << selection
+							   << " (isPresetLoading = " << (isPresetLoading ? "TRUE" : "FALSE") << ")"
+							   << " - plugin path will be: " << (selection >= 0 && selection < pluginPaths.size() ? pluginPaths[selection] : "INVALID");
 		/*
 		 ofLogNotice("scVST") << "🔍 Plugin selector changed to " << selection
 		 << " (isPresetLoading = " << (isPresetLoading ? "TRUE" : "FALSE") << ")";
@@ -242,6 +302,12 @@ void scVST::setup(){
 					);
 	
 	listeners.push(ofEvents().update.newListener([this](ofEventArgs&) {
+		if(transportFeedbackSuppressed) {
+			uint64_t currentTime = ofGetElapsedTimeMillis();
+			if(currentTime >= transportFeedbackClearTime) {
+				transportFeedbackSuppressed = false;
+			}
+		}
 		// Parameter timer logic - NOW ONLY FOR TIMEOUT PROTECTION
 		if(parameterTimerActive) {
 			uint64_t currentTime = ofGetElapsedTimeMillis();
@@ -1522,6 +1588,11 @@ void scVST::presetSave(ofJson &json) {
 	nodeJson["currentPluginPath"] = currentPluginPath;
 	nodeJson["enableMultithreading"] = enableMultithreading.get();
 	nodeJson["monoInstancing"] = monoInstancing.get();
+	nodeJson["transportPlay"] = transportPlay.get();
+	nodeJson["transportPosition"] = transportPosition.get();
+	nodeJson["tempo"] = tempo.get();
+	nodeJson["timeSignatureNum"] = timeSignatureNum.get();
+	nodeJson["timeSignatureDenom"] = timeSignatureDenom.get();
 	
 	// Save FXP data from first instance if available
 	if(!synthInstances.empty()) {
@@ -1687,6 +1758,11 @@ void scVST::loadBeforeConnections(ofJson &json) {
 	// Deserialize basic parameters first
 	deserializeParameter(nodeJson, enableMultithreading);
 	deserializeParameter(nodeJson, monoInstancing);
+	deserializeParameter(nodeJson, transportPlay);
+	deserializeParameter(nodeJson, transportPosition);
+	deserializeParameter(nodeJson, tempo);
+	deserializeParameter(nodeJson, timeSignatureNum);
+	deserializeParameter(nodeJson, timeSignatureDenom);
 	
 	// IMPORTANT: Deserialize plugin selector AFTER setting isPresetLoading = true
 	if(nodeJson.contains("currentPluginPath") && !nodeJson["currentPluginPath"].is_null()) {
@@ -2417,6 +2493,9 @@ void scVST::buildSynth(ofxSCServer* server) {
 						if (!this->isPresetLoading && !this->hasPendingPresetData) {
 							this->scheduleDebouncedFXPCache();
 						}
+					}
+					else if (address == "/vst_transport") {
+						this->handleTransportPosition(msg);
 					}
 					else if (address == "/vst_open") {
 						this->handleVSTOpen(msg);
@@ -3708,4 +3787,186 @@ void scVST::saveCacheToGlobal() {
 	globalFXPCacheValid[key] = true;
 	
 	ofLogNotice("scVST") << "📤 Saved FXP cache for node '" << key << "' (" << cachedFXP.size() << " bytes)";
+}
+
+void scVST::setTransportPlay(bool playing) {
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available for transport control";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "Setting transport " << (playing ? "PLAY" : "STOP");
+	
+	// Send to all instances
+	std::vector<float> args = {playing ? 1.0f : 0.0f};
+	sendTransportCommandToAllInstances("/transport_play", args);
+}
+
+void scVST::setTransportPosition(float position) {
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available for transport control";
+		return;
+	}
+	
+	// Prevent feedback from our own changes
+	transportFeedbackSuppressed = true;
+	transportFeedbackClearTime = ofGetElapsedTimeMillis() + 100; // 100ms delay
+	
+	ofLogNotice("scVST") << "Setting transport position to " << position << " beats";
+	
+	std::vector<float> args = {position};
+	sendTransportCommandToAllInstances("/transport_set", args);
+	
+	lastKnownPosition = position;
+}
+
+void scVST::resetTransport() {
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available for transport control";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "Resetting transport (position=0, play=true)";
+	
+	// Prevent feedback
+	transportFeedbackSuppressed = true;
+	transportFeedbackClearTime = ofGetElapsedTimeMillis() + 200; // Longer delay for multiple commands
+	
+	// Set position to 0
+	std::vector<float> posArgs = {0.0f};
+	sendTransportCommandToAllInstances("/transport_set", posArgs);
+	
+	// Start playing
+	std::vector<float> playArgs = {1.0f};
+	sendTransportCommandToAllInstances("/transport_play", playArgs);
+	
+	// Update GUI parameters without triggering events
+	transportPosition.setWithoutEventNotifications(0.0f);
+	transportPlay.setWithoutEventNotifications(true);
+	
+	lastKnownPosition = 0.0f;
+}
+
+void scVST::setTempo(float bpm) {
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available for tempo control";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "Setting tempo to " << bpm << " BPM";
+	
+	std::vector<float> args = {bpm};
+	sendTransportCommandToAllInstances("/tempo", args);
+}
+
+void scVST::setTimeSignature(int num, int denom) {
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available for time signature control";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "Setting time signature to " << num << "/" << denom;
+	
+	// Note: /time_sig takes int arguments, not float
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				try {
+					ofxOscMessage timeSigMsg;
+					timeSigMsg.setAddress("/u_cmd");
+					timeSigMsg.addIntArg(synth->nodeID);
+					timeSigMsg.addIntArg(2);
+					timeSigMsg.addStringArg("/time_sig");
+					timeSigMsg.addIntArg(num);
+					timeSigMsg.addIntArg(denom);
+					serverInstances.first->sendMsg(timeSigMsg);
+				} catch(const std::exception& e) {
+					ofLogError("scVST") << "Error setting time signature on synth " << synth->nodeID << ": " << e.what();
+				}
+			}
+		}
+	}
+}
+
+void scVST::queryTransportPosition() {
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available for transport query";
+		return;
+	}
+	
+	// Query from first instance only
+	for(auto& serverInstances : synthInstances) {
+		if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
+			try {
+				isTransportQuerying = true;
+				
+				ofxOscMessage queryMsg;
+				queryMsg.setAddress("/u_cmd");
+				queryMsg.addIntArg(serverInstances.second[0]->nodeID);
+				queryMsg.addIntArg(2);
+				queryMsg.addStringArg("/transport_get");
+				serverInstances.first->sendMsg(queryMsg);
+				
+				ofLogNotice("scVST") << "Querying transport position from first instance";
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Error querying transport position: " << e.what();
+				isTransportQuerying = false;
+			}
+			break; // Only query from first server
+		}
+	}
+}
+
+void scVST::handleTransportPosition(ofxOscMessage& msg) {
+	if (msg.getNumArgs() >= 3) {
+		int nodeID = msg.getArgAsInt32(0);
+		float position = msg.getArgAsFloat(2);
+		
+		// Verify this is our VST instance
+		if (!isMyVSTInstance(nodeID)) return;
+		
+		ofLogVerbose("scVST") << "Transport position received: " << position << " beats from node " << nodeID;
+		
+		// Update GUI parameter if not suppressed and position changed significantly
+		if(!transportFeedbackSuppressed && !isPresetLoading) {
+			float positionDiff = abs(position - lastKnownPosition);
+			if(positionDiff > 0.01f) { // Only update if position changed by > 0.01 beats
+				transportPosition.setWithoutEventNotifications(position);
+				lastKnownPosition = position;
+			}
+		}
+		
+		// Clear querying flag
+		isTransportQuerying = false;
+	}
+}
+
+void scVST::sendTransportCommandToAllInstances(const std::string& command, const std::vector<float>& args) {
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				try {
+					ofxOscMessage transportMsg;
+					transportMsg.setAddress("/u_cmd");
+					transportMsg.addIntArg(synth->nodeID);
+					transportMsg.addIntArg(2);
+					transportMsg.addStringArg(command);
+					
+					// Add arguments
+					for(float arg : args) {
+						transportMsg.addFloatArg(arg);
+					}
+					
+					serverInstances.first->sendMsg(transportMsg);
+				} catch(const std::exception& e) {
+					ofLogError("scVST") << "Error sending transport command " << command
+									   << " to synth " << synth->nodeID << ": " << e.what();
+				}
+			}
+		}
+	}
 }

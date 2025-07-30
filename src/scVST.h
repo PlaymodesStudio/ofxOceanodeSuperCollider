@@ -266,6 +266,32 @@ private:
 	std::string getNodeCacheKey();
 	void loadCacheFromGlobal();
 	void saveCacheToGlobal();
+	
+	// Transport control parameters
+	ofParameter<bool> transportPlay;
+	ofParameter<float> transportPosition;
+	ofParameter<void> transportReset;
+	ofParameter<float> tempo;
+	ofParameter<int> timeSignatureNum;
+	ofParameter<int> timeSignatureDenom;
+	ofParameter<void> queryTransportPos;  // Button to manually query position
+
+	// Transport state management
+	bool transportFeedbackSuppressed;
+	uint64_t transportFeedbackClearTime;
+	float lastKnownPosition;
+	bool isTransportQuerying;
+
+	// Transport control methods
+	void setTransportPlay(bool playing);
+	void setTransportPosition(float position);
+	void resetTransport();
+	void setTempo(float bpm);
+	void setTimeSignature(int num, int denom);
+	void queryTransportPosition();
+	void handleTransportPosition(ofxOscMessage& msg);
+	void sendTransportCommandToAllInstances(const std::string& command, const std::vector<float>& args);
+
 
 
 	static void drawSeparator();
