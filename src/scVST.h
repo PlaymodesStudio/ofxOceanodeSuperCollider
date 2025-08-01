@@ -247,12 +247,26 @@ private:
 	 
 	// Per-plugin FXP caching for BOTH preset saving AND graph recomputation
 	std::map<std::string, std::vector<uint8_t>> cachedFXPs;        // pluginPath -> FXP data
-		
+	
+	// NEW: State tracking for smart FXP source selection
+	bool oceanodePresetLoading;           // Track if Oceanode preset is currently loading
+	bool vstStateModifiedSincePreset;     // Track if VST has been modified since last preset load
+	uint64_t lastParameterChangeTime;     // Timestamp of last parameter change for debouncing
+	uint64_t parameterDebounceDelay;      // Configurable debounce delay (default 1000ms)
+	bool parameterCacheScheduled;         // Track if parameter-triggered cache is scheduled
+	
 		// Methods for FXP management
 		void scheduleImmediateFXPCache();
 		void scheduleDebouncedFXPCache(int delayMs = 5000);
 		void updateFXPCacheIfNeeded();
 		void saveFXPToCache();
+		
+		// NEW: Enhanced caching methods
+		void scheduleParameterDebouncedCache();
+		void updateParameterDebouncedCacheIfNeeded();
+		bool shouldUsePresetFXP() const;
+		bool shouldUseCachedFXP() const;
+		void resetVSTModificationTracking();
 		
 		// Helper methods
 		std::string getPluginCacheKey() const { return currentPluginPath; }

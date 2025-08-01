@@ -32,6 +32,13 @@ scVST::scVST() : scNode("VST") {
 	
 	waitingForFXPSave = false;
 	waitingForFXPLoad = false;
+	
+	// NEW: Initialize state tracking variables
+	oceanodePresetLoading = false;
+	vstStateModifiedSincePreset = false;
+	lastParameterChangeTime = 0;
+	parameterDebounceDelay = 1000; // 1 second default debounce
+	parameterCacheScheduled = false;
 }
 
 void scVST::setup(){
@@ -321,8 +328,9 @@ void scVST::setup(){
 			}
 		}
 		
-		// ADD THIS LINE:
+		// Update both immediate and debounced FXP caching
 		updateFXPCacheIfNeeded();
+		updateParameterDebouncedCacheIfNeeded();  // NEW: Handle debounced parameter caching
 		
 		// Feedback clearing logic (keep existing)
 		uint64_t currentTime = ofGetElapsedTimeMillis();
@@ -449,13 +457,16 @@ void scVST::loadSelectedPlugin() {
 	
 	int totalInstances = 0;
 	
-	// Load plugin on all instances
+	// ========== PARALLEL LOADING IMPLEMENTATION ==========
+	
+	// Phase 1: Send close commands to ALL instances in parallel (no delays)
+	ofLogNotice("scVST") << "📤 Phase 1: Sending close commands to all instances (parallel)";
 	for(auto& serverInstances : synthInstances) {
 		for(auto synth : serverInstances.second) {
 			if(synth != nullptr) {
 				totalInstances++;
 				
-				// Close current plugin if any
+				// Close current plugin if any - NO DELAY
 				ofxOscMessage closeMsg;
 				closeMsg.setAddress("/u_cmd");
 				closeMsg.addIntArg(synth->nodeID);
@@ -463,10 +474,26 @@ void scVST::loadSelectedPlugin() {
 				closeMsg.addStringArg("/close");
 				serverInstances.first->sendMsg(closeMsg);
 				
-				// Small delay between close and open
-				ofSleepMillis(50);
-				
-				// Open new plugin with multithreading setting
+				//ofLogVerbose("scVST") << "Sent close to instance " << synth->nodeID;
+			}
+		}
+	}
+	
+	// Phase 2: Brief processing time to let close commands be processed
+	ofLogNotice("scVST") << "⏳ Phase 2: Processing close commands (" << totalInstances << " instances)";
+	for(int i = 0; i < 10; i++) {
+		for(auto& serverInstances : synthInstances) {
+			serverInstances.first->process();
+		}
+		ofSleepMillis(10); // Brief processing time, not per-instance delay
+	}
+	
+	// Phase 3: Send open commands to ALL instances in parallel (no delays)
+	ofLogNotice("scVST") << "📤 Phase 3: Sending open commands to all instances (parallel)";
+	for(auto& serverInstances : synthInstances) {
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				// Open new plugin with multithreading setting - NO DELAY
 				ofxOscMessage openMsg;
 				openMsg.setAddress("/u_cmd");
 				openMsg.addIntArg(synth->nodeID);
@@ -478,9 +505,18 @@ void scVST::loadSelectedPlugin() {
 				openMsg.addIntArg(0); // Normal mode
 				serverInstances.first->sendMsg(openMsg);
 				
-				//ofLogNotice("scVST") << "Opening plugin on instance " << synth->nodeID;
+				//ofLogVerbose("scVST") << "Sent open to instance " << synth->nodeID;
 			}
 		}
+	}
+	
+	// Phase 4: Brief processing burst to kickstart the open process
+	ofLogNotice("scVST") << "⚡ Phase 4: Processing open commands";
+	for(int i = 0; i < 5; i++) {
+		for(auto& serverInstances : synthInstances) {
+			serverInstances.first->process();
+		}
+		ofSleepMillis(20);
 	}
 	
 	//ofLogNotice("scVST") << "Plugin load commands sent - instances will respond asynchronously";
@@ -814,16 +850,36 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 		if(success) {
 			readyInstances.insert(nodeID);
 			
+			// Enhanced progress tracking for parallel loading
+			int totalExpectedInstances = 0;
+			for(auto& serverInstances : synthInstances) {
+				totalExpectedInstances += serverInstances.second.size();
+			}
+			
+			ofLogNotice("scVST") << "✅ VST instance " << nodeID << " loaded successfully ("
+								<< readyInstances.size() << "/" << totalExpectedInstances << " ready)";
+			
 			// When ALL instances are ready, apply FXP to all at once
 			if(areAllInstancesReady()) {
-				//ofLogNotice("scVST") << "🎉 All VST instances ready!";
+				ofLogNotice("scVST") << "🎉 All " << totalExpectedInstances << " VST instances ready! Applying state restoration...";
 				
-				// NEW PRIORITY LOGIC: Recent cache beats old preset
+				// NEW SMART SOURCE SELECTION LOGIC (keep existing logic)
+				std::string nodeKey = getNodeCacheKey();
 				
-				// Priority 1: Apply this node's cached FXP data (most recent state)
-				if(fxpCacheValid && !isPresetLoading && !hasPendingPresetData) {
-					std::string nodeKey = getNodeCacheKey();
-					ofLogNotice("scVST") << "🔄 Restoring VST state from node cache (" << cachedFXP.size() << " bytes) for node '" << nodeKey << "'";
+				// Priority 1: During Oceanode preset loading - ALWAYS use preset FXP data
+				if(oceanodePresetLoading && hasSavedFXPData) {
+					ofLogNotice("scVST") << "🔄 Restoring VST state from Oceanode preset FXP (preset loading) for node '" << nodeKey << "'";
+					for(auto& serverInstances : synthInstances) {
+						for(auto synth : serverInstances.second) {
+							if(synth != nullptr && fxpAppliedInstances.count(synth->nodeID) == 0) {
+								applyFXPToInstance(synth->nodeID);
+							}
+						}
+					}
+				}
+				// Priority 2: VST has been modified since preset load - use cached FXP data
+				else if(shouldUseCachedFXP()) {
+					ofLogNotice("scVST") << "🔄 Restoring VST state from cache (VST modified since preset) for node '" << nodeKey << "' (" << cachedFXP.size() << " bytes)";
 					
 					// Create temp file with this node's cached FXP
 					string tempPath = createTempFXPPath();
@@ -833,7 +889,7 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 							file.write(reinterpret_cast<const char*>(cachedFXP.data()), cachedFXP.size());
 							file.close();
 							
-							// Apply to all instances of this node
+							// Apply to all instances of this node IN PARALLEL
 							for(auto& serverInstances : synthInstances) {
 								for(auto synth : serverInstances.second) {
 									if(synth != nullptr) {
@@ -845,24 +901,22 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 										readMsg.addStringArg(tempPath);
 										readMsg.addIntArg(1); // async = true
 										serverInstances.first->sendMsg(readMsg);
+										// NO DELAYS - all FXP loads sent in parallel
 									}
 								}
 							}
 							
-							// CRITICAL: Clear cache validity after applying
-							fxpCacheValid = false;
-							
-							ofLogNotice("scVST") << "✅ VST state restored from node cache for '" << nodeKey << "'";
+							ofLogNotice("scVST") << "✅ VST state restoration commands sent to all instances (parallel)";
 							
 						}
 					} catch(const std::exception& e) {
 						ofLogError("scVST") << "Error applying cached FXP for node '" << nodeKey << "': " << e.what();
-						fxpCacheValid = false;
+						fxpCacheValid = false; // Only invalidate on error
 					}
 				}
-				// Priority 2: Apply preset FXP data (only during actual preset loading)
-				else if(hasSavedFXPData && isPresetLoading) {
-					ofLogNotice("scVST") << "🔄 Restoring VST state from preset FXP (preset loading)";
+				// Priority 3: No modifications since preset load - use preset FXP data if available
+				else if(shouldUsePresetFXP()) {
+					ofLogNotice("scVST") << "🔄 Restoring VST state from preset FXP (no modifications since preset) for node '" << nodeKey << "'";
 					for(auto& serverInstances : synthInstances) {
 						for(auto synth : serverInstances.second) {
 							if(synth != nullptr && fxpAppliedInstances.count(synth->nodeID) == 0) {
@@ -872,9 +926,7 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 					}
 				}
 				else {
-					ofLogNotice("scVST") << "ℹ️ No FXP to apply - fxpCacheValid:" << fxpCacheValid
-					<< " hasSavedFXPData:" << hasSavedFXPData
-					<< " isPresetLoading:" << isPresetLoading;
+					ofLogNotice("scVST") << "ℹ️ No FXP to apply - using default VST state";
 				}
 				
 				if(hasPendingPresetData) {
@@ -2095,9 +2147,11 @@ void scVST::applyPendingPresetData() {
 void scVST::activateParameterBindings() {
 	//ofLogNotice("scVST") << "🔗 Activating GUI parameter bindings to VST";
 	
-	// CRITICAL: Now we can finally set preset loading to false
+	// CRITICAL: Now we can finally set both preset loading flags to false
 	isPresetLoading = false;
-	//ofLogNotice("scVST") << "🔓 Set isPresetLoading = FALSE - parameter listeners now active";
+	oceanodePresetLoading = false;  // NEW: Also clear Oceanode preset loading flag
+	resetVSTModificationTracking(); // NEW: Reset modification tracking after successful VST sync
+	//ofLogNotice("scVST") << "🔓 Set both preset loading flags = FALSE, reset VST modification tracking - parameter listeners now active";
 	
 	// Small delay to ensure the flag change is processed
 	ofSleepMillis(100);
@@ -2476,22 +2530,31 @@ void scVST::buildSynth(ofxSCServer* server) {
 					if (address == "/vst_param") {
 						this->handleVSTParam(msg);
 						
-						// ADD THESE LINES:
+						// NEW: Debounced parameter caching with VST modification tracking
 						if (msg.getNumArgs() >= 3) {
 							int paramIndex = (int)msg.getArgAsFloat(2);
 							// Only cache if NOT from our own GUI propagation AND not during preset loading
 							if (this->suppressingFeedback.count(paramIndex) == 0 &&
-								!this->isPresetLoading && !this->hasPendingPresetData) {
-								this->scheduleDebouncedFXPCache();
+								!this->oceanodePresetLoading && !this->hasPendingPresetData) {
+								
+								// Mark VST as modified since preset load
+								this->vstStateModifiedSincePreset = true;
+								
+								// Schedule debounced cache update
+								this->scheduleParameterDebouncedCache();
 							}
 						}
 					}
 					else if (address == "/vst_auto") {
 						this->handleVSTAuto(msg);
 						
-						// ADD THIS LINE:
-						if (!this->isPresetLoading && !this->hasPendingPresetData) {
-							this->scheduleDebouncedFXPCache();
+						// NEW: Debounced automation caching with VST modification tracking
+						if (!this->oceanodePresetLoading && !this->hasPendingPresetData) {
+							// Mark VST as modified since preset load
+							this->vstStateModifiedSincePreset = true;
+							
+							// Schedule debounced cache update
+							this->scheduleParameterDebouncedCache();
 						}
 					}
 					else if (address == "/vst_transport") {
@@ -2507,10 +2570,11 @@ void scVST::buildSynth(ofxSCServer* server) {
 							int programIndex = (int)msg.getArgAsFloat(2);
 							if (this->isMyVSTInstance(nodeID)) {
 								//ofLogNotice("scVST") << "VST program changed to " << programIndex << " on node " << nodeID;
-								if(!this->isPresetLoading) {
+								if(!this->oceanodePresetLoading) {
 									this->vstProgram.setWithoutEventNotifications(programIndex);
 									
-									// ADD THIS LINE:
+									// Mark VST as modified and schedule immediate cache
+									this->vstStateModifiedSincePreset = true;
 									this->scheduleImmediateFXPCache();
 								}
 							}
@@ -2547,11 +2611,13 @@ void scVST::buildSynth(ofxSCServer* server) {
 						this->handleVSTUpdate(msg);
 						
 						// Debug the cache scheduling:
-						ofLogNotice("scVST") << "🔍 About to schedule cache - isPresetLoading:" << this->isPresetLoading
+						ofLogNotice("scVST") << "🔍 About to schedule cache - oceanodePresetLoading:" << this->oceanodePresetLoading
 						<< " hasPendingPresetData:" << this->hasPendingPresetData;
 						
-						if (!this->isPresetLoading && !this->hasPendingPresetData) {
+						if (!this->oceanodePresetLoading && !this->hasPendingPresetData) {
 							ofLogNotice("scVST") << "✅ Scheduling immediate FXP cache";
+							// Mark VST as modified and schedule cache
+							this->vstStateModifiedSincePreset = true;
 							this->scheduleImmediateFXPCache();
 						} else {
 							ofLogNotice("scVST") << "❌ Cache scheduling blocked";
@@ -2751,23 +2817,28 @@ void scVST::queryVSTParametersAfterUpdate(int nodeID) {
 void scVST::createSynth(ofxSCServer* server){
 	if(synthInstances.count(server) == 0) return;
 	
+	// Phase 1: Create all synth nodes first (parallel)
+	ofLogNotice("scVST") << "📤 Creating " << synthInstances[server].size() << " VST synth nodes (parallel)";
 	for(int i = 0; i < synthInstances[server].size(); i++) {
 		if(synthInstances[server][i] != nullptr) {
 			// Create the synth on the server (no need to set channel params since they're fixed in the SynthDef)
 			synthInstances[server][i]->create();
 			/*
-			 ofLogNotice("scVST") << "Created VST instance " << i
+			 ofLogVerbose("scVST") << "Created VST instance " << i
 			 << " with nodeID " << synthInstances[server][i]->nodeID
 			 << " (" << (monoInstancing.get() ? "mono" : "stereo") << ")";
 			 */
 		}
 	}
 	
-	// Load the selected plugin on all instances
+	// Phase 2: Load the selected plugin on all instances (parallel)
 	if (!currentPluginPath.empty()) {
+		ofLogNotice("scVST") << "📤 Loading plugin on all instances (parallel): " << currentPluginPath;
+		
+		// Send all open commands without delays
 		for(int i = 0; i < synthInstances[server].size(); i++) {
 			if(synthInstances[server][i] != nullptr) {
-				// Open the VST plugin
+				// Open the VST plugin - NO DELAY between instances
 				ofxOscMessage openMsg;
 				openMsg.setAddress("/u_cmd");
 				openMsg.addIntArg(synthInstances[server][i]->nodeID);
@@ -2779,8 +2850,14 @@ void scVST::createSynth(ofxSCServer* server){
 				openMsg.addIntArg(0); // Normal mode
 				server->sendMsg(openMsg);
 				
-				//ofLogNotice("scVST") << "Opened plugin on instance " << i;
+				//ofLogVerbose("scVST") << "Sent plugin open to instance " << i;
 			}
+		}
+		
+		// Brief processing time to kickstart plugin loading
+		for(int i = 0; i < 5; i++) {
+			server->process();
+			ofSleepMillis(10);
 		}
 		
 		pluginLoaded = true;
@@ -3231,7 +3308,8 @@ std::vector<uint8_t> scVST::base64Decode(const std::string& encoded) {
 
 void scVST::presetWillBeLoaded(){
 	isPresetLoading = true;
-	//ofLogNotice("scVST") << "🔒 Preset loading started - isPresetLoading = TRUE";
+	oceanodePresetLoading = true;  // NEW: Track Oceanode preset loading specifically
+	//ofLogNotice("scVST") << "🔒 Oceanode preset loading started - both flags = TRUE";
 }
 
 void scVST::activateConnections(){
@@ -3246,10 +3324,12 @@ void scVST::presetHasLoaded(){
 	// Still keep preset loading active if we have pending VST data
 	if(!hasPendingPresetData) {
 		isPresetLoading = false;
-		//ofLogNotice("scVST") << "🎉 Preset loading complete - isPresetLoading = FALSE (no VST data pending)";
+		oceanodePresetLoading = false;  // NEW: Clear Oceanode preset loading flag
+		resetVSTModificationTracking(); // NEW: Reset modification tracking after successful preset load
+		//ofLogNotice("scVST") << "🎉 Preset loading complete - both flags = FALSE, VST modification tracking reset";
 	} else {
-		//ofLogNotice("scVST") << "⏳ Preset loaded but VST sync pending - keeping isPresetLoading = TRUE";
-		// Keep isPresetLoading = true until VST sync is done
+		//ofLogNotice("scVST") << "⏳ Preset loaded but VST sync pending - keeping flags = TRUE";
+		// Keep both flags true until VST sync is done
 	}
 }
 
@@ -3642,10 +3722,10 @@ void scVST::scheduleImmediateFXPCache() {
 	std::string nodeKey = getNodeCacheKey();
 	ofLogNotice("scVST") << "🔍 scheduleImmediateFXPCache for node '" << nodeKey << "' - pluginLoaded:" << pluginLoaded
 						<< " synthInstances.empty:" << synthInstances.empty()
-						<< " isPresetLoading:" << isPresetLoading
+						<< " oceanodePresetLoading:" << oceanodePresetLoading
 						<< " hasPendingPresetData:" << hasPendingPresetData;
 	
-	if(!pluginLoaded || synthInstances.empty() || isPresetLoading || hasPendingPresetData) {
+	if(!pluginLoaded || synthInstances.empty() || oceanodePresetLoading || hasPendingPresetData) {
 		ofLogNotice("scVST") << "❌ FXP cache scheduling blocked for node '" << nodeKey << "'";
 		return;
 	}
@@ -3656,7 +3736,7 @@ void scVST::scheduleImmediateFXPCache() {
 }
 
 void scVST::scheduleDebouncedFXPCache(int delayMs) {
-	if(!pluginLoaded || synthInstances.empty() || isPresetLoading || hasPendingPresetData) {
+	if(!pluginLoaded || synthInstances.empty() || oceanodePresetLoading || hasPendingPresetData) {
 		return;
 	}
 	
@@ -3664,6 +3744,34 @@ void scVST::scheduleDebouncedFXPCache(int delayMs) {
 	ofLogVerbose("scVST") << "📅 Scheduling debounced FXP cache update for node '" << nodeKey << "' (" << delayMs << "ms)";
 	fxpCacheScheduledTime = ofGetElapsedTimeMillis() + delayMs;
 	fxpCacheScheduled = true;
+}
+
+// NEW: Debounced parameter caching method
+void scVST::scheduleParameterDebouncedCache() {
+	if(!pluginLoaded || synthInstances.empty() || oceanodePresetLoading || hasPendingPresetData) {
+		return;
+	}
+	
+	std::string nodeKey = getNodeCacheKey();
+	lastParameterChangeTime = ofGetElapsedTimeMillis();
+	parameterCacheScheduled = true;
+	
+	ofLogVerbose("scVST") << "📅 Parameter change detected for node '" << nodeKey << "' - debounce timer reset";
+}
+
+// NEW: Update debounced parameter cache
+void scVST::updateParameterDebouncedCacheIfNeeded() {
+	if(!parameterCacheScheduled) return;
+	
+	uint64_t currentTime = ofGetElapsedTimeMillis();
+	if(currentTime >= (lastParameterChangeTime + parameterDebounceDelay)) {
+		parameterCacheScheduled = false;
+		
+		std::string nodeKey = getNodeCacheKey();
+		ofLogNotice("scVST") << "⏰ Debounce period elapsed for node '" << nodeKey << "' - saving FXP to cache";
+		
+		saveFXPToCache();
+	}
 }
 
 void scVST::updateFXPCacheIfNeeded() {
@@ -3676,11 +3784,29 @@ void scVST::updateFXPCacheIfNeeded() {
 	}
 }
 
+// NEW: Helper methods for smart source selection
+bool scVST::shouldUsePresetFXP() const {
+	return hasSavedFXPData && !vstStateModifiedSincePreset && !oceanodePresetLoading;
+}
+
+bool scVST::shouldUseCachedFXP() const {
+	return fxpCacheValid && vstStateModifiedSincePreset && !oceanodePresetLoading;
+}
+
+void scVST::resetVSTModificationTracking() {
+	vstStateModifiedSincePreset = false;
+	lastParameterChangeTime = 0;
+	parameterCacheScheduled = false;
+	
+	std::string nodeKey = getNodeCacheKey();
+	ofLogNotice("scVST") << "🔄 Reset VST modification tracking for node '" << nodeKey << "'";
+}
+
 void scVST::saveFXPToCache() {
 	std::string nodeKey = getNodeCacheKey();
 	ofLogNotice("scVST") << "💾 saveFXPToCache called for node '" << nodeKey << "' - current fxpCacheValid:" << fxpCacheValid;
 	
-	if(synthInstances.empty() || isPresetLoading || hasPendingPresetData) {
+	if(synthInstances.empty() || oceanodePresetLoading || hasPendingPresetData) {
 		ofLogNotice("scVST") << "❌ saveFXPToCache blocked for node '" << nodeKey << "'";
 		return;
 	}
