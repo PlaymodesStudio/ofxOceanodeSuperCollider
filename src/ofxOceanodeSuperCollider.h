@@ -37,6 +37,7 @@
 
 #include "scVST.h"
 #include "scVSTI.h"
+#include "scPolyMixer.h"
 
 namespace ofxOceanodeSuperCollider{
 
