@@ -121,6 +121,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scBeatTracker>("SuperCollider", controller->getServers());
 	o.registerModel<scVSTI>("SuperCollider");
 	o.registerModel<scVST>("SuperCollider");
+	o.registerModel<scPolyMixer>("SuperCollider");
 
 }
 
