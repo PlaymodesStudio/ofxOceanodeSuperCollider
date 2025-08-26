@@ -29,6 +29,21 @@ void scNode::addInput(std::string name){
         *availableInput = port;
         for(auto &output : outputs) output = output;
     }));
+void scNode::removeInput(int index) {
+	if(index < 0 || index >= inputs.size()) {
+		return;
+	}
+	try {
+		string inputName = inputs[index].getName();
+		removeParameter(inputName);
+		inputs.erase(inputs.begin() + index);
+		
+		if(index < availableInputs.size()) {
+			availableInputs.erase(availableInputs.begin() + index);
+		}
+	} catch(const std::exception& e) {
+		ofLogError("scNode") << "Error removing input at index " << index << ": " << e.what();
+	}
 }
 
 void scNode::addOutput(std::string name){

@@ -61,6 +61,7 @@ public:
     
     ofEvent<int> createdSynth;
     
+	void removeInput(int index);
 protected:
     ofEventListeners listeners;
     
