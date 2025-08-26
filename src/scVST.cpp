@@ -395,26 +395,71 @@ void scVST::searchForVSTPlugins() {
 	vstSearchPaths.push_back("/usr/local/lib/vst3/");
 #endif
 	
-	// Search for VST plugins
+	// Search for VST plugins recursively
 	for (const string& path : vstSearchPaths) {
-		ofDirectory dir(path);
-		if (dir.exists()) {
-			dir.listDir();
-			for (int i = 0; i < dir.size(); i++) {
-				string filename = dir.getName(i);
-				string filepath = dir.getPath(i);
-				
-				// Check for VST extensions
-				if (ofToLower(ofFilePath::getFileExt(filename)) == "vst" ||
-					ofToLower(ofFilePath::getFileExt(filename)) == "vst3" ||
-					filename.find(".vst") != string::npos) {
+		ofLogNotice("scVST") << "Searching VST path: " << path;
+		
+		// Use a stack-based approach for recursive directory traversal
+		std::vector<string> dirsToProcess;
+		dirsToProcess.push_back(path);
+		
+		while (!dirsToProcess.empty()) {
+			string currentPath = dirsToProcess.back();
+			dirsToProcess.pop_back();
+			
+			ofDirectory dir(currentPath);
+			if (dir.exists()) {
+				try {
+					dir.listDir();
+					ofLogVerbose("scVST") << "Processing directory: " << currentPath << " (" << dir.size() << " items)";
 					
-					string pluginName = ofFilePath::getBaseName(filename);
-					availablePlugins.push_back(pluginName);
-					pluginPaths.push_back(filepath);
+					for (int i = 0; i < dir.size(); i++) {
+						try {
+							string filename = dir.getName(i);
+							string filepath = dir.getPath(i);
+							
+							ofLogVerbose("scVST") << "Processing item: " << filename << " (isDirectory: " << dir.getFile(i).isDirectory() << ")";
+							
+							// Check for VST extensions first (VST3 plugins are actually directories with .vst3 extension)
+							string extension = ofToLower(ofFilePath::getFileExt(filename));
+							if (extension == "vst" ||
+								extension == "vst3" ||
+								filename.find(".vst") != string::npos) {
+								
+								string pluginName = ofFilePath::getBaseName(filename);
+								
+								// Create display name with folder context for subfolders
+								string displayName = pluginName;
+								string parentFolder = ofFilePath::getBaseName(ofFilePath::getEnclosingDirectory(filepath));
+								if (!parentFolder.empty() && parentFolder != ofFilePath::getBaseName(path)) {
+									displayName = parentFolder + "/" + pluginName;
+								}
+								
+								availablePlugins.push_back(displayName);
+								pluginPaths.push_back(filepath);
+								ofLogNotice("scVST") << "Found VST plugin: " << displayName << " at " << filepath;
+							}
+							// Only recurse into directories that are NOT VST plugins
+							else if (dir.getFile(i).isDirectory()) {
+								// Add subdirectory to processing stack
+								dirsToProcess.push_back(filepath + "/");
+								ofLogVerbose("scVST") << "Added subdir to stack: " << filepath;
+							}
+						} catch (const std::exception& e) {
+							// Skip individual files/dirs that cause problems
+							ofLogVerbose("scVST") << "Error processing item in " << currentPath << ": " << e.what();
+						}
+					}
+				} catch (const std::exception& e) {
+					ofLogWarning("scVST") << "Error accessing directory " << currentPath << ": " << e.what();
+					// Skip this directory and continue with others
 				}
+			} else {
+				ofLogVerbose("scVST") << "Directory does not exist: " << currentPath;
 			}
 		}
+		
+		ofLogNotice("scVST") << "Finished searching path: " << path << " (found " << availablePlugins.size() << " plugins so far)";
 	}
 	
 	// If no plugins found, add a default message
@@ -916,11 +961,26 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 				}
 				// Priority 3: No modifications since preset load - use preset FXP data if available
 				else if(shouldUsePresetFXP()) {
-					ofLogNotice("scVST") << "🔄 Restoring VST state from preset FXP (no modifications since preset) for node '" << nodeKey << "'";
-					for(auto& serverInstances : synthInstances) {
-						for(auto synth : serverInstances.second) {
-							if(synth != nullptr && fxpAppliedInstances.count(synth->nodeID) == 0) {
-								applyFXPToInstance(synth->nodeID);
+					//ofLogNotice("scVST") << "🔄 Restoring VST state from preset FXP (no modifications since preset) for node '" << nodeKey << "'";
+					if(hasSavedFXPData) {
+						string tempPath = createTempFXPPath();
+						std::ofstream file(tempPath, std::ios::binary);
+						file.write(reinterpret_cast<const char*>(savedFXPData.data()), savedFXPData.size());
+						file.close();
+						
+						// Apply to all instances IN PARALLEL
+						for(auto& serverInstances : synthInstances) {
+							for(auto synth : serverInstances.second) {
+								if(synth != nullptr) {
+									ofxOscMessage readMsg;
+									readMsg.setAddress("/u_cmd");
+									readMsg.addIntArg(synth->nodeID);
+									readMsg.addIntArg(2);
+									readMsg.addStringArg("/program_read");
+									readMsg.addStringArg(tempPath);
+									readMsg.addIntArg(1); // async = true
+									serverInstances.first->sendMsg(readMsg);
+								}
 							}
 						}
 					}
@@ -1631,7 +1691,7 @@ void scVST::sendMidiNoteOff(int channel, int pitch, int instanceIndex) {
 
 void scVST::presetSave(ofJson &json) {
 	string nodeKey = getParameterGroup().getName();
-	ofLogNotice("scVST") << "=== PRESET SAVE (WITH FXP DATA) for node '" << nodeKey << "' ===";
+	//ofLogNotice("scVST") << "=== PRESET SAVE (WITH FXP DATA) for node '" << nodeKey << "' ===";
 	
 	// Create a node-specific section in the JSON
 	ofJson& nodeJson = json["vstNodes"][nodeKey];  // Namespace under vstNodes
@@ -1661,7 +1721,7 @@ void scVST::presetSave(ofJson &json) {
 		}
 		
 		if(firstInstance && firstServer) {
-			ofLogNotice("scVST") << "Saving FXP preset from first instance (node " << firstInstance->nodeID << ") for '" << nodeKey << "'";
+			//ofLogNotice("scVST") << "Saving FXP preset from first instance (node " << firstInstance->nodeID << ") for '" << nodeKey << "'";
 			
 			// Create temporary file for FXP data
 			tempFXPPath = createTempFXPPath();
@@ -1702,7 +1762,7 @@ void scVST::presetSave(ofJson &json) {
 							nodeJson["fxpData"] = base64Data;
 							nodeJson["fxpDataSize"] = size;
 							
-							ofLogNotice("scVST") << "Saved FXP data (" << size << " bytes) for '" << nodeKey << "'";
+							//ofLogNotice("scVST") << "Saved FXP data (" << size << " bytes) for '" << nodeKey << "'";
 							
 							// Store in memory for later use
 							savedFXPData = buffer;
@@ -1787,12 +1847,12 @@ void scVST::presetSave(ofJson &json) {
 		nodeJson["vstDataType"] = "fxp_only";
 	}
 	
-	ofLogNotice("scVST") << "Finished preset save for node '" << nodeKey << "'";
+	//ofLogNotice("scVST") << "Finished preset save for node '" << nodeKey << "'";
 }
 
 void scVST::loadBeforeConnections(ofJson &json) {
 	string nodeKey = getParameterGroup().getName();
-	ofLogNotice("scVST") << "=== LOAD BEFORE CONNECTIONS (CREATE GUI PARAMETERS) for node '" << nodeKey << "' ===";
+	//ofLogNotice("scVST") << "=== LOAD BEFORE CONNECTIONS (CREATE GUI PARAMETERS) for node '" << nodeKey << "' ===";
 	
 	// Check if we have node-specific data
 	if(!json.contains("vstNodes") || !json["vstNodes"].contains(nodeKey)) {
@@ -1805,7 +1865,7 @@ void scVST::loadBeforeConnections(ofJson &json) {
 	
 	// FIRST: Set the loading flag to prevent plugin selector from triggering
 	isPresetLoading = true;
-	ofLogNotice("scVST") << "🔒 Set isPresetLoading = TRUE to prevent plugin selector triggering for '" << nodeKey << "'";
+	//ofLogNotice("scVST") << "🔒 Set isPresetLoading = TRUE to prevent plugin selector triggering for '" << nodeKey << "'";
 	
 	// Deserialize basic parameters first
 	deserializeParameter(nodeJson, enableMultithreading);
@@ -1816,18 +1876,38 @@ void scVST::loadBeforeConnections(ofJson &json) {
 	deserializeParameter(nodeJson, timeSignatureNum);
 	deserializeParameter(nodeJson, timeSignatureDenom);
 	
-	// IMPORTANT: Deserialize plugin selector AFTER setting isPresetLoading = true
 	if(nodeJson.contains("currentPluginPath") && !nodeJson["currentPluginPath"].is_null()) {
 		string savedPluginPath = static_cast<string>(nodeJson["currentPluginPath"]);
 		
 		// Find the plugin in our available plugins and set the selector
+		bool pluginFound = false;
 		for(int i = 0; i < pluginPaths.size(); i++) {
 			if(pluginPaths[i] == savedPluginPath) {
-				ofLogNotice("scVST") << "🔧 Setting plugin selector to " << i << " (" << savedPluginPath << ") for '" << nodeKey << "'";
+				//ofLogNotice("scVST") << "🔧 Setting plugin selector to " << i << " (" << savedPluginPath << ") for '" << nodeKey << "'";
 				pluginSelector.setWithoutEventNotifications(i);
 				currentPluginPath = savedPluginPath;
+				pluginFound = true;
 				break;
 			}
+		}
+		
+		// If exact path not found, try matching by filename only
+		if(!pluginFound) {
+			string savedPluginName = ofFilePath::getBaseName(savedPluginPath);
+			for(int i = 0; i < pluginPaths.size(); i++) {
+				string currentPluginName = ofFilePath::getBaseName(pluginPaths[i]);
+				if(currentPluginName == savedPluginName) {
+					ofLogWarning("scVST") << "🔧 Plugin path changed, matched by name: " << savedPluginName << " at index " << i;
+					pluginSelector.setWithoutEventNotifications(i);
+					currentPluginPath = pluginPaths[i];
+					pluginFound = true;
+					break;
+				}
+			}
+		}
+		
+		if(!pluginFound) {
+			ofLogError("scVST") << "❌ Could not find saved plugin: " << savedPluginPath << " - keeping current selection";
 		}
 	}
 	
@@ -1838,7 +1918,7 @@ void scVST::loadBeforeConnections(ofJson &json) {
 			savedFXPData = base64Decode(base64Data);
 			hasSavedFXPData = true;
 			
-			ofLogNotice("scVST") << "Loaded FXP data for later application (" << savedFXPData.size() << " bytes) for '" << nodeKey << "'";
+			//ofLogNotice("scVST") << "Loaded FXP data for later application (" << savedFXPData.size() << " bytes) for '" << nodeKey << "'";
 		} catch(const std::exception& e) {
 			ofLogError("scVST") << "Error loading FXP data for '" << nodeKey << "': " << e.what();
 			hasSavedFXPData = false;
@@ -1849,10 +1929,10 @@ void scVST::loadBeforeConnections(ofJson &json) {
 	
 	// Debug the JSON structure
 	if(nodeJson.contains("vstParameters") && !nodeJson["vstParameters"].is_null()) {
-		ofLogNotice("scVST") << "📄 JSON contains " << nodeJson["vstParameters"].size() << " parameters to restore for '" << nodeKey << "'";
+		//ofLogNotice("scVST") << "📄 JSON contains " << nodeJson["vstParameters"].size() << " parameters to restore for '" << nodeKey << "'";
 		
 		// Create GUI parameters immediately so connections can be restored
-		ofLogNotice("scVST") << "🔧 Creating GUI parameters for connection restoration for '" << nodeKey << "'";
+		//ofLogNotice("scVST") << "🔧 Creating GUI parameters for connection restoration for '" << nodeKey << "'";
 		
 		int createdCount = 0;
 		int skippedCount = 0;
@@ -1866,7 +1946,7 @@ void scVST::loadBeforeConnections(ofJson &json) {
 					if(dynamicVectorParameters.count(paramIndex) > 0 ||
 					   dynamicParameters.count(paramIndex) > 0) {
 						skippedCount++;
-						ofLogVerbose("scVST") << "⏭️ Skipping existing parameter " << paramIndex << " for '" << nodeKey << "'";
+						//ofLogVerbose("scVST") << "⏭️ Skipping existing parameter " << paramIndex << " for '" << nodeKey << "'";
 						continue;
 					}
 					
@@ -1889,7 +1969,7 @@ void scVST::loadBeforeConnections(ofJson &json) {
 						initialValues = {static_cast<float>(item.value()["value"])};
 					}
 					
-					ofLogNotice("scVST") << "🔧 Creating parameter " << paramIndex << " (" << paramName << ") with " << initialValues.size() << " values for '" << nodeKey << "'";
+					//ofLogNotice("scVST") << "🔧 Creating parameter " << paramIndex << " (" << paramName << ") with " << initialValues.size() << " values for '" << nodeKey << "'";
 					
 					// Create/update parameter info
 					if(parameterInfoMap.count(paramIndex) == 0) {
@@ -1909,7 +1989,7 @@ void scVST::loadBeforeConnections(ofJson &json) {
 					// Verify it was created
 					if(dynamicVectorParameters.count(paramIndex) > 0) {
 						createdCount++;
-						ofLogNotice("scVST") << "✅ Successfully created parameter " << paramIndex << " for '" << nodeKey << "'";
+						//ofLogNotice("scVST") << "✅ Successfully created parameter " << paramIndex << " for '" << nodeKey << "'";
 					} else {
 						ofLogError("scVST") << "❌ Failed to create parameter " << paramIndex << " for '" << nodeKey << "'";
 					}
@@ -1919,7 +1999,7 @@ void scVST::loadBeforeConnections(ofJson &json) {
 			}
 		}
 		
-		ofLogNotice("scVST") << "✅ Created " << createdCount << " GUI parameters (" << skippedCount << " skipped) for '" << nodeKey << "'";
+		//ofLogNotice("scVST") << "✅ Created " << createdCount << " GUI parameters (" << skippedCount << " skipped) for '" << nodeKey << "'";
 	} else {
 		ofLogWarning("scVST") << "❌ No vstParameters found in JSON for node '" << nodeKey << "'!";
 	}
@@ -1929,7 +2009,7 @@ void scVST::loadBeforeConnections(ofJson &json) {
 	hasPendingPresetData = true;
 	fxpAppliedInstances.clear();
 	
-	ofLogNotice("scVST") << "Finished load before connections for node '" << nodeKey << "'";
+	//ofLogNotice("scVST") << "Finished load before connections for node '" << nodeKey << "'";
 }
 
 void scVST::presetRecallAfterSettingParameters(ofJson &json) {
@@ -1955,9 +2035,9 @@ void scVST::presetRecallAfterSettingParameters(ofJson &json) {
 
 void scVST::setupParameterTimer(int delayMs) {
 	// Now this timer is just a backup timeout protection
-	int timeoutDelay = delayMs * 2; // Give more time since we're primarily waiting for the event
-	if(timeoutDelay < 2000) timeoutDelay = 2000;   // Minimum 2s timeout
-	if(timeoutDelay > 10000) timeoutDelay = 10000; // Maximum 10s timeout
+	int timeoutDelay = delayMs; // Give more time since we're primarily waiting for the event
+	if(timeoutDelay < 1000) timeoutDelay = 1000;   // Minimum 2s timeout
+	if(timeoutDelay > 5000) timeoutDelay = 5000; // Maximum 10s timeout
 	
 	parameterTimerStart = ofGetElapsedTimeMillis();
 	parameterTimerDelay = timeoutDelay;
