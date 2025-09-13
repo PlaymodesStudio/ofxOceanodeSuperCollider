@@ -118,6 +118,29 @@ void scVST::setup(){
 	lastKnownPosition = 0.0f;
 	isTransportQuerying = false;
 	
+	// MIDI CC Parameters section
+	addCustomRegion(
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
+	);
+	
+	// MIDI CC control parameters
+	addInspectorParameter(addMidiCC.set("Add MIDI CC"));
+	addInspectorParameter(midiCCToAdd.set("CC Number", 1, 1, 127));
+	addInspectorParameter(removeAllMidiCC.set("Remove All CC"));
+	
+	// MIDI CC listeners
+	listeners.push(addMidiCC.newListener([this]{
+		if(!isPresetLoading) {
+			addMidiCCParameter(midiCCToAdd.get());
+		}
+	}));
+
+	listeners.push(removeAllMidiCC.newListener([this]{
+		removeAllMidiCCParameters();
+	}));
+	
+	
 	addCustomRegion(
 					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
 					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
@@ -248,8 +271,8 @@ void scVST::setup(){
 	}));
 	
 	listeners.push(propagateParams.newListener([this]{
-		//ofLogNotice("scVST") << "Propagating first instance parameters to all others";
-		propagateFirstInstanceToAll();
+		ofLogNotice("scVST") << "=== PROPAGATING FIRST INSTANCE VIA FXP (BUTTON) ===";
+		propagateFirstInstanceViaFXP();
 	}));
 	
 	listeners.push(removeAllParams.newListener([this]{
@@ -462,12 +485,34 @@ void scVST::searchForVSTPlugins() {
 		ofLogNotice("scVST") << "Finished searching path: " << path << " (found " << availablePlugins.size() << " plugins so far)";
 	}
 	
-	// If no plugins found, add a default message
+	// Sort plugins alphabetically
+	if (!availablePlugins.empty()) {
+		// Create pairs of (plugin name, plugin path) for sorting
+		vector<pair<string, string>> pluginPairs;
+		for (int i = 0; i < availablePlugins.size(); i++) {
+			pluginPairs.push_back(make_pair(availablePlugins[i], pluginPaths[i]));
+		}
+		
+		// Sort by plugin name (case-insensitive)
+		sort(pluginPairs.begin(), pluginPairs.end(),
+			 [](const pair<string, string>& a, const pair<string, string>& b) {
+				 return ofToLower(a.first) < ofToLower(b.first);
+			 });
+		
+		// Rebuild the sorted vectors
+		availablePlugins.clear();
+		pluginPaths.clear();
+		for (const auto& pair : pluginPairs) {
+			availablePlugins.push_back(pair.first);
+			pluginPaths.push_back(pair.second);
+		}
+	}
+
+	// If no plugins found, add a default message (existing code)
 	if (availablePlugins.empty()) {
 		availablePlugins.push_back("No VST plugins found");
 		pluginPaths.push_back("");
-	}
-}
+	}}
 
 void scVST::loadSelectedPlugin() {
 	/*
@@ -1430,6 +1475,8 @@ void scVST::removeParameterFromGUI(int paramIndex) {
 void scVST::removeAllDynamicParameters() {
 	//ofLogNotice("scVST") << "Removing all dynamic parameters";
 	
+	removeAllMidiCCParameters();
+
 	try {
 		// Create a copy of the keys to avoid iterator invalidation
 		vector<int> paramIndices;
@@ -1847,6 +1894,31 @@ void scVST::presetSave(ofJson &json) {
 		nodeJson["vstDataType"] = "fxp_only";
 	}
 	
+	if(!midiCCParameters.empty()) {
+		nodeJson["midiCCParameters"] = ofJson::object();
+		
+		for(auto& ccParam : midiCCParameters) {
+			int ccNumber = ccParam.first;
+			try {
+				ofJson ccData;
+				ccData["ccNumber"] = ccNumber;
+				ccData["displayName"] = ccParam.second.displayName;
+				ccData["enabled"] = ccParam.second.enabled;
+				
+				if(dynamicMidiCCParameters.count(ccNumber) > 0) {
+					ccData["value"] = dynamicMidiCCParameters[ccNumber]->getParameter().get();
+				} else {
+					ccData["value"] = ccParam.second.value;
+				}
+				
+				nodeJson["midiCCParameters"][ofToString(ccNumber)] = ccData;
+				
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Error saving MIDI CC parameter " << ccNumber << ": " << e.what();
+			}
+		}
+	}
+	
 	//ofLogNotice("scVST") << "Finished preset save for node '" << nodeKey << "'";
 }
 
@@ -2002,6 +2074,63 @@ void scVST::loadBeforeConnections(ofJson &json) {
 		//ofLogNotice("scVST") << "✅ Created " << createdCount << " GUI parameters (" << skippedCount << " skipped) for '" << nodeKey << "'";
 	} else {
 		ofLogWarning("scVST") << "❌ No vstParameters found in JSON for node '" << nodeKey << "'!";
+	}
+	
+	// Add to loadBeforeConnections() method after creating VST parameters:
+
+	// Load MIDI CC parameters if available
+	if(nodeJson.contains("midiCCParameters") && !nodeJson["midiCCParameters"].is_null()) {
+		ofLogNotice("scVST") << "📄 JSON contains " << nodeJson["midiCCParameters"].size()
+							 << " MIDI CC parameters to restore for '" << nodeKey << "'";
+		
+		int createdCCCount = 0;
+		
+		for(auto& item : nodeJson["midiCCParameters"].items()) {
+			try {
+				int ccNumber = ofToInt(item.key());
+				if(item.value().is_object() && ccNumber >= 1 && ccNumber <= 127) {
+					
+					// Skip if CC parameter already exists
+					if(midiCCParameters.count(ccNumber) > 0) {
+						ofLogVerbose("scVST") << "⏭️ Skipping existing MIDI CC " << ccNumber;
+						continue;
+					}
+					
+					// Extract CC parameter info
+					string displayName = "CC" + ofToString(ccNumber);
+					if(item.value().contains("displayName") && !item.value()["displayName"].is_null()) {
+						displayName = item.value()["displayName"];
+					}
+					
+					float value = 0.0f;
+					if(item.value().contains("value")) {
+						value = static_cast<float>(item.value()["value"]);
+					}
+					
+					// Create MIDI CC parameter
+					addMidiCCParameter(ccNumber);
+					
+					// Set the loaded value
+					if(dynamicMidiCCParameters.count(ccNumber) > 0) {
+						dynamicMidiCCParameters[ccNumber]->getParameter().setWithoutEventNotifications(value);
+					}
+					
+					// Update display name
+					if(midiCCParameters.count(ccNumber) > 0) {
+						midiCCParameters[ccNumber].displayName = displayName;
+						midiCCParameters[ccNumber].value = value;
+					}
+					
+					createdCCCount++;
+					ofLogNotice("scVST") << "✅ Successfully restored MIDI CC " << ccNumber
+										<< " (" << displayName << ") = " << value;
+				}
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Error restoring MIDI CC parameter " << item.key() << ": " << e.what();
+			}
+		}
+		
+		ofLogNotice("scVST") << "✅ Restored " << createdCCCount << " MIDI CC parameters for '" << nodeKey << "'";
 	}
 	
 	// Store the full preset data for later VST synchronization
@@ -4175,4 +4304,460 @@ void scVST::sendTransportCommandToAllInstances(const std::string& command, const
 			}
 		}
 	}
+}
+
+void scVST::addMidiCCParameter(int ccNumber) {
+	// Validate CC number
+	if(ccNumber < 1 || ccNumber > 127) {
+		ofLogError("scVST") << "Invalid MIDI CC number: " << ccNumber << " (must be 1-127)";
+		return;
+	}
+	
+	if(midiCCParameters.count(ccNumber) > 0) {
+		ofLogWarning("scVST") << "MIDI CC " << ccNumber << " already exists, updating value";
+		// Update existing parameter value and send to VST
+		if(dynamicMidiCCParameters.count(ccNumber) > 0) {
+			float currentValue = dynamicMidiCCParameters[ccNumber]->getParameter().get();
+			sendMidiCC(ccNumber, currentValue);
+		}
+		return;
+	}
+	
+	ofLogNotice("scVST") << "Adding MIDI CC " << ccNumber << " parameter";
+	
+	// Create MIDI CC parameter info
+	MidiCCParameter ccParam;
+	ccParam.ccNumber = ccNumber;
+	ccParam.value = 0.0f;
+	ccParam.displayName = "CC" + ofToString(ccNumber);
+	ccParam.enabled = true;
+	midiCCParameters[ccNumber] = ccParam;
+	
+	// Create GUI parameter
+	string paramName = "CC" + ofToString(ccNumber);
+	
+	// Ensure parameter name is unique
+	string uniqueParamName = paramName;
+	int nameCounter = 1;
+	while(getParameterGroup().contains(uniqueParamName)) {
+		uniqueParamName = paramName + "_" + ofToString(nameCounter);
+		nameCounter++;
+	}
+	
+	// Create float parameter
+	auto newParam = std::make_shared<ofParameter<float>>();
+	newParam->set(uniqueParamName, 0.0f, 0.0f, 1.0f);
+	
+	// Store parameter to keep it alive
+	dynamicMidiCCFloatParameters[ccNumber] = newParam;
+	
+	try {
+		auto oceanodeParam = addParameter(*newParam);
+		dynamicMidiCCParameters[ccNumber] = oceanodeParam;
+		
+		ofLogNotice("scVST") << "Successfully added MIDI CC parameter " << uniqueParamName;
+		
+		// Set up listener to send MIDI CC when parameter changes
+		listeners.push(newParam->newListener([this, ccNumber](float &value) -> void {
+			try {
+				if(this == nullptr) return;
+				
+				// Update parameter info
+				if(midiCCParameters.count(ccNumber) > 0) {
+					midiCCParameters[ccNumber].value = value;
+				}
+				
+				// Send MIDI CC if VST instances are available and not during preset loading
+				if(!isPresetLoading &&
+				   !synthInstances.empty() &&
+				   areAllInstancesReady()) {
+					
+					ofLogVerbose("scVST") << "Sending MIDI CC " << ccNumber
+										 << " = " << value << " to VST";
+					sendMidiCC(ccNumber, value);
+				}
+				
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Error in MIDI CC listener for CC " << ccNumber << ": " << e.what();
+			} catch(...) {
+				ofLogError("scVST") << "Unknown error in MIDI CC listener for CC " << ccNumber;
+			}
+		}));
+		
+		// Add name editor and removal button
+		addMidiCCNameEditor(ccNumber, uniqueParamName);
+		addMidiCCRemovalButton(ccNumber, uniqueParamName);
+		
+	} catch(const std::exception& e) {
+		ofLogError("scVST") << "Error adding MIDI CC parameter: " << e.what();
+		// Clean up on error
+		dynamicMidiCCFloatParameters.erase(ccNumber);
+		dynamicMidiCCParameters.erase(ccNumber);
+		midiCCParameters.erase(ccNumber);
+	}
+}
+
+void scVST::removeMidiCCParameter(int ccNumber) {
+	ofLogNotice("scVST") << "Removing MIDI CC " << ccNumber << " parameter";
+	
+	if(midiCCParameters.count(ccNumber) == 0) {
+		ofLogWarning("scVST") << "MIDI CC " << ccNumber << " not found";
+		return;
+	}
+	
+	string paramName = midiCCParameters[ccNumber].displayName;
+	
+	// Remove main parameter
+	if(dynamicMidiCCParameters.count(ccNumber) > 0) {
+		try {
+			string actualParamName = paramName;
+			if(!getParameterGroup().contains(actualParamName)) {
+				// Parameter might have been renamed, search for it
+				for(int i = 0; i < getParameterGroup().size(); i++) {
+					string currentName = getParameterGroup().get(i).getName();
+					if(currentName.find("CC" + ofToString(ccNumber)) == 0) {
+						actualParamName = currentName;
+						break;
+					}
+				}
+			}
+			
+			if(getParameterGroup().contains(actualParamName)) {
+				removeParameter(actualParamName);
+				ofLogNotice("scVST") << "Removed main MIDI CC parameter: " << actualParamName;
+			}
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error removing MIDI CC parameter: " << e.what();
+		}
+		dynamicMidiCCParameters.erase(ccNumber);
+	}
+	
+	// Remove stored float parameter
+	if(dynamicMidiCCFloatParameters.count(ccNumber) > 0) {
+		dynamicMidiCCFloatParameters.erase(ccNumber);
+	}
+	
+	// Remove name editor from inspector
+	if(dynamicMidiCCNameParameters.count(ccNumber) > 0) {
+		try {
+			vector<string> possibleNames = {
+				"CC" + ofToString(ccNumber) + "_Name",
+				"CC" + ofToString(ccNumber) + "_Name_1",
+				"CC" + ofToString(ccNumber) + "_Name_2"
+			};
+			
+			bool removed = false;
+			for(const string& possibleName : possibleNames) {
+				if(getInspectorParameterGroup().contains(possibleName)) {
+					removeInspectorParameter(possibleName);
+					ofLogNotice("scVST") << "Removed CC name editor: " << possibleName;
+					removed = true;
+					break;
+				}
+			}
+			
+			if(!removed) {
+				ofLogWarning("scVST") << "Could not find CC name editor to remove for CC " << ccNumber;
+			}
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error removing CC name editor: " << e.what();
+		}
+		dynamicMidiCCNameParameters.erase(ccNumber);
+	}
+	
+	// Remove removal button from inspector
+	if(dynamicMidiCCRemovalButtons.count(ccNumber) > 0) {
+		try {
+			vector<string> possibleNames = {
+				"Remove CC" + ofToString(ccNumber),
+				"Remove CC" + ofToString(ccNumber) + "_1",
+				"Remove CC" + ofToString(ccNumber) + "_2"
+			};
+			
+			bool removed = false;
+			for(const string& possibleName : possibleNames) {
+				if(getInspectorParameterGroup().contains(possibleName)) {
+					removeInspectorParameter(possibleName);
+					ofLogNotice("scVST") << "Removed CC removal button: " << possibleName;
+					removed = true;
+					break;
+				}
+			}
+			
+			if(!removed) {
+				ofLogWarning("scVST") << "Could not find CC removal button to remove for CC " << ccNumber;
+			}
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error removing CC removal button: " << e.what();
+		}
+		dynamicMidiCCRemovalButtons.erase(ccNumber);
+	}
+	
+	// Remove from parameter info map
+	midiCCParameters.erase(ccNumber);
+	
+	ofLogNotice("scVST") << "Finished removing MIDI CC " << ccNumber;
+}
+
+void scVST::removeAllMidiCCParameters() {
+	ofLogNotice("scVST") << "Removing all MIDI CC parameters";
+	
+	try {
+		// Create a copy of the keys to avoid iterator invalidation
+		vector<int> ccNumbers;
+		for(auto& ccParam : midiCCParameters) {
+			ccNumbers.push_back(ccParam.first);
+		}
+		
+		// Remove each CC parameter individually
+		for(int ccNumber : ccNumbers) {
+			try {
+				removeMidiCCParameter(ccNumber);
+			} catch(const std::exception& e) {
+				ofLogWarning("scVST") << "Error removing MIDI CC " << ccNumber << ": " << e.what();
+			} catch(...) {
+				ofLogWarning("scVST") << "Unknown error removing MIDI CC " << ccNumber;
+			}
+		}
+		
+		// Force clear all maps as safety measure
+		try {
+			midiCCParameters.clear();
+			dynamicMidiCCParameters.clear();
+			dynamicMidiCCFloatParameters.clear();
+			dynamicMidiCCNameParameters.clear();
+			dynamicMidiCCRemovalButtons.clear();
+		} catch(...) {}
+		
+		ofLogNotice("scVST") << "Finished removing all MIDI CC parameters";
+		
+	} catch(const std::exception& e) {
+		ofLogError("scVST") << "Error in removeAllMidiCCParameters: " << e.what();
+	} catch(...) {
+		ofLogError("scVST") << "Unknown error in removeAllMidiCCParameters";
+	}
+}
+
+void scVST::sendMidiCC(int ccNumber, float value) {
+	// Safety checks
+	if(ccNumber < 1 || ccNumber > 127) {
+		ofLogError("scVST") << "Invalid MIDI CC number: " << ccNumber;
+		return;
+	}
+	
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available for MIDI CC";
+		return;
+	}
+	
+	// Convert float (0.0-1.0) to MIDI value (0-127)
+	int midiValue = (int)(ofClamp(value, 0.0f, 1.0f) * 127.0f);
+	
+	ofLogVerbose("scVST") << "Sending MIDI CC " << ccNumber << " = " << midiValue
+						  << " (float: " << value << ") to all VST instances";
+	
+	// Send to all instances
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				try {
+					// Use existing sendMidiToInstance method with CC message (0xB0)
+					sendMidiToInstance(serverInstances.first, synth, midiChannel.get(), 0xB0, ccNumber, midiValue);
+				} catch(const std::exception& e) {
+					ofLogError("scVST") << "Error sending MIDI CC to synth " << synth->nodeID << ": " << e.what();
+				}
+			}
+		}
+	}
+}
+
+void scVST::addMidiCCNameEditor(int ccNumber, const string& paramName) {
+	string nameEditorName = paramName + "_Name";
+	string uniqueNameEditorName = nameEditorName;
+	int nameEditorCounter = 1;
+	while(getInspectorParameterGroup().contains(uniqueNameEditorName)) {
+		uniqueNameEditorName = nameEditorName + "_" + ofToString(nameEditorCounter);
+		nameEditorCounter++;
+	}
+	
+	auto nameEditor = std::make_shared<ofParameter<string>>();
+	nameEditor->set(uniqueNameEditorName, midiCCParameters[ccNumber].displayName);
+	
+	dynamicMidiCCNameParameters[ccNumber] = nameEditor;
+	addInspectorParameter(*nameEditor);
+	
+	// Set up name change listener
+	listeners.push(nameEditor->newListener([this, ccNumber](string &newName) -> void {
+		if(this == nullptr) return;
+		
+		if(!newName.empty() && midiCCParameters.count(ccNumber) > 0) {
+			string oldName = midiCCParameters[ccNumber].displayName;
+			midiCCParameters[ccNumber].displayName = newName;
+			ofLogNotice("scVST") << "Renamed MIDI CC " << ccNumber << " from '" << oldName << "' to '" << newName << "'";
+		}
+	}));
+}
+
+void scVST::addMidiCCRemovalButton(int ccNumber, const string& paramName) {
+	string removeButtonName = "Remove " + paramName;
+	string uniqueRemoveButtonName = removeButtonName;
+	int removeNameCounter = 1;
+	while(getInspectorParameterGroup().contains(uniqueRemoveButtonName)) {
+		uniqueRemoveButtonName = removeButtonName + "_" + ofToString(removeNameCounter);
+		removeNameCounter++;
+	}
+	
+	auto removeButton = std::make_shared<ofParameter<void>>();
+	removeButton->set(uniqueRemoveButtonName);
+	
+	dynamicMidiCCRemovalButtons[ccNumber] = removeButton;
+	addInspectorParameter(*removeButton);
+	
+	listeners.push(removeButton->newListener([this, ccNumber](){
+		ofLogNotice("scVST") << "Removing MIDI CC " << ccNumber << " via individual button";
+		removeMidiCCParameter(ccNumber);
+	}));
+}
+
+void scVST::propagateFirstInstanceViaFXP() {
+	if(synthInstances.empty()) {
+		ofLogWarning("scVST") << "No VST instances available for propagation";
+		return;
+	}
+	
+	// Find first instance
+	ofxSCSynth* firstInstance = nullptr;
+	ofxSCServer* firstServer = nullptr;
+	
+	for(auto& serverInstances : synthInstances) {
+		if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
+			firstInstance = serverInstances.second[0];
+			firstServer = serverInstances.first;
+			break;
+		}
+	}
+	
+	if(!firstInstance || !firstServer) {
+		ofLogError("scVST") << "Could not find first VST instance for propagation";
+		return;
+	}
+	
+	ofLogNotice("scVST") << "Propagating complete VST state from instance " << firstInstance->nodeID;
+	
+	// Create temporary FXP file for propagation
+	string tempPropagatePathLocal = createTempPropagateFXPPath();
+	
+	// Set up listener for write completion
+	bool propagateWriteComplete = false;
+	bool propagateWriteSuccess = false;
+	
+	auto writeListener = std::make_shared<ofEventListener>();
+	*writeListener = firstInstance->newFeedbackMessage.newListener([&propagateWriteComplete, &propagateWriteSuccess, firstInstance](ofxOscMessage& msg) -> void {
+		if(msg.getAddress() == "/vst_program_write") {
+			if(msg.getNumArgs() >= 3) {
+				int nodeID = msg.getArgAsInt32(0);
+				if(nodeID == firstInstance->nodeID) {
+					propagateWriteSuccess = msg.getArgAsFloat(2) > 0.5f;
+					propagateWriteComplete = true;
+				}
+			}
+		}
+	});
+	
+	// Request first instance to save its current state
+	ofxOscMessage writeMsg;
+	writeMsg.setAddress("/u_cmd");
+	writeMsg.addIntArg(firstInstance->nodeID);
+	writeMsg.addIntArg(2);
+	writeMsg.addStringArg("/program_write");
+	writeMsg.addStringArg(tempPropagatePathLocal);
+	writeMsg.addIntArg(1); // async = true
+	firstServer->sendMsg(writeMsg);
+	
+	// Wait for write completion with active processing
+	ofLogNotice("scVST") << "Waiting for FXP save from first instance...";
+	int maxWait = 50; // 5 seconds
+	int waitCount = 0;
+	
+	while(!propagateWriteComplete && waitCount < maxWait) {
+		firstServer->process();
+		ofSleepMillis(100);
+		waitCount++;
+	}
+	
+	if(propagateWriteComplete && propagateWriteSuccess) {
+		ofLogNotice("scVST") << "✅ FXP saved, now applying to other instances...";
+		
+		// Apply to all OTHER instances (skip first)
+		int appliedCount = 0;
+		bool skipFirst = true;
+		
+		for(auto& serverInstances : synthInstances) {
+			if(serverInstances.first == nullptr) continue;
+			
+			for(auto synth : serverInstances.second) {
+				if(synth != nullptr) {
+					// Skip the first instance (source)
+					if(skipFirst) {
+						skipFirst = false;
+						continue;
+					}
+					
+					ofLogNotice("scVST") << "📤 Applying FXP to instance " << synth->nodeID;
+					
+					// Send program_read command
+					ofxOscMessage readMsg;
+					readMsg.setAddress("/u_cmd");
+					readMsg.addIntArg(synth->nodeID);
+					readMsg.addIntArg(2);
+					readMsg.addStringArg("/program_read");
+					readMsg.addStringArg(tempPropagatePathLocal);
+					readMsg.addIntArg(1); // async = true
+					serverInstances.first->sendMsg(readMsg);
+					
+					appliedCount++;
+					
+					// Small delay between instances to avoid overwhelming
+					ofSleepMillis(50);
+				}
+			}
+		}
+		
+		ofLogNotice("scVST") << "✅ Propagated FXP to " << appliedCount << " instances";
+		
+		// Clean up temp file after a delay
+		ofSleepMillis(1000); // Give time for all loads to complete
+		try {
+			ofFile::removeFile(tempPropagatePathLocal);
+			ofLogVerbose("scVST") << "Cleaned up propagate FXP file";
+		} catch(...) {
+			ofLogWarning("scVST") << "Could not clean up propagate FXP file";
+		}
+		
+	} else {
+		ofLogError("scVST") << "❌ Failed to save FXP from first instance - propagation aborted";
+		
+		// Clean up temp file
+		try {
+			ofFile::removeFile(tempPropagatePathLocal);
+		} catch(...) {}
+	}
+}
+
+// Add this helper method to scVST.cpp:
+std::string scVST::createTempPropagateFXPPath() {
+	std::string tempDir = ofFilePath::getUserHomeDir() + "/.tmp/";
+	ofDirectory::createDirectory(tempDir, true, true);
+	
+	std::string safeName = getNodeCacheKey();
+	// Replace any problematic characters in node name
+	std::replace(safeName.begin(), safeName.end(), '/', '_');
+	std::replace(safeName.begin(), safeName.end(), '\\', '_');
+	std::replace(safeName.begin(), safeName.end(), ':', '_');
+	std::replace(safeName.begin(), safeName.end(), ' ', '_');
+	
+	std::string filename = "oceanode_vst_propagate_" + safeName + "_" + ofToString(ofGetElapsedTimeMillis()) + ".fxp";
+	return tempDir + filename;
 }

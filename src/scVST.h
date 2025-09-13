@@ -100,6 +100,18 @@ public:
 			} catch(...) {
 				ofLogWarning("scVST") << "Unknown error clearing maps";
 			}
+
+			try {
+				midiCCParameters.clear();
+				dynamicMidiCCParameters.clear();
+				dynamicMidiCCFloatParameters.clear();
+				dynamicMidiCCNameParameters.clear();
+				dynamicMidiCCRemovalButtons.clear();
+			} catch(const std::exception& e) {
+				ofLogWarning("scVST") << "Error clearing MIDI CC maps: " << e.what();
+			} catch(...) {
+				ofLogWarning("scVST") << "Unknown error clearing MIDI CC maps";
+			}
 			
 		} catch(const std::exception& e) {
 			ofLogError("scVST") << "Error in scVST destructor: " << e.what();
@@ -137,6 +149,17 @@ public:
 protected:
 	
 private:
+	
+	struct MidiCCParameter {
+		int ccNumber;
+		float value;
+		std::string displayName;
+		bool enabled;
+		
+		MidiCCParameter() : ccNumber(0), value(0.0f), displayName(""), enabled(true) {}
+		MidiCCParameter(int cc, const std::string& name)
+			: ccNumber(cc), value(0.0f), displayName(name), enabled(true) {}
+	};
 	
 	
 	void searchForVSTPlugins();
@@ -379,6 +402,29 @@ private:
 	// Bus management - now handles multiple instances per server
 	std::map<ofxSCServer*, std::map<int, int>> outputBuses;
 	std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
+	
+	//MIDI CC
+	std::map<int, MidiCCParameter> midiCCParameters; // CC number -> parameter info
+	std::map<int, shared_ptr<ofxOceanodeParameter<float>>> dynamicMidiCCParameters; // CC -> GUI parameter
+	std::map<int, shared_ptr<ofParameter<float>>> dynamicMidiCCFloatParameters; // Keep parameters alive
+	std::map<int, shared_ptr<ofParameter<string>>> dynamicMidiCCNameParameters; // CC name editors
+	std::map<int, shared_ptr<ofParameter<void>>> dynamicMidiCCRemovalButtons; // CC removal buttons
+	
+	// MIDI CC control parameters
+	ofParameter<void> addMidiCC;
+	ofParameter<int> midiCCToAdd;
+	ofParameter<void> removeAllMidiCC;
+	
+	// MIDI CC methods (add to private section)
+	void addMidiCCParameter(int ccNumber);
+	void removeMidiCCParameter(int ccNumber);
+	void removeAllMidiCCParameters();
+	void sendMidiCC(int ccNumber, float value);
+	void addMidiCCNameEditor(int ccNumber, const string& paramName);
+	void addMidiCCRemovalButton(int ccNumber, const string& paramName);
+	
+	void propagateFirstInstanceViaFXP();
+		std::string createTempPropagateFXPPath();
 };
 
 #endif /* scVST_h */
