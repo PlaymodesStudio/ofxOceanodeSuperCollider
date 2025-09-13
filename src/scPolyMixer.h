@@ -15,6 +15,9 @@
 #include <mutex>
 #include <set>
 #include <map>
+#include <atomic>
+#include <thread>
+#include <chrono>
 
 class ofxSCSynth;
 class ofxSCServer;
@@ -169,10 +172,17 @@ private:
 	void syncGainVecToTrackLevels();
 	void syncTrackLevelsToGainVec();
 	
-	// Deferred parameter removal to avoid rendering crashes
-	void deferredParameterRemoval();
-	std::vector<std::string> parametersToRemove;
-	bool hasPendingRemovals;
+	
+	// VU meter bus management - missing from original implementation
+	std::map<ofxSCServer*, std::vector<ofxSCBus*>> trackVUBuses;
+	ofxSCBus* masterVUBus = nullptr;
+	
+	   
+	void safeSetInputBus(ofxSCServer* server, scNode* node, int bus);
+	void disableAllVUMeters(ofxSCServer* server);
+	void enableAllVUMeters(ofxSCServer* server);	
+	void restoreTrackParameters(ofxSCServer* server, int trackIndex);
+
 };
 
 #endif /* scPolyMixer_h */
