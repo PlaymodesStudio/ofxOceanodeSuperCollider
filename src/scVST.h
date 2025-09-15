@@ -424,7 +424,23 @@ private:
 	void addMidiCCRemovalButton(int ccNumber, const string& paramName);
 	
 	void propagateFirstInstanceViaFXP();
-		std::string createTempPropagateFXPPath();
+	std::string createTempPropagateFXPPath();
+	
+	// MIDI Output parameters
+	ofParameter<vector<float>> noteOut;    // 128 elements: note velocity (0=off, >0=velocity)
+	ofParameter<vector<float>> ccOut;      // 128 elements: CC values (0.0-1.0)
+
+	// MIDI output 
+	vector<float> currentNoteStates;       // Track current note velocities
+	vector<float> currentCCStates;         // Track current CC values
+	void handleVSTMidi(ofxOscMessage& msg);
+	
+	// MIDI output batching for performance
+	bool midiOutputDirty;
+	uint64_t lastMidiUpdateTime;
+	std::mutex midiUpdateMutex;
+	void updateMidiOutputs();
+
 };
 
 #endif /* scVST_h */

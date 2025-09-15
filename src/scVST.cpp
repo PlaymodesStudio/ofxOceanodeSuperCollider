@@ -39,6 +39,11 @@ scVST::scVST() : scNode("VST") {
 	lastParameterChangeTime = 0;
 	parameterDebounceDelay = 1000; // 1 second default debounce
 	parameterCacheScheduled = false;
+	
+	// Add to constructor:
+	midiOutputDirty = false;
+	lastMidiUpdateTime = 0;
+
 }
 
 void scVST::setup(){
@@ -117,6 +122,27 @@ void scVST::setup(){
 	transportFeedbackClearTime = 0;
 	lastKnownPosition = 0.0f;
 	isTransportQuerying = false;
+	
+	// MIDI Output section
+	addCustomRegion(
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
+		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
+	);
+
+	// Initialize MIDI output vectors (128 elements each)
+	vector<float> initialNoteVector(128, 0.0f);  // All notes off initially
+	vector<float> initialCCVector(128, 0.0f);    // All CCs at 0 initially
+
+	addOutputParameter(noteOut.set("Note Out", initialNoteVector,
+								   vector<float>(128, 0.0f),
+								   vector<float>(128, 1.0f)));
+	addOutputParameter(ccOut.set("CC Out", initialCCVector,
+								vector<float>(128, 0.0f),
+								vector<float>(128, 1.0f)));
+
+	// Initialize state tracking
+	currentNoteStates = initialNoteVector;
+	currentCCStates = initialCCVector;
 	
 	// MIDI CC Parameters section
 	addCustomRegion(
@@ -332,6 +358,8 @@ void scVST::setup(){
 					);
 	
 	listeners.push(ofEvents().update.newListener([this](ofEventArgs&) {
+		updateMidiOutputs();
+		
 		if(transportFeedbackSuppressed) {
 			uint64_t currentTime = ofGetElapsedTimeMillis();
 			if(currentTime >= transportFeedbackClearTime) {
@@ -2772,6 +2800,9 @@ void scVST::buildSynth(ofxSCServer* server) {
 					else if (address == "/vst_open") {
 						this->handleVSTOpen(msg);
 					}
+					else if (address == "/vst_midi") {
+						this->handleVSTMidi(msg);
+					}
 					else if (address == "/vst_program_index") {
 						// Handle program index changes
 						if (msg.getNumArgs() >= 3) {
@@ -4746,7 +4777,6 @@ void scVST::propagateFirstInstanceViaFXP() {
 	}
 }
 
-// Add this helper method to scVST.cpp:
 std::string scVST::createTempPropagateFXPPath() {
 	std::string tempDir = ofFilePath::getUserHomeDir() + "/.tmp/";
 	ofDirectory::createDirectory(tempDir, true, true);
@@ -4761,3 +4791,98 @@ std::string scVST::createTempPropagateFXPPath() {
 	std::string filename = "oceanode_vst_propagate_" + safeName + "_" + ofToString(ofGetElapsedTimeMillis()) + ".fxp";
 	return tempDir + filename;
 }
+
+void scVST::handleVSTMidi(ofxOscMessage& msg) {
+	if (msg.getNumArgs() >= 3) {
+		int nodeID = msg.getArgAsInt32(0);
+		
+		// Quick checks without logging
+		if (!isMyVSTInstance(nodeID)) return;
+		
+		int instanceIndex = getInstanceIndexFromNodeID(nodeID);
+		if(instanceIndex != 0) return; // Only first instance
+		
+		// Extract MIDI bytes
+		vector<uint8_t> midiBytes;
+		for(int i = 2; i < msg.getNumArgs(); i++) {
+			midiBytes.push_back((uint8_t)msg.getArgAsFloat(i));
+		}
+		
+		if(midiBytes.size() >= 2) {
+			uint8_t status = midiBytes[0];
+			uint8_t statusType = status & 0xF0;
+			
+			// Skip timing messages
+			if(status >= 0xF8) return;
+			
+			bool dataChanged = false;
+			
+			{
+				std::lock_guard<std::mutex> lock(midiUpdateMutex);
+				
+				if(statusType == 0x90 && midiBytes.size() >= 3) {
+					// Note On
+					uint8_t note = midiBytes[1] & 0x7F;
+					uint8_t velocity = midiBytes[2] & 0x7F;
+					
+					if(note < 128) {
+						float newValue = (velocity > 0) ? (velocity / 127.0f) : 0.0f;
+						if(currentNoteStates[note] != newValue) {
+							currentNoteStates[note] = newValue;
+							dataChanged = true;
+						}
+					}
+				}
+				else if(statusType == 0x80 && midiBytes.size() >= 3) {
+					// Note Off
+					uint8_t note = midiBytes[1] & 0x7F;
+					
+					if(note < 128 && currentNoteStates[note] != 0.0f) {
+						currentNoteStates[note] = 0.0f;
+						dataChanged = true;
+					}
+				}
+				else if(statusType == 0xB0 && midiBytes.size() >= 3) {
+					// Control Change
+					uint8_t ccNumber = midiBytes[1] & 0x7F;
+					uint8_t ccValue = midiBytes[2] & 0x7F;
+					
+					if(ccNumber < 128) {
+						float newValue = ccValue / 127.0f;
+						if(abs(currentCCStates[ccNumber] - newValue) > 0.001f) {
+							currentCCStates[ccNumber] = newValue;
+							dataChanged = true;
+						}
+					}
+				}
+				
+				if(dataChanged) {
+					midiOutputDirty = true;
+				}
+			}
+		}
+	}
+}
+
+void scVST::updateMidiOutputs() {
+	if(!midiOutputDirty) return;
+	
+	uint64_t currentTime = ofGetElapsedTimeMillis();
+	
+	// Limit updates to ~60fps (16ms intervals) to match Oceanode's refresh
+	if(currentTime - lastMidiUpdateTime < 16) return;
+	
+	{
+		std::lock_guard<std::mutex> lock(midiUpdateMutex);
+		if(midiOutputDirty) {
+			// Update both parameters in one batch
+			noteOut = currentNoteStates;
+			ccOut = currentCCStates;
+			
+			midiOutputDirty = false;
+			lastMidiUpdateTime = currentTime;
+		}
+	}
+}
+
+
