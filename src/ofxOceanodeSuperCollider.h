@@ -17,7 +17,7 @@
 //#include "scOut.h"
 #include "scTonal.h"
 #include "scBuffer.h"
-#include "scRecbuf.h"
+#include "scRecbufHold.h"
 #include "scBufferScope.h"
 #include "scFreezer.h"
 #include "scCustomBuffer.h"
@@ -36,8 +36,8 @@
 #include "ofxSCServer.h"
 
 #include "scVST.h"
-#include "scVSTI.h"
 #include "scPolyMixer.h"
+#include "scFunction.h"
 
 namespace ofxOceanodeSuperCollider{
 
@@ -106,7 +106,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scInfo>("SuperCollider", controller->getServers());
 	o.registerModel<scBuffer>("SuperCollider", controller->getServers());
 	o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
-	o.registerModel<scRecbuf>("SuperCollider", controller->getServers());
+	o.registerModel<scRecbufHold>("SuperCollider", controller->getServers());
 	o.registerModel<scBufferAllocator>("SuperCollider", controller->getServers());
 	o.registerModel<scBufferscope>("SuperCollider", controller->getServers());
 	o.registerModel<scOutput>("SuperCollider", controller->getServers());
@@ -120,9 +120,9 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scA2k>("SuperCollider", controller->getServers());
 	o.registerModel<scConvolution>("SuperCollider", controller->getServers());
 	o.registerModel<scBeatTracker>("SuperCollider", controller->getServers());
-	o.registerModel<scVSTI>("SuperCollider");
 	o.registerModel<scVST>("SuperCollider");
 	o.registerModel<scPolyMixer>("SuperCollider");
+	o.registerModel<scFunction>("SuperCollider");
 
 }
 
