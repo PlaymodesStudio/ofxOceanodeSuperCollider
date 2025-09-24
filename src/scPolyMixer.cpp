@@ -565,20 +565,16 @@ void scPolyMixer::recreateVUBuses(ofxSCServer* server) {
 	
 	// Clean up existing buses
 	if(trackVUBuses.count(server) > 0) {
-		auto busesToDelete = trackVUBuses[server];
-		trackVUBuses[server].clear();
-		
-		for(auto bus : busesToDelete) {
-			if(bus != nullptr) {
-				try {
-					bus->free();
+			for(auto bus : trackVUBuses[server]) {
+				if(bus != nullptr) {
+					bus->free(); // This should set controlBusses[index] = NULL
 					delete bus;
-				} catch(...) {
-					// Ignore deletion errors
 				}
 			}
+			trackVUBuses[server].clear();
 		}
-	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
 	
 	trackVUBuses[server].resize(numTracksCount, nullptr);
 	
@@ -1023,9 +1019,11 @@ void scPolyMixer::removeAllInputParameters() {
 		createTrackInstances(server);
 		
 		// ONLY create VU meter buses if enabled
+		/*
 		if(ENABLE_VU_METERS) {
 			createVUMeterBuses(server);
 		}
+		 */
 	}
 	
 void scPolyMixer::createSynth(ofxSCServer* server) {
@@ -1383,6 +1381,9 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 				}
 			}
 		}
+		
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
 	}
 	
 	void scPolyMixer::createVUMeterBuses(ofxSCServer* server) {
