@@ -29,6 +29,8 @@ void scNode::addInput(std::string name){
         *availableInput = port;
         for(auto &output : outputs) output = output;
     }));
+}
+
 void scNode::removeInput(int index) {
 	if(index < 0 || index >= inputs.size()) {
 		return;
