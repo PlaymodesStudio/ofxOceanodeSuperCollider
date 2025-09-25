@@ -49,12 +49,24 @@ void scOldSynthdef::setup(){
                                 vector<int>(1, ofToInt(specMap["maxval"]))));
             string toSendName = ofToLower(spec.first);
             listeners.push(vi.newListener([this, toSendName](vector<int> &vi_){
+                for(auto i : vi_) {
+                    if(std::isnan(i)){
+                        ofLog() << "Trying to send a nan value";
+                        return;
+                    }
+                }
                 for(auto synthServer : synths){
                     if(vi_.size() == 1) synthServer.second->setMultiple(toSendName, vi_[0], numChannels);
                     else synthServer.second->set(toSendName, vi_);
                 }
             }));
             listeners.push(resendParams.newListener([this, vi, toSendName]{
+                for(auto i : vi.get()) {
+                    if(std::isnan(i)){
+                        ofLog() << "Trying to send a nan value";
+                        return;
+                    }
+                }
                 for(auto synthServer : synths){
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
@@ -68,12 +80,24 @@ void scOldSynthdef::setup(){
                                 vector<float>(1, ofToFloat(specMap["maxval"]))));
             string toSendName = ofToLower(spec.first);
             listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
+                for(auto f : vf_) {
+                    if(std::isnan(f)){
+                        ofLog() << "Trying to send a nan value";
+                        return;
+                    }
+                }
                 for(auto synthServer : synths){
                     if(vf_.size() == 1) synthServer.second->setMultiple(toSendName, vf_[0], numChannels);
                     else synthServer.second->set(toSendName, vf_);
                 }
             }));
             listeners.push(resendParams.newListener([this, vf, toSendName]{
+                for(auto f : vf.get()) {
+                    if(std::isnan(f)){
+                        ofLog() << "Trying to send a nan value";
+                        return;
+                    }
+                }
                 for(auto synthServer : synths){
                     if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
                     else synthServer.second->set(toSendName, vf);
@@ -88,11 +112,19 @@ void scOldSynthdef::setup(){
                                 ofToInt(specMap["maxval"])));
             string toSendName = ofToLower(spec.first);
             listeners.push(i.newListener([this, toSendName](int &i_){
+                if(std::isnan(i_)){
+                    ofLog() << "Trying to send a nan value";
+                    return;
+                }
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, i_);
                 }
             }));
             listeners.push(resendParams.newListener([this, i, toSendName]{
+                if(std::isnan(i.get())){
+                    ofLog() << "Trying to send a nan value";
+                    return;
+                }
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, i);
                 }
@@ -105,11 +137,19 @@ void scOldSynthdef::setup(){
                                 ofToFloat(specMap["maxval"])));
             string toSendName = ofToLower(spec.first);
             listeners.push(f.newListener([this, toSendName](float &f_){
+                if(std::isnan(f_)){
+                    ofLog() << "Trying to send a nan value";
+                    return;
+                }
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, f_);
                 }
             }));
             listeners.push(resendParams.newListener([this, f, toSendName]{
+                if(std::isnan(f.get())){
+                    ofLog() << "Trying to send a nan value";
+                    return;
+                }
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, f);
                 }

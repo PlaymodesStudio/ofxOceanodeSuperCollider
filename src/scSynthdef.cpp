@@ -86,6 +86,12 @@ void scSynthdef::setup(){
                                 vector<int>(1, ofToInt(specMap["maxval"]))));
             
             setValuesToSynths = [this, toSendName, vi](){
+                for(auto i : vi.get()) {
+                    if(std::isnan(i)){
+                        ofLog() << "Trying to send a nan value";
+                        return;
+                    }
+                }
                 for(auto synthServer : synths){
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
@@ -104,6 +110,12 @@ void scSynthdef::setup(){
                                 vector<float>(1, ofToFloat(specMap["maxval"]))));
             
             setValuesToSynths = [this, toSendName, vf](){
+                for(auto f : vf.get()) {
+                    if(std::isnan(f)){
+                        ofLog() << "Trying to send a nan value";
+                        return;
+                    }
+                }
                 for(auto synthServer : synths){
                     if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
                     else synthServer.second->set(toSendName, vf);
@@ -123,6 +135,10 @@ void scSynthdef::setup(){
                                 ofToInt(specMap["maxval"])));
             
             setValuesToSynths = [this, toSendName, i](){
+                if(std::isnan(i.get())){
+                    ofLog() << "Trying to send a nan value";
+                    return;
+                }
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, i);
                 }
@@ -140,6 +156,10 @@ void scSynthdef::setup(){
                                 ofToFloat(specMap["maxval"])));
             
             setValuesToSynths = [this, toSendName, f](){
+                if(std::isnan(f.get())){
+                    ofLog() << "Trying to send a nan value";
+                    return;
+                }
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, f);
                 }
@@ -157,6 +177,10 @@ void scSynthdef::setup(){
                                 ofToBool(specMap["maxval"])));
             
             setValuesToSynths = [this, toSendName, b](){
+                if(std::isnan(b.get())){
+                    ofLog() << "Trying to send a nan value";
+                    return;
+                }
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, b);
                 }
@@ -171,6 +195,12 @@ void scSynthdef::setup(){
             addParameter(vi.set(paramName, {-1}, {-1}, {INT_MAX}));
             
             setValuesToSynths = [this, toSendName, vi](){
+                for(auto i : vi.get()) {
+                    if(std::isnan(i)){
+                        ofLog() << "Trying to send a nan value";
+                        return;
+                    }
+                }
                 for(auto synthServer : synths){
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
@@ -188,6 +218,12 @@ void scSynthdef::setup(){
             parameterReference = addParameterDropdown(vi, paramName, ofToInt(specMap["default"]), splitString);
             
             setValuesToSynths = [this, toSendName, vi](){
+                for(auto i : vi.get()) {
+                    if(std::isnan(i)){
+                        ofLog() << "Trying to send a nan value";
+                        return;
+                    }
+                }
                 for(auto synthServer : synths){
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
@@ -206,6 +242,12 @@ void scSynthdef::setup(){
             parameterReference = addParameterDropdown(vf, paramName, ofToInt(specMap["default"]), splitString);
             
             setValuesToSynths = [this, toSendName, vf](){
+                for(auto f : vf.get()) {
+                    if(std::isnan(f)){
+                        ofLog() << "Trying to send a nan value";
+                        return;
+                    }
+                }
                 for(auto synthServer : synths){
                     if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
                     else synthServer.second->set(toSendName, vf);
