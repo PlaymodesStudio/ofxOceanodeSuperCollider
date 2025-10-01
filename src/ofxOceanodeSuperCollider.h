@@ -30,6 +30,8 @@
 #include "scRave.h"
 #include "scWavescope.h"
 #include "scWavescope2.h"
+#include "scWavescope3.h"
+#include "scVUMeter.h"
 #include "scOutput.h"
 #include "scNode.h"
 #include "ofxOceanodeSuperColliderController.h"
@@ -117,11 +119,13 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scFreezer>("SuperCollider");
 	o.registerModel<scWavescope>("SuperCollider", controller->getServers());
 	o.registerModel<scWavescope2>("SuperCollider", controller->getServers());
+	o.registerModel<scWavescope3>("SuperCollider", controller->getServers());
 	o.registerModel<scA2k>("SuperCollider", controller->getServers());
 	o.registerModel<scConvolution>("SuperCollider", controller->getServers());
 	o.registerModel<scBeatTracker>("SuperCollider", controller->getServers());
 	o.registerModel<scVST>("SuperCollider");
 	o.registerModel<scPolyMixer>("SuperCollider");
+	o.registerModel<scVUMeter>("SuperCollider");
 	o.registerModel<scFunction>("SuperCollider");
 
 }
