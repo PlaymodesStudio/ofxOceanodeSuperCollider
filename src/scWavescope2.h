@@ -8,7 +8,6 @@ class scWavescope2 : public ofxOceanodeNodeModel {
 public:
 	scWavescope2(vector<serverManager*> outputServers) : ofxOceanodeNodeModel("Wavescope2"), servers(outputServers){
 		synth = nullptr;
-		waveformBus = nullptr;
 		
 		// Frame-based capture settings
 		frameRate = 60.0f;
@@ -21,11 +20,11 @@ public:
 		slidingBuffer.resize(maxBufferSize * 24, 0.0f); // Max 24 channels
 		writeIndex = 0;
 		
-		// OSC setup for additional phase tracking
-		setupPhaseListener();
 	}
 	
 	void setup(){
+		loadServerConfig();
+
 		addParameter(showWindow.set("Show", false));
 		addParameter(input.set("In", nodePort()), ofxOceanodeParameterFlags_DisableOutConnection);
 		addParameter(serverIndex.set("Server", 0, 0, servers.size()-1));
@@ -57,7 +56,6 @@ public:
 			if(port.getNodeRef() != nullptr) recreateSynth();
 			else {
 				if(synth){ synth->free(); delete synth; synth = nullptr; }
-				if(waveformBus){ waveformBus->free(); delete waveformBus; waveformBus = nullptr; }
 			}
 		}));
 
@@ -75,67 +73,58 @@ public:
 		}));
 	}
 	
-	void setupPhaseListener(){
-		// Setup OSC receiver for phase updates from SuperCollider
-		phaseReceiver.setup(57120); // Default SC port
-	}
 	
 	void update(ofEventArgs &) override{
-		// Process OSC messages for phase tracking
-		while(phaseReceiver.hasWaitingMessages()){
-			ofxOscMessage m;
-			phaseReceiver.getNextMessage(m);
-			
-			// Handle phase messages
-			if(m.getAddress() == "/wavescope_phase" && m.getNumArgs() >= 2){
-				float newPhase = m.getArgAsFloat(0);
-				int channels = m.getArgAsInt(1);
-				
-				// Debug output (comment out in production)
-				// ofLogNotice("scWavescope2") << "Received phase: " << newPhase << " for " << channels << " channels";
-				
-				if(!freeze.get()){
-					currentWritePhase = newPhase;
-				}
-			}
-		}
-		
-		// Original bus reading logic
-		if(!synth || !waveformBus) return;
-		if(waveformBus->index < 0) return;
-
-		auto newFrameData = waveformBus->readValues;
-		int expectedFrameSize = numChannels.get() * samplesPerFrame;
-
-		if(newFrameData.size() != expectedFrameSize){
-			newFrameData.resize(expectedFrameSize, 0.0f);
-		}
+		if(!synth || controlBuses.empty()) return;
 
 		if(!freeze.get()){
-			// Slide buffer and insert new frame
-			slideBufferAndInsertFrame(newFrameData);
+			for(auto bus : controlBuses) {
+				if(bus != nullptr) {
+					bus->requestValues();
+				}
+			}
+			
+			vector<float> frameData(controlBuses.size(), 0.0f);
+			
+			// Map physical bus indices to data positions
+			int lowestBusIndex = controlBuses[0]->index;
+			for(auto bus : controlBuses) {
+				if(bus->index < lowestBusIndex) lowestBusIndex = bus->index;
+			}
+			
+			// Read data based on physical bus order, not array order
+			for(int i = 0; i < controlBuses.size(); i++) {
+				if(controlBuses[i] != nullptr) {
+					int physicalBus = controlBuses[i]->index;
+					int dataPosition = physicalBus - lowestBusIndex;
+					if(dataPosition >= 0 && dataPosition < frameData.size()) {
+						frameData[dataPosition] = controlBuses[i]->readValues[0];
+					}
+				}
+			}
+			
+			slideBufferAndInsertFrame(frameData);
 			
 			if(autoGain.get()){
 				updateAutoGain();
 			}
 		}
-		
-		waveformBus->requestValues();
 	}
 	
 	void slideBufferAndInsertFrame(const vector<float>& frameData){
 		int numChans = numChannels.get();
-
-		// Sanity check
-		if((int)frameData.size() != numChans * samplesPerFrame){
-			ofLogError("slideBuffer") << "Unexpected frame size: " << frameData.size()
-									  << " (expected: " << numChans * samplesPerFrame << ")";
+		int expectedSize = numChans * samplesPerFrame;
+		
+		if(frameData.size() != expectedSize){
+			ofLogWarning("scWavescope2") << "Frame data size mismatch: "
+				<< frameData.size() << " expected: " << expectedSize;
 			return;
 		}
-
+		
+		// Slide buffer with correctly ordered data (already handled bus order in update())
 		for(int ch = 0; ch < numChans; ch++){
 			int channelOffset = ch * maxBufferSize;
-
+			
 			// Shift left by samplesPerFrame
 			memmove(&slidingBuffer[channelOffset],
 					&slidingBuffer[channelOffset + samplesPerFrame],
@@ -143,8 +132,8 @@ public:
 
 			// Insert new samples at end
 			for(int i = 0; i < samplesPerFrame; i++){
-				int interleavedIdx = i * numChans + ch;
-				slidingBuffer[channelOffset + maxBufferSize - samplesPerFrame + i] = frameData[interleavedIdx];
+				int dataIdx = ch * samplesPerFrame + i;
+				slidingBuffer[channelOffset + maxBufferSize - samplesPerFrame + i] = frameData[dataIdx];
 			}
 		}
 	}
@@ -219,19 +208,20 @@ public:
 			ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), bgColor);
 
 		for(int ch = 0; ch < numChans; ch++){
+			int displayChannel = ch;
+			
 			float trackY = canvasPos.y + ch * trackHeight;
 			float trackCenterY = trackY + trackHeight * 0.5f;
-			int channelOffset = ch * maxBufferSize;
+			int channelOffset = displayChannel * maxBufferSize;
 
 			// Grid
 			if(gridVisible){
 				ImU32 gridColor = IM_COL32(60, 60, 60, 100);
 				ImU32 centerLineColor = IM_COL32(120, 120, 120, 150);
 				
-				if(ch < numChans - 1){
-					float separatorY = trackY + trackHeight;
-					drawList->AddLine(ImVec2(canvasPos.x, separatorY),
-						ImVec2(canvasPos.x + canvasSize.x, separatorY), IM_COL32(80, 80, 80, 200));
+				if(ch > 0){
+					drawList->AddLine(ImVec2(canvasPos.x, trackY),
+						ImVec2(canvasPos.x + canvasSize.x, trackY), IM_COL32(80, 80, 80, 200));
 				}
 				
 				drawList->AddLine(ImVec2(canvasPos.x, trackCenterY),
@@ -248,7 +238,7 @@ public:
 				if(showClippingEnabled){
 					float clipY1 = trackCenterY - clipThreshold * trackHeight * 0.45f;
 					float clipY2 = trackCenterY + clipThreshold * trackHeight * 0.45f;
-					ImU32 thresholdColor = IM_COL32(255, 100, 100, 100); // Light red
+					ImU32 thresholdColor = IM_COL32(255, 100, 100, 100);
 					drawList->AddLine(ImVec2(canvasPos.x, clipY1),
 						ImVec2(canvasPos.x + canvasSize.x, clipY1), thresholdColor);
 					drawList->AddLine(ImVec2(canvasPos.x, clipY2),
@@ -270,7 +260,6 @@ public:
 				float progress1 = (float)i / (canvasSize.x - 1);
 				float progress2 = (float)(i + 1) / (canvasSize.x - 1);
 				
-				// Map to sample indices within our time window
 				int sampleIdx1 = startSample + (int)(progress1 * samplesToDisplay);
 				int sampleIdx2 = startSample + (int)(progress2 * samplesToDisplay);
 				
@@ -280,40 +269,39 @@ public:
 				if(channelOffset + sampleIdx1 < slidingBuffer.size() &&
 				   channelOffset + sampleIdx2 < slidingBuffer.size()){
 					
-					// Get raw samples (before gain)
 					float rawS1 = slidingBuffer[channelOffset + sampleIdx1];
 					float rawS2 = slidingBuffer[channelOffset + sampleIdx2];
 					
-					// Apply gain for display
 					float s1 = ofClamp(rawS1 * gainValue, -1.f, 1.f);
 					float s2 = ofClamp(rawS2 * gainValue, -1.f, 1.f);
 					
 					float y1 = trackCenterY - s1 * trackHeight * 0.45f;
 					float y2 = trackCenterY - s2 * trackHeight * 0.45f;
 					
-					// Check for clipping on raw samples (before gain)
 					bool isClipping = false;
 					if(showClippingEnabled){
 						isClipping = (abs(rawS1) >= clipThreshold || abs(rawS2) >= clipThreshold);
 					}
 					
-					// Choose color based on clipping
 					ImU32 lineColor = isClipping ? clippingLineCol : normalLineCol;
-					float lineWidth = isClipping ? 2.0f : 1.5f; // Thicker line for clipping
+					float lineWidth = isClipping ? 2.0f : 1.5f;
 					
 					drawList->AddLine(ImVec2(canvasPos.x + i, y1),
 						ImVec2(canvasPos.x + i + 1, y2), lineColor, lineWidth);
 				}
 			}
 
-			// Draw header
+			// Draw header - use displayChannel for header parameters
 			const auto& hdrVec = header.get();
 			const auto& thVec = headerThickness.get();
 			const auto& opVec = headerOpacity.get();
 
-			float hdr = ofClamp((hdrVec.size() == 1 ? hdrVec[0] : (ch < hdrVec.size() ? hdrVec[ch] : 0.f)), 0.f, 1.f);
-			float th = ofClamp((thVec.size() == 1 ? thVec[0] : (ch < thVec.size() ? thVec[ch] : 0.01f)), 0.f, 1.f);
-			float op = ofClamp((opVec.size() == 1 ? opVec[0] : (ch < opVec.size() ? opVec[ch] : 1.f)), 0.f, 1.f);
+			float hdr = ofClamp((hdrVec.size() == 1 ? hdrVec[0] :
+				(displayChannel < hdrVec.size() ? hdrVec[displayChannel] : 0.f)), 0.f, 1.f);
+			float th = ofClamp((thVec.size() == 1 ? thVec[0] :
+				(displayChannel < thVec.size() ? thVec[displayChannel] : 0.01f)), 0.f, 1.f);
+			float op = ofClamp((opVec.size() == 1 ? opVec[0] :
+				(displayChannel < opVec.size() ? opVec[displayChannel] : 1.f)), 0.f, 1.f);
 
 			float xLeft = canvasPos.x + (1.0f - hdr) * canvasSize.x;
 			float xRight = xLeft + th * canvasSize.x;
@@ -331,36 +319,29 @@ public:
 		float samplesPerPixel = (float)samplesToDisplay / canvasSize.x;
 		timeInfo += " (" + ofToString(samplesPerPixel, 1) + " samples/px)";
 		
-		// Show phase info if we're receiving OSC
-		if(currentWritePhase > 0){
-			timeInfo += " | Phase: " + ofToString((int)currentWritePhase);
-		}
-		
-		drawList->AddText(infoPos, IM_COL32(200, 200, 200, 180), timeInfo.c_str());
+		//drawList->AddText(infoPos, IM_COL32(200, 200, 200, 180), timeInfo.c_str());
 		
 		if(autoGain.get()){
 			ImVec2 gainPos = ImVec2(canvasPos.x + 10, canvasPos.y + 25);
 			string gainInfo = "Auto Gain: " + ofToString(gainValue, 2);
-			drawList->AddText(gainPos, IM_COL32(200, 200, 200, 180), gainInfo.c_str());
+			//drawList->AddText(gainPos, IM_COL32(200, 200, 200, 180), gainInfo.c_str());
 		}
 		
-		// Clipping info
 		if(showClippingEnabled){
 			ImVec2 clipPos = ImVec2(canvasPos.x + 10, canvasPos.y + 40);
 			string clipInfo = "Clip Threshold: " + ofToString(clipThreshold, 2);
-			drawList->AddText(clipPos, IM_COL32(255, 100, 100, 180), clipInfo.c_str());
+			//drawList->AddText(clipPos, IM_COL32(255, 100, 100, 180), clipInfo.c_str());
 			
-			// Check if any recent samples are clipping
 			bool recentClipping = checkRecentClipping();
 			if(recentClipping){
 				ImVec2 warningPos = ImVec2(canvasPos.x + canvasSize.x - 100, canvasPos.y + 10);
-				drawList->AddText(warningPos, IM_COL32(255, 0, 0, 255), "CLIPPING!");
+				//drawList->AddText(warningPos, IM_COL32(255, 0, 0, 255), "CLIPPING!");
 			}
 		}
 		
 		if(freeze.get()){
 			ImVec2 textPos = ImVec2(canvasPos.x + canvasSize.x - 80, canvasPos.y + 10);
-			drawList->AddText(textPos, IM_COL32(255, 200, 100, 255), "FROZEN");
+			//drawList->AddText(textPos, IM_COL32(255, 200, 100, 255), "FROZEN");
 		}
 		
 		ImGui::Dummy(canvasSize);
@@ -388,26 +369,46 @@ public:
 	
 	void recreateSynth(){
 		if(synth){ synth->free(); delete synth; synth = nullptr; }
-		if(waveformBus){ waveformBus->free(); delete waveformBus; waveformBus = nullptr; }
+		
+		// Free all individual buses
+		for(auto bus : controlBuses) {
+			if(bus) { bus->free(); delete bus; }
+		}
+		controlBuses.clear();
 
 		if(input->getNodeRef() == nullptr) return;
 
-		int totalBusSize = samplesPerFrame * numChannels.get();
+		int numChans = numChannels.get();
+		int totalBuses = samplesPerFrame * numChans;
 		
 		try {
-			waveformBus = new ofxSCBus(RATE_CONTROL, totalBusSize, servers[serverIndex]->getServer());
-			if(waveformBus->index < 0){ delete waveformBus; waveformBus = nullptr; return; }
+			// Create individual single-channel buses
+			controlBuses.resize(totalBuses);
+			for(int i = 0; i < totalBuses; i++) {
+				controlBuses[i] = new ofxSCBus(RATE_CONTROL, 1, servers[serverIndex]->getServer());
+			}
 			
-			synth = new ofxSCSynth("wavescope_realtime" + ofToString(numChannels.get()),
+			// Find lowest bus index
+			int lowestBusIndex = controlBuses[0]->index;
+			for(auto bus : controlBuses) {
+				if(bus->index < lowestBusIndex) {
+					lowestBusIndex = bus->index;
+				}
+			}
+			
+			synth = new ofxSCSynth("wavescope_realtime" + ofToString(numChans),
 				servers[serverIndex]->getServer());
-			synth->addToTail();
 			synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));
-			synth->set("out", waveformBus->index);
+			synth->set("out", lowestBusIndex);
 			synth->set("refreshRate", frameRate);
+			synth->addToTail();
 
 		} catch (const std::exception &e) {
+			for(auto bus : controlBuses) {
+				if(bus) { bus->free(); delete bus; }
+			}
+			controlBuses.clear();
 			if(synth){ synth->free(); delete synth; synth = nullptr; }
-			if(waveformBus){ waveformBus->free(); delete waveformBus; waveformBus = nullptr; }
 		}
 	}
 	
@@ -492,6 +493,7 @@ private:
 
 	// Frame-synchronized capture (back to original approach)
 	vector<float> slidingBuffer;    // Large circular buffer
+	
 	int maxBufferSize;              // Maximum samples in buffer
 	float maxBufferTime;            // Maximum time (10 seconds)
 	int samplesPerFrame;            // Samples per frame (64)
@@ -499,15 +501,12 @@ private:
 	float sampleRate;
 	int writeIndex;
 	
-	// OSC phase tracking (additional info)
-	ofxOscReceiver phaseReceiver;
-	float currentWritePhase = 0.0f;
-	
 	// Server configuration
 	int serverBlockSize = 128; // Default fallback
 	bool configLoaded = false;
 
-	ofxSCBus* waveformBus = nullptr;
+	vector<ofxSCBus*> controlBuses;
+
 	ofxSCSynth* synth = nullptr;
 	vector<serverManager*> servers;
 };
