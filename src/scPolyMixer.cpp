@@ -92,16 +92,18 @@ void scPolyMixer::setup() {
 		
 		listeners.push(numChannels.newListener([this](int &channels){
 			if(!isUpdatingTracks) {
-								
-				// Need to recreate all instances with new SynthDef
+				// Free existing synths - graph rebuild will recreate them properly
 				for(auto& serverInstances : trackInstances) {
 					if(serverInstances.first != nullptr) {
 						freeTrackInstances(serverInstances.first);
-						createTrackInstances(serverInstances.first);
-						createSynth(serverInstances.first);
+						freeVUBuses(serverInstances.first);
 					}
 				}
-				resendParams.notify();
+				
+				// Trigger graph recomputation - forces buildSynth/createSynth to be called
+				for(auto& output : outputs) {
+					output = output;
+				}
 			}
 		}));
 		
@@ -202,12 +204,16 @@ void scPolyMixer::update(ofEventArgs &args) {
 	}
 	
 	// Update master VU meter
+	// Update master VU meter
 	vector<float> masterLevels = masterLevel.get();
-	float masterNormalizedLevel = (masterLevels.size() > 0) ? masterLevels[0] : ((-3.0f + 60.0f) / 66.0f);
-	float masterDbLevel = (masterNormalizedLevel * 66.0f) - 60.0f;
-	float masterScale = dbToAmp(masterDbLevel);
-	
+
 	for(int ch = 0; ch < masterSum.size(); ch++) {
+		// Get per-channel master level (or use first if scalar)
+		float masterNormalizedLevel = (ch < masterLevels.size()) ? masterLevels[ch] :
+									  (masterLevels.size() > 0 ? masterLevels[0] : ((-3.0f + 60.0f) / 66.0f));
+		float masterDbLevel = (masterNormalizedLevel * 66.0f) - 60.0f;
+		float masterScale = dbToAmp(masterDbLevel);
+		
 		masterSum[ch] = ofClamp(masterSum[ch] * masterScale, 0.0f, 2.0f);
 	}
 	
