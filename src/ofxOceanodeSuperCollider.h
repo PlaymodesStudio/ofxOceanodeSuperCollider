@@ -14,6 +14,11 @@
 #include "scStart.h"
 #include "scSynthdef.h"
 #include "scOldSynthdef.h"
+#include "scNode.h"
+#include "ofxOceanodeSuperColliderController.h"
+#include "ofxSCServer.h"
+#include "scOutput.h"
+
 //#include "scOut.h"
 #include "scTonal.h"
 #include "scBuffer.h"
@@ -30,14 +35,15 @@
 #include "scRave.h"
 #include "scWavescope.h"
 #include "scVUMeter.h"
-#include "scOutput.h"
-#include "scNode.h"
-#include "ofxOceanodeSuperColliderController.h"
-#include "ofxSCServer.h"
-
 #include "scVST.h"
 #include "scPolyMixer.h"
 #include "scFunction.h"
+#include "scChannelRouterMatrix.h"
+
+
+
+
+
 
 namespace ofxOceanodeSuperCollider{
 
@@ -122,6 +128,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scVST>("SuperCollider");
 	o.registerModel<scPolyMixer>("SuperCollider");
 	o.registerModel<scVUMeter>("SuperCollider");
+	o.registerModel<scChannelRouterMatrix>("SuperCollider");
 	o.registerModel<scFunction>("SuperCollider");
 
 }
