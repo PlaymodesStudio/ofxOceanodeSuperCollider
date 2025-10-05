@@ -85,35 +85,37 @@ void scVUMeter::setup() {
 		
 		// Set up parameter listeners - EXACTLY like polymixer
 		listeners.push(numChannels.newListener([this](int &channels){
-			// Recreate synth with new channel count
+			// Free existing synths - graph rebuild will recreate them
 			for(auto& pair : synthInstances) {
-				if(pair.first != nullptr) {
-					if(pair.second != nullptr) {
-						pair.second->free();
-						delete pair.second;
-					}
-					pair.second = new ofxSCSynth(getSynthDefName(), pair.first);
-					recreateVUBus(pair.first);
-					pair.second->create();
-					updateVUTiming(vuAttack.get(), vuRelease.get());
-					
-					// Set VU bus
-					if(vuBuses[pair.first] != nullptr) {
-						pair.second->set("vubus", vuBuses[pair.first]->index);
-					}
+				if(pair.second != nullptr) {
+					pair.second->free();
+					delete pair.second;
+					pair.second = nullptr;  // Set to null so createSynth knows to rebuild
 				}
 			}
 			
-			// Resize VU meter parameter
+			// Free VU buses - will be recreated during createSynth
+			for(auto& pair : vuBuses) {
+				if(pair.second != nullptr) {
+					pair.second->free();
+					delete pair.second;
+					pair.second = nullptr;
+				}
+			}
+			
+			// Trigger graph recomputation
+			for(auto& output : outputs) {
+				output = output;
+			}
+			
+			// Resize UI parameters
 			vector<float> newVU(channels, 0.0f);
 			vuMeter.set(newVU);
 			
-			// Resize VU Data output
 			if(vuData != nullptr) {
 				vuData->getParameter().set(newVU);
 			}
 			
-			// Resize peak tracking
 			peakLevels.resize(channels, -60.0f);
 			peakDecayTimers.resize(channels, 0.0f);
 		}));
