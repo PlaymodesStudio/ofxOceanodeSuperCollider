@@ -263,12 +263,6 @@ void serverManager::recomputeGraph(){
         server->setBLatency(true);
 //        server->setWaitToSend(true);
         
-        //TODO: Only delete non existing nodes
-        for(auto node : nodesList){
-            if(node != nullptr)
-                node->free(server);
-        }
-        nodesList.clear();
         
 //        for(auto &b : busses) b.free();
         for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
@@ -288,12 +282,31 @@ void serverManager::recomputeGraph(){
                 newNodesList.push_back(outputs[i]);
             }
         }
-            
+        
+        std::vector<scNode*> toCreateNodes;
+        std::vector<scNode*> toUpdateNodes;
+        
+        for(auto &node : newNodesList){
+            auto nodeInListIter = std::find(nodesList.begin(), nodesList.end(), node);
+            if(nodeInListIter != nodesList.end()){
+                toUpdateNodes.push_back(node);
+                nodesList.erase(nodeInListIter);
+            }else{
+                toCreateNodes.push_back(node);
+            }
+        }
+        for(auto node : nodesList){
+            if(node != nullptr)
+                node->free(server);
+        }
+        nodesList.clear();
+        
             std::map<nodePort, std::vector<scNode*>> connections;
             
             for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
                 (*it)->getConnections(connections);
-                (*it)->buildSynth(server);
+                if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end())
+                   (*it)->buildSynth(server);
             }
                 
         //Create outputBusses for all nodes except scOutput
@@ -314,8 +327,20 @@ void serverManager::recomputeGraph(){
                 }
             }
         
+        scNode* lastNode = nullptr;
         for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
-            (*it)->createSynth(server);
+            if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end()){
+                (*it)->createSynth(server);
+            }
+            else{
+                if(lastNode == nullptr){
+//                    (*it)->moveSynthAfter(server, -1);
+                }
+                else{
+                    (*it)->moveSynthBefore(server, lastNode->getLastSynthID(server));
+                }
+            }
+            lastNode = (*it);
         }
         
         nodesList = newNodesList;

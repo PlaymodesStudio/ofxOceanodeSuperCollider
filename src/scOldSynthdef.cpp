@@ -186,6 +186,11 @@ void scOldSynthdef::createSynth(ofxSCServer* server){
     synths[server]->create();
 }
 
+void scOldSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
+    resendParams.notify();
+    synths[server]->moveBefore(nodeID);
+}
+
 void scOldSynthdef::free(ofxSCServer* server){
     if(synths.count(server) == 1){
         synths[server]->free();
@@ -221,6 +226,10 @@ void scOldSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
 
 int scOldSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
     return outputBus[server]; //Only one output in this type
+}
+
+int scOldSynthdef::getLastSynthID(ofxSCServer* server){
+    return synths[server]->nodeID;
 }
 
 oldSynthdefDesc scOldSynthdef::readAndCreateSynthdef(string file){

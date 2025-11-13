@@ -57,6 +57,7 @@ public:
     
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;
+    void moveSynthBefore(ofxSCServer* server, int nodeID) override;
     void free(ofxSCServer* server) override;
     void freeAll();
     
@@ -64,6 +65,8 @@ public:
     void setInputBus(ofxSCServer* server, scNode* node, int bus) override;
     
     int getOutputBusIndex(ofxSCServer* server, int index) override;
+    
+    int getLastSynthID(ofxSCServer* server) override;
     
     ofEvent<void> resendParams;
     

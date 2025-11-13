@@ -30,12 +30,15 @@ public:
     
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;
+    void moveSynthBefore(ofxSCServer* server, int nodeID) override;
     void free(ofxSCServer* server) override;
     
     bool isInputConnected(){return inputs[0]->getNodeRef() != nullptr;}
     scNode* getInputNode(){return inputs[0]->getNodeRef();}
     
     void setInputBus(ofxSCServer* server, scNode* node, int bus) override;
+    
+    int getLastSynthID(ofxSCServer* server) override;
     
 //    void presetRecallBeforeSettingParameters(ofJson &json) override;
 //

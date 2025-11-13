@@ -337,6 +337,11 @@ void scSynthdef::createSynth(ofxSCServer* server){
     synths[server]->create();
 }
 
+void scSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
+    resendParams.notify();
+    synths[server]->moveBefore(nodeID);
+}
+
 void scSynthdef::free(ofxSCServer* server){
     if(synths.count(server) == 1){
         synths[server]->free();
@@ -376,6 +381,10 @@ void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
 
 int scSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
     return outputBuses[server][index];
+}
+
+int scSynthdef::getLastSynthID(ofxSCServer* server){
+    return synths[server]->nodeID;
 }
 
 synthdefDesc scSynthdef::readAndCreateSynthdef(string file){

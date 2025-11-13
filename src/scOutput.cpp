@@ -98,6 +98,18 @@ void scOutput::createSynth(ofxSCServer* server){
     }
 }
 
+void scOutput::moveSynthBefore(ofxSCServer* server, int nodeID){
+    if(server == outputServers[serverIndex]->getServer()){
+        synth->set("out", outputChannel);
+        synth->set("levels", volume);
+        synth->set("delay", delay);
+        synth->set("stereomix", stereomix);
+        synth->set("stereomixsize", stereomixSize);
+        synth->set("in", inputBus[server]);
+        synth->moveBefore(nodeID);
+    }
+}
+
 void scOutput::free(ofxSCServer* server){
     if(synth != nullptr){
         synth->free();
@@ -111,6 +123,13 @@ void scOutput::setInputBus(ofxSCServer* server, scNode* node, int bus){
     if(synth != nullptr && inputs[0]->getNodeRef() == node){
         synth->set("in", bus);
     }
+}
+
+int scOutput::getLastSynthID(ofxSCServer* server){
+    if(server == outputServers[serverIndex]->getServer()){
+        return synth->nodeID;
+    }
+    return -1;
 }
 
 //void scOutput::presetWillBeLoaded(){

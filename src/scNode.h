@@ -52,12 +52,15 @@ public:
     
     virtual void buildSynth(ofxSCServer* server){};
     virtual void createSynth(ofxSCServer* server){};
+    virtual void moveSynthBefore(ofxSCServer* server, int nodeID){};
     virtual void free(ofxSCServer* server){};
     virtual void runSynth(ofxSCServer* server){};
     virtual void setOutputBus(ofxSCServer* server, int index, int bus){};
     virtual void setInputBus(ofxSCServer* server, scNode* node, int bus){};
     
     virtual int getOutputBusIndex(ofxSCServer* server, int index){return -1;};
+    
+    virtual int getLastSynthID(ofxSCServer* server){return -1;};
     
     ofEvent<int> createdSynth;
     
