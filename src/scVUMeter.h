@@ -35,6 +35,9 @@ public:
 	void setOutputBus(ofxSCServer* server, int index, int bus);
 	int getOutputBusIndex(ofxSCServer* server, int index);
 	
+	void moveSynthBefore(ofxSCServer* server, int nodeID);
+	int getLastSynthID(ofxSCServer* server);
+	
 private:
 	// Synth instances per server
 	std::map<ofxSCServer*, ofxSCSynth*> synthInstances;

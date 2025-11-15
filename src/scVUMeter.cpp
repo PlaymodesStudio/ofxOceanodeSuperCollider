@@ -318,6 +318,54 @@ int scVUMeter::getOutputBusIndex(ofxSCServer* server, int index) {
 	return -1;
 }
 
+void scVUMeter::moveSynthBefore(ofxSCServer* server, int nodeID) {
+	if(server == nullptr) return;
+
+	auto it = synthInstances.find(server);
+	if(it == synthInstances.end() || it->second == nullptr) {
+		return;
+	}
+
+	ofxSCSynth* synth = it->second;
+
+	try {
+		// Ensure VU bus and timing are correct
+		if(vuBuses.count(server) > 0 && vuBuses[server] != nullptr) {
+			synth->set("vubus", vuBuses[server]->index);
+		}
+
+		synth->set("vuattacktime", vuAttack.get());
+		synth->set("vureleasetime", vuRelease.get());
+
+		// Restore input bus (first mapped input, if any)
+		if(inputBuses.count(server) > 0 && !inputBuses[server].empty()) {
+			int inBus = inputBuses[server].begin()->second;
+			synth->set("in", inBus);
+		}
+
+		// Restore output bus (index 0, if assigned)
+		if(outputBuses.count(server) > 0 && outputBuses[server].count(0) > 0) {
+			synth->set("out", outputBuses[server][0]);
+		}
+
+		// Finally move the synth before the given node in the SC graph
+		synth->moveBefore(nodeID);
+
+	} catch(const std::exception& e) {
+		ofLogError("scVUMeter") << "Error in moveSynthBefore(): " << e.what();
+	}
+}
+
+int scVUMeter::getLastSynthID(ofxSCServer* server) {
+	if(server == nullptr) return -1;
+
+	auto it = synthInstances.find(server);
+	if(it != synthInstances.end() && it->second != nullptr) {
+		return it->second->nodeID;
+	}
+	return -1;
+}
+
 void scVUMeter::recreateVUBus(ofxSCServer* server) {
 	if(server == nullptr) return;
 	
