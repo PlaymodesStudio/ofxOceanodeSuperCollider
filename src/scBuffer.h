@@ -152,6 +152,7 @@ public:
 				dir.open(absolutePath);
 				if(dir.exists()){
 					dir.allowExt("wav");
+					dir.allowExt("WAV");
 					dir.sort();
 					for(auto f = dir.begin(); f < dir.end(); ++f){
 						string wavPath = f->getAbsolutePath();
@@ -160,7 +161,32 @@ public:
 						float srate       = 0.0f;
 						
 						getFileInfo(wavPath, numChannels, durationMs, srate);
-						if(numChannels <= 0) continue;
+
+						// Fallback to at least trying ch=0 even if probing failed.
+						int channelsToLoad = (numChannels > 0 ? numChannels : 1);
+
+						for(int ch = 0; ch < channelsToLoad; ++ch){
+							try{
+								auto buf0 = new ofxSCBuffer(0, 0, servers[0]->getServer());
+								buf0->readChannel(wavPath, {ch});   // will throw/log if truly unreadable
+								buffers.push_back(buf0);
+
+								newIndices.push_back(buf0->index);
+								newDurations.push_back(durationMs);
+								newSampleRates.push_back(srate);
+								durations.push_back(durationMs);
+
+								for(size_t j = 1; j < servers.size(); ++j){
+									auto bufn = new ofxSCBuffer(0, 0, servers[j]->getServer());
+									bufn->readChannel(wavPath, {ch});
+									buffers.push_back(bufn);
+								}
+							}catch(const std::exception& e){
+								ofLogError("scBuffer") << "Exception reading file: " << e.what();
+								continue;
+							}
+						}
+
 						
 						for(int ch = 0; ch < numChannels; ++ch){
 							try{
@@ -187,37 +213,41 @@ public:
 						files[f->getFileName()] = numChannels;
 					}
 				}
-			}else if(ofFilePath::getFileExt(absolutePath) == "wav"){
-				// -------- SINGLE FILE
-				of::filesystem::path wavPath = absolutePath;
-				int   numChannels = 0;
-				float durationMs  = 0.0f;
-				float srate       = 0.0f;
-				
-				getFileInfo(wavPath, numChannels, durationMs, srate);
-				if(numChannels > 0){
-					for(int ch = 0; ch < numChannels; ++ch){
-						try{
-							auto buf0 = new ofxSCBuffer(0, 0, servers[0]->getServer());
-							buf0->readChannel(wavPath, {ch});
-							buffers.push_back(buf0);
-							
-							newIndices.push_back(buf0->index);
-							newDurations.push_back(durationMs);
-							newSampleRates.push_back(srate);
-							durations.push_back(durationMs);
-							
-							for(size_t j = 1; j < servers.size(); ++j){
-								auto bufn = new ofxSCBuffer(0, 0, servers[j]->getServer());
-								bufn->readChannel(wavPath, {ch});
-								buffers.push_back(bufn);
+			}else{
+				std::string ext = ofFilePath::getFileExt(absolutePath);
+				for(auto &c : ext) c = std::tolower(static_cast<unsigned char>(c));
+				if(ext == "wav"){
+					// -------- SINGLE FILE
+					of::filesystem::path wavPath = absolutePath;
+					int   numChannels = 0;
+					float durationMs  = 0.0f;
+					float srate       = 0.0f;
+					
+					getFileInfo(wavPath, numChannels, durationMs, srate);
+					if(numChannels > 0){
+						for(int ch = 0; ch < numChannels; ++ch){
+							try{
+								auto buf0 = new ofxSCBuffer(0, 0, servers[0]->getServer());
+								buf0->readChannel(wavPath, {ch});
+								buffers.push_back(buf0);
+								
+								newIndices.push_back(buf0->index);
+								newDurations.push_back(durationMs);
+								newSampleRates.push_back(srate);
+								durations.push_back(durationMs);
+								
+								for(size_t j = 1; j < servers.size(); ++j){
+									auto bufn = new ofxSCBuffer(0, 0, servers[j]->getServer());
+									bufn->readChannel(wavPath, {ch});
+									buffers.push_back(bufn);
+								}
+							}catch(const std::exception& e){
+								ofLogError("scBuffer") << "Exception reading file: " << e.what();
+								continue;
 							}
-						}catch(const std::exception& e){
-							ofLogError("scBuffer") << "Exception reading file: " << e.what();
-							continue;
 						}
+						files[wavPath.filename()] = numChannels;
 					}
-					files[wavPath.filename()] = numChannels;
 				}
 			}
 			
@@ -315,92 +345,149 @@ private:
 	};
 	std::map<string, EmbedInfo> embedInfo;
 	
-    bool findDataChunk(ofFile& file, uint32_t& dataSize) {
-        char chunkID[4];
-        uint32_t chunkSize;
-        
-        // Start from after the RIFF header (12 bytes)
-        file.seekg(12);
-        
-        while(file.read((char*)&chunkID, 4).good()) {
-            file.read((char*)&chunkSize, 4);
-            
-            if(strncmp(chunkID, "data", 4) == 0) {
-                dataSize = chunkSize;
-                return true;
-            }
-            
-            // Skip this chunk
-            file.seekg(chunkSize, std::ios::cur);
-        }
-        
-        return false;
-    }
+	bool findDataChunk(ofFile& file, uint32_t& dataSize) {
+		char chunkID[4];
+		uint32_t chunkSize;
 
-    void getFileInfo(string filepath, int &numChannels, float &durationMs, float &sampleRate) { // Updated signature
-        numChannels = 0;
-        durationMs = 0;
-        sampleRate = 0; // Initialize sample rate
-        
-        ofFile file(filepath, ofFile::ReadOnly, true);
-        if(!file.is_open()) {
-            ofLogError("scBuffer") << "Could not open file: " << filepath;
-            return;
-        }
+		// Start right after RIFF header
+		file.seekg(12, std::ios::beg);
 
-        // Read RIFF header
-        WaveHeader header;
-        if(!file.read((char*)&header, sizeof(WaveHeader))) {
-            ofLogError("scBuffer") << "Could not read WAV header: " << filepath;
-            file.close();
-            return;
-        }
+		while (file.read(reinterpret_cast<char*>(&chunkID), 4).good()) {
+			if(!file.read(reinterpret_cast<char*>(&chunkSize), 4).good()){
+				return false;
+			}
 
-        // Verify RIFF header
-        if(strncmp(header.riff, "RIFF", 4) != 0) {
-            ofLogError("scBuffer") << "Invalid WAV file (no RIFF header): " << filepath;
-            file.close();
-            return;
-        }
+			if (std::strncmp(chunkID, "data", 4) == 0) {
+				dataSize = chunkSize;
+				return true;
+			}
 
-        // Store number of channels
-        numChannels = header.channels;
+			// Skip this chunk's payload
+			file.seekg(chunkSize, std::ios::cur);
 
-        // Store sample rate
-        sampleRate = (float)header.sample_rate; // Extract sample rate
+			// *** CRITICAL: skip pad byte if chunk size is odd ***
+			if (chunkSize & 1u) {
+				file.seekg(1, std::ios::cur);
+			}
+		}
+		return false;
+	}
 
-        // Find the actual data chunk and its size
-        uint32_t actualDataSize;
-        if(!findDataChunk(file, actualDataSize)) {
-            ofLogError("scBuffer") << "Could not find data chunk in WAV file: " << filepath;
-            file.close();
-            return;
-        }
 
-        // Calculate duration
-        if(header.sample_rate > 0 && header.channels > 0 && header.bits_per_sample > 0) {
-            int bytesPerSample = header.bits_per_sample / 8;
-            int totalSamples = actualDataSize / (bytesPerSample * header.channels);
-            durationMs = (float)totalSamples / header.sample_rate * 1000.0f;
-            
-            ofLogNotice("scBuffer") << "File info for: " << filepath;
-            ofLogNotice("scBuffer") << "  Channels: " << numChannels;
-            ofLogNotice("scBuffer") << "  Sample Rate: " << sampleRate;
-            ofLogNotice("scBuffer") << "  Bits per Sample: " << header.bits_per_sample;
-            ofLogNotice("scBuffer") << "  Data Size: " << actualDataSize;
-            ofLogNotice("scBuffer") << "  Duration (ms): " << durationMs;
-        }
+	void getFileInfo(string filepath, int &numChannels, float &durationMs, float &sampleRate) {
+		numChannels = 0;
+		durationMs  = 0.0f;
+		sampleRate  = 0.0f;
 
-        file.close();
-    }
+		ofFile file(filepath, ofFile::ReadOnly, true);
+		if(!file.is_open()){
+			ofLogError("scBuffer") << "Could not open file: " << filepath;
+			return;
+		}
+
+		// Read RIFF header
+		char riff[4], wave[4];
+		uint32_t riffSize = 0;
+		if(!file.read((char*)&riff, 4) || !file.read((char*)&riffSize, 4) || !file.read((char*)&wave, 4)){
+			ofLogError("scBuffer") << "Could not read RIFF header: " << filepath;
+			file.close();
+			return;
+		}
+		if(std::strncmp(riff, "RIFF", 4) != 0 || std::strncmp(wave, "WAVE", 4) != 0){
+			ofLogError("scBuffer") << "Not a RIFF/WAVE file: " << filepath;
+			file.close();
+			return;
+		}
+
+		// Iterate chunks until we see fmt  and data
+		bool haveFmt  = false;
+		bool haveData = false;
+		uint16_t bitsPerSample = 0;
+		uint32_t dataSize = 0;
+
+		while(true){
+			char chunkID[4];
+			uint32_t chunkSize = 0;
+			if(!file.read((char*)&chunkID, 4)) break;                // EOF
+			if(!file.read((char*)&chunkSize, 4)) { haveData |= false; break; }
+
+			std::streampos payloadPos = file.tellg();
+
+			if(std::strncmp(chunkID, "fmt ", 4) == 0){
+				// Read the standard 16-byte fmt payload (works for PCM; if longer, we still get the core fields)
+				if(chunkSize >= 16){
+					uint16_t formatType = 0;
+					uint16_t channels   = 0;
+					uint32_t srate      = 0;
+					uint32_t byterate   = 0;
+					uint16_t blockAlign = 0;
+					uint16_t bits       = 0;
+
+					file.read((char*)&formatType, 2);
+					file.read((char*)&channels,   2);
+					file.read((char*)&srate,      4);
+					file.read((char*)&byterate,   4);
+					file.read((char*)&blockAlign, 2);
+					file.read((char*)&bits,       2);
+
+					numChannels    = channels;
+					sampleRate     = (float)srate;
+					bitsPerSample  = bits;
+					haveFmt        = true;
+
+					// Skip any remaining fmt bytes
+					auto consumed = 16u;
+					if(chunkSize > consumed){
+						file.seekg(chunkSize - consumed, std::ios::cur);
+					}
+				}else{
+					// Malformed fmt; skip its payload
+					file.seekg(chunkSize, std::ios::cur);
+				}
+			}else if(std::strncmp(chunkID, "data", 4) == 0){
+				dataSize  = chunkSize;
+				haveData  = true;
+				// No need to seek: we'll compute duration then break after padding step
+				file.seekg(chunkSize, std::ios::cur);
+			}else{
+				// Unhandled chunk (JUNK, bext, iXML, smpl, LIST, clm , etc.) → skip
+				file.seekg(chunkSize, std::ios::cur);
+			}
+
+			// *** critical: chunk padding if size is odd ***
+			if(chunkSize & 1u){
+				file.seekg(1, std::ios::cur);
+			}
+
+			if(haveFmt && haveData) break;
+		}
+
+		if(haveFmt && haveData && sampleRate > 0.0f && numChannels > 0 && bitsPerSample > 0){
+			int bytesPerSample = bitsPerSample / 8;
+			int totalSamples   = (bytesPerSample > 0 && numChannels > 0) ? (dataSize / (bytesPerSample * numChannels)) : 0;
+			durationMs         = (totalSamples > 0) ? (float(totalSamples) / sampleRate * 1000.0f) : 0.0f;
+
+			ofLogNotice("scBuffer") << "File info for: " << filepath
+									<< " | ch=" << numChannels
+									<< " | sr=" << sampleRate
+									<< " | bps=" << bitsPerSample
+									<< " | data=" << dataSize
+									<< " | ms=" << durationMs;
+		}else{
+			ofLogWarning("scBuffer") << "Could not fully parse fmt/data; will still try to load: " << filepath;
+		}
+
+		file.close();
+	}
+
     
     ofEventListener listener;
     ofEventListener listener2;
     ofEventListener listener3;
     ofParameter<vector<int>> buffersParam;
     ofParameter<vector<float>> durationsMs;
-    ofParameter<vector<float>> sampleRates; // New sample rate parameter
-    vector<float> durations;  // Store durations for inspector display
+    ofParameter<vector<float>> sampleRates;
+    vector<float> durations;
     
     vector<serverManager*> servers;
     
