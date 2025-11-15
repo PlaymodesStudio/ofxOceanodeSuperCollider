@@ -173,10 +173,24 @@ void scVST::setup(){
 					);
 	
 	// Inspector parameters
-	addInspectorParameter(enableMultithreading.set("Multithreading", false));
-	addInspectorParameter(monoInstancing.set("Mono Instancing", false)); // NEW: Mono/Stereo instancing
+	addInspectorParameter(enableMultithreading.set("Multithreading", true));
+	addInspectorParameter(singleInstance.set("Single Instance", true));
+	addInspectorParameter(monoInstancing.set("Mono Instancing", false));
 	addInspectorParameter(removeAllParams.set("Remove All Params"));
 	addInspectorParameter(saveFXPToDisk.set("Save FXP to Disk"));
+	
+	listeners.push(singleInstance.newListener([this](bool &b){
+		for (auto &serverInstances : synthInstances) {
+			if (serverInstances.first) {
+				freeVSTInstances(serverInstances.first);
+				createVSTInstances(serverInstances.first);
+				createSynth(serverInstances.first);
+			}
+		}
+		resendParams.notify();
+	}));
+
+
 	
 	// Transport parameter listeners
 	listeners.push(transportPlay.newListener([this](bool &playing){
@@ -407,14 +421,17 @@ void scVST::setup(){
 }
 
 int scVST::calculateNumInstances() const {
+	if (singleInstance.get()) {
+		return 1;                      // one multichannel instance
+	}
 	if (monoInstancing.get()) {
-		// In mono mode, each instance handles 1 channel
-		return numChannels.get();
+		return numChannels.get();      // 1ch per instance
 	} else {
-		// In stereo mode, each instance handles 2 channels (stereo pair)
-		return (numChannels.get() + 1) / 2;
+		return (numChannels.get() + 1) / 2; // 2ch per instance
 	}
 }
+
+
 
 void scVST::searchForVSTPlugins() {
 	availablePlugins.clear();
@@ -3106,72 +3123,123 @@ void scVST::createSynth(ofxSCServer* server){
 	resendParams.notify();
 }
 
-void scVST::setOutputBus(ofxSCServer* server, int index, int bus){
-	outputBuses[server][index] = bus;
+void scVST::moveSynthBefore(ofxSCServer* server, int nodeID){
+	if(!server) {
+		ofLogWarning("scVST") << "moveSynthBefore: server is null";
+		return;
+	}
 	
-	if(synthInstances.count(server) > 0) {
-		int numInstances = synthInstances[server].size();
-		
-		for(int i = 0; i < numInstances; i++) {
-			if(synthInstances[server][i] != nullptr) {
-				int instanceOutputBus;
-				int channelsPerInstance;
-				
-				if(monoInstancing.get()) {
-					// Mono mode: each instance outputs to a single channel
-					instanceOutputBus = bus + i;
-					channelsPerInstance = 1;
-				} else {
-					// Stereo mode: each instance outputs to a stereo pair
-					instanceOutputBus = bus + (i * 2);
-					channelsPerInstance = 2;
-				}
-				
-				// Set the output bus and channel count
-				synthInstances[server][i]->set("out", instanceOutputBus);
-				synthInstances[server][i]->set("outChannels", channelsPerInstance);
-				
-				/*
-				 ofLogNotice("scVST") << "Instance " << i << " routed to bus "
-				 << instanceOutputBus << " ("
-				 << channelsPerInstance << " channels)";
-				 */
+	// If we don't have instances for this server, nothing to do
+	if(synthInstances.count(server) == 0) {
+		//ofLogVerbose("scVST") << "moveSynthBefore: no instances for this server";
+		return;
+	}
+
+	// Re-apply simple params (currently inChannels via resendParams)
+	// This mirrors scSynthdef/scOutput behaviour where params are resent
+	// before a graph move.
+	resendParams.notify();
+	
+	// Move all instances for this server before the given nodeID,
+	// preserving their relative order in the SC node tree.
+	for(auto* synth : synthInstances[server]) {
+		if(synth != nullptr && synth->nodeID > 0) {
+			try {
+				synth->moveBefore(nodeID);
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Error moving synth " << synth->nodeID
+									<< " before node " << nodeID << ": " << e.what();
+			} catch(...) {
+				ofLogError("scVST") << "Unknown error moving synth before node";
 			}
 		}
 	}
 }
 
-void scVST::setInputBus(ofxSCServer* server, scNode* node, int bus){
-	inputBuses[server][node] = bus;
-	
-	if(synthInstances.count(server) > 0) {
-		for(int i = 0; i < synthInstances[server].size(); i++) {
-			if(synthInstances[server][i] != nullptr) {
-				int instanceInputBus;
-				int channelsPerInstance;
-				
-				if(monoInstancing.get()) {
-					// Mono mode: each instance gets input from a single channel
-					instanceInputBus = bus + i;
-					channelsPerInstance = 1;
-				} else {
-					// Stereo mode: each instance gets input from a stereo pair
-					instanceInputBus = bus + (i * 2);
-					channelsPerInstance = 2;
-				}
-				
-				// Set the input bus and channel count
-				synthInstances[server][i]->set("in", instanceInputBus);
-				synthInstances[server][i]->set("inChannels", channelsPerInstance);
-				/*
-				 ofLogNotice("scVST") << "Instance " << i << " input from bus "
-				 << instanceInputBus << " ("
-				 << channelsPerInstance << " channels)";
-				 */
-			}
+int scVST::getLastSynthID(ofxSCServer* server){
+	if(!server) return -1;
+	if(synthInstances.count(server) == 0) return -1;
+
+	int lastID = -1;
+
+	// Iterate through the instances for this server and grab the last
+	// valid nodeID. This gives the "tail" of this node in the SC graph,
+	// which the recompute algorithm can use as an insertion anchor.
+	for(auto* synth : synthInstances[server]) {
+		if(synth != nullptr && synth->nodeID > 0) {
+			lastID = synth->nodeID;
 		}
 	}
+
+	return lastID;
 }
+
+
+
+void scVST::setOutputBus(ofxSCServer* server, int index, int bus){
+	outputBuses[server][index] = bus;
+
+	if (synthInstances.count(server) == 0) return;
+
+	const int numInstances = synthInstances[server].size();
+
+	for (int i = 0; i < numInstances; ++i) {
+		if (synthInstances[server][i] == nullptr) continue;
+
+		int instanceOutputBus   = bus;
+		int channelsPerInstance = 2; // default for stereo mode
+
+		if (singleInstance.get()) {
+			// One plugin instance sees the entire ambisonic bus
+			instanceOutputBus   = bus;
+			channelsPerInstance = numChannels.get();   // e.g., 4/9/16…
+		} else if (monoInstancing.get()) {
+			// 1 channel per instance → lay them out consecutively
+			instanceOutputBus   = bus + i;
+			channelsPerInstance = 1;
+		} else {
+			// Stereo instancing → 2 channels per instance
+			instanceOutputBus   = bus + (i * 2);
+			channelsPerInstance = 2;
+		}
+
+		// Tell the SuperCollider synth how many channels it should expose on 'out'
+		synthInstances[server][i]->set("out",         instanceOutputBus);
+		synthInstances[server][i]->set("outChannels", channelsPerInstance);
+	}
+}
+
+
+void scVST::setInputBus(ofxSCServer* server, scNode* node, int bus){
+	inputBuses[server][node] = bus;
+
+	if (synthInstances.count(server) == 0) return;
+
+	const int numInstances = synthInstances[server].size();
+
+	for (int i = 0; i < numInstances; ++i) {
+		if (synthInstances[server][i] == nullptr) continue;
+
+		int instanceInputBus    = bus;
+		int channelsPerInstance = 2;
+
+		if (singleInstance.get()) {
+			instanceInputBus    = bus;
+			channelsPerInstance = numChannels.get();   // e.g., 4/9/16…
+		} else if (monoInstancing.get()) {
+			instanceInputBus    = bus + i;
+			channelsPerInstance = 1;
+		} else {
+			instanceInputBus    = bus + (i * 2);
+			channelsPerInstance = 2;
+		}
+
+		synthInstances[server][i]->set("in",          instanceInputBus);
+		synthInstances[server][i]->set("inChannels",  channelsPerInstance);
+	}
+}
+
+
 
 int scVST::getOutputBusIndex(ofxSCServer* server, int index){
 	if(outputBuses.count(server) > 0 && outputBuses[server].count(index) > 0) {

@@ -136,6 +136,8 @@ public:
 	// Eduard's two-phase approach
 	void buildSynth(ofxSCServer* server);
 	void createSynth(ofxSCServer* server);
+	void moveSynthBefore(ofxSCServer* server, int nodeID);  // NEW
+
 	void free(ofxSCServer* server);
 	void freeAll();
 	
@@ -143,7 +145,8 @@ public:
 	void setInputBus(ofxSCServer* server, scNode* node, int bus);
 	
 	int getOutputBusIndex(ofxSCServer* server, int index);
-	
+	int getLastSynthID(ofxSCServer* server);                // NEW
+
 	ofEvent<void> resendParams;
 	
 protected:
@@ -355,6 +358,8 @@ private:
 	ofParameter<vector<float>> velocity;
 	ofParameter<int> midiChannel;
 	ofParameter<vector<int>> instance;  // NEW: Instance routing parameter
+	ofParameter<bool> singleInstance;   // one plugin instance handles all channels
+
 	
 	// Inspector parameters
 	ofParameter<bool> enableMultithreading;
