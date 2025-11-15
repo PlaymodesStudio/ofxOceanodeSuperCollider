@@ -281,6 +281,49 @@ int scChannelRouterMatrix::getOutputBusIndex(ofxSCServer* server, int index) {
 	return -1;
 }
 
+void scChannelRouterMatrix::moveSynthBefore(ofxSCServer* server, int nodeID) {
+	if(server == nullptr) return;
+
+	auto it = synthInstances.find(server);
+	if(it == synthInstances.end() || it->second == nullptr) {
+		return;
+	}
+
+	ofxSCSynth* synth = it->second;
+
+	try {
+		// Ensure matrix + compensation are up to date
+		updateSynthParameters(server);
+
+		// Restore input bus (first mapped input, if any)
+		if(inputBuses.count(server) > 0 && !inputBuses[server].empty()) {
+			int inBus = inputBuses[server].begin()->second;
+			synth->set("in", inBus);
+		}
+
+		// Restore output bus 0, if present
+		if(outputBuses.count(server) > 0 && outputBuses[server].count(0) > 0) {
+			synth->set("out", outputBuses[server][0]);
+		}
+
+		// Move synth inside SC graph
+		synth->moveBefore(nodeID);
+
+	} catch(const std::exception& e) {
+		ofLogError("scChannelRouterMatrix") << "Error in moveSynthBefore(): " << e.what();
+	}
+}
+
+int scChannelRouterMatrix::getLastSynthID(ofxSCServer* server) {
+	if(server == nullptr) return -1;
+
+	auto it = synthInstances.find(server);
+	if(it != synthInstances.end() && it->second != nullptr) {
+		return it->second->nodeID;
+	}
+	return -1;
+}
+
 void scChannelRouterMatrix::presetSave(ofJson &json) {
 	int n = numChannels.get();
 	for(int i = 0; i < n; i++) {

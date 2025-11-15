@@ -33,7 +33,9 @@ public:
 	void setOutputBus(ofxSCServer* server, int index, int bus);
 	int getOutputBusIndex(ofxSCServer* server, int index);
 	
-	// Preset handling
+	void moveSynthBefore(ofxSCServer* server, int nodeID);
+	int getLastSynthID(ofxSCServer* server);
+	
 	void presetSave(ofJson &json);
 	void presetRecallAfterSettingParameters(ofJson &json);
 	
