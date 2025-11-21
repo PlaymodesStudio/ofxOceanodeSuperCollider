@@ -379,6 +379,17 @@ void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
     }
 }
 
+void scSynthdef::resetInputBusses(ofxSCServer* server){
+    inputBuses[server].clear();
+    for(int i = 0; i < inputs.size(); i++){
+        string paramName = "in";
+        if(i > 0) paramName += ofToString(i+1);
+        if(synths[server] != nullptr){
+            synths[server]->set(paramName, 0);
+        }
+    }
+}
+
 int scSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
     return outputBuses[server][index];
 }

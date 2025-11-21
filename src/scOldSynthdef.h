@@ -63,6 +63,7 @@ public:
 
     void setOutputBus(ofxSCServer* server, int index, int bus) override;
     void setInputBus(ofxSCServer* server, scNode* node, int bus) override;
+    void resetInputBusses(ofxSCServer* server) override;
     
     int getOutputBusIndex(ofxSCServer* server, int index) override;
     

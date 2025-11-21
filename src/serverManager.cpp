@@ -305,8 +305,11 @@ void serverManager::recomputeGraph(){
             
             for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
                 (*it)->getConnections(connections);
-                if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end())
-                   (*it)->buildSynth(server);
+                if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end()){
+                    (*it)->buildSynth(server);
+                }else{
+                    (*it)->resetInputBusses(server);
+                }
             }
                 
         //Create outputBusses for all nodes except scOutput

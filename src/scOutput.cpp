@@ -125,6 +125,13 @@ void scOutput::setInputBus(ofxSCServer* server, scNode* node, int bus){
     }
 }
 
+void scOutput::resetInputBusses(ofxSCServer* server){
+    inputBus[server] = 0;
+    if(synth != nullptr){
+        synth->set("in", 0);
+    }
+}
+
 int scOutput::getLastSynthID(ofxSCServer* server){
     if(server == outputServers[serverIndex]->getServer()){
         return synth->nodeID;
