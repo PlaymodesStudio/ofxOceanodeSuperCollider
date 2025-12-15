@@ -8,6 +8,7 @@
 #ifndef scInfo_h
 #define scInfo_h
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
 
@@ -44,7 +45,7 @@ public:
         
         addParameter(input.set("In", nodePort()), ofxOceanodeParameterFlags_DisableOutConnection);
         addParameter(serverIndex.set("Server", 0, 0, servers.size()-1));
-        addParameter(numChannels.set("N Chan", 1, 1, 100));
+        addParameter(numChannels.set("N Chan", 1, 1, MAX_NODE_CHANNELS));
         
         listeners.push(input.newListener([this](nodePort &port){
             if(port.getNodeRef() != nullptr){
