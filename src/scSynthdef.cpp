@@ -5,8 +5,10 @@
 //  Created by Eduard Frigola Bagué on 24/11/22.
 //
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "scSynthdef.h"
 #include "ofxSCSynth.h"
+
 
 scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synthDescription), synthdefName(_synthDescription.name), scNode(_synthDescription.name + "*"){
     description = synthDescription.description;
@@ -26,7 +28,7 @@ void scSynthdef::setup(){
         }
     }
     
-    addParameter(numChannels.set("N Chan", 1, 1, 100));
+    addParameter(numChannels.set("N Chan", 1, 1, MAX_NODE_CHANNELS));
     
     oldNumChannels = numChannels;
     listeners.push(numChannels.newListener([this](int &i){
@@ -274,12 +276,12 @@ void scSynthdef::setup(){
                 if(availableInput->getNodeRef() != nullptr){
                     for(auto synthServer : synths){
                         synthServer.second->set(toSendName + "_sel", 1);
-                        synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), 100);
+                        synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), MAX_NODE_CHANNELS);
                     }
                 }else{
                     for(auto synthServer : synths){
                         synthServer.second->set(toSendName + "_sel", 0);
-                        synthServer.second->mapan(toSendName + "_ar", -1, 100);
+                        synthServer.second->mapan(toSendName + "_ar", -1, MAX_NODE_CHANNELS);
                     }
                 }
             }));
