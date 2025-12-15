@@ -345,6 +345,7 @@ private:
 	// Core parameters
 	ofParameter<int> numChannels;
 	ofParameter<int> pluginSelector;
+	ofParameter<float> mix;  // NEW: Dry/wet mix control (0=bypass, 1=100% wet)
 	
 	// VST management
 	ofParameter<void> openEditor;

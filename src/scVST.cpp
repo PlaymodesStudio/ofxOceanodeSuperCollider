@@ -6,6 +6,7 @@
 //  Extended by Santi Vilanova on 25/7/25.
 //
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "scVST.h"
 #include "ofxSCSynth.h"
 #include "imgui.h"
@@ -53,10 +54,14 @@ void scVST::setup(){
 	waitingForFXPSave = false;
 	waitingForFXPLoad = false;
 	
+	// CRITICAL: Add input and output FIRST to ensure they exist before any other initialization
+	// This prevents crashes when macros call update() on connected nodes during preset loading
 	scNode::addInput("In");
+	scNode::addOutput("Out");
 	
 	// Basic parameters
-	addParameter(numChannels.set("N Chan", 2, 1, 100));
+	addParameter(numChannels.set("N Chan", 2, 1, MAX_NODE_CHANNELS));
+	addParameter(mix.set("Mix", 1.0f, 0.0f, 1.0f));  // NEW: Dry/wet mix control
 	
 	// Thick separator after VST controls
 	addCustomRegion(
@@ -264,6 +269,17 @@ void scVST::setup(){
 		resendParams.notify();
 	}));
 	
+	listeners.push(mix.newListener([this](float &m){
+		// Send mix parameter to all VST instances
+		for(auto& serverInstances : synthInstances){
+			for(auto synth : serverInstances.second){
+				if(synth != nullptr){
+					synth->set("mix", m);
+				}
+			}
+		}
+	}));
+	
 	listeners.push(monoInstancing.newListener([this](bool &mono){
 		/*
 		 ofLogNotice("scVST") << "Instancing mode changed to " << (mono ? "mono" : "stereo")
@@ -354,17 +370,18 @@ void scVST::setup(){
 	}));
 	
 	listeners.push(resendParams.newListener([this](){
-		// Apply numChannels to all instances
+		// Apply numChannels and mix to all instances
 		for(auto& serverInstances : synthInstances){
 			for(auto synth : serverInstances.second){
 				if(synth != nullptr){
 					synth->set("inChannels", numChannels);
+					synth->set("mix", mix);  // NEW: Also resend mix parameter
 				}
 			}
 		}
 	}));
 	
-	scNode::addOutput("Out");
+	// Output was already added at the beginning of setup() to prevent race conditions
 	
 	addCustomRegion(
 					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
@@ -1993,17 +2010,41 @@ void scVST::loadBeforeConnections(ofJson &json) {
 	deserializeParameter(nodeJson, timeSignatureNum);
 	deserializeParameter(nodeJson, timeSignatureDenom);
 	
+	// NEW: Backward compatibility - only deserialize mix if it exists in the preset
+	// Old presets won't have this parameter, so we skip it to avoid crashes
+	if(nodeJson.contains("Mix") && !nodeJson["Mix"].is_null()) {
+		try {
+			deserializeParameter(nodeJson, mix);
+			// Validate the deserialized value
+			float mixValue = mix.get();
+			if(std::isnan(mixValue) || std::isinf(mixValue) || mixValue < 0.0f || mixValue > 1.0f) {
+				ofLogWarning("scVST") << "Invalid mix value detected (" << mixValue << "), resetting to 1.0";
+				mix.setWithoutEventNotifications(1.0f);
+			}
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error deserializing mix parameter: " << e.what() << " - using default";
+			mix.setWithoutEventNotifications(1.0f);
+		}
+	} else {
+		// Set default value for old presets (100% wet)
+		mix.setWithoutEventNotifications(1.0f);
+		ofLogNotice("scVST") << "Old preset detected - setting mix to default value (1.0)";
+	}
+	
 	if(nodeJson.contains("currentPluginPath") && !nodeJson["currentPluginPath"].is_null()) {
 		string savedPluginPath = static_cast<string>(nodeJson["currentPluginPath"]);
 		
-		// Find the plugin in our available plugins and set the selector
+		// FIXED: Set currentPluginPath directly instead of relying on index
+		// This ensures the correct plugin loads even if new plugins are installed
+		currentPluginPath = savedPluginPath;
+		
+		// Update the selector index for GUI display (but don't rely on it for loading)
 		bool pluginFound = false;
 		for(int i = 0; i < pluginPaths.size(); i++) {
 			if(pluginPaths[i] == savedPluginPath) {
-				//ofLogNotice("scVST") << "🔧 Setting plugin selector to " << i << " (" << savedPluginPath << ") for '" << nodeKey << "'";
 				pluginSelector.setWithoutEventNotifications(i);
-				currentPluginPath = savedPluginPath;
 				pluginFound = true;
+				ofLogNotice("scVST") << "✅ Found plugin at index " << i << ": " << savedPluginPath;
 				break;
 			}
 		}
@@ -2014,9 +2055,11 @@ void scVST::loadBeforeConnections(ofJson &json) {
 			for(int i = 0; i < pluginPaths.size(); i++) {
 				string currentPluginName = ofFilePath::getBaseName(pluginPaths[i]);
 				if(currentPluginName == savedPluginName) {
-					ofLogWarning("scVST") << "🔧 Plugin path changed, matched by name: " << savedPluginName << " at index " << i;
+					ofLogWarning("scVST") << "⚠️ Plugin path changed, matched by name: " << savedPluginName;
+					ofLogWarning("scVST") << "   Old path: " << savedPluginPath;
+					ofLogWarning("scVST") << "   New path: " << pluginPaths[i];
 					pluginSelector.setWithoutEventNotifications(i);
-					currentPluginPath = pluginPaths[i];
+					currentPluginPath = pluginPaths[i];  // Update to new path
 					pluginFound = true;
 					break;
 				}
@@ -2024,7 +2067,9 @@ void scVST::loadBeforeConnections(ofJson &json) {
 		}
 		
 		if(!pluginFound) {
-			ofLogError("scVST") << "❌ Could not find saved plugin: " << savedPluginPath << " - keeping current selection";
+			ofLogError("scVST") << "❌ Could not find saved plugin: " << savedPluginPath;
+			ofLogError("scVST") << "   Plugin will still attempt to load from saved path";
+			// Keep currentPluginPath as savedPluginPath - it might still work if the file exists
 		}
 	}
 	
