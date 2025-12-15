@@ -1,6 +1,7 @@
 #ifndef scA2k_h
 #define scA2k_h
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
 
@@ -19,7 +20,7 @@ public:
 	void setup(){
 		addParameter(input.set("In", nodePort()), ofxOceanodeParameterFlags_DisableOutConnection);
 		addParameter(serverIndex.set("Server", 0, 0, servers.size() - 1));
-		addParameter(numChannels.set("N Chan", 1, 1, 100));
+		addParameter(numChannels.set("N Chan", 1, 1, MAX_NODE_CHANNELS));
 		addOutputParameter(values.set("Values", {0}, {-FLT_MAX}, {FLT_MAX}));
 
 		listeners.push(input.newListener([this](nodePort &port){
