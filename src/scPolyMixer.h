@@ -180,8 +180,13 @@ private:
 	   
 	void safeSetInputBus(ofxSCServer* server, scNode* node, int bus);
 	void disableAllVUMeters(ofxSCServer* server);
-	void enableAllVUMeters(ofxSCServer* server);	
+	void enableAllVUMeters(ofxSCServer* server);
 	void restoreTrackParameters(ofxSCServer* server, int trackIndex);
+	
+	// Graph recomputation support
+	void moveSynthBefore(ofxSCServer* server, int nodeID) override;
+	int getLastSynthID(ofxSCServer* server) override;
+
 
 };
 

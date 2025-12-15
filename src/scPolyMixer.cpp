@@ -44,7 +44,7 @@ scPolyMixer::~scPolyMixer() {
 }
 
 void scPolyMixer::setup() {
-	// ofLogNotice("scPolyMixer") << "Starting setup...";
+	ofLogNotice("scPolyMixer") << "=== POLYMIXER SETUP - NEW CODE VERSION ===";
 	
 	try {
 		// Core parameters
@@ -86,26 +86,61 @@ void scPolyMixer::setup() {
 		// Set up parameter listeners
 		listeners.push(numTracks.newListener([this](int &tracks){
 			if(!isUpdatingTracks) {
+				// 1. Update GUI / parameters FIRST
 				updateTrackCount();
-			}
-		}));
-		
-		listeners.push(numChannels.newListener([this](int &channels){
-			if(!isUpdatingTracks) {
-				// Free existing synths - graph rebuild will recreate them properly
+
+				// 2. EFFICIENT: Use moveNext to rebuild synths without full graph recomputation
+				std::vector<ofxSCServer*> servers;
 				for(auto& serverInstances : trackInstances) {
 					if(serverInstances.first != nullptr) {
-						freeTrackInstances(serverInstances.first);
-						freeVUBuses(serverInstances.first);
+						servers.push_back(serverInstances.first);
 					}
 				}
 				
-				// Trigger graph recomputation - forces buildSynth/createSynth to be called
-				for(auto& output : outputs) {
-					output = output;
+				for(auto server : servers) {
+					// Get the last synth ID before freeing
+					int lastID = getLastSynthID(server);
+					
+					// Free and rebuild this node's synths
+					free(server);
+					buildSynth(server);
+					createSynth(server);
+					
+					// Move synths to correct position in graph
+					if(lastID > 0) {
+						moveSynthBefore(server, lastID);
+					}
 				}
 			}
 		}));
+
+		listeners.push(numChannels.newListener([this](int &channels){
+			if(!isUpdatingTracks) {
+				// EFFICIENT: Use moveNext to rebuild synths without full graph recomputation
+				std::vector<ofxSCServer*> servers;
+				for(auto& serverInstances : trackInstances) {
+					if(serverInstances.first != nullptr) {
+						servers.push_back(serverInstances.first);
+					}
+				}
+				
+				for(auto server : servers) {
+					// Get the last synth ID before freeing
+					int lastID = getLastSynthID(server);
+					
+					// Free and rebuild this node's synths
+					free(server);
+					buildSynth(server);
+					createSynth(server);
+					
+					// Move synths to correct position in graph
+					if(lastID > 0) {
+						moveSynthBefore(server, lastID);
+					}
+				}
+			}
+		}));
+
 		
 		listeners.push(masterLevel.newListener([this](vector<float> &levels){
 			updateMasterLevel(levels);
@@ -119,6 +154,43 @@ void scPolyMixer::setup() {
 		
 		
 		
+		
+		// Override input listeners to efficiently handle connection changes
+		// Use moveNext instead of full graph recomputation
+		for(int i = 0; i < inputs.size(); i++) {
+			int inputIndex = i;
+			listeners.push(inputs[i].newListener([this, inputIndex](nodePort &port){
+				ofLogNotice("scPolyMixer") << "Input " << inputIndex << " changed, using efficient moveNext";
+				
+				// Update the input port reference
+				if(availableInputs.size() > inputIndex && availableInputs[inputIndex] != nullptr) {
+					*availableInputs[inputIndex] = port;
+				}
+				
+				// EFFICIENT: Use moveNext to update connections without full graph recomputation
+				std::vector<ofxSCServer*> servers;
+				for(auto& serverInstances : trackInstances) {
+					if(serverInstances.first != nullptr) {
+						servers.push_back(serverInstances.first);
+					}
+				}
+				
+				for(auto server : servers) {
+					// Get the last synth ID before freeing
+					int lastID = getLastSynthID(server);
+					
+					// Free and rebuild this node's synths
+					free(server);
+					buildSynth(server);
+					createSynth(server);
+					
+					// Move synths to correct position in graph
+					if(lastID > 0) {
+						moveSynthBefore(server, lastID);
+					}
+				}
+			}));
+		}
 		
 		// Add single output
 		scNode::addOutput("Out");
@@ -555,6 +627,70 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 	}
 }
 	
+int scPolyMixer::getLastSynthID(ofxSCServer* server) {
+	if (!server) return -1;
+	if (trackInstances.count(server) == 0) return -1;
+
+	int lastID = -1;
+
+	for (auto *synth : trackInstances[server]) {
+		if (synth && synth->nodeID > 0)
+			lastID = synth->nodeID;
+	}
+
+	return lastID;
+}
+
+void scPolyMixer::moveSynthBefore(ofxSCServer* server, int nodeID)
+{
+	if (!server) return;
+	if (trackInstances.count(server) == 0) return;
+
+	// Re-send parameters (this is consistent with other nodes)
+	resendParams.notify();
+
+	auto &instances = trackInstances[server];
+
+	for (int i = 0; i < instances.size(); i++) {
+		ofxSCSynth *synth = instances[i];
+		if (!synth) continue;
+
+		try {
+			// --- Restore parameters per track ---
+
+			restoreTrackParameters(server, i);
+
+			// Restore output bus
+			if (outputBuses[server].count(0) > 0)
+				synth->set("out", outputBuses[server][0]);
+
+			// Restore input bus (if any)
+			for (auto &pair : inputBuses[server]) {
+				scNode *node = pair.first;
+				int bus = pair.second;
+
+				// match track by input index
+				if (trackInputIndices.count(i) &&
+					availableInputs[trackInputIndices[i]] != nullptr &&
+					availableInputs[trackInputIndices[i]]->getNodeRef() == node)
+				{
+					synth->set("in", bus);
+					break;
+				}
+			}
+
+			// Finally, move synth in the graph
+			synth->moveBefore(nodeID);
+
+		}
+		catch (const std::exception &e) {
+			ofLogError("scPolyMixer") << "Error in moveSynthBefore for track "
+									  << i << ": " << e.what();
+		}
+	}
+}
+
+
 void scPolyMixer::recreateVUBuses(ofxSCServer* server) {
 	if(server == nullptr) {
 		ofLogError("scPolyMixer") << "Cannot recreate VU buses: server is null";
@@ -1184,13 +1320,31 @@ void scPolyMixer::free(ofxSCServer* server) {
 		}
 	}
 	
-
 void scPolyMixer::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 	if(server == nullptr || node == nullptr) {
 		ofLogError("scPolyMixer") << "Cannot set input bus: server or node is null";
 		return;
 	}
 	
+	// --- Handle disconnection (bus == -1) ---
+	if(bus == -1) {
+		ofLogNotice("scPolyMixer") << "=== POLYMIXER INPUT DISCONNECTED ===";
+		
+		// Remove from input buses map
+		inputBuses[server].erase(node);
+		
+		// Trigger graph recomputation - the output notification will cause
+		// serverManager to call recomputeGraph()
+		ofLogNotice("scPolyMixer") << "Triggering graph recomputation via output notification";
+		for(auto &output : outputs) {
+			output = output;
+		}
+		
+		ofLogNotice("scPolyMixer") << "=== DISCONNECTION HANDLING COMPLETE ===";
+		return;
+	}
+	
+	// --- Normal connection / bus change ---
 	inputBuses[server][node] = bus;
 	ofLogNotice("scPolyMixer") << "Input bus set to " << bus << " for node";
 	
@@ -1199,7 +1353,7 @@ void scPolyMixer::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 		int trackIndex = trackIndexPair.first;
 		int inputIndex = trackIndexPair.second;
 		
-		if(inputIndex < 0 || inputIndex >= availableInputs.size()) {
+		if(inputIndex < 0 || inputIndex >= (int)availableInputs.size()) {
 			continue;
 		}
 		
@@ -1207,7 +1361,7 @@ void scPolyMixer::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 		   availableInputs[inputIndex]->getNodeRef() == node) {
 			
 			if(trackInstances.count(server) > 0 &&
-			   trackIndex >= 0 && trackIndex < trackInstances[server].size() &&
+			   trackIndex >= 0 && trackIndex < (int)trackInstances[server].size() &&
 			   trackInstances[server][trackIndex] != nullptr) {
 				
 				try {
@@ -1223,6 +1377,7 @@ void scPolyMixer::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 		}
 	}
 }
+
 
 void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 	if(server == nullptr || trackInstances.count(server) == 0 ||
