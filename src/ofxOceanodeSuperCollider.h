@@ -8,8 +8,7 @@
 #ifndef ofxOceanodeSuperCollider_h
 #define ofxOceanodeSuperCollider_h
 
-#define MAX_NODE_CHANNELS 100
-
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanode.h"
 #include "scStart.h"
 #include "scSynthdef.h"
@@ -22,6 +21,7 @@
 //#include "scOut.h"
 #include "scTonal.h"
 #include "scBuffer.h"
+#include "scWavetableBuffer.h"
 #include "scRecbufHold.h"
 #include "scBufferScope.h"
 #include "scFreezer.h"
@@ -111,6 +111,7 @@ static void registerModels(ofxOceanode &o){
 
 	o.registerModel<scInfo>("SuperCollider", controller->getServers());
 	o.registerModel<scBuffer>("SuperCollider", controller->getServers());
+	o.registerModel<scWavetableBuffer>("SuperCollider", controller->getServers());
 	o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
 	o.registerModel<scRecbufHold>("SuperCollider", controller->getServers());
 	o.registerModel<scBufferAllocator>("SuperCollider", controller->getServers());
