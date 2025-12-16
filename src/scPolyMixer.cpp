@@ -5,6 +5,7 @@
 //  Multi-track mixer with dynamic track count and multi-instancing
 //
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "scPolyMixer.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -49,18 +50,16 @@ void scPolyMixer::setup() {
 	try {
 		// Core parameters
 		addParameter(numTracks.set("Num Tracks", 4, 1, 12)); // Limit to 12 tracks to prevent graphics crashes
-		addParameter(numChannels.set("Num Channels", 2, 1, 16));
+		addParameter(numChannels.set("Num Channels", 2, 1, MAX_NODE_CHANNELS));
 
 		addCustomRegion(
 			ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
 			ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
 		);
 		
-		// Master level - 0-1 range (0 = -60dB, 1 = +6dB, default ~0.86 = -3dB)
-		float defaultMasterLevel = ((-3.0f + 60.0f) / 66.0f); // Convert -3dB to 0-1 range
-		addParameter(masterLevel.set("Master Level", vector<float>(1, defaultMasterLevel),
+		addParameter(masterLevel.set("Master Level", vector<float>(1, 1.0f),  // Default 1.0
 									vector<float>(1, 0.0f),
-									vector<float>(1, 1.0f)));
+									vector<float>(1, 2.0f)));
 		
 		// Gain Vec - linear amp multipliers per track (starts with 4 tracks)
 		addParameter(gainVec.set("Gain Vec", vector<float>(4, 1.0f),
@@ -81,15 +80,23 @@ void scPolyMixer::setup() {
 		// Master VU Attack/Release parameters - inspector parameters
 		addInspectorParameter(masterVUAttack.set("Master VU Attack", 10.0f, 1.0f, 100.0f)); // ms
 		addInspectorParameter(masterVURelease.set("Master VU Release", 300.0f, 10.0f, 2000.0f)); // ms
-	
+
+		// VU height parameters
+		addInspectorParameter(trackVUHeight.set("Track VU Height", 40.0f, 10.0f, 200.0f)); // px
+		addInspectorParameter(masterVUHeight.set("Master VU Height", 60.0f, 10.0f, 200.0f)); // px
+
+		addInspectorParameter(drawVU.set("Draw VU", true));
 		
 		// Set up parameter listeners
 		listeners.push(numTracks.newListener([this](int &tracks){
 			if(!isUpdatingTracks) {
+				// Store old value
+				static int oldNumTracks = tracks;
+				
 				// 1. Update GUI / parameters FIRST
 				updateTrackCount();
 
-				// 2. EFFICIENT: Use moveNext to rebuild synths without full graph recomputation
+				// 2. Recreate synths using REPLACEMENT action
 				std::vector<ofxSCServer*> servers;
 				for(auto& serverInstances : trackInstances) {
 					if(serverInstances.first != nullptr) {
@@ -98,25 +105,58 @@ void scPolyMixer::setup() {
 				}
 				
 				for(auto server : servers) {
-					// Get the last synth ID before freeing
-					int lastID = getLastSynthID(server);
+					// Recreate VU buses FIRST
+					recreateVUBuses(server);
 					
-					// Free and rebuild this node's synths
-					free(server);
-					buildSynth(server);
-					createSynth(server);
-					
-					// Move synths to correct position in graph
-					if(lastID > 0) {
-						moveSynthBefore(server, lastID);
+					// Recreate each track instance with replacement
+					if(trackInstances.count(server) > 0) {
+						auto& instances = trackInstances[server];
+						int numTrackInstances = calculateNumTrackInstances();
+						
+						// Resize instances vector
+						if(instances.size() != numTrackInstances) {
+							// Free excess instances
+							for(int i = numTrackInstances; i < instances.size(); i++) {
+								if(instances[i] != nullptr) {
+									instances[i]->free();
+									delete instances[i];
+								}
+							}
+							instances.resize(numTrackInstances, nullptr);
+						}
+						
+						// Recreate all instances with REPLACEMENT action
+						for(int i = 0; i < instances.size(); i++) {
+							if(instances[i] != nullptr) {
+								// Create new synth with replacement action
+								ofxSCSynth* newSynth = new ofxSCSynth(getSynthDefName(), server);
+								newSynth->create(4, instances[i]->nodeID); // 4 = kAddAction_replace
+								
+								// Delete old synth
+								delete instances[i];
+								instances[i] = newSynth;
+							} else {
+								// Create new instance if it doesn't exist
+								instances[i] = new ofxSCSynth(getSynthDefName(), server);
+								instances[i]->create();
+							}
+						}
 					}
 				}
+				
+				// Restore ALL parameters using resendParams - THIS IS THE KEY!
+				resendParams.notify();
+				
+				oldNumTracks = tracks;
 			}
 		}));
 
 		listeners.push(numChannels.newListener([this](int &channels){
 			if(!isUpdatingTracks) {
-				// EFFICIENT: Use moveNext to rebuild synths without full graph recomputation
+				// Store old value
+				static int oldNumChannels = channels;
+				
+				// Recreate synths using REPLACEMENT action
 				std::vector<ofxSCServer*> servers;
 				for(auto& serverInstances : trackInstances) {
 					if(serverInstances.first != nullptr) {
@@ -125,20 +165,109 @@ void scPolyMixer::setup() {
 				}
 				
 				for(auto server : servers) {
-					// Get the last synth ID before freeing
-					int lastID = getLastSynthID(server);
+					// Recreate VU buses with new channel count FIRST
+					recreateVUBuses(server);
 					
-					// Free and rebuild this node's synths
-					free(server);
-					buildSynth(server);
-					createSynth(server);
-					
-					// Move synths to correct position in graph
-					if(lastID > 0) {
-						moveSynthBefore(server, lastID);
+					// Recreate each track instance with replacement
+					if(trackInstances.count(server) > 0) {
+						auto& instances = trackInstances[server];
+						
+						// Recreate all instances with new channel count using REPLACEMENT
+						for(int i = 0; i < instances.size(); i++) {
+							if(instances[i] != nullptr) {
+								// Create new synth with replacement action
+								ofxSCSynth* newSynth = new ofxSCSynth(getSynthDefName(), server);
+								newSynth->create(4, instances[i]->nodeID); // 4 = kAddAction_replace
+								
+								// Delete old synth
+								delete instances[i];
+								instances[i] = newSynth;
+							}
+						}
 					}
 				}
+				
+				// Restore ALL parameters using resendParams - THIS IS THE KEY!
+				resendParams.notify();
+				
+				// Update peak tracking arrays for new channel count
+				for(auto& peakPair : trackPeakLevels) {
+					peakPair.second.resize(channels, -60.0f);
+				}
+				for(auto& timerPair : trackPeakDecayTimers) {
+					timerPair.second.resize(channels, 0.0f);
+				}
+				masterPeakLevels.resize(channels, -60.0f);
+				masterPeakDecayTimers.resize(channels, 0.0f);
+				
+				// Update VU parameter sizes
+				for(auto& vuParam : vuParameters) {
+					vector<float> newVU(channels, 0.0f);
+					vuParam.second.set(newVU);
+				}
+				
+				// Update master VU
+				vector<float> newMasterVU(channels, 0.0f);
+				masterVUMeter.set(newMasterVU);
+				
+				if(masterVUData != nullptr) {
+					masterVUData->getParameter().set(newMasterVU);
+				}
+				
+				oldNumChannels = channels;
 			}
+		}));
+		
+		listeners.push(resendParams.newListener([this](){
+			ofLogNotice("scPolyMixer") << "=== RESEND PARAMS TRIGGERED ===";
+			
+			// Restore parameters for all tracks across all servers
+			for(auto& serverInstances : trackInstances) {
+				ofxSCServer* server = serverInstances.first;
+				if(server == nullptr) continue;
+				
+				auto& instances = serverInstances.second;
+				for(int i = 0; i < instances.size(); i++) {
+					if(instances[i] != nullptr) {
+						restoreTrackParameters(server, i);  // This now includes solo logic
+					}
+				}
+				
+				// Restore input buses
+				for(auto& inputPair : inputBuses[server]) {
+					scNode* node = inputPair.first;
+					int bus = inputPair.second;
+					
+					for(auto& trackIndexPair : trackInputIndices) {
+						int trackIndex = trackIndexPair.first;
+						int inputIndex = trackIndexPair.second;
+						
+						if(inputIndex >= 0 && inputIndex < availableInputs.size() &&
+						   availableInputs[inputIndex] != nullptr &&
+						   availableInputs[inputIndex]->getNodeRef() == node) {
+							
+							if(trackIndex < instances.size() && instances[trackIndex] != nullptr) {
+								instances[trackIndex]->set("in", bus);
+								ofLogNotice("scPolyMixer") << "Restored input bus " << bus << " for track " << trackIndex;
+							}
+							break;
+						}
+					}
+				}
+				
+				// Restore output bus for all tracks
+				if(outputBuses[server].count(0) > 0) {
+					int outBus = outputBuses[server][0];
+					for(auto synth : instances) {
+						if(synth != nullptr) {
+							synth->set("out", outBus);
+						}
+					}
+					ofLogNotice("scPolyMixer") << "Restored output bus " << outBus << " for all tracks";
+				}
+			}
+			
+			ofLogNotice("scPolyMixer") << "=== RESEND PARAMS COMPLETE (solo logic applied) ===";
 		}));
 
 		
@@ -152,45 +281,15 @@ void scPolyMixer::setup() {
 			}
 		}));
 		
+		listeners.push(masterVUAttack.newListener([this](float &v){
+			updateAllTracksVUTiming(v, -1.0f);
+		}));
+
+		listeners.push(masterVURelease.newListener([this](float &v){
+			updateAllTracksVUTiming(-1.0f, v);
+		}));
+
 		
-		
-		
-		// Override input listeners to efficiently handle connection changes
-		// Use moveNext instead of full graph recomputation
-		for(int i = 0; i < inputs.size(); i++) {
-			int inputIndex = i;
-			listeners.push(inputs[i].newListener([this, inputIndex](nodePort &port){
-				ofLogNotice("scPolyMixer") << "Input " << inputIndex << " changed, using efficient moveNext";
-				
-				// Update the input port reference
-				if(availableInputs.size() > inputIndex && availableInputs[inputIndex] != nullptr) {
-					*availableInputs[inputIndex] = port;
-				}
-				
-				// EFFICIENT: Use moveNext to update connections without full graph recomputation
-				std::vector<ofxSCServer*> servers;
-				for(auto& serverInstances : trackInstances) {
-					if(serverInstances.first != nullptr) {
-						servers.push_back(serverInstances.first);
-					}
-				}
-				
-				for(auto server : servers) {
-					// Get the last synth ID before freeing
-					int lastID = getLastSynthID(server);
-					
-					// Free and rebuild this node's synths
-					free(server);
-					buildSynth(server);
-					createSynth(server);
-					
-					// Move synths to correct position in graph
-					if(lastID > 0) {
-						moveSynthBefore(server, lastID);
-					}
-				}
-			}));
-		}
 		
 		// Add single output
 		scNode::addOutput("Out");
@@ -233,6 +332,38 @@ void scPolyMixer::setup() {
 }
 
 void scPolyMixer::update(ofEventArgs &args) {
+	// Process deferred track additions FIRST
+	if(needsGUIRebuild && !tracksToAddNextFrame.empty() && !isLoadingPreset) {
+		isUpdatingTracks = true;
+		
+		ofLogNotice("scPolyMixer") << "Processing deferred track additions: "
+								   << tracksToAddNextFrame.size() << " tracks";
+		
+		for(int trackIndex : tracksToAddNextFrame) {
+			try {
+				trackPeakLevels[trackIndex] = vector<float>(numChannels.get(), -60.0f);
+				trackPeakDecayTimers[trackIndex] = vector<float>(numChannels.get(), 0.0f);
+				
+				string vuName = "VU " + ofToString(trackIndex + 1);
+				vector<float> defaultVU(numChannels.get(), 0.0f);
+				vuParameters[trackIndex].set(vuName, defaultVU,
+											vector<float>(numChannels.get(), 0.0f),
+											vector<float>(numChannels.get(), 1.0f));
+				
+				addTrackToGUI(trackIndex);
+				
+			} catch(const std::exception& e) {
+				ofLogError("scPolyMixer") << "Error adding deferred track " << trackIndex << ": " << e.what();
+			}
+		}
+		
+		tracksToAddNextFrame.clear();
+		needsGUIRebuild = false;
+		isUpdatingTracks = false;
+		
+		ofLogNotice("scPolyMixer") << "Deferred track addition complete";
+	}
+	
 	// Update individual track VU meters
 	vector<float> masterSum(numChannels.get(), 0.0f);
 	int activeTracks = 0;
@@ -244,17 +375,39 @@ void scPolyMixer::update(ofEventArgs &args) {
 		auto& buses = serverBuses.second;
 		for(int trackIndex = 0; trackIndex < buses.size(); trackIndex++) {
 			if(buses[trackIndex] != nullptr && vuParameters.count(trackIndex) > 0) {
-				// The ofxSCServer safety checks will prevent crashes during /c_set
-				vector<float> trackLevels = buses[trackIndex]->readValues;
+				
+				// CRITICAL: Check if track has an active input connection
+				bool hasInput = false;
+				
+				// Check connection status
+				if(trackInputIndices.count(trackIndex) > 0) {
+					int inputIndex = trackInputIndices[trackIndex];
+					if(inputIndex >= 0 && inputIndex < availableInputs.size() &&
+					   availableInputs[inputIndex] != nullptr &&
+					   availableInputs[inputIndex]->getNodeRef() != nullptr) {
+						hasInput = true;
+					}
+				}
+				
+				vector<float> trackLevels;
+				
+				if(hasInput) {
+					// Track has input - read actual VU data from SuperCollider
+					trackLevels = buses[trackIndex]->readValues;
+				} else {
+					// Track has NO input - zero out VU meter immediately
+					trackLevels = vector<float>(numChannels.get(), 0.0f);
+				}
+				
 				vuParameters[trackIndex].setWithoutEventNotifications(trackLevels);
 				
-				// Update VU Data output parameter
 				if(trackVUData.count(trackIndex) > 0 && trackVUData[trackIndex] != nullptr) {
 					trackVUData[trackIndex]->getParameter().set(trackLevels);
 				}
 				
-				// Sum for master VU
-				bool trackIsAudible = true;
+				// Sum for master VU (only if track is audible AND has input)
+				bool trackIsAudible = hasInput;
+				
 				if(trackMuteParams.count(trackIndex) > 0 && trackMuteParams[trackIndex]->get()) {
 					trackIsAudible = false;
 				}
@@ -270,23 +423,20 @@ void scPolyMixer::update(ofEventArgs &args) {
 					activeTracks++;
 				}
 				
+				// Always request next values to keep bus active
 				buses[trackIndex]->requestValues();
 			}
 		}
 	}
 	
 	// Update master VU meter
-	// Update master VU meter
 	vector<float> masterLevels = masterLevel.get();
 
 	for(int ch = 0; ch < masterSum.size(); ch++) {
-		// Get per-channel master level (or use first if scalar)
-		float masterNormalizedLevel = (ch < masterLevels.size()) ? masterLevels[ch] :
-									  (masterLevels.size() > 0 ? masterLevels[0] : ((-3.0f + 60.0f) / 66.0f));
-		float masterDbLevel = (masterNormalizedLevel * 66.0f) - 60.0f;
-		float masterScale = dbToAmp(masterDbLevel);
+		float masterLinearLevel = (ch < masterLevels.size()) ? masterLevels[ch] :
+								  (masterLevels.size() > 0 ? masterLevels[0] : 1.0f);
 		
-		masterSum[ch] = ofClamp(masterSum[ch] * masterScale, 0.0f, 2.0f);
+		masterSum[ch] = ofClamp(masterSum[ch] * masterLinearLevel, 0.0f, 2.0f);
 	}
 	
 	masterVUMeter.setWithoutEventNotifications(masterSum);
@@ -295,6 +445,7 @@ void scPolyMixer::update(ofEventArgs &args) {
 		masterVUData->getParameter().set(masterSum);
 	}
 }
+
 
 
 int scPolyMixer::calculateNumTrackInstances() const {
@@ -315,55 +466,26 @@ void scPolyMixer::updateTrackCount() {
 	
 	try {
 		int currentTracks = numTracks.get();
-		// ofLogNotice("scPolyMixer") << "Updating track count to " << currentTracks;
-		
-		// SAFETY CHECK: Don't proceed if SuperCollider isn't ready
-		// Check if we have any server instances and if they're properly initialized
-		bool scReady = trackInstances.empty(); // If no instances, we're safe to proceed
-		
-		for(auto& serverInstances : trackInstances) {
-			if(serverInstances.first != nullptr) {
-				// Check if server exists and has been initialized
-				// We'll assume it's ready if we have a valid server pointer
-				scReady = true;
-				break;
-			}
-		}
-		
-		// For now, always proceed but with extra logging
-		if(!scReady) {
-			// ofLogWarning("scPolyMixer") << "SuperCollider server may not be ready, proceeding with caution";
-		}
-		
-		// INCREMENTAL APPROACH: Only change what needs to change
 		
 		if(trackLevels.size() != currentTracks) {
-			// ofLogNotice("scPolyMixer") << "Updating tracks: " << trackLevels.size() << " -> " << currentTracks;
-			
 			int oldSize = trackLevels.size();
 			
 			if(oldSize > currentTracks) {
-				// REMOVING TRACKS: Remove from the end, one by one
-				// CRITICAL: Process all removals first, then clean up
+				// REMOVING TRACKS
 				vector<int> tracksToRemove;
 				for(int j = oldSize - 1; j >= currentTracks; j--) {
 					tracksToRemove.push_back(j);
 				}
 				
-				// Remove all tracks in one batch to avoid multiple GUI updates
 				for(int trackIndex : tracksToRemove) {
 					removeTrackFromGUI(trackIndex);
 				}
 				
-				// Remove excess inputs one by one using the safe method
 				while(inputs.size() > currentTracks) {
 					int lastIndex = inputs.size() - 1;
 					try {
 						scNode::removeInput(lastIndex);
-						// ofLogVerbose("scPolyMixer") << "Removed input " << lastIndex;
 					} catch(const std::exception& e) {
-						// ofLogWarning("scPolyMixer") << "Error removing input " << lastIndex << ": " << e.what();
-						// If we can't remove safely, just clear the vectors
 						inputs.clear();
 						availableInputs.clear();
 						break;
@@ -371,20 +493,43 @@ void scPolyMixer::updateTrackCount() {
 				}
 				
 			} else {
-				// ADDING TRACKS: Add new tracks to the end
-				for(int trackIndex = oldSize; trackIndex < currentTracks; trackIndex++) {
-					try {
-						addTrackToGUI(trackIndex);
-					} catch(const std::exception& e) {
-						ofLogError("scPolyMixer") << "Error adding track " << trackIndex << ": " << e.what();
+				// ADDING TRACKS
+				// If loading preset, add immediately; otherwise defer to next frame
+				if(isLoadingPreset) {
+					ofLogNotice("scPolyMixer") << "Preset loading: adding tracks immediately";
+					for(int trackIndex = oldSize; trackIndex < currentTracks; trackIndex++) {
+						try {
+							// Pre-allocate tracking data
+							trackPeakLevels[trackIndex] = vector<float>(numChannels.get(), -60.0f);
+							trackPeakDecayTimers[trackIndex] = vector<float>(numChannels.get(), 0.0f);
+							
+							string vuName = "VU " + ofToString(trackIndex + 1);
+							vector<float> defaultVU(numChannels.get(), 0.0f);
+							vuParameters[trackIndex].set(vuName, defaultVU,
+														vector<float>(numChannels.get(), 0.0f),
+														vector<float>(numChannels.get(), 1.0f));
+							
+							addTrackToGUI(trackIndex);
+						} catch(const std::exception& e) {
+							ofLogError("scPolyMixer") << "Error adding track " << trackIndex << ": " << e.what();
+						}
 					}
+				} else {
+					// Normal operation: defer to next frame
+					tracksToAddNextFrame.clear();
+					for(int trackIndex = oldSize; trackIndex < currentTracks; trackIndex++) {
+						tracksToAddNextFrame.push_back(trackIndex);
+					}
+					needsGUIRebuild = true;
+					ofLogNotice("scPolyMixer") << "Scheduled " << tracksToAddNextFrame.size()
+											  << " tracks for addition next frame";
 				}
 			}
 		}
 		
-		// Update gainVec to match track count - one multiplier per track
+		// Update gainVec to match track count
 		vector<float> currentLevels = gainVec.get();
-		currentLevels.resize(currentTracks, 1.0f); // Default multiplier 1.0 for new tracks
+		currentLevels.resize(currentTracks, 1.0f);
 		gainVec.setWithoutEventNotifications(currentLevels);
 		
 		// Update solo tracking
@@ -395,10 +540,6 @@ void scPolyMixer::updateTrackCount() {
 			}
 		}
 		soloedTracks = validSoloedTracks;
-		
-		// ofLogNotice("scPolyMixer") << "Track count update complete - now have "
-		//						   << trackLevels.size() << " tracks and " << inputs.size() << " inputs";
-		
 		
 	} catch(const std::exception& e) {
 		ofLogError("scPolyMixer") << "Error in updateTrackCount: " << e.what();
@@ -411,15 +552,10 @@ void scPolyMixer::updateTrackCount() {
 
 void scPolyMixer::addTrackToGUI(int trackIndex) {
 	if(trackLevels.count(trackIndex) > 0) {
-		// ofLogWarning("scPolyMixer") << "Track " << trackIndex << " already exists in GUI";
 		return;
 	}
 	
-	// No need to process pending removals since we now do immediate removal
-	// ofLogNotice("scPolyMixer") << "Adding track " << trackIndex << " (immediate removal system active)";
-	
 	string trackName = "Track " + ofToString(trackIndex + 1);
-	// ofLogNotice("scPolyMixer") << "Adding " << trackName << " to GUI";
 	
 	try {
 		// Add input if we don't have enough
@@ -434,15 +570,11 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 		auto levelParam = std::make_shared<ofParameter<vector<float>>>();
 		auto muteParam = std::make_shared<ofParameter<bool>>();
 		auto soloParam = std::make_shared<ofParameter<bool>>();
-		auto vuAttackParam = std::make_shared<ofParameter<float>>();
-		auto vuReleaseParam = std::make_shared<ofParameter<float>>();
 		
 		try {
-			// Track level parameter - 0-1 range (0 = -60dB, 1 = +6dB, default ~0.86 = -3dB)
-			float defaultTrackLevel = ((-3.0f + 60.0f) / 66.0f); // Convert -3dB to 0-1 range
-			vector<float> defaultLevel(1, defaultTrackLevel);
+			vector<float> defaultLevel(1, 0.5f);
 			levelParam->set("Level " + ofToString(trackIndex + 1), defaultLevel,
-						   vector<float>(1, 0.0f), vector<float>(1, 1.0f));
+						   vector<float>(1, 0.0f), vector<float>(1, 2.0f));
 			trackLevelParams[trackIndex] = levelParam;
 			auto levelOceanodeParam = addParameter(*levelParam);
 			trackLevels[trackIndex] = levelOceanodeParam;
@@ -452,7 +584,6 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 		}
 		
 		try {
-			// Create mute and solo parameters - HIDDEN from regular GUI (only shown in imgui widget)
 			muteParam->set("Mute " + ofToString(trackIndex + 1), false);
 			trackMuteParams[trackIndex] = muteParam;
 			addInspectorParameter(*muteParam);
@@ -470,40 +601,28 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 			throw;
 		}
 		
-		try {
-			// VU Attack/Release parameters - HIDDEN inspector parameters
-			vuAttackParam->set("VU Attack " + ofToString(trackIndex + 1), 10.0f, 1.0f, 100.0f); // ms
-			trackVUAttack[trackIndex] = vuAttackParam;
-			addInspectorParameter(*vuAttackParam);
-		} catch(const std::exception& e) {
-			ofLogError("scPolyMixer") << "Error creating VU attack parameter for track " << trackIndex << ": " << e.what();
-			throw;
+		// Peak tracking was already pre-allocated in updateTrackCount()
+		// Just verify it exists
+		if(trackPeakLevels.count(trackIndex) == 0) {
+			trackPeakLevels[trackIndex] = vector<float>(numChannels.get(), -60.0f);
+			trackPeakDecayTimers[trackIndex] = vector<float>(numChannels.get(), 0.0f);
+		}
+		
+		// VU parameter was already pre-allocated in updateTrackCount()
+		// Just add it to the inspector
+		if(vuParameters.count(trackIndex) > 0) {
+			addInspectorParameter(vuParameters[trackIndex]);
+		} else {
+			// Fallback: create it now if somehow not pre-allocated
+			string vuName = "VU " + ofToString(trackIndex + 1);
+			vector<float> defaultVU(numChannels.get(), 0.0f);
+			vuParameters[trackIndex].set(vuName, defaultVU,
+										vector<float>(numChannels.get(), 0.0f),
+										vector<float>(numChannels.get(), 1.0f));
+			addInspectorParameter(vuParameters[trackIndex]);
 		}
 		
 		try {
-			vuReleaseParam->set("VU Release " + ofToString(trackIndex + 1), 300.0f, 10.0f, 2000.0f); // ms
-			trackVURelease[trackIndex] = vuReleaseParam;
-			addInspectorParameter(*vuReleaseParam);
-		} catch(const std::exception& e) {
-			ofLogError("scPolyMixer") << "Error creating VU release parameter for track " << trackIndex << ": " << e.what();
-			throw;
-		}
-		
-		// Initialize peak tracking for this track
-		trackPeakLevels[trackIndex] = vector<float>(numChannels.get(), -60.0f); // Start at -60dB
-		trackPeakDecayTimers[trackIndex] = vector<float>(numChannels.get(), 0.0f);
-		
-		// VU Meter parameter - EXACTLY like scInfo - HIDDEN from regular GUI
-		string vuName = "VU " + ofToString(trackIndex + 1);
-		vector<float> defaultVU(numChannels.get(), 0.0f);
-		vuParameters[trackIndex].set(vuName, defaultVU,
-									vector<float>(numChannels.get(), 0.0f),
-									vector<float>(numChannels.get(), 1.0f));
-		// Add as inspector parameter (hidden from regular GUI, only shown in imgui widget)
-		addInspectorParameter(vuParameters[trackIndex]);
-		
-		try {
-			// VU Data output parameter - normalized 0-1 VU meter data for other nodes
 			string vuDataName = "VU Data " + ofToString(trackIndex + 1);
 			vector<float> defaultVUData(numChannels.get(), 0.0f);
 			auto vuDataParam = std::make_shared<ofParameter<vector<float>>>();
@@ -517,10 +636,6 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 			throw;
 		}
 		
-		// ofLogNotice("scPolyMixer") << "Created VU Data output parameter for track " << trackIndex
-		//						   << " with " << numChannels.get() << " channels";
-		
-		// Add the compact widget as a custom region
 		string widgetName = "Track " + ofToString(trackIndex + 1) + " Control";
 		try {
 			addCustomRegion(
@@ -536,7 +651,6 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 			throw;
 		}
 		
-		// Add a subtle separator after each track widget
 		string separatorName = "TrackSeparator_" + ofToString(trackIndex);
 		try {
 			addCustomRegion(
@@ -566,7 +680,6 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 			throw;
 		}
 		
-		// Set up listeners for level, mute, solo (but NOT for VU - it's output only)
 		listeners.push(levelParam->newListener([this, trackIndex](vector<float> &levels){
 			if(!isUpdatingTracks && trackLevels.count(trackIndex) > 0) {
 				updateTrackInstanceLevel(trackIndex, levels);
@@ -587,38 +700,13 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 			}
 		}));
 		
-		// Add listeners for VU attack/release parameters
-		listeners.push(vuAttackParam->newListener([this, trackIndex](float &attackTime){
-			if(!isUpdatingTracks) {
-				updateTrackVUTiming(trackIndex, attackTime, -1.0f); // -1 means don't change release
-			}
-		}));
-		
-		listeners.push(vuReleaseParam->newListener([this, trackIndex](float &releaseTime){
-			if(!isUpdatingTracks) {
-				updateTrackVUTiming(trackIndex, -1.0f, releaseTime); // -1 means don't change attack
-			}
-		}));
-		
-		// ofLogNotice("scPolyMixer") << "Successfully added " << trackName;
-		
 	} catch(const std::exception& e) {
 		ofLogError("scPolyMixer") << "Error adding track " << trackIndex << ": " << e.what();
-		// Clean up on error
 		trackLevels.erase(trackIndex);
-		trackVUData.erase(trackIndex); // Remove VU Data output parameter
-		// trackMutes and trackSolos maps removed - using direct parameters now
+		trackVUData.erase(trackIndex);
 		trackLevelParams.erase(trackIndex);
 		trackMuteParams.erase(trackIndex);
 		trackSoloParams.erase(trackIndex);
-		trackVUAttack.erase(trackIndex);
-		trackVURelease.erase(trackIndex);
-		trackPeakLevels.erase(trackIndex);
-		trackPeakDecayTimers.erase(trackIndex);
-		trackVUAttack.erase(trackIndex);
-		trackVURelease.erase(trackIndex);
-		
-		// Clear peak tracking data
 		trackPeakLevels.erase(trackIndex);
 		trackPeakDecayTimers.erase(trackIndex);
 		trackInputIndices.erase(trackIndex);
@@ -651,13 +739,13 @@ void scPolyMixer::moveSynthBefore(ofxSCServer* server, int nodeID)
 
 	auto &instances = trackInstances[server];
 
-	for (int i = 0; i < instances.size(); i++) {
+	//we iterate reversedly to address the bus allocation order
+	for (int i = instances.size()-1 ; i >= 0; i--) {
 		ofxSCSynth *synth = instances[i];
 		if (!synth) continue;
 
 		try {
-			// --- Restore parameters per track ---
-
+			// --- Restore parameters per track (now includes solo logic) ---
 			restoreTrackParameters(server, i);
 
 			// Restore output bus
@@ -688,6 +776,8 @@ void scPolyMixer::moveSynthBefore(ofxSCServer* server, int nodeID)
 									  << i << ": " << e.what();
 		}
 	}
+	
+	ofLogNotice("scPolyMixer") << "moveSynthBefore complete (solo logic applied via restoreTrackParameters)";
 }
 
 
@@ -703,40 +793,38 @@ void scPolyMixer::recreateVUBuses(ofxSCServer* server) {
 		return;
 	}
 	
-	ofLogNotice("scPolyMixer") << "Recreating " << numTracksCount << " VU buses with EXTRA SAFETY";
+	ofLogNotice("scPolyMixer") << "Recreating " << numTracksCount << " VU buses";
 	
 	// Clean up existing buses
 	if(trackVUBuses.count(server) > 0) {
-			for(auto bus : trackVUBuses[server]) {
-				if(bus != nullptr) {
-					bus->free(); // This should set controlBusses[index] = NULL
-					delete bus;
-				}
+		for(auto bus : trackVUBuses[server]) {
+			if(bus != nullptr) {
+				bus->free();
+				delete bus;
 			}
-			trackVUBuses[server].clear();
 		}
+		trackVUBuses[server].clear();
+	}
+	
+	//is this really needed???
 	std::this_thread::sleep_for(std::chrono::milliseconds(10));
-
 	
 	trackVUBuses[server].resize(numTracksCount, nullptr);
 	
 	for(int i = 0; i < numTracksCount; i++) {
 		try {
 			int channelCount = numChannels.get();
-			if(channelCount <= 0 || channelCount > 16) continue;
+			// FIXED: Use MAX_NODE_CHANNELS instead of hardcoded 16
+			if(channelCount <= 0 || channelCount > MAX_NODE_CHANNELS) continue;
 			
 			ofxSCBus* newBus = new ofxSCBus(RATE_CONTROL, channelCount, server);
 			
 			if(newBus != nullptr && newBus->index >= 0 && newBus->index < 4096) {
-				// EXTRA SAFETY: Verify the server's controlBusses array has this bus
 				if(server->controlBusses[newBus->index] != nullptr) {
 					trackVUBuses[server][i] = newBus;
 					newBus->requestValues();
-					ofLogNotice("scPolyMixer") << "Created VERIFIED VU bus " << i
-											  << " with index " << newBus->index;
+					ofLogNotice("scPolyMixer") << "Created VU bus " << i << " with index " << newBus->index;
 				} else {
-					ofLogError("scPolyMixer") << "Server controlBusses array invalid for index "
-											 << newBus->index;
 					delete newBus;
 					trackVUBuses[server][i] = nullptr;
 				}
@@ -744,13 +832,12 @@ void scPolyMixer::recreateVUBuses(ofxSCServer* server) {
 				if(newBus != nullptr) delete newBus;
 				trackVUBuses[server][i] = nullptr;
 			}
-			
 		} catch(...) {
 			trackVUBuses[server][i] = nullptr;
 		}
 	}
 	
-	ofLogNotice("scPolyMixer") << "VU bus recreation complete with extra safety checks";
+	ofLogNotice("scPolyMixer") << "VU bus recreation complete";
 }
 	
 	void scPolyMixer::removeTrackFromGUI(int trackIndex) {
@@ -778,16 +865,6 @@ void scPolyMixer::recreateVUBuses(ofxSCServer* server) {
 				trackSoloParams.erase(trackIndex);
 			}
 			
-			if(trackVUAttack.count(trackIndex) > 0) {
-				trackVUAttack[trackIndex].reset();
-				trackVUAttack.erase(trackIndex);
-			}
-			
-			if(trackVURelease.count(trackIndex) > 0) {
-				trackVURelease[trackIndex].reset();
-				trackVURelease.erase(trackIndex);
-			}
-			
 			if(trackVUData.count(trackIndex) > 0) {
 				trackVUData[trackIndex].reset();
 				trackVUData.erase(trackIndex);
@@ -811,8 +888,6 @@ void scPolyMixer::recreateVUBuses(ofxSCServer* server) {
 				"Mute " + ofToString(trackIndex + 1),
 				"Solo " + ofToString(trackIndex + 1),
 				"VU Data " + ofToString(trackIndex + 1),
-				"VU Attack " + ofToString(trackIndex + 1),
-				"VU Release " + ofToString(trackIndex + 1),
 				"VU " + ofToString(trackIndex + 1)
 			};
 			
@@ -879,8 +954,6 @@ void scPolyMixer::removeAllTrackParameters() {
 		trackSoloParams.clear();
 		trackVUMeterParams.clear();
 		trackVUData.clear();
-		trackVUAttack.clear();
-		trackVURelease.clear();
 		trackInputIndices.clear();
 		soloedTracks.clear();
 		trackPeakLevels.clear();
@@ -896,8 +969,6 @@ void scPolyMixer::removeAllTrackParameters() {
 				removeInspectorParameter("Solo " + ofToString(trackIndex + 1));
 				removeInspectorParameter("VU " + ofToString(trackIndex + 1));
 				removeParameter("VU Data " + ofToString(trackIndex + 1));
-				removeInspectorParameter("VU Attack " + ofToString(trackIndex + 1));
-				removeInspectorParameter("VU Release " + ofToString(trackIndex + 1));
 				
 				// Remove custom regions (ImGui widgets and separators)
 				string widgetName = "Track " + ofToString(trackIndex + 1) + " Control";
@@ -943,48 +1014,44 @@ void scPolyMixer::removeAllInputParameters() {
 }
 	
 	// Audio parameter update implementations
-	void scPolyMixer::updateTrackInstanceLevel(int trackIndex, const vector<float>& levels) {
-		if(trackInstances.empty()) return;
-		
-		ofLogVerbose("scPolyMixer") << "Updating track " << trackIndex << " levels (" << levels.size() << " channels)";
-		
-		// Update all instances of this track across all servers
-		for(auto& serverInstances : trackInstances) {
-			if(serverInstances.first != nullptr &&
-			   trackIndex < serverInstances.second.size() &&
-			   serverInstances.second[trackIndex] != nullptr) {
+void scPolyMixer::updateTrackInstanceLevel(int trackIndex, const vector<float>& levels) {
+	if(trackInstances.empty()) return;
+	
+	ofLogVerbose("scPolyMixer") << "Updating track " << trackIndex << " levels (" << levels.size() << " channels)";
+	
+	// Update all instances of this track across all servers
+	for(auto& serverInstances : trackInstances) {
+		if(serverInstances.first != nullptr &&
+		   trackIndex < serverInstances.second.size() &&
+		   serverInstances.second[trackIndex] != nullptr) {
+			
+			try {
+				// Apply gainVec multiplier to track levels (now linear)
+				vector<float> gainVecValues = gainVec.get();
+				float gainVecMultiplier = (trackIndex < gainVecValues.size()) ? gainVecValues[trackIndex] : 1.0f;
 				
-				try {
-					// CRITICAL FIX: Apply gainVec multiplier to track levels
-					vector<float> gainVecValues = gainVec.get();
-					float gainVecMultiplier = (trackIndex < gainVecValues.size()) ? gainVecValues[trackIndex] : 1.0f;
-					
-					vector<float> finalLevels;
-					if(levels.size() == 1) {
-						// Scalar mode - convert 0-1 range to dB, then to amp, then apply gainVec multiplier
-						float normalizedLevel = levels[0];
-						float dbLevel = (normalizedLevel * 66.0f) - 60.0f; // Convert 0-1 to -60dB to +6dB
-						float ampLevel = dbToAmp(dbLevel);
-						float scaledLevel = ampLevel * gainVecMultiplier;
-						finalLevels = vector<float>(numChannels.get(), scaledLevel);
-					} else {
-						// Vector mode - convert each 0-1 to dB to amp, then multiply by gainVec
-						finalLevels.resize(numChannels.get());
-						for(int ch = 0; ch < numChannels.get(); ch++) {
-							float channelNormalizedLevel = (ch < levels.size()) ? levels[ch] : levels[0];
-							float channelDbLevel = (channelNormalizedLevel * 66.0f) - 60.0f;
-							float channelAmpLevel = dbToAmp(channelDbLevel);
-							finalLevels[ch] = channelAmpLevel * gainVecMultiplier;
-						}
+				vector<float> finalLevels;
+				if(levels.size() == 1) {
+					// Scalar mode - linear gain, just multiply by gainVec
+					float linearLevel = levels[0];
+					float scaledLevel = linearLevel * gainVecMultiplier;
+					finalLevels = vector<float>(numChannels.get(), scaledLevel);
+				} else {
+					// Vector mode - linear gain per channel
+					finalLevels.resize(numChannels.get());
+					for(int ch = 0; ch < numChannels.get(); ch++) {
+						float channelLinearLevel = (ch < levels.size()) ? levels[ch] : levels[0];
+						finalLevels[ch] = channelLinearLevel * gainVecMultiplier;
 					}
-					serverInstances.second[trackIndex]->set("level", finalLevels);
-				} catch(const std::exception& e) {
-					ofLogError("scPolyMixer") << "Error setting levels for track " << trackIndex
-					<< ": " << e.what();
 				}
+				serverInstances.second[trackIndex]->set("level", finalLevels);
+			} catch(const std::exception& e) {
+				ofLogError("scPolyMixer") << "Error setting levels for track " << trackIndex
+				<< ": " << e.what();
 			}
 		}
 	}
+}
 	
 	void scPolyMixer::updateTrackInstanceMute(int trackIndex, bool muted) {
 		if(trackInstances.empty()) return;
@@ -1021,42 +1088,33 @@ void scPolyMixer::removeAllInputParameters() {
 		<< " (total soloed: " << soloedTracks.size() << ")";
 	}
 	
-	void scPolyMixer::updateMasterLevel(const vector<float>& levels) {
-		if(trackInstances.empty()) return;
-		
-		ofLogVerbose("scPolyMixer") << "Updating master levels (" << levels.size() << " channels)";
-		
-		// Update master level on all track instances across all servers
-		for(auto& serverInstances : trackInstances) {
-			if(serverInstances.first != nullptr) {
-				for(auto synth : serverInstances.second) {
-					if(synth != nullptr) {
-						try {
-							// Convert 0-1 range to dB to amplitude for SuperCollider
-							if(levels.size() == 1) {
-								float normalizedLevel = levels[0];
-								float dbLevel = (normalizedLevel * 66.0f) - 60.0f; // Convert 0-1 to -60dB to +6dB
-								float ampLevel = dbToAmp(dbLevel);
-								vector<float> expandedMasterLevel(numChannels.get(), ampLevel);
-								synth->set("masterLevel", expandedMasterLevel);
-							} else {
-								vector<float> ampLevels;
-								ampLevels.resize(levels.size());
-								for(int i = 0; i < levels.size(); i++) {
-									float normalizedLevel = levels[i];
-									float dbLevel = (normalizedLevel * 66.0f) - 60.0f;
-									ampLevels[i] = dbToAmp(dbLevel);
-								}
-								synth->set("masterLevel", ampLevels);
-							}
-						} catch(const std::exception& e) {
-							ofLogError("scPolyMixer") << "Error setting master levels: " << e.what();
+void scPolyMixer::updateMasterLevel(const vector<float>& levels) {
+	if(trackInstances.empty()) return;
+	
+	ofLogVerbose("scPolyMixer") << "Updating master levels (" << levels.size() << " channels)";
+	
+	// Update master level on all track instances across all servers
+	for(auto& serverInstances : trackInstances) {
+		if(serverInstances.first != nullptr) {
+			for(auto synth : serverInstances.second) {
+				if(synth != nullptr) {
+					try {
+						// Linear gain - direct pass-through
+						if(levels.size() == 1) {
+							float linearLevel = levels[0];
+							vector<float> expandedMasterLevel(numChannels.get(), linearLevel);
+							synth->set("masterLevel", expandedMasterLevel);
+						} else {
+							synth->set("masterLevel", levels);
 						}
+					} catch(const std::exception& e) {
+						ofLogError("scPolyMixer") << "Error setting master levels: " << e.what();
 					}
 				}
 			}
 		}
 	}
+}
 	
 	void scPolyMixer::updateSoloLogic() {
 		if(trackInstances.empty()) return;
@@ -1137,6 +1195,21 @@ void scPolyMixer::removeAllInputParameters() {
 			}
 		}
 	}
+
+void scPolyMixer::updateAllTracksVUTiming(float attackTime, float releaseTime) {
+	for(auto& serverInstances : trackInstances) {
+		for(auto* synth : serverInstances.second) {
+			if(!synth) continue;
+			if(attackTime >= 0.0f) {
+				synth->set("vuAttackTime", attackTime);
+			}
+			if(releaseTime >= 0.0f) {
+				synth->set("vuReleaseTime", releaseTime);
+			}
+		}
+	}
+}
+
 	
 	void scPolyMixer::syncGainVecToTrackLevels() {
 		// gainVec changed - update all track instances with new multipliers
@@ -1187,24 +1260,22 @@ void scPolyMixer::createSynth(ofxSCServer* server) {
 				// Create the synth
 				trackInstances[server][i]->create();
 				
-				// Set basic parameters (convert default normalized values to amplitude)
-				float defaultNormalizedLevel = ((-3.0f + 60.0f) / 66.0f); // -3dB as 0-1 range
-				float defaultDbLevel = (defaultNormalizedLevel * 66.0f) - 60.0f;
-				vector<float> defaultLevel(numChannels.get(), dbToAmp(defaultDbLevel));
+				// CRITICAL: Set input to -1 (no input) by default
+				trackInstances[server][i]->set("in", -1);
+				
+				// Set basic parameters - linear gain (default 0.5)
+				vector<float> defaultLevel(numChannels.get(), 0.5f);
 				trackInstances[server][i]->set("level", defaultLevel);
 				trackInstances[server][i]->set("mute", 0.0f);
 				
-				vector<float> defaultMasterLevel(numChannels.get(), dbToAmp(defaultDbLevel));
+				// Master level default 1.0
+				vector<float> defaultMasterLevel(numChannels.get(), 1.0f);
 				trackInstances[server][i]->set("masterLevel", defaultMasterLevel);
 				
-				// Set VU meter attack/release parameters
-				float attackTime = (trackVUAttack.count(i) > 0) ? trackVUAttack[i]->get() : 10.0f;
-				float releaseTime = (trackVURelease.count(i) > 0) ? trackVURelease[i]->get() : 300.0f;
-				
-				trackInstances[server][i]->set("vuAttackTime", attackTime);
-				trackInstances[server][i]->set("vuReleaseTime", releaseTime);
-				
-				// Set VU bus normally - let the ofxSCServer safety checks handle invalid access
+				trackInstances[server][i]->set("vuAttackTime", masterVUAttack.get());
+				trackInstances[server][i]->set("vuReleaseTime", masterVURelease.get());
+
+				// Set VU bus normally
 				if(trackVUBuses.count(server) > 0 &&
 				   i < trackVUBuses[server].size() &&
 				   trackVUBuses[server][i] != nullptr) {
@@ -1216,7 +1287,7 @@ void scPolyMixer::createSynth(ofxSCServer* server) {
 					ofLogWarning("scPolyMixer") << "No VU bus for track " << i;
 				}
 				
-				ofLogNotice("scPolyMixer") << "Created track " << i << " synth successfully";
+				ofLogNotice("scPolyMixer") << "Created track " << i << " synth successfully (input defaulted to -1)";
 				
 			} catch(const std::exception& e) {
 				ofLogError("scPolyMixer") << "Error creating track " << i << " synth: " << e.what();
@@ -1321,32 +1392,17 @@ void scPolyMixer::free(ofxSCServer* server) {
 	}
 	
 void scPolyMixer::setInputBus(ofxSCServer* server, scNode* node, int bus) {
-	if(server == nullptr || node == nullptr) {
-		ofLogError("scPolyMixer") << "Cannot set input bus: server or node is null";
+	if(server == nullptr) {
+		ofLogError("scPolyMixer") << "Cannot set input bus: server is null";
 		return;
 	}
 	
-	// --- Handle disconnection (bus == -1) ---
-	if(bus == -1) {
-		ofLogNotice("scPolyMixer") << "=== POLYMIXER INPUT DISCONNECTED ===";
-		
-		// Remove from input buses map
-		inputBuses[server].erase(node);
-		
-		// Trigger graph recomputation - the output notification will cause
-		// serverManager to call recomputeGraph()
-		ofLogNotice("scPolyMixer") << "Triggering graph recomputation via output notification";
-		for(auto &output : outputs) {
-			output = output;
-		}
-		
-		ofLogNotice("scPolyMixer") << "=== DISCONNECTION HANDLING COMPLETE ===";
-		return;
-	}
+	ofLogNotice("scPolyMixer") << "setInputBus: node=" << (node ? "valid" : "null") << ", bus=" << bus;
 	
-	// --- Normal connection / bus change ---
-	inputBuses[server][node] = bus;
-	ofLogNotice("scPolyMixer") << "Input bus set to " << bus << " for node";
+	// Store in the map (even if bus is -1, though serverManager shouldn't call us with -1)
+	if(bus >= 0 && node != nullptr) {
+		inputBuses[server][node] = bus;
+	}
 	
 	// Find which track this input corresponds to
 	for(auto& trackIndexPair : trackInputIndices) {
@@ -1361,21 +1417,65 @@ void scPolyMixer::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 		   availableInputs[inputIndex]->getNodeRef() == node) {
 			
 			if(trackInstances.count(server) > 0 &&
-			   trackIndex >= 0 && trackIndex < (int)trackInstances[server].size() &&
+			   trackIndex < (int)trackInstances[server].size() &&
 			   trackInstances[server][trackIndex] != nullptr) {
 				
 				try {
-					// SIMPLE: Just set the input bus - let ofxSCServer safety checks handle the rest
 					trackInstances[server][trackIndex]->set("in", bus);
 					ofLogNotice("scPolyMixer") << "Track " << trackIndex << " input set to bus " << bus;
 					
+					// CRITICAL: Update connection tracking
+					trackHasInput[trackIndex] = (bus >= 0);
+					
+					// If disconnecting (bus < 0 means no connection in the future, but won't happen here)
+					// We need to detect when the node becomes nullptr
+					// Actually, check if this is a valid connection
+					bool isConnected = (bus >= 0 && node != nullptr);
+					trackHasInput[trackIndex] = isConnected;
+					
+					ofLogNotice("scPolyMixer") << "Track " << trackIndex << " connection status: "
+											  << (isConnected ? "CONNECTED" : "DISCONNECTED");
+					
 				} catch(const std::exception& e) {
-					ofLogError("scPolyMixer") << "Error setting input bus for track " << trackIndex << ": " << e.what();
+					ofLogError("scPolyMixer") << "Error setting input for track " << trackIndex << ": " << e.what();
 				}
 			}
 			break;
 		}
 	}
+}
+
+void scPolyMixer::resetInputBusses(ofxSCServer* server) {
+	ofLogNotice("scPolyMixer") << "=== RESET INPUT BUSSES (called by serverManager) ===";
+	
+	// Clear the input buses map
+	inputBuses[server].clear();
+	
+	// Set ALL track inputs to -1 (silence/disconnected)
+	if(trackInstances.count(server) > 0) {
+		for(int i = 0; i < trackInstances[server].size(); i++) {
+			if(trackInstances[server][i] != nullptr) {
+				try {
+					trackInstances[server][i]->set("in", -1);
+					
+					// CRITICAL: Immediately zero out the VU meter for disconnected tracks
+					if(vuParameters.count(i) > 0) {
+						vector<float> zeroVU(numChannels.get(), 0.0f);
+						vuParameters[i].setWithoutEventNotifications(zeroVU);
+						
+						if(trackVUData.count(i) > 0 && trackVUData[i] != nullptr) {
+							trackVUData[i]->getParameter().set(zeroVU);
+						}
+					}
+					
+				} catch(const std::exception& e) {
+					ofLogError("scPolyMixer") << "Error resetting input for track " << i << ": " << e.what();
+				}
+			}
+		}
+	}
+	
+	ofLogNotice("scPolyMixer") << "All tracks reset to -1 (disconnected) with zeroed VU meters";
 }
 
 
@@ -1395,13 +1495,11 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 			vector<float> ampLevels;
 			
 			if(levels.size() == 1) {
-				// Scalar mode - convert to dB then amp
 				float normalizedLevel = levels[0];
 				float dbLevel = (normalizedLevel * 66.0f) - 60.0f;
 				float ampLevel = dbToAmp(dbLevel);
 				ampLevels = vector<float>(numChannels.get(), ampLevel);
 			} else {
-				// Vector mode
 				ampLevels.resize(levels.size());
 				for(int i = 0; i < levels.size(); i++) {
 					float normalizedLevel = levels[i];
@@ -1421,11 +1519,29 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 			synth->set("level", ampLevels);
 		}
 		
-		// Restore mute state
+		// CRITICAL: Restore mute state WITH solo logic
+		bool individuallyMuted = false;
 		if(trackMuteParams.count(trackIndex) > 0) {
-			bool muted = trackMuteParams[trackIndex]->get();
-			synth->set("mute", muted ? 1.0f : 0.0f);
+			individuallyMuted = trackMuteParams[trackIndex]->get();
 		}
+		
+		// Apply solo logic
+		bool anySoloed = !soloedTracks.empty();
+		bool shouldBeSoloMuted = false;
+		
+		if(anySoloed) {
+			// If any track is soloed, mute this track unless it's also soloed
+			shouldBeSoloMuted = (soloedTracks.count(trackIndex) == 0);
+		}
+		
+		// Final mute state is individual mute OR solo mute
+		bool finalMute = individuallyMuted || shouldBeSoloMuted;
+		synth->set("mute", finalMute ? 1.0f : 0.0f);
+		
+		ofLogVerbose("scPolyMixer") << "Track " << trackIndex << " mute restored: "
+									<< "individual=" << individuallyMuted
+									<< ", solo_muted=" << shouldBeSoloMuted
+									<< ", final=" << finalMute;
 		
 		// Restore master level
 		vector<float> masterLevels = masterLevel.get();
@@ -1446,26 +1562,20 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 			synth->set("masterLevel", ampLevels);
 		}
 		
-		// Restore VU timing parameters
-		if(trackVUAttack.count(trackIndex) > 0) {
-			synth->set("vuAttackTime", trackVUAttack[trackIndex]->get());
-		}
-		if(trackVURelease.count(trackIndex) > 0) {
-			synth->set("vuReleaseTime", trackVURelease[trackIndex]->get());
-		}
+		// Restore VU timing parameters - FIXED: these are global parameters, not per-track
+		synth->set("vuAttackTime", masterVUAttack.get());
+		synth->set("vuReleaseTime", masterVURelease.get());
+
 		
-		// Restore VU bus (CRITICAL: Only set if valid)
+		// Restore VU bus
 		if(trackVUBuses.count(server) > 0 &&
 		   trackIndex < trackVUBuses[server].size() &&
 		   trackVUBuses[server][trackIndex] != nullptr &&
 		   trackVUBuses[server][trackIndex]->index >= 0) {
 			
 			synth->set("vuBus", trackVUBuses[server][trackIndex]->index);
-			ofLogNotice("scPolyMixer") << "Restored VU bus " << trackVUBuses[server][trackIndex]->index
-									  << " for track " << trackIndex;
 		} else {
-			synth->set("vuBus", -1); // Disable VU if no valid bus
-			ofLogWarning("scPolyMixer") << "No valid VU bus for track " << trackIndex << ", disabled";
+			synth->set("vuBus", -1);
 		}
 		
 		// Restore output bus
@@ -1480,9 +1590,6 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 								 << ": " << e.what();
 	}
 }
-
-
-
 
 	
 	int scPolyMixer::getOutputBusIndex(ofxSCServer* server, int index) {
@@ -1543,6 +1650,7 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 			}
 		}
 		
+		//is this really needed??
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
 	}
@@ -1779,27 +1887,79 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 		}
 	}
 	
-	void scPolyMixer::loadBeforeConnections(ofJson &json) {
-		// MINIMAL CONNECTION RECOVERY FIX: Load numTracks first to ensure structure exists
-		deserializeParameter(json, numTracks);
-		deserializeParameter(json, numChannels);
-	}
+void scPolyMixer::loadBeforeConnections(ofJson &json) {
+	ofLogNotice("scPolyMixer") << "=== LOAD BEFORE CONNECTIONS ===";
 	
-	void scPolyMixer::presetRecallAfterSettingParameters(ofJson &json) {
-		// Restore track-specific data
-		for(int i = 0; i < numTracks && i < json["TrackInfo"].size(); i++) {
+	// Set flag to bypass deferred loading
+	isLoadingPreset = true;
+	
+	// Load numTracks and numChannels first
+	deserializeParameter(json, numTracks);
+	deserializeParameter(json, numChannels);
+	
+	// CRITICAL: Force immediate track creation if needed (bypass deferred system)
+	if(!tracksToAddNextFrame.empty()) {
+		ofLogNotice("scPolyMixer") << "Forcing immediate track creation for preset loading: "
+								   << tracksToAddNextFrame.size() << " tracks";
+		
+		for(int trackIndex : tracksToAddNextFrame) {
 			try {
-				if(json["TrackInfo"][i].contains("Mute") && trackMuteParams.count(i) > 0) {
-					trackMuteParams[i]->set(json["TrackInfo"][i]["Mute"]);
-				}
-				if(json["TrackInfo"][i].contains("Solo") && trackSoloParams.count(i) > 0) {
-					trackSoloParams[i]->set(json["TrackInfo"][i]["Solo"]);
-				}
-			} catch(ofJson::exception& e) {
-				ofLog() << "scPolyMixer preset recall error: " << e.what();
+				// Pre-allocate tracking data
+				trackPeakLevels[trackIndex] = vector<float>(numChannels.get(), -60.0f);
+				trackPeakDecayTimers[trackIndex] = vector<float>(numChannels.get(), 0.0f);
+				
+				string vuName = "VU " + ofToString(trackIndex + 1);
+				vector<float> defaultVU(numChannels.get(), 0.0f);
+				vuParameters[trackIndex].set(vuName, defaultVU,
+											vector<float>(numChannels.get(), 0.0f),
+											vector<float>(numChannels.get(), 1.0f));
+				
+				// Add to GUI immediately
+				addTrackToGUI(trackIndex);
+				
+			} catch(const std::exception& e) {
+				ofLogError("scPolyMixer") << "Error adding track during preset load " << trackIndex << ": " << e.what();
 			}
 		}
+		
+		tracksToAddNextFrame.clear();
+		needsGUIRebuild = false;
 	}
+	
+	isLoadingPreset = false;
+	
+	ofLogNotice("scPolyMixer") << "Tracks ready for connection restoration";
+}
+	
+void scPolyMixer::presetRecallAfterSettingParameters(ofJson &json) {
+	ofLogNotice("scPolyMixer") << "=== PRESET RECALL AFTER SETTING PARAMETERS ===";
+	
+	// Restore track-specific data
+	for(int i = 0; i < numTracks && i < json["TrackInfo"].size(); i++) {
+		try {
+			if(json["TrackInfo"][i].contains("Mute") && trackMuteParams.count(i) > 0) {
+				trackMuteParams[i]->set(json["TrackInfo"][i]["Mute"]);
+			}
+			if(json["TrackInfo"][i].contains("Solo") && trackSoloParams.count(i) > 0) {
+				bool soloState = json["TrackInfo"][i]["Solo"];
+				trackSoloParams[i]->set(soloState);
+				
+				// CRITICAL: Update soloedTracks set directly
+				if(soloState) {
+					soloedTracks.insert(i);
+					ofLogNotice("scPolyMixer") << "Restored solo state for track " << i;
+				}
+			}
+		} catch(ofJson::exception& e) {
+			ofLog() << "scPolyMixer preset recall error: " << e.what();
+		}
+	}
+	
+	// CRITICAL: Apply solo logic after all solo states are restored
+	updateSoloLogic();
+	
+	ofLogNotice("scPolyMixer") << "Solo states restored: " << soloedTracks.size() << " tracks soloed";
+}
 	
 	void scPolyMixer::drawSeparator() {
 		ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1858,10 +2018,89 @@ void scPolyMixer::freeVUBuses(ofxSCServer* server) {
 }
 
 void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
-	// Safety checks
-	if (trackIndex < 0 || trackIndex >= numTracks.get()) return;
-	if (vuParameters.count(trackIndex) == 0) return;
-	if (trackMuteParams.count(trackIndex) == 0 || trackSoloParams.count(trackIndex) == 0) return;
+	// CRITICAL: Don't render if we're in the middle of updating tracks
+	if(isUpdatingTracks) {
+		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		return;
+	}
+	
+	// Safety checks - return early if data not ready
+	if (trackIndex < 0 || trackIndex >= numTracks.get()) {
+		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		return;
+	}
+	
+	if (vuParameters.count(trackIndex) == 0) {
+		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		return;
+	}
+	
+	if (trackMuteParams.count(trackIndex) == 0 || trackSoloParams.count(trackIndex) == 0) {
+		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		return;
+	}
+	
+	// CRITICAL: Check if peak tracking arrays exist and have correct size
+	if(trackPeakLevels.count(trackIndex) == 0 ||
+	   trackPeakLevels[trackIndex].size() != numChannels.get()) {
+		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		return;
+	}
+	
+	if(trackPeakDecayTimers.count(trackIndex) == 0 ||
+	   trackPeakDecayTimers[trackIndex].size() != numChannels.get()) {
+		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		return;
+	}
+	
+	// NEW: Check if VU drawing is enabled
+	if (!drawVU.get()) {
+		// Only draw mute/solo buttons without VU meter
+		ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+		const float buttonHeight = 16.0f;
+		const float buttonWidth = 115.0f;
+		const float spacing = 5.0f;
+		
+		ImGui::SetCursorScreenPos(cursorPos);
+		
+		bool isMuted = trackMuteParams[trackIndex]->get();
+		bool isSoloed = trackSoloParams[trackIndex]->get();
+		
+		// Mute button
+		ImGui::PushID(trackIndex * 1000 + 1);
+		ImVec4 muteColor = isMuted ? ImVec4(0.8f, 0.2f, 0.2f, 1.0f) : ImVec4(0.3f, 0.3f, 0.3f, 1.0f);
+		ImVec4 muteHover = isMuted ? ImVec4(0.9f, 0.3f, 0.3f, 1.0f) : ImVec4(0.4f, 0.4f, 0.4f, 1.0f);
+		ImVec4 muteActive = isMuted ? ImVec4(0.7f, 0.1f, 0.1f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+		ImGui::PushStyleColor(ImGuiCol_Button, muteColor);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, muteHover);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, muteActive);
+		if (ImGui::Button("MUTE", ImVec2(buttonWidth, buttonHeight))) {
+			trackMuteParams[trackIndex]->set(!isMuted);
+		}
+		ImGui::PopStyleColor(3);
+		ImGui::PopID();
+		
+		// Solo button
+		ImGui::SameLine(0, spacing);
+		ImGui::PushID(trackIndex * 1000 + 2);
+		ImVec4 soloColor = isSoloed ? ImVec4(0.8f, 0.8f, 0.2f, 1.0f) : ImVec4(0.3f, 0.3f, 0.3f, 1.0f);
+		ImVec4 soloHover = isSoloed ? ImVec4(0.9f, 0.9f, 0.3f, 1.0f) : ImVec4(0.4f, 0.4f, 0.4f, 1.0f);
+		ImVec4 soloActive = isSoloed ? ImVec4(0.7f, 0.7f, 0.1f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+		ImGui::PushStyleColor(ImGuiCol_Button, soloColor);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, soloHover);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, soloActive);
+		if (ImGui::Button("SOLO", ImVec2(buttonWidth, buttonHeight))) {
+			trackSoloParams[trackIndex]->set(!isSoloed);
+		}
+		ImGui::PopStyleColor(3);
+		ImGui::PopID();
+		
+		ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, cursorPos.y + buttonHeight + spacing));
+		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		return;
+	}
+	
+	// === FULL WIDGET WITH VU METER ===
 	
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
@@ -1871,11 +2110,12 @@ void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
 	int numChans = vuLevels.size();
 	
 	// Widget dimensions - compact design with vertical channel stacking
-	const float widgetWidth = 240.0f;    // Full node width
-	const float channelHeight = 8.0f;     // Height per channel
-	const float vuHeight = numChans * channelHeight; // Total VU height based on channels
-	const float buttonHeight = 16.0f;     // Small button height
-	const float buttonWidth = 115.0f;     // Half width minus spacing
+	const float widgetWidth = 240.0f;
+	const float totalVUHeight = trackVUHeight.get();
+	const float channelHeight = totalVUHeight / numChans;
+	const float vuHeight = totalVUHeight;
+	const float buttonHeight = 16.0f;
+	const float buttonWidth = 115.0f;
 	const float spacing = 5.0f;
 	const float totalHeight = vuHeight + spacing + buttonHeight + spacing;
 	
@@ -1889,163 +2129,113 @@ void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
 	
 	// Draw each channel as a horizontal bar stacked vertically
 	for (int ch = 0; ch < numChans; ch++) {
-		float ampLevel = ofClamp(vuLevels[ch], 0.0f, 2.0f); // Allow up to +6dB
+		float ampLevel = ofClamp(vuLevels[ch], 0.0f, 2.0f);
 		float dbLevel = ampToDb(ampLevel);
 		
-		// Calculate position for this channel
 		float channelY = vuStart.y + (ch * channelHeight);
-		ImVec2 channelStart = ImVec2(vuStart.x + 1, channelY + 1);
-		ImVec2 channelEnd = ImVec2(vuStart.x + widgetWidth - 1, channelY + channelHeight - 1);
+		ImVec2 channelStart = ImVec2(vuStart.x, channelY);
+		ImVec2 channelEnd   = ImVec2(vuStart.x + widgetWidth, channelY + channelHeight);
 		
-		// Draw channel background (slightly lighter than main background)
 		drawList->AddRectFilled(channelStart, channelEnd, IM_COL32(30, 30, 30, 255));
 		
-		// Peak line tracking (separate from VU meter bars)
-		// NOTE: VU meter bars now use SuperCollider's LagUD.kr() for attack/release
-		// These calculations are only for the visual peak indicator lines
-		float attackMs = (trackVUAttack.count(trackIndex) > 0) ? trackVUAttack[trackIndex]->get() : 10.0f;
-		float releaseMs = (trackVURelease.count(trackIndex) > 0) ? trackVURelease[trackIndex]->get() : 300.0f;
+		// Peak line tracking
+		float attackMs = masterVUAttack.get();
+		float releaseMs = masterVURelease.get();
+
 		
-		// Simple peak line tracking (60fps assumed) - visual indicators only
 		float attackCoeff = 1.0f - expf(-1000.0f / (attackMs * 60.0f));
 		float releaseCoeff = 1.0f - expf(-1000.0f / (releaseMs * 60.0f));
 		
-		if (trackPeakLevels[trackIndex].size() <= ch) {
-			trackPeakLevels[trackIndex].resize(ch + 1, -60.0f);
-			trackPeakDecayTimers[trackIndex].resize(ch + 1, 0.0f);
-		}
-		
-		if (dbLevel > trackPeakLevels[trackIndex][ch]) {
-			trackPeakLevels[trackIndex][ch] = dbLevel;
-			trackPeakDecayTimers[trackIndex][ch] = 1000.0f; // Hold peak for 1 second
-		} else {
-			trackPeakDecayTimers[trackIndex][ch] -= 16.67f; // ~60fps
-			if (trackPeakDecayTimers[trackIndex][ch] <= 0) {
-				trackPeakLevels[trackIndex][ch] -= releaseCoeff * 0.5f; // Slow decay
-				trackPeakLevels[trackIndex][ch] = ofClamp(trackPeakLevels[trackIndex][ch], -60.0f, 6.0f);
-			}
-		}
-		
-		// Draw the actual level meter for this channel (dB-based)
-		if (dbLevel > -60.0f) {
-			float meterPosition = dbToVUPosition(dbLevel, -60.0f, 6.0f);
-			float meterWidth = (widgetWidth - 2) * meterPosition;
-			ImVec2 meterEnd = ImVec2(channelStart.x + meterWidth, channelEnd.y);
+		// CRITICAL: Extra bounds check before accessing array
+		if (ch < trackPeakLevels[trackIndex].size() &&
+			ch < trackPeakDecayTimers[trackIndex].size()) {
 			
-			// Professional VU color gradient based on dB
-			ImU32 meterColor = getVUMeterColorDB(dbLevel);
-			drawList->AddRectFilled(channelStart, meterEnd, meterColor);
-		}
-		
-		// Draw peak line
-		float peakPosition = dbToVUPosition(trackPeakLevels[trackIndex][ch], -60.0f, 6.0f);
-		if (peakPosition > 0.01f) {
-			float peakX = channelStart.x + (widgetWidth - 2) * peakPosition;
-			ImU32 peakColor = getVUMeterColorDB(trackPeakLevels[trackIndex][ch]);
-			drawList->AddLine(
-				ImVec2(peakX, channelStart.y),
-				ImVec2(peakX, channelEnd.y),
-				peakColor,
-				2.0f
-			);
-		}
-		
-		// Draw 0dB reference line (permanent visual indicator)
-		float zeroDbPosition = dbToVUPosition(0.0f, -60.0f, 6.0f);
-		if (zeroDbPosition > 0.01f && zeroDbPosition < 0.99f) {
-			float zeroDbX = channelStart.x + (widgetWidth - 2) * zeroDbPosition;
-			drawList->AddLine(
-				ImVec2(zeroDbX, channelStart.y),
-				ImVec2(zeroDbX, channelEnd.y),
-				IM_COL32(255, 255, 255, 180), // White line for 0dB reference
-				1.0f
-			);
-		}
-		
-		// Channel separator lines (between channels)
-		if (ch < numChans - 1) {
-			float sepY = channelY + channelHeight;
-			drawList->AddLine(
-				ImVec2(vuStart.x, sepY),
-				ImVec2(vuEnd.x, sepY),
-				IM_COL32(60, 60, 60, 128),
-				1.0f
-			);
-		}
-		
-		// Optional: Add channel number labels for multichannel (if more than 2 channels)
-		if (numChans > 2) {
-			char channelLabel[4];
-			sprintf(channelLabel, "%d", ch + 1);
-			ImVec2 labelPos = ImVec2(vuStart.x + 2, channelY + 1);
-			drawList->AddText(labelPos, IM_COL32(150, 150, 150, 200), channelLabel);
+			if (dbLevel > trackPeakLevels[trackIndex][ch]) {
+				trackPeakLevels[trackIndex][ch] = dbLevel;
+				trackPeakDecayTimers[trackIndex][ch] = 1000.0f;
+			} else {
+				trackPeakDecayTimers[trackIndex][ch] -= 16.67f;
+				if (trackPeakDecayTimers[trackIndex][ch] <= 0) {
+					trackPeakLevels[trackIndex][ch] -= releaseCoeff * 0.5f;
+					trackPeakLevels[trackIndex][ch] = ofClamp(trackPeakLevels[trackIndex][ch], -60.0f, 6.0f);
+				}
+			}
+			
+			// Draw the actual level meter
+			if (dbLevel > -60.0f) {
+				float meterPosition = dbToVUPosition(dbLevel, -60.0f, 6.0f);
+				float meterWidth = (widgetWidth - 2) * meterPosition;
+				ImVec2 meterEnd = ImVec2(channelStart.x + meterWidth, channelEnd.y);
+				
+				ImU32 meterColor = getVUMeterColorDB(dbLevel);
+				drawList->AddRectFilled(channelStart, meterEnd, meterColor);
+			}
+			
+			// Draw peak line
+			float peakPosition = dbToVUPosition(trackPeakLevels[trackIndex][ch], -60.0f, 6.0f);
+			if (peakPosition > 0.01f) {
+				float peakX = channelStart.x + (widgetWidth - 2) * peakPosition;
+				ImU32 peakColor = getVUMeterColorDB(trackPeakLevels[trackIndex][ch]);
+				drawList->AddLine(
+					ImVec2(peakX, channelStart.y),
+					ImVec2(peakX, channelEnd.y),
+					peakColor,
+					2.0f
+				);
+			}
+			
+			// Draw 0dB reference line
+			float zeroDbPosition = dbToVUPosition(0.0f, -60.0f, 6.0f);
+			if (zeroDbPosition > 0.01f && zeroDbPosition < 0.99f) {
+				float zeroDbX = channelStart.x + (widgetWidth - 2) * zeroDbPosition;
+				drawList->AddLine(
+					ImVec2(zeroDbX, channelStart.y),
+					ImVec2(zeroDbX, channelEnd.y),
+					IM_COL32(255, 255, 255, 180),
+					1.0f
+				);
+			}
 		}
 	}
 	
 	// === MUTE & SOLO BUTTONS ===
 	ImVec2 buttonsStart = ImVec2(cursorPos.x, cursorPos.y + vuHeight + spacing);
-	
-	// Move ImGui cursor to button position
 	ImGui::SetCursorScreenPos(buttonsStart);
 	
-	// Get button states from direct parameters
 	bool isMuted = trackMuteParams[trackIndex]->get();
 	bool isSoloed = trackSoloParams[trackIndex]->get();
 	
 	// Mute button
-	ImGui::PushID(trackIndex * 1000 + 1); // Unique ID
-	
-	// Mute button colors
-	ImVec4 muteColor = isMuted ?
-		ImVec4(0.8f, 0.2f, 0.2f, 1.0f) :  // Red when muted
-		ImVec4(0.3f, 0.3f, 0.3f, 1.0f);   // Dark gray when not muted
-	ImVec4 muteHover = isMuted ?
-		ImVec4(0.9f, 0.3f, 0.3f, 1.0f) :  // Lighter red on hover
-		ImVec4(0.4f, 0.4f, 0.4f, 1.0f);   // Lighter gray on hover
-	ImVec4 muteActive = isMuted ?
-		ImVec4(0.7f, 0.1f, 0.1f, 1.0f) :  // Darker red when pressed
-		ImVec4(0.6f, 0.6f, 0.6f, 1.0f);   // Lighter gray when pressed
-		
+	ImGui::PushID(trackIndex * 1000 + 1);
+	ImVec4 muteColor = isMuted ? ImVec4(0.8f, 0.2f, 0.2f, 1.0f) : ImVec4(0.3f, 0.3f, 0.3f, 1.0f);
+	ImVec4 muteHover = isMuted ? ImVec4(0.9f, 0.3f, 0.3f, 1.0f) : ImVec4(0.4f, 0.4f, 0.4f, 1.0f);
+	ImVec4 muteActive = isMuted ? ImVec4(0.7f, 0.1f, 0.1f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
 	ImGui::PushStyleColor(ImGuiCol_Button, muteColor);
 	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, muteHover);
 	ImGui::PushStyleColor(ImGuiCol_ButtonActive, muteActive);
-	
 	if (ImGui::Button("MUTE", ImVec2(buttonWidth, buttonHeight))) {
 		trackMuteParams[trackIndex]->set(!isMuted);
 	}
-	
 	ImGui::PopStyleColor(3);
 	ImGui::PopID();
 	
-	// Solo button (side by side)
+	// Solo button
 	ImGui::SameLine(0, spacing);
-	ImGui::PushID(trackIndex * 1000 + 2); // Unique ID
-	
-	// Solo button colors
-	ImVec4 soloColor = isSoloed ?
-		ImVec4(0.8f, 0.8f, 0.2f, 1.0f) :  // Yellow when soloed
-		ImVec4(0.3f, 0.3f, 0.3f, 1.0f);   // Dark gray when not soloed
-	ImVec4 soloHover = isSoloed ?
-		ImVec4(0.9f, 0.9f, 0.3f, 1.0f) :  // Lighter yellow on hover
-		ImVec4(0.4f, 0.4f, 0.4f, 1.0f);   // Lighter gray on hover
-	ImVec4 soloActive = isSoloed ?
-		ImVec4(0.7f, 0.7f, 0.1f, 1.0f) :  // Darker yellow when pressed
-		ImVec4(0.6f, 0.6f, 0.6f, 1.0f);   // Lighter gray when pressed
-		
+	ImGui::PushID(trackIndex * 1000 + 2);
+	ImVec4 soloColor = isSoloed ? ImVec4(0.8f, 0.8f, 0.2f, 1.0f) : ImVec4(0.3f, 0.3f, 0.3f, 1.0f);
+	ImVec4 soloHover = isSoloed ? ImVec4(0.9f, 0.9f, 0.3f, 1.0f) : ImVec4(0.4f, 0.4f, 0.4f, 1.0f);
+	ImVec4 soloActive = isSoloed ? ImVec4(0.7f, 0.7f, 0.1f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
 	ImGui::PushStyleColor(ImGuiCol_Button, soloColor);
 	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, soloHover);
 	ImGui::PushStyleColor(ImGuiCol_ButtonActive, soloActive);
-	
 	if (ImGui::Button("SOLO", ImVec2(buttonWidth, buttonHeight))) {
 		trackSoloParams[trackIndex]->set(!isSoloed);
 	}
-	
 	ImGui::PopStyleColor(3);
 	ImGui::PopID();
 	
-	// Add some spacing after the widget
 	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, cursorPos.y + totalHeight));
-	ImGui::Dummy(ImVec2(widgetWidth, 2.0f)); // Small spacing for next widget
+	ImGui::Dummy(ImVec2(widgetWidth, 2.0f));
 }
 
 ImU32 scPolyMixer::getVUMeterColor(float level) {
@@ -2077,6 +2267,16 @@ ImU32 scPolyMixer::getVUMeterColor(float level) {
 }
 
 void scPolyMixer::drawMasterVUWidget() {
+	// NEW: Check if VU drawing is enabled
+	if (!drawVU.get()) {
+		ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+		ImGui::SetCursorScreenPos(cursorPos);
+		ImGui::Dummy(ImVec2(240.0f, 4.0f));
+		return;
+	}
+	
+	// === FULL MASTER VU WIDGET ===
+	
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 	
@@ -2085,9 +2285,11 @@ void scPolyMixer::drawMasterVUWidget() {
 	int numChans = masterVULevels.size();
 	
 	// Master VU widget dimensions - bigger than track widgets
+	// Master VU widget dimensions - bigger than track widgets
 	const float widgetWidth = 240.0f;     // Full node width
-	const float channelHeight = 20.0f;    // Bigger height per channel for master
-	const float vuHeight = numChans * channelHeight; // Total VU height
+	const float totalVUHeight = masterVUHeight.get();   // FIXED total height for all channels (bigger for master)
+	const float channelHeight = (totalVUHeight / numChans); // Divide by number of channels
+	const float vuHeight = totalVUHeight; // Total VU height is constant
 	const float spacing = 2.0f;           // More spacing for master
 	const float totalHeight = spacing + vuHeight + spacing;
 	
@@ -2112,8 +2314,8 @@ void scPolyMixer::drawMasterVUWidget() {
 		
 		// Calculate position for this channel
 		float channelY = vuStart.y + (ch * channelHeight);
-		ImVec2 channelStart = ImVec2(vuStart.x + 2, channelY + 2);
-		ImVec2 channelEnd = ImVec2(vuStart.x + widgetWidth - 2, channelY + channelHeight - 2);
+		ImVec2 channelStart = ImVec2(vuStart.x, channelY);
+		ImVec2 channelEnd   = ImVec2(vuStart.x + widgetWidth, channelY + channelHeight);
 		
 		// Draw channel background (darker than track VUs)
 		drawList->AddRectFilled(channelStart, channelEnd, IM_COL32(25, 25, 25, 255));
@@ -2148,15 +2350,6 @@ void scPolyMixer::drawMasterVUWidget() {
 			// Master VU uses more intense colors based on dB
 			ImU32 meterColor = getVUMeterColorDB(dbLevel);
 			
-			// Add slight glow effect for master VU
-			if (meterPosition > 0.1f) {
-				// Draw a slightly larger, more transparent version behind for glow
-				ImVec2 glowStart = ImVec2(channelStart.x, channelStart.y - 1);
-				ImVec2 glowEnd = ImVec2(meterEnd.x, channelEnd.y + 1);
-				ImU32 glowColor = (meterColor & 0x00FFFFFF) | 0x40000000; // Same color, 25% alpha
-				drawList->AddRectFilled(glowStart, glowEnd, glowColor);
-			}
-			
 			drawList->AddRectFilled(channelStart, meterEnd, meterColor);
 		}
 		
@@ -2183,33 +2376,6 @@ void scPolyMixer::drawMasterVUWidget() {
 				IM_COL32(255, 255, 255, 220), // Brighter white line for master 0dB reference
 				1.5f // Slightly thicker for master
 			);
-		}
-		
-		// Channel separator lines (between channels)
-		if (ch < numChans - 1) {
-			float sepY = channelY + channelHeight;
-			drawList->AddLine(
-				ImVec2(vuStart.x, sepY),
-				ImVec2(vuEnd.x, sepY),
-				IM_COL32(80, 80, 80, 128),
-				1.0f
-			);
-		}
-		
-		// Channel labels (L/R for stereo, or numbers for multichannel)
-		const char* channelLabels[] = {"L", "R", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"};
-		if (ch < 16) {
-			ImVec2 labelPos = ImVec2(vuStart.x + 4, channelY + 3);
-			drawList->AddText(labelPos, IM_COL32(180, 180, 180, 255), channelLabels[ch]);
-		}
-		
-		// Level value text on the right (for levels > 10%)
-		if (meterPosition > 0.1f) {
-			char levelText[8];
-			sprintf(levelText, "%.1f", dbLevel);
-			ImVec2 levelTextSize = ImGui::CalcTextSize(levelText);
-			ImVec2 levelTextPos = ImVec2(vuEnd.x - levelTextSize.x - 4, channelY + 3);
-			drawList->AddText(levelTextPos, IM_COL32(200, 200, 200, 255), levelText);
 		}
 	}
 	

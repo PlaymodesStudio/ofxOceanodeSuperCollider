@@ -50,9 +50,14 @@ public:
 	
 	// Custom region method specific to scPolyMixer
 	void addCustomRegion(ofParameter<std::function<void()>> p1, ofParameter<std::function<void()>> p2);
+	
+	void updateAllTracksVUTiming(float attackTime, float releaseTime);
 
 	
 private:
+	std::vector<int> tracksToAddNextFrame;
+	bool needsGUIRebuild = false;
+	bool isLoadingPreset = false;
 	
 	static const bool ENABLE_VU_METERS = true;
 	bool vuMetersReady = false;
@@ -82,15 +87,18 @@ private:
 	std::map<int, vector<float>> trackPeakDecayTimers;
 	vector<float> masterPeakLevels;
 	vector<float> masterPeakDecayTimers;
+	std::unordered_map<int, bool> trackHasInput;
+
 	
 	// VU meter timing controls (per track)
-	std::map<int, shared_ptr<ofParameter<float>>> trackVUAttack;
-	std::map<int, shared_ptr<ofParameter<float>>> trackVURelease;
+	ofParameter<float> trackVUHeight;
+	ofParameter<float> masterVUHeight;
 	
 	// Master VU meter timing controls
 	ofParameter<float> masterVUAttack;
 	ofParameter<float> masterVURelease;
-	
+	ofParameter<bool> drawVU;
+
 	// Dynamic track parameters - using maps for proper management
 	std::map<int, shared_ptr<ofxOceanodeParameter<vector<float>>>> trackLevels;
 	// trackMutes and trackSolos removed - now using direct parameters (trackMuteParams/trackSoloParams)
@@ -171,8 +179,8 @@ private:
 	// Parameter synchronization
 	void syncGainVecToTrackLevels();
 	void syncTrackLevelsToGainVec();
-	
-	
+	bool isTrackConnected(ofxSCServer* server, int trackIndex) const;
+
 	// VU meter bus management - missing from original implementation
 	std::map<ofxSCServer*, std::vector<ofxSCBus*>> trackVUBuses;
 	ofxSCBus* masterVUBus = nullptr;
@@ -182,6 +190,7 @@ private:
 	void disableAllVUMeters(ofxSCServer* server);
 	void enableAllVUMeters(ofxSCServer* server);
 	void restoreTrackParameters(ofxSCServer* server, int trackIndex);
+	void resetInputBusses(ofxSCServer* server) override;
 	
 	// Graph recomputation support
 	void moveSynthBefore(ofxSCServer* server, int nodeID) override;
