@@ -5,6 +5,7 @@
 //  Simple VU meter - EXTRACTED FROM WORKING POLYMIXER
 //
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "scVUMeter.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -49,7 +50,7 @@ void scVUMeter::setup() {
 	
 	try {
 		// Core parameters - EXACTLY like polymixer
-		addParameter(numChannels.set("Num Channels", 2, 1, 16));
+		addParameter(numChannels.set("Num Channels", 2, 1, MAX_NODE_CHANNELS));
 		
 		addCustomRegion(
 			ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
@@ -67,7 +68,7 @@ void scVUMeter::setup() {
 		
 		// Widget size parameters
 		addInspectorParameter(widgetWidth.set("Widget Width", 240.0f, 100.0f, 800.0f));
-		addInspectorParameter(widgetHeight.set("Widget Height", 20.0f, 10.0f, 100.0f));
+		addInspectorParameter(widgetHeight.set("VU Height", 640.0f, 20.0f, 1900.0f)); // Changed name and default
 		
 		// VU Data output parameter - EXACTLY like polymixer
 		vector<float> defaultVUData(2, 0.0f);
@@ -83,27 +84,53 @@ void scVUMeter::setup() {
 		// Add passthrough output - needed for graph to determine server
 		scNode::addOutput("Out");
 		
-		// Set up parameter listeners - EXACTLY like polymixer
+		// Set up parameter listeners - FOLLOW CANONICAL PATTERN FROM scSynthdef
 		listeners.push(numChannels.newListener([this](int &channels){
-			// Free existing synths - graph rebuild will recreate them
+			// Recreate synths with proper replacement - EXACTLY like scSynthdef
 			for(auto& pair : synthInstances) {
 				if(pair.second != nullptr) {
-					pair.second->free();
+					ofxSCServer* server = pair.first;
+					int oldNodeID = pair.second->nodeID;
+					
+					// Create new synth with replacement action
+					ofxSCSynth *newSynth = new ofxSCSynth(getSynthDefName(), server);
+					newSynth->create(4, oldNodeID); // 4 = kAddAction_replace
+					
+					// Delete old synth
 					delete pair.second;
-					pair.second = nullptr;  // Set to null so createSynth knows to rebuild
+					pair.second = newSynth;
+					
+					// Recreate VU bus for new channel count
+					recreateVUBus(server);
+					
+					// Restore all parameters after synth recreation
+					if(vuBuses.count(server) > 0 && vuBuses[server] != nullptr) {
+						newSynth->set("vubus", vuBuses[server]->index);
+						ofLogNotice("scVUMeter") << "Restored VU bus to index " << vuBuses[server]->index;
+					}
+					
+					newSynth->set("vuattacktime", vuAttack.get());
+					newSynth->set("vureleasetime", vuRelease.get());
+					ofLogNotice("scVUMeter") << "Restored VU timing parameters";
+					
+					// Restore input bus
+					if(inputBuses.count(server) > 0 && !inputBuses[server].empty()) {
+						for(auto& inputPair : inputBuses[server]) {
+							newSynth->set("in", inputPair.second);
+							ofLogNotice("scVUMeter") << "Restored input bus to " << inputPair.second;
+							break; // Only one input
+						}
+					}
+					
+					// Restore output bus
+					if(outputBuses.count(server) > 0 && outputBuses[server].count(0) > 0) {
+						newSynth->set("out", outputBuses[server][0]);
+						ofLogNotice("scVUMeter") << "Restored output bus to " << outputBuses[server][0];
+					}
 				}
 			}
 			
-			// Free VU buses - will be recreated during createSynth
-			for(auto& pair : vuBuses) {
-				if(pair.second != nullptr) {
-					pair.second->free();
-					delete pair.second;
-					pair.second = nullptr;
-				}
-			}
-			
-			// Trigger graph recomputation
+			// CRITICAL: Trigger graph recomputation - EXACTLY like scSynthdef
 			for(auto& output : outputs) {
 				output = output;
 			}
@@ -384,7 +411,8 @@ void scVUMeter::recreateVUBus(ofxSCServer* server) {
 			if(server->controlBusses[newBus->index] != nullptr) {
 				vuBuses[server] = newBus;
 				newBus->requestValues();
-				ofLogNotice("scVUMeter") << "Created VU bus with index " << newBus->index;
+				ofLogNotice("scVUMeter") << "Created VU bus with index " << newBus->index
+					<< " for " << channelCount << " channels";
 			} else {
 				delete newBus;
 				vuBuses[server] = nullptr;
@@ -418,22 +446,27 @@ void scVUMeter::updateVUTiming(float attackTime, float releaseTime) {
 }
 
 void scVUMeter::drawVUWidget() {
-	// EXACTLY like polymixer drawMasterVUWidget, but with configurable dimensions
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 	
 	const vector<float>& vuLevels = vuMeter.get();
 	int numChans = vuLevels.size();
 	
-	// Use configurable dimensions
 	const float widgetW = widgetWidth.get();
-	const float channelH = widgetHeight.get();
-	const float vuHeight = numChans * channelH;
+	const float totalVUHeight = widgetHeight.get();
+	
+	// FIXED: Add left margin for channel labels
+	const float leftMargin = 20.0f;  // Space for channel numbers
+	const float meterWidth = widgetW - leftMargin;
+	
+	// Account for 1px separators between channels
+	const float totalSeparatorHeight = (numChans - 1) * 1.0f;
+	const float channelH = (totalVUHeight - totalSeparatorHeight) / numChans;
 	const float spacing = 2.0f;
-	const float totalHeight = spacing + vuHeight + spacing;
+	const float totalHeight = spacing + totalVUHeight + spacing;
 	
 	ImVec2 vuStart = ImVec2(cursorPos.x, cursorPos.y + spacing);
-	ImVec2 vuEnd = ImVec2(vuStart.x + widgetW, vuStart.y + vuHeight);
+	ImVec2 vuEnd = ImVec2(vuStart.x + widgetW, vuStart.y + totalVUHeight);
 	
 	// Background
 	drawList->AddRectFilled(vuStart, vuEnd, IM_COL32(15, 15, 15, 255));
@@ -445,20 +478,21 @@ void scVUMeter::drawVUWidget() {
 		peakDecayTimers.resize(numChans, 0.0f);
 	}
 	
-	// Draw each channel - EXACTLY like polymixer
+	// Draw each channel
+	float currentY = vuStart.y;
+	
 	for(int ch = 0; ch < numChans; ch++) {
 		float ampLevel = ofClamp(vuLevels[ch], 0.0f, 2.0f);
 		float dbLevel = ampToDb(ampLevel);
 		
-		float channelY = vuStart.y + (ch * channelH);
-		ImVec2 channelStart = ImVec2(vuStart.x + 2, channelY + 2);
-		ImVec2 channelEnd = ImVec2(vuStart.x + widgetW - 2, channelY + channelH - 2);
+		// Meter starts after left margin
+		ImVec2 channelStart = ImVec2(vuStart.x + leftMargin, currentY);
+		ImVec2 channelEnd = ImVec2(vuStart.x + widgetW, currentY + channelH);
 		
 		// Channel background
 		drawList->AddRectFilled(channelStart, channelEnd, IM_COL32(25, 25, 25, 255));
 		
-		// Update peak tracking - EXACTLY like polymixer
-		float attackMs = vuAttack.get();
+		// Update peak tracking
 		float releaseMs = vuRelease.get();
 		float releaseCoeff = 1.0f - expf(-1000.0f / (releaseMs * 60.0f));
 		
@@ -476,39 +510,30 @@ void scVUMeter::drawVUWidget() {
 		// Draw level meter
 		if(dbLevel > -60.0f) {
 			float meterPosition = dbToVUPosition(dbLevel, -60.0f, 6.0f);
-			float meterWidth = (widgetW - 4) * meterPosition;
-			ImVec2 meterEnd = ImVec2(channelStart.x + meterWidth, channelEnd.y);
+			float meterW = meterWidth * meterPosition;
+			ImVec2 meterEnd = ImVec2(channelStart.x + meterW, channelEnd.y);
 			
 			unsigned int meterColor = getVUMeterColorDB(dbLevel);
-			
-			// Glow effect
-			if(meterPosition > 0.1f) {
-				ImVec2 glowStart = ImVec2(channelStart.x, channelStart.y - 1);
-				ImVec2 glowEnd = ImVec2(meterEnd.x, channelEnd.y + 1);
-				unsigned int glowColor = (meterColor & 0x00FFFFFF) | 0x40000000;
-				drawList->AddRectFilled(glowStart, glowEnd, glowColor);
-			}
-			
 			drawList->AddRectFilled(channelStart, meterEnd, meterColor);
 		}
 		
 		// Draw peak line
 		float peakPosition = dbToVUPosition(peakLevels[ch], -60.0f, 6.0f);
 		if(peakPosition > 0.01f) {
-			float peakX = channelStart.x + (widgetW - 4) * peakPosition;
+			float peakX = channelStart.x + meterWidth * peakPosition;
 			unsigned int peakColor = getVUMeterColorDB(peakLevels[ch]);
 			drawList->AddLine(
 				ImVec2(peakX, channelStart.y),
 				ImVec2(peakX, channelEnd.y),
 				peakColor,
-				3.0f
+				2.0f
 			);
 		}
 		
 		// Draw 0dB reference line
 		float zeroDbPosition = dbToVUPosition(0.0f, -60.0f, 6.0f);
 		if(zeroDbPosition > 0.01f && zeroDbPosition < 0.99f) {
-			float zeroDbX = channelStart.x + (widgetW - 4) * zeroDbPosition;
+			float zeroDbX = channelStart.x + meterWidth * zeroDbPosition;
 			drawList->AddLine(
 				ImVec2(zeroDbX, channelStart.y),
 				ImVec2(zeroDbX, channelEnd.y),
@@ -517,37 +542,43 @@ void scVUMeter::drawVUWidget() {
 			);
 		}
 		
-		// Channel separator
+		// Move to next channel
+		currentY += channelH;
 		if(ch < numChans - 1) {
-			float sepY = channelY + channelH;
-			drawList->AddLine(
-				ImVec2(vuStart.x, sepY),
-				ImVec2(vuEnd.x, sepY),
-				IM_COL32(80, 80, 80, 128),
-				1.0f
-			);
+			currentY += 1.0f;  // 1px separator
+		}
+	}
+	
+	// DRAW ALL TEXT AFTER BACKGROUNDS - prevents clipping
+	currentY = vuStart.y;
+	for(int ch = 0; ch < numChans; ch++) {
+		float ampLevel = ofClamp(vuLevels[ch], 0.0f, 2.0f);
+		float dbLevel = ampToDb(ampLevel);
+		
+		// Channel label - in the left margin area
+		char channelLabel[8];
+		if(ch == 0) sprintf(channelLabel, "L");
+		else if(ch == 1) sprintf(channelLabel, "R");
+		else sprintf(channelLabel, "%d", ch + 1);
+		
+		ImVec2 labelPos = ImVec2(vuStart.x + 4, currentY + 2);
+		drawList->AddText(labelPos, IM_COL32(180, 180, 180, 255), channelLabel);
+		
+		// Level value text - on the right edge
+		float meterPosition = dbToVUPosition(dbLevel, -60.0f, 6.0f);
+		if(meterPosition > 0.1f) {
+			char levelText[8];
+			sprintf(levelText, "%.1f", dbLevel);
+			ImVec2 levelTextSize = ImGui::CalcTextSize(levelText);
+			ImVec2 levelTextPos = ImVec2(vuEnd.x - levelTextSize.x - 4, currentY + 2);
+			drawList->AddText(levelTextPos, IM_COL32(200, 200, 200, 255), levelText);
 		}
 		
-		// Channel labels (only if height is sufficient)
-		if(channelH >= 15.0f) {
-			const char* channelLabels[] = {"L", "R", "3", "4", "5", "6", "7", "8",
-										   "9", "10", "11", "12", "13", "14", "15", "16"};
-			if(ch < 16) {
-				ImVec2 labelPos = ImVec2(vuStart.x + 4, channelY + 3);
-				drawList->AddText(labelPos, IM_COL32(180, 180, 180, 255), channelLabels[ch]);
-			}
-		}
-		
-		// Level value text (only if height is sufficient and level is visible)
-		if(channelH >= 15.0f) {
-			float meterPosition = dbToVUPosition(dbLevel, -60.0f, 6.0f);
-			if(meterPosition > 0.1f) {
-				char levelText[8];
-				sprintf(levelText, "%.1f", dbLevel);
-				ImVec2 levelTextSize = ImGui::CalcTextSize(levelText);
-				ImVec2 levelTextPos = ImVec2(vuEnd.x - levelTextSize.x - 4, channelY + 3);
-				drawList->AddText(levelTextPos, IM_COL32(200, 200, 200, 255), levelText);
-			}
+		// Move to next channel position
+		const float channelH = (totalVUHeight - (numChans - 1) * 1.0f) / numChans;
+		currentY += channelH;
+		if(ch < numChans - 1) {
+			currentY += 1.0f;
 		}
 	}
 	
