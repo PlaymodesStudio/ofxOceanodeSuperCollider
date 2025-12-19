@@ -1,6 +1,7 @@
 #ifndef scWavescope_h
 #define scWavescope_h
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
 
@@ -17,7 +18,7 @@ public:
 		// Sliding buffer for maximum time window
 		maxBufferTime = 10.0f; // 10 seconds maximum
 		maxBufferSize = (int)(maxBufferTime * sampleRate);
-		slidingBuffer.resize(maxBufferSize * 24, 0.0f); // Max 24 channels
+		slidingBuffer.resize(maxBufferSize * MAX_NODE_CHANNELS, 0.0f); // Max 24 channels
 		writeIndex = 0;
 		
 	}
@@ -28,7 +29,7 @@ public:
 		addParameter(showWindow.set("Show", false));
 		addParameter(input.set("In", nodePort()), ofxOceanodeParameterFlags_DisableOutConnection);
 		addParameter(serverIndex.set("Server", 0, 0, servers.size()-1));
-		addParameter(numChannels.set("N Chan", 1, 1, 24));
+		addParameter(numChannels.set("N Chan", 1, 1, MAX_NODE_CHANNELS));
 		
 		// Time window zoom - this is the main zoom control
 		addParameter(timeWindow.set("Time Window", 0.1f, 0.001f, maxBufferTime)); // 1ms to 10s
@@ -587,7 +588,7 @@ public:
 						
 						// Update buffer size based on actual sample rate
 						maxBufferSize = (int)(maxBufferTime * sampleRate);
-						slidingBuffer.resize(maxBufferSize * 24, 0.0f);
+						slidingBuffer.resize(maxBufferSize * MAX_NODE_CHANNELS, 0.0f);
 						
 						float controlRate = sampleRate / serverBlockSize;
 						ofLogNotice("scWavescope2") << "Sample rate: " << loadedSampleRate
