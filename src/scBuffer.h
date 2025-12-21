@@ -48,6 +48,8 @@ public:
 		addOutputParameter(buffersParam.set("Buffer", {0}, {0}, {INT_MAX}));
 		addOutputParameter(durationsMs.set("Duration", {0}, {0}, {FLT_MAX}));
 		addOutputParameter(sampleRates.set("Sample Rate", {0}, {0}, {FLT_MAX})); // New sample rate output
+		addParameter(select.set("Select", {0}, {0}, {INT_MAX}));
+		addOutputParameter(selectOut.set("Select Out", {0}, {0}, {INT_MAX}));
 		
 		addInspectorParameter(filenamesList.set([this](){
 			int i = 0;
@@ -162,32 +164,6 @@ public:
 						
 						getFileInfo(wavPath, numChannels, durationMs, srate);
 
-						// Fallback to at least trying ch=0 even if probing failed.
-						int channelsToLoad = (numChannels > 0 ? numChannels : 1);
-
-						for(int ch = 0; ch < channelsToLoad; ++ch){
-							try{
-								auto buf0 = new ofxSCBuffer(0, 0, servers[0]->getServer());
-								buf0->readChannel(wavPath, {ch});   // will throw/log if truly unreadable
-								buffers.push_back(buf0);
-
-								newIndices.push_back(buf0->index);
-								newDurations.push_back(durationMs);
-								newSampleRates.push_back(srate);
-								durations.push_back(durationMs);
-
-								for(size_t j = 1; j < servers.size(); ++j){
-									auto bufn = new ofxSCBuffer(0, 0, servers[j]->getServer());
-									bufn->readChannel(wavPath, {ch});
-									buffers.push_back(bufn);
-								}
-							}catch(const std::exception& e){
-								ofLogError("scBuffer") << "Exception reading file: " << e.what();
-								continue;
-							}
-						}
-
-						
 						for(int ch = 0; ch < numChannels; ++ch){
 							try{
 								auto buf0 = new ofxSCBuffer(0, 0, servers[0]->getServer());
@@ -255,6 +231,36 @@ public:
 			buffersParam = newIndices;
 			durationsMs  = newDurations;
 			sampleRates  = newSampleRates;
+		});
+		
+		listener4 = select.newListener([this](vector<int> &selection){
+			vector<int> selectedBuffers;
+			
+			// For each selected sample index
+			for(int sampleIdx : selection){
+				// Find which buffers correspond to this sample
+				int currentSample = 0;
+				int bufferIdx = 0;
+				
+				for(auto &file : files){
+					int numChannels = file.second;
+					
+					if(currentSample == sampleIdx){
+						// Add all channels of this sample
+						for(int ch = 0; ch < numChannels; ch++){
+							if(bufferIdx + ch < buffersParam.get().size()){
+								selectedBuffers.push_back(buffersParam.get()[bufferIdx + ch]);
+							}
+						}
+						break;
+					}
+					
+					currentSample++;
+					bufferIdx += numChannels;
+				}
+			}
+			
+			selectOut = selectedBuffers;
 		});
 	}
 	
@@ -484,6 +490,9 @@ private:
     ofEventListener listener;
     ofEventListener listener2;
     ofEventListener listener3;
+	ofEventListener listener4;
+	ofParameter<vector<int>> select;
+	ofParameter<vector<int>> selectOut;
     ofParameter<vector<int>> buffersParam;
     ofParameter<vector<float>> durationsMs;
     ofParameter<vector<float>> sampleRates;
