@@ -68,7 +68,7 @@ void scVUMeter::setup() {
 		
 		// Widget size parameters
 		addInspectorParameter(widgetWidth.set("Widget Width", 240.0f, 100.0f, 800.0f));
-		addInspectorParameter(widgetHeight.set("VU Height", 640.0f, 20.0f, 1900.0f)); // Changed name and default
+		addInspectorParameter(widgetHeight.set("VU Height", 100.0f, 20.0f, 1900.0f)); // Changed name and default
 		
 		// VU Data output parameter - EXACTLY like polymixer
 		vector<float> defaultVUData(2, 0.0f);
