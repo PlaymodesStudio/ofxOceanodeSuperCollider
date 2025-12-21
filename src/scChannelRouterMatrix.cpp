@@ -5,6 +5,7 @@
 //  Channel Router Matrix - Route inputs to outputs with gain control
 //
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "scChannelRouterMatrix.h"
 #include "ofxSCSynth.h"
 #include "ofxSuperCollider.h"
@@ -42,7 +43,7 @@ void scChannelRouterMatrix::setup() {
 	
 	try {
 		// Core parameters
-		addParameter(numChannels.set("Num Channels", 2, 1, 16));
+		addParameter(numChannels.set("Num Channels", 2, 1, MAX_NODE_CHANNELS));
 		
 		// Mode dropdown: Multislider (0) or Toggle (1)
 		vector<string> modeOptions = {"Multislider", "Toggle"};
