@@ -70,6 +70,12 @@ private:
 	std::map<ofxSCServer*, std::vector<ofxSCSynth*>> trackInstances;
 	std::map<ofxSCServer*, std::vector<ofxSCBus*>> vuMeterBuses;
 	
+	// Track customization
+	std::map<int, std::shared_ptr<ofParameter<string>>> trackNameParams;
+	std::map<int, std::shared_ptr<ofParameter<ofColor>>> trackColorParams;
+	void drawTrackSeparator(int trackIndex);
+	
+	
 	// Core parameters
 	ofParameter<int> numTracks;
 	ofParameter<int> numChannels;

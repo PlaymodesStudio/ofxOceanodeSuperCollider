@@ -550,6 +550,60 @@ void scPolyMixer::updateTrackCount() {
 	isUpdatingTracks = false;
 }
 
+void scPolyMixer::drawTrackSeparator(int trackIndex) {
+	// Safety checks
+	if(trackIndex < 0 || trackIndex >= numTracks.get()) {
+		ImGui::Dummy(ImVec2(240.0f, 20.0f));
+		return;
+	}
+	
+	if(trackNameParams.count(trackIndex) == 0 || trackColorParams.count(trackIndex) == 0) {
+		ImGui::Dummy(ImVec2(240.0f, 20.0f));
+		return;
+	}
+	
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+	
+	const float barWidth = 240.0f;
+	const float barHeight = 20.0f;
+	
+	// Get track name and color
+	string trackName = trackNameParams[trackIndex]->get();
+	ofColor trackColor = trackColorParams[trackIndex]->get();
+	
+	// Draw simple colored bar
+	ImVec2 barStart = cursorPos;
+	ImVec2 barEnd = ImVec2(barStart.x + barWidth, barStart.y + barHeight);
+	
+	// Use EXACT color from inspector (no darkening or modification)
+	ImU32 bgColor = IM_COL32(
+		trackColor.r,
+		trackColor.g,
+		trackColor.b,
+		255
+	);
+	drawList->AddRectFilled(barStart, barEnd, bgColor);
+	
+	// Draw track name text (CENTERED)
+	ImVec2 textSize = ImGui::CalcTextSize(trackName.c_str());
+	ImVec2 textPos = ImVec2(
+		barStart.x + (barWidth - textSize.x) * 0.5f,  // Center horizontally
+		barStart.y + (barHeight - textSize.y) * 0.5f  // Center vertically
+	);
+	
+	// Simple white text, no shadow
+	drawList->AddText(
+		textPos,
+		IM_COL32(255, 255, 255, 255),
+		trackName.c_str()
+	);
+	
+	// Move cursor
+	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, cursorPos.y + barHeight));
+	ImGui::Dummy(ImVec2(barWidth, 0.0f));
+}
+
 void scPolyMixer::addTrackToGUI(int trackIndex) {
 	if(trackLevels.count(trackIndex) > 0) {
 		return;
@@ -558,18 +612,76 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 	string trackName = "Track " + ofToString(trackIndex + 1);
 	
 	try {
-		// Add input if we don't have enough
+		// CRITICAL: Declare parameters outside try-catch blocks for scope access
+		auto levelParam = std::make_shared<ofParameter<vector<float>>>();
+		auto muteParam = std::make_shared<ofParameter<bool>>();
+		auto soloParam = std::make_shared<ofParameter<bool>>();
+		
+		// Add track name parameter FIRST (inspector only, not visible in main GUI)
+		try {
+			auto nameParam = std::make_shared<ofParameter<string>>();
+			nameParam->set("Name " + ofToString(trackIndex + 1),
+						   "Track " + ofToString(trackIndex + 1));
+			trackNameParams[trackIndex] = nameParam;
+			addInspectorParameter(*nameParam);
+		} catch(const std::exception& e) {
+			ofLogError("scPolyMixer") << "Error creating name parameter for track " << trackIndex << ": " << e.what();
+			throw;
+		}
+		
+		// Add track color parameter (inspector only)
+		try {
+			auto colorParam = std::make_shared<ofParameter<ofColor>>();
+			// Generate a default color based on track index
+			ofColor defaultColor;
+			defaultColor.setHsb((trackIndex * 30) % 360, 100, 150);
+			colorParam->set("Color " + ofToString(trackIndex + 1), defaultColor);
+			trackColorParams[trackIndex] = colorParam;
+			addInspectorParameter(*colorParam);
+		} catch(const std::exception& e) {
+			ofLogError("scPolyMixer") << "Error creating color parameter for track " << trackIndex << ": " << e.what();
+			throw;
+		}
+		
+		// Add thick separator line BEFORE track name bar
+		string topSeparatorName = "TrackTopSeparator_" + ofToString(trackIndex);
+		try {
+			addCustomRegion(
+				ofParameter<std::function<void()>>().set(topSeparatorName, [](){
+					drawSeparator();
+				}),
+				ofParameter<std::function<void()>>().set(topSeparatorName + "_Region", [](){
+					drawSeparator();
+				})
+			);
+		} catch(const std::exception& e) {
+			ofLogError("scPolyMixer") << "Error creating top separator for track " << trackIndex << ": " << e.what();
+			throw;
+		}
+		
+		// Add separator with track name and color - this is the visual header
+		string separatorName = "TrackSeparator_" + ofToString(trackIndex);
+		try {
+			addCustomRegion(
+				ofParameter<std::function<void()>>().set(separatorName, [this, trackIndex](){
+					drawTrackSeparator(trackIndex);
+				}),
+				ofParameter<std::function<void()>>().set(separatorName + "_Region", [this, trackIndex](){
+					drawTrackSeparator(trackIndex);
+				})
+			);
+		} catch(const std::exception& e) {
+			ofLogError("scPolyMixer") << "Error creating separator for track " << trackIndex << ": " << e.what();
+			throw;
+		}
+		
+		// NOW add input - this comes AFTER the track name bar
 		if(inputs.size() <= trackIndex) {
 			scNode::addInput("In " + ofToString(trackIndex + 1));
 		}
 		
 		// Track input index mapping
 		trackInputIndices[trackIndex] = trackIndex;
-		
-		// CRITICAL: Declare parameters outside try-catch blocks for scope access
-		auto levelParam = std::make_shared<ofParameter<vector<float>>>();
-		auto muteParam = std::make_shared<ofParameter<bool>>();
-		auto soloParam = std::make_shared<ofParameter<bool>>();
 		
 		try {
 			vector<float> defaultLevel(1, 0.5f);
@@ -636,6 +748,7 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 			throw;
 		}
 		
+		// Then add the track widget (VU meter and buttons)
 		string widgetName = "Track " + ofToString(trackIndex + 1) + " Control";
 		try {
 			addCustomRegion(
@@ -648,35 +761,6 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 			);
 		} catch(const std::exception& e) {
 			ofLogError("scPolyMixer") << "Error creating track widget for track " << trackIndex << ": " << e.what();
-			throw;
-		}
-		
-		string separatorName = "TrackSeparator_" + ofToString(trackIndex);
-		try {
-			addCustomRegion(
-				ofParameter<std::function<void()>>().set(separatorName, [](){
-					ImVec2 p = ImGui::GetCursorScreenPos();
-					ImGui::GetWindowDrawList()->AddLine(
-						ImVec2(p.x + 10, p.y),
-						ImVec2(p.x + 230, p.y),
-						IM_COL32(100, 100, 100, 100),
-						1.0f
-					);
-					ImGui::Dummy(ImVec2(0, 3));
-				}),
-				ofParameter<std::function<void()>>().set(separatorName + "_Region", [](){
-					ImVec2 p = ImGui::GetCursorScreenPos();
-					ImGui::GetWindowDrawList()->AddLine(
-						ImVec2(p.x + 10, p.y),
-						ImVec2(p.x + 230, p.y),
-						IM_COL32(100, 100, 100, 100),
-						1.0f
-					);
-					ImGui::Dummy(ImVec2(0, 3));
-				})
-			);
-		} catch(const std::exception& e) {
-			ofLogError("scPolyMixer") << "Error creating separator for track " << trackIndex << ": " << e.what();
 			throw;
 		}
 		
@@ -707,6 +791,8 @@ void scPolyMixer::addTrackToGUI(int trackIndex) {
 		trackLevelParams.erase(trackIndex);
 		trackMuteParams.erase(trackIndex);
 		trackSoloParams.erase(trackIndex);
+		trackNameParams.erase(trackIndex);
+		trackColorParams.erase(trackIndex);
 		trackPeakLevels.erase(trackIndex);
 		trackPeakDecayTimers.erase(trackIndex);
 		trackInputIndices.erase(trackIndex);
@@ -840,104 +926,107 @@ void scPolyMixer::recreateVUBuses(ofxSCServer* server) {
 	ofLogNotice("scPolyMixer") << "VU bus recreation complete";
 }
 	
-	void scPolyMixer::removeTrackFromGUI(int trackIndex) {
-		// ofLogNotice("scPolyMixer") << "Removing track " << trackIndex << " from GUI";
-		
-		try {
-			// Step 1: Clear all shared_ptr references to prevent dangling pointers
-			if(trackLevels.count(trackIndex) > 0) {
-				trackLevels[trackIndex].reset();
-				trackLevels.erase(trackIndex);
-			}
-			
-			if(trackLevelParams.count(trackIndex) > 0) {
-				trackLevelParams[trackIndex].reset();
-				trackLevelParams.erase(trackIndex);
-			}
-			
-			if(trackMuteParams.count(trackIndex) > 0) {
-				trackMuteParams[trackIndex].reset();
-				trackMuteParams.erase(trackIndex);
-			}
-			
-			if(trackSoloParams.count(trackIndex) > 0) {
-				trackSoloParams[trackIndex].reset();
-				trackSoloParams.erase(trackIndex);
-			}
-			
-			if(trackVUData.count(trackIndex) > 0) {
-				trackVUData[trackIndex].reset();
-				trackVUData.erase(trackIndex);
-			}
-			
-			// Clear VU meters and other tracking data
-			if(ENABLE_VU_METERS) {
-				trackVUMeters.erase(trackIndex);
-				trackVUMeterParams.erase(trackIndex);
-			}
-			
-			trackInputIndices.erase(trackIndex);
-			soloedTracks.erase(trackIndex);
-			trackPeakLevels.erase(trackIndex);
-			trackPeakDecayTimers.erase(trackIndex);
-			vuParameters.erase(trackIndex);
-			
-			// Step 2: FORCE PARAMETER REMOVAL - Remove from both groups without checking existence
-			vector<string> parametersToRemoveNow = {
-				"Level " + ofToString(trackIndex + 1),
-				"Mute " + ofToString(trackIndex + 1),
-				"Solo " + ofToString(trackIndex + 1),
-				"VU Data " + ofToString(trackIndex + 1),
-				"VU " + ofToString(trackIndex + 1)
-			};
-			
-			// Add custom regions
-			string widgetName = "Track " + ofToString(trackIndex + 1) + " Control";
-			parametersToRemoveNow.push_back(widgetName);
-			parametersToRemoveNow.push_back(widgetName + "_Region");
-			string separatorName = "TrackSeparator_" + ofToString(trackIndex);
-			parametersToRemoveNow.push_back(separatorName);
-			parametersToRemoveNow.push_back(separatorName + "_Region");
-			
-			// ofLogNotice("scPolyMixer") << "Force removing " << parametersToRemoveNow.size()
-			//						   << " parameters for track " << trackIndex;
-			
-			int successfulRemovals = 0;
-			for(const auto& paramName : parametersToRemoveNow) {
-				bool removed = false;
-				
-				// Force removal from regular parameters (ignore errors)
-				try {
-					removeParameter(paramName);
-					removed = true;
-					// ofLogNotice("scPolyMixer") << "✓ Removed regular parameter: " << paramName;
-				} catch(...) {
-					// Ignore errors, try inspector parameters
-				}
-				
-				// Force removal from inspector parameters (ignore errors)
-				try {
-					removeInspectorParameter(paramName);
-					removed = true;
-					// ofLogNotice("scPolyMixer") << "✓ Removed inspector parameter: " << paramName;
-				} catch(...) {
-					// Ignore errors
-				}
-				
-				if(removed) {
-					successfulRemovals++;
-				} else {
-					// ofLogWarning("scPolyMixer") << "✗ Could not remove parameter: " << paramName;
-				}
-			}
-			
-			// ofLogNotice("scPolyMixer") << "Parameter removal complete for track " << trackIndex
-			//						   << " (" << successfulRemovals << "/" << parametersToRemoveNow.size() << " successful)";
-			
-		} catch(const std::exception& e) {
-			ofLogError("scPolyMixer") << "Error removing track " << trackIndex << ": " << e.what();
+void scPolyMixer::removeTrackFromGUI(int trackIndex) {
+	try {
+		// Step 1: Clear all shared_ptr references to prevent dangling pointers
+		if(trackLevels.count(trackIndex) > 0) {
+			trackLevels[trackIndex].reset();
+			trackLevels.erase(trackIndex);
 		}
+		
+		if(trackLevelParams.count(trackIndex) > 0) {
+			trackLevelParams[trackIndex].reset();
+			trackLevelParams.erase(trackIndex);
+		}
+		
+		if(trackMuteParams.count(trackIndex) > 0) {
+			trackMuteParams[trackIndex].reset();
+			trackMuteParams.erase(trackIndex);
+		}
+		
+		if(trackSoloParams.count(trackIndex) > 0) {
+			trackSoloParams[trackIndex].reset();
+			trackSoloParams.erase(trackIndex);
+		}
+		
+		if(trackVUData.count(trackIndex) > 0) {
+			trackVUData[trackIndex].reset();
+			trackVUData.erase(trackIndex);
+		}
+		
+		if(trackNameParams.count(trackIndex) > 0) {
+			trackNameParams[trackIndex].reset();
+			trackNameParams.erase(trackIndex);
+		}
+		
+		if(trackColorParams.count(trackIndex) > 0) {
+			trackColorParams[trackIndex].reset();
+			trackColorParams.erase(trackIndex);
+		}
+		
+		// Clear VU meters and other tracking data
+		if(ENABLE_VU_METERS) {
+			trackVUMeters.erase(trackIndex);
+			trackVUMeterParams.erase(trackIndex);
+		}
+		
+		trackInputIndices.erase(trackIndex);
+		soloedTracks.erase(trackIndex);
+		trackPeakLevels.erase(trackIndex);
+		trackPeakDecayTimers.erase(trackIndex);
+		vuParameters.erase(trackIndex);
+		
+		// Step 2: FORCE PARAMETER REMOVAL - Remove from both groups without checking existence
+		vector<string> parametersToRemoveNow = {
+			"Level " + ofToString(trackIndex + 1),
+			"Mute " + ofToString(trackIndex + 1),
+			"Solo " + ofToString(trackIndex + 1),
+			"Name " + ofToString(trackIndex + 1),
+			"Color " + ofToString(trackIndex + 1),
+			"VU Data " + ofToString(trackIndex + 1),
+			"VU " + ofToString(trackIndex + 1)
+		};
+		
+		// Add custom regions
+		string widgetName = "Track " + ofToString(trackIndex + 1) + " Control";
+		parametersToRemoveNow.push_back(widgetName);
+		parametersToRemoveNow.push_back(widgetName + "_Region");
+		string separatorName = "TrackSeparator_" + ofToString(trackIndex);
+		parametersToRemoveNow.push_back(separatorName);
+		parametersToRemoveNow.push_back(separatorName + "_Region");
+		string topSeparatorName = "TrackTopSeparator_" + ofToString(trackIndex);
+		parametersToRemoveNow.push_back(topSeparatorName);
+		parametersToRemoveNow.push_back(topSeparatorName + "_Region");
+		
+		int successfulRemovals = 0;
+		for(const auto& paramName : parametersToRemoveNow) {
+			bool removed = false;
+			
+			// Force removal from regular parameters (ignore errors)
+			try {
+				removeParameter(paramName);
+				removed = true;
+			} catch(...) {
+				// Ignore errors, try inspector parameters
+			}
+			
+			// Force removal from inspector parameters (ignore errors)
+			try {
+				removeInspectorParameter(paramName);
+				removed = true;
+			} catch(...) {
+				// Ignore errors
+			}
+			
+			if(removed) {
+				successfulRemovals++;
+			}
+		}
+		
+	} catch(const std::exception& e) {
+		ofLogError("scPolyMixer") << "Error removing track " << trackIndex << ": " << e.what();
 	}
+}
 
 void scPolyMixer::removeAllTrackParameters() {
 	ofLogNotice("scPolyMixer") << "Removing all track parameters";
@@ -954,6 +1043,8 @@ void scPolyMixer::removeAllTrackParameters() {
 		trackSoloParams.clear();
 		trackVUMeterParams.clear();
 		trackVUData.clear();
+		trackNameParams.clear();
+		trackColorParams.clear();
 		trackInputIndices.clear();
 		soloedTracks.clear();
 		trackPeakLevels.clear();
@@ -967,6 +1058,8 @@ void scPolyMixer::removeAllTrackParameters() {
 				removeParameter("Level " + ofToString(trackIndex + 1));
 				removeInspectorParameter("Mute " + ofToString(trackIndex + 1));
 				removeInspectorParameter("Solo " + ofToString(trackIndex + 1));
+				removeInspectorParameter("Name " + ofToString(trackIndex + 1));
+				removeInspectorParameter("Color " + ofToString(trackIndex + 1));
 				removeInspectorParameter("VU " + ofToString(trackIndex + 1));
 				removeParameter("VU Data " + ofToString(trackIndex + 1));
 				
@@ -975,6 +1068,8 @@ void scPolyMixer::removeAllTrackParameters() {
 				removeParameter(widgetName);
 				string separatorName = "TrackSeparator_" + ofToString(trackIndex);
 				removeParameter(separatorName);
+				string topSeparatorName = "TrackTopSeparator_" + ofToString(trackIndex);
+				removeParameter(topSeparatorName);
 			} catch(const std::exception& e) {
 				ofLogWarning("scPolyMixer") << "Error removing parameters for track " << trackIndex << ": " << e.what();
 			}
@@ -1875,17 +1970,26 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 	}
 
 	
-	void scPolyMixer::presetSave(ofJson &json) {
-		// Save track-specific data
-		for(int i = 0; i < numTracks; i++) {
-			if(trackMuteParams.count(i) > 0) {
-				json["TrackInfo"][i]["Mute"] = trackMuteParams[i]->get();
-			}
-			if(trackSoloParams.count(i) > 0) {
-				json["TrackInfo"][i]["Solo"] = trackSoloParams[i]->get();
-			}
+void scPolyMixer::presetSave(ofJson &json) {
+	// Save track-specific data
+	for(int i = 0; i < numTracks; i++) {
+		if(trackMuteParams.count(i) > 0) {
+			json["TrackInfo"][i]["Mute"] = trackMuteParams[i]->get();
+		}
+		if(trackSoloParams.count(i) > 0) {
+			json["TrackInfo"][i]["Solo"] = trackSoloParams[i]->get();
+		}
+		if(trackNameParams.count(i) > 0) {
+			json["TrackInfo"][i]["Name"] = trackNameParams[i]->get();
+		}
+		if(trackColorParams.count(i) > 0) {
+			ofColor color = trackColorParams[i]->get();
+			json["TrackInfo"][i]["Color"]["r"] = color.r;
+			json["TrackInfo"][i]["Color"]["g"] = color.g;
+			json["TrackInfo"][i]["Color"]["b"] = color.b;
 		}
 	}
+}
 	
 void scPolyMixer::loadBeforeConnections(ofJson &json) {
 	ofLogNotice("scPolyMixer") << "=== LOAD BEFORE CONNECTIONS ===";
@@ -1949,6 +2053,16 @@ void scPolyMixer::presetRecallAfterSettingParameters(ofJson &json) {
 					soloedTracks.insert(i);
 					ofLogNotice("scPolyMixer") << "Restored solo state for track " << i;
 				}
+			}
+			if(json["TrackInfo"][i].contains("Name") && trackNameParams.count(i) > 0) {
+				trackNameParams[i]->set(json["TrackInfo"][i]["Name"]);
+			}
+			if(json["TrackInfo"][i].contains("Color") && trackColorParams.count(i) > 0) {
+				ofColor color;
+				color.r = json["TrackInfo"][i]["Color"]["r"];
+				color.g = json["TrackInfo"][i]["Color"]["g"];
+				color.b = json["TrackInfo"][i]["Color"]["b"];
+				trackColorParams[i]->set(color);
 			}
 		} catch(ofJson::exception& e) {
 			ofLog() << "scPolyMixer preset recall error: " << e.what();
