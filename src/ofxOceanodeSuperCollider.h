@@ -39,6 +39,7 @@
 #include "scPolyMixer.h"
 #include "scFunction.h"
 #include "scChannelRouterMatrix.h"
+#include "scFastEnvelopeFollower.h"
 
 
 
@@ -131,6 +132,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scVUMeter>("SuperCollider");
 	o.registerModel<scChannelRouterMatrix>("SuperCollider");
 	o.registerModel<scFunction>("SuperCollider");
+	o.registerModel<scFastEnvelopeFollower>("SuperCollider");
 
 }
 
