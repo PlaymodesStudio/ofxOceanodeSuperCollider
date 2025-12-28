@@ -49,6 +49,7 @@ private:
 	ofParameter<int> numChannels;
 	ofParameter<int> matrixMode; // 0 = Multislider, 1 = Toggle
 	ofParameter<int> compensation; // 0 = 0dB, 1 = -3dB, 2 = -6dB
+	ofParameter<bool> bypass;
 	
 	// Inspector parameters for widget size
 	ofParameter<float> widgetWidth;

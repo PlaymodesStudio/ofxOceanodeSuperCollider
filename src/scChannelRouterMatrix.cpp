@@ -45,6 +45,9 @@ void scChannelRouterMatrix::setup() {
 		// Core parameters
 		addParameter(numChannels.set("Num Channels", 2, 1, MAX_NODE_CHANNELS));
 		
+		// Bypass parameter
+		addParameter(bypass.set("Bypass", false));
+		
 		// Mode dropdown: Multislider (0) or Toggle (1)
 		vector<string> modeOptions = {"Multislider", "Toggle"};
 		addParameterDropdown(matrixMode, "Mode", 0, modeOptions);
@@ -80,6 +83,15 @@ void scChannelRouterMatrix::setup() {
 			// Trigger graph recomputation
 			for(auto& output : outputs) {
 				output = output;
+			}
+		}));
+		
+		listeners.push(bypass.newListener([this](bool &b){
+			// Update synth parameters
+			for(auto& pair : synthInstances) {
+				if(pair.first != nullptr) {
+					updateSynthParameters(pair.first);
+				}
 			}
 		}));
 		
@@ -190,6 +202,9 @@ void scChannelRouterMatrix::createSynth(ofxSCServer* server) {
 		synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
 		synthInstances[server]->create();
 		
+		// Set bypass parameter immediately
+		synthInstances[server]->set("bypass", bypass.get() ? 1.0f : 0.0f);
+		
 		updateSynthParameters(server);
 		
 		if(inputBuses.count(server) > 0 && !inputBuses[server].empty()) {
@@ -219,6 +234,7 @@ void scChannelRouterMatrix::updateSynthParameters(ofxSCServer* server) {
 		vector<float> matrixData = flattenMatrix();
 		synthInstances[server]->set("matrix", matrixData);
 		synthInstances[server]->set("compensation", (float)compensation.get());
+		synthInstances[server]->set("bypass", bypass.get() ? 1.0f : 0.0f);
 		
 		ofLogVerbose("scChannelRouterMatrix") << "Updated synth parameters";
 		
@@ -293,7 +309,7 @@ void scChannelRouterMatrix::moveSynthBefore(ofxSCServer* server, int nodeID) {
 	ofxSCSynth* synth = it->second;
 
 	try {
-		// Ensure matrix + compensation are up to date
+		// Ensure matrix + compensation + bypass are up to date
 		updateSynthParameters(server);
 
 		// Restore input bus (first mapped input, if any)
