@@ -74,8 +74,8 @@ public:
     static synthdefDesc readAndCreateSynthdef(string file);
     
 private:
-    
     string getSynthdefFilename();
+	string findNextAvailableSynthdef();
     
     ofEventListeners listeners;
     
@@ -92,6 +92,7 @@ private:
     
     ofParameter<bool> doNotDistributeInputs;
     ofParameter<bool> doNotDistributeOutputs;
+	bool synthdefExists(string filename);
 };
 
 #endif /* scSynthdef_h */
