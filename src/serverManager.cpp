@@ -8,6 +8,7 @@
 #include "serverManager.h"
 #include "ofxOceanodeSuperCollider.h"
 #include "ofxOceanodeSuperColliderController.h"
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxSuperCollider.h"
 #include "scNode.h"
 #include "scStart.h"
@@ -39,13 +40,12 @@ void serverManager::setup(){
     }
     boot();
     
-    listeners.push(ofxOceanodeShared::getPresetWillBeLoadedEvent().newListener([this](){
-        for(auto node : nodesList) node->free(server);
-        nodesList.clear();
-        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-        busses.clear();
-    }));
-    
+	listeners.push(ofxOceanodeShared::getPresetWillBeLoadedEvent().newListener([this](){
+			backupNodesList = nodesList; // Save state
+			nodesList.clear();           // Clear main list to prevent crash
+			// Note: We do NOT clear busses here, preventing the glitch.
+		}));
+	
     listeners.push(ofxOceanodeShared::getPresetHasLoadedEvent().newListener([this](){
         recomputeGraph();
     }));
@@ -212,7 +212,7 @@ void serverManager::kill(){
 void serverManager::loadDefs(){
     ofxOscMessage m;
     m.setAddress("/d_loadDir");
-    m.addStringArg(ofToDataPath("Supercollider/Synthdefs", true));
+	m.addStringArg(ofToDataPath(SYNTHDEF_DIRECTORY, true));
     m.addIntArg(0);
     server->sendMsg(m);
 }
@@ -252,109 +252,137 @@ void serverManager::removeOutput(scOutput *output){
 }
 
 void serverManager::recomputeGraph(){
-    if(ofxOceanodeShared::isPresetLoading()) return;
-//    ofLog() << "Recompute Graph";
-    if(outputs.size() == 0){
-        for(auto node : nodesList) node->free(server);
-        nodesList.clear();
-        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-        busses.clear();
-    }else{
-        server->setBLatency(true);
-//        server->setWaitToSend(true);
-        
-        
-//        for(auto &b : busses) b.free();
-        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-        busses.clear();
-        outputBussesRefToNode.clear();
-        inputBussesRefToNode.clear();
-        
-        std::vector<scNode*> newNodesList;
-        std::map<scNode*, std::pair<int, std::vector<int>>> nodeChilds;
-        for(int i = 0; i < outputs.size(); i++){
-            if(outputs[i]->isInputConnected()){
-                outputs[i]->getInputNode()->appendOrderedNodes(newNodesList, nodeChilds);
-            }
-        }
-        for(int i = 0; i < outputs.size(); i++){
-            if(outputs[i]->isInputConnected()){
-                newNodesList.push_back(outputs[i]);
-            }
-        }
-        
-        std::vector<scNode*> toCreateNodes;
-        std::vector<scNode*> toUpdateNodes;
-        
-        for(auto &node : newNodesList){
-            auto nodeInListIter = std::find(nodesList.begin(), nodesList.end(), node);
-            if(nodeInListIter != nodesList.end()){
-                toUpdateNodes.push_back(node);
-                nodesList.erase(nodeInListIter);
-            }else{
-                toCreateNodes.push_back(node);
-            }
-        }
-        for(auto node : nodesList){
-            if(node != nullptr)
-                node->free(server);
-        }
-        nodesList.clear();
-        
-            std::map<nodePort, std::vector<scNode*>> connections;
-            
-            for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
-                (*it)->getConnections(connections);
-                if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end()){
-                    (*it)->buildSynth(server);
-                }else{
-                    (*it)->resetInputBusses(server);
-                }
-            }
-                
-        //Create outputBusses for all nodes except scOutput
-        for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
-            for(int i = 0; i < (*it)->getNumOutputs() ; i++){
-                busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server);
-                int busindex = busses.back().index;
-                (*it)->setOutputBus(server, i, busindex);
-                outputBussesRefToNode[(*it)][i] = busindex;
-            }
-        }
-        
-            for(auto &c : connections){
-                for(auto &dest : c.second){
-                    int busindex = outputBussesRefToNode[c.first.getNodeRef()][c.first.getIndex()];
-                    dest->setInputBus(server, c.first.getNodeRef(), busindex);
-                    inputBussesRefToNode[dest].push_back(busindex);
-                }
-            }
-        
-        scNode* lastNode = nullptr;
-        for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
-            if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end()){
-                (*it)->createSynth(server);
-            }
-            else{
-                if(lastNode == nullptr){
-//                    (*it)->moveSynthAfter(server, -1);
-                }
-                else{
-                    (*it)->moveSynthBefore(server, lastNode->getLastSynthID(server));
-                }
-            }
-            lastNode = (*it);
-        }
-        
-        nodesList = newNodesList;
-//            nodesList.insert(nodesList.end(), newNodesList.begin(), newNodesList.end());
-//        }
-//        server->sendStoredBundle();
-//        server->setWaitToSend(false);
-        server->setBLatency(false);
-    }
-    graphComputed.notify();
+	if(ofxOceanodeShared::isPresetLoading()) return;
+
+	// 1. Calculate the NEW topology based on valid outputs
+	std::vector<scNode*> newNodesList;
+	std::map<scNode*, std::pair<int, std::vector<int>>> nodeChilds;
+	
+	if(outputs.size() > 0){
+		for(int i = 0; i < outputs.size(); i++){
+			// Check for null to be extra safe
+			if(outputs[i] && outputs[i]->isInputConnected()){
+				outputs[i]->getInputNode()->appendOrderedNodes(newNodesList, nodeChilds);
+			}
+		}
+		for(int i = 0; i < outputs.size(); i++){
+			if(outputs[i] && outputs[i]->isInputConnected()){
+				newNodesList.push_back(outputs[i]);
+			}
+		}
+	}
+
+	// 2. COMPARE: New Topology vs Backup
+	bool canRestore = false;
+	
+	// If the count matches, check the pointers
+	if(backupNodesList.size() == newNodesList.size()){
+		canRestore = true;
+		for(size_t i = 0; i < backupNodesList.size(); ++i){
+			// If pointers are identical, it means the objects are the same (alive).
+			// This happens during Copy/Paste of non-audio nodes.
+			if(backupNodesList[i] != newNodesList[i]){
+				canRestore = false;
+				break;
+			}
+		}
+	}
+
+	if(canRestore){
+		// [SCENARIO: SOFT UPDATE]
+		// The audio nodes are identical. We just restore the list.
+		// No audio glitch, no silence.
+		nodesList = newNodesList;
+		backupNodesList.clear();
+		return;
+	}
+
+	// [SCENARIO: HARD REBUILD]
+	// The nodes are different (Preset Load or Audio Graph Change).
+	// We must rebuild everything.
+	
+	// Clear backup (these are likely dead pointers now)
+	backupNodesList.clear();
+
+	if(outputs.size() == 0){
+		// Full Clear
+		ofxOscMessage m;
+		m.setAddress("/g_freeAll");
+		m.addIntArg(1);
+		server->sendMsg(m);
+
+		for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
+		busses.clear();
+	}
+	else{
+		server->setBLatency(true);
+
+		// [DISTORTION FIX]
+		// Since we couldn't free the old C++ nodes (they were deleted),
+		// the old synths are still running. We must wipe the server group.
+		// Group 1 is the default container created in initialize().
+		ofxOscMessage m;
+		m.setAddress("/g_freeAll");
+		m.addIntArg(1);
+		server->sendMsg(m);
+
+		// Reset Busses
+		for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
+		busses.clear();
+		outputBussesRefToNode.clear();
+		inputBussesRefToNode.clear();
+		
+		std::vector<scNode*> toCreateNodes;
+		
+		// All nodes in the new list need creation
+		for(auto &node : newNodesList){
+			toCreateNodes.push_back(node);
+		}
+		
+		// Rebuild Connections
+		std::map<nodePort, std::vector<scNode*>> connections;
+		for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
+			(*it)->getConnections(connections);
+			(*it)->buildSynth(server);
+		}
+			
+		// Alloc Busses
+		for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
+			for(int i = 0; i < (*it)->getNumOutputs() ; i++){
+				busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server);
+				int busindex = busses.back().index;
+				(*it)->setOutputBus(server, i, busindex);
+				outputBussesRefToNode[(*it)][i] = busindex;
+			}
+		}
+		
+		// Link Busses
+		for(auto &c : connections){
+			for(auto &dest : c.second){
+				int busindex = outputBussesRefToNode[c.first.getNodeRef()][c.first.getIndex()];
+				dest->setInputBus(server, c.first.getNodeRef(), busindex);
+				inputBussesRefToNode[dest].push_back(busindex);
+			}
+		}
+		
+		// Create Synths on Server
+		scNode* lastNode = nullptr;
+		for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
+			(*it)->createSynth(server);
+			
+			if(lastNode != nullptr){
+				(*it)->moveSynthBefore(server, lastNode->getLastSynthID(server));
+			}
+			lastNode = (*it);
+		}
+		
+		nodesList = newNodesList;
+		server->setBLatency(false);
+	}
+	graphComputed.notify();
 }
+
+
 
 //int serverManager::getOutputBusForNode(scNode* node){
 //    if(outputBussesRefToNode.count(node) == 1){

@@ -101,6 +101,7 @@ private:
     
     std::vector<scOutput*> outputs;
     std::vector<scNode*> nodesList;
+	std::vector<scNode*> backupNodesList;
     std::map<scNode*, std::map<int, std::vector<ofxSCSynth*>>> synthMap;
     
     std::vector<ofxSCBus> busses;
