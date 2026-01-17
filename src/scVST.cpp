@@ -4332,7 +4332,7 @@ void scVST::setTempo(float bpm) {
 		return;
 	}
 	
-	ofLogNotice("scVST") << "Setting tempo to " << bpm << " BPM";
+	//ofLogNotice("scVST") << "Setting tempo to " << bpm << " BPM";
 	
 	std::vector<float> args = {bpm};
 	sendTransportCommandToAllInstances("/tempo", args);
@@ -4344,7 +4344,7 @@ void scVST::setTimeSignature(int num, int denom) {
 		return;
 	}
 	
-	ofLogNotice("scVST") << "Setting time signature to " << num << "/" << denom;
+	//ofLogNotice("scVST") << "Setting time signature to " << num << "/" << denom;
 	
 	// Note: /time_sig takes int arguments, not float
 	for(auto& serverInstances : synthInstances) {
@@ -4406,7 +4406,7 @@ void scVST::handleTransportPosition(ofxOscMessage& msg) {
 		// Verify this is our VST instance
 		if (!isMyVSTInstance(nodeID)) return;
 		
-		ofLogVerbose("scVST") << "Transport position received: " << position << " beats from node " << nodeID;
+		//ofLogVerbose("scVST") << "Transport position received: " << position << " beats from node " << nodeID;
 		
 		// Update GUI parameter if not suppressed and position changed significantly
 		if(!transportFeedbackSuppressed && !isPresetLoading) {
@@ -4516,8 +4516,8 @@ void scVST::addMidiCCParameter(int ccNumber) {
 				   !synthInstances.empty() &&
 				   areAllInstancesReady()) {
 					
-					ofLogVerbose("scVST") << "Sending MIDI CC " << ccNumber
-										 << " = " << value << " to VST";
+					//ofLogVerbose("scVST") << "Sending MIDI CC " << ccNumber
+					//					 << " = " << value << " to VST";
 					sendMidiCC(ccNumber, value);
 				}
 				
