@@ -81,6 +81,7 @@ private:
 	ofParameter<int> numChannels;
 	ofParameter<vector<float>> masterLevel;
 	ofParameter<vector<float>> gainVec;  // Renamed from levelVec - linear amp multipliers
+	ofParameter<vector<float>> balanceVec;  // NEW: Balance vector for all tracks (-1 to 1)
 	
 	// Master output VU meter
 	ofParameter<vector<float>> masterVUMeter;
@@ -107,12 +108,13 @@ private:
 
 	// Dynamic track parameters - using maps for proper management
 	std::map<int, shared_ptr<ofxOceanodeParameter<vector<float>>>> trackLevels;
-	// trackMutes and trackSolos removed - now using direct parameters (trackMuteParams/trackSoloParams)
+	std::map<int, shared_ptr<ofxOceanodeParameter<float>>> trackBalances; // NEW: Per-track balance
 	std::map<int, shared_ptr<ofxOceanodeParameter<vector<float>>>> trackVUMeters;
 	std::map<int, shared_ptr<ofxOceanodeParameter<vector<float>>>> trackVUData; // Output VU data for each track
 
 	// Keep parameters alive
 	std::map<int, shared_ptr<ofParameter<vector<float>>>> trackLevelParams;
+	std::map<int, shared_ptr<ofParameter<float>>> trackBalanceParams; // NEW: Per-track balance params
 	std::map<int, shared_ptr<ofParameter<bool>>> trackMuteParams;
 	std::map<int, shared_ptr<ofParameter<bool>>> trackSoloParams;
 	std::map<int, shared_ptr<ofParameter<vector<float>>>> trackVUMeterParams;
@@ -138,6 +140,7 @@ private:
 	
 	// Audio parameter updates
 	void updateTrackInstanceLevel(int trackIndex, const vector<float>& levels);
+	void updateTrackInstanceBalance(int trackIndex, float balance); // NEW
 	void updateTrackInstanceMute(int trackIndex, bool muted);
 	void updateTrackInstanceSolo(int trackIndex, bool soloed);
 	void updateMasterLevel(const vector<float>& levels);
@@ -185,6 +188,8 @@ private:
 	// Parameter synchronization
 	void syncGainVecToTrackLevels();
 	void syncTrackLevelsToGainVec();
+	void syncBalanceVecToTrackBalances(); // NEW
+	void syncTrackBalancesToBalanceVec(); // NEW
 	bool isTrackConnected(ofxSCServer* server, int trackIndex) const;
 
 	// VU meter bus management - missing from original implementation
@@ -206,4 +211,3 @@ private:
 };
 
 #endif /* scPolyMixer_h */
-
