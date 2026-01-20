@@ -40,6 +40,7 @@
 #include "scFunction.h"
 #include "scChannelRouterMatrix.h"
 #include "scFastEnvelopeFollower.h"
+#include "scFM7.h"
 
 
 
@@ -133,6 +134,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scChannelRouterMatrix>("SuperCollider");
 	o.registerModel<scFunction>("SuperCollider");
 	o.registerModel<scFastEnvelopeFollower>("SuperCollider");
+	o.registerModel<scFM7>("SuperCollider");
 
 }
 
