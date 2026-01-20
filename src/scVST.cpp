@@ -102,11 +102,15 @@ void scVST::setup(){
 									 ofxOceanodeParameterFlags_DisableSavePreset |
 									 ofxOceanodeParameterFlags_DisableSaveProject);
 	
-	addParameter(gate.set("Gate", {0}, {0}, {1}));
+	
+	addParameter(instance.set("Instance", {0}, {0}, {64}));
+	addParameter(midiChannel.set("MIDI Chan", 1, 1, 16));
+	
 	addParameter(pitch.set("Pitch", {60}, {0}, {127}));
 	addParameter(velocity.set("Velocity", {0.5}, {0}, {1}));
-	addParameter(midiChannel.set("MIDI Chan", 1, 1, 16));
-	addParameter(instance.set("Instance", {0}, {0}, {64})); // NEW: Instance routing
+	addParameter(gate.set("Gate", {0}, {0}, {1}));
+	
+	
 	
 	// Thick separator after MIDI parameters
 	addCustomRegion(
@@ -4997,5 +5001,3 @@ void scVST::updateMidiOutputs() {
 		}
 	}
 }
-
-
