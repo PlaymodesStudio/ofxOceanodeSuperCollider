@@ -14,6 +14,7 @@
 #include <mutex>
 #include <set>
 #include <map>
+#include <atomic>
 
 class ofxSCSynth;
 class ofxSCServer;
@@ -194,6 +195,8 @@ private:
 	void sendMidiNoteOn(int channel, int pitch, int velocity, int instanceIndex = -1);  // NEW: Instance routing
 	void sendMidiNoteOff(int channel, int pitch, int instanceIndex = -1);              // NEW: Instance routing
 	void sendMidiToInstance(ofxSCServer* server, ofxSCSynth* synth, int channel, int status, int data1, int data2);
+	void sendPitchBend(float value);
+	void sendModWheel(float value);
 		
 	
 	// Parameter management UI helpers
@@ -357,6 +360,8 @@ private:
 	ofParameter<vector<int>> gate;
 	ofParameter<vector<float>> pitch;
 	ofParameter<vector<float>> velocity;
+	ofParameter<float> pitchBend;
+	ofParameter<float> modWheel;
 	ofParameter<int> midiChannel;
 	ofParameter<vector<int>> instance;  // NEW: Instance routing parameter
 	ofParameter<bool> singleInstance;   // one plugin instance handles all channels
@@ -442,10 +447,21 @@ private:
 	void handleVSTMidi(ofxOscMessage& msg);
 	
 	// MIDI output batching for performance
-	bool midiOutputDirty;
+	std::atomic<bool> midiOutputDirty;
 	uint64_t lastMidiUpdateTime;
 	std::mutex midiUpdateMutex;
 	void updateMidiOutputs();
+
+	// PERFORMANCE: Throttling and timing variables
+	uint64_t lastMaintenanceTime;
+	uint64_t maintenanceIntervalMs;
+	uint64_t lastParamThrottleCleanup;
+	uint64_t paramThrottleCleanupInterval;
+
+	// PERFORMANCE: Parameter update throttling
+	std::map<int, uint64_t> lastParamUpdateTime;
+	std::mutex paramThrottleMutex;
+	static const uint64_t PARAM_UPDATE_THROTTLE_MS = 16;
 
 };
 

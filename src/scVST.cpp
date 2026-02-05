@@ -42,9 +42,13 @@ scVST::scVST() : scNode("VST") {
 	parameterCacheScheduled = false;
 	
 	// Add to constructor:
-	midiOutputDirty = false;
+	midiOutputDirty.store(false, std::memory_order_relaxed);
 	lastMidiUpdateTime = 0;
 
+	lastMaintenanceTime = 0;
+	maintenanceIntervalMs = 50;
+	lastParamThrottleCleanup = 0;
+	paramThrottleCleanupInterval = 5000;
 }
 
 void scVST::setup(){
@@ -72,16 +76,17 @@ void scVST::setup(){
 	// Search for VST plugins on setup
 	searchForVSTPlugins();
 	
-	// VST Plugin selector dropdown
 	if (!availablePlugins.empty()) {
-		addParameterDropdown(pluginSelector, "Plugin", 0, availablePlugins);
+		addParameterDropdown(pluginSelector, "Plugin", 0, availablePlugins,
+							 ofxOceanodeParameterFlags_DisableSavePreset);
 		currentPluginPath = pluginPaths[0]; // Set default to first plugin
 	} else {
 		// Fallback if no plugins found
 		availablePlugins.push_back("No VST plugins found");
 		pluginPaths.push_back("");
 		addParameterDropdown(pluginSelector, "Plugin", 0, availablePlugins,
-							ofxOceanodeParameterFlags_DisableSavePreset);	}
+							 ofxOceanodeParameterFlags_DisableSavePreset);
+	}
 	
 	
 	// VST control parameters
@@ -109,6 +114,8 @@ void scVST::setup(){
 	addParameter(pitch.set("Pitch", {60}, {0}, {127}));
 	addParameter(velocity.set("Velocity", {0.5}, {0}, {1}));
 	addParameter(gate.set("Gate", {0}, {0}, {1}));
+	addParameter(pitchBend.set("PitchBend", 0.5, 0, 1));
+	addParameter(modWheel.set("ModWheel", 0, 0, 1));
 	
 	
 	
@@ -344,26 +351,18 @@ void scVST::setup(){
 		ofLogNotice("scVST") << "🔍 Plugin selector changed to " << selection
 							   << " (isPresetLoading = " << (isPresetLoading ? "TRUE" : "FALSE") << ")"
 							   << " - plugin path will be: " << (selection >= 0 && selection < pluginPaths.size() ? pluginPaths[selection] : "INVALID");
-		/*
-		 ofLogNotice("scVST") << "🔍 Plugin selector changed to " << selection
-		 << " (isPresetLoading = " << (isPresetLoading ? "TRUE" : "FALSE") << ")";
-		 */
 		
-		// CRITICAL: Don't load plugin during preset loading!
+		// CRITICAL: Don't do ANYTHING during preset loading!
+		// currentPluginPath is already set correctly from the preset JSON
 		if(isPresetLoading) {
-			//ofLogNotice("scVST") << "🔒 Preset loading in progress - deferring plugin load";
-			// Just update the path, don't load yet
-			if (selection >= 0 && selection < pluginPaths.size()) {
-				currentPluginPath = pluginPaths[selection];
-				//ofLogNotice("scVST") << "📝 Updated plugin path to: " << currentPluginPath;
-			}
-			return; // Don't load the plugin yet
+			ofLogNotice("scVST") << "🔒 Preset loading in progress - ignoring selector change (currentPluginPath already set from preset)";
+			return; // Don't update currentPluginPath, don't load the plugin
 		}
 		
 		// Normal operation - load the plugin immediately
 		if (selection >= 0 && selection < pluginPaths.size()) {
 			currentPluginPath = pluginPaths[selection];
-			//ofLogNotice("scVST") << "🔄 Loading selected plugin: " << currentPluginPath;
+			ofLogNotice("scVST") << "🔄 Loading selected plugin: " << currentPluginPath;
 			loadSelectedPlugin();
 		}
 	}));
@@ -371,6 +370,18 @@ void scVST::setup(){
 	// MIDI gate listener
 	listeners.push(gate.newListener([this](vector<int> &gates){
 		processGates(gates);
+	}));
+
+	listeners.push(pitchBend.newListener([this](float &val){
+		if(!isPresetLoading) {
+			sendPitchBend(val);
+		}
+	}));
+
+	listeners.push(modWheel.newListener([this](float &val){
+		if(!isPresetLoading) {
+			sendModWheel(val);
+		}
 	}));
 	
 	listeners.push(resendParams.newListener([this](){
@@ -393,47 +404,65 @@ void scVST::setup(){
 					);
 	
 	listeners.push(ofEvents().update.newListener([this](ofEventArgs&) {
-		updateMidiOutputs();
+		uint64_t currentTime = ofGetElapsedTimeMillis();
 		
-		if(transportFeedbackSuppressed) {
-			uint64_t currentTime = ofGetElapsedTimeMillis();
-			if(currentTime >= transportFeedbackClearTime) {
-				transportFeedbackSuppressed = false;
+		// MIDI output update - only when dirty and throttled
+		if(midiOutputDirty.load(std::memory_order_acquire)) {
+			if(currentTime - lastMidiUpdateTime >= 16) { // ~60fps max
+				updateMidiOutputs();
 			}
 		}
-		// Parameter timer logic - NOW ONLY FOR TIMEOUT PROTECTION
+		
+		// PERFORMANCE: Throttled maintenance tasks
+		if(currentTime - lastMaintenanceTime < maintenanceIntervalMs) {
+			return;  // Skip maintenance this frame
+		}
+		lastMaintenanceTime = currentTime;
+		
+		// Transport feedback clearing
+		if(transportFeedbackSuppressed && currentTime >= transportFeedbackClearTime) {
+			transportFeedbackSuppressed = false;
+		}
+		
+		// Parameter timer logic
 		if(parameterTimerActive) {
-			uint64_t currentTime = ofGetElapsedTimeMillis();
 			if(currentTime - parameterTimerStart >= parameterTimerDelay) {
 				parameterTimerActive = false;
-				ofLogWarning("scVST") << "⏰ Parameter timer timeout - applying preset data anyway";
-				// Only apply if we still have pending data (might have been applied already by VST open event)
+				ofLogWarning("scVST") << "Parameter timer timeout - applying preset data anyway";
 				if(hasPendingPresetData) {
 					applyPendingPresetData();
 				}
 			}
 		}
 		
-		// Update both immediate and debounced FXP caching
+		// FXP cache updates
 		updateFXPCacheIfNeeded();
-		updateParameterDebouncedCacheIfNeeded();  // NEW: Handle debounced parameter caching
+		updateParameterDebouncedCacheIfNeeded();
 		
-		// Feedback clearing logic (keep existing)
-		uint64_t currentTime = ofGetElapsedTimeMillis();
-		std::vector<int> toRemove;
-		
-		{
-			std::lock_guard<std::mutex> lock(feedbackMutex);
-			for(auto& pair : feedbackClearTimes) {
-				if(currentTime >= pair.second) {
-					suppressingFeedback.erase(pair.first);
-					toRemove.push_back(pair.first);
+		// PERFORMANCE: Feedback clearing logic
+		if(!feedbackClearTimes.empty()) {
+			std::vector<int> toRemove;
+			
+			{
+				std::lock_guard<std::mutex> lock(feedbackMutex);
+				for(auto& pair : feedbackClearTimes) {
+					if(currentTime >= pair.second) {
+						suppressingFeedback.erase(pair.first);
+						toRemove.push_back(pair.first);
+					}
 				}
+			}
+			
+			for(int paramIndex : toRemove) {
+				feedbackClearTimes.erase(paramIndex);
 			}
 		}
 		
-		for(int paramIndex : toRemove) {
-			feedbackClearTimes.erase(paramIndex);
+		// PERFORMANCE: Periodic cleanup of parameter throttle map
+		if(currentTime - lastParamThrottleCleanup > paramThrottleCleanupInterval) {
+			lastParamThrottleCleanup = currentTime;
+			std::lock_guard<std::mutex> lock(paramThrottleMutex);
+			lastParamUpdateTime.clear();
 		}
 	}));
 	
@@ -699,6 +728,19 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 		
 		// Verify this is our VST instance
 		if (!isMyVSTInstance(nodeID)) return;
+
+		// PERFORMANCE: Throttle parameter updates per parameter index
+		uint64_t currentTime = ofGetElapsedTimeMillis();
+		{
+			std::lock_guard<std::mutex> lock(paramThrottleMutex);
+			auto it = lastParamUpdateTime.find(paramIndex);
+			if(it != lastParamUpdateTime.end() &&
+			   currentTime - it->second < PARAM_UPDATE_THROTTLE_MS) {
+				return; // Skip this update - too soon since last one
+			}
+			lastParamUpdateTime[paramIndex] = currentTime;
+		}
+
 		/*
 		 ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
 		 << " from node " << nodeID;
@@ -733,6 +775,19 @@ void scVST::handleVSTAuto(ofxOscMessage& msg) {
 		
 		// Verify this is our VST instance
 		if (!isMyVSTInstance(nodeID)) return;
+
+		// PERFORMANCE: Throttle parameter updates per parameter index
+		uint64_t currentTime = ofGetElapsedTimeMillis();
+		{
+			std::lock_guard<std::mutex> lock(paramThrottleMutex);
+			auto it = lastParamUpdateTime.find(paramIndex);
+			if(it != lastParamUpdateTime.end() &&
+			   currentTime - it->second < PARAM_UPDATE_THROTTLE_MS) {
+				return; // Skip this update - too soon since last one
+			}
+			lastParamUpdateTime[paramIndex] = currentTime;
+		}
+
 		/*
 		 ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " automated to " << value
 		 << " from node " << nodeID;
@@ -1669,64 +1724,77 @@ bool scVST::isMyVSTInstance(int nodeID) const {
 	return false;
 }
 
-void scVST::processGates(vector<int>& gates) {
-	// Ensure we have enough space in our tracking vectors
-	if (previousGates.size() != gates.size()) {
-		previousGates.resize(gates.size(), 0);
-		activeNotes.resize(gates.size(), -1); // -1 means no active note
-	}
-	
-	// Get current pitch, velocity, and instance vectors
+void scVST::processGates(vector<int> &gates){
+	// Get parameter vectors
 	auto currentPitch = pitch.get();
 	auto currentVelocity = velocity.get();
 	auto currentInstance = instance.get();
+
+	// The source of truth for polyphony is the pitch vector size
+	size_t numVoices = currentPitch.size();
+	if (numVoices == 0) numVoices = 1; // Safety fallback
+
+	// Resize our internal tracking vectors to match the polyphony count (Pitch Size)
+	// We do NOT resize the 'gates' vector itself to preserve the GUI slider.
+	if (previousGates.size() != numVoices) {
+		previousGates.resize(numVoices, 0);
+		activeNotes.resize(numVoices, -1);
+	}
 	
-	// Process each gate
-	for (int i = 0; i < gates.size(); i++) {
-		int currentGate = gates[i];
-		int previousGate = (i < previousGates.size()) ? previousGates[i] : 0;
+	// Process each voice based on the Pitch vector size
+	for (int i = 0; i < numVoices; i++) {
+		
+		// Determine the effective gate value for this voice
+		int currentGate = 0;
+		if (gates.size() == 1) {
+			// Scalar/Broadcast Mode: The single slider value applies to all pitch voices
+			currentGate = gates[0];
+		} else {
+			// Vector Mode: Match indices 1:1. If gate vector is shorter than pitch, silence.
+			if (i < gates.size()) {
+				currentGate = gates[i];
+			}
+		}
+
+		int previousGate = previousGates[i]; // Safe access due to resize above
 		
 		// Rising edge - gate went from 0 to 1
 		if (currentGate == 1 && previousGate == 0) {
 			// Get pitch for this index
-			int noteNumber = 60; // Default middle C
+			int noteNumber = 60;
 			if (i < currentPitch.size()) {
 				noteNumber = ofClamp(currentPitch[i], 0, 127);
 			} else if (!currentPitch.empty()) {
 				noteNumber = ofClamp(currentPitch[0], 0, 127);
 			}
 			
-			// Get velocity for this index
-			float vel = 0.5; // Default velocity
+			// Get velocity for this index (Broadcast scalar or match index)
+			float vel = 0.5;
 			if (i < currentVelocity.size()) {
 				vel = ofClamp(currentVelocity[i], 0.0, 1.0);
 			} else if (!currentVelocity.empty()) {
+				// Fallback to scalar velocity if vector is size 1
 				vel = ofClamp(currentVelocity[0], 0.0, 1.0);
 			}
 			
 			// Get instance for this index
-			int targetInstance = 0; // Default to all instances
+			int targetInstance = 0;
 			if (i < currentInstance.size()) {
 				targetInstance = ofClamp(currentInstance[i], 0, 64);
 			} else if (!currentInstance.empty()) {
 				targetInstance = ofClamp(currentInstance[0], 0, 64);
 			}
 			
-			// Convert velocity to MIDI range (0-127)
 			int midiVelocity = int(vel * 127);
 			
-			// Send note on with instance routing
 			sendMidiNoteOn(midiChannel.get(), noteNumber, midiVelocity, targetInstance);
-			
-			// Store the active note
 			activeNotes[i] = noteNumber;
 		}
 		
 		// Falling edge - gate went from 1 to 0
 		else if (currentGate == 0 && previousGate == 1) {
-			// Send note off for the previously active note
 			if (i < activeNotes.size() && activeNotes[i] >= 0) {
-				// Get instance for this index for note off
+				// Get instance for note off
 				int targetInstance = 0;
 				if (i < currentInstance.size()) {
 					targetInstance = ofClamp(currentInstance[i], 0, 64);
@@ -1735,13 +1803,13 @@ void scVST::processGates(vector<int>& gates) {
 				}
 				
 				sendMidiNoteOff(midiChannel.get(), activeNotes[i], targetInstance);
-				activeNotes[i] = -1; // Clear active note
+				activeNotes[i] = -1;
 			}
 		}
+		
+		// Update state for next frame
+		previousGates[i] = currentGate;
 	}
-	
-	// Update previous gates for next comparison
-	previousGates = gates;
 }
 
 void scVST::sendMidiNoteOn(int channel, int pitch, int velocity, int instanceIndex) {
@@ -1818,6 +1886,8 @@ void scVST::presetSave(ofJson &json) {
 	nodeJson["tempo"] = tempo.get();
 	nodeJson["timeSignatureNum"] = timeSignatureNum.get();
 	nodeJson["timeSignatureDenom"] = timeSignatureDenom.get();
+	nodeJson["pitchBend"] = pitchBend.get();
+	nodeJson["modWheel"] = modWheel.get();
 	
 	// Save FXP data from first instance if available
 	if(!synthInstances.empty()) {
@@ -2013,6 +2083,8 @@ void scVST::loadBeforeConnections(ofJson &json) {
 	deserializeParameter(nodeJson, tempo);
 	deserializeParameter(nodeJson, timeSignatureNum);
 	deserializeParameter(nodeJson, timeSignatureDenom);
+	deserializeParameter(nodeJson, pitchBend);
+	deserializeParameter(nodeJson, modWheel);
 	
 	// NEW: Backward compatibility - only deserialize mix if it exists in the preset
 	// Old presets won't have this parameter, so we skip it to avoid crashes
@@ -2038,43 +2110,147 @@ void scVST::loadBeforeConnections(ofJson &json) {
 	if(nodeJson.contains("currentPluginPath") && !nodeJson["currentPluginPath"].is_null()) {
 		string savedPluginPath = static_cast<string>(nodeJson["currentPluginPath"]);
 		
-		// FIXED: Set currentPluginPath directly instead of relying on index
-		// This ensures the correct plugin loads even if new plugins are installed
+		ofLogNotice("scVST") << "🔍 Preset contains plugin path: " << savedPluginPath;
+		
+		// CRITICAL: Set currentPluginPath FIRST - this is the authoritative source from the preset
 		currentPluginPath = savedPluginPath;
 		
-		// Update the selector index for GUI display (but don't rely on it for loading)
-		bool pluginFound = false;
+		// Now find the correct index for GUI display
+		int foundIndex = -1;
+		
+		// Normalize the saved path for comparison (remove trailing slashes, normalize separators)
+		string normalizedSavedPath = savedPluginPath;
+		while(!normalizedSavedPath.empty() && (normalizedSavedPath.back() == '/' || normalizedSavedPath.back() == '\\')) {
+			normalizedSavedPath.pop_back();
+		}
+		
+		// First try: exact path match (with normalization)
 		for(int i = 0; i < pluginPaths.size(); i++) {
-			if(pluginPaths[i] == savedPluginPath) {
-				pluginSelector.setWithoutEventNotifications(i);
-				pluginFound = true;
-				ofLogNotice("scVST") << "✅ Found plugin at index " << i << ": " << savedPluginPath;
+			string normalizedCurrentPath = pluginPaths[i];
+			while(!normalizedCurrentPath.empty() && (normalizedCurrentPath.back() == '/' || normalizedCurrentPath.back() == '\\')) {
+				normalizedCurrentPath.pop_back();
+			}
+			
+			if(normalizedCurrentPath == normalizedSavedPath) {
+				foundIndex = i;
+				currentPluginPath = pluginPaths[i]; // Use the exact path from the list
+				ofLogNotice("scVST") << "✅ Found exact plugin path match at index " << i;
 				break;
 			}
 		}
 		
-		// If exact path not found, try matching by filename only
-		if(!pluginFound) {
-			string savedPluginName = ofFilePath::getBaseName(savedPluginPath);
+		// Second try: case-insensitive path match
+		if(foundIndex < 0) {
+			string lowerSavedPath = ofToLower(normalizedSavedPath);
 			for(int i = 0; i < pluginPaths.size(); i++) {
-				string currentPluginName = ofFilePath::getBaseName(pluginPaths[i]);
-				if(currentPluginName == savedPluginName) {
-					ofLogWarning("scVST") << "⚠️ Plugin path changed, matched by name: " << savedPluginName;
-					ofLogWarning("scVST") << "   Old path: " << savedPluginPath;
-					ofLogWarning("scVST") << "   New path: " << pluginPaths[i];
-					pluginSelector.setWithoutEventNotifications(i);
-					currentPluginPath = pluginPaths[i];  // Update to new path
-					pluginFound = true;
+				string normalizedCurrentPath = pluginPaths[i];
+				while(!normalizedCurrentPath.empty() && (normalizedCurrentPath.back() == '/' || normalizedCurrentPath.back() == '\\')) {
+					normalizedCurrentPath.pop_back();
+				}
+				
+				if(ofToLower(normalizedCurrentPath) == lowerSavedPath) {
+					foundIndex = i;
+					currentPluginPath = pluginPaths[i];
+					ofLogNotice("scVST") << "✅ Found case-insensitive path match at index " << i;
 					break;
 				}
 			}
 		}
 		
-		if(!pluginFound) {
-			ofLogError("scVST") << "❌ Could not find saved plugin: " << savedPluginPath;
-			ofLogError("scVST") << "   Plugin will still attempt to load from saved path";
-			// Keep currentPluginPath as savedPluginPath - it might still work if the file exists
+		// Third try: match by filename only (plugin may have moved to different folder)
+		if(foundIndex < 0) {
+			string savedPluginName = ofFilePath::getBaseName(savedPluginPath);
+			string savedPluginExt = ofToLower(ofFilePath::getFileExt(savedPluginPath));
+			
+			ofLogNotice("scVST") << "⚠️ Path not found, searching by filename: " << savedPluginName << " (ext: " << savedPluginExt << ")";
+			
+			// First try to match with same extension
+			for(int i = 0; i < pluginPaths.size(); i++) {
+				string currentPluginName = ofFilePath::getBaseName(pluginPaths[i]);
+				string currentPluginExt = ofToLower(ofFilePath::getFileExt(pluginPaths[i]));
+				
+				if(currentPluginName == savedPluginName && currentPluginExt == savedPluginExt) {
+					foundIndex = i;
+					currentPluginPath = pluginPaths[i];
+					ofLogWarning("scVST") << "⚠️ Plugin found at different location:";
+					ofLogWarning("scVST") << "   Old: " << savedPluginPath;
+					ofLogWarning("scVST") << "   New: " << pluginPaths[i];
+					break;
+				}
+			}
 		}
+		
+		// Fourth try: match by filename, any extension (handles .vst vs .vst3)
+		if(foundIndex < 0) {
+			string savedPluginName = ofFilePath::getBaseName(savedPluginPath);
+			
+			for(int i = 0; i < pluginPaths.size(); i++) {
+				string currentPluginName = ofFilePath::getBaseName(pluginPaths[i]);
+				
+				if(ofToLower(currentPluginName) == ofToLower(savedPluginName)) {
+					foundIndex = i;
+					currentPluginPath = pluginPaths[i];
+					ofLogWarning("scVST") << "⚠️ Plugin found with different extension:";
+					ofLogWarning("scVST") << "   Old: " << savedPluginPath;
+					ofLogWarning("scVST") << "   New: " << pluginPaths[i];
+					break;
+				}
+			}
+		}
+		
+		// Fifth try: match by display name in availablePlugins (handles subfolder prefixes)
+		if(foundIndex < 0) {
+			string savedPluginName = ofFilePath::getBaseName(savedPluginPath);
+			
+			ofLogNotice("scVST") << "⚠️ Trying display name match for: " << savedPluginName;
+			
+			for(int i = 0; i < availablePlugins.size(); i++) {
+				// availablePlugins might have format "Folder/PluginName" or just "PluginName"
+				string displayName = availablePlugins[i];
+				
+				// Check if display name ends with the saved plugin name
+				size_t slashPos = displayName.rfind('/');
+				string pluginNameOnly = (slashPos != string::npos) ? displayName.substr(slashPos + 1) : displayName;
+				
+				if(ofToLower(pluginNameOnly) == ofToLower(savedPluginName)) {
+					foundIndex = i;
+					currentPluginPath = pluginPaths[i];
+					ofLogWarning("scVST") << "⚠️ Plugin found via display name match:";
+					ofLogWarning("scVST") << "   Looking for: " << savedPluginName;
+					ofLogWarning("scVST") << "   Found: " << displayName << " -> " << pluginPaths[i];
+					break;
+				}
+			}
+		}
+		
+		// Update the selector index for GUI display
+		if(foundIndex >= 0) {
+			pluginSelector.setWithoutEventNotifications(foundIndex);
+			ofLogNotice("scVST") << "✅ Plugin selector set to index " << foundIndex;
+			ofLogNotice("scVST") << "   Display name: " << (foundIndex < availablePlugins.size() ? availablePlugins[foundIndex] : "N/A");
+			ofLogNotice("scVST") << "   Path: " << currentPluginPath;
+		} else {
+			ofLogError("scVST") << "❌ Could not find saved plugin in current plugin list!";
+			ofLogError("scVST") << "   Saved path: " << savedPluginPath;
+			ofLogError("scVST") << "   Available plugins:";
+			for(int i = 0; i < std::min((int)availablePlugins.size(), 10); i++) {
+				ofLogError("scVST") << "     [" << i << "] " << availablePlugins[i] << " -> " << pluginPaths[i];
+			}
+			if(availablePlugins.size() > 10) {
+				ofLogError("scVST") << "     ... and " << (availablePlugins.size() - 10) << " more";
+			}
+			
+			// Keep currentPluginPath as savedPluginPath - might still work
+			// Set selector to 0 to avoid undefined state
+			if(!pluginPaths.empty()) {
+				pluginSelector.setWithoutEventNotifications(0);
+				ofLogWarning("scVST") << "⚠️ Selector defaulted to index 0, but will load: " << currentPluginPath;
+			}
+		}
+		
+		ofLogNotice("scVST") << "📝 Final state:";
+		ofLogNotice("scVST") << "   currentPluginPath: " << currentPluginPath;
+		ofLogNotice("scVST") << "   pluginSelector: " << pluginSelector.get();
 	}
 	
 	// Load FXP data if available (but don't apply yet)
@@ -2236,24 +2412,29 @@ void scVST::loadBeforeConnections(ofJson &json) {
 }
 
 void scVST::presetRecallAfterSettingParameters(ofJson &json) {
-	//ofLogNotice("scVST") << "=== PRESET RECALL AFTER SETTING PARAMETERS ===";
+	string nodeKey = getParameterGroup().getName();
+	ofLogNotice("scVST") << "=== PRESET RECALL AFTER SETTING PARAMETERS for node '" << nodeKey << "' ===";
+	ofLogNotice("scVST") << "currentPluginPath = " << currentPluginPath;
 	
-	// Now we can safely load the plugin if it changed
-	if(json.contains("currentPluginPath") && !json["currentPluginPath"].is_null()) {
-		string savedPluginPath = static_cast<string>(json["currentPluginPath"]);
-		
-		if(savedPluginPath != currentPluginPath) {
-			ofLogError("scVST") << "Plugin path mismatch! This shouldn't happen.";
-		}
-		
-		// Load the plugin now (isPresetLoading is still true, so it will preserve parameters)
-		//ofLogNotice("scVST") << "🔄 Loading plugin after parameter creation: " << currentPluginPath;
-		loadSelectedPlugin();
-		setupParameterTimer(5000);
-	} else {
-		// If plugin didn't change, still set up timer for VST synchronization
-		setupParameterTimer(3000);
+	// Verify currentPluginPath is valid before loading
+	if(currentPluginPath.empty()) {
+		ofLogError("scVST") << "❌ No plugin path set - cannot load plugin!";
+		isPresetLoading = false;
+		return;
 	}
+	
+	// Check if the plugin file actually exists
+	ofFile pluginFile(currentPluginPath);
+	if(!pluginFile.exists()) {
+		ofLogError("scVST") << "❌ Plugin file does not exist: " << currentPluginPath;
+		ofLogError("scVST") << "   The plugin may have been moved or uninstalled.";
+		// Still try to proceed - maybe it's a bundle that exists as a directory
+	}
+	
+	// Load the plugin now (isPresetLoading is still true, so it will preserve parameters)
+	ofLogNotice("scVST") << "🔄 Loading plugin: " << currentPluginPath;
+	loadSelectedPlugin();
+	setupParameterTimer(5000);
 }
 
 void scVST::setupParameterTimer(int delayMs) {
@@ -2833,30 +3014,24 @@ void scVST::buildSynth(ofxSCServer* server) {
 					if (address == "/vst_param") {
 						this->handleVSTParam(msg);
 						
-						// NEW: Debounced parameter caching with VST modification tracking
-						if (msg.getNumArgs() >= 3) {
-							int paramIndex = (int)msg.getArgAsFloat(2);
-							// Only cache if NOT from our own GUI propagation AND not during preset loading
-							if (this->suppressingFeedback.count(paramIndex) == 0 &&
-								!this->oceanodePresetLoading && !this->hasPendingPresetData) {
-								
-								// Mark VST as modified since preset load
-								this->vstStateModifiedSincePreset = true;
-								
-								// Schedule debounced cache update
-								this->scheduleParameterDebouncedCache();
+						// PERFORMANCE: Only schedule cache if not already scheduled and not during preset loading
+						if (!this->oceanodePresetLoading && !this->hasPendingPresetData && !this->parameterCacheScheduled) {
+							if (msg.getNumArgs() >= 3) {
+								int paramIndex = (int)msg.getArgAsFloat(2);
+								std::lock_guard<std::mutex> lock(this->feedbackMutex);
+								if (this->suppressingFeedback.count(paramIndex) == 0) {
+									this->vstStateModifiedSincePreset = true;
+									this->scheduleParameterDebouncedCache();
+								}
 							}
 						}
 					}
 					else if (address == "/vst_auto") {
 						this->handleVSTAuto(msg);
 						
-						// NEW: Debounced automation caching with VST modification tracking
-						if (!this->oceanodePresetLoading && !this->hasPendingPresetData) {
-							// Mark VST as modified since preset load
+						// PERFORMANCE: Only schedule if not already scheduled
+						if (!this->oceanodePresetLoading && !this->hasPendingPresetData && !this->parameterCacheScheduled) {
 							this->vstStateModifiedSincePreset = true;
-							
-							// Schedule debounced cache update
 							this->scheduleParameterDebouncedCache();
 						}
 					}
@@ -3402,6 +3577,41 @@ void scVST::sendMidiToInstance(ofxSCServer* server, ofxSCSynth* synth, int chann
 	m.addBlobArg(buffer);
 	m.addFloatArg(0.0f); // detune
 	server->sendMsg(m);
+}
+
+void scVST::sendPitchBend(float value) {
+	// Value is 0.0 to 1.0, center is 0.5
+	// MIDI pitch bend is 14-bit (0-16383), center is 8192
+	int bendValue = (int)(ofClamp(value, 0.0f, 1.0f) * 16383.0f);
+	int lsb = bendValue & 0x7F;
+	int msb = (bendValue >> 7) & 0x7F;
+	
+	// Send to all instances
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				sendMidiToInstance(serverInstances.first, synth, midiChannel.get(), 0xE0, lsb, msb);
+			}
+		}
+	}
+}
+
+void scVST::sendModWheel(float value) {
+	// Mod wheel is CC 1
+	int ccValue = (int)(ofClamp(value, 0.0f, 1.0f) * 127.0f);
+	
+	// Send to all instances
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		
+		for(auto synth : serverInstances.second) {
+			if(synth != nullptr) {
+				sendMidiToInstance(serverInstances.first, synth, midiChannel.get(), 0xB0, 1, ccValue);
+			}
+		}
+	}
 }
 
 void scVST::handleDynamicParameterChange(int paramIndex, const vector<float>& values) {
