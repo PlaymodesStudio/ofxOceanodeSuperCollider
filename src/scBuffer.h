@@ -10,44 +10,45 @@
 
 #include "ofxOceanodeNodeModel.h"
 #include "ofxSuperCollider.h"
+#include <filesystem>
 
 // WAVE file header format
 struct WaveHeader {
-    char riff[4];                // RIFF string
-    uint32_t overall_size;      // overall size of file in bytes
-    char wave[4];               // WAVE string
-    char fmt_chunk_marker[4];   // fmt string with trailing null char
-    uint32_t length_of_fmt;     // length of the format data
-    uint16_t format_type;       // format type. 1-PCM, 3- IEEE float
-    uint16_t channels;          // no.of channels
-    uint32_t sample_rate;       // sampling rate (blocks per second)
-    uint32_t byterate;          // SampleRate * NumChannels * BitsPerSample/8
-    uint16_t block_align;       // NumChannels * BitsPerSample/8
-    uint16_t bits_per_sample;   // bits per sample, 8- 8bits, 16- 16 bits etc
-    char data_chunk_header[4];  // DATA string or FLLR string
-    uint32_t data_size;         // NumSamples * NumChannels * BitsPerSample/8
+	char riff[4];                // RIFF string
+	uint32_t overall_size;      // overall size of file in bytes
+	char wave[4];               // WAVE string
+	char fmt_chunk_marker[4];   // fmt string with trailing null char
+	uint32_t length_of_fmt;     // length of the format data
+	uint16_t format_type;       // format type. 1-PCM, 3- IEEE float
+	uint16_t channels;          // no.of channels
+	uint32_t sample_rate;       // sampling rate (blocks per second)
+	uint32_t byterate;          // SampleRate * NumChannels * BitsPerSample/8
+	uint16_t block_align;       // NumChannels * BitsPerSample/8
+	uint16_t bits_per_sample;   // bits per sample, 8- 8bits, 16- 16 bits etc
+	char data_chunk_header[4];  // DATA string or FLLR string
+	uint32_t data_size;         // NumSamples * NumChannels * BitsPerSample/8
 };
 
 class scBuffer : public ofxOceanodeNodeModel {
 public:
-    scBuffer(vector<serverManager*> outputServers) : ofxOceanodeNodeModel("SC Buffer"){
-        servers = outputServers;
-    };
-    
-    ~scBuffer(){
-        for(auto b : buffers){
-            b->free();
-            delete b;
-        }
-        buffers.clear();
-    }
-    
+	scBuffer(vector<serverManager*> outputServers) : ofxOceanodeNodeModel("SC Buffer"){
+		servers = outputServers;
+	};
+	
+	~scBuffer(){
+		for(auto b : buffers){
+			b->free();
+			delete b;
+		}
+		buffers.clear();
+	}
+	
 	void setup(){
 		addParameter(path.set("Path", ""));
 		addParameter(openFileDialog.set("Open"));
 		addOutputParameter(buffersParam.set("Buffer", {0}, {0}, {INT_MAX}));
 		addOutputParameter(durationsMs.set("Duration", {0}, {0}, {FLT_MAX}));
-		addOutputParameter(sampleRates.set("Sample Rate", {0}, {0}, {FLT_MAX})); // New sample rate output
+		addOutputParameter(sampleRates.set("Sample Rate", {0}, {0}, {FLT_MAX}));
 		addParameter(select.set("Select", {0}, {0}, {INT_MAX}));
 		addOutputParameter(selectOut.set("Select Out", {0}, {0}, {INT_MAX}));
 		
@@ -62,6 +63,21 @@ public:
 		}));
 		
 		addInspectorParameter(embedInProject.set("Embed Samples", false));
+		addInspectorParameter(unembedButton.set("Unembed (Restore Original)"));
+		
+		// Unembed button listener
+		unembedListener = unembedButton.newListener([this](){
+			if(!originalPath.empty() && originalPath != path.get()) {
+				string absOriginal = resolveToAbsolutePath(originalPath);
+				if(ofFile::doesFileExist(absOriginal)) {
+					path = originalPath;
+					embedInProject = false;
+					originalPath = "";
+				} else {
+					ofSystemAlertDialog("Cannot unembed: original file no longer exists at:\n" + originalPath);
+				}
+			}
+		});
 		
 		listener2 = openFileDialog.newListener([this]{
 			auto result = ofSystemLoadDialog("Select sample file or folder", false, ofToDataPath("Supercollider/Samples", true));
@@ -69,6 +85,7 @@ public:
 				string pathWidthData = result.getPath();
 				ofStringReplace(pathWidthData, ofToDataPath("Supercollider/Samples/", true), "");
 				path = pathWidthData;
+				originalPath = "";
 			}
 		});
 		
@@ -97,46 +114,8 @@ public:
 			buffers.clear();
 			files.clear();
 			
-			// ---- sanitize incoming GUI path (strip leading "./")
-			string sClean = s;
-			if(sClean.size() >= 2 && sClean[0] == '.' && sClean[1] == '/'){
-				sClean = sClean.substr(2);
-			}
-			
-			// ---- resolve to absolute path (favor embedded copy if available)
-			string absolutePath;
-			
-			// 1) If embed flag is on and we have a preset folder, try the embedded copy first (by filename)
-			if(embedInProject && !currentPresetPath.empty()){
-				string filename;
-				if(!sClean.empty() && sClean[0] == '/'){
-					ofFile f(sClean);
-					filename = f.getFileName();
-				}else{
-					// sClean is data-relative; if it points to a folder/file, we still only want the filename
-					ofFile f(ofToDataPath(sClean, true));
-					filename = f.getFileName();
-				}
-				
-				string embeddedPath = ofToDataPath(currentPresetPath + "/samples/" + filename, true);
-				if(ofFile::doesFileExist(embeddedPath)){
-					absolutePath = embeddedPath;
-				}
-			}
-			
-			// 2) If not resolved yet, choose based on path form
-			if(absolutePath.empty()){
-				if(!sClean.empty() && sClean[0] == '/'){
-					// absolute path from GUI
-					absolutePath = sClean;
-				}else if(sClean.rfind("Presets/", 0) == 0){
-					// data-relative embedded path like "Presets/Debug/446--OTT/samples/TANTAS-9.wav"
-					absolutePath = ofToDataPath(sClean, true);
-				}else{
-					// default: treat as a path inside Supercollider/Samples/
-					absolutePath = ofToDataPath("Supercollider/Samples/" + sClean, true);
-				}
-			}
+			// ---- resolve to absolute path
+			string absolutePath = resolveToAbsolutePath(s);
 			
 			// ---- existence check
 			if(!ofFile::doesFileExist(absolutePath)){
@@ -264,41 +243,75 @@ public:
 		});
 	}
 	
-	//using macrosave/macroload because they implement folder/file management
-	//but the name is confusing, as this is not used for any macro (subpacth) operation
 	void macroSave(ofJson &json, string presetFolderPath) override {
 		if(embedInProject && !path.get().empty()) {
-			string samplesFolder = presetFolderPath + "/samples";
-			ofDirectory dir(samplesFolder);
-			if(!dir.exists()) {
-				dir.create(true);
-			}
-			
 			string currentPath = path.get();
-			string absolutePath;
+			string absolutePath = resolveToAbsolutePath(currentPath);
 			
-			if(currentPath[0] == '/') {
-				absolutePath = currentPath;
-			} else {
-				absolutePath = ofToDataPath("Supercollider/Samples/" + currentPath, true);
+			if(!ofFile::doesFileExist(absolutePath)) {
+				json["EmbedInProject"] = false;
+				return;
 			}
 			
-			if(ofFile::doesFileExist(absolutePath)) {
-				ofFile sourceFile(absolutePath);
-				
-				if(sourceFile.isDirectory()) {
-					ofDirectory sourceDir(absolutePath);
-					string destPath = samplesFolder + "/" + sourceFile.getFileName();
-					sourceDir.copyTo(destPath, true, true);
-				} else {
-					string destPath = samplesFolder + "/" + sourceFile.getFileName();
-					sourceFile.copyTo(destPath, true, true);
+			// Compute destination paths
+			string absPresetPath = ofToDataPath(presetFolderPath, true);
+			string absSamplesFolder = absPresetPath + "/samples";
+			
+			// Create samples folder
+			try {
+				std::filesystem::path samplesDir(absSamplesFolder);
+				if(!std::filesystem::exists(samplesDir)) {
+					std::filesystem::create_directories(samplesDir);
 				}
-				
-				json["EmbedInProject"] = true;
-				json["EmbeddedFilename"] = sourceFile.getFileName();  // Just the filename
-				// Don't save OriginalPath - the path parameter itself stores the original
+			} catch(const std::exception& e) {
+				ofLogError("scBuffer") << "Failed to create samples directory: " << e.what();
+				json["EmbedInProject"] = false;
+				return;
 			}
+			
+			// Get filename and destination
+			std::filesystem::path sourcePath(absolutePath);
+			string filename = sourcePath.filename().string();
+			string absDestPath = absSamplesFolder + "/" + filename;
+			
+			// Copy file if source != destination
+			try {
+				std::filesystem::path srcCanonical = std::filesystem::weakly_canonical(sourcePath);
+				std::filesystem::path destCanonical = std::filesystem::weakly_canonical(std::filesystem::path(absDestPath));
+				
+				if(srcCanonical != destCanonical) {
+					// Store original path for unembed
+					if(originalPath.empty()) {
+						originalPath = currentPath;
+					}
+					
+					// Copy the file
+					if(std::filesystem::is_directory(sourcePath)) {
+						std::filesystem::copy(sourcePath, absDestPath,
+							std::filesystem::copy_options::recursive |
+							std::filesystem::copy_options::overwrite_existing);
+					} else {
+						std::filesystem::copy_file(sourcePath, absDestPath,
+							std::filesystem::copy_options::overwrite_existing);
+					}
+				}
+			} catch(const std::exception& e) {
+				ofLogError("scBuffer") << "Filesystem error during copy: " << e.what();
+				json["EmbedInProject"] = false;
+				return;
+			}
+			
+			// Compute data-relative path for the embedded sample
+			string embeddedRelativePath = computeDataRelativePath(absPresetPath) + "/samples/" + filename;
+			
+			// Update path parameter and JSON
+			path = embeddedRelativePath;
+			json["Path"] = embeddedRelativePath;
+			
+			if(!originalPath.empty()) {
+				json["OriginalPath"] = originalPath;
+			}
+			json["EmbedInProject"] = true;
 		} else {
 			json["EmbedInProject"] = false;
 		}
@@ -306,56 +319,83 @@ public:
 
 	void macroLoad(ofJson &json, string presetFolderPath) override {
 		if(json.count("EmbedInProject") > 0 && json["EmbedInProject"].get<bool>()) {
-			string embeddedFilename = json["EmbeddedFilename"].get<string>();
-			string embeddedFullPath = ofToDataPath(presetFolderPath + "/samples/" + embeddedFilename, true);
-
-			if(ofFile::doesFileExist(embeddedFullPath)) {
-				embedInProject = true;
-				currentPresetPath = presetFolderPath;
-
-				string guiPresetPath = presetFolderPath;
-				if(guiPresetPath.size() >= 2 && guiPresetPath[0]=='.' && guiPresetPath[1]=='/')
-					guiPresetPath = guiPresetPath.substr(2);
-
-				pathToSetAfterLoad = guiPresetPath + "/samples/" + embeddedFilename;
-			} else {
-				string errorMsg = "ERROR: Embedded samples not found!\n\n";
-				errorMsg += "Expected: " + embeddedFullPath + "\n\n";
-				errorMsg += "The original path will be used instead.";
-				ofSystemAlertDialog(errorMsg);
-				
-				embedInProject = false;
-				currentPresetPath = "";
-				pathToSetAfterLoad = "";
+			embedInProject = true;
+			if(json.count("OriginalPath") > 0) {
+				originalPath = json["OriginalPath"].get<string>();
 			}
 		} else {
 			embedInProject = false;
-			currentPresetPath = "";
-			pathToSetAfterLoad = "";
+			originalPath = "";
 		}
 	}
 
 	void presetRecallAfterSettingParameters(ofJson &json) override {
-		// After all parameters are loaded, update path if we have embedded samples
-		if(!pathToSetAfterLoad.empty()) {
-			path = pathToSetAfterLoad;
-			pathToSetAfterLoad = "";
-		}
+		// Nothing needed - path parameter already contains correct path
 	}
-    
+	
 private:
 	
-	struct EmbedInfo {
-		bool isEmbedded = false;
-		string originalPath = "";
-	};
-	std::map<string, EmbedInfo> embedInfo;
+	// Resolve any path format to absolute path
+	string resolveToAbsolutePath(const string& inputPath) {
+		string sClean = inputPath;
+		if(sClean.size() >= 2 && sClean[0] == '.' && sClean[1] == '/'){
+			sClean = sClean.substr(2);
+		}
+		
+		if(!sClean.empty() && sClean[0] == '/') {
+			return sClean;
+		}
+		
+		// Check for known data-relative prefixes
+		bool isKnownDataRelative = (sClean.rfind("Macros/", 0) == 0) ||
+								   (sClean.rfind("Presets/", 0) == 0) ||
+								   (sClean.rfind("Supercollider/", 0) == 0);
+		
+		if(isKnownDataRelative) {
+			return ofToDataPath(sClean, true);
+		}
+		
+		// Try data-relative first
+		string dataRelativePath = ofToDataPath(sClean, true);
+		if(ofFile::doesFileExist(dataRelativePath)){
+			return dataRelativePath;
+		}
+		
+		// Fallback to Supercollider/Samples/
+		return ofToDataPath("Supercollider/Samples/" + sClean, true);
+	}
+	
+	// Compute data-relative path from absolute path
+	string computeDataRelativePath(const string& absPath) {
+		// Look for "Macros/" in the path
+		size_t macrosPos = absPath.find("/Macros/");
+		if(macrosPos != string::npos) {
+			return absPath.substr(macrosPos + 1);
+		}
+		
+		// Look for "Presets/" in the path
+		size_t presetsPos = absPath.find("/Presets/");
+		if(presetsPos != string::npos) {
+			return absPath.substr(presetsPos + 1);
+		}
+		
+		// Fallback: strip data path
+		string dataPath = ofToDataPath("", true);
+		if(absPath.find(dataPath) == 0) {
+			string rel = absPath.substr(dataPath.length());
+			if(!rel.empty() && rel[0] == '/') {
+				rel = rel.substr(1);
+			}
+			return rel;
+		}
+		
+		return ofFilePath::getBaseName(absPath);
+	}
 	
 	bool findDataChunk(ofFile& file, uint32_t& dataSize) {
 		char chunkID[4];
 		uint32_t chunkSize;
 
-		// Start right after RIFF header
 		file.seekg(12, std::ios::beg);
 
 		while (file.read(reinterpret_cast<char*>(&chunkID), 4).good()) {
@@ -368,17 +408,14 @@ private:
 				return true;
 			}
 
-			// Skip this chunk's payload
 			file.seekg(chunkSize, std::ios::cur);
 
-			// *** CRITICAL: skip pad byte if chunk size is odd ***
 			if (chunkSize & 1u) {
 				file.seekg(1, std::ios::cur);
 			}
 		}
 		return false;
 	}
-
 
 	void getFileInfo(string filepath, int &numChannels, float &durationMs, float &sampleRate) {
 		numChannels = 0;
@@ -391,7 +428,6 @@ private:
 			return;
 		}
 
-		// Read RIFF header
 		char riff[4], wave[4];
 		uint32_t riffSize = 0;
 		if(!file.read((char*)&riff, 4) || !file.read((char*)&riffSize, 4) || !file.read((char*)&wave, 4)){
@@ -405,7 +441,6 @@ private:
 			return;
 		}
 
-		// Iterate chunks until we see fmt  and data
 		bool haveFmt  = false;
 		bool haveData = false;
 		uint16_t bitsPerSample = 0;
@@ -414,13 +449,12 @@ private:
 		while(true){
 			char chunkID[4];
 			uint32_t chunkSize = 0;
-			if(!file.read((char*)&chunkID, 4)) break;                // EOF
+			if(!file.read((char*)&chunkID, 4)) break;
 			if(!file.read((char*)&chunkSize, 4)) { haveData |= false; break; }
 
 			std::streampos payloadPos = file.tellg();
 
 			if(std::strncmp(chunkID, "fmt ", 4) == 0){
-				// Read the standard 16-byte fmt payload (works for PCM; if longer, we still get the core fields)
 				if(chunkSize >= 16){
 					uint16_t formatType = 0;
 					uint16_t channels   = 0;
@@ -441,26 +475,21 @@ private:
 					bitsPerSample  = bits;
 					haveFmt        = true;
 
-					// Skip any remaining fmt bytes
 					auto consumed = 16u;
 					if(chunkSize > consumed){
 						file.seekg(chunkSize - consumed, std::ios::cur);
 					}
 				}else{
-					// Malformed fmt; skip its payload
 					file.seekg(chunkSize, std::ios::cur);
 				}
 			}else if(std::strncmp(chunkID, "data", 4) == 0){
 				dataSize  = chunkSize;
 				haveData  = true;
-				// No need to seek: we'll compute duration then break after padding step
 				file.seekg(chunkSize, std::ios::cur);
 			}else{
-				// Unhandled chunk (JUNK, bext, iXML, smpl, LIST, clm , etc.) → skip
 				file.seekg(chunkSize, std::ios::cur);
 			}
 
-			// *** critical: chunk padding if size is odd ***
 			if(chunkSize & 1u){
 				file.seekg(1, std::ios::cur);
 			}
@@ -472,47 +501,37 @@ private:
 			int bytesPerSample = bitsPerSample / 8;
 			int totalSamples   = (bytesPerSample > 0 && numChannels > 0) ? (dataSize / (bytesPerSample * numChannels)) : 0;
 			durationMs         = (totalSamples > 0) ? (float(totalSamples) / sampleRate * 1000.0f) : 0.0f;
-
-			ofLogNotice("scBuffer") << "File info for: " << filepath
-									<< " | ch=" << numChannels
-									<< " | sr=" << sampleRate
-									<< " | bps=" << bitsPerSample
-									<< " | data=" << dataSize
-									<< " | ms=" << durationMs;
-		}else{
-			ofLogWarning("scBuffer") << "Could not fully parse fmt/data; will still try to load: " << filepath;
 		}
 
 		file.close();
 	}
 
-    
-    ofEventListener listener;
-    ofEventListener listener2;
-    ofEventListener listener3;
+	
+	ofEventListener listener;
+	ofEventListener listener2;
+	ofEventListener listener3;
 	ofEventListener listener4;
+	ofEventListener unembedListener;
 	ofParameter<vector<int>> select;
 	ofParameter<vector<int>> selectOut;
-    ofParameter<vector<int>> buffersParam;
-    ofParameter<vector<float>> durationsMs;
-    ofParameter<vector<float>> sampleRates;
-    vector<float> durations;
-    
-    vector<serverManager*> servers;
-    
-    ofParameter<string> path;
-    ofParameter<void> openFileDialog;
-    
-    customGuiRegion filenamesList;
-        
-    std::vector<ofxSCBuffer*> buffers;
-    std::map<string, int> files;
+	ofParameter<vector<int>> buffersParam;
+	ofParameter<vector<float>> durationsMs;
+	ofParameter<vector<float>> sampleRates;
+	vector<float> durations;
+	
+	vector<serverManager*> servers;
+	
+	ofParameter<string> path;
+	ofParameter<void> openFileDialog;
+	ofParameter<void> unembedButton;
+	
+	customGuiRegion filenamesList;
+		
+	std::vector<ofxSCBuffer*> buffers;
+	std::map<string, int> files;
 	
 	ofParameter<bool> embedInProject;
-	string currentPresetPath = "";
-	string pathToSetAfterLoad = "";
-
-
+	string originalPath = "";
 };
 
 #endif /* scBuffer_h */
