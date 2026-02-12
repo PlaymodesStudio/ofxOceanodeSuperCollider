@@ -254,12 +254,13 @@ void serverManager::removeOutput(scOutput *output){
 void serverManager::recomputeGraph(){
 	if(ofxOceanodeShared::isPresetLoading()) return;
 
-	// 1. Calculate NEW Topology
+	// 1. Calculate the NEW topology based on valid outputs
 	std::vector<scNode*> newNodesList;
 	std::map<scNode*, std::pair<int, std::vector<int>>> nodeChilds;
 	
 	if(outputs.size() > 0){
 		for(int i = 0; i < outputs.size(); i++){
+			// Check for null to be extra safe
 			if(outputs[i] && outputs[i]->isInputConnected()){
 				outputs[i]->getInputNode()->appendOrderedNodes(newNodesList, nodeChilds);
 			}
@@ -271,129 +272,113 @@ void serverManager::recomputeGraph(){
 		}
 	}
 
-	// =========================================================
-	// PATH A: RECOVERY MODE (Preset Load or Copy/Paste)
-	// We have data in backupNodesList, meaning a Load event started this.
-	// =========================================================
-	if(!backupNodesList.empty()){
-		
-		// Check for Copy/Paste Match (Soft Update)
-		bool canRestore = (backupNodesList.size() == newNodesList.size());
-		if(canRestore){
-			for(size_t i = 0; i < backupNodesList.size(); ++i){
-				if(backupNodesList[i] != newNodesList[i]){
-					canRestore = false;
-					break;
-				}
+	// 2. COMPARE: New Topology vs Backup
+	bool canRestore = false;
+	
+	// If the count matches, check the pointers
+	if(backupNodesList.size() == newNodesList.size()){
+		canRestore = true;
+		for(size_t i = 0; i < backupNodesList.size(); ++i){
+			// If pointers are identical, it means the objects are the same (alive).
+			// This happens during Copy/Paste of non-audio nodes.
+			if(backupNodesList[i] != newNodesList[i]){
+				canRestore = false;
+				break;
 			}
 		}
+	}
 
-		if(canRestore){
-			// [GLITCH FIX] Identical graph. Restore and exit silent.
-			nodesList = newNodesList;
-			backupNodesList.clear();
-			return;
-		}
+	if(canRestore){
+		// [SCENARIO: SOFT UPDATE]
+		// The audio nodes are identical. We just restore the list.
+		// No audio glitch, no silence.
+		nodesList = newNodesList;
+		backupNodesList.clear();
+		return;
+	}
 
-		// [CRASH FIX] Mismatch = Full Preset Load.
-		// Old pointers in backupNodesList are likely ZOMBIES.
-		// We DO NOT call free() on them. We wipe the server group instead.
+	// [SCENARIO: HARD REBUILD]
+	// The nodes are different (Preset Load or Audio Graph Change).
+	// We must rebuild everything.
+	
+	// Clear backup (these are likely dead pointers now)
+	backupNodesList.clear();
+
+	if(outputs.size() == 0){
+		// Full Clear
 		ofxOscMessage m;
 		m.setAddress("/g_freeAll");
 		m.addIntArg(1);
 		server->sendMsg(m);
-		
-		// Force full rebuild below
-		backupNodesList.clear();
-		// nodesList is already empty from the listener
-	}
-	
-	// =========================================================
-	// PATH B: MANUAL MODE (Wire Disconnect/Connect)
-	// backupNodesList is empty. nodesList contains current live nodes.
-	// We must identify what changed and update surgically.
-	// =========================================================
-	
-	server->setBLatency(true);
 
-	// 1. Clean up Busses (Necessary for re-routing)
-	for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-	busses.clear();
-	outputBussesRefToNode.clear();
-	inputBussesRefToNode.clear();
-	
-	std::vector<scNode*> toCreateNodes;
-	std::vector<scNode*> toUpdateNodes;
-	
-	// 2. Diff: New vs Old
-	for(auto &node : newNodesList){
-		auto nodeInListIter = std::find(nodesList.begin(), nodesList.end(), node);
-		if(nodeInListIter != nodesList.end()){
-			toUpdateNodes.push_back(node);
-			nodesList.erase(nodeInListIter); // Remove from list so only "Dead" nodes remain
-		}else{
-			toCreateNodes.push_back(node);   // New node found
-		}
+		for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
+		busses.clear();
 	}
-	
-	// 3. [STUCK SOUND FIX] Free Removed Nodes
-	// Any node remaining in nodesList was disconnected.
-	// We MUST free it to stop the sound.
-	for(auto node : nodesList){
-		if(node != nullptr)
-			node->free(server);
-	}
-	nodesList.clear(); // Clear the dead list
-	
-	// 4. Rebuild Connections
-	std::map<nodePort, std::vector<scNode*>> connections;
-	for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
-		(*it)->getConnections(connections);
+	else{
+		server->setBLatency(true);
+
+		// [DISTORTION FIX]
+		// Since we couldn't free the old C++ nodes (they were deleted),
+		// the old synths are still running. We must wipe the server group.
+		// Group 1 is the default container created in initialize().
+		ofxOscMessage m;
+		m.setAddress("/g_freeAll");
+		m.addIntArg(1);
+		server->sendMsg(m);
+
+		// Reset Busses
+		for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
+		busses.clear();
+		outputBussesRefToNode.clear();
+		inputBussesRefToNode.clear();
 		
-		if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end()){
-			(*it)->buildSynth(server); // Build new
-		}else{
-			(*it)->resetInputBusses(server); // Reset existing
-		}
-	}
+		std::vector<scNode*> toCreateNodes;
 		
-	// 5. Alloc Busses
-	for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
-		for(int i = 0; i < (*it)->getNumOutputs() ; i++){
-			busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server);
-			int busindex = busses.back().index;
-			(*it)->setOutputBus(server, i, busindex);
-			outputBussesRefToNode[(*it)][i] = busindex;
+		// All nodes in the new list need creation
+		for(auto &node : newNodesList){
+			toCreateNodes.push_back(node);
 		}
-	}
-	
-	// 6. Link Busses
-	for(auto &c : connections){
-		for(auto &dest : c.second){
-			int busindex = outputBussesRefToNode[c.first.getNodeRef()][c.first.getIndex()];
-			dest->setInputBus(server, c.first.getNodeRef(), busindex);
-			inputBussesRefToNode[dest].push_back(busindex);
+		
+		// Rebuild Connections
+		std::map<nodePort, std::vector<scNode*>> connections;
+		for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
+			(*it)->getConnections(connections);
+			(*it)->buildSynth(server);
 		}
-	}
-	
-	// 7. Create/Order Synths
-	scNode* lastNode = nullptr;
-	for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
-		if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end()){
+			
+		// Alloc Busses
+		for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
+			for(int i = 0; i < (*it)->getNumOutputs() ; i++){
+				busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server);
+				int busindex = busses.back().index;
+				(*it)->setOutputBus(server, i, busindex);
+				outputBussesRefToNode[(*it)][i] = busindex;
+			}
+		}
+		
+		// Link Busses
+		for(auto &c : connections){
+			for(auto &dest : c.second){
+				int busindex = outputBussesRefToNode[c.first.getNodeRef()][c.first.getIndex()];
+				dest->setInputBus(server, c.first.getNodeRef(), busindex);
+				inputBussesRefToNode[dest].push_back(busindex);
+			}
+		}
+		
+		// Create Synths on Server
+		scNode* lastNode = nullptr;
+		for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
 			(*it)->createSynth(server);
-		}
-		else{
+			
 			if(lastNode != nullptr){
 				(*it)->moveSynthBefore(server, lastNode->getLastSynthID(server));
 			}
+			lastNode = (*it);
 		}
-		lastNode = (*it);
+		
+		nodesList = newNodesList;
+		server->setBLatency(false);
 	}
-	
-	// Update main list
-	nodesList = newNodesList;
-	server->setBLatency(false);
-
 	graphComputed.notify();
 }
 
