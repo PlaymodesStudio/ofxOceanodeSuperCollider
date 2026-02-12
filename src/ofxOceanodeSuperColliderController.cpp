@@ -153,6 +153,7 @@ void ofxOceanodeSuperColliderController::reloadAudioDevices(){
 void ofxOceanodeSuperColliderController::saveConfig(std::string filepath, scPreferences prefs){
     ofJson json;
     json["local"] = prefs.local;
+    json["loadOnPreset"] = prefs.loadOnPreset;
     json["udpPort"] = prefs.udpPort;
     json["bindAddress"] = prefs.bindAddress;
     json["numControlBusChannels"] = prefs.numControlBusChannels;
@@ -193,6 +194,7 @@ void ofxOceanodeSuperColliderController::loadConfig(std::string filepath, scPref
     ofJson json = ofLoadJson(filepath);
     if(!json.empty()){
         prefs.local = json["local"];
+        prefs.loadOnPreset = json.value<bool>("loadOnPreset", false);
         prefs.udpPort = json["udpPort"];
         prefs.bindAddress = json["bindAddress"];
         prefs.numControlBusChannels = json["numControlBusChannels"];

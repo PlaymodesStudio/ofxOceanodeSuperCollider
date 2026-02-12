@@ -25,6 +25,7 @@ class nodePort;
 
 struct scPreferences{
     bool local = true;
+    bool loadOnPreset = false;
     int udpPort = 57110; //u (0-65535)
     std::string bindAddress = "127.0.0.1"; //-B (set to 0.0.0.0 to listen to all)
     int numControlBusChannels = 16384; //c
@@ -92,6 +93,8 @@ public:
     scPreferences preferences;
     ofEvent<void> graphComputed;
 private:
+    
+    void loadSynthdefsFromPreset(std::string path);
 
     std::vector<scNode*> connectedNodes; //List of all nodes
     
