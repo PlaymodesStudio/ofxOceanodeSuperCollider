@@ -18,7 +18,7 @@ scNode::scNode(std::string name) : ofxOceanodeNodeModel("SC " + name){
 };
 
 scNode::~scNode(){
-    
+    destroyedNode.notify();
 };
 
 void scNode::addInput(std::string name){

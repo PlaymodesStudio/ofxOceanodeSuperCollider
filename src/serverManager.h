@@ -118,6 +118,7 @@ private:
     scStart* sc;
     
     int numRecomputeGraphOnce;
+    ofEventListeners nodeDestroyedListeners;
 };
 
 #endif /* serverManager_h */

@@ -64,6 +64,7 @@ public:
     virtual int getLastSynthID(ofxSCServer* server){return -1;};
     
     ofEvent<int> createdSynth;
+    ofEvent<void> destroyedNode;
     
 	void removeInput(int index);
 protected:

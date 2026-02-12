@@ -40,10 +40,6 @@ void serverManager::setup(){
     boot();
     
     listeners.push(ofxOceanodeShared::getPresetWillBeLoadedEvent().newListener([this](){
-        for(auto node : nodesList) node->free(server);
-        nodesList.clear();
-        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-        busses.clear();
     }));
     
     listeners.push(ofxOceanodeShared::getPresetHasLoadedEvent().newListener([this](){
@@ -260,13 +256,12 @@ void serverManager::recomputeGraph(){
         for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
         busses.clear();
     }else{
-        server->setBLatency(true);
+        
 //        server->setWaitToSend(true);
         
         
 //        for(auto &b : busses) b.free();
-        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-        busses.clear();
+        
         outputBussesRefToNode.clear();
         inputBussesRefToNode.clear();
         
@@ -295,11 +290,21 @@ void serverManager::recomputeGraph(){
                 toCreateNodes.push_back(node);
             }
         }
+        server->setBLatency(true);
+        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
+        busses.clear();
+        
         for(auto node : nodesList){
             if(node != nullptr)
                 node->free(server);
         }
         nodesList.clear();
+        
+        for(auto &node : newNodesList){
+            nodeDestroyedListeners.push(node->destroyedNode.newListener([this, node](){
+                nodesList.erase(std::remove(nodesList.begin(), nodesList.end(), node), nodesList.end());
+            }));
+        }
         
             std::map<nodePort, std::vector<scNode*>> connections;
             
