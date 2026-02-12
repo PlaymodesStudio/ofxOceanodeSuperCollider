@@ -300,10 +300,14 @@ void serverManager::recomputeGraph(){
         }
         nodesList.clear();
         
-        for(auto &node : newNodesList){
-            nodeDestroyedListeners.push(node->destroyedNode.newListener([this, node](){
+        for(auto &node : toCreateNodes){
+            nodeDestroyedListeners[node] = node->destroyedNode.newListener([this, node](){
                 nodesList.erase(std::remove(nodesList.begin(), nodesList.end(), node), nodesList.end());
-            }));
+            });
+        }
+        
+        for(auto &node : nodesList){
+            nodeDestroyedListeners.erase(node);
         }
         
             std::map<nodePort, std::vector<scNode*>> connections;

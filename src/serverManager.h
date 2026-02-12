@@ -118,7 +118,7 @@ private:
     scStart* sc;
     
     int numRecomputeGraphOnce;
-    ofEventListeners nodeDestroyedListeners;
+    std::map<scNode*, ofEventListener> nodeDestroyedListeners;
 };
 
 #endif /* serverManager_h */
