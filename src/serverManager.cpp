@@ -278,6 +278,19 @@ void serverManager::recomputeGraph(){
             }
         }
         
+        std::map<nodePort, std::vector<scNode*>> newConnections;
+        
+        for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
+            (*it)->getConnections(newConnections);
+        }
+        
+        //Skip all proceses if the list is the same and if the nodeList has not changed (due to destroyed nodes)
+        if(nodesList == newNodesList && !nodesListChanged && newConnections == connections){
+            return;
+        }
+        
+        nodesListChanged = false;
+        
         std::vector<scNode*> toCreateNodes;
         std::vector<scNode*> toUpdateNodes;
         
@@ -303,6 +316,7 @@ void serverManager::recomputeGraph(){
         for(auto &node : toCreateNodes){
             nodeDestroyedListeners[node] = node->destroyedNode.newListener([this, node](){
                 nodesList.erase(std::remove(nodesList.begin(), nodesList.end(), node), nodesList.end());
+                nodesListChanged = true;
             });
         }
         
@@ -310,10 +324,8 @@ void serverManager::recomputeGraph(){
             nodeDestroyedListeners.erase(node);
         }
         
-            std::map<nodePort, std::vector<scNode*>> connections;
             
             for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
-                (*it)->getConnections(connections);
                 if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end()){
                     (*it)->buildSynth(server);
                 }else{
@@ -331,7 +343,7 @@ void serverManager::recomputeGraph(){
             }
         }
         
-            for(auto &c : connections){
+            for(auto &c : newConnections){
                 for(auto &dest : c.second){
                     int busindex = outputBussesRefToNode[c.first.getNodeRef()][c.first.getIndex()];
                     dest->setInputBus(server, c.first.getNodeRef(), busindex);
@@ -356,6 +368,7 @@ void serverManager::recomputeGraph(){
         }
         
         nodesList = newNodesList;
+        connections = newConnections;
 //            nodesList.insert(nodesList.end(), newNodesList.begin(), newNodesList.end());
 //        }
 //        server->sendStoredBundle();

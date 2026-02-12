@@ -31,6 +31,10 @@ public:
         }
         return nodeRef < other.nodeRef;
     }
+    
+    bool operator==(const nodePort& other) const {
+        return (index == other.index && nodeRef == nodeRef);
+    }
 private:
     int index = -1;
     scNode* nodeRef = nullptr;

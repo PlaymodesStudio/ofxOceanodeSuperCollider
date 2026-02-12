@@ -21,6 +21,7 @@ class ofxSCBus;
 class scNode;
 class scStart;
 class scOutput;
+class nodePort;
 
 struct scPreferences{
     bool local = true;
@@ -106,6 +107,8 @@ private:
     std::vector<ofxSCBus> busses;
     std::map<scNode*, std::map<int, int>> outputBussesRefToNode;
     std::map<scNode*, std::vector<int>> inputBussesRefToNode;
+    std::map<nodePort, std::vector<scNode*>> connections;
+    
     
     float volume;
     bool mute;
@@ -119,6 +122,7 @@ private:
     
     int numRecomputeGraphOnce;
     std::map<scNode*, ofEventListener> nodeDestroyedListeners;
+    bool nodesListChanged = false;
 };
 
 #endif /* serverManager_h */
