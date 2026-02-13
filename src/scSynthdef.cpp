@@ -330,6 +330,14 @@ void scSynthdef::setup(){
     }
 }
 
+void scSynthdef::activate(){
+    for(auto &synth : synths) synth.second->run(true);
+}
+
+void scSynthdef::deactivate(){
+    for(auto &synth : synths) synth.second->run(false);
+}
+
 void scSynthdef::buildSynth(ofxSCServer* server){
     synths[server] = new ofxSCSynth(getSynthdefFilename(), server);
 }

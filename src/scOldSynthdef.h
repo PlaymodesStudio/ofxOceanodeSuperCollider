@@ -47,13 +47,9 @@ public:
         //        isPresetLoading = false;
     }
 
-    void activate() override{
-        //        synth->run(true);
-    }
-
-    void deactivate() override{
-        //        synth->run(false);
-    }
+    void activate() override;
+    
+    void deactivate() override;
 
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;

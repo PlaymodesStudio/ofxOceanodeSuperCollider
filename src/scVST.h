@@ -130,6 +130,10 @@ public:
 	
 	void setup();
 	
+    void activate() override;
+    
+    void deactivate() override;
+
 	// Preset lifecycle methods - declared as overrides, implemented in .cpp
 	void presetWillBeLoaded() override;
 	void activateConnections() override;

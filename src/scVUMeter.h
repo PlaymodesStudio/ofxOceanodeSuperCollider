@@ -25,6 +25,10 @@ public:
 	
 	void setup();
 	void update(ofEventArgs &args) override;
+    
+    void activate() override;
+    
+    void deactivate() override;
 	
 	// scNode interface methods
 	void buildSynth(ofxSCServer* server);

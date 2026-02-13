@@ -193,6 +193,14 @@ void scVUMeter::update(ofEventArgs &args) {
 	}
 }
 
+void scVUMeter::activate(){
+    for(auto &synth : synthInstances) synth.second->run(true);
+}
+
+void scVUMeter::deactivate(){
+    for(auto &synth : synthInstances) synth.second->run(false);
+}
+
 string scVUMeter::getSynthDefName() const {
 	return "vumeter" + ofToString(numChannels.get());
 }

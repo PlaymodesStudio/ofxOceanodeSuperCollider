@@ -557,6 +557,22 @@ void scVST::setup(){
 	
 }
 
+void scVST::activate(){
+    for(auto &synths : synthInstances){
+        for(auto &synth : synths.second){
+            synth->run(true);
+        }
+    }
+}
+
+void scVST::deactivate(){
+    for(auto &synths : synthInstances){
+        for(auto &synth : synths.second){
+            synth->run(false);
+        }
+    }
+}
+
 int scVST::calculateNumInstances() const {
 	if (singleInstance.get()) {
 		return 1;                      // one multichannel instance

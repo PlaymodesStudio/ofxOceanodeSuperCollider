@@ -177,6 +177,14 @@ void scOldSynthdef::setup(){
     scNode::addOutput("Out");
 }
 
+void scOldSynthdef::activate(){
+    for(auto &synth : synths) synth.second->run(true);
+}
+
+void scOldSynthdef::deactivate(){
+    for(auto &synth : synths) synth.second->run(false);
+}
+
 void scOldSynthdef::buildSynth(ofxSCServer* server){
     synths[server] = new ofxSCSynth(ofToLower(synthdefName), server);
 }
