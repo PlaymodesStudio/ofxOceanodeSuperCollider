@@ -11,6 +11,7 @@
 
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
+#include "ofxOsc.h"
 #include <mutex>
 #include <set>
 #include <map>
@@ -23,11 +24,15 @@ class ofxSCServer;
 struct VSTParameterInfo {
 	int index;
 	std::string displayName;  // User-editable name
+	std::string originalName; // Original VST parameter name
+	std::string registeredName; // Actual name registered in Oceanode parameter group
 	float value;
+	bool isConnected;  // Track if parameter has external connections
+	bool isPersistent; // Track if parameter should persist across preset loads
 	
-	VSTParameterInfo() : index(-1), value(0.0f) {}
+	VSTParameterInfo() : index(-1), value(0.0f), isConnected(false), isPersistent(true) {}
 	VSTParameterInfo(int idx, const std::string& name)
-		: index(idx), displayName(name), value(0.0f) {}
+		: index(idx), displayName(name), originalName(name), registeredName(name), value(0.0f), isConnected(false), isPersistent(true) {}
 };
 
 class scVST: public scNode {
@@ -144,7 +149,8 @@ public:
 	
 	void setOutputBus(ofxSCServer* server, int index, int bus);
 	void setInputBus(ofxSCServer* server, scNode* node, int bus);
-	
+	void resetInputBusses(ofxSCServer* server) override;
+
 	int getOutputBusIndex(ofxSCServer* server, int index);
 	int getLastSynthID(ofxSCServer* server);                // NEW
 
@@ -201,6 +207,9 @@ private:
 	
 	// Parameter management UI helpers
 	void removeAllDynamicParameters();
+	void removeAllDynamicParametersForce(); // Force removal even during preset loading
+	void clearParameterMaps(); // Clear all parameter tracking maps
+	void validateParameterConsistency(); // Validate parameter state consistency
 	
 	// NEW: Dynamic parameter vector handling
 	void handleDynamicParameterChange(int paramIndex, const vector<float>& values);
@@ -283,6 +292,11 @@ private:
 	uint64_t lastParameterChangeTime;     // Timestamp of last parameter change for debouncing
 	uint64_t parameterDebounceDelay;      // Configurable debounce delay (default 1000ms)
 	bool parameterCacheScheduled;         // Track if parameter-triggered cache is scheduled
+	
+	// FXP PRESET LOADING: Critical flag to ensure reliable parameter updates during FXP load
+	std::atomic<bool> isFXPLoading;       // Track if FXP preset is currently being loaded
+	uint64_t fxpLoadStartTime;            // Timestamp when FXP load started
+	static const uint64_t FXP_LOAD_TIMEOUT_MS = 10000; // 10 second timeout for FXP loading (increased for complex plugins)
 	
 		// Methods for FXP management
 		void scheduleImmediateFXPCache();
@@ -386,12 +400,16 @@ private:
 	std::map<int, shared_ptr<ofParameter<string>>> dynamicStringParameters; // Keep name editors alive
 	std::map<int, shared_ptr<ofParameter<void>>> dynamicRemovalButtons; // Remove parameter buttons
 	
+	// Store saved parameter names during preset loading to restore after VST queries
+	std::map<int, std::string> savedParameterNames;
+	
 	std::set<int> suppressingFeedback; // Track parameters currently being set to prevent feedback
 	std::mutex feedbackMutex;          // Thread safety for feedback prevention
 	std::map<int, uint64_t> feedbackClearTimes;
 	
 	// Last touched parameter tracking
 	int lastTouchedIndex;
+	uint64_t lastTouchedTime;  // Track when parameter was last touched for better filtering
 	
 	// State management
 	bool isPresetLoading;
@@ -458,10 +476,48 @@ private:
 	uint64_t lastParamThrottleCleanup;
 	uint64_t paramThrottleCleanupInterval;
 
-	// PERFORMANCE: Parameter update throttling
-	std::map<int, uint64_t> lastParamUpdateTime;
-	std::mutex paramThrottleMutex;
+	// PERFORMANCE: Lock-free parameter update tracking
+	std::atomic<uint64_t> parameterUpdateGeneration[1024];
+	std::atomic<bool> parameterDirty[1024];
 	static const uint64_t PARAM_UPDATE_THROTTLE_MS = 16;
+	
+	// PERFORMANCE: Batch parameter processing
+	struct PendingParameterUpdate {
+		int nodeID;
+		int paramIndex;
+		float value;
+		uint64_t timestamp;
+	};
+	std::vector<PendingParameterUpdate> pendingParameterUpdates;
+	std::mutex pendingUpdatesMutex;
+	static const size_t MAX_PENDING_UPDATES = 1024;
+	static const uint64_t BATCH_PROCESS_INTERVAL_MS = 8;
+	uint64_t lastBatchProcessTime;
+	
+	// PERFORMANCE: Pre-allocated string cache to avoid allocations in hot paths
+	std::string cachedAddressString;
+	
+	// PERFORMANCE: Batch OSC message processing
+	std::vector<ofxOscMessage> pendingOscMessages;
+	std::mutex oscMessageMutex;
+	static const size_t MAX_PENDING_OSC_MESSAGES = 512;
+	
+	// PERFORMANCE: OSC Message pooling
+	class OSCMessagePool {
+	private:
+		std::vector<std::unique_ptr<ofxOscMessage>> pool;
+		std::mutex poolMutex;
+	public:
+		std::unique_ptr<ofxOscMessage> acquire();
+		void release(std::unique_ptr<ofxOscMessage> msg);
+	};
+	OSCMessagePool oscPool;
+	
+	// PERFORMANCE: Optimized methods
+	void processPendingParameterUpdates();
+	void handleVSTParamOptimized(ofxOscMessage& msg);
+	void loadSelectedPluginOptimized();
+	void sendParameterUpdateOptimized(int nodeID, int paramIndex, float value);
 
 };
 

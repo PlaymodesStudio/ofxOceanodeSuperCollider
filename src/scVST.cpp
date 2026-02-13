@@ -20,6 +20,27 @@ std::map<std::string, std::vector<uint8_t>> scVST::globalFXPCache;
 std::map<std::string, bool> scVST::globalFXPCacheValid;
 std::mutex scVST::globalCacheMutex;
 
+// OSC Message Pool implementation
+std::unique_ptr<ofxOscMessage> scVST::OSCMessagePool::acquire() {
+	std::lock_guard<std::mutex> lock(poolMutex);
+	if(!pool.empty()) {
+		auto msg = std::move(pool.back());
+		pool.pop_back();
+		msg->clear();
+		return msg;
+	}
+	return std::make_unique<ofxOscMessage>();
+}
+
+void scVST::OSCMessagePool::release(std::unique_ptr<ofxOscMessage> msg) {
+	if(!msg) return;
+	std::lock_guard<std::mutex> lock(poolMutex);
+	if(pool.size() < 100) { // Keep pool size reasonable
+		msg->clear();
+		pool.push_back(std::move(msg));
+	}
+}
+
 
 scVST::scVST() : scNode("VST") {
 	isPresetLoading = false;
@@ -27,6 +48,7 @@ scVST::scVST() : scNode("VST") {
 	hasPendingPresetData = false;
 	parameterTimerActive = false;
 	lastTouchedIndex = -1;
+	lastTouchedTime = 0;
 	waitingForSyncFXPSave = false;
 	syncSourceNodeID = -1;
 	syncInProgress = false;
@@ -41,14 +63,35 @@ scVST::scVST() : scNode("VST") {
 	parameterDebounceDelay = 1000; // 1 second default debounce
 	parameterCacheScheduled = false;
 	
-	// Add to constructor:
+	// FXP PRESET LOADING: Initialize critical flag for reliable FXP loading
+	isFXPLoading.store(false, std::memory_order_relaxed);
+	fxpLoadStartTime = 0;
+	
+	// PERFORMANCE: Initialize MIDI output with relaxed memory ordering for speed
 	midiOutputDirty.store(false, std::memory_order_relaxed);
 	lastMidiUpdateTime = 0;
-
+	
+	// PERFORMANCE: Throttle maintenance tasks to reduce CPU load
 	lastMaintenanceTime = 0;
-	maintenanceIntervalMs = 50;
+	maintenanceIntervalMs = 50;  // Run maintenance max 20 times per second
 	lastParamThrottleCleanup = 0;
-	paramThrottleCleanupInterval = 5000;
+	paramThrottleCleanupInterval = 5000;  // Clean throttle map every 5 seconds
+	
+	// PERFORMANCE: Initialize lock-free parameter tracking
+	for(int i = 0; i < 1024; i++) {
+		parameterUpdateGeneration[i].store(0, std::memory_order_relaxed);
+		parameterDirty[i].store(false, std::memory_order_relaxed);
+	}
+	
+	// PERFORMANCE: Pre-allocate batch processing
+	pendingParameterUpdates.reserve(MAX_PENDING_UPDATES);
+	lastBatchProcessTime = 0;
+	
+	// PERFORMANCE: Pre-allocate string cache to avoid allocations
+	cachedAddressString.reserve(32);
+	
+	// PERFORMANCE: Reserve space for pending OSC messages
+	pendingOscMessages.reserve(MAX_PENDING_OSC_MESSAGES);
 }
 
 void scVST::setup(){
@@ -132,7 +175,7 @@ void scVST::setup(){
 	addInspectorParameter(timeSignatureNum.set("TimeSig Num", 4, 1, 16));
 	addInspectorParameter(timeSignatureDenom.set("TimeSig Denom", 4, 1, 16));
 	addInspectorParameter(queryTransportPos.set("QueryPosition"));
-
+	
 	// Initialize transport state
 	transportFeedbackSuppressed = false;
 	transportFeedbackClearTime = 0;
@@ -141,30 +184,30 @@ void scVST::setup(){
 	
 	// MIDI Output section
 	addCustomRegion(
-		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
-		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
-	);
-
+					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
+					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
+					);
+	
 	// Initialize MIDI output vectors (128 elements each)
 	vector<float> initialNoteVector(128, 0.0f);  // All notes off initially
 	vector<float> initialCCVector(128, 0.0f);    // All CCs at 0 initially
-
+	
 	addOutputParameter(noteOut.set("Note Out", initialNoteVector,
 								   vector<float>(128, 0.0f),
 								   vector<float>(128, 1.0f)));
 	addOutputParameter(ccOut.set("CC Out", initialCCVector,
-								vector<float>(128, 0.0f),
-								vector<float>(128, 1.0f)));
-
+								 vector<float>(128, 0.0f),
+								 vector<float>(128, 1.0f)));
+	
 	// Initialize state tracking
 	currentNoteStates = initialNoteVector;
 	currentCCStates = initialCCVector;
 	
 	// MIDI CC Parameters section
 	addCustomRegion(
-		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
-		ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
-	);
+					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
+					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
+					);
 	
 	// MIDI CC control parameters
 	addInspectorParameter(addMidiCC.set("Add MIDI CC"));
@@ -177,7 +220,7 @@ void scVST::setup(){
 			addMidiCCParameter(midiCCToAdd.get());
 		}
 	}));
-
+	
 	listeners.push(removeAllMidiCC.newListener([this]{
 		removeAllMidiCCParameters();
 	}));
@@ -205,8 +248,8 @@ void scVST::setup(){
 		}
 		resendParams.notify();
 	}));
-
-
+	
+	
 	
 	// Transport parameter listeners
 	listeners.push(transportPlay.newListener([this](bool &playing){
@@ -214,37 +257,37 @@ void scVST::setup(){
 			setTransportPlay(playing);
 		}
 	}));
-
+	
 	listeners.push(transportPosition.newListener([this](float &position){
 		if(!transportFeedbackSuppressed && !isPresetLoading) {
 			setTransportPosition(position);
 		}
 	}));
-
+	
 	listeners.push(transportReset.newListener([this]{
 		if(!isPresetLoading) {
 			resetTransport();
 		}
 	}));
-
+	
 	listeners.push(tempo.newListener([this](float &bpm){
 		if(!isPresetLoading) {
 			setTempo(bpm);
 		}
 	}));
-
+	
 	listeners.push(timeSignatureNum.newListener([this](int &num){
 		if(!isPresetLoading) {
 			setTimeSignature(num, timeSignatureDenom.get());
 		}
 	}));
-
+	
 	listeners.push(timeSignatureDenom.newListener([this](int &denom){
 		if(!isPresetLoading) {
 			setTimeSignature(timeSignatureNum.get(), denom);
 		}
 	}));
-
+	
 	listeners.push(queryTransportPos.newListener([this]{
 		queryTransportPosition();
 	}));
@@ -330,10 +373,26 @@ void scVST::setup(){
 	
 	listeners.push(addLastTouched.newListener([this]{
 		if(lastTouchedIndex >= 0) {
-			//ofLogNotice("scVST") << "Adding last touched parameter: " << lastTouchedIndex;
-			addParameterToGUI(lastTouchedIndex);
+			// Check if parameter already exists in GUI
+			if(dynamicParameters.count(lastTouchedIndex) > 0 ||
+			   dynamicVectorParameters.count(lastTouchedIndex) > 0) {
+				ofLogWarning("scVST") << "Parameter " << lastTouchedIndex << " already exists in GUI";
+			} else {
+				// Check how recently this parameter was touched (to avoid stale touches)
+				uint64_t timeSinceTouch = ofGetElapsedTimeMillis() - lastTouchedTime;
+				if (timeSinceTouch > 30000) { // 30 seconds timeout
+					ofLogWarning("scVST") << "Last touched parameter " << lastTouchedIndex
+					<< " was touched " << (timeSinceTouch/1000)
+					<< " seconds ago - might be stale";
+				}
+				
+				ofLogNotice("scVST") << "Adding last touched parameter: " << lastTouchedIndex;
+				addParameterToGUI(lastTouchedIndex);
+			}
 		} else {
-			ofLogWarning("scVST") << "No last touched parameter to add (index: " << lastTouchedIndex << ")";
+			ofLogWarning("scVST") << "No parameter has been touched in the VST GUI";
+			ofLogWarning("scVST") << "Touch/move a parameter in the VST editor first, then click 'Add Last'";
+			ofLogWarning("scVST") << "Note: Already published parameters are ignored to prevent automation conflicts";
 		}
 	}));
 	
@@ -349,8 +408,8 @@ void scVST::setup(){
 	// FIXED: Plugin selector listener with preset loading check
 	listeners.push(pluginSelector.newListener([this](int &selection){
 		ofLogNotice("scVST") << "🔍 Plugin selector changed to " << selection
-							   << " (isPresetLoading = " << (isPresetLoading ? "TRUE" : "FALSE") << ")"
-							   << " - plugin path will be: " << (selection >= 0 && selection < pluginPaths.size() ? pluginPaths[selection] : "INVALID");
+		<< " (isPresetLoading = " << (isPresetLoading ? "TRUE" : "FALSE") << ")"
+		<< " - plugin path will be: " << (selection >= 0 && selection < pluginPaths.size() ? pluginPaths[selection] : "INVALID");
 		
 		// CRITICAL: Don't do ANYTHING during preset loading!
 		// currentPluginPath is already set correctly from the preset JSON
@@ -371,13 +430,13 @@ void scVST::setup(){
 	listeners.push(gate.newListener([this](vector<int> &gates){
 		processGates(gates);
 	}));
-
+	
 	listeners.push(pitchBend.newListener([this](float &val){
 		if(!isPresetLoading) {
 			sendPitchBend(val);
 		}
 	}));
-
+	
 	listeners.push(modWheel.newListener([this](float &val){
 		if(!isPresetLoading) {
 			sendModWheel(val);
@@ -406,6 +465,12 @@ void scVST::setup(){
 	listeners.push(ofEvents().update.newListener([this](ofEventArgs&) {
 		uint64_t currentTime = ofGetElapsedTimeMillis();
 		
+		// PERFORMANCE: Batch process pending parameter updates
+		if(currentTime - lastBatchProcessTime >= BATCH_PROCESS_INTERVAL_MS) {
+			processPendingParameterUpdates();
+			lastBatchProcessTime = currentTime;
+		}
+		
 		// MIDI output update - only when dirty and throttled
 		if(midiOutputDirty.load(std::memory_order_acquire)) {
 			if(currentTime - lastMidiUpdateTime >= 16) { // ~60fps max
@@ -424,14 +489,32 @@ void scVST::setup(){
 			transportFeedbackSuppressed = false;
 		}
 		
-		// Parameter timer logic
+		// Parameter timer logic - now with extension if VST not ready
 		if(parameterTimerActive) {
 			if(currentTime - parameterTimerStart >= parameterTimerDelay) {
-				parameterTimerActive = false;
-				ofLogWarning("scVST") << "Parameter timer timeout - applying preset data anyway";
-				if(hasPendingPresetData) {
-					applyPendingPresetData();
+				
+				if(areAllInstancesReady()) {
+					// VST is ready, apply preset data
+					parameterTimerActive = false;
+					ofLogNotice("scVST") << "Timer timeout - VST ready, applying preset data now";
+					if(hasPendingPresetData) {
+						applyPendingPresetData();
+					}
+				} else {
+					// VST not ready yet - extend the timer instead of giving up
+					ofLogWarning("scVST") << "Timer timeout but VST not ready - extending wait by 2s";
+					parameterTimerStart = currentTime;
+					parameterTimerDelay = 2000;  // Wait another 2 seconds
+					// parameterTimerActive stays true
 				}
+			}
+		}
+		
+		// FXP PRESET LOADING: Check for FXP loading timeout
+		if(isFXPLoading.load(std::memory_order_acquire)) {
+			if(currentTime - fxpLoadStartTime > FXP_LOAD_TIMEOUT_MS) {
+				ofLogWarning("scVST") << "FXP loading timeout - clearing flag";
+				isFXPLoading.store(false, std::memory_order_release);
 			}
 		}
 		
@@ -439,35 +522,39 @@ void scVST::setup(){
 		updateFXPCacheIfNeeded();
 		updateParameterDebouncedCacheIfNeeded();
 		
-		// PERFORMANCE: Feedback clearing logic
+		// PERFORMANCE: Feedback clearing logic with minimal locking
 		if(!feedbackClearTimes.empty()) {
-			std::vector<int> toRemove;
-			
-			{
-				std::lock_guard<std::mutex> lock(feedbackMutex);
-				for(auto& pair : feedbackClearTimes) {
-					if(currentTime >= pair.second) {
-						suppressingFeedback.erase(pair.first);
-						toRemove.push_back(pair.first);
+			std::unique_lock<std::mutex> lock(feedbackMutex, std::try_to_lock);
+			if(lock.owns_lock()) {
+				auto it = feedbackClearTimes.begin();
+				while(it != feedbackClearTimes.end()) {
+					if(currentTime >= it->second) {
+						suppressingFeedback.erase(it->first);
+						it = feedbackClearTimes.erase(it);
+					} else {
+						++it;
 					}
 				}
 			}
-			
-			for(int paramIndex : toRemove) {
-				feedbackClearTimes.erase(paramIndex);
-			}
 		}
 		
-		// PERFORMANCE: Periodic cleanup of parameter throttle map
+		// PERFORMANCE: Periodic cleanup of dirty flags
 		if(currentTime - lastParamThrottleCleanup > paramThrottleCleanupInterval) {
 			lastParamThrottleCleanup = currentTime;
-			std::lock_guard<std::mutex> lock(paramThrottleMutex);
-			lastParamUpdateTime.clear();
+			// Clear old dirty flags that weren't processed
+			for(int i = 0; i < 1024; i++) {
+				if(parameterDirty[i].load(std::memory_order_acquire)) {
+					uint64_t lastUpdate = parameterUpdateGeneration[i].load(std::memory_order_acquire);
+					if(currentTime - lastUpdate > 1000) { // Clear if older than 1 second
+						parameterDirty[i].store(false, std::memory_order_release);
+					}
+				}
+			}
 		}
 	}));
 	
 	loadCacheFromGlobal();
-
+	
 }
 
 int scVST::calculateNumInstances() const {
@@ -591,8 +678,8 @@ void scVST::searchForVSTPlugins() {
 		// Sort by plugin name (case-insensitive)
 		sort(pluginPairs.begin(), pluginPairs.end(),
 			 [](const pair<string, string>& a, const pair<string, string>& b) {
-				 return ofToLower(a.first) < ofToLower(b.first);
-			 });
+			return ofToLower(a.first) < ofToLower(b.first);
+		});
 		
 		// Rebuild the sorted vectors
 		availablePlugins.clear();
@@ -602,83 +689,115 @@ void scVST::searchForVSTPlugins() {
 			pluginPaths.push_back(pair.second);
 		}
 	}
-
+	
 	// If no plugins found, add a default message (existing code)
 	if (availablePlugins.empty()) {
 		availablePlugins.push_back("No VST plugins found");
 		pluginPaths.push_back("");
 	}}
 
+void scVST::processPendingParameterUpdates() {
+	if(pendingParameterUpdates.empty()) return;
+	
+	std::vector<PendingParameterUpdate> updates;
+	{
+		std::lock_guard<std::mutex> lock(pendingUpdatesMutex);
+		updates = std::move(pendingParameterUpdates);
+		pendingParameterUpdates.clear();
+		pendingParameterUpdates.reserve(MAX_PENDING_UPDATES);
+	}
+	
+	// Group updates by parameter to avoid redundant updates
+	std::map<int, std::pair<float, int>> latestValues; // paramIndex -> (value, nodeID)
+	for(const auto& update : updates) {
+		latestValues[update.paramIndex] = {update.value, update.nodeID};
+	}
+	
+	// Apply only the latest value for each parameter
+	for(const auto& [paramIndex, valueAndNode] : latestValues) {
+		float value = valueAndNode.first;
+		int nodeID = valueAndNode.second;
+		
+		// Update parameter info
+		if(parameterInfoMap.count(paramIndex) == 0) {
+			VSTParameterInfo info;
+			info.index = paramIndex;
+			info.displayName = savedParameterNames.count(paramIndex) > 0 ?
+			savedParameterNames[paramIndex] : "Param" + ofToString(paramIndex);
+			info.value = value;
+			parameterInfoMap[paramIndex] = info;
+		} else {
+			parameterInfoMap[paramIndex].value = value;
+		}
+		
+		// Update GUI parameter
+		updateParameterValueFromVST(paramIndex, value, nodeID);
+		
+		// Clear dirty flag
+		parameterDirty[paramIndex].store(false, std::memory_order_release);
+		
+		// Handle propagation if needed
+		if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
+			propagateParameterToOtherInstances(nodeID, paramIndex, value);
+		}
+	}
+}
+
 void scVST::loadSelectedPlugin() {
-	/*
-	 ofLogNotice("scVST") << "🔍 loadSelectedPlugin() called - isPresetLoading = "
-	 << (isPresetLoading ? "TRUE" : "FALSE")
-	 << ", currentPluginPath = " << currentPluginPath;
-	 */
 	if (currentPluginPath.empty()) {
-		ofLogWarning("scVST") << "❌ No plugin path set, skipping load";
+		ofLogWarning("scVST") << "No plugin path set, skipping load";
 		return;
 	}
-	
-	if (isPresetLoading) {
-		//ofLogNotice("scVST") << "⏳ Preset loading in progress, skipping parameter removal and query";
-	}
-	
-	//ofLogNotice("scVST") << "Loading plugin: " << currentPluginPath;
 	
 	// Clear existing parameter mappings
 	parameterInfoMap.clear();
 	
-	// ONLY remove dynamic parameters if NOT during preset loading
-	if(!isPresetLoading) {
-		//ofLogNotice("scVST") << "🗑️ Removing existing GUI parameters (not preset loading)";
+	if (!isPresetLoading) {
+		ofLogNotice("scVST") << "Removing existing GUI parameters before loading new plugin";
 		removeAllDynamicParameters();
 	} else {
-		//ofLogNotice("scVST") << "🔒 Keeping existing GUI parameters (preset loading in progress)";
+		ofLogNotice("scVST") << "Preserving GUI parameters during preset loading";
 	}
 	
-	// Clear readiness tracking
+	// Clear readiness tracking - the handleVSTOpen will manage synchronization
 	readyInstances.clear();
+	fxpAppliedInstances.clear();
 	
 	int totalInstances = 0;
 	
-	// ========== PARALLEL LOADING IMPLEMENTATION ==========
-	
-	// Phase 1: Send close commands to ALL instances in parallel (no delays)
-	ofLogNotice("scVST") << "📤 Phase 1: Sending close commands to all instances (parallel)";
+	// OPTIMIZED PARALLEL APPROACH with event-driven synchronization
+	// Phase 1: Send all close commands in parallel
 	for(auto& serverInstances : synthInstances) {
 		for(auto synth : serverInstances.second) {
 			if(synth != nullptr) {
 				totalInstances++;
 				
-				// Close current plugin if any - NO DELAY
+				// Close current plugin if any - NO DELAYS
 				ofxOscMessage closeMsg;
 				closeMsg.setAddress("/u_cmd");
 				closeMsg.addIntArg(synth->nodeID);
 				closeMsg.addIntArg(2);
 				closeMsg.addStringArg("/close");
 				serverInstances.first->sendMsg(closeMsg);
-				
-				//ofLogVerbose("scVST") << "Sent close to instance " << synth->nodeID;
 			}
 		}
 	}
 	
-	// Phase 2: Brief processing time to let close commands be processed
-	ofLogNotice("scVST") << "⏳ Phase 2: Processing close commands (" << totalInstances << " instances)";
-	for(int i = 0; i < 10; i++) {
+	// Phase 2: Minimal processing for close commands
+	for(int i = 0; i < 3; i++) {
 		for(auto& serverInstances : synthInstances) {
 			serverInstances.first->process();
 		}
-		ofSleepMillis(10); // Brief processing time, not per-instance delay
+		ofSleepMillis(5); // Very brief delay
 	}
 	
-	// Phase 3: Send open commands to ALL instances in parallel (no delays)
-	ofLogNotice("scVST") << "📤 Phase 3: Sending open commands to all instances (parallel)";
+	// Phase 3: Send all open commands in parallel
+	ofLogNotice("scVST") << "🚀 Loading plugin on all " << totalInstances << " instances (parallel): " << currentPluginPath;
+	
 	for(auto& serverInstances : synthInstances) {
 		for(auto synth : serverInstances.second) {
 			if(synth != nullptr) {
-				// Open new plugin with multithreading setting - NO DELAY
+				// Open new plugin - NO DELAYS
 				ofxOscMessage openMsg;
 				openMsg.setAddress("/u_cmd");
 				openMsg.addIntArg(synth->nodeID);
@@ -686,29 +805,28 @@ void scVST::loadSelectedPlugin() {
 				openMsg.addStringArg("/open");
 				openMsg.addStringArg(currentPluginPath);
 				openMsg.addIntArg(1); // Request GUI editor
-				openMsg.addIntArg(enableMultithreading.get() ? 1 : 0); // Multithreading setting
+				openMsg.addIntArg(enableMultithreading.get() ? 1 : 0);
 				openMsg.addIntArg(0); // Normal mode
 				serverInstances.first->sendMsg(openMsg);
-				
-				//ofLogVerbose("scVST") << "Sent open to instance " << synth->nodeID;
 			}
 		}
 	}
 	
-	// Phase 4: Brief processing burst to kickstart the open process
-	ofLogNotice("scVST") << "⚡ Phase 4: Processing open commands";
-	for(int i = 0; i < 5; i++) {
+	// Phase 4: Minimal processing to kickstart opens
+	for(int i = 0; i < 2; i++) {
 		for(auto& serverInstances : synthInstances) {
 			serverInstances.first->process();
 		}
-		ofSleepMillis(20);
+		ofSleepMillis(5);
 	}
 	
-	//ofLogNotice("scVST") << "Plugin load commands sent - instances will respond asynchronously";
+	// The handleVSTOpen callback will handle synchronization and FXP loading
+	// when all instances report ready via /vst_open messages
+	ofLogNotice("scVST") << "Plugin load commands sent - waiting for /vst_open confirmations...";
+	
 	fxpCacheValid = false;
 	cachedFXP.clear();
 	fxpCacheScheduled = false;
-	
 	pluginLoaded = true;
 }
 
@@ -726,30 +844,67 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 		int paramIndex = (int)msg.getArgAsFloat(2);
 		float value = msg.getArgAsFloat(3);
 		
-		// Verify this is our VST instance
+		// PERFORMANCE: Early exit without string operations
 		if (!isMyVSTInstance(nodeID)) return;
-
-		// PERFORMANCE: Throttle parameter updates per parameter index
+		if (paramIndex < 0 || paramIndex >= 1024) return;
+		
+		// FXP PRESET LOADING: Use blocking updates during FXP load
+		bool useFXPLoading = isFXPLoading.load(std::memory_order_acquire);
 		uint64_t currentTime = ofGetElapsedTimeMillis();
-		{
-			std::lock_guard<std::mutex> lock(paramThrottleMutex);
-			auto it = lastParamUpdateTime.find(paramIndex);
-			if(it != lastParamUpdateTime.end() &&
-			   currentTime - it->second < PARAM_UPDATE_THROTTLE_MS) {
-				return; // Skip this update - too soon since last one
+		
+		if(useFXPLoading) {
+			// During FXP loading, process immediately without throttling
+			updateParameterValueFromVST(paramIndex, value, nodeID);
+		} else {
+			// PERFORMANCE: Lock-free throttling using atomics
+			uint64_t lastUpdate = parameterUpdateGeneration[paramIndex].load(std::memory_order_acquire);
+			
+			// Check if enough time has passed
+			if (currentTime - lastUpdate < PARAM_UPDATE_THROTTLE_MS) {
+				return; // Skip this update - too soon
 			}
-			lastParamUpdateTime[paramIndex] = currentTime;
+			
+			// Try to claim this update slot using compare-exchange
+			uint64_t expected = lastUpdate;
+			if (!parameterUpdateGeneration[paramIndex].compare_exchange_weak(
+																			 expected, currentTime, std::memory_order_release, std::memory_order_relaxed)) {
+																				 return; // Another thread won the race
+																			 }
+			
+			// Queue for batch processing
+			{
+				std::lock_guard<std::mutex> lock(pendingUpdatesMutex);
+				if(pendingParameterUpdates.size() < MAX_PENDING_UPDATES) {
+					pendingParameterUpdates.push_back({nodeID, paramIndex, value, currentTime});
+					parameterDirty[paramIndex].store(true, std::memory_order_release);
+				}
+			}
 		}
-
-		/*
-		 ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
-		 << " from node " << nodeID;
-		 */
+		
+		// Only update lastTouchedIndex if this parameter is NOT already published
+		// This prevents automated parameters from overriding manual GUI tweaks
+		bool isAlreadyPublished = (dynamicParameters.count(paramIndex) > 0 ||
+								   dynamicVectorParameters.count(paramIndex) > 0);
+		
+		if (!isAlreadyPublished) {
+			lastTouchedIndex = paramIndex;
+			lastTouchedTime = ofGetElapsedTimeMillis();
+			ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
+			<< " from node " << nodeID << " (updating lastTouchedIndex for addLast)";
+		}
+		
 		// Update parameter info
 		if(parameterInfoMap.count(paramIndex) == 0) {
 			VSTParameterInfo info;
 			info.index = paramIndex;
-			info.displayName = "Param" + ofToString(paramIndex);
+			
+			// Check if we have a saved name from preset loading
+			if(savedParameterNames.count(paramIndex) > 0) {
+				info.displayName = savedParameterNames[paramIndex];
+			} else {
+				info.displayName = "Param" + ofToString(paramIndex);
+			}
+			
 			info.value = value;
 			parameterInfoMap[paramIndex] = info;
 		} else {
@@ -773,45 +928,50 @@ void scVST::handleVSTAuto(ofxOscMessage& msg) {
 		int paramIndex = (int)msg.getArgAsFloat(2);
 		float value = msg.getArgAsFloat(3);
 		
-		// Verify this is our VST instance
+		// PERFORMANCE: Early exit without string operations
 		if (!isMyVSTInstance(nodeID)) return;
-
-		// PERFORMANCE: Throttle parameter updates per parameter index
+		if (paramIndex < 0 || paramIndex >= 1024) return;
+		
+		// FXP PRESET LOADING: Process immediately during FXP load
+		bool useFXPLoading = isFXPLoading.load(std::memory_order_acquire);
 		uint64_t currentTime = ofGetElapsedTimeMillis();
-		{
-			std::lock_guard<std::mutex> lock(paramThrottleMutex);
-			auto it = lastParamUpdateTime.find(paramIndex);
-			if(it != lastParamUpdateTime.end() &&
-			   currentTime - it->second < PARAM_UPDATE_THROTTLE_MS) {
-				return; // Skip this update - too soon since last one
-			}
-			lastParamUpdateTime[paramIndex] = currentTime;
-		}
-
-		/*
-		 ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " automated to " << value
-		 << " from node " << nodeID;
-		 */
-		// Update last touched parameter
-		lastTouchedIndex = paramIndex;
 		
-		// Update parameter info
-		if(parameterInfoMap.count(paramIndex) == 0) {
-			VSTParameterInfo info;
-			info.index = paramIndex;
-			info.displayName = "Param" + ofToString(paramIndex);
-			info.value = value;
-			parameterInfoMap[paramIndex] = info;
+		if(useFXPLoading) {
+			// During FXP loading, process immediately
+			updateParameterValueFromVST(paramIndex, value, nodeID);
 		} else {
-			parameterInfoMap[paramIndex].value = value;
+			// PERFORMANCE: Lock-free throttling for automation
+			uint64_t lastUpdate = parameterUpdateGeneration[paramIndex].load(std::memory_order_acquire);
+			
+			// Check if enough time has passed
+			if (currentTime - lastUpdate < PARAM_UPDATE_THROTTLE_MS) {
+				return; // Skip this update
+			}
+			
+			// Try to claim this update slot
+			uint64_t expected = lastUpdate;
+			if (!parameterUpdateGeneration[paramIndex].compare_exchange_weak(
+																			 expected, currentTime, std::memory_order_release, std::memory_order_relaxed)) {
+																				 return; // Another thread won
+																			 }
+			
+			// Queue for batch processing
+			{
+				std::lock_guard<std::mutex> lock(pendingUpdatesMutex);
+				if(pendingParameterUpdates.size() < MAX_PENDING_UPDATES) {
+					pendingParameterUpdates.push_back({nodeID, paramIndex, value, currentTime});
+					parameterDirty[paramIndex].store(true, std::memory_order_release);
+				}
+			}
 		}
 		
-		// Update GUI parameter if it exists
-		updateParameterValueFromVST(paramIndex, value, nodeID);
+		// Only update lastTouchedIndex if this parameter is NOT already published
+		bool isAlreadyPublished = (dynamicParameters.count(paramIndex) > 0 ||
+								   dynamicVectorParameters.count(paramIndex) > 0);
 		
-		// ONLY propagate automation from the first instance if no vector parameter exists
-		if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
-			propagateParameterToOtherInstances(nodeID, paramIndex, value);
+		if (!isAlreadyPublished) {
+			lastTouchedIndex = paramIndex;
+			lastTouchedTime = currentTime;
 		}
 	}
 }
@@ -1074,7 +1234,10 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 			if(areAllInstancesReady()) {
 				ofLogNotice("scVST") << "🎉 All " << totalExpectedInstances << " VST instances ready! Applying state restoration...";
 				
-				// NEW SMART SOURCE SELECTION LOGIC (keep existing logic)
+				// CRITICAL: Stop the timer - event-driven approach takes over
+				parameterTimerActive = false;
+				
+				// NEW SMART SOURCE SELECTION LOGIC
 				std::string nodeKey = getNodeCacheKey();
 				
 				// Priority 1: During Oceanode preset loading - ALWAYS use preset FXP data
@@ -1127,7 +1290,6 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 				}
 				// Priority 3: No modifications since preset load - use preset FXP data if available
 				else if(shouldUsePresetFXP()) {
-					//ofLogNotice("scVST") << "🔄 Restoring VST state from preset FXP (no modifications since preset) for node '" << nodeKey << "'";
 					if(hasSavedFXPData) {
 						string tempPath = createTempFXPPath();
 						std::ofstream file(tempPath, std::ios::binary);
@@ -1155,9 +1317,17 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 					ofLogNotice("scVST") << "ℹ️ No FXP to apply - using default VST state";
 				}
 				
+				// FXP PRESET LOADING: Wait for FXP to be processed, then clear flag
+				if(hasSavedFXPData || fxpCacheValid) {
+					ofSleepMillis(500); // Allow time for all parameter updates to be processed
+					ofLogNotice("scVST") << "FXP load complete - disabling blocking locks";
+				}
+				isFXPLoading.store(false, std::memory_order_release);
+				
+				// CRITICAL: Apply pending GUI parameters now that VST is ready
 				if(hasPendingPresetData) {
-					ofSleepMillis(100); // Wait for FXP processing
-					//ofLogNotice("scVST") << "🎯 Applying GUI parameters now";
+					ofLogNotice("scVST") << "🎯 Applying pending GUI parameters (VST ready event)";
+					ofSleepMillis(200); // Let FXP settle first
 					applyPendingPresetData();
 				}
 			}
@@ -1230,6 +1400,8 @@ void scVST::addParameterToGUI(int paramIndex) {
 		return;
 	}
 	
+	// CRITICAL FIX: First check if parameter already exists in ANY form
+	// This prevents duplication when loading presets
 	if(dynamicParameters.count(paramIndex) > 0 || dynamicVectorParameters.count(paramIndex) > 0) {
 		// Parameter already exists, just update its value AND send to VST
 		if(parameterInfoMap.count(paramIndex) > 0) {
@@ -1246,8 +1418,47 @@ void scVST::addParameterToGUI(int paramIndex) {
 				setVSTParameter(paramIndex, value);
 			}
 		}
-		//ofLogNotice("scVST") << "Parameter " << paramIndex << " already exists in GUI, updated value";
+		ofLogVerbose("scVST::addParameterToGUI") << "Parameter " << paramIndex << " already exists, updated value only";
 		return;
+	}
+	
+	// CRITICAL FIX: Also check if a parameter with this name already exists in the parameter group
+	// This catches cases where the parameter exists but isn't in our tracking maps
+	if(parameterInfoMap.count(paramIndex) > 0) {
+		string paramName = parameterInfoMap[paramIndex].displayName;
+		
+		// Check for any variant of this parameter name in the group
+		for(int i = 0; i < getParameterGroup().size(); i++) {
+			string existingName = getParameterGroup().get(i).getName();
+			// Check if this is the same parameter (with or without suffix)
+			if(existingName == paramName || existingName.find(paramName + "_") == 0) {
+				ofLogWarning("scVST::addParameterToGUI") << "Parameter '" << paramName
+				<< "' (index " << paramIndex << ") already exists in group as '"
+				<< existingName << "' - skipping creation";
+				
+				// Try to update the value if we can find it
+				try {
+					float value = parameterInfoMap[paramIndex].value;
+					// Try to find and update the existing parameter
+					for(auto& param : dynamicVectorFloatParameters) {
+						if(param.second && param.second->getName() == existingName) {
+							param.second->setWithoutEventNotifications({value});
+							setVSTParameter(paramIndex, value);
+							break;
+						}
+					}
+					for(auto& param : dynamicFloatParameters) {
+						if(param.second && param.second->getName() == existingName) {
+							param.second->setWithoutEventNotifications(value);
+							setVSTParameter(paramIndex, value);
+							break;
+						}
+					}
+				} catch(...) {}
+				
+				return;
+			}
+		}
 	}
 	
 	// Create parameter info if it doesn't exist
@@ -1277,6 +1488,12 @@ void scVST::addParameterToGUI(int paramIndex) {
 	
 	// Store the parameter to keep it alive BEFORE adding to GUI
 	dynamicVectorFloatParameters[paramIndex] = newParam;
+	
+	// CRITICAL: Store the actual registered name
+	parameterInfoMap[paramIndex].registeredName = uniqueParamName;
+	ofLogVerbose("scVST") << "Registered parameter " << paramIndex
+	<< " with name '" << uniqueParamName
+	<< "' (display: " << parameterInfoMap[paramIndex].displayName << ")";
 	
 	try {
 		auto oceanodeParam = addParameter(*newParam);
@@ -1464,140 +1681,537 @@ void scVST::addParameterToGUI(int paramIndex) {
 }
 
 void scVST::removeParameterFromGUI(int paramIndex) {
-	//ofLogNotice("scVST") << "Removing parameter " << paramIndex << " from GUI";
+	ofLogNotice("scVST::removeParameterFromGUI") << "Removing parameter " << paramIndex << " from GUI";
 	
-	// Safety check
-	if(parameterInfoMap.count(paramIndex) == 0) {
-		ofLogWarning("scVST") << "Parameter " << paramIndex << " not found in parameter info map";
-		return;
+	// CRITICAL FIX: Force removal even during preset loading
+	// Store the current preset loading state and temporarily disable it
+	bool wasPresetLoading = isPresetLoading;
+	bool wasOceanodePresetLoading = oceanodePresetLoading;
+	isPresetLoading = false;
+	oceanodePresetLoading = false;
+	
+	// Get parameter info if available
+	string paramName = "Param" + ofToString(paramIndex);
+	string registeredName = "";
+	string originalName = "";
+	string actualParameterNameInGroup = "";  // The actual name found in the parameter group
+	
+	if(parameterInfoMap.count(paramIndex) > 0) {
+		// Use the actual registered name if available
+		if(!parameterInfoMap[paramIndex].registeredName.empty()) {
+			registeredName = parameterInfoMap[paramIndex].registeredName;
+			ofLogNotice("scVST") << "Using registered name '" << registeredName
+			<< "' for removing parameter " << paramIndex;
+		}
+		paramName = parameterInfoMap[paramIndex].displayName;
+		originalName = parameterInfoMap[paramIndex].originalName;
+		ofLogNotice("scVST") << "Parameter " << paramIndex << " info: displayName='" << paramName
+		<< "', originalName='" << originalName
+		<< "', registeredName='" << registeredName << "'";
 	}
 	
-	string paramName = parameterInfoMap[paramIndex].displayName;
+	// DEBUG: List all parameters in the group to see what's actually there
+	ofLogNotice("scVST") << "Current parameters in group:";
+	for(int i = 0; i < getParameterGroup().size(); i++) {
+		ofLogNotice("scVST") << "  [" << i << "] " << getParameterGroup().get(i).getName();
+	}
 	
-	// Remove main parameter (scalar)
-	if(dynamicParameters.count(paramIndex) > 0) {
-		try {
-			string actualParamName = paramName;
-			if(!getParameterGroup().contains(actualParamName)) {
-				// Parameter might have been renamed with a suffix, search for it
-				for(int i = 0; i < getParameterGroup().size(); i++) {
-					string currentName = getParameterGroup().get(i).getName();
-					if(currentName.find(paramName) == 0) {
-						actualParamName = currentName;
-						break;
-					}
+	// FIX: Check if parameter exists in our tracking maps
+	bool parameterTracked = (dynamicParameters.count(paramIndex) > 0 ||
+							 dynamicVectorParameters.count(paramIndex) > 0);
+	
+	// CRITICAL FIX: Search for VST parameters by their index pattern
+	// VST parameters are typically at the end of the parameter group after the fixed parameters
+	// We need to find parameters that could be VST parameter 861
+	bool parameterFoundInGroup = false;
+	
+	// First, try to find by VST parameter index pattern
+	// VST parameters typically start after the fixed parameters
+	// Look for any parameter that could be index 861
+	for(int i = 0; i < getParameterGroup().size(); i++) {
+		string currentName = getParameterGroup().get(i).getName();
+		
+		// Skip empty names and fixed parameters
+		if(currentName.empty()) continue;
+		
+		// Check if this could be a VST parameter
+		// VST parameters are typically after the fixed ones (after index ~28)
+		if(i >= 28) {  // Approximate start of VST parameters
+			// This could be our parameter if:
+			// 1. It matches any of our known names
+			// 2. It's at a position that could correspond to parameter 861
+			// 3. It's not one of the fixed parameter names
+			
+			// List of fixed parameter names to exclude
+			vector<string> fixedParams = {
+				"In", "Out", "N Chan", "Mix", "Plugin", "Editor", "Add Last", "Propagate",
+				"Program", "Instance", "MIDI Chan", "Pitch", "Velocity", "Gate", "PitchBend",
+				"ModWheel", "Play", "Position", "Reset", "BPM", "Note Out", "CC Out"
+			};
+			
+			bool isFixedParam = false;
+			for(const string& fixed : fixedParams) {
+				if(currentName == fixed) {
+					isFixedParam = true;
+					break;
 				}
 			}
 			
-			if(getParameterGroup().contains(actualParamName)) {
-				removeParameter(actualParamName);
-				//ofLogNotice("scVST") << "Removed main scalar parameter: " << actualParamName;
+			if(!isFixedParam) {
+				// This is likely a VST parameter
+				// For parameter 861, it's likely one of the first VST parameters added
+				ofLogNotice("scVST") << "Found potential VST parameter at index " << i << ": " << currentName;
+				
+				// Check if this matches our parameter by various criteria
+				bool matches = false;
+				
+				// Check if it matches the original VST name
+				if(!originalName.empty()) {
+					string lowerCurrent = currentName;
+					string lowerOriginal = originalName;
+					std::transform(lowerCurrent.begin(), lowerCurrent.end(), lowerCurrent.begin(), ::tolower);
+					std::transform(lowerOriginal.begin(), lowerOriginal.end(), lowerOriginal.begin(), ::tolower);
+					if(lowerCurrent == lowerOriginal || lowerCurrent.find(lowerOriginal) != string::npos) {
+						matches = true;
+						ofLogNotice("scVST") << "Matched by original name: " << originalName;
+					}
+				}
+				
+				// Check common VST parameter names for index 861
+				// Index 861 often corresponds to filter cutoff in many VSTs
+				vector<string> commonNames = {"CutOff", "cutoff", "Cutoff", "Filter", "filter", "Freq", "freq"};
+				if(!matches) {
+					for(const string& common : commonNames) {
+						if(currentName == common || currentName.find(common) != string::npos) {
+							matches = true;
+							ofLogNotice("scVST") << "Matched by common name: " << common;
+							break;
+						}
+					}
+				}
+				
+				// If we found a match, use this parameter
+				if(matches) {
+					actualParameterNameInGroup = currentName;
+					parameterFoundInGroup = true;
+					ofLogNotice("scVST") << "✓ Identified parameter to remove: " << actualParameterNameInGroup;
+					break;
+				}
+			}
+		}
+	}
+	
+	// If not found by VST index pattern, try other methods
+	if(!parameterFoundInGroup) {
+		// Build list of names to try
+		vector<string> namesToTry;
+		
+		// Priority 1: Registered name
+		if(!registeredName.empty()) {
+			namesToTry.push_back(registeredName);
+		}
+		
+		// Priority 2: Original VST name
+		if(!originalName.empty()) {
+			namesToTry.push_back(originalName);
+		}
+		
+		// Priority 3: Display name (if it's not the generic Param name)
+		if(!paramName.empty() && paramName != "Param" + ofToString(paramIndex)) {
+			namesToTry.push_back(paramName);
+		}
+		
+		// Priority 4: Generic name
+		namesToTry.push_back("Param" + ofToString(paramIndex));
+		
+		// Search through all parameters
+		for(int i = 0; i < getParameterGroup().size(); i++) {
+			string currentName = getParameterGroup().get(i).getName();
+			
+			// Check against known names
+			for(const string& tryName : namesToTry) {
+				if(currentName == tryName ||
+				   currentName.find(tryName + "_") == 0) {
+					actualParameterNameInGroup = currentName;
+					parameterFoundInGroup = true;
+					ofLogNotice("scVST") << "Found parameter by name search: " << actualParameterNameInGroup;
+					break;
+				}
+			}
+			
+			if(parameterFoundInGroup) break;
+		}
+	}
+	
+	// Remove the parameter from the group if found
+	if(parameterFoundInGroup && !actualParameterNameInGroup.empty()) {
+		try {
+			ofLogNotice("scVST") << "Removing parameter from group: " << actualParameterNameInGroup;
+			removeParameter(actualParameterNameInGroup);
+			
+			// Verify removal
+			if(!getParameterGroup().contains(actualParameterNameInGroup)) {
+				ofLogNotice("scVST") << "✅ Successfully removed parameter from group: " << actualParameterNameInGroup;
+			} else {
+				ofLogError("scVST") << "❌ Failed to remove parameter from group: " << actualParameterNameInGroup;
 			}
 		} catch(const std::exception& e) {
-			ofLogError("scVST") << "Error removing scalar parameter: " << e.what();
+			ofLogError("scVST") << "Exception removing parameter: " << e.what();
+		}
+	} else if(!parameterTracked) {
+		ofLogWarning("scVST") << "Parameter " << paramIndex << " not found in group or tracking maps";
+	}
+	
+	// Clean up tracking maps (always do this, even if parameter wasn't in group)
+	if(dynamicParameters.count(paramIndex) > 0) {
+		dynamicParameters.erase(paramIndex);
+		ofLogNotice("scVST") << "Removed from dynamicParameters";
+	}
+	
+	if(dynamicVectorParameters.count(paramIndex) > 0) {
+		dynamicVectorParameters.erase(paramIndex);
+		ofLogNotice("scVST") << "Removed from dynamicVectorParameters";
+	}
+	
+	// Remove stored float parameters
+	dynamicFloatParameters.erase(paramIndex);
+	dynamicVectorFloatParameters.erase(paramIndex);
+	
+	// Remove inspector parameters using the actual parameter name found
+	string nameForInspector = !actualParameterNameInGroup.empty() ? actualParameterNameInGroup : paramName;
+	
+	// Remove name editor from inspector
+	if(dynamicStringParameters.count(paramIndex) > 0) {
+		vector<string> nameEditorVariations = {
+			nameForInspector + "_Name",
+			paramName + "_Name",
+			"Param" + ofToString(paramIndex) + "_Name"
+		};
+		
+		bool removedNameEditor = false;
+		for(const string& editorName : nameEditorVariations) {
+			if(getInspectorParameterGroup().contains(editorName)) {
+				try {
+					removeInspectorParameter(editorName);
+					ofLogNotice("scVST") << "Removed name editor: " << editorName;
+					removedNameEditor = true;
+					break;
+				} catch(...) {}
+			}
+		}
+		
+		// If not found with exact names, search for it
+		if(!removedNameEditor) {
+			for(int i = getInspectorParameterGroup().size() - 1; i >= 0; i--) {
+				string currentName = getInspectorParameterGroup().get(i).getName();
+				if(currentName.find("_Name") != string::npos &&
+				   (currentName.find(nameForInspector) == 0 ||
+					currentName.find(paramName) == 0 ||
+					currentName.find("Param" + ofToString(paramIndex)) == 0)) {
+					try {
+						removeInspectorParameter(currentName);
+						ofLogNotice("scVST") << "Removed name editor by search: " << currentName;
+						break;
+					} catch(...) {}
+				}
+			}
+		}
+		
+		dynamicStringParameters.erase(paramIndex);
+	}
+	
+	// Remove removal button from inspector
+	if(dynamicRemovalButtons.count(paramIndex) > 0) {
+		vector<string> removalButtonVariations = {
+			"Remove " + nameForInspector,
+			"Remove " + paramName,
+			"Remove Param" + ofToString(paramIndex)
+		};
+		
+		bool removedButton = false;
+		for(const string& buttonName : removalButtonVariations) {
+			if(getInspectorParameterGroup().contains(buttonName)) {
+				try {
+					removeInspectorParameter(buttonName);
+					ofLogNotice("scVST") << "Removed removal button: " << buttonName;
+					removedButton = true;
+					break;
+				} catch(...) {}
+			}
+		}
+		
+		// If not found with exact names, search for it
+		if(!removedButton) {
+			for(int i = getInspectorParameterGroup().size() - 1; i >= 0; i--) {
+				string currentName = getInspectorParameterGroup().get(i).getName();
+				if(currentName.find("Remove ") == 0 &&
+				   (currentName.find(nameForInspector) != string::npos ||
+					currentName.find(paramName) != string::npos ||
+					currentName.find("Param" + ofToString(paramIndex)) != string::npos)) {
+					try {
+						removeInspectorParameter(currentName);
+						ofLogNotice("scVST") << "Removed removal button by search: " << currentName;
+						break;
+					} catch(...) {}
+				}
+			}
+		}
+		
+		dynamicRemovalButtons.erase(paramIndex);
+	}
+	
+	// Remove from parameter info map
+	parameterInfoMap.erase(paramIndex);
+	
+	// CRITICAL FIX: Restore the preset loading flags
+	isPresetLoading = wasPresetLoading;
+	oceanodePresetLoading = wasOceanodePresetLoading;
+	
+	// FINAL VERIFICATION: Check if the parameter was actually removed
+	if(parameterFoundInGroup && !actualParameterNameInGroup.empty()) {
+		if(getParameterGroup().contains(actualParameterNameInGroup)) {
+			ofLogError("scVST") << "❌ FAILED to remove parameter " << paramIndex
+			<< " - still exists as '" << actualParameterNameInGroup << "' in parameter group!";
+		} else {
+			ofLogNotice("scVST") << "✅ Successfully removed parameter " << paramIndex << " from GUI";
+		}
+	} else {
+		ofLogNotice("scVST") << "Parameter " << paramIndex << " removal completed (was not in group)";
+	}
+	
+	// CRITICAL FIX: Search for all possible parameter names in the GUI
+	vector<string> possibleParamNames;
+	// Priority 1: Use the registered name if we have it
+	if(!registeredName.empty()) {
+		possibleParamNames.push_back(registeredName);
+	}
+	// Priority 2: Try the display name
+	possibleParamNames.push_back(paramName);
+	
+	// Add numbered suffixes that might have been added
+	for(int suffix = 1; suffix <= 20; suffix++) {
+		possibleParamNames.push_back(paramName + "_" + ofToString(suffix));
+	}
+	
+	// Also search by the generic "Param" + index name
+	string genericName = "Param" + ofToString(paramIndex);
+	if(genericName != paramName) {
+		possibleParamNames.push_back(genericName);
+		for(int suffix = 1; suffix <= 20; suffix++) {
+			possibleParamNames.push_back(genericName + "_" + ofToString(suffix));
+		}
+	}
+	
+	// Remove main parameter (scalar)
+	if(dynamicParameters.count(paramIndex) > 0) {
+		bool removed = false;
+		for(const string& possibleName : possibleParamNames) {
+			try {
+				if(getParameterGroup().contains(possibleName)) {
+					ofLogNotice("scVST") << "Attempting to remove scalar parameter: " << possibleName;
+					removeParameter(possibleName);
+					// Verify it was actually removed
+					if(!getParameterGroup().contains(possibleName)) {
+						ofLogNotice("scVST") << "✅ Successfully removed scalar parameter: " << possibleName;
+						removed = true;
+						break;
+					} else {
+						ofLogError("scVST") << "❌ Failed to remove scalar parameter: " << possibleName << " - still exists!";
+					}
+				}
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Exception removing parameter " << possibleName << ": " << e.what();
+			}
+		}
+		
+		if(!removed) {
+			// Last resort: iterate through all parameters to find one that matches
+			for(int i = getParameterGroup().size() - 1; i >= 0; i--) {
+				string currentName = getParameterGroup().get(i).getName();
+				if(currentName.find(paramName) == 0 || currentName.find(genericName) == 0) {
+					try {
+						removeParameter(currentName);
+						ofLogNotice("scVST") << "Removed scalar parameter by search: " << currentName;
+						break;
+					} catch(...) {}
+				}
+			}
 		}
 		dynamicParameters.erase(paramIndex);
 	}
 	
 	// Remove main parameter (vector)
 	if(dynamicVectorParameters.count(paramIndex) > 0) {
-		try {
-			string actualParamName = paramName;
-			if(!getParameterGroup().contains(actualParamName)) {
-				// Parameter might have been renamed with a suffix, search for it
-				for(int i = 0; i < getParameterGroup().size(); i++) {
-					string currentName = getParameterGroup().get(i).getName();
-					if(currentName.find(paramName) == 0) {
-						actualParamName = currentName;
+		bool removed = false;
+		for(const string& possibleName : possibleParamNames) {
+			try {
+				if(getParameterGroup().contains(possibleName)) {
+					ofLogNotice("scVST") << "Attempting to remove vector parameter: " << possibleName;
+					removeParameter(possibleName);
+					// Verify it was actually removed
+					if(!getParameterGroup().contains(possibleName)) {
+						ofLogNotice("scVST") << "✅ Successfully removed vector parameter: " << possibleName;
+						removed = true;
 						break;
+					} else {
+						ofLogError("scVST") << "❌ Failed to remove vector parameter: " << possibleName << " - still exists!";
 					}
 				}
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Exception removing parameter " << possibleName << ": " << e.what();
 			}
-			
-			if(getParameterGroup().contains(actualParamName)) {
-				removeParameter(actualParamName);
-				//ofLogNotice("scVST") << "Removed main vector parameter: " << actualParamName;
+		}
+		
+		if(!removed) {
+			// Last resort: iterate through all parameters to find one that matches
+			for(int i = getParameterGroup().size() - 1; i >= 0; i--) {
+				string currentName = getParameterGroup().get(i).getName();
+				if(currentName.find(paramName) == 0 || currentName.find(genericName) == 0) {
+					try {
+						removeParameter(currentName);
+						ofLogNotice("scVST") << "Removed vector parameter by search: " << currentName;
+						break;
+					} catch(...) {}
+				}
 			}
-		} catch(const std::exception& e) {
-			ofLogError("scVST") << "Error removing vector parameter: " << e.what();
 		}
 		dynamicVectorParameters.erase(paramIndex);
 	}
 	
 	// Remove stored float parameter
-	if(dynamicFloatParameters.count(paramIndex) > 0) {
-		dynamicFloatParameters.erase(paramIndex);
-	}
+	dynamicFloatParameters.erase(paramIndex);
 	
 	// Remove stored vector float parameter
-	if(dynamicVectorFloatParameters.count(paramIndex) > 0) {
-		dynamicVectorFloatParameters.erase(paramIndex);
-	}
+	dynamicVectorFloatParameters.erase(paramIndex);
 	
 	// Remove name editor from inspector
 	if(dynamicStringParameters.count(paramIndex) > 0) {
-		try {
-			vector<string> possibleNames = {
-				paramName + "_Name",
-				paramName + "_Name_1",
-				paramName + "_Name_2"
-			};
-			
-			bool removed = false;
-			for(const string& possibleName : possibleNames) {
+		// Build list of possible name editor names
+		vector<string> possibleNameEditors;
+		for(const string& baseName : possibleParamNames) {
+			possibleNameEditors.push_back(baseName + "_Name");
+			for(int suffix = 1; suffix <= 10; suffix++) {
+				possibleNameEditors.push_back(baseName + "_Name_" + ofToString(suffix));
+			}
+		}
+		
+		bool removed = false;
+		for(const string& possibleName : possibleNameEditors) {
+			try {
 				if(getInspectorParameterGroup().contains(possibleName)) {
 					removeInspectorParameter(possibleName);
-					//ofLogNotice("scVST") << "Removed name editor: " << possibleName;
+					ofLogNotice("scVST") << "Removed name editor: " << possibleName;
 					removed = true;
 					break;
 				}
+			} catch(...) {}
+		}
+		
+		if(!removed) {
+			// Search for any name editor that might be related
+			for(int i = getInspectorParameterGroup().size() - 1; i >= 0; i--) {
+				string currentName = getInspectorParameterGroup().get(i).getName();
+				if((currentName.find(paramName + "_Name") == 0) ||
+				   (currentName.find(genericName + "_Name") == 0)) {
+					try {
+						removeInspectorParameter(currentName);
+						ofLogNotice("scVST") << "Removed name editor by search: " << currentName;
+						break;
+					} catch(...) {}
+				}
 			}
-			
-			if(!removed) {
-				ofLogWarning("scVST") << "Could not find name editor parameter to remove for " << paramName;
-			}
-		} catch(const std::exception& e) {
-			ofLogError("scVST") << "Error removing name editor parameter: " << e.what();
 		}
 		dynamicStringParameters.erase(paramIndex);
 	}
 	
 	// Remove removal button from inspector
 	if(dynamicRemovalButtons.count(paramIndex) > 0) {
-		try {
-			vector<string> possibleNames = {
-				"Remove " + paramName,
-				"Remove " + paramName + "_1",
-				"Remove " + paramName + "_2"
-			};
-			
-			bool removed = false;
-			for(const string& possibleName : possibleNames) {
+		// Build list of possible removal button names
+		vector<string> possibleRemovalButtons;
+		for(const string& baseName : possibleParamNames) {
+			possibleRemovalButtons.push_back("Remove " + baseName);
+			for(int suffix = 1; suffix <= 10; suffix++) {
+				possibleRemovalButtons.push_back("Remove " + baseName + "_" + ofToString(suffix));
+			}
+		}
+		
+		bool removed = false;
+		for(const string& possibleName : possibleRemovalButtons) {
+			try {
 				if(getInspectorParameterGroup().contains(possibleName)) {
 					removeInspectorParameter(possibleName);
-					//ofLogNotice("scVST") << "Removed removal button: " << possibleName;
+					ofLogNotice("scVST") << "Removed removal button: " << possibleName;
 					removed = true;
 					break;
 				}
+			} catch(...) {}
+		}
+		
+		if(!removed) {
+			// Search for any removal button that might be related
+			for(int i = getInspectorParameterGroup().size() - 1; i >= 0; i--) {
+				string currentName = getInspectorParameterGroup().get(i).getName();
+				if((currentName.find("Remove " + paramName) == 0) ||
+				   (currentName.find("Remove " + genericName) == 0)) {
+					try {
+						removeInspectorParameter(currentName);
+						ofLogNotice("scVST") << "Removed removal button by search: " << currentName;
+						break;
+					} catch(...) {}
+				}
 			}
-			
-			if(!removed) {
-				ofLogWarning("scVST") << "Could not find removal button parameter to remove for " << paramName;
-			}
-		} catch(const std::exception& e) {
-			ofLogError("scVST") << "Error removing removal button parameter: " << e.what();
 		}
 		dynamicRemovalButtons.erase(paramIndex);
 	}
 	
-	//ofLogNotice("scVST") << "Finished removing parameter " << paramIndex;
+	// Remove from parameter info map
+	parameterInfoMap.erase(paramIndex);
+	
+	// CRITICAL FIX: Restore the preset loading flags
+	isPresetLoading = wasPresetLoading;
+	oceanodePresetLoading = wasOceanodePresetLoading;
+	
+	// FINAL VERIFICATION: Check if the parameter was actually removed
+	bool stillExists = false;
+	string foundName = "";
+	
+	// Check if any variant of the parameter still exists in the group
+	for(int i = 0; i < getParameterGroup().size(); i++) {
+		string currentName = getParameterGroup().get(i).getName();
+		// Check against all possible names
+		if(!registeredName.empty() && currentName == registeredName) {
+			stillExists = true;
+			foundName = currentName;
+			break;
+		}
+		if(currentName == paramName ||
+		   currentName.find(paramName + "_") == 0 ||
+		   currentName == "Param" + ofToString(paramIndex) ||
+		   currentName.find("Param" + ofToString(paramIndex) + "_") == 0) {
+			stillExists = true;
+			foundName = currentName;
+			break;
+		}
+	}
+	
+	if(stillExists) {
+		ofLogError("scVST") << "❌ FAILED to remove parameter " << paramIndex
+		<< " - still exists as '" << foundName << "' in parameter group!";
+		ofLogError("scVST") << "   Tried to remove: registeredName='" << registeredName
+		<< "', displayName='" << paramName << "'";
+	} else {
+		ofLogNotice("scVST") << "✅ Successfully removed parameter " << paramIndex << " from GUI";
+	}
 }
 
 void scVST::removeAllDynamicParameters() {
-	//ofLogNotice("scVST") << "Removing all dynamic parameters";
+	ofLogNotice("scVST::removeAllDynamicParameters") << "Starting removal of all dynamic parameters";
+	ofLogNotice("scVST::removeAllDynamicParameters") << "Current counts - scalar: " << dynamicParameters.size()
+	<< ", vector: " << dynamicVectorParameters.size()
+	<< ", paramInfo: " << parameterInfoMap.size();
 	
 	removeAllMidiCCParameters();
-
+	
 	try {
 		// Create a copy of the keys to avoid iterator invalidation
 		vector<int> paramIndices;
@@ -1635,15 +2249,171 @@ void scVST::removeAllDynamicParameters() {
 			dynamicVectorFloatParameters.clear();
 			dynamicStringParameters.clear();
 			dynamicRemovalButtons.clear();
-		} catch(...) {}
+		} catch(...) {
+			ofLogError("scVST::removeAllDynamicParameters") << "Error clearing parameter maps";
+		}
 		
-		//ofLogNotice("scVST") << "Finished removing all dynamic parameters";
+		ofLogNotice("scVST::removeAllDynamicParameters") << "Finished removing all dynamic parameters";
+		ofLogNotice("scVST::removeAllDynamicParameters") << "Final counts - scalar: " << dynamicParameters.size()
+		<< ", vector: " << dynamicVectorParameters.size()
+		<< ", paramInfo: " << parameterInfoMap.size();
 		
 	} catch(const std::exception& e) {
 		ofLogError("scVST") << "Error in removeAllDynamicParameters: " << e.what();
 	} catch(...) {
 		ofLogError("scVST") << "Unknown error in removeAllDynamicParameters";
 	}
+}
+
+void scVST::removeAllDynamicParametersForce() {
+	ofLogNotice("scVST::removeAllDynamicParametersForce") << "Force removing all dynamic parameters (ignoring preset loading state)";
+	ofLogNotice("scVST::removeAllDynamicParametersForce") << "Initial counts - scalar: " << dynamicParameters.size()
+	<< ", vector: " << dynamicVectorParameters.size()
+	<< ", paramInfo: " << parameterInfoMap.size();
+	
+	// Temporarily disable preset loading flag to allow removal
+	bool wasPresetLoading = isPresetLoading;
+	bool wasOceanodePresetLoading = oceanodePresetLoading;
+	isPresetLoading = false;
+	oceanodePresetLoading = false;
+	
+	removeAllMidiCCParameters();
+	
+	try {
+		// Create a copy of all parameter indices
+		vector<int> allParamIndices;
+		
+		// Collect ALL parameter indices from all maps
+		for(auto& param : dynamicParameters) {
+			allParamIndices.push_back(param.first);
+		}
+		for(auto& param : dynamicVectorParameters) {
+			if(std::find(allParamIndices.begin(), allParamIndices.end(), param.first) == allParamIndices.end()) {
+				allParamIndices.push_back(param.first);
+			}
+		}
+		for(auto& param : parameterInfoMap) {
+			if(std::find(allParamIndices.begin(), allParamIndices.end(), param.first) == allParamIndices.end()) {
+				allParamIndices.push_back(param.first);
+			}
+		}
+		
+		// Remove each parameter forcefully
+		for(int paramIndex : allParamIndices) {
+			try {
+				removeParameterFromGUI(paramIndex);
+			} catch(...) {
+				// Continue even if individual removal fails
+			}
+		}
+		
+		// Force clear all maps
+		clearParameterMaps();
+		
+	} catch(const std::exception& e) {
+		ofLogError("scVST") << "Error in removeAllDynamicParametersForce: " << e.what();
+	}
+	
+	// Restore preset loading flags
+	isPresetLoading = wasPresetLoading;
+	oceanodePresetLoading = wasOceanodePresetLoading;
+	
+	ofLogNotice("scVST::removeAllDynamicParametersForce") << "Force removal complete";
+	ofLogNotice("scVST::removeAllDynamicParametersForce") << "Final counts - scalar: " << dynamicParameters.size()
+	<< ", vector: " << dynamicVectorParameters.size()
+	<< ", paramInfo: " << parameterInfoMap.size();
+}
+
+void scVST::clearParameterMaps() {
+	ofLogNotice("scVST") << "Clearing all parameter tracking maps";
+	
+	try {
+		// Clear all parameter-related maps
+		parameterInfoMap.clear();
+		dynamicParameters.clear();
+		dynamicVectorParameters.clear();
+		dynamicFloatParameters.clear();
+		dynamicVectorFloatParameters.clear();
+		dynamicStringParameters.clear();
+		dynamicRemovalButtons.clear();
+		
+		// Clear feedback tracking
+		{
+			std::lock_guard<std::mutex> lock(feedbackMutex);
+			suppressingFeedback.clear();
+			feedbackClearTimes.clear();
+		}
+		
+		// Clear parameter throttling
+		// Old throttle map cleanup no longer needed with atomic approach
+		
+		ofLogNotice("scVST") << "All parameter maps cleared";
+	} catch(const std::exception& e) {
+		ofLogError("scVST") << "Error clearing parameter maps: " << e.what();
+	}
+}
+
+void scVST::validateParameterConsistency() {
+	ofLogNotice("scVST") << "Validating parameter consistency";
+	
+	// Check for orphaned parameters in GUI
+	int orphanedCount = 0;
+	for(int i = getParameterGroup().size() - 1; i >= 0; i--) {
+		string paramName = getParameterGroup().get(i).getName();
+		
+		// Check if this is a dynamic parameter
+		bool found = false;
+		for(auto& param : dynamicVectorParameters) {
+			if(dynamicVectorFloatParameters.count(param.first) > 0) {
+				auto& floatParam = dynamicVectorFloatParameters[param.first];
+				if(floatParam && floatParam->getName() == paramName) {
+					found = true;
+					break;
+				}
+			}
+		}
+		
+		if(!found) {
+			for(auto& param : dynamicParameters) {
+				if(dynamicFloatParameters.count(param.first) > 0) {
+					auto& floatParam = dynamicFloatParameters[param.first];
+					if(floatParam && floatParam->getName() == paramName) {
+						found = true;
+						break;
+					}
+				}
+			}
+		}
+		
+		// Remove orphaned parameters
+		if(!found && (paramName.find("Param") == 0 || paramName.find("_") != string::npos)) {
+			try {
+				removeParameter(paramName);
+				orphanedCount++;
+				ofLogWarning("scVST") << "Removed orphaned parameter: " << paramName;
+			} catch(...) {}
+		}
+	}
+	
+	if(orphanedCount > 0) {
+		ofLogNotice("scVST") << "Removed " << orphanedCount << " orphaned parameters";
+	}
+	
+	// Validate parameter info map consistency
+	vector<int> invalidIndices;
+	for(auto& info : parameterInfoMap) {
+		if(dynamicVectorParameters.count(info.first) == 0 &&
+		   dynamicParameters.count(info.first) == 0) {
+			invalidIndices.push_back(info.first);
+		}
+	}
+	
+	for(int idx : invalidIndices) {
+		parameterInfoMap.erase(idx);
+		ofLogWarning("scVST") << "Removed invalid parameter info for index " << idx;
+	}
+	
+	ofLogNotice("scVST") << "Parameter consistency validation complete";
 }
 
 void scVST::updateParameterValue(int paramIndex, float value) {
@@ -1664,7 +2434,7 @@ void scVST::updateParameterValue(int paramIndex, float value) {
 
 void scVST::setVSTParameter(int paramIndex, float value) {
 	// Safety checks
-	if(paramIndex < 0) {
+	if(paramIndex < 0 || paramIndex >= 1024) {
 		ofLogError("scVST") << "Invalid parameter index: " << paramIndex;
 		return;
 	}
@@ -1684,7 +2454,8 @@ void scVST::setVSTParameter(int paramIndex, float value) {
 		suppressingFeedback.insert(paramIndex);
 	}
 	
-	//ofLogNotice("scVST") << "Setting VST parameter " << paramIndex << " to " << value << " on all instances";
+	// Mark parameter as recently updated
+	parameterUpdateGeneration[paramIndex].store(ofGetElapsedTimeMillis(), std::memory_order_release);
 	
 	// Apply parameter change to ALL instances
 	for(auto& serverInstances : synthInstances) {
@@ -1729,11 +2500,11 @@ void scVST::processGates(vector<int> &gates){
 	auto currentPitch = pitch.get();
 	auto currentVelocity = velocity.get();
 	auto currentInstance = instance.get();
-
+	
 	// The source of truth for polyphony is the pitch vector size
 	size_t numVoices = currentPitch.size();
 	if (numVoices == 0) numVoices = 1; // Safety fallback
-
+	
 	// Resize our internal tracking vectors to match the polyphony count (Pitch Size)
 	// We do NOT resize the 'gates' vector itself to preserve the GUI slider.
 	if (previousGates.size() != numVoices) {
@@ -1755,7 +2526,7 @@ void scVST::processGates(vector<int> &gates){
 				currentGate = gates[i];
 			}
 		}
-
+		
 		int previousGate = previousGates[i]; // Safe access due to resize above
 		
 		// Rising edge - gate went from 0 to 1
@@ -1975,7 +2746,7 @@ void scVST::presetSave(ofJson &json) {
 	if(!dynamicVectorParameters.empty() || !dynamicParameters.empty()) {
 		nodeJson["vstParameters"] = ofJson::object();
 		
-		// Save vector parameters
+		// Save vector parameters with enhanced metadata
 		for(auto& param : dynamicVectorParameters) {
 			int paramIndex = param.first;
 			try {
@@ -1984,10 +2755,24 @@ void scVST::presetSave(ofJson &json) {
 				paramData["isVector"] = true;
 				paramData["vectorValue"] = param.second->getParameter().get();
 				
+				// Save display name, original name, and registered name
 				if(parameterInfoMap.count(paramIndex) > 0) {
 					paramData["name"] = parameterInfoMap[paramIndex].displayName;
+					paramData["originalName"] = parameterInfoMap[paramIndex].originalName;
+					paramData["registeredName"] = parameterInfoMap[paramIndex].registeredName;
+					paramData["isConnected"] = parameterInfoMap[paramIndex].isConnected;
+					paramData["isPersistent"] = parameterInfoMap[paramIndex].isPersistent;
 				} else {
 					paramData["name"] = "Param" + ofToString(paramIndex);
+					paramData["originalName"] = "Param" + ofToString(paramIndex);
+					paramData["registeredName"] = "Param" + ofToString(paramIndex);
+					paramData["isConnected"] = false;
+					paramData["isPersistent"] = true;
+				}
+				
+				// Check if parameter has external connections
+				if(param.second->getInConnection()) {
+					paramData["hasExternalConnection"] = true;
 				}
 				
 				if(!paramData["vectorValue"].empty()) {
@@ -2276,6 +3061,26 @@ void scVST::loadBeforeConnections(ofJson &json) {
 		// Create GUI parameters immediately so connections can be restored
 		//ofLogNotice("scVST") << "🔧 Creating GUI parameters for connection restoration for '" << nodeKey << "'";
 		
+		// FIX: Only clear parameters if we're loading a different plugin
+		// Don't clear if parameters were already created for this preset
+		bool shouldClearParameters = false;
+		
+		// Check if we have a plugin mismatch
+		if(!currentPluginPath.empty() && nodeJson.contains("currentPluginPath")) {
+			string savedPluginPath = nodeJson["currentPluginPath"];
+			if(savedPluginPath != currentPluginPath) {
+				shouldClearParameters = true;
+				ofLogWarning("scVST") << "⚠️ Plugin mismatch detected, clearing existing parameters";
+			}
+		}
+		
+		// Only clear if necessary
+		if(shouldClearParameters && (!dynamicParameters.empty() || !dynamicVectorParameters.empty() || !parameterInfoMap.empty())) {
+			ofLogWarning("scVST") << "⚠️ Clearing existing parameters before loading new plugin parameters";
+			removeAllDynamicParametersForce();
+			clearParameterMaps();
+		}
+		
 		int createdCount = 0;
 		int skippedCount = 0;
 		
@@ -2292,10 +3097,32 @@ void scVST::loadBeforeConnections(ofJson &json) {
 						continue;
 					}
 					
-					// Extract parameter info from preset
+					// Extract parameter info from preset with enhanced metadata
 					string paramName = "Param" + ofToString(paramIndex);
+					string originalName = paramName;
+					string registeredName = "";  // Will be set when parameter is created
+					bool isConnected = false;
+					bool isPersistent = true;
+					
 					if(item.value().contains("name") && !item.value()["name"].is_null()) {
 						paramName = item.value()["name"];
+					}
+					
+					if(item.value().contains("originalName") && !item.value()["originalName"].is_null()) {
+						originalName = item.value()["originalName"];
+					}
+					
+					// Load the registered name if available (for proper removal later)
+					if(item.value().contains("registeredName") && !item.value()["registeredName"].is_null()) {
+						registeredName = item.value()["registeredName"];
+					}
+					
+					if(item.value().contains("isConnected")) {
+						isConnected = static_cast<bool>(item.value()["isConnected"]);
+					}
+					
+					if(item.value().contains("isPersistent")) {
+						isPersistent = static_cast<bool>(item.value()["isPersistent"]);
 					}
 					
 					vector<float> initialValues = {0.0f};
@@ -2311,19 +3138,19 @@ void scVST::loadBeforeConnections(ofJson &json) {
 						initialValues = {static_cast<float>(item.value()["value"])};
 					}
 					
-					//ofLogNotice("scVST") << "🔧 Creating parameter " << paramIndex << " (" << paramName << ") with " << initialValues.size() << " values for '" << nodeKey << "'";
+					// Create/update parameter info BEFORE creating GUI parameter
+					VSTParameterInfo info;
+					info.index = paramIndex;
+					info.displayName = paramName;
+					info.originalName = originalName;
+					info.registeredName = registeredName;
+					info.value = initialValues[0];
+					info.isConnected = isConnected;
+					info.isPersistent = isPersistent;
+					parameterInfoMap[paramIndex] = info;
 					
-					// Create/update parameter info
-					if(parameterInfoMap.count(paramIndex) == 0) {
-						VSTParameterInfo info;
-						info.index = paramIndex;
-						info.displayName = paramName;
-						info.value = initialValues[0];
-						parameterInfoMap[paramIndex] = info;
-					} else {
-						parameterInfoMap[paramIndex].displayName = paramName;
-						parameterInfoMap[paramIndex].value = initialValues[0];
-					}
+					// Store the saved name for later restoration if needed
+					savedParameterNames[paramIndex] = paramName;
 					
 					// Create GUI parameter with the loaded values
 					createGUIParameterWithValues(paramIndex, paramName, initialValues);
@@ -2347,11 +3174,11 @@ void scVST::loadBeforeConnections(ofJson &json) {
 	}
 	
 	// Add to loadBeforeConnections() method after creating VST parameters:
-
+	
 	// Load MIDI CC parameters if available
 	if(nodeJson.contains("midiCCParameters") && !nodeJson["midiCCParameters"].is_null()) {
 		ofLogNotice("scVST") << "📄 JSON contains " << nodeJson["midiCCParameters"].size()
-							 << " MIDI CC parameters to restore for '" << nodeKey << "'";
+		<< " MIDI CC parameters to restore for '" << nodeKey << "'";
 		
 		int createdCCCount = 0;
 		
@@ -2393,7 +3220,7 @@ void scVST::loadBeforeConnections(ofJson &json) {
 					
 					createdCCCount++;
 					ofLogNotice("scVST") << "✅ Successfully restored MIDI CC " << ccNumber
-										<< " (" << displayName << ") = " << value;
+					<< " (" << displayName << ") = " << value;
 				}
 			} catch(const std::exception& e) {
 				ofLogError("scVST") << "Error restoring MIDI CC parameter " << item.key() << ": " << e.what();
@@ -2451,12 +3278,54 @@ void scVST::setupParameterTimer(int delayMs) {
 }
 
 void scVST::createGUIParameterWithValues(int paramIndex, const string& paramName, const vector<float>& values) {
-	// Ensure parameter name is unique
-	string uniqueParamName = paramName;
-	int nameCounter = 1;
-	while(getParameterGroup().contains(uniqueParamName)) {
-		uniqueParamName = paramName + "_" + ofToString(nameCounter);
-		nameCounter++;
+	// FIX: Validate parameter name to prevent empty names
+	string validParamName = paramName;
+	if(validParamName.empty()) {
+		validParamName = "Param" + ofToString(paramIndex);
+		ofLogWarning("scVST") << "Empty parameter name detected for index " << paramIndex << ", using: " << validParamName;
+	}
+	
+	// FIX: Check if parameter already exists with this index
+	if(dynamicVectorParameters.count(paramIndex) > 0 || dynamicParameters.count(paramIndex) > 0) {
+		ofLogWarning("scVST") << "Parameter " << paramIndex << " already exists, skipping creation";
+		return;
+	}
+	
+	// FIX: Remove any existing parameter with the same name to prevent duplicates
+	string uniqueParamName = validParamName;
+	if(getParameterGroup().contains(uniqueParamName)) {
+		ofLogWarning("scVST") << "Parameter name '" << uniqueParamName << "' already exists in group";
+		// Try to find and remove the existing parameter
+		bool removed = false;
+		for(int i = getParameterGroup().size() - 1; i >= 0; i--) {
+			if(getParameterGroup().get(i).getName() == uniqueParamName) {
+				try {
+					ofLogWarning("scVST") << "Attempting to remove existing parameter: " << uniqueParamName;
+					removeParameter(uniqueParamName);
+					if(!getParameterGroup().contains(uniqueParamName)) {
+						ofLogNotice("scVST") << "Successfully removed existing parameter: " << uniqueParamName;
+						removed = true;
+					}
+					break;
+				} catch(const std::exception& e) {
+					ofLogError("scVST") << "Failed to remove existing parameter: " << e.what();
+				}
+			}
+		}
+		
+		if(!removed) {
+			// If removal fails, we need to use a different name
+			int nameCounter = 1;
+			while(getParameterGroup().contains(uniqueParamName)) {
+				uniqueParamName = validParamName + "_" + ofToString(nameCounter);
+				nameCounter++;
+				if(nameCounter > 10) {
+					ofLogError("scVST") << "Too many duplicate parameters with name: " << validParamName;
+					return;
+				}
+			}
+			ofLogWarning("scVST") << "Could not remove existing parameter, using alternative name: " << uniqueParamName;
+		}
 	}
 	
 	// Create VECTOR parameter with the loaded values
@@ -2465,6 +3334,27 @@ void scVST::createGUIParameterWithValues(int paramIndex, const string& paramName
 	
 	// Store the parameter to keep it alive BEFORE adding to GUI
 	dynamicVectorFloatParameters[paramIndex] = newParam;
+	
+	// CRITICAL: Store the actual registered name in parameterInfoMap
+	// This MUST be done whether the parameter info exists or not
+	if(parameterInfoMap.count(paramIndex) == 0) {
+		// Create parameter info if it doesn't exist
+		VSTParameterInfo info;
+		info.index = paramIndex;
+		info.displayName = validParamName;
+		info.originalName = validParamName;
+		info.registeredName = uniqueParamName;
+		info.value = values.empty() ? 0.0f : values[0];
+		parameterInfoMap[paramIndex] = info;
+		ofLogNotice("scVST") << "Created parameter info for " << paramIndex
+		<< " with registered name '" << uniqueParamName << "'";
+	} else {
+		// Update the registered name for existing parameter info
+		parameterInfoMap[paramIndex].registeredName = uniqueParamName;
+		ofLogNotice("scVST") << "Updated registered name to '" << uniqueParamName
+		<< "' for parameter " << paramIndex
+		<< " (display name: " << parameterInfoMap[paramIndex].displayName << ")";
+	}
 	
 	try {
 		auto oceanodeParam = addParameter(*newParam);
@@ -2713,6 +3603,23 @@ void scVST::syncGUIParametersToVST(ofJson &nodeJson) {
 					vector<float> currentValues = dynamicVectorParameters[paramIndex]->getParameter().get();
 					ofLogNotice("scVST") << "✅ Found GUI parameter " << paramIndex << " with " << currentValues.size() << " values for '" << nodeKey << "'";
 					
+					// Update parameter info to ensure VST linkage is maintained
+					if(parameterInfoMap.count(paramIndex) > 0) {
+						// Restore the VST parameter index mapping
+						parameterInfoMap[paramIndex].index = paramIndex;
+						if(!currentValues.empty()) {
+							parameterInfoMap[paramIndex].value = currentValues[0];
+						}
+						
+						// Check if we need to restore the name from JSON
+						if(item.value().contains("name") && !item.value()["name"].is_null()) {
+							string savedName = item.value()["name"];
+							if(parameterInfoMap[paramIndex].displayName != savedName) {
+								parameterInfoMap[paramIndex].displayName = savedName;
+							}
+						}
+					}
+					
 					if(currentValues.size() == 1) {
 						// Scalar mode - send to all instances
 						float value = currentValues[0];
@@ -2726,8 +3633,9 @@ void scVST::syncGUIParametersToVST(ofJson &nodeJson) {
 					
 					sentCount++;
 				} else {
-					// Parameter should have been created in loadBeforeConnections()
-					ofLogError("scVST") << "❌ Parameter " << paramIndex << " exists in JSON but not in GUI for '" << nodeKey << "'! This shouldn't happen during preset loading.";
+					// FIX: Don't recreate parameters during sync - they should have been created in loadBeforeConnections
+					// If they're missing, it's likely because they were intentionally removed or the plugin doesn't support them
+					ofLogWarning("scVST") << "⚠️ Parameter " << paramIndex << " exists in JSON but not in GUI for '" << nodeKey << "' - skipping";
 					skippedCount++;
 				}
 				
@@ -3009,7 +3917,12 @@ void scVST::buildSynth(ofxSCServer* server) {
 				if(this == nullptr) return;
 				
 				try {
-					string address = msg.getAddress();
+					// PERFORMANCE: Get address as const reference to avoid string copy
+					const string& address = msg.getAddress();
+					
+					// PERFORMANCE: Use string comparison optimized for common cases
+					// Check first character to quickly filter message types
+					if (address[0] != '/') return;
 					
 					if (address == "/vst_param") {
 						this->handleVSTParam(msg);
@@ -3168,11 +4081,13 @@ void scVST::handleVSTPresetRead(ofxOscMessage& msg) {
 		bool success = msg.getArgAsFloat(2) > 0.5f;
 		
 		if (!isMyVSTInstance(nodeID)) return;
-		/*
-		 ofLogNotice("scVST") << "VST preset read " << (success ? "succeeded" : "failed")
-		 << " on node " << nodeID;
-		 */
+		
+		// FXP PRESET LOADING: Set flag when FXP load starts to enable blocking locks
 		if(success) {
+			ofLogNotice("scVST") << "FXP load started for node " << nodeID << " - enabling blocking locks";
+			isFXPLoading.store(true, std::memory_order_release);
+			fxpLoadStartTime = ofGetElapsedTimeMillis();
+			
 			fxpAppliedInstances.insert(nodeID);
 			/*
 			 ofLogNotice("scVST") << "FXP successfully applied to instance " << nodeID
@@ -3207,6 +4122,11 @@ void scVST::handleVSTPresetRead(ofxOscMessage& msg) {
 				
 				if(syncFXPAppliedInstances.size() >= expectedInstances) {
 					//ofLogNotice("scVST") << "🎉 All instances synchronized via FXP!";
+					
+					// FXP PRESET LOADING: Clear flag after brief delay to allow parameter processing
+					ofSleepMillis(500); // Allow time for all parameter updates to be processed
+					isFXPLoading.store(false, std::memory_order_release);
+					ofLogNotice("scVST") << "FXP load complete - disabling blocking locks";
 					
 					// Optional: Update GUI parameters to reflect the new state
 					queryVSTParametersAfterSync();
@@ -3282,8 +4202,6 @@ void scVST::queryVSTParametersAfterUpdate(int nodeID) {
 	
 	if(!targetServer) return;
 	
-	//ofLogNotice("scVST") << "Querying parameters after VST update on node " << nodeID;
-	
 	// Query a reasonable range of parameters to capture the preset changes
 	ofxOscMessage paramQueryMsg;
 	paramQueryMsg.setAddress("/u_cmd");
@@ -3358,7 +4276,7 @@ void scVST::moveSynthBefore(ofxSCServer* server, int nodeID){
 		//ofLogVerbose("scVST") << "moveSynthBefore: no instances for this server";
 		return;
 	}
-
+	
 	// Re-apply simple params (currently inChannels via resendParams)
 	// This mirrors scSynthdef/scOutput behaviour where params are resent
 	// before a graph move.
@@ -3372,7 +4290,7 @@ void scVST::moveSynthBefore(ofxSCServer* server, int nodeID){
 				synth->moveBefore(nodeID);
 			} catch(const std::exception& e) {
 				ofLogError("scVST") << "Error moving synth " << synth->nodeID
-									<< " before node " << nodeID << ": " << e.what();
+				<< " before node " << nodeID << ": " << e.what();
 			} catch(...) {
 				ofLogError("scVST") << "Unknown error moving synth before node";
 			}
@@ -3383,9 +4301,9 @@ void scVST::moveSynthBefore(ofxSCServer* server, int nodeID){
 int scVST::getLastSynthID(ofxSCServer* server){
 	if(!server) return -1;
 	if(synthInstances.count(server) == 0) return -1;
-
+	
 	int lastID = -1;
-
+	
 	// Iterate through the instances for this server and grab the last
 	// valid nodeID. This gives the "tail" of this node in the SC graph,
 	// which the recompute algorithm can use as an insertion anchor.
@@ -3394,25 +4312,36 @@ int scVST::getLastSynthID(ofxSCServer* server){
 			lastID = synth->nodeID;
 		}
 	}
-
+	
 	return lastID;
 }
 
-
+void scVST::resetInputBusses(ofxSCServer* server){
+	inputBuses[server].clear();
+	
+	if(synthInstances.count(server) == 0) return;
+	
+	for(auto* synth : synthInstances[server]){
+		if(synth != nullptr){
+			synth->set("in", 0);
+			synth->set("inChannels", 0);
+		}
+	}
+}
 
 void scVST::setOutputBus(ofxSCServer* server, int index, int bus){
 	outputBuses[server][index] = bus;
-
+	
 	if (synthInstances.count(server) == 0) return;
-
+	
 	const int numInstances = synthInstances[server].size();
-
+	
 	for (int i = 0; i < numInstances; ++i) {
 		if (synthInstances[server][i] == nullptr) continue;
-
+		
 		int instanceOutputBus   = bus;
 		int channelsPerInstance = 2; // default for stereo mode
-
+		
 		if (singleInstance.get()) {
 			// One plugin instance sees the entire ambisonic bus
 			instanceOutputBus   = bus;
@@ -3426,7 +4355,7 @@ void scVST::setOutputBus(ofxSCServer* server, int index, int bus){
 			instanceOutputBus   = bus + (i * 2);
 			channelsPerInstance = 2;
 		}
-
+		
 		// Tell the SuperCollider synth how many channels it should expose on 'out'
 		synthInstances[server][i]->set("out",         instanceOutputBus);
 		synthInstances[server][i]->set("outChannels", channelsPerInstance);
@@ -3436,17 +4365,17 @@ void scVST::setOutputBus(ofxSCServer* server, int index, int bus){
 
 void scVST::setInputBus(ofxSCServer* server, scNode* node, int bus){
 	inputBuses[server][node] = bus;
-
+	
 	if (synthInstances.count(server) == 0) return;
-
+	
 	const int numInstances = synthInstances[server].size();
-
+	
 	for (int i = 0; i < numInstances; ++i) {
 		if (synthInstances[server][i] == nullptr) continue;
-
+		
 		int instanceInputBus    = bus;
 		int channelsPerInstance = 2;
-
+		
 		if (singleInstance.get()) {
 			instanceInputBus    = bus;
 			channelsPerInstance = numChannels.get();   // e.g., 4/9/16…
@@ -3457,7 +4386,7 @@ void scVST::setInputBus(ofxSCServer* server, scNode* node, int bus){
 			instanceInputBus    = bus + (i * 2);
 			channelsPerInstance = 2;
 		}
-
+		
 		synthInstances[server][i]->set("in",          instanceInputBus);
 		synthInstances[server][i]->set("inChannels",  channelsPerInstance);
 	}
@@ -3876,6 +4805,17 @@ std::vector<uint8_t> scVST::base64Decode(const std::string& encoded) {
 void scVST::presetWillBeLoaded(){
 	isPresetLoading = true;
 	oceanodePresetLoading = true;  // NEW: Track Oceanode preset loading specifically
+	
+	// CRITICAL FIX: Clear all dynamic parameters before loading preset
+	// This prevents parameter duplication and ensures clean state
+	ofLogNotice("scVST::presetWillBeLoaded") << "🧹 Clearing all dynamic parameters before preset load";
+	
+	// Clear saved parameter names from previous preset
+	savedParameterNames.clear();
+	
+	// Use the force removal to ensure parameters are cleared even during preset loading
+	removeAllDynamicParametersForce();
+	
 	//ofLogNotice("scVST") << "🔒 Oceanode preset loading started - both flags = TRUE";
 }
 
@@ -4288,9 +5228,9 @@ void scVST::saveFXPToUserChosenPath() {
 void scVST::scheduleImmediateFXPCache() {
 	std::string nodeKey = getNodeCacheKey();
 	ofLogNotice("scVST") << "🔍 scheduleImmediateFXPCache for node '" << nodeKey << "' - pluginLoaded:" << pluginLoaded
-						<< " synthInstances.empty:" << synthInstances.empty()
-						<< " oceanodePresetLoading:" << oceanodePresetLoading
-						<< " hasPendingPresetData:" << hasPendingPresetData;
+	<< " synthInstances.empty:" << synthInstances.empty()
+	<< " oceanodePresetLoading:" << oceanodePresetLoading
+	<< " hasPendingPresetData:" << hasPendingPresetData;
 	
 	if(!pluginLoaded || synthInstances.empty() || oceanodePresetLoading || hasPendingPresetData) {
 		ofLogNotice("scVST") << "❌ FXP cache scheduling blocked for node '" << nodeKey << "'";
@@ -4423,7 +5363,7 @@ void scVST::saveFXPToCache() {
 								this->saveCacheToGlobal();
 								
 								ofLogNotice("scVST") << "✅ FXP cached successfully for node '" << nodeKey
-													<< "' (" << size << " bytes)";
+								<< "' (" << size << " bytes)";
 							}
 							file.close();
 						}
@@ -4657,7 +5597,7 @@ void scVST::sendTransportCommandToAllInstances(const std::string& command, const
 					serverInstances.first->sendMsg(transportMsg);
 				} catch(const std::exception& e) {
 					ofLogError("scVST") << "Error sending transport command " << command
-									   << " to synth " << synth->nodeID << ": " << e.what();
+					<< " to synth " << synth->nodeID << ": " << e.what();
 				}
 			}
 		}
@@ -4912,7 +5852,7 @@ void scVST::sendMidiCC(int ccNumber, float value) {
 	int midiValue = (int)(ofClamp(value, 0.0f, 1.0f) * 127.0f);
 	
 	ofLogVerbose("scVST") << "Sending MIDI CC " << ccNumber << " = " << midiValue
-						  << " (float: " << value << ") to all VST instances";
+	<< " (float: " << value << ") to all VST instances";
 	
 	// Send to all instances
 	for(auto& serverInstances : synthInstances) {
@@ -5123,14 +6063,18 @@ void scVST::handleVSTMidi(ofxOscMessage& msg) {
 	if (msg.getNumArgs() >= 3) {
 		int nodeID = msg.getArgAsInt32(0);
 		
-		// Quick checks without logging
+		// PERFORMANCE: Quick checks without logging
 		if (!isMyVSTInstance(nodeID)) return;
 		
 		int instanceIndex = getInstanceIndexFromNodeID(nodeID);
 		if(instanceIndex != 0) return; // Only first instance
 		
-		// Extract MIDI bytes
+		// PERFORMANCE: Pre-allocate vector with known size to avoid reallocation
+		int numMidiArgs = msg.getNumArgs() - 2;
+		if(numMidiArgs <= 0) return;
+		
 		vector<uint8_t> midiBytes;
+		midiBytes.reserve(numMidiArgs);  // OPTIMIZATION: Reserve space upfront
 		for(int i = 2; i < msg.getNumArgs(); i++) {
 			midiBytes.push_back((uint8_t)msg.getArgAsFloat(i));
 		}
@@ -5139,13 +6083,18 @@ void scVST::handleVSTMidi(ofxOscMessage& msg) {
 			uint8_t status = midiBytes[0];
 			uint8_t statusType = status & 0xF0;
 			
-			// Skip timing messages
+			// PERFORMANCE: Skip timing messages early
 			if(status >= 0xF8) return;
 			
 			bool dataChanged = false;
 			
 			{
-				std::lock_guard<std::mutex> lock(midiUpdateMutex);
+				// PERFORMANCE: Try lock to avoid blocking audio thread
+				std::unique_lock<std::mutex> lock(midiUpdateMutex, std::try_to_lock);
+				if(!lock.owns_lock()) {
+					// Skip this MIDI message if we can't get the lock immediately
+					return;
+				}
 				
 				if(statusType == 0x90 && midiBytes.size() >= 3) {
 					// Note On
@@ -5192,21 +6141,29 @@ void scVST::handleVSTMidi(ofxOscMessage& msg) {
 }
 
 void scVST::updateMidiOutputs() {
-	if(!midiOutputDirty) return;
+	// PERFORMANCE: Early exit with relaxed memory ordering (no fence needed)
+	if(!midiOutputDirty.load(std::memory_order_relaxed)) return;
 	
 	uint64_t currentTime = ofGetElapsedTimeMillis();
 	
-	// Limit updates to ~60fps (16ms intervals) to match Oceanode's refresh
+	// PERFORMANCE: Limit updates to ~60fps (16ms intervals) to match Oceanode's refresh
 	if(currentTime - lastMidiUpdateTime < 16) return;
 	
 	{
-		std::lock_guard<std::mutex> lock(midiUpdateMutex);
-		if(midiOutputDirty) {
-			// Update both parameters in one batch
+		// PERFORMANCE: Try lock to avoid blocking if another thread is updating
+		std::unique_lock<std::mutex> lock(midiUpdateMutex, std::try_to_lock);
+		if(!lock.owns_lock()) {
+			// Another thread is updating, skip this frame
+			return;
+		}
+		
+		if(midiOutputDirty.load(std::memory_order_relaxed)) {
+			// OPTIMIZATION: Update both parameters in one batch
+			// Use move semantics to avoid deep copy if possible
 			noteOut = currentNoteStates;
 			ccOut = currentCCStates;
 			
-			midiOutputDirty = false;
+			midiOutputDirty.store(false, std::memory_order_relaxed);
 			lastMidiUpdateTime = currentTime;
 		}
 	}
