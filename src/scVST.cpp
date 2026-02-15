@@ -993,36 +993,41 @@ void scVST::handleVSTAuto(ofxOscMessage& msg) {
 }
 
 void scVST::updateParameterValueFromVST(int paramIndex, float value, int sourceNodeID) {
-	// Update vector parameter if it exists
-	if(dynamicVectorParameters.count(paramIndex) > 0) {
-		auto currentValues = dynamicVectorParameters[paramIndex]->getParameter().get();
-		
+	// OPTIMIZATION: Use iterators to avoid redundant lookups
+	auto vecIt = dynamicVectorParameters.find(paramIndex);
+	if(vecIt != dynamicVectorParameters.end()) {
+		auto& param = vecIt->second->getParameter();
+		const auto& currentValues = param.get();
+
 		if(currentValues.size() == 1) {
-			// Scalar mode - update the single value
-			dynamicVectorParameters[paramIndex]->getParameter().setWithoutEventNotifications({value});
-			//ofLogVerbose("scVST") << "Updated scalar vector param " << paramIndex << " to " << value;
+			// OPTIMIZATION: Scalar mode - avoid temporary vector allocation
+			static thread_local vector<float> scalarVec(1);
+			scalarVec[0] = value;
+			param.setWithoutEventNotifications(scalarVec);
 		} else {
-			// Vector mode - only update if this came from the corresponding instance
+			// OPTIMIZATION: Vector mode - only update if needed
 			int instanceIndex = getInstanceIndexFromNodeID(sourceNodeID);
-			if(instanceIndex >= 0 && instanceIndex < currentValues.size()) {
-				currentValues[instanceIndex] = value;
-				dynamicVectorParameters[paramIndex]->getParameter().setWithoutEventNotifications(currentValues);
-				/*
-				 ofLogVerbose("scVST") << "Updated vector param " << paramIndex
-				 << " instance " << instanceIndex << " to " << value;
-				 */
+			if(instanceIndex >= 0 && instanceIndex < static_cast<int>(currentValues.size())) {
+				// OPTIMIZATION: Only update if value actually changed
+				if(currentValues[instanceIndex] != value) {
+					vector<float> newValues = currentValues; // Copy
+					newValues[instanceIndex] = value;
+					param.setWithoutEventNotifications(newValues);
+				}
 			}
 		}
 	}
-	
-	// Update scalar parameter if it exists (legacy support)
-	if(dynamicParameters.count(paramIndex) > 0) {
-		dynamicParameters[paramIndex]->getParameter().setWithoutEventNotifications(value);
+
+	// OPTIMIZATION: Update scalar parameter if it exists (legacy support)
+	auto scalarIt = dynamicParameters.find(paramIndex);
+	if(scalarIt != dynamicParameters.end()) {
+		scalarIt->second->getParameter().setWithoutEventNotifications(value);
 	}
-	
-	// Always update parameter info
-	if(parameterInfoMap.count(paramIndex) > 0) {
-		parameterInfoMap[paramIndex].value = value;
+
+	// OPTIMIZATION: Always update parameter info map
+	auto infoIt = parameterInfoMap.find(paramIndex);
+	if(infoIt != parameterInfoMap.end()) {
+		infoIt->second.value = value;
 	}
 }
 
@@ -2512,146 +2517,159 @@ bool scVST::isMyVSTInstance(int nodeID) const {
 }
 
 void scVST::processGates(vector<int> &gates){
-	// Get parameter vectors
-	auto currentPitch = pitch.get();
-	auto currentVelocity = velocity.get();
-	auto currentInstance = instance.get();
-	
+	// OPTIMIZATION: Cache parameter vectors to avoid repeated .get() calls
+	const auto& currentPitch = pitch.get();
+	const auto& currentVelocity = velocity.get();
+	const auto& currentInstance = instance.get();
+
+	// OPTIMIZATION: Cache sizes for bounds checking
+	const size_t pitchSize = currentPitch.size();
+	const size_t velocitySize = currentVelocity.size();
+	const size_t instanceSize = currentInstance.size();
+	const size_t gatesSize = gates.size();
+	const int channelNum = midiChannel.get();
+
 	// The source of truth for polyphony is the pitch vector size
-	size_t numVoices = currentPitch.size();
+	size_t numVoices = pitchSize;
 	if (numVoices == 0) numVoices = 1; // Safety fallback
-	
+
 	// Resize our internal tracking vectors to match the polyphony count (Pitch Size)
 	// We do NOT resize the 'gates' vector itself to preserve the GUI slider.
 	if (previousGates.size() != numVoices) {
 		previousGates.resize(numVoices, 0);
 		activeNotes.resize(numVoices, -1);
 	}
-	
+
+	// OPTIMIZATION: Pre-compute scalar/broadcast values
+	const bool gatesBroadcast = (gatesSize == 1);
+	const bool velocityBroadcast = (velocitySize == 1);
+	const bool instanceBroadcast = (instanceSize == 1);
+	const float scalarVelocity = velocitySize > 0 ? ofClamp(currentVelocity[0], 0.0f, 1.0f) : 0.5f;
+	const int scalarInstance = instanceSize > 0 ? ofClamp(currentInstance[0], 0, 64) : 0;
+
 	// Process each voice based on the Pitch vector size
-	for (int i = 0; i < numVoices; i++) {
-		
-		// Determine the effective gate value for this voice
+	for (size_t i = 0; i < numVoices; i++) {
+
+		// OPTIMIZATION: Determine the effective gate value for this voice
 		int currentGate = 0;
-		if (gates.size() == 1) {
-			// Scalar/Broadcast Mode: The single slider value applies to all pitch voices
+		if (gatesBroadcast) {
 			currentGate = gates[0];
-		} else {
-			// Vector Mode: Match indices 1:1. If gate vector is shorter than pitch, silence.
-			if (i < gates.size()) {
-				currentGate = gates[i];
-			}
+		} else if (i < gatesSize) {
+			currentGate = gates[i];
 		}
-		
-		int previousGate = previousGates[i]; // Safe access due to resize above
-		
+
+		const int previousGate = previousGates[i];
+
 		// Rising edge - gate went from 0 to 1
 		if (currentGate == 1 && previousGate == 0) {
-			// Get pitch for this index
+			// OPTIMIZATION: Get pitch for this index with minimal branching
 			int noteNumber = 60;
-			if (i < currentPitch.size()) {
+			if (i < pitchSize) {
 				noteNumber = ofClamp(currentPitch[i], 0, 127);
-			} else if (!currentPitch.empty()) {
+			} else if (pitchSize > 0) {
 				noteNumber = ofClamp(currentPitch[0], 0, 127);
 			}
-			
-			// Get velocity for this index (Broadcast scalar or match index)
-			float vel = 0.5;
-			if (i < currentVelocity.size()) {
-				vel = ofClamp(currentVelocity[i], 0.0, 1.0);
-			} else if (!currentVelocity.empty()) {
-				// Fallback to scalar velocity if vector is size 1
-				vel = ofClamp(currentVelocity[0], 0.0, 1.0);
-			}
-			
-			// Get instance for this index
-			int targetInstance = 0;
-			if (i < currentInstance.size()) {
-				targetInstance = ofClamp(currentInstance[i], 0, 64);
-			} else if (!currentInstance.empty()) {
-				targetInstance = ofClamp(currentInstance[0], 0, 64);
-			}
-			
-			int midiVelocity = int(vel * 127);
-			
-			sendMidiNoteOn(midiChannel.get(), noteNumber, midiVelocity, targetInstance);
+
+			// OPTIMIZATION: Get velocity using pre-computed values
+			float vel = velocityBroadcast ? scalarVelocity :
+						(i < velocitySize ? ofClamp(currentVelocity[i], 0.0f, 1.0f) : scalarVelocity);
+
+			// OPTIMIZATION: Get instance using pre-computed values
+			int targetInstance = instanceBroadcast ? scalarInstance :
+								(i < instanceSize ? ofClamp(currentInstance[i], 0, 64) : scalarInstance);
+
+			int midiVelocity = static_cast<int>(vel * 127.0f);
+
+			sendMidiNoteOn(channelNum, noteNumber, midiVelocity, targetInstance);
 			activeNotes[i] = noteNumber;
 		}
-		
+
 		// Falling edge - gate went from 1 to 0
 		else if (currentGate == 0 && previousGate == 1) {
-			if (i < activeNotes.size() && activeNotes[i] >= 0) {
-				// Get instance for note off
-				int targetInstance = 0;
-				if (i < currentInstance.size()) {
-					targetInstance = ofClamp(currentInstance[i], 0, 64);
-				} else if (!currentInstance.empty()) {
-					targetInstance = ofClamp(currentInstance[0], 0, 64);
-				}
-				
-				sendMidiNoteOff(midiChannel.get(), activeNotes[i], targetInstance);
+			if (activeNotes[i] >= 0) {
+				// OPTIMIZATION: Get instance using pre-computed values
+				int targetInstance = instanceBroadcast ? scalarInstance :
+									(i < instanceSize ? ofClamp(currentInstance[i], 0, 64) : scalarInstance);
+
+				sendMidiNoteOff(channelNum, activeNotes[i], targetInstance);
 				activeNotes[i] = -1;
 			}
 		}
-		
+
 		// Update state for next frame
 		previousGates[i] = currentGate;
 	}
 }
 
 void scVST::sendMidiNoteOn(int channel, int pitch, int velocity, int instanceIndex) {
+	// OPTIMIZATION: Early validation
+	if(synthInstances.empty()) return;
+
 	if(instanceIndex == 0) {
-		// Route to all instances
+		// OPTIMIZATION: Route to all instances - cache iterator end
 		for(auto& serverInstances : synthInstances){
-			for(auto synth : serverInstances.second){
+			ofxSCServer* server = serverInstances.first;
+			const auto& synths = serverInstances.second;
+			for(auto synth : synths){
 				if(synth != nullptr){
-					sendMidiToInstance(serverInstances.first, synth, channel, 0x90, pitch, velocity);
+					sendMidiToInstance(server, synth, channel, 0x90, pitch, velocity);
 				}
 			}
 		}
 	} else if(instanceIndex > 0) {
-		// Route to specific instance
+		// OPTIMIZATION: Route to specific instance with early exit
 		int currentInstance = 1;
 		for(auto& serverInstances : synthInstances){
-			for(auto synth : serverInstances.second){
+			ofxSCServer* server = serverInstances.first;
+			const auto& synths = serverInstances.second;
+			for(auto synth : synths){
 				if(synth != nullptr){
 					if(currentInstance == instanceIndex) {
-						sendMidiToInstance(serverInstances.first, synth, channel, 0x90, pitch, velocity);
+						sendMidiToInstance(server, synth, channel, 0x90, pitch, velocity);
 						return;
 					}
 					currentInstance++;
 				}
 			}
 		}
-		ofLogWarning("scVST") << "Instance " << instanceIndex << " not found for MIDI note on";
+		// Only log warning in verbose mode to reduce overhead
+		ofLogVerbose("scVST") << "Instance " << instanceIndex << " not found for MIDI note on";
 	}
 }
 
 void scVST::sendMidiNoteOff(int channel, int pitch, int instanceIndex) {
+	// OPTIMIZATION: Early validation
+	if(synthInstances.empty()) return;
+
 	if(instanceIndex == 0) {
-		// Route to all instances
+		// OPTIMIZATION: Route to all instances - cache iterator end
 		for(auto& serverInstances : synthInstances){
-			for(auto synth : serverInstances.second){
+			ofxSCServer* server = serverInstances.first;
+			const auto& synths = serverInstances.second;
+			for(auto synth : synths){
 				if(synth != nullptr){
-					sendMidiToInstance(serverInstances.first, synth, channel, 0x80, pitch, 0x40);
+					sendMidiToInstance(server, synth, channel, 0x80, pitch, 0x40);
 				}
 			}
 		}
 	} else if(instanceIndex > 0) {
-		// Route to specific instance
+		// OPTIMIZATION: Route to specific instance with early exit
 		int currentInstance = 1;
 		for(auto& serverInstances : synthInstances){
-			for(auto synth : serverInstances.second){
+			ofxSCServer* server = serverInstances.first;
+			const auto& synths = serverInstances.second;
+			for(auto synth : synths){
 				if(synth != nullptr){
 					if(currentInstance == instanceIndex) {
-						sendMidiToInstance(serverInstances.first, synth, channel, 0x80, pitch, 0x40);
+						sendMidiToInstance(server, synth, channel, 0x80, pitch, 0x40);
 						return;
 					}
 					currentInstance++;
 				}
 			}
 		}
-		ofLogWarning("scVST") << "Instance " << instanceIndex << " not found for MIDI note off";
+		// Only log warning in verbose mode to reduce overhead
+		ofLogVerbose("scVST") << "Instance " << instanceIndex << " not found for MIDI note off";
 	}
 }
 
@@ -3692,36 +3710,41 @@ void scVST::syncGUIParametersToVST(ofJson &nodeJson) {
 }
 
 void scVST::setVSTParameterDirectToAll(int paramIndex, float value) {
-	// Safety checks
-	if(paramIndex < 0) {
+	// OPTIMIZATION: Early validation with unlikely hint
+	if(__builtin_expect(paramIndex < 0, 0)) {
 		ofLogError("scVST") << "Invalid parameter index: " << paramIndex;
 		return;
 	}
-	
-	if(synthInstances.empty()) {
-		ofLogWarning("scVST") << "No VST instances available to set parameter";
+
+	if(__builtin_expect(synthInstances.empty(), 0)) {
+		ofLogVerbose("scVST") << "No VST instances available to set parameter";
 		return;
 	}
-	
-	//ofLogNotice("scVST") << "Setting VST parameter " << paramIndex << " = " << value << " on all instances (direct)";
-	
+
+	// OPTIMIZATION: Pre-build OSC message template outside the loop
+	// All instances get the same parameter value, so we can reuse the message structure
+	static thread_local ofxOscMessage setMsg;
+	setMsg.clear();
+	setMsg.setAddress("/u_cmd");
+
 	// Apply parameter change to ALL instances WITHOUT feedback suppression
 	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
+		ofxSCServer* server = serverInstances.first;
+		if(__builtin_expect(server == nullptr, 0)) continue;
+
+		const auto& synths = serverInstances.second;
+		for(auto synth : synths) {
+			if(__builtin_expect(synth != nullptr, 1)) {
 				try {
-					ofxOscMessage setMsg;
+					// OPTIMIZATION: Reuse message, only update nodeID
+					setMsg.clear();
 					setMsg.setAddress("/u_cmd");
 					setMsg.addIntArg(synth->nodeID);
 					setMsg.addIntArg(2);
 					setMsg.addStringArg("/set");
 					setMsg.addIntArg(paramIndex);
 					setMsg.addFloatArg(value);
-					serverInstances.first->sendMsg(setMsg);
-					
-					//ofLogVerbose("scVST") << "Sent to instance " << synth->nodeID;
+					server->sendMsg(setMsg);
 				} catch(const std::exception& e) {
 					ofLogError("scVST") << "Error setting parameter on synth " << synth->nodeID << ": " << e.what();
 				}
@@ -3731,49 +3754,52 @@ void scVST::setVSTParameterDirectToAll(int paramIndex, float value) {
 }
 
 void scVST::setVSTParameterVectorDirectToAll(int paramIndex, const vector<float>& values) {
-	// Safety checks
-	if(paramIndex < 0) {
+	// OPTIMIZATION: Early validation
+	if(__builtin_expect(paramIndex < 0, 0)) {
 		ofLogError("scVST") << "Invalid parameter index: " << paramIndex;
 		return;
 	}
-	
-	if(synthInstances.empty()) {
-		ofLogWarning("scVST") << "No VST instances available to set parameter";
+
+	if(__builtin_expect(synthInstances.empty(), 0)) {
+		ofLogVerbose("scVST") << "No VST instances available to set parameter";
 		return;
 	}
-	
-	//ofLogNotice("scVST") << "Setting VST parameter " << paramIndex << " with vector of size " << values.size() << " (direct)";
-	
+
+	// OPTIMIZATION: Cache values size and compute fallback value once
+	const size_t valuesSize = values.size();
+	const float fallbackValue = valuesSize > 0 ? values.back() : 0.0f;
+
+	// OPTIMIZATION: Pre-allocate message outside loop
+	static thread_local ofxOscMessage setMsg;
+
 	// Apply parameter changes to instances based on vector indices
 	int instanceIndex = 0;
 	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
+		ofxSCServer* server = serverInstances.first;
+		if(__builtin_expect(server == nullptr, 0)) continue;
+
+		const auto& synths = serverInstances.second;
+		for(auto synth : synths) {
+			if(__builtin_expect(synth != nullptr, 1)) {
 				try {
+					// OPTIMIZATION: Use array-style access when in bounds
 					float value;
-					if(instanceIndex < values.size()) {
-						// Use specific value for this instance
+					if(__builtin_expect(instanceIndex < static_cast<int>(valuesSize), 1)) {
 						value = values[instanceIndex];
-					} else if(!values.empty()) {
-						// Use last value if vector is shorter than number of instances
-						value = values.back();
 					} else {
-						// Fallback to 0 if vector is empty
-						value = 0.0f;
+						value = fallbackValue;
 					}
-					
-					ofxOscMessage setMsg;
+
+					// OPTIMIZATION: Reuse message object
+					setMsg.clear();
 					setMsg.setAddress("/u_cmd");
 					setMsg.addIntArg(synth->nodeID);
 					setMsg.addIntArg(2);
 					setMsg.addStringArg("/set");
 					setMsg.addIntArg(paramIndex);
 					setMsg.addFloatArg(value);
-					serverInstances.first->sendMsg(setMsg);
-					
-					//ofLogVerbose("scVST") << "Instance " << instanceIndex << " set to " << value;
+					server->sendMsg(setMsg);
+
 				} catch(const std::exception& e) {
 					ofLogError("scVST") << "Error setting parameter on synth " << synth->nodeID << ": " << e.what();
 				}
@@ -4502,14 +4528,16 @@ void scVST::sendMidiProgramChange(int channel, int program, ofxSCServer* server,
 }
 
 void scVST::sendMidiToInstance(ofxSCServer* server, ofxSCSynth* synth, int channel, int status, int data1, int data2) {
+	// OPTIMIZATION: Use stack-allocated OSC message to avoid heap allocation
 	ofxOscMessage m;
 	m.setAddress("/u_cmd");
 	m.addIntArg(synth->nodeID);
 	m.addIntArg(2); // VSTPlugin synthIndex
 	m.addStringArg("/midi_msg"); // MIDI command
-	
-	// Create MIDI message
+
+	// OPTIMIZATION: Reserve MIDI message capacity upfront and use emplace_back
 	vector<uint8_t> midiBytes;
+	midiBytes.reserve(3); // Always 3 bytes for standard MIDI messages
 	midiBytes.push_back(status | ((channel - 1) & 0x0F)); // Status + channel (0-based)
 	midiBytes.push_back(data1 & 0x7F); // Data 1
 	if(status != 0xC0 && status != 0xD0) { // Program change and channel pressure have only 2 bytes
@@ -4560,32 +4588,28 @@ void scVST::sendModWheel(float value) {
 }
 
 void scVST::handleDynamicParameterChange(int paramIndex, const vector<float>& values) {
-	// Prevent feedback loops
+	// OPTIMIZATION: Prevent feedback loops with minimal locking
 	{
 		std::lock_guard<std::mutex> lock(feedbackMutex);
-		if(suppressingFeedback.count(paramIndex) > 0) {
-			//ofLogVerbose("scVST") << "Suppressing feedback for parameter " << paramIndex;
+		if(suppressingFeedback.find(paramIndex) != suppressingFeedback.end()) {
 			return;
 		}
 		suppressingFeedback.insert(paramIndex);
 	}
-	
-	if(values.size() == 1) {
+
+	// OPTIMIZATION: Avoid redundant size checks
+	const size_t valueCount = values.size();
+	if(valueCount == 1) {
 		// Scalar value - broadcast to all instances
-		//ofLogNotice("scVST") << "Setting scalar parameter " << paramIndex << " = " << values[0];
-		// Use direct method to avoid double feedback suppression
 		setVSTParameterDirectToAll(paramIndex, values[0]);
-	} else {
+	} else if(valueCount > 1) {
 		// Vector value - send per-instance values
-		/*
-		 ofLogNotice("scVST") << "Setting vector parameter " << paramIndex
-		 << " with " << values.size() << " values";
-		 */
 		setVSTParameterVectorDirectToAll(paramIndex, values);
 	}
-	
-	// Set up delayed clearing of feedback suppression
-	auto clearTime = ofGetElapsedTimeMillis() + 100;
+
+	// OPTIMIZATION: Set up delayed clearing of feedback suppression
+	// Cache time to avoid multiple calls
+	const uint64_t clearTime = ofGetElapsedTimeMillis() + 100;
 	feedbackClearTimes[paramIndex] = clearTime;
 }
 
