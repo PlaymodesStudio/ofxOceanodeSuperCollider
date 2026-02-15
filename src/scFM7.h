@@ -141,6 +141,14 @@ private:
 	void storeToSlot(int slot);
 	void recallSlot(int slot);
 	void updateMorph();
+
+	// Disk I/O for Presets
+	void savePresetToDisk(int slot);
+	void loadPresetFromDisk(int slot);
+	void loadAllPresetsFromDisk();
+	void deletePresetFromDisk(int slot);
+	string getPresetsFolderPath();
+	string getPresetFilePath(int slot);
 	
 	// Param Helpers
 	void sendFloatParameter(const string& name, vector<float>& values);

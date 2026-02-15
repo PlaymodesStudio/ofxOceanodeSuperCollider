@@ -98,8 +98,11 @@ void scFM7::setup() {
 	addSeparator("Output", ofColor(200));
 	scNode::addOutput("Out");
 
+	// --- Load Presets from Disk ---
+	loadAllPresetsFromDisk();
+
 	// --- LISTENERS ---
-	
+
 	listeners.push(numChannels.newListener([this](int &n){
 		for(auto& output : outputs) output = output;
 	}));
@@ -193,6 +196,7 @@ void scFM7::drawPresetSlots() {
 	bool isActive = ImGui::IsItemActive();
 	ImVec2 mouse = ImGui::GetIO().MousePos;
 	bool mouseDown = ImGui::IsMouseClicked(0);
+	bool rightClick = ImGui::IsMouseClicked(1);
 	bool shift = ImGui::GetIO().KeyShift;
 	
 	for(int i=0; i<16; i++) {
@@ -208,6 +212,10 @@ void scFM7::drawPresetSlots() {
 		if(hovered && isActive && mouseDown) {
 			if(shift) storeToSlot(i);
 			else recallSlot(i);
+		}
+
+		if(hovered && rightClick) {
+			deletePresetFromDisk(i);
 		}
 		
 		ImU32 col;
@@ -231,6 +239,7 @@ void scFM7::drawPresetSlots() {
 		char buf[8]; sprintf(buf, "%d", i+1);
 		drawList->AddText(ImVec2(slotP.x+2, slotP.y+2), IM_COL32(255,255,255,180), buf);
 		if(shift && hovered) drawList->AddText(ImVec2(slotP.x+slotSize-15, slotP.y+slotSize-15), IM_COL32(255,0,0,255), "S");
+		if(!shift && hovered && rightClick) drawList->AddText(ImVec2(slotP.x+slotSize-15, slotP.y+slotSize-15), IM_COL32(255,0,0,255), "X");
 	}
 }
 
@@ -427,6 +436,9 @@ void scFM7::storeToSlot(int slot) {
 	p.hasData = true;
 	presetSlots[slot] = p;
 	activePresetSlot = slot;
+
+	// Save to disk
+	savePresetToDisk(slot);
 }
 
 void scFM7::recallSlot(int slot) {
@@ -606,6 +618,99 @@ string scFM7::getSynthDefName() const {
 	return "SuperFM7" + ofToString(numChannels.get());
 }
 
+// --- DISK I/O FOR PRESETS ---
+
+string scFM7::getPresetsFolderPath() {
+	return ofToDataPath("nodeSnapshots/scFM7/", true);
+}
+
+string scFM7::getPresetFilePath(int slot) {
+	return getPresetsFolderPath() + "preset_" + ofToString(slot) + ".json";
+}
+
+void scFM7::savePresetToDisk(int slot) {
+	if(slot < 0 || slot >= 16) return;
+	if(!presetSlots[slot].hasData) return;
+
+	// Ensure directory exists
+	ofDirectory dir(getPresetsFolderPath());
+	if(!dir.exists()) dir.create(true);
+
+	FMPatch& p = presetSlots[slot];
+	ofJson json;
+	json["matrix"] = p.matrix;
+	json["egLevels"] = p.egLevels;
+	json["egTimes"] = p.egTimes;
+	json["opAmps"] = p.opAmps;
+	json["opRatios"] = p.opRatios;
+	json["opDetunes"] = p.opDetunes;
+	json["feedback"] = p.feedback;
+	json["duration"] = p.duration;
+	json["masterAmp"] = p.masterAmp;
+	json["vibFreq"] = p.vibFreq;
+	json["vibAmp"] = p.vibAmp;
+	json["tremFreq"] = p.tremFreq;
+	json["tremAmp"] = p.tremAmp;
+
+	ofFile file(getPresetFilePath(slot), ofFile::WriteOnly);
+	file << json.dump(4);
+}
+
+void scFM7::loadPresetFromDisk(int slot) {
+	if(slot < 0 || slot >= 16) return;
+
+	ofFile file(getPresetFilePath(slot));
+	if(!file.exists()) return;
+
+	ofJson json = ofJson::parse(file);
+	FMPatch p;
+	p.matrix = json.value("matrix", vector<float>(36, 0.0f));
+	p.egLevels = json.value("egLevels", vector<float>(24, 1.0f));
+	p.egTimes = json.value("egTimes", vector<float>(24, 0.0f));
+	p.opAmps = json.value("opAmps", vector<float>(6, 0.0f));
+	p.opRatios = json.value("opRatios", vector<float>(6, 1.0f));
+	p.opDetunes = json.value("opDetunes", vector<float>(6, 0.0f));
+	p.feedback = json.value("feedback", 0.0f);
+	p.duration = json.value("duration", 2.0f);
+	p.masterAmp = json.value("masterAmp", 0.5f);
+	p.vibFreq = json.value("vibFreq", 5.0f);
+	p.vibAmp = json.value("vibAmp", 0.0f);
+	p.tremFreq = json.value("tremFreq", 5.0f);
+	p.tremAmp = json.value("tremAmp", 0.0f);
+
+	// Legacy support
+	if(json.count("lfoFreq")) p.vibFreq = json["lfoFreq"];
+	if(json.count("lfoDepth")) p.vibAmp = json["lfoDepth"];
+
+	p.hasData = true;
+	presetSlots[slot] = p;
+}
+
+void scFM7::loadAllPresetsFromDisk() {
+	for(int i = 0; i < 16; i++) {
+		loadPresetFromDisk(i);
+	}
+}
+
+void scFM7::deletePresetFromDisk(int slot) {
+	if(slot < 0 || slot >= 16) return;
+
+	// Delete from disk
+	ofFile file(getPresetFilePath(slot));
+	if(file.exists()) {
+		file.remove();
+	}
+
+	// Clear from memory
+	presetSlots[slot] = FMPatch();
+	presetSlots[slot].hasData = false;
+
+	// Clear active if it was this slot
+	if(activePresetSlot == slot) {
+		activePresetSlot = -1;
+	}
+}
+
 // --- PERSISTENCE ---
 
 void scFM7::presetSave(ofJson &json) {
@@ -613,29 +718,7 @@ void scFM7::presetSave(ofJson &json) {
 	json["EgLevels"] = allEgLevels;
 	json["EgTimes"] = allEgTimes;
 	json["ActiveSlot"] = activePresetSlot;
-	
-	for(int i=0; i<16; i++) {
-		if(presetSlots[i].hasData) {
-			ofJson slotJson;
-			slotJson["matrix"] = presetSlots[i].matrix;
-			slotJson["egLevels"] = presetSlots[i].egLevels;
-			slotJson["egTimes"] = presetSlots[i].egTimes;
-			slotJson["opAmps"] = presetSlots[i].opAmps;
-			slotJson["opRatios"] = presetSlots[i].opRatios;
-			slotJson["opDetunes"] = presetSlots[i].opDetunes;
-			slotJson["feedback"] = presetSlots[i].feedback;
-			slotJson["duration"] = presetSlots[i].duration;
-			slotJson["masterAmp"] = presetSlots[i].masterAmp;
-			
-			// Save Renamed Params
-			slotJson["vibFreq"] = presetSlots[i].vibFreq;
-			slotJson["vibAmp"] = presetSlots[i].vibAmp;
-			slotJson["tremFreq"] = presetSlots[i].tremFreq;
-			slotJson["tremAmp"] = presetSlots[i].tremAmp;
-			
-			json["PresetSlot_" + ofToString(i)] = slotJson;
-		}
-	}
+	// Presets are now saved to disk, not in the preset file
 }
 
 void scFM7::presetRecallAfterSettingParameters(ofJson &json) {
@@ -654,7 +737,8 @@ void scFM7::presetRecallAfterSettingParameters(ofJson &json) {
 	if(json.count("ActiveSlot")) {
 		activePresetSlot = json["ActiveSlot"].get<int>();
 	}
-	
+
+	// Legacy support: load old preset slots from JSON if they exist
 	for(int i=0; i<16; i++) {
 		string key = "PresetSlot_" + ofToString(i);
 		if(json.count(key)) {
@@ -669,22 +753,22 @@ void scFM7::presetRecallAfterSettingParameters(ofJson &json) {
 			p.feedback = slotJson.value("feedback", 0.0f);
 			p.duration = slotJson.value("duration", 2.0f);
 			p.masterAmp = slotJson.value("masterAmp", 0.5f);
-			
-			// Recall New Keys (Fallbacks to defaults if old preset)
 			p.vibFreq = slotJson.value("vibFreq", 5.0f);
 			p.vibAmp = slotJson.value("vibAmp", 0.0f);
 			p.tremFreq = slotJson.value("tremFreq", 5.0f);
 			p.tremAmp = slotJson.value("tremAmp", 0.0f);
-			
-			// Legacy support: if old 'lfoFreq' exists, map it to vibFreq
+
+			// Legacy support
 			if(slotJson.count("lfoFreq")) p.vibFreq = slotJson["lfoFreq"];
 			if(slotJson.count("lfoDepth")) p.vibAmp = slotJson["lfoDepth"];
-			
+
 			p.hasData = true;
 			presetSlots[i] = p;
+			// Save to new disk location
+			savePresetToDisk(i);
 		}
 	}
-	
+
 	refreshEnvelopeGUI();
 	updateAllParamsToSynth();
 }
