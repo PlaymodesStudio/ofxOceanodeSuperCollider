@@ -469,7 +469,7 @@ void serverManager::loadSynthdefsFromPreset(std::string path){
     };
     
     for(auto &synthdef : synthsList){
-        std::string path = searchForPathInDirectory(synthdef, "Supercollider/synthdefs");
+        std::string path = synthdefFolders[synthdef];
         
         ofxOscMessage m;
         m.setAddress("/d_loadDir");

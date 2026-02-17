@@ -90,6 +90,10 @@ public:
         numRecomputeGraphOnce = 0;
     }
     
+    void setSynthdefFolders(std::map<std::string, std::string> _synthdefFolders){
+        synthdefFolders = _synthdefFolders;
+    }
+    
     scPreferences preferences;
     ofEvent<void> graphComputed;
 private:
@@ -127,6 +131,7 @@ private:
     int numRecomputeGraphOnce;
     std::map<scNode*, ofEventListener> nodeDestroyedListeners;
     bool nodesListChanged = false;
+    std::map<std::string, std::string> synthdefFolders;
 };
 
 #endif /* serverManager_h */
