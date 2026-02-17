@@ -42,6 +42,7 @@ public:
 		}));
 
 		listeners.push(numChannels.newListener([this](int &i){
+            if(i < 1 || i > MAX_NODE_CHANNELS) return;
 			if(input->getNodeRef() != nullptr){
 				recreateSynth();
 			}

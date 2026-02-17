@@ -86,6 +86,7 @@ void scVUMeter::setup() {
 		
 		// Set up parameter listeners - FOLLOW CANONICAL PATTERN FROM scSynthdef
 		listeners.push(numChannels.newListener([this](int &channels){
+            if(channels < 1 || channels > MAX_NODE_CHANNELS) return;
 			// Recreate synths with proper replacement - EXACTLY like scSynthdef
 			for(auto& pair : synthInstances) {
 				if(pair.second != nullptr) {

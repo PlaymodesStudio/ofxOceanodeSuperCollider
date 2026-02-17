@@ -515,6 +515,7 @@ public:
 	}
 	
 	void recreateSynth(){
+        if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
 		if(synth){ synth->free(); delete synth; synth = nullptr; }
 		
 		// Free all individual buses

@@ -148,6 +148,7 @@ public:
     
     void recreateSynth(){
         int numChans = numChannels;
+        if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
         if(synth != nullptr){
             synth->free();
             delete synth;

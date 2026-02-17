@@ -28,7 +28,10 @@ public:
 		addParameter(numChannels.set("NChan", 1, 1, 8));
 
 		listeners.push(in.newListener([this](nodePort&){ recreate(); }));
-		listeners.push(numChannels.newListener([this](int&){ recreate(); }));
+        listeners.push(numChannels.newListener([this](int &i){
+            if(i < 1 || i > MAX_NODE_CHANNELS) return;
+            recreate();
+        }));
 	}
 
 	/* mark this node as “history” so the graph can ignore its

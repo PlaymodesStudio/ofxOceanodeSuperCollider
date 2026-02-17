@@ -103,6 +103,7 @@ public:
 			
 			// Set up parameter listeners
 			listeners.push(numChannels.newListener([this](int &channels){
+                if(channels < 1 || channels > MAX_NODE_CHANNELS) return;
 				// Recreate synths with proper replacement
 				for(auto& pair : synthInstances) {
 					if(pair.second != nullptr) {

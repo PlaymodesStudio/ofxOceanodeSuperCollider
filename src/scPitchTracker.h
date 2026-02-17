@@ -63,6 +63,7 @@ public:
 
 private:
 	void recreateSynth(){
+        if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
 		clearSynth();
 		if(input->getNodeRef() != nullptr){
 			string defName = "pitchTracker" + ofToString(numChannels);

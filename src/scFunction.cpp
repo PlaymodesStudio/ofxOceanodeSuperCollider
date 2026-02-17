@@ -51,6 +51,7 @@ void scFunction::setup() {
 	
 	// Listeners
 	listeners.push(numChannels.newListener([this](int &channels){
+        if(channels < 1 || channels > 16) return;
 		if(!synthInstances.empty()) {
 			std::vector<ofxSCServer*> serversToRecreate;
 			for(auto& serverSynth : synthInstances) {

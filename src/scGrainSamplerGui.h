@@ -124,6 +124,7 @@ public:
 
 	void createSynth(ofxSCServer* server) override {
 		if(!server) return;
+        if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
 		
 		// 1. Allocate Envelope Buffer for this server
 		if(!envBuffers[server]) {

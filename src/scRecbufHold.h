@@ -149,6 +149,7 @@ private:
 
 	/* ─────────── recreate buffers when params change ─────────── */
 	void recreateBuffers(){
+        if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
 		if(isRecording){
 			record = false;  // Stop recording first
 			handleRecordToggle(false);
