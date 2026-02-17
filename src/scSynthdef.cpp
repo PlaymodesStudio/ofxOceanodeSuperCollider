@@ -32,6 +32,7 @@ void scSynthdef::setup(){
     
     oldNumChannels = numChannels;
     listeners.push(numChannels.newListener([this](int &i){
+        if(i < 1 || i > MAX_NODE_CHANNELS) return;
         if(oldNumChannels != numChannels || variableChanged){
             for(auto &synth : synths){
                 ofxSCSynth *newSynth = new ofxSCSynth(getSynthdefFilename(), synth.first);

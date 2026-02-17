@@ -97,6 +97,7 @@ private:
 
 	/* ─────────── (re)crear ─────────── */
 	void recreateResources(){
+        if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
 		cleanup();
 		if(input->getNodeRef() == nullptr) return;
 

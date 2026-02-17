@@ -125,6 +125,7 @@ private:
 	}
 
 	void recreateResources() {
+        if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
 		clearSynth();
 		if(input->getNodeRef() == nullptr || irSpectrumBuffer == nullptr) return;
 

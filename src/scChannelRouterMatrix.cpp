@@ -143,6 +143,7 @@ void scChannelRouterMatrix::initializeMatrix() {
 
 void scChannelRouterMatrix::updateMatrixSize() {
 	int n = numChannels.get();
+    if(n < 1 || n > MAX_NODE_CHANNELS) return;
 	int oldSize = routingMatrix.size();
 	
 	vector<vector<float>> oldMatrix = routingMatrix;

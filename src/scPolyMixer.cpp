@@ -151,6 +151,7 @@ void scPolyMixer::setup() {
 			}));
 
 		listeners.push(numChannels.newListener([this](int &channels){
+            if(channels < 1 || channels > MAX_NODE_CHANNELS) return;
 					if(!isUpdatingTracks) {
 						// Store old value
 						static int oldNumChannels = channels;
