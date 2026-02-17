@@ -596,6 +596,31 @@ void scFM7::createSynth(ofxSCServer* server) {
 	synth->create();
 }
 
+void scFM7::buildSynth(ofxSCServer* server) {
+	createSynth(server);
+}
+
+int scFM7::getLastSynthID(ofxSCServer* server) {
+	if (synthInstances.count(server) && synthInstances[server]) {
+		return synthInstances[server]->nodeID;
+	}
+	return -1;
+}
+
+void scFM7::moveSynthBefore(ofxSCServer* server, int nodeID) {
+	if (!server) return;
+	
+	if (synthInstances.count(server) && synthInstances[server]) {
+		ofxSCSynth* synth = synthInstances[server];
+		
+		if(outputBuses.count(server) && outputBuses[server].count(0)) {
+			synth->set("out", outputBuses[server][0]);
+		}
+		
+		synth->moveBefore(nodeID);
+	}
+}
+
 void scFM7::free(ofxSCServer* server) {
 	if(!server) return;
 	if(synthInstances.count(server) && synthInstances[server]) {

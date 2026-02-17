@@ -43,8 +43,13 @@ public:
 	void setup() override;
 	
 	// scNode Overrides
+	void buildSynth(ofxSCServer* server) override;
 	void createSynth(ofxSCServer* server) override;
 	void free(ofxSCServer* server) override;
+	// Graph ordering support
+	void moveSynthBefore(ofxSCServer* server, int nodeID) override;
+	int getLastSynthID(ofxSCServer* server) override;
+	
 	void setOutputBus(ofxSCServer* server, int index, int bus) override;
 	void update(ofEventArgs& args) override;
 
