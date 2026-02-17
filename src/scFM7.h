@@ -47,6 +47,9 @@ public:
 	void free(ofxSCServer* server) override;
 	void setOutputBus(ofxSCServer* server, int index, int bus) override;
 	void update(ofEventArgs& args) override;
+
+	void activate() override;
+	void deactivate() override;
 	
 	// Persistence
 	void presetSave(ofJson &json) override;

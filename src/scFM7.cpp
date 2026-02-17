@@ -606,6 +606,18 @@ void scFM7::free(ofxSCServer* server) {
 	outputBuses.erase(server);
 }
 
+void scFM7::activate() {
+	for(auto& pair : synthInstances) {
+		if(pair.second) pair.second->run(true);
+	}
+}
+
+void scFM7::deactivate() {
+	for(auto& pair : synthInstances) {
+		if(pair.second) pair.second->run(false);
+	}
+}
+
 void scFM7::setOutputBus(ofxSCServer* server, int index, int bus) {
 	if(!server) return;
 	outputBuses[server][index] = bus;
