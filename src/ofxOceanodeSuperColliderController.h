@@ -28,7 +28,9 @@ public:
     void killServers();
 
     void saveConfig(std::string filepath, scPreferences prefs);
-    void loadConfig(std::string filepath, scPreferences &prefs);
+	void saveControllerConfig(std::string filepath);
+	void loadConfig(std::string filepath, scPreferences &prefs);
+	
     
     vector<serverManager*> getServers(){return outputServers;}
 private:

@@ -116,7 +116,11 @@ void ofxOceanodeSuperColliderController::draw(){
             n->setStereoMixSize(stereomixSize);
         }
     }
-    
+	if(ImGui::Button("[Save SC Controller Settings]"))
+	{
+		saveControllerConfig("Supercollider/Config/Controller/ControllerPreferences.json");
+	}
+
     ImGui::Separator();
     
     for(int i = 0; i < outputServers.size(); i++){
@@ -126,9 +130,9 @@ void ofxOceanodeSuperColliderController::draw(){
         }
     }
     
-    if(ImGui::Button("Save Settings")){
+    if(ImGui::Button("[Save Server Settings]")){
         for(int i = 0; i < outputServers.size(); i++){
-            saveConfig("Supercollider/Config/ServerPreferences_" + ofToString(i) + ".json", outputServers[i]->preferences);
+            saveConfig("Supercollider/Config/Server/ServerPreferences_" + ofToString(i) + ".json", outputServers[i]->preferences);
         }
     }
 }
@@ -172,6 +176,18 @@ void ofxOceanodeSuperColliderController::saveConfig(std::string filepath, scPref
     
     ofSavePrettyJson(filepath, json);
 }
+
+void ofxOceanodeSuperColliderController::saveControllerConfig(std::string filepath){
+	ofJson json;
+
+	json["delay"] = delay;
+	json["volume"] = volume;
+	json["st ereomixsize"] = stereomixSize;
+	json["stereomix"] = stereomix;
+
+	ofSavePrettyJson(filepath, json);
+}
+
 
 void ofxOceanodeSuperColliderController::loadConfig(std::string filepath, scPreferences &prefs){
     ofJson json = ofLoadJson(filepath);
