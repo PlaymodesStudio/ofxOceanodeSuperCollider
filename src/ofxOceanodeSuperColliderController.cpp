@@ -43,6 +43,7 @@ void ofxOceanodeSuperColliderController::createServers(){
 
 void ofxOceanodeSuperColliderController::setup(){
 	
+	// load preferences from JSON
 	ofJson json = ofLoadJson("Supercollider/Config/Controller/ControllerPreferences.json");
 	if(!json.empty())
 	{
@@ -51,7 +52,7 @@ void ofxOceanodeSuperColliderController::setup(){
 		stereomixSize = json["stereomixsize"];
 		stereomix = json["stereomix"];
 	}
-
+	// apply preferences to output servers
     for(auto s : outputServers)
 	{
 		s->setup();
