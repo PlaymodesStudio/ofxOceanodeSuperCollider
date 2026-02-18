@@ -12,16 +12,17 @@
 
 ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOceanodeBaseController("SuperCollider"){
     volume = 1;
-    mute = false;
     delay = 0;
-    stereomix = false;
-    stereomixSize = 2;
-    reloadAudioDevices();
+    stereomix = true;
+    stereomixSize = 4;
+	mute = false;
+	
+	reloadAudioDevices();
 }
 
 void ofxOceanodeSuperColliderController::createServers(){
     ofDirectory dir;
-    dir.open(ofToDataPath("Supercollider/Config/"));
+    dir.open(ofToDataPath("Supercollider/Config/Server"));
     if(dir.exists()){
         dir.sort();
         for(auto f : dir.getFiles()){
@@ -30,7 +31,8 @@ void ofxOceanodeSuperColliderController::createServers(){
             outputServers.back()->setAudioDevices(audioDeviceNames);
         }
     }else{
-        dir.createDirectory("Supercollider/Config/");
+        dir.createDirectory("Supercollider/Config/Server");
+		ofSystemAlertDialog("Supercollider server dir not found!\nCheck ./data/SuperCollider/Config ");
     }
     //If no config found, create just one server with default settings
     if(outputServers.size() == 0){
@@ -40,7 +42,25 @@ void ofxOceanodeSuperColliderController::createServers(){
 }
 
 void ofxOceanodeSuperColliderController::setup(){
-    for(auto s : outputServers) s->setup();
+	
+	ofJson json = ofLoadJson("Supercollider/Config/Controller/ControllerPreferences.json");
+	if(!json.empty())
+	{
+		delay = json["delay"];
+		volume = json["volume"];
+		stereomixSize = json["stereomixsize"];
+		stereomix = json["stereomix"];
+	}
+
+    for(auto s : outputServers)
+	{
+		s->setup();
+		s->setDelay(delay);
+		s->setVolume(volume);
+		s->setStereoMix(stereomix);
+		s->setStereoMixSize(stereomixSize);
+	}
+	
 }
 
 void ofxOceanodeSuperColliderController::draw(){
