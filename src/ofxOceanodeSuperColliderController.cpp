@@ -182,7 +182,7 @@ void ofxOceanodeSuperColliderController::saveControllerConfig(std::string filepa
 
 	json["delay"] = delay;
 	json["volume"] = volume;
-	json["st ereomixsize"] = stereomixSize;
+	json["stereomixsize"] = stereomixSize;
 	json["stereomix"] = stereomix;
 
 	ofSavePrettyJson(filepath, json);
