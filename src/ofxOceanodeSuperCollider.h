@@ -41,6 +41,7 @@
 #include "scChannelRouterMatrix.h"
 #include "scFastEnvelopeFollower.h"
 #include "scFM7.h"
+#include "scFM7Drone.h"
 #include "scDoubleBuffer.h"
 #include "scGrainSamplerGui.h"
 #include "waveTrack.h"
@@ -138,10 +139,10 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scFunction>("SuperCollider");
 	o.registerModel<scFastEnvelopeFollower>("SuperCollider");
 	o.registerModel<scFM7>("SuperCollider");
+	o.registerModel<scFM7Drone>("SuperCollider");
 	o.registerModel<scGrainSamplerGui>("SuperCollider");
 	o.registerModel<scDoubleBuffer>("SuperCollider", controller->getServers());
 	o.registerModel<waveTrack>("SuperCollider", controller->getServers());
-
 
 }
 
