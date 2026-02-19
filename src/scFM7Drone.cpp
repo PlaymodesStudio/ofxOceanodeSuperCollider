@@ -359,20 +359,33 @@ void scFM7Drone::updateMorph() {
 
 // --- NODE LOGIC ---
 
-void scFM7Drone::createSynth(ofxSCServer* server) {
+// buildSynth: allocate the synth object only (no create() yet).
+// serverManager calls: buildSynth → setOutputBus → createSynth
+// So the output bus is set on the object before create() is called.
+void scFM7Drone::buildSynth(ofxSCServer* server) {
 	if(!server) return;
 	if(synthInstances[server]) {
 		synthInstances[server]->free();
 		delete synthInstances[server];
 	}
-
 	synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
+}
+
+// createSynth: set all parameters and call create() to instantiate in SC.
+// At this point setOutputBus() has already been called, so outputBuses is populated.
+void scFM7Drone::createSynth(ofxSCServer* server) {
+	if(!server) return;
+
+	// If buildSynth wasn't called (e.g. standalone use), allocate now
+	if(!synthInstances[server]) {
+		synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
+	}
+
 	auto synth = synthInstances[server];
+	int n = numChannels.get();
 
 	synth->set("feedback",   feedback.get());
 	synth->set("mod_matrix", modMatrix.get());
-
-	int n = numChannels.get();
 
 	// Pitch
 	{
@@ -406,14 +419,12 @@ void scFM7Drone::createSynth(ofxSCServer* server) {
 		sendOp("op_detune", opDetunes[i].get());
 	}
 
+	// Output bus (already set by setOutputBus, but set explicitly to be safe)
 	if(outputBuses.count(server) && outputBuses[server].count(0)) {
 		synth->set("out", outputBuses[server][0]);
 	}
-	synth->create();
-}
 
-void scFM7Drone::buildSynth(ofxSCServer* server) {
-	createSynth(server);
+	synth->create();
 }
 
 int scFM7Drone::getLastSynthID(ofxSCServer* server) {
@@ -425,12 +436,48 @@ int scFM7Drone::getLastSynthID(ofxSCServer* server) {
 
 void scFM7Drone::moveSynthBefore(ofxSCServer* server, int nodeID) {
 	if(!server) return;
-	if(synthInstances.count(server) && synthInstances[server]) {
-		ofxSCSynth* synth = synthInstances[server];
-		if(outputBuses.count(server) && outputBuses[server].count(0))
-			synth->set("out", outputBuses[server][0]);
-		synth->moveBefore(nodeID);
+	if(!synthInstances.count(server) || !synthInstances[server]) return;
+
+	ofxSCSynth* synth = synthInstances[server];
+	int n = numChannels.get();
+
+	// Resend all params before moving (mirrors scSynthdef's resendParams pattern)
+	synth->set("feedback",   feedback.get());
+	synth->set("mod_matrix", modMatrix.get());
+
+	{
+		vector<float> p = pitch.get();
+		if((int)p.size() != n) p.resize(n, p.empty() ? 60.0f : p[0]);
+		synth->set("pitch", p);
 	}
+
+	synth->set("modScale", modScale.get());
+	synth->set("vibFreq",  vibFreq.get());
+	synth->set("vibAmp",   vibAmp.get());
+	synth->set("tremFreq", tremFreq.get());
+	synth->set("tremAmp",  tremAmp.get());
+
+	{
+		auto amp = masterAmp.get();
+		if(amp.size() == 1) synth->setMultiple("amp", amp[0], n);
+		else synth->set("amp", amp);
+	}
+
+	for(int i = 0; i < 6; i++) {
+		auto sendOp = [&](const string& prefix, vector<float> v) {
+			string name = opParamName(prefix, i);
+			if(v.size() == 1) synth->setMultiple(name, v[0], n);
+			else synth->set(name, v);
+		};
+		sendOp("op_amp",    opAmps[i].get());
+		sendOp("op_ratio",  opRatios[i].get());
+		sendOp("op_detune", opDetunes[i].get());
+	}
+
+	if(outputBuses.count(server) && outputBuses[server].count(0))
+		synth->set("out", outputBuses[server][0]);
+
+	synth->moveBefore(nodeID);
 }
 
 void scFM7Drone::free(ofxSCServer* server) {
