@@ -9,6 +9,7 @@
 #define scBuffer_h
 
 #include "ofxOceanodeNodeModel.h"
+#include "ofxOceanodeShared.h"
 #include "ofxSuperCollider.h"
 #include <filesystem>
 
@@ -247,16 +248,23 @@ public:
 		if(embedInProject && !path.get().empty()) {
 			string currentPath = path.get();
 			string absolutePath = resolveToAbsolutePath(currentPath);
-			
+
 			if(!ofFile::doesFileExist(absolutePath)) {
 				json["EmbedInProject"] = false;
 				return;
 			}
-			
-			// Compute destination paths
-			string absPresetPath = ofToDataPath(presetFolderPath, true);
-			string absSamplesFolder = absPresetPath + "/samples";
-			
+
+			// Use the shared current preset path as the root for embedded samples.
+			// This is always the top-level preset folder (e.g. Presets/AUDIO/31--bolas),
+			// regardless of how deep inside a local macro subfolder we are being called from.
+			// Samples stored here are shared across all local macros within the same preset
+			// and remain stable under macro duplication (no macro ID in the path).
+			string sharedPresetPath = ofxOceanodeShared::getCurrentPresetPath();
+			string absPresetRoot = sharedPresetPath.empty()
+			                       ? ofToDataPath(presetFolderPath, true)
+			                       : ofToDataPath(sharedPresetPath, true);
+			string absSamplesFolder = absPresetRoot + "/samples";
+
 			// Create samples folder
 			try {
 				std::filesystem::path samplesDir(absSamplesFolder);
@@ -268,23 +276,23 @@ public:
 				json["EmbedInProject"] = false;
 				return;
 			}
-			
+
 			// Get filename and destination
 			std::filesystem::path sourcePath(absolutePath);
 			string filename = sourcePath.filename().string();
 			string absDestPath = absSamplesFolder + "/" + filename;
-			
+
 			// Copy file if source != destination
 			try {
 				std::filesystem::path srcCanonical = std::filesystem::weakly_canonical(sourcePath);
 				std::filesystem::path destCanonical = std::filesystem::weakly_canonical(std::filesystem::path(absDestPath));
-				
+
 				if(srcCanonical != destCanonical) {
 					// Store original path for unembed
 					if(originalPath.empty()) {
 						originalPath = currentPath;
 					}
-					
+
 					// Copy the file
 					if(std::filesystem::is_directory(sourcePath)) {
 						std::filesystem::copy(sourcePath, absDestPath,
@@ -300,14 +308,15 @@ public:
 				json["EmbedInProject"] = false;
 				return;
 			}
-			
-			// Compute data-relative path for the embedded sample
-			string embeddedRelativePath = computeDataRelativePath(absPresetPath) + "/samples/" + filename;
-			
+
+			// Store path relative to data dir — points to preset root, not to any macro subfolder,
+			// so it remains valid regardless of macro ID or duplication.
+			string embeddedRelativePath = computeDataRelativePath(absPresetRoot) + "/samples/" + filename;
+
 			// Update path parameter and JSON
 			path = embeddedRelativePath;
 			json["Path"] = embeddedRelativePath;
-			
+
 			if(!originalPath.empty()) {
 				json["OriginalPath"] = originalPath;
 			}
@@ -330,11 +339,12 @@ public:
 	}
 
 	void presetRecallAfterSettingParameters(ofJson &json) override {
-		// Nothing needed - path parameter already contains correct path
+		// Nothing needed — embedded sample paths are stored relative to the preset root,
+		// not the macro subfolder, so they remain valid after duplication.
 	}
 	
 private:
-	
+
 	// Resolve any path format to absolute path
 	string resolveToAbsolutePath(const string& inputPath) {
 		string sClean = inputPath;
