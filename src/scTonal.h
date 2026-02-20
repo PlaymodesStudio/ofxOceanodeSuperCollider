@@ -37,17 +37,19 @@ public:
         addParameterDropdown(mode, "Class", 0, names);
         addOutputParameter(modeSize.set("Size", 5, 0, INT_MAX));
         addOutputParameter(output.set("Output", {0}, {0}, {INT_MAX}));
-        
+        addOutputParameter(outputNames.set("Names", names));
+
         listeners.push(mode.newListener([this](int &m){
             modeSize = scales[mode].second.size();
             output = scales[mode].second;
         }));
     }
-    
+
 private:
     ofParameter<int>    mode;
     ofParameter<int>    modeSize;
     ofParameter<vector<int>> output;
+    ofParameter<vector<string>> outputNames;
     
     vector<pair<string, vector<int>>> scales;
     
@@ -82,16 +84,17 @@ public:
         addParameter(fold.set("Fold", false));
         addOutputParameter(modeSize.set("Size", 5, 0, INT_MAX));
         addOutputParameter(output.set("Output", {0}, {0}, {INT_MAX}));
-        
+        addOutputParameter(outputNames.set("Names", names));
+
         listeners.push(mode.newListener([this](int &m){
             compute();
         }));
-        
+
         listeners.push(fold.newListener([this](bool &b){
             compute();
         }));
     }
-    
+
     void compute(){
         modeSize = chords[mode].second.size();
         if(fold){
@@ -103,11 +106,12 @@ public:
             output = chords[mode].second;
         }
     }
-    
+
 private:
     ofParameter<int>    mode;
     ofParameter<int>    modeSize;
     ofParameter<vector<int>> output;
+    ofParameter<vector<string>> outputNames;
     ofParameter<bool> fold;
     
     vector<pair<string, vector<int>>> chords;
