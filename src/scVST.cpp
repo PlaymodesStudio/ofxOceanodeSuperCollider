@@ -4324,9 +4324,13 @@ void scVST::moveSynthBefore(ofxSCServer* server, int nodeID){
 	// before a graph move.
 	resendParams.notify();
 	
-	// Move all instances for this server before the given nodeID,
-	// preserving their relative order in the SC node tree.
-	for(auto* synth : synthInstances[server]) {
+	// Move all instances before nodeID using reverse iteration so that
+	// synthInstances[0] ends up as the most-upstream synth in SC's node
+	// tree (matching creation order). Forward iteration would invert the
+	// internal order because each moveBefore pushes previous synths back.
+	auto &instances = synthInstances[server];
+	for(int i = (int)instances.size() - 1; i >= 0; i--) {
+		auto* synth = instances[i];
 		if(synth != nullptr && synth->nodeID > 0) {
 			try {
 				synth->moveBefore(nodeID);
@@ -4344,18 +4348,17 @@ int scVST::getLastSynthID(ofxSCServer* server){
 	if(!server) return -1;
 	if(synthInstances.count(server) == 0) return -1;
 	
-	int lastID = -1;
-	
-	// Iterate through the instances for this server and grab the last
-	// valid nodeID. This gives the "tail" of this node in the SC graph,
-	// which the recompute algorithm can use as an insertion anchor.
+	// moveSynthBefore uses reverse iteration, so synthInstances[0] ends up
+	// as the most-upstream synth in SC's node tree. Return its nodeID so
+	// that any node upstream of this VST is placed before the entire
+	// instance group, not in the middle of it.
 	for(auto* synth : synthInstances[server]) {
 		if(synth != nullptr && synth->nodeID > 0) {
-			lastID = synth->nodeID;
+			return synth->nodeID;
 		}
 	}
-	
-	return lastID;
+
+	return -1;
 }
 
 void scVST::resetInputBusses(ofxSCServer* server){
