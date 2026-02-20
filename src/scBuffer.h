@@ -254,15 +254,25 @@ public:
 				return;
 			}
 
-			// Use the shared current preset path as the root for embedded samples.
-			// This is always the top-level preset folder (e.g. Presets/AUDIO/31--bolas),
-			// regardless of how deep inside a local macro subfolder we are being called from.
-			// Samples stored here are shared across all local macros within the same preset
-			// and remain stable under macro duplication (no macro ID in the path).
+			// Determine where to store the embedded sample:
+			// - For local macros (presetFolderPath is under Presets/): use the shared
+			//   current preset path as the root (e.g. Presets/AUDIO/31--bolas/samples/).
+			//   This strips any Macro_N subfolder, keeping the path stable under duplication.
+			// - For global macros (presetFolderPath is under Macros/): use presetFolderPath
+			//   directly so samples live inside the global macro's own folder.
+			// - Fallback (clipboard/temp): use presetFolderPath as-is.
+			string absFolderPath = ofToDataPath(presetFolderPath, true);
 			string sharedPresetPath = ofxOceanodeShared::getCurrentPresetPath();
-			string absPresetRoot = sharedPresetPath.empty()
-			                       ? ofToDataPath(presetFolderPath, true)
-			                       : ofToDataPath(sharedPresetPath, true);
+			string absSharedPresetPath = sharedPresetPath.empty() ? "" : ofToDataPath(sharedPresetPath, true);
+
+			string absPresetRoot;
+			if(!absSharedPresetPath.empty() && absFolderPath.find("/Presets/") != string::npos) {
+				// Local macro context — anchor to the top-level preset folder
+				absPresetRoot = absSharedPresetPath;
+			} else {
+				// Global macro or clipboard — use the folder path itself
+				absPresetRoot = absFolderPath;
+			}
 			string absSamplesFolder = absPresetRoot + "/samples";
 
 			// Create samples folder
