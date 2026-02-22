@@ -45,6 +45,9 @@
 #include "scDoubleBuffer.h"
 #include "scGrainSamplerGui.h"
 #include "waveTrack.h"
+#include "scGraphicEQ.h"
+#include "scFFT.h"
+#include "scLissajous.h"
 
 
 
@@ -143,6 +146,9 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scGrainSamplerGui>("SuperCollider");
 	o.registerModel<scDoubleBuffer>("SuperCollider", controller->getServers());
 	o.registerModel<waveTrack>("SuperCollider", controller->getServers());
+	o.registerModel<scGraphicEQ>("SuperCollider");
+	o.registerModel<scFFT>("SuperCollider", controller->getServers());
+	o.registerModel<scLissajous>("SuperCollider", controller->getServers());
 
 }
 
