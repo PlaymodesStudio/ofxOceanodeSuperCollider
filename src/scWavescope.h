@@ -15,9 +15,11 @@ public:
 		sampleRate = 44100.0f;
 		samplesPerFrame = 64; // Fixed frame size like original
 		
-		// Sliding buffer for maximum time window
+		// Sliding buffer for maximum time window.
+		// The buffer is sized in captured samples (samplesPerFrame per display frame),
+		// NOT in audio samples — so every slot is filled each frame with no gaps.
 		maxBufferTime = 10.0f; // 10 seconds maximum
-		maxBufferSize = (int)(maxBufferTime * sampleRate);
+		maxBufferSize = (int)(maxBufferTime * frameRate) * samplesPerFrame;
 		slidingBuffer.resize(maxBufferSize * MAX_NODE_CHANNELS, 0.0f); // Max 24 channels
 		writeIndex = 0;
 		
@@ -147,10 +149,11 @@ public:
 		const int numChans = std::max(1, numChannels.get());
 		const float gainValue = gain.get();
 
-		// How much history (same logic as main view)
+		// How much history (same logic as main view).
+		// Buffer is frame-based: frameRate * samplesPerFrame slots per second.
 		float timeWindowSeconds = ofClamp(timeWindow.get(), 0.001f, maxBufferTime);
-		int samplesToDisplay = (int)(timeWindowSeconds * sampleRate);
-		samplesToDisplay = ofClamp(samplesToDisplay, 1, maxBufferSize);
+		int samplesToDisplay = (int)(timeWindowSeconds * frameRate) * samplesPerFrame;
+		samplesToDisplay = ofClamp(samplesToDisplay, samplesPerFrame, maxBufferSize);
 
 		const int startSample = maxBufferSize - samplesToDisplay;
 		const int endSample   = maxBufferSize;
@@ -329,11 +332,12 @@ public:
 		if(canvasSize.x < 50) canvasSize.x = 800;
 		if(canvasSize.y < 50) canvasSize.y = 400;
 
-		// Calculate which samples to display based on time window
+		// Calculate which slots to display based on time window.
+		// Buffer is frame-based: frameRate * samplesPerFrame slots per second.
 		float timeWindowSeconds = timeWindow.get();
-		int samplesToDisplay = (int)(timeWindowSeconds * sampleRate);
+		int samplesToDisplay = (int)(timeWindowSeconds * frameRate) * samplesPerFrame;
 		samplesToDisplay = min(samplesToDisplay, maxBufferSize);
-		samplesToDisplay = max(samplesToDisplay, 1);
+		samplesToDisplay = max(samplesToDisplay, samplesPerFrame);
 		
 		// Always show the most recent samples (rightmost in buffer)
 		int startSample = maxBufferSize - samplesToDisplay;
@@ -586,9 +590,9 @@ public:
 					if(configJson.contains("hardwareSampleRate")) {
 						int loadedSampleRate = configJson["hardwareSampleRate"].get<int>();
 						sampleRate = (float)loadedSampleRate;
-						
-						// Update buffer size based on actual sample rate
-						maxBufferSize = (int)(maxBufferTime * sampleRate);
+
+						// Buffer is frame-based: frameRate * samplesPerFrame slots per second.
+						maxBufferSize = (int)(maxBufferTime * frameRate) * samplesPerFrame;
 						slidingBuffer.resize(maxBufferSize * MAX_NODE_CHANNELS, 0.0f);
 						
 						float controlRate = sampleRate / serverBlockSize;
