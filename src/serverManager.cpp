@@ -53,6 +53,8 @@ void serverManager::setup(){
     listeners.push(server->serverInitializedEvent.newListener([this](){
         recomputeGraph();
     }));
+	
+	if(busFromSilent == nullptr) busFromSilent = std::make_unique<ofxSCBus>(RATE_AUDIO, MAX_NODE_CHANNELS, server);
 }
 
 void serverManager::draw(){
@@ -195,8 +197,7 @@ void serverManager::initialize(){
     setDelay(delay);
     setStereoMix(stereomix);
     setStereoMixSize(stereomixSize);
-    
-    if(busFromSilent == nullptr) busFromSilent = std::make_unique<ofxSCBus>(RATE_AUDIO, MAX_NODE_CHANNELS, server);
+        
 }
 
 void serverManager::kill(){
