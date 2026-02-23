@@ -33,7 +33,7 @@ public:
     }
     
     bool operator==(const nodePort& other) const {
-        return (index == other.index && nodeRef == nodeRef);
+        return (index == other.index && nodeRef == other.nodeRef);
     }
 private:
     int index = -1;
