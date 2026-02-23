@@ -85,6 +85,14 @@ public:
 		}
 	}
 
+	void activate() override {
+		if(synth) synth->run(true);
+	}
+
+	void deactivate() override {
+		if(synth) synth->run(false);
+	}
+
 private:
 	void recreateSynth(){
 		clearSynth();
@@ -92,6 +100,7 @@ private:
 			string defName = "beatTracker" + ofToString(numChannels);
 			synth = new ofxSCSynth(defName, servers[serverIndex]->getServer());
 			synth->addToTail();
+			synth->run(getActive());
 
 			quarterBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
 			eighthBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());

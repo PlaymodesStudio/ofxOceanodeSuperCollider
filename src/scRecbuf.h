@@ -114,6 +114,7 @@ private:
 		recSynth = new ofxSCSynth(defName,
 								  servers[serverIndex]->getServer());
 		recSynth->create(1, 1);
+		recSynth->run(getActive());
 		recSynth->set("in",
 			input->getBusIndex(servers[serverIndex]->getServer()));
 		recSynth->set("buf", bufnum.get());
@@ -163,6 +164,9 @@ private:
 
 		lastFile = absPath;
 	}
+
+	void activate() override { if(recSynth) recSynth->run(true); }
+	void deactivate() override { if(recSynth) recSynth->run(false); }
 
 	/* ─────────── cleanup ─────────── */
 	void cleanup(){

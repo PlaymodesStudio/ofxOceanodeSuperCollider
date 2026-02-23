@@ -132,13 +132,22 @@ private:
 		std::string defName = "convolution" + ofToString(numChannels);
 		synth = new ofxSCSynth(defName, servers[serverIndex]->getServer());
 		synth->create(1, 1);
-		
+		synth->run(getActive());
+
 		synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));
 		synth->set("out", output->getBusIndex(servers[serverIndex]->getServer()));
 		synth->set("irspectrum", irBufnum.get());
 		synth->set("partsize", partitionSize);
 		synth->set("mix", mix);
 		synth->set("levels", levels);
+	}
+
+	void activate() override {
+		if(synth) synth->run(true);
+	}
+
+	void deactivate() override {
+		if(synth) synth->run(false);
 	}
 
 	void clearSynth() {

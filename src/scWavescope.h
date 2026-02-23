@@ -518,6 +518,14 @@ public:
 		return false;
 	}
 	
+	void activate() override {
+		if(synth) synth->run(true);
+	}
+
+	void deactivate() override {
+		if(synth) synth->run(false);
+	}
+
 	void recreateSynth(){
         if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
 		if(synth){ synth->free(); delete synth; synth = nullptr; }
@@ -554,6 +562,7 @@ public:
 			synth->set("out", lowestBusIndex);
 			synth->set("refreshRate", frameRate);
 			synth->addToTail();
+			synth->run(getActive());
 
 		} catch (const std::exception &e) {
 			for(auto bus : controlBuses) {

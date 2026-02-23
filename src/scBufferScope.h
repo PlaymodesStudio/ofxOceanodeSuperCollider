@@ -70,6 +70,14 @@ private:
 
 	void freeSynths(){ for(auto *s:synths){ if(s){ s->free(); delete s; } } synths.clear(); }
 
+	void activate() override {
+		for(auto* s : synths) if(s) s->run(true);
+	}
+
+	void deactivate() override {
+		for(auto* s : synths) if(s) s->run(false);
+	}
+
 	void recreateSynths(){
 		freeSynths(); if(waveformBus){ waveformBus->free(); delete waveformBus; waveformBus=nullptr; }
 		if(bufnums->empty()) return;
@@ -80,6 +88,7 @@ private:
 		for(int k=0;k<ch;++k){
 			auto *s=new ofxSCSynth("bufferscopeSpread1_"+ofToString(samplesPerChannel),servers[serverIndex]->getServer());
 			s->addToTail();
+			s->run(getActive());
 			s->set("buf",bufnums->at(k));
 			s->set("out",waveformBus->index + k*samplesPerChannel);
 			synths.push_back(s);

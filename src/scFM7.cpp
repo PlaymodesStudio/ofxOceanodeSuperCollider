@@ -594,6 +594,7 @@ void scFM7::createSynth(ofxSCServer* server) {
 		synth->set("out", outputBuses[server][0]);
 	}
 	synth->create();
+	synth->run(getActive());
 }
 
 void scFM7::buildSynth(ofxSCServer* server) {

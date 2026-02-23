@@ -80,6 +80,14 @@ void scOutput::setStereoMixSize(int _stereomixSize){
     }
 }
 
+void scOutput::activate(){
+    if(synth != nullptr) synth->run(true);
+}
+
+void scOutput::deactivate(){
+    if(synth != nullptr) synth->run(false);
+}
+
 void scOutput::buildSynth(ofxSCServer *server){
     if(server == outputServers[serverIndex]->getServer()){
         synth = new ofxSCSynth("output", server);
@@ -95,6 +103,7 @@ void scOutput::createSynth(ofxSCServer* server){
         synth->set("stereomixsize", stereomixSize);
         synth->set("in", inputBus[server]);
         synth->create();
+        synth->run(getActive());
     }
 }
 

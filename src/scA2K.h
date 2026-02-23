@@ -57,12 +57,21 @@ public:
 	}
 
 private:
+	void activate() override {
+		if(synth) synth->run(true);
+	}
+
+	void deactivate() override {
+		if(synth) synth->run(false);
+	}
+
 	void recreateSynth(){
 		clearSynth();
 		if(input->getNodeRef() != nullptr){
 			string defName = "a2k" + ofToString(numChannels);
 			synth = new ofxSCSynth(defName, servers[serverIndex]->getServer());
 			synth->addToTail();
+			synth->run(getActive());
 
 			valueBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
 			synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));

@@ -103,6 +103,14 @@ void scFunction::sendCurveDataToSuperCollider() {
 	}
 }
 
+void scFunction::activate() {
+	for(auto& pair : synthInstances) if(pair.second) pair.second->run(true);
+}
+
+void scFunction::deactivate() {
+	for(auto& pair : synthInstances) if(pair.second) pair.second->run(false);
+}
+
 void scFunction::buildSynth(ofxSCServer* server) {
 	ofLogNotice("scFunction") << "Building synth for server";
 }
@@ -121,7 +129,8 @@ void scFunction::createSynth(ofxSCServer* server) {
 		synthInstances[server] = synth.get();  // Raw pointer for interface
 		synthPtrs[server] = synth;             // Shared pointer to keep alive
 		synth->create();
-		
+		synth->run(getActive());
+
 		// Apply pending input bus assignments
 		for(auto& inputBus : inputBuses[server]) {
 			if(inputBus.first != nullptr) {

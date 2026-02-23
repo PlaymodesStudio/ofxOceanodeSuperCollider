@@ -155,10 +155,19 @@ public:
 		if(outputBuses.count(server) && outputBuses[server].count(0)) s->set("out", outputBuses[server][0]);
 		
 		s->create();
-		
+		s->run(getActive());
+
 		if(waveformData.empty() && bufnum.get().size() > 0) triggerWaveformFetch(bufnum.get()[0]);
 	}
-	
+
+	void activate() override {
+		for(auto& pair : synthInstances) if(pair.second) pair.second->run(true);
+	}
+
+	void deactivate() override {
+		for(auto& pair : synthInstances) if(pair.second) pair.second->run(false);
+	}
+
 	void free(ofxSCServer* server) override {
 		if(!server) return;
 		if(synthInstances[server]) {

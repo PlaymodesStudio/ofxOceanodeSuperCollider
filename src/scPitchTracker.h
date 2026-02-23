@@ -61,6 +61,14 @@ public:
 
 	
 
+	void activate() override {
+		if(synth) synth->run(true);
+	}
+
+	void deactivate() override {
+		if(synth) synth->run(false);
+	}
+
 private:
 	void recreateSynth(){
         if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
@@ -69,6 +77,7 @@ private:
 			string defName = "pitchTracker" + ofToString(numChannels);
 			synth = new ofxSCSynth(defName, servers[serverIndex]->getServer());
 			synth->addToTail();
+			synth->run(getActive());
 
 			freqBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
 			confBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());

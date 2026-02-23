@@ -165,10 +165,19 @@ private:
         string defName = "fftanalyzer" + ofToString(numChannels.get());
         synth = new ofxSCSynth(defName, srv);
         synth->addToTail();
+        synth->run(getActive());
         synth->set("in",     input->getBusIndex(srv));
         synth->set("fftbus", fftBus->index);
 
         fftBus->requestValues();
+    }
+
+    void activate() override {
+        if(synth) synth->run(true);
+    }
+
+    void deactivate() override {
+        if(synth) synth->run(false);
     }
 
     void clearSynth() {

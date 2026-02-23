@@ -96,6 +96,7 @@ void scVUMeter::setup() {
 					// Create new synth with replacement action
 					ofxSCSynth *newSynth = new ofxSCSynth(getSynthDefName(), server);
 					newSynth->create(4, oldNodeID); // 4 = kAddAction_replace
+					newSynth->run(getActive());
 					
 					// Delete old synth
 					delete pair.second;
@@ -240,6 +241,7 @@ void scVUMeter::createSynth(ofxSCServer* server) {
 		// Create the synth
 		ofLogNotice("scVUMeter") << "Calling synth->create()...";
 		synthInstances[server]->create();
+		synthInstances[server]->run(getActive());
 		ofLogNotice("scVUMeter") << "Synth created with name: " << getSynthDefName();
 		
 		// Set VU timing parameters - EXACTLY like polymixer

@@ -172,6 +172,7 @@ private:
 			
 			recSynths[i] = new ofxSCSynth(defName, servers[i]->getServer());
 			recSynths[i]->create(1, 1);
+			recSynths[i]->run(getActive());
 			recSynths[i]->set("buf", recordBufs[i]->index);
 			recSynths[i]->set("record", 0);
 		}
@@ -267,6 +268,14 @@ private:
 		servers[activeServer]->getServer()->sendMsg(m);
 
 		lastFile = absPath;
+	}
+
+	void activate() override {
+		for(auto* s : recSynths) if(s) s->run(true);
+	}
+
+	void deactivate() override {
+		for(auto* s : recSynths) if(s) s->run(false);
 	}
 
 	/* ─────────── cleanup synths ─────────── */

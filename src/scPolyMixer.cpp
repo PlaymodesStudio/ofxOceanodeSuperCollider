@@ -142,7 +142,8 @@ void scPolyMixer::setup() {
 							} else {
 								newSynth->create();
 							}
-							
+							newSynth->run(getActive());
+
 							instances[i] = newSynth;
 						}
 					}
@@ -235,6 +236,7 @@ void scPolyMixer::setup() {
 										// Create new synth with replacement action (AddAction 4)
 										// All the above .set() calls are sent in this single OSC bundle
 										newSynth->create(4, oldSynth->nodeID);
+										newSynth->run(getActive());
 										
 										// Delete old synth object
 										delete oldSynth;
@@ -1490,6 +1492,19 @@ void scPolyMixer::updateAllTracksVUTiming(float attackTime, float releaseTime) {
 	}
 	
 	// SuperCollider integration implementations
+
+void scPolyMixer::activate() {
+	for(auto& serverPair : trackInstances)
+		for(auto* synth : serverPair.second)
+			if(synth) synth->run(true);
+}
+
+void scPolyMixer::deactivate() {
+	for(auto& serverPair : trackInstances)
+		for(auto* synth : serverPair.second)
+			if(synth) synth->run(false);
+}
+
 	void scPolyMixer::buildSynth(ofxSCServer* server) {
 		ofLogNotice("scPolyMixer") << "Building synth for server";
 		
@@ -1568,7 +1583,8 @@ void scPolyMixer::createSynth(ofxSCServer* server) {
 				// 3. EXECUTE CREATION
 				// This sends the /s_new message WITH all the above arguments
 				trackInstances[server][i]->create();
-				
+				trackInstances[server][i]->run(getActive());
+
 			} catch(const std::exception& e) {
 				ofLogError("scPolyMixer") << "Error creating track " << i << ": " << e.what();
 			}

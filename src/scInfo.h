@@ -146,6 +146,14 @@ public:
         }
     }
     
+    void activate() override {
+        if(synth) synth->run(true);
+    }
+
+    void deactivate() override {
+        if(synth) synth->run(false);
+    }
+
     void recreateSynth(){
         int numChans = numChannels;
         if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
@@ -171,6 +179,7 @@ public:
         if(input->getNodeRef() != nullptr){
             synth = new ofxSCSynth("Info" + ofToString(numChans), servers[serverIndex]->getServer());
             synth->addToTail();
+            synth->run(getActive());
             ampBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
             peakBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
             valueBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());

@@ -28,6 +28,9 @@ public:
     void setStereoMix(bool stereomix);
     void setStereoMixSize(int stereomixSize);
     
+    void activate() override;
+    void deactivate() override;
+
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;
     void moveSynthBefore(ofxSCServer* server, int nodeID) override;

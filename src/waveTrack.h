@@ -156,6 +156,15 @@ public:
 		s->set("jump", 0.0f);
 
 		s->create();
+		s->run(getActive());
+	}
+
+	void activate() override {
+		for(auto& pair : synthMap) if(pair.second) pair.second->run(true);
+	}
+
+	void deactivate() override {
+		for(auto& pair : synthMap) if(pair.second) pair.second->run(false);
 	}
 
 	void moveSynthBefore(ofxSCServer* server, int nodeID) override {

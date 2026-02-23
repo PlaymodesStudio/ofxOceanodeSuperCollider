@@ -4264,6 +4264,7 @@ void scVST::createSynth(ofxSCServer* server){
 		if(synthInstances[server][i] != nullptr) {
 			// Create the synth on the server (no need to set channel params since they're fixed in the SynthDef)
 			synthInstances[server][i]->create();
+			synthInstances[server][i]->run(getActive());
 			/*
 			 ofLogVerbose("scVST") << "Created VST instance " << i
 			 << " with nodeID " << synthInstances[server][i]->nodeID

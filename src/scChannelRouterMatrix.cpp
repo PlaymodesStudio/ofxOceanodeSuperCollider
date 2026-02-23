@@ -182,6 +182,14 @@ vector<float> scChannelRouterMatrix::flattenMatrix() const {
 	return flattened;
 }
 
+void scChannelRouterMatrix::activate() {
+	for(auto& pair : synthInstances) if(pair.second) pair.second->run(true);
+}
+
+void scChannelRouterMatrix::deactivate() {
+	for(auto& pair : synthInstances) if(pair.second) pair.second->run(false);
+}
+
 void scChannelRouterMatrix::buildSynth(ofxSCServer* server) {
 	ofLogNotice("scChannelRouterMatrix") << "Building synth for server";
 }
@@ -202,7 +210,8 @@ void scChannelRouterMatrix::createSynth(ofxSCServer* server) {
 		
 		synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
 		synthInstances[server]->create();
-		
+		synthInstances[server]->run(getActive());
+
 		// Set bypass parameter immediately
 		synthInstances[server]->set("bypass", bypass.get() ? 1.0f : 0.0f);
 		

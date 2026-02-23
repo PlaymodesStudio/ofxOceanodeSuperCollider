@@ -53,10 +53,19 @@ private:
 		string name = "blockdelay" + ofToString(chans);
 		synth = new ofxSCSynth(name, servers[0]->getServer());
 		synth->create(1, 1);               // tail of default group
+		synth->run(getActive());
 		synth->set("in",  in->getBusIndex(servers[0]->getServer()));
 		synth->set("out", outBus->index);
 
 		out = nodePort(*outBus);            // exposa el port sortida
+	}
+
+	void activate() override {
+		if(synth) synth->run(true);
+	}
+
+	void deactivate() override {
+		if(synth) synth->run(false);
 	}
 
 	void cleanup(){

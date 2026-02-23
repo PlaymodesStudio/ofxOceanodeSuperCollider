@@ -113,6 +113,7 @@ public:
 						// Create new synth with replacement action
 						ofxSCSynth *newSynth = new ofxSCSynth(getSynthDefName(), server);
 						newSynth->create(4, oldNodeID); // 4 = kAddAction_replace
+						newSynth->run(getActive());
 						
 						// Delete old synth
 						delete pair.second;
@@ -256,6 +257,14 @@ public:
 		return "vumeter" + ofToString(numChannels.get());
 	}
 	
+	void activate() override {
+		for(auto& pair : synthInstances) if(pair.second) pair.second->run(true);
+	}
+
+	void deactivate() override {
+		for(auto& pair : synthInstances) if(pair.second) pair.second->run(false);
+	}
+
 	void buildSynth(ofxSCServer* server) {
 		ofLogNotice("scFastEnvelopeFollower") << "buildSynth called for server: "
 			<< (server != nullptr ? "valid" : "NULL");
@@ -283,7 +292,8 @@ public:
 			
 			// Create the synth
 			synthInstances[server]->create();
-			
+			synthInstances[server]->run(getActive());
+
 			// Set envelope timing parameters - faster than VU meter defaults
 			synthInstances[server]->set("vuattacktime", attackTime.get());
 			synthInstances[server]->set("vureleasetime", releaseTime.get());

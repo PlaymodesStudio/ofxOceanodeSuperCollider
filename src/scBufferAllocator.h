@@ -60,6 +60,14 @@ public:
 		}
 	}
 
+	void activate() override {
+		for(auto* s : synths) if(s) s->run(true);
+	}
+
+	void deactivate() override {
+		for(auto* s : synths) if(s) s->run(false);
+	}
+
 private:
 	void recreateResources() {
 		cleanup();
@@ -82,6 +90,7 @@ private:
 
 			auto* synth = new ofxSCSynth("bufalloc", servers[serverIndex]->getServer());
 			synth->create(1, 1);
+			synth->run(getActive());
 
 			// 🔒 Ensure synth is silent until manually triggered
 			synth->set("record", 0);  // must be set first to avoid early recording

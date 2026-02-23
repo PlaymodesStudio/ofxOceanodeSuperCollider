@@ -178,6 +178,15 @@ private:
         synth->set("out",        lowestIdx);
         synth->set("timeWindow", timeWindow.get());
         synth->addToTail();
+        synth->run(getActive());
+    }
+
+    void activate() override {
+        if(synth) synth->run(true);
+    }
+
+    void deactivate() override {
+        if(synth) synth->run(false);
     }
 
     void clearSynth() {
