@@ -32,6 +32,7 @@ public:
 	void free(ofxSCServer* server);
 	
 	void setInputBus(ofxSCServer* server, scNode* node, int bus);
+	void resetInputBusses(ofxSCServer* server, int targetBus = 0);
 	void setOutputBus(ofxSCServer* server, int index, int bus);
 	int getOutputBusIndex(ofxSCServer* server, int index);
 	

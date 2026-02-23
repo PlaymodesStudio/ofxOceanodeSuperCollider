@@ -286,6 +286,13 @@ void scChannelRouterMatrix::setInputBus(ofxSCServer* server, scNode* node, int b
 	}
 }
 
+void scChannelRouterMatrix::resetInputBusses(ofxSCServer* server, int targetBus) {
+	inputBuses[server].clear();
+	if(synthInstances.count(server) > 0 && synthInstances[server] != nullptr) {
+		synthInstances[server]->set("in", targetBus);
+	}
+}
+
 void scChannelRouterMatrix::setOutputBus(ofxSCServer* server, int index, int bus) {
 	if(server == nullptr) return;
 	

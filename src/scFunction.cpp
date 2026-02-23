@@ -194,6 +194,13 @@ void scFunction::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 	}
 }
 
+void scFunction::resetInputBusses(ofxSCServer* server, int targetBus) {
+	inputBuses[server].clear();
+	if(synthInstances.count(server) > 0 && synthInstances[server] != nullptr) {
+		synthInstances[server]->set("in", targetBus);
+	}
+}
+
 int scFunction::getOutputBusIndex(ofxSCServer* server, int index) {
 	if(outputBuses.count(server) > 0 && outputBuses[server].count(index) > 0) {
 		return outputBuses[server][index];

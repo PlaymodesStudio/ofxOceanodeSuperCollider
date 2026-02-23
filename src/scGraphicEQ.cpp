@@ -315,6 +315,16 @@ void scGraphicEQ::setInputBus(ofxSCServer* server, scNode* node, int bus) {
     }
 }
 
+void scGraphicEQ::resetInputBusses(ofxSCServer* server, int targetBus) {
+    inputBuses[server].clear();
+    if(synthInstances.count(server) && synthInstances[server]) {
+        synthInstances[server]->set("in", targetBus);
+    }
+    if(fftSynthInstances.count(server) && fftSynthInstances[server]) {
+        fftSynthInstances[server]->set("in", targetBus);
+    }
+}
+
 void scGraphicEQ::setOutputBus(ofxSCServer* server, int index, int bus) {
     if(!server) return;
     outputBuses[server][index] = bus;
