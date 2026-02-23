@@ -182,15 +182,21 @@ void scVUMeter::update(ofEventArgs &args) {
 	for(auto& pair : vuBuses) {
 		ofxSCServer* server = pair.first;
 		if(server == nullptr || pair.second == nullptr) continue;
-		
+
 		vector<float> levels = pair.second->readValues;
+
+		// Sanitize: replace NaN/inf values with 0.0f to prevent downstream corruption
+		for(auto& v : levels) {
+			if(!std::isfinite(v)) v = 0.0f;
+		}
+
 		vuMeter.setWithoutEventNotifications(levels);
-		
+
 		// Update VU Data output parameter
 		if(vuData != nullptr) {
 			vuData->getParameter().set(levels);
 		}
-		
+
 		pair.second->requestValues();
 	}
 }
@@ -333,9 +339,16 @@ void scVUMeter::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 	}
 }
 
+void scVUMeter::resetInputBusses(ofxSCServer* server, int targetBus) {
+	inputBuses[server].clear();
+	if(synthInstances.count(server) > 0 && synthInstances[server] != nullptr) {
+		synthInstances[server]->set("in", targetBus);
+	}
+}
+
 void scVUMeter::setOutputBus(ofxSCServer* server, int index, int bus) {
 	if(server == nullptr) return;
-	
+
 	outputBuses[server][index] = bus;
 	ofLogNotice("scVUMeter") << "Output bus set to " << bus;
 	
