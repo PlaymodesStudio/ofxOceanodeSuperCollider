@@ -1738,7 +1738,7 @@ void scPolyMixer::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 	}
 }
 
-void scPolyMixer::resetInputBusses(ofxSCServer* server) {
+void scPolyMixer::resetInputBusses(ofxSCServer* server, int targetBus) {
 	ofLogNotice("scPolyMixer") << "=== RESET INPUT BUSSES (called by serverManager) ===";
 	
 	// Clear the input buses map
@@ -1749,7 +1749,7 @@ void scPolyMixer::resetInputBusses(ofxSCServer* server) {
 		for(int i = 0; i < trackInstances[server].size(); i++) {
 			if(trackInstances[server][i] != nullptr) {
 				try {
-					trackInstances[server][i]->set("in", -1);
+					trackInstances[server][i]->set("in", targetBus);
 					
 					// CRITICAL: Immediately zero out the VU meter for disconnected tracks
 					if(vuParameters.count(i) > 0) {

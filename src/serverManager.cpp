@@ -23,6 +23,7 @@ serverManager::serverManager(){
     audioDevice = 0;
     dumpOsc = false;
     numRecomputeGraphOnce = 0;
+    busFromSilent = nullptr;
 };
 
 serverManager::~serverManager(){
@@ -194,6 +195,8 @@ void serverManager::initialize(){
     setDelay(delay);
     setStereoMix(stereomix);
     setStereoMixSize(stereomixSize);
+    
+    if(busFromSilent == nullptr) busFromSilent = std::make_unique<ofxSCBus>(RATE_AUDIO, MAX_NODE_CHANNELS, server);
 }
 
 void serverManager::kill(){
@@ -328,9 +331,8 @@ void serverManager::recomputeGraph(){
             for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
                 if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end()){
                     (*it)->buildSynth(server);
-                }else{
-                    (*it)->resetInputBusses(server);
                 }
+                (*it)->resetInputBusses(server, busFromSilent->index);
             }
                 
         //Create outputBusses for all nodes except scOutput

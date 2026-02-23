@@ -233,13 +233,13 @@ void scOldSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
     }
 }
 
-void scOldSynthdef::resetInputBusses(ofxSCServer* server){
+void scOldSynthdef::resetInputBusses(ofxSCServer* server, int targetBus){
     inputBuses[server].clear();
     for(int i = 0; i < inputs.size(); i++){
         string paramName = "in";
         if(i > 0) paramName += ofToString(i+1);
         if(synths[server] != nullptr){
-            synths[server]->set(paramName, 0);
+            synths[server]->set(paramName, targetBus);
         }
     }
 }

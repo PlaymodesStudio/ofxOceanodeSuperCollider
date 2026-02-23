@@ -203,7 +203,7 @@ private:
 	void disableAllVUMeters(ofxSCServer* server);
 	void enableAllVUMeters(ofxSCServer* server);
 	void restoreTrackParameters(ofxSCServer* server, int trackIndex);
-	void resetInputBusses(ofxSCServer* server) override;
+	void resetInputBusses(ofxSCServer* server, int targetBus = 0) override;
 	
 	// Graph recomputation support
 	void moveSynthBefore(ofxSCServer* server, int nodeID) override;

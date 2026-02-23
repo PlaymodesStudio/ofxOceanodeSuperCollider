@@ -4362,14 +4362,14 @@ int scVST::getLastSynthID(ofxSCServer* server){
 	return -1;
 }
 
-void scVST::resetInputBusses(ofxSCServer* server){
+void scVST::resetInputBusses(ofxSCServer* server, int targetBus){
 	inputBuses[server].clear();
 	
 	if(synthInstances.count(server) == 0) return;
 	
 	for(auto* synth : synthInstances[server]){
 		if(synth != nullptr){
-			synth->set("in", 0);
+			synth->set("in", targetBus);
 			synth->set("inChannels", 0);
 		}
 	}

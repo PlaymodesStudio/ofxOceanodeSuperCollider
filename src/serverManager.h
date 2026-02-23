@@ -109,6 +109,7 @@ private:
     std::map<scNode*, std::vector<int>> inputBussesRefToNode;
     std::map<nodePort, std::vector<scNode*>> connections;
     
+    std::unique_ptr<ofxSCBus> busFromSilent;
     
     float volume;
     bool mute;

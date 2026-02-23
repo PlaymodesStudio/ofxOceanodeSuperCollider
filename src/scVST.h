@@ -153,7 +153,7 @@ public:
 	
 	void setOutputBus(ofxSCServer* server, int index, int bus);
 	void setInputBus(ofxSCServer* server, scNode* node, int bus);
-	void resetInputBusses(ofxSCServer* server) override;
+	void resetInputBusses(ofxSCServer* server, int targetBus = 0) override;
 
 	int getOutputBusIndex(ofxSCServer* server, int index);
 	int getLastSynthID(ofxSCServer* server);                // NEW

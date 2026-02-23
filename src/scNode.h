@@ -61,7 +61,7 @@ public:
     virtual void runSynth(ofxSCServer* server){};
     virtual void setOutputBus(ofxSCServer* server, int index, int bus){};
     virtual void setInputBus(ofxSCServer* server, scNode* node, int bus){};
-    virtual void resetInputBusses(ofxSCServer* server){};
+    virtual void resetInputBusses(ofxSCServer* server, int targetBus = 0){};
     
     virtual int getOutputBusIndex(ofxSCServer* server, int index){return -1;};
     

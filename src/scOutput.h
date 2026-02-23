@@ -40,7 +40,7 @@ public:
     scNode* getInputNode(){return inputs[0]->getNodeRef();}
     
     void setInputBus(ofxSCServer* server, scNode* node, int bus) override;
-    void resetInputBusses(ofxSCServer* server) override;
+    void resetInputBusses(ofxSCServer* server, int targetBus = 0) override;
     
     int getLastSynthID(ofxSCServer* server) override;
     

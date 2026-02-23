@@ -134,10 +134,10 @@ void scOutput::setInputBus(ofxSCServer* server, scNode* node, int bus){
     }
 }
 
-void scOutput::resetInputBusses(ofxSCServer* server){
+void scOutput::resetInputBusses(ofxSCServer* server, int targetBus){
     inputBus[server] = 0;
     if(synth != nullptr){
-        synth->set("in", 0);
+        synth->set("in", targetBus);
     }
 }
 

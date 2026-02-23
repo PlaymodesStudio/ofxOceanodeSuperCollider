@@ -392,12 +392,12 @@ void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
     }
 }
 
-void scSynthdef::resetInputBusses(ofxSCServer* server){
+void scSynthdef::resetInputBusses(ofxSCServer* server, int targetBus){
     inputBuses[server].clear();
     for(int i = 0; i < inputs.size(); i++){
         string paramName = ofToLower(inputs[i].getName());
         if(synths[server] != nullptr){
-            synths[server]->set(paramName, 0);
+            synths[server]->set(paramName, targetBus);
         }
     }
 }
