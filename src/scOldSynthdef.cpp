@@ -192,6 +192,7 @@ void scOldSynthdef::buildSynth(ofxSCServer* server){
 void scOldSynthdef::createSynth(ofxSCServer* server){
     resendParams.notify();
     synths[server]->create();
+    synths[server]->run(getActive());
 }
 
 void scOldSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){

@@ -37,6 +37,7 @@ void scSynthdef::setup(){
             for(auto &synth : synths){
                 ofxSCSynth *newSynth = new ofxSCSynth(getSynthdefFilename(), synth.first);
                 newSynth->create(4, synth.second->nodeID); //replace synth
+                newSynth->run(getActive());
                 delete synth.second;
                 synth.second = newSynth;
             }
@@ -346,6 +347,7 @@ void scSynthdef::buildSynth(ofxSCServer* server){
 void scSynthdef::createSynth(ofxSCServer* server){
     resendParams.notify();
     synths[server]->create();
+    synths[server]->run(getActive());
 }
 
 void scSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
