@@ -476,7 +476,7 @@ void serverManager::loadSynthdefsFromPreset(std::string path){
         m.addStringArg(path);
         server->sendMsg(m);
     }
-//    ofSleepMillis(5000);
+    ofSleepMillis(1000);
 }
 
 
