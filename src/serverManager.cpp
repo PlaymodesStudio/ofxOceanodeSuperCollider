@@ -34,7 +34,7 @@ serverManager::~serverManager(){
 }
 
 void serverManager::setup(){
-    server = new ofxSCServer(preferences.bindAddress, preferences.udpPort);
+    server = new ofxSCServer(preferences.bindAddress, preferences.udpPort, preferences.udpPort+20, preferences.numInputBusChannels, preferences.numOutputBusChannels, preferences.numAudioBusChannels, preferences.numControlBusChannels, preferences.numBuffers);
     if(preferences.local){
         sc = new scStart(preferences);
     }
