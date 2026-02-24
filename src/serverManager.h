@@ -16,6 +16,7 @@
 #include <ofEvent.h>
 #include <set>
 #include <string>
+#include "ofxOscMessage.h"
 
 class ofxSCServer;
 class ofxSCSynth;
@@ -101,6 +102,7 @@ public:
 private:
     
     void loadSynthdefsFromPreset(std::string path);
+    void checkGraph(ofxOscMessage &m);
 
     std::vector<scNode*> connectedNodes; //List of all nodes
     

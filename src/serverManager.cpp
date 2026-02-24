@@ -58,6 +58,7 @@ void serverManager::setup(){
     }));
 	
 	if(busFromSilent == nullptr) busFromSilent = std::make_unique<ofxSCBus>(RATE_AUDIO, MAX_NODE_CHANNELS, server);
+    listeners.push(server->queryTreeReplyEvent.newListener(this, &serverManager::checkGraph));
 }
 
 void serverManager::draw(){
@@ -180,6 +181,14 @@ void serverManager::draw(){
         m.setAddress("/dumpOSC");
         if(dumpOsc) m.addIntArg(1);
         else m.addIntArg(0);
+        server->sendMsg(m);
+    }
+    
+    if(ImGui::Button("Check graph")){
+        ofxOscMessage m;
+        m.setAddress("/g_queryTree");
+        m.addIntArg(0);
+        m.addIntArg(1);
         server->sendMsg(m);
     }
 }
@@ -390,92 +399,6 @@ void serverManager::recomputeGraph(){
 //        server->sendStoredBundle();
 //        server->setWaitToSend(false);
         server->setBLatency(false);
-        
-        
-        auto getNodeNameid = [](scNode* node) -> std::string {
-            std::string result = node->getParameterGroup().getName();
-            std::string parents = node->getParents();
-            if(parents != "Canvas"){
-                result = result + " " + parents;
-            }
-            ofStringReplace(result, " ", "_");
-            ofStringReplace(result, "_/_", "_");
-            return result;
-        };
-        
-        auto returnReplaceSpaces = [](std::string s) -> std::string {
-            ofStringReplace(s, " ", "_");
-            return s;
-        };
-    
-        if(nodesList.size() != 0){ //Create graphvix diagram
-            cout << "-------------- Begin Dot --------------" << endl;
-            cout << "digraph G {" << endl;
-            cout << "rankdir=\"LR\";" << endl;
-            cout << "node [ shape = rectangle ]" << endl;
-            cout << "graph [ splines=polyline ]" << endl;
-            cout << endl;
-            
-            struct macromap{
-                std::map<std::string, macromap> childs;
-                std::vector<std::string> elements;
-            };
-            macromap mm;
-            std::map<std::string, std::string> nodesMap;
-            int i = nodesList.size();
-            for(auto &node : nodesList){
-                std::string nodename = node->getParameterGroup().getName();
-                int nodeOrder = i;
-                int nodeInServerId = node->getNodeID(server);
-                std::string nodeid = getNodeNameid(node);
-                std::string nodeelement = nodeid + " [label=\"" + nodename + " \\n Order: " + ofToString(i, 2, '0') + " \\n ID: " + ofToString(nodeInServerId) + "\"]";
-                std::string parents = node->getParents();
-                if(parents == "Canvas"){
-                    mm.elements.push_back(nodeelement);
-                }else{
-                    std::vector<std::string> splittedParents = ofSplitString(parents, " / ");
-                    macromap* mm_ref = &mm;
-                    for(auto &parent : splittedParents){
-                        mm_ref = &mm_ref->childs[parent];
-                    }
-                    mm_ref->elements.push_back(nodeelement);
-                }
-                i--;
-            }
-            
-            int clusterid = 0;
-            
-            std::function<void(macromap)> printAllElements = [&printAllElements, &clusterid](macromap mm){
-                for(auto &e : mm.elements){
-                    cout << e << endl;
-                }
-                for(auto &c : mm.childs){
-                    std::string childname = c.first;
-                    cout << "subgraph cluster_" << clusterid++ << " {" << endl;
-                    cout << "style=filled;" << endl;
-                    cout << "node [style=filled,color=white];" << endl;
-                    printAllElements(c.second);
-                    cout << "label = \"" << childname << "\"" << endl;
-                    cout << "}" << endl;
-                }
-            };
-            
-            printAllElements(mm);
-            
-            cout << endl;
-            
-            for(auto &c : connections){
-                std::string fromnodeid = getNodeNameid(c.first.getNodeRef());
-                for(auto &dest : c.second){
-                    int busindex = outputBussesRefToNode[c.first.getNodeRef()][c.first.getIndex()];
-                    std::string tonodeid = getNodeNameid(dest);
-                    cout << fromnodeid << " -> " << tonodeid << " [label = \"" << busindex << "\"]" << endl;
-                }
-            }
-            cout << "}" << endl;
-            cout << "-------------- End Dot --------------" << endl;
-        }
-        
     }
     graphComputed.notify();
 }
@@ -568,6 +491,285 @@ void serverManager::loadSynthdefsFromPreset(std::string path){
     }
     
     ofSleepMillis(100 * synthsList.size());
+}
+
+void serverManager::checkGraph(ofxOscMessage &m){
+    struct synthControl{
+        bool usesIndex;
+        std::string name = "";
+        int index = 0;
+        bool usesAssignment;
+        float value;
+        std::string assignment;
+    };
+    
+    struct synthStruct{
+        synthStruct(){};
+        synthStruct(int _synthId, std::string _synthName) : synthId(_synthId), synthName(_synthName){};
+        int synthId;
+        std::string synthName;
+        std::vector<synthControl> controls;
+    };
+    
+    std::map<int, synthStruct> synths;
+    
+    int readIndex = 0;
+    bool controlValuesIncluded = m.getArgAsInt(readIndex++);
+    int nodeIdOfRequestedGroup = m.getArgAsInt(readIndex++);
+    int numChildNodesInGroup = m.getArgAsInt(readIndex++);
+    
+    std::function<void()> readChild = [m, &readChild, &readIndex, controlValuesIncluded, &synths](){
+        int nodeId = m.getArgAsInt(readIndex++);
+        int numChildNodes = m.getArgAsInt(readIndex++);
+        if(numChildNodes != -1){
+            for(int i = 0; i < numChildNodes; i++){
+                readChild();
+            }
+        }
+        else{
+            std::string synthName = m.getArgAsString(readIndex++);
+            synths[nodeId] = synthStruct(nodeId, synthName);
+            if(controlValuesIncluded){
+                int numControlValues = m.getArgAsInt(readIndex++);
+                for(int i = 0; i < numControlValues; i++){
+                    auto &control = synths[nodeId].controls.emplace_back();
+                    ofxOscArgType controlArgType = m.getArgType(readIndex);
+                    if(controlArgType == OFXOSC_TYPE_INT32){
+                        control.usesIndex = true;
+                        control.index = m.getArgAsInt(readIndex++);
+                    }
+                    else if(controlArgType == OFXOSC_TYPE_STRING){
+                        control.usesIndex = false;
+                        control.name = m.getArgAsString(readIndex++);
+                    }
+                    
+                    ofxOscArgType controlValueArgType = m.getArgType(readIndex);
+                    if(controlValueArgType == OFXOSC_TYPE_FLOAT){
+                        control.usesAssignment = false;
+                        control.value = m.getArgAsFloat(readIndex++);
+                    }
+                    else if(controlValueArgType == OFXOSC_TYPE_STRING){
+                        control.usesAssignment = true;
+                        control.assignment = m.getArgAsString(readIndex++);
+                    }
+                }
+            }
+        }
+    };
+    
+    for(int i = 0; i < numChildNodesInGroup; i++){
+        readChild();
+    }
+    
+    
+    auto getNodeNameid = [](scNode* node) -> std::string {
+        std::string result = node->getParameterGroup().getName();
+        std::string parents = node->getParents();
+        if(parents != "Canvas"){
+            result = result + " " + parents;
+        }
+        ofStringReplace(result, " ", "_");
+        ofStringReplace(result, "_/_", "_");
+        ofStringReplace(result, "*", "");
+        ofStringReplace(result, "SC ", "");
+        return result;
+    };
+    
+    auto returnReplaceSpaces = [](std::string s) -> std::string {
+        ofStringReplace(s, " ", "_");
+        return s;
+    };
+
+    if(nodesList.size() != 0){ //Create graphvix diagram
+        
+        std::ofstream fout(ofToDataPath("foo.dot"));
+
+//        file_out << "This is my output\n";
+//        fout << "-------------- Begin Dot --------------" << endl;
+        fout << "digraph G {" << endl;
+        fout << "rankdir=\"LR\";" << endl;
+        fout << "node [ shape = rectangle ]" << endl;
+        fout << "graph [ splines=polyline ]" << endl;
+        fout << endl;
+        
+        struct macromap{
+            std::map<std::string, macromap> childs;
+            std::vector<std::string> elements;
+        };
+        
+        macromap mm;
+        std::map<std::string, std::string> nodesMap;
+        std::map<int, std::pair<std::string, std::vector<std::string>>> busesConnections;
+        int i = nodesList.size();
+        for(auto &node : nodesList){
+            std::string nodename = node->getParameterGroup().getName();
+            std::string parents = node->getParents();
+            std::string nodeid = getNodeNameid(node);
+            int nodeOrder = i;
+            vector<int> nodeInServerIDs = node->getNodeIDs(server);
+            std::string nodeelement;// = "subgraph cluster_" + nodeid + " {\n";
+//            nodeelement += "label=\"" + nodename + " \\n Order: " + ofToString(i, 2, '0') + "\"\n";
+            for(auto scNode : nodeInServerIDs){
+                
+                
+                /*
+                 synth1 [shape=plaintext label=<
+                                 <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
+                                 <TR><TD COLSPAN="3">Panner 3</TD></TR>
+                                 <TR><TD COLSPAN="3">Order: 64</TD></TR>
+                                 <TR><TD COLSPAN="3">ID: 2001</TD></TR>
+                                 <TR><TD COLSPAN="3">2001</TD></TR>
+                                 <TR><TD PORT="in1" BGCOLOR="lightgray" WIDTH="1"></TD><TD>in1</TD></TR>
+                                 <TR><TD PORT="levels"></TD><TD COLSPAN="1">Levels</TD></TR>
+                                 <TR><TD SIDES="R"></TD><TD>output</TD><TD PORT="output" BGCOLOR="lightgray" WIDTH="1"></TD></TR>
+                                 </TABLE>>];
+                 */
+                
+                
+                if(scNode != -1 && synths.count(scNode) == 1){
+                    synthStruct synth = synths[scNode];
+                    
+                    nodeelement += nodeid + "_" + ofToString(scNode) + " [shape=plaintext label=<\n";
+                    nodeelement += "<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\">\n";
+                    nodeelement += "<TR><TD COLSPAN=\"3\">" + parents + "</TD></TR>";
+                    nodeelement += "<TR><TD COLSPAN=\"3\">" + nodename + "</TD></TR>";
+                    nodeelement += "<TR><TD COLSPAN=\"3\">Order: " + ofToString(i, 2, '0') + "</TD></TR>";
+                    nodeelement += "<TR><TD COLSPAN=\"3\">ID: " + ofToString(scNode) + "</TD></TR>\n";
+                    
+//                    for(auto c : synth.controls){
+//                        nodeelement += "<TR><TD PORT=\"" + c.name + "\"></TD><TD COLSPAN=\"1\">" + c.name + "</TD></TR>\n";
+//                    }
+                    
+                    for(auto p : node->getParameterGroup()){
+                        if(std::find_if(node->getInputs().begin(), node->getInputs().end(), [p](auto &v){return p->getName() == v.getName();}) != node->getInputs().end()){
+                            nodeelement += "<TR><TD PORT=\"" + p->getName() + "\" WIDTH=\"1\"></TD><TD WIDTH=\"100\">" + p->getName() + "</TD></TR>\n";
+                            auto search = std::find_if(synth.controls.begin(), synth.controls.end(), [p](auto &contr){
+                                return ofToLower(p->getName()) == contr.name;
+                            });
+                            if(search != synth.controls.end()){
+                                busesConnections[search->value].second.push_back(nodeid + "_" + ofToString(scNode) + ":" + p->getName());
+                            }
+                        }
+                        else if(std::find_if(node->getOutputs().begin(), node->getOutputs().end(), [p](auto &v){return p->getName() == v.getName();}) != node->getOutputs().end()){
+                            nodeelement += "<TR><TD SIDES=\"R\"></TD><TD WIDTH=\"100\">" + p->getName() + "</TD><TD PORT=\"" + p->getName() + "\" WIDTH=\"1\"></TD></TR>\n";
+                            auto search = std::find_if(synth.controls.begin(), synth.controls.end(), [p](auto &contr){
+                                return ofToLower(p->getName()) == contr.name;
+                            });
+                            if(search != synth.controls.end()){
+                                busesConnections[search->value].first = nodeid + "_" + ofToString(scNode) + ":" + p->getName();
+                            }
+                        }
+                        else{
+                            //TODO: Draw if modulable ar
+//                            nodeelement += "<TR><TD PORT=\"" + p->getName() + "\"></TD><TD COLSPAN=\"1\">" + p->getName() + "</TD></TR>\n";
+                            auto search = std::find_if(synth.controls.begin(), synth.controls.end(), [p](auto &contr){
+                                return (ofToLower(p->getName()) + "_sel") == contr.name;
+                            });
+                            if(search != synth.controls.end() && search->value == 1){
+                                auto search2 = std::find_if(synth.controls.begin(), synth.controls.end(), [p](auto &contr){
+                                    return (ofToLower(p->getName()) + "_ar") == contr.name;
+                                });
+                                nodeelement += "<TR><TD PORT=\"" + p->getName() + "\" WIDTH=\"1\"></TD><TD WIDTH=\"100\">" + p->getName() + "</TD></TR>\n";
+                                
+                                std::string assignment = search2->assignment;
+                                assignment.erase(assignment.begin());
+                                busesConnections[ofToInt(assignment)].second.push_back(nodeid + "_" + ofToString(scNode) + ":" + p->getName());
+                                
+                            }
+                        }
+                        
+                    }
+                    
+                    nodeelement += "</TABLE>>];\n";
+                }
+                else{
+                   //TODO: DRAW RED SYNTH
+                    ofLog() << "Not fount node " << nodename;
+                }
+            }
+//            nodeelement += "}";
+            
+//            std::string parents = node->getParents();
+            if(parents == "Canvas"){
+                mm.elements.push_back(nodeelement);
+            }else{
+                std::vector<std::string> splittedParents = ofSplitString(parents, " / ");
+                macromap* mm_ref = &mm;
+                for(auto &parent : splittedParents){
+                    mm_ref = &mm_ref->childs[parent];
+                }
+                mm_ref->elements.push_back(nodeelement);
+            }
+            i--;
+        }
+        
+        int clusterid = 0;
+        
+        std::function<void(macromap)> printAllElements = [&printAllElements, &clusterid, &fout](macromap mm){
+            for(auto &e : mm.elements){
+                fout << e << endl;
+            }
+            for(auto &c : mm.childs){
+                std::string childname = c.first;
+//                fout << "subgraph cluster_" << clusterid++ << " {" << endl;
+//                fout << "label = \"" << childname << "\"" << endl;
+//                fout << "style=filled;" << endl;
+//                fout << "node [style=filled,color=white];" << endl;
+                printAllElements(c.second);
+                
+//                fout << "}" << endl;
+            }
+        };
+        
+        printAllElements(mm);
+        
+        fout << endl;
+        
+//        for (auto it = nodesList.rbegin(); it != nodesList.rend(); ++it) {
+//            int i = 0;
+//            for(auto in : (*it)->getInputs()){
+//                std::string tonodeid = getNodeNameid(*it);
+//                std::string fromnodeid = "";
+//                if(in->getNodeRef() != nullptr){
+//                    fromnodeid = getNodeNameid(in->getNodeRef());
+//                }else{//Create empty node
+//                    fromnodeid = tonodeid + ofToString(i);
+//                    //n0 [label= "", shape=none,height=.0,width=.0]
+//                    cout << fromnodeid << " [label= \"\", shape=none,height=0,width=0]" << endl;
+//                }
+//                cout << fromnodeid << " -> " << tonodeid << " [label = \"" << in->getBusIndex(server) << "\", headlabel = \"" << in.getName() << "\"]" <<  endl;
+//                i++;
+//            }
+//        }
+        
+//            for(auto &c : connections){
+//                std::string fromnodeid = getNodeNameid(c.first.getNodeRef());
+//                for(auto &dest : c.second){
+//                    int busindex = outputBussesRefToNode[c.first.getNodeRef()][c.first.getIndex()];
+//                    std::string tonodeid = getNodeNameid(dest);
+//                    cout << fromnodeid << " -> " << tonodeid << " [label = \"" << busindex << "\"]" << endl;
+//                }
+//            }
+        
+        for(auto c : busesConnections){
+            if(c.second.first == ""){
+                for(auto dest : c.second.second){
+                    std::string destNoDots = dest.substr(0, dest.find(':'));
+                    fout << "null_" + ofToString(c.first) + "_" + destNoDots + " [label= \"\", shape=none,height=0,width=0]\n";
+                    
+                    fout << "null_" + ofToString(c.first) + "_" + destNoDots << " -> " << dest << " [label = \"" << c.first << "\"]" << endl;
+                }
+            }
+            else{
+                for(auto dest : c.second.second){
+                    fout << c.second.first << " -> " << dest << " [label = \"" << c.first << "\"]" << endl;
+                }
+            }
+        }
+        fout << "}" << endl;
+        ofSystem("/opt/homebrew/bin/dot -Tpdf \"" + ofToDataPath("foo.dot") + "\" -o \"" + ofToDataPath("foo.pdf") + "\"");
+//        fout << "-------------- End Dot --------------" << endl;
+    }
 }
 
 

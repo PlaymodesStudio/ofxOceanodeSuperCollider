@@ -65,7 +65,7 @@ public:
     
     int getLastSynthID(ofxSCServer* server) override;
     
-    int getNodeID(ofxSCServer* server) override;
+    vector<int> getNodeIDs(ofxSCServer* server) override;
     
     ofEvent<void> resendParams;
     

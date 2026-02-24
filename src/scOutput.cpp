@@ -148,11 +148,11 @@ int scOutput::getLastSynthID(ofxSCServer* server){
     return -1;
 }
 
-int scOutput::getNodeID(ofxSCServer* server){
+vector<int> scOutput::getNodeIDs(ofxSCServer* server){
     if(synth != nullptr){
-        return synth->nodeID;
+        return vector<int>(1, synth->nodeID);
     }
-    return -1;
+    return {-1};
 }
 
 //void scOutput::presetWillBeLoaded(){

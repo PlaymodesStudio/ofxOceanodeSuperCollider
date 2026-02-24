@@ -252,11 +252,11 @@ int scOldSynthdef::getLastSynthID(ofxSCServer* server){
     return synths[server]->nodeID;
 }
 
-int scOldSynthdef::getNodeID(ofxSCServer* server){
+vector<int> scOldSynthdef::getNodeIDs(ofxSCServer* server){
     if(synths[server] != nullptr){
-        return synths[server]->nodeID;
+        return vector<int>(1, synths[server]->nodeID);
     }
-    return -1;
+    return {-1};
 }
 
 oldSynthdefDesc scOldSynthdef::readAndCreateSynthdef(string file){

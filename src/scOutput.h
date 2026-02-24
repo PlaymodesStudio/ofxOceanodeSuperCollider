@@ -44,7 +44,7 @@ public:
     
     int getLastSynthID(ofxSCServer* server) override;
     
-    int getNodeID(ofxSCServer* server) override;
+    vector<int> getNodeIDs(ofxSCServer* server) override;
     
 //    void presetRecallBeforeSettingParameters(ofJson &json) override;
 //
