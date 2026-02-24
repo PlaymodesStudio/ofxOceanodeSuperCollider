@@ -45,6 +45,7 @@ public:
 	void free(ofxSCServer* server) override;
 	void moveSynthBefore(ofxSCServer* server, int nodeID) override;
 	int getLastSynthID(ofxSCServer* server) override;
+    vector<int> getNodeIDs(ofxSCServer* server) override;
 
 	void setOutputBus(ofxSCServer* server, int index, int bus) override;
 	void update(ofEventArgs& args) override;

@@ -42,6 +42,7 @@ public:
 	
 	void moveSynthBefore(ofxSCServer* server, int nodeID);
 	int getLastSynthID(ofxSCServer* server);
+    vector<int> getNodeIDs(ofxSCServer* server) override;
 	
 private:
 	// Synth instances per server

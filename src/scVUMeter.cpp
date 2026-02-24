@@ -417,6 +417,13 @@ int scVUMeter::getLastSynthID(ofxSCServer* server) {
 	return -1;
 }
 
+vector<int> scVUMeter::getNodeIDs(ofxSCServer* server){
+    if(synthInstances[server] != nullptr){
+        return vector<int>(1, synthInstances[server]->nodeID);
+    }
+    return {-1};
+}
+
 void scVUMeter::recreateVUBus(ofxSCServer* server) {
 	if(server == nullptr) return;
 	

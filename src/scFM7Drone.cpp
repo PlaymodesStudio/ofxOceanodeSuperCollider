@@ -435,6 +435,13 @@ int scFM7Drone::getLastSynthID(ofxSCServer* server) {
 	return -1;
 }
 
+vector<int> scFM7Drone::getNodeIDs(ofxSCServer* server){
+    if(synthInstances[server] != nullptr){
+        return vector<int>(1, synthInstances[server]->nodeID);
+    }
+    return {-1};
+}
+
 void scFM7Drone::moveSynthBefore(ofxSCServer* server, int nodeID) {
 	if(!server) return;
 	if(!synthInstances.count(server) || !synthInstances[server]) return;

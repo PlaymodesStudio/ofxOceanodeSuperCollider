@@ -374,6 +374,13 @@ public:
 		}
 		return -1;
 	}
+    
+    vector<int> getNodeIDs(ofxSCServer* server) override{
+        if(synthInstances[server] != nullptr){
+            return vector<int>(1, synthInstances[server]->nodeID);
+        }
+        return {-1};
+    }
 
 private:
 	ofEventListeners listeners;
