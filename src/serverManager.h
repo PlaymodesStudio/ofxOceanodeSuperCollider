@@ -14,6 +14,8 @@
 #include <string>
 #include <ofConstants.h>
 #include <ofEvent.h>
+#include <set>
+#include <string>
 
 class ofxSCServer;
 class ofxSCSynth;
@@ -25,6 +27,7 @@ class nodePort;
 
 struct scPreferences{
     bool local = true;
+    bool loadOnPreset = false;
     int udpPort = 57110; //u (0-65535)
     std::string bindAddress = "127.0.0.1"; //-B (set to 0.0.0.0 to listen to all)
     int numControlBusChannels = 16384; //c
@@ -89,9 +92,15 @@ public:
         numRecomputeGraphOnce = 0;
     }
     
+    void setSynthdefFolders(std::map<std::string, std::string> _synthdefFolders){
+        synthdefFolders = _synthdefFolders;
+    }
+    
     scPreferences preferences;
     ofEvent<void> graphComputed;
 private:
+    
+    void loadSynthdefsFromPreset(std::string path);
 
     std::vector<scNode*> connectedNodes; //List of all nodes
     
@@ -124,6 +133,9 @@ private:
     int numRecomputeGraphOnce;
     std::map<scNode*, ofEventListener> nodeDestroyedListeners;
     bool nodesListChanged = false;
+    std::map<std::string, std::string> synthdefFolders;
+    
+    std::set<std::string> alreadyLoadedSynthsList;
 };
 
 #endif /* serverManager_h */

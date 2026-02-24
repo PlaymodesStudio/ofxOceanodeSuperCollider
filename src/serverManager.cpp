@@ -44,6 +44,9 @@ void serverManager::setup(){
     }));
     
     listeners.push(ofxOceanodeShared::getPresetHasLoadedEvent().newListener([this](){
+        if(preferences.loadOnPreset){
+            loadSynthdefsFromPreset(ofxOceanodeShared::getCurrentPresetPath());
+        }
         recomputeGraph();
     }));
     
@@ -77,6 +80,12 @@ void serverManager::draw(){
             delete sc;
         }else{
             sc = new scStart(preferences);
+        }
+    }
+    
+    if(ImGui::Checkbox("Load Synthdefs On Preset", &preferences.loadOnPreset)){
+        if(!preferences.loadOnPreset){
+            loadDefs();
         }
     }
     
@@ -212,7 +221,11 @@ void serverManager::kill(){
 void serverManager::loadDefs(){
     ofxOscMessage m;
     m.setAddress("/d_loadDir");
-    m.addStringArg(ofToDataPath("Supercollider/Synthdefs", true));
+    if(preferences.loadOnPreset){
+        m.addStringArg(ofToDataPath(std::string(SYNTHDEF_DIRECTORY) + "/Defaults", true));
+    }else{
+        m.addStringArg(ofToDataPath(SYNTHDEF_DIRECTORY, true));
+    }
     m.addIntArg(0);
     server->sendMsg(m);
 }
@@ -380,6 +393,97 @@ void serverManager::recomputeGraph(){
     }
     graphComputed.notify();
 }
+
+void serverManager::loadSynthdefsFromPreset(std::string path){
+    //TODO: clear all loaded definitions, via /d_free message https://doc.sccode.org/Reference/Server-Command-Reference.html
+    
+//    std::set<std::string> synthsList;
+    std::set<std::string> synthsList;
+    
+    std::function<void(std::string)> checkSynthsInPreset = [this, &checkSynthsInPreset, &synthsList](std::string path){
+        ofJson json = ofLoadJson(path + "/modules.json");
+        
+        if(json.empty()){
+            return;
+        }
+        
+        for (ofJson::iterator node = json.begin(); node != json.end(); ++node) {
+            if(node.key().rfind("SC ", 0) == 0){
+                std::string synthdefName = node.key();
+                bool version2 = ofStringTimesInString(node.key(), "*") == 1;
+                ofStringReplace(synthdefName, "SC ", "");
+                ofStringReplace(synthdefName, "*", "");
+                
+                if(version2){
+                    if(alreadyLoadedSynthsList.count(synthdefName) == 0){
+                        synthsList.insert(synthdefName);
+                    }
+                }
+//                else{
+//                    synthsList.insert(synthdefName);
+//                }
+            }
+            else if(node.key() == "Macro"){
+                for (ofJson::iterator nodeID = node.value().begin(); nodeID != node.value().end(); ++nodeID) {
+                    int id = ofToInt(nodeID.key());
+                    
+                    ofJson macroJson = ofLoadJson(path + "/Macro_" + ofToString(id) + ".json");
+                    
+                    if(macroJson.empty()) continue;
+                    
+                    if(macroJson["LocalPreset"]){
+                        checkSynthsInPreset(path + "/Macro_" + ofToString(id));
+                    }else{
+                        std::string macroPath = macroJson["MacroPath"];
+//                        ofLog() << macroPath;
+                        std::vector<std::string> macroPathSplit = ofSplitString(macroPath, "/");
+                        std::string recreatedMacroPath = "";
+                        for(auto it = macroPathSplit.rbegin(); it !=macroPathSplit.rend(); it++){
+                            recreatedMacroPath = *it + "/" + recreatedMacroPath;
+                            if(*it == "Macros"){
+//                                ofLog() << "Recreated Macro Path: " << recreatedMacroPath;
+                                checkSynthsInPreset(recreatedMacroPath);
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    
+    checkSynthsInPreset(path);
+    
+    
+    std::function<std::string(std::string, std::string)> searchForPathInDirectory = [&searchForPathInDirectory](std::string synthdefName, std::string searchPath)->std::string{
+        ofDirectory dir(searchPath);
+        dir.sort();
+        for(auto &file : dir.getFiles()){
+            if(file.isDirectory()){
+                string path = searchForPathInDirectory(synthdefName, file.getAbsolutePath());
+                if(path != "") return path;
+            }else{
+                if(file.getFileName() == (synthdefName + ".txarcmeta")){
+                    return dir.getAbsolutePath();
+                }
+            }
+        }
+        return "";
+    };
+    
+    for(auto &synthdef : synthsList){
+        alreadyLoadedSynthsList.insert(synthdef);
+        std::string path = synthdefFolders[synthdef];
+        
+        ofxOscMessage m;
+        m.setAddress("/d_loadDir");
+        m.addStringArg(path);
+        server->sendMsg(m);
+    }
+    
+    ofSleepMillis(100 * synthsList.size());
+}
+
 
 //int serverManager::getOutputBusForNode(scNode* node){
 //    if(outputBussesRefToNode.count(node) == 1){
