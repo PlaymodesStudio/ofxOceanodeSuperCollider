@@ -399,7 +399,7 @@ void serverManager::loadSynthdefsFromPreset(std::string path){
 //    std::set<std::string> synthsList;
     std::set<std::string> synthsList;
     
-    std::function<void(std::string)> checkSynthsInPreset = [&checkSynthsInPreset, &synthsList](std::string path){
+    std::function<void(std::string)> checkSynthsInPreset = [this, &checkSynthsInPreset, &synthsList](std::string path){
         ofJson json = ofLoadJson(path + "/modules.json");
         
         if(json.empty()){
@@ -414,7 +414,9 @@ void serverManager::loadSynthdefsFromPreset(std::string path){
                 ofStringReplace(synthdefName, "*", "");
                 
                 if(version2){
-                    synthsList.insert(synthdefName);
+                    if(alreadyLoadedSynthsList.count(synthdefName) == 0){
+                        synthsList.insert(synthdefName);
+                    }
                 }
 //                else{
 //                    synthsList.insert(synthdefName);
@@ -469,6 +471,7 @@ void serverManager::loadSynthdefsFromPreset(std::string path){
     };
     
     for(auto &synthdef : synthsList){
+        alreadyLoadedSynthsList.insert(synthdef);
         std::string path = synthdefFolders[synthdef];
         
         ofxOscMessage m;
@@ -476,7 +479,8 @@ void serverManager::loadSynthdefsFromPreset(std::string path){
         m.addStringArg(path);
         server->sendMsg(m);
     }
-    ofSleepMillis(1000);
+    
+    ofSleepMillis(100 * synthsList.size());
 }
 
 

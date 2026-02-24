@@ -14,6 +14,8 @@
 #include <string>
 #include <ofConstants.h>
 #include <ofEvent.h>
+#include <set>
+#include <string>
 
 class ofxSCServer;
 class ofxSCSynth;
@@ -132,6 +134,8 @@ private:
     std::map<scNode*, ofEventListener> nodeDestroyedListeners;
     bool nodesListChanged = false;
     std::map<std::string, std::string> synthdefFolders;
+    
+    std::set<std::string> alreadyLoadedSynthsList;
 };
 
 #endif /* serverManager_h */
