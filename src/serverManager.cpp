@@ -15,6 +15,7 @@
 #include "ofxOceanodeShared.h"
 
 serverManager::serverManager(){
+    initialized = false;
     volume = 1;
     mute = false;
     delay = 0;
@@ -51,10 +52,20 @@ void serverManager::setup(){
     }));
     
     listeners.push(server->serverBootedEvent.newListener([this](){
+        initialized = false;
         initialize();
     }));
     listeners.push(server->serverInitializedEvent.newListener([this](){
+        initialized = true;
+        nodesList.clear();
+        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
+        busses.clear();
         recomputeGraph();
+        
+        setVolume(volume);
+        setDelay(delay);
+        setStereoMix(stereomix);
+        setStereoMixSize(stereomixSize);
     }));
 	
 	if(busFromSilent == nullptr) busFromSilent = std::make_unique<ofxSCBus>(RATE_AUDIO, MAX_NODE_CHANNELS, server);
@@ -201,12 +212,6 @@ void serverManager::initialize(){
     server->sendMsg(m2);
     
     loadDefs();
-    
-    setVolume(volume);
-    setDelay(delay);
-    setStereoMix(stereomix);
-    setStereoMixSize(stereomixSize);
-        
 }
 
 void serverManager::kill(){
@@ -266,6 +271,7 @@ void serverManager::removeOutput(scOutput *output){
 
 void serverManager::recomputeGraph(){
     if(ofxOceanodeShared::isPresetLoading()) return;
+    if(!initialized) return;
 //    ofLog() << "Recompute Graph";
     if(outputs.size() == 0){
         for(auto node : nodesList) node->free(server);

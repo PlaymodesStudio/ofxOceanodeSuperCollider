@@ -109,6 +109,8 @@ private:
     ofxSCSynth *synth;
     ofxSCServer *server;
     
+    bool initialized;
+    
     std::vector<scOutput*> outputs;
     std::vector<scNode*> nodesList;
     std::map<scNode*, std::map<int, std::vector<ofxSCSynth*>>> synthMap;
