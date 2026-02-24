@@ -52,6 +52,7 @@ public:
             termcmd += " -l " + ofToString(prefs.maxLogins);
             termcmd += " -s " + ofToString(prefs.safetyClipThreshold);
             termcmd += " -H " + prefs.deviceName;
+            termcmd += " -D 0 "; //Deactivate synthdefs
             std::string pluginsPath = scPath.substr(0, scPath.size()-7);
             if(prefs.ugensPlugins != "") termcmd += " -U " + ofToString("\"") + ofToDataPath(prefs.ugensPlugins, true) + ofToString(":") + pluginsPath + ofToString("\"");
             
