@@ -345,12 +345,14 @@ void scSynthdef::buildSynth(ofxSCServer* server){
 }
 
 void scSynthdef::createSynth(ofxSCServer* server){
+    if(synths.count(server) == 0) return;
     resendParams.notify();
     synths[server]->create();
     synths[server]->run(getActive());
 }
 
 void scSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
+    if(synths.count(server) == 0) return;
     resendParams.notify();
     synths[server]->moveBefore(nodeID);
 }
@@ -373,7 +375,7 @@ void scSynthdef::setOutputBus(ofxSCServer* server, int index, int bus){
     for(int i = 0; i < outputs.size(); i++){
         if(outputs[i]->getIndex() == index){
             string paramName = ofToLower(outputs[i].getName());
-            if(synths[server] != nullptr){
+            if(synths.count(server) != 0){
                 synths[server]->set(paramName, bus);
             }
         }
@@ -385,7 +387,7 @@ void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
     for(int i = 0; i < inputs.size(); i++){
         if(inputs[i]->getNodeRef() == node){
             string paramName = ofToLower(inputs[i].getName());
-            if(synths[server] != nullptr){
+            if(synths.count(server) != 0){
                 synths[server]->set(paramName, bus);
             }
         }
@@ -396,7 +398,7 @@ void scSynthdef::resetInputBusses(ofxSCServer* server, int targetBus){
     inputBuses[server].clear();
     for(int i = 0; i < inputs.size(); i++){
         string paramName = ofToLower(inputs[i].getName());
-        if(synths[server] != nullptr){
+        if(synths.count(server) != 0){
             synths[server]->set(paramName, targetBus);
         }
     }
@@ -407,6 +409,7 @@ int scSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
 }
 
 int scSynthdef::getLastSynthID(ofxSCServer* server){
+    if(synths.count(server) == 0) return -1;
     return synths[server]->nodeID;
 }
 
