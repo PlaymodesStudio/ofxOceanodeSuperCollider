@@ -177,8 +177,7 @@ private:
         synth->set("in",         input->getBusIndex(srv));
         synth->set("out",        lowestIdx);
         synth->set("timeWindow", timeWindow.get());
-        synth->addToTail();
-        synth->run(getActive());
+        synth->createAndRun(1, 1, getActive()); //addToTail
     }
 
     void activate() override {

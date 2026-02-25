@@ -36,8 +36,7 @@ void scSynthdef::setup(){
         if(oldNumChannels != numChannels || variableChanged){
             for(auto &synth : synths){
                 ofxSCSynth *newSynth = new ofxSCSynth(getSynthdefFilename(), synth.first);
-                newSynth->create(4, synth.second->nodeID); //replace synth
-                newSynth->run(getActive());
+                newSynth->createAndRun(4, synth.second->nodeID, getActive()); //replace synth
                 delete synth.second;
                 synth.second = newSynth;
             }
@@ -347,8 +346,7 @@ void scSynthdef::buildSynth(ofxSCServer* server){
 void scSynthdef::createSynth(ofxSCServer* server){
     if(synths.count(server) == 0) return;
     resendParams.notify();
-    synths[server]->create();
-    synths[server]->run(getActive());
+    synths[server]->createAndRun(0, 1, getActive());
 }
 
 void scSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){

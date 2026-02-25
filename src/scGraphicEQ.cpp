@@ -148,8 +148,7 @@ void scGraphicEQ::setup() {
                 ofxSCServer* srv = pair.first;
                 int oldID = pair.second->nodeID;
                 ofxSCSynth* newSynth = new ofxSCSynth(getSynthDefName(), srv);
-                newSynth->create(4, oldID); // kAddAction_replace
-                newSynth->run(getActive());
+                newSynth->createAndRun(4, oldID, getActive()); // kAddAction_replace
                 delete pair.second;
                 pair.second = newSynth;
                 restoreFullState(srv);
@@ -264,8 +263,7 @@ void scGraphicEQ::createSynth(ofxSCServer* server) {
             delete synthInstances[server];
         }
         synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
-        synthInstances[server]->create();
-        synthInstances[server]->run(getActive());
+        synthInstances[server]->createAndRun(0, 1, getActive());
 
         sendAllParamsToSynth(server);
 
@@ -409,8 +407,7 @@ void scGraphicEQ::createFFTSynth(ofxSCServer* server) {
         if(inBus < 0 && inputBuses.count(server) && !inputBuses[server].empty())
             inBus = inputBuses[server].begin()->second;
 
-        fftSynth->create(3, synthInstances[server]->nodeID); // addAfter
-        fftSynth->run(getActive());
+        fftSynth->createAndRun(3, synthInstances[server]->nodeID, getActive()); // addAfter
         if(inBus >= 0) fftSynth->set("in", inBus);
         fftSynth->set("fftbus", bus->index);
 

@@ -424,8 +424,7 @@ void scFM7Drone::createSynth(ofxSCServer* server) {
 		synth->set("out", outputBuses[server][0]);
 	}
 
-	synth->create();
-	synth->run(getActive());
+    synth->createAndRun(0, 1, getActive()); //addToTail
 }
 
 int scFM7Drone::getLastSynthID(ofxSCServer* server) {

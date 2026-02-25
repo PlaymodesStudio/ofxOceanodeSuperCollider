@@ -113,8 +113,7 @@ private:
 		std::string defName = "recbuf" + ofToString(nCh);
 		recSynth = new ofxSCSynth(defName,
 								  servers[serverIndex]->getServer());
-		recSynth->create(1, 1);
-		recSynth->run(getActive());
+        recSynth->createAndRun(1, 1, getActive()); //addToTail
 		recSynth->set("in",
 			input->getBusIndex(servers[serverIndex]->getServer()));
 		recSynth->set("buf", bufnum.get());

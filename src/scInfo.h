@@ -178,8 +178,7 @@ public:
         }
         if(input->getNodeRef() != nullptr){
             synth = new ofxSCSynth("Info" + ofToString(numChans), servers[serverIndex]->getServer());
-            synth->addToTail();
-            synth->run(getActive());
+            synth->createAndRun(1, 1, getActive()); //addToTail
             ampBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
             peakBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());
             valueBus = new ofxSCBus(RATE_CONTROL, numChans, servers[serverIndex]->getServer());

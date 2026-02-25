@@ -87,8 +87,7 @@ private:
 		waveformData.assign(total,0.f);
 		for(int k=0;k<ch;++k){
 			auto *s=new ofxSCSynth("bufferscopeSpread1_"+ofToString(samplesPerChannel),servers[serverIndex]->getServer());
-			s->addToTail();
-			s->run(getActive());
+            s->createAndRun(1, 1, getActive()); //addToTail
 			s->set("buf",bufnums->at(k));
 			s->set("out",waveformBus->index + k*samplesPerChannel);
 			synths.push_back(s);

@@ -89,8 +89,7 @@ private:
 			indices[i] = buf->index;
 
 			auto* synth = new ofxSCSynth("bufalloc", servers[serverIndex]->getServer());
-			synth->create(1, 1);
-			synth->run(getActive());
+            synth->createAndRun(1, 1, getActive()); //addToTail
 
 			// 🔒 Ensure synth is silent until manually triggered
 			synth->set("record", 0);  // must be set first to avoid early recording

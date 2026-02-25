@@ -70,8 +70,7 @@ private:
 		if(input->getNodeRef() != nullptr){
 			string defName = "a2k" + ofToString(numChannels);
 			synth = new ofxSCSynth(defName, servers[serverIndex]->getServer());
-			synth->addToTail();
-			synth->run(getActive());
+			synth->createAndRun(1, 1, getActive()); //addToTail
 
 			valueBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
 			synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));

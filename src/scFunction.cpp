@@ -128,8 +128,7 @@ void scFunction::createSynth(ofxSCServer* server) {
 		auto synth = std::make_shared<ofxSCSynth>(synthDefName, server);
 		synthInstances[server] = synth.get();  // Raw pointer for interface
 		synthPtrs[server] = synth;             // Shared pointer to keep alive
-		synth->create();
-		synth->run(getActive());
+        synth->createAndRun(0, 1, getActive());
 
 		// Apply pending input bus assignments
 		for(auto& inputBus : inputBuses[server]) {

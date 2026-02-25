@@ -171,8 +171,7 @@ private:
 			}
 			
 			recSynths[i] = new ofxSCSynth(defName, servers[i]->getServer());
-			recSynths[i]->create(1, 1);
-			recSynths[i]->run(getActive());
+			recSynths[i]->createAndRun(1, 1, getActive());
 			recSynths[i]->set("buf", recordBufs[i]->index);
 			recSynths[i]->set("record", 0);
 		}

@@ -102,8 +102,7 @@ void scOutput::createSynth(ofxSCServer* server){
         synth->set("stereomix", stereomix);
         synth->set("stereomixsize", stereomixSize);
         synth->set("in", inputBus[server]);
-        synth->create();
-        synth->run(getActive());
+        synth->createAndRun(0, 1, getActive());
     }
 }
 

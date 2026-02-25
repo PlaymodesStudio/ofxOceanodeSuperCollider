@@ -131,8 +131,7 @@ private:
 
 		std::string defName = "convolution" + ofToString(numChannels);
 		synth = new ofxSCSynth(defName, servers[serverIndex]->getServer());
-		synth->create(1, 1);
-		synth->run(getActive());
+        synth->createAndRun(1, 1, getActive()); //addToTail
 
 		synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));
 		synth->set("out", output->getBusIndex(servers[serverIndex]->getServer()));

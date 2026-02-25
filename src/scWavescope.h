@@ -557,8 +557,7 @@ public:
 			synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));
 			synth->set("out", lowestBusIndex);
 			synth->set("refreshRate", frameRate);
-			synth->addToTail();
-			synth->run(getActive());
+            synth->createAndRun(1, 1, getActive());
 
 		} catch (const std::exception &e) {
 			for(auto bus : controlBuses) {

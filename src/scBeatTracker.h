@@ -99,8 +99,7 @@ private:
 		if(input->getNodeRef() != nullptr){
 			string defName = "beatTracker" + ofToString(numChannels);
 			synth = new ofxSCSynth(defName, servers[serverIndex]->getServer());
-			synth->addToTail();
-			synth->run(getActive());
+            synth->createAndRun(1, 1, getActive()); //addToTail
 
 			quarterBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
 			eighthBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());

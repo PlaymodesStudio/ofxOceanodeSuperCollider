@@ -593,8 +593,7 @@ void scFM7::createSynth(ofxSCServer* server) {
 	if(outputBuses.count(server) && outputBuses[server].count(0)) {
 		synth->set("out", outputBuses[server][0]);
 	}
-	synth->create();
-	synth->run(getActive());
+    synth->createAndRun(0, 1, getActive()); //addToTail
 }
 
 void scFM7::buildSynth(ofxSCServer* server) {

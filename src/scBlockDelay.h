@@ -52,8 +52,7 @@ private:
 		// SynthDef name: blockdelay<channels>
 		string name = "blockdelay" + ofToString(chans);
 		synth = new ofxSCSynth(name, servers[0]->getServer());
-		synth->create(1, 1);               // tail of default group
-		synth->run(getActive());
+        synth->createAndRun(1, 1, getActive()); //addToTail
 		synth->set("in",  in->getBusIndex(servers[0]->getServer()));
 		synth->set("out", outBus->index);
 

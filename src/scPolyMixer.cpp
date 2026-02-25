@@ -137,12 +137,11 @@ void scPolyMixer::setup() {
 							// 2. EXECUTE REPLACEMENT
 							if(oldSynth != nullptr) {
 								// Action 4 (Replace) takes the target node ID
-								newSynth->create(4, oldSynth->nodeID);
+								newSynth->createAndRun(4, oldSynth->nodeID, getActive());
 								delete oldSynth;
 							} else {
-								newSynth->create();
+								newSynth->createAndRun(0, 1, getActive());
 							}
-							newSynth->run(getActive());
 
 							instances[i] = newSynth;
 						}
@@ -1582,8 +1581,7 @@ void scPolyMixer::createSynth(ofxSCServer* server) {
 
 				// 3. EXECUTE CREATION
 				// This sends the /s_new message WITH all the above arguments
-				trackInstances[server][i]->create();
-				trackInstances[server][i]->run(getActive());
+				trackInstances[server][i]->createAndRun(0, 1, getActive());
 
 			} catch(const std::exception& e) {
 				ofLogError("scPolyMixer") << "Error creating track " << i << ": " << e.what();

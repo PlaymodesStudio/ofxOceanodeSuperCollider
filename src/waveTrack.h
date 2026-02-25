@@ -155,8 +155,7 @@ public:
 		s->set("play", 0.0f);
 		s->set("jump", 0.0f);
 
-		s->create();
-		s->run(getActive());
+        s->createAndRun(0, 1, getActive());;
 	}
 
 	void activate() override {

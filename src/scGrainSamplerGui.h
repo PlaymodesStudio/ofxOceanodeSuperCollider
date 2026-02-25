@@ -154,8 +154,7 @@ public:
 		
 		if(outputBuses.count(server) && outputBuses[server].count(0)) s->set("out", outputBuses[server][0]);
 		
-		s->create();
-		s->run(getActive());
+		s->createAndRun(0, 1, getActive());
 
 		if(waveformData.empty() && bufnum.get().size() > 0) triggerWaveformFetch(bufnum.get()[0]);
 	}

@@ -76,9 +76,7 @@ private:
 		if(input->getNodeRef() != nullptr){
 			string defName = "pitchTracker" + ofToString(numChannels);
 			synth = new ofxSCSynth(defName, servers[serverIndex]->getServer());
-			synth->addToTail();
-			synth->run(getActive());
-
+            synth->createAndRun(1, 1, getActive()); //addToTail
 			freqBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
 			confBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
 

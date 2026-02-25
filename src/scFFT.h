@@ -188,8 +188,7 @@ private:
 
         string defName = "fftanalyzer" + ofToString(numChannels.get());
         synth = new ofxSCSynth(defName, srv);
-        synth->addToTail();
-        synth->run(getActive());
+        synth->createAndRun(1, 1, getActive()); //addToTail
         synth->set("in",     input->getBusIndex(srv));
         synth->set("fftbus", fftBus->index);
 

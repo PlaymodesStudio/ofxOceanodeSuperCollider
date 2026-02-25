@@ -209,8 +209,7 @@ void scChannelRouterMatrix::createSynth(ofxSCServer* server) {
 		}
 		
 		synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
-		synthInstances[server]->create();
-		synthInstances[server]->run(getActive());
+		synthInstances[server]->createAndRun(0, 1, getActive());
 
 		// Set bypass parameter immediately
 		synthInstances[server]->set("bypass", bypass.get() ? 1.0f : 0.0f);

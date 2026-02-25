@@ -114,8 +114,7 @@ public:
 						int oldNodeID = pair.second->nodeID;
 
 						ofxSCSynth *newSynth = new ofxSCSynth(getSynthDefName(), server);
-						newSynth->create(4, oldNodeID); // 4 = kAddAction_replace
-						newSynth->run(getActive());
+						newSynth->createAndRun(4, oldNodeID, getActive()); // 4 = kAddAction_replace
 
 						delete pair.second;
 						pair.second = newSynth;
@@ -225,8 +224,7 @@ public:
 
 			recreateEnvelopeBus(server);
 
-			synthInstances[server]->create();
-			synthInstances[server]->run(getActive());
+			synthInstances[server]->createAndRun(0, 1, getActive());
 
 			synthInstances[server]->set("vuattacktime", attackTime.get());
 			synthInstances[server]->set("vureleasetime", releaseTime.get());
