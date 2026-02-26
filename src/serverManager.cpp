@@ -212,6 +212,8 @@ void serverManager::initialize(){
     server->sendMsg(m2);
     
     loadDefs();
+    
+    server->sendInitializationSyncMessage();
 }
 
 void serverManager::kill(){
