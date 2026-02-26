@@ -213,10 +213,7 @@ void serverManager::initialize(){
     
     loadDefs();
     
-    ofxOscMessage m3;
-    m3.setAddress("/sync");
-    m3.addIntArg(1917); //Init with numbers
-    server->sendMsg(m3);
+    server->sendInitializationSyncMessage();
 }
 
 void serverManager::kill(){
