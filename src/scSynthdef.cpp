@@ -286,6 +286,10 @@ void scSynthdef::setup(){
                     }
                 }
             }));
+            
+            listeners.push(resetAudioRateBusAssignments.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, int> busAssignmentInfo){
+                synths[busAssignmentInfo.first]->mapan(toSendName + "_ar", busAssignmentInfo.second, MAX_NODE_CHANNELS);
+            }));
         }
         listeners.push(resendParams.newListener([setValuesToSynths]{
             setValuesToSynths();
@@ -393,13 +397,14 @@ void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
 }
 
 void scSynthdef::resetInputBusses(ofxSCServer* server, int targetBus){
+    if(synths.count(server) == 0) return;
     inputBuses[server].clear();
     for(int i = 0; i < inputs.size(); i++){
         string paramName = ofToLower(inputs[i].getName());
-        if(synths.count(server) != 0){
-            synths[server]->set(paramName, targetBus);
-        }
+        synths[server]->set(paramName, targetBus);
     }
+    auto args = std::make_pair(server, targetBus);
+    resetAudioRateBusAssignments.notify(args);
 }
 
 int scSynthdef::getOutputBusIndex(ofxSCServer* server, int index){

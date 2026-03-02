@@ -66,6 +66,7 @@ public:
     int getLastSynthID(ofxSCServer* server) override;
     
     ofEvent<void> resendParams;
+    ofEvent<std::pair<ofxSCServer*, int>> resetAudioRateBusAssignments;
     
     static synthdefDesc readAndCreateSynthdef(string file);
     
