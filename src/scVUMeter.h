@@ -58,8 +58,14 @@ private:
 	ofParameter<float> widgetWidth;
 	ofParameter<float> widgetHeight;
 	
+	ofParameter<void> clearPeaks; // The clear trigger
+	vector<float> stickyMaxPeaks; // The persistent peak values
+		
+	
 	// VU Data output parameter
 	shared_ptr<ofxOceanodeParameter<vector<float>>> vuData;
+	shared_ptr<ofxOceanodeParameter<vector<float>>> maxPeaksOutput; // Added this
+
 	
 	// Peak tracking for GUI
 	vector<float> peakLevels;

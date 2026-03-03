@@ -146,6 +146,9 @@ void scVUMeter::setup() {
 			
 			peakLevels.resize(channels, -60.0f);
 			peakDecayTimers.resize(channels, 0.0f);
+			
+			stickyMaxPeaks.assign(channels, -60.0f);
+			if(maxPeaksOutput) maxPeaksOutput->getParameter().set(stickyMaxPeaks);
 		}));
 		
 		listeners.push(vuAttack.newListener([this](float &attackTime){
@@ -159,6 +162,23 @@ void scVUMeter::setup() {
 		// Initialize peak tracking
 		peakLevels.resize(numChannels.get(), -60.0f);
 		peakDecayTimers.resize(numChannels.get(), 0.0f);
+		
+		addParameter(clearPeaks.set("Clear Max"));
+
+		// Initialize sticky peaks vector
+		stickyMaxPeaks.assign(numChannels.get(), -60.0f);
+
+		// Create the Max Peaks output
+		vector<float> defaultMax(numChannels.get(), -60.0f);
+		auto maxPeaksParam = std::make_shared<ofParameter<vector<float>>>();
+		maxPeaksParam->set("Max Peaks", defaultMax, vector<float>(numChannels.get(), -60.0f), vector<float>(numChannels.get(), 6.0f));
+		maxPeaksOutput = addOutputParameter(*maxPeaksParam);
+
+		// Listener for the clear button
+		listeners.push(clearPeaks.newListener([this](){
+			stickyMaxPeaks.assign(numChannels.get(), -60.0f);
+			if(maxPeaksOutput) maxPeaksOutput->getParameter().set(stickyMaxPeaks);
+		}));
 		
 		// Add VU meter widget - EXACTLY like polymixer master VU
 		addCustomRegion(
@@ -539,6 +559,15 @@ void scVUMeter::drawVUWidget() {
 			drawList->AddRectFilled(channelStart, meterEnd, meterColor);
 		}
 		
+		// Update Sticky Max Peak
+		if(dbLevel > stickyMaxPeaks[ch]) {
+			stickyMaxPeaks[ch] = dbLevel;
+			if(maxPeaksOutput) {
+				// Update output parameter
+				maxPeaksOutput->getParameter().set(stickyMaxPeaks);
+			}
+		}
+		
 		// Draw peak line
 		float peakPosition = dbToVUPosition(peakLevels[ch], -60.0f, 6.0f);
 		if(peakPosition > 0.01f) {
@@ -561,6 +590,17 @@ void scVUMeter::drawVUWidget() {
 				ImVec2(zeroDbX, channelEnd.y),
 				IM_COL32(255, 255, 255, 220),
 				1.5f
+			);
+		}
+		
+		float stickyPos = dbToVUPosition(stickyMaxPeaks[ch], -60.0f, 6.0f);
+		if(stickyPos > 0.0f) {
+			float stickyX = channelStart.x + meterWidth * stickyPos;
+			drawList->AddLine(
+				ImVec2(stickyX, channelStart.y),
+				ImVec2(stickyX, channelEnd.y),
+				IM_COL32(255, 105, 180, 255), // Pink
+				2.0f
 			);
 		}
 		
@@ -603,6 +643,8 @@ void scVUMeter::drawVUWidget() {
 			currentY += 1.0f;
 		}
 	}
+	
+	
 	
 	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, cursorPos.y + totalHeight));
 	ImGui::Dummy(ImVec2(widgetW, 4.0f));
