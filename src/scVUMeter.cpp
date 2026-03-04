@@ -84,52 +84,54 @@ void scVUMeter::setup() {
 		// Add passthrough output - needed for graph to determine server
 		scNode::addOutput("Out");
 		
-		// Set up parameter listeners - FOLLOW CANONICAL PATTERN FROM scSynthdef
-		listeners.push(numChannels.newListener([this](int &channels){
-            if(channels < 1 || channels > MAX_NODE_CHANNELS) return;
-			// Recreate synths with proper replacement - EXACTLY like scSynthdef
-			for(auto& pair : synthInstances) {
-				if(pair.second != nullptr) {
-					ofxSCServer* server = pair.first;
-					int oldNodeID = pair.second->nodeID;
-					
-					// Create new synth with replacement action
-					ofxSCSynth *newSynth = new ofxSCSynth(getSynthDefName(), server);
-					newSynth->createAndRun(4, oldNodeID, getActive()); // 4 = kAddAction_replace
-					
-					// Delete old synth
-					delete pair.second;
-					pair.second = newSynth;
-					
-					// Recreate VU bus for new channel count
-					recreateVUBus(server);
-					
-					// Restore all parameters after synth recreation
-					if(vuBuses.count(server) > 0 && vuBuses[server] != nullptr) {
-						newSynth->set("vubus", vuBuses[server]->index);
-						ofLogNotice("scVUMeter") << "Restored VU bus to index " << vuBuses[server]->index;
+		// CRITICAL: Add resendParams listener (following scSynthDef pattern)
+		listeners.push(resendParams.newListener([this](){
+			for(auto synthServer : synthInstances){
+				if(synthServer.second != nullptr){
+					// Set VU-specific parameters
+					if(vuBuses.count(synthServer.first) > 0 && vuBuses[synthServer.first] != nullptr){
+						synthServer.second->set("vubus", vuBuses[synthServer.first]->index);
 					}
-					
-					newSynth->set("vuattacktime", vuAttack.get());
-					newSynth->set("vureleasetime", vuRelease.get());
-					ofLogNotice("scVUMeter") << "Restored VU timing parameters";
-					
-					// Restore input bus
-					if(inputBuses.count(server) > 0 && !inputBuses[server].empty()) {
-						for(auto& inputPair : inputBuses[server]) {
-							newSynth->set("in", inputPair.second);
-							ofLogNotice("scVUMeter") << "Restored input bus to " << inputPair.second;
-							break; // Only one input
+					synthServer.second->set("vuattacktime", vuAttack.get());
+					synthServer.second->set("vureleasetime", vuRelease.get());
+				}
+			}
+			for(auto synthServer : synthInstances){
+				for(int i = 0; i < inputs.size(); i++){
+					if(inputBuses[synthServer.first].count(inputs[i]->getNodeRef()) == 1){
+						string paramName = ofToLower(inputs[i].getName());
+						if(synthServer.second != nullptr){
+							synthServer.second->set(paramName, inputBuses[synthServer.first][inputs[i]->getNodeRef()]);
 						}
 					}
-					
-					// Restore output bus
-					if(outputBuses.count(server) > 0 && outputBuses[server].count(0) > 0) {
-						newSynth->set("out", outputBuses[server][0]);
-						ofLogNotice("scVUMeter") << "Restored output bus to " << outputBuses[server][0];
+				}
+				for(int i = 0; i < outputs.size(); i++){
+					if(outputBuses[synthServer.first].count(outputs[i]->getIndex()) == 1){
+						string paramName = ofToLower(outputs[i].getName());
+						if(synthServer.second != nullptr){
+							synthServer.second->set(paramName, outputBuses[synthServer.first][outputs[i]->getIndex()]);
+						}
 					}
 				}
 			}
+		}));
+		
+		// Set up parameter listeners - FOLLOW CANONICAL PATTERN FROM scSynthdef
+		listeners.push(numChannels.newListener([this](int &channels){
+			if(channels < 1 || channels > MAX_NODE_CHANNELS) return;
+			// Recreate synths with proper replacement - EXACTLY like scSynthdef
+			for(auto &synth : synthInstances){
+				ofxSCSynth *newSynth = new ofxSCSynth(getSynthDefName(), synth.first);
+				newSynth->createAndRun(4, synth.second->nodeID, getActive()); // 4 = kAddAction_replace
+				delete synth.second;
+				synth.second = newSynth;
+				
+				// Recreate VU bus for new channel count
+				recreateVUBus(synth.first);
+			}
+			
+			// Use event pattern to restore ALL parameters (following scSynthDef)
+			resendParams.notify();
 			
 			// CRITICAL: Trigger graph recomputation - EXACTLY like scSynthdef
 			for(auto& output : outputs) {
@@ -221,11 +223,11 @@ void scVUMeter::update(ofEventArgs &args) {
 }
 
 void scVUMeter::activate(){
-    for(auto &synth : synthInstances) synth.second->run(true);
+	for(auto &synth : synthInstances) synth.second->run(true);
 }
 
 void scVUMeter::deactivate(){
-    for(auto &synth : synthInstances) synth.second->run(false);
+	for(auto &synth : synthInstances) synth.second->run(false);
 }
 
 string scVUMeter::getSynthDefName() const {
@@ -233,79 +235,21 @@ string scVUMeter::getSynthDefName() const {
 }
 
 void scVUMeter::buildSynth(ofxSCServer* server) {
-	ofLogNotice("scVUMeter") << "========== BUILD SYNTH CALLED ==========";
-	ofLogNotice("scVUMeter") << "Building synth for server: " << (server != nullptr ? "valid" : "NULL");
+	// Following scSynthDef canonical pattern
+	synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
 }
 
 void scVUMeter::createSynth(ofxSCServer* server) {
-	ofLogNotice("scVUMeter") << "========== CREATE SYNTH CALLED ==========";
+	// Following scSynthDef canonical pattern
+	if(synthInstances.count(server) == 0) return;
 	
-	if(server == nullptr) {
-		ofLogError("scVUMeter") << "Server is NULL!";
-		return;
-	}
+	// Create VU bus before notifying params
+	recreateVUBus(server);
 	
-	try {
-		ofLogNotice("scVUMeter") << "Creating synth with " << numChannels.get() << " channels";
-		ofLogNotice("scVUMeter") << "SynthDef name will be: " << getSynthDefName();
-		
-		// Create synth instance
-		if(synthInstances[server] != nullptr) {
-			ofLogNotice("scVUMeter") << "Freeing existing synth instance";
-			synthInstances[server]->free();
-			delete synthInstances[server];
-		}
-		
-		ofLogNotice("scVUMeter") << "Creating new ofxSCSynth...";
-		synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
-		
-		// Create VU bus - EXACTLY like polymixer
-		ofLogNotice("scVUMeter") << "Creating VU bus...";
-		recreateVUBus(server);
-		
-		// Create the synth
-		ofLogNotice("scVUMeter") << "Calling synth->create()...";
-        synthInstances[server]->createAndRun(0, 1, getActive());
-		ofLogNotice("scVUMeter") << "Synth created with name: " << getSynthDefName();
-		
-		// Set VU timing parameters - EXACTLY like polymixer
-		ofLogNotice("scVUMeter") << "Setting VU timing parameters...";
-		synthInstances[server]->set("vuattacktime", vuAttack.get());
-		synthInstances[server]->set("vureleasetime", vuRelease.get());
-		ofLogNotice("scVUMeter") << "VU timing set - attack: " << vuAttack.get() << "ms, release: " << vuRelease.get() << "ms";
-		
-		// Set VU bus - EXACTLY like polymixer
-		if(vuBuses[server] != nullptr && vuBuses[server]->index >= 0) {
-			ofLogNotice("scVUMeter") << "Setting VU bus to index " << vuBuses[server]->index;
-			synthInstances[server]->set("vubus", vuBuses[server]->index);
-			ofLogNotice("scVUMeter") << "VU bus set successfully";
-		} else {
-			ofLogError("scVUMeter") << "VU bus is invalid! vuBuses[server]: "
-				<< (vuBuses[server] != nullptr ? "exists" : "NULL")
-				<< ", index: " << (vuBuses[server] != nullptr ? vuBuses[server]->index : -999);
-		}
-		
-		// Set input bus if already connected
-		if(inputBuses.count(server) > 0 && !inputBuses[server].empty()) {
-			for(auto& pair : inputBuses[server]) {
-				synthInstances[server]->set("in", pair.second);
-				ofLogNotice("scVUMeter") << "Set input bus to " << pair.second;
-				break; // Only one input
-			}
-		}
-		
-		// Set output bus if already assigned
-		if(outputBuses.count(server) > 0 && outputBuses[server].count(0) > 0) {
-			synthInstances[server]->set("out", outputBuses[server][0]);
-			ofLogNotice("scVUMeter") << "Set output bus to " << outputBuses[server][0];
-		}
-		
-		ofLogNotice("scVUMeter") << "========== SYNTH CREATION COMPLETE ==========";
-		
-	} catch(const std::exception& e) {
-		ofLogError("scVUMeter") << "========== ERROR IN CREATE SYNTH ==========";
-		ofLogError("scVUMeter") << "Exception: " << e.what();
-	}
+	// Use event pattern to set all parameters
+	resendParams.notify();
+	
+	synthInstances[server]->createAndRun(0, 1, getActive());
 }
 
 void scVUMeter::free(ofxSCServer* server) {
@@ -332,50 +276,41 @@ void scVUMeter::free(ofxSCServer* server) {
 }
 
 void scVUMeter::setInputBus(ofxSCServer* server, scNode* node, int bus) {
-	if(server == nullptr || node == nullptr) return;
-	
+	// Following scSynthDef canonical pattern
 	inputBuses[server][node] = bus;
-	ofLogNotice("scVUMeter") << "Input bus set to " << bus;
-	
-	if(synthInstances.count(server) > 0 && synthInstances[server] != nullptr) {
-		try {
-			synthInstances[server]->set("in", bus);
-			ofLogNotice("scVUMeter") << "Synth input set to bus " << bus;
-			
-			// Restore VU bus and timing parameters after setting input
-			if(vuBuses.count(server) > 0 && vuBuses[server] != nullptr) {
-				synthInstances[server]->set("vubus", vuBuses[server]->index);
-				ofLogNotice("scVUMeter") << "Restored VU bus to index " << vuBuses[server]->index;
+	for(int i = 0; i < inputs.size(); i++){
+		if(inputs[i]->getNodeRef() == node){
+			string paramName = ofToLower(inputs[i].getName());
+			if(synthInstances.count(server) != 0){
+				synthInstances[server]->set(paramName, bus);
 			}
-			synthInstances[server]->set("vuattacktime", vuAttack.get());
-			synthInstances[server]->set("vureleasetime", vuRelease.get());
-			ofLogNotice("scVUMeter") << "Restored VU timing parameters";
-			
-		} catch(const std::exception& e) {
-			ofLogError("scVUMeter") << "Error setting input bus: " << e.what();
 		}
 	}
 }
 
 void scVUMeter::resetInputBusses(ofxSCServer* server, int targetBus) {
+	// Following scSynthDef canonical pattern
+	if(synthInstances.count(server) == 0) return;
 	inputBuses[server].clear();
-	if(synthInstances.count(server) > 0 && synthInstances[server] != nullptr) {
-		synthInstances[server]->set("in", targetBus);
+	for(int i = 0; i < inputs.size(); i++){
+		string paramName = ofToLower(inputs[i].getName());
+		synthInstances[server]->set(paramName, targetBus);
 	}
+	// Note: VUMeter doesn't currently have audio-rate parameters,
+	// but following canonical pattern for future compatibility
+	auto args = std::make_pair(server, targetBus);
+	resetAudioRateBusAssignments.notify(args);
 }
 
 void scVUMeter::setOutputBus(ofxSCServer* server, int index, int bus) {
-	if(server == nullptr) return;
-
+	// Following scSynthDef canonical pattern
 	outputBuses[server][index] = bus;
-	ofLogNotice("scVUMeter") << "Output bus set to " << bus;
-	
-	if(synthInstances.count(server) > 0 && synthInstances[server] != nullptr) {
-		try {
-			synthInstances[server]->set("out", bus);
-			ofLogNotice("scVUMeter") << "Synth output set to bus " << bus;
-		} catch(const std::exception& e) {
-			ofLogError("scVUMeter") << "Error setting output bus: " << e.what();
+	for(int i = 0; i < outputs.size(); i++){
+		if(outputs[i]->getIndex() == index){
+			string paramName = ofToLower(outputs[i].getName());
+			if(synthInstances.count(server) != 0){
+				synthInstances[server]->set(paramName, bus);
+			}
 		}
 	}
 }
@@ -388,41 +323,10 @@ int scVUMeter::getOutputBusIndex(ofxSCServer* server, int index) {
 }
 
 void scVUMeter::moveSynthBefore(ofxSCServer* server, int nodeID) {
-	if(server == nullptr) return;
-
-	auto it = synthInstances.find(server);
-	if(it == synthInstances.end() || it->second == nullptr) {
-		return;
-	}
-
-	ofxSCSynth* synth = it->second;
-
-	try {
-		// Ensure VU bus and timing are correct
-		if(vuBuses.count(server) > 0 && vuBuses[server] != nullptr) {
-			synth->set("vubus", vuBuses[server]->index);
-		}
-
-		synth->set("vuattacktime", vuAttack.get());
-		synth->set("vureleasetime", vuRelease.get());
-
-		// Restore input bus (first mapped input, if any)
-		if(inputBuses.count(server) > 0 && !inputBuses[server].empty()) {
-			int inBus = inputBuses[server].begin()->second;
-			synth->set("in", inBus);
-		}
-
-		// Restore output bus (index 0, if assigned)
-		if(outputBuses.count(server) > 0 && outputBuses[server].count(0) > 0) {
-			synth->set("out", outputBuses[server][0]);
-		}
-
-		// Finally move the synth before the given node in the SC graph
-		synth->moveBefore(nodeID);
-
-	} catch(const std::exception& e) {
-		ofLogError("scVUMeter") << "Error in moveSynthBefore(): " << e.what();
-	}
+	// Following scSynthDef canonical pattern
+	if(synthInstances.count(server) == 0) return;
+	resendParams.notify();
+	synthInstances[server]->moveBefore(nodeID);
 }
 
 int scVUMeter::getLastSynthID(ofxSCServer* server) {
@@ -497,11 +401,9 @@ void scVUMeter::drawVUWidget() {
 	const float widgetW = widgetWidth.get();
 	const float totalVUHeight = widgetHeight.get();
 	
-	// FIXED: Add left margin for channel labels
-	const float leftMargin = 20.0f;  // Space for channel numbers
+	const float leftMargin = 20.0f;
 	const float meterWidth = widgetW - leftMargin;
 	
-	// Account for 1px separators between channels
 	const float totalSeparatorHeight = (numChans - 1) * 1.0f;
 	const float channelH = (totalVUHeight - totalSeparatorHeight) / numChans;
 	const float spacing = 2.0f;
@@ -514,27 +416,22 @@ void scVUMeter::drawVUWidget() {
 	drawList->AddRectFilled(vuStart, vuEnd, IM_COL32(15, 15, 15, 255));
 	drawList->AddRect(vuStart, vuEnd, IM_COL32(100, 100, 100, 255), 0.0f, 0, 2.0f);
 	
-	// Initialize peak tracking if needed
 	if(peakLevels.size() != numChans) {
 		peakLevels.resize(numChans, -60.0f);
 		peakDecayTimers.resize(numChans, 0.0f);
 	}
 	
-	// Draw each channel
 	float currentY = vuStart.y;
 	
 	for(int ch = 0; ch < numChans; ch++) {
 		float ampLevel = ofClamp(vuLevels[ch], 0.0f, 2.0f);
 		float dbLevel = ampToDb(ampLevel);
 		
-		// Meter starts after left margin
 		ImVec2 channelStart = ImVec2(vuStart.x + leftMargin, currentY);
 		ImVec2 channelEnd = ImVec2(vuStart.x + widgetW, currentY + channelH);
 		
-		// Channel background
 		drawList->AddRectFilled(channelStart, channelEnd, IM_COL32(25, 25, 25, 255));
 		
-		// Update peak tracking
 		float releaseMs = vuRelease.get();
 		float releaseCoeff = 1.0f - expf(-1000.0f / (releaseMs * 60.0f));
 		
@@ -554,16 +451,13 @@ void scVUMeter::drawVUWidget() {
 			float meterPosition = dbToVUPosition(dbLevel, -60.0f, 6.0f);
 			float meterW = meterWidth * meterPosition;
 			ImVec2 meterEnd = ImVec2(channelStart.x + meterW, channelEnd.y);
-			
 			unsigned int meterColor = getVUMeterColorDB(dbLevel);
 			drawList->AddRectFilled(channelStart, meterEnd, meterColor);
 		}
 		
-		// Update Sticky Max Peak
 		if(dbLevel > stickyMaxPeaks[ch]) {
 			stickyMaxPeaks[ch] = dbLevel;
 			if(maxPeaksOutput) {
-				// Update output parameter
 				maxPeaksOutput->getParameter().set(stickyMaxPeaks);
 			}
 		}
@@ -573,51 +467,31 @@ void scVUMeter::drawVUWidget() {
 		if(peakPosition > 0.01f) {
 			float peakX = channelStart.x + meterWidth * peakPosition;
 			unsigned int peakColor = getVUMeterColorDB(peakLevels[ch]);
-			drawList->AddLine(
-				ImVec2(peakX, channelStart.y),
-				ImVec2(peakX, channelEnd.y),
-				peakColor,
-				2.0f
-			);
+			drawList->AddLine(ImVec2(peakX, channelStart.y), ImVec2(peakX, channelEnd.y), peakColor, 2.0f);
 		}
 		
-		// Draw 0dB reference line
+		// 0dB reference
 		float zeroDbPosition = dbToVUPosition(0.0f, -60.0f, 6.0f);
 		if(zeroDbPosition > 0.01f && zeroDbPosition < 0.99f) {
 			float zeroDbX = channelStart.x + meterWidth * zeroDbPosition;
-			drawList->AddLine(
-				ImVec2(zeroDbX, channelStart.y),
-				ImVec2(zeroDbX, channelEnd.y),
-				IM_COL32(255, 255, 255, 220),
-				1.5f
-			);
+			drawList->AddLine(ImVec2(zeroDbX, channelStart.y), ImVec2(zeroDbX, channelEnd.y), IM_COL32(255, 255, 255, 220), 1.5f);
 		}
 		
+		// Sticky Peak line
 		float stickyPos = dbToVUPosition(stickyMaxPeaks[ch], -60.0f, 6.0f);
 		if(stickyPos > 0.0f) {
 			float stickyX = channelStart.x + meterWidth * stickyPos;
-			drawList->AddLine(
-				ImVec2(stickyX, channelStart.y),
-				ImVec2(stickyX, channelEnd.y),
-				IM_COL32(255, 105, 180, 255), // Pink
-				2.0f
-			);
+			drawList->AddLine(ImVec2(stickyX, channelStart.y), ImVec2(stickyX, channelEnd.y), IM_COL32(255, 105, 180, 255), 2.0f);
 		}
 		
-		// Move to next channel
 		currentY += channelH;
-		if(ch < numChans - 1) {
-			currentY += 1.0f;  // 1px separator
-		}
+		if(ch < numChans - 1) currentY += 1.0f;
 	}
 	
-	// DRAW ALL TEXT AFTER BACKGROUNDS - prevents clipping
+	// TEXT RENDERING
 	currentY = vuStart.y;
 	for(int ch = 0; ch < numChans; ch++) {
-		float ampLevel = ofClamp(vuLevels[ch], 0.0f, 2.0f);
-		float dbLevel = ampToDb(ampLevel);
-		
-		// Channel label - in the left margin area
+		// Channel Labels (L/R/Num)
 		char channelLabel[8];
 		if(ch == 0) sprintf(channelLabel, "L");
 		else if(ch == 1) sprintf(channelLabel, "R");
@@ -626,25 +500,29 @@ void scVUMeter::drawVUWidget() {
 		ImVec2 labelPos = ImVec2(vuStart.x + 4, currentY + 2);
 		drawList->AddText(labelPos, IM_COL32(180, 180, 180, 255), channelLabel);
 		
-		// Level value text - on the right edge
-		float meterPosition = dbToVUPosition(dbLevel, -60.0f, 6.0f);
-		if(meterPosition > 0.1f) {
+		// ONLY show DB text for Sticky Peaks, positioned next to the pink line
+		float stickyDb = stickyMaxPeaks[ch];
+		if(stickyDb > -60.0f) {
 			char levelText[8];
-			sprintf(levelText, "%.1f", dbLevel);
+			sprintf(levelText, "%.1f", stickyDb);
 			ImVec2 levelTextSize = ImGui::CalcTextSize(levelText);
-			ImVec2 levelTextPos = ImVec2(vuEnd.x - levelTextSize.x - 4, currentY + 2);
-			drawList->AddText(levelTextPos, IM_COL32(200, 200, 200, 255), levelText);
+			
+			float stickyPos = dbToVUPosition(stickyDb, -60.0f, 6.0f);
+			float stickyX = (vuStart.x + leftMargin) + meterWidth * stickyPos;
+			
+			// Position text slightly offset from the line
+			// If the line is at the very end, move text to the left of the line
+			float xOffset = (stickyPos > 0.8f) ? -(levelTextSize.x + 4) : 4;
+			ImVec2 levelTextPos = ImVec2(stickyX + xOffset, currentY + 2);
+			
+			// Draw text in Lighter Pink
+			drawList->AddText(levelTextPos, IM_COL32(255, 182, 193, 255), levelText);
 		}
 		
-		// Move to next channel position
 		const float channelH = (totalVUHeight - (numChans - 1) * 1.0f) / numChans;
 		currentY += channelH;
-		if(ch < numChans - 1) {
-			currentY += 1.0f;
-		}
+		if(ch < numChans - 1) currentY += 1.0f;
 	}
-	
-	
 	
 	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, cursorPos.y + totalHeight));
 	ImGui::Dummy(ImVec2(widgetW, 4.0f));

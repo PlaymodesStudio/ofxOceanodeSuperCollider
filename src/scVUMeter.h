@@ -50,6 +50,10 @@ private:
 	std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
 	std::map<ofxSCServer*, std::map<int, int>> outputBuses;
 	
+	// Event system for parameter synchronization (following scSynthDef pattern)
+	ofEvent<void> resendParams;
+	ofEvent<std::pair<ofxSCServer*, int>> resetAudioRateBusAssignments;
+	
 	// Parameters
 	ofParameter<int> numChannels;
 	ofParameter<vector<float>> vuMeter;
