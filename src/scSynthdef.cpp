@@ -273,22 +273,18 @@ void scSynthdef::setup(){
                 for(auto &output : outputs) output = output;
             });
             
-            listeners.push(resendParams.newListener([this, toSendName, availableInput]{
-                if(availableInput->getNodeRef() != nullptr){
-                    for(auto synthServer : synths){
-                        synthServer.second->set(toSendName + "_sel", 1);
-                        synthServer.second->mapan(toSendName + "_ar", availableInput->getBusIndex(synthServer.first), MAX_NODE_CHANNELS);
-                    }
-                }else{
-                    for(auto synthServer : synths){
-                        synthServer.second->set(toSendName + "_sel", 0);
-                        synthServer.second->mapan(toSendName + "_ar", -1, MAX_NODE_CHANNELS);
-                    }
-                }
-            }));
             
             listeners.push(resetAudioRateBusAssignments.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, int> busAssignmentInfo){
+                synths[busAssignmentInfo.first]->set(toSendName + "_sel", 0);
                 synths[busAssignmentInfo.first]->mapan(toSendName + "_ar", busAssignmentInfo.second, MAX_NODE_CHANNELS);
+            }));
+            
+            listeners.push(setAudioRateBusAssignment.newListener([this, toSendName, availableInput](std::tuple<ofxSCServer*, scNode*, int> busAssignmentInfo){
+                const auto [server, node, bus] = busAssignmentInfo;
+                if(availableInput->getNodeRef() == node){
+                    synths[server]->set(toSendName + "_sel", 1);
+                    synths[server]->mapan(toSendName + "_ar", bus, MAX_NODE_CHANNELS);
+                }
             }));
         }
         listeners.push(resendParams.newListener([setValuesToSynths]{
@@ -394,6 +390,8 @@ void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
             }
         }
     }
+    auto args = std::make_tuple(server, node, bus);
+    setAudioRateBusAssignment.notify(args);
 }
 
 void scSynthdef::resetInputBusses(ofxSCServer* server, int targetBus){
