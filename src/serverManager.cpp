@@ -235,6 +235,17 @@ void serverManager::loadDefs(){
     }
     m.addIntArg(0);
     server->sendMsg(m);
+
+    // DynGen slot SynthDefs (DynGenWrapper_N_S) live in their own subdir.
+    // Copy/symlink the CompiledSynthdefs/dyngen/ output from dyngen.scd to
+    // [data]/Supercollider/Synthdefs/dyngen/ so they are picked up here.
+    std::string dyngenDir = ofToDataPath(std::string(SYNTHDEF_DIRECTORY) + "/dyngen", true);
+    if(ofDirectory::doesDirectoryExist(dyngenDir)){
+        ofxOscMessage m2;
+        m2.setAddress("/d_loadDir");
+        m2.addStringArg(dyngenDir);
+        server->sendMsg(m2);
+    }
 }
 
 void serverManager::setVolume(float _volume){
