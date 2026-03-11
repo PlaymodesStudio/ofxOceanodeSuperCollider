@@ -52,6 +52,10 @@ public:
     void moveSynthBefore(ofxSCServer* server, int nodeID) override;
     int  getLastSynthID(ofxSCServer* server) override;
 
+    // Events for parameter synchronization (matching scSynthdef pattern)
+    ofEvent<void> resendParams;
+    ofEvent<std::pair<ofxSCServer*, int>> resetAudioRateBusAssignments;
+
 private:
     // --- SuperCollider resources ---
     std::map<ofxSCServer*, ofxSCSynth*>            synthInstances;

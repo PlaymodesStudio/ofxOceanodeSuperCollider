@@ -151,17 +151,16 @@ void scGraphicEQ::setup() {
                 newSynth->createAndRun(4, oldID, getActive()); // kAddAction_replace
                 delete pair.second;
                 pair.second = newSynth;
-                restoreFullState(srv);
             }
         }
+        resendParams.notify();
         for(auto& output : outputs) output = output;
     }));
 
     // Any band parameter change → update synth + flag curve recompute
     auto paramListener = [this](vector<float>&) {
         curveNeedsUpdate = true;
-        for(auto& pair : synthInstances)
-            if(pair.second) sendAllParamsToSynth(pair.first);
+        resendParams.notify();
     };
     listeners.push(b1gain.newListener(paramListener));
     listeners.push(b2gain.newListener(paramListener));
@@ -181,8 +180,7 @@ void scGraphicEQ::setup() {
 
     // Mix doesn't affect EQ curve, just send to synth
     listeners.push(mix.newListener([this](vector<float>&) {
-        for(auto& pair : synthInstances)
-            if(pair.second) sendAllParamsToSynth(pair.first);
+        resendParams.notify();
     }));
 
     // showFFT toggle
@@ -192,6 +190,25 @@ void scGraphicEQ::setup() {
                 if(pair.second) createFFTSynth(pair.first);
         } else {
             freeAllFFTSynths();
+        }
+    }));
+
+    // resendParams event listener - centralized parameter synchronization
+    listeners.push(resendParams.newListener([this]() {
+        for(auto& pair : synthInstances) {
+            if(pair.second) {
+                sendAllParamsToSynth(pair.first);
+                
+                // Restore input buses
+                if(inputBuses.count(pair.first) && !inputBuses[pair.first].empty()) {
+                    pair.second->set("in", inputBuses[pair.first].begin()->second);
+                }
+                
+                // Restore output buses
+                if(outputBuses.count(pair.first) && outputBuses[pair.first].count(0)) {
+                    pair.second->set("out", outputBuses[pair.first].at(0));
+                }
+            }
         }
     }));
 
@@ -252,26 +269,17 @@ void scGraphicEQ::deactivate() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void scGraphicEQ::buildSynth(ofxSCServer* server) {
-    // Nothing needed at build time
+    if(!server) return;
+    synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
 }
 
 void scGraphicEQ::createSynth(ofxSCServer* server) {
     if(!server) return;
+    if(synthInstances.count(server) == 0) return;
+    
     try {
-        if(synthInstances[server]) {
-            synthInstances[server]->free();
-            delete synthInstances[server];
-        }
-        synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
+        resendParams.notify();
         synthInstances[server]->createAndRun(0, 1, getActive());
-
-        sendAllParamsToSynth(server);
-
-        if(inputBuses.count(server) && !inputBuses[server].empty())
-            synthInstances[server]->set("in", inputBuses[server].begin()->second);
-
-        if(outputBuses.count(server) && outputBuses[server].count(0))
-            synthInstances[server]->set("out", outputBuses[server].at(0));
 
         if(showFFT.get()) createFFTSynth(server);
 
@@ -303,10 +311,8 @@ void scGraphicEQ::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 
     if(synthInstances.count(server) && synthInstances[server]) {
         try {
+            // Set the input bus parameter
             synthInstances[server]->set("in", bus);
-            sendAllParamsToSynth(server);
-            if(outputBuses.count(server) && outputBuses[server].count(0))
-                synthInstances[server]->set("out", outputBuses[server].at(0));
         } catch(const std::exception& e) {
             ofLogError("scGraphicEQ") << "setInputBus error: " << e.what();
         }
@@ -314,13 +320,21 @@ void scGraphicEQ::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 }
 
 void scGraphicEQ::resetInputBusses(ofxSCServer* server, int targetBus) {
+    if(!server) return;
+    if(synthInstances.count(server) == 0) return;
+    
     inputBuses[server].clear();
-    if(synthInstances.count(server) && synthInstances[server]) {
+    
+    if(synthInstances[server]) {
         synthInstances[server]->set("in", targetBus);
     }
     if(fftSynthInstances.count(server) && fftSynthInstances[server]) {
         fftSynthInstances[server]->set("in", targetBus);
     }
+    
+    // Notify audio-rate bus assignments (for future audio-rate modulation support)
+    auto args = std::make_pair(server, targetBus);
+    resetAudioRateBusAssignments.notify(args);
 }
 
 void scGraphicEQ::setOutputBus(ofxSCServer* server, int index, int bus) {
@@ -349,12 +363,12 @@ int scGraphicEQ::getOutputBusIndex(ofxSCServer* server, int index) {
 
 void scGraphicEQ::moveSynthBefore(ofxSCServer* server, int nodeID) {
     if(!server) return;
-    auto it = synthInstances.find(server);
-    if(it == synthInstances.end() || !it->second) return;
+    if(synthInstances.count(server) == 0) return;
+    if(!synthInstances[server]) return;
 
     try {
-        restoreFullState(server);
-        it->second->moveBefore(nodeID);
+        resendParams.notify();
+        synthInstances[server]->moveBefore(nodeID);
 
         if(showFFT.get() && fftSynthInstances.count(server) && fftSynthInstances[server]) {
             fftSynthInstances[server]->moveBefore(nodeID);
@@ -485,19 +499,10 @@ void scGraphicEQ::sendAllParamsToSynth(ofxSCServer* server) {
 }
 
 void scGraphicEQ::restoreFullState(ofxSCServer* server) {
+    // This method is now deprecated - use resendParams.notify() instead
+    // Kept for backward compatibility
     if(!server) return;
-    auto it = synthInstances.find(server);
-    if(it == synthInstances.end() || !it->second) return;
-    ofxSCSynth* synth = it->second;
-    try {
-        sendAllParamsToSynth(server);
-        if(inputBuses.count(server) && !inputBuses[server].empty())
-            synth->set("in", inputBuses[server].begin()->second);
-        if(outputBuses.count(server) && outputBuses[server].count(0))
-            synth->set("out", outputBuses[server].at(0));
-    } catch(const std::exception& e) {
-        ofLogError("scGraphicEQ") << "restoreFullState error: " << e.what();
-    }
+    resendParams.notify();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
