@@ -67,6 +67,7 @@ public:
     
     ofEvent<void> resendParams;
     ofEvent<std::pair<ofxSCServer*, int>> resetAudioRateBusAssignments;
+    ofEvent<std::tuple<ofxSCServer*, scNode*, int>> setAudioRateBusAssignment;
     
     static synthdefDesc readAndCreateSynthdef(string file);
     
