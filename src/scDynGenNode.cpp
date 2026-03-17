@@ -11,6 +11,8 @@
 //    3. Dynamic param count: only registered as many sliders as annotations.
 //    4. Open/Save + script dropdown (data/Supercollider/dyngenScripts/).
 //    5. Word-wrap view: toggle button in editor toolbar.
+//    6. AI code generation: "AI" toolbar button → Claude writes EEL2 via API.
+//       Set ANTHROPIC_API_KEY env var or write key to ~/.claude/api_key.
 //
 
 #include "scDynGenNode.h"
@@ -18,6 +20,7 @@
 #include "ofxSCServer.h"
 #include "ofxSuperCollider.h"
 #include "imgui.h"
+#include "ofJson.h"
 
 #include <algorithm>
 #include <sstream>
@@ -25,6 +28,8 @@
 #include <cstring>
 #include <cmath>
 #include <climits>
+#include <chrono>
+#include <cstdio>   // popen / pclose / fgets
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Static member definitions
@@ -105,7 +110,30 @@ void scDynGenNode::releaseSlot(int idx) {
 
 scDynGenNode::scDynGenNode() : scNode("DynGen") {
     std::memset(editorBuf, 0, sizeof(editorBuf));
+    std::memset(llmPromptBuf, 0, sizeof(llmPromptBuf));
     eel2StatusMsg = "Ready";
+
+    // ── Feature 6: load Anthropic API key ────────────────────────────────────
+    // Priority:
+    //   1. ANTHROPIC_API_KEY environment variable
+    //   2. <data>/anthropic_api_key.txt   (easiest — just drop the file in data/)
+    //   3. ~/.anthropic_api_key
+    auto tryReadKey = [&](const std::string& path) {
+        std::ifstream f(path);
+        if(f) { std::getline(f, llmApiKey); return !llmApiKey.empty(); }
+        return false;
+    };
+    const char* envKey = std::getenv("ANTHROPIC_API_KEY");
+    if(envKey && *envKey) {
+        llmApiKey = std::string(envKey);
+    } else if(!tryReadKey(ofToDataPath("anthropic_api_key.txt"))) {
+        tryReadKey(ofFilePath::getUserHomeDir() + "/.anthropic_api_key");
+    }
+    // Trim any trailing whitespace / newlines from the key
+    while(!llmApiKey.empty() && (llmApiKey.back() == '\n' ||
+                                  llmApiKey.back() == '\r' ||
+                                  llmApiKey.back() == ' '))
+        llmApiKey.pop_back();
 }
 
 scDynGenNode::~scDynGenNode() {
@@ -188,7 +216,7 @@ void scDynGenNode::setup() {
         for(auto& out : outputs) out = out;
     }));
 
-    // eel2CodeParam changed (preset load or from update() debounce)
+    // eel2CodeParam changed (preset load, file open, update() debounce, or AI)
     listeners.push(eel2CodeParam.newListener([this](std::string& code) {
         std::strncpy(editorBuf, code.c_str(), kBufSize - 1);
         editorBuf[kBufSize - 1] = '\0';
@@ -198,6 +226,20 @@ void scDynGenNode::setup() {
         updateParamCount((int)anns.size(), anns);
         // Send code to all live servers
         sendCodeToAllServers();
+        // Recreate synths when flagged (AI generation or file load) so @init
+        // executes fresh with the new script.  Skipped for live-typing edits.
+        if(codeRequiresRecreate) {
+            codeRequiresRecreate = false;
+            for(auto& pair : synthInstances) {
+                if(!pair.second) continue;
+                int oldID = pair.second->nodeID;
+                ofxSCSynth* newSynth = new ofxSCSynth(getSynthDefName(), pair.first);
+                newSynth->createAndRun(4, oldID, getActive());
+                delete pair.second;
+                pair.second = newSynth;
+            }
+            resendParams.notify();
+        }
         eel2StatusMsg = "Loaded";
     }));
 
@@ -245,6 +287,29 @@ void scDynGenNode::update(ofEventArgs&) {
         ofFileDialogResult r = ofSystemSaveDialog(
             "dyngen_script.eel2", "Save EEL2 Script");
         if(r.bSuccess) saveScriptFile(r.filePath);
+    }
+
+    // ── Feature 6: poll LLM future ────────────────────────────────────────────
+    if(llmPending.load() && llmFuture.valid()) {
+        if(llmFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            std::string result = llmFuture.get();
+            bool isError = (result.rfind("// Error:", 0) == 0 ||
+                            result.rfind("// API error", 0) == 0);
+            if(isError) {
+                llmStatusMsg = result;
+                llmHasError  = true;
+            } else {
+                std::strncpy(editorBuf, result.c_str(), kBufSize - 1);
+                editorBuf[kBufSize - 1] = '\0';
+                codeDirty            = true;
+                codeDirtyTimer       = 0.0f;
+                codeRequiresRecreate = true;   // force @init on new script
+                eel2StatusMsg        = "AI generated";
+                llmHasError          = false;
+            }
+            llmPending.store(false);
+            llmDone.store(true);
+        }
     }
 
     // ── Debounce code changes ─────────────────────────────────────────────────
@@ -696,11 +761,11 @@ void scDynGenNode::loadScriptFile(const std::string& path) {
     }
     std::string code((std::istreambuf_iterator<char>(f)),
                       std::istreambuf_iterator<char>());
-    std::strncpy(editorBuf, code.c_str(), kBufSize - 1);
-    editorBuf[kBufSize - 1] = '\0';
-    codeDirty      = true;
-    codeDirtyTimer = 0.0f;
-    eel2StatusMsg  = "Loaded: " + ofFilePath::getFileName(path);
+    // Set param directly (bypasses debounce) so annotations/param names
+    // update immediately and synths are recreated with the new @init.
+    codeRequiresRecreate = true;
+    eel2CodeParam.set(code);   // fires listener: parse→updateParams→send→recreate
+    eel2StatusMsg   = "Loaded: " + ofFilePath::getFileName(path);
     scriptListDirty = false;
 }
 
@@ -717,6 +782,235 @@ void scDynGenNode::saveScriptFile(const std::string& path) {
     f << std::string(editorBuf);
     eel2StatusMsg  = "Saved: " + ofFilePath::getFileName(path);
     scriptListDirty = true;  // trigger re-scan on next draw
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Feature 6: LLM code generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+std::string scDynGenNode::buildDynGenSystemPrompt() {
+    return
+R"SYSPROMPT(You are an EEL2 code generator for the DynGen node in Oceanode, a modular audio environment built on SuperCollider. DynGen executes EEL2 at audio rate inside a SC UGen.
+
+Output ONLY valid EEL2 code. No markdown, no code fences, no prose before or after. Start directly with //@param declarations, @init, or @sample.
+
+=== CRITICAL CONSTRAINTS — violating any of these produces silence, explosions, or crashes ===
+1. num_ch is NEVER available (always 0). ALWAYS hardcode n (the channel count given in the request).
+2. $pi is NOT defined. Use 6.28318530 for 2π and 3.14159265 for π.
+3. out(variable) does NOT write to output channels. Use named output variables: out0  out1  out2 etc.
+4. No file I/O, no strings, no external calls, no classes.
+5. buf[] is the ONLY persistent heap. Partition it in @init with non-overlapping base offsets.
+6. Keep total buf[] usage (sum of ALL buffer sizes) under 100000 floats to avoid heap aliasing.
+7. Each buffer MUST wrap using ITS OWN size — never use a shared max_size for wrap-around.
+8. Available functions: exp() sin() cos() tan() log() sqrt() abs() floor() ceil() max() min() pow() atan() atan2()
+9. srate (float, sample rate) is available in all sections.
+10. Conditional: condition ? value_if_true : value_if_false
+
+=== PARAM DECLARATION ===
+//@param Name : default, min, max
+Maximum 8 params (p0..p7). Must appear at the top of the file before @init.
+
+=== INPUT MEMORY LAYOUT ===
+For n audio channels and P params, in() is a flat array:
+  in(0) .. in(n-1)          = current audio input samples
+  in(n + pi*n + ci)         = param pi, channel ci
+
+Mono   (n=1):  in(1)=p0        in(2)=p1        in(3)=p2    ...
+Stereo (n=2):  in(2)=p0_ch0    in(3)=p0_ch1    in(4)=p1_ch0    in(5)=p1_ch1 ...
+
+For params that do not vary per-channel, always read channel 0: in(n + pi*n + 0)
+
+=== OUTPUT VARIABLES ===
+Write to out0 .. out(n-1). Do NOT use out(variable).
+  Mono:   write out0
+  Stereo: write out0 and out1
+
+=== CODE SECTIONS ===
+@init   — runs once at script load. Init buf[], write pointers, filter states, constants.
+@block  — runs once per audio block (before @sample). Read params. Compute block-rate coefficients.
+@sample — runs once per audio sample. Read in(). Write out0/out1/etc.
+
+=== DELAY LINE / RING BUFFER PATTERN ===
+@init
+  size_A = 4096;   // smallest power-of-2 >= longest delay in samples
+  ofs_A  = 0;      // unique base offset for this buffer
+  w_A    = 0;      // write pointer
+  // For a second buffer: ofs_B = ofs_A + size_A; etc.
+@sample
+  buf[ofs_A + w_A] = signal_to_store;
+  r = w_A - delay_samps; r < 0 ? r += size_A;
+  delayed = buf[ofs_A + r];
+  w_A += 1; w_A >= size_A ? w_A = 0;
+
+=== ONE-POLE LOW-PASS FILTER PATTERN ===
+@init
+  lp_state = 0;
+@block
+  cutoff_hz = in(n + 0*n + 0);  // p0, ch0
+  lp_a = 1.0 - exp(-6.28318530 * cutoff_hz / srate);
+@sample
+  lp_state += lp_a * (in(0) - lp_state);
+  out0 = lp_state;
+
+=== EXAMPLES ===
+
+// Stereo passthrough (n=2)
+@sample
+out0 = in(0);
+out1 = in(1);
+
+// Mono hard-clip distortion (n=1)
+//@param Drive : 3.0, 1.0, 20.0
+//@param Mix   : 0.5, 0.0, 1.0
+@block
+drive = in(1);   // p0 (n=1 → in(1+0))
+mix   = in(2);   // p1 (n=1 → in(1+1))
+@sample
+wet = in(0) * drive;
+wet = max(-1.0, min(1.0, wet));
+out0 = in(0) * (1-mix) + wet * mix;
+
+// Stereo ping-pong delay (n=2)
+//@param DelayMs  : 250.0, 1.0, 2000.0
+//@param Feedback : 0.5,   0.0, 0.95
+//@param Mix      : 0.4,   0.0, 1.0
+@init
+d_size = 16384;
+dL_ofs = 0;
+dR_ofs = 16384;
+dL_w   = 0;
+dR_w   = 0;
+@block
+delay_ms = in(2);    // p0 ch0 (n=2 → in(2+0*2+0)=in(2))
+feedback = in(4);    // p1 ch0 (n=2 → in(2+1*2+0)=in(4))
+mix      = in(6);    // p2 ch0 (n=2 → in(2+2*2+0)=in(6))
+d_len = max(1, min(d_size-1, floor(delay_ms * srate * 0.001)));
+@sample
+rL = dL_w - d_len; rL < 0 ? rL += d_size;
+rR = dR_w - d_len; rR < 0 ? rR += d_size;
+dL_now = buf[dL_ofs + rL];
+dR_now = buf[dR_ofs + rR];
+buf[dL_ofs + dL_w] = in(0) + dR_now * feedback;
+buf[dR_ofs + dR_w] = in(1) + dL_now * feedback;
+dL_w += 1; dL_w >= d_size ? dL_w = 0;
+dR_w += 1; dR_w >= d_size ? dR_w = 0;
+out0 = in(0)*(1-mix) + dL_now*mix;
+out1 = in(1)*(1-mix) + dR_now*mix;
+
+// Mono sine oscillator / test tone (n=1)
+//@param Freq : 440.0, 20.0, 20000.0
+//@param Amp  : 0.5,   0.0, 1.0
+@init
+phase = 0;
+@block
+freq = in(1);   // p0
+amp  = in(2);   // p1
+phase_inc = 6.28318530 * freq / srate;
+@sample
+out0 = sin(phase) * amp;
+phase += phase_inc;
+phase >= 6.28318530 ? phase -= 6.28318530;
+)SYSPROMPT";
+}
+
+std::string scDynGenNode::callAnthropicAPI(const std::string& fullPrompt,
+                                            const std::string& systemPrompt,
+                                            const std::string& apiKey) {
+    try {
+
+        // Build request JSON using ofJson (nlohmann::json, always in OF)
+        ofJson requestBody = {
+            {"model",      "claude-sonnet-4-5"},
+            {"max_tokens", 2048},
+            {"system",     systemPrompt},
+            {"messages",   ofJson::array({{{"role", "user"}, {"content", fullPrompt}}})}
+        };
+        std::string bodyStr = requestBody.dump();
+
+        // Write body to a temp file so we don't have to shell-escape the JSON
+        std::string tmpPath = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp")
+                              + "/dyngen_api_req.json";
+        {
+            std::ofstream tf(tmpPath);
+            if(!tf.is_open()) return "// Error: cannot write temp file " + tmpPath;
+            tf << bodyStr;
+        }
+
+        // Use curl (always on macOS) — runs in our std::async thread, no audio impact
+        std::string cmd =
+            "curl -s"
+            " -X POST https://api.anthropic.com/v1/messages"
+            " -H 'content-type: application/json'"
+            " -H 'x-api-key: " + apiKey + "'"
+            " -H 'anthropic-version: 2023-06-01'"
+            " -d @" + tmpPath +
+            " 2>&1";
+
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if(!pipe) return "// Error: popen failed";
+
+        std::string respStr;
+        char buf[4096];
+        while(fgets(buf, sizeof(buf), pipe))
+            respStr += buf;
+        pclose(pipe);
+
+        // Clean up temp file
+        std::remove(tmpPath.c_str());
+
+        // Parse JSON response
+        ofJson obj = ofJson::parse(respStr);
+
+        // Surface API-level errors (auth failure, rate limit, etc.)
+        if(obj.contains("error"))
+            return "// API error: " + obj["error"].value("message", "unknown error");
+
+        auto& content = obj["content"];
+        if(!content.is_array() || content.empty())
+            return "// Error: unexpected response format";
+        return content[0].value("text", "");
+
+    } catch(const std::exception& e) {
+        return std::string("// Error: ") + e.what();
+    }
+}
+
+void scDynGenNode::requestLLMCode(const std::string& userPrompt) {
+    if(llmApiKey.empty()) {
+        llmStatusMsg = "// Error: no API key. Place key in data/anthropic_api_key.txt";
+        llmHasError  = true;
+        llmDone.store(true);
+        return;
+    }
+
+    llmPending.store(true);
+    llmDone.store(false);
+    llmHasError  = false;
+    llmStatusMsg = "Generating...";
+
+    // Capture everything needed before launching the thread (no this in thread)
+    int         n    = numChannels.get();
+    std::string sysP = buildDynGenSystemPrompt();
+    std::string key  = llmApiKey;
+
+    std::string fullPrompt;
+    if(llmFixMode) {
+        std::string issue = userPrompt.empty()
+            ? "Fix any bugs and make sure the script runs correctly."
+            : "Issue: " + userPrompt;
+        fullPrompt =
+            "Fix this EEL2 script for n=" + std::to_string(n) + " channels.\n\n"
+            "Current code:\n" + std::string(editorBuf) + "\n\n" + issue;
+    } else {
+        fullPrompt =
+            "Generate an EEL2 script for n=" + std::to_string(n) + " channels.\n\n"
+            + userPrompt;
+    }
+
+    llmFuture = std::async(std::launch::async,
+        [fullPrompt, sysP, key]() -> std::string {
+            return callAnthropicAPI(fullPrompt, sysP, key);
+        });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -763,7 +1057,21 @@ void scDynGenNode::drawEditor() {
         if(ImGui::Button(wv ? "Edit" : "Wrap", ImVec2(46, 0))) wrapView = !wrapView;
         if(wv) ImGui::PopStyleColor();
     }
-    ImGui::SameLine(0, 8);
+    ImGui::SameLine(0, 4);
+
+    // Feature 6: AI generate button
+    {
+        bool busy = llmPending.load();
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            busy ? IM_COL32(40, 20, 65, 255) : IM_COL32(60, 38, 90, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(90, 58, 130, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(115, 78, 165, 255));
+        if(ImGui::Button(busy ? "···" : "AI", ImVec2(34, 0)) && !busy) {
+            ImGui::OpenPopup("##llm_popup");
+        }
+        ImGui::PopStyleColor(3);
+    }
+    ImGui::SameLine(0, 4);
 
     // Script dropdown — list .eel2 files from dyngenScripts/
     if(!scriptFiles.empty()) {
@@ -776,9 +1084,9 @@ void scDynGenNode::drawEditor() {
 
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(25, 38, 58, 255));
         // Combo width = W minus all fixed-width toolbar elements:
-        //   Open(46)+gap(4)+Save(46)+gap(4)+Wrap(46)+gap(8) = 154 before
-        //   gap(4)+Load(46) = 50 after  →  total non-combo = 204; -4 margin
-        ImGui::SetNextItemWidth(W - 208.0f);
+        //   Open(46)+gap(4)+Save(46)+gap(4)+Wrap(46)+gap(4)+AI(34)+gap(4) = 192 before
+        //   gap(4)+Load(46) = 50 after  →  total non-combo = 242; -4 margin
+        ImGui::SetNextItemWidth(W - 246.0f);
         ImGui::Combo("##scripts", &selectedScriptIdx, items.data(), (int)items.size());
         ImGui::PopStyleColor();
         ImGui::SameLine(0, 4);
@@ -847,6 +1155,99 @@ void scDynGenNode::drawEditor() {
                     ? IM_COL32(255, 80, 80, 255)
                     : IM_COL32(110, 200, 110, 255);
     dl->AddText(ImVec2(cursor.x + pad, statusY), statusCol, eel2StatusMsg.c_str());
+
+    // ── Feature 6: AI generate popup ─────────────────────────────────────────
+    ImGui::SetNextWindowSize(ImVec2(520, 230), ImGuiCond_Appearing);
+    if(ImGui::BeginPopup("##llm_popup", ImGuiWindowFlags_None)) {
+
+        // Header
+        ImGui::TextColored(ImVec4(0.72f, 0.60f, 1.0f, 1.0f),
+            "Ask Claude to write EEL2 code");
+        ImGui::SameLine();
+        if(llmApiKey.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "  [No API key]");
+        else
+            ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.55f, 1.0f), "  [Key loaded]");
+
+        ImGui::TextDisabled("Using n=%d channels (matches Num Channels setting on the node).",
+            numChannels.get());
+        ImGui::Spacing();
+
+        // ── Mode toggle ───────────────────────────────────────────────────────
+        auto modeBtn = [&](const char* label, bool active) -> bool {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                active ? IM_COL32(65, 40, 95, 255) : IM_COL32(28, 28, 38, 255));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(90, 58, 130, 255));
+            bool clicked = ImGui::Button(label, ImVec2(122, 0));
+            ImGui::PopStyleColor(2);
+            return clicked;
+        };
+        if(modeBtn("  Generate  ##m", !llmFixMode)) llmFixMode = false;
+        ImGui::SameLine(0, 2);
+        if(modeBtn(" Fix current ##m", llmFixMode))  llmFixMode = true;
+
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if(llmPending.load()) {
+            // Spinner while waiting
+            static const char* kSpinChars = "|/-\\";
+            static int sSpin = 0;
+            sSpin = (sSpin + 1) % 4;
+            ImGui::Text("Generating... %c", kSpinChars[sSpin]);
+            ImGui::TextDisabled("Waiting for Claude's response.");
+
+        } else if(llmDone.load()) {
+            if(llmHasError) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,0.4f,0.4f,1));
+                ImGui::TextWrapped("%s", llmStatusMsg.c_str());
+                ImGui::PopStyleColor();
+                ImGui::Spacing();
+                if(ImGui::Button("Close##llmerr", ImVec2(80, 0))) {
+                    llmDone.store(false);
+                    llmHasError = false;
+                    ImGui::CloseCurrentPopup();
+                }
+            } else {
+                // Success: code was injected into editorBuf by update() — auto-close
+                llmDone.store(false);
+                ImGui::CloseCurrentPopup();
+            }
+
+        } else {
+            // Normal prompt-input state
+            ImGui::InputTextMultiline("##llm_input", llmPromptBuf,
+                sizeof(llmPromptBuf), ImVec2(504, 100));
+            if(llmFixMode)
+                ImGui::TextDisabled("Describe the issue, or leave empty for a general fix.");
+            else
+                ImGui::TextDisabled("Describe the EEL2 effect, synth, or processor you want.");
+            ImGui::Spacing();
+
+            // Generate requires a non-empty prompt; Fix can run with empty prompt
+            bool canGenerate = !llmApiKey.empty() && (!llmFixMode || true)
+                               && (llmFixMode || llmPromptBuf[0] != '\0');
+            if(!canGenerate) ImGui::BeginDisabled();
+            const char* btnLabel = llmFixMode ? "Fix code##llm" : "Generate##llm";
+            if(ImGui::Button(btnLabel, ImVec2(100, 0)))
+                requestLLMCode(std::string(llmPromptBuf));
+            if(!canGenerate) ImGui::EndDisabled();
+
+            ImGui::SameLine(0, 10);
+            if(ImGui::Button("Cancel##llm", ImVec2(70, 0)))
+                ImGui::CloseCurrentPopup();
+
+            if(llmApiKey.empty()) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(1, 0.65f, 0.3f, 1), "No API key found. Add one of:");
+                ImGui::TextDisabled("  data/anthropic_api_key.txt  (just paste the key as plain text)");
+                ImGui::TextDisabled("  ~/.anthropic_api_key");
+                ImGui::TextDisabled("  ANTHROPIC_API_KEY env var");
+            }
+        }
+
+        ImGui::EndPopup();
+    }
 
     // ── Advance cursor ────────────────────────────────────────────────────────
     ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + totalH));
