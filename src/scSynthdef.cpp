@@ -291,7 +291,32 @@ void scSynthdef::setup(){
             setValuesToSynths();
         }));
     }
-    
+
+    // ── Adaptive lag inspector controls ──────────────────────────────────────
+    // lagEnabled=false (default) → fixed lag at lagMaxTime, same behaviour as before.
+    // lagEnabled=true            → adaptive: large delta drives lag toward lagMinTime.
+    addInspectorParameter(lagEnabled.set("Adaptive Lag",      false));
+    addInspectorParameter(lagSensitivity.set("Lag Sensitivity", 20.f,     1.f,   500.f));
+    addInspectorParameter(lagMinTime.set("Lag Min Time",       0.001f,    0.f,   0.02f));
+    addInspectorParameter(lagMaxTime.set("Lag Max Time",       1.f/30.f,  0.f,   0.5f));
+
+    auto sendLagParams = [this](){
+        for(auto &s : synths){
+            if(!s.second) continue;
+            s.second->set("lagEnabled",     lagEnabled.get() ? 1.f : 0.f);
+            s.second->set("lagSensitivity", lagSensitivity.get());
+            s.second->set("lagMinTime",     lagMinTime.get());
+            s.second->set("lagMaxTime",     lagMaxTime.get());
+        }
+    };
+
+    listeners.push(lagEnabled.newListener([sendLagParams](bool&)   { sendLagParams(); }));
+    listeners.push(lagSensitivity.newListener([sendLagParams](float&){ sendLagParams(); }));
+    listeners.push(lagMinTime.newListener([sendLagParams](float&)  { sendLagParams(); }));
+    listeners.push(lagMaxTime.newListener([sendLagParams](float&)  { sendLagParams(); }));
+    // resendParams fires on synth build, preset load, N-Chan change, server reconnect
+    listeners.push(resendParams.newListener([sendLagParams](){ sendLagParams(); }));
+
     listeners.push(resendParams.newListener([this](){
         for(auto synthServer : synths){
             if(synthServer.second != nullptr){
