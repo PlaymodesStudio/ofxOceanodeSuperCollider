@@ -90,13 +90,6 @@ private:
     
     ofParameter<bool> doNotDistributeInputs;
     ofParameter<bool> doNotDistributeOutputs;
-
-    // ── Adaptive lag inspector parameters ──────────────────────────────────
-    ofParameter<bool>  lagEnabled;      // false = fixed lag (default), true = adaptive
-    ofParameter<float> lagSensitivity;  // transient detection sharpness (1–500)
-    ofParameter<float> lagMinTime;      // anti-click floor in seconds
-    ofParameter<float> lagMaxTime;      // smoothing ceiling in seconds
-
 	bool synthdefExists(string filename);
 };
 
