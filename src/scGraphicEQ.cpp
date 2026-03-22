@@ -79,6 +79,7 @@ vector<float> scGraphicEQ::qToRq(const vector<float>& qVec, int nCh) const {
 void scGraphicEQ::setup() {
     // ── Core ────────────────────────────────────────────────────────────────
     addParameter(numChannels.set("Num Channels", 2, 1, MAX_NODE_CHANNELS));
+    oldNumChannels = numChannels;
 
     // Convenience: single-element default / min / max vectors
     const vector<float> gainDef  = { 0.0f };
@@ -143,18 +144,20 @@ void scGraphicEQ::setup() {
 
     listeners.push(numChannels.newListener([this](int &ch) {
         if(ch < 1 || ch > MAX_NODE_CHANNELS) return;
-        for(auto& pair : synthInstances) {
-            if(pair.second) {
-                ofxSCServer* srv = pair.first;
-                int oldID = pair.second->nodeID;
-                ofxSCSynth* newSynth = new ofxSCSynth(getSynthDefName(), srv);
-                newSynth->createAndRun(4, oldID, getActive()); // kAddAction_replace
-                delete pair.second;
-                pair.second = newSynth;
+        if(oldNumChannels != ch) {
+            for(auto& pair : synthInstances) {
+                if(pair.second) {
+                    ofxSCServer* srv = pair.first;
+                    int oldID = pair.second->nodeID;
+                    ofxSCSynth* newSynth = new ofxSCSynth(getSynthDefName(), srv);
+                    newSynth->createAndRun(4, oldID, getActive()); // kAddAction_replace
+                    delete pair.second;
+                    pair.second = newSynth;
+                }
             }
+            resendParams.notify();
         }
-        resendParams.notify();
-        for(auto& output : outputs) output = output;
+        oldNumChannels = ch;
     }));
 
     // Any band parameter change → update synth + flag curve recompute

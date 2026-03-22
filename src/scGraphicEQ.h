@@ -68,6 +68,7 @@ private:
 
     // --- EQ parameters (main interface) ---
     ofParameter<int> numChannels;
+    int oldNumChannels = 0;
 
     // Band gains — vector<float> for per-channel modulation
     ofParameter<vector<float>> b1gain, b2gain, b3gain, b4gain, b5gain;
