@@ -1,202 +1,114 @@
+//
+//  scConvolution.h
+//  ofxOceanodeSuperCollider
+//
+//  Partitioned convolution reverb.  Two IR modes:
+//
+//    Synthetic (default) — gaussian noise + time-varying one-pole LPF
+//    (darkens over time) + exponential decay envelope.  Controlled by
+//    RT60, Brightness, Absorption.
+//
+//    File — any WAV/AIFF loaded as a mono IR.
+//
+//  State machine per server (4 states):
+//    kLoadingIR    → allocate + send load/alloc; for file: b_query at 600 ms,
+//                    transition at 800 ms; for synth: launch scconvIRGen at
+//                    300 ms, transition immediately.
+//    kPreparingSpec→ on entry: allocate exact spec buffer, start PreparePartConv
+//                    once gen synth has finished writing (timer >= rt60 for synth,
+//                    timer >= 0 for file).  Transition 1.5 s after PreparePartConv.
+//    kReady        → kAddAction_replace with new spec buffer as init-arg.
+//
+//  genSynth is tracked per-server so it can be freed *before* its target
+//  irBuffer is freed/reallocated — prevents old synth from writing into a
+//  reused buffer index and causing periodic noise bursts.
+//
+
 #ifndef scConvolution_h
 #define scConvolution_h
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
-#include "ofxSCBuffer.h"
 #include "ofxSCSynth.h"
+#include "ofxSCBuffer.h"
 #include "ofxOscMessage.h"
-#include "ofMain.h"
-#include <filesystem>
-namespace fs = std::filesystem;
+#include <map>
+#include <string>
 
-class scConvolution : public ofxOceanodeNodeModel {
+class ofxSCServer;
+class ofxSCSynth;
+class ofxSCBuffer;
+
+class scConvolution : public scNode {
 public:
-	explicit scConvolution(std::vector<serverManager*> outputServers) :
-		ofxOceanodeNodeModel("SC Convolution"),
-		servers(std::move(outputServers)),
-		impulseBuffer(nullptr),
-		irSpectrumBuffer(nullptr),
-		synth(nullptr) {}
+    // fftsize in the SynthDef: partition = 1024 samples ≈ 23 ms at 44.1 kHz
+    static constexpr int kFftSize = 2048;
 
-	~scConvolution() override { cleanup(); }
+    scConvolution();
+    ~scConvolution();
 
-	void setup() override {
-		addParameter(input.set("In", nodePort()),
-					 ofxOceanodeParameterFlags_DisableOutConnection);
-		
-		addParameter(serverIndex.set("Server", 0, 0,
-									 MAX(0, (int)servers.size()-1)));
-		
-		addParameter(numChannels.set("N Chan", 1, 1, 100));
-		addParameter(impulseFile.set("Impulse File", ""));
-		addParameter(partitionSize.set("Partition Size", 1024, 256, 2048));
-		addParameter(mix.set("Mix", 0.0f, 0.0f, 1.0f));
-		addParameter(levels.set("Levels", 0.5f, 0.0f, 1.0f));
-		
-		addParameter(chooseFile.set("Choose File", false));
-		
-		addOutputParameter(output.set("Out", nodePort()));
-		addParameter(bufnum.set("Bufnum", -1),
-					 ofxOceanodeParameterFlags_DisableInConnection);
-		addParameter(irBufnum.set("IR Bufnum", -1),
-					 ofxOceanodeParameterFlags_DisableInConnection);
+    void setup()                    override;
+    void update(ofEventArgs& args)  override;
+    void activate()                 override;
+    void deactivate()               override;
 
-		setupListeners();
-	}
+    // scNode interface
+    void buildSynth(ofxSCServer* server)              override;
+    void createSynth(ofxSCServer* server)             override;
+    void free(ofxSCServer* server)                    override;
+    void moveSynthBefore(ofxSCServer* server, int id) override;
+
+    void setInputBus(ofxSCServer* server, scNode* node, int bus)  override;
+    void setOutputBus(ofxSCServer* server, int index, int bus)    override;
+    void resetInputBusses(ofxSCServer* server, int targetBus = 0) override;
+
+    int  getOutputBusIndex(ofxSCServer* server, int index) override;
+    int  getLastSynthID(ofxSCServer* server)               override;
+
+    ofEvent<void> resendParams;
+    int           oldNumChannels = 0;
 
 private:
-	void setupListeners() {
-		listeners.push(input.newListener([this](nodePort&){ recreateResources(); }));
-		listeners.push(serverIndex.newListener([this](int&){ recreateResources(); }));
-		listeners.push(numChannels.newListener([this](int&){ recreateResources(); }));
-		listeners.push(partitionSize.newListener([this](int&){
-			if(impulseBuffer != nullptr){ prepareConvolutionBuffer(); }
-		}));
-		
-		listeners.push(impulseFile.newListener([this](std::string& file){
-			if(file != ""){ loadImpulseResponse(file); }
-		}));
-		
-		listeners.push(chooseFile.newListener([this](bool& t){
-			if(t){ openFileDialog(); chooseFile = false; }
-		}));
-		
-		listeners.push(mix.newListener([this](float& m){
-			if(synth != nullptr){ synth->set("mix", m); }
-		}));
-		
-		listeners.push(levels.newListener([this](float& l){
-			if(synth != nullptr){ synth->set("levels", l); }
-		}));
-	}
+    enum IRState { kIdle, kLoadingIR, kPreparingSpec, kReady };
 
-	void openFileDialog() {
-		ofFileDialogResult res = ofSystemLoadDialog("Choose impulse response");
-		if(res.bSuccess){
-			impulseFile = res.getPath();
-		}
-	}
+    struct ServerState {
+        ofxSCBuffer* irBuffer          = nullptr;
+        ofxSCBuffer* activeSpecBuffer  = nullptr;
+        ofxSCBuffer* pendingSpecBuffer = nullptr;
+        ofxSCSynth*  genSynth          = nullptr;  // synthetic IR generator (tracked to prevent buffer reuse corruption)
+        IRState      irState           = kIdle;
+        float        timer             = 0.0f;
+        bool         fileMode          = false;
+        bool         prepConvSent      = false;
+    };
 
-	void loadImpulseResponse(const std::string& filepath) {
-		clearBuffers();
-		
-		// Load the impulse response file
-		impulseBuffer = new ofxSCBuffer(1, 1, servers[serverIndex]->getServer());
-		impulseBuffer->read(filepath);
-		bufnum = impulseBuffer->index;
-		
-		prepareConvolutionBuffer();
-	}
+    std::map<ofxSCServer*, ofxSCSynth*>             synthInstances;
+    std::map<ofxSCServer*, std::map<scNode*, int>>  inputBuses;
+    std::map<ofxSCServer*, std::map<int, int>>      outputBuses;
+    std::map<ofxSCServer*, ServerState>             serverStates;
 
-	void prepareConvolutionBuffer() {
-		if(impulseBuffer == nullptr) return;
-		
-		// Calculate buffer size needed for PartConv (simplified)
-		int numPartitions = (impulseBuffer->frames + partitionSize - 1) / partitionSize;
-		int bufsize = numPartitions * partitionSize * 2; // Complex FFT data
-		
-		// Create spectrum buffer
-		if(irSpectrumBuffer != nullptr){
-			irSpectrumBuffer->free();
-			delete irSpectrumBuffer;
-		}
-		
-		irSpectrumBuffer = new ofxSCBuffer(bufsize, 1, servers[serverIndex]->getServer());
-		irSpectrumBuffer->alloc();
-		irBufnum = irSpectrumBuffer->index;
-		
-		// Prepare the convolution buffer via OSC message
-		preparePartConvBuffer();
-		
-		recreateResources();
-	}
+    ofParameter<int>         numChannels;
+    ofParameter<float>       wet;
+    ofParameter<float>       level;
+    ofParameter<float>       rt60;
+    ofParameter<float>       brightness;
+    ofParameter<float>       absorpCurve;
+    ofParameter<std::string> irFilePath;   // inspector + preset; not in main panel
 
-	void preparePartConvBuffer() {
-		// Send OSC command to prepare the buffer
-		ofxOscMessage m;
-		m.setAddress("/b_gen");
-		m.addIntArg(irSpectrumBuffer->index);
-		m.addStringArg("PreparePartConv");
-		m.addIntArg(impulseBuffer->index);
-		m.addIntArg(partitionSize);
-		
-		servers[serverIndex]->getServer()->sendMsg(m);
-	}
+    std::string getSynthDefName()                                   const;
+    void        startSyntheticIR();
+    void        startSyntheticIRForServer(ofxSCServer* srv);
+    void        loadImpulseResponse(const std::string& path);
+    void        cancelLoad(ofxSCServer* srv);
+    void        allocExactSpecBuffer(ofxSCServer* srv, int irFrames);
+    void        preparePartConv(ofxSCServer* server);
+    void        sendParamsToSynth(ofxSCServer* server);
+    void        swapAndReplaceWithNewSpec(ofxSCServer* srv);
+    void        openFileDialog();
+    void        drawStatusWidget();
 
-	void recreateResources() {
-        if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
-		clearSynth();
-		if(input->getNodeRef() == nullptr || irSpectrumBuffer == nullptr) return;
-
-		std::string defName = "convolution" + ofToString(numChannels);
-		synth = new ofxSCSynth(defName, servers[serverIndex]->getServer());
-        synth->createAndRun(1, 1, getActive()); //addToTail
-
-		synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));
-		synth->set("out", output->getBusIndex(servers[serverIndex]->getServer()));
-		synth->set("irspectrum", irBufnum.get());
-		synth->set("partsize", partitionSize);
-		synth->set("mix", mix);
-		synth->set("levels", levels);
-	}
-
-	void activate() override {
-		if(synth) synth->run(true);
-	}
-
-	void deactivate() override {
-		if(synth) synth->run(false);
-	}
-
-	void clearSynth() {
-		if(synth != nullptr){
-			synth->free();
-			delete synth;
-			synth = nullptr;
-		}
-	}
-
-	void clearBuffers() {
-		if(impulseBuffer != nullptr){
-			impulseBuffer->free();
-			delete impulseBuffer;
-			impulseBuffer = nullptr;
-		}
-		if(irSpectrumBuffer != nullptr){
-			irSpectrumBuffer->free();
-			delete irSpectrumBuffer;
-			irSpectrumBuffer = nullptr;
-		}
-		bufnum = -1;
-		irBufnum = -1;
-	}
-
-	void cleanup() {
-		clearSynth();
-		clearBuffers();
-	}
-
-	// Member variables
-	ofEventListeners listeners;
-	
-	ofParameter<nodePort> input;
-	ofParameter<nodePort> output;
-	ofParameter<int> serverIndex;
-	ofParameter<int> numChannels;
-	ofParameter<std::string> impulseFile;
-	ofParameter<int> partitionSize;
-	ofParameter<float> mix;
-	ofParameter<float> levels;
-	ofParameter<bool> chooseFile;
-	
-	ofParameter<int> bufnum;
-	ofParameter<int> irBufnum;
-
-	ofxSCBuffer* impulseBuffer;
-	ofxSCBuffer* irSpectrumBuffer;
-	ofxSCSynth* synth;
-	std::vector<serverManager*> servers;
+    ofEventListeners listeners;
 };
 
 #endif /* scConvolution_h */
