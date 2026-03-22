@@ -70,6 +70,7 @@ private:
 	std::map<ofxSCServer*, ofxSCSynth*> synthInstances;
 	std::map<ofxSCServer*, std::map<int, int>> outputBuses;
 	ofEventListeners listeners;
+	int oldNumChannels = 0;
 
 	// --- Parameters ---
 	ofParameter<int> numChannels;

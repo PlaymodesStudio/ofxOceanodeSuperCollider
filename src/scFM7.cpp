@@ -104,7 +104,10 @@ void scFM7::setup() {
 	// --- LISTENERS ---
 
 	listeners.push(numChannels.newListener([this](int &n){
-		for(auto& output : outputs) output = output;
+		if(oldNumChannels != n) {
+			for(auto& output : outputs) output = output;
+		}
+		oldNumChannels = n;
 	}));
 
 	listeners.push(pitch.newListener([this](vector<float> &v){ sendFloatParameter("pitch", v); }));
