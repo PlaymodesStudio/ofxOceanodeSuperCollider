@@ -50,6 +50,7 @@
 #include "scLissajous.h"
 #include "scPolyphonicArpeggiator.h"
 #include "scDynGenNode.h"
+#include "scVelvetReverb.h"
 
 
 
@@ -141,7 +142,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scFreezer>("SuperCollider");
 	o.registerModel<scWavescope>("SuperCollider", controller->getServers());
 	o.registerModel<scA2k>("SuperCollider", controller->getServers());
-	o.registerModel<scConvolution>("SuperCollider", controller->getServers());
+	o.registerModel<scConvolution>("SuperCollider");
 	o.registerModel<scBeatTracker>("SuperCollider", controller->getServers());
 	o.registerModel<scVST>("SuperCollider");
 	o.registerModel<scPolyMixer>("SuperCollider");
@@ -159,6 +160,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scFFT>("SuperCollider", controller->getServers());
 	o.registerModel<scLissajous>("SuperCollider", controller->getServers());
 	o.registerModel<scDynGenNode>("SuperCollider");
+	o.registerModel<scVelvetReverb>("SuperCollider");
 
 }
 
