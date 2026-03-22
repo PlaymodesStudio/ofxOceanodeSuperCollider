@@ -319,8 +319,10 @@ void scVST::setup(){
 	}));
 	
 	listeners.push(numChannels.newListener([this](int &i){
-		//ofLogNotice("scVST") << "Channels changed to " << i << ", will need " << calculateNumInstances() << " instances";
-		resendParams.notify();
+		if(oldNumChannels != i) {
+			resendParams.notify();
+		}
+		oldNumChannels = i;
 	}));
 	
 	listeners.push(mix.newListener([this](float &m){
@@ -4258,6 +4260,10 @@ void scVST::queryVSTParametersAfterUpdate(int nodeID) {
 void scVST::createSynth(ofxSCServer* server){
 	if(synthInstances.count(server) == 0) return;
 	
+	// Canonical ordering (matches scSynthdef): queue correct bus params BEFORE /s_new
+	// so they arrive as init-args and the node never runs with default out=0.
+	resendParams.notify();
+	
 	// Phase 1: Create all synth nodes first (parallel)
 	ofLogNotice("scVST") << "📤 Creating " << synthInstances[server].size() << " VST synth nodes (parallel)";
 	for(int i = 0; i < synthInstances[server].size(); i++) {
@@ -4303,8 +4309,6 @@ void scVST::createSynth(ofxSCServer* server){
 		
 		pluginLoaded = true;
 	}
-	
-	resendParams.notify();
 }
 
 void scVST::moveSynthBefore(ofxSCServer* server, int nodeID){

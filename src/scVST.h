@@ -359,6 +359,7 @@ private:
 
 	
 	ofEventListeners listeners;
+	int oldNumChannels = 0;
 	
 	// Multi-instance VST support - each server can have multiple VST instances
 	std::map<ofxSCServer*, std::vector<ofxSCSynth*>> synthInstances;
