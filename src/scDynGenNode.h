@@ -83,6 +83,7 @@ public:
     void loadBeforeConnections(ofJson& json) override;
 
     ofEvent<void> resendParams;
+    int oldNumChannels = 0;
 
 private:
     // ── Global slot pool ──────────────────────────────────────────────────────

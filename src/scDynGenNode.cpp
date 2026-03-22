@@ -204,16 +204,21 @@ void scDynGenNode::setup() {
     // numChannels → replace synths (same slot, same code)
     listeners.push(numChannels.newListener([this](int& ch) {
         if(ch < 1 || ch > kMaxChans) return;
-        for(auto& pair : synthInstances) {
-            if(!pair.second) continue;
-            int oldID = pair.second->nodeID;
-            ofxSCSynth* newSynth = new ofxSCSynth(getSynthDefName(), pair.first);
-            newSynth->createAndRun(4, oldID, getActive());  // kAddAction_replace
-            delete pair.second;
-            pair.second = newSynth;  // update map BEFORE resendParams
+        if(oldNumChannels != ch) {
+            for(auto& pair : synthInstances) {
+                if(!pair.second) continue;
+                // Canonical kAddAction_replace: swap pointer first so
+                // resendParams queues params on new synth as init-args.
+                int oldID       = pair.second->nodeID;
+                ofxSCSynth* old = pair.second;
+                ofxSCSynth* newSynth = new ofxSCSynth(getSynthDefName(), pair.first);
+                pair.second = newSynth;
+                resendParams.notify();
+                newSynth->createAndRun(4, oldID, getActive());
+                delete old;
+            }
         }
-        resendParams.notify();
-        for(auto& out : outputs) out = out;
+        oldNumChannels = ch;
     }));
 
     // eel2CodeParam changed (preset load, file open, update() debounce, or AI)
@@ -224,21 +229,33 @@ void scDynGenNode::setup() {
         auto anns = parseAnnotations(code);
         mergeParamNames(anns);
         updateParamCount((int)anns.size(), anns);
-        // Send code to all live servers
-        sendCodeToAllServers();
         // Recreate synths when flagged (AI generation or file load) so @init
         // executes fresh with the new script.  Skipped for live-typing edits.
         if(codeRequiresRecreate) {
             codeRequiresRecreate = false;
             for(auto& pair : synthInstances) {
                 if(!pair.second) continue;
-                int oldID = pair.second->nodeID;
+                // Mirror createSynth: send code WITHOUT BLatency so SC processes
+                // /cmd dyngenscript before /s_new (which fires ~200ms later).
+                // Sending both with BLatency races at the same SC timestamp.
+                bool wasLatency = pair.first->getBLatency();
+                pair.first->setBLatency(false);
+                sendCodeToServer(pair.first);
+                pair.first->setBLatency(wasLatency);
+                // Canonical kAddAction_replace ordering: swap pointer first so
+                // resendParams queues params on the new synth object, then
+                // createAndRun sends them as init-args in /s_new.
+                int oldID        = pair.second->nodeID;
+                ofxSCSynth* old  = pair.second;
                 ofxSCSynth* newSynth = new ofxSCSynth(getSynthDefName(), pair.first);
-                newSynth->createAndRun(4, oldID, getActive());
-                delete pair.second;
                 pair.second = newSynth;
+                resendParams.notify();
+                newSynth->createAndRun(4, oldID, getActive());
+                delete old;
             }
-            resendParams.notify();
+        } else {
+            // Live-typing edit: just push new code, no synth recreation needed
+            sendCodeToAllServers();
         }
         eel2StatusMsg = "Loaded";
     }));
