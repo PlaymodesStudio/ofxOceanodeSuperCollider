@@ -959,13 +959,15 @@ int scPolyMixer::getLastSynthID(ofxSCServer* server) {
 	if (!server) return -1;
 	if (trackInstances.count(server) == 0) return -1;
 
-	// moveSynthBefore uses reverse iteration, so track[0] ends up as the
-	// most-upstream synth in SC's node tree. Return track[0]'s nodeID so
-	// that any node upstream of this mixer is placed before the entire
-	// track group, not in the middle of it.
-	for (auto *synth : trackInstances[server]) {
-		if (synth && synth->nodeID > 0)
-			return synth->nodeID;
+	// moveSynthBefore iterates from (N-1) down to 0, calling moveBefore(scOutputID)
+	// for each track. The last call (i=0) places track[0] closest to scOutput,
+	// making track[0] the LAST to execute. Track[N-1] (moved first) is the FIRST
+	// to execute. Upstream sources must be placed before track[N-1] so they run
+	// before ALL track synths. Return the highest-indexed valid track's nodeID.
+	auto& instances = trackInstances[server];
+	for (int i = (int)instances.size() - 1; i >= 0; i--) {
+		if (instances[i] && instances[i]->nodeID > 0)
+			return instances[i]->nodeID;
 	}
 
 	return -1;
