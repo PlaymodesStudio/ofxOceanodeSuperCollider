@@ -79,11 +79,25 @@ void scChannelRouterMatrix::setup() {
 		
 		// Set up parameter listeners
 		listeners.push(numChannels.newListener([this](int &n){
-			updateMatrixSize();
-			// Trigger graph recomputation
-			for(auto& output : outputs) {
-				output = output;
+			if(n < 1 || n > MAX_NODE_CHANNELS) return;
+			if(oldNumChannels != n) {
+				updateMatrixSize();
+				for(auto &pair : synthInstances) {
+					if(pair.second) {
+						int oldNodeID = pair.second->nodeID;
+						ofxSCSynth *newSynth = new ofxSCSynth(getSynthDefName(), pair.first);
+						delete pair.second;
+						pair.second = newSynth;
+						updateSynthParameters(pair.first);
+						if(inputBuses.count(pair.first) > 0 && !inputBuses[pair.first].empty())
+							pair.second->set("in", inputBuses[pair.first].begin()->second);
+						if(outputBuses.count(pair.first) > 0 && outputBuses[pair.first].count(0) > 0)
+							pair.second->set("out", outputBuses[pair.first][0]);
+						pair.second->createAndRun(4, oldNodeID, getActive());
+					}
+				}
 			}
+			oldNumChannels = n;
 		}));
 		
 		listeners.push(bypass.newListener([this](bool &b){
@@ -209,23 +223,20 @@ void scChannelRouterMatrix::createSynth(ofxSCServer* server) {
 		}
 		
 		synthInstances[server] = new ofxSCSynth(getSynthDefName(), server);
-		synthInstances[server]->createAndRun(0, 1, getActive());
 
-		// Set bypass parameter immediately
-		synthInstances[server]->set("bypass", bypass.get() ? 1.0f : 0.0f);
-		
+		// Queue all params before /s_new so they arrive as init-args
 		updateSynthParameters(server);
-		
 		if(inputBuses.count(server) > 0 && !inputBuses[server].empty()) {
 			for(auto& pair : inputBuses[server]) {
 				synthInstances[server]->set("in", pair.second);
 				break;
 			}
 		}
-		
 		if(outputBuses.count(server) > 0 && outputBuses[server].count(0) > 0) {
 			synthInstances[server]->set("out", outputBuses[server][0]);
 		}
+
+		synthInstances[server]->createAndRun(0, 1, getActive());
 		
 		ofLogNotice("scChannelRouterMatrix") << "Synth created successfully";
 		

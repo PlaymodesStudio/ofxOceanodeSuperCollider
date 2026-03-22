@@ -63,6 +63,7 @@ private:
 	
 	// Event listeners
 	ofEventListeners listeners;
+	int oldNumChannels = 0;
 	
 	// Helper methods
 	string getSynthDefName() const;
