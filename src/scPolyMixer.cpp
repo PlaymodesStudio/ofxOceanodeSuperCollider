@@ -1010,15 +1010,14 @@ void scPolyMixer::moveSynthBefore(ofxSCServer* server, int nodeID)
 					break;
 				}
 			}
-
-			// Finally, move synth in the graph
-			synth->moveBefore(nodeID);
-
 		}
 		catch (const std::exception &e) {
 			ofLogError("scPolyMixer") << "Error in moveSynthBefore for track "
 									  << i << ": " << e.what();
 		}
+
+		// Always move synth in the graph, even if parameter restoration failed
+		synth->moveBefore(nodeID);
 	}
 	
 	ofLogNotice("scPolyMixer") << "moveSynthBefore complete (solo logic applied via restoreTrackParameters)";
@@ -1692,10 +1691,8 @@ void scPolyMixer::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 	
 	ofLogNotice("scPolyMixer") << "setInputBus: node=" << (node ? "valid" : "null") << ", bus=" << bus;
 	
-	// Store in the map (even if bus is -1, though serverManager shouldn't call us with -1)
-	if(bus >= 0 && node != nullptr) {
-		inputBuses[server][node] = bus;
-	}
+	// Store unconditionally (matches canonical scSynthdef behavior)
+	inputBuses[server][node] = bus;
 	
 	// Find which track this input corresponds to
 	for(auto& trackIndexPair : trackInputIndices) {
