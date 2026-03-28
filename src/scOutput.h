@@ -51,9 +51,10 @@ public:
 private:
     ofEventListeners listeners;
     
-    ofParameter<int> outputChannel;
-    ofParameter<int> serverIndex;
-    
+    ofParameter<int>   outputChannel;
+    ofParameter<int>   serverIndex;
+    ofParameter<float> delayMsParam;   // user-facing knob / inlet
+
     float volume;
     int delay;
     bool stereomix;

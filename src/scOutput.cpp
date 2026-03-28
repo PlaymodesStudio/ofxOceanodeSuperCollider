@@ -49,7 +49,12 @@ void scOutput::setup(){
             synth->set("out", ch);
         }
     }));
-    
+
+    addParameter(delayMsParam.set("Delay Ms", 0.0f, 0.0f, 10000.0f));
+    listeners.push(delayMsParam.newListener([this](float &ms){
+        setDelay((int)ms);
+    }));
+
 }
 
 void scOutput::setVolume(float _volume){
@@ -62,7 +67,8 @@ void scOutput::setVolume(float _volume){
 void scOutput::setDelay(int _delay){
     delay = _delay;
     if(synth != nullptr){
-        synth->set("delay", delay);
+        // DelayN \delay argument is in seconds; delay is stored in ms
+        synth->set("delay", delay / 1000.0f);
     }
 }
 
@@ -98,7 +104,7 @@ void scOutput::createSynth(ofxSCServer* server){
     if(server == outputServers[serverIndex]->getServer()){
         synth->set("out", outputChannel);
         synth->set("levels", volume);
-        synth->set("delay", delay);
+        synth->set("delay", delay / 1000.0f);   // ms → seconds for DelayN
         synth->set("stereomix", stereomix);
         synth->set("stereomixsize", stereomixSize);
         synth->set("in", inputBus[server]);
@@ -110,7 +116,7 @@ void scOutput::moveSynthBefore(ofxSCServer* server, int nodeID){
     if(server == outputServers[serverIndex]->getServer()){
         synth->set("out", outputChannel);
         synth->set("levels", volume);
-        synth->set("delay", delay);
+        synth->set("delay", delay / 1000.0f);   // ms → seconds for DelayN
         synth->set("stereomix", stereomix);
         synth->set("stereomixsize", stereomixSize);
         synth->set("in", inputBus[server]);
