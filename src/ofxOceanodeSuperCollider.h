@@ -47,6 +47,8 @@
 #include "waveTrack.h"
 #include "scGraphicEQ.h"
 #include "scFFT.h"
+#include "scFFTHD.h"
+#include "scSpectrogram.h"
 #include "scLissajous.h"
 #include "scPolyphonicArpeggiator.h"
 #include "scDynGenNode.h"
@@ -158,6 +160,8 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scGraphicEQ>("SuperCollider");
 	o.registerModel<scPolyphonicArpeggiator>("SuperCollider");
 	o.registerModel<scFFT>("SuperCollider", controller->getServers());
+	o.registerModel<scFFTHD>("SuperCollider", controller->getServers());
+	o.registerModel<scSpectrogram>("SuperCollider", controller->getServers());
 	o.registerModel<scLissajous>("SuperCollider", controller->getServers());
 	o.registerModel<scDynGenNode>("SuperCollider");
 	o.registerModel<scVelvetReverb>("SuperCollider");
