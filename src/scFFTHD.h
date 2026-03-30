@@ -44,6 +44,7 @@ public:
         , servers(outputServers)
     {
         displayMagnitudes.fill(0.0f);
+        outputBuffer.assign(NUM_BANDS, 0.0f);
     }
 
     ~scFFTHD() {
@@ -67,6 +68,7 @@ public:
             vector<float>(NUM_BANDS, 0.0f),
             vector<float>(NUM_BANDS, 0.0f),
             vector<float>(NUM_BANDS, 1.0f)));
+        spectrumData.setSerializable(false); // never save 1080 stale floats to preset JSON
 
         addInspectorParameter(widgetWidth.set("Widget Width",  240.0f, 100.0f, 800.0f));
         addInspectorParameter(widgetHeight.set("Widget Height", 140.0f,  60.0f, 400.0f));
@@ -107,14 +109,14 @@ public:
 
         const vector<float>& raw = fftBus->readValues;
         if((int)raw.size() == NUM_BANDS) {
-            float coeff = smoothing.get();
-            vector<float> out(NUM_BANDS);
+            const float coeff        = smoothing.get();
+            const float oneMinusCoeff = 1.0f - coeff;
             for(int i = 0; i < NUM_BANDS; i++) {
                 displayMagnitudes[i] = displayMagnitudes[i] * coeff
-                                     + raw[i] * (1.0f - coeff);
-                out[i] = displayMagnitudes[i];
+                                     + raw[i] * oneMinusCoeff;
+                outputBuffer[i] = displayMagnitudes[i];
             }
-            spectrumData = out;
+            spectrumData = outputBuffer;
         }
         fftBus->requestValues();
     }
@@ -158,6 +160,7 @@ private:
     ofEventListener  serverGraphListener;
 
     std::array<float, NUM_BANDS> displayMagnitudes;
+    vector<float>                outputBuffer;       // pre-allocated, avoids per-frame heap alloc
     vector<serverManager*>       servers;
 
     // ── SC management ──────────────────────────────────────────────────────
@@ -190,6 +193,13 @@ private:
 
     void activate()   override { if(synth) synth->run(true);  }
     void deactivate() override { if(synth) synth->run(false); }
+
+    // Called after ALL parameters are set AND all connections are remade.
+    // At this point input->getNodeRef() is guaranteed to be valid if the
+    // connection exists, so recreateSynth() can safely start the FFT synth.
+    void presetHasLoaded() override {
+        if(input->getNodeRef() && enabled.get()) recreateSynth();
+    }
 
     void clearSynth() {
         if(synth)  { synth->free();  delete synth;  synth  = nullptr; }
