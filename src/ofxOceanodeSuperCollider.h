@@ -53,6 +53,7 @@
 #include "scPolyphonicArpeggiator.h"
 #include "scDynGenNode.h"
 #include "scVelvetReverb.h"
+#include "pinkTromboneNode.h"
 
 
 
@@ -165,6 +166,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scLissajous>("SuperCollider", controller->getServers());
 	o.registerModel<scDynGenNode>("SuperCollider");
 	o.registerModel<scVelvetReverb>("SuperCollider");
+	o.registerModel<pinkTromboneNode>("SuperCollider");
 
 }
 
