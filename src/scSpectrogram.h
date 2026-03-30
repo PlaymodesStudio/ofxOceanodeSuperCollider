@@ -66,6 +66,7 @@ public:
         addParameter(colormapIdx.set("Colormap", 0, 0, 3)); // 0=Hot 1=Viridis 2=Phosphor 3=Gray
 
         addOutputParameter(textureOut.set("Texture", nullptr, nullptr, nullptr));
+        textureOut.setSerializable(false); // raw pointer — meaningless to serialize
 
         addInspectorParameter(widgetWidth.set("Widget Width",   480.0f, 100.0f, 1920.0f));
         addInspectorParameter(widgetHeight.set("Widget Height", 200.0f,  40.0f,  600.0f));
@@ -108,10 +109,11 @@ public:
 
         const vector<float>& raw = fftBus->readValues;
         if((int)raw.size() == NUM_BANDS) {
-            float coeff = smoothing.get();
+            const float coeff         = smoothing.get();
+            const float oneMinusCoeff = 1.0f - coeff;
             for(int i = 0; i < NUM_BANDS; i++) {
                 displayMagnitudes[i] = displayMagnitudes[i] * coeff
-                                     + raw[i] * (1.0f - coeff);
+                                     + raw[i] * oneMinusCoeff;
             }
             scrollAccum += speed.get();
             int pixels = (int)scrollAccum;
@@ -203,6 +205,12 @@ private:
 
     void activate()   override { if(synth) synth->run(true);  }
     void deactivate() override { if(synth) synth->run(false); }
+
+    // Called after ALL parameters are set AND all connections are remade.
+    // Guarantees input->getNodeRef() is valid so the SC synth can safely start.
+    void presetHasLoaded() override {
+        if(input->getNodeRef() && enabled.get()) recreateSynth();
+    }
 
     void clearSynth() {
         if(synth)  { synth->free();  delete synth;  synth  = nullptr; }
@@ -299,7 +307,9 @@ void main() {
         // Invert Y: band 1079 (high freq) → FBO bottom (GL y=0), band 0 (low freq) → FBO top.
         // With UV (0,0)→(1,1), AddImage maps GL y=0 to screen top → high freq at top. ✓
         float mag = texture(tColumn, vec2(0.5, 1.0 - uv.y)).r;
-        float db  = 20.0 * log(max(mag, 1e-12)) / log(10.0);
+        // 1.0/log(10.0) as a compile-time constant avoids recomputing it per fragment
+        const float INV_LOG10 = 0.43429448190325176;
+        float db  = 20.0 * log(max(mag, 1e-12)) * INV_LOG10;
         float t   = clamp((db - dbFloor) / (dbCeil - dbFloor), 0.0, 1.0);
         out_color = vec4(applyColormap(t), 1.0);
     } else {
@@ -315,10 +325,9 @@ void main() {
 
     // ── Per-frame scroll pass ───────────────────────────────────────────────
     void doScrollPass(int pixels) {
-        // Upload new column: band 0 (lowest freq) → row 0 → GL texture bottom → FBO bottom
-        for(int i = 0; i < NUM_BANDS; i++) {
-            columnPix.setColor(0, i, ofFloatColor(displayMagnitudes[i]));
-        }
+        // Direct memcpy into pixel buffer — avoids 1080 ofFloatColor constructions per frame.
+        // columnPix is OF_PIXELS_R (single float per pixel), layout matches displayMagnitudes.
+        memcpy(columnPix.getData(), displayMagnitudes.data(), NUM_BANDS * sizeof(float));
         columnTex.loadData(columnPix);
 
         const float normShiftVal = (float)pixels / (float)FBO_WIDTH;
@@ -327,7 +336,7 @@ void main() {
         ofFbo& writeFbo = fbos[1 - ping];
 
         writeFbo.begin();
-        ofClear(0, 0, 0, 255);
+        // No ofClear needed: the shader writes every pixel of the FBO
         scrollShader.begin();
         scrollShader.setUniformTexture("tHistory",   readFbo.getTexture(),  0);
         scrollShader.setUniformTexture("tColumn",    columnTex,             1);
