@@ -31,6 +31,19 @@ void scNode::addInput(std::string name){
     }));
 }
 
+void scNode::removeOutput(int index) {
+	if(index < 0 || index >= (int)outputs.size()) {
+		return;
+	}
+	try {
+		string outputName = outputs[index].getName();
+		removeParameter(outputName);
+		outputs.erase(outputs.begin() + index);
+	} catch(const std::exception& e) {
+		ofLogError("scNode") << "Error removing output at index " << index << ": " << e.what();
+	}
+}
+
 void scNode::removeInput(int index) {
 	if(index < 0 || index >= inputs.size()) {
 		return;

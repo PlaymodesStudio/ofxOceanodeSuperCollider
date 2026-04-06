@@ -71,6 +71,7 @@ public:
     ofEvent<void> destroyedNode;
     
 	void removeInput(int index);
+    void removeOutput(int index);
 protected:
     ofEventListeners listeners;
     
