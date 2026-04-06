@@ -8,6 +8,12 @@
 #include <algorithm>
 #include <cmath>
 
+// Convert a MIDI note number (float, 0-127) to frequency in Hz.
+// A4 (note 69) = 440 Hz.
+static inline float midiNoteToHz(float note) {
+    return 440.0f * std::pow(2.0f, (note - 69.0f) / 12.0f);
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Constructor / Destructor
 // ════════════════════════════════════════════════════════════════════════════
@@ -150,13 +156,9 @@ void fullStepSequencer::setup() {
         }
     }));
     nodeListeners.push(muteP.newListener([this](vector<int>& v) {
-        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++)
             trackConfigs[ti].muted = (v[ti] != 0);
-            float activeVal = (getActive() && !trackConfigs[ti].muted) ? 1.0f : 0.0f;
-            for(auto& [srv, synths] : trackSynths)
-                if(ti < (int)synths.size() && synths[ti])
-                    synths[ti]->set("active", activeVal);
-        }
+        updateActiveStates();  // also accounts for solo
     }));
     nodeListeners.push(swingP.newListener([this](float& v) {
         for(auto& [srv, synths] : trackSynths)
@@ -172,14 +174,16 @@ void fullStepSequencer::setup() {
     }));
 
     // ── Per-track step-data parameters with auto-send listeners (FM7Drone pattern) ─
-    pStepOn     .resize(MAX_TRACKS);
-    pStepVol    .resize(MAX_TRACKS);
-    pStepProb   .resize(MAX_TRACKS);
-    pStepPan    .resize(MAX_TRACKS);
-    pStepCut    .resize(MAX_TRACKS);
-    pStepRes    .resize(MAX_TRACKS);
-    pStepPitch  .resize(MAX_TRACKS);
-    pStepReverse.resize(MAX_TRACKS);
+    pStepOn      .resize(MAX_TRACKS);
+    pStepVol     .resize(MAX_TRACKS);
+    pStepProb    .resize(MAX_TRACKS);
+    pStepPan     .resize(MAX_TRACKS);
+    pStepCut     .resize(MAX_TRACKS);
+    pStepRes     .resize(MAX_TRACKS);
+    pStepPitch   .resize(MAX_TRACKS);
+    pStepReverse .resize(MAX_TRACKS);
+    pStepRevSend .resize(MAX_TRACKS);
+    pStepEchoSend.resize(MAX_TRACKS);
 
     for(int ti = 0; ti < MAX_TRACKS; ti++) {
         vector<float> zeros(MAX_STEPS, 0.0f);
@@ -192,7 +196,9 @@ void fullStepSequencer::setup() {
         pStepCut    [ti].set("stepCut_"    +ofToString(ti), zeros,  vector<float>(MAX_STEPS,-1.f), ones);
         pStepRes    [ti].set("stepRes_"    +ofToString(ti), zeros,  zeros,  ones );
         pStepPitch  [ti].set("stepPitch_"  +ofToString(ti), izeros, vector<int>(MAX_STEPS,-12), vector<int>(MAX_STEPS,12));
-        pStepReverse[ti].set("stepReverse_"+ofToString(ti), zeros,  zeros,  ones );
+        pStepReverse [ti].set("stepReverse_" +ofToString(ti), zeros, zeros, ones );
+        pStepRevSend [ti].set("stepRevSend_" +ofToString(ti), zeros, zeros, ones );
+        pStepEchoSend[ti].set("stepEchoSend_"+ofToString(ti), zeros, zeros, ones );
 
         // Listeners: fire synth->set() for every server's synth when value changes.
         // If synth->created==true  → ofxSCSynth::set() sends /n_setn immediately.
@@ -229,6 +235,14 @@ void fullStepSequencer::setup() {
         nodeListeners.push(pStepReverse[ti].newListener([this, ti](vector<float>& v){
             for(auto& [srv, synths] : trackSynths)
                 if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepReverse", v);
+        }));
+        nodeListeners.push(pStepRevSend[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepRevSend", v);
+        }));
+        nodeListeners.push(pStepEchoSend[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepEchoSend", v);
         }));
     }
 }
@@ -382,6 +396,15 @@ void fullStepSequencer::moveSynthBefore(ofxSCServer* srv, int nodeID) {
             s->set("eqPeakRq",      1.0f / std::max(tci.eqPeakQ, 0.01f));
             s->set("eqLPFreq",      tci.eqLPFreq);
             s->set("eqLPRq",        1.0f / std::max(tci.eqLPQ,   0.01f));
+            s->set("revRoom",       tdi.revRoom);
+            s->set("revDamp",       tdi.revDamp);
+            s->set("echoMode",      (float)tdi.echoMode);
+            s->set("echoBeats",     tdi.echoBeats);
+            s->set("echoPitchHz",   midiNoteToHz(tdi.echoPitchNote));
+            s->set("echoFeedback",  tdi.echoFeedback);
+            s->set("echoRes",       tdi.echoRes);
+            s->set("echoHPF",       tdi.echoHPF);
+            s->set("echoLPF",       tdi.echoLPF);
             fireStepParams(ti);  // arrays: created=true → /n_setn; false → vecArgs
         }
         s->moveBefore(nodeID);
@@ -463,6 +486,15 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("eqPeakRq",      1.0f / std::max(tc.eqPeakQ,  0.01f));
     s->set("eqLPFreq",      tc.eqLPFreq);
     s->set("eqLPRq",        1.0f / std::max(tc.eqLPQ,    0.01f));
+    s->set("revRoom",       td.revRoom);
+    s->set("revDamp",       td.revDamp);
+    s->set("echoMode",      (float)td.echoMode);
+    s->set("echoBeats",     td.echoBeats);
+    s->set("echoPitchHz",   midiNoteToHz(td.echoPitchNote));
+    s->set("echoFeedback",  td.echoFeedback);
+    s->set("echoRes",       td.echoRes);
+    s->set("echoHPF",       td.echoHPF);
+    s->set("echoLPF",       td.echoLPF);
 
     // ── Audio output bus ────────────────────────────────────────────────────
     // If the graph manager has already assigned a bus (setOutputBus was called
@@ -555,31 +587,36 @@ void fullStepSequencer::fireStepParams(int ti) {
     const TrackConfig& tc = trackConfig(ti);
     int n = tc.getNumSteps();
 
-    vector<float> on   (MAX_STEPS, 0.f), vol  (MAX_STEPS, 1.f),
-                  prob (MAX_STEPS, 1.f), pan  (MAX_STEPS, 0.f),
-                  cut  (MAX_STEPS, 0.f), res  (MAX_STEPS, 0.f),
-                  rev  (MAX_STEPS, 0.f);
+    vector<float> on      (MAX_STEPS, 0.f), vol     (MAX_STEPS, 1.f),
+                  prob    (MAX_STEPS, 1.f), pan     (MAX_STEPS, 0.f),
+                  cut     (MAX_STEPS, 0.f), res     (MAX_STEPS, 0.f),
+                  rev     (MAX_STEPS, 0.f),
+                  revSend (MAX_STEPS, 0.f), echoSend(MAX_STEPS, 0.f);
     vector<int>   pitch(MAX_STEPS, 0);
 
     for(int i = 0; i < n; i++) {
-        on   [i] = (i < (int)td.stepOn.size()      && td.stepOn[i])      ? 1.f : 0.f;
-        vol  [i] = (i < (int)td.stepVol.size())    ? td.stepVol[i]    : 1.f;
-        prob [i] = (i < (int)td.stepProb.size())   ? td.stepProb[i]   : 1.f;
-        pan  [i] = (i < (int)td.stepPan.size())    ? td.stepPan[i]    : 0.f;
-        cut  [i] = (i < (int)td.stepCut.size())    ? td.stepCut[i]    : 0.f;
-        res  [i] = (i < (int)td.stepRes.size())    ? td.stepRes[i]    : 0.f;
-        pitch[i] = (i < (int)td.stepPitch.size())  ? td.stepPitch[i]  : 0;
-        rev  [i] = (i < (int)td.stepReverse.size() && td.stepReverse[i]) ? 1.f : 0.f;
+        on      [i] = (i < (int)td.stepOn.size()      && td.stepOn[i])      ? 1.f : 0.f;
+        vol     [i] = (i < (int)td.stepVol.size())     ? td.stepVol[i]     : 1.f;
+        prob    [i] = (i < (int)td.stepProb.size())    ? td.stepProb[i]    : 1.f;
+        pan     [i] = (i < (int)td.stepPan.size())     ? td.stepPan[i]     : 0.f;
+        cut     [i] = (i < (int)td.stepCut.size())     ? td.stepCut[i]     : 0.f;
+        res     [i] = (i < (int)td.stepRes.size())     ? td.stepRes[i]     : 0.f;
+        pitch   [i] = (i < (int)td.stepPitch.size())   ? td.stepPitch[i]   : 0;
+        rev     [i] = (i < (int)td.stepReverse.size()  && td.stepReverse[i])  ? 1.f : 0.f;
+        revSend [i] = (i < (int)td.stepRevSend.size()) ? td.stepRevSend[i] : 0.f;
+        echoSend[i] = (i < (int)td.stepEchoSend.size())? td.stepEchoSend[i]: 0.f;
     }
 
-    pStepOn     [ti].set(on);
-    pStepVol    [ti].set(vol);
-    pStepProb   [ti].set(prob);
-    pStepPan    [ti].set(pan);
-    pStepCut    [ti].set(cut);
-    pStepRes    [ti].set(res);
-    pStepPitch  [ti].set(pitch);
-    pStepReverse[ti].set(rev);
+    pStepOn      [ti].set(on);
+    pStepVol     [ti].set(vol);
+    pStepProb    [ti].set(prob);
+    pStepPan     [ti].set(pan);
+    pStepCut     [ti].set(cut);
+    pStepRes     [ti].set(res);
+    pStepPitch   [ti].set(pitch);
+    pStepReverse [ti].set(rev);
+    pStepRevSend [ti].set(revSend);
+    pStepEchoSend[ti].set(echoSend);
 }
 
 void fullStepSequencer::sendStepDataDirect(ofxSCSynth* s, const TrackData& td, ofxSCServer* srv) {
@@ -665,11 +702,31 @@ void fullStepSequencer::setNumTracks(int n) {
     // ── Synth management (skip during preset loading) ─────────────────────────
     if(!ofxOceanodeShared::isPresetLoading()) {
         if(n > old) {
-            for(int ti = old; ti < n; ti++) {
+            for(int ti = old; ti < n; ti++)
                 snprintf(nameEditBuf[ti], 64, "%s", trackConfigs[ti].name.c_str());
-                for(auto* sm : allServers)
-                    if(sm && sm->getServer())
-                        createTrackSynth(sm->getServer(), ti);
+
+            // Create only the new track synths.  Each new synth's Phasor.kr clock
+            // starts at phase 0 (resetPos=0 in the SynthDef).  To align the already-
+            // running synths with this phase, fire a reset pulse on them: their Phasors
+            // jump back to 0 in the same SC bundle, so all tracks step together.
+            // (We intentionally skip the new synths here: they haven't received /n_go
+            // yet so set() would land in vecArgs as a scalar, potentially overwriting
+            // the default reset=0 and silencing the HPZ1 rising-edge on startup.)
+            for(auto* sm : allServers) {
+                if(!sm || !sm->getServer()) continue;
+                for(int ti = old; ti < n; ti++)
+                    createTrackSynth(sm->getServer(), ti);
+            }
+            // Reset already-running synths so their Phasors align to 0.
+            // Only touches ti < old — those synths have been live long enough
+            // to have received /n_go, so set() sends /n_setn immediately.
+            for(int ti = 0; ti < old; ti++) {
+                for(auto& [srv, synths] : trackSynths) {
+                    if(ti < (int)synths.size() && synths[ti]) {
+                        synths[ti]->set("reset", 1.0f);
+                        synths[ti]->set("reset", 0.0f);
+                    }
+                }
             }
         } else {
             for(int ti = old - 1; ti >= n; ti--) {
@@ -698,6 +755,20 @@ void fullStepSequencer::sendBpmToAll() {
     for(auto& [srv, synths] : trackSynths)
         for(auto* s : synths)
             if(s) s->set("bpm", currentBpm);
+}
+
+void fullStepSequencer::updateActiveStates() {
+    bool anySolo = false;
+    for(int j = 0; j < numTracks; j++)
+        if(trackConfigs[j].solo) { anySolo = true; break; }
+    for(int j = 0; j < numTracks; j++) {
+        bool active = getActive()
+                      && !trackConfigs[j].muted
+                      && !(anySolo && !trackConfigs[j].solo);
+        for(auto& [srv, synths] : trackSynths)
+            if(j < (int)synths.size() && synths[j])
+                synths[j]->set("active", active ? 1.0f : 0.0f);
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -795,6 +866,15 @@ void fullStepSequencer::reloadCurrentSlot() {
             s->set("eqPeakRq",      1.0f / std::max(tci.eqPeakQ, 0.01f));
             s->set("eqLPFreq",      tci.eqLPFreq);
             s->set("eqLPRq",        1.0f / std::max(tci.eqLPQ,   0.01f));
+            s->set("revRoom",       tdi.revRoom);
+            s->set("revDamp",       tdi.revDamp);
+            s->set("echoMode",      (float)tdi.echoMode);
+            s->set("echoBeats",     tdi.echoBeats);
+            s->set("echoPitchHz",   midiNoteToHz(tdi.echoPitchNote));
+            s->set("echoFeedback",  tdi.echoFeedback);
+            s->set("echoRes",       tdi.echoRes);
+            s->set("echoHPF",       tdi.echoHPF);
+            s->set("echoLPF",       tdi.echoLPF);
             s->set("bufnum",        (float)getBufnum(ti, srv));
         }
     }
@@ -1076,10 +1156,14 @@ void fullStepSequencer::drawSequencerWindow() {
         if(!open) showWindow = false;
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
-        const float splitterW = 6.0f;
-        const float marginW   = 6.0f;  // gap between splitter and tracks content
-        browserW = ofClamp(browserW, 80.0f, avail.x - 120.0f);
-        const float tracksW = avail.x - browserW - splitterW - marginW;
+        const float splitterW  = 6.0f;
+        const float marginW    = 6.0f;
+        const float fxSplitW   = 6.0f;
+        const float fxMarginW  = 6.0f;
+        browserW = ofClamp(browserW,  80.0f, avail.x - 300.0f);
+        fxColW   = ofClamp(fxColW,   140.0f, 360.0f);
+        const float tracksW = avail.x - browserW - splitterW - marginW
+                                       - fxColW   - fxSplitW - fxMarginW;
 
         // ── Left: file browser ────────────────────────────────────────────────
         ImGui::BeginChild("##browser", ImVec2(browserW, avail.y), false);
@@ -1116,6 +1200,180 @@ void fullStepSequencer::drawSequencerWindow() {
             ImGui::PopID();
         }
 
+        ImGui::EndChild();
+
+        // ── FX splitter ───────────────────────────────────────────────────────
+        ImGui::SameLine(0, fxMarginW);
+        ImGui::InvisibleButton("##fxsplit", ImVec2(fxSplitW, avail.y));
+        if(ImGui::IsItemHovered() || ImGui::IsItemActive())
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        if(ImGui::IsItemActive())
+            fxColW = ofClamp(fxColW - ImGui::GetIO().MouseDelta.x, 140.0f, 360.0f);
+        {
+            ImVec2 p = ImGui::GetItemRectMin();
+            ImVec2 q = ImGui::GetItemRectMax();
+            float cx = (p.x + q.x) * 0.5f;
+            bool active = ImGui::IsItemHovered() || ImGui::IsItemActive();
+            ImU32 col = active ? IM_COL32(180,180,180,200) : IM_COL32(90,90,90,150);
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(cx, p.y), ImVec2(cx, q.y), col, 1.5f);
+        }
+        ImGui::SameLine(0, 0);
+
+        // ── Right: FX column ──────────────────────────────────────────────────
+        ImGui::BeginChild("##fxcol", ImVec2(fxColW, avail.y), false,
+                          ImGuiWindowFlags_NoScrollbar);
+
+        static constexpr ImVec4 accentPalFX[8] = {
+            {0.27f,0.53f,0.95f,1.f},{0.28f,0.82f,0.48f,1.f},
+            {0.95f,0.60f,0.18f,1.f},{0.72f,0.38f,0.92f,1.f},
+            {0.20f,0.84f,0.90f,1.f},{0.95f,0.28f,0.30f,1.f},
+            {0.94f,0.88f,0.20f,1.f},{0.80f,0.32f,0.70f,1.f},
+        };
+        static constexpr ImVec4 revColFX  = {0.14f, 0.72f, 0.72f, 1.f};
+        static constexpr ImVec4 echoColFX = {0.86f, 0.58f, 0.12f, 1.f};
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f,0.58f,0.65f,1.f));
+        ImGui::TextUnformatted("FX");
+        ImGui::PopStyleColor();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::BeginChild("##fxscroll", ImVec2(0, 0), false);
+        const float cw = ImGui::GetContentRegionAvail().x;
+
+        for(int ti = 0; ti < numTracks; ti++) {
+            ImGui::PushID(ti);
+            TrackConfig& tci = trackConfig(ti);
+            TrackData&   tfd = track(ti);
+            const ImVec4& tacc = accentPalFX[ti % 8];
+
+            // Track header
+            ImGui::TextColored(tacc, "[%d]", ti + 1);
+            ImGui::SameLine(0, 5);
+            ImGui::TextUnformatted(tci.name.c_str());
+
+            // ── REV ──────────────────────────────────────────────────────────
+            {
+                ImDrawList* cdl = ImGui::GetWindowDrawList();
+                ImVec2 rp = ImGui::GetCursorScreenPos();
+                ImGui::Dummy({cw, 18.f});
+                cdl->AddRectFilled(rp, {rp.x + cw, rp.y + 18.f},
+                                   IM_COL32(14, 50, 50, 220), 3.f);
+                ImVec2 ts = ImGui::CalcTextSize("REV");
+                cdl->AddText({rp.x + 5.f, rp.y + (18.f - ts.y) * 0.5f},
+                             ImGui::ColorConvertFloat4ToU32(revColFX), "REV");
+            }
+
+            bool revChanged = false;
+            ImGui::SetNextItemWidth(cw);
+            if(ImGui::SliderFloat("##rroom", &tfd.revRoom, 0.0f, 1.0f, "Room %.2f"))
+                revChanged = true;
+            ImGui::SetNextItemWidth(cw);
+            if(ImGui::SliderFloat("##rdamp", &tfd.revDamp, 0.0f, 1.0f, "Damp %.2f"))
+                revChanged = true;
+            if(revChanged) {
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti]) {
+                        synths[ti]->set("revRoom", tfd.revRoom);
+                        synths[ti]->set("revDamp", tfd.revDamp);
+                    }
+            }
+
+            // ── ECHO ─────────────────────────────────────────────────────────
+            {
+                ImDrawList* cdl = ImGui::GetWindowDrawList();
+                ImVec2 ep = ImGui::GetCursorScreenPos();
+                ImGui::Dummy({cw, 18.f});
+                cdl->AddRectFilled(ep, {ep.x + cw, ep.y + 18.f},
+                                   IM_COL32(52, 34, 10, 220), 3.f);
+                ImVec2 ts = ImGui::CalcTextSize("ECHO");
+                cdl->AddText({ep.x + 5.f, ep.y + (18.f - ts.y) * 0.5f},
+                             ImGui::ColorConvertFloat4ToU32(echoColFX), "ECHO");
+            }
+
+            bool echoChanged = false;
+
+            // ── Mode toggle: BEATS / PITCH ────────────────────────────────────
+            const float btnW = (cw - 2.0f) * 0.5f;
+            // Highlight the active mode button with the echo accent color
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                tfd.echoMode == 0 ? echoColFX : ImVec4(0.22f, 0.22f, 0.22f, 1.f));
+            if(ImGui::Button("BEATS##emode", ImVec2(btnW, 0))) {
+                tfd.echoMode = 0; echoChanged = true;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0, 2);
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                tfd.echoMode == 1 ? echoColFX : ImVec4(0.22f, 0.22f, 0.22f, 1.f));
+            if(ImGui::Button("PITCH##emode", ImVec2(btnW, 0))) {
+                tfd.echoMode = 1; echoChanged = true;
+            }
+            ImGui::PopStyleColor();
+
+            // ── Time control (beats or Hz depending on mode) ──────────────────
+            ImGui::SetNextItemWidth(cw);
+            if(tfd.echoMode == 0) {
+                if(ImGui::DragFloat("##ebeats", &tfd.echoBeats, 0.125f, 0.125f, 8.0f,
+                                    "Delay %.3f bt")) echoChanged = true;
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Delay = (60/BPM) \xc3\x97 Beats");
+            } else {
+                // MIDI note drag (0-127), show note name alongside
+                static const char* kNoteNames[] = {
+                    "C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+                int nn = ofClamp((int)std::round(tfd.echoPitchNote), 0, 127);
+                char noteName[8];
+                snprintf(noteName, sizeof(noteName), "%s%d",
+                         kNoteNames[nn % 12], nn / 12 - 1);
+                const float noteW = cw - ImGui::CalcTextSize(noteName).x - 6.f;
+                ImGui::SetNextItemWidth(noteW);
+                if(ImGui::DragFloat("##epitch", &tfd.echoPitchNote, 1.0f, 0.0f, 127.0f,
+                                    "%.0f")) {
+                    tfd.echoPitchNote = std::round(
+                        ofClamp(tfd.echoPitchNote, 0.0f, 127.0f));
+                    echoChanged = true;
+                }
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Delay = 1 / %.1f Hz  (resonant comb)",
+                                      midiNoteToHz(tfd.echoPitchNote));
+                ImGui::SameLine(0, 6);
+                ImGui::TextDisabled("%s", noteName);
+            }
+
+            ImGui::SetNextItemWidth(cw);
+            if(ImGui::SliderFloat("##efb", &tfd.echoFeedback, 0.0f, 0.97f,
+                                  "FB %.2f")) echoChanged = true;
+            ImGui::SetNextItemWidth(cw);
+            if(ImGui::SliderFloat("##eres", &tfd.echoRes, 0.0f, 0.99f,
+                                  "Res %.2f")) echoChanged = true;
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Filter resonance in feedback path");
+            ImGui::SetNextItemWidth(cw);
+            if(ImGui::DragFloat("##ehpf", &tfd.echoHPF, 10.0f, 20.0f, 8000.0f,
+                                "HP %.0f Hz")) echoChanged = true;
+            ImGui::SetNextItemWidth(cw);
+            if(ImGui::DragFloat("##elpf", &tfd.echoLPF, 50.0f, 200.0f, 20000.0f,
+                                "LP %.0f Hz")) echoChanged = true;
+            if(echoChanged) {
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti]) {
+                        synths[ti]->set("echoMode",     (float)tfd.echoMode);
+                        synths[ti]->set("echoBeats",    tfd.echoBeats);
+                        synths[ti]->set("echoPitchHz",  midiNoteToHz(tfd.echoPitchNote));
+                        synths[ti]->set("echoFeedback", tfd.echoFeedback);
+                        synths[ti]->set("echoRes",      tfd.echoRes);
+                        synths[ti]->set("echoHPF",      tfd.echoHPF);
+                        synths[ti]->set("echoLPF",      tfd.echoLPF);
+                    }
+            }
+
+            ImGui::Spacing();
+            if(ti < numTracks - 1) ImGui::Separator();
+            ImGui::Spacing();
+            ImGui::PopID();
+        }
+
+        ImGui::EndChild();
         ImGui::EndChild();
     }
     ImGui::End();
@@ -1239,7 +1497,13 @@ void fullStepSequencer::drawTrack(int ti) {
         {0.94f, 0.88f, 0.20f, 1.f},  // 6 yellow
         {0.80f, 0.32f, 0.70f, 1.f},  // 7 violet
     };
-    const ImVec4 acc    = accentPalette[ti % MAX_TRACKS];
+    // Determine whether any track is soloed so non-soloed tracks can be greyed.
+    bool anySolo = false;
+    for(int j = 0; j < numTracks; j++) if(trackConfigs[j].solo) { anySolo = true; break; }
+    const bool   isGreyed = tc.muted || (anySolo && !tc.solo);
+    const ImVec4 trueAcc  = accentPalette[ti % MAX_TRACKS];
+    static constexpr ImVec4 greyAcc = {0.30f, 0.31f, 0.35f, 1.f};
+    const ImVec4 acc    = isGreyed ? greyAcc : trueAcc;
     const ImU32  accU32 = ImGui::ColorConvertFloat4ToU32(acc);
 
     // ── Card setup (splitter: ch0 = BG drawn behind, ch1 = content) ───────────
@@ -1300,6 +1564,25 @@ void fullStepSequencer::drawTrack(int ti) {
             mv.resize(MAX_TRACKS, 0);
             mv[ti] = tc.muted ? 1 : 0;
             muteP.set(mv);
+        }
+        ImGui::PopStyleColor(2);
+    }
+
+    // SOLO button
+    ImGui::SameLine(0, 5);
+    {
+        bool s = tc.solo;
+        // Soloed: golden; non-soloed but some other track is soloed: dimmed red hint
+        ImVec4 soloBtnCol = s ? ImVec4(0.82f, 0.64f, 0.06f, 1.f)
+                              : (anySolo ? ImVec4(0.30f, 0.18f, 0.08f, 1.f)
+                                         : ImVec4(0.20f, 0.22f, 0.28f, 1.f));
+        ImVec4 soloBtnHov = s ? ImVec4(0.92f, 0.76f, 0.14f, 1.f)
+                              : ImVec4(0.28f, 0.32f, 0.40f, 1.f);
+        ImGui::PushStyleColor(ImGuiCol_Button,        soloBtnCol);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, soloBtnHov);
+        if(ImGui::Button(s ? "SOLO##sl" : "SOLO##sl", {48.f, 20.f})) {
+            tc.solo = !tc.solo;
+            updateActiveStates();
         }
         ImGui::PopStyleColor(2);
     }
@@ -1506,8 +1789,8 @@ void fullStepSequencer::drawTrack(int ti) {
 
     // ── Tab row ───────────────────────────────────────────────────────────────
     // 0:VOL  1:PROB  2:PAN  3:CUT  4:RES  5:PITCH  6:WAV  7:ENV  8:EQ  9:EUC  10:REV  11:×
-    const char* tabLabels[] = { "VOL","PROB","PAN","CUT","RES","PITCH","WAV","ENV","EQ","EUC","REV","\xc3\x97" };
-    const int   nTabs = 12;
+    const char* tabLabels[] = { "VOL","PROB","PAN","CUT","RES","PITCH","WAV","ENV","EQ","EUC","REV","FX","\xc3\x97" };
+    const int   nTabs = 13;
     const ImVec2 tabSz = {44.f, 23.f};
     for(int t = 0; t < nTabs; t++) {
         if(t > 0) ImGui::SameLine(0, 3);
@@ -2435,6 +2718,86 @@ void fullStepSequencer::drawTrack(int ti) {
         ImGui::Spacing();
     }
 
+    // ── FX tab (tab 11) ──────────────────────────────────────────────────────
+    if(td.activeTab == 11) {
+        td.stepRevSend .resize(ns, 0.0f);
+        td.stepEchoSend.resize(ns, 0.0f);
+
+        // Effect colors
+        static constexpr ImVec4 revColFX  = {0.14f, 0.72f, 0.72f, 1.f};  // teal
+        static constexpr ImVec4 echoColFX = {0.86f, 0.58f, 0.12f, 1.f};  // amber
+        const ImU32 revBgU  = IM_COL32(14, 50, 50, 255);
+        const ImU32 revBarU = ImGui::ColorConvertFloat4ToU32(revColFX);
+        const ImU32 echoBgU = IM_COL32(52, 34, 10, 255);
+        const ImU32 echoBarU= ImGui::ColorConvertFloat4ToU32(echoColFX);
+
+        bool fxChanged = false;
+
+        // Helper: draw one row of FX send sliders (3/4 height of a normal param row)
+        const float fxH = PARAM_H * 0.75f;
+        auto drawFXRow = [&](std::vector<float>& arr, const char* rowId,
+                              ImU32 bgU, ImU32 barU, bool isPaintOwner) {
+            for(int si = 0; si < ns; si++) {
+                if(si > 0) ImGui::SameLine(0, STEP_GAP);
+                int pai = ((si - td.shift) % ns + ns) % ns;
+                float& val = arr[pai];
+
+                ImVec2 pos = ImGui::GetCursorScreenPos();
+                ImGui::InvisibleButton((std::string(rowId) + ofToString(si)).c_str(),
+                                       ImVec2(sw, fxH));
+
+                bool mouseDown = ImGui::IsMouseDown(0);
+                if(ImGui::IsItemActive() && sliderPaintTrack == -1) sliderPaintTrack = ti;
+                if(sliderPaintTrack == ti && mouseDown) {
+                    float mx = ImGui::GetIO().MousePos.x;
+                    float my = ImGui::GetIO().MousePos.y;
+                    // Y-bounds guard: only update this row when the mouse is inside it
+                    if(mx >= pos.x && mx < pos.x + sw &&
+                       my >= pos.y && my < pos.y + fxH) {
+                        float t = 1.0f - ofClamp((my - pos.y) / fxH, 0.0f, 1.0f);
+                        if(t != val) { val = t; fxChanged = true; }
+                    }
+                }
+                if(ImGui::IsItemHovered() && ImGui::IsMouseClicked(1)) {
+                    val = 0.0f; fxChanged = true;
+                }
+
+                bool slIsPh = (si == visualPlayhead);
+                ImVec2 bmax = {pos.x + sw, pos.y + fxH};
+                dl->AddRectFilled(pos, bmax, slIsPh
+                    ? ImGui::ColorConvertFloat4ToU32(playheadCol) : bgU, STEP_ROUND);
+                if(slIsPh)
+                    dl->AddRectFilled(pos, {bmax.x, pos.y + 3.f},
+                                      IM_COL32(255, 255, 255, 220), STEP_ROUND);
+                float barH = fxH * val;
+                if(barH > 0.5f)
+                    dl->AddRectFilled({pos.x + 1, pos.y + fxH - barH},
+                                      {pos.x + sw - 1, pos.y + fxH},
+                                      slIsPh ? IM_COL32(255,255,255,180) : barU);
+            }
+        };
+
+        // ── REV send row ─────────────────────────────────────────────────────
+        ImGui::Spacing();
+        ImGui::TextColored(revColFX, "REV");
+        ImGui::SameLine(0, 6);
+        ImGui::TextDisabled("send per step  (right-click resets to 0)");
+        ImGui::Spacing();
+        drawFXRow(td.stepRevSend,  "##fxrev",  revBgU,  revBarU,  true);
+
+        // ── ECHO send row ────────────────────────────────────────────────────
+        ImGui::Spacing();
+        ImGui::TextColored(echoColFX, "ECHO");
+        ImGui::SameLine(0, 6);
+        ImGui::TextDisabled("send per step");
+        ImGui::Spacing();
+        drawFXRow(td.stepEchoSend, "##fxecho", echoBgU, echoBarU, true);
+
+        if(fxChanged) sendStepDataToAll(ti);
+
+        ImGui::Spacing();
+    }
+
     // Release slider paint gesture when mouse is released on this track
     if(!ImGui::IsMouseDown(0) && sliderPaintTrack == ti) sliderPaintTrack = -1;
 
@@ -2500,6 +2863,7 @@ static ofJson serializeTrackConfig(const fullStepSequencer::TrackConfig& tc) {
     j["globalVol"]     = tc.globalVol;
     j["globalProb"]    = tc.globalProb;
     j["muted"]         = tc.muted;
+    j["solo"]          = tc.solo;
     return j;
 }
 
@@ -2542,6 +2906,7 @@ static void deserializeTrackConfig(const ofJson& j, fullStepSequencer::TrackConf
     if(j.contains("globalVol"))     tc.globalVol      = j["globalVol"].get<float>();
     if(j.contains("globalProb"))    tc.globalProb     = j["globalProb"].get<float>();
     if(j.contains("muted"))         tc.muted          = j["muted"].get<bool>();
+    if(j.contains("solo"))          tc.solo           = j["solo"].get<bool>();
 }
 
 // Serialize/deserialize per-slot step/shift data only
@@ -2553,22 +2918,37 @@ static ofJson serializeTrackData(const fullStepSequencer::TrackData& td) {
     ofJson on = ofJson::array(), vol = ofJson::array(), prob  = ofJson::array();
     ofJson pan = ofJson::array(), cut = ofJson::array(), res   = ofJson::array();
     ofJson spitch = ofJson::array(), srev = ofJson::array();
-    for(bool  v : td.stepOn)      on    .push_back(v);
-    for(float v : td.stepVol)     vol   .push_back(v);
-    for(float v : td.stepProb)    prob  .push_back(v);
-    for(float v : td.stepPan)     pan   .push_back(v);
-    for(float v : td.stepCut)     cut   .push_back(v);
-    for(float v : td.stepRes)     res   .push_back(v);
-    for(int   v : td.stepPitch)   spitch.push_back(v);
-    for(bool  v : td.stepReverse) srev  .push_back(v);
-    j["stepOn"]      = on;
-    j["stepVol"]     = vol;
-    j["stepProb"]    = prob;
-    j["stepPan"]     = pan;
-    j["stepCut"]     = cut;
-    j["stepRes"]     = res;
-    j["stepPitch"]   = spitch;
-    j["stepReverse"] = srev;
+    ofJson srevSend = ofJson::array(), sechoSend = ofJson::array();
+    for(bool  v : td.stepOn)       on       .push_back(v);
+    for(float v : td.stepVol)      vol      .push_back(v);
+    for(float v : td.stepProb)     prob     .push_back(v);
+    for(float v : td.stepPan)      pan      .push_back(v);
+    for(float v : td.stepCut)      cut      .push_back(v);
+    for(float v : td.stepRes)      res      .push_back(v);
+    for(int   v : td.stepPitch)    spitch   .push_back(v);
+    for(bool  v : td.stepReverse)  srev     .push_back(v);
+    for(float v : td.stepRevSend)  srevSend .push_back(v);
+    for(float v : td.stepEchoSend) sechoSend.push_back(v);
+    j["stepOn"]       = on;
+    j["stepVol"]      = vol;
+    j["stepProb"]     = prob;
+    j["stepPan"]      = pan;
+    j["stepCut"]      = cut;
+    j["stepRes"]      = res;
+    j["stepPitch"]    = spitch;
+    j["stepReverse"]  = srev;
+    j["stepRevSend"]  = srevSend;
+    j["stepEchoSend"] = sechoSend;
+    // FX params — per-slot
+    j["revRoom"]      = td.revRoom;
+    j["revDamp"]      = td.revDamp;
+    j["echoMode"]      = td.echoMode;
+    j["echoBeats"]     = td.echoBeats;
+    j["echoPitchNote"] = td.echoPitchNote;
+    j["echoFeedback"] = td.echoFeedback;
+    j["echoRes"]      = td.echoRes;
+    j["echoHPF"]      = td.echoHPF;
+    j["echoLPF"]      = td.echoLPF;
     return j;
 }
 
@@ -2607,6 +2987,32 @@ static void deserializeTrackData(const ofJson& j, fullStepSequencer::TrackData& 
         for(int i = 0; i < n && i < (int)arr.size(); i++)
             td.stepReverse[i] = arr[i].get<bool>();
     }
+    if(j.contains("stepRevSend")) {
+        auto& arr = j["stepRevSend"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepRevSend[i] = arr[i].get<float>();
+    }
+    if(j.contains("stepEchoSend")) {
+        auto& arr = j["stepEchoSend"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepEchoSend[i] = arr[i].get<float>();
+    }
+    // FX params — per-slot
+    if(j.contains("revRoom"))      td.revRoom      = j["revRoom"].get<float>();
+    if(j.contains("revDamp"))      td.revDamp      = j["revDamp"].get<float>();
+    if(j.contains("echoMode"))      td.echoMode      = j["echoMode"].get<int>();
+    if(j.contains("echoBeats"))     td.echoBeats     = j["echoBeats"].get<float>();
+    if(j.contains("echoPitchNote")) td.echoPitchNote = j["echoPitchNote"].get<float>();
+    // Backward compat: old presets stored Hz — convert to MIDI note on load
+    else if(j.contains("echoPitchHz")) {
+        float hz = j["echoPitchHz"].get<float>();
+        td.echoPitchNote = 69.0f + 12.0f * std::log2(hz / 440.0f);
+        td.echoPitchNote = ofClamp(td.echoPitchNote, 0.0f, 127.0f);
+    }
+    if(j.contains("echoFeedback")) td.echoFeedback = j["echoFeedback"].get<float>();
+    if(j.contains("echoRes"))      td.echoRes      = j["echoRes"].get<float>();
+    if(j.contains("echoHPF"))      td.echoHPF      = j["echoHPF"].get<float>();
+    if(j.contains("echoLPF"))      td.echoLPF      = j["echoLPF"].get<float>();
 }
 
 void fullStepSequencer::serializeSlots(ofJson& j) const {

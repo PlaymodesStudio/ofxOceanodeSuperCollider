@@ -99,14 +99,27 @@ public:
         float       globalProb     = 1.0f;
 
         bool        muted          = false;  // per-track mute (mirrors muteP node param)
+        bool        solo           = false;  // per-track solo (isolates this track)
 
         int getNumSteps() const { return std::min(numBeats * stepsPerBeat, MAX_STEPS); }
     };
 
-    /// Per-track per-slot data — only shift and step patterns change between slots.
+    /// Per-track per-slot data — shift, step patterns, and per-slot FX settings.
     struct TrackData {
         int                shift     = 0;
         int                activeTab = -1;  // -1=none  0=VOL … 8=ENV
+
+        // FX: Reverb (FreeVerb2) — per-slot
+        float revRoom      = 0.7f;
+        float revDamp      = 0.5f;
+        // FX: Echo (delay with resonant HP/LP filter) — per-slot
+        int   echoMode      = 0;      // 0=beats, 1=pitch (1/Hz)
+        float echoBeats     = 1.0f;
+        float echoPitchNote = 69.0f; // MIDI note → converted to Hz before sending to SC
+        float echoFeedback = 0.40f;
+        float echoRes      = 0.0f;
+        float echoHPF      = 200.0f;
+        float echoLPF      = 8000.0f;
 
         std::vector<bool>  stepOn;
         std::vector<float> stepVol;
@@ -116,17 +129,21 @@ public:
         std::vector<float> stepRes;     // 0..1 resonance
         std::vector<int>   stepPitch;   // -12..12 semitones per step
         std::vector<bool>  stepReverse; // true = play sample backwards for this step
+        std::vector<float> stepRevSend;  // 0..1 reverb send amount per step
+        std::vector<float> stepEchoSend; // 0..1 echo send amount per step
 
         void resizeSteps() {
             // Always grow to MAX_STEPS — never shrink.
-            stepOn     .resize(MAX_STEPS, false);
-            stepVol    .resize(MAX_STEPS, 1.0f);
-            stepProb   .resize(MAX_STEPS, 1.0f);
-            stepPan    .resize(MAX_STEPS, 0.0f);
-            stepCut    .resize(MAX_STEPS, 0.0f);
-            stepRes    .resize(MAX_STEPS, 0.0f);
-            stepPitch  .resize(MAX_STEPS, 0);
-            stepReverse.resize(MAX_STEPS, false);
+            stepOn      .resize(MAX_STEPS, false);
+            stepVol     .resize(MAX_STEPS, 1.0f);
+            stepProb    .resize(MAX_STEPS, 1.0f);
+            stepPan     .resize(MAX_STEPS, 0.0f);
+            stepCut     .resize(MAX_STEPS, 0.0f);
+            stepRes     .resize(MAX_STEPS, 0.0f);
+            stepPitch   .resize(MAX_STEPS, 0);
+            stepReverse .resize(MAX_STEPS, false);
+            stepRevSend .resize(MAX_STEPS, 0.0f);
+            stepEchoSend.resize(MAX_STEPS, 0.0f);
         }
     };
 
@@ -240,6 +257,7 @@ private:
     void sendStepDataToAll(int ti);
     void fireStepParams(int ti);
     void sendBpmToAll();
+    void updateActiveStates(); // recompute SC 'active' for all tracks (mute + solo)
 
     // ── File browser ──────────────────────────────────────────────────────────
     struct BrowseEntry { bool isDir; std::string name, fullPath; };
@@ -288,6 +306,8 @@ private:
     static std::vector<bool> euclideanRhythm(int k, int n);
 
     // ── Internal flags ────────────────────────────────────────────────────────
+    float    fxColW          = 210.0f; // FX column width (right panel)
+
     int      lastResetVal    = 0;   // previous value of resetSeq — detect rising edge 0→1
     int  sliderPaintTrack    = -1;   // track index owning current slider paint gesture (-1 = none)
     int  stepPaintTrack      = -1;   // track index owning current step-on paint gesture (-1 = none)
@@ -309,6 +329,8 @@ private:
     std::vector<ofParameter<vector<float>>> pStepRes;
     std::vector<ofParameter<vector<int>>>   pStepPitch;
     std::vector<ofParameter<vector<float>>> pStepReverse;
+    std::vector<ofParameter<vector<float>>> pStepRevSend;
+    std::vector<ofParameter<vector<float>>> pStepEchoSend;
 
     // ── Event listeners ───────────────────────────────────────────────────────
     ofEventListeners nodeListeners;
