@@ -37,7 +37,6 @@
 #include "scVUMeter.h"
 #include "scVST.h"
 #include "scPolyMixer.h"
-#include "scFunction.h"
 #include "scChannelRouterMatrix.h"
 #include "scFastEnvelopeFollower.h"
 #include "scFM7.h"
@@ -51,9 +50,11 @@
 #include "scSpectrogram.h"
 #include "scLissajous.h"
 #include "scPolyphonicArpeggiator.h"
+#include "scBufferBrowser.h"
 #include "scDynGenNode.h"
 #include "scVelvetReverb.h"
 #include "pinkTromboneNode.h"
+#include "fullStepSequencer.h"
 
 
 
@@ -151,7 +152,6 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scPolyMixer>("SuperCollider");
 	o.registerModel<scVUMeter>("SuperCollider");
 	o.registerModel<scChannelRouterMatrix>("SuperCollider");
-	o.registerModel<scFunction>("SuperCollider");
 	o.registerModel<scFastEnvelopeFollower>("SuperCollider");
 	o.registerModel<scFM7>("SuperCollider");
 	o.registerModel<scFM7Drone>("SuperCollider");
@@ -160,6 +160,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<waveTrack>("SuperCollider", controller->getServers());
 	o.registerModel<scGraphicEQ>("SuperCollider");
 	o.registerModel<scPolyphonicArpeggiator>("SuperCollider");
+	o.registerModel<scBufferBrowser>("SuperCollider", controller->getServers());
 	o.registerModel<scFFT>("SuperCollider", controller->getServers());
 	o.registerModel<scFFTHD>("SuperCollider", controller->getServers());
 	o.registerModel<scSpectrogram>("SuperCollider", controller->getServers());
@@ -167,6 +168,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scDynGenNode>("SuperCollider");
 	o.registerModel<scVelvetReverb>("SuperCollider");
 	o.registerModel<pinkTromboneNode>("SuperCollider");
+	o.registerModel<fullStepSequencer>("SuperCollider", controller->getServers());
 
 }
 
