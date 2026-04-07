@@ -98,6 +98,14 @@ public:
         float       globalVol      = 1.0f;
         float       globalProb     = 1.0f;
 
+        // AMP tab: beat-synced amplitude LFO
+        bool        lfoEnabled     = false;
+        float       lfoRate        = 1.0f;   // beats per LFO cycle (1=one cycle/beat)
+        float       lfoDepth       = 0.5f;   // 0..1 amplitude modulation depth
+        int         lfoShape       = 0;      // 0=sin, 1=square, 2=saw, 3=invsaw
+        float       lfoPhase       = 0.0f;   // initial/retrigger phase 0..1
+        float       lfoPulseWidth  = 0.5f;   // square wave pulse width 0..1
+
         bool        muted          = false;  // per-track mute (mirrors muteP node param)
         bool        solo           = false;  // per-track solo (isolates this track)
 
@@ -112,6 +120,8 @@ public:
         // FX: Reverb (FreeVerb2) — per-slot
         float revRoom      = 0.7f;
         float revDamp      = 0.5f;
+        float revTailLP    = 8000.0f;  // 1-pole LP cutoff on reverb tail (Hz)
+        float revTailHP    = 20.0f;    // 1-pole HP cutoff on reverb tail (Hz)
         // FX: Echo (delay with resonant HP/LP filter) — per-slot
         int   echoMode      = 0;      // 0=beats, 1=pitch (1/Hz)
         float echoBeats     = 1.0f;
@@ -120,6 +130,19 @@ public:
         float echoRes      = 0.0f;
         float echoHPF      = 200.0f;
         float echoLPF      = 8000.0f;
+        // ARP: simple arpeggiation — per-slot
+        bool  arpEnabled   = false;
+        float arpInterval  = 7.0f;   // semitones per arp step (±24)
+        int   arpModulo    = 4;      // steps before arp restarts (1..16)
+        float arpGateWidth = 1.0f;   // gate width fraction (0..1); 1=full, only in mono+arp mode
+        int   arpSpeedMode = 0;      // 0=divisions/beat, 1=MIDI pitch→Hz
+        // STUT: multi-tap echo per step — per-slot
+        bool  stuttEnabled  = false;
+        int   stuttNumTaps  = 3;     // number of echo taps (1..16)
+        float stuttFadeVol  = 0.7f;  // per-tap volume multiplier (0..1)
+        float stuttFadeCut  = 0.0f;  // per-tap filter shift (-1..1)
+        float stuttInterval = 0.0f;  // semitones per tap (-24..24)
+        float stuttRes      = 0.0f;  // resonance added to filter on stutter taps (0..1)
 
         std::vector<bool>  stepOn;
         std::vector<float> stepVol;
@@ -131,6 +154,10 @@ public:
         std::vector<bool>  stepReverse; // true = play sample backwards for this step
         std::vector<float> stepRevSend;  // 0..1 reverb send amount per step
         std::vector<float> stepEchoSend; // 0..1 echo send amount per step
+        std::vector<bool>  stepArp;      // true = arp enabled for this step
+        std::vector<float> stepArpSpeed; // arp retrigger speed per step (divisions/beat)
+        std::vector<bool>  stepStut;     // true = stutter echo enabled for this step
+        std::vector<float> stepStutSpeed;// stutter retrigger speed per step (divisions/beat)
 
         void resizeSteps() {
             // Always grow to MAX_STEPS — never shrink.
@@ -144,6 +171,10 @@ public:
             stepReverse .resize(MAX_STEPS, false);
             stepRevSend .resize(MAX_STEPS, 0.0f);
             stepEchoSend.resize(MAX_STEPS, 0.0f);
+            stepArp      .resize(MAX_STEPS, false);
+            stepArpSpeed .resize(MAX_STEPS, 4.0f);
+            stepStut     .resize(MAX_STEPS, false);
+            stepStutSpeed.resize(MAX_STEPS, 4.0f);
         }
     };
 
@@ -198,10 +229,12 @@ private:
     ofParameter<vector<float>> globalVolP;   // per-track output volume (0..1)
     ofParameter<vector<float>> globalProbP;  // per-track probability multiplier (0..1)
     ofParameter<vector<int>>   muteP;        // per-track mute state: 0=unmuted, 1=muted
+    ofParameter<vector<int>>   soloP;        // per-track solo state: 0=off, 1=soloed
     ofParameter<float>         swingP;       // global swing for all tracks (0=straight, 0.5=max)
+    ofParameter<float>         globalTransposeP; // global semitone offset added to all track transposes
     ofParameter<int>           currentSlotP; // 0..MAX_SLOTS-1
     ofParameter<bool>          embedInProject;
-    ofParameter<int>           gateOut;      // 1 when current step gate is open
+    ofParameter<vector<int>>   gateOut;      // per-track gate state (0 or 1)
 
     // ── Multitrack ────────────────────────────────────────────────────────────
     int numTracks = 1;  // current active track count (driven by numTracksP)
@@ -235,6 +268,10 @@ private:
     std::map<ofxSCServer*, std::vector<ofxSCBus*>> stepBuses;
     // gateBuses[server][ti]: 1-channel KR bus; synth writes current gate (0 or 1)
     std::map<ofxSCServer*, std::vector<ofxSCBus*>> gateBuses;
+    // mixBus[server]: single stereo audio bus that ALL track synths also write to.
+    // Exposed as the "Mix" output port; the OS graph system sums all writers per cycle.
+    std::map<ofxSCServer*, ofxSCBus*> mixBuses;
+    ofParameter<nodePort> mixOutParam;
     // currentStep[ti]: last step index read back from SC (for playhead drawing)
     std::vector<int> currentStep;
 
@@ -314,6 +351,10 @@ private:
     bool stepPaintValue      = false; // value being stamped during a step-on paint gesture
     int  revPaintTrack       = -1;   // track index owning current REV tab paint gesture (-1 = none)
     bool revPaintValue       = false; // value being stamped during a REV paint gesture
+    int  arpPaintTrack       = -1;   // track index owning current ARP step paint gesture (-1 = none)
+    bool arpPaintValue       = false; // value being stamped during an ARP step paint gesture
+    int  stuttPaintTrack     = -1;   // track index owning current STUT step paint gesture (-1 = none)
+    bool stuttPaintValue     = false; // value being stamped during a STUT step paint gesture
     int  browserSel          = -1;   // keyboard-selected entry index in file browser (-1 = none)
     float browserW           = 220.0f; // file browser panel width (resizable)
 
@@ -331,6 +372,10 @@ private:
     std::vector<ofParameter<vector<float>>> pStepReverse;
     std::vector<ofParameter<vector<float>>> pStepRevSend;
     std::vector<ofParameter<vector<float>>> pStepEchoSend;
+    std::vector<ofParameter<vector<float>>> pStepArp;
+    std::vector<ofParameter<vector<float>>> pStepArpSpeed;
+    std::vector<ofParameter<vector<float>>> pStepStut;
+    std::vector<ofParameter<vector<float>>> pStepStutSpeed;
 
     // ── Event listeners ───────────────────────────────────────────────────────
     ofEventListeners nodeListeners;

@@ -65,6 +65,9 @@ fullStepSequencer::~fullStepSequencer() {
             for(auto* b : buses) { if(b) { b->free(); delete b; } }
         }
         gateBuses.clear();
+
+        for(auto& [srv, mb] : mixBuses) { if(mb) { mb->free(); delete mb; } }
+        mixBuses.clear();
     } catch(const std::exception& e) {
         ofLogError("fullStepSequencer") << "Destructor: " << e.what();
     }
@@ -90,19 +93,21 @@ void fullStepSequencer::setup() {
     addParameter(globalProbP.set("Prob",       {1.0f},  {0.0f},   {1.0f}));
 
     addSeparator("Mute");
-    addParameter(muteP.set("Mute",
-        vector<int>(MAX_TRACKS, 0),
-        vector<int>(MAX_TRACKS, 0),
-        vector<int>(MAX_TRACKS, 1)));
+    addParameter(muteP.set("Mute",   {0}, {0}, {1}));
+    addParameter(soloP.set("Solo",   {0}, {0}, {1}));
 
     addSeparator("Swing");
     addParameter(swingP.set("Swing", 0.0f, 0.0f, 0.5f));
 
     addSeparator("Transpose");
-    addParameter(transposeP .set("Transpose", {0.0f},  {-24.0f}, {24.0f}));
+    addParameter(transposeP .set("Transpose",  {0.0f},  {-24.0f}, {24.0f}));
+    addParameter(globalTransposeP.set("GTranspose", 0.0f, -24.0f, 24.0f));
 
     addSeparator("Output");
-    addOutputParameter(gateOut.set("Gate", 0, 0, 1));
+    addOutputParameter(gateOut.set("Gate", {0}, {0}, {1}));
+    // Mix output: a single stereo bus that receives the sum of all tracks.
+    // Uses MAX_TRACKS as a sentinel index so getOutputBusIndex can distinguish it.
+    addOutputParameter(mixOutParam.set("Mix", nodePort(MAX_TRACKS, this)));
 
     // ── Initial output port for track 0 ──────────────────────────────────────
     scNode::addOutput("Out 1");
@@ -132,11 +137,12 @@ void fullStepSequencer::setup() {
     }));
 
     nodeListeners.push(transposeP.newListener([this](vector<float>& v) {
+        float gt = globalTransposeP.get();
         for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
             trackConfigs[ti].trackPitch = v[ti];
             for(auto& [srv, synths] : trackSynths)
                 if(ti < (int)synths.size() && synths[ti])
-                    synths[ti]->set("globalPitch", v[ti]);
+                    synths[ti]->set("globalPitch", v[ti] + gt);
         }
     }));
     nodeListeners.push(globalVolP.newListener([this](vector<float>& v) {
@@ -159,6 +165,19 @@ void fullStepSequencer::setup() {
         for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++)
             trackConfigs[ti].muted = (v[ti] != 0);
         updateActiveStates();  // also accounts for solo
+    }));
+    nodeListeners.push(soloP.newListener([this](vector<int>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++)
+            trackConfigs[ti].solo = (v[ti] != 0);
+        updateActiveStates();
+    }));
+    nodeListeners.push(globalTransposeP.newListener([this](float& v) {
+        for(int ti = 0; ti < numTracks; ti++) {
+            float pitch = trackConfigs[ti].trackPitch + v;
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalPitch", pitch);
+        }
     }));
     nodeListeners.push(swingP.newListener([this](float& v) {
         for(auto& [srv, synths] : trackSynths)
@@ -184,6 +203,10 @@ void fullStepSequencer::setup() {
     pStepReverse .resize(MAX_TRACKS);
     pStepRevSend .resize(MAX_TRACKS);
     pStepEchoSend.resize(MAX_TRACKS);
+    pStepArp     .resize(MAX_TRACKS);
+    pStepArpSpeed.resize(MAX_TRACKS);
+    pStepStut    .resize(MAX_TRACKS);
+    pStepStutSpeed.resize(MAX_TRACKS);
 
     for(int ti = 0; ti < MAX_TRACKS; ti++) {
         vector<float> zeros(MAX_STEPS, 0.0f);
@@ -199,6 +222,20 @@ void fullStepSequencer::setup() {
         pStepReverse [ti].set("stepReverse_" +ofToString(ti), zeros, zeros, ones );
         pStepRevSend [ti].set("stepRevSend_" +ofToString(ti), zeros, zeros, ones );
         pStepEchoSend[ti].set("stepEchoSend_"+ofToString(ti), zeros, zeros, ones );
+        pStepArp     [ti].set("stepArp_"     +ofToString(ti), zeros, zeros, ones );
+        {
+            vector<float> fours(MAX_STEPS, 4.0f);
+            vector<float> lo(MAX_STEPS, 0.0f);
+            vector<float> hi(MAX_STEPS, 127.0f);
+            pStepArpSpeed[ti].set("stepArpSpeed_"+ofToString(ti), fours, lo, hi);
+        }
+        pStepStut    [ti].set("stepStut_"     +ofToString(ti), zeros, zeros, ones);
+        {
+            vector<float> fours(MAX_STEPS, 4.0f);
+            vector<float> lo(MAX_STEPS, 0.25f);
+            vector<float> hi(MAX_STEPS, 64.0f);
+            pStepStutSpeed[ti].set("stepStutSpeed_"+ofToString(ti), fours, lo, hi);
+        }
 
         // Listeners: fire synth->set() for every server's synth when value changes.
         // If synth->created==true  → ofxSCSynth::set() sends /n_setn immediately.
@@ -244,6 +281,22 @@ void fullStepSequencer::setup() {
             for(auto& [srv, synths] : trackSynths)
                 if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepEchoSend", v);
         }));
+        nodeListeners.push(pStepArp[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepArp", v);
+        }));
+        nodeListeners.push(pStepArpSpeed[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepArpSpeed", v);
+        }));
+        nodeListeners.push(pStepStut[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepStut", v);
+        }));
+        nodeListeners.push(pStepStutSpeed[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepStutSpeed", v);
+        }));
     }
 }
 
@@ -263,13 +316,16 @@ void fullStepSequencer::update(ofEventArgs& /*args*/) {
         }
     }
     if(!gateBuses.empty()) {
-        // Gate output reflects track 0 only
         auto& busList = gateBuses.begin()->second;
-        if(!busList.empty() && busList[0]) {
-            if(!busList[0]->readValues.empty())
-                gateOut = (int)std::round(busList[0]->readValues[0]);
-            busList[0]->requestValues();
+        auto gv = gateOut.get();
+        gv.resize(numTracks, 0);
+        for(int ti = 0; ti < numTracks && ti < (int)busList.size(); ti++) {
+            if(!busList[ti]) continue;
+            if(!busList[ti]->readValues.empty())
+                gv[ti] = (int)std::round(busList[ti]->readValues[0]);
+            busList[ti]->requestValues();
         }
+        gateOut.set(gv);
     }
 
 }
@@ -301,14 +357,16 @@ void fullStepSequencer::deactivate() {
 // scNode interface
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::buildSynth(ofxSCServer* /*srv*/) {
-    // Intentional no-op.
-    //
-    // The graph manager calls buildSynth → setOutputBus → createSynth.
-    // We need setOutputBus to run BEFORE the synth is created so the correct
-    // bus is baked into /s_new.  setOutputBus always writes to outputBuses[srv]
-    // regardless of synth state, so createSynth can read it from there.
-    // All allocation and spawning happens inside createSynth.
+void fullStepSequencer::buildSynth(ofxSCServer* srv) {
+    if(!srv) return;
+    // Create the mix bus here (before setInputBus is called on downstream nodes)
+    // so getBusIndex(server) returns a valid index during the connection phase.
+    // Free any existing mix bus for this server first to prevent leaks on rebuilds.
+    if(mixBuses.count(srv) && mixBuses[srv]) {
+        mixBuses[srv]->free();
+        delete mixBuses[srv];
+    }
+    mixBuses[srv] = new ofxSCBus(RATE_AUDIO, 2, srv);
 }
 
 void fullStepSequencer::createSynth(ofxSCServer* srv) {
@@ -328,6 +386,10 @@ void fullStepSequencer::createSynth(ofxSCServer* srv) {
 void fullStepSequencer::free(ofxSCServer* srv) {
     freeServerSynths(srv);
     outputBuses.erase(srv);
+    if(mixBuses.count(srv)) {
+        if(mixBuses[srv]) { mixBuses[srv]->free(); delete mixBuses[srv]; }
+        mixBuses.erase(srv);
+    }
 }
 
 void fullStepSequencer::setOutputBus(ofxSCServer* srv, int idx, int bus) {
@@ -346,6 +408,11 @@ void fullStepSequencer::setOutputBus(ofxSCServer* srv, int idx, int bus) {
 }
 
 int fullStepSequencer::getOutputBusIndex(ofxSCServer* srv, int idx) {
+    if(idx == MAX_TRACKS) {
+        if(mixBuses.count(srv) && mixBuses.at(srv))
+            return mixBuses.at(srv)->index;
+        return -1;
+    }
     if(outputBuses.count(srv) && outputBuses[srv].count(idx))
         return outputBuses[srv][idx];
     return -1;
@@ -370,7 +437,7 @@ void fullStepSequencer::moveSynthBefore(ofxSCServer* srv, int nodeID) {
             s->set("numSteps",      (float)tci.getNumSteps());
             s->set("shift",         (float)tdi.shift);
             s->set("swing",         swingP.get());
-            s->set("globalPitch",   tci.trackPitch);
+            s->set("globalPitch",   tci.trackPitch + globalTransposeP.get());
             s->set("globalVol",     tci.globalVol);
             s->set("globalProb",    tci.globalProb);
             s->set("bufnum",        (float)getBufnum(ti, srv));
@@ -388,6 +455,12 @@ void fullStepSequencer::moveSynthBefore(ofxSCServer* srv, int nodeID) {
             s->set("envRelease",    0.0f);
             s->set("envCurveA",     tci.envCurveA);
             s->set("envCurveD",     tci.envCurveD);
+            s->set("lfoEnabled",    tci.lfoEnabled    ? 1.0f : 0.0f);
+            s->set("lfoRate",       tci.lfoRate);
+            s->set("lfoDepth",      tci.lfoDepth);
+            s->set("lfoShape",      (float)tci.lfoShape);
+            s->set("lfoPhase",      tci.lfoPhase);
+            s->set("lfoPulseWidth", tci.lfoPulseWidth);
             s->set("eqEnabled",     tci.eqEnabled   ? 1.0f : 0.0f);
             s->set("eqHPFreq",      tci.eqHPFreq);
             s->set("eqHPRq",        1.0f / std::max(tci.eqHPQ,   0.01f));
@@ -398,6 +471,8 @@ void fullStepSequencer::moveSynthBefore(ofxSCServer* srv, int nodeID) {
             s->set("eqLPRq",        1.0f / std::max(tci.eqLPQ,   0.01f));
             s->set("revRoom",       tdi.revRoom);
             s->set("revDamp",       tdi.revDamp);
+            s->set("revTailLP",     tdi.revTailLP);
+            s->set("revTailHP",     tdi.revTailHP);
             s->set("echoMode",      (float)tdi.echoMode);
             s->set("echoBeats",     tdi.echoBeats);
             s->set("echoPitchHz",   midiNoteToHz(tdi.echoPitchNote));
@@ -405,6 +480,19 @@ void fullStepSequencer::moveSynthBefore(ofxSCServer* srv, int nodeID) {
             s->set("echoRes",       tdi.echoRes);
             s->set("echoHPF",       tdi.echoHPF);
             s->set("echoLPF",       tdi.echoLPF);
+            s->set("arpEnabled",    tdi.arpEnabled  ? 1.0f : 0.0f);
+            s->set("arpInterval",   tdi.arpInterval);
+            s->set("arpModulo",     (float)tdi.arpModulo);
+            s->set("arpGateWidth",  tdi.arpGateWidth);
+            s->set("arpSpeedMode",  (float)tdi.arpSpeedMode);
+            s->set("stuttEnabled",  tdi.stuttEnabled ? 1.0f : 0.0f);
+            s->set("stuttNumTaps",  (float)tdi.stuttNumTaps);
+            s->set("stuttFadeVol",  tdi.stuttFadeVol);
+            s->set("stuttFadeCut",  tdi.stuttFadeCut);
+            s->set("stuttInterval", tdi.stuttInterval);
+            s->set("stuttRes",      tdi.stuttRes);
+            if(mixBuses.count(srv) && mixBuses.at(srv))
+                s->set("mixOut", (float)mixBuses.at(srv)->index);
             fireStepParams(ti);  // arrays: created=true → /n_setn; false → vecArgs
         }
         s->moveBefore(nodeID);
@@ -458,7 +546,7 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("shift",         (float)td.shift);
     s->set("swing",         swingP.get());
     s->set("numSteps",      (float)tc.getNumSteps());
-    s->set("globalPitch",   tc.trackPitch);
+    s->set("globalPitch",   tc.trackPitch + globalTransposeP.get());
     s->set("globalVol",     tc.globalVol);
     s->set("globalProb",    tc.globalProb);
     s->set("bufnum",        bufnum);
@@ -478,6 +566,12 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("envRelease",    0.0f);
     s->set("envCurveA",     tc.envCurveA);
     s->set("envCurveD",     tc.envCurveD);
+    s->set("lfoEnabled",    tc.lfoEnabled    ? 1.0f : 0.0f);
+    s->set("lfoRate",       tc.lfoRate);
+    s->set("lfoDepth",      tc.lfoDepth);
+    s->set("lfoShape",      (float)tc.lfoShape);
+    s->set("lfoPhase",      tc.lfoPhase);
+    s->set("lfoPulseWidth", tc.lfoPulseWidth);
     s->set("eqEnabled",     tc.eqEnabled   ? 1.0f : 0.0f);
     s->set("eqHPFreq",      tc.eqHPFreq);
     s->set("eqHPRq",        1.0f / std::max(tc.eqHPQ,    0.01f));
@@ -488,6 +582,8 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("eqLPRq",        1.0f / std::max(tc.eqLPQ,    0.01f));
     s->set("revRoom",       td.revRoom);
     s->set("revDamp",       td.revDamp);
+    s->set("revTailLP",     td.revTailLP);
+    s->set("revTailHP",     td.revTailHP);
     s->set("echoMode",      (float)td.echoMode);
     s->set("echoBeats",     td.echoBeats);
     s->set("echoPitchHz",   midiNoteToHz(td.echoPitchNote));
@@ -495,6 +591,17 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("echoRes",       td.echoRes);
     s->set("echoHPF",       td.echoHPF);
     s->set("echoLPF",       td.echoLPF);
+    s->set("arpEnabled",    td.arpEnabled  ? 1.0f : 0.0f);
+    s->set("arpInterval",   td.arpInterval);
+    s->set("arpModulo",     (float)td.arpModulo);
+    s->set("arpGateWidth",  td.arpGateWidth);
+    s->set("arpSpeedMode",  (float)td.arpSpeedMode);
+    s->set("stuttEnabled",  td.stuttEnabled ? 1.0f : 0.0f);
+    s->set("stuttNumTaps",  (float)td.stuttNumTaps);
+    s->set("stuttFadeVol",  td.stuttFadeVol);
+    s->set("stuttFadeCut",  td.stuttFadeCut);
+    s->set("stuttInterval", td.stuttInterval);
+    s->set("stuttRes",      td.stuttRes);
 
     // ── Audio output bus ────────────────────────────────────────────────────
     // If the graph manager has already assigned a bus (setOutputBus was called
@@ -516,6 +623,10 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
         privateBuses[srv][ti] = pb;
         s->set("out", pb->index);
     }
+
+    // ── Mix output bus (shared across all tracks on this server) ───────────
+    if(mixBuses.count(srv) && mixBuses.at(srv))
+        s->set("mixOut", (float)mixBuses.at(srv)->index);
 
     // ── KR step-readback bus (for playhead indicator) ───────────────────────
     if(stepBuses.count(srv) && ti < (int)stepBuses[srv].size() && stepBuses[srv][ti]) {
@@ -591,7 +702,9 @@ void fullStepSequencer::fireStepParams(int ti) {
                   prob    (MAX_STEPS, 1.f), pan     (MAX_STEPS, 0.f),
                   cut     (MAX_STEPS, 0.f), res     (MAX_STEPS, 0.f),
                   rev     (MAX_STEPS, 0.f),
-                  revSend (MAX_STEPS, 0.f), echoSend(MAX_STEPS, 0.f);
+                  revSend  (MAX_STEPS, 0.f), echoSend(MAX_STEPS, 0.f),
+                  arp      (MAX_STEPS, 0.f), arpSpeed (MAX_STEPS, 4.0f),
+                  stut     (MAX_STEPS, 0.f), stutSpeed(MAX_STEPS, 4.0f);
     vector<int>   pitch(MAX_STEPS, 0);
 
     for(int i = 0; i < n; i++) {
@@ -605,6 +718,10 @@ void fullStepSequencer::fireStepParams(int ti) {
         rev     [i] = (i < (int)td.stepReverse.size()  && td.stepReverse[i])  ? 1.f : 0.f;
         revSend [i] = (i < (int)td.stepRevSend.size()) ? td.stepRevSend[i] : 0.f;
         echoSend[i] = (i < (int)td.stepEchoSend.size())? td.stepEchoSend[i]: 0.f;
+        arp     [i] = (i < (int)td.stepArp.size()       && td.stepArp[i])    ? 1.f : 0.f;
+        arpSpeed[i] = (i < (int)td.stepArpSpeed.size())  ? td.stepArpSpeed[i] : 4.0f;
+        stut    [i] = (i < (int)td.stepStut.size()      && td.stepStut[i])   ? 1.f : 0.f;
+        stutSpeed[i]= (i < (int)td.stepStutSpeed.size()) ? td.stepStutSpeed[i]: 4.0f;
     }
 
     pStepOn      [ti].set(on);
@@ -617,6 +734,10 @@ void fullStepSequencer::fireStepParams(int ti) {
     pStepReverse [ti].set(rev);
     pStepRevSend [ti].set(revSend);
     pStepEchoSend[ti].set(echoSend);
+    pStepArp     [ti].set(arp);
+    pStepArpSpeed[ti].set(arpSpeed);
+    pStepStut    [ti].set(stut);
+    pStepStutSpeed[ti].set(stutSpeed);
 }
 
 void fullStepSequencer::sendStepDataDirect(ofxSCSynth* s, const TrackData& td, ofxSCServer* srv) {
@@ -688,6 +809,7 @@ void fullStepSequencer::setNumTracks(int n) {
         auto vv = globalVolP .get(); vv .resize(n, 1.0f); globalVolP .set(vv);
         auto pv = globalProbP.get(); pv.resize(n, 1.0f); globalProbP.set(pv);
         auto mv = muteP      .get(); mv .resize(n, 0);    muteP      .set(mv);
+        auto sv = soloP      .get(); sv .resize(n, 0);    soloP      .set(sv);
     }
 
     // ── Output port management ────────────────────────────────────────────────
@@ -816,19 +938,21 @@ void fullStepSequencer::reloadCurrentSlot() {
     // Rebuild vector parameters from global track config (fires listeners → SC synths)
     {
         auto tv = transposeP.get();  auto vv = globalVolP.get();
-        auto pv = globalProbP.get(); auto mv = muteP.get();
+        auto pv = globalProbP.get(); auto mv = muteP.get(); auto sv = soloP.get();
         tv.resize(numTracks, 0.0f);  vv.resize(numTracks, 1.0f);
-        pv.resize(numTracks, 1.0f);  mv.resize(numTracks, 0);
+        pv.resize(numTracks, 1.0f);  mv.resize(numTracks, 0); sv.resize(numTracks, 0);
         for(int ti = 0; ti < numTracks; ti++) {
             tv[ti] = trackConfigs[ti].trackPitch;
             vv[ti] = trackConfigs[ti].globalVol;
             pv[ti] = trackConfigs[ti].globalProb;
             mv[ti] = trackConfigs[ti].muted ? 1 : 0;
+            sv[ti] = trackConfigs[ti].solo  ? 1 : 0;
         }
         transposeP.set(tv);
         globalVolP.set(vv);
         globalProbP.set(pv);
         muteP.set(mv);  // fires listener → sets active on SC synths
+        soloP.set(sv);  // fires listener → updateActiveStates
     }
 
     // Push slot-specific (shift) and config params to running synths.
@@ -858,6 +982,12 @@ void fullStepSequencer::reloadCurrentSlot() {
             s->set("envRelease",    0.0f);
             s->set("envCurveA",     tci.envCurveA);
             s->set("envCurveD",     tci.envCurveD);
+            s->set("lfoEnabled",    tci.lfoEnabled    ? 1.0f : 0.0f);
+            s->set("lfoRate",       tci.lfoRate);
+            s->set("lfoDepth",      tci.lfoDepth);
+            s->set("lfoShape",      (float)tci.lfoShape);
+            s->set("lfoPhase",      tci.lfoPhase);
+            s->set("lfoPulseWidth", tci.lfoPulseWidth);
             s->set("eqEnabled",     tci.eqEnabled   ? 1.0f : 0.0f);
             s->set("eqHPFreq",      tci.eqHPFreq);
             s->set("eqHPRq",        1.0f / std::max(tci.eqHPQ,   0.01f));
@@ -868,6 +998,8 @@ void fullStepSequencer::reloadCurrentSlot() {
             s->set("eqLPRq",        1.0f / std::max(tci.eqLPQ,   0.01f));
             s->set("revRoom",       tdi.revRoom);
             s->set("revDamp",       tdi.revDamp);
+            s->set("revTailLP",     tdi.revTailLP);
+            s->set("revTailHP",     tdi.revTailHP);
             s->set("echoMode",      (float)tdi.echoMode);
             s->set("echoBeats",     tdi.echoBeats);
             s->set("echoPitchHz",   midiNoteToHz(tdi.echoPitchNote));
@@ -875,6 +1007,11 @@ void fullStepSequencer::reloadCurrentSlot() {
             s->set("echoRes",       tdi.echoRes);
             s->set("echoHPF",       tdi.echoHPF);
             s->set("echoLPF",       tdi.echoLPF);
+            s->set("arpEnabled",    tdi.arpEnabled  ? 1.0f : 0.0f);
+            s->set("arpInterval",   tdi.arpInterval);
+            s->set("arpModulo",     (float)tdi.arpModulo);
+            s->set("arpGateWidth",  tdi.arpGateWidth);
+            s->set("arpSpeedMode",  (float)tdi.arpSpeedMode);
             s->set("bufnum",        (float)getBufnum(ti, srv));
         }
     }
@@ -1271,11 +1408,21 @@ void fullStepSequencer::drawSequencerWindow() {
             ImGui::SetNextItemWidth(cw);
             if(ImGui::SliderFloat("##rdamp", &tfd.revDamp, 0.0f, 1.0f, "Damp %.2f"))
                 revChanged = true;
+            ImGui::SetNextItemWidth(cw);
+            if(ImGui::DragFloat("##rtlp", &tfd.revTailLP, 50.0f, 200.0f, 20000.0f, "LP %.0f Hz"))
+                revChanged = true;
+            ImGui::SetNextItemWidth(cw);
+            if(ImGui::DragFloat("##rthp", &tfd.revTailHP, 10.0f, 20.0f, 5000.0f, "HP %.0f Hz"))
+                revChanged = true;
             if(revChanged) {
+                tfd.revTailLP = ofClamp(tfd.revTailLP, 200.0f, 20000.0f);
+                tfd.revTailHP = ofClamp(tfd.revTailHP, 20.0f,  5000.0f);
                 for(auto& [srv, synths] : trackSynths)
                     if(ti < (int)synths.size() && synths[ti]) {
-                        synths[ti]->set("revRoom", tfd.revRoom);
-                        synths[ti]->set("revDamp", tfd.revDamp);
+                        synths[ti]->set("revRoom",   tfd.revRoom);
+                        synths[ti]->set("revDamp",   tfd.revDamp);
+                        synths[ti]->set("revTailLP", tfd.revTailLP);
+                        synths[ti]->set("revTailHP", tfd.revTailHP);
                     }
             }
 
@@ -1561,8 +1708,7 @@ void fullStepSequencer::drawTrack(int ti) {
         if(ImGui::Button(m ? "MUTED##mt" : "MUTE##mt", {58.f, 20.f})) {
             tc.muted = !tc.muted;
             auto mv = muteP.get();
-            mv.resize(MAX_TRACKS, 0);
-            mv[ti] = tc.muted ? 1 : 0;
+            if(ti < (int)mv.size()) mv[ti] = tc.muted ? 1 : 0;
             muteP.set(mv);
         }
         ImGui::PopStyleColor(2);
@@ -1582,7 +1728,9 @@ void fullStepSequencer::drawTrack(int ti) {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, soloBtnHov);
         if(ImGui::Button(s ? "SOLO##sl" : "SOLO##sl", {48.f, 20.f})) {
             tc.solo = !tc.solo;
-            updateActiveStates();
+            auto sv = soloP.get();
+            if(ti < (int)sv.size()) sv[ti] = tc.solo ? 1 : 0;
+            soloP.set(sv);  // listener fires → updateActiveStates()
         }
         ImGui::PopStyleColor(2);
     }
@@ -1788,13 +1936,13 @@ void fullStepSequencer::drawTrack(int ti) {
     ImGui::Spacing();
 
     // ── Tab row ───────────────────────────────────────────────────────────────
-    // 0:VOL  1:PROB  2:PAN  3:CUT  4:RES  5:PITCH  6:WAV  7:ENV  8:EQ  9:EUC  10:REV  11:×
-    const char* tabLabels[] = { "VOL","PROB","PAN","CUT","RES","PITCH","WAV","ENV","EQ","EUC","REV","FX","\xc3\x97" };
-    const int   nTabs = 13;
+    // 0:VOL  1:PROB  2:PAN  3:CUT  4:RES  5:PITCH  6:WAV  7:AMP  8:EQ  9:EUC  10:REV  11:FX  12:ARP  13:ECHO
+    const char* tabLabels[] = { "VOL","PROB","PAN","CUT","RES","PITCH","WAV","AMP","EQ","EUC","REV","FX","ARP","ECHO" };
+    const int   nTabs = 14;
     const ImVec2 tabSz = {44.f, 23.f};
     for(int t = 0; t < nTabs; t++) {
         if(t > 0) ImGui::SameLine(0, 3);
-        bool isActive = (t < nTabs - 1 && td.activeTab == t);
+        bool isActive = (td.activeTab == t);
         ImGui::PushStyleColor(ImGuiCol_Button,
             isActive ? ImVec4(acc.x*0.38f, acc.y*0.38f, acc.z*0.38f, 0.95f)
                      : ImVec4(0.16f, 0.18f, 0.23f, 1.f));
@@ -1812,9 +1960,8 @@ void fullStepSequencer::drawTrack(int ti) {
         }
         ImGui::PopStyleColor(3);
         if(clicked) {
-            if(t == nTabs - 1)         td.activeTab = -1;
-            else if(td.activeTab == t) td.activeTab = -1;
-            else                       td.activeTab = t;
+            if(td.activeTab == t) td.activeTab = -1;
+            else                  td.activeTab = t;
         }
     }
 
@@ -2276,60 +2423,15 @@ void fullStepSequencer::drawTrack(int ti) {
         ImGui::Spacing();
     }
 
-    // ── ENV tab (tab 7) ──────────────────────────────────────────────────────
+    // ── AMP tab (tab 7): ENV (left) | LFO (right) in a two-column layout ──────
     if(td.activeTab == 7) {
         ImGui::Spacing();
 
-        // ── Enable toggle ─────────────────────────────────────────────────────
-        {
-            bool en = tc.envEnabled;
-            if(en) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.45f, 0.15f, 1.0f));
-            if(ImGui::SmallButton(en ? "ENV ON" : "ENV OFF")) {
-                tc.envEnabled = !tc.envEnabled;
-                for(auto& [srv, synths] : trackSynths)
-                    if(ti < (int)synths.size() && synths[ti])
-                        synths[ti]->set("envEnabled", tc.envEnabled ? 1.0f : 0.0f);
-            }
-            if(en) ImGui::PopStyleColor();
-        }
-
-        // ── Envelope shape visualisation ─────────────────────────────────────
-        ImGui::Spacing();
-
-        int numBeatGaps = (ns > 1) ? (ns - 1) / tc.stepsPerBeat : 0;
-        int numStepGaps = (ns > 1) ? (ns - 1) - numBeatGaps      : 0;
-        float envW = std::max((float)ns * sw
-                              + (float)numBeatGaps * 4.0f
-                              + (float)numStepGaps * 1.0f, 120.0f);
-        const float envH = 64.0f;
-
-        ImVec2 envPos = ImGui::GetCursorScreenPos();
-        ImGui::Dummy(ImVec2(envW, envH));
-
-        // Background
-        dl->AddRectFilled(envPos, ImVec2(envPos.x + envW, envPos.y + envH),
-                          IM_COL32(28, 28, 28, 255));
-
-        // Compute pixel positions for each segment boundary
-        float tA = tc.envAttack;
-        float tH = tc.envHold;
-        float tD = tc.envDecay;
-        float total = std::max(tA + tH + tD, 0.001f);
-
-        float x0 = envPos.x;
-        float x1 = envPos.x + (tA         / total) * envW;           // end attack
-        float x2 = envPos.x + ((tA + tH)  / total) * envW;           // end hold
-        float x3 = envPos.x + envW;                                    // end decay (= envelope end)
-        float yTop = envPos.y + 6.0f;
-        float yBot = envPos.y + envH - 6.0f;
-
-        ImU32 fillCol = tc.envEnabled
-                        ? IM_COL32(180, 130, 50, 55)
-                        : IM_COL32(80,  80,  80, 35);
-        ImU32 lineCol = tc.envEnabled
-                        ? IM_COL32(220, 170, 70, 230)
-                        : IM_COL32(110, 110, 110, 160);
-        ImU32 segCol  = IM_COL32(90, 90, 90, 100);
+        const float colGap  = 10.0f;
+        const float totalW  = ImGui::GetContentRegionAvail().x;
+        const float halfW   = (totalW - colGap) * 0.5f;
+        const float panelH  = 64.0f;
+        const float drgW    = std::max((halfW - 3*(ImGui::CalcTextSize("A").x + 4.0f) - 2*8.0f) / 3.0f, 34.0f);
 
         // SC-compatible curve interpolation: (exp(c*t)-1)/(exp(c)-1), fallback linear
         auto evalCurve = [](float t, float c) -> float {
@@ -2337,129 +2439,204 @@ void fullStepSequencer::drawTrack(int ti) {
             return (std::expf(c * t) - 1.0f) / (std::expf(c) - 1.0f);
         };
 
-        // Build a multi-point outline (attack + hold + decay + release).
-        // CN = number of interior sample points per curved segment (excluding shared endpoints).
-        constexpr int CN = 20;
-        std::vector<ImVec2> outline;
-        outline.reserve(CN + 1 + CN + 1);   // A(CN) + hold-end(1) + D(CN-1 extra) + R-end(1)
+        if(ImGui::BeginTable("##ampcols", 2, ImGuiTableFlags_None, ImVec2(totalW, 0))) {
+            ImGui::TableSetupColumn("##envcol", ImGuiTableColumnFlags_WidthFixed, halfW);
+            ImGui::TableSetupColumn("##lfocol",  ImGuiTableColumnFlags_WidthFixed, halfW);
 
-        // Attack: yBot → yTop, curve = envCurveA
-        for(int i = 0; i < CN; i++) {
-            float t  = float(i) / float(CN - 1);
-            float ct = evalCurve(t, tc.envCurveA);
-            outline.push_back({ x0 + (x1 - x0) * t,
-                                 yBot + (yTop - yBot) * ct });
-        }
-        // Hold: flat at yTop, endpoint only (start shared with last attack point)
-        outline.push_back({ x2, yTop });
+            // ── Row 1: toggles ────────────────────────────────────────────────
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            {
+                bool en = tc.envEnabled;
+                if(en) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.45f, 0.15f, 1.0f));
+                if(ImGui::SmallButton(en ? "ENV ON##amp" : "ENV OFF##amp")) {
+                    tc.envEnabled = !tc.envEnabled;
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti])
+                            synths[ti]->set("envEnabled", tc.envEnabled ? 1.0f : 0.0f);
+                }
+                if(en) ImGui::PopStyleColor();
+            }
+            ImGui::TableSetColumnIndex(1);
+            {
+                bool le = tc.lfoEnabled;
+                if(le) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.45f, 0.65f, 1.0f));
+                if(ImGui::SmallButton(le ? "LFO ON##amp" : "LFO OFF##amp")) {
+                    tc.lfoEnabled = !tc.lfoEnabled;
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti])
+                            synths[ti]->set("lfoEnabled", tc.lfoEnabled ? 1.0f : 0.0f);
+                }
+                if(le) ImGui::PopStyleColor();
+            }
 
-        // Decay: yTop → yBot, curve = envCurveD (skip i=0, shared with hold end)
-        for(int i = 1; i < CN; i++) {
-            float t  = float(i) / float(CN - 1);
-            float ct = evalCurve(t, tc.envCurveD);
-            outline.push_back({ x2 + (x3 - x2) * t,
-                                 yTop + (yBot - yTop) * ct });
-        }
-        // (No Release segment — envelope always ends at amplitude 0)
+            // ── Row 2: canvases ───────────────────────────────────────────────
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            {
+                ImVec2 ep = ImGui::GetCursorScreenPos();
+                ImGui::Dummy(ImVec2(halfW, panelH));
+                dl->AddRectFilled(ep, {ep.x + halfW, ep.y + panelH}, IM_COL32(28, 28, 28, 255));
 
-        // Fill: outline + baseline back to start
-        std::vector<ImVec2> fillPoly = outline;
-        fillPoly.push_back({ x0, yBot });
-        dl->AddConvexPolyFilled(fillPoly.data(), (int)fillPoly.size(), fillCol);
+                float tA = tc.envAttack, tH = tc.envHold, tD = tc.envDecay;
+                float tot = std::max(tA + tH + tD, 0.001f);
+                float x0 = ep.x, x1 = ep.x + (tA/tot)*halfW,
+                      x2 = ep.x + ((tA+tH)/tot)*halfW, x3 = ep.x + halfW;
+                float yT = ep.y + 6.0f, yB = ep.y + panelH - 6.0f;
 
-        // Outline polyline
-        dl->AddPolyline(outline.data(), (int)outline.size(), lineCol, false, 2.0f);
+                ImU32 envFill = tc.envEnabled ? IM_COL32(180,130,50,55) : IM_COL32(80,80,80,35);
+                ImU32 envLine = tc.envEnabled ? IM_COL32(220,170,70,230) : IM_COL32(110,110,110,160);
 
-        // Segment boundary ticks (A-end, H-end only; D-end is the right edge)
-        for(float xTick : {x1, x2}) {
-            dl->AddLine(ImVec2(xTick, envPos.y),
-                        ImVec2(xTick, envPos.y + envH), segCol, 1.0f);
-        }
+                constexpr int CN = 20;
+                std::vector<ImVec2> outline;
+                for(int i = 0; i < CN; i++) {
+                    float t = float(i)/float(CN-1), ct = evalCurve(t, tc.envCurveA);
+                    outline.push_back({x0+(x1-x0)*t, yB+(yT-yB)*ct});
+                }
+                outline.push_back({x2, yT});
+                for(int i = 1; i < CN; i++) {
+                    float t = float(i)/float(CN-1), ct = evalCurve(t, tc.envCurveD);
+                    outline.push_back({x2+(x3-x2)*t, yT+(yB-yT)*ct});
+                }
+                std::vector<ImVec2> fp = outline; fp.push_back({x0, yB});
+                dl->AddConvexPolyFilled(fp.data(), (int)fp.size(), envFill);
+                dl->AddPolyline(outline.data(), (int)outline.size(), envLine, false, 2.0f);
+                for(float xT : {x1, x2})
+                    dl->AddLine({xT, ep.y}, {xT, ep.y+panelH}, IM_COL32(90,90,90,100), 1.0f);
+                auto drawLbl = [&](float xa, float xb, const char* l) {
+                    float cx = (xa+xb)*0.5f; ImVec2 ts = ImGui::CalcTextSize(l);
+                    if(xb-xa > ts.x+4) dl->AddText({cx-ts.x*0.5f, ep.y+4}, IM_COL32(180,180,180,200), l);
+                };
+                drawLbl(x0,x1,"A"); drawLbl(x1,x2,"H"); drawLbl(x2,x3,"D");
+                dl->AddRect(ep, {ep.x+halfW, ep.y+panelH}, IM_COL32(70,70,70,200));
+            }
+            ImGui::TableSetColumnIndex(1);
+            {
+                ImVec2 lp = ImGui::GetCursorScreenPos();
+                ImGui::Dummy(ImVec2(halfW, panelH));
+                dl->AddRectFilled(lp, {lp.x+halfW, lp.y+panelH}, IM_COL32(22, 22, 22, 255));
 
-        // Segment labels (A H D centred in each segment)
-        auto drawSegLabel = [&](float xFrom, float xTo, const char* lbl) {
-            float cx = (xFrom + xTo) * 0.5f;
-            ImVec2 ts = ImGui::CalcTextSize(lbl);
-            if(xTo - xFrom > ts.x + 4.0f)
-                dl->AddText(ImVec2(cx - ts.x * 0.5f, envPos.y + 4.0f),
-                            IM_COL32(180, 180, 180, 200), lbl);
-        };
-        drawSegLabel(x0, x1, "A");
-        drawSegLabel(x1, x2, "H");
-        drawSegLabel(x2, x3, "D");
+                ImU32 lfoLine = tc.lfoEnabled ? IM_COL32(60,160,230,230) : IM_COL32(90,90,90,160);
+                ImU32 lfoFill = tc.lfoEnabled ? IM_COL32(40,110,180,50)  : IM_COL32(60,60,60,30);
 
-        // Border
-        dl->AddRect(envPos, ImVec2(envPos.x + envW, envPos.y + envH),
-                    IM_COL32(70, 70, 70, 200));
+                constexpr int LFO_PTS = 128;
+                std::vector<ImVec2> lfopts; lfopts.reserve(LFO_PTS);
+                float yT = lp.y+4.0f, yB = lp.y+panelH-4.0f;
+                for(int i = 0; i < LFO_PTS; i++) {
+                    float t = float(i)/float(LFO_PTS-1), y01;
+                    switch(tc.lfoShape) {
+                        case 1:  y01 = (t < tc.lfoPulseWidth) ? 1.0f : 0.0f; break;
+                        case 2:  y01 = t; break;
+                        case 3:  y01 = 1.0f - t; break;
+                        default: y01 = std::sinf(t*2.0f*float(M_PI))*0.5f+0.5f; break;
+                    }
+                    lfopts.push_back({lp.x + t*halfW, yB+(yT-yB)*y01});
+                }
+                std::vector<ImVec2> lf = lfopts;
+                lf.insert(lf.begin(), {lp.x, yB}); lf.push_back({lp.x+halfW, yB});
+                dl->AddConvexPolyFilled(lf.data(), (int)lf.size(), lfoFill);
+                dl->AddPolyline(lfopts.data(), (int)lfopts.size(), lfoLine, false, 1.5f);
+                float phX = lp.x + tc.lfoPhase * halfW;
+                dl->AddLine({phX, lp.y}, {phX, lp.y+panelH}, IM_COL32(255,220,60,180), 1.0f);
+                dl->AddRect(lp, {lp.x+halfW, lp.y+panelH}, IM_COL32(60,60,60,200));
+            }
 
-        // ── A / H / D / R DragFloat controls ─────────────────────────────────
-        ImGui::Spacing();
-
-        struct EnvSeg { const char* label; const char* id; float* val; float lo; float hi; };
-        EnvSeg segs[3] = {
-            { "A", "##envA", &tc.envAttack, 0.001f, 8.0f },
-            { "H", "##envH", &tc.envHold,   0.000f, 8.0f },
-            { "D", "##envD", &tc.envDecay,  0.001f, 8.0f },
-        };
-
-        bool envChanged = false;
-        for(int e = 0; e < 3; e++) {
-            if(e > 0) ImGui::SameLine(0, 8);
-            ImGui::TextUnformatted(segs[e].label);
-            ImGui::SameLine(0, 4);
-            ImGui::SetNextItemWidth(68.0f);
-            if(ImGui::DragFloat(segs[e].id, segs[e].val,
-                                0.001f, segs[e].lo, segs[e].hi, "%.3fs"))
-                envChanged = true;
-        }
-
-        if(envChanged) {
-            for(auto& [srv, synths] : trackSynths) {
-                if(ti < (int)synths.size() && synths[ti]) {
-                    synths[ti]->set("envAttack", tc.envAttack);
-                    synths[ti]->set("envHold",   tc.envHold);
-                    synths[ti]->set("envDecay",  tc.envDecay);
+            // ── Row 3: controls ───────────────────────────────────────────────
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            {
+                // A / H / D
+                bool envChanged = false;
+                struct EnvSeg { const char* label; const char* id; float* val; float lo; float hi; };
+                EnvSeg segs[3] = {
+                    {"A","##envA",&tc.envAttack,0.001f,8.0f},
+                    {"H","##envH",&tc.envHold,  0.000f,8.0f},
+                    {"D","##envD",&tc.envDecay, 0.001f,8.0f},
+                };
+                for(int e = 0; e < 3; e++) {
+                    if(e > 0) ImGui::SameLine(0, 8);
+                    ImGui::TextUnformatted(segs[e].label);
+                    ImGui::SameLine(0, 4);
+                    ImGui::SetNextItemWidth(drgW);
+                    if(ImGui::DragFloat(segs[e].id, segs[e].val, 0.001f, segs[e].lo, segs[e].hi, "%.2fs"))
+                        envChanged = true;
+                }
+                if(envChanged) {
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti]) {
+                            synths[ti]->set("envAttack", tc.envAttack);
+                            synths[ti]->set("envHold",   tc.envHold);
+                            synths[ti]->set("envDecay",  tc.envDecay);
+                        }
+                }
+                ImGui::Spacing();
+                // ~A / ~D curve tension
+                bool curveChanged = false;
+                ImGui::TextUnformatted("~A"); ImGui::SameLine(0,4);
+                ImGui::SetNextItemWidth(drgW);
+                if(ImGui::DragFloat("##crvA", &tc.envCurveA, 0.05f, -8.0f, 8.0f, "%.2f")) curveChanged = true;
+                ImGui::SameLine(0, 8);
+                ImGui::TextUnformatted("~D"); ImGui::SameLine(0,4);
+                ImGui::SetNextItemWidth(drgW);
+                if(ImGui::DragFloat("##crvD", &tc.envCurveD, 0.05f, -8.0f, 8.0f, "%.2f")) curveChanged = true;
+                if(curveChanged) {
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti]) {
+                            synths[ti]->set("envCurveA", tc.envCurveA);
+                            synths[ti]->set("envCurveD", tc.envCurveD);
+                        }
                 }
             }
-        }
-
-        // ── Curve tension row (A and D only; H=1→1 and R=0→0 are flat) ────────
-        ImGui::Spacing();
-
-        struct CurveSeg { const char* label; const char* id; float* val; };
-        CurveSeg curveSegs[2] = {
-            { "~A", "##crvA", &tc.envCurveA },
-            { "~D", "##crvD", &tc.envCurveD },
-        };
-
-        bool curveChanged = false;
-        // Align ~A under A and ~D under D by offsetting with the same widths
-        // A col: label + 4 + 68 + 8 = ~90px.  H col: same ~90px. So ~D starts at 2*90.
-        float colW = ImGui::CalcTextSize("A").x + 4.0f + 68.0f + 8.0f;
-        for(int c = 0; c < 2; c++) {
-            if(c == 0) {
-                // no indent — ~A aligns with A
-            } else {
-                // ~D: skip H column width to align with D
-                ImGui::SameLine(0, colW + 8.0f);
-            }
-            ImGui::TextUnformatted(curveSegs[c].label);
-            ImGui::SameLine(0, 4);
-            ImGui::SetNextItemWidth(68.0f);
-            if(ImGui::DragFloat(curveSegs[c].id, curveSegs[c].val,
-                                0.05f, -8.0f, 8.0f, "%.2f"))
-                curveChanged = true;
-        }
-
-        if(curveChanged) {
-            for(auto& [srv, synths] : trackSynths) {
-                if(ti < (int)synths.size() && synths[ti]) {
-                    synths[ti]->set("envCurveA", tc.envCurveA);
-                    synths[ti]->set("envCurveD", tc.envCurveD);
+            ImGui::TableSetColumnIndex(1);
+            {
+                // Shape + optional PW
+                {
+                    const char* shapes[] = { "Sin", "Square", "Saw", "InvSaw" };
+                    int sh = tc.lfoShape;
+                    ImGui::SetNextItemWidth(halfW * 0.45f);
+                    if(ImGui::Combo("##lfoshape", &sh, shapes, 4)) {
+                        tc.lfoShape = sh;
+                        for(auto& [srv, synths] : trackSynths)
+                            if(ti < (int)synths.size() && synths[ti])
+                                synths[ti]->set("lfoShape", (float)tc.lfoShape);
+                    }
+                }
+                if(tc.lfoShape == 1) {
+                    ImGui::SameLine(0, 6);
+                    ImGui::TextUnformatted("PW"); ImGui::SameLine(0,4);
+                    ImGui::SetNextItemWidth(drgW);
+                    if(ImGui::DragFloat("##lfopw", &tc.lfoPulseWidth, 0.01f, 0.01f, 0.99f, "%.2f")) {
+                        for(auto& [srv, synths] : trackSynths)
+                            if(ti < (int)synths.size() && synths[ti])
+                                synths[ti]->set("lfoPulseWidth", tc.lfoPulseWidth);
+                    }
+                }
+                ImGui::Spacing();
+                // Rate / Depth / Phase
+                bool lfoChanged = false;
+                ImGui::TextUnformatted("Rt"); ImGui::SameLine(0,4);
+                ImGui::SetNextItemWidth(drgW);
+                if(ImGui::DragFloat("##lforate",  &tc.lfoRate,  0.01f, 0.0625f, 64.0f, "%.2fbt")) lfoChanged = true;
+                ImGui::SameLine(0,8);
+                ImGui::TextUnformatted("Dp"); ImGui::SameLine(0,4);
+                ImGui::SetNextItemWidth(drgW);
+                if(ImGui::DragFloat("##lfodepth", &tc.lfoDepth, 0.01f, 0.0f,   1.0f,  "%.2f"))   lfoChanged = true;
+                ImGui::SameLine(0,8);
+                ImGui::TextUnformatted("Ph"); ImGui::SameLine(0,4);
+                ImGui::SetNextItemWidth(drgW);
+                if(ImGui::DragFloat("##lfophase", &tc.lfoPhase, 0.01f, 0.0f,   1.0f,  "%.2f"))   lfoChanged = true;
+                if(lfoChanged) {
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti]) {
+                            synths[ti]->set("lfoRate",  tc.lfoRate);
+                            synths[ti]->set("lfoDepth", tc.lfoDepth);
+                            synths[ti]->set("lfoPhase", tc.lfoPhase);
+                        }
                 }
             }
-        }
 
+            ImGui::EndTable();
+        }
         ImGui::Spacing();
     }
 
@@ -2798,6 +2975,362 @@ void fullStepSequencer::drawTrack(int ti) {
         ImGui::Spacing();
     }
 
+    // ── ARP tab (tab 12) ─────────────────────────────────────────────────────
+    if(td.activeTab == 12) {
+        td.stepArp     .resize(ns, false);
+        td.stepArpSpeed.resize(ns, 4.0f);
+
+        bool arpChanged = false;
+        ImGui::Spacing();
+
+        // ── Row 1: per-step arp enable toggles ────────────────────────────────
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+            int  ri         = ((si - td.shift) % ns + ns) % ns;
+            int  beatGroup  = (si / tc.stepsPerBeat) % 2;
+            bool isPlayhead = (si == visualPlayhead);
+            bool isArp      = (ri < (int)td.stepArp.size()) && td.stepArp[ri];
+
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton(("##arpstep" + ofToString(si)).c_str(), ImVec2(sw, STEP_H));
+
+            bool mouseDown = ImGui::IsMouseDown(0);
+            if(ImGui::IsItemActivated() && arpPaintTrack == -1) {
+                arpPaintTrack = ti;
+                arpPaintValue = !isArp;
+            }
+            if(arpPaintTrack == ti && mouseDown && ImGui::IsItemHovered()) {
+                if(ri < (int)td.stepArp.size() && td.stepArp[ri] != arpPaintValue) {
+                    td.stepArp[ri] = arpPaintValue;
+                    arpChanged = true;
+                }
+            }
+            if(ImGui::IsItemClicked(1)) {
+                if(ri < (int)td.stepArp.size()) td.stepArp[ri] = false;
+                arpChanged = true;
+            }
+
+            ImU32 bgCol = isArp ? IM_COL32(40, 160, 80, 255)
+                                : ImGui::ColorConvertFloat4ToU32(isPlayhead ? playheadCol : beatPalette[beatGroup].off);
+            ImU32 textCol = isArp ? IM_COL32(255,255,255,255) : IM_COL32(100,100,100,180);
+            ImVec2 bmax = {pos.x + sw, pos.y + STEP_H};
+            dl->AddRectFilled(pos, bmax, bgCol, STEP_ROUND);
+            if(isPlayhead && !isArp)
+                dl->AddRectFilled(pos, {bmax.x, pos.y + 3.f}, IM_COL32(255,255,255,220), STEP_ROUND);
+            dl->AddText({pos.x + sw*0.5f - 4.f, pos.y + STEP_H*0.5f - 7.f}, textCol, "A");
+        }
+        if(!ImGui::IsMouseDown(0) && arpPaintTrack == ti) arpPaintTrack = -1;
+
+        // ── Row 2: per-step arp speed (DragFloat, only interactive when arp on) ─
+        ImGui::Spacing();
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+            int ri     = ((si - td.shift) % ns + ns) % ns;
+            bool isArp = (ri < (int)td.stepArp.size()) && td.stepArp[ri];
+            float& spd = (ri < (int)td.stepArpSpeed.size()) ? td.stepArpSpeed[ri]
+                                                             : td.stepArpSpeed[0];
+            ImGui::PushID(si + 1000);
+            if(!isArp) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(sw);
+            if(td.arpSpeedMode == 0) {
+                // DIV mode: divisions per beat
+                if(ImGui::DragFloat("##as", &spd, 0.25f, 0.25f, 64.0f, "%.2g")) {
+                    spd = std::max(0.25f, spd);
+                    arpChanged = true;
+                }
+                if(ImGui::IsItemHovered()) {
+                    const char* n = (spd <= 0.26f) ? "whole" : (spd <= 0.51f) ? "half" :
+                                    (spd <= 1.01f) ? "quarter" : (spd <= 2.01f) ? "8th" :
+                                    (spd <= 4.01f) ? "16th"    : (spd <= 8.01f) ? "32nd" : "fast";
+                    ImGui::SetTooltip("%.2f div/beat (%s)", spd, n);
+                }
+            } else {
+                // MIDI mode: note number → Hz (tonal stutter)
+                if(ImGui::DragFloat("##as", &spd, 1.0f, 0.0f, 127.0f, "%.0f")) {
+                    spd = ofClamp(std::round(spd), 0.0f, 127.0f);
+                    arpChanged = true;
+                }
+                if(ImGui::IsItemHovered()) {
+                    // MIDI note name helper
+                    static const char* noteNames[] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+                    int note = (int)spd;
+                    float hz = 440.0f * std::pow(2.0f, (note - 69) / 12.0f);
+                    ImGui::SetTooltip("MIDI %d (%s%d) = %.1f Hz", note,
+                        noteNames[note % 12], note / 12 - 1, hz);
+                }
+            }
+            if(!isArp) ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+
+        if(arpChanged) sendStepDataToAll(ti);
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Global ARP enable + speed mode ───────────────────────────────────
+        {
+            bool arpEn = td.arpEnabled;
+            ImVec4 enCol = arpEn ? ImVec4(0.24f, 0.72f, 0.40f, 1.f) : ImVec4(0.20f, 0.22f, 0.28f, 1.f);
+            ImVec4 enHov = arpEn ? ImVec4(0.30f, 0.82f, 0.50f, 1.f) : ImVec4(0.28f, 0.32f, 0.40f, 1.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,        enCol);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, enHov);
+            if(ImGui::Button(arpEn ? "ARP ON##arp" : "ARP OFF##arp", {88.f, 22.f})) {
+                td.arpEnabled = !td.arpEnabled;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("arpEnabled", td.arpEnabled ? 1.0f : 0.0f);
+            }
+            ImGui::PopStyleColor(2);
+        }
+        ImGui::SameLine(0, 8);
+        {
+            bool isMidi = (td.arpSpeedMode == 1);
+            ImVec4 mCol = isMidi ? ImVec4(0.50f, 0.35f, 0.72f, 1.f) : ImVec4(0.20f, 0.22f, 0.28f, 1.f);
+            ImVec4 mHov = isMidi ? ImVec4(0.60f, 0.45f, 0.82f, 1.f) : ImVec4(0.28f, 0.32f, 0.40f, 1.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,        mCol);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, mHov);
+            if(ImGui::Button(isMidi ? "MIDI##arpmode" : "DIV##arpmode", {50.f, 22.f})) {
+                td.arpSpeedMode = 1 - td.arpSpeedMode;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("arpSpeedMode", (float)td.arpSpeedMode);
+            }
+            ImGui::PopStyleColor(2);
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("DIV: divisions/beat (synced)\nMIDI: note number → Hz (tonal stutter)");
+        }
+
+        if(!td.arpEnabled) ImGui::BeginDisabled();
+        ImGui::Spacing();
+
+        // ── Interval / Modulo / Gate Width — single row ───────────────────────
+        ImGui::TextUnformatted("Intv");
+        ImGui::SameLine(0, 4);
+        {
+            float intv = td.arpInterval;
+            ImGui::SetNextItemWidth(62.0f);
+            if(ImGui::DragFloat("##arpinterval", &intv, 1.0f, -24.0f, 24.0f, "%.0f")) {
+                intv = std::round(ofClamp(intv, -24.0f, 24.0f));
+                td.arpInterval = intv;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("arpInterval", td.arpInterval);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Semitone jump per arp step");
+        }
+        ImGui::SameLine(0, 10);
+        ImGui::TextUnformatted("Mod");
+        ImGui::SameLine(0, 4);
+        {
+            int modulo = td.arpModulo;
+            ImGui::SetNextItemWidth(50.0f);
+            if(ImGui::DragInt("##arpmodulo", &modulo, 1, 1, 16)) {
+                modulo = ofClamp(modulo, 1, 16);
+                td.arpModulo = modulo;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("arpModulo", (float)td.arpModulo);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Steps before arp restarts");
+        }
+        ImGui::SameLine(0, 10);
+        ImGui::TextUnformatted("Gate");
+        ImGui::SameLine(0, 4);
+        {
+            float gw = td.arpGateWidth;
+            ImGui::SetNextItemWidth(62.0f);
+            if(ImGui::DragFloat("##arpgatewidth", &gw, 0.01f, 0.0f, 1.0f, "%.2f")) {
+                gw = ofClamp(gw, 0.0f, 1.0f);
+                td.arpGateWidth = gw;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("arpGateWidth", td.arpGateWidth);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Gate fraction of retrigger period (1=full). Mono+arp only.");
+        }
+
+        if(!td.arpEnabled) ImGui::EndDisabled();
+        ImGui::Spacing();
+    }
+
+    // ── ECHO (stutter multi-tap) tab (tab 13) ────────────────────────────────
+    if(td.activeTab == 13) {
+        td.stepStut     .resize(ns, false);
+        td.stepStutSpeed.resize(ns, 4.0f);
+
+        bool stutChanged = false;
+        ImGui::Spacing();
+
+        // ── Row 1: per-step stutter enable toggles ────────────────────────────
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+            int  ri         = ((si - td.shift) % ns + ns) % ns;
+            int  beatGroup  = (si / tc.stepsPerBeat) % 2;
+            bool isPlayhead = (si == visualPlayhead);
+            bool isStut     = (ri < (int)td.stepStut.size()) && td.stepStut[ri];
+
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton(("##stutstep" + ofToString(si)).c_str(), ImVec2(sw, STEP_H));
+
+            bool mouseDown = ImGui::IsMouseDown(0);
+            if(ImGui::IsItemActivated() && stuttPaintTrack == -1) {
+                stuttPaintTrack = ti;
+                stuttPaintValue = !isStut;
+            }
+            if(stuttPaintTrack == ti && mouseDown && ImGui::IsItemHovered()) {
+                if(ri < (int)td.stepStut.size() && td.stepStut[ri] != stuttPaintValue) {
+                    td.stepStut[ri] = stuttPaintValue;
+                    stutChanged = true;
+                }
+            }
+            if(ImGui::IsItemClicked(1)) {
+                if(ri < (int)td.stepStut.size()) td.stepStut[ri] = false;
+                stutChanged = true;
+            }
+
+            ImU32 bgCol   = isStut ? IM_COL32(200, 120, 40, 255)
+                                   : ImGui::ColorConvertFloat4ToU32(isPlayhead ? playheadCol : beatPalette[beatGroup].off);
+            ImU32 textCol = isStut ? IM_COL32(255,255,255,255) : IM_COL32(100,100,100,180);
+            ImVec2 bmax   = {pos.x + sw, pos.y + STEP_H};
+            dl->AddRectFilled(pos, bmax, bgCol, STEP_ROUND);
+            if(isPlayhead && !isStut)
+                dl->AddRectFilled(pos, {bmax.x, pos.y + 3.f}, IM_COL32(255,255,255,220), STEP_ROUND);
+            dl->AddText({pos.x + sw*0.5f - 4.f, pos.y + STEP_H*0.5f - 7.f}, textCol, "E");
+        }
+        if(!ImGui::IsMouseDown(0) && stuttPaintTrack == ti) stuttPaintTrack = -1;
+
+        // ── Row 2: per-step stutter speed (divisions/beat) ────────────────────
+        ImGui::Spacing();
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+            int ri      = ((si - td.shift) % ns + ns) % ns;
+            bool isStut = (ri < (int)td.stepStut.size()) && td.stepStut[ri];
+            float& spd  = (ri < (int)td.stepStutSpeed.size()) ? td.stepStutSpeed[ri]
+                                                               : td.stepStutSpeed[0];
+            ImGui::PushID(si + 2000);
+            if(!isStut) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(sw);
+            if(ImGui::DragFloat("##ss", &spd, 0.25f, 0.25f, 64.0f, "%.2g")) {
+                spd = std::max(0.25f, spd);
+                stutChanged = true;
+            }
+            if(ImGui::IsItemHovered()) {
+                const char* n = (spd <= 0.26f) ? "whole" : (spd <= 0.51f) ? "half" :
+                                (spd <= 1.01f) ? "quarter" : (spd <= 2.01f) ? "8th" :
+                                (spd <= 4.01f) ? "16th"    : (spd <= 8.01f) ? "32nd" : "fast";
+                ImGui::SetTooltip("%.2f div/beat (%s)", spd, n);
+            }
+            if(!isStut) ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+
+        if(stutChanged) sendStepDataToAll(ti);
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── ECHO ON/OFF button ────────────────────────────────────────────────
+        {
+            bool en = td.stuttEnabled;
+            ImVec4 enCol = en ? ImVec4(0.72f, 0.45f, 0.15f, 1.f) : ImVec4(0.20f, 0.22f, 0.28f, 1.f);
+            ImVec4 enHov = en ? ImVec4(0.82f, 0.55f, 0.25f, 1.f) : ImVec4(0.28f, 0.32f, 0.40f, 1.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,        enCol);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, enHov);
+            if(ImGui::Button(en ? "ECHO ON##stut" : "ECHO OFF##stut", {88.f, 22.f})) {
+                td.stuttEnabled = !td.stuttEnabled;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("stuttEnabled", td.stuttEnabled ? 1.0f : 0.0f);
+            }
+            ImGui::PopStyleColor(2);
+        }
+
+        if(!td.stuttEnabled) ImGui::BeginDisabled();
+        ImGui::Spacing();
+
+        // ── Taps / FadeVol / FadeCut / Interval — single row ─────────────────
+        ImGui::TextUnformatted("Taps");
+        ImGui::SameLine(0, 4);
+        {
+            int taps = td.stuttNumTaps;
+            ImGui::SetNextItemWidth(50.0f);
+            if(ImGui::DragInt("##stuttaps", &taps, 1, 1, 16)) {
+                taps = ofClamp(taps, 1, 16);
+                td.stuttNumTaps = taps;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("stuttNumTaps", (float)td.stuttNumTaps);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Number of echo taps");
+        }
+        ImGui::SameLine(0, 8);
+        ImGui::TextUnformatted("Vol");
+        ImGui::SameLine(0, 4);
+        {
+            float fv = td.stuttFadeVol;
+            ImGui::SetNextItemWidth(58.0f);
+            if(ImGui::DragFloat("##stuttfadevol", &fv, 0.01f, 0.0f, 1.0f, "%.2f")) {
+                fv = ofClamp(fv, 0.0f, 1.0f);
+                td.stuttFadeVol = fv;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("stuttFadeVol", td.stuttFadeVol);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Volume factor per tap (0=silence, 1=no fade)");
+        }
+        ImGui::SameLine(0, 8);
+        ImGui::TextUnformatted("Cut");
+        ImGui::SameLine(0, 4);
+        {
+            float fc = td.stuttFadeCut;
+            ImGui::SetNextItemWidth(58.0f);
+            if(ImGui::DragFloat("##stuttfadecut", &fc, 0.01f, -1.0f, 1.0f, "%.2f")) {
+                fc = ofClamp(fc, -1.0f, 1.0f);
+                td.stuttFadeCut = fc;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("stuttFadeCut", td.stuttFadeCut);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Filter shift per tap (-1=LP, 0=none, +1=HP)");
+        }
+        ImGui::SameLine(0, 8);
+        ImGui::TextUnformatted("Intv");
+        ImGui::SameLine(0, 4);
+        {
+            float intv = td.stuttInterval;
+            ImGui::SetNextItemWidth(54.0f);
+            if(ImGui::DragFloat("##stuttinterval", &intv, 1.0f, -24.0f, 24.0f, "%.0f")) {
+                intv = std::round(ofClamp(intv, -24.0f, 24.0f));
+                td.stuttInterval = intv;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("stuttInterval", td.stuttInterval);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Semitone shift per tap");
+        }
+        ImGui::SameLine(0, 8);
+        ImGui::TextUnformatted("Res");
+        ImGui::SameLine(0, 4);
+        {
+            float res = td.stuttRes;
+            ImGui::SetNextItemWidth(54.0f);
+            if(ImGui::DragFloat("##stuttres", &res, 0.01f, 0.0f, 1.0f, "%.2f")) {
+                res = ofClamp(res, 0.0f, 1.0f);
+                td.stuttRes = res;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("stuttRes", td.stuttRes);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Resonance boost on stutter filter taps");
+        }
+
+        if(!td.stuttEnabled) ImGui::EndDisabled();
+        ImGui::Spacing();
+    }
+
     // Release slider paint gesture when mouse is released on this track
     if(!ImGui::IsMouseDown(0) && sliderPaintTrack == ti) sliderPaintTrack = -1;
 
@@ -2842,6 +3375,12 @@ static ofJson serializeTrackConfig(const fullStepSequencer::TrackConfig& tc) {
     j["envDecay"]      = tc.envDecay;
     j["envCurveA"]     = tc.envCurveA;
     j["envCurveD"]     = tc.envCurveD;
+    j["lfoEnabled"]    = tc.lfoEnabled;
+    j["lfoRate"]       = tc.lfoRate;
+    j["lfoDepth"]      = tc.lfoDepth;
+    j["lfoShape"]      = tc.lfoShape;
+    j["lfoPhase"]      = tc.lfoPhase;
+    j["lfoPulseWidth"] = tc.lfoPulseWidth;
     j["eqEnabled"]     = tc.eqEnabled;
     j["eqHPFreq"]      = tc.eqHPFreq;
     j["eqHPQ"]         = tc.eqHPQ;
@@ -2885,6 +3424,12 @@ static void deserializeTrackConfig(const ofJson& j, fullStepSequencer::TrackConf
     if(j.contains("envDecay"))      tc.envDecay       = j["envDecay"].get<float>();
     if(j.contains("envCurveA"))     tc.envCurveA      = j["envCurveA"].get<float>();
     if(j.contains("envCurveD"))     tc.envCurveD      = j["envCurveD"].get<float>();
+    if(j.contains("lfoEnabled"))    tc.lfoEnabled     = j["lfoEnabled"].get<bool>();
+    if(j.contains("lfoRate"))       tc.lfoRate        = j["lfoRate"].get<float>();
+    if(j.contains("lfoDepth"))      tc.lfoDepth       = j["lfoDepth"].get<float>();
+    if(j.contains("lfoShape"))      tc.lfoShape       = j["lfoShape"].get<int>();
+    if(j.contains("lfoPhase"))      tc.lfoPhase       = j["lfoPhase"].get<float>();
+    if(j.contains("lfoPulseWidth")) tc.lfoPulseWidth  = j["lfoPulseWidth"].get<float>();
     if(j.contains("eqEnabled"))     tc.eqEnabled      = j["eqEnabled"].get<bool>();
     if(j.contains("eqHPFreq"))      tc.eqHPFreq       = j["eqHPFreq"].get<float>();
     if(j.contains("eqHPQ"))         tc.eqHPQ          = j["eqHPQ"].get<float>();
@@ -2919,6 +3464,7 @@ static ofJson serializeTrackData(const fullStepSequencer::TrackData& td) {
     ofJson pan = ofJson::array(), cut = ofJson::array(), res   = ofJson::array();
     ofJson spitch = ofJson::array(), srev = ofJson::array();
     ofJson srevSend = ofJson::array(), sechoSend = ofJson::array();
+    ofJson sarpStep = ofJson::array();
     for(bool  v : td.stepOn)       on       .push_back(v);
     for(float v : td.stepVol)      vol      .push_back(v);
     for(float v : td.stepProb)     prob     .push_back(v);
@@ -2929,6 +3475,9 @@ static ofJson serializeTrackData(const fullStepSequencer::TrackData& td) {
     for(bool  v : td.stepReverse)  srev     .push_back(v);
     for(float v : td.stepRevSend)  srevSend .push_back(v);
     for(float v : td.stepEchoSend) sechoSend.push_back(v);
+    for(bool  v : td.stepArp)      sarpStep .push_back(v);
+    ofJson sarpSpeed = ofJson::array();
+    for(float v : td.stepArpSpeed) sarpSpeed.push_back(v);
     j["stepOn"]       = on;
     j["stepVol"]      = vol;
     j["stepProb"]     = prob;
@@ -2939,9 +3488,13 @@ static ofJson serializeTrackData(const fullStepSequencer::TrackData& td) {
     j["stepReverse"]  = srev;
     j["stepRevSend"]  = srevSend;
     j["stepEchoSend"] = sechoSend;
+    j["stepArp"]      = sarpStep;
+    j["stepArpSpeed"] = sarpSpeed;
     // FX params — per-slot
     j["revRoom"]      = td.revRoom;
     j["revDamp"]      = td.revDamp;
+    j["revTailLP"]    = td.revTailLP;
+    j["revTailHP"]    = td.revTailHP;
     j["echoMode"]      = td.echoMode;
     j["echoBeats"]     = td.echoBeats;
     j["echoPitchNote"] = td.echoPitchNote;
@@ -2949,6 +3502,24 @@ static ofJson serializeTrackData(const fullStepSequencer::TrackData& td) {
     j["echoRes"]      = td.echoRes;
     j["echoHPF"]      = td.echoHPF;
     j["echoLPF"]      = td.echoLPF;
+    // ARP params — per-slot
+    j["arpEnabled"]   = td.arpEnabled;
+    j["arpInterval"]  = td.arpInterval;
+    j["arpModulo"]    = td.arpModulo;
+    j["arpGateWidth"] = td.arpGateWidth;
+    j["arpSpeedMode"] = td.arpSpeedMode;
+    // STUT params — per-slot
+    j["stuttEnabled"]  = td.stuttEnabled;
+    j["stuttNumTaps"]  = td.stuttNumTaps;
+    j["stuttFadeVol"]  = td.stuttFadeVol;
+    j["stuttFadeCut"]  = td.stuttFadeCut;
+    j["stuttInterval"] = td.stuttInterval;
+    j["stuttRes"]      = td.stuttRes;
+    ofJson sStut = ofJson::array(), sStutSpeed = ofJson::array();
+    for(bool  v : td.stepStut)      sStut     .push_back(v);
+    for(float v : td.stepStutSpeed) sStutSpeed.push_back(v);
+    j["stepStut"]      = sStut;
+    j["stepStutSpeed"] = sStutSpeed;
     return j;
 }
 
@@ -2997,9 +3568,21 @@ static void deserializeTrackData(const ofJson& j, fullStepSequencer::TrackData& 
         for(int i = 0; i < n && i < (int)arr.size(); i++)
             td.stepEchoSend[i] = arr[i].get<float>();
     }
+    if(j.contains("stepArp")) {
+        auto& arr = j["stepArp"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepArp[i] = arr[i].get<bool>();
+    }
+    if(j.contains("stepArpSpeed")) {
+        auto& arr = j["stepArpSpeed"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepArpSpeed[i] = arr[i].get<float>();
+    }
     // FX params — per-slot
     if(j.contains("revRoom"))      td.revRoom      = j["revRoom"].get<float>();
     if(j.contains("revDamp"))      td.revDamp      = j["revDamp"].get<float>();
+    if(j.contains("revTailLP"))    td.revTailLP    = j["revTailLP"].get<float>();
+    if(j.contains("revTailHP"))    td.revTailHP    = j["revTailHP"].get<float>();
     if(j.contains("echoMode"))      td.echoMode      = j["echoMode"].get<int>();
     if(j.contains("echoBeats"))     td.echoBeats     = j["echoBeats"].get<float>();
     if(j.contains("echoPitchNote")) td.echoPitchNote = j["echoPitchNote"].get<float>();
@@ -3013,6 +3596,29 @@ static void deserializeTrackData(const ofJson& j, fullStepSequencer::TrackData& 
     if(j.contains("echoRes"))      td.echoRes      = j["echoRes"].get<float>();
     if(j.contains("echoHPF"))      td.echoHPF      = j["echoHPF"].get<float>();
     if(j.contains("echoLPF"))      td.echoLPF      = j["echoLPF"].get<float>();
+    // ARP params — per-slot (new; missing in old presets → defaults from struct)
+    if(j.contains("arpEnabled"))   td.arpEnabled   = j["arpEnabled"].get<bool>();
+    if(j.contains("arpInterval"))  td.arpInterval  = j["arpInterval"].get<float>();
+    if(j.contains("arpModulo"))    td.arpModulo    = j["arpModulo"].get<int>();
+    if(j.contains("arpGateWidth")) td.arpGateWidth = j["arpGateWidth"].get<float>();
+    if(j.contains("arpSpeedMode")) td.arpSpeedMode = j["arpSpeedMode"].get<int>();
+    // STUT params — per-slot (missing in old presets → defaults from struct)
+    if(j.contains("stuttEnabled"))  td.stuttEnabled  = j["stuttEnabled"].get<bool>();
+    if(j.contains("stuttNumTaps"))  td.stuttNumTaps  = j["stuttNumTaps"].get<int>();
+    if(j.contains("stuttFadeVol"))  td.stuttFadeVol  = j["stuttFadeVol"].get<float>();
+    if(j.contains("stuttFadeCut"))  td.stuttFadeCut  = j["stuttFadeCut"].get<float>();
+    if(j.contains("stuttInterval")) td.stuttInterval = j["stuttInterval"].get<float>();
+    if(j.contains("stuttRes"))      td.stuttRes      = j["stuttRes"].get<float>();
+    if(j.contains("stepStut")) {
+        auto& arr = j["stepStut"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepStut[i] = arr[i].get<bool>();
+    }
+    if(j.contains("stepStutSpeed")) {
+        auto& arr = j["stepStutSpeed"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepStutSpeed[i] = arr[i].get<float>();
+    }
 }
 
 void fullStepSequencer::serializeSlots(ofJson& j) const {
