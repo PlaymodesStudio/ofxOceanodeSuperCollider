@@ -106,6 +106,12 @@ public:
         float       lfoPhase       = 0.0f;   // initial/retrigger phase 0..1
         float       lfoPulseWidth  = 0.5f;   // square wave pulse width 0..1
 
+        // Slicer mode: sample divided into N slices (N=numSteps); each step triggers one slice
+        bool        slicerMode     = false;
+        bool        sliceFit       = false;  // stretch each slice to exactly one step duration
+        int         sliceGrid      = 0;      // 0=off, N>0: grid snap divisions for slice boundaries
+        std::vector<float> slicePoints;      // ns+1 boundary positions [0..1] (lazy-inited)
+
         bool        muted          = false;  // per-track mute (mirrors muteP node param)
         bool        solo           = false;  // per-track solo (isolates this track)
 
@@ -158,6 +164,8 @@ public:
         std::vector<float> stepArpSpeed; // arp retrigger speed per step (divisions/beat)
         std::vector<bool>  stepStut;     // true = stutter echo enabled for this step
         std::vector<float> stepStutSpeed;// stutter retrigger speed per step (divisions/beat)
+        std::vector<int>   stepSlice;    // which slice index plays at each step (slicer mode)
+        std::vector<bool>  stepSliceOn;  // per-step silence flag for slicer mode (true=play, false=silence)
 
         void resizeSteps() {
             // Always grow to MAX_STEPS — never shrink.
@@ -175,6 +183,9 @@ public:
             stepArpSpeed .resize(MAX_STEPS, 4.0f);
             stepStut     .resize(MAX_STEPS, false);
             stepStutSpeed.resize(MAX_STEPS, 4.0f);
+            stepSlice    .resize(MAX_STEPS, 0);
+            for(int i = 0; i < MAX_STEPS; i++) stepSlice[i] = i;
+            stepSliceOn  .resize(MAX_STEPS, true);
         }
     };
 
@@ -330,13 +341,30 @@ private:
     std::string computeDataRelativePath(const std::string& absPath) const;
 
     // ── Waveform display ─────────────────────────────────────────────────────
-    static constexpr int WAVEFORM_BINS = 512;
+    // 8192 bins gives ~1px resolution per bin at 16x zoom with a ~512px display.
+    static constexpr int WAVEFORM_BINS = 8192;
     std::vector<std::vector<float>> waveformPeaks;  // [track][bin] peak (0..1)
     void                 loadWaveformData(int ti, const std::string& path);
+
+    // Per-track waveform zoom (1..64) and scroll (0..1) — shared by WAV and SLICE tabs.
+    float waveZoom  [MAX_TRACKS];   // 1 = full sample visible; 64 = 1/64 visible
+    float waveScroll[MAX_TRACKS];   // 0 = left edge, 1 = right edge
 
     // WAV tab drag state
     enum class WavDrag { None, In, Out };
     WavDrag wavDragMode = WavDrag::None;
+
+    // SLICE tab drag state (interior slice boundary drag)
+    int  sliceDragTrack = -1;
+    int  sliceDragIdx   = 0;   // 0=none, ≥1=interior boundary k, -2=inPoint, -3=outPoint
+
+    // Slicer matrix paint state (drag assigns the same slice row across columns)
+
+    // ── Slicer helpers ────────────────────────────────────────────────────────
+    /// Initialize (or reinitialize) slicePoints to uniform spacing between inPoint..outPoint.
+    void initSlicePoints(int ti);
+    /// Compute per-step slice start/end arrays from slicePoints + stepSlice assignment.
+    void computeSliceArrays(int ti, std::vector<float>& starts, std::vector<float>& ends) const;
 
     // ── Euclidean rhythm helper ───────────────────────────────────────────────
     /// Returns a boolean pattern of length n with k evenly-distributed pulses.
@@ -376,6 +404,9 @@ private:
     std::vector<ofParameter<vector<float>>> pStepArpSpeed;
     std::vector<ofParameter<vector<float>>> pStepStut;
     std::vector<ofParameter<vector<float>>> pStepStutSpeed;
+    std::vector<ofParameter<vector<float>>> pStepSliceStart; // [MAX_TRACKS] slice start (0..1) per step
+    std::vector<ofParameter<vector<float>>> pStepSliceEnd;   // [MAX_TRACKS] slice end   (0..1) per step
+    std::vector<ofParameter<vector<float>>> pStepSliceOn;    // [MAX_TRACKS] per-step silence flag (1=play)
 
     // ── Event listeners ───────────────────────────────────────────────────────
     ofEventListeners nodeListeners;

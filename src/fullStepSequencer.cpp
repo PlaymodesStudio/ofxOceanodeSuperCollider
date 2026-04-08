@@ -23,6 +23,8 @@ fullStepSequencer::fullStepSequencer(vector<serverManager*> servers)
 {
     memset(nameEditBuf, 0, sizeof(nameEditBuf));
 
+    for(int i = 0; i < MAX_TRACKS; i++) { waveZoom[i] = 1.0f; waveScroll[i] = 0.0f; }
+
     // Cache the first available server for preview playback
     for(auto* sm : allServers) {
         if(sm && sm->getServer()) {
@@ -205,8 +207,11 @@ void fullStepSequencer::setup() {
     pStepEchoSend.resize(MAX_TRACKS);
     pStepArp     .resize(MAX_TRACKS);
     pStepArpSpeed.resize(MAX_TRACKS);
-    pStepStut    .resize(MAX_TRACKS);
-    pStepStutSpeed.resize(MAX_TRACKS);
+    pStepStut      .resize(MAX_TRACKS);
+    pStepStutSpeed .resize(MAX_TRACKS);
+    pStepSliceStart.resize(MAX_TRACKS);
+    pStepSliceEnd  .resize(MAX_TRACKS);
+    pStepSliceOn   .resize(MAX_TRACKS);
 
     for(int ti = 0; ti < MAX_TRACKS; ti++) {
         vector<float> zeros(MAX_STEPS, 0.0f);
@@ -235,6 +240,15 @@ void fullStepSequencer::setup() {
             vector<float> lo(MAX_STEPS, 0.25f);
             vector<float> hi(MAX_STEPS, 64.0f);
             pStepStutSpeed[ti].set("stepStutSpeed_"+ofToString(ti), fours, lo, hi);
+        }
+        // stepSliceStart / stepSliceEnd / stepSliceOn — slicer mode arrays
+        {
+            vector<float> lo(MAX_STEPS, 0.0f), hi(MAX_STEPS, 1.0f);
+            vector<float> defStart(MAX_STEPS, 0.0f), defEnd(MAX_STEPS, 1.0f);
+            vector<float> defOn(MAX_STEPS, 1.0f);
+            pStepSliceStart[ti].set("stepSliceStart_"+ofToString(ti), defStart, lo, hi);
+            pStepSliceEnd  [ti].set("stepSliceEnd_"  +ofToString(ti), defEnd,   lo, hi);
+            pStepSliceOn   [ti].set("stepSliceOn_"   +ofToString(ti), defOn,    lo, hi);
         }
 
         // Listeners: fire synth->set() for every server's synth when value changes.
@@ -296,6 +310,18 @@ void fullStepSequencer::setup() {
         nodeListeners.push(pStepStutSpeed[ti].newListener([this, ti](vector<float>& v){
             for(auto& [srv, synths] : trackSynths)
                 if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepStutSpeed", v);
+        }));
+        nodeListeners.push(pStepSliceStart[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepSliceStart", v);
+        }));
+        nodeListeners.push(pStepSliceEnd[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepSliceEnd", v);
+        }));
+        nodeListeners.push(pStepSliceOn[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepSliceOn", v);
         }));
     }
 }
@@ -461,6 +487,8 @@ void fullStepSequencer::moveSynthBefore(ofxSCServer* srv, int nodeID) {
             s->set("lfoShape",      (float)tci.lfoShape);
             s->set("lfoPhase",      tci.lfoPhase);
             s->set("lfoPulseWidth", tci.lfoPulseWidth);
+            s->set("slicerMode",    tci.slicerMode   ? 1.0f : 0.0f);
+            s->set("sliceFit",      tci.sliceFit     ? 1.0f : 0.0f);
             s->set("eqEnabled",     tci.eqEnabled   ? 1.0f : 0.0f);
             s->set("eqHPFreq",      tci.eqHPFreq);
             s->set("eqHPRq",        1.0f / std::max(tci.eqHPQ,   0.01f));
@@ -572,6 +600,8 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("lfoShape",      (float)tc.lfoShape);
     s->set("lfoPhase",      tc.lfoPhase);
     s->set("lfoPulseWidth", tc.lfoPulseWidth);
+    s->set("slicerMode",    tc.slicerMode   ? 1.0f : 0.0f);
+    s->set("sliceFit",      tc.sliceFit     ? 1.0f : 0.0f);
     s->set("eqEnabled",     tc.eqEnabled   ? 1.0f : 0.0f);
     s->set("eqHPFreq",      tc.eqHPFreq);
     s->set("eqHPRq",        1.0f / std::max(tc.eqHPQ,    0.01f));
@@ -738,6 +768,19 @@ void fullStepSequencer::fireStepParams(int ti) {
     pStepArpSpeed[ti].set(arpSpeed);
     pStepStut    [ti].set(stut);
     pStepStutSpeed[ti].set(stutSpeed);
+
+    // Slice arrays (slicer mode: which slice start/end normalised 0..1 plays at each step)
+    if(tc.slicerMode) {
+        std::vector<float> sliceStarts, sliceEnds;
+        computeSliceArrays(ti, sliceStarts, sliceEnds);
+        pStepSliceStart[ti].set(sliceStarts);
+        pStepSliceEnd  [ti].set(sliceEnds);
+        // stepSliceOn — per-step silence flag (1=play, 0=silence), independent of stepOn
+        std::vector<float> sliceOn(MAX_STEPS, 1.0f);
+        for(int i = 0; i < n && i < (int)td.stepSliceOn.size(); i++)
+            sliceOn[i] = td.stepSliceOn[i] ? 1.0f : 0.0f;
+        pStepSliceOn[ti].set(sliceOn);
+    }
 }
 
 void fullStepSequencer::sendStepDataDirect(ofxSCSynth* s, const TrackData& td, ofxSCServer* srv) {
@@ -915,6 +958,42 @@ const fullStepSequencer::TrackConfig& fullStepSequencer::trackConfig(int ti) con
     return trackConfigs[ti];
 }
 
+void fullStepSequencer::initSlicePoints(int ti) {
+    TrackConfig& tc = trackConfigs[ti];
+    int ns = tc.getNumSteps();
+    tc.slicePoints.resize(ns + 1);
+    float span = tc.outPoint - tc.inPoint;
+    for(int k = 0; k <= ns; k++)
+        tc.slicePoints[k] = tc.inPoint + span * (float)k / (float)std::max(ns, 1);
+}
+
+void fullStepSequencer::computeSliceArrays(int ti,
+                                           std::vector<float>& starts,
+                                           std::vector<float>& ends) const {
+    const TrackConfig& tc = trackConfig(ti);
+    const TrackData&   td = track(ti);
+    int ns = tc.getNumSteps();
+    starts.assign(MAX_STEPS, 0.0f);
+    ends.assign(MAX_STEPS, 1.0f);
+
+    if((int)tc.slicePoints.size() != ns + 1) {
+        // Fallback uniform (slicePoints not yet initialized)
+        float span = tc.outPoint - tc.inPoint;
+        for(int si = 0; si < ns; si++) {
+            starts[si] = tc.inPoint + span * (float)si       / (float)std::max(ns, 1);
+            ends[si]   = tc.inPoint + span * (float)(si + 1) / (float)std::max(ns, 1);
+        }
+        return;
+    }
+
+    for(int si = 0; si < ns; si++) {
+        int sliceIdx = (si < (int)td.stepSlice.size()) ? td.stepSlice[si] : si;
+        sliceIdx = std::max(0, std::min(sliceIdx, ns - 1));
+        starts[si] = tc.slicePoints[sliceIdx];
+        ends[si]   = tc.slicePoints[sliceIdx + 1];
+    }
+}
+
 void fullStepSequencer::initSlots() {
     // Initialise global per-track configs (one per track, shared across all slots)
     trackConfigs.resize(MAX_TRACKS);
@@ -988,6 +1067,8 @@ void fullStepSequencer::reloadCurrentSlot() {
             s->set("lfoShape",      (float)tci.lfoShape);
             s->set("lfoPhase",      tci.lfoPhase);
             s->set("lfoPulseWidth", tci.lfoPulseWidth);
+            s->set("slicerMode",    tci.slicerMode   ? 1.0f : 0.0f);
+            s->set("sliceFit",      tci.sliceFit     ? 1.0f : 0.0f);
             s->set("eqEnabled",     tci.eqEnabled   ? 1.0f : 0.0f);
             s->set("eqHPFreq",      tci.eqHPFreq);
             s->set("eqHPRq",        1.0f / std::max(tci.eqHPQ,   0.01f));
@@ -1294,9 +1375,9 @@ void fullStepSequencer::drawSequencerWindow() {
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
         const float splitterW  = 6.0f;
-        const float marginW    = 6.0f;
+        const float marginW    = 10.0f;
         const float fxSplitW   = 6.0f;
-        const float fxMarginW  = 6.0f;
+        const float fxMarginW  = 14.0f;  // visible gap between tracks and FX column
         browserW = ofClamp(browserW,  80.0f, avail.x - 300.0f);
         fxColW   = ofClamp(fxColW,   140.0f, 360.0f);
         const float tracksW = avail.x - browserW - splitterW - marginW
@@ -1323,7 +1404,7 @@ void fullStepSequencer::drawSequencerWindow() {
             ImU32 col = active ? IM_COL32(180,180,180,200) : IM_COL32(90,90,90,150);
             ImGui::GetWindowDrawList()->AddLine(ImVec2(cx, p.y), ImVec2(cx, q.y), col, 1.5f);
         }
-        ImGui::SameLine(0, marginW);
+        ImGui::SameLine(0, fxMarginW);  // gap appears LEFT of tracks (i.e. left of scrollbar)
 
         // ── Right: scrollable tracks area ─────────────────────────────────────
         ImGui::BeginChild("##tracks", ImVec2(tracksW, avail.y), false,
@@ -1340,7 +1421,7 @@ void fullStepSequencer::drawSequencerWindow() {
         ImGui::EndChild();
 
         // ── FX splitter ───────────────────────────────────────────────────────
-        ImGui::SameLine(0, fxMarginW);
+        ImGui::SameLine(0, marginW);  // small gap between scrollbar and FX splitter
         ImGui::InvisibleButton("##fxsplit", ImVec2(fxSplitW, avail.y));
         if(ImGui::IsItemHovered() || ImGui::IsItemActive())
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -1662,12 +1743,21 @@ void fullStepSequencer::drawTrack(int ti) {
     ImVec2 cardMin = ImGui::GetCursorScreenPos();
     float  cardW   = ImGui::GetContentRegionAvail().x;
 
+    // 3-channel splitter: ch0=card bg, ch1=section sub-bg patches, ch2=content
     ImDrawListSplitter splitter;
-    splitter.Split(dl, 2);
-    splitter.SetCurrentChannel(dl, 1);  // content goes to ch1
+    splitter.Split(dl, 3);
+    splitter.SetCurrentChannel(dl, 2);  // content goes to ch2
 
     ImGui::Dummy({0.f, cardPadTop});
     ImGui::Indent(accentBarW + cardPadX);
+
+    // Positions captured during content rendering for section sub-backgrounds
+    float sectionL  = cardMin.x + accentBarW + 3.0f;
+    float sectionR  = cardMin.x + cardW - 3.0f;
+    float hdrMinY   = ImGui::GetCursorScreenPos().y;
+    float hdrMaxY   = hdrMinY;
+    float stepsMinY = hdrMinY, stepsMaxY = hdrMinY;
+    float tabMinY   = hdrMinY, tabMaxY   = hdrMinY;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Header row 1: [N] | name | [sample] | MUTE
@@ -1731,6 +1821,33 @@ void fullStepSequencer::drawTrack(int ti) {
             auto sv = soloP.get();
             if(ti < (int)sv.size()) sv[ti] = tc.solo ? 1 : 0;
             soloP.set(sv);  // listener fires → updateActiveStates()
+        }
+        ImGui::PopStyleColor(2);
+    }
+
+    // STEP / SLICER mode button — same row as MUTE/SOLO
+    ImGui::SameLine(0, 10);
+    {
+        bool slicer = tc.slicerMode;
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            slicer ? ImVec4(0.38f, 0.18f, 0.72f, 1.f)
+                   : ImVec4(0.20f, 0.22f, 0.28f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+            slicer ? ImVec4(0.50f, 0.28f, 0.88f, 1.f)
+                   : ImVec4(0.28f, 0.32f, 0.40f, 1.f));
+        if(ImGui::Button(slicer ? "SLICER##sm" : "STEP##sm", {60.f, 20.f})) {
+            tc.slicerMode = !tc.slicerMode;
+            if(tc.slicerMode) {
+                if((int)tc.slicePoints.size() != tc.getNumSteps() + 1)
+                    initSlicePoints(ti);
+                for(auto& slot : slots)
+                    if(ti < (int)slot.tracks.size() && (int)slot.tracks[ti].stepSlice.size() < tc.getNumSteps())
+                        slot.tracks[ti].resizeSteps();
+            }
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("slicerMode", tc.slicerMode ? 1.0f : 0.0f);
+            if(tc.slicerMode) fireStepParams(ti);
         }
         ImGui::PopStyleColor(2);
     }
@@ -1840,14 +1957,32 @@ void fullStepSequencer::drawTrack(int ti) {
         ImGui::PopStyleColor(2);
     }
 
+    hdrMaxY = ImGui::GetCursorScreenPos().y;
+
+    // Dim separator line under the header section
+    {
+        float sepY = ImGui::GetCursorScreenPos().y + 2.0f;
+        dl->AddLine({sectionL + 4.0f, sepY}, {sectionR - 4.0f, sepY},
+                    IM_COL32(60, 64, 82, 180), 1.0f);
+    }
+    ImGui::Dummy({0.f, 4.0f});
+
     // ── Disable step/tab content when muted ──────────────────────────────────
     if(tc.muted) ImGui::BeginDisabled(true);
 
     // ── Step row ──────────────────────────────────────────────────────────────
     int ns = tc.getNumSteps();
-    float sw = std::max(4.0f, BEAT_W / (float)tc.stepsPerBeat);
+
+    // Step width: the track with the most steps fills the full content width;
+    // all tracks use the same sw so steps are always the same visual size.
+    float contentW = cardW - accentBarW - cardPadX;
+    int maxStepsGlobal = 1;
+    for(int i = 0; i < numTracks; i++)
+        maxStepsGlobal = std::max(maxStepsGlobal, trackConfigs[i].getNumSteps());
+    float sw = std::max(4.0f, (contentW - (float)(maxStepsGlobal - 1) * STEP_GAP) / (float)maxStepsGlobal);
 
     ImGui::Spacing();
+    stepsMinY = ImGui::GetCursorScreenPos().y;
 
     // Beat-group palette derived from the per-track accent color.
     // Even beat: full accent; Odd beat: accent lightened toward white.
@@ -1870,15 +2005,13 @@ void fullStepSequencer::drawTrack(int ti) {
                          ? std::max(0, std::min(currentStep[ti], ns - 1))
                          : 0;
 
-    // Step buttons — click+drag paints on/off across multiple steps.
-    // stepPaintTrack tracks which track owns the active gesture so painting
-    // on track N does not bleed into track M in the same frame.
-    {
+    if(!tc.slicerMode) {
+        // ── Normal step buttons — click+drag paints on/off ───────────────────
         bool mouseDown  = ImGui::IsMouseDown(0);
         bool stepChanged = false;
 
         for(int si = 0; si < ns; si++) {
-            if(si > 0) ImGui::SameLine(0, STEP_GAP);  // uniform gap everywhere
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
 
             int ai = ((si - td.shift) % ns + ns) % ns;
             bool isOn       = (ai < (int)td.stepOn.size()) ? td.stepOn[ai] : false;
@@ -1889,13 +2022,10 @@ void fullStepSequencer::drawTrack(int ti) {
             std::string bid = "##s" + ofToString(si);
             ImGui::InvisibleButton(bid.c_str(), ImVec2(sw, STEP_H));
 
-            // Gesture start: latch paint value and claim this track
             if(ImGui::IsItemActive() && stepPaintTrack == -1) {
                 stepPaintTrack = ti;
                 stepPaintValue = !isOn;
             }
-
-            // Paint only when this track owns the gesture
             if(stepPaintTrack == ti && mouseDown) {
                 float mouseX = ImGui::GetIO().MousePos.x;
                 if(mouseX >= pos.x && mouseX < pos.x + sw) {
@@ -1907,37 +2037,148 @@ void fullStepSequencer::drawTrack(int ti) {
             }
             isOn = (ai < (int)td.stepOn.size()) ? td.stepOn[ai] : false;
 
-            // ── Manual draw ───────────────────────────────────────────────────
             bool hovered  = ImGui::IsItemHovered();
             ImVec4 btnCol = isOn ? beatPalette[beatGroup].on : beatPalette[beatGroup].off;
-
             if(isPlayhead) btnCol = playheadCol;
             if(hovered) {
                 btnCol.x = std::min(1.0f, btnCol.x + 0.08f);
                 btnCol.y = std::min(1.0f, btnCol.y + 0.08f);
                 btnCol.z = std::min(1.0f, btnCol.z + 0.08f);
             }
-
             ImU32  fillCol = ImGui::ColorConvertFloat4ToU32(btnCol);
             ImVec2 bmax    = ImVec2(pos.x + sw, pos.y + STEP_H);
-            // Rounded corners, no stroke
             dl->AddRectFilled(pos, bmax, fillCol, STEP_ROUND);
-            // Thin white playhead bar at top
             if(isPlayhead)
-                dl->AddRectFilled(pos,
-                    ImVec2(bmax.x, pos.y + 3.0f),
+                dl->AddRectFilled(pos, ImVec2(bmax.x, pos.y + 3.0f),
                     IM_COL32(255, 255, 255, 220), STEP_ROUND);
         }
 
         if(!mouseDown && stepPaintTrack == ti) stepPaintTrack = -1;
         if(stepChanged) sendStepDataToAll(ti);
+    } else {
+        // ── Slicer matrix: ns columns × ns rows ─────────────────────────────
+        // Row layout: row 0 = TOP = slice ns-1 (last slice)
+        //             row ns-1 = BOTTOM = slice 0 (first slice)
+        // So the bottom cell always corresponds to the first slice of the sample.
+        td.stepSlice  .resize(MAX_STEPS, 0);
+        td.stepSliceOn.resize(MAX_STEPS, true);
+
+        // Fixed cell height so each row is always the same size;
+        // total column height grows/shrinks with the number of steps.
+        const float cellH     = 14.0f;
+        const float matrixH   = cellH * (float)ns;
+        const float colStep   = sw + STEP_GAP;
+        const float totalMatW = ns * sw + (ns > 1 ? (ns - 1) * STEP_GAP : 0.0f);
+
+        // Single InvisibleButton covering the whole matrix for unified gesture handling.
+        // IsItemActive() stays true while the mouse button is held even if the pointer
+        // drifts outside, which is exactly the drag-paint semantic we want.
+        ImVec2 matPos = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##slicermat", ImVec2(totalMatW, matrixH));
+        bool matActive  = ImGui::IsItemActive();
+        bool matHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        bool rClicked   = ImGui::IsMouseClicked(1) && matHovered;
+
+        ImVec2 mp = ImGui::GetIO().MousePos;
+        // Column under mouse (raw visual column index 0..ns-1)
+        int mouseCol = -1;
+        if(mp.x >= matPos.x && mp.x < matPos.x + totalMatW)
+            mouseCol = std::max(0, std::min(ns - 1, (int)((mp.x - matPos.x) / colStep)));
+        // Row under mouse (0 = top visual row = last slice)
+        int mouseRow = (mp.y >= matPos.y && mp.y < matPos.y + matrixH)
+                       ? std::max(0, std::min(ns - 1, (int)((mp.y - matPos.y) / cellH)))
+                       : -1;
+        // Convert visual row to slice index: top row = slice ns-1, bottom row = slice 0
+        auto rowToSlice = [&](int row) { return (ns - 1) - row; };
+
+        bool sliceChanged = false, silenceChanged = false;
+
+        // Left drag (active = button held after click inside button): paint slice
+        if(matActive && mouseCol >= 0 && mouseRow >= 0) {
+            int ai       = ((mouseCol - td.shift) % ns + ns) % ns;
+            int sliceIdx = rowToSlice(mouseRow);
+            if(ai < (int)td.stepSlice.size() && td.stepSlice[ai] != sliceIdx) {
+                td.stepSlice[ai] = sliceIdx;
+                sliceChanged = true;
+            }
+        }
+
+        // Right click: toggle silence for the column under cursor
+        if(rClicked && mouseCol >= 0) {
+            int ai = ((mouseCol - td.shift) % ns + ns) % ns;
+            if(ai < (int)td.stepSliceOn.size()) {
+                td.stepSliceOn[ai] = !td.stepSliceOn[ai];
+                silenceChanged = true;
+            }
+        }
+
+        // Draw all cells
+        const ImVec4 cellOffCol = {0.12f, 0.13f, 0.17f, 1.f};
+        const ImVec4 silenceCol = {0.28f, 0.10f, 0.10f, 1.f};
+        for(int si = 0; si < ns; si++) {
+            int   ai          = ((si - td.shift) % ns + ns) % ns;
+            int   activeSlice = (ai < (int)td.stepSlice.size()) ? td.stepSlice[ai] : (ai % ns);
+            // Convert slice index back to visual row (inverted)
+            int   activeVisRow = (ns - 1) - activeSlice;
+            bool  isSilenced  = (ai < (int)td.stepSliceOn.size()) ? !td.stepSliceOn[ai] : false;
+            bool  isPlayhead  = (si == visualPlayhead);
+            float cx          = matPos.x + si * colStep;
+
+            for(int row = 0; row < ns; row++) {
+                float  cy   = matPos.y + row * cellH;
+                ImVec2 cmin = {cx,      cy};
+                ImVec2 cmax = {cx + sw, cy + cellH - 1.0f};
+                bool   isActive = (row == activeVisRow);
+                ImVec4 col;
+                if(isSilenced)      col = isActive ? silenceCol : cellOffCol;
+                else if(isActive)   col = isPlayhead ? playheadCol : acc;
+                else                col = cellOffCol;
+                dl->AddRectFilled(cmin, cmax, ImGui::ColorConvertFloat4ToU32(col));
+            }
+            // Column border
+            dl->AddRect({cx, matPos.y}, {cx + sw, matPos.y + matrixH}, IM_COL32(50,50,60,150));
+            // Playhead top bar
+            if(isPlayhead)
+                dl->AddRectFilled({cx, matPos.y}, {cx + sw, matPos.y + 3.0f},
+                    IM_COL32(255, 255, 255, 200));
+        }
+        if(matHovered && mouseCol >= 0)
+            ImGui::SetTooltip("Left-drag: assign slice\nRight-click: silence/unsilence step");
+
+        if(sliceChanged) {
+            std::vector<float> starts, ends;
+            computeSliceArrays(ti, starts, ends);
+            pStepSliceStart[ti].set(starts);
+            pStepSliceEnd  [ti].set(ends);
+        }
+        if(silenceChanged) {
+            std::vector<float> sliceOn(MAX_STEPS, 1.0f);
+            for(int i = 0; i < ns && i < (int)td.stepSliceOn.size(); i++)
+                sliceOn[i] = td.stepSliceOn[i] ? 1.0f : 0.0f;
+            pStepSliceOn[ti].set(sliceOn);
+        }
+
+        // FILL button: reset to the default diagonal pattern (step i plays slice i)
+        ImGui::Spacing();
+        if(ImGui::SmallButton("FILL")) {
+            for(int i = 0; i < ns; i++) td.stepSlice[i] = i;
+            std::vector<float> starts, ends;
+            computeSliceArrays(ti, starts, ends);
+            pStepSliceStart[ti].set(starts);
+            pStepSliceEnd  [ti].set(ends);
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Reset to default: step i plays slice i");
     }
 
+    stepsMaxY = ImGui::GetCursorScreenPos().y;
     ImGui::Spacing();
+    tabMinY = ImGui::GetCursorScreenPos().y;
 
     // ── Tab row ───────────────────────────────────────────────────────────────
-    // 0:VOL  1:PROB  2:PAN  3:CUT  4:RES  5:PITCH  6:WAV  7:AMP  8:EQ  9:EUC  10:REV  11:FX  12:ARP  13:ECHO
-    const char* tabLabels[] = { "VOL","PROB","PAN","CUT","RES","PITCH","WAV","AMP","EQ","EUC","REV","FX","ARP","ECHO" };
+    // 0:VOL  1:PROB  2:PAN  3:CUT  4:RES  5:PITCH  6:WAV/SLICE  7:AMP  8:EQ  9:EUC  10:REV  11:FX  12:ARP  13:ECHO
+    const char* tabLabels[] = { "VOL","PROB","PAN","CUT","RES","PITCH",
+                                 tc.slicerMode ? "SLICE" : "WAV",
+                                 "AMP","EQ","EUC","REV","FX","ARP","ECHO" };
     const int   nTabs = 14;
     const ImVec2 tabSz = {44.f, 23.f};
     for(int t = 0; t < nTabs; t++) {
@@ -2237,16 +2478,275 @@ void fullStepSequencer::drawTrack(int ti) {
         ImGui::Spacing();
     }
 
-    // ── WAV tab (tab 6) ──────────────────────────────────────────────────────
-    if(td.activeTab == 6) {
-        // Compute the waveform display width to match the step-button grid
-        int numBeatGaps = (ns > 1) ? (ns - 1) / tc.stepsPerBeat : 0;
-        int numStepGaps = (ns > 1) ? (ns - 1) - numBeatGaps      : 0;
-        float wavW = (float)ns * sw
-                     + (float)numBeatGaps * 4.0f
-                     + (float)numStepGaps * 1.0f;
+    // ── WAV / SLICE tab (tab 6) ──────────────────────────────────────────────
+    if(td.activeTab == 6 && tc.slicerMode) {
+        // ── SLICE tab: zoomable waveform with draggable in/out and slice boundaries
+        ImGui::Spacing();
+
+        float wavW = ImGui::GetContentRegionAvail().x;
         wavW = std::max(wavW, 120.0f);
         const float wavH = 80.0f;
+        const float sbH  = 7.0f;
+
+        // Ensure slicePoints is initialised
+        if((int)tc.slicePoints.size() != ns + 1) initSlicePoints(ti);
+
+        float& zoom   = waveZoom[ti];
+        float& scroll = waveScroll[ti];
+        float viewW    = 1.0f / zoom;
+        float visStart = scroll * (1.0f - viewW);
+        float visEnd   = visStart + viewW;
+
+        ImVec2 wavPos = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##slicewav", ImVec2(wavW, wavH));
+        bool wavActive  = ImGui::IsItemActive();
+        bool wavHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
+        // Helpers
+        auto smpToX = [&](float s) {
+            return wavPos.x + (s - visStart) / (visEnd - visStart) * wavW;
+        };
+        auto xToSmp = [&](float x) {
+            return std::min(std::max(visStart + (x - wavPos.x) / wavW * (visEnd - visStart), 0.0f), 1.0f);
+        };
+        auto applyZoomS = [&](float factor, float centreNorm) {
+            float sampleAt = visStart + centreNorm * viewW;
+            zoom = std::max(1.0f, std::min(64.0f, zoom * factor));
+            float newViewW = 1.0f / zoom;
+            if(zoom > 1.0f) {
+                float newStart = sampleAt - centreNorm * newViewW;
+                scroll = newStart / (1.0f - newViewW);
+            } else { scroll = 0.0f; }
+            scroll   = std::max(0.0f, std::min(1.0f, scroll));
+            viewW    = 1.0f / zoom;
+            visStart = scroll * (1.0f - viewW);
+            visEnd   = visStart + viewW;
+        };
+
+        // Background
+        dl->AddRectFilled(wavPos, {wavPos.x + wavW, wavPos.y + wavH}, IM_COL32(18, 18, 22, 255));
+
+        // Waveform
+        if(!waveformPeaks[ti].empty()) {
+            int   bins = (int)waveformPeaks[ti].size();
+            float midY = wavPos.y + wavH * 0.5f;
+            for(int px = 0; px < (int)wavW; px++) {
+                float frac = visStart + (float)px / wavW * (visEnd - visStart);
+                int bidx   = std::min(std::max((int)(frac * (float)bins), 0), bins - 1);
+                float hh   = waveformPeaks[ti][bidx] * wavH * 0.5f;
+                if(hh < 0.5f) continue;
+                dl->AddLine({wavPos.x + px, midY - hh}, {wavPos.x + px, midY + hh},
+                            IM_COL32(90, 170, 210, 200));
+            }
+        } else {
+            float midY = wavPos.y + wavH * 0.5f;
+            dl->AddLine({wavPos.x, midY}, {wavPos.x + wavW, midY}, IM_COL32(80, 80, 80, 180));
+            dl->AddText({wavPos.x + wavW * 0.5f - 28, midY - 7},
+                        IM_COL32(110, 110, 110, 255), "no sample");
+        }
+
+        // Grid lines (clipped to visible range)
+        if(tc.sliceGrid > 0) {
+            for(int g = 1; g < tc.sliceGrid; g++) {
+                float gs = (float)g / (float)tc.sliceGrid;
+                if(gs < visStart || gs > visEnd) continue;
+                float gx = smpToX(gs);
+                dl->AddLine({gx, wavPos.y}, {gx, wavPos.y + wavH}, IM_COL32(160,160,160,80));
+            }
+        }
+
+        // Darken region outside in..out
+        {
+            if(tc.inPoint > visStart)
+                dl->AddRectFilled(wavPos, {smpToX(tc.inPoint), wavPos.y + wavH}, IM_COL32(0,0,0,110));
+            if(tc.outPoint < visEnd)
+                dl->AddRectFilled({smpToX(tc.outPoint), wavPos.y}, {wavPos.x+wavW, wavPos.y+wavH}, IM_COL32(0,0,0,110));
+        }
+
+        // Interior slice boundary lines (clipped to visible range)
+        for(int k = 1; k < ns; k++) {
+            if(tc.slicePoints[k] < visStart || tc.slicePoints[k] > visEnd) continue;
+            float bx = smpToX(tc.slicePoints[k]);
+            bool isDragging = (sliceDragTrack == ti && sliceDragIdx == k);
+            ImU32 lineCol = isDragging ? IM_COL32(255,220,60,255) : IM_COL32(180,180,255,200);
+            dl->AddLine({bx, wavPos.y}, {bx, wavPos.y + wavH}, lineCol, isDragging ? 2.0f : 1.0f);
+            dl->AddRectFilled({bx - 4, wavPos.y}, {bx + 4, wavPos.y + 8}, lineCol);
+        }
+
+        // In / Out markers
+        float inX  = smpToX(tc.inPoint);
+        float outX = smpToX(tc.outPoint);
+        if(tc.inPoint >= visStart - 0.01f && tc.inPoint <= visEnd + 0.01f) {
+            dl->AddLine({inX, wavPos.y}, {inX, wavPos.y+wavH}, IM_COL32(80,220,100,255), 2.0f);
+            dl->AddTriangleFilled({inX-5,wavPos.y},{inX+5,wavPos.y},{inX,wavPos.y+10},
+                                  IM_COL32(80,220,100,255));
+        }
+        if(tc.outPoint >= visStart - 0.01f && tc.outPoint <= visEnd + 0.01f) {
+            dl->AddLine({outX, wavPos.y}, {outX, wavPos.y+wavH}, IM_COL32(220,140,60,255), 2.0f);
+            dl->AddTriangleFilled({outX-5,wavPos.y},{outX+5,wavPos.y},{outX,wavPos.y+10},
+                                  IM_COL32(220,140,60,255));
+        }
+
+        // ── Unified drag interaction ──────────────────────────────────────────
+        // sliceDragIdx: ≥1 = slice boundary k, -2 = inPoint, -3 = outPoint
+        const float snapPx = 8.0f;
+        if(wavActive) {
+            float norm = xToSmp(ImGui::GetIO().MousePos.x);
+
+            // On first frame of drag: pick nearest target (in screen pixels)
+            if(sliceDragTrack != ti || sliceDragIdx == 0) {
+                float bestPx = snapPx;
+                int   best   = 0;
+                auto checkPx = [&](float sx, int idx) {
+                    float d = std::abs(smpToX(sx) - ImGui::GetIO().MousePos.x);
+                    if(d < bestPx) { bestPx = d; best = idx; }
+                };
+                checkPx(tc.inPoint,  -2);
+                checkPx(tc.outPoint, -3);
+                for(int k = 1; k < ns; k++) checkPx(tc.slicePoints[k], k);
+                sliceDragTrack = ti;
+                sliceDragIdx   = best;
+            }
+
+            // Grid snap in sample space
+            auto snapToGrid = [&](float v) -> float {
+                if(tc.sliceGrid <= 0) return v;
+                float best = v, bd = 1e9f;
+                for(int g = 0; g <= tc.sliceGrid; g++) {
+                    float gn = (float)g / (float)tc.sliceGrid;
+                    float d  = std::abs(v - gn);
+                    if(d < bd) { bd = d; best = gn; }
+                }
+                return best;
+            };
+
+            bool wavChanged = false;
+            if(sliceDragIdx == -2) {
+                float newIn = std::min(snapToGrid(norm), tc.outPoint - 0.01f);
+                newIn = std::max(newIn, 0.0f);
+                if(newIn != tc.inPoint) {
+                    tc.inPoint = newIn; initSlicePoints(ti); wavChanged = true;
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti])
+                            synths[ti]->set("inPoint", tc.inPoint);
+                }
+            } else if(sliceDragIdx == -3) {
+                float newOut = std::max(snapToGrid(norm), tc.inPoint + 0.01f);
+                newOut = std::min(newOut, 1.0f);
+                if(newOut != tc.outPoint) {
+                    tc.outPoint = newOut; initSlicePoints(ti); wavChanged = true;
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti])
+                            synths[ti]->set("outPoint", tc.outPoint);
+                }
+            } else if(sliceDragIdx >= 1 && sliceDragIdx < ns) {
+                float lo     = tc.slicePoints[sliceDragIdx - 1] + 0.002f;
+                float hi     = tc.slicePoints[sliceDragIdx + 1] - 0.002f;
+                float newPos = std::min(std::max(snapToGrid(norm), lo), hi);
+                if(newPos != tc.slicePoints[sliceDragIdx]) {
+                    tc.slicePoints[sliceDragIdx] = newPos; wavChanged = true;
+                }
+            }
+            if(wavChanged) {
+                std::vector<float> starts, ends;
+                computeSliceArrays(ti, starts, ends);
+                pStepSliceStart[ti].set(starts);
+                pStepSliceEnd  [ti].set(ends);
+            }
+        } else {
+            if(sliceDragTrack == ti) { sliceDragTrack = -1; sliceDragIdx = 0; }
+        }
+
+        if(wavHovered)
+            ImGui::SetTooltip("In: %.4f  Out: %.4f", tc.inPoint, tc.outPoint);
+
+        // ── Zoom buttons + scrollbar ──────────────────────────────────────────
+        {
+            // – / + buttons
+            if(ImGui::SmallButton("–##slicezm")) applyZoomS(0.5f, 0.5f);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom out");
+            ImGui::SameLine(0, 2);
+            if(ImGui::SmallButton("+##slicezm")) applyZoomS(2.0f, 0.5f);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom in");
+            ImGui::SameLine(0, 4);
+            // Zoom level label
+            char zoomLbl[16]; snprintf(zoomLbl, sizeof(zoomLbl), "x%.0f", zoom);
+            ImGui::TextDisabled("%s", zoomLbl);
+
+            // Scrollbar (only when zoomed), fills remaining width
+            if(zoom > 1.0f) {
+                ImGui::SameLine(0, 6);
+                float usedX  = ImGui::GetCursorScreenPos().x - (wavPos.x);
+                float scrollW = std::max(20.0f, wavW - usedX);
+                ImVec2 sbPos = ImGui::GetCursorScreenPos();
+                ImGui::InvisibleButton("##slicescroll", {scrollW, sbH});
+                if(ImGui::IsItemActive()) {
+                    scroll += ImGui::GetIO().MouseDelta.x / scrollW;
+                    scroll = std::max(0.0f, std::min(1.0f, scroll));
+                }
+                dl->AddRectFilled(sbPos, {sbPos.x + scrollW, sbPos.y + sbH},
+                                  IM_COL32(22, 22, 28, 220), 3.0f);
+                float thumbW = std::max(16.0f, scrollW / zoom);
+                float thumbX = sbPos.x + scroll * (scrollW - thumbW);
+                dl->AddRectFilled({thumbX, sbPos.y + 1}, {thumbX + thumbW, sbPos.y + sbH - 1},
+                                  IM_COL32(90, 95, 120, 220), 3.0f);
+            }
+        }
+
+        // ── Controls row ─────────────────────────────────────────────────────
+        ImGui::Spacing();
+
+        // sliceFit toggle
+        {
+            bool fit = tc.sliceFit;
+            if(fit) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.30f, 0.18f, 0.65f, 1.0f));
+            if(ImGui::SmallButton(fit ? "SLICEFIT ON" : "SLICEFIT")) {
+                tc.sliceFit = !tc.sliceFit;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("sliceFit", tc.sliceFit ? 1.0f : 0.0f);
+            }
+            if(fit) ImGui::PopStyleColor();
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Stretch each slice to exactly one step duration");
+        }
+
+        // Reset to uniform button
+        ImGui::SameLine(0, 10);
+        if(ImGui::SmallButton("Reset##slicereset")) {
+            initSlicePoints(ti);
+            std::vector<float> starts, ends;
+            computeSliceArrays(ti, starts, ends);
+            pStepSliceStart[ti].set(starts);
+            pStepSliceEnd  [ti].set(ends);
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Reset to uniform slice spacing");
+
+        // Grid snap DragInt
+        ImGui::SameLine(0, 14);
+        ImGui::TextUnformatted("Grid:");
+        ImGui::SameLine(0, 4);
+        ImGui::SetNextItemWidth(48.0f);
+        int sg = tc.sliceGrid;
+        if(ImGui::DragInt("##slicegrid", &sg, 0.1f, 0, 128, sg == 0 ? "off" : "%d"))
+            tc.sliceGrid = std::max(sg, 0);
+
+        ImGui::Spacing();
+    }
+
+    if(td.activeTab == 6 && !tc.slicerMode) {
+        // ── WAV tab: full-width zoomable waveform with in/out markers ────────
+        float wavW = ImGui::GetContentRegionAvail().x;
+        wavW = std::max(wavW, 120.0f);
+        const float wavH  = 80.0f;
+        const float sbH   = 7.0f;  // scrollbar height
+
+        float& zoom   = waveZoom[ti];
+        float& scroll = waveScroll[ti];
+        // Visible sample range (normalized 0..1)
+        float viewW    = 1.0f / zoom;
+        float visStart = scroll * (1.0f - viewW);
+        float visEnd   = visStart + viewW;
 
         ImGui::Spacing();
         ImVec2 wavPos = ImGui::GetCursorScreenPos();
@@ -2254,81 +2754,95 @@ void fullStepSequencer::drawTrack(int ti) {
         // ── InvisibleButton captures mouse ───────────────────────────────────
         ImGui::InvisibleButton("##wav", ImVec2(wavW, wavH));
         bool wavActive  = ImGui::IsItemActive();
-        bool wavHovered = ImGui::IsItemHovered();
+        bool wavHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
+        // Helper: sample fraction → screen X
+        auto smpToX = [&](float s) {
+            return wavPos.x + (s - visStart) / (visEnd - visStart) * wavW;
+        };
+        // Helper: screen X → sample fraction (clamped 0..1)
+        auto xToSmp = [&](float x) {
+            return std::min(std::max(visStart + (x - wavPos.x) / wavW * (visEnd - visStart), 0.0f), 1.0f);
+        };
+        // Zoom helper (centred on a normalised sample position)
+        auto applyZoom = [&](float factor, float centreNorm) {
+            float sampleAt = visStart + centreNorm * viewW;
+            zoom = std::max(1.0f, std::min(64.0f, zoom * factor));
+            float newViewW = 1.0f / zoom;
+            if(zoom > 1.0f) {
+                float newStart = sampleAt - centreNorm * newViewW;
+                scroll = newStart / (1.0f - newViewW);
+            } else { scroll = 0.0f; }
+            scroll   = std::max(0.0f, std::min(1.0f, scroll));
+            viewW    = 1.0f / zoom;
+            visStart = scroll * (1.0f - viewW);
+            visEnd   = visStart + viewW;
+        };
 
         // Background
         dl->AddRectFilled(wavPos, ImVec2(wavPos.x + wavW, wavPos.y + wavH),
-                          IM_COL32(28, 28, 28, 255));
+                          IM_COL32(18, 18, 22, 255));
 
-        // Waveform bars (or placeholder when no sample is loaded)
+        // Waveform bars — map each screen pixel to the correct peak bin
         if(!waveformPeaks[ti].empty()) {
-            int   bins  = (int)waveformPeaks[ti].size();
-            float midY  = wavPos.y + wavH * 0.5f;
+            int   bins = (int)waveformPeaks[ti].size();
+            float midY = wavPos.y + wavH * 0.5f;
             for(int px = 0; px < (int)wavW; px++) {
-                int bidx  = (int)((float)px / wavW * (float)bins);
-                bidx      = std::min(std::max(bidx, 0), bins - 1);
-                float hh  = waveformPeaks[ti][bidx] * wavH * 0.5f;
+                float frac = visStart + (float)px / wavW * (visEnd - visStart);
+                int bidx   = std::min(std::max((int)(frac * (float)bins), 0), bins - 1);
+                float hh   = waveformPeaks[ti][bidx] * wavH * 0.5f;
                 if(hh < 0.5f) continue;
-                dl->AddLine(ImVec2(wavPos.x + px, midY - hh),
-                            ImVec2(wavPos.x + px, midY + hh),
+                dl->AddLine({wavPos.x + px, midY - hh}, {wavPos.x + px, midY + hh},
                             IM_COL32(90, 170, 210, 200));
             }
         } else {
-            // No sample loaded
             float midY = wavPos.y + wavH * 0.5f;
-            dl->AddLine(ImVec2(wavPos.x, midY),
-                        ImVec2(wavPos.x + wavW, midY),
-                        IM_COL32(80, 80, 80, 180));
-            const char* msg = "no sample";
-            dl->AddText(ImVec2(wavPos.x + wavW * 0.5f - 28, midY - 7),
-                        IM_COL32(110, 110, 110, 255), msg);
+            dl->AddLine({wavPos.x, midY}, {wavPos.x + wavW, midY}, IM_COL32(80, 80, 80, 180));
+            dl->AddText({wavPos.x + wavW * 0.5f - 28, midY - 7},
+                        IM_COL32(110, 110, 110, 255), "no sample");
         }
 
-        // ── Grid lines ───────────────────────────────────────────────────────
+        // Grid lines (at 0..1 divisions in sample space, clipped to visible range)
         if(tc.wavGrid > 0) {
             for(int g = 1; g < tc.wavGrid; g++) {
-                float gx = wavPos.x + (float)g / (float)tc.wavGrid * wavW;
-                dl->AddLine(ImVec2(gx, wavPos.y), ImVec2(gx, wavPos.y + wavH),
-                            IM_COL32(160, 160, 160, 80), 1.0f);
+                float gs = (float)g / (float)tc.wavGrid;
+                if(gs < visStart || gs > visEnd) continue;
+                float gx = smpToX(gs);
+                dl->AddLine({gx, wavPos.y}, {gx, wavPos.y + wavH}, IM_COL32(160, 160, 160, 80));
             }
         }
 
-        // Darken region outside in..out
-        float inX  = wavPos.x + tc.inPoint  * wavW;
-        float outX = wavPos.x + tc.outPoint * wavW;
-        dl->AddRectFilled(wavPos,
-                          ImVec2(inX,  wavPos.y + wavH), IM_COL32(0, 0, 0, 110));
-        dl->AddRectFilled(ImVec2(outX, wavPos.y),
-                          ImVec2(wavPos.x + wavW, wavPos.y + wavH), IM_COL32(0, 0, 0, 110));
+        // Darken region outside in..out (clipped to visible range)
+        {
+            float inS  = std::max(tc.inPoint,  visStart);
+            float outS = std::min(tc.outPoint, visEnd);
+            if(tc.inPoint > visStart)
+                dl->AddRectFilled(wavPos, {smpToX(inS), wavPos.y + wavH}, IM_COL32(0,0,0,110));
+            if(tc.outPoint < visEnd)
+                dl->AddRectFilled({smpToX(outS), wavPos.y}, {wavPos.x + wavW, wavPos.y + wavH}, IM_COL32(0,0,0,110));
+        }
 
-        // In marker (green)
-        dl->AddLine(ImVec2(inX, wavPos.y), ImVec2(inX, wavPos.y + wavH),
-                    IM_COL32(80, 220, 100, 255), 2.0f);
-        dl->AddTriangleFilled(
-            ImVec2(inX - 5.0f, wavPos.y),
-            ImVec2(inX + 5.0f, wavPos.y),
-            ImVec2(inX,        wavPos.y + 10.0f),
-            IM_COL32(80, 220, 100, 255));
+        float inX  = smpToX(tc.inPoint);
+        float outX = smpToX(tc.outPoint);
 
-        // Out marker (orange)
-        dl->AddLine(ImVec2(outX, wavPos.y), ImVec2(outX, wavPos.y + wavH),
-                    IM_COL32(220, 140, 60, 255), 2.0f);
-        dl->AddTriangleFilled(
-            ImVec2(outX - 5.0f, wavPos.y),
-            ImVec2(outX + 5.0f, wavPos.y),
-            ImVec2(outX,        wavPos.y + 10.0f),
-            IM_COL32(220, 140, 60, 255));
-
-        // Border
-        dl->AddRect(wavPos, ImVec2(wavPos.x + wavW, wavPos.y + wavH),
-                    IM_COL32(70, 70, 70, 200));
+        // In marker (green) — only draw if visible
+        if(tc.inPoint >= visStart - 0.01f && tc.inPoint <= visEnd + 0.01f) {
+            dl->AddLine({inX, wavPos.y}, {inX, wavPos.y + wavH}, IM_COL32(80, 220, 100, 255), 2.0f);
+            dl->AddTriangleFilled({inX-5, wavPos.y}, {inX+5, wavPos.y}, {inX, wavPos.y+10},
+                                  IM_COL32(80, 220, 100, 255));
+        }
+        // Out marker (orange) — only draw if visible
+        if(tc.outPoint >= visStart - 0.01f && tc.outPoint <= visEnd + 0.01f) {
+            dl->AddLine({outX, wavPos.y}, {outX, wavPos.y + wavH}, IM_COL32(220, 140, 60, 255), 2.0f);
+            dl->AddTriangleFilled({outX-5, wavPos.y}, {outX+5, wavPos.y}, {outX, wavPos.y+10},
+                                  IM_COL32(220, 140, 60, 255));
+        }
 
         // ── Drag interaction ─────────────────────────────────────────────────
         if(wavActive) {
-            float mouseX = ImGui::GetIO().MousePos.x;
-            float norm   = std::min(std::max((mouseX - wavPos.x) / wavW, 0.0f), 1.0f);
+            float norm = xToSmp(ImGui::GetIO().MousePos.x);
 
-            // Snap to grid
+            // Snap to grid (in sample space)
             if(tc.wavGrid > 0) {
                 float bestDist = 1e9f;
                 for(int g = 0; g <= tc.wavGrid; g++) {
@@ -2339,8 +2853,8 @@ void fullStepSequencer::drawTrack(int ti) {
             }
 
             if(wavDragMode == WavDrag::None) {
-                float distIn  = std::abs(mouseX - inX);
-                float distOut = std::abs(mouseX - outX);
+                float distIn  = std::abs(inX  - ImGui::GetIO().MousePos.x);
+                float distOut = std::abs(outX - ImGui::GetIO().MousePos.x);
                 wavDragMode   = (distIn <= distOut) ? WavDrag::In : WavDrag::Out;
             }
 
@@ -2352,21 +2866,49 @@ void fullStepSequencer::drawTrack(int ti) {
                 float newOut = std::max(norm, tc.inPoint + 0.01f);
                 if(newOut != tc.outPoint) { tc.outPoint = newOut; changed = true; }
             }
-
             if(changed) {
-                for(auto& [srv, synths] : trackSynths) {
+                for(auto& [srv, synths] : trackSynths)
                     if(ti < (int)synths.size() && synths[ti]) {
                         synths[ti]->set("inPoint",  tc.inPoint);
                         synths[ti]->set("outPoint", tc.outPoint);
                     }
-                }
             }
         } else {
             wavDragMode = WavDrag::None;
         }
 
         if(wavHovered)
-            ImGui::SetTooltip("In: %.3f  Out: %.3f", tc.inPoint, tc.outPoint);
+            ImGui::SetTooltip("In: %.4f  Out: %.4f", tc.inPoint, tc.outPoint);
+
+        // ── Zoom buttons + scrollbar ──────────────────────────────────────────
+        {
+            if(ImGui::SmallButton("–##wavzm")) applyZoom(0.5f, 0.5f);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom out");
+            ImGui::SameLine(0, 2);
+            if(ImGui::SmallButton("+##wavzm")) applyZoom(2.0f, 0.5f);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom in");
+            ImGui::SameLine(0, 4);
+            char zoomLbl[16]; snprintf(zoomLbl, sizeof(zoomLbl), "x%.0f", zoom);
+            ImGui::TextDisabled("%s", zoomLbl);
+
+            if(zoom > 1.0f) {
+                ImGui::SameLine(0, 6);
+                float usedX  = ImGui::GetCursorScreenPos().x - wavPos.x;
+                float scrollW = std::max(20.0f, wavW - usedX);
+                ImVec2 sbPos = ImGui::GetCursorScreenPos();
+                ImGui::InvisibleButton("##wavscroll", {scrollW, sbH});
+                if(ImGui::IsItemActive()) {
+                    scroll += ImGui::GetIO().MouseDelta.x / scrollW;
+                    scroll = std::max(0.0f, std::min(1.0f, scroll));
+                }
+                dl->AddRectFilled(sbPos, {sbPos.x + scrollW, sbPos.y + sbH},
+                                  IM_COL32(22, 22, 28, 220), 3.0f);
+                float thumbW = std::max(16.0f, scrollW / zoom);
+                float thumbX = sbPos.x + scroll * (scrollW - thumbW);
+                dl->AddRectFilled({thumbX, sbPos.y + 1}, {thumbX + thumbW, sbPos.y + sbH - 1},
+                                  IM_COL32(90, 95, 120, 220), 3.0f);
+            }
+        }
 
         // ── Controls row ─────────────────────────────────────────────────────
         ImGui::Spacing();
@@ -2659,7 +3201,7 @@ void fullStepSequencer::drawTrack(int ti) {
 
         // ── Frequency response curve ─────────────────────────────────────────
         ImGui::Spacing();
-        float eqW = std::max((float)ns * sw + (float)(ns - 1) * STEP_GAP, 180.0f);
+        float eqW = std::max(ImGui::GetContentRegionAvail().x, 180.0f);
         const float eqH = 64.0f;
         ImVec2 eqPos = ImGui::GetCursorScreenPos();
         ImGui::Dummy(ImVec2(eqW, eqH));
@@ -2849,18 +3391,20 @@ void fullStepSequencer::drawTrack(int ti) {
             std::string sid = "##rev" + ofToString(si);
             ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, STEP_H));
 
-            // Paint gesture — uses revPaintTrack/revPaintValue, independent of stepPaintTrack
+            // Paint gesture: latch value on first press, then apply across any
+            // column the mouse passes over (same IsItemActive drag pattern as step buttons).
             bool mouseDown = ImGui::IsMouseDown(0);
-            if(ImGui::IsItemActivated()) {
-                if(revPaintTrack == -1) {
-                    revPaintTrack = ti;
-                    revPaintValue = !isRev;
-                }
+            if(ImGui::IsItemActivated() && revPaintTrack == -1) {
+                revPaintTrack = ti;
+                revPaintValue = !isRev;
             }
-            if(revPaintTrack == ti && mouseDown && ImGui::IsItemHovered()) {
-                if(ri < (int)td.stepReverse.size() && td.stepReverse[ri] != revPaintValue) {
-                    td.stepReverse[ri] = revPaintValue;
-                    revChanged = true;
+            if(revPaintTrack == ti && mouseDown) {
+                float mx = ImGui::GetIO().MousePos.x;
+                if(mx >= pos.x && mx < pos.x + sw) {
+                    if(ri < (int)td.stepReverse.size() && (bool)td.stepReverse[ri] != revPaintValue) {
+                        td.stepReverse[ri] = revPaintValue;
+                        revChanged = true;
+                    }
                 }
             }
             if(ImGui::IsItemClicked(1)) {
@@ -2999,10 +3543,13 @@ void fullStepSequencer::drawTrack(int ti) {
                 arpPaintTrack = ti;
                 arpPaintValue = !isArp;
             }
-            if(arpPaintTrack == ti && mouseDown && ImGui::IsItemHovered()) {
-                if(ri < (int)td.stepArp.size() && td.stepArp[ri] != arpPaintValue) {
-                    td.stepArp[ri] = arpPaintValue;
-                    arpChanged = true;
+            if(arpPaintTrack == ti && mouseDown) {
+                float mx = ImGui::GetIO().MousePos.x;
+                if(mx >= pos.x && mx < pos.x + sw) {
+                    if(ri < (int)td.stepArp.size() && td.stepArp[ri] != arpPaintValue) {
+                        td.stepArp[ri] = arpPaintValue;
+                        arpChanged = true;
+                    }
                 }
             }
             if(ImGui::IsItemClicked(1)) {
@@ -3337,10 +3884,28 @@ void fullStepSequencer::drawTrack(int ti) {
     if(tc.muted) ImGui::EndDisabled();
 
     // ── Close card ────────────────────────────────────────────────────────────
+    tabMaxY = ImGui::GetCursorScreenPos().y;
     ImGui::Unindent(accentBarW + cardPadX);
     ImGui::Dummy({0.f, cardPadBot});
     ImVec2 cardMax = {cardMin.x + cardW, ImGui::GetCursorScreenPos().y};
 
+    // Section sub-bg patches (ch1, drawn on top of card bg, below content)
+    splitter.SetCurrentChannel(dl, 1);
+    const float secR  = 5.0f;
+    // Header section (rows 1+2)
+    if(hdrMaxY > hdrMinY + 1.0f)
+        dl->AddRectFilled({sectionL, hdrMinY - 2.0f}, {sectionR, hdrMaxY + 2.0f},
+                          IM_COL32(30, 33, 46, 220), secR);
+    // Step/slicer matrix section
+    if(stepsMaxY > stepsMinY + 1.0f)
+        dl->AddRectFilled({sectionL, stepsMinY - 2.0f}, {sectionR, stepsMaxY + 2.0f},
+                          IM_COL32(16, 18, 26, 210), secR);
+    // Tab content section
+    if(tabMaxY > tabMinY + 1.0f)
+        dl->AddRectFilled({sectionL, tabMinY - 2.0f}, {sectionR, tabMaxY + 2.0f},
+                          IM_COL32(20, 22, 33, 210), secR);
+
+    // Card background (ch0, renders first — behind everything)
     splitter.SetCurrentChannel(dl, 0);
     dl->AddRectFilled(cardMin, cardMax, IM_COL32(23, 26, 35, 255), 8.0f);
     dl->AddRectFilled(cardMin, {cardMin.x + accentBarW, cardMax.y}, accU32, 8.0f);
@@ -3403,6 +3968,12 @@ static ofJson serializeTrackConfig(const fullStepSequencer::TrackConfig& tc) {
     j["globalProb"]    = tc.globalProb;
     j["muted"]         = tc.muted;
     j["solo"]          = tc.solo;
+    j["slicerMode"]    = tc.slicerMode;
+    j["sliceFit"]      = tc.sliceFit;
+    j["sliceGrid"]     = tc.sliceGrid;
+    ofJson spArr = ofJson::array();
+    for(float v : tc.slicePoints) spArr.push_back(v);
+    j["slicePoints"]   = spArr;
     return j;
 }
 
@@ -3452,6 +4023,13 @@ static void deserializeTrackConfig(const ofJson& j, fullStepSequencer::TrackConf
     if(j.contains("globalProb"))    tc.globalProb     = j["globalProb"].get<float>();
     if(j.contains("muted"))         tc.muted          = j["muted"].get<bool>();
     if(j.contains("solo"))          tc.solo           = j["solo"].get<bool>();
+    if(j.contains("slicerMode"))    tc.slicerMode     = j["slicerMode"].get<bool>();
+    if(j.contains("sliceFit"))      tc.sliceFit       = j["sliceFit"].get<bool>();
+    if(j.contains("sliceGrid"))     tc.sliceGrid      = j["sliceGrid"].get<int>();
+    if(j.contains("slicePoints")) {
+        tc.slicePoints.clear();
+        for(auto& v : j["slicePoints"]) tc.slicePoints.push_back(v.get<float>());
+    }
 }
 
 // Serialize/deserialize per-slot step/shift data only
@@ -3520,6 +4098,11 @@ static ofJson serializeTrackData(const fullStepSequencer::TrackData& td) {
     for(float v : td.stepStutSpeed) sStutSpeed.push_back(v);
     j["stepStut"]      = sStut;
     j["stepStutSpeed"] = sStutSpeed;
+    ofJson sSlice = ofJson::array(), sSliceOn = ofJson::array();
+    for(int  v : td.stepSlice)   sSlice  .push_back(v);
+    for(bool v : td.stepSliceOn) sSliceOn.push_back(v);
+    j["stepSlice"]   = sSlice;
+    j["stepSliceOn"] = sSliceOn;
     return j;
 }
 
@@ -3618,6 +4201,16 @@ static void deserializeTrackData(const ofJson& j, fullStepSequencer::TrackData& 
         auto& arr = j["stepStutSpeed"];
         for(int i = 0; i < n && i < (int)arr.size(); i++)
             td.stepStutSpeed[i] = arr[i].get<float>();
+    }
+    if(j.contains("stepSlice")) {
+        auto& arr = j["stepSlice"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepSlice[i] = arr[i].get<int>();
+    }
+    if(j.contains("stepSliceOn")) {
+        auto& arr = j["stepSliceOn"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepSliceOn[i] = arr[i].get<bool>();
     }
 }
 
