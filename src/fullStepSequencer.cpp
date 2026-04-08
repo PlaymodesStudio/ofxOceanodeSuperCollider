@@ -23,7 +23,11 @@ fullStepSequencer::fullStepSequencer(vector<serverManager*> servers)
 {
     memset(nameEditBuf, 0, sizeof(nameEditBuf));
 
-    for(int i = 0; i < MAX_TRACKS; i++) { waveZoom[i] = 1.0f; waveScroll[i] = 0.0f; }
+    for(int i = 0; i < MAX_TRACKS; i++) {
+        waveZoom[i] = 1.0f; waveScroll[i] = 0.0f;
+        slicePreviewSynths[i] = nullptr;
+        slicePreviewIdx[i]    = -1;
+    }
 
     // Cache the first available server for preview playback
     for(auto* sm : allServers) {
@@ -44,6 +48,7 @@ fullStepSequencer::~fullStepSequencer() {
     try {
         nodeListeners.unsubscribeAll();
         stopPreview();
+        for(int i = 0; i < MAX_TRACKS; i++) stopSlicePreview(i);
         freeAllSamples();
 
         for(auto& [srv, synths] : trackSynths) {
@@ -84,6 +89,7 @@ void fullStepSequencer::setup() {
     addSeparator("Sequencer");
     addParameter(showWindow.set("Show",  false));
     addParameter(resetSeq.set("Reset", 0, 0, 1));
+    addParameter(playSeq.set("Play", false));
     addParameter(numTracksP.set("Tracks", 1, 1, MAX_TRACKS));
     addParameter(currentSlotP.set("Slot", 0, 0, MAX_SLOTS - 1));
     addParameter(embedInProject.set("Embed", false));
@@ -136,6 +142,16 @@ void fullStepSequencer::setup() {
         lastResetVal = v;
         for(auto& [srv, synths] : trackSynths)
             for(auto* s : synths) if(s) s->set("reset", (float)v);
+    }));
+
+    nodeListeners.push(playSeq.newListener([this](bool& v) {
+        // Mirror the playSeq value (false/true) to the SC 'play' arg on every change.
+        // The SynthDef uses HPZ1.kr(play) to detect the false→true rising edge and fires
+        // a one-shot playTrig that resets the phasor to beginning when starting playback.
+        // When play=false, the sequencer stops; when play=true, it starts from step 0.
+        lastPlayVal = v;
+        for(auto& [srv, synths] : trackSynths)
+            for(auto* s : synths) if(s) s->set("play", v ? 1.0f : 0.0f);
     }));
 
     nodeListeners.push(transposeP.newListener([this](vector<float>& v) {
@@ -209,9 +225,10 @@ void fullStepSequencer::setup() {
     pStepArpSpeed.resize(MAX_TRACKS);
     pStepStut      .resize(MAX_TRACKS);
     pStepStutSpeed .resize(MAX_TRACKS);
-    pStepSliceStart.resize(MAX_TRACKS);
-    pStepSliceEnd  .resize(MAX_TRACKS);
-    pStepSliceOn   .resize(MAX_TRACKS);
+    pStepSliceStart   .resize(MAX_TRACKS);
+    pStepSliceEnd     .resize(MAX_TRACKS);
+    pStepSliceOn      .resize(MAX_TRACKS);
+    pStepDecayOffset  .resize(MAX_TRACKS);
 
     for(int ti = 0; ti < MAX_TRACKS; ti++) {
         vector<float> zeros(MAX_STEPS, 0.0f);
@@ -249,6 +266,11 @@ void fullStepSequencer::setup() {
             pStepSliceStart[ti].set("stepSliceStart_"+ofToString(ti), defStart, lo, hi);
             pStepSliceEnd  [ti].set("stepSliceEnd_"  +ofToString(ti), defEnd,   lo, hi);
             pStepSliceOn   [ti].set("stepSliceOn_"   +ofToString(ti), defOn,    lo, hi);
+        }
+        // stepDecayOffset — per-step envelope decay time offset (-1..1)
+        {
+            vector<float> lo(MAX_STEPS, -1.0f), hi(MAX_STEPS, 1.0f);
+            pStepDecayOffset[ti].set("stepDecayOffset_"+ofToString(ti), zeros, lo, hi);
         }
 
         // Listeners: fire synth->set() for every server's synth when value changes.
@@ -322,6 +344,10 @@ void fullStepSequencer::setup() {
         nodeListeners.push(pStepSliceOn[ti].newListener([this, ti](vector<float>& v){
             for(auto& [srv, synths] : trackSynths)
                 if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepSliceOn", v);
+        }));
+        nodeListeners.push(pStepDecayOffset[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepDecayOffset", v);
         }));
     }
 }
@@ -579,6 +605,7 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("globalProb",    tc.globalProb);
     s->set("bufnum",        bufnum);
     s->set("reset",         0);
+    s->set("play",          playSeq.get() ? 1.0f : 0.0f);
     s->set("active",        (getActive() && !tc.muted) ? 1.0f : 0.0f);
     s->set("mono",          tc.monoMode      ? 1.0f : 0.0f);
     s->set("volLatch",      tc.volLatch       ? 1.0f : 0.0f);
@@ -594,6 +621,7 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("envRelease",    0.0f);
     s->set("envCurveA",     tc.envCurveA);
     s->set("envCurveD",     tc.envCurveD);
+    s->set("decayRange",    tc.decayRange);
     s->set("lfoEnabled",    tc.lfoEnabled    ? 1.0f : 0.0f);
     s->set("lfoRate",       tc.lfoRate);
     s->set("lfoDepth",      tc.lfoDepth);
@@ -768,6 +796,13 @@ void fullStepSequencer::fireStepParams(int ti) {
     pStepArpSpeed[ti].set(arpSpeed);
     pStepStut    [ti].set(stut);
     pStepStutSpeed[ti].set(stutSpeed);
+
+    // Decay offset array (per-step envelope decay time modulation)
+    std::vector<float> decayOffset(MAX_STEPS, 0.0f);
+    for(int i = 0; i < n; i++) {
+        decayOffset[i] = (i < (int)td.stepDecayOffset.size()) ? td.stepDecayOffset[i] : 0.0f;
+    }
+    pStepDecayOffset[ti].set(decayOffset);
 
     // Slice arrays (slicer mode: which slice start/end normalised 0..1 plays at each step)
     if(tc.slicerMode) {
@@ -1360,6 +1395,46 @@ void fullStepSequencer::stopPreview() {
     if(previewBuf)   { previewBuf->free();   delete previewBuf;   previewBuf   = nullptr; }
 }
 
+void fullStepSequencer::stopSlicePreview(int ti) {
+    if(ti < 0 || ti >= MAX_TRACKS) return;
+    if(slicePreviewSynths[ti]) {
+        slicePreviewSynths[ti]->free();
+        delete slicePreviewSynths[ti];
+        slicePreviewSynths[ti] = nullptr;
+    }
+    slicePreviewIdx[ti] = -1;
+}
+
+void fullStepSequencer::triggerSlicePreview(int ti, int sliceIdx) {
+    stopSlicePreview(ti);
+    if(!previewServer) return;
+
+    const TrackConfig& tc = trackConfig(ti);
+    int ns = tc.getNumSteps();
+    if((int)tc.slicePoints.size() != ns + 1) return;
+
+    sliceIdx = std::max(0, std::min(sliceIdx, ns - 1));
+    float startPos = tc.slicePoints[sliceIdx];
+    float endPos   = tc.slicePoints[sliceIdx + 1];
+    if(endPos <= startPos) return;
+
+    int bufnum = getBufnum(ti, previewServer);
+
+    try {
+        slicePreviewSynths[ti] = new ofxSCSynth("SlicePreview", previewServer);
+        slicePreviewSynths[ti]->set("bufnum",   (float)bufnum);
+        slicePreviewSynths[ti]->set("startPos", startPos);
+        slicePreviewSynths[ti]->set("endPos",   endPos);
+        slicePreviewSynths[ti]->set("out",      0.0f);
+        slicePreviewSynths[ti]->set("gain",     0.7f);
+        slicePreviewSynths[ti]->addToTail();
+        slicePreviewIdx[ti] = sliceIdx;
+    } catch(const std::exception& e) {
+        ofLogError("fullStepSequencer") << "triggerSlicePreview: " << e.what();
+        stopSlicePreview(ti);
+    }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // ImGui – Sequencer window
 // ════════════════════════════════════════════════════════════════════════════
@@ -1741,7 +1816,7 @@ void fullStepSequencer::drawTrack(int ti) {
     const float cardPadBot = 9.0f;
 
     ImVec2 cardMin = ImGui::GetCursorScreenPos();
-    float  cardW   = ImGui::GetContentRegionAvail().x;
+    float  cardW   = ImGui::GetContentRegionAvail().x - 4.0f;
 
     // 3-channel splitter: ch0=card bg, ch1=section sub-bg patches, ch2=content
     ImDrawListSplitter splitter;
@@ -2092,6 +2167,13 @@ void fullStepSequencer::drawTrack(int ti) {
         auto rowToSlice = [&](int row) { return (ns - 1) - row; };
 
         bool sliceChanged = false, silenceChanged = false;
+
+        // Left click: trigger slice preview for the column under the cursor
+        if(ImGui::IsItemActivated() && mouseCol >= 0) {
+            int ai       = ((mouseCol - td.shift) % ns + ns) % ns;
+            int sliceIdx = (ai < (int)td.stepSlice.size()) ? td.stepSlice[ai] : (ai % ns);
+            triggerSlicePreview(ti, sliceIdx);
+        }
 
         // Left drag (active = button held after click inside button): paint slice
         if(matActive && mouseCol >= 0 && mouseRow >= 0) {
@@ -2483,7 +2565,7 @@ void fullStepSequencer::drawTrack(int ti) {
         // ── SLICE tab: zoomable waveform with draggable in/out and slice boundaries
         ImGui::Spacing();
 
-        float wavW = ImGui::GetContentRegionAvail().x;
+        float wavW = ImGui::GetContentRegionAvail().x - 4.0f;
         wavW = std::max(wavW, 120.0f);
         const float wavH = 80.0f;
         const float sbH  = 7.0f;
@@ -2523,8 +2605,37 @@ void fullStepSequencer::drawTrack(int ti) {
             visEnd   = visStart + viewW;
         };
 
+        // Determine active slices for highlighting (computed once, used twice below)
+        int playheadSlice = -1;
+        if(visualPlayhead >= 0 && visualPlayhead < ns) {
+            int ai = ((visualPlayhead - td.shift) % ns + ns) % ns;
+            if(ai < (int)td.stepSlice.size())
+                playheadSlice = td.stepSlice[ai];
+        }
+        int previewSlice = slicePreviewIdx[ti];
+
+        // Helper: clip a normalized sample range to visible range and convert to pixel x
+        auto slicePixelRange = [&](int sliceIdx, float& hx0, float& hx1) -> bool {
+            if(sliceIdx < 0 || sliceIdx >= ns) return false;
+            if((int)tc.slicePoints.size() != ns + 1) return false;
+            float sL = tc.slicePoints[sliceIdx];
+            float sR = tc.slicePoints[sliceIdx + 1];
+            float cL = std::max(sL, visStart);
+            float cR = std::min(sR, visEnd);
+            if(cR <= cL) return false;
+            hx0 = smpToX(cL); hx1 = smpToX(cR);
+            return true;
+        };
+
         // Background
         dl->AddRectFilled(wavPos, {wavPos.x + wavW, wavPos.y + wavH}, IM_COL32(18, 18, 22, 255));
+
+        // ── Playhead slice tint — drawn BEFORE waveform so waveform shows through ──
+        {
+            float hx0, hx1;
+            if(slicePixelRange(playheadSlice, hx0, hx1))
+                dl->AddRectFilled({hx0, wavPos.y}, {hx1, wavPos.y + wavH}, IM_COL32(240,190,30,80));
+        }
 
         // Waveform
         if(!waveformPeaks[ti].empty()) {
@@ -2543,6 +2654,35 @@ void fullStepSequencer::drawTrack(int ti) {
             dl->AddLine({wavPos.x, midY}, {wavPos.x + wavW, midY}, IM_COL32(80, 80, 80, 180));
             dl->AddText({wavPos.x + wavW * 0.5f - 28, midY - 7},
                         IM_COL32(110, 110, 110, 255), "no sample");
+        }
+
+        // ── Active slice edge lines — drawn AFTER waveform so they're crisp on top ──
+        {
+            float hx0, hx1;
+            // Playhead: bright gold edges
+            if(slicePixelRange(playheadSlice, hx0, hx1)) {
+                if(tc.slicePoints[playheadSlice]     >= visStart)
+                    dl->AddLine({hx0, wavPos.y}, {hx0, wavPos.y + wavH}, IM_COL32(240,200,40,235), 2.0f);
+                if(tc.slicePoints[playheadSlice + 1] <= visEnd)
+                    dl->AddLine({hx1, wavPos.y}, {hx1, wavPos.y + wavH}, IM_COL32(240,200,40,235), 2.0f);
+                // Top and bottom bars for clear framing
+                dl->AddLine({hx0, wavPos.y + 1},       {hx1, wavPos.y + 1},       IM_COL32(240,200,40,180), 2.0f);
+                dl->AddLine({hx0, wavPos.y + wavH - 2},{hx1, wavPos.y + wavH - 2},IM_COL32(240,200,40,180), 2.0f);
+            }
+            // Preview slice: cyan overlay + edges
+            if(previewSlice != playheadSlice && slicePixelRange(previewSlice, hx0, hx1)) {
+                dl->AddRectFilled({hx0, wavPos.y}, {hx1, wavPos.y + wavH}, IM_COL32(60,220,200,55));
+                if(tc.slicePoints[previewSlice]     >= visStart)
+                    dl->AddLine({hx0, wavPos.y}, {hx0, wavPos.y + wavH}, IM_COL32(60,220,200,220), 2.0f);
+                if(tc.slicePoints[previewSlice + 1] <= visEnd)
+                    dl->AddLine({hx1, wavPos.y}, {hx1, wavPos.y + wavH}, IM_COL32(60,220,200,220), 2.0f);
+            } else if(previewSlice >= 0 && previewSlice == playheadSlice && slicePixelRange(previewSlice, hx0, hx1)) {
+                // Same region: boost the edges to show both playhead + preview
+                if(tc.slicePoints[previewSlice]     >= visStart)
+                    dl->AddLine({hx0, wavPos.y}, {hx0, wavPos.y + wavH}, IM_COL32(100,240,180,255), 2.5f);
+                if(tc.slicePoints[previewSlice + 1] <= visEnd)
+                    dl->AddLine({hx1, wavPos.y}, {hx1, wavPos.y + wavH}, IM_COL32(100,240,180,255), 2.5f);
+            }
         }
 
         // Grid lines (clipped to visible range)
@@ -2606,6 +2746,16 @@ void fullStepSequencer::drawTrack(int ti) {
                 for(int k = 1; k < ns; k++) checkPx(tc.slicePoints[k], k);
                 sliceDragTrack = ti;
                 sliceDragIdx   = best;
+
+                // First press not on any boundary: play the clicked slice region
+                if(ImGui::IsItemActivated() && best == 0) {
+                    for(int k = 0; k < ns; k++) {
+                        if(norm >= tc.slicePoints[k] && norm < tc.slicePoints[k + 1]) {
+                            triggerSlicePreview(ti, k);
+                            break;
+                        }
+                    }
+                }
             }
 
             // Grid snap in sample space
@@ -2663,7 +2813,7 @@ void fullStepSequencer::drawTrack(int ti) {
         // ── Zoom buttons + scrollbar ──────────────────────────────────────────
         {
             // – / + buttons
-            if(ImGui::SmallButton("–##slicezm")) applyZoomS(0.5f, 0.5f);
+            if(ImGui::SmallButton("-##slicezm")) applyZoomS(0.5f, 0.5f);
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom out");
             ImGui::SameLine(0, 2);
             if(ImGui::SmallButton("+##slicezm")) applyZoomS(2.0f, 0.5f);
@@ -2736,7 +2886,7 @@ void fullStepSequencer::drawTrack(int ti) {
 
     if(td.activeTab == 6 && !tc.slicerMode) {
         // ── WAV tab: full-width zoomable waveform with in/out markers ────────
-        float wavW = ImGui::GetContentRegionAvail().x;
+        float wavW = ImGui::GetContentRegionAvail().x - 4.0f;
         wavW = std::max(wavW, 120.0f);
         const float wavH  = 80.0f;
         const float sbH   = 7.0f;  // scrollbar height
@@ -2882,7 +3032,7 @@ void fullStepSequencer::drawTrack(int ti) {
 
         // ── Zoom buttons + scrollbar ──────────────────────────────────────────
         {
-            if(ImGui::SmallButton("–##wavzm")) applyZoom(0.5f, 0.5f);
+            if(ImGui::SmallButton("-##wavzm")) applyZoom(0.5f, 0.5f);
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom out");
             ImGui::SameLine(0, 2);
             if(ImGui::SmallButton("+##wavzm")) applyZoom(2.0f, 0.5f);
@@ -3179,6 +3329,102 @@ void fullStepSequencer::drawTrack(int ti) {
 
             ImGui::EndTable();
         }
+        
+        // ── Decay Time Slider Sequencer ──────────────────────────────────────────
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Ensure stepDecayOffset is properly sized
+        td.stepDecayOffset.resize(ns, 0.0f);
+        
+        // Header with decayRange parameter
+        ImGui::TextUnformatted("Decay Time Modulation");
+        ImGui::SameLine(0, 16);
+        ImGui::TextUnformatted("Range:");
+        ImGui::SameLine(0, 4);
+        ImGui::SetNextItemWidth(80.0f);
+        bool decayRangeChanged = false;
+        if(ImGui::DragFloat("##decayRange", &tc.decayRange, 0.01f, 0.0f, 5.0f, "%.2fs")) {
+            tc.decayRange = std::max(tc.decayRange, 0.0f);
+            decayRangeChanged = true;
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Maximum decay time offset range (±%.2fs)\n-1 = decay - %.2fs, +1 = decay + %.2fs",
+                              tc.decayRange, tc.decayRange);
+        
+        if(decayRangeChanged) {
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("decayRange", tc.decayRange);
+        }
+        
+        ImGui::Spacing();
+        
+        // Per-step decay offset sliders (similar to CUT tab implementation)
+        bool decaySliderChanged = false;
+        
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+            int pai = ((si - td.shift) % ns + ns) % ns;
+            float& val = td.stepDecayOffset[pai];
+            
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            std::string sid = "##decay" + ofToString(si);
+            ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
+            
+            // Click+drag to set value — paints any column the mouse X overlaps.
+            bool mouseDown = ImGui::IsMouseDown(0);
+            if(ImGui::IsItemActive() && sliderPaintTrack == -1)
+                sliderPaintTrack = ti;
+            if(sliderPaintTrack == ti && mouseDown) {
+                float mouseX = ImGui::GetIO().MousePos.x;
+                float mouseY = ImGui::GetIO().MousePos.y;
+                if(mouseX >= pos.x && mouseX < pos.x + sw) {
+                    float t = 1.0f - ofClamp((mouseY - pos.y) / PARAM_H, 0.0f, 1.0f);
+                    val = -1.0f + t * 2.0f; // Map to -1..1 range
+                    decaySliderChanged = true;
+                }
+            }
+            // Right-click to reset
+            if(ImGui::IsItemHovered() && ImGui::IsMouseClicked(1)) {
+                val = 0.0f;
+                decaySliderChanged = true;
+            }
+            
+            // Background: beat-group off-color; playhead column = golden yellow
+            int  slBeatGroup = (si / tc.stepsPerBeat) % 2;
+            bool slIsPlayhead = (si == visualPlayhead);
+            ImVec4 bgCol4 = slIsPlayhead ? playheadCol : beatPalette[slBeatGroup].off;
+            ImU32  bgCol  = ImGui::ColorConvertFloat4ToU32(bgCol4);
+            ImVec2 bmax   = ImVec2(pos.x + sw, pos.y + PARAM_H);
+            dl->AddRectFilled(pos, bmax, bgCol, STEP_ROUND);
+            // White top bar on playhead column (same as step buttons)
+            if(slIsPlayhead)
+                dl->AddRectFilled(pos, ImVec2(bmax.x, pos.y + 3.0f),
+                                  IM_COL32(255, 255, 255, 220), STEP_ROUND);
+            
+            // Draw bar (bipolar, centered at 0)
+            float t = (val + 1.0f) * 0.5f; // Convert -1..1 to 0..1
+            ImU32 barCol = slIsPlayhead
+                           ? IM_COL32(255, 255, 255, 180)   // white bar on playhead
+                           : ImGui::ColorConvertFloat4ToU32(beatPalette[slBeatGroup].on);
+            
+            // Bipolar bar drawing (centered at middle)
+            float midY  = pos.y + PARAM_H * 0.5f;
+            float valY  = pos.y + PARAM_H * (1.0f - t);
+            float top   = std::min(valY, midY);
+            float bot   = std::max(valY, midY);
+            if(bot > top + 0.5f)
+                dl->AddRectFilled(ImVec2(pos.x + 1, top),
+                                  ImVec2(pos.x + sw - 1, bot), barCol);
+            // Center line (= 0 offset)
+            dl->AddLine(ImVec2(pos.x, midY), ImVec2(pos.x + sw, midY),
+                        IM_COL32(100, 100, 100, 120));
+        }
+        
+        if(decaySliderChanged) sendStepDataToAll(ti);
+        
         ImGui::Spacing();
     }
 
@@ -3611,6 +3857,29 @@ void fullStepSequencer::drawTrack(int ti) {
         }
 
         if(arpChanged) sendStepDataToAll(ti);
+
+        // ── Fill all steps ────────────────────────────────────────────────────
+        {
+            static float arpFillDiv  = 4.0f;
+            static int   arpFillMidi = 60;
+            ImGui::Spacing();
+            if(td.arpSpeedMode == 0) {
+                ImGui::SetNextItemWidth(60.0f);
+                ImGui::DragFloat("##arpfillval", &arpFillDiv, 0.25f, 0.25f, 64.0f, "%.2g");
+            } else {
+                ImGui::SetNextItemWidth(60.0f);
+                ImGui::DragInt("##arpfillval", &arpFillMidi, 1, 0, 127);
+            }
+            ImGui::SameLine(0, 6);
+            if(ImGui::Button("Fill All##arpfill")) {
+                td.stepArpSpeed.resize(ns, 4.0f);
+                float v = (td.arpSpeedMode == 0) ? arpFillDiv : (float)arpFillMidi;
+                for(int si = 0; si < ns; si++) td.stepArpSpeed[si] = v;
+                sendStepDataToAll(ti);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Set all steps to this value");
+        }
 
         ImGui::Spacing();
         ImGui::Separator();

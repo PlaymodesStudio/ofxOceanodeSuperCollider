@@ -106,6 +106,9 @@ public:
         float       lfoPhase       = 0.0f;   // initial/retrigger phase 0..1
         float       lfoPulseWidth  = 0.5f;   // square wave pulse width 0..1
 
+        // AMP tab: per-step envelope decay offset
+        float       decayRange     = 1.0f;   // max seconds of decay offset (±decayRange)
+
         // Slicer mode: sample divided into N slices (N=numSteps); each step triggers one slice
         bool        slicerMode     = false;
         bool        sliceFit       = false;  // stretch each slice to exactly one step duration
@@ -164,8 +167,9 @@ public:
         std::vector<float> stepArpSpeed; // arp retrigger speed per step (divisions/beat)
         std::vector<bool>  stepStut;     // true = stutter echo enabled for this step
         std::vector<float> stepStutSpeed;// stutter retrigger speed per step (divisions/beat)
-        std::vector<int>   stepSlice;    // which slice index plays at each step (slicer mode)
-        std::vector<bool>  stepSliceOn;  // per-step silence flag for slicer mode (true=play, false=silence)
+        std::vector<int>   stepSlice;         // which slice index plays at each step (slicer mode)
+        std::vector<bool>  stepSliceOn;       // per-step silence flag for slicer mode (true=play, false=silence)
+        std::vector<float> stepDecayOffset;   // per-step decay time offset (-1..1, scaled by decayRange)
 
         void resizeSteps() {
             // Always grow to MAX_STEPS — never shrink.
@@ -183,9 +187,10 @@ public:
             stepArpSpeed .resize(MAX_STEPS, 4.0f);
             stepStut     .resize(MAX_STEPS, false);
             stepStutSpeed.resize(MAX_STEPS, 4.0f);
-            stepSlice    .resize(MAX_STEPS, 0);
+            stepSlice       .resize(MAX_STEPS, 0);
             for(int i = 0; i < MAX_STEPS; i++) stepSlice[i] = i;
-            stepSliceOn  .resize(MAX_STEPS, true);
+            stepSliceOn     .resize(MAX_STEPS, true);
+            stepDecayOffset .resize(MAX_STEPS, 0.0f);
         }
     };
 
@@ -235,6 +240,7 @@ private:
     // ── Node-GUI parameters ───────────────────────────────────────────────────
     ofParameter<bool>          showWindow;
     ofParameter<int>           resetSeq;      // 0/1 — trigger fires on rising edge 0→1
+    ofParameter<bool>          playSeq;       // play/stop toggle — rising edge resets phasor
     ofParameter<int>           numTracksP;   // 1..MAX_TRACKS — number of active tracks
     ofParameter<vector<float>> transposeP;   // per-track transpose in semitones (-24..24)
     ofParameter<vector<float>> globalVolP;   // per-track output volume (0..1)
@@ -322,6 +328,13 @@ private:
     void triggerPreview(const std::string& path);
     void stopPreview();
 
+    // ── Slice preview (per-track; plays a single slice on demand) ─────────────
+    ofxSCSynth*  slicePreviewSynths[MAX_TRACKS];   // one-shot preview synth per track
+    int          slicePreviewIdx   [MAX_TRACKS];   // slice index being previewed (-1 = none)
+
+    void triggerSlicePreview(int ti, int sliceIdx);
+    void stopSlicePreview(int ti);
+
     // ── ImGui window rendering ────────────────────────────────────────────────
     void drawSequencerWindow();
     void drawBrowser(float w, float h);
@@ -374,6 +387,7 @@ private:
     float    fxColW          = 210.0f; // FX column width (right panel)
 
     int      lastResetVal    = 0;   // previous value of resetSeq — detect rising edge 0→1
+    bool     lastPlayVal     = false; // previous value of playSeq — detect rising edge false→true
     int  sliderPaintTrack    = -1;   // track index owning current slider paint gesture (-1 = none)
     int  stepPaintTrack      = -1;   // track index owning current step-on paint gesture (-1 = none)
     bool stepPaintValue      = false; // value being stamped during a step-on paint gesture
@@ -404,9 +418,10 @@ private:
     std::vector<ofParameter<vector<float>>> pStepArpSpeed;
     std::vector<ofParameter<vector<float>>> pStepStut;
     std::vector<ofParameter<vector<float>>> pStepStutSpeed;
-    std::vector<ofParameter<vector<float>>> pStepSliceStart; // [MAX_TRACKS] slice start (0..1) per step
-    std::vector<ofParameter<vector<float>>> pStepSliceEnd;   // [MAX_TRACKS] slice end   (0..1) per step
-    std::vector<ofParameter<vector<float>>> pStepSliceOn;    // [MAX_TRACKS] per-step silence flag (1=play)
+    std::vector<ofParameter<vector<float>>> pStepSliceStart;    // [MAX_TRACKS] slice start (0..1) per step
+    std::vector<ofParameter<vector<float>>> pStepSliceEnd;      // [MAX_TRACKS] slice end   (0..1) per step
+    std::vector<ofParameter<vector<float>>> pStepSliceOn;       // [MAX_TRACKS] per-step silence flag (1=play)
+    std::vector<ofParameter<vector<float>>> pStepDecayOffset;   // [MAX_TRACKS] per-step decay offset (-1..1)
 
     // ── Event listeners ───────────────────────────────────────────────────────
     ofEventListeners nodeListeners;
