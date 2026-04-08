@@ -380,7 +380,12 @@ void serverManager::recomputeGraph(){
         
             for(auto &c : newConnections){
                 for(auto &dest : c.second){
-                    int busindex = outputBussesRefToNode[c.first.getNodeRef()][c.first.getIndex()];
+                    int busindex;
+                    auto& nodeMap = outputBussesRefToNode[c.first.getNodeRef()];
+                    if(nodeMap.count(c.first.getIndex()))
+                        busindex = nodeMap[c.first.getIndex()];
+                    else
+                        busindex = c.first.getBusIndex(server); // fallback for self-managed buses (e.g. mix bus)
                     dest->setInputBus(server, c.first.getNodeRef(), busindex);
                     inputBussesRefToNode[dest].push_back(busindex);
                 }
