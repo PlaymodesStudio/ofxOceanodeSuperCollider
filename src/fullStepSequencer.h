@@ -425,4 +425,9 @@ private:
 
     // ── Event listeners ───────────────────────────────────────────────────────
     ofEventListeners nodeListeners;
+    
+    // ── Track reordering helpers ──────────────────────────────────────────────
+    void moveTrackUp(int trackIndex);
+    void moveTrackDown(int trackIndex);
+    void swapTracks(int trackA, int trackB);
 };

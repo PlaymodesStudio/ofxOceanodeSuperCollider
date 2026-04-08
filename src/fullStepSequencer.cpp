@@ -1837,12 +1837,50 @@ void fullStepSequencer::drawTrack(int ti) {
     // ═══════════════════════════════════════════════════════════════════════════
     // Header row 1: [N] | name | [sample] | MUTE
     // ═══════════════════════════════════════════════════════════════════════════
+    // Track reordering arrows
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.17f, 0.22f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.28f, 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.38f, 0.45f, 1.0f));
+    
+    // Up arrow
+    bool canMoveUp = (ti > 0);
+    if (!canMoveUp) ImGui::BeginDisabled();
+    if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
+        moveTrackUp(ti);
+    }
+    if (!canMoveUp) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered() && canMoveUp) {
+        ImGui::SetTooltip("Move track up");
+    }
+    
+    ImGui::SameLine(0, 2);
+    
+    // Down arrow
+    bool canMoveDown = (ti < numTracks - 1);
+    if (!canMoveDown) ImGui::BeginDisabled();
+    if (ImGui::ArrowButton("##down", ImGuiDir_Down)) {
+        moveTrackDown(ti);
+    }
+    if (!canMoveDown) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered() && canMoveDown) {
+        ImGui::SetTooltip("Move track down");
+    }
+    
+    ImGui::PopStyleColor(3);
+    ImGui::SameLine(0, 8);
+
     ImGui::TextColored(acc, "[%d]", ti + 1);
     ImGui::SameLine(0, 6);
 
+    // Enhanced track title field with stronger highlighting
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(acc.x * 0.15f, acc.y * 0.15f, acc.z * 0.15f, 0.8f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(acc.x * 0.25f, acc.y * 0.25f, acc.z * 0.25f, 0.9f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(acc.x * 0.35f, acc.y * 0.35f, acc.z * 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     ImGui::SetNextItemWidth(90.0f);
     if(ImGui::InputText("##name", nameEditBuf[ti], 64))
         tc.name = nameEditBuf[ti];
+    ImGui::PopStyleColor(4);
 
     if(ImGui::BeginDragDropTarget()) {
         if(const ImGuiPayload* p = ImGui::AcceptDragDropPayload("FSS_SAMPLE")) {
@@ -4181,6 +4219,36 @@ void fullStepSequencer::drawTrack(int ti) {
     dl->AddRect(cardMin, cardMax, IM_COL32(46, 50, 64, 200), 8.0f, 0, 1.0f);
     splitter.Merge(dl);
 
+    // Add invisible button covering the entire track area for drag-drop
+    ImVec2 trackAreaMin = {cardMin.x + accentBarW, cardMin.y};
+    ImVec2 trackAreaMax = {cardMax.x, cardMax.y};
+    ImGui::SetCursorScreenPos(trackAreaMin);
+    ImGui::InvisibleButton(("##trackarea" + ofToString(ti)).c_str(),
+                          ImVec2(trackAreaMax.x - trackAreaMin.x, trackAreaMax.y - trackAreaMin.y));
+    
+    // Handle drag-drop for the entire track area
+    if(ImGui::BeginDragDropTarget()) {
+        if(const ImGuiPayload* p = ImGui::AcceptDragDropPayload("FSS_SAMPLE")) {
+            std::string path(static_cast<const char*>(p->Data), p->DataSize - 1);
+            samplePaths[ti] = path;
+            loadSampleForTrack(ti, path);
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("bufnum", (float)getBufnum(ti, srv));
+        }
+        ImGui::EndDragDropTarget();
+    }
+    
+    // Visual feedback when hovering with a dragged sample
+    if(ImGui::IsItemHovered() && ImGui::GetDragDropPayload() &&
+       strcmp(ImGui::GetDragDropPayload()->DataType, "FSS_SAMPLE") == 0) {
+        // Draw highlight overlay
+        dl->AddRectFilled(trackAreaMin, trackAreaMax,
+                         ImGui::ColorConvertFloat4ToU32(ImVec4(acc.x, acc.y, acc.z, 0.2f)), 8.0f);
+        dl->AddRect(trackAreaMin, trackAreaMax,
+                   ImGui::ColorConvertFloat4ToU32(ImVec4(acc.x, acc.y, acc.z, 0.8f)), 8.0f, 0, 2.0f);
+    }
+
     ImGui::Spacing();
     ImGui::Spacing();
 }
@@ -4739,4 +4807,89 @@ std::string fullStepSequencer::computeDataRelativePath(const std::string& absPat
         return rel;
     }
     return std::filesystem::path(absPath).filename().string();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Track reordering helpers
+// ════════════════════════════════════════════════════════════════════════════
+
+void fullStepSequencer::moveTrackUp(int trackIndex) {
+    if (trackIndex <= 0 || trackIndex >= numTracks) return;
+    swapTracks(trackIndex, trackIndex - 1);
+}
+
+void fullStepSequencer::moveTrackDown(int trackIndex) {
+    if (trackIndex < 0 || trackIndex >= numTracks - 1) return;
+    swapTracks(trackIndex, trackIndex + 1);
+}
+
+void fullStepSequencer::swapTracks(int trackA, int trackB) {
+    if (trackA < 0 || trackA >= numTracks || trackB < 0 || trackB >= numTracks || trackA == trackB) return;
+    
+    // Swap track configs
+    std::swap(trackConfigs[trackA], trackConfigs[trackB]);
+    
+    // Swap sample paths
+    std::swap(samplePaths[trackA], samplePaths[trackB]);
+    
+    // Swap waveform peaks
+    std::swap(waveformPeaks[trackA], waveformPeaks[trackB]);
+    
+    // Swap name edit buffers
+    char tempName[64];
+    strcpy(tempName, nameEditBuf[trackA]);
+    strcpy(nameEditBuf[trackA], nameEditBuf[trackB]);
+    strcpy(nameEditBuf[trackB], tempName);
+    
+    // Swap track data in all slots
+    for (auto& slot : slots) {
+        if (trackA < (int)slot.tracks.size() && trackB < (int)slot.tracks.size()) {
+            std::swap(slot.tracks[trackA], slot.tracks[trackB]);
+        }
+    }
+    
+    // Swap sample buffers
+    std::swap(trackBufs[trackA], trackBufs[trackB]);
+    
+    // Update node parameters
+    auto tv = transposeP.get();
+    auto vv = globalVolP.get();
+    auto pv = globalProbP.get();
+    auto mv = muteP.get();
+    auto sv = soloP.get();
+    
+    if (trackA < (int)tv.size() && trackB < (int)tv.size()) {
+        std::swap(tv[trackA], tv[trackB]);
+        std::swap(vv[trackA], vv[trackB]);
+        std::swap(pv[trackA], pv[trackB]);
+        std::swap(mv[trackA], mv[trackB]);
+        std::swap(sv[trackA], sv[trackB]);
+        
+        transposeP.set(tv);
+        globalVolP.set(vv);
+        globalProbP.set(pv);
+        muteP.set(mv);
+        soloP.set(sv);
+    }
+    
+    // Recreate synths for both tracks to ensure proper bus routing
+    for (auto* sm : allServers) {
+        if (!sm || !sm->getServer()) continue;
+        ofxSCServer* srv = sm->getServer();
+        
+        // Free and recreate synths for both tracks
+        if (trackSynths.count(srv) && trackA < (int)trackSynths[srv].size() && trackSynths[srv][trackA]) {
+            trackSynths[srv][trackA]->free();
+            delete trackSynths[srv][trackA];
+            trackSynths[srv][trackA] = nullptr;
+        }
+        if (trackSynths.count(srv) && trackB < (int)trackSynths[srv].size() && trackSynths[srv][trackB]) {
+            trackSynths[srv][trackB]->free();
+            delete trackSynths[srv][trackB];
+            trackSynths[srv][trackB] = nullptr;
+        }
+        
+        createTrackSynth(srv, trackA);
+        createTrackSynth(srv, trackB);
+    }
 }
