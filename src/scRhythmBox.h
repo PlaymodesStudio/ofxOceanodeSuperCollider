@@ -1,5 +1,5 @@
 //
-//  fullStepSequencer.h
+//  scRhythmBox.h
 //  ofxOceanodeSuperCollider
 //
 //  Fruity-Loops-style multitrack step sequencer with integrated file browser.
@@ -9,7 +9,7 @@
 //  Architecture:
 //    • Inherits scNode for proper SC signal-graph integration.
 //    • Pre-allocates MAX_TRACKS output ports at setup(); only numTracks are active.
-//    • One "FullStepSeqTrack" synth instance per track per SC server.
+//    • One "RhythmBoxTrack" synth instance per track per SC server.
 //    • One mono sample buffer per track per server (via ofxSCBuffer::readChannel).
 //    • Slot system: MAX_SLOTS independent snapshots of all per-track data.
 //    • Floating ImGui window: left = file browser, right = scrollable track rows.
@@ -33,7 +33,7 @@
 #include <fstream>
 #include <cstring>
 
-class fullStepSequencer : public scNode {
+class scRhythmBox : public scNode {
 public:
     // ── Constants ─────────────────────────────────────────────────────────────
     static constexpr int   MAX_TRACKS  = 8;
@@ -97,6 +97,12 @@ public:
         float       trackPitch     = 0.0f;
         float       globalVol      = 1.0f;
         float       globalProb     = 1.0f;
+        float       sequenceProb   = 1.0f;  // probability that entire sequence plays (0..1)
+        float       globalStepProbSub = 1.0f; // global step-prob multiplier (0..1, 1=full prob)
+        float       globalCut      = 0.0f;  // global cut offset (-1..1, additive to per-step cut)
+        float       globalPanOffset = 0.0f; // global pan offset (-1..1, additive to per-step pan)
+        float       globalRevSend  = 0.0f;  // global reverb send additive (0..1)
+        float       globalEchoSend = 0.0f;  // global echo send additive (0..1)
 
         // AMP tab: beat-synced amplitude LFO
         bool        lfoEnabled     = false;
@@ -200,8 +206,8 @@ public:
     };
 
     // ── Constructor / Destructor ──────────────────────────────────────────────
-    fullStepSequencer(vector<serverManager*> servers);
-    ~fullStepSequencer();
+    scRhythmBox(vector<serverManager*> servers);
+    ~scRhythmBox();
 
     // ── ofxOceanodeNodeModel overrides ────────────────────────────────────────
     void setup()              override;
@@ -243,8 +249,14 @@ private:
     ofParameter<bool>          playSeq;       // play/stop toggle — rising edge resets phasor
     ofParameter<int>           numTracksP;   // 1..MAX_TRACKS — number of active tracks
     ofParameter<vector<float>> transposeP;   // per-track transpose in semitones (-24..24)
-    ofParameter<vector<float>> globalVolP;   // per-track output volume (0..1)
-    ofParameter<vector<float>> globalProbP;  // per-track probability multiplier (0..1)
+    ofParameter<float>         masterVolP;   // master output volume multiplier (0..2)
+    ofParameter<vector<float>> globalVolP;          // per-track output volume (0..1)
+    ofParameter<vector<float>> globalProbP;         // per-track probability multiplier (0..1)
+    ofParameter<vector<float>> globalStepProbSubP;  // per-track global step-prob reduction (0..1)
+    ofParameter<vector<float>> globalCutP;          // per-track global cut offset (-1..1)
+    ofParameter<vector<float>> globalPanOffsetP;    // per-track global pan offset (-1..1)
+    ofParameter<vector<float>> globalRevSendP;      // per-track global reverb send (0..1)
+    ofParameter<vector<float>> globalEchoSendP;     // per-track global echo send (0..1)
     ofParameter<vector<int>>   muteP;        // per-track mute state: 0=unmuted, 1=muted
     ofParameter<vector<int>>   soloP;        // per-track solo state: 0=off, 1=soloed
     ofParameter<float>         swingP;       // global swing for all tracks (0=straight, 0.5=max)
@@ -425,6 +437,18 @@ private:
 
     // ── Event listeners ───────────────────────────────────────────────────────
     ofEventListeners nodeListeners;
+    
+    // ── Project save/load functionality ───────────────────────────────────────
+    std::string currentProjectPath;
+    std::string projectsDirectory;
+    char projectNameBuffer[256];
+    std::vector<std::string> availableProjects;
+    
+    void saveProject(const std::string& projectName);
+    void loadProject(const std::string& projectPath);
+    void refreshProjectsList();
+    void drawProjectMenu();
+    std::string getProjectsDirectory() const;
     
     // ── Track reordering helpers ──────────────────────────────────────────────
     void moveTrackUp(int trackIndex);

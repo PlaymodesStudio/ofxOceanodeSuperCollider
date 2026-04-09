@@ -3,7 +3,7 @@
 //  ofxOceanodeSuperCollider
 //
 
-#include "fullStepSequencer.h"
+#include "scRhythmBox.h"
 #include "ofxSuperCollider.h"
 #include <algorithm>
 #include <cmath>
@@ -18,8 +18,8 @@ static inline float midiNoteToHz(float note) {
 // Constructor / Destructor
 // ════════════════════════════════════════════════════════════════════════════
 
-fullStepSequencer::fullStepSequencer(vector<serverManager*> servers)
-    : scNode("FullStepSequencer"), allServers(servers)
+scRhythmBox::scRhythmBox(vector<serverManager*> servers)
+    : scNode("Rhythm Box"), allServers(servers)
 {
     memset(nameEditBuf, 0, sizeof(nameEditBuf));
 
@@ -42,9 +42,15 @@ fullStepSequencer::fullStepSequencer(vector<serverManager*> servers)
     samplePaths.resize(MAX_TRACKS);
     waveformPeaks.resize(MAX_TRACKS);
     currentStep.assign(MAX_TRACKS, 0);
+    
+    // Initialize project functionality
+    projectsDirectory = getProjectsDirectory();
+    memset(projectNameBuffer, 0, sizeof(projectNameBuffer));
+    strcpy(projectNameBuffer, "New Project");
+    refreshProjectsList();
 }
 
-fullStepSequencer::~fullStepSequencer() {
+scRhythmBox::~scRhythmBox() {
     try {
         nodeListeners.unsubscribeAll();
         stopPreview();
@@ -76,7 +82,7 @@ fullStepSequencer::~fullStepSequencer() {
         for(auto& [srv, mb] : mixBuses) { if(mb) { mb->free(); delete mb; } }
         mixBuses.clear();
     } catch(const std::exception& e) {
-        ofLogError("fullStepSequencer") << "Destructor: " << e.what();
+        ofLogError("scRhythmBox") << "Destructor: " << e.what();
     }
 }
 
@@ -84,7 +90,7 @@ fullStepSequencer::~fullStepSequencer() {
 // Setup
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::setup() {
+void scRhythmBox::setup() {
     // ── Node GUI parameters (with separators for visual grouping) ───────────
     addSeparator("Sequencer");
     addParameter(showWindow.set("Show",  false));
@@ -95,10 +101,22 @@ void fullStepSequencer::setup() {
     addParameter(embedInProject.set("Embed", false));
 
     addSeparator("Volume");
+    addParameter(masterVolP.set("MasterVol", 1.0f, 0.0f, 2.0f));
     addParameter(globalVolP .set("Vol",        {1.0f},  {0.0f},   {1.0f}));
 
     addSeparator("Probability");
     addParameter(globalProbP.set("Prob",       {1.0f},  {0.0f},   {1.0f}));
+    addParameter(globalStepProbSubP.set("StepProb", {1.0f}, {0.0f}, {1.0f}));
+
+    addSeparator("Filter");
+    addParameter(globalCutP.set("Cut",        {0.0f},  {-1.0f},  {1.0f}));
+
+    addSeparator("Pan");
+    addParameter(globalPanOffsetP.set("Pan",  {0.0f},  {-1.0f},  {1.0f}));
+
+    addSeparator("FXSend");
+    addParameter(globalRevSendP .set("RevSend",  {0.0f},  {0.0f},   {1.0f}));
+    addParameter(globalEchoSendP.set("EchoSend", {0.0f},  {0.0f},   {1.0f}));
 
     addSeparator("Mute");
     addParameter(muteP.set("Mute",   {0}, {0}, {1}));
@@ -164,12 +182,19 @@ void fullStepSequencer::setup() {
         }
     }));
     nodeListeners.push(globalVolP.newListener([this](vector<float>& v) {
+        float mv = masterVolP.get();
         for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
             trackConfigs[ti].globalVol = v[ti];
             for(auto& [srv, synths] : trackSynths)
                 if(ti < (int)synths.size() && synths[ti])
-                    synths[ti]->set("globalVol", v[ti]);
+                    synths[ti]->set("globalVol", v[ti] * mv);
         }
+    }));
+    nodeListeners.push(masterVolP.newListener([this](float& mv) {
+        for(int ti = 0; ti < numTracks; ti++)
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalVol", trackConfigs[ti].globalVol * mv);
     }));
     nodeListeners.push(globalProbP.newListener([this](vector<float>& v) {
         for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
@@ -200,6 +225,47 @@ void fullStepSequencer::setup() {
     nodeListeners.push(swingP.newListener([this](float& v) {
         for(auto& [srv, synths] : trackSynths)
             for(auto* s : synths) if(s) s->set("swing", v);
+    }));
+
+    nodeListeners.push(globalStepProbSubP.newListener([this](vector<float>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalStepProbSub = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalStepProbSub", v[ti]);
+        }
+    }));
+    nodeListeners.push(globalCutP.newListener([this](vector<float>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalCut = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalCut", v[ti]);
+        }
+    }));
+    nodeListeners.push(globalPanOffsetP.newListener([this](vector<float>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalPanOffset = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalPanOffset", v[ti]);
+        }
+    }));
+    nodeListeners.push(globalRevSendP.newListener([this](vector<float>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalRevSend = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalRevSend", v[ti]);
+        }
+    }));
+    nodeListeners.push(globalEchoSendP.newListener([this](vector<float>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalEchoSend = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalEchoSend", v[ti]);
+        }
     }));
 
     nodeListeners.push(numTracksP.newListener([this](int& n) {
@@ -356,7 +422,7 @@ void fullStepSequencer::setup() {
 // update / draw
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::update(ofEventArgs& /*args*/) {
+void scRhythmBox::update(ofEventArgs& /*args*/) {
     // Poll KR buses on the primary server for playhead and gate readback.
     if(!stepBuses.empty()) {
         auto& busList = stepBuses.begin()->second;
@@ -382,7 +448,7 @@ void fullStepSequencer::update(ofEventArgs& /*args*/) {
 
 }
 
-void fullStepSequencer::draw(ofEventArgs& /*args*/) {
+void scRhythmBox::draw(ofEventArgs& /*args*/) {
     if(showWindow) drawSequencerWindow();
 }
 
@@ -390,17 +456,17 @@ void fullStepSequencer::draw(ofEventArgs& /*args*/) {
 // BPM / activate / deactivate
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::setBpm(float bpm) {
+void scRhythmBox::setBpm(float bpm) {
     currentBpm = bpm;
     sendBpmToAll();
 }
 
-void fullStepSequencer::activate() {
+void scRhythmBox::activate() {
     for(auto& [srv, synths] : trackSynths)
         for(auto* s : synths) if(s) s->run(true);
 }
 
-void fullStepSequencer::deactivate() {
+void scRhythmBox::deactivate() {
     for(auto& [srv, synths] : trackSynths)
         for(auto* s : synths) if(s) s->run(false);
 }
@@ -409,7 +475,7 @@ void fullStepSequencer::deactivate() {
 // scNode interface
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::buildSynth(ofxSCServer* srv) {
+void scRhythmBox::buildSynth(ofxSCServer* srv) {
     if(!srv) return;
     // Create the mix bus here (before setInputBus is called on downstream nodes)
     // so getBusIndex(server) returns a valid index during the connection phase.
@@ -421,7 +487,7 @@ void fullStepSequencer::buildSynth(ofxSCServer* srv) {
     mixBuses[srv] = new ofxSCBus(RATE_AUDIO, 2, srv);
 }
 
-void fullStepSequencer::createSynth(ofxSCServer* srv) {
+void scRhythmBox::createSynth(ofxSCServer* srv) {
     if(!srv) return;
 
     // Full rebuild — pre-size all per-server vectors then delegate per track.
@@ -435,7 +501,7 @@ void fullStepSequencer::createSynth(ofxSCServer* srv) {
         createTrackSynth(srv, ti);
 }
 
-void fullStepSequencer::free(ofxSCServer* srv) {
+void scRhythmBox::free(ofxSCServer* srv) {
     freeServerSynths(srv);
     outputBuses.erase(srv);
     if(mixBuses.count(srv)) {
@@ -444,7 +510,7 @@ void fullStepSequencer::free(ofxSCServer* srv) {
     }
 }
 
-void fullStepSequencer::setOutputBus(ofxSCServer* srv, int idx, int bus) {
+void scRhythmBox::setOutputBus(ofxSCServer* srv, int idx, int bus) {
     // Free private placeholder bus for this track if it exists
     if(privateBuses.count(srv) && idx < (int)privateBuses[srv].size()
        && privateBuses[srv][idx]) {
@@ -459,7 +525,7 @@ void fullStepSequencer::setOutputBus(ofxSCServer* srv, int idx, int bus) {
     }
 }
 
-int fullStepSequencer::getOutputBusIndex(ofxSCServer* srv, int idx) {
+int scRhythmBox::getOutputBusIndex(ofxSCServer* srv, int idx) {
     if(idx == MAX_TRACKS) {
         if(mixBuses.count(srv) && mixBuses.at(srv))
             return mixBuses.at(srv)->index;
@@ -470,7 +536,7 @@ int fullStepSequencer::getOutputBusIndex(ofxSCServer* srv, int idx) {
     return -1;
 }
 
-void fullStepSequencer::moveSynthBefore(ofxSCServer* srv, int nodeID) {
+void scRhythmBox::moveSynthBefore(ofxSCServer* srv, int nodeID) {
     if(!trackSynths.count(srv)) return;
     auto& synths = trackSynths[srv];
     for(int ti = 0; ti < (int)synths.size(); ti++) {
@@ -490,7 +556,7 @@ void fullStepSequencer::moveSynthBefore(ofxSCServer* srv, int nodeID) {
             s->set("shift",         (float)tdi.shift);
             s->set("swing",         swingP.get());
             s->set("globalPitch",   tci.trackPitch + globalTransposeP.get());
-            s->set("globalVol",     tci.globalVol);
+            s->set("globalVol",     tci.globalVol * masterVolP.get());
             s->set("globalProb",    tci.globalProb);
             s->set("bufnum",        (float)getBufnum(ti, srv));
             s->set("inPoint",       tci.inPoint);
@@ -545,6 +611,11 @@ void fullStepSequencer::moveSynthBefore(ofxSCServer* srv, int nodeID) {
             s->set("stuttFadeCut",  tdi.stuttFadeCut);
             s->set("stuttInterval", tdi.stuttInterval);
             s->set("stuttRes",      tdi.stuttRes);
+            s->set("globalStepProbSub", tci.globalStepProbSub);
+            s->set("globalCut",         tci.globalCut);
+            s->set("globalPanOffset",   tci.globalPanOffset);
+            s->set("globalRevSend",     tci.globalRevSend);
+            s->set("globalEchoSend",    tci.globalEchoSend);
             if(mixBuses.count(srv) && mixBuses.at(srv))
                 s->set("mixOut", (float)mixBuses.at(srv)->index);
             fireStepParams(ti);  // arrays: created=true → /n_setn; false → vecArgs
@@ -553,7 +624,7 @@ void fullStepSequencer::moveSynthBefore(ofxSCServer* srv, int nodeID) {
     }
 }
 
-int fullStepSequencer::getLastSynthID(ofxSCServer* srv) {
+int scRhythmBox::getLastSynthID(ofxSCServer* srv) {
     if(!trackSynths.count(srv)) return -1;
     // Return the last active track's synth ID (tail of the chain)
     for(int ti = numTracks - 1; ti >= 0; ti--)
@@ -566,7 +637,7 @@ int fullStepSequencer::getLastSynthID(ofxSCServer* srv) {
 // Synth helpers
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
+void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
     if(!srv || ti >= MAX_TRACKS) return;
 
     // Ensure per-server vectors are large enough for this track index
@@ -590,7 +661,7 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     const TrackConfig& tc = trackConfig(ti);
     int bufnum = getBufnum(ti, srv);
 
-    auto* s = new ofxSCSynth("FullStepSeqTrack", srv);
+    auto* s = new ofxSCSynth("RhythmBoxTrack", srv);
     trackSynths[srv][ti] = s;
 
     // Set timing and sample parameters
@@ -601,8 +672,9 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("swing",         swingP.get());
     s->set("numSteps",      (float)tc.getNumSteps());
     s->set("globalPitch",   tc.trackPitch + globalTransposeP.get());
-    s->set("globalVol",     tc.globalVol);
+    s->set("globalVol",     tc.globalVol * masterVolP.get());
     s->set("globalProb",    tc.globalProb);
+    s->set("sequenceProb",  tc.sequenceProb);
     s->set("bufnum",        bufnum);
     s->set("reset",         0);
     s->set("play",          playSeq.get() ? 1.0f : 0.0f);
@@ -660,6 +732,11 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("stuttFadeCut",  td.stuttFadeCut);
     s->set("stuttInterval", td.stuttInterval);
     s->set("stuttRes",      td.stuttRes);
+    s->set("globalStepProbSub", tc.globalStepProbSub);
+    s->set("globalCut",         tc.globalCut);
+    s->set("globalPanOffset",   tc.globalPanOffset);
+    s->set("globalRevSend",     tc.globalRevSend);
+    s->set("globalEchoSend",    tc.globalEchoSend);
 
     // ── Audio output bus ────────────────────────────────────────────────────
     // If the graph manager has already assigned a bus (setOutputBus was called
@@ -720,7 +797,7 @@ void fullStepSequencer::createTrackSynth(ofxSCServer* srv, int ti) {
     fireStepParams(ti);
 }
 
-void fullStepSequencer::freeServerSynths(ofxSCServer* srv) {
+void scRhythmBox::freeServerSynths(ofxSCServer* srv) {
     // Free synths
     if(trackSynths.count(srv)) {
         for(auto* s : trackSynths[srv]) { if(s) { s->free(); delete s; } }
@@ -741,16 +818,16 @@ void fullStepSequencer::freeServerSynths(ofxSCServer* srv) {
     }
 }
 
-void fullStepSequencer::sendStepData(ofxSCSynth* /*s*/, const TrackData& /*td*/) {
+void scRhythmBox::sendStepData(ofxSCSynth* /*s*/, const TrackData& /*td*/) {
     // No-op: step data is now sent via pStep* ofParameter listeners.
     // Call fireStepParams(ti) instead.
 }
 
-void fullStepSequencer::sendStepDataToAll(int ti) {
+void scRhythmBox::sendStepDataToAll(int ti) {
     fireStepParams(ti);
 }
 
-void fullStepSequencer::fireStepParams(int ti) {
+void scRhythmBox::fireStepParams(int ti) {
     if(ti >= MAX_TRACKS) return;
     const TrackData&   td = track(ti);
     const TrackConfig& tc = trackConfig(ti);
@@ -818,7 +895,7 @@ void fullStepSequencer::fireStepParams(int ti) {
     }
 }
 
-void fullStepSequencer::sendStepDataDirect(ofxSCSynth* s, const TrackData& td, ofxSCServer* srv) {
+void scRhythmBox::sendStepDataDirect(ofxSCSynth* s, const TrackData& td, ofxSCServer* srv) {
     // Send step arrays via /n_setn directly, bypassing the ofxSCSynth created-flag check.
     // Called immediately after createAndRun so SC has the correct data from the first step.
     if(!s || s->nodeID == 0 || !srv) return;
@@ -861,7 +938,7 @@ void fullStepSequencer::sendStepDataDirect(ofxSCSynth* s, const TrackData& td, o
     setn("stepPitch", pitch);
 }
 
-void fullStepSequencer::setNumTracks(int n) {
+void scRhythmBox::setNumTracks(int n) {
     n = ofClamp(n, 1, MAX_TRACKS);
     int old = numTracks;
     if(n == old) return;
@@ -883,11 +960,16 @@ void fullStepSequencer::setNumTracks(int n) {
 
     // ── Resize vector parameters ─────────────────────────────────────────────
     {
-        auto tv = transposeP .get(); tv .resize(n, 0.0f); transposeP .set(tv);
-        auto vv = globalVolP .get(); vv .resize(n, 1.0f); globalVolP .set(vv);
-        auto pv = globalProbP.get(); pv.resize(n, 1.0f); globalProbP.set(pv);
-        auto mv = muteP      .get(); mv .resize(n, 0);    muteP      .set(mv);
-        auto sv = soloP      .get(); sv .resize(n, 0);    soloP      .set(sv);
+        auto tv  = transposeP        .get(); tv .resize(n, 0.0f); transposeP        .set(tv);
+        auto vv  = globalVolP        .get(); vv .resize(n, 1.0f); globalVolP        .set(vv);
+        auto pv  = globalProbP       .get(); pv .resize(n, 1.0f); globalProbP       .set(pv);
+        auto mv  = muteP             .get(); mv .resize(n, 0);    muteP             .set(mv);
+        auto sv  = soloP             .get(); sv .resize(n, 0);    soloP             .set(sv);
+        auto sps = globalStepProbSubP.get(); sps.resize(n, 1.0f); globalStepProbSubP.set(sps);
+        auto gc  = globalCutP        .get(); gc .resize(n, 0.0f); globalCutP        .set(gc);
+        auto gp  = globalPanOffsetP  .get(); gp .resize(n, 0.0f); globalPanOffsetP  .set(gp);
+        auto grs = globalRevSendP    .get(); grs.resize(n, 0.0f); globalRevSendP    .set(grs);
+        auto ges = globalEchoSendP   .get(); ges.resize(n, 0.0f); globalEchoSendP   .set(ges);
     }
 
     // ── Output port management ────────────────────────────────────────────────
@@ -951,13 +1033,13 @@ void fullStepSequencer::setNumTracks(int n) {
     }
 }
 
-void fullStepSequencer::sendBpmToAll() {
+void scRhythmBox::sendBpmToAll() {
     for(auto& [srv, synths] : trackSynths)
         for(auto* s : synths)
             if(s) s->set("bpm", currentBpm);
 }
 
-void fullStepSequencer::updateActiveStates() {
+void scRhythmBox::updateActiveStates() {
     bool anySolo = false;
     for(int j = 0; j < numTracks; j++)
         if(trackConfigs[j].solo) { anySolo = true; break; }
@@ -975,25 +1057,25 @@ void fullStepSequencer::updateActiveStates() {
 // Track / slot data management
 // ════════════════════════════════════════════════════════════════════════════
 
-fullStepSequencer::TrackData& fullStepSequencer::track(int ti) {
+scRhythmBox::TrackData& scRhythmBox::track(int ti) {
     int slot = currentSlotP.get();
     return slots[slot].tracks[ti];
 }
 
-const fullStepSequencer::TrackData& fullStepSequencer::track(int ti) const {
+const scRhythmBox::TrackData& scRhythmBox::track(int ti) const {
     int slot = currentSlotP.get();
     return slots[slot].tracks[ti];
 }
 
-fullStepSequencer::TrackConfig& fullStepSequencer::trackConfig(int ti) {
+scRhythmBox::TrackConfig& scRhythmBox::trackConfig(int ti) {
     return trackConfigs[ti];
 }
 
-const fullStepSequencer::TrackConfig& fullStepSequencer::trackConfig(int ti) const {
+const scRhythmBox::TrackConfig& scRhythmBox::trackConfig(int ti) const {
     return trackConfigs[ti];
 }
 
-void fullStepSequencer::initSlicePoints(int ti) {
+void scRhythmBox::initSlicePoints(int ti) {
     TrackConfig& tc = trackConfigs[ti];
     int ns = tc.getNumSteps();
     tc.slicePoints.resize(ns + 1);
@@ -1002,7 +1084,7 @@ void fullStepSequencer::initSlicePoints(int ti) {
         tc.slicePoints[k] = tc.inPoint + span * (float)k / (float)std::max(ns, 1);
 }
 
-void fullStepSequencer::computeSliceArrays(int ti,
+void scRhythmBox::computeSliceArrays(int ti,
                                            std::vector<float>& starts,
                                            std::vector<float>& ends) const {
     const TrackConfig& tc = trackConfig(ti);
@@ -1029,7 +1111,7 @@ void fullStepSequencer::computeSliceArrays(int ti,
     }
 }
 
-void fullStepSequencer::initSlots() {
+void scRhythmBox::initSlots() {
     // Initialise global per-track configs (one per track, shared across all slots)
     trackConfigs.resize(MAX_TRACKS);
     for(int ti = 0; ti < MAX_TRACKS; ti++)
@@ -1044,29 +1126,45 @@ void fullStepSequencer::initSlots() {
     }
 }
 
-void fullStepSequencer::reloadCurrentSlot() {
+void scRhythmBox::reloadCurrentSlot() {
     // Sync node-GUI name buffers from global TrackConfig (name is per-track, not per-slot).
     for(int ti = 0; ti < numTracks; ti++)
         snprintf(nameEditBuf[ti], 64, "%s", trackConfigs[ti].name.c_str());
 
     // Rebuild vector parameters from global track config (fires listeners → SC synths)
     {
-        auto tv = transposeP.get();  auto vv = globalVolP.get();
-        auto pv = globalProbP.get(); auto mv = muteP.get(); auto sv = soloP.get();
-        tv.resize(numTracks, 0.0f);  vv.resize(numTracks, 1.0f);
-        pv.resize(numTracks, 1.0f);  mv.resize(numTracks, 0); sv.resize(numTracks, 0);
+        auto tv  = transposeP        .get(); auto vv  = globalVolP        .get();
+        auto pv  = globalProbP       .get(); auto mv  = muteP             .get();
+        auto sv  = soloP             .get(); auto sps = globalStepProbSubP.get();
+        auto gc  = globalCutP        .get(); auto gp  = globalPanOffsetP  .get();
+        auto grs = globalRevSendP    .get(); auto ges = globalEchoSendP   .get();
+        tv .resize(numTracks, 0.0f);  vv .resize(numTracks, 1.0f);
+        pv .resize(numTracks, 1.0f);  mv .resize(numTracks, 0);
+        sv .resize(numTracks, 0);     sps.resize(numTracks, 0.0f);
+        gc .resize(numTracks, 0.0f);  gp .resize(numTracks, 0.0f);
+        grs.resize(numTracks, 0.0f);  ges.resize(numTracks, 0.0f);
         for(int ti = 0; ti < numTracks; ti++) {
-            tv[ti] = trackConfigs[ti].trackPitch;
-            vv[ti] = trackConfigs[ti].globalVol;
-            pv[ti] = trackConfigs[ti].globalProb;
-            mv[ti] = trackConfigs[ti].muted ? 1 : 0;
-            sv[ti] = trackConfigs[ti].solo  ? 1 : 0;
+            tv [ti] = trackConfigs[ti].trackPitch;
+            vv [ti] = trackConfigs[ti].globalVol;
+            pv [ti] = trackConfigs[ti].globalProb;
+            mv [ti] = trackConfigs[ti].muted ? 1 : 0;
+            sv [ti] = trackConfigs[ti].solo  ? 1 : 0;
+            sps[ti] = trackConfigs[ti].globalStepProbSub;
+            gc [ti] = trackConfigs[ti].globalCut;
+            gp [ti] = trackConfigs[ti].globalPanOffset;
+            grs[ti] = trackConfigs[ti].globalRevSend;
+            ges[ti] = trackConfigs[ti].globalEchoSend;
         }
-        transposeP.set(tv);
-        globalVolP.set(vv);
-        globalProbP.set(pv);
-        muteP.set(mv);  // fires listener → sets active on SC synths
-        soloP.set(sv);  // fires listener → updateActiveStates
+        transposeP        .set(tv);
+        globalVolP        .set(vv);
+        globalProbP       .set(pv);
+        muteP             .set(mv);   // fires listener → sets active on SC synths
+        soloP             .set(sv);   // fires listener → updateActiveStates
+        globalStepProbSubP.set(sps);
+        globalCutP        .set(gc);
+        globalPanOffsetP  .set(gp);
+        globalRevSendP    .set(grs);
+        globalEchoSendP   .set(ges);
     }
 
     // Push slot-specific (shift) and config params to running synths.
@@ -1129,6 +1227,11 @@ void fullStepSequencer::reloadCurrentSlot() {
             s->set("arpGateWidth",  tdi.arpGateWidth);
             s->set("arpSpeedMode",  (float)tdi.arpSpeedMode);
             s->set("bufnum",        (float)getBufnum(ti, srv));
+            s->set("globalStepProbSub", tci.globalStepProbSub);
+            s->set("globalCut",         tci.globalCut);
+            s->set("globalPanOffset",   tci.globalPanOffset);
+            s->set("globalRevSend",     tci.globalRevSend);
+            s->set("globalEchoSend",    tci.globalEchoSend);
         }
     }
     // Fire step params — one call per track covers all servers via the pStep* listener.
@@ -1140,7 +1243,7 @@ void fullStepSequencer::reloadCurrentSlot() {
 // Sample buffer management
 // ════════════════════════════════════════════════════════════════════════════
 
-int fullStepSequencer::getBufnum(int ti, ofxSCServer* srv) const {
+int scRhythmBox::getBufnum(int ti, ofxSCServer* srv) const {
     if(ti >= (int)trackBufs.size()) return 0;
     auto it = trackBufs[ti].find(srv);
     if(it != trackBufs[ti].end() && it->second)
@@ -1148,7 +1251,7 @@ int fullStepSequencer::getBufnum(int ti, ofxSCServer* srv) const {
     return 0;  // SC buffer 0 = silent when not loaded
 }
 
-void fullStepSequencer::loadSampleForTrack(int ti, const std::string& path) {
+void scRhythmBox::loadSampleForTrack(int ti, const std::string& path) {
     if(ti >= MAX_TRACKS || path.empty()) return;
 
     freeSampleForTrack(ti);  // frees old buffer + clears samplePaths[ti]
@@ -1165,10 +1268,10 @@ void fullStepSequencer::loadSampleForTrack(int ti, const std::string& path) {
         auto* buf = new ofxSCBuffer(0, 0, primarySrv);
         buf->read(path);  // load all channels (stereo/mono as-is)
         trackBufs[ti][primarySrv] = buf;
-        ofLogNotice("fullStepSequencer") << "Loaded track " << ti << " : " << path
+        ofLogNotice("scRhythmBox") << "Loaded track " << ti << " : " << path
                                           << " bufnum=" << buf->index;
     } catch(const std::exception& e) {
-        ofLogError("fullStepSequencer") << "loadSampleForTrack ti=" << ti << " : " << e.what();
+        ofLogError("scRhythmBox") << "loadSampleForTrack ti=" << ti << " : " << e.what();
         return;
     }
 
@@ -1181,7 +1284,7 @@ void fullStepSequencer::loadSampleForTrack(int ti, const std::string& path) {
             buf->read(path);
             trackBufs[ti][srv] = buf;
         } catch(const std::exception& e) {
-            ofLogError("fullStepSequencer") << "mirror ti=" << ti << " srv" << j << ": " << e.what();
+            ofLogError("scRhythmBox") << "mirror ti=" << ti << " srv" << j << ": " << e.what();
         }
     }
 
@@ -1190,7 +1293,7 @@ void fullStepSequencer::loadSampleForTrack(int ti, const std::string& path) {
     samplePaths[ti] = path;
 }
 
-void fullStepSequencer::freeSampleForTrack(int ti) {
+void scRhythmBox::freeSampleForTrack(int ti) {
     if(ti >= (int)trackBufs.size()) return;
     for(auto& [srv, buf] : trackBufs[ti]) {
         if(buf) { buf->free(); delete buf; }
@@ -1200,7 +1303,7 @@ void fullStepSequencer::freeSampleForTrack(int ti) {
     if(ti < (int)samplePaths.size()) samplePaths[ti].clear();
 }
 
-void fullStepSequencer::freeAllSamples() {
+void scRhythmBox::freeAllSamples() {
     for(int i = 0; i < MAX_TRACKS; i++)
         freeSampleForTrack(i);
 }
@@ -1210,7 +1313,7 @@ void fullStepSequencer::freeAllSamples() {
 // Waveform peak extraction  (handles 16-bit, 24-bit, 32-bit float PCM WAV)
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::loadWaveformData(int ti, const std::string& path) {
+void scRhythmBox::loadWaveformData(int ti, const std::string& path) {
     if(ti < 0 || ti >= MAX_TRACKS) return;
     waveformPeaks[ti].clear();
 
@@ -1329,7 +1432,7 @@ void fullStepSequencer::loadWaveformData(int ti, const std::string& path) {
 // Euclidean rhythm helper
 // ════════════════════════════════════════════════════════════════════════════
 
-std::vector<bool> fullStepSequencer::euclideanRhythm(int k, int n) {
+std::vector<bool> scRhythmBox::euclideanRhythm(int k, int n) {
     std::vector<bool> pattern(n, false);
     if(k <= 0 || n <= 0) return pattern;
     k = std::min(k, n);
@@ -1343,7 +1446,7 @@ std::vector<bool> fullStepSequencer::euclideanRhythm(int k, int n) {
 // File browser
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::refreshBrowse(const std::string& dir) {
+void scRhythmBox::refreshBrowse(const std::string& dir) {
     browseEntries.clear();
     browseDir = dir;
     if(!std::filesystem::exists(dir)) return;
@@ -1365,7 +1468,7 @@ void fullStepSequencer::refreshBrowse(const std::string& dir) {
         browseEntries.insert(browseEntries.end(), dirs.begin(),  dirs.end());
         browseEntries.insert(browseEntries.end(), files.begin(), files.end());
     } catch(const std::exception& e) {
-        ofLogWarning("fullStepSequencer") << "refreshBrowse: " << e.what();
+        ofLogWarning("scRhythmBox") << "refreshBrowse: " << e.what();
     }
 }
 
@@ -1373,7 +1476,7 @@ void fullStepSequencer::refreshBrowse(const std::string& dir) {
 // Preview playback
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::triggerPreview(const std::string& path) {
+void scRhythmBox::triggerPreview(const std::string& path) {
     stopPreview();
     if(path.empty() || !previewServer) return;
     try {
@@ -1385,17 +1488,17 @@ void fullStepSequencer::triggerPreview(const std::string& path) {
         previewSynth->set("gain",   0.7f);
         previewSynth->addToTail();
     } catch(const std::exception& e) {
-        ofLogError("fullStepSequencer") << "preview: " << e.what();
+        ofLogError("scRhythmBox") << "preview: " << e.what();
         stopPreview();
     }
 }
 
-void fullStepSequencer::stopPreview() {
+void scRhythmBox::stopPreview() {
     if(previewSynth) { previewSynth->free(); delete previewSynth; previewSynth = nullptr; }
     if(previewBuf)   { previewBuf->free();   delete previewBuf;   previewBuf   = nullptr; }
 }
 
-void fullStepSequencer::stopSlicePreview(int ti) {
+void scRhythmBox::stopSlicePreview(int ti) {
     if(ti < 0 || ti >= MAX_TRACKS) return;
     if(slicePreviewSynths[ti]) {
         slicePreviewSynths[ti]->free();
@@ -1405,7 +1508,7 @@ void fullStepSequencer::stopSlicePreview(int ti) {
     slicePreviewIdx[ti] = -1;
 }
 
-void fullStepSequencer::triggerSlicePreview(int ti, int sliceIdx) {
+void scRhythmBox::triggerSlicePreview(int ti, int sliceIdx) {
     stopSlicePreview(ti);
     if(!previewServer) return;
 
@@ -1430,7 +1533,7 @@ void fullStepSequencer::triggerSlicePreview(int ti, int sliceIdx) {
         slicePreviewSynths[ti]->addToTail();
         slicePreviewIdx[ti] = sliceIdx;
     } catch(const std::exception& e) {
-        ofLogError("fullStepSequencer") << "triggerSlicePreview: " << e.what();
+        ofLogError("scRhythmBox") << "triggerSlicePreview: " << e.what();
         stopSlicePreview(ti);
     }
 }
@@ -1439,7 +1542,7 @@ void fullStepSequencer::triggerSlicePreview(int ti, int sliceIdx) {
 // ImGui – Sequencer window
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::drawSequencerWindow() {
+void scRhythmBox::drawSequencerWindow() {
     string title = "Step Sequencer " + ofToString(getNumIdentifier());
     ImGui::SetNextWindowSize(ImVec2(1100, 660), ImGuiCond_FirstUseEver);
 
@@ -1485,6 +1588,9 @@ void fullStepSequencer::drawSequencerWindow() {
         ImGui::BeginChild("##tracks", ImVec2(tracksW, avail.y), false,
                           ImGuiWindowFlags_HorizontalScrollbar);
 
+        // ── Project Menu ──────────────────────────────────────────────────────
+        drawProjectMenu();
+        ImGui::Separator();
         ImGui::Spacing();
 
         for(int ti = 0; ti < numTracks; ti++) {
@@ -1686,7 +1792,7 @@ void fullStepSequencer::drawSequencerWindow() {
 // ImGui – File browser panel
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::drawBrowser(float /*w*/, float /*h*/) {
+void scRhythmBox::drawBrowser(float /*w*/, float /*h*/) {
     // Navigation bar
     if(ImGui::Button("...")) {
         auto res = ofSystemLoadDialog("Select Samples Folder", true, browseDir);
@@ -1784,7 +1890,7 @@ void fullStepSequencer::drawBrowser(float /*w*/, float /*h*/) {
 // ImGui – Single track row
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::drawTrack(int ti) {
+void scRhythmBox::drawTrack(int ti) {
     TrackData&   td = track(ti);
     TrackConfig& tc = trackConfig(ti);
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1965,6 +2071,43 @@ void fullStepSequencer::drawTrack(int ti) {
         ImGui::PopStyleColor(2);
     }
 
+    // Vol (track volume) inline with header — was in VOL tab
+    ImGui::SameLine(0, 14);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.62f, 0.70f, 1.f));
+    ImGui::TextUnformatted("Vol:");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(80.0f);
+    {
+        float gv = tc.globalVol;
+        if(ImGui::SliderFloat("##hgvol", &gv, 0.0f, 1.0f, "%.2f")) {
+            tc.globalVol = gv;
+            auto v = globalVolP.get(); v.resize(numTracks, 1.0f);
+            v[ti] = gv; globalVolP.set(v);
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Track output volume (0..1)");
+    }
+
+    // SeqProb (sequence probability) inline with header — was in PROB tab
+    ImGui::SameLine(0, 10);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.62f, 0.70f, 1.f));
+    ImGui::TextUnformatted("SeqProb:");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(80.0f);
+    {
+        float sp = tc.sequenceProb;
+        if(ImGui::SliderFloat("##hseqprob", &sp, 0.0f, 1.0f, "%.2f")) {
+            tc.sequenceProb = sp;
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("sequenceProb", sp);
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Sequence probability (0..1)\nProbability that the entire sequence plays.");
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Header row 2: Beats | Steps/Beat | Shift | MONO | LATCH
     // ═══════════════════════════════════════════════════════════════════════════
@@ -2103,8 +2246,9 @@ void fullStepSequencer::drawTrack(int ti) {
     auto mixColF = [](ImVec4 a, ImVec4 b, float t) -> ImVec4 {
         return {a.x*(1-t)+b.x*t, a.y*(1-t)+b.y*t, a.z*(1-t)+b.z*t, 1.f};
     };
-    const ImVec4 baseDark0 = {0.09f, 0.10f, 0.13f, 1.f};
-    const ImVec4 baseDark1 = {0.14f, 0.16f, 0.20f, 1.f};
+    // Create dark base colors from the track's accent color instead of fixed blue
+    const ImVec4 baseDark0 = {acc.x * 0.09f, acc.y * 0.10f, acc.z * 0.13f, 1.f};
+    const ImVec4 baseDark1 = {acc.x * 0.14f, acc.y * 0.16f, acc.z * 0.20f, 1.f};
     const ImVec4 accLight  = mixColF(acc, {1.f, 1.f, 1.f, 1.f}, 0.22f);
     struct BeatColors { ImVec4 off, on; };
     const BeatColors beatPalette[2] = {
@@ -2344,21 +2488,9 @@ void fullStepSequencer::drawTrack(int ti) {
         };
         auto& cfg = cfgs[td.activeTab];
 
-        // ── Global control row (VOL tab = track volume, PROB tab = track prob) ──
+        // ── Global control row (VOL tab = euclidean accents, PROB tab = track prob) ──
         if(td.activeTab == 0) {
             ImGui::Spacing();
-            ImGui::TextUnformatted("Vol:");
-            ImGui::SameLine(0, 4);
-            ImGui::SetNextItemWidth(120.0f);
-            float gv = tc.globalVol;
-            if(ImGui::SliderFloat("##gvol", &gv, 0.0f, 1.0f, "%.2f")) {
-                tc.globalVol = gv;
-                auto v = globalVolP.get(); v.resize(numTracks, 1.0f);
-                v[ti] = gv; globalVolP.set(v);  // fires listener → SC
-            }
-            if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Track output volume (0..1)\nAlso editable via the Vol node parameter.");
-
             // ── Euclidean Accents ────────────────────────────────────────────
             ImGui::SameLine(0, 16);
             ImGui::TextUnformatted("Accents:");
@@ -2420,6 +2552,34 @@ void fullStepSequencer::drawTrack(int ti) {
             }
             if(ImGui::IsItemHovered())
                 ImGui::SetTooltip("Track probability multiplier (0..1)\nMultiplies all per-step probabilities.\nAlso editable via the Prob node parameter.");
+        }
+        if(td.activeTab == 2) {
+            ImGui::Spacing();
+            ImGui::TextUnformatted("Global Pan:");
+            ImGui::SameLine(0, 4);
+            ImGui::SetNextItemWidth(140.0f);
+            float gpo = tc.globalPanOffset;
+            if(ImGui::SliderFloat("##gpanoffset", &gpo, -1.0f, 1.0f, "%.2f")) {
+                tc.globalPanOffset = gpo;
+                auto v = globalPanOffsetP.get(); v.resize(numTracks, 0.0f);
+                v[ti] = gpo; globalPanOffsetP.set(v);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Global pan offset (-1..1)\nAdded to per-step pan, clipped to -1..1.");
+        }
+        if(td.activeTab == 3) {
+            ImGui::Spacing();
+            ImGui::TextUnformatted("Global Cut:");
+            ImGui::SameLine(0, 4);
+            ImGui::SetNextItemWidth(140.0f);
+            float gco = tc.globalCut;
+            if(ImGui::SliderFloat("##gcutoffset", &gco, -1.0f, 1.0f, "%.2f")) {
+                tc.globalCut = gco;
+                auto v = globalCutP.get(); v.resize(numTracks, 0.0f);
+                v[ti] = gco; globalCutP.set(v);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Global cut offset (-1..1)\nAdded to per-step cut+stutter offset, clipped to -1..1.\n-1..0 = LP region, 0..1 = HP region.");
         }
 
         bool sliderChanged = false;
@@ -2684,8 +2844,15 @@ void fullStepSequencer::drawTrack(int ti) {
                 int bidx   = std::min(std::max((int)(frac * (float)bins), 0), bins - 1);
                 float hh   = waveformPeaks[ti][bidx] * wavH * 0.5f;
                 if(hh < 0.5f) continue;
-                dl->AddLine({wavPos.x + px, midY - hh}, {wavPos.x + px, midY + hh},
-                            IM_COL32(90, 170, 210, 200));
+                // Use light tone of track accent color for waveform
+                const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+                ImU32 waveformColor = IM_COL32(
+                    (int)(trackColor.x * 255 * 0.7f),  // Light tone of track color
+                    (int)(trackColor.y * 255 * 0.8f),
+                    (int)(trackColor.z * 255 * 0.9f),
+                    200
+                );
+                dl->AddLine({wavPos.x + px, midY - hh}, {wavPos.x + px, midY + hh}, waveformColor);
             }
         } else {
             float midY = wavPos.y + wavH * 0.5f;
@@ -2980,8 +3147,15 @@ void fullStepSequencer::drawTrack(int ti) {
                 int bidx   = std::min(std::max((int)(frac * (float)bins), 0), bins - 1);
                 float hh   = waveformPeaks[ti][bidx] * wavH * 0.5f;
                 if(hh < 0.5f) continue;
-                dl->AddLine({wavPos.x + px, midY - hh}, {wavPos.x + px, midY + hh},
-                            IM_COL32(90, 170, 210, 200));
+                // Use light tone of track accent color for waveform
+                const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+                ImU32 waveformColor = IM_COL32(
+                    (int)(trackColor.x * 255 * 0.7f),  // Light tone of track color
+                    (int)(trackColor.y * 255 * 0.8f),
+                    (int)(trackColor.z * 255 * 0.9f),
+                    200
+                );
+                dl->AddLine({wavPos.x + px, midY - hh}, {wavPos.x + px, midY + hh}, waveformColor);
             }
         } else {
             float midY = wavPos.y + wavH * 0.5f;
@@ -3782,6 +3956,36 @@ void fullStepSequencer::drawTrack(int ti) {
             }
         };
 
+        // ── Global FX sends ───────────────────────────────────────────────────
+        ImGui::Spacing();
+        ImGui::TextColored(revColFX, "Global Rev Send:");
+        ImGui::SameLine(0, 6);
+        ImGui::SetNextItemWidth(140.0f);
+        {
+            float grs = tc.globalRevSend;
+            if(ImGui::SliderFloat("##ggrevs", &grs, 0.0f, 1.0f, "%.2f")) {
+                tc.globalRevSend = grs;
+                auto v = globalRevSendP.get(); v.resize(numTracks, 0.0f);
+                v[ti] = grs; globalRevSendP.set(v);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Global reverb send (0..1)\nAdded to per-step rev send, clipped to 0..1.");
+        }
+        ImGui::Spacing();
+        ImGui::TextColored(echoColFX, "Global Echo Send:");
+        ImGui::SameLine(0, 6);
+        ImGui::SetNextItemWidth(140.0f);
+        {
+            float ges = tc.globalEchoSend;
+            if(ImGui::SliderFloat("##ggechos", &ges, 0.0f, 1.0f, "%.2f")) {
+                tc.globalEchoSend = ges;
+                auto v = globalEchoSendP.get(); v.resize(numTracks, 0.0f);
+                v[ti] = ges; globalEchoSendP.set(v);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Global echo send (0..1)\nAdded to per-step echo send, clipped to 0..1.");
+        }
+
         // ── REV send row ─────────────────────────────────────────────────────
         ImGui::Spacing();
         ImGui::TextColored(revColFX, "REV");
@@ -4199,22 +4403,53 @@ void fullStepSequencer::drawTrack(int ti) {
     // Section sub-bg patches (ch1, drawn on top of card bg, below content)
     splitter.SetCurrentChannel(dl, 1);
     const float secR  = 5.0f;
-    // Header section (rows 1+2)
-    if(hdrMaxY > hdrMinY + 1.0f)
-        dl->AddRectFilled({sectionL, hdrMinY - 2.0f}, {sectionR, hdrMaxY + 2.0f},
-                          IM_COL32(30, 33, 46, 220), secR);
-    // Step/slicer matrix section
-    if(stepsMaxY > stepsMinY + 1.0f)
-        dl->AddRectFilled({sectionL, stepsMinY - 2.0f}, {sectionR, stepsMaxY + 2.0f},
-                          IM_COL32(16, 18, 26, 210), secR);
-    // Tab content section
-    if(tabMaxY > tabMinY + 1.0f)
-        dl->AddRectFilled({sectionL, tabMinY - 2.0f}, {sectionR, tabMaxY + 2.0f},
-                          IM_COL32(20, 22, 33, 210), secR);
+    // Header section (rows 1+2) - use dark tone of track color
+    if(hdrMaxY > hdrMinY + 1.0f) {
+        const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+        ImU32 hdrBg = IM_COL32(
+            (int)(trackColor.x * 255 * 0.15f),  // Slightly lighter than main background
+            (int)(trackColor.y * 255 * 0.16f),
+            (int)(trackColor.z * 255 * 0.22f),
+            220
+        );
+        dl->AddRectFilled({sectionL, hdrMinY - 2.0f}, {sectionR, hdrMaxY + 2.0f}, hdrBg, secR);
+    }
+    // Step/slicer matrix section - use darker tone of track color
+    if(stepsMaxY > stepsMinY + 1.0f) {
+        const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+        ImU32 stepsBg = IM_COL32(
+            (int)(trackColor.x * 255 * 0.08f),  // Darker than main background
+            (int)(trackColor.y * 255 * 0.09f),
+            (int)(trackColor.z * 255 * 0.13f),
+            210
+        );
+        dl->AddRectFilled({sectionL, stepsMinY - 2.0f}, {sectionR, stepsMaxY + 2.0f}, stepsBg, secR);
+    }
+    // Tab content section - use medium tone of track color
+    if(tabMaxY > tabMinY + 1.0f) {
+        const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+        ImU32 tabBg = IM_COL32(
+            (int)(trackColor.x * 255 * 0.10f),  // Medium tone
+            (int)(trackColor.y * 255 * 0.11f),
+            (int)(trackColor.z * 255 * 0.16f),
+            210
+        );
+        dl->AddRectFilled({sectionL, tabMinY - 2.0f}, {sectionR, tabMaxY + 2.0f}, tabBg, secR);
+    }
 
     // Card background (ch0, renders first — behind everything)
     splitter.SetCurrentChannel(dl, 0);
-    dl->AddRectFilled(cardMin, cardMax, IM_COL32(23, 26, 35, 255), 8.0f);
+    
+    // Create dark tone of track color for background
+    const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+    ImU32 darkTrackBg = IM_COL32(
+        (int)(trackColor.x * 255 * 0.12f),  // Very dark tone of track color
+        (int)(trackColor.y * 255 * 0.12f),
+        (int)(trackColor.z * 255 * 0.12f),
+        255
+    );
+    
+    dl->AddRectFilled(cardMin, cardMax, darkTrackBg, 8.0f);
     dl->AddRectFilled(cardMin, {cardMin.x + accentBarW, cardMax.y}, accU32, 8.0f);
     dl->AddRect(cardMin, cardMax, IM_COL32(46, 50, 64, 200), 8.0f, 0, 1.0f);
     splitter.Merge(dl);
@@ -4258,7 +4493,7 @@ void fullStepSequencer::drawTrack(int ti) {
 // ════════════════════════════════════════════════════════════════════════════
 
 // Serialize/deserialize per-track global config (not per-slot)
-static ofJson serializeTrackConfig(const fullStepSequencer::TrackConfig& tc) {
+static ofJson serializeTrackConfig(const scRhythmBox::TrackConfig& tc) {
     ofJson j;
     j["name"]          = tc.name;
     j["numBeats"]      = tc.numBeats;
@@ -4300,10 +4535,16 @@ static ofJson serializeTrackConfig(const fullStepSequencer::TrackConfig& tc) {
     j["accentHi"]      = tc.accentHi;
     j["accentLo"]      = tc.accentLo;
     j["accentBeatVar"] = tc.accentBeatVar;
-    j["trackPitch"]    = tc.trackPitch;
-    j["globalVol"]     = tc.globalVol;
-    j["globalProb"]    = tc.globalProb;
-    j["muted"]         = tc.muted;
+    j["trackPitch"]         = tc.trackPitch;
+    j["globalVol"]          = tc.globalVol;
+    j["globalProb"]         = tc.globalProb;
+    j["sequenceProb"]       = tc.sequenceProb;
+    j["globalStepProbSub"]  = tc.globalStepProbSub;
+    j["globalCut"]          = tc.globalCut;
+    j["globalPanOffset"]    = tc.globalPanOffset;
+    j["globalRevSend"]      = tc.globalRevSend;
+    j["globalEchoSend"]     = tc.globalEchoSend;
+    j["muted"]              = tc.muted;
     j["solo"]          = tc.solo;
     j["slicerMode"]    = tc.slicerMode;
     j["sliceFit"]      = tc.sliceFit;
@@ -4314,7 +4555,7 @@ static ofJson serializeTrackConfig(const fullStepSequencer::TrackConfig& tc) {
     return j;
 }
 
-static void deserializeTrackConfig(const ofJson& j, fullStepSequencer::TrackConfig& tc) {
+static void deserializeTrackConfig(const ofJson& j, scRhythmBox::TrackConfig& tc) {
     if(j.contains("name"))          tc.name          = j["name"].get<std::string>();
     if(j.contains("numBeats"))      tc.numBeats      = j["numBeats"].get<int>();
     if(j.contains("stepsPerBeat"))  tc.stepsPerBeat  = j["stepsPerBeat"].get<int>();
@@ -4355,10 +4596,16 @@ static void deserializeTrackConfig(const ofJson& j, fullStepSequencer::TrackConf
     if(j.contains("accentHi"))      tc.accentHi       = j["accentHi"].get<float>();
     if(j.contains("accentLo"))      tc.accentLo       = j["accentLo"].get<float>();
     if(j.contains("accentBeatVar")) tc.accentBeatVar  = j["accentBeatVar"].get<float>();
-    if(j.contains("trackPitch"))    tc.trackPitch     = j["trackPitch"].get<float>();
-    if(j.contains("globalVol"))     tc.globalVol      = j["globalVol"].get<float>();
-    if(j.contains("globalProb"))    tc.globalProb     = j["globalProb"].get<float>();
-    if(j.contains("muted"))         tc.muted          = j["muted"].get<bool>();
+    if(j.contains("trackPitch"))        tc.trackPitch        = j["trackPitch"].get<float>();
+    if(j.contains("globalVol"))         tc.globalVol         = j["globalVol"].get<float>();
+    if(j.contains("globalProb"))        tc.globalProb        = j["globalProb"].get<float>();
+    if(j.contains("sequenceProb"))      tc.sequenceProb      = j["sequenceProb"].get<float>();
+    if(j.contains("globalStepProbSub")) tc.globalStepProbSub = j["globalStepProbSub"].get<float>();
+    if(j.contains("globalCut"))         tc.globalCut         = j["globalCut"].get<float>();
+    if(j.contains("globalPanOffset"))   tc.globalPanOffset   = j["globalPanOffset"].get<float>();
+    if(j.contains("globalRevSend"))     tc.globalRevSend     = j["globalRevSend"].get<float>();
+    if(j.contains("globalEchoSend"))    tc.globalEchoSend    = j["globalEchoSend"].get<float>();
+    if(j.contains("muted"))             tc.muted             = j["muted"].get<bool>();
     if(j.contains("solo"))          tc.solo           = j["solo"].get<bool>();
     if(j.contains("slicerMode"))    tc.slicerMode     = j["slicerMode"].get<bool>();
     if(j.contains("sliceFit"))      tc.sliceFit       = j["sliceFit"].get<bool>();
@@ -4370,7 +4617,7 @@ static void deserializeTrackConfig(const ofJson& j, fullStepSequencer::TrackConf
 }
 
 // Serialize/deserialize per-slot step/shift data only
-static ofJson serializeTrackData(const fullStepSequencer::TrackData& td) {
+static ofJson serializeTrackData(const scRhythmBox::TrackData& td) {
     ofJson j;
     j["shift"]     = td.shift;
     j["activeTab"] = td.activeTab;
@@ -4443,8 +4690,8 @@ static ofJson serializeTrackData(const fullStepSequencer::TrackData& td) {
     return j;
 }
 
-static void deserializeTrackData(const ofJson& j, fullStepSequencer::TrackData& td,
-                                 const fullStepSequencer::TrackConfig& tc) {
+static void deserializeTrackData(const ofJson& j, scRhythmBox::TrackData& td,
+                                 const scRhythmBox::TrackConfig& tc) {
     if(j.contains("shift"))    td.shift    = j["shift"].get<int>();
     if(j.contains("activeTab"))td.activeTab= j["activeTab"].get<int>();
 
@@ -4551,7 +4798,7 @@ static void deserializeTrackData(const ofJson& j, fullStepSequencer::TrackData& 
     }
 }
 
-void fullStepSequencer::serializeSlots(ofJson& j) const {
+void scRhythmBox::serializeSlots(ofJson& j) const {
     j["browseDir"]   = browseDir;
     j["currentSlot"] = currentSlotP.get();
     j["numTracks"]   = numTracks;
@@ -4581,7 +4828,7 @@ void fullStepSequencer::serializeSlots(ofJson& j) const {
     j["slots"] = slotsArr;
 }
 
-void fullStepSequencer::deserializeSlots(const ofJson& j) {
+void scRhythmBox::deserializeSlots(const ofJson& j) {
     if(j.contains("browseDir")) {
         std::string d = j["browseDir"].get<std::string>();
         if(std::filesystem::exists(d)) refreshBrowse(d);
@@ -4641,7 +4888,7 @@ void fullStepSequencer::deserializeSlots(const ofJson& j) {
         snprintf(nameEditBuf[ti], 64, "%s", trackConfigs[ti].name.c_str());
 }
 
-void fullStepSequencer::presetSave(ofJson& j) {
+void scRhythmBox::presetSave(ofJson& j) {
     serializeSlots(j);
     j["embedInProject"] = embedInProject.get();
 
@@ -4654,7 +4901,7 @@ void fullStepSequencer::presetSave(ofJson& j) {
     }
 }
 
-void fullStepSequencer::loadBeforeConnections(ofJson& j) {
+void scRhythmBox::loadBeforeConnections(ofJson& j) {
     if(j.contains("browseDir")) {
         std::string d = j["browseDir"].get<std::string>();
         if(std::filesystem::exists(d)) refreshBrowse(d);
@@ -4668,7 +4915,7 @@ void fullStepSequencer::loadBeforeConnections(ofJson& j) {
     }
 }
 
-void fullStepSequencer::presetRecallAfterSettingParameters(ofJson& j) {
+void scRhythmBox::presetRecallAfterSettingParameters(ofJson& j) {
     if(j.contains("embedInProject"))
         embedInProject = j["embedInProject"].get<bool>();
 
@@ -4704,7 +4951,7 @@ void fullStepSequencer::presetRecallAfterSettingParameters(ofJson& j) {
     reloadCurrentSlot();
 }
 
-void fullStepSequencer::macroSave(ofJson& j, string path) {
+void scRhythmBox::macroSave(ofJson& j, string path) {
     serializeSlots(j);
     j["embedInProject"] = embedInProject.get();
 
@@ -4726,7 +4973,7 @@ void fullStepSequencer::macroSave(ofJson& j, string path) {
     }
 }
 
-void fullStepSequencer::macroLoad(ofJson& j, string /*path*/) {
+void scRhythmBox::macroLoad(ofJson& j, string /*path*/) {
     if(j.contains("embedInProject"))
         embedInProject = j["embedInProject"].get<bool>();
     presetRecallAfterSettingParameters(j);
@@ -4736,14 +4983,14 @@ void fullStepSequencer::macroLoad(ofJson& j, string /*path*/) {
 // Sample embed helpers
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::embedSamplesIntoJson(ofJson& j, const std::string& folderRootAbs) {
+void scRhythmBox::embedSamplesIntoJson(ofJson& j, const std::string& folderRootAbs) {
     if(!j.contains("samplePaths")) return;
 
     std::string samplesDir = folderRootAbs + "/samples";
     try {
         std::filesystem::create_directories(samplesDir);
     } catch(const std::exception& e) {
-        ofLogError("fullStepSequencer") << "embedSamples: mkdir failed: " << e.what();
+        ofLogError("scRhythmBox") << "embedSamples: mkdir failed: " << e.what();
         return;
     }
 
@@ -4766,7 +5013,7 @@ void fullStepSequencer::embedSamplesIntoJson(ofJson& j, const std::string& folde
                     std::filesystem::copy_options::overwrite_existing);
             }
         } catch(const std::exception& e) {
-            ofLogWarning("fullStepSequencer") << "embedSamples: copy failed for track " << ti << ": " << e.what();
+            ofLogWarning("scRhythmBox") << "embedSamples: copy failed for track " << ti << ": " << e.what();
             continue;
         }
 
@@ -4776,7 +5023,7 @@ void fullStepSequencer::embedSamplesIntoJson(ofJson& j, const std::string& folde
     }
 }
 
-std::string fullStepSequencer::resolveToAbsolutePath(const std::string& inputPath) const {
+std::string scRhythmBox::resolveToAbsolutePath(const std::string& inputPath) const {
     std::string s = inputPath;
     if(s.size() >= 2 && s[0] == '.' && s[1] == '/') s = s.substr(2);
 
@@ -4793,7 +5040,7 @@ std::string fullStepSequencer::resolveToAbsolutePath(const std::string& inputPat
     return ofToDataPath("Supercollider/Samples/" + s, true);
 }
 
-std::string fullStepSequencer::computeDataRelativePath(const std::string& absPath) const {
+std::string scRhythmBox::computeDataRelativePath(const std::string& absPath) const {
     size_t p = absPath.find("/Macros/");
     if(p != std::string::npos) return absPath.substr(p + 1);
 
@@ -4813,17 +5060,17 @@ std::string fullStepSequencer::computeDataRelativePath(const std::string& absPat
 // Track reordering helpers
 // ════════════════════════════════════════════════════════════════════════════
 
-void fullStepSequencer::moveTrackUp(int trackIndex) {
+void scRhythmBox::moveTrackUp(int trackIndex) {
     if (trackIndex <= 0 || trackIndex >= numTracks) return;
     swapTracks(trackIndex, trackIndex - 1);
 }
 
-void fullStepSequencer::moveTrackDown(int trackIndex) {
+void scRhythmBox::moveTrackDown(int trackIndex) {
     if (trackIndex < 0 || trackIndex >= numTracks - 1) return;
     swapTracks(trackIndex, trackIndex + 1);
 }
 
-void fullStepSequencer::swapTracks(int trackA, int trackB) {
+void scRhythmBox::swapTracks(int trackA, int trackB) {
     if (trackA < 0 || trackA >= numTracks || trackB < 0 || trackB >= numTracks || trackA == trackB) return;
     
     // Swap track configs
@@ -4891,5 +5138,329 @@ void fullStepSequencer::swapTracks(int trackA, int trackB) {
         
         createTrackSynth(srv, trackA);
         createTrackSynth(srv, trackB);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Project Save/Load Implementation
+// ════════════════════════════════════════════════════════════════════════════
+
+std::string scRhythmBox::getProjectsDirectory() const {
+    std::string dataPath = ofToDataPath("", true);
+    std::string projectsPath = dataPath + "/RhythmBoxProjects";
+    
+    // Create directory if it doesn't exist
+    std::filesystem::create_directories(projectsPath);
+    
+    return projectsPath;
+}
+
+void scRhythmBox::refreshProjectsList() {
+    availableProjects.clear();
+    
+    try {
+        if (std::filesystem::exists(projectsDirectory) && std::filesystem::is_directory(projectsDirectory)) {
+            for (const auto& entry : std::filesystem::directory_iterator(projectsDirectory)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".json") {
+                    availableProjects.push_back(entry.path().stem().string());
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        ofLogError("scRhythmBox") << "Error refreshing projects list: " << e.what();
+    }
+    
+    // Sort alphabetically
+    std::sort(availableProjects.begin(), availableProjects.end());
+}
+
+void scRhythmBox::saveProject(const std::string& projectName) {
+    if (projectName.empty()) {
+        ofLogError("scRhythmBox") << "Cannot save project with empty name";
+        return;
+    }
+    
+    try {
+        // Create the full path
+        std::string filename = projectName + ".json";
+        std::string fullPath = projectsDirectory + "/" + filename;
+        
+        // Create JSON object with all rhythm box data
+        ofJson projectJson;
+        projectJson["projectName"] = projectName;
+        projectJson["version"] = "1.0";
+        projectJson["timestamp"] = ofGetTimestampString();
+        
+        // Use existing serialization method
+        serializeSlots(projectJson);
+        
+        // Save to file
+        std::ofstream file(fullPath);
+        if (file.is_open()) {
+            file << projectJson.dump(2);  // Pretty print with 2-space indentation
+            file.close();
+            
+            currentProjectPath = fullPath;
+            ofLogNotice("scRhythmBox") << "Project saved: " << fullPath;
+            
+            // Refresh the projects list
+            refreshProjectsList();
+        } else {
+            ofLogError("scRhythmBox") << "Failed to open file for writing: " << fullPath;
+        }
+        
+    } catch (const std::exception& e) {
+        ofLogError("scRhythmBox") << "Error saving project: " << e.what();
+    }
+}
+
+void scRhythmBox::loadProject(const std::string& projectPath) {
+    if (projectPath.empty()) {
+        ofLogError("scRhythmBox") << "Cannot load project with empty path";
+        return;
+    }
+    
+    try {
+        std::string fullPath;
+        if (projectPath.find('/') != std::string::npos) {
+            // Already a full path
+            fullPath = projectPath;
+        } else {
+            // Just a project name, construct full path
+            fullPath = projectsDirectory + "/" + projectPath + ".json";
+        }
+        
+        if (!std::filesystem::exists(fullPath)) {
+            ofLogError("scRhythmBox") << "Project file does not exist: " << fullPath;
+            return;
+        }
+        
+        // Load JSON from file
+        std::ifstream file(fullPath);
+        if (!file.is_open()) {
+            ofLogError("scRhythmBox") << "Failed to open project file: " << fullPath;
+            return;
+        }
+        
+        ofJson projectJson;
+        file >> projectJson;
+        file.close();
+        
+        // Validate project file
+        if (!projectJson.contains("projectName") || !projectJson.contains("version")) {
+            ofLogError("scRhythmBox") << "Invalid project file format (missing projectName or version): " << fullPath;
+            return;
+        }
+
+        ofLogNotice("scRhythmBox::loadProject") << "=== START loading: " << fullPath;
+        ofLogNotice("scRhythmBox::loadProject") << "  current numTracks=" << numTracks
+            << "  project numTracks=" << (projectJson.contains("numTracks") ? projectJson["numTracks"].get<int>() : -1);
+
+        // 1. Update output port count if numTracks changed.
+        if(projectJson.contains("numTracks")) {
+            int n = ofClamp(projectJson["numTracks"].get<int>(), 1, MAX_TRACKS);
+            if(n != numTracks) {
+                ofLogNotice("scRhythmBox::loadProject") << "  setNumTracks(" << n << ")";
+                setNumTracks(n);
+                numTracksP.set(n);
+            }
+        }
+
+        // 2. Load all data into memory (trackConfigs, slots, samplePaths, swing)
+        ofLogNotice("scRhythmBox::loadProject") << "  deserializeSlots...";
+        deserializeSlots(projectJson);
+        ofLogNotice("scRhythmBox::loadProject") << "  after deserialize: numTracks=" << numTracks
+            << "  slots[0].tracks.size()=" << slots[0].tracks.size();
+
+        // 3. Load samples so getBufnum() is valid when synths are created
+        ofLogNotice("scRhythmBox::loadProject") << "  loading samples...";
+        {
+            std::vector<std::string> pathsToLoad = samplePaths;
+            freeAllSamples();
+            int loaded = 0;
+            for(int ti = 0; ti < MAX_TRACKS; ti++) {
+                if(pathsToLoad[ti].empty()) continue;
+                std::string absPath = resolveToAbsolutePath(pathsToLoad[ti]);
+                ofLogNotice("scRhythmBox::loadProject") << "  track " << ti << " sample: " << absPath
+                    << (std::filesystem::exists(absPath) ? " [EXISTS]" : " [MISSING]");
+                if(!std::filesystem::exists(absPath)) continue;
+                loadSampleForTrack(ti, absPath);
+                loaded++;
+            }
+            ofLogNotice("scRhythmBox::loadProject") << "  loaded " << loaded << " samples";
+        }
+
+        // 4. Recreate all SC synths from scratch with the loaded data.
+        ofLogNotice("scRhythmBox::loadProject") << "  recreating synths for " << allServers.size() << " server(s)...";
+        for(auto* sm : allServers) {
+            if(sm && sm->getServer()) {
+                ofLogNotice("scRhythmBox::loadProject") << "  createSynth on server";
+                createSynth(sm->getServer());
+            }
+        }
+
+        // 5. Apply saved slot index
+        if(projectJson.contains("currentSlot")) {
+            int slot = ofClamp(projectJson["currentSlot"].get<int>(), 0, MAX_SLOTS - 1);
+            ofLogNotice("scRhythmBox::loadProject") << "  setting currentSlot=" << slot;
+            currentSlotP.set(slot);
+        }
+        reloadCurrentSlot();
+
+        currentProjectPath = fullPath;
+
+        // Extract project name for the buffer
+        std::string projectName = projectJson["projectName"].get<std::string>();
+        strncpy(projectNameBuffer, projectName.c_str(), sizeof(projectNameBuffer) - 1);
+        projectNameBuffer[sizeof(projectNameBuffer) - 1] = '\0';
+
+        ofLogNotice("scRhythmBox::loadProject") << "=== DONE: numTracks=" << numTracks
+            << "  stepOn[0][0]=" << (slots[0].tracks.size() > 0 ? (int)slots[0].tracks[0].stepOn[0] : -1);
+        
+    } catch (const std::exception& e) {
+        ofLogError("scRhythmBox") << "Error loading project: " << e.what();
+    }
+}
+
+void scRhythmBox::drawProjectMenu() {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.8f, 0.9f, 1.0f));
+    ImGui::TextUnformatted("PROJECT");
+    ImGui::PopStyleColor();
+    
+    ImGui::SameLine();
+    ImGui::Spacing();
+    ImGui::SameLine();
+    
+    // Project name input
+    ImGui::SetNextItemWidth(150.0f);
+    if (ImGui::InputText("##projectname", projectNameBuffer, sizeof(projectNameBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+        saveProject(std::string(projectNameBuffer));
+    }
+    
+    ImGui::SameLine();
+    
+    // Save button
+    if (ImGui::Button("Save")) {
+        saveProject(std::string(projectNameBuffer));
+    }
+    
+    ImGui::SameLine();
+    
+    // Load dropdown — use OpenPopup/BeginPopup so clicks on items are not
+    // consumed by ImGui's internal popup-close logic before Selectable fires.
+    if (ImGui::Button("Load")) {
+        refreshProjectsList();
+        ImGui::OpenPopup("##projectpopup");
+    }
+    if (ImGui::BeginPopup("##projectpopup")) {
+        if (availableProjects.empty()) {
+            ImGui::TextDisabled("(no projects saved)");
+        } else {
+            for (const auto& project : availableProjects) {
+                if (ImGui::MenuItem(project.c_str())) {
+                    loadProject(project);
+                }
+            }
+        }
+        ImGui::EndPopup();
+    }
+    
+    ImGui::SameLine();
+    
+    // New project button
+    if (ImGui::Button("New")) {
+        // Reset to default state
+        strcpy(projectNameBuffer, "New Project");
+        currentProjectPath.clear();
+        
+        // Reset rhythm box to default state
+        numTracksP = 1;
+        currentSlotP = 0;
+        
+        // Clear all tracks
+        for (int ti = 0; ti < MAX_TRACKS; ti++) {
+            freeSampleForTrack(ti);
+            trackConfigs[ti] = TrackConfig(); // Reset to default
+        }
+        
+        // Reset all slots
+        initSlots();
+        
+        ofLogNotice("scRhythmBox") << "New project created";
+    }
+    
+    // Show current project info
+    if (!currentProjectPath.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("| %s", std::filesystem::path(currentProjectPath).stem().string().c_str());
+    }
+
+    // ── Transport + Master Volume ─────────────────────────────────────────────
+    ImGui::Spacing();
+
+    // Play button (green when active)
+    bool playing = playSeq.get();
+    if(playing) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.6f, 0.15f, 1.0f));
+    if(ImGui::Button(playing ? "|| Pause" : "|> Play")) {
+        playSeq.set(!playing);
+    }
+    if(playing) ImGui::PopStyleColor();
+
+    ImGui::SameLine(0, 6);
+
+    // Stop button
+    if(ImGui::Button("[] Stop")) {
+        playSeq.set(false);
+        // Also send reset so playhead returns to step 0
+        resetSeq.set(1);
+        resetSeq.set(0);
+    }
+
+    ImGui::SameLine(0, 6);
+
+    // Reset button — pulses resetSeq 0→1→0
+    if(ImGui::Button("Reset")) {
+        resetSeq.set(1);
+        resetSeq.set(0);
+    }
+
+    ImGui::SameLine(0, 20);
+
+    // Master volume slider
+    ImGui::TextUnformatted("Vol:");
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(100.0f);
+    float mv = masterVolP.get();
+    if(ImGui::SliderFloat("##mastervol", &mv, 0.0f, 2.0f, "%.2f")) {
+        masterVolP.set(mv);
+    }
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Master output volume (all tracks)\n0..1 = attenuate, 1..2 = boost");
+
+    ImGui::SameLine(0, 14);
+    ImGui::TextUnformatted("Transpose:");
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(100.0f);
+    float gt = globalTransposeP.get();
+    if(ImGui::SliderFloat("##gtranspose", &gt, -24.0f, 24.0f, "%.1f st")) {
+        globalTransposeP.set(gt);
+    }
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Global semitone offset added to all track transposes");
+
+    ImGui::SameLine(0, 14);
+    ImGui::TextUnformatted("StepProb:");
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(100.0f);
+    // StepProb: show the first track's value as representative; editing sets all tracks
+    {
+        auto spv = globalStepProbSubP.get();
+        float spFirst = spv.empty() ? 0.0f : spv[0];
+        if(ImGui::SliderFloat("##gstepprob", &spFirst, 0.0f, 1.0f, "%.2f")) {
+            spv.assign(numTracks, spFirst);
+            globalStepProbSubP.set(spv);
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Global step-probability reduction (subtracts from per-step prob before gate)\n0 = no reduction, 1 = all steps silenced");
     }
 }
