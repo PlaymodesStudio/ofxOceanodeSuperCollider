@@ -55,6 +55,7 @@
 #include "scVelvetReverb.h"
 #include "pinkTromboneNode.h"
 #include "scRhythmBox.h"
+#include "scMultiTrackRecorder.h"
 
 
 
@@ -169,6 +170,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scVelvetReverb>("SuperCollider");
 	o.registerModel<pinkTromboneNode>("SuperCollider");
 	o.registerModel<scRhythmBox>("SuperCollider", controller->getServers());
+	o.registerModel<scMultiTrackRecorder>("SuperCollider", controller->getServers());
 
 }
 
