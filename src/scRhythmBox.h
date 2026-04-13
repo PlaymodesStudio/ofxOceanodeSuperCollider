@@ -103,6 +103,7 @@ public:
         float       globalPanOffset = 0.0f; // global pan offset (-1..1, additive to per-step pan)
         float       globalRevSend  = 0.0f;  // global reverb send additive (0..1)
         float       globalEchoSend = 0.0f;  // global echo send additive (0..1)
+        float       globalRes      = 0.0f;  // global resonance additive (0..1)
 
         // AMP tab: beat-synced amplitude LFO
         bool        lfoEnabled     = false;
@@ -146,11 +147,13 @@ public:
         float echoHPF      = 200.0f;
         float echoLPF      = 8000.0f;
         // ARP: simple arpeggiation — per-slot
-        bool  arpEnabled   = false;
-        float arpInterval  = 7.0f;   // semitones per arp step (±24)
-        int   arpModulo    = 4;      // steps before arp restarts (1..16)
-        float arpGateWidth = 1.0f;   // gate width fraction (0..1); 1=full, only in mono+arp mode
-        int   arpSpeedMode = 0;      // 0=divisions/beat, 1=MIDI pitch→Hz
+        bool  arpEnabled      = false;
+        float arpInterval     = 7.0f;   // semitones per arp step (±24)
+        int   arpModulo       = 4;      // steps before arp restarts (1..16)
+        float arpGateWidth    = 1.0f;   // gate width fraction (0..1); 1=full, only in mono+arp mode
+        int   arpSpeedMode    = 0;      // 0=divisions/beat, 1=MIDI pitch→Hz
+        bool  globalArpEnabled = false; // override: all steps use arp with globalArpSpeed
+        float globalArpSpeed   = 4.0f;  // global arp speed (div/beat or MIDI note)
         // STUT: multi-tap echo per step — per-slot
         bool  stuttEnabled  = false;
         int   stuttNumTaps  = 3;     // number of echo taps (1..16)
@@ -162,6 +165,7 @@ public:
         std::vector<bool>  stepOn;
         std::vector<float> stepVol;
         std::vector<float> stepProb;
+        std::vector<int>   stepProbGroup;    // probability group index (0=individual, >0=group)
         std::vector<float> stepPan;     // -1..1 stereo balance
         std::vector<float> stepCut;     // -1..0 LP, 0..1 HP
         std::vector<float> stepRes;     // 0..1 resonance
@@ -182,6 +186,7 @@ public:
             stepOn      .resize(MAX_STEPS, false);
             stepVol     .resize(MAX_STEPS, 1.0f);
             stepProb    .resize(MAX_STEPS, 1.0f);
+            stepProbGroup.resize(MAX_STEPS, 0);
             stepPan     .resize(MAX_STEPS, 0.0f);
             stepCut     .resize(MAX_STEPS, 0.0f);
             stepRes     .resize(MAX_STEPS, 0.0f);
@@ -257,6 +262,7 @@ private:
     ofParameter<vector<float>> globalPanOffsetP;    // per-track global pan offset (-1..1)
     ofParameter<vector<float>> globalRevSendP;      // per-track global reverb send (0..1)
     ofParameter<vector<float>> globalEchoSendP;     // per-track global echo send (0..1)
+    ofParameter<vector<float>> globalResP;          // per-track global resonance additive (0..1)
     ofParameter<vector<int>>   muteP;        // per-track mute state: 0=unmuted, 1=muted
     ofParameter<vector<int>>   soloP;        // per-track solo state: 0=off, 1=soloed
     ofParameter<float>         swingP;       // global swing for all tracks (0=straight, 0.5=max)
@@ -401,6 +407,8 @@ private:
     int      lastResetVal    = 0;   // previous value of resetSeq — detect rising edge 0→1
     bool     lastPlayVal     = false; // previous value of playSeq — detect rising edge false→true
     int  sliderPaintTrack    = -1;   // track index owning current slider paint gesture (-1 = none)
+    int  cutPaintTrack       = -1;   // track index owning current CUT slider paint gesture (-1 = none)
+    int  resPaintTrack       = -1;   // track index owning current RES slider paint gesture (-1 = none)
     int  stepPaintTrack      = -1;   // track index owning current step-on paint gesture (-1 = none)
     bool stepPaintValue      = false; // value being stamped during a step-on paint gesture
     int  revPaintTrack       = -1;   // track index owning current REV tab paint gesture (-1 = none)
@@ -419,6 +427,7 @@ private:
     std::vector<ofParameter<vector<float>>> pStepOn;    // size MAX_TRACKS
     std::vector<ofParameter<vector<float>>> pStepVol;
     std::vector<ofParameter<vector<float>>> pStepProb;
+    std::vector<ofParameter<vector<int>>>   pStepProbGroup; // probability group indices (0=individual, >0=group)
     std::vector<ofParameter<vector<float>>> pStepPan;
     std::vector<ofParameter<vector<float>>> pStepCut;
     std::vector<ofParameter<vector<float>>> pStepRes;
