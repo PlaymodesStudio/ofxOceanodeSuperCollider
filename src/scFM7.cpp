@@ -1,4 +1,5 @@
 #include "scFM7.h"
+#include "ofxOceanodeShared.h"
 
 scFM7::scFM7() : scNode("SuperFM") {
 	// Initialize Defaults
@@ -188,9 +189,10 @@ void scFM7::updateAllParamsToSynth() {
 }
 
 void scFM7::drawPresetSlots() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 p = ImGui::GetCursorScreenPos();
-	float w = widgetWidth.get();
+	float w = widgetWidth.get() * zoom;
 	
 	float slotSize = w / 8.0f;
 	float h = slotSize * 2.0f;
@@ -247,9 +249,10 @@ void scFM7::drawPresetSlots() {
 }
 
 void scFM7::drawEnvelopeEditor() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 p = ImGui::GetCursorScreenPos();
-	ImVec2 size(widgetWidth.get(), envelopeHeight.get());
+	ImVec2 size(widgetWidth.get() * zoom, envelopeHeight.get() * zoom);
 	
 	ImGui::InvisibleButton("##env_interaction", size);
 	bool isActive = ImGui::IsItemActive();
@@ -292,7 +295,7 @@ void scFM7::drawEnvelopeEditor() {
 	bool mouseDown = ImGui::IsMouseDown(0);
 	if(!mouseDown) draggingPoint = -1;
 	
-	float handleRadius = 6.0f;
+	float handleRadius = 6.0f * zoom;
 	
 	for(int i=0; i<4; i++) {
 		ImVec2 pt = points[i+1];
@@ -850,19 +853,20 @@ void scFM7::presetRecallAfterSettingParameters(ofJson &json) {
 }
 
 void scFM7::drawModMatrix() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 p = ImGui::GetCursorScreenPos();
-	float w = widgetWidth.get();
-	float h = matrixHeight.get();
-	
+	float w = widgetWidth.get() * zoom;
+	float h = matrixHeight.get() * zoom;
+
 	ImGui::InvisibleButton("##MatrixArea", ImVec2(w, h));
 	bool isActive = ImGui::IsItemActive();
-	
-	float startX = p.x + 40;
-	float startY = p.y + 20;
-	float availableW = w - 40;
-	float availableH = h - 20;
-	
+
+	float startX = p.x + 40 * zoom;
+	float startY = p.y + 20 * zoom;
+	float availableW = w - 40 * zoom;
+	float availableH = h - 20 * zoom;
+
 	float cellSize = std::min(availableW / 6.0f, availableH / 6.0f);
 	int dim = 6;
 	
@@ -874,7 +878,7 @@ void scFM7::drawModMatrix() {
 	char buf[16];
 	for(int i=0; i<dim; i++) {
 		sprintf(buf, "%d", i+1);
-		float x = startX + i*cellSize + (cellSize*0.5f) - 4;
+		float x = startX + i*cellSize + (cellSize*0.5f) - 4 * zoom;
 		drawList->AddText(ImVec2(x, p.y), IM_COL32(200,200,200,255), buf);
 	}
 	
@@ -886,7 +890,7 @@ void scFM7::drawModMatrix() {
 
 	for(int row=0; row<dim; row++) {
 		sprintf(buf, "M%d", row+1);
-		float y = startY + row*cellSize + (cellSize*0.5f) - 6;
+		float y = startY + row*cellSize + (cellSize*0.5f) - 6 * zoom;
 		drawList->AddText(ImVec2(p.x, y), IM_COL32(200,200,200,255), buf);
 		
 		for(int col=0; col<dim; col++) {

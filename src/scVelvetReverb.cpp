@@ -429,6 +429,7 @@ void scVelvetReverb::sendIRData(ofxSCServer* srv, ofxSCBuffer* buf,
 // ─────────────────────────────────────────────────────────────────────────────
 
 void scVelvetReverb::drawStatusWidget() {
+    float zoom = ofxOceanodeShared::getZoomLevel();
     bool anyReady   = false;
     bool anyLoading = false;
 
@@ -459,5 +460,5 @@ void scVelvetReverb::drawStatusWidget() {
     }
 
     ImGui::TextColored(col, "%s", label.c_str());
-    ImGui::Dummy(ImVec2(0, 2));
+    ImGui::Dummy(ImVec2(0, 2.0f * zoom));
 }

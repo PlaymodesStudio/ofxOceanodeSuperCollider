@@ -1,4 +1,5 @@
 #include "scPolyphonicArpeggiator.h"
+#include "ofxOceanodeShared.h"
 #include "ofxSCSynth.h"
 #include "imgui.h"
 #include <chrono>
@@ -923,10 +924,11 @@ void scPolyphonicArpeggiator::updateMorph() {
 // ═══════════════════════════════════════════════════════════
 
 void scPolyphonicArpeggiator::drawPatternDisplay() {
+    float zoom = ofxOceanodeShared::getZoomLevel();
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
-    float width  = guiWidth.get();
-    float height = patternHeight.get();
+    float width  = guiWidth.get() * zoom;
+    float height = patternHeight.get() * zoom;
 
     ImGui::InvisibleButton("##scpattern", ImVec2(width, height));
 
@@ -976,14 +978,14 @@ void scPolyphonicArpeggiator::drawPatternDisplay() {
         if(i % 4 == 0) {
             char buf[8];
             snprintf(buf, sizeof(buf), "%d", i);
-            drawList->AddText(ImVec2(x + 2, p.y + 2), IM_COL32(140, 140, 140, 200), buf);
+            drawList->AddText(ImVec2(x + 2.0f * zoom, p.y + 2.0f * zoom), IM_COL32(140, 140, 140, 200), buf);
         }
     }
 
     char info[80];
     snprintf(info, sizeof(info), "Poly %d | PolyInt %d | Trsp %d", poly, polyInt, (int)transpose);
     ImVec2 infoSize = ImGui::CalcTextSize(info);
-    drawList->AddText(ImVec2(p.x + width - infoSize.x - 4, p.y + height - infoSize.y - 2),
+    drawList->AddText(ImVec2(p.x + width - infoSize.x - 4.0f * zoom, p.y + height - infoSize.y - 2.0f * zoom),
                      IM_COL32(160, 160, 170, 200), info);
 }
 
@@ -992,10 +994,11 @@ void scPolyphonicArpeggiator::drawPatternDisplay() {
 // ═══════════════════════════════════════════════════════════
 
 void scPolyphonicArpeggiator::drawEuclideanDisplay() {
+    float zoom = ofxOceanodeShared::getZoomLevel();
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
-    float width  = guiWidth.get();
-    float height = euclideanHeight.get();
+    float width  = guiWidth.get() * zoom;
+    float height = euclideanHeight.get() * zoom;
 
     ImGui::InvisibleButton("##sceuclidean", ImVec2(width, height));
 
@@ -1011,11 +1014,11 @@ void scPolyphonicArpeggiator::drawEuclideanDisplay() {
         for(int i = 0; i < len && i < (int)euclideanPattern.size(); i++) {
             float x = p.x + i * stepW;
             if(euclideanPattern[i]) {
-                drawList->AddRectFilled(ImVec2(x + 1, p.y + 2),
-                    ImVec2(x + stepW - 1, p.y + rowHeight - 2), IM_COL32(200, 100, 100, 255));
+                drawList->AddRectFilled(ImVec2(x + 1.0f * zoom, p.y + 2.0f * zoom),
+                    ImVec2(x + stepW - 1.0f * zoom, p.y + rowHeight - 2.0f * zoom), IM_COL32(200, 100, 100, 255));
             }
         }
-        drawList->AddText(ImVec2(p.x + 2, p.y + 2), IM_COL32(255, 255, 255, 180), "Gates");
+        drawList->AddText(ImVec2(p.x + 2.0f * zoom, p.y + 2.0f * zoom), IM_COL32(255, 255, 255, 180), "Gates");
     }
 
     // Row 2: Accent euclidean
@@ -1026,11 +1029,11 @@ void scPolyphonicArpeggiator::drawEuclideanDisplay() {
         for(int i = 0; i < len && i < (int)euclideanAccents.size(); i++) {
             float x = p.x + i * stepW;
             if(euclideanAccents[i]) {
-                drawList->AddRectFilled(ImVec2(x + 1, rowY + 2),
-                    ImVec2(x + stepW - 1, rowY + rowHeight - 2), IM_COL32(100, 200, 100, 255));
+                drawList->AddRectFilled(ImVec2(x + 1.0f * zoom, rowY + 2.0f * zoom),
+                    ImVec2(x + stepW - 1.0f * zoom, rowY + rowHeight - 2.0f * zoom), IM_COL32(100, 200, 100, 255));
             }
         }
-        drawList->AddText(ImVec2(p.x + 2, rowY + 2), IM_COL32(255, 255, 255, 180), "Accents");
+        drawList->AddText(ImVec2(p.x + 2.0f * zoom, rowY + 2.0f * zoom), IM_COL32(255, 255, 255, 180), "Accents");
     }
 
     // Row 3: Duration euclidean
@@ -1041,11 +1044,11 @@ void scPolyphonicArpeggiator::drawEuclideanDisplay() {
         for(int i = 0; i < len && i < (int)euclideanDurations.size(); i++) {
             float x = p.x + i * stepW;
             if(euclideanDurations[i]) {
-                drawList->AddRectFilled(ImVec2(x + 1, rowY + 2),
-                    ImVec2(x + stepW - 1, rowY + rowHeight - 2), IM_COL32(100, 100, 200, 255));
+                drawList->AddRectFilled(ImVec2(x + 1.0f * zoom, rowY + 2.0f * zoom),
+                    ImVec2(x + stepW - 1.0f * zoom, rowY + rowHeight - 2.0f * zoom), IM_COL32(100, 100, 200, 255));
             }
         }
-        drawList->AddText(ImVec2(p.x + 2, rowY + 2), IM_COL32(255, 255, 255, 180), "Duration");
+        drawList->AddText(ImVec2(p.x + 2.0f * zoom, rowY + 2.0f * zoom), IM_COL32(255, 255, 255, 180), "Duration");
     }
 }
 
@@ -1054,9 +1057,10 @@ void scPolyphonicArpeggiator::drawEuclideanDisplay() {
 // ═══════════════════════════════════════════════════════════
 
 void scPolyphonicArpeggiator::drawSnapshotSlots() {
+    float zoom = ofxOceanodeShared::getZoomLevel();
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
-    float width = guiWidth.get();
+    float width = guiWidth.get() * zoom;
 
     float slotSize = width / 8.0f;
     float height   = slotSize * 2.0f;
@@ -1075,7 +1079,7 @@ void scPolyphonicArpeggiator::drawSnapshotSlots() {
         int row    = i / 8;
         int column = i % 8;
         ImVec2 slotPos = ImVec2(p.x + column * slotSize, p.y + row * slotSize);
-        ImVec2 slotMax = ImVec2(slotPos.x + slotSize - 2, slotPos.y + slotSize - 2);
+        ImVec2 slotMax = ImVec2(slotPos.x + slotSize - 2.0f * zoom, slotPos.y + slotSize - 2.0f * zoom);
 
         bool hasData = snapshotSlots[i].hasData;
         bool hovered = (mouse.x >= slotPos.x && mouse.x < slotMax.x &&
@@ -1107,13 +1111,13 @@ void scPolyphonicArpeggiator::drawSnapshotSlots() {
 
         char buf[8];
         sprintf(buf, "%d", i + 1);
-        drawList->AddText(ImVec2(slotPos.x + 3, slotPos.y + 3), IM_COL32(255, 255, 255, 200), buf);
+        drawList->AddText(ImVec2(slotPos.x + 3.0f * zoom, slotPos.y + 3.0f * zoom), IM_COL32(255, 255, 255, 200), buf);
 
         if(shift && hovered) {
-            drawList->AddText(ImVec2(slotPos.x + slotSize - 15, slotPos.y + slotSize - 15),
+            drawList->AddText(ImVec2(slotPos.x + slotSize - 15.0f * zoom, slotPos.y + slotSize - 15.0f * zoom),
                              IM_COL32(255, 100, 100, 255), "S");
         } else if(hovered && hasData) {
-            drawList->AddText(ImVec2(slotPos.x + slotSize - 15, slotPos.y + slotSize - 15),
+            drawList->AddText(ImVec2(slotPos.x + slotSize - 15.0f * zoom, slotPos.y + slotSize - 15.0f * zoom),
                              IM_COL32(255, 80, 80, 180), "X");
         }
     }

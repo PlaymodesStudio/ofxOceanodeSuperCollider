@@ -1575,8 +1575,9 @@ void scRhythmBox::triggerSlicePreview(int ti, int sliceIdx) {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scRhythmBox::drawSequencerWindow() {
+    float zoom = ofxOceanodeShared::getZoomLevel();
     string title = "Step Sequencer " + ofToString(getNumIdentifier());
-    ImGui::SetNextWindowSize(ImVec2(1100, 660), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1100 * zoom, 660 * zoom), ImGuiCond_FirstUseEver);
 
     bool open = showWindow.get();
     if(ImGui::Begin(title.c_str(), &open,
@@ -1584,12 +1585,12 @@ void scRhythmBox::drawSequencerWindow() {
         if(!open) showWindow = false;
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
-        const float splitterW  = 6.0f;
-        const float marginW    = 10.0f;
-        const float fxSplitW   = 6.0f;
-        const float fxMarginW  = 14.0f;  // visible gap between tracks and FX column
-        browserW = ofClamp(browserW,  80.0f, avail.x - 300.0f);
-        fxColW   = ofClamp(fxColW,   140.0f, 360.0f);
+        const float splitterW  = 6.0f * zoom;
+        const float marginW    = 10.0f * zoom;
+        const float fxSplitW   = 6.0f * zoom;
+        const float fxMarginW  = 14.0f * zoom;  // visible gap between tracks and FX column
+        browserW = ofClamp(browserW,  80.0f * zoom, avail.x - 300.0f * zoom);
+        fxColW   = ofClamp(fxColW,   140.0f * zoom, 360.0f * zoom);
         const float tracksW = avail.x - browserW - splitterW - marginW
                                        - fxColW   - fxSplitW - fxMarginW;
 
@@ -1604,7 +1605,7 @@ void scRhythmBox::drawSequencerWindow() {
         if(ImGui::IsItemHovered() || ImGui::IsItemActive())
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
         if(ImGui::IsItemActive())
-            browserW = ofClamp(browserW + ImGui::GetIO().MouseDelta.x, 80.0f, avail.x - 120.0f);
+            browserW = ofClamp(browserW + ImGui::GetIO().MouseDelta.x, 80.0f * zoom, avail.x - 120.0f * zoom);
         // Draw a subtle separator line in the middle of the splitter area
         {
             ImVec2 p = ImGui::GetItemRectMin();
@@ -1612,7 +1613,7 @@ void scRhythmBox::drawSequencerWindow() {
             float cx = (p.x + q.x) * 0.5f;
             bool active = ImGui::IsItemHovered() || ImGui::IsItemActive();
             ImU32 col = active ? IM_COL32(180,180,180,200) : IM_COL32(90,90,90,150);
-            ImGui::GetWindowDrawList()->AddLine(ImVec2(cx, p.y), ImVec2(cx, q.y), col, 1.5f);
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(cx, p.y), ImVec2(cx, q.y), col, 1.5f * zoom);
         }
         ImGui::SameLine(0, fxMarginW);  // gap appears LEFT of tracks (i.e. left of scrollbar)
 
@@ -1639,14 +1640,14 @@ void scRhythmBox::drawSequencerWindow() {
         if(ImGui::IsItemHovered() || ImGui::IsItemActive())
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
         if(ImGui::IsItemActive())
-            fxColW = ofClamp(fxColW - ImGui::GetIO().MouseDelta.x, 140.0f, 360.0f);
+            fxColW = ofClamp(fxColW - ImGui::GetIO().MouseDelta.x, 140.0f * zoom, 360.0f * zoom);
         {
             ImVec2 p = ImGui::GetItemRectMin();
             ImVec2 q = ImGui::GetItemRectMax();
             float cx = (p.x + q.x) * 0.5f;
             bool active = ImGui::IsItemHovered() || ImGui::IsItemActive();
             ImU32 col = active ? IM_COL32(180,180,180,200) : IM_COL32(90,90,90,150);
-            ImGui::GetWindowDrawList()->AddLine(ImVec2(cx, p.y), ImVec2(cx, q.y), col, 1.5f);
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(cx, p.y), ImVec2(cx, q.y), col, 1.5f * zoom);
         }
         ImGui::SameLine(0, 0);
 
@@ -1923,6 +1924,7 @@ void scRhythmBox::drawBrowser(float /*w*/, float /*h*/) {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scRhythmBox::drawTrack(int ti) {
+    float zoom = ofxOceanodeShared::getZoomLevel();
     TrackData&   td = track(ti);
     TrackConfig& tc = trackConfig(ti);
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1948,13 +1950,13 @@ void scRhythmBox::drawTrack(int ti) {
     const ImU32  accU32 = ImGui::ColorConvertFloat4ToU32(acc);
 
     // ── Card setup (splitter: ch0 = BG drawn behind, ch1 = content) ───────────
-    const float accentBarW = 5.0f;
-    const float cardPadX   = 10.0f;
-    const float cardPadTop = 7.0f;
-    const float cardPadBot = 9.0f;
+    const float accentBarW = 5.0f * zoom;
+    const float cardPadX   = 10.0f * zoom;
+    const float cardPadTop = 7.0f * zoom;
+    const float cardPadBot = 9.0f * zoom;
 
     ImVec2 cardMin = ImGui::GetCursorScreenPos();
-    float  cardW   = ImGui::GetContentRegionAvail().x - 4.0f;
+    float  cardW   = ImGui::GetContentRegionAvail().x - 4.0f * zoom;
 
     // 3-channel splitter: ch0=card bg, ch1=section sub-bg patches, ch2=content
     ImDrawListSplitter splitter;
@@ -1965,8 +1967,8 @@ void scRhythmBox::drawTrack(int ti) {
     ImGui::Indent(accentBarW + cardPadX);
 
     // Positions captured during content rendering for section sub-backgrounds
-    float sectionL  = cardMin.x + accentBarW + 3.0f;
-    float sectionR  = cardMin.x + cardW - 3.0f;
+    float sectionL  = cardMin.x + accentBarW + 3.0f * zoom;
+    float sectionR  = cardMin.x + cardW - 3.0f * zoom;
     float hdrMinY   = ImGui::GetCursorScreenPos().y;
     float hdrMaxY   = hdrMinY;
     float stepsMinY = hdrMinY, stepsMaxY = hdrMinY;
@@ -2005,17 +2007,17 @@ void scRhythmBox::drawTrack(int ti) {
     }
     
     ImGui::PopStyleColor(3);
-    ImGui::SameLine(0, 8);
+    ImGui::SameLine(0, 8 * zoom);
 
     ImGui::TextColored(acc, "[%d]", ti + 1);
-    ImGui::SameLine(0, 6);
+    ImGui::SameLine(0, 6 * zoom);
 
     // Enhanced track title field with stronger highlighting
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(acc.x * 0.15f, acc.y * 0.15f, acc.z * 0.15f, 0.8f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(acc.x * 0.25f, acc.y * 0.25f, acc.z * 0.25f, 0.9f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(acc.x * 0.35f, acc.y * 0.35f, acc.z * 0.35f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
-    ImGui::SetNextItemWidth(90.0f);
+    ImGui::SetNextItemWidth(90.0f * zoom);
     if(ImGui::InputText("##name", nameEditBuf[ti], 64))
         tc.name = nameEditBuf[ti];
     ImGui::PopStyleColor(4);
@@ -2032,21 +2034,21 @@ void scRhythmBox::drawTrack(int ti) {
         ImGui::EndDragDropTarget();
     }
 
-    ImGui::SameLine(0, 8);
+    ImGui::SameLine(0, 8 * zoom);
     if(!samplePaths[ti].empty())
         ImGui::TextDisabled("[%s]", std::filesystem::path(samplePaths[ti]).filename().string().c_str());
     else
         ImGui::TextDisabled("[no sample]");
 
     // MUTE button
-    ImGui::SameLine(0, 14);
+    ImGui::SameLine(0, 14 * zoom);
     {
         bool m = tc.muted;
         ImGui::PushStyleColor(ImGuiCol_Button,
             m ? ImVec4(0.72f, 0.15f, 0.15f, 1.f) : ImVec4(0.20f, 0.22f, 0.28f, 1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
             m ? ImVec4(0.82f, 0.22f, 0.22f, 1.f) : ImVec4(0.28f, 0.32f, 0.40f, 1.f));
-        if(ImGui::Button(m ? "MUTED##mt" : "MUTE##mt", {58.f, 20.f})) {
+        if(ImGui::Button(m ? "MUTED##mt" : "MUTE##mt", {58.f * zoom, 20.f * zoom})) {
             tc.muted = !tc.muted;
             auto mv = muteP.get();
             if(ti < (int)mv.size()) mv[ti] = tc.muted ? 1 : 0;
@@ -2056,7 +2058,7 @@ void scRhythmBox::drawTrack(int ti) {
     }
 
     // SOLO button
-    ImGui::SameLine(0, 5);
+    ImGui::SameLine(0, 5 * zoom);
     {
         bool s = tc.solo;
         // Soloed: golden; non-soloed but some other track is soloed: dimmed red hint
@@ -2067,7 +2069,7 @@ void scRhythmBox::drawTrack(int ti) {
                               : ImVec4(0.28f, 0.32f, 0.40f, 1.f);
         ImGui::PushStyleColor(ImGuiCol_Button,        soloBtnCol);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, soloBtnHov);
-        if(ImGui::Button(s ? "SOLO##sl" : "SOLO##sl", {48.f, 20.f})) {
+        if(ImGui::Button(s ? "SOLO##sl" : "SOLO##sl", {48.f * zoom, 20.f * zoom})) {
             tc.solo = !tc.solo;
             auto sv = soloP.get();
             if(ti < (int)sv.size()) sv[ti] = tc.solo ? 1 : 0;
@@ -2077,7 +2079,7 @@ void scRhythmBox::drawTrack(int ti) {
     }
 
     // STEP / SLICER mode button — same row as MUTE/SOLO
-    ImGui::SameLine(0, 10);
+    ImGui::SameLine(0, 10 * zoom);
     {
         bool slicer = tc.slicerMode;
         ImGui::PushStyleColor(ImGuiCol_Button,
@@ -2086,7 +2088,7 @@ void scRhythmBox::drawTrack(int ti) {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
             slicer ? ImVec4(0.50f, 0.28f, 0.88f, 1.f)
                    : ImVec4(0.28f, 0.32f, 0.40f, 1.f));
-        if(ImGui::Button(slicer ? "SLICER##sm" : "STEP##sm", {60.f, 20.f})) {
+        if(ImGui::Button(slicer ? "SLICER##sm" : "STEP##sm", {60.f * zoom, 20.f * zoom})) {
             tc.slicerMode = !tc.slicerMode;
             if(tc.slicerMode) {
                 if((int)tc.slicePoints.size() != tc.getNumSteps() + 1)
@@ -2104,12 +2106,12 @@ void scRhythmBox::drawTrack(int ti) {
     }
 
     // Vol (track volume) inline with header — was in VOL tab
-    ImGui::SameLine(0, 14);
+    ImGui::SameLine(0, 14 * zoom);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.62f, 0.70f, 1.f));
     ImGui::TextUnformatted("Vol:");
     ImGui::PopStyleColor();
-    ImGui::SameLine(0, 4);
-    ImGui::SetNextItemWidth(80.0f);
+    ImGui::SameLine(0, 4 * zoom);
+    ImGui::SetNextItemWidth(80.0f * zoom);
     {
         float gv = tc.globalVol;
         if(ImGui::SliderFloat("##hgvol", &gv, 0.0f, 1.0f, "%.2f")) {
@@ -5739,18 +5741,19 @@ void scRhythmBox::loadProject(const std::string& projectPath) {
 }
 
 void scRhythmBox::drawProjectMenu() {
+    float zoom = ofxOceanodeShared::getZoomLevel();
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.8f, 0.9f, 1.0f));
     ImGui::TextUnformatted("PROJECT");
     ImGui::PopStyleColor();
 
-    ImGui::SameLine(0, 8);
+    ImGui::SameLine(0, 8 * zoom);
 
     // Project name field — always shows the current project name.
     // Editing it and pressing Save As writes a new file; Save overwrites the existing one.
-    ImGui::SetNextItemWidth(160.0f);
+    ImGui::SetNextItemWidth(160.0f * zoom);
     ImGui::InputText("##projectname", projectNameBuffer, sizeof(projectNameBuffer));
 
-    ImGui::SameLine(0, 4);
+    ImGui::SameLine(0, 4 * zoom);
 
     // Save — overwrite currentProjectPath. If no project is loaded yet, behave like Save As.
     bool hasCurrent = !currentProjectPath.empty();
@@ -5776,7 +5779,7 @@ void scRhythmBox::drawProjectMenu() {
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip(hasCurrent ? "Overwrite current project" : "Save new project");
 
-    ImGui::SameLine(0, 4);
+    ImGui::SameLine(0, 4 * zoom);
 
     // Save As — always saves under the name in the text field.
     if(ImGui::Button("Save As")) {
@@ -5786,7 +5789,7 @@ void scRhythmBox::drawProjectMenu() {
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("Save under the name shown in the field");
 
-    ImGui::SameLine(0, 4);
+    ImGui::SameLine(0, 4 * zoom);
 
     // Load dropdown
     if(ImGui::Button("Load")) {
@@ -5833,7 +5836,7 @@ void scRhythmBox::drawProjectMenu() {
     }
     if(playing) ImGui::PopStyleColor();
 
-    ImGui::SameLine(0, 6);
+    ImGui::SameLine(0, 6 * zoom);
 
     // Stop button
     if(ImGui::Button("[] Stop")) {

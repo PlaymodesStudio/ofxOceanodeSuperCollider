@@ -11,6 +11,7 @@
 #include "ofxSCBus.h"
 #include "ofxSuperCollider.h"
 #include "imgui.h"
+#include "ofxOceanodeShared.h"
 
 scVUMeter::scVUMeter() : scNode("VUMeter") {
 	ofLogNotice("scVUMeter") << "========== CONSTRUCTOR CALLED ==========";
@@ -392,21 +393,23 @@ void scVUMeter::updateVUTiming(float attackTime, float releaseTime) {
 }
 
 void scVUMeter::drawVUWidget() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
+
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-	
+
 	const vector<float>& vuLevels = vuMeter.get();
 	int numChans = vuLevels.size();
-	
-	const float widgetW = widgetWidth.get();
-	const float totalVUHeight = widgetHeight.get();
-	
-	const float leftMargin = 20.0f;
+
+	const float widgetW = widgetWidth.get() * zoom;
+	const float totalVUHeight = widgetHeight.get() * zoom;
+
+	const float leftMargin = 20.0f * zoom;
 	const float meterWidth = widgetW - leftMargin;
-	
-	const float totalSeparatorHeight = (numChans - 1) * 1.0f;
+
+	const float totalSeparatorHeight = (numChans - 1) * 1.0f * zoom;
 	const float channelH = (totalVUHeight - totalSeparatorHeight) / numChans;
-	const float spacing = 2.0f;
+	const float spacing = 2.0f * zoom;
 	const float totalHeight = spacing + totalVUHeight + spacing;
 	
 	ImVec2 vuStart = ImVec2(cursorPos.x, cursorPos.y + spacing);
@@ -485,9 +488,9 @@ void scVUMeter::drawVUWidget() {
 		}
 		
 		currentY += channelH;
-		if(ch < numChans - 1) currentY += 1.0f;
+		if(ch < numChans - 1) currentY += 1.0f * zoom;
 	}
-	
+
 	// TEXT RENDERING
 	currentY = vuStart.y;
 	for(int ch = 0; ch < numChans; ch++) {
@@ -496,8 +499,8 @@ void scVUMeter::drawVUWidget() {
 		if(ch == 0) sprintf(channelLabel, "L");
 		else if(ch == 1) sprintf(channelLabel, "R");
 		else sprintf(channelLabel, "%d", ch + 1);
-		
-		ImVec2 labelPos = ImVec2(vuStart.x + 4, currentY + 2);
+
+		ImVec2 labelPos = ImVec2(vuStart.x + 4 * zoom, currentY + 2 * zoom);
 		drawList->AddText(labelPos, IM_COL32(180, 180, 180, 255), channelLabel);
 		
 		// ONLY show DB text for Sticky Peaks, positioned next to the pink line
@@ -519,24 +522,25 @@ void scVUMeter::drawVUWidget() {
 			drawList->AddText(levelTextPos, IM_COL32(255, 182, 193, 255), levelText);
 		}
 		
-		const float channelH = (totalVUHeight - (numChans - 1) * 1.0f) / numChans;
-		currentY += channelH;
-		if(ch < numChans - 1) currentY += 1.0f;
+		const float channelH2 = (totalVUHeight - (numChans - 1) * 1.0f * zoom) / numChans;
+		currentY += channelH2;
+		if(ch < numChans - 1) currentY += 1.0f * zoom;
 	}
-	
+
 	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, cursorPos.y + totalHeight));
-	ImGui::Dummy(ImVec2(widgetW, 4.0f));
+	ImGui::Dummy(ImVec2(widgetW, 4.0f * zoom));
 }
 
 void scVUMeter::drawSeparator() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
 	ImVec2 p = ImGui::GetCursorScreenPos();
 	ImGui::GetWindowDrawList()->AddLine(
 		ImVec2(p.x, p.y),
-		ImVec2(p.x + 240, p.y),
+		ImVec2(p.x + 240 * zoom, p.y),
 		IM_COL32(200, 200, 200, 255),
 		1.0f
 	);
-	ImGui::Dummy(ImVec2(0, 4));
+	ImGui::Dummy(ImVec2(0, 4 * zoom));
 }
 
 float scVUMeter::ampToDb(float amp) {

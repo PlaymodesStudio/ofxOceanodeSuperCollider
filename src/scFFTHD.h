@@ -19,6 +19,7 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
+#include "ofxOceanodeShared.h"
 #include "scNode.h"
 #include "serverManager.h"
 #include "ofxSCSynth.h"
@@ -256,15 +257,16 @@ private:
     }
 
     void drawSpectrumWidget() {
+        float zoom = ofxOceanodeShared::getZoomLevel();
         static constexpr float LABEL_H = 14.0f;
         static constexpr float PAD     =  2.0f;
         ImDrawList* dl     = ImGui::GetWindowDrawList();
         ImVec2      cursor = ImGui::GetCursorScreenPos();
-        const float W      = widgetWidth.get();
-        const float totalH = widgetHeight.get() + LABEL_H;
-        drawSpectrumFull(dl, cursor.x + PAD, cursor.y + PAD, W, totalH);
-        ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + totalH + PAD * 2.0f));
-        ImGui::Dummy(ImVec2(W, 4.0f));
+        const float W      = widgetWidth.get() * zoom;
+        const float totalH = (widgetHeight.get() + LABEL_H) * zoom;
+        drawSpectrumFull(dl, cursor.x + PAD * zoom, cursor.y + PAD * zoom, W, totalH);
+        ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + totalH + PAD * zoom * 2.0f));
+        ImGui::Dummy(ImVec2(W, 4.0f * zoom));
     }
 };
 

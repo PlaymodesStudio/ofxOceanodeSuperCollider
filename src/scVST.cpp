@@ -10,6 +10,7 @@
 #include "scVST.h"
 #include "ofxSCSynth.h"
 #include "imgui.h"
+#include "ofxOceanodeShared.h"
 #include <set>
 #include <unordered_set>
 #include <vector>
@@ -4786,19 +4787,17 @@ void scVST::propagateFirstInstanceToAll() {
 }
 
 void scVST::drawSeparator() {
-	// Get the current cursor position in screen coordinates
+	float zoom = ofxOceanodeShared::getZoomLevel();
 	ImVec2 p = ImGui::GetCursorScreenPos();
-	
-	// Draw a 1px-thick horizontal line exactly 240px long
+
 	ImGui::GetWindowDrawList()->AddLine(
 										ImVec2(p.x,     p.y),
-										ImVec2(p.x + 240, p.y),
+										ImVec2(p.x + 240 * zoom, p.y),
 										IM_COL32(200, 200, 200, 255),
 										1.0f
 										);
-	
-	// Add a little vertical spacing so subsequent widgets aren't jammed against the line
-	ImGui::Dummy(ImVec2(0, 4));
+
+	ImGui::Dummy(ImVec2(0, 4 * zoom));
 }
 
 

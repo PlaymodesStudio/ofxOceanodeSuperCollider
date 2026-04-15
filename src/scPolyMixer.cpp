@@ -11,6 +11,7 @@
 #include "ofxSCBus.h"
 #include "ofxSuperCollider.h"
 #include "imgui.h"
+#include "ofxOceanodeShared.h"
 
 scPolyMixer::scPolyMixer() : scNode("PolyMixerTrack") {
 	isUpdatingTracks = false;
@@ -658,11 +659,12 @@ void scPolyMixer::drawTrackSeparator(int trackIndex) {
 		return;
 	}
 	
+	float zoom = ofxOceanodeShared::getZoomLevel();
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-	
-	const float barWidth = 240.0f;
-	const float barHeight = 20.0f;
+
+	const float barWidth = 240.0f * zoom;
+	const float barHeight = 20.0f * zoom;
 	
 	// Get track name and color
 	string trackName = trackNameParams[trackIndex]->get();
@@ -2277,14 +2279,15 @@ void scPolyMixer::presetRecallAfterSettingParameters(ofJson &json) {
 }
 	
 	void scPolyMixer::drawSeparator() {
+		float zoom = ofxOceanodeShared::getZoomLevel();
 		ImVec2 p = ImGui::GetCursorScreenPos();
 		ImGui::GetWindowDrawList()->AddLine(
 											ImVec2(p.x, p.y),
-											ImVec2(p.x + 240, p.y),
+											ImVec2(p.x + 240 * zoom, p.y),
 											IM_COL32(200, 200, 200, 255),
 											1.0f
 											);
-		ImGui::Dummy(ImVec2(0, 4));
+		ImGui::Dummy(ImVec2(0, 4 * zoom));
 	}
 	
 	void scPolyMixer::addCustomRegion(ofParameter<std::function<void()>> p1, ofParameter<std::function<void()>> p2) {
@@ -2333,38 +2336,40 @@ void scPolyMixer::freeVUBuses(ofxSCServer* server) {
 }
 
 void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
+	float zoom = ofxOceanodeShared::getZoomLevel();
+
 	// CRITICAL: Don't render if we're in the middle of updating tracks
 	if(isUpdatingTracks) {
-		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		ImGui::Dummy(ImVec2(240.0f * zoom, 2.0f));
 		return;
 	}
-	
+
 	// Safety checks - return early if data not ready
 	if (trackIndex < 0 || trackIndex >= numTracks.get()) {
-		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		ImGui::Dummy(ImVec2(240.0f * zoom, 2.0f));
 		return;
 	}
-	
+
 	if (vuParameters.count(trackIndex) == 0) {
-		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		ImGui::Dummy(ImVec2(240.0f * zoom, 2.0f));
 		return;
 	}
-	
+
 	if (trackMuteParams.count(trackIndex) == 0 || trackSoloParams.count(trackIndex) == 0) {
-		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		ImGui::Dummy(ImVec2(240.0f * zoom, 2.0f));
 		return;
 	}
-	
+
 	// CRITICAL: Check if peak tracking arrays exist and have correct size
 	if(trackPeakLevels.count(trackIndex) == 0 ||
 	   trackPeakLevels[trackIndex].size() != numChannels.get()) {
-		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		ImGui::Dummy(ImVec2(240.0f * zoom, 2.0f));
 		return;
 	}
-	
+
 	if(trackPeakDecayTimers.count(trackIndex) == 0 ||
 	   trackPeakDecayTimers[trackIndex].size() != numChannels.get()) {
-		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		ImGui::Dummy(ImVec2(240.0f * zoom, 2.0f));
 		return;
 	}
 	
@@ -2372,15 +2377,15 @@ void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
 	if (!drawVU.get()) {
 		// Only draw mute/solo buttons without VU meter
 		ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-		const float buttonHeight = 16.0f;
-		const float buttonWidth = 115.0f;
-		const float spacing = 5.0f;
-		
+		const float buttonHeight = 16.0f * zoom;
+		const float buttonWidth = 115.0f * zoom;
+		const float spacing = 5.0f * zoom;
+
 		ImGui::SetCursorScreenPos(cursorPos);
-		
+
 		bool isMuted = trackMuteParams[trackIndex]->get();
 		bool isSoloed = trackSoloParams[trackIndex]->get();
-		
+
 		// Mute button
 		ImGui::PushID(trackIndex * 1000 + 1);
 		ImVec4 muteColor = isMuted ? ImVec4(0.8f, 0.2f, 0.2f, 1.0f) : ImVec4(0.3f, 0.3f, 0.3f, 1.0f);
@@ -2394,7 +2399,7 @@ void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
 		}
 		ImGui::PopStyleColor(3);
 		ImGui::PopID();
-		
+
 		// Solo button
 		ImGui::SameLine(0, spacing);
 		ImGui::PushID(trackIndex * 1000 + 2);
@@ -2409,29 +2414,29 @@ void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
 		}
 		ImGui::PopStyleColor(3);
 		ImGui::PopID();
-		
+
 		ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, cursorPos.y + buttonHeight + spacing));
-		ImGui::Dummy(ImVec2(240.0f, 2.0f));
+		ImGui::Dummy(ImVec2(240.0f * zoom, 2.0f));
 		return;
 	}
 	
 	// === FULL WIDGET WITH VU METER ===
-	
+
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-	
+
 	// Get VU meter data
 	const vector<float>& vuLevels = vuParameters[trackIndex].get();
 	int numChans = vuLevels.size();
-	
+
 	// Widget dimensions - compact design with vertical channel stacking
-	const float widgetWidth = 240.0f;
-	const float totalVUHeight = trackVUHeight.get();
+	const float widgetWidth = 240.0f * zoom;
+	const float totalVUHeight = trackVUHeight.get() * zoom;
 	const float channelHeight = totalVUHeight / numChans;
 	const float vuHeight = totalVUHeight;
-	const float buttonHeight = 16.0f;
-	const float buttonWidth = 115.0f;
-	const float spacing = 5.0f;
+	const float buttonHeight = 16.0f * zoom;
+	const float buttonWidth = 115.0f * zoom;
+	const float spacing = 5.0f * zoom;
 	const float totalHeight = vuHeight + spacing + buttonHeight + spacing;
 	
 	// === MULTICHANNEL VU METER (VERTICAL STACK) ===
@@ -2550,7 +2555,7 @@ void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
 	ImGui::PopID();
 	
 	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, cursorPos.y + totalHeight));
-	ImGui::Dummy(ImVec2(widgetWidth, 2.0f));
+	ImGui::Dummy(ImVec2(widgetWidth, 2.0f * zoom));
 }
 
 ImU32 scPolyMixer::getVUMeterColor(float level) {
@@ -2582,30 +2587,31 @@ ImU32 scPolyMixer::getVUMeterColor(float level) {
 }
 
 void scPolyMixer::drawMasterVUWidget() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
+
 	// NEW: Check if VU drawing is enabled
 	if (!drawVU.get()) {
 		ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 		ImGui::SetCursorScreenPos(cursorPos);
-		ImGui::Dummy(ImVec2(240.0f, 4.0f));
+		ImGui::Dummy(ImVec2(240.0f * zoom, 4.0f * zoom));
 		return;
 	}
-	
+
 	// === FULL MASTER VU WIDGET ===
-	
+
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-	
+
 	// Get master VU meter data
 	const vector<float>& masterVULevels = masterVUMeter.get();
 	int numChans = masterVULevels.size();
-	
+
 	// Master VU widget dimensions - bigger than track widgets
-	// Master VU widget dimensions - bigger than track widgets
-	const float widgetWidth = 240.0f;     // Full node width
-	const float totalVUHeight = masterVUHeight.get();   // FIXED total height for all channels (bigger for master)
-	const float channelHeight = (totalVUHeight / numChans); // Divide by number of channels
-	const float vuHeight = totalVUHeight; // Total VU height is constant
-	const float spacing = 2.0f;           // More spacing for master
+	const float widgetWidth = 240.0f * zoom;
+	const float totalVUHeight = masterVUHeight.get() * zoom;
+	const float channelHeight = (totalVUHeight / numChans);
+	const float vuHeight = totalVUHeight;
+	const float spacing = 2.0f * zoom;
 	const float totalHeight = spacing + vuHeight + spacing;
 	
 	// === MASTER VU METER (VERTICAL STACK) ===
@@ -2696,7 +2702,7 @@ void scPolyMixer::drawMasterVUWidget() {
 	
 	// Add some spacing after the master widget
 	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, cursorPos.y + totalHeight));
-	ImGui::Dummy(ImVec2(widgetWidth, 4.0f)); // Spacing for next widget
+	ImGui::Dummy(ImVec2(widgetWidth, 4.0f * zoom)); // Spacing for next widget
 }
 
 // dB conversion utility functions

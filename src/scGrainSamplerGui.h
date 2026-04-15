@@ -7,6 +7,7 @@
 #include "ofxSCBus.h"
 #include "ofxSCBuffer.h"
 #include "ofxSCServer.h" // Ensure this is included
+#include "ofxOceanodeShared.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <vector>
@@ -295,10 +296,11 @@ private:
 	// --- GUI ---
 
 	void drawGui() {
+		float zoom = ofxOceanodeShared::getZoomLevel();
 		ImDrawList* dl = ImGui::GetWindowDrawList();
 		ImVec2 p = ImGui::GetCursorScreenPos();
-		float w = width.get();
-		float fullH = height.get();
+		float w = width.get() * zoom;
+		float fullH = height.get() * zoom;
 		float waveH = fullH * 0.5f;
 		float envH = fullH * 0.5f;
 
@@ -324,19 +326,19 @@ private:
 		// Active Grains
 		for(const auto& g : visualGrains) {
 			float x = p.x + g.pos * w;
-			float gw = 4.0f;
+			float gw = 4.0f * zoom;
 			ofColor c; c.setHsb((g.channel*30)%255, 180, 255);
 			float alpha = g.level * (g.lifeTime/g.maxLife);
 			ImU32 col = IM_COL32(c.r, c.g, c.b, (int)(alpha*255));
 			dl->AddRectFilled(ImVec2(x-gw, p.y), ImVec2(x+gw, p.y+waveH), col);
 		}
-		
+
 		// Cursors
 		int n = numChannels.get();
 		for(int i=0; i<n; i++) {
 			float x = p.x + ofClamp(getVal(startPos.get(), i), 0.f, 1.f) * w;
 			ofColor c; c.setHsb((i*30)%255, 255, 255);
-			dl->AddLine(ImVec2(x, p.y), ImVec2(x, p.y+waveH), IM_COL32(c.r,c.g,c.b,200), 2.0f);
+			dl->AddLine(ImVec2(x, p.y), ImVec2(x, p.y+waveH), IM_COL32(c.r,c.g,c.b,200), 2.0f * zoom);
 		}
 
 		if(waveActive && ImGui::IsMouseDown(0)) {
@@ -377,24 +379,24 @@ private:
 			ImVec2 scr1 = ImVec2(ep.x + p1.x*w, ep.y + envH - p1.y*envH);
 			ImVec2 scr2 = ImVec2(ep.x + p2.x*w, ep.y + envH - p2.y*envH);
 			ImVec2 mid = ImVec2((scr1.x+scr2.x)*0.5f, (scr1.y+scr2.y)*0.5f);
-			
+
 			float dist = sqrt(pow(mouse.x-mid.x,2) + pow(mouse.y-mid.y,2));
-			if(envActive && ImGui::IsMouseDragging(0) && ImGui::GetIO().KeyShift && dist < 20) {
+			if(envActive && ImGui::IsMouseDragging(0) && ImGui::GetIO().KeyShift && dist < 20 * zoom) {
 				 float dragY = ImGui::GetIO().MouseDelta.y * 0.01f;
 				 p1.tension = ofClamp(p1.tension - dragY, -1.0f, 1.0f);
 				 envNeedsUpdate = true;
 			}
-			dl->AddCircle(mid, 4.0f, IM_COL32(200,200,200,100));
+			dl->AddCircle(mid, 4.0f * zoom, IM_COL32(200,200,200,100));
 		}
 
 		// Draw Points
 		for(size_t i=0; i<envPoints.size(); i++) {
 			float px = ep.x + envPoints[i].x * w;
 			float py = ep.y + envH - (envPoints[i].y * envH);
-			bool hover = (pow(mouse.x-px,2) + pow(mouse.y-py,2)) < 36.0f;
-			
+			bool hover = (pow(mouse.x-px,2) + pow(mouse.y-py,2)) < (36.0f * zoom * zoom);
+
 			if(envActive && ImGui::IsMouseClicked(0) && hover) selectedPoint = i;
-			
+
 			if(selectedPoint == i) {
 				if(ImGui::IsMouseDragging(0) && !ImGui::GetIO().KeyShift) {
 					float nx = (mouse.x - ep.x) / w;
@@ -405,11 +407,11 @@ private:
 					}
 					envNeedsUpdate = true;
 				}
-				dl->AddCircleFilled(ImVec2(px, py), 6.0f, IM_COL32(255,255,255,255));
+				dl->AddCircleFilled(ImVec2(px, py), 6.0f * zoom, IM_COL32(255,255,255,255));
 			} else {
-				dl->AddCircleFilled(ImVec2(px, py), 4.0f, IM_COL32(255,255,0,255));
+				dl->AddCircleFilled(ImVec2(px, py), 4.0f * zoom, IM_COL32(255,255,0,255));
 			}
-			
+
 			if(hover && ImGui::IsMouseClicked(1) && i > 0 && i < envPoints.size()-1) {
 				envPoints.erase(envPoints.begin() + i);
 				envNeedsUpdate = true;

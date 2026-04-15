@@ -12,6 +12,7 @@
 #include "ofxSCBus.h"
 #include "ofxSuperCollider.h"
 #include "imgui.h"
+#include "ofxOceanodeShared.h"
 #include <cmath>
 #include <algorithm>
 
@@ -648,12 +649,14 @@ float scGraphicEQ::dbToY(float db, float yStart, float height) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void scGraphicEQ::drawEQWidget() {
+    float zoom = ofxOceanodeShared::getZoomLevel();
+
     ImDrawList* dl     = ImGui::GetWindowDrawList();
     ImVec2      cursor = ImGui::GetCursorScreenPos();
 
-    const float W   = widgetWidth.get();
-    const float H   = widgetHeight.get();
-    const float pad = 2.0f;
+    const float W   = widgetWidth.get() * zoom;
+    const float H   = widgetHeight.get() * zoom;
+    const float pad = 2.0f * zoom;
     const float xS  = cursor.x + pad;
     const float yS  = cursor.y + pad;
     const float xE  = xS + W;
@@ -668,8 +671,8 @@ void scGraphicEQ::drawEQWidget() {
     static const char* gridLabels[] = { "20", "50", "100", "200", "500", "1k", "2k", "5k", "10k", "20k" };
     for(int g = 0; g < 10; g++) {
         float gx = logFreqToX(gridFreqs[g], xS, W);
-        dl->AddLine(ImVec2(gx, yS), ImVec2(gx, yE - 14.0f), IM_COL32(40, 40, 55, 200));
-        dl->AddText(ImVec2(gx + 2.0f, yE - 14.0f), IM_COL32(100, 100, 120, 220), gridLabels[g]);
+        dl->AddLine(ImVec2(gx, yS), ImVec2(gx, yE - 14.0f * zoom), IM_COL32(40, 40, 55, 200));
+        dl->AddText(ImVec2(gx + 2.0f * zoom, yE - 14.0f * zoom), IM_COL32(100, 100, 120, 220), gridLabels[g]);
     }
 
     // ── dB grid (horizontal) ─────────────────────────────────────────────
@@ -680,7 +683,7 @@ void scGraphicEQ::drawEQWidget() {
         dl->AddLine(ImVec2(xS, gy), ImVec2(xE, gy), color);
         if(db != GAIN_MIN_DB && db != GAIN_MAX_DB) {
             char label[8]; sprintf(label, "%+.0f", db);
-            dl->AddText(ImVec2(xS + 2.0f, gy - 11.0f), IM_COL32(90, 90, 110, 200), label);
+            dl->AddText(ImVec2(xS + 2.0f * zoom, gy - 11.0f * zoom), IM_COL32(90, 90, 110, 200), label);
         }
     }
 
@@ -730,7 +733,7 @@ void scGraphicEQ::drawEQWidget() {
     };
     for(int b = 0; b < 5; b++) {
         float bx = logFreqToX(bandFreqs[b], xS, W);
-        dl->AddLine(ImVec2(bx, yS), ImVec2(bx, yE - 14.0f), bandColors[b]);
+        dl->AddLine(ImVec2(bx, yS), ImVec2(bx, yE - 14.0f * zoom), bandColors[b]);
     }
 
     // ── 0 dB reference line — drawn BEFORE curve so curve sits on top ─────
@@ -759,5 +762,5 @@ void scGraphicEQ::drawEQWidget() {
     }
 
     ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + H + 2.0f * pad));
-    ImGui::Dummy(ImVec2(W, 4.0f));
+    ImGui::Dummy(ImVec2(W, 4.0f * zoom));
 }

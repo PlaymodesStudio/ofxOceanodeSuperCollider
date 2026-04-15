@@ -18,6 +18,7 @@
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
 #include "imgui.h"
+#include "ofxOceanodeShared.h"
 #include <array>
 #include <cmath>
 #include <algorithm>
@@ -213,9 +214,10 @@ private:
     //
     void drawSpectrumFull(ImDrawList* dl,
                           float xS, float yS,
-                          float W,  float totalH)
+                          float W,  float totalH,
+                          float labelH = 14.0f)
     {
-        static constexpr float LABEL_H = 14.0f;
+        const float LABEL_H = labelH;
 
         const float specH     = totalH - LABEL_H;   // height of bars area
         const float xE        = xS + W;
@@ -315,21 +317,23 @@ private:
 
     // ── Embedded node widget ────────────────────────────────────────────────
     void drawSpectrumWidget() {
-        static constexpr float LABEL_H  = 14.0f;
-        static constexpr float PAD      =  2.0f;
+        float zoom = ofxOceanodeShared::getZoomLevel();
+
+        const float LABEL_H = 14.0f * zoom;
+        const float PAD     =  2.0f * zoom;
 
         ImDrawList* dl     = ImGui::GetWindowDrawList();
         ImVec2      cursor = ImGui::GetCursorScreenPos();
 
-        const float W      = widgetWidth.get();
-        const float specH  = widgetHeight.get();    // bars-only height set by user
-        const float totalH = specH + LABEL_H;       // bars + label row
+        const float W      = widgetWidth.get() * zoom;
+        const float specH  = widgetHeight.get() * zoom;
+        const float totalH = specH + LABEL_H;
 
-        drawSpectrumFull(dl, cursor.x + PAD, cursor.y + PAD, W, totalH);
+        drawSpectrumFull(dl, cursor.x + PAD, cursor.y + PAD, W, totalH, LABEL_H);
 
         // Claim the full area so ImGui lays out correctly
         ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + totalH + PAD * 2.0f));
-        ImGui::Dummy(ImVec2(W, 4.0f));
+        ImGui::Dummy(ImVec2(W, 4.0f * zoom));
     }
 };
 

@@ -24,6 +24,7 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
+#include "ofxOceanodeShared.h"
 #include "serverManager.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -198,13 +199,14 @@ private:
 
     // ── Drawing ──────────────────────────────────────────────────────────────
     void drawWidget() {
+        float zoom = ofxOceanodeShared::getZoomLevel();
         ImDrawList* dl     = ImGui::GetWindowDrawList();
         ImVec2      cursor = ImGui::GetCursorScreenPos();
 
-        const float W  = widgetWidth.get();
-        const float H  = widgetHeight.get();
-        const float xS = cursor.x + 2.f;
-        const float yS = cursor.y + 2.f;
+        const float W  = widgetWidth.get() * zoom;
+        const float H  = widgetHeight.get() * zoom;
+        const float xS = cursor.x + 2.f * zoom;
+        const float yS = cursor.y + 2.f * zoom;
         const float xE = xS + W;
         const float yE = yS + H;
         const float cx = xS + W * 0.5f;
@@ -224,8 +226,8 @@ private:
         dl->AddLine(ImVec2(xE, yS), ImVec2(xS, yE), IM_COL32(25, 25, 40, 120));
 
         if(history.empty()) {
-            ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + H + 4.f));
-            ImGui::Dummy(ImVec2(W, 4.f));
+            ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + H + 4.f * zoom));
+            ImGui::Dummy(ImVec2(W, 4.f * zoom));
             return;
         }
 
@@ -252,19 +254,19 @@ private:
                 float y1 = cy - ofClamp(fr.y[s]   * g, -1.f, 1.f) * ry;
                 float x2 = cx + ofClamp(fr.x[s+1] * g, -1.f, 1.f) * rx;
                 float y2 = cy - ofClamp(fr.y[s+1] * g, -1.f, 1.f) * ry;
-                dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), c, ds * 0.5f);
+                dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), c, ds * 0.5f * zoom);
             }
 
             // Brightest dot at the newest sample of newest frame
             if(fi == nFr - 1) {
                 float xp = cx + ofClamp(fr.x[SAMPLES_PER_CH-1] * g, -1.f, 1.f) * rx;
                 float yp = cy - ofClamp(fr.y[SAMPLES_PER_CH-1] * g, -1.f, 1.f) * ry;
-                dl->AddCircleFilled(ImVec2(xp, yp), ds, IM_COL32(col.r, col.g, col.b, col.a));
+                dl->AddCircleFilled(ImVec2(xp, yp), ds * zoom, IM_COL32(col.r, col.g, col.b, col.a));
             }
         }
 
-        ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + H + 4.f));
-        ImGui::Dummy(ImVec2(W, 4.f));
+        ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + H + 4.f * zoom));
+        ImGui::Dummy(ImVec2(W, 4.f * zoom));
     }
 };
 

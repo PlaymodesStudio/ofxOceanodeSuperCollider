@@ -7,6 +7,7 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "scChannelRouterMatrix.h"
+#include "ofxOceanodeShared.h"
 #include "ofxSCSynth.h"
 #include "ofxSuperCollider.h"
 #include "imgui.h"
@@ -408,18 +409,19 @@ void scChannelRouterMatrix::drawMatrixWidget() {
 }
 
 void scChannelRouterMatrix::drawMultisliderMatrix() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-	
+
 	int n = numChannels.get();
-	float maxWidth = widgetWidth.get();
-	float maxHeight = widgetHeight.get();
-	
-	float labelWidth = 25.0f;
-	float labelHeight = 20.0f;
+	float maxWidth = widgetWidth.get() * zoom;
+	float maxHeight = widgetHeight.get() * zoom;
+
+	float labelWidth = 25.0f * zoom;
+	float labelHeight = 20.0f * zoom;
 	float availableWidth = maxWidth - labelWidth;
 	float availableHeight = maxHeight - labelHeight;
-	
+
 	float cellWidth = availableWidth / n;
 	float cellHeight = availableHeight / n;
 	
@@ -438,44 +440,44 @@ void scChannelRouterMatrix::drawMultisliderMatrix() {
 	}
 	
 	ImVec2 matrixStart = ImVec2(cursorPos.x + labelWidth, cursorPos.y + labelHeight);
-	
+
 	// Background
 	drawList->AddRectFilled(
 		matrixStart,
 		ImVec2(matrixStart.x + matrixWidth, matrixStart.y + matrixHeight),
 		IM_COL32(20, 20, 20, 255)
 	);
-	
+
 	// Track which row we're currently dragging in
 	static int dragRow = -1;
 	int currentRow = -1;
 	int currentCol = -1;
-	
+
 	// Create one invisible button per row for row-based interaction
 	for(int i = 0; i < n; i++) {
 		ImVec2 rowStart = ImVec2(matrixStart.x, matrixStart.y + i * cellHeight);
 		ImVec2 rowSize = ImVec2(matrixWidth, cellHeight);
-		
+
 		ImGui::SetCursorScreenPos(rowStart);
 		ImGui::PushID(i);
 		ImGui::InvisibleButton("##RowInteraction", rowSize);
 		bool isRowActive = ImGui::IsItemActive();
 		bool isRowHovered = ImGui::IsItemHovered();
 		ImGui::PopID();
-		
+
 		ImVec2 mousePos = ImGui::GetIO().MousePos;
-		
+
 		// Handle right-click to toggle cell between 0 and 1
 		if(isRowHovered && ImGui::IsMouseClicked(1)) {
 			float relX = mousePos.x - matrixStart.x;
-			
+
 			if(relX >= 0 && relX < matrixWidth) {
 				int clickedCol = (int)(relX / cellWidth);
-				
+
 				if(clickedCol >= 0 && clickedCol < n) {
 					// Toggle between 0 and 1
 					routingMatrix[i][clickedCol] = (routingMatrix[i][clickedCol] > 0.5f) ? 0.0f : 1.0f;
-					
+
 					for(auto& pair : synthInstances) {
 						if(pair.first != nullptr) {
 							updateSynthParameters(pair.first);
@@ -484,31 +486,31 @@ void scChannelRouterMatrix::drawMultisliderMatrix() {
 				}
 			}
 		}
-		
+
 		// Handle left-click drag within this row only
 		if((isRowHovered || isRowActive) && ImGui::IsMouseDown(0)) {
 			float relX = mousePos.x - matrixStart.x;
 			float relY = mousePos.y - rowStart.y;
-			
+
 			if(relX >= 0 && relX < matrixWidth && relY >= 0 && relY < cellHeight) {
 				currentCol = (int)(relX / cellWidth);
 				currentRow = i;
-				
+
 				// On first click in this row, remember which row we're dragging
 				if(ImGui::IsMouseClicked(0)) {
 					dragRow = i;
 				}
-				
+
 				// Only allow dragging within the same row where we started
 				if(dragRow == i && currentCol >= 0 && currentCol < n) {
 					float normalizedY = 1.0f - ofClamp(relY / cellHeight, 0.0f, 1.0f);
-					
+
 					if(ImGui::GetIO().KeyShift) {
 						normalizedY = std::round(normalizedY * 10.0f) / 10.0f;
 					}
-					
+
 					routingMatrix[i][currentCol] = normalizedY;
-					
+
 					for(auto& pair : synthInstances) {
 						if(pair.first != nullptr) {
 							updateSynthParameters(pair.first);
@@ -518,39 +520,39 @@ void scChannelRouterMatrix::drawMultisliderMatrix() {
 			}
 		}
 	}
-	
+
 	// Reset drag row when mouse is released
 	if(ImGui::IsMouseReleased(0)) {
 		dragRow = -1;
 	}
-	
+
 	// Draw cells
 	for(int i = 0; i < n; i++) {
 		char label[8];
 		sprintf(label, "I%d", i + 1);
 		ImVec2 labelPos = ImVec2(
-			cursorPos.x + 2,
-			matrixStart.y + i * cellHeight + cellHeight * 0.5f - 7
+			cursorPos.x + 2.0f * zoom,
+			matrixStart.y + i * cellHeight + cellHeight * 0.5f - 7.0f * zoom
 		);
 		drawList->AddText(labelPos, IM_COL32(180, 180, 180, 255), label);
-		
+
 		for(int j = 0; j < n; j++) {
 			ImVec2 cellStart;
 			getCellPosition(i, j, matrixStart, cellWidth, cellHeight, cellStart);
 			ImVec2 cellEnd = ImVec2(cellStart.x + cellWidth - 1, cellStart.y + cellHeight - 1);
-			
+
 			bool isCellHovered = (i == currentRow && j == currentCol);
-			
+
 			float value = routingMatrix[i][j];
 			float barHeight = (cellHeight - 1) * value;
-			
+
 			ImVec2 barStart = ImVec2(cellStart.x, cellEnd.y - barHeight);
-			
+
 			drawList->AddRectFilled(cellStart, cellEnd, IM_COL32(30, 30, 30, 255));
-			
+
 			if(value > 0.01f) {
 				ImU32 barColor;
-				
+
 				if(value < 0.5f) {
 					int blue = (int)(100 + 155 * (value / 0.5f));
 					int green = (int)(100 * (value / 0.5f));
@@ -562,7 +564,7 @@ void scChannelRouterMatrix::drawMultisliderMatrix() {
 					int blue = (int)(255 * (1.0f - t));
 					barColor = IM_COL32(red, green, blue, 255);
 				}
-				
+
 				if(isCellHovered) {
 					ImU32 r = (barColor >> 0) & 0xFF;
 					ImU32 g = (barColor >> 8) & 0xFF;
@@ -572,43 +574,44 @@ void scChannelRouterMatrix::drawMultisliderMatrix() {
 					b = std::min(b + 50, 255u);
 					barColor = IM_COL32(r, g, b, 255);
 				}
-				
+
 				drawList->AddRectFilled(barStart, cellEnd, barColor);
 			}
 		}
 	}
-	
+
 	// Grid
 	drawList->AddRect(matrixStart, ImVec2(matrixStart.x + matrixWidth, matrixStart.y + matrixHeight),
-		IM_COL32(80, 80, 80, 255), 0.0f, 0, 1.0f);
-	
+		IM_COL32(80, 80, 80, 255), 0.0f, 0, 1.0f * zoom);
+
 	for(int i = 1; i < n; i++) {
 		float x = matrixStart.x + i * cellWidth;
 		drawList->AddLine(ImVec2(x, matrixStart.y), ImVec2(x, matrixStart.y + matrixHeight),
 			IM_COL32(60, 60, 60, 128));
-		
+
 		float y = matrixStart.y + i * cellHeight;
 		drawList->AddLine(ImVec2(matrixStart.x, y), ImVec2(matrixStart.x + matrixWidth, y),
 			IM_COL32(60, 60, 60, 128));
 	}
-	
-	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, matrixStart.y + matrixHeight + 5));
-	ImGui::Dummy(ImVec2(maxWidth, 2.0f));
+
+	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, matrixStart.y + matrixHeight + 5.0f * zoom));
+	ImGui::Dummy(ImVec2(maxWidth, 2.0f * zoom));
 }
 
 void scChannelRouterMatrix::drawToggleMatrix() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-	
+
 	int n = numChannels.get();
-	float maxWidth = widgetWidth.get();
-	float maxHeight = widgetHeight.get();
-	
-	float labelWidth = 25.0f;
-	float labelHeight = 20.0f;
+	float maxWidth = widgetWidth.get() * zoom;
+	float maxHeight = widgetHeight.get() * zoom;
+
+	float labelWidth = 25.0f * zoom;
+	float labelHeight = 20.0f * zoom;
 	float availableWidth = maxWidth - labelWidth;
 	float availableHeight = maxHeight - labelHeight;
-	
+
 	float cellWidth = availableWidth / n;
 	float cellHeight = availableHeight / n;
 	
@@ -627,43 +630,43 @@ void scChannelRouterMatrix::drawToggleMatrix() {
 	}
 	
 	ImVec2 matrixStart = ImVec2(cursorPos.x + labelWidth, cursorPos.y + labelHeight);
-	
+
 	// Background
 	drawList->AddRectFilled(
 		matrixStart,
 		ImVec2(matrixStart.x + matrixWidth, matrixStart.y + matrixHeight),
 		IM_COL32(20, 20, 20, 255)
 	);
-	
+
 	// Interaction
 	ImGui::SetCursorScreenPos(matrixStart);
 	ImGui::InvisibleButton("##ToggleMatrixInteraction", ImVec2(matrixWidth, matrixHeight));
 	bool isHovered = ImGui::IsItemHovered();
 	bool isActive = ImGui::IsItemActive();
-	
+
 	ImVec2 mousePos = ImGui::GetIO().MousePos;
 	int currentRow = -1;
 	int currentCol = -1;
-	
+
 	static bool dragValue = false;
 	static int lastPaintedRow = -1;
 	static int lastPaintedCol = -1;
-	
+
 	if((isHovered || isActive) && ImGui::IsMouseDown(0)) {
 		float relX = mousePos.x - matrixStart.x;
 		float relY = mousePos.y - matrixStart.y;
-		
+
 		if(relX >= 0 && relX < matrixWidth && relY >= 0 && relY < matrixHeight) {
 			currentCol = (int)(relX / cellWidth);
 			currentRow = (int)(relY / cellHeight);
-			
+
 			if(currentCol >= 0 && currentCol < n && currentRow >= 0 && currentRow < n) {
 				if(ImGui::IsMouseClicked(0)) {
 					dragValue = (routingMatrix[currentRow][currentCol] > 0.5f) ? false : true;
 					routingMatrix[currentRow][currentCol] = dragValue ? 1.0f : 0.0f;
 					lastPaintedRow = currentRow;
 					lastPaintedCol = currentCol;
-					
+
 					for(auto& pair : synthInstances) {
 						if(pair.first != nullptr) {
 							updateSynthParameters(pair.first);
@@ -674,7 +677,7 @@ void scChannelRouterMatrix::drawToggleMatrix() {
 					routingMatrix[currentRow][currentCol] = dragValue ? 1.0f : 0.0f;
 					lastPaintedRow = currentRow;
 					lastPaintedCol = currentCol;
-					
+
 					for(auto& pair : synthInstances) {
 						if(pair.first != nullptr) {
 							updateSynthParameters(pair.first);
@@ -684,56 +687,56 @@ void scChannelRouterMatrix::drawToggleMatrix() {
 			}
 		}
 	}
-	
+
 	if(ImGui::IsMouseReleased(0)) {
 		lastPaintedRow = -1;
 		lastPaintedCol = -1;
 	}
-	
+
 	// Draw cells
 	for(int i = 0; i < n; i++) {
 		char label[8];
 		sprintf(label, "I%d", i + 1);
 		ImVec2 labelPos = ImVec2(
-			cursorPos.x + 2,
-			matrixStart.y + i * cellHeight + cellHeight * 0.5f - 7
+			cursorPos.x + 2.0f * zoom,
+			matrixStart.y + i * cellHeight + cellHeight * 0.5f - 7.0f * zoom
 		);
 		drawList->AddText(labelPos, IM_COL32(180, 180, 180, 255), label);
-		
+
 		for(int j = 0; j < n; j++) {
 			ImVec2 cellStart;
 			getCellPosition(i, j, matrixStart, cellWidth, cellHeight, cellStart);
 			ImVec2 cellEnd = ImVec2(cellStart.x + cellWidth - 1, cellStart.y + cellHeight - 1);
-			
+
 			bool isActiveCell = (routingMatrix[i][j] > 0.5f);
 			bool isCellHovered = (i == currentRow && j == currentCol);
-			
+
 			ImU32 cellColor = isActiveCell ? IM_COL32(220, 220, 220, 255) : IM_COL32(30, 30, 30, 255);
-			
+
 			if(isCellHovered) {
 				cellColor = isActiveCell ? IM_COL32(255, 255, 255, 255) : IM_COL32(60, 60, 60, 255);
 			}
-			
+
 			drawList->AddRectFilled(cellStart, cellEnd, cellColor);
 		}
 	}
-	
+
 	// Grid
 	drawList->AddRect(matrixStart, ImVec2(matrixStart.x + matrixWidth, matrixStart.y + matrixHeight),
-		IM_COL32(80, 80, 80, 255), 0.0f, 0, 1.0f);
-	
+		IM_COL32(80, 80, 80, 255), 0.0f, 0, 1.0f * zoom);
+
 	for(int i = 1; i < n; i++) {
 		float x = matrixStart.x + i * cellWidth;
 		drawList->AddLine(ImVec2(x, matrixStart.y), ImVec2(x, matrixStart.y + matrixHeight),
 			IM_COL32(60, 60, 60, 128));
-		
+
 		float y = matrixStart.y + i * cellHeight;
 		drawList->AddLine(ImVec2(matrixStart.x, y), ImVec2(matrixStart.x + matrixWidth, y),
 			IM_COL32(60, 60, 60, 128));
 	}
-	
-	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, matrixStart.y + matrixHeight + 5));
-	ImGui::Dummy(ImVec2(maxWidth, 2.0f));
+
+	ImGui::SetCursorScreenPos(ImVec2(cursorPos.x, matrixStart.y + matrixHeight + 5.0f * zoom));
+	ImGui::Dummy(ImVec2(maxWidth, 2.0f * zoom));
 }
 
 void scChannelRouterMatrix::getCellPosition(int row, int col, const ImVec2& matrixStart, float cellWidth, float cellHeight, ImVec2& result) {

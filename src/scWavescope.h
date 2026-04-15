@@ -3,6 +3,7 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
+#include "ofxOceanodeShared.h"
 #include "scNode.h"
 
 class scWavescope : public ofxOceanodeNodeModel {
@@ -321,6 +322,7 @@ public:
 	}
 	
 	void drawWaveform(){
+		float zoom = ofxOceanodeShared::getZoomLevel();
 		if(slidingBuffer.empty()) return;
 
 		auto drawList = ImGui::GetWindowDrawList();
@@ -365,22 +367,22 @@ public:
 			if(gridVisible){
 				ImU32 gridColor = IM_COL32(60, 60, 60, 100);
 				ImU32 centerLineColor = IM_COL32(120, 120, 120, 150);
-				
+
 				if(ch > 0){
 					drawList->AddLine(ImVec2(canvasPos.x, trackY),
 						ImVec2(canvasPos.x + canvasSize.x, trackY), IM_COL32(80, 80, 80, 200));
 				}
-				
+
 				drawList->AddLine(ImVec2(canvasPos.x, trackCenterY),
 					ImVec2(canvasPos.x + canvasSize.x, trackCenterY), centerLineColor);
-				
+
 				// Vertical grid lines
 				for(int i = 1; i < 10; i++){
 					float x = canvasPos.x + (canvasSize.x * i / 10);
 					drawList->AddLine(ImVec2(x, trackY),
 						ImVec2(x, trackY + trackHeight), gridColor);
 				}
-				
+
 				// Draw clipping threshold lines if enabled
 				if(showClippingEnabled){
 					float clipY1 = trackCenterY - clipThreshold * trackHeight * 0.45f;
@@ -397,42 +399,42 @@ public:
 			ImU32 normalLineCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
 				lineColor->r/255.f, lineColor->g/255.f, lineColor->b/255.f,
 				freeze.get() ? 0.8f : 1.0f));
-			
+
 			ImU32 clippingLineCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
 				clippingColor->r/255.f, clippingColor->g/255.f, clippingColor->b/255.f,
 				freeze.get() ? 0.8f : 1.0f));
-			
+
 			// High-quality waveform drawing within time window
 			for(int i = 0; i < canvasSize.x - 1; i++){
 				float progress1 = (float)i / (canvasSize.x - 1);
 				float progress2 = (float)(i + 1) / (canvasSize.x - 1);
-				
+
 				int sampleIdx1 = startSample + (int)(progress1 * samplesToDisplay);
 				int sampleIdx2 = startSample + (int)(progress2 * samplesToDisplay);
-				
+
 				sampleIdx1 = ofClamp(sampleIdx1, startSample, endSample - 1);
 				sampleIdx2 = ofClamp(sampleIdx2, startSample, endSample - 1);
-				
+
 				if(channelOffset + sampleIdx1 < slidingBuffer.size() &&
 				   channelOffset + sampleIdx2 < slidingBuffer.size()){
-					
+
 					float rawS1 = slidingBuffer[channelOffset + sampleIdx1];
 					float rawS2 = slidingBuffer[channelOffset + sampleIdx2];
-					
+
 					float s1 = ofClamp(rawS1 * gainValue, -1.f, 1.f);
 					float s2 = ofClamp(rawS2 * gainValue, -1.f, 1.f);
-					
+
 					float y1 = trackCenterY - s1 * trackHeight * 0.45f;
 					float y2 = trackCenterY - s2 * trackHeight * 0.45f;
-					
+
 					bool isClipping = false;
 					if(showClippingEnabled){
 						isClipping = (abs(rawS1) >= clipThreshold || abs(rawS2) >= clipThreshold);
 					}
-					
+
 					ImU32 lineColor = isClipping ? clippingLineCol : normalLineCol;
-					float lineWidth = isClipping ? 2.0f : 1.5f;
-					
+					float lineWidth = (isClipping ? 2.0f : 1.5f) * zoom;
+
 					drawList->AddLine(ImVec2(canvasPos.x + i, y1),
 						ImVec2(canvasPos.x + i + 1, y2), lineColor, lineWidth);
 				}
@@ -458,36 +460,36 @@ public:
 		}
 
 		// Status info
-		ImVec2 infoPos = ImVec2(canvasPos.x + 10, canvasPos.y + 10);
+		ImVec2 infoPos = ImVec2(canvasPos.x + 10 * zoom, canvasPos.y + 10 * zoom);
 		string timeInfo = "Window: " + ofToString(timeWindowSeconds * 1000, 1) + "ms";
 		if(timeWindowSeconds >= 1.0f){
 			timeInfo = "Window: " + ofToString(timeWindowSeconds, 2) + "s";
 		}
 		float samplesPerPixel = (float)samplesToDisplay / canvasSize.x;
 		timeInfo += " (" + ofToString(samplesPerPixel, 1) + " samples/px)";
-		
+
 		//drawList->AddText(infoPos, IM_COL32(200, 200, 200, 180), timeInfo.c_str());
-		
+
 		if(autoGain.get()){
-			ImVec2 gainPos = ImVec2(canvasPos.x + 10, canvasPos.y + 25);
+			ImVec2 gainPos = ImVec2(canvasPos.x + 10 * zoom, canvasPos.y + 25 * zoom);
 			string gainInfo = "Auto Gain: " + ofToString(gainValue, 2);
 			//drawList->AddText(gainPos, IM_COL32(200, 200, 200, 180), gainInfo.c_str());
 		}
-		
+
 		if(showClippingEnabled){
-			ImVec2 clipPos = ImVec2(canvasPos.x + 10, canvasPos.y + 40);
+			ImVec2 clipPos = ImVec2(canvasPos.x + 10 * zoom, canvasPos.y + 40 * zoom);
 			string clipInfo = "Clip Threshold: " + ofToString(clipThreshold, 2);
 			//drawList->AddText(clipPos, IM_COL32(255, 100, 100, 180), clipInfo.c_str());
-			
+
 			bool recentClipping = checkRecentClipping();
 			if(recentClipping){
-				ImVec2 warningPos = ImVec2(canvasPos.x + canvasSize.x - 100, canvasPos.y + 10);
+				ImVec2 warningPos = ImVec2(canvasPos.x + canvasSize.x - 100 * zoom, canvasPos.y + 10 * zoom);
 				//drawList->AddText(warningPos, IM_COL32(255, 0, 0, 255), "CLIPPING!");
 			}
 		}
-		
+
 		if(freeze.get()){
-			ImVec2 textPos = ImVec2(canvasPos.x + canvasSize.x - 80, canvasPos.y + 10);
+			ImVec2 textPos = ImVec2(canvasPos.x + canvasSize.x - 80 * zoom, canvasPos.y + 10 * zoom);
 			//drawList->AddText(textPos, IM_COL32(255, 200, 100, 255), "FROZEN");
 		}
 		

@@ -15,6 +15,7 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
+#include "ofxOceanodeShared.h"
 #include "scNode.h"
 #include "serverManager.h"
 #include "ofxSCSynth.h"
@@ -368,12 +369,13 @@ void main() {
     }
 
     void drawWidget() {
+        float zoom = ofxOceanodeShared::getZoomLevel();
         static constexpr float PAD = 2.0f;
         ImVec2 cursor = ImGui::GetCursorScreenPos();
-        const float W = widgetWidth.get();
-        const float H = widgetHeight.get();
-        drawSpectrogramImage(cursor.x + PAD, cursor.y + PAD, W, H);
-        ImGui::Dummy(ImVec2(W + PAD * 2.0f, 4.0f));
+        const float W = widgetWidth.get() * zoom;
+        const float H = widgetHeight.get() * zoom;
+        drawSpectrogramImage(cursor.x + PAD * zoom, cursor.y + PAD * zoom, W, H);
+        ImGui::Dummy(ImVec2(W + PAD * zoom * 2.0f, 4.0f * zoom));
     }
 };
 

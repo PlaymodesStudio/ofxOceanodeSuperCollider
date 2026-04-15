@@ -4,6 +4,7 @@
 //
 
 #include "scConvolution.h"
+#include "ofxOceanodeShared.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "ofxSuperCollider.h"
@@ -411,6 +412,7 @@ void scConvolution::openFileDialog() {
 }
 
 void scConvolution::drawStatusWidget() {
+    float zoom = ofxOceanodeShared::getZoomLevel();
     bool anyReady    = false;
     bool anyLoading  = false;
     bool anyFileMode = false;
@@ -461,5 +463,5 @@ void scConvolution::drawStatusWidget() {
         ImGui::SameLine();
         if(ImGui::SmallButton("Synth")) { irFilePath.set(""); startSyntheticIR(); }
     }
-    ImGui::Dummy(ImVec2(0, 2));
+    ImGui::Dummy(ImVec2(0, 2.0f * zoom));
 }

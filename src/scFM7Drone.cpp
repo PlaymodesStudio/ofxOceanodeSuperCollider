@@ -1,4 +1,5 @@
 #include "scFM7Drone.h"
+#include "ofxOceanodeShared.h"
 
 // Static helper: build SC control name like "op_amp_1", "op_ratio_3", etc.
 string scFM7Drone::opParamName(const string& prefix, int opIdx) {
@@ -175,9 +176,10 @@ void scFM7Drone::sendFloatParameter(const string& name, vector<float>& values) {
 // --- PRESET SLOTS GUI ---
 
 void scFM7Drone::drawPresetSlots() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 p = ImGui::GetCursorScreenPos();
-	float w = widgetWidth.get();
+	float w = widgetWidth.get() * zoom;
 
 	float slotSize = w / 8.0f;
 	float h = slotSize * 2.0f;
@@ -626,17 +628,18 @@ void scFM7Drone::presetRecallAfterSettingParameters(ofJson &json) {
 }
 
 void scFM7Drone::drawModMatrix() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImVec2 p = ImGui::GetCursorScreenPos();
-	float w = widgetWidth.get();
-	float h = matrixHeight.get();
+	float w = widgetWidth.get() * zoom;
+	float h = matrixHeight.get() * zoom;
 
 	ImGui::InvisibleButton("##MatrixArea", ImVec2(w, h));
 	bool isActive = ImGui::IsItemActive();
 
-	float startX   = p.x + 40;
-	float startY   = p.y + 20;
-	float cellSize = std::min((w - 40) / 6.0f, (h - 20) / 6.0f);
+	float startX   = p.x + 40 * zoom;
+	float startY   = p.y + 20 * zoom;
+	float cellSize = std::min((w - 40 * zoom) / 6.0f, (h - 20 * zoom) / 6.0f);
 	int   dim      = 6;
 
 	vector<float> matrix = modMatrix.get();
@@ -646,7 +649,7 @@ void scFM7Drone::drawModMatrix() {
 	char buf[16];
 	for(int i = 0; i < dim; i++) {
 		sprintf(buf, "%d", i+1);
-		drawList->AddText(ImVec2(startX + i*cellSize + cellSize*0.5f - 4, p.y),
+		drawList->AddText(ImVec2(startX + i*cellSize + cellSize*0.5f - 4 * zoom, p.y),
 						  IM_COL32(200,200,200,255), buf);
 	}
 
@@ -657,7 +660,7 @@ void scFM7Drone::drawModMatrix() {
 
 	for(int row = 0; row < dim; row++) {
 		sprintf(buf, "M%d", row+1);
-		drawList->AddText(ImVec2(p.x, startY + row*cellSize + cellSize*0.5f - 6),
+		drawList->AddText(ImVec2(p.x, startY + row*cellSize + cellSize*0.5f - 6 * zoom),
 						  IM_COL32(200,200,200,255), buf);
 
 		for(int col = 0; col < dim; col++) {
