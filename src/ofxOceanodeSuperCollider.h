@@ -42,7 +42,6 @@
 #include "scFM7.h"
 #include "scFM7Drone.h"
 #include "scDoubleBuffer.h"
-#include "scGrainSamplerGui.h"
 #include "waveTrack.h"
 #include "scGraphicEQ.h"
 #include "scFFT.h"
@@ -56,6 +55,7 @@
 #include "pinkTromboneNode.h"
 #include "scRhythmBox.h"
 #include "scMultiTrackRecorder.h"
+#include "scGrainBox.h"
 
 
 
@@ -156,7 +156,6 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scFastEnvelopeFollower>("SuperCollider");
 	o.registerModel<scFM7>("SuperCollider");
 	o.registerModel<scFM7Drone>("SuperCollider");
-	o.registerModel<scGrainSamplerGui>("SuperCollider");
 	o.registerModel<scDoubleBuffer>("SuperCollider", controller->getServers());
 	o.registerModel<waveTrack>("SuperCollider", controller->getServers());
 	o.registerModel<scGraphicEQ>("SuperCollider");
@@ -171,6 +170,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<pinkTromboneNode>("SuperCollider");
 	o.registerModel<scRhythmBox>("SuperCollider", controller->getServers());
 	o.registerModel<scMultiTrackRecorder>("SuperCollider", controller->getServers());
+	o.registerModel<scGrainBox>("SuperCollider", controller->getServers());
 
 }
 
