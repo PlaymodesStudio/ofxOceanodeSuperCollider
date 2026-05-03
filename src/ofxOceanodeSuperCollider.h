@@ -56,6 +56,7 @@
 #include "scRhythmBox.h"
 #include "scMultiTrackRecorder.h"
 #include "scGrainBox.h"
+#include "scPolyComb.h"
 
 
 
@@ -171,6 +172,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scRhythmBox>("SuperCollider", controller->getServers());
 	o.registerModel<scMultiTrackRecorder>("SuperCollider", controller->getServers());
 	o.registerModel<scGrainBox>("SuperCollider", controller->getServers());
+	o.registerModel<scPolyComb>("SuperCollider");
 
 }
 
