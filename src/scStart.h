@@ -10,6 +10,8 @@
 
 #include "ofThread.h"
 #include "serverManager.h"
+#include <atomic>
+#include <mutex>
 
 // this needs to be threaded otherwise it blocks the main thread
 class scStart : public ofThread{
@@ -28,34 +30,64 @@ public:
     }
     
     void start(){
-        startThread();
+        reboot = true;
+        if(!isThreadRunning()) startThread();
+    }
+
+    void setPreferences(scPreferences _prefs){
+        std::lock_guard<std::mutex> lock(preferencesMutex);
+        prefs = _prefs;
+    }
+
+    void restartServer(scPreferences _prefs){
+        {
+            std::lock_guard<std::mutex> lock(preferencesMutex);
+            prefs = _prefs;
+        }
+        reboot = true;
+        if(isThreadRunning()){
+            ofSystem("killall scsynth");
+        }else{
+            startThread();
+        }
     }
       
     void threadedFunction(){
         while(reboot){
+            uint64_t launchTime = ofGetElapsedTimeMillis();
+            scPreferences launchPrefs;
+            {
+                std::lock_guard<std::mutex> lock(preferencesMutex);
+                launchPrefs = prefs;
+            }
             string termcmd = "\"" + scPath + "\"";
-            termcmd += " -u " + ofToString(prefs.udpPort);
-            termcmd += " -B " + prefs.bindAddress;
-            termcmd += " -c " + ofToString(prefs.numControlBusChannels);
-            termcmd += " -a " + ofToString(prefs.numAudioBusChannels);
-            termcmd += " -i " + ofToString(prefs.numInputBusChannels);
-            termcmd += " -o " + ofToString(prefs.numOutputBusChannels);
-            termcmd += " -z " + ofToString(prefs.blockSize);
-            termcmd += " -Z " + ofToString(prefs.hardwareBufferSize);
-            termcmd += " -S " + ofToString(prefs.hardwareSampleRate);
-            termcmd += " -b " + ofToString(prefs.numBuffers);
-            termcmd += " -n " + ofToString(prefs.maxNodes);
-            termcmd += " -d " + ofToString(prefs.maxSynthDefs);
-            termcmd += " -m " + ofToString(prefs.memSize);
-            termcmd += " -w " + ofToString(prefs.numWireBufs);
-            termcmd += " -r " + ofToString(prefs.numRGens);
-            termcmd += " -l " + ofToString(prefs.maxLogins);
-            termcmd += " -s " + ofToString(prefs.safetyClipThreshold);
-            termcmd += " -H " + prefs.deviceName;
+            termcmd += " -u " + ofToString(launchPrefs.udpPort);
+            termcmd += " -B " + launchPrefs.bindAddress;
+            termcmd += " -c " + ofToString(launchPrefs.numControlBusChannels);
+            termcmd += " -a " + ofToString(launchPrefs.numAudioBusChannels);
+            termcmd += " -i " + ofToString(launchPrefs.numInputBusChannels);
+            termcmd += " -o " + ofToString(launchPrefs.numOutputBusChannels);
+            termcmd += " -z " + ofToString(launchPrefs.blockSize);
+            termcmd += " -Z " + ofToString(launchPrefs.hardwareBufferSize);
+            termcmd += " -S " + ofToString(launchPrefs.hardwareSampleRate);
+            termcmd += " -b " + ofToString(launchPrefs.numBuffers);
+            termcmd += " -n " + ofToString(launchPrefs.maxNodes);
+            termcmd += " -d " + ofToString(launchPrefs.maxSynthDefs);
+            termcmd += " -m " + ofToString(launchPrefs.memSize);
+            termcmd += " -w " + ofToString(launchPrefs.numWireBufs);
+            termcmd += " -r " + ofToString(launchPrefs.numRGens);
+            termcmd += " -l " + ofToString(launchPrefs.maxLogins);
+            termcmd += " -s " + ofToString(launchPrefs.safetyClipThreshold);
+            if(launchPrefs.deviceName == "nil"){
+                termcmd += " -H nil";
+            }else{
+                termcmd += " -H " + shellQuote("") + " " + shellQuote(launchPrefs.deviceName);
+            }
             termcmd += " -D 0 "; //Deactivate synthdefs
             std::string pluginsPath = scPath.substr(0, scPath.size()-7);
-            if(prefs.ugensPlugins != "") termcmd += " -U " + ofToString("\"") + ofToDataPath(prefs.ugensPlugins, true) + ofToString(":") + pluginsPath + ofToString("\"");
+            if(launchPrefs.ugensPlugins != "") termcmd += " -U " + shellQuote(ofToDataPath(launchPrefs.ugensPlugins, true) + ":" + pluginsPath);
             
+            ofLogNotice("scStart") << "Launching scsynth: " << termcmd;
             
 #ifdef TARGET_WIN32
             ret = _popen(termcmd.c_str(),"r");
@@ -88,23 +120,41 @@ public:
 #endif
                 ret = nullptr;
             }
+            if(reboot && ofGetElapsedTimeMillis() - launchTime < 1000){
+                ofSleepMillis(1000);
+            }
         }
     }
       
       
     ~scStart(){
-        waitForThread(true);
+        killServer();
     }
     
     void killServer(){
         reboot = false;
         ofSystem("killall scsynth");
+        waitForThread(false);
     }
     
 private:
+    static std::string shellQuote(const std::string& value){
+        std::string quoted = "'";
+        for(char c : value){
+            if(c == '\''){
+                quoted += "'\\''";
+            }else{
+                quoted += c;
+            }
+        }
+        quoted += "'";
+        return quoted;
+    }
+
     string scPath = "";
     scPreferences prefs;
-    bool reboot = true;
+    std::mutex preferencesMutex;
+    std::atomic<bool> reboot{true};
     
     FILE * ret = nullptr;
 };

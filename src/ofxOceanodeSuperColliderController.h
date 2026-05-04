@@ -36,13 +36,22 @@ public:
 private:
     
     void reloadAudioDevices();
+    void syncAudioDeviceSelection();
+    std::string getSuperColliderDeviceName(const std::string& deviceName) const;
+    std::string getAudioDeviceNameFromSelection() const;
+    void applyAudioDeviceToServers(bool restartServers);
     
     float volume;
     bool mute;
     int delay;
     bool stereomix;
     int stereomixSize;
+    int audioDevice;
+    std::string selectedAudioDeviceName;
     vector<string> audioDeviceNames;
+    vector<string> audioDeviceSuperColliderNames;
+    vector<int> audioDeviceInputChannels;
+    vector<int> audioDeviceOutputChannels;
     vector<serverManager*> outputServers;
 };
 

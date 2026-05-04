@@ -25,6 +25,10 @@ serverManager::serverManager(){
     dumpOsc = false;
     numRecomputeGraphOnce = 0;
     busFromSilent = nullptr;
+    server = nullptr;
+    sc = nullptr;
+    configuredNumInputBusChannels = -1;
+    configuredNumOutputBusChannels = -1;
 };
 
 serverManager::~serverManager(){
@@ -35,6 +39,9 @@ serverManager::~serverManager(){
 }
 
 void serverManager::setup(){
+    if(configuredNumInputBusChannels < 0) configuredNumInputBusChannels = preferences.numInputBusChannels;
+    if(configuredNumOutputBusChannels < 0) configuredNumOutputBusChannels = preferences.numOutputBusChannels;
+
     server = new ofxSCServer(preferences.bindAddress, preferences.udpPort, preferences.udpPort+20, preferences.numInputBusChannels, preferences.numOutputBusChannels, preferences.numAudioBusChannels, preferences.numControlBusChannels, preferences.numBuffers);
     if(preferences.local){
         sc = new scStart(preferences);
@@ -87,8 +94,11 @@ void serverManager::draw(){
     
     if(ImGui::Checkbox("Local", &preferences.local)){
         if(!preferences.local){
-            sc->killServer();
-            delete sc;
+            if(sc != nullptr){
+                sc->killServer();
+                delete sc;
+                sc = nullptr;
+            }
         }else{
             sc = new scStart(preferences);
         }
@@ -155,21 +165,7 @@ void serverManager::draw(){
     ImGui::InputInt("Max Logins", &preferences.maxLogins);
     ImGui::InputFloat("Safety Clip Th", &preferences.safetyClipThreshold);
     
-    auto vector_getter = [](void* vec, int idx, const char** out_text)
-    {
-        auto& vector = *static_cast<std::vector<std::string>*>(vec);
-        if (idx < 0 || idx >= static_cast<int>(vector.size())) { return false; }
-        *out_text = vector.at(idx).c_str();
-        return true;
-    };
-    
-    if(ImGui::Combo("Audio Device", &audioDevice, vector_getter, static_cast<void*>(&audioDeviceNames), audioDeviceNames.size())){
-        if(audioDevice == 0){
-            preferences.deviceName = "nil";
-        }else{
-            preferences.deviceName = audioDeviceNames[audioDevice];
-        }
-    }
+    ImGui::Text("Audio Device: %s", preferences.deviceName == "nil" ? "Default" : preferences.deviceName.c_str());
     
     //Device name;
     bool verb = preferences.verbosity;
@@ -196,7 +192,8 @@ void serverManager::draw(){
 }
 
 void serverManager::boot(){
-    if(preferences.local){
+    if(preferences.local && sc != nullptr){
+        sc->setPreferences(preferences);
         sc->start();
     }
 }
@@ -217,11 +214,45 @@ void serverManager::initialize(){
 }
 
 void serverManager::kill(){
-    if(preferences.local){
+    if(preferences.local && sc != nullptr){
         ofxOscMessage m;
         m.setAddress("/quit");
         server->sendMsg(m);
         sc->killServer();
+    }
+}
+
+void serverManager::prepareForRestart(){
+    initialized = false;
+    if(preferences.local){
+        ofxOscMessage m;
+        m.setAddress("/quit");
+        if(server != nullptr) server->sendMsg(m);
+        if(sc == nullptr) sc = new scStart(preferences);
+        sc->setPreferences(preferences);
+        sc->killServer();
+    }
+}
+
+void serverManager::setAudioDeviceName(const std::string& deviceName, int inputChannels, int outputChannels){
+    if(configuredNumInputBusChannels < 0) configuredNumInputBusChannels = preferences.numInputBusChannels;
+    if(configuredNumOutputBusChannels < 0) configuredNumOutputBusChannels = preferences.numOutputBusChannels;
+
+    preferences.deviceName = (deviceName.empty() || deviceName == "Default") ? "nil" : deviceName;
+    preferences.numInputBusChannels = configuredNumInputBusChannels;
+    preferences.numOutputBusChannels = configuredNumOutputBusChannels;
+
+    if(preferences.deviceName != "nil"){
+        if(inputChannels > 0 && configuredNumInputBusChannels > inputChannels){
+            ofLogNotice("serverManager") << "Clamping SC input channels for " << preferences.deviceName
+                << " from " << configuredNumInputBusChannels << " to " << inputChannels;
+            preferences.numInputBusChannels = inputChannels;
+        }
+        if(outputChannels > 0 && configuredNumOutputBusChannels > outputChannels){
+            ofLogNotice("serverManager") << "Clamping SC output channels for " << preferences.deviceName
+                << " from " << configuredNumOutputBusChannels << " to " << outputChannels;
+            preferences.numOutputBusChannels = outputChannels;
+        }
     }
 }
 

@@ -61,6 +61,7 @@ public:
     void boot();
     void initialize();
     void kill();
+    void prepareForRestart();
     void loadDefs();
     
     void setVolume(float volume);
@@ -76,6 +77,7 @@ public:
     void removeOutput(scOutput* output);
     
     void setAudioDevices(std::vector<std::string> audioDevices){audioDeviceNames = audioDevices;}
+    void setAudioDeviceName(const std::string& deviceName, int inputChannels = 0, int outputChannels = 0);
     
     ofxSCServer* getServer(){return server;}
 //    int getOutputBusForNode(scNode* node);
@@ -131,6 +133,8 @@ private:
     bool dumpOsc;
     std::vector<std::string> audioDeviceNames;
     scStart* sc;
+    int configuredNumInputBusChannels;
+    int configuredNumOutputBusChannels;
     
     int numRecomputeGraphOnce;
     std::map<scNode*, ofEventListener> nodeDestroyedListeners;
