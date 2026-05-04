@@ -49,6 +49,7 @@ void serverManager::setup(){
     boot();
     
     listeners.push(ofxOceanodeShared::getPresetWillBeLoadedEvent().newListener([this](){
+        teardownGraphForPresetLoad();
     }));
     
     listeners.push(ofxOceanodeShared::getPresetHasLoadedEvent().newListener([this](){
@@ -311,6 +312,34 @@ void serverManager::addOutput(scOutput *output){
 void serverManager::removeOutput(scOutput *output){
     outputs.erase(std::remove(outputs.begin(), outputs.end(), output), outputs.end());
     recomputeGraph();
+}
+
+void serverManager::teardownGraphForPresetLoad(){
+    if(server == nullptr) return;
+
+    outputBussesRefToNode.clear();
+    inputBussesRefToNode.clear();
+    connections.clear();
+    nodesListChanged = true;
+
+    const int silentBusIndex = busFromSilent != nullptr ? busFromSilent->index : 0;
+    for(auto node : nodesList){
+        if(node != nullptr){
+            node->resetInputBusses(server, silentBusIndex);
+            node->free(server);
+        }
+    }
+    nodesList.clear();
+
+    for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
+    busses.clear();
+
+    if(initialized){
+        ofxOscMessage m;
+        m.setAddress("/g_freeAll");
+        m.addIntArg(1);
+        server->sendMsg(m);
+    }
 }
 
 void serverManager::recomputeGraph(){

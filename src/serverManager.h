@@ -72,6 +72,7 @@ public:
     
     void setOutputChannel(int channel);
     void recomputeGraph();
+    void teardownGraphForPresetLoad();
     
     void addOutput(scOutput* output);
     void removeOutput(scOutput* output);
