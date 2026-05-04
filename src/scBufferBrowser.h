@@ -27,6 +27,7 @@ public:
 
     void setup() override;
     void draw(ofEventArgs&) override;
+    void drawBrowserContents();
 
     // ── Preset serialization ────────────────────────────────────────────────
     void presetSave(ofJson &json) override;
@@ -79,6 +80,7 @@ private:
     // ── Parameters ──────────────────────────────────────────────────────────
     ofParameter<bool>         showWindow;
     ofParameter<vector<int>>  bufferOutput;
+    customGuiRegion           browserRegion;
 
     ofEventListeners nodeListeners;
 };

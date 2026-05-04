@@ -36,6 +36,13 @@ void scBufferBrowser::setup() {
     addParameter(showWindow.set("Show", false));
     addOutputParameter(bufferOutput.set("Buffer", {-1}, {-1}, {INT_MAX}));
 
+    auto browserRegionRef = addCustomRegion(browserRegion.set("Buffer Browser", [this](){
+        drawBrowserContents();
+    }), [this](){
+        drawBrowserContents();
+    });
+    browserRegionRef->setFlags(browserRegionRef->getFlags() | ofxOceanodeParameterFlags_NoGuiWidget);
+
     // Default browse location
     currentBrowseDir = ofToDataPath("Supercollider/Samples", true);
     if(!std::filesystem::exists(currentBrowseDir))
@@ -54,137 +61,118 @@ void scBufferBrowser::draw(ofEventArgs&) {
     ImGui::SetNextWindowSize(ImVec2(320, 500), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), (bool*)&showWindow.get(),
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-
-        // ── Top bar ──────────────────────────────────────────────────────
-        if(ImGui::Button("...")) {
-            auto res = ofSystemLoadDialog("Select Samples Folder", true, currentBrowseDir);
-            if(res.bSuccess) refreshBrowseDir(res.getPath());
-        }
-        ImGui::SameLine();
-        std::string dirLabel = std::filesystem::path(currentBrowseDir).filename().string();
-        ImGui::TextUnformatted(dirLabel.c_str());
-
-        // Show loaded file count
-        if(!loadedFiles.empty()) {
-            if(loadedFiles.size() == 1) {
-                std::string fname = std::filesystem::path(loadedFiles[0]).filename().string();
-                ImGui::TextDisabled("Loaded: %s", fname.c_str());
-            } else {
-                ImGui::TextDisabled("Loaded: %d files", (int)loadedFiles.size());
-            }
-        } else {
-            ImGui::TextDisabled("(no files loaded)");
-        }
-        ImGui::TextDisabled("click=preview, dbl=toggle select, arrows=navigate");
-        ImGui::Separator();
-
-        // ── File list ────────────────────────────────────────────────────
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        ImGui::BeginChild("##blist", ImVec2(0, avail.y), false);
-
-        // Up one level
-        if(ImGui::Selectable("^ ..")) {
-            auto parent = std::filesystem::path(currentBrowseDir).parent_path().string();
-            if(!parent.empty() && parent != currentBrowseDir) {
-                refreshBrowseDir(parent);
-            }
-        }
-
-        // ── Keyboard navigation ──────────────────────────────────────────
-        // Only process when the child window is focused
-        if(ImGui::IsWindowFocused()) {
-            bool moved = false;
-            if(ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
-                focusIndex = std::max(0, focusIndex - 1);
-                moved = true;
-            }
-            if(ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
-                focusIndex = std::min((int)browseEntries.size() - 1, focusIndex + 1);
-                moved = true;
-            }
-            if(ImGui::IsKeyPressed(ImGuiKey_Enter) && focusIndex >= 0 && focusIndex < (int)browseEntries.size()) {
-                auto& entry = browseEntries[focusIndex];
-                if(entry.isDir) {
-                    refreshBrowseDir(entry.fullPath);
-                } else {
-                    // Enter toggles selection (same as double-click)
-                    if(selectedIndices.count(focusIndex))
-                        selectedIndices.erase(focusIndex);
-                    else
-                        selectedIndices.insert(focusIndex);
-                    rebuildBuffersFromSelection();
-                }
-            }
-            // Preview on arrow navigation for audio files
-            if(moved && focusIndex >= 0 && focusIndex < (int)browseEntries.size()) {
-                if(!browseEntries[focusIndex].isDir)
-                    triggerPreview(browseEntries[focusIndex].fullPath);
-            }
-        }
-
-        for(int i = 0; i < (int)browseEntries.size(); i++) {
-            auto& entry = browseEntries[i];
-
-            // Build label
-            std::string prefix;
-            if(entry.isDir) {
-                prefix = "[D] ";
-            } else if(selectedIndices.count(i)) {
-                prefix = " *  ";  // selected marker
-            } else {
-                prefix = "    ";
-            }
-            std::string label = prefix + entry.name;
-
-            // Highlight: focused entry or selected entry
-            bool isSelected = selectedIndices.count(i) > 0;
-            bool isFocused  = (i == focusIndex);
-
-            if(isFocused && isSelected) {
-                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.55f, 0.25f, 1.0f));
-            } else if(isFocused) {
-                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.25f, 0.35f, 0.55f, 1.0f));
-            } else if(isSelected) {
-                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.10f, 0.40f, 0.18f, 1.0f));
-            }
-
-            bool highlight = isFocused || isSelected;
-
-            if(ImGui::Selectable(label.c_str(), highlight, ImGuiSelectableFlags_AllowDoubleClick)) {
-                if(entry.isDir) {
-                    refreshBrowseDir(entry.fullPath);
-                    // Pop style before breaking out of the loop via the refresh
-                    if(highlight) ImGui::PopStyleColor();
-                    break;
-                } else {
-                    focusIndex = i;
-                    if(ImGui::IsMouseDoubleClicked(0)) {
-                        // Double click: toggle selection
-                        if(selectedIndices.count(i))
-                            selectedIndices.erase(i);
-                        else
-                            selectedIndices.insert(i);
-                        rebuildBuffersFromSelection();
-                    } else {
-                        // Single click: preview
-                        triggerPreview(entry.fullPath);
-                    }
-                }
-            }
-
-            if(highlight) ImGui::PopStyleColor();
-
-            // Auto-scroll to focused item
-            if(isFocused && ImGui::IsWindowFocused())
-                ImGui::SetScrollHereY(0.5f);
-
-            if(!entry.isDir && ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", entry.name.c_str());
-        }
-
-        ImGui::EndChild();
+        drawBrowserContents();
     }
     ImGui::End();
+}
+
+void scBufferBrowser::drawBrowserContents() {
+    // ── Top bar ──────────────────────────────────────────────────────
+    if(ImGui::Button("...")) {
+        auto res = ofSystemLoadDialog("Select Samples Folder", true, currentBrowseDir);
+        if(res.bSuccess) refreshBrowseDir(res.getPath());
+    }
+    ImGui::SameLine();
+    std::string dirLabel = std::filesystem::path(currentBrowseDir).filename().string();
+    ImGui::TextUnformatted(dirLabel.c_str());
+
+    // Show loaded file count
+    if(!loadedFiles.empty()) {
+        if(loadedFiles.size() == 1) {
+            std::string fname = std::filesystem::path(loadedFiles[0]).filename().string();
+            ImGui::TextDisabled("Loaded: %s", fname.c_str());
+        } else {
+            ImGui::TextDisabled("Loaded: %d files", (int)loadedFiles.size());
+        }
+    } else {
+        ImGui::TextDisabled("(no files loaded)");
+    }
+    ImGui::TextDisabled("click=preview, dbl=toggle select, arrows=navigate");
+    ImGui::Separator();
+
+    // ── File list ────────────────────────────────────────────────────
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImGui::BeginChild("##blist", ImVec2(0, avail.y), false);
+
+    // Up one level
+    if(ImGui::Selectable("^ ..")) {
+        auto parent = std::filesystem::path(currentBrowseDir).parent_path().string();
+        if(!parent.empty() && parent != currentBrowseDir) {
+            refreshBrowseDir(parent);
+        }
+    }
+
+    // ── Keyboard navigation ──────────────────────────────────────────
+    if(ImGui::IsWindowFocused()) {
+        bool moved = false;
+        if(ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+            focusIndex = std::max(0, focusIndex - 1);
+            moved = true;
+        }
+        if(ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+            focusIndex = std::min((int)browseEntries.size() - 1, focusIndex + 1);
+            moved = true;
+        }
+        if(ImGui::IsKeyPressed(ImGuiKey_Enter) && focusIndex >= 0 && focusIndex < (int)browseEntries.size()) {
+            auto& entry = browseEntries[focusIndex];
+            if(entry.isDir) {
+                refreshBrowseDir(entry.fullPath);
+            } else {
+                if(selectedIndices.count(focusIndex)) selectedIndices.erase(focusIndex);
+                else selectedIndices.insert(focusIndex);
+                rebuildBuffersFromSelection();
+            }
+        }
+        if(moved && focusIndex >= 0 && focusIndex < (int)browseEntries.size()) {
+            if(!browseEntries[focusIndex].isDir) triggerPreview(browseEntries[focusIndex].fullPath);
+        }
+    }
+
+    for(int i = 0; i < (int)browseEntries.size(); i++) {
+        auto& entry = browseEntries[i];
+
+        std::string prefix;
+        if(entry.isDir) prefix = "[D] ";
+        else if(selectedIndices.count(i)) prefix = " *  ";
+        else prefix = "    ";
+        std::string label = prefix + entry.name;
+
+        bool isSelected = selectedIndices.count(i) > 0;
+        bool isFocused  = (i == focusIndex);
+
+        if(isFocused && isSelected) {
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.55f, 0.25f, 1.0f));
+        } else if(isFocused) {
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.25f, 0.35f, 0.55f, 1.0f));
+        } else if(isSelected) {
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.10f, 0.40f, 0.18f, 1.0f));
+        }
+
+        bool highlight = isFocused || isSelected;
+
+        if(ImGui::Selectable(label.c_str(), highlight, ImGuiSelectableFlags_AllowDoubleClick)) {
+            if(entry.isDir) {
+                refreshBrowseDir(entry.fullPath);
+                if(highlight) ImGui::PopStyleColor();
+                break;
+            } else {
+                focusIndex = i;
+                if(ImGui::IsMouseDoubleClicked(0)) {
+                    if(selectedIndices.count(i)) selectedIndices.erase(i);
+                    else selectedIndices.insert(i);
+                    rebuildBuffersFromSelection();
+                } else {
+                    triggerPreview(entry.fullPath);
+                }
+            }
+        }
+
+        if(highlight) ImGui::PopStyleColor();
+        if(isFocused && ImGui::IsWindowFocused()) ImGui::SetScrollHereY(0.5f);
+        if(!entry.isDir && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entry.name.c_str());
+    }
+
+    ImGui::EndChild();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
