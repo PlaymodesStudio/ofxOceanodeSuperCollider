@@ -372,10 +372,14 @@ void main() {
         float zoom = ofxOceanodeShared::getZoomLevel();
         static constexpr float PAD = 2.0f;
         ImVec2 cursor = ImGui::GetCursorScreenPos();
-        const float W = widgetWidth.get() * zoom;
-        const float H = widgetHeight.get() * zoom;
-        drawSpectrogramImage(cursor.x + PAD * zoom, cursor.y + PAD * zoom, W, H);
-        ImGui::Dummy(ImVec2(W + PAD * zoom * 2.0f, 4.0f * zoom));
+        const auto& customRegionContext = ofxOceanodeShared::getCustomRegionRenderContext();
+        const float pad = PAD * zoom;
+        const float availableWidth = std::max(1.0f, customRegionContext.width - pad * 2.0f);
+        const float availableHeight = std::max(1.0f, customRegionContext.height - pad * 2.0f);
+        const float W = customRegionContext.active ? availableWidth : widgetWidth.get() * zoom;
+        const float H = customRegionContext.active ? availableHeight : widgetHeight.get() * zoom;
+        drawSpectrogramImage(cursor.x + pad, cursor.y + pad, W, H);
+        ImGui::Dummy(ImVec2(W + pad * 2.0f, customRegionContext.active ? H + pad * 2.0f : 4.0f * zoom));
     }
 };
 
