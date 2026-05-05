@@ -1585,6 +1585,10 @@ void scRhythmBox::drawSequencerWindow() {
         if(!open) showWindow = false;
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
+        if(avail.x < 320.0f * zoom || avail.y < 80.0f * zoom) {
+            ImGui::End();
+            return;
+        }
         const float splitterW  = 6.0f * zoom;
         const float marginW    = 10.0f * zoom;
         const float fxSplitW   = 6.0f * zoom;
