@@ -12,6 +12,8 @@
 #include "ofxSuperCollider.h"
 #include "imgui.h"
 #include "ofxOceanodeShared.h"
+#include <cstring>
+#include <cstdio>
 
 scPolyMixer::scPolyMixer() : scNode("PolyMixerTrack") {
 	isUpdatingTracks = false;
@@ -52,6 +54,9 @@ void scPolyMixer::setup() {
 		// Core parameters
 		addParameter(numTracks.set("Num Tracks", 4, 1, 12)); // Limit to 12 tracks to prevent graphics crashes
 		addParameter(numChannels.set("Num Channels", 2, 1, MAX_NODE_CHANNELS));
+		addParameter(showMixerWindow.set("Show GUI", false));
+		addInspectorParameter(mixerWindowWidth.set("Mixer Win W", 860.0f, 360.0f, 1800.0f));
+		addInspectorParameter(mixerWindowHeight.set("Mixer Win H", 520.0f, 260.0f, 1000.0f));
 
 		addCustomRegion(
 			ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
@@ -535,6 +540,12 @@ void scPolyMixer::update(ofEventArgs &args) {
 	
 	if(masterVUData != nullptr) {
 		masterVUData->getParameter().set(masterSum);
+	}
+}
+
+void scPolyMixer::draw(ofEventArgs &args) {
+	if(showMixerWindow.get()) {
+		drawMixerWindow();
 	}
 }
 
@@ -2333,6 +2344,277 @@ void scPolyMixer::freeVUBuses(ofxSCServer* server) {
 		// CRITICAL: Re-enable VU updates
 		isUpdatingTracks = false;
 	}
+}
+
+void scPolyMixer::drawMixerWindow() {
+	float zoom = ofxOceanodeShared::getZoomLevel();
+	float w = mixerWindowWidth.get() * zoom;
+	float h = mixerWindowHeight.get() * zoom;
+	bool open = showMixerWindow.get();
+	string title = "SC PolyMixer " + ofToString(getNumIdentifier());
+
+	ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_FirstUseEver);
+	if(!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+		ImGui::End();
+		if(!open) showMixerWindow = false;
+		return;
+	}
+	if(!open) {
+		ImGui::End();
+		showMixerWindow = false;
+		return;
+	}
+
+	ImVec2 avail = ImGui::GetContentRegionAvail();
+	if(avail.x < 160.0f * zoom || avail.y < 160.0f * zoom) {
+		ImGui::End();
+		return;
+	}
+	const float stripW = 92.0f * zoom;
+	const float masterW = 108.0f * zoom;
+	const float gap = 10.0f * zoom;
+	const float stripH = std::max(1.0f, avail.y);
+
+	drawMixerStrip(-1, masterW, stripH, true);
+
+	ImGui::SameLine(0, gap);
+	ImGui::BeginChild("##PolyMixerTracks", ImVec2(0, stripH), false, ImGuiWindowFlags_HorizontalScrollbar);
+	for(int i = 0; i < numTracks.get(); i++) {
+		ImGui::PushID(i);
+		drawMixerStrip(i, stripW, stripH, false);
+		ImGui::PopID();
+		if(i < numTracks.get() - 1) ImGui::SameLine(0, 6.0f * zoom);
+	}
+	ImGui::EndChild();
+	ImGui::End();
+}
+
+void scPolyMixer::drawMixerStrip(int trackIndex, float stripWidth, float stripHeight, bool master) {
+	float zoom = ofxOceanodeShared::getZoomLevel();
+	stripWidth = std::max(stripWidth, 60.0f * zoom);
+	stripHeight = std::max(stripHeight, 160.0f * zoom);
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	ImVec2 start = ImGui::GetCursorScreenPos();
+	ImVec2 end(start.x + stripWidth, start.y + stripHeight);
+
+	ofColor trackColor(70, 70, 76);
+	string label = "MASTER";
+	if(!master && trackColorParams.count(trackIndex) > 0) {
+		trackColor = trackColorParams[trackIndex]->get();
+	}
+	if(!master && trackNameParams.count(trackIndex) > 0) {
+		label = trackNameParams[trackIndex]->get();
+	}
+
+	dl->AddRectFilled(start, end, IM_COL32(24, 24, 28, 255), 5.0f * zoom);
+	dl->AddRect(start, end, IM_COL32(70, 70, 78, 220), 5.0f * zoom);
+
+	ImU32 headerColor = master ? IM_COL32(180, 180, 188, 255) : IM_COL32(trackColor.r, trackColor.g, trackColor.b, 255);
+	dl->AddRectFilled(start, ImVec2(end.x, start.y + 22.0f * zoom), headerColor, 5.0f * zoom);
+
+	ImGui::SetCursorScreenPos(ImVec2(start.x + 5.0f * zoom, start.y + 3.0f * zoom));
+	if(master) {
+		ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(20, 20, 24, 255));
+		ImGui::TextUnformatted(label.c_str());
+		ImGui::PopStyleColor();
+	} else {
+		char nameBuffer[96];
+		std::strncpy(nameBuffer, label.c_str(), sizeof(nameBuffer) - 1);
+		nameBuffer[sizeof(nameBuffer) - 1] = '\0';
+		ImGui::SetNextItemWidth(stripWidth - 10.0f * zoom);
+		ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+		if(ImGui::InputText("##trackname", nameBuffer, sizeof(nameBuffer))) {
+			if(trackNameParams.count(trackIndex) > 0) {
+				trackNameParams[trackIndex]->set(string(nameBuffer));
+			}
+		}
+		ImGui::PopStyleColor(2);
+	}
+
+	float top = start.y + 32.0f * zoom;
+	float bottom = end.y - 12.0f * zoom;
+	float availableH = std::max(1.0f, bottom - top);
+	float gapY = 8.0f * zoom;
+	float buttonH = master ? 0.0f : 22.0f * zoom;
+	float labelH = 18.0f * zoom;
+	float knobBlockH = master ? 0.0f : 52.0f * zoom;
+	float buttonBlockH = master ? 0.0f : buttonH + gapY;
+	float vuH = ofClamp(availableH * 0.30f, 48.0f * zoom, 120.0f * zoom);
+	float faderH = availableH - vuH - gapY - labelH - knobBlockH - buttonBlockH - (master ? 0.0f : gapY);
+	faderH = std::max(44.0f * zoom, faderH);
+	float centerX = start.x + stripWidth * 0.5f;
+
+	vector<float> vu = master ? masterVUMeter.get() :
+		(vuParameters.count(trackIndex) > 0 ? vuParameters[trackIndex].get() : vector<float>(numChannels.get(), 0.0f));
+	ImVec2 vuPos(start.x + 14.0f * zoom, top);
+	ImVec2 vuSize(stripWidth - 28.0f * zoom, vuH);
+	vuSize.x = std::max(vuSize.x, 8.0f * zoom);
+	vuSize.y = std::max(vuSize.y, 8.0f * zoom);
+	drawMixerVUMeter(trackIndex, vu, vuPos, vuSize, master);
+
+	float faderTop = vuPos.y + vuH + gapY;
+	float level = 1.0f;
+	if(master) {
+		auto levels = masterLevel.get();
+		level = levels.empty() ? 1.0f : levels[0];
+	} else if(trackLevelParams.count(trackIndex) > 0) {
+		auto levels = trackLevelParams[trackIndex]->get();
+		level = levels.empty() ? 0.5f : levels[0];
+	}
+
+	ImGui::SetCursorScreenPos(ImVec2(centerX - 18.0f * zoom, faderTop));
+	ImGui::PushID(master ? 90000 : trackIndex);
+	if(ImGui::VSliderFloat("##vol", ImVec2(36.0f * zoom, faderH), &level, 0.0f, 2.0f, "")) {
+		level = ofClamp(level, 0.0f, 2.0f);
+		if(master) {
+			masterLevel.set(vector<float>(1, level));
+		} else if(trackLevelParams.count(trackIndex) > 0) {
+			trackLevelParams[trackIndex]->set(vector<float>(1, level));
+		}
+	}
+	ImGui::PopID();
+
+	char dbText[32];
+	snprintf(dbText, sizeof(dbText), "%.1fdB", ampToDb(level));
+	ImVec2 textSize = ImGui::CalcTextSize(dbText);
+	float labelY = faderTop + faderH + 4.0f * zoom;
+	dl->AddText(ImVec2(centerX - textSize.x * 0.5f, labelY), IM_COL32(210, 210, 215, 255), dbText);
+
+	if(!master) {
+		float pan = trackBalanceParams.count(trackIndex) > 0 ? trackBalanceParams[trackIndex]->get() : 0.0f;
+		float panY = labelY + labelH + 2.0f * zoom;
+		ImGui::SetCursorScreenPos(ImVec2(centerX - 22.0f * zoom, panY));
+		if(drawPanKnob("##pan", pan, 20.0f * zoom) && trackBalanceParams.count(trackIndex) > 0) {
+			trackBalanceParams[trackIndex]->set(ofClamp(pan, -1.0f, 1.0f));
+		}
+
+		float buttonY = panY + knobBlockH + 2.0f * zoom;
+		float btnW = (stripWidth - 16.0f * zoom) * 0.5f;
+		bool muted = trackMuteParams.count(trackIndex) > 0 && trackMuteParams[trackIndex]->get();
+		bool soloed = trackSoloParams.count(trackIndex) > 0 && trackSoloParams[trackIndex]->get();
+
+		ImGui::SetCursorScreenPos(ImVec2(start.x + 5.0f * zoom, buttonY));
+		ImGui::PushStyleColor(ImGuiCol_Button, muted ? ImVec4(0.75f, 0.16f, 0.16f, 1.0f) : ImVec4(0.22f, 0.22f, 0.25f, 1.0f));
+		if(ImGui::Button("M", ImVec2(btnW, buttonH)) && trackMuteParams.count(trackIndex) > 0) {
+			trackMuteParams[trackIndex]->set(!muted);
+		}
+		ImGui::PopStyleColor();
+		ImGui::SameLine(0, 4.0f * zoom);
+		ImGui::PushStyleColor(ImGuiCol_Button, soloed ? ImVec4(0.82f, 0.72f, 0.18f, 1.0f) : ImVec4(0.22f, 0.22f, 0.25f, 1.0f));
+		if(ImGui::Button("S", ImVec2(btnW, buttonH)) && trackSoloParams.count(trackIndex) > 0) {
+			trackSoloParams[trackIndex]->set(!soloed);
+		}
+		ImGui::PopStyleColor();
+	}
+
+	ImGui::SetCursorScreenPos(start);
+	ImGui::Dummy(ImVec2(stripWidth, stripHeight));
+}
+
+void scPolyMixer::drawMixerVUMeter(int trackIndex, const vector<float>& vuLevels, ImVec2 pos, ImVec2 size, bool master) {
+	size.x = std::max(size.x, 1.0f);
+	size.y = std::max(size.y, 1.0f);
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	int channels = std::max(1, (int)vuLevels.size());
+	float gap = 2.0f;
+	float channelW = (size.x - gap * (channels - 1)) / channels;
+
+	ImGui::SetCursorScreenPos(pos);
+	ImGui::InvisibleButton(master ? "##mastervumix" : "##trackvumix", size);
+	if(ImGui::IsItemClicked()) {
+		resetMixerPeaks(trackIndex, master);
+	}
+
+	if(master && (masterPeakLevels.size() != channels || masterPeakDecayTimers.size() != channels)) {
+		masterPeakLevels.assign(channels, -60.0f);
+		masterPeakDecayTimers.assign(channels, 0.0f);
+	}
+	if(!master && (trackPeakLevels.count(trackIndex) == 0 || trackPeakLevels[trackIndex].size() != channels)) {
+		trackPeakLevels[trackIndex].assign(channels, -60.0f);
+		trackPeakDecayTimers[trackIndex].assign(channels, 0.0f);
+	}
+
+	dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(12, 12, 14, 255), 3.0f);
+	dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(62, 62, 68, 255), 3.0f);
+
+	for(int ch = 0; ch < channels; ch++) {
+		float amp = ofClamp(ch < (int)vuLevels.size() ? vuLevels[ch] : 0.0f, 0.0f, 2.0f);
+		float db = ampToDb(amp);
+		vector<float>& peaks = master ? masterPeakLevels : trackPeakLevels[trackIndex];
+		vector<float>& timers = master ? masterPeakDecayTimers : trackPeakDecayTimers[trackIndex];
+
+		if(db > peaks[ch]) {
+			peaks[ch] = db;
+			timers[ch] = 1000.0f;
+		} else {
+			timers[ch] -= 16.67f;
+			if(timers[ch] <= 0.0f) {
+				float releaseCoeff = 1.0f - expf(-1000.0f / (std::max(masterVURelease.get(), 1.0f) * 60.0f));
+				peaks[ch] = ofClamp(peaks[ch] - releaseCoeff * 0.5f, -60.0f, 6.0f);
+			}
+		}
+
+		float x0 = pos.x + ch * (channelW + gap);
+		ImVec2 c0(x0, pos.y);
+		ImVec2 c1(x0 + channelW, pos.y + size.y);
+		dl->AddRectFilled(c0, c1, IM_COL32(24, 24, 27, 255), 2.0f);
+
+		float meterPos = dbToVUPosition(db, -60.0f, 6.0f);
+		float meterH = size.y * meterPos;
+		if(meterH > 0.5f) {
+			dl->AddRectFilled(ImVec2(c0.x, c1.y - meterH), c1, getVUMeterColorDB(db), 2.0f);
+		}
+
+		float peakPos = dbToVUPosition(peaks[ch], -60.0f, 6.0f);
+		if(peakPos > 0.01f) {
+			float peakY = c1.y - size.y * peakPos;
+			dl->AddLine(ImVec2(c0.x, peakY), ImVec2(c1.x, peakY), getVUMeterColorDB(peaks[ch]), master ? 2.0f : 1.5f);
+		}
+
+		float zeroY = c1.y - size.y * dbToVUPosition(0.0f, -60.0f, 6.0f);
+		dl->AddLine(ImVec2(c0.x, zeroY), ImVec2(c1.x, zeroY), IM_COL32(235, 235, 240, 150), 1.0f);
+	}
+}
+
+bool scPolyMixer::drawPanKnob(const char* id, float& value, float radius) {
+	radius = std::max(radius, 4.0f);
+	ImVec2 pos = ImGui::GetCursorScreenPos();
+	ImVec2 size(radius * 2.0f, radius * 2.0f + ImGui::GetTextLineHeight());
+	ImGui::InvisibleButton(id, size);
+	bool changed = false;
+	if(ImGui::IsItemActive()) {
+		value = ofClamp(value + ImGui::GetIO().MouseDelta.x * 0.01f - ImGui::GetIO().MouseDelta.y * 0.01f, -1.0f, 1.0f);
+		changed = true;
+	}
+	if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+		value = 0.0f;
+		changed = true;
+	}
+
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	ImVec2 center(pos.x + radius, pos.y + radius);
+	dl->AddCircleFilled(center, radius, IM_COL32(38, 38, 43, 255), 32);
+	dl->AddCircle(center, radius, IM_COL32(120, 120, 130, 255), 32, 1.5f);
+
+	float angle = ofMap(value, -1.0f, 1.0f, -2.35f, 2.35f, true) - HALF_PI;
+	ImVec2 indicator(center.x + cosf(angle) * radius * 0.72f, center.y + sinf(angle) * radius * 0.72f);
+	dl->AddLine(center, indicator, IM_COL32(235, 235, 240, 255), 2.0f);
+
+	const char* panText = value < -0.02f ? "L" : (value > 0.02f ? "R" : "C");
+	ImVec2 textSize = ImGui::CalcTextSize(panText);
+	dl->AddText(ImVec2(center.x - textSize.x * 0.5f, pos.y + radius * 2.0f + 1.0f), IM_COL32(205, 205, 210, 255), panText);
+	return changed;
+}
+
+void scPolyMixer::resetMixerPeaks(int trackIndex, bool master) {
+	if(master) {
+		masterPeakLevels.assign(std::max(1, numChannels.get()), -60.0f);
+		masterPeakDecayTimers.assign(std::max(1, numChannels.get()), 0.0f);
+		return;
+	}
+	trackPeakLevels[trackIndex].assign(std::max(1, numChannels.get()), -60.0f);
+	trackPeakDecayTimers[trackIndex].assign(std::max(1, numChannels.get()), 0.0f);
 }
 
 void scPolyMixer::drawCompactTrackWidget(int trackIndex) {

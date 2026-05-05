@@ -12,6 +12,7 @@
 #include "scNode.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
+#include "imgui.h"
 #include <mutex>
 #include <set>
 #include <map>
@@ -49,6 +50,7 @@ public:
 	
 	ofEvent<void> resendParams;
 	void update(ofEventArgs &args) override;
+	void draw(ofEventArgs &args) override;
 	
 	// Custom region method specific to scPolyMixer
 	void addCustomRegion(ofParameter<std::function<void()>> p1, ofParameter<std::function<void()>> p2);
@@ -84,6 +86,9 @@ private:
 	ofParameter<vector<float>> masterLevel;
 	ofParameter<vector<float>> gainVec;  // Renamed from levelVec - linear amp multipliers
 	ofParameter<vector<float>> balanceVec;  // NEW: Balance vector for all tracks (-1 to 1)
+	ofParameter<bool> showMixerWindow;
+	ofParameter<float> mixerWindowWidth;
+	ofParameter<float> mixerWindowHeight;
 	
 	// Master output VU meter
 	ofParameter<vector<float>> masterVUMeter;
@@ -159,6 +164,11 @@ private:
 	
 	void drawCompactTrackWidget(int trackIndex);
 	void drawMasterVUWidget();
+	void drawMixerWindow();
+	void drawMixerStrip(int trackIndex, float stripWidth, float stripHeight, bool master);
+	void drawMixerVUMeter(int trackIndex, const vector<float>& vuLevels, ImVec2 pos, ImVec2 size, bool master);
+	bool drawPanKnob(const char* id, float& value, float radius);
+	void resetMixerPeaks(int trackIndex, bool master);
 	unsigned int getVUMeterColor(float level);
 	unsigned int getVUMeterColorDB(float dbLevel);
 	
