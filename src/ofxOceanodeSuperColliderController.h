@@ -37,8 +37,10 @@ private:
     
     void reloadAudioDevices();
     void syncAudioDeviceSelection();
+    void syncSampleRateSelection();
     std::string getSuperColliderDeviceName(const std::string& deviceName) const;
     std::string getAudioDeviceNameFromSelection() const;
+    int getSampleRateFromSelection() const;
     void applyAudioDeviceToServers(bool restartServers);
     
     float volume;
@@ -47,11 +49,16 @@ private:
     bool stereomix;
     int stereomixSize;
     int audioDevice;
+    int sampleRate;
+    int selectedSampleRate;
     std::string selectedAudioDeviceName;
     vector<string> audioDeviceNames;
     vector<string> audioDeviceSuperColliderNames;
     vector<int> audioDeviceInputChannels;
     vector<int> audioDeviceOutputChannels;
+    vector<vector<int>> audioDeviceSampleRates;
+    vector<string> sampleRateNames;
+    vector<int> sampleRateValues;
     vector<serverManager*> outputServers;
 };
 
