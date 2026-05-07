@@ -14,6 +14,8 @@
 #include "scOutput.h"
 #include "ofxOceanodeShared.h"
 
+std::map<ofxSCServer*, int> serverManager::serverSampleRates;
+
 serverManager::serverManager(){
     initialized = false;
     volume = 1;
@@ -32,6 +34,7 @@ serverManager::serverManager(){
 };
 
 serverManager::~serverManager(){
+    serverSampleRates.erase(server);
     for(auto node : nodesList) node->free(server);
     nodesList.clear();
     for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
@@ -43,6 +46,7 @@ void serverManager::setup(){
     if(configuredNumOutputBusChannels < 0) configuredNumOutputBusChannels = preferences.numOutputBusChannels;
 
     server = new ofxSCServer(preferences.bindAddress, preferences.udpPort, preferences.udpPort+20, preferences.numInputBusChannels, preferences.numOutputBusChannels, preferences.numAudioBusChannels, preferences.numControlBusChannels, preferences.numBuffers);
+    serverSampleRates[server] = preferences.hardwareSampleRate;
     if(preferences.local){
         sc = new scStart(preferences);
     }
@@ -299,6 +303,23 @@ void serverManager::setStereoMix(bool _stereomix){
 void serverManager::setStereoMixSize(int _stereomixSize){
     stereomixSize = _stereomixSize;
     for(auto &o : outputs) o->setStereoMixSize(stereomixSize);
+}
+
+void serverManager::setHardwareSampleRate(int sampleRate){
+    if(sampleRate > 0){
+        preferences.hardwareSampleRate = sampleRate;
+        if(server != nullptr){
+            serverSampleRates[server] = sampleRate;
+        }
+    }
+}
+
+int serverManager::getSampleRateForServer(ofxSCServer* server){
+    auto it = serverSampleRates.find(server);
+    if(it != serverSampleRates.end() && it->second > 0){
+        return it->second;
+    }
+    return scPreferences().hardwareSampleRate;
 }
 
 void serverManager::addOutput(scOutput *output){

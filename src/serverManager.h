@@ -69,6 +69,8 @@ public:
     
     void setStereoMix(bool stereomix);
     void setStereoMixSize(int stereomixSize);
+    void setHardwareSampleRate(int sampleRate);
+    int getSampleRate() const { return preferences.hardwareSampleRate; }
     
     void setOutputChannel(int channel);
     void recomputeGraph();
@@ -81,6 +83,7 @@ public:
     void setAudioDeviceName(const std::string& deviceName, int inputChannels = 0, int outputChannels = 0);
     
     ofxSCServer* getServer(){return server;}
+    static int getSampleRateForServer(ofxSCServer* server);
 //    int getOutputBusForNode(scNode* node);
     
     void recomputeGraphOnce(){
@@ -117,6 +120,8 @@ private:
     std::vector<scOutput*> outputs;
     std::vector<scNode*> nodesList;
     std::map<scNode*, std::map<int, std::vector<ofxSCSynth*>>> synthMap;
+
+    static std::map<ofxSCServer*, int> serverSampleRates;
     
     std::vector<ofxSCBus> busses;
     std::map<scNode*, std::map<int, int>> outputBussesRefToNode;
