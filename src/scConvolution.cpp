@@ -9,6 +9,7 @@
 #include "ofxSCBuffer.h"
 #include "ofxSuperCollider.h"
 #include "ofxOscMessage.h"
+#include "serverManager.h"
 #include "imgui.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -297,7 +298,8 @@ void scConvolution::startSyntheticIRForServer(ofxSCServer* srv) {
     cancelLoad(srv);
 
     ServerState& s = serverStates[srv];
-    int irFrames   = (int)(rt60.get() * 44100.0f) + 512;
+    const float sr = (float)serverManager::getSampleRateForServer(srv);
+    int irFrames   = (int)(rt60.get() * sr) + 512;
     s.irBuffer     = new ofxSCBuffer(irFrames, 1, srv);
     s.irBuffer->alloc();
 
@@ -342,7 +344,7 @@ void scConvolution::allocExactSpecBuffer(ofxSCServer* srv, int irFrames) {
     ServerState& s = serverStates[srv];
     if(s.pendingSpecBuffer) { s.pendingSpecBuffer->free(); delete s.pendingSpecBuffer; s.pendingSpecBuffer = nullptr; }
 
-    if(irFrames <= 1) irFrames = 5 * 44100; // fallback if frame count unknown
+    if(irFrames <= 1) irFrames = 5 * serverManager::getSampleRateForServer(srv); // fallback if frame count unknown
     int partSize    = kFftSize / 2;
     int nPartitions = (irFrames + partSize - 1) / partSize;
     s.pendingSpecBuffer = new ofxSCBuffer(nPartitions * kFftSize, 1, srv);

@@ -5,6 +5,8 @@
 #include "ofxOceanodeNodeModel.h"
 #include "ofxOceanodeShared.h"
 #include "scNode.h"
+#include "serverManager.h"
+#include <algorithm>
 
 class scWavescope : public ofxOceanodeNodeModel {
 public:
@@ -13,7 +15,7 @@ public:
 		
 		// Frame-based capture settings
 		frameRate = 60.0f;
-		sampleRate = 44100.0f;
+		sampleRate = (float)scPreferences().hardwareSampleRate;
 		samplesPerFrame = 64; // Fixed frame size like original
 		
 		// Sliding buffer for maximum time window
@@ -574,6 +576,14 @@ public:
 		if(configLoaded) return; // Only load once
 		
 		int currentServerIndex = serverIndex.get();
+		if(currentServerIndex >= 0 && currentServerIndex < (int)servers.size() && servers[currentServerIndex] != nullptr) {
+			int configuredSampleRate = servers[currentServerIndex]->getSampleRate();
+			if(configuredSampleRate > 0) {
+				sampleRate = (float)configuredSampleRate;
+				maxBufferSize = std::max(1, (int)(maxBufferTime * sampleRate));
+				slidingBuffer.resize(maxBufferSize * MAX_NODE_CHANNELS, 0.0f);
+			}
+		}
 		
 		// Construct path to server config file
 		string configPath = ofToDataPath("Supercollider/Config/ServerPreferences_" +

@@ -81,6 +81,8 @@ private:
     std::map<ofxSCServer*, int>          outputBuses;
     std::map<ofxSCServer*, ofxSCBus*>    privateBuses;
 
+    void reloadSampleBuffersForServer(ofxSCServer* srv);
+
     // ── Node GUI parameters ───────────────────────────────────────────────────
     ofParameter<bool>          showWindow;
     ofParameter<int>           numChannelsP;   // 1..MAX_CHANNELS

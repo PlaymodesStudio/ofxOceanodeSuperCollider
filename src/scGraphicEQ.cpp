@@ -595,6 +595,13 @@ float scGraphicEQ::computeMagnitudeDb(const BiquadCoeffs& c, float freqHz, float
     return 20.0f * std::log10f(std::max(mag, 1e-12f));
 }
 
+float scGraphicEQ::getDisplaySampleRate() const {
+    if(!synthInstances.empty() && synthInstances.begin()->first != nullptr) {
+        return (float)serverManager::getSampleRateForServer(synthInstances.begin()->first);
+    }
+    return (float)scPreferences().hardwareSampleRate;
+}
+
 void scGraphicEQ::recomputeEQCurve() {
     // Use channel 0 value (index 0) of each parameter vector for the display curve.
     // Pitch parameters are converted to Hz for biquad computation.
@@ -604,12 +611,13 @@ void scGraphicEQ::recomputeEQCurve() {
     auto p0hz = [&](const vector<float>& v, float defPitch) -> float {
         return pitchToHz(v.empty() ? defPitch : v[0]);
     };
+    const float sr = getDisplaySampleRate();
 
-    BiquadCoeffs band1 = computeLowShelf (p0hz(b1pitch, 46.f),  v0(b1gain, 0.f), v0(b1slope, 1.f), SAMPLE_RATE);
-    BiquadCoeffs band2 = computePeakEQ   (p0hz(b2pitch, 71.f),  v0(b2gain, 0.f), v0(b2q, 1.f),     SAMPLE_RATE);
-    BiquadCoeffs band3 = computePeakEQ   (p0hz(b3pitch, 84.f),  v0(b3gain, 0.f), v0(b3q, 1.f),     SAMPLE_RATE);
-    BiquadCoeffs band4 = computePeakEQ   (p0hz(b4pitch, 96.f),  v0(b4gain, 0.f), v0(b4q, 1.f),     SAMPLE_RATE);
-    BiquadCoeffs band5 = computeHighShelf(p0hz(b5pitch, 115.f), v0(b5gain, 0.f), v0(b5slope, 1.f), SAMPLE_RATE);
+    BiquadCoeffs band1 = computeLowShelf (p0hz(b1pitch, 46.f),  v0(b1gain, 0.f), v0(b1slope, 1.f), sr);
+    BiquadCoeffs band2 = computePeakEQ   (p0hz(b2pitch, 71.f),  v0(b2gain, 0.f), v0(b2q, 1.f),     sr);
+    BiquadCoeffs band3 = computePeakEQ   (p0hz(b3pitch, 84.f),  v0(b3gain, 0.f), v0(b3q, 1.f),     sr);
+    BiquadCoeffs band4 = computePeakEQ   (p0hz(b4pitch, 96.f),  v0(b4gain, 0.f), v0(b4q, 1.f),     sr);
+    BiquadCoeffs band5 = computeHighShelf(p0hz(b5pitch, 115.f), v0(b5gain, 0.f), v0(b5slope, 1.f), sr);
 
     float logMin = std::log10f(FREQ_MIN);
     float logMax = std::log10f(FREQ_MAX);
@@ -618,11 +626,11 @@ void scGraphicEQ::recomputeEQCurve() {
         float t    = (float)i / (float)(NUM_FREQ_POINTS - 1);
         float freq = std::pow(10.0f, logMin + t * (logMax - logMin));
 
-        float db = computeMagnitudeDb(band1, freq, SAMPLE_RATE)
-                 + computeMagnitudeDb(band2, freq, SAMPLE_RATE)
-                 + computeMagnitudeDb(band3, freq, SAMPLE_RATE)
-                 + computeMagnitudeDb(band4, freq, SAMPLE_RATE)
-                 + computeMagnitudeDb(band5, freq, SAMPLE_RATE);
+        float db = computeMagnitudeDb(band1, freq, sr)
+                 + computeMagnitudeDb(band2, freq, sr)
+                 + computeMagnitudeDb(band3, freq, sr)
+                 + computeMagnitudeDb(band4, freq, sr)
+                 + computeMagnitudeDb(band5, freq, sr);
 
         combinedCurveDb[i] = ofClamp(db, GAIN_MIN_DB - 3.0f, GAIN_MAX_DB + 3.0f);
     }

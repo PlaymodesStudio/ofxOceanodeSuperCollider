@@ -42,7 +42,7 @@ class ofxSCBuffer;
 
 class scConvolution : public scNode {
 public:
-    // fftsize in the SynthDef: partition = 1024 samples ≈ 23 ms at 44.1 kHz
+    // fftsize in the SynthDef: partition = 1024 samples; time width follows the active server sample rate
     static constexpr int kFftSize = 2048;
 
     scConvolution();

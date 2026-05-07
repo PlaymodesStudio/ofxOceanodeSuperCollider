@@ -318,6 +318,7 @@ private:
 
     int  getBufnum(int ti, ofxSCServer* srv) const;
     void loadSampleForTrack(int ti, const std::string& path);
+    void reloadSamplesForServer(ofxSCServer* srv);
     void freeSampleForTrack(int ti);
     void freeAllSamples();
 

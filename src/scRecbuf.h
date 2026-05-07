@@ -13,6 +13,7 @@
 #include "ofxOscMessage.h"
 
 #include "ofMain.h"              // ofColor, ofSystemLoadDialog
+#include <algorithm>
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -100,10 +101,11 @@ private:
         if(numChannels < 1 || numChannels > MAX_NODE_CHANNELS) return;
 		cleanup();
 		if(input->getNodeRef() == nullptr) return;
+		if(serverIndex < 0 || serverIndex >= (int)servers.size()) return;
 
-		constexpr float kSR = 44100.0f;
+		const float sr = (float)servers[serverIndex]->getSampleRate();
 		int nCh  = numChannels.get();
-		int nFrm = static_cast<int>(ceil((lengthMs.get()/1000.0f) * kSR));
+		int nFrm = std::max(1, static_cast<int>(ceil((lengthMs.get()/1000.0f) * sr)));
 
 		recordBuf = new ofxSCBuffer(nFrm, nCh,
 									servers[serverIndex]->getServer());

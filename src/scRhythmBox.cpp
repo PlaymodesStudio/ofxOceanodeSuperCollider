@@ -505,6 +505,7 @@ void scRhythmBox::buildSynth(ofxSCServer* srv) {
 
 void scRhythmBox::createSynth(ofxSCServer* srv) {
     if(!srv) return;
+    reloadSamplesForServer(srv);
 
     // Full rebuild — pre-size all per-server vectors then delegate per track.
     freeServerSynths(srv);
@@ -1323,6 +1324,45 @@ void scRhythmBox::loadSampleForTrack(int ti, const std::string& path) {
     // Store path AFTER freeSampleForTrack (which cleared it) so display and
     // preset serialisation have the correct value.
     samplePaths[ti] = path;
+}
+
+void scRhythmBox::reloadSamplesForServer(ofxSCServer* srv) {
+    if(!srv) return;
+
+    for(int ti = 0; ti < MAX_TRACKS && ti < (int)samplePaths.size(); ti++) {
+        if(trackBufs[ti].count(srv)) {
+            if(trackBufs[ti][srv]) {
+                trackBufs[ti][srv]->free();
+                delete trackBufs[ti][srv];
+            }
+            trackBufs[ti].erase(srv);
+        }
+
+        if(samplePaths[ti].empty()) continue;
+
+        const std::string absPath = resolveToAbsolutePath(samplePaths[ti]);
+        if(!std::filesystem::exists(absPath)) {
+            ofLogWarning("scRhythmBox") << "Cannot reload sample for track " << ti
+                                        << " after server rebuild: " << absPath;
+            continue;
+        }
+
+        try {
+            auto* buf = new ofxSCBuffer(0, 0, srv);
+            buf->read(absPath);
+            trackBufs[ti][srv] = buf;
+            samplePaths[ti] = absPath;
+            if(ti < (int)waveformPeaks.size() && waveformPeaks[ti].empty()) {
+                loadWaveformData(ti, absPath);
+            }
+            ofLogNotice("scRhythmBox") << "Reloaded track " << ti
+                                       << " sample for rebuilt server: " << absPath
+                                       << " bufnum=" << buf->index;
+        } catch(const std::exception& e) {
+            ofLogError("scRhythmBox") << "reloadSamplesForServer ti=" << ti
+                                      << " : " << e.what();
+        }
+    }
 }
 
 void scRhythmBox::freeSampleForTrack(int ti) {
@@ -4021,24 +4061,27 @@ void scRhythmBox::drawTrack(int ti) {
             float di = q.a1*sw + q.a2*s2w;
             return sqrtf(std::max((nr*nr + ni*ni) / std::max(dr*dr + di*di, 1e-20f), 1e-20f));
         };
-        constexpr float EQ_SR = 44100.0f;
+        float eqSampleRate = (float)scPreferences().hardwareSampleRate;
+        if(!allServers.empty() && allServers.front() != nullptr) {
+            eqSampleRate = (float)allServers.front()->getSampleRate();
+        }
         float hpFreq = std::max(tc.eqHPFreq, 20.0f);
         float hpQ    = std::max(tc.eqHPQ,    0.01f);
         {
-            float w0 = 2.0f*(float)M_PI*hpFreq/EQ_SR, cw = cosf(w0), sw_ = sinf(w0);
+            float w0 = 2.0f*(float)M_PI*hpFreq/eqSampleRate, cw = cosf(w0), sw_ = sinf(w0);
             float alpha = sw_ / (2.0f * hpQ), a0 = 1.0f + alpha;
             Bq hpBq = {(1+cw)*0.5f/a0, -(1+cw)/a0, (1+cw)*0.5f/a0, -2*cw/a0, (1-alpha)/a0};
 
             float pkFreq = std::max(tc.eqPeakFreq, 20.0f);
             float pkQ    = std::max(tc.eqPeakQ,    0.1f);
             float A = powf(10.0f, tc.eqPeakGain / 40.0f);
-            float w0p = 2.0f*(float)M_PI*pkFreq/EQ_SR, cwp = cosf(w0p), swp = sinf(w0p);
+            float w0p = 2.0f*(float)M_PI*pkFreq/eqSampleRate, cwp = cosf(w0p), swp = sinf(w0p);
             float alphap = swp / (2.0f * pkQ), a0p = 1.0f + alphap / A;
             Bq pkBq = {(1+alphap*A)/a0p, -2*cwp/a0p, (1-alphap*A)/a0p, -2*cwp/a0p, (1-alphap/A)/a0p};
 
             float lpFreq = std::max(tc.eqLPFreq, 20.0f);
             float lpQ    = std::max(tc.eqLPQ,    0.01f);
-            float w0l = 2.0f*(float)M_PI*lpFreq/EQ_SR, cwl = cosf(w0l), swl = sinf(w0l);
+            float w0l = 2.0f*(float)M_PI*lpFreq/eqSampleRate, cwl = cosf(w0l), swl = sinf(w0l);
             float alphal = swl / (2.0f * lpQ), a0l = 1.0f + alphal;
             Bq lpBq = {(1-cwl)*0.5f/a0l, (1-cwl)/a0l, (1-cwl)*0.5f/a0l, -2*cwl/a0l, (1-alphal)/a0l};
 
@@ -4065,7 +4108,7 @@ void scRhythmBox::drawTrack(int ti) {
                 float t  = (float)pi / (EQ_PTS - 1);
                 float f  = FMIN * powf(FMAX / FMIN, t);
                 float db = 20.0f * log10f(
-                    std::max(evalBq(hpBq, f, EQ_SR) * evalBq(pkBq, f, EQ_SR) * evalBq(lpBq, f, EQ_SR),
+                    std::max(evalBq(hpBq, f, eqSampleRate) * evalBq(pkBq, f, eqSampleRate) * evalBq(lpBq, f, eqSampleRate),
                              1e-6f));
                 db = ofClamp(db, -DB_RANGE, DB_RANGE);
                 float x = eqPos.x + t * eqW;

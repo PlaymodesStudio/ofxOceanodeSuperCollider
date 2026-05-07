@@ -24,6 +24,7 @@
 #include "ofxOscMessage.h"
 #include "ofxOceanodeShared.h"
 #include "ofMain.h"
+#include <algorithm>
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -162,8 +163,9 @@ private:
         if(trackInputs[t]->getNodeRef() == nullptr) return;
 
         ofxSCServer* server = servers[serverIndex]->getServer();
+        const float sr = (float)servers[serverIndex]->getSampleRate();
         int nCh  = numChannels.get();
-        int nFrm = static_cast<int>(std::ceil(lengthSec.get() * 44100.0f));
+        int nFrm = std::max(1, static_cast<int>(std::ceil(lengthSec.get() * sr)));
         std::string defName = "multirecbuf" + ofToString(nCh);
 
         trackBufs[t] = new ofxSCBuffer(nFrm, nCh, server);

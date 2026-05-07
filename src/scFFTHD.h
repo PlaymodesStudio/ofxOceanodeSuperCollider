@@ -3,7 +3,7 @@
 //  ofxOceanodeSupercollider
 //
 //  High-resolution FFT spectrum analyzer — 1080 log-spaced bands.
-//  Uses a 4096-point FFT (2048 real bins, ~10.8 Hz/bin at 44100 Hz).
+//  Uses a 4096-point FFT (2048 real bins; bin width follows the active server sample rate).
 //  Log-band aggregation (max) and normalization happen inside the SynthDef,
 //  matching the proven scFFT / fftanalyzer.scd pattern exactly.
 //  All 1080 output bands map to ≥1 real FFT bin — no interpolation.
@@ -36,9 +36,7 @@
 class scFFTHD : public ofxOceanodeNodeModel {
 public:
     static constexpr int   NUM_BANDS    = 1080;   // matches SynthDef output (log-aggregated)
-    static constexpr float SAMPLE_RATE  = 44100.0f;
     static constexpr float FREQ_MIN     = 20.0f;
-    static constexpr float FREQ_MAX     = 22050.0f;
 
     scFFTHD(vector<serverManager*> outputServers)
         : ofxOceanodeNodeModel("SC FFT HD")
@@ -164,6 +162,13 @@ private:
     vector<float>                outputBuffer;       // pre-allocated, avoids per-frame heap alloc
     vector<serverManager*>       servers;
 
+    float getCurrentSampleRate() const {
+        if(serverIndex >= 0 && serverIndex < (int)servers.size() && servers[serverIndex] != nullptr){
+            return (float)std::max(1, servers[serverIndex]->getSampleRate());
+        }
+        return (float)scPreferences().hardwareSampleRate;
+    }
+
     // ── SC management ──────────────────────────────────────────────────────
     void recreateSynth() {
         clearSynth();
@@ -217,7 +222,8 @@ private:
         const float yLabelTop = yE + 1.0f;
         const float floorVal  = dbFloor.get();
         const bool  useDb     = dbScale.get();
-        const float logRatio  = std::log(FREQ_MAX / FREQ_MIN);
+        const float freqMax   = std::max(FREQ_MIN * 1.01f, getCurrentSampleRate() / 2.0f);
+        const float logRatio  = std::log(freqMax / FREQ_MIN);
 
         dl->PushClipRect(ImVec2(xS, yS), ImVec2(xE, yLabelTop + LABEL_H), true);
 
@@ -229,6 +235,7 @@ private:
         static const char* gridLabels[] = { "50","100","200","500","1k","2k","5k","10k","20k" };
 
         for(int g = 0; g < 9; g++) {
+            if(gridFreqs[g] > freqMax) break;
             float gx = xS + W * (std::log(gridFreqs[g] / FREQ_MIN) / logRatio);
             dl->AddLine(ImVec2(gx, yS),      ImVec2(gx, yE),    IM_COL32(35, 35,  50, 200));
             dl->AddText(ImVec2(gx + 2.0f, yLabelTop),           IM_COL32(90, 90, 110, 210), gridLabels[g]);

@@ -14,6 +14,7 @@
 #include "ofxOceanodeShared.h"
 
 #include "ofMain.h"
+#include <algorithm>
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -125,9 +126,7 @@ private:
 
 	/* ─────────── create buffers (following scCustomBuffer pattern) ─────────── */
 	void createBuffers(){
-		constexpr float kSR = 44100.0f;
 		int nCh  = numChannels.get();
-		int nFrm = static_cast<int>(ceil(lengthSec.get() * kSR));  // Convert seconds to frames
 
 		// Create buffers for all servers (like scCustomBuffer does)
 		for(int i = 0; i < servers.size(); i++){
@@ -136,6 +135,8 @@ private:
 				delete recordBufs[i];
 			}
 			
+			const float sr = (float)servers[i]->getSampleRate();
+			int nFrm = std::max(1, static_cast<int>(ceil(lengthSec.get() * sr)));
 			recordBufs[i] = new ofxSCBuffer(nFrm, nCh, servers[i]->getServer());
 			recordBufs[i]->alloc();  // Immediate allocation like scCustomBuffer
 			
@@ -232,7 +233,7 @@ private:
 
 		// Calculate exact recording duration and frames
 		float actualDurationMs = recStopTimeMs - recStartTimeMs;
-		constexpr float sampleRate = 44100.0f;
+		const float sampleRate = (float)servers[activeServer]->getSampleRate();
 		int actualFrames = static_cast<int>((actualDurationMs / 1000.0f) * sampleRate);
 		
 		// Ensure we don't exceed buffer size

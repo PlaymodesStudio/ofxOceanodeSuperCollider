@@ -307,8 +307,9 @@ void scGrainBox::setup() {
 // (created=false) and is baked into the /s_new message via createAndRun.
 void scGrainBox::buildSynth(ofxSCServer* srv) {
     if(!srv) return;
-    bool hadSampleBufs = sampleBufs.count(srv) && !sampleBufs[srv].empty();
-    ofLogNotice("scGrainBox") << "buildSynth: sampleBufs=" << hadSampleBufs
+    reloadSampleBuffersForServer(srv);
+    bool hasSampleBufs = sampleBufs.count(srv) && !sampleBufs[srv].empty();
+    ofLogNotice("scGrainBox") << "buildSynth: sampleBufs=" << hasSampleBufs
         << " samplePath=" << (samplePath.empty() ? "<empty>" : samplePath)
         << " numSampleCh=" << numSampleChannels;
 
@@ -696,6 +697,40 @@ void scGrainBox::loadSample(const std::string& path) {
     oldNumSampleChannels = numSampleChannels;
 }
 
+void scGrainBox::reloadSampleBuffersForServer(ofxSCServer* srv) {
+    if(!srv) return;
+
+    if(sampleBufs.count(srv)) {
+        for(auto* b : sampleBufs[srv]) {
+            if(b) { b->free(); delete b; }
+        }
+        sampleBufs[srv].clear();
+    }
+
+    if(samplePath.empty()) return;
+
+    if(!std::filesystem::exists(samplePath)) {
+        ofLogWarning("scGrainBox") << "Cannot reload sample after server rebuild: " << samplePath;
+        return;
+    }
+
+    for(int ch = 0; ch < numSampleChannels; ch++) {
+        auto* buf = new ofxSCBuffer(0, 0, srv);
+        ofxOscMessage m;
+        m.setAddress("/b_allocReadChannel");
+        m.addIntArg(buf->index);
+        m.addStringArg(samplePath);
+        m.addIntArg(0);
+        m.addIntArg(-1);
+        m.addIntArg(ch);
+        srv->sendMsg(m);
+        sampleBufs[srv].push_back(buf);
+        ofLogNotice("scGrainBox") << "Reloaded sample channel " << ch
+                                  << " for rebuilt server: " << samplePath
+                                  << " bufnum=" << buf->index;
+    }
+}
+
 void scGrainBox::loadWaveformData(const std::string& path) {
     if(path.empty()) return;
     waveformPeaks.assign(WAVEFORM_BINS, 0.0f);
@@ -718,7 +753,7 @@ void scGrainBox::loadWaveformData(const std::string& path) {
     f.seekg(22, std::ios::beg);
     int16_t numCh; f.read((char*)&numCh, 2);
     numSampleChannels = std::max(1, std::min((int)numCh, MAX_CHANNELS));
-    int32_t sampleRate = 44100;
+    int32_t sampleRate = 0;
     f.seekg(24, std::ios::beg);
     f.read((char*)&sampleRate, 4);
     f.seekg(34, std::ios::beg);

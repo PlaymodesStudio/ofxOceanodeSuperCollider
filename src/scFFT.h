@@ -30,9 +30,7 @@
 class scFFT : public ofxOceanodeNodeModel {
 public:
     static constexpr int   NUM_BINS     = 128;
-    static constexpr float SAMPLE_RATE  = 44100.0f;
     static constexpr float FREQ_MIN     = 20.0f;
-    static constexpr float FREQ_MAX     = 22050.0f;
 
     scFFT(vector<serverManager*> outputServers)
         : ofxOceanodeNodeModel("SC FFT")
@@ -163,6 +161,13 @@ private:
     std::array<float, NUM_BINS> displayMagnitudes;
     vector<serverManager*>      servers;
 
+    float getCurrentSampleRate() const {
+        if(serverIndex >= 0 && serverIndex < (int)servers.size() && servers[serverIndex] != nullptr){
+            return (float)std::max(1, servers[serverIndex]->getSampleRate());
+        }
+        return (float)scPreferences().hardwareSampleRate;
+    }
+
     // ── SC management ──────────────────────────────────────────────────────
     void recreateSynth() {
         clearSynth();
@@ -223,7 +228,8 @@ private:
         const float xE        = xS + W;
         const float yE        = yS + specH;          // bottom of bars area
         const float yLabelTop = yE + 1.0f;
-        const float nyquist   = SAMPLE_RATE / 2.0f;
+        const float nyquist   = getCurrentSampleRate() / 2.0f;
+        const float freqMax   = std::max(FREQ_MIN * 1.01f, nyquist);
         const float floorVal  = dbFloor.get();
         const bool  useLog    = logScale.get();
         const bool  useDb     = dbScale.get();
@@ -240,10 +246,10 @@ private:
         // ── Frequency grid + labels ─────────────────────────────────────────
         static const float gridFreqs[]  = { 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000 };
         static const char* gridLabels[] = { "50","100","200","500","1k","2k","5k","10k","20k" };
-        const float logRatio = std::log(FREQ_MAX / FREQ_MIN);
+        const float logRatio = std::log(freqMax / FREQ_MIN);
 
         for(int g = 0; g < 9; g++) {
-            if(gridFreqs[g] > FREQ_MAX) break;
+            if(gridFreqs[g] > freqMax) break;
             float gx = useLog
                 ? xS + W * (std::log(gridFreqs[g] / FREQ_MIN) / logRatio)
                 : xS + W * (gridFreqs[g] / nyquist);
@@ -256,7 +262,7 @@ private:
         auto bandToX = [&](float b) -> float {
             float t = b / (float)NUM_BINS;
             if(useLog) return xS + W * t;
-            float fc = FREQ_MIN * std::pow(FREQ_MAX / FREQ_MIN, t);
+            float fc = FREQ_MIN * std::pow(freqMax / FREQ_MIN, t);
             return xS + W * (fc / nyquist);
         };
 
@@ -300,8 +306,8 @@ private:
                     x1 = xS + W * t1;
                     x2 = xS + W * t2;
                 } else {
-                    float fc1 = FREQ_MIN * std::pow(FREQ_MAX / FREQ_MIN, t1);
-                    float fc2 = FREQ_MIN * std::pow(FREQ_MAX / FREQ_MIN, t2);
+                    float fc1 = FREQ_MIN * std::pow(freqMax / FREQ_MIN, t1);
+                    float fc2 = FREQ_MIN * std::pow(freqMax / FREQ_MIN, t2);
                     x1 = xS + W * (fc1 / nyquist);
                     x2 = xS + W * (fc2 / nyquist);
                 }

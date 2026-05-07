@@ -6,6 +6,7 @@
 #include "ofxSCSynth.h"
 #include "serverManager.h"
 #include "ofMain.h"
+#include <algorithm>
 
 class scBufferAllocator : public ofxOceanodeNodeModel {
 public:
@@ -72,10 +73,11 @@ private:
 	void recreateResources() {
 		cleanup();
 		if(input->getNodeRef() == nullptr) return;
+		if(serverIndex < 0 || serverIndex >= (int)servers.size()) return;
 
-		const float sr = 44100.0f;
+		const float sr = (float)servers[serverIndex]->getSampleRate();
 		int ch = numChannels.get();
-		int frames = static_cast<int>((lengthMs.get() / 1000.f) * sr);
+		int frames = std::max(1, static_cast<int>((lengthMs.get() / 1000.f) * sr));
 
 		vector<int> indices(ch, -1);
 		buffers.clear();

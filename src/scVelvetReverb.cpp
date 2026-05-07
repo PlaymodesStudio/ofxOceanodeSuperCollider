@@ -15,6 +15,7 @@
 #include "ofxSuperCollider.h"
 #include "ofxOscMessage.h"
 #include "ofxOceanodeShared.h"
+#include "serverManager.h"
 #include "imgui.h"
 #include <cmath>
 #include <algorithm>
@@ -139,7 +140,7 @@ void scVelvetReverb::update(ofEventArgs& args) {
             // then generate IR in C++ and upload via /b_setn.
             if(s.timer >= 0.3f) {
                  if(s.irBuffer) {
-                    const float  sr   = 44100.0f;
+                    const float  sr   = (float)serverManager::getSampleRateForServer(srv);
                     unsigned int seed = (unsigned int)(rt60.get()        * 1000.0f)
                                       ^ (unsigned int)(brightness.get()  * 10000.0f)
                                       ^ (unsigned int)(damping.get()     * 100000.0f);
@@ -285,7 +286,8 @@ void scVelvetReverb::startSyntheticIRForServer(ofxSCServer* srv) {
     cancelLoad(srv);
 
     ServerState& s  = serverStates[srv];
-    int irFrames    = (int)(rt60.get() * 44100.0f) + 512;
+    const float sr  = (float)serverManager::getSampleRateForServer(srv);
+    int irFrames    = (int)(rt60.get() * sr) + 512;
     s.irBuffer      = new ofxSCBuffer(irFrames, 1, srv);
     s.irBuffer->alloc();
 
@@ -302,7 +304,7 @@ void scVelvetReverb::allocExactSpecBuffer(ofxSCServer* srv, int irFrames) {
     if(s.pendingSpecBuffer) {
         s.pendingSpecBuffer->free(); delete s.pendingSpecBuffer; s.pendingSpecBuffer = nullptr;
     }
-    if(irFrames <= 1) irFrames = (int)(rt60.get() * 44100.0f) + 512;
+    if(irFrames <= 1) irFrames = (int)(rt60.get() * serverManager::getSampleRateForServer(srv)) + 512;
     int partSize    = kFftSize / 2;
     int nPartitions = (irFrames + partSize - 1) / partSize;
     s.pendingSpecBuffer = new ofxSCBuffer(nPartitions * kFftSize, 1, srv);

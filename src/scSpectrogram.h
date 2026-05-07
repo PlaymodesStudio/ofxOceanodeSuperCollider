@@ -34,7 +34,6 @@ public:
     static constexpr int   NUM_BANDS   = 1080;
     static constexpr int   FBO_WIDTH   = 1920;
     static constexpr int   FBO_HEIGHT  = NUM_BANDS;
-    static constexpr float SAMPLE_RATE = 44100.0f;
     static constexpr float FREQ_MIN    = 20.0f;
     static constexpr float FREQ_MAX    = 22050.0f;
 

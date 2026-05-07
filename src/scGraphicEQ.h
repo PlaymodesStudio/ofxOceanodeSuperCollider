@@ -20,6 +20,7 @@
 #include "scNode.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
+#include "serverManager.h"
 #include <map>
 #include <array>
 #include <cmath>
@@ -108,7 +109,6 @@ private:
     static constexpr float FFT_FREQ_MIN    = 20.0f;
     static constexpr float FFT_FREQ_MAX    = 22050.0f;
     static constexpr float FFT_DB_FLOOR    = -80.0f;
-    static constexpr float SAMPLE_RATE     = 44100.0f;
 
     std::array<float, NUM_FREQ_POINTS> combinedCurveDb;
     std::array<float, NUM_BINS>        fftMagnitudes;
@@ -123,6 +123,7 @@ private:
     static BiquadCoeffs computePeakEQ   (float freqHz, float gainDb, float qFactor, float sr);
     static float        computeMagnitudeDb(const BiquadCoeffs& c, float freqHz, float sr);
 
+    float getDisplaySampleRate() const;
     void recomputeEQCurve();
 
     // --- ImGui visualization ---
