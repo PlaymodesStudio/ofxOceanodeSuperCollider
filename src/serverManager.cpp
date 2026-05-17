@@ -11,7 +11,7 @@
 #include "ofxSuperCollider.h"
 #include "scNode.h"
 #include "scStart.h"
-#include "nodes/scOutput.h"
+#include "scOutput.h"
 #include "ofxOceanodeShared.h"
 
 std::map<ofxSCServer*, int> serverManager::serverSampleRates;

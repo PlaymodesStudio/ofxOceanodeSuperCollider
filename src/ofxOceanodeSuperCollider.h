@@ -16,7 +16,7 @@
 #include "scNode.h"
 #include "ofxOceanodeSuperColliderController.h"
 #include "ofxSCServer.h"
-#include "nodes/scOutput.h"
+#include "scOutput.h"
 
 //#include "scOut.h"
 #include "nodes/scTonal.h"
