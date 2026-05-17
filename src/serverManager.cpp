@@ -11,7 +11,7 @@
 #include "ofxSuperCollider.h"
 #include "scNode.h"
 #include "scStart.h"
-#include "scOutput.h"
+#include "nodes/scOutput.h"
 #include "ofxOceanodeShared.h"
 
 std::map<ofxSCServer*, int> serverManager::serverSampleRates;
@@ -53,6 +53,7 @@ void serverManager::setup(){
     boot();
     
     listeners.push(ofxOceanodeShared::getPresetWillBeLoadedEvent().newListener([this](){
+        if(ofxOceanodeShared::getPresetLoadType() == ofxOceanodePresetLoadType_ClipboardPaste) return;
         teardownGraphForPresetLoad();
     }));
     
