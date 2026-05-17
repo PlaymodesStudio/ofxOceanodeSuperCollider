@@ -4,7 +4,7 @@
 //
 
 #include "pinkTromboneNode.h"
-#include "pinkTrombone/noise.hpp"   // pt_noise_seed()
+#include "../external/pinkTrombone/noise.hpp"   // pt_noise_seed()
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constructor / Destructor

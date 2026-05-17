@@ -112,6 +112,7 @@ private:
     // with Oceanode at any given time (Feature 3).
     struct ParamSlot {
         ofParameter<vector<float>> param;
+        std::shared_ptr<ofxOceanodeParameter<vector<float>>> registeredParam;
     };
     std::array<ParamSlot, kMaxParams> paramSlots;
 
@@ -145,6 +146,7 @@ private:
     bool scriptListDirty   = true;
     bool pendingLoadDialog = false;
     bool pendingSaveDialog = false;
+    std::string pendingScriptLoadPath;
 
     void refreshScriptList();
     void loadScriptFile(const std::string& path);

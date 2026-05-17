@@ -42,9 +42,9 @@
 #include <vector>
 
 // ── Pink Trombone engine ─────────────────────────────────────────────────────
-#include "pinkTrombone/Glottis.hpp"
-#include "pinkTrombone/Tract.hpp"
-#include "pinkTrombone/WhiteNoise.hpp"
+#include "../external/pinkTrombone/Glottis.hpp"
+#include "../external/pinkTrombone/Tract.hpp"
+#include "../external/pinkTrombone/WhiteNoise.hpp"
 
 // ─────────────────────────────────────────────────────────────────────────────
 class pinkTromboneNode : public scNode {
