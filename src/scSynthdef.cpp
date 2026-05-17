@@ -16,6 +16,10 @@ scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synth
 }
 
 void scSynthdef::setup(){
+    // Keep metadata-backed descriptions available in the inspector even if the
+    // model lifecycle changes and setup() runs after construction-only state.
+    description = synthDescription.description;
+
     //First check for inputs
     for(auto spec : synthDescription.params){
         auto specMap = spec.second;
