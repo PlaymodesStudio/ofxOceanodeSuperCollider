@@ -38,6 +38,7 @@ private:
     void reloadAudioDevices();
     void syncAudioDeviceSelection();
     void syncSampleRateSelection();
+    bool hasAvailableAudioDevice(const std::string& deviceName) const;
     std::string getSuperColliderDeviceName(const std::string& deviceName) const;
     std::string getAudioDeviceNameFromSelection() const;
     int getSampleRateFromSelection() const;

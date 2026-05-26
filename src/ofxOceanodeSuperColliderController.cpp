@@ -300,23 +300,21 @@ void ofxOceanodeSuperColliderController::syncAudioDeviceSelection(){
     }
 
     audioDevice = 0;
-    const std::string displayName = selectedAudioDeviceName == "nil" ? "Default" : selectedAudioDeviceName;
-    for(int i = 0; i < (int)audioDeviceNames.size(); i++){
-        if(audioDeviceNames[i] == displayName ||
-           (i < (int)audioDeviceSuperColliderNames.size() && audioDeviceSuperColliderNames[i] == selectedAudioDeviceName)){
+    if(selectedAudioDeviceName == "nil"){
+        return;
+    }
+
+    for(int i = 0; i < (int)audioDeviceSuperColliderNames.size(); i++){
+        if(audioDeviceSuperColliderNames[i] == selectedAudioDeviceName){
             audioDevice = i;
             return;
         }
     }
 
-    if(selectedAudioDeviceName != "nil"){
-        audioDeviceNames.push_back(selectedAudioDeviceName);
-        audioDeviceSuperColliderNames.push_back(selectedAudioDeviceName);
-        audioDeviceInputChannels.push_back(0);
-        audioDeviceOutputChannels.push_back(0);
-        audioDeviceSampleRates.push_back({});
-        audioDevice = (int)audioDeviceNames.size() - 1;
-    }
+    ofLogWarning("ofxOceanodeSuperColliderController") << "Saved audio device \"" << selectedAudioDeviceName
+        << "\" is not available on this computer. Falling back to the system default device.";
+    selectedAudioDeviceName = "nil";
+    audioDevice = 0;
 }
 
 void ofxOceanodeSuperColliderController::syncSampleRateSelection(){
@@ -354,6 +352,15 @@ std::string ofxOceanodeSuperColliderController::getSuperColliderDeviceName(const
     return deviceName.substr(separator + 2);
 }
 
+bool ofxOceanodeSuperColliderController::hasAvailableAudioDevice(const std::string& deviceName) const{
+    if(deviceName.empty() || deviceName == "Default" || deviceName == "nil"){
+        return true;
+    }
+
+    return std::find(audioDeviceSuperColliderNames.begin(), audioDeviceSuperColliderNames.end(), deviceName)
+        != audioDeviceSuperColliderNames.end();
+}
+
 std::string ofxOceanodeSuperColliderController::getAudioDeviceNameFromSelection() const{
     if(audioDevice <= 0 || audioDevice >= (int)audioDeviceSuperColliderNames.size()){
         return "nil";
@@ -369,7 +376,14 @@ int ofxOceanodeSuperColliderController::getSampleRateFromSelection() const{
 }
 
 void ofxOceanodeSuperColliderController::applyAudioDeviceToServers(bool restartServers){
-    const std::string deviceName = getAudioDeviceNameFromSelection();
+    const bool requestedDeviceAvailable = hasAvailableAudioDevice(selectedAudioDeviceName);
+    const std::string deviceName = requestedDeviceAvailable ? getAudioDeviceNameFromSelection() : "nil";
+    if(!requestedDeviceAvailable){
+        selectedAudioDeviceName = "nil";
+        audioDevice = 0;
+        syncSampleRateSelection();
+    }
+
     const int inputChannels = (audioDevice >= 0 && audioDevice < (int)audioDeviceInputChannels.size()) ? audioDeviceInputChannels[audioDevice] : 0;
     const int outputChannels = (audioDevice >= 0 && audioDevice < (int)audioDeviceOutputChannels.size()) ? audioDeviceOutputChannels[audioDevice] : 0;
     selectedAudioDeviceName = deviceName;
