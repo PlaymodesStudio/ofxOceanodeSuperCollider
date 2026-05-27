@@ -17,32 +17,9 @@
 #include <vector>
 #include <fstream>
 
-// Static member initialization for global FXP cache
 std::map<std::string, std::vector<uint8_t>> scVST::globalFXPCache;
 std::map<std::string, bool> scVST::globalFXPCacheValid;
 std::mutex scVST::globalCacheMutex;
-
-// OSC Message Pool implementation
-std::unique_ptr<ofxOscMessage> scVST::OSCMessagePool::acquire() {
-	std::lock_guard<std::mutex> lock(poolMutex);
-	if(!pool.empty()) {
-		auto msg = std::move(pool.back());
-		pool.pop_back();
-		msg->clear();
-		return msg;
-	}
-	return std::make_unique<ofxOscMessage>();
-}
-
-void scVST::OSCMessagePool::release(std::unique_ptr<ofxOscMessage> msg) {
-	if(!msg) return;
-	std::lock_guard<std::mutex> lock(poolMutex);
-	if(pool.size() < 100) { // Keep pool size reasonable
-		msg->clear();
-		pool.push_back(std::move(msg));
-	}
-}
-
 
 scVST::scVST() : scNode("VST") {
 	isPresetLoading = false;
@@ -57,47 +34,43 @@ scVST::scVST() : scNode("VST") {
 	
 	waitingForFXPSave = false;
 	waitingForFXPLoad = false;
+	lastFXPWriteSucceeded = false;
+	activeFXPWriteOperation = FXPWriteOperation::None;
+	activeFXPReadOperation = FXPReadOperation::None;
+	activeFXPWriteNodeID = -1;
+	activeFXPWriteStartTime = 0;
 	
-	// NEW: Initialize state tracking variables
 	oceanodePresetLoading = false;
 	vstStateModifiedSincePreset = false;
 	lastParameterChangeTime = 0;
-	parameterDebounceDelay = 1000; // 1 second default debounce
+	parameterDebounceDelay = 1000;
 	parameterCacheScheduled = false;
+	clearAllParameterSlotCaches();
 	fxpCacheSaveInProgress.store(false, std::memory_order_relaxed);
 	fxpCacheSavePending.store(false, std::memory_order_relaxed);
 	
-	// FXP PRESET LOADING: Initialize critical flag for reliable FXP loading
 	isFXPLoading.store(false, std::memory_order_relaxed);
 	fxpLoadStartTime = 0;
 	
-	// PERFORMANCE: Initialize MIDI output with relaxed memory ordering for speed
 	midiOutputDirty.store(false, std::memory_order_relaxed);
 	lastMidiUpdateTime = 0;
 	
-	// PERFORMANCE: Throttle maintenance tasks to reduce CPU load
 	lastMaintenanceTime = 0;
-	maintenanceIntervalMs = 50;  // Run maintenance max 20 times per second
+	maintenanceIntervalMs = 50;
 	lastParamThrottleCleanup = 0;
-	paramThrottleCleanupInterval = 5000;  // Clean throttle map every 5 seconds
+	paramThrottleCleanupInterval = 5000;
 	
-	// PERFORMANCE: Initialize lock-free parameter tracking
 	for(int i = 0; i < 1024; i++) {
 		parameterUpdateGeneration[i].store(0, std::memory_order_relaxed);
 		parameterDirty[i].store(false, std::memory_order_relaxed);
+		feedbackSuppressUntil[i].store(0, std::memory_order_relaxed);
+		latestParameterValues[i].store(0.0f, std::memory_order_relaxed);
+		latestParameterNodeIDs[i].store(-1, std::memory_order_relaxed);
 	}
 	
-	// PERFORMANCE: Pre-allocate batch processing
-	pendingParameterUpdates.reserve(MAX_PENDING_UPDATES);
 	lastBatchProcessTime = 0;
-	batchedUpdatedParamIndices.reserve(MAX_PENDING_UPDATES);
-	batchedParamSeen.fill(0);
-	
-	// PERFORMANCE: Pre-allocate string cache to avoid allocations
-	cachedAddressString.reserve(32);
-	
-	// PERFORMANCE: Reserve space for pending OSC messages
-	pendingOscMessages.reserve(MAX_PENDING_OSC_MESSAGES);
+	pendingGUISeen.fill(0);
+	pendingGUIParamIndices.reserve(128);
 }
 
 void scVST::setup(){
@@ -106,15 +79,29 @@ void scVST::setup(){
 	hasSavedFXPData = false;
 	waitingForFXPSave = false;
 	waitingForFXPLoad = false;
+	lastFXPWriteSucceeded = false;
+	activeFXPWriteOperation = FXPWriteOperation::None;
+	activeFXPReadOperation = FXPReadOperation::None;
+	activeFXPWriteNodeID = -1;
+	activeFXPWritePath.clear();
+	activeFXPWriteNodeKey.clear();
+	activeFXPWriteStartTime = 0;
+	clearAllParameterSlotCaches();
+	for(int i = 0; i < 1024; i++) {
+		parameterDirty[i].store(false, std::memory_order_relaxed);
+		latestParameterValues[i].store(0.0f, std::memory_order_relaxed);
+		latestParameterNodeIDs[i].store(-1, std::memory_order_relaxed);
+	}
+	pendingGUISeen.fill(0);
+	pendingGUIParamIndices.clear();
+	clearAllFeedbackSuppression();
 	
-	// CRITICAL: Add input and output FIRST to ensure they exist before any other initialization
-	// This prevents crashes when macros call update() on connected nodes during preset loading
+	// Inputs and outputs need to exist before preset loading can trigger upstream updates.
 	scNode::addInput("In");
 	scNode::addOutput("Out");
 	
-	// Basic parameters
 	addParameter(numChannels.set("N Chan", 2, 1, MAX_NODE_CHANNELS));
-	addParameter(mix.set("Mix", 1.0f, 0.0f, 1.0f));  // NEW: Dry/wet mix control
+	addParameter(mix.set("Mix", 1.0f, 0.0f, 1.0f));
 	
 	// Thick separator after VST controls
 	addCustomRegion(
@@ -122,7 +109,6 @@ void scVST::setup(){
 					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); })
 					);
 	
-	// Search for VST plugins on setup
 	searchForVSTPlugins();
 	
 	if (!availablePlugins.empty()) {
@@ -130,7 +116,6 @@ void scVST::setup(){
 							 ofxOceanodeParameterFlags_DisableSavePreset);
 		currentPluginPath = pluginPaths[0]; // Set default to first plugin
 	} else {
-		// Fallback if no plugins found
 		availablePlugins.push_back("No VST plugins found");
 		pluginPaths.push_back("");
 		addParameterDropdown(pluginSelector, "Plugin", 0, availablePlugins,
@@ -452,18 +437,15 @@ void scVST::setup(){
 	}));
 	
 	listeners.push(resendParams.newListener([this](){
-		// Apply numChannels and mix to all instances
 		for(auto& serverInstances : synthInstances){
 			for(auto synth : serverInstances.second){
 				if(synth != nullptr){
 					synth->set("inChannels", numChannels);
-					synth->set("mix", mix);  // NEW: Also resend mix parameter
+					synth->set("mix", mix);
 				}
 			}
 		}
 	}));
-	
-	// Output was already added at the beginning of setup() to prevent race conditions
 	
 	addCustomRegion(
 					ofParameter<std::function<void()>>().set("", [](){ drawSeparator(); }),
@@ -473,87 +455,96 @@ void scVST::setup(){
 	listeners.push(ofEvents().update.newListener([this](ofEventArgs&) {
 		uint64_t currentTime = ofGetElapsedTimeMillis();
 		
-		// PERFORMANCE: Batch process pending parameter updates
 		if(currentTime - lastBatchProcessTime >= BATCH_PROCESS_INTERVAL_MS) {
 			processPendingParameterUpdates();
+			flushPendingGUIParameterUpdates();
 			lastBatchProcessTime = currentTime;
 		}
 		
-		// MIDI output update - only when dirty and throttled
 		if(midiOutputDirty.load(std::memory_order_acquire)) {
-			if(currentTime - lastMidiUpdateTime >= 16) { // ~60fps max
+			if(currentTime - lastMidiUpdateTime >= 16) {
 				updateMidiOutputs();
 			}
 		}
 		
-		// PERFORMANCE: Throttled maintenance tasks
 		if(currentTime - lastMaintenanceTime < maintenanceIntervalMs) {
-			return;  // Skip maintenance this frame
+			return;
 		}
 		lastMaintenanceTime = currentTime;
 		
-		// Transport feedback clearing
 		if(transportFeedbackSuppressed && currentTime >= transportFeedbackClearTime) {
 			transportFeedbackSuppressed = false;
 		}
 		
-		// Parameter timer logic - now with extension if VST not ready
+		// If the plugin has not reported ready yet, keep extending the delayed
+		// preset application window instead of abandoning the pending data.
 		if(parameterTimerActive) {
 			if(currentTime - parameterTimerStart >= parameterTimerDelay) {
 				
 				if(areAllInstancesReady()) {
-					// VST is ready, apply preset data
 					parameterTimerActive = false;
 					ofLogNotice("scVST") << "Timer timeout - VST ready, applying preset data now";
 					if(hasPendingPresetData) {
 						applyPendingPresetData();
 					}
 				} else {
-					// VST not ready yet - extend the timer instead of giving up
 					ofLogWarning("scVST") << "Timer timeout but VST not ready - extending wait by 2s";
 					parameterTimerStart = currentTime;
-					parameterTimerDelay = 2000;  // Wait another 2 seconds
-					// parameterTimerActive stays true
+					parameterTimerDelay = 2000;
 				}
 			}
 		}
 		
-		// FXP PRESET LOADING: Check for FXP loading timeout
 		if(isFXPLoading.load(std::memory_order_acquire)) {
 			if(currentTime - fxpLoadStartTime > FXP_LOAD_TIMEOUT_MS) {
 				ofLogWarning("scVST") << "FXP loading timeout - clearing flag";
 				isFXPLoading.store(false, std::memory_order_release);
-			}
-		}
-		
-		// FXP cache updates
-		updateFXPCacheIfNeeded();
-		updateParameterDebouncedCacheIfNeeded();
-		
-		// PERFORMANCE: Feedback clearing logic with minimal locking
-		if(!feedbackClearTimes.empty()) {
-			std::unique_lock<std::mutex> lock(feedbackMutex, std::try_to_lock);
-			if(lock.owns_lock()) {
-				auto it = feedbackClearTimes.begin();
-				while(it != feedbackClearTimes.end()) {
-					if(currentTime >= it->second) {
-						suppressingFeedback.erase(it->first);
-						it = feedbackClearTimes.erase(it);
-					} else {
-						++it;
-					}
+				if(fxpCacheSavePending.exchange(false, std::memory_order_acq_rel)) {
+					scheduleImmediateFXPCache();
 				}
 			}
 		}
+
+		if(activeFXPWriteOperation != FXPWriteOperation::None &&
+		   currentTime - activeFXPWriteStartTime > FXP_WRITE_TIMEOUT_MS) {
+			ofLogWarning("scVST") << "FXP write timeout - clearing pending operation";
+
+			switch(activeFXPWriteOperation) {
+				case FXPWriteOperation::PresetSave:
+					waitingForFXPSave = false;
+					cleanupTempFXPFile();
+					break;
+				case FXPWriteOperation::CacheSave: {
+					fxpCacheSaveInProgress.store(false, std::memory_order_release);
+					try {
+						if(!activeFXPWritePath.empty()) ofFile::removeFile(activeFXPWritePath);
+					} catch(...) {}
+					bool scheduleFollowUpSave = fxpCacheSavePending.exchange(false, std::memory_order_acq_rel);
+					if(scheduleFollowUpSave) scheduleImmediateFXPCache();
+					break;
+				}
+				case FXPWriteOperation::UserExport:
+					ofLogWarning("scVST") << "User FXP export timed out";
+					break;
+				case FXPWriteOperation::SyncSave:
+					resetSyncFXPState(true);
+					break;
+				case FXPWriteOperation::None:
+					break;
+			}
+
+			clearActiveFXPWriteState();
+		}
 		
-		// PERFORMANCE: Periodic cleanup of dirty flags
+		updateFXPCacheIfNeeded();
+		updateParameterDebouncedCacheIfNeeded();
+		
 		if(currentTime - lastParamThrottleCleanup > paramThrottleCleanupInterval) {
 			lastParamThrottleCleanup = currentTime;
-			// Clear old dirty flags that weren't processed
 			for(int i = 0; i < 1024; i++) {
 				if(parameterDirty[i].load(std::memory_order_acquire)) {
 					uint64_t lastUpdate = parameterUpdateGeneration[i].load(std::memory_order_acquire);
-					if(currentTime - lastUpdate > 1000) { // Clear if older than 1 second
+					if(currentTime - lastUpdate > 1000) {
 						parameterDirty[i].store(false, std::memory_order_release);
 					}
 				}
@@ -721,62 +712,157 @@ void scVST::searchForVSTPlugins() {
 	}}
 
 void scVST::processPendingParameterUpdates() {
-	if(pendingParameterUpdates.empty()) return;
-	
-	std::vector<PendingParameterUpdate> updates;
-	{
-		std::lock_guard<std::mutex> lock(pendingUpdatesMutex);
-		updates = std::move(pendingParameterUpdates);
-		pendingParameterUpdates.clear();
-		pendingParameterUpdates.reserve(MAX_PENDING_UPDATES);
-	}
-	
-	batchedUpdatedParamIndices.clear();
-
-	// Group updates by parameter using fixed-size scratch buffers to avoid map allocations
-	for(const auto& update : updates) {
-		if(!batchedParamSeen[update.paramIndex]) {
-			batchedParamSeen[update.paramIndex] = 1;
-			batchedUpdatedParamIndices.push_back(update.paramIndex);
+	for(int paramIndex = 0; paramIndex < 1024; ++paramIndex) {
+		if(!parameterDirty[paramIndex].exchange(false, std::memory_order_acq_rel)) {
+			continue;
 		}
 
-		batchedLatestValues[update.paramIndex] = update.value;
-		batchedLatestNodeIDs[update.paramIndex] = update.nodeID;
-	}
-
-	// Preserve the previous std::map iteration order: ascending parameter index
-	std::sort(batchedUpdatedParamIndices.begin(), batchedUpdatedParamIndices.end());
-	
-	// Apply only the latest value for each parameter
-	for(int paramIndex : batchedUpdatedParamIndices) {
-		float value = batchedLatestValues[paramIndex];
-		int nodeID = batchedLatestNodeIDs[paramIndex];
+		float value = latestParameterValues[paramIndex].load(std::memory_order_acquire);
+		int nodeID = latestParameterNodeIDs[paramIndex].load(std::memory_order_acquire);
+		if(nodeID < 0) {
+			continue;
+		}
 		
 		// Update parameter info
-		if(parameterInfoMap.count(paramIndex) == 0) {
+		auto infoSlot = parameterInfoSlots[paramIndex];
+		if(infoSlot == nullptr) {
 			VSTParameterInfo info;
 			info.index = paramIndex;
-			info.displayName = savedParameterNames.count(paramIndex) > 0 ?
-			savedParameterNames[paramIndex] : "Param" + ofToString(paramIndex);
+			info.displayName = savedParameterNamePresent[paramIndex] ?
+			savedParameterNameSlots[paramIndex] : "Param" + ofToString(paramIndex);
 			info.value = value;
 			parameterInfoMap[paramIndex] = info;
+			cacheParameterInfoSlot(paramIndex);
+			infoSlot = parameterInfoSlots[paramIndex];
 		} else {
-			parameterInfoMap[paramIndex].value = value;
+			infoSlot->value = value;
 		}
 		
-		// Update GUI parameter
-		updateParameterValueFromVST(paramIndex, value, nodeID);
-		
-		// Clear dirty flag
-		parameterDirty[paramIndex].store(false, std::memory_order_release);
+		// GUI writes are flushed once per update tick to keep OSC feedback cheap.
+		queueGUIParameterUpdate(paramIndex, value, nodeID);
 		
 		// Handle propagation if needed
 		if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
 			propagateParameterToOtherInstances(nodeID, paramIndex, value);
 		}
-
-		batchedParamSeen[paramIndex] = 0;
 	}
+}
+
+void scVST::queueGUIParameterUpdate(int paramIndex, float value, int sourceNodeID) {
+	if(!pendingGUISeen[paramIndex]) {
+		pendingGUISeen[paramIndex] = 1;
+		pendingGUIParamIndices.push_back(paramIndex);
+	}
+
+	pendingGUIValues[paramIndex] = value;
+	pendingGUINodeIDs[paramIndex] = sourceNodeID;
+}
+
+void scVST::flushPendingGUIParameterUpdates() {
+	if(pendingGUIParamIndices.empty()) return;
+
+	for(int paramIndex : pendingGUIParamIndices) {
+		applyGUIParameterValueFromVST(paramIndex, pendingGUIValues[paramIndex], pendingGUINodeIDs[paramIndex]);
+		pendingGUISeen[paramIndex] = 0;
+	}
+
+	pendingGUIParamIndices.clear();
+}
+
+bool scVST::isFeedbackSuppressed(int paramIndex, uint64_t currentTime) const {
+	return paramIndex >= 0 &&
+		   paramIndex < 1024 &&
+		   currentTime < feedbackSuppressUntil[paramIndex].load(std::memory_order_acquire);
+}
+
+void scVST::suppressFeedbackFor(int paramIndex, uint64_t untilTime) {
+	if(paramIndex >= 0 && paramIndex < 1024) {
+		feedbackSuppressUntil[paramIndex].store(untilTime, std::memory_order_release);
+	}
+}
+
+void scVST::clearAllFeedbackSuppression() {
+	for(auto& suppressUntil : feedbackSuppressUntil) {
+		suppressUntil.store(0, std::memory_order_relaxed);
+	}
+}
+
+void scVST::cacheParameterInfoSlot(int paramIndex) {
+	if(paramIndex < 0 || paramIndex >= 1024) return;
+	auto it = parameterInfoMap.find(paramIndex);
+	parameterInfoSlots[paramIndex] = it != parameterInfoMap.end() ? &it->second : nullptr;
+}
+
+void scVST::clearParameterInfoSlot(int paramIndex) {
+	if(paramIndex < 0 || paramIndex >= 1024) return;
+	parameterInfoSlots[paramIndex] = nullptr;
+}
+
+void scVST::cacheDynamicScalarParameterSlot(int paramIndex, const shared_ptr<ofxOceanodeParameter<float>>& param) {
+	if(paramIndex < 0 || paramIndex >= 1024) return;
+	dynamicScalarParameterSlots[paramIndex] = param;
+}
+
+void scVST::cacheDynamicVectorParameterSlot(int paramIndex, const shared_ptr<ofxOceanodeParameter<vector<float>>>& param) {
+	if(paramIndex < 0 || paramIndex >= 1024) return;
+	dynamicVectorParameterSlots[paramIndex] = param;
+}
+
+void scVST::clearDynamicParameterSlots(int paramIndex) {
+	if(paramIndex < 0 || paramIndex >= 1024) return;
+	dynamicScalarParameterSlots[paramIndex].reset();
+	dynamicVectorParameterSlots[paramIndex].reset();
+}
+
+shared_ptr<ofxOceanodeParameter<float>> scVST::resolveDynamicScalarParameterSlot(int paramIndex) {
+	if(paramIndex < 0 || paramIndex >= 1024) return nullptr;
+
+	auto param = dynamicScalarParameterSlots[paramIndex];
+	if(param) return param;
+
+	auto it = dynamicParameters.find(paramIndex);
+	if(it == dynamicParameters.end()) return nullptr;
+
+	cacheDynamicScalarParameterSlot(paramIndex, it->second);
+	return it->second;
+}
+
+shared_ptr<ofxOceanodeParameter<vector<float>>> scVST::resolveDynamicVectorParameterSlot(int paramIndex) {
+	if(paramIndex < 0 || paramIndex >= 1024) return nullptr;
+
+	auto param = dynamicVectorParameterSlots[paramIndex];
+	if(param) return param;
+
+	auto it = dynamicVectorParameters.find(paramIndex);
+	if(it == dynamicVectorParameters.end()) return nullptr;
+
+	cacheDynamicVectorParameterSlot(paramIndex, it->second);
+	return it->second;
+}
+
+bool scVST::isParameterPublished(int paramIndex) {
+	return resolveDynamicScalarParameterSlot(paramIndex) != nullptr ||
+		   resolveDynamicVectorParameterSlot(paramIndex) != nullptr;
+}
+
+void scVST::cacheSavedParameterNameSlot(int paramIndex, const std::string& name) {
+	if(paramIndex < 0 || paramIndex >= 1024) return;
+	savedParameterNameSlots[paramIndex] = name;
+	savedParameterNamePresent[paramIndex] = 1;
+}
+
+void scVST::clearSavedParameterNameSlot(int paramIndex) {
+	if(paramIndex < 0 || paramIndex >= 1024) return;
+	savedParameterNameSlots[paramIndex].clear();
+	savedParameterNamePresent[paramIndex] = 0;
+}
+
+void scVST::clearAllParameterSlotCaches() {
+	parameterInfoSlots.fill(nullptr);
+	for(auto& scalarSlot : dynamicScalarParameterSlots) scalarSlot.reset();
+	for(auto& vectorSlot : dynamicVectorParameterSlots) vectorSlot.reset();
+	for(auto& savedName : savedParameterNameSlots) savedName.clear();
+	savedParameterNamePresent.fill(0);
 }
 
 void scVST::loadSelectedPlugin() {
@@ -787,6 +873,10 @@ void scVST::loadSelectedPlugin() {
 	
 	// Clear existing parameter mappings
 	parameterInfoMap.clear();
+	for(int i = 0; i < 1024; ++i) {
+		clearParameterInfoSlot(i);
+		clearDynamicParameterSlots(i);
+	}
 	
 	if (!isPresetLoading) {
 		ofLogNotice("scVST") << "Removing existing GUI parameters before loading new plugin";
@@ -880,20 +970,16 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 		int paramIndex = (int)msg.getArgAsFloat(2);
 		float value = msg.getArgAsFloat(3);
 		
-		// PERFORMANCE: Early exit without string operations
 		if (!isMyVSTInstance(nodeID)) return;
 		if (paramIndex < 0 || paramIndex >= 1024) return;
 		
-		// FXP PRESET LOADING: Use blocking updates during FXP load
 		bool useFXPLoading = isFXPLoading.load(std::memory_order_acquire);
 		uint64_t currentTime = ofGetElapsedTimeMillis();
 		
 		if(useFXPLoading) {
-			// During FXP loading, keep the original immediate path for reliable recall
-			// Only update lastTouchedIndex if this parameter is NOT already published
-			// This prevents automated parameters from overriding manual GUI tweaks
-			bool isAlreadyPublished = (dynamicParameters.count(paramIndex) > 0 ||
-									   dynamicVectorParameters.count(paramIndex) > 0);
+			// During FXP recall we stay on the immediate path so state restoration
+			// is not delayed by the normal steady-state batcher.
+			bool isAlreadyPublished = isParameterPublished(paramIndex);
 			
 			if (!isAlreadyPublished) {
 				lastTouchedIndex = paramIndex;
@@ -902,61 +988,56 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 				<< " from node " << nodeID << " (updating lastTouchedIndex for addLast)";
 			}
 			
-			// Update parameter info
-			if(parameterInfoMap.count(paramIndex) == 0) {
+			auto infoSlot = parameterInfoSlots[paramIndex];
+			if(infoSlot == nullptr) {
 				VSTParameterInfo info;
 				info.index = paramIndex;
 				
-				// Check if we have a saved name from preset loading
-				if(savedParameterNames.count(paramIndex) > 0) {
-					info.displayName = savedParameterNames[paramIndex];
+				if(savedParameterNamePresent[paramIndex]) {
+					info.displayName = savedParameterNameSlots[paramIndex];
 				} else {
 					info.displayName = "Param" + ofToString(paramIndex);
 				}
 				
 				info.value = value;
 				parameterInfoMap[paramIndex] = info;
+				cacheParameterInfoSlot(paramIndex);
 			} else {
-				parameterInfoMap[paramIndex].value = value;
+				infoSlot->value = value;
 			}
 			
-			// During FXP loading, process immediately without throttling
 			updateParameterValueFromVST(paramIndex, value, nodeID);
 			
-			// ONLY propagate if this change came from GUI interaction on the first instance
-			// AND we don't have a vector parameter controlling this parameter
 			if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
 				propagateParameterToOtherInstances(nodeID, paramIndex, value);
 			}
 		} else {
-			// PERFORMANCE: Lock-free throttling using atomics
-			uint64_t lastUpdate = parameterUpdateGeneration[paramIndex].load(std::memory_order_acquire);
-			
-			// Check if enough time has passed
-			if (currentTime - lastUpdate < PARAM_UPDATE_THROTTLE_MS) {
-				return; // Skip this update - too soon
-			}
-			
-			// Try to claim this update slot using compare-exchange
-			uint64_t expected = lastUpdate;
-			if (!parameterUpdateGeneration[paramIndex].compare_exchange_weak(
-																			 expected, currentTime, std::memory_order_release, std::memory_order_relaxed)) {
-																				 return; // Another thread won the race
-																			 }
-			
-			// Queue for batch processing
-			{
-				std::lock_guard<std::mutex> lock(pendingUpdatesMutex);
-				if(pendingParameterUpdates.size() < MAX_PENDING_UPDATES) {
-					pendingParameterUpdates.push_back({nodeID, paramIndex, value, currentTime});
-					parameterDirty[paramIndex].store(true, std::memory_order_release);
-				}
-			}
+			bool isAlreadyPublished = isParameterPublished(paramIndex);
 
-			// Keep last-touched tracking immediate, but let the batch processor own
-			// parameterInfoMap updates, GUI updates, and propagation in steady state.
-			bool isAlreadyPublished = (dynamicParameters.count(paramIndex) > 0 ||
-									   dynamicVectorParameters.count(paramIndex) > 0);
+			if(isAlreadyPublished) {
+				// Published parameters need snappy GUI mirroring from the plugin editor,
+				// so we always keep the latest value for the next flush.
+				latestParameterValues[paramIndex].store(value, std::memory_order_release);
+				latestParameterNodeIDs[paramIndex].store(nodeID, std::memory_order_release);
+				parameterDirty[paramIndex].store(true, std::memory_order_release);
+				parameterUpdateGeneration[paramIndex].store(currentTime, std::memory_order_release);
+			} else {
+				uint64_t lastUpdate = parameterUpdateGeneration[paramIndex].load(std::memory_order_acquire);
+				
+				if (currentTime - lastUpdate < PARAM_UPDATE_THROTTLE_MS) {
+					return;
+				}
+				
+				uint64_t expected = lastUpdate;
+				if (!parameterUpdateGeneration[paramIndex].compare_exchange_weak(
+																				 expected, currentTime, std::memory_order_release, std::memory_order_relaxed)) {
+																					 return;
+																				 }
+				
+				latestParameterValues[paramIndex].store(value, std::memory_order_release);
+				latestParameterNodeIDs[paramIndex].store(nodeID, std::memory_order_release);
+				parameterDirty[paramIndex].store(true, std::memory_order_release);
+			}
 			
 			if (!isAlreadyPublished) {
 				lastTouchedIndex = paramIndex;
@@ -974,46 +1055,42 @@ void scVST::handleVSTAuto(ofxOscMessage& msg) {
 		int paramIndex = (int)msg.getArgAsFloat(2);
 		float value = msg.getArgAsFloat(3);
 		
-		// PERFORMANCE: Early exit without string operations
 		if (!isMyVSTInstance(nodeID)) return;
 		if (paramIndex < 0 || paramIndex >= 1024) return;
 		
-		// FXP PRESET LOADING: Process immediately during FXP load
 		bool useFXPLoading = isFXPLoading.load(std::memory_order_acquire);
 		uint64_t currentTime = ofGetElapsedTimeMillis();
 		
 		if(useFXPLoading) {
-			// During FXP loading, process immediately
 			updateParameterValueFromVST(paramIndex, value, nodeID);
 		} else {
-			// PERFORMANCE: Lock-free throttling for automation
-			uint64_t lastUpdate = parameterUpdateGeneration[paramIndex].load(std::memory_order_acquire);
-			
-			// Check if enough time has passed
-			if (currentTime - lastUpdate < PARAM_UPDATE_THROTTLE_MS) {
-				return; // Skip this update
-			}
-			
-			// Try to claim this update slot
-			uint64_t expected = lastUpdate;
-			if (!parameterUpdateGeneration[paramIndex].compare_exchange_weak(
-																			 expected, currentTime, std::memory_order_release, std::memory_order_relaxed)) {
-																				 return; // Another thread won
-																			 }
-			
-			// Queue for batch processing
-			{
-				std::lock_guard<std::mutex> lock(pendingUpdatesMutex);
-				if(pendingParameterUpdates.size() < MAX_PENDING_UPDATES) {
-					pendingParameterUpdates.push_back({nodeID, paramIndex, value, currentTime});
-					parameterDirty[paramIndex].store(true, std::memory_order_release);
+			bool isAlreadyPublished = isParameterPublished(paramIndex);
+
+			if(isAlreadyPublished) {
+				latestParameterValues[paramIndex].store(value, std::memory_order_release);
+				latestParameterNodeIDs[paramIndex].store(nodeID, std::memory_order_release);
+				parameterDirty[paramIndex].store(true, std::memory_order_release);
+				parameterUpdateGeneration[paramIndex].store(currentTime, std::memory_order_release);
+			} else {
+				uint64_t lastUpdate = parameterUpdateGeneration[paramIndex].load(std::memory_order_acquire);
+				
+				if (currentTime - lastUpdate < PARAM_UPDATE_THROTTLE_MS) {
+					return;
 				}
+				
+				uint64_t expected = lastUpdate;
+				if (!parameterUpdateGeneration[paramIndex].compare_exchange_weak(
+																				 expected, currentTime, std::memory_order_release, std::memory_order_relaxed)) {
+																					 return;
+																				 }
+				
+				latestParameterValues[paramIndex].store(value, std::memory_order_release);
+				latestParameterNodeIDs[paramIndex].store(nodeID, std::memory_order_release);
+				parameterDirty[paramIndex].store(true, std::memory_order_release);
 			}
 		}
 		
-		// Only update lastTouchedIndex if this parameter is NOT already published
-		bool isAlreadyPublished = (dynamicParameters.count(paramIndex) > 0 ||
-								   dynamicVectorParameters.count(paramIndex) > 0);
+		bool isAlreadyPublished = isParameterPublished(paramIndex);
 		
 		if (!isAlreadyPublished) {
 			lastTouchedIndex = paramIndex;
@@ -1022,25 +1099,21 @@ void scVST::handleVSTAuto(ofxOscMessage& msg) {
 	}
 }
 
-void scVST::updateParameterValueFromVST(int paramIndex, float value, int sourceNodeID) {
-	// OPTIMIZATION: Use iterators to avoid redundant lookups
-	auto vecIt = dynamicVectorParameters.find(paramIndex);
-	if(vecIt != dynamicVectorParameters.end()) {
-		auto& param = vecIt->second->getParameter();
+void scVST::applyGUIParameterValueFromVST(int paramIndex, float value, int sourceNodeID) {
+	auto vectorParam = resolveDynamicVectorParameterSlot(paramIndex);
+	if(vectorParam) {
+		auto& param = vectorParam->getParameter();
 		const auto& currentValues = param.get();
 
 		if(currentValues.size() == 1) {
-			// OPTIMIZATION: Scalar mode - avoid redundant writes and temporary allocation
 			if(currentValues[0] != value) {
 				static thread_local vector<float> scalarVec(1);
 				scalarVec[0] = value;
 				param.setWithoutEventNotifications(scalarVec);
 			}
 		} else {
-			// OPTIMIZATION: Vector mode - only update if needed
 			int instanceIndex = getInstanceIndexFromNodeID(sourceNodeID);
 			if(instanceIndex >= 0 && instanceIndex < static_cast<int>(currentValues.size())) {
-				// OPTIMIZATION: Only update if value actually changed
 				if(currentValues[instanceIndex] != value) {
 					static thread_local vector<float> vectorScratch;
 					vectorScratch.assign(currentValues.begin(), currentValues.end());
@@ -1051,19 +1124,20 @@ void scVST::updateParameterValueFromVST(int paramIndex, float value, int sourceN
 		}
 	}
 
-	// OPTIMIZATION: Update scalar parameter if it exists (legacy support)
-	auto scalarIt = dynamicParameters.find(paramIndex);
-	if(scalarIt != dynamicParameters.end()) {
-		auto& scalarParam = scalarIt->second->getParameter();
+	auto scalarParamSlot = resolveDynamicScalarParameterSlot(paramIndex);
+	if(scalarParamSlot) {
+		auto& scalarParam = scalarParamSlot->getParameter();
 		if(scalarParam.get() != value) {
 			scalarParam.setWithoutEventNotifications(value);
 		}
 	}
+}
 
-	// OPTIMIZATION: Always update parameter info map
-	auto infoIt = parameterInfoMap.find(paramIndex);
-	if(infoIt != parameterInfoMap.end()) {
-		infoIt->second.value = value;
+void scVST::updateParameterValueFromVST(int paramIndex, float value, int sourceNodeID) {
+	applyGUIParameterValueFromVST(paramIndex, value, sourceNodeID);
+
+	if(paramIndex >= 0 && paramIndex < 1024 && parameterInfoSlots[paramIndex] != nullptr) {
+		parameterInfoSlots[paramIndex]->value = value;
 	}
 }
 
@@ -1077,18 +1151,7 @@ void scVST::propagateParameterToOtherInstances(int sourceNodeID, int paramIndex,
 	if(!shouldPropagateFromVSTGUI(paramIndex, sourceNodeID)) {
 		return;
 	}
-	
-	// Check if we're suppressing feedback for this parameter
-	{
-		std::lock_guard<std::mutex> lock(feedbackMutex);
-		if(suppressingFeedback.count(paramIndex) > 0) {
-			/*
-			 ofLogVerbose("scVST") << "Suppressing propagation feedback for parameter " << paramIndex;
-			 return;
-			 */
-		}
-		suppressingFeedback.insert(paramIndex);
-	}
+	suppressFeedbackFor(paramIndex, ofGetElapsedTimeMillis() + 50);
 	/*
 	 ofLogNotice("scVST") << "Propagating parameter " << paramIndex << " = " << value
 	 << " from node " << sourceNodeID << " to other instances (GUI-initiated)";
@@ -1114,73 +1177,41 @@ void scVST::propagateParameterToOtherInstances(int sourceNodeID, int paramIndex,
 		}
 	}
 	
-	// Set up a delayed task to clear the feedback suppression
-	auto clearTime = ofGetElapsedTimeMillis() + 50; // 50ms delay
-	feedbackClearTimes[paramIndex] = clearTime;
 }
 
 bool scVST::shouldPropagateFromVSTGUI(int paramIndex, int sourceNodeID) {
 	if(isPresetLoading || hasPendingPresetData) {
-		//ofLogVerbose("scVST") << "Not propagating param " << paramIndex << " - preset loading in progress";
+		return false;
+	}
+
+	if(isFeedbackSuppressed(paramIndex, ofGetElapsedTimeMillis())) {
 		return false;
 	}
 	
-	// Don't propagate if we're currently suppressing feedback for this parameter
-	{
-		std::lock_guard<std::mutex> lock(feedbackMutex);
-		if(suppressingFeedback.count(paramIndex) > 0) {
-			//ofLogVerbose("scVST") << "Not propagating param " << paramIndex << " - feedback suppressed";
-			return false;
-		}
-	}
-	
-	// Check if this is the first instance for its server
 	if(firstInstanceNodeIDs.count(sourceNodeID) == 0) {
-		//ofLogVerbose("scVST") << "Not propagating param " << paramIndex << " - not from first instance";
 		return false;
 	}
 	
-	// Check if we have a vector parameter controlling this parameter
-	if(dynamicVectorParameters.count(paramIndex) > 0) {
-		auto values = dynamicVectorParameters[paramIndex]->getParameter().get();
+	auto vectorParam = resolveDynamicVectorParameterSlot(paramIndex);
+	if(vectorParam) {
+		auto values = vectorParam->getParameter().get();
 		
-		// If vector has more than 1 value, user wants per-instance control
 		if(values.size() > 1) {
-			/*
-			 ofLogVerbose("scVST") << "Not propagating param " << paramIndex
-			 << " - user has per-instance control (vector size " << values.size() << ")";
-			 */
 			return false;
 		}
 		
-		// If vector has 1 value, it's a scalar broadcast - allow propagation
-		/*
-		 ofLogVerbose("scVST") << "Allowing propagation of param " << paramIndex
-		 << " - scalar broadcast mode";
-		 */
 		return true;
 	}
 	
-	// No vector parameter exists, allow propagation
-	/*
-	 ofLogVerbose("scVST") << "Allowing propagation of param " << paramIndex
-	 << " - no vector parameter exists";
-	 */
 	return true;
 }
 
 
 
 void scVST::handleInstanceAwareParameterChange(int paramIndex, const vector<float>& values) {
-	// Prevent feedback loops
-	{
-		std::lock_guard<std::mutex> lock(feedbackMutex);
-		if(suppressingFeedback.count(paramIndex) > 0) {
-			//ofLogVerbose("scVST") << "Suppressing feedback for parameter " << paramIndex;
-			return;
-		}
-		suppressingFeedback.insert(paramIndex);
-	}
+	// Mark the parameter as locally-driven so echoed VST feedback is ignored,
+	// but do not drop fresh GUI/LFO changes while suppression is active.
+	suppressFeedbackFor(paramIndex, ofGetElapsedTimeMillis() + 100);
 	/*
 	 ofLogNotice("scVST") << "Instance-aware parameter change: param " << paramIndex
 	 << " with " << values.size() << " values (USER-initiated)";
@@ -1231,9 +1262,6 @@ void scVST::handleInstanceAwareParameterChange(int paramIndex, const vector<floa
 		}
 	}
 	
-	// Set up delayed clearing of feedback suppression
-	auto clearTime = ofGetElapsedTimeMillis() + 100; // Longer delay for user-initiated changes
-	feedbackClearTimes[paramIndex] = clearTime;
 }
 
 void scVST::handleVSTOpen(ofxOscMessage& msg) {
@@ -1286,7 +1314,6 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 						ofLogVerbose("scVST") << "Restoring VST state from cache for node '"
 										 << nodeKey << "' (" << cachedFXP.size() << " bytes)";
 					
-					// Create temp file with this node's cached FXP
 					string tempPath = createTempFXPPath();
 					try {
 						std::ofstream file(tempPath, std::ios::binary);
@@ -1294,7 +1321,6 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 							file.write(reinterpret_cast<const char*>(cachedFXP.data()), cachedFXP.size());
 							file.close();
 							
-							// Apply to all instances of this node IN PARALLEL
 							for(auto& serverInstances : synthInstances) {
 								for(auto synth : serverInstances.second) {
 									if(synth != nullptr) {
@@ -1304,9 +1330,8 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 										readMsg.addIntArg(2);
 										readMsg.addStringArg("/program_read");
 										readMsg.addStringArg(tempPath);
-										readMsg.addIntArg(1); // async = true
+										readMsg.addIntArg(1);
 										serverInstances.first->sendMsg(readMsg);
-										// NO DELAYS - all FXP loads sent in parallel
 									}
 								}
 							}
@@ -1316,10 +1341,9 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 						}
 					} catch(const std::exception& e) {
 						ofLogError("scVST") << "Error applying cached FXP for node '" << nodeKey << "': " << e.what();
-						fxpCacheValid = false; // Only invalidate on error
+						fxpCacheValid = false;
 					}
 				}
-				// Priority 3: No modifications since preset load - use preset FXP data if available
 				else if(shouldUsePresetFXP()) {
 					if(hasSavedFXPData) {
 						string tempPath = createTempFXPPath();
@@ -1327,7 +1351,6 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 						file.write(reinterpret_cast<const char*>(savedFXPData.data()), savedFXPData.size());
 						file.close();
 						
-						// Apply to all instances IN PARALLEL
 						for(auto& serverInstances : synthInstances) {
 							for(auto synth : serverInstances.second) {
 								if(synth != nullptr) {
@@ -1337,7 +1360,7 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 									readMsg.addIntArg(2);
 									readMsg.addStringArg("/program_read");
 									readMsg.addStringArg(tempPath);
-									readMsg.addIntArg(1); // async = true
+									readMsg.addIntArg(1);
 									serverInstances.first->sendMsg(readMsg);
 								}
 							}
@@ -1348,17 +1371,21 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 						ofLogVerbose("scVST") << "No FXP to apply; using default VST state";
 				}
 				
-				// FXP PRESET LOADING: Wait for FXP to be processed, then clear flag
+				// Hold the immediate feedback path briefly so recall-driven parameter
+				// messages land before steady-state batching resumes.
 				if(hasSavedFXPData || fxpCacheValid) {
-					ofSleepMillis(500); // Allow time for all parameter updates to be processed
+					ofSleepMillis(500);
 						ofLogVerbose("scVST") << "FXP load complete; disabling blocking locks";
 				}
 				isFXPLoading.store(false, std::memory_order_release);
+				if(fxpCacheSavePending.exchange(false, std::memory_order_acq_rel)) {
+					scheduleImmediateFXPCache();
+				}
 				
-				// CRITICAL: Apply pending GUI parameters now that VST is ready
+				// GUI-side preset values are applied after the plugin state has settled.
 				if(hasPendingPresetData) {
 						ofLogVerbose("scVST") << "Applying pending GUI parameters after VST ready event";
-					ofSleepMillis(200); // Let FXP settle first
+					ofSleepMillis(200);
 					applyPendingPresetData();
 				}
 			}
@@ -1433,18 +1460,21 @@ void scVST::addParameterToGUI(int paramIndex) {
 	
 	// CRITICAL FIX: First check if parameter already exists in ANY form
 	// This prevents duplication when loading presets
-	if(dynamicParameters.count(paramIndex) > 0 || dynamicVectorParameters.count(paramIndex) > 0) {
+	if((paramIndex >= 0 && paramIndex < 1024 &&
+		(dynamicScalarParameterSlots[paramIndex] || dynamicVectorParameterSlots[paramIndex])) ||
+	   dynamicParameters.count(paramIndex) > 0 || dynamicVectorParameters.count(paramIndex) > 0) {
 		// Parameter already exists, just update its value AND send to VST
-		if(parameterInfoMap.count(paramIndex) > 0) {
-			if(dynamicParameters.count(paramIndex) > 0) {
-				float value = parameterInfoMap[paramIndex].value;
-				dynamicParameters[paramIndex]->getParameter().setWithoutEventNotifications(value);
+		auto infoSlot = (paramIndex >= 0 && paramIndex < 1024) ? parameterInfoSlots[paramIndex] : nullptr;
+		if(infoSlot != nullptr) {
+			if(paramIndex >= 0 && paramIndex < 1024 && dynamicScalarParameterSlots[paramIndex]) {
+				float value = infoSlot->value;
+				dynamicScalarParameterSlots[paramIndex]->getParameter().setWithoutEventNotifications(value);
 				// Send to VST
 				setVSTParameter(paramIndex, value);
 			}
-			if(dynamicVectorParameters.count(paramIndex) > 0) {
-				float value = parameterInfoMap[paramIndex].value;
-				dynamicVectorParameters[paramIndex]->getParameter().setWithoutEventNotifications({value});
+			if(paramIndex >= 0 && paramIndex < 1024 && dynamicVectorParameterSlots[paramIndex]) {
+				float value = infoSlot->value;
+				dynamicVectorParameterSlots[paramIndex]->getParameter().setWithoutEventNotifications({value});
 				// Send to VST
 				setVSTParameter(paramIndex, value);
 			}
@@ -1455,8 +1485,9 @@ void scVST::addParameterToGUI(int paramIndex) {
 	
 	// CRITICAL FIX: Also check if a parameter with this name already exists in the parameter group
 	// This catches cases where the parameter exists but isn't in our tracking maps
-	if(parameterInfoMap.count(paramIndex) > 0) {
-		string paramName = parameterInfoMap[paramIndex].displayName;
+	auto infoSlot = (paramIndex >= 0 && paramIndex < 1024) ? parameterInfoSlots[paramIndex] : nullptr;
+	if(infoSlot != nullptr) {
+		string paramName = infoSlot->displayName;
 		
 		// Check for any variant of this parameter name in the group
 		for(int i = 0; i < getParameterGroup().size(); i++) {
@@ -1469,7 +1500,7 @@ void scVST::addParameterToGUI(int paramIndex) {
 				
 				// Try to update the value if we can find it
 				try {
-					float value = parameterInfoMap[paramIndex].value;
+					float value = infoSlot->value;
 					// Try to find and update the existing parameter
 					for(auto& param : dynamicVectorFloatParameters) {
 						if(param.second && param.second->getName() == existingName) {
@@ -1493,17 +1524,19 @@ void scVST::addParameterToGUI(int paramIndex) {
 	}
 	
 	// Create parameter info if it doesn't exist
-	if(parameterInfoMap.count(paramIndex) == 0) {
+	if(infoSlot == nullptr) {
 		VSTParameterInfo info;
 		info.index = paramIndex;
 		info.displayName = "Param" + ofToString(paramIndex);
 		info.value = 0.0f;
 		parameterInfoMap[paramIndex] = info;
+		cacheParameterInfoSlot(paramIndex);
 		//ofLogNotice("scVST") << "Created parameter info for index " << paramIndex;
 	}
 	
 	// Create new parameter - now as VECTOR parameter to support both scalar and vector values
-	string paramName = parameterInfoMap[paramIndex].displayName;
+	infoSlot = (paramIndex >= 0 && paramIndex < 1024) ? parameterInfoSlots[paramIndex] : nullptr;
+	string paramName = infoSlot != nullptr ? infoSlot->displayName : "Param" + ofToString(paramIndex);
 	
 	// Ensure parameter name is unique
 	string uniqueParamName = paramName;
@@ -1515,7 +1548,7 @@ void scVST::addParameterToGUI(int paramIndex) {
 	
 	// Create VECTOR parameter instead of scalar
 	auto newParam = std::make_shared<ofParameter<vector<float>>>();
-	newParam->set(uniqueParamName, {parameterInfoMap[paramIndex].value}, {0.0f}, {1.0f});
+	newParam->set(uniqueParamName, {infoSlot != nullptr ? infoSlot->value : 0.0f}, {0.0f}, {1.0f});
 	
 	// Store the parameter to keep it alive BEFORE adding to GUI
 	dynamicVectorFloatParameters[paramIndex] = newParam;
@@ -1525,15 +1558,18 @@ void scVST::addParameterToGUI(int paramIndex) {
 	ofLogVerbose("scVST") << "Registered parameter " << paramIndex
 	<< " with name '" << uniqueParamName
 	<< "' (display: " << parameterInfoMap[paramIndex].displayName << ")";
+	cacheParameterInfoSlot(paramIndex);
 	
 	try {
 		auto oceanodeParam = addParameter(*newParam);
 		dynamicVectorParameters[paramIndex] = oceanodeParam;
+		cacheDynamicVectorParameterSlot(paramIndex, oceanodeParam);
 		
 		//ofLogNotice("scVST") << "Successfully added vector parameter " << uniqueParamName << " to GUI";
 		
-		// Set up listener for this parameter with vector handling
-		listeners.push(newParam->newListener([this, paramIndex](vector<float> &values) -> void {
+		// Listen on the registered Oceanode parameter so restored connections
+		// keep driving the VST after preset reload.
+		listeners.push(oceanodeParam->getParameter().newListener([this, paramIndex](vector<float> &values) -> void {
 			try {
 				if(this == nullptr) return;
 				
@@ -1581,7 +1617,7 @@ void scVST::addParameterToGUI(int paramIndex) {
 		}));
 		
 		// IMPORTANT: Send the initial value to the VST after creating the GUI parameter
-		float initialValue = parameterInfoMap[paramIndex].value;
+		float initialValue = parameterInfoSlots[paramIndex] != nullptr ? parameterInfoSlots[paramIndex]->value : 0.0f;
 		if(initialValue != 0.0f || !isPresetLoading) { // Always send during preset loading
 			/*
 			 ofLogNotice("scVST") << "Sending initial value " << initialValue
@@ -1615,6 +1651,7 @@ void scVST::addParameterToGUI(int paramIndex) {
 			if(!newName.empty() && parameterInfoMap.count(paramIndex) > 0) {
 				string oldName = parameterInfoMap[paramIndex].displayName;
 				parameterInfoMap[paramIndex].displayName = newName;
+				cacheParameterInfoSlot(paramIndex);
 				
 				//ofLogNotice("scVST") << "Renamed parameter " << paramIndex << " from '" << oldName << "' to '" << newName << "'";
 				
@@ -1658,9 +1695,10 @@ void scVST::addParameterToGUI(int paramIndex) {
 					try {
 						auto oceanodeParam = addParameter(*newParam);
 						dynamicVectorParameters[paramIndex] = oceanodeParam;
+						cacheDynamicVectorParameterSlot(paramIndex, oceanodeParam);
 						
-						// Re-setup the parameter listener
-						listeners.push(newParam->newListener([this, paramIndex](vector<float> &values) -> void {
+						// Re-setup the parameter listener on the registered parameter.
+						listeners.push(oceanodeParam->getParameter().newListener([this, paramIndex](vector<float> &values) -> void {
 							if(this == nullptr) return;
 							if(!isPresetLoading && parameterInfoMap.count(paramIndex) > 0) {
 								handleDynamicParameterChange(paramIndex, values);
@@ -1896,11 +1934,13 @@ void scVST::removeParameterFromGUI(int paramIndex) {
 	// Clean up tracking maps (always do this, even if parameter wasn't in group)
 	if(dynamicParameters.count(paramIndex) > 0) {
 		dynamicParameters.erase(paramIndex);
+		clearDynamicParameterSlots(paramIndex);
 		ofLogNotice("scVST") << "Removed from dynamicParameters";
 	}
 	
 	if(dynamicVectorParameters.count(paramIndex) > 0) {
 		dynamicVectorParameters.erase(paramIndex);
+		clearDynamicParameterSlots(paramIndex);
 		ofLogNotice("scVST") << "Removed from dynamicVectorParameters";
 	}
 	
@@ -1993,6 +2033,7 @@ void scVST::removeParameterFromGUI(int paramIndex) {
 	
 	// Remove from parameter info map
 	parameterInfoMap.erase(paramIndex);
+	clearParameterInfoSlot(paramIndex);
 	
 	// CRITICAL FIX: Restore the preset loading flags
 	isPresetLoading = wasPresetLoading;
@@ -2069,6 +2110,7 @@ void scVST::removeParameterFromGUI(int paramIndex) {
 			}
 		}
 		dynamicParameters.erase(paramIndex);
+		clearDynamicParameterSlots(paramIndex);
 	}
 	
 	// Remove main parameter (vector)
@@ -2107,6 +2149,7 @@ void scVST::removeParameterFromGUI(int paramIndex) {
 			}
 		}
 		dynamicVectorParameters.erase(paramIndex);
+		clearDynamicParameterSlots(paramIndex);
 	}
 	
 	// Remove stored float parameter
@@ -2197,6 +2240,7 @@ void scVST::removeParameterFromGUI(int paramIndex) {
 	
 	// Remove from parameter info map
 	parameterInfoMap.erase(paramIndex);
+	clearParameterInfoSlot(paramIndex);
 	
 	// CRITICAL FIX: Restore the preset loading flags
 	isPresetLoading = wasPresetLoading;
@@ -2280,6 +2324,9 @@ void scVST::removeAllDynamicParameters() {
 			dynamicVectorFloatParameters.clear();
 			dynamicStringParameters.clear();
 			dynamicRemovalButtons.clear();
+			for(int i = 0; i < 1024; ++i) {
+				clearDynamicParameterSlots(i);
+			}
 		} catch(...) {
 			ofLogError("scVST::removeAllDynamicParameters") << "Error clearing parameter maps";
 		}
@@ -2367,13 +2414,11 @@ void scVST::clearParameterMaps() {
 		dynamicVectorFloatParameters.clear();
 		dynamicStringParameters.clear();
 		dynamicRemovalButtons.clear();
+		savedParameterNames.clear();
+		clearAllParameterSlotCaches();
 		
 		// Clear feedback tracking
-		{
-			std::lock_guard<std::mutex> lock(feedbackMutex);
-			suppressingFeedback.clear();
-			feedbackClearTimes.clear();
-		}
+		clearAllFeedbackSuppression();
 		
 		// Clear parameter throttling
 		// Old throttle map cleanup no longer needed with atomic approach
@@ -2441,6 +2486,7 @@ void scVST::validateParameterConsistency() {
 	
 	for(int idx : invalidIndices) {
 		parameterInfoMap.erase(idx);
+		clearParameterInfoSlot(idx);
 		ofLogWarning("scVST") << "Removed invalid parameter info for index " << idx;
 	}
 	
@@ -2449,17 +2495,19 @@ void scVST::validateParameterConsistency() {
 
 void scVST::updateParameterValue(int paramIndex, float value) {
 	// Update scalar parameter if it exists (without triggering events)
-	if(dynamicParameters.count(paramIndex) > 0) {
-		dynamicParameters[paramIndex]->getParameter().setWithoutEventNotifications(value);
+	auto scalarParam = (paramIndex >= 0 && paramIndex < 1024) ? dynamicScalarParameterSlots[paramIndex] : nullptr;
+	if(scalarParam) {
+		scalarParam->getParameter().setWithoutEventNotifications(value);
 	}
 	
 	// Update vector parameter if it exists (set as single-element vector, without triggering events)
-	if(dynamicVectorParameters.count(paramIndex) > 0) {
-		dynamicVectorParameters[paramIndex]->getParameter().setWithoutEventNotifications({value});
+	auto vectorParam = (paramIndex >= 0 && paramIndex < 1024) ? dynamicVectorParameterSlots[paramIndex] : nullptr;
+	if(vectorParam) {
+		vectorParam->getParameter().setWithoutEventNotifications({value});
 	}
 	
-	if(parameterInfoMap.count(paramIndex) > 0) {
-		parameterInfoMap[paramIndex].value = value;
+	if(paramIndex >= 0 && paramIndex < 1024 && parameterInfoSlots[paramIndex] != nullptr) {
+		parameterInfoSlots[paramIndex]->value = value;
 	}
 }
 
@@ -2474,16 +2522,8 @@ void scVST::setVSTParameter(int paramIndex, float value) {
 		ofLogWarning("scVST") << "No VST instances available to set parameter";
 		return;
 	}
-	
-	// Prevent feedback loops
-	{
-		std::lock_guard<std::mutex> lock(feedbackMutex);
-		if(suppressingFeedback.count(paramIndex) > 0) {
-			ofLogVerbose("scVST") << "Suppressing feedback for parameter " << paramIndex;
-			return;
-		}
-		suppressingFeedback.insert(paramIndex);
-	}
+
+	suppressFeedbackFor(paramIndex, ofGetElapsedTimeMillis() + 50);
 	
 	// Mark parameter as recently updated
 	parameterUpdateGeneration[paramIndex].store(ofGetElapsedTimeMillis(), std::memory_order_release);
@@ -2505,9 +2545,6 @@ void scVST::setVSTParameter(int paramIndex, float value) {
 		}
 	}
 	
-	// Set up delayed clearing of feedback suppression
-	auto clearTime = ofGetElapsedTimeMillis() + 50; // 50ms delay
-	feedbackClearTimes[paramIndex] = clearTime;
 }
 
 bool scVST::isMyVSTInstance(int nodeID) const {
@@ -2678,7 +2715,11 @@ void scVST::presetSave(ofJson &json) {
 	//ofLogNotice("scVST") << "=== PRESET SAVE (WITH FXP DATA) for node '" << nodeKey << "' ===";
 	
 	// Create a node-specific section in the JSON
+	if(!json.contains("vstNodes") || !json["vstNodes"].is_object()) {
+		json["vstNodes"] = ofJson::object();
+	}
 	ofJson& nodeJson = json["vstNodes"][nodeKey];  // Namespace under vstNodes
+	nodeJson = ofJson::object();
 	
 	// Save metadata
 	nodeJson["currentPluginPath"] = currentPluginPath;
@@ -2696,6 +2737,7 @@ void scVST::presetSave(ofJson &json) {
 	if(!synthInstances.empty()) {
 		ofxSCSynth* firstInstance = nullptr;
 		ofxSCServer* firstServer = nullptr;
+		bool canCaptureFXP = true;
 		
 		// Find first instance
 		for(auto& serverInstances : synthInstances) {
@@ -2706,71 +2748,124 @@ void scVST::presetSave(ofJson &json) {
 			}
 		}
 		
-		if(firstInstance && firstServer) {
-			//ofLogNotice("scVST") << "Saving FXP preset from first instance (node " << firstInstance->nodeID << ") for '" << nodeKey << "'";
-			
-			// Create temporary file for FXP data
-			tempFXPPath = createTempFXPPath();
-			waitingForFXPSave = true;
-			
-			// Request VST to write preset to file
-			ofxOscMessage writeMsg;
-			writeMsg.setAddress("/u_cmd");
-			writeMsg.addIntArg(firstInstance->nodeID);
-			writeMsg.addIntArg(2);
-			writeMsg.addStringArg("/program_write");
-			writeMsg.addStringArg(tempFXPPath);
-			writeMsg.addIntArg(1); // async = true
-			firstServer->sendMsg(writeMsg);
-			
-			// Wait for write completion with timeout
-			int maxWait = 50; // 5 seconds
-			int waitCount = 0;
-			
-			while(waitingForFXPSave && waitCount < maxWait) {
-				firstServer->process();
-				ofSleepMillis(100);
-				waitCount++;
-			}
-			
-			if(!waitingForFXPSave) {
-				// Successfully saved, read the file into memory
-				try {
-					std::ifstream file(tempFXPPath, std::ios::binary | std::ios::ate);
-					if(file.is_open()) {
-						std::streamsize size = file.tellg();
-						file.seekg(0, std::ios::beg);
-						
-						std::vector<uint8_t> buffer(size);
-						if(file.read(reinterpret_cast<char*>(buffer.data()), size)) {
-							// Store as base64 encoded string in JSON
-							string base64Data = base64Encode(buffer);
-							nodeJson["fxpData"] = base64Data;
-							nodeJson["fxpDataSize"] = size;
-							
-							//ofLogNotice("scVST") << "Saved FXP data (" << size << " bytes) for '" << nodeKey << "'";
-							
-							// Store in memory for later use
-							savedFXPData = buffer;
-							hasSavedFXPData = true;
-						} else {
-							ofLogError("scVST") << "Error reading FXP file content for '" << nodeKey << "'";
-						}
-						file.close();
-					} else {
-						ofLogError("scVST") << "FXP file not found after write: " << tempFXPPath << " for '" << nodeKey << "'";
+			if(firstInstance && firstServer) {
+				//ofLogNotice("scVST") << "Saving FXP preset from first instance (node " << firstInstance->nodeID << ") for '" << nodeKey << "'";
+				bool hasCacheFallback = fxpCacheValid && !cachedFXP.empty();
+
+				if(activeFXPWriteOperation != FXPWriteOperation::None ||
+				   activeFXPReadOperation != FXPReadOperation::None ||
+				   syncInProgress ||
+				   isFXPLoading.load(std::memory_order_acquire)) {
+					int busyWaitCount = 0;
+					int busyMaxWait = hasCacheFallback ? 3 : 50;
+					while((activeFXPWriteOperation != FXPWriteOperation::None ||
+						   activeFXPReadOperation != FXPReadOperation::None ||
+						   syncInProgress ||
+						   isFXPLoading.load(std::memory_order_acquire)) &&
+						  busyWaitCount < busyMaxWait) {
+						firstServer->process();
+						ofSleepMillis(100);
+						busyWaitCount++;
 					}
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error reading FXP file for '" << nodeKey << "': " << e.what();
+
+					if(activeFXPWriteOperation != FXPWriteOperation::None ||
+					   activeFXPReadOperation != FXPReadOperation::None ||
+					   syncInProgress ||
+					   isFXPLoading.load(std::memory_order_acquire)) {
+						if(hasCacheFallback) {
+							ofLogWarning("scVST") << "Preset save falling back to cached FXP for '"
+												  << nodeKey << "' because another FXP operation is still active";
+						} else {
+							ofLogError("scVST") << "Timeout waiting for previous FXP operation before preset save for '" << nodeKey << "'";
+						}
+						canCaptureFXP = false;
+					}
 				}
 				
-				// Clean up temp file
-				cleanupTempFXPFile();
-			} else {
-				ofLogError("scVST") << "Timeout waiting for FXP save for '" << nodeKey << "'";
-				waitingForFXPSave = false;
-				cleanupTempFXPFile();
-			}
+				if(canCaptureFXP) {
+					// Create temporary file for FXP data
+					tempFXPPath = createTempFXPPath();
+					waitingForFXPSave = true;
+					lastFXPWriteSucceeded = false;
+					activeFXPWriteOperation = FXPWriteOperation::PresetSave;
+					activeFXPWriteNodeID = firstInstance->nodeID;
+					activeFXPWritePath = tempFXPPath;
+					activeFXPWriteNodeKey = nodeKey;
+					activeFXPWriteStartTime = ofGetElapsedTimeMillis();
+					
+					// Request VST to write preset to file
+					ofxOscMessage writeMsg;
+					writeMsg.setAddress("/u_cmd");
+					writeMsg.addIntArg(firstInstance->nodeID);
+					writeMsg.addIntArg(2);
+					writeMsg.addStringArg("/program_write");
+					writeMsg.addStringArg(tempFXPPath);
+					writeMsg.addIntArg(1); // async = true
+					firstServer->sendMsg(writeMsg);
+					
+					// Wait for write completion with timeout
+					int maxWait = 50; // 5 seconds
+					int waitCount = 0;
+					
+					while(waitingForFXPSave && waitCount < maxWait) {
+						firstServer->process();
+						ofSleepMillis(100);
+						waitCount++;
+					}
+					
+					if(!waitingForFXPSave && lastFXPWriteSucceeded) {
+						// Successfully saved, read the file into memory
+						try {
+							std::ifstream file(tempFXPPath, std::ios::binary | std::ios::ate);
+							if(file.is_open()) {
+								std::streamsize size = file.tellg();
+								file.seekg(0, std::ios::beg);
+								
+								std::vector<uint8_t> buffer(size);
+								if(file.read(reinterpret_cast<char*>(buffer.data()), size)) {
+									// Store as base64 encoded string in JSON
+									string base64Data = base64Encode(buffer);
+									nodeJson["fxpData"] = base64Data;
+									nodeJson["fxpDataSize"] = size;
+									
+									// Store in memory for later use
+									savedFXPData = buffer;
+									hasSavedFXPData = true;
+								} else {
+									ofLogError("scVST") << "Error reading FXP file content for '" << nodeKey << "'";
+								}
+								file.close();
+							} else {
+								ofLogError("scVST") << "FXP file not found after write: " << tempFXPPath << " for '" << nodeKey << "'";
+							}
+						} catch(const std::exception& e) {
+							ofLogError("scVST") << "Error reading FXP file for '" << nodeKey << "': " << e.what();
+						}
+						
+						// Clean up temp file
+						cleanupTempFXPFile();
+					} else {
+						if(waitingForFXPSave) {
+							ofLogError("scVST") << "Timeout waiting for FXP save for '" << nodeKey << "'";
+							waitingForFXPSave = false;
+							clearActiveFXPWriteState();
+						} else {
+							ofLogError("scVST") << "FXP save failed for '" << nodeKey << "'";
+						}
+
+						cleanupTempFXPFile();
+						canCaptureFXP = false;
+					}
+				}
+
+				if(!canCaptureFXP && hasCacheFallback) {
+					string base64Data = base64Encode(cachedFXP);
+					nodeJson["fxpData"] = base64Data;
+					nodeJson["fxpDataSize"] = cachedFXP.size();
+					savedFXPData = cachedFXP;
+					hasSavedFXPData = true;
+					ofLogWarning("scVST") << "Using cached FXP fallback while saving preset for '" << nodeKey << "'";
+				}
 		}
 	}
 	
@@ -3180,9 +3275,11 @@ void scVST::loadBeforeConnections(ofJson &json) {
 					info.isConnected = isConnected;
 					info.isPersistent = isPersistent;
 					parameterInfoMap[paramIndex] = info;
+					cacheParameterInfoSlot(paramIndex);
 					
 					// Store the saved name for later restoration if needed
 					savedParameterNames[paramIndex] = paramName;
+					cacheSavedParameterNameSlot(paramIndex, paramName);
 					
 					// Create GUI parameter with the loaded values
 					createGUIParameterWithValues(paramIndex, paramName, initialValues);
@@ -3318,7 +3415,9 @@ void scVST::createGUIParameterWithValues(int paramIndex, const string& paramName
 	}
 	
 	// FIX: Check if parameter already exists with this index
-	if(dynamicVectorParameters.count(paramIndex) > 0 || dynamicParameters.count(paramIndex) > 0) {
+	if((paramIndex >= 0 && paramIndex < 1024 &&
+		(dynamicVectorParameterSlots[paramIndex] || dynamicScalarParameterSlots[paramIndex])) ||
+	   dynamicVectorParameters.count(paramIndex) > 0 || dynamicParameters.count(paramIndex) > 0) {
 		ofLogWarning("scVST") << "Parameter " << paramIndex << " already exists, skipping creation";
 		return;
 	}
@@ -3378,6 +3477,7 @@ void scVST::createGUIParameterWithValues(int paramIndex, const string& paramName
 		info.registeredName = uniqueParamName;
 		info.value = values.empty() ? 0.0f : values[0];
 		parameterInfoMap[paramIndex] = info;
+		cacheParameterInfoSlot(paramIndex);
 		ofLogNotice("scVST") << "Created parameter info for " << paramIndex
 		<< " with registered name '" << uniqueParamName << "'";
 	} else {
@@ -3387,18 +3487,21 @@ void scVST::createGUIParameterWithValues(int paramIndex, const string& paramName
 		<< "' for parameter " << paramIndex
 		<< " (display name: " << parameterInfoMap[paramIndex].displayName << ")";
 	}
+	cacheParameterInfoSlot(paramIndex);
 	
 	try {
 		auto oceanodeParam = addParameter(*newParam);
 		dynamicVectorParameters[paramIndex] = oceanodeParam;
+		cacheDynamicVectorParameterSlot(paramIndex, oceanodeParam);
 		
 		/*
 		 ofLogVerbose("scVST") << "Created GUI parameter " << uniqueParamName
 		 << " (index " << paramIndex << ") with " << values.size() << " values";
 		 */
 		
-		// IMPROVED listener logic - check for VST instances AND preset loading state
-		listeners.push(newParam->newListener([this, paramIndex](vector<float> &values) -> void {
+		// Listen on the registered Oceanode parameter so restored connections
+		// keep driving the VST after preset reload.
+		listeners.push(oceanodeParam->getParameter().newListener([this, paramIndex](vector<float> &values) -> void {
 			try {
 				if(this == nullptr) return;
 				
@@ -3454,6 +3557,7 @@ void scVST::createGUIParameterWithValues(int paramIndex, const string& paramName
 		ofLogError("scVST") << "Error adding GUI parameter: " << e.what();
 		dynamicVectorFloatParameters.erase(paramIndex);
 		dynamicVectorParameters.erase(paramIndex);
+		clearDynamicParameterSlots(paramIndex);
 	}
 }
 
@@ -3616,11 +3720,7 @@ void scVST::syncGUIParametersToVST(ofJson &nodeJson) {
 	ofLogNotice("scVST") << "🎛️ Currently have " << dynamicParameters.size() << " GUI scalar parameters for '" << nodeKey << "'";
 	
 	// Clear feedback suppression
-	{
-		std::lock_guard<std::mutex> lock(feedbackMutex);
-		suppressingFeedback.clear();
-		feedbackClearTimes.clear();
-	}
+	clearAllFeedbackSuppression();
 	
 	int sentCount = 0;
 	int skippedCount = 0;
@@ -3702,7 +3802,7 @@ void scVST::syncGUIParametersToVST(ofJson &nodeJson) {
 	for(auto& item : nodeJson["vstParameters"].items()) {
 		try {
 			int paramIndex = ofToInt(item.key());
-			feedbackClearTimes[paramIndex] = clearTime;
+			suppressFeedbackFor(paramIndex, clearTime);
 		} catch(...) {}
 	}
 }
@@ -3964,35 +4064,25 @@ void scVST::clearInstanceLookupCache() {
 }
 
 void scVST::buildSynth(ofxSCServer* server) {
-	// Phase 1: Create synth instances
 	createVSTInstances(server);
-	
-	// Set up OSC feedback listeners for each synth instance
-	// Update the OSC message handler in buildSynth() method:
-	
-	// Set up OSC feedback listeners for each synth instance
+
 	for(auto synth : synthInstances[server]) {
 		if(synth != nullptr) {
 			listeners.push(synth->newFeedbackMessage.newListener([this](ofxOscMessage& msg) -> void {
 				if(this == nullptr) return;
 				
 				try {
-					// PERFORMANCE: Get address as const reference to avoid string copy
 					const string& address = msg.getAddress();
 					
-					// PERFORMANCE: Use string comparison optimized for common cases
-					// Check first character to quickly filter message types
 					if (address[0] != '/') return;
 					
 					if (address == "/vst_param") {
 						this->handleVSTParam(msg);
 						
-						// PERFORMANCE: Only schedule cache if not already scheduled and not during preset loading
 						if (!this->oceanodePresetLoading && !this->hasPendingPresetData && !this->parameterCacheScheduled) {
 							if (msg.getNumArgs() >= 3) {
 								int paramIndex = (int)msg.getArgAsFloat(2);
-								std::lock_guard<std::mutex> lock(this->feedbackMutex);
-								if (this->suppressingFeedback.count(paramIndex) == 0) {
+								if (!this->isFeedbackSuppressed(paramIndex, ofGetElapsedTimeMillis())) {
 									this->vstStateModifiedSincePreset = true;
 									this->scheduleParameterDebouncedCache();
 								}
@@ -4002,7 +4092,6 @@ void scVST::buildSynth(ofxSCServer* server) {
 					else if (address == "/vst_auto") {
 						this->handleVSTAuto(msg);
 						
-						// PERFORMANCE: Only schedule if not already scheduled
 						if (!this->oceanodePresetLoading && !this->hasPendingPresetData && !this->parameterCacheScheduled) {
 							this->vstStateModifiedSincePreset = true;
 							this->scheduleParameterDebouncedCache();
@@ -4018,16 +4107,13 @@ void scVST::buildSynth(ofxSCServer* server) {
 						this->handleVSTMidi(msg);
 					}
 					else if (address == "/vst_program_index") {
-						// Handle program index changes
 						if (msg.getNumArgs() >= 3) {
 							int nodeID = msg.getArgAsInt32(0);
 							int programIndex = (int)msg.getArgAsFloat(2);
 							if (this->isMyVSTInstance(nodeID)) {
-								//ofLogNotice("scVST") << "VST program changed to " << programIndex << " on node " << nodeID;
 								if(!this->oceanodePresetLoading) {
 									this->vstProgram.setWithoutEventNotifications(programIndex);
 									
-									// Mark VST as modified and schedule immediate cache
 									this->vstStateModifiedSincePreset = true;
 									this->scheduleImmediateFXPCache();
 								}
@@ -4041,7 +4127,6 @@ void scVST::buildSynth(ofxSCServer* server) {
 						this->handleVSTPresetRead(msg);
 					}
 					else if (address == "/vst_set") {
-						// Handle simple parameter responses
 						if (msg.getNumArgs() >= 4) {
 							int paramIndex = (int)msg.getArgAsFloat(2);
 							float value = msg.getArgAsFloat(3);
@@ -4052,6 +4137,7 @@ void scVST::buildSynth(ofxSCServer* server) {
 								info.displayName = "Param" + ofToString(paramIndex);
 								info.value = value;
 								this->parameterInfoMap[paramIndex] = info;
+								this->cacheParameterInfoSlot(paramIndex);
 							} else {
 								this->parameterInfoMap[paramIndex].value = value;
 							}
@@ -4063,7 +4149,6 @@ void scVST::buildSynth(ofxSCServer* server) {
 						this->handleVSTUpdate(msg);
 
 						if (!this->oceanodePresetLoading && !this->hasPendingPresetData) {
-							// Mark VST as modified and schedule cache
 							this->vstStateModifiedSincePreset = true;
 							this->scheduleImmediateFXPCache();
 						}
@@ -4092,37 +4177,70 @@ void scVST::handleVSTPresetWrite(ofxOscMessage& msg) {
 		bool success = msg.getArgAsFloat(2) > 0.5f;
 		
 		if (!isMyVSTInstance(nodeID)) return;
-		
-		// Handle regular preset save (existing functionality)
-		if(waitingForFXPSave) {
-			waitingForFXPSave = false;
-			/*
-			 ofLogNotice("scVST") << "VST preset write " << (success ? "succeeded" : "failed")
-			 << " on node " << nodeID;
-			 */
-			return;
+
+		if(activeFXPWriteOperation == FXPWriteOperation::None || nodeID != activeFXPWriteNodeID) return;
+		lastFXPWriteSucceeded = success;
+
+		switch(activeFXPWriteOperation) {
+			case FXPWriteOperation::PresetSave:
+				waitingForFXPSave = false;
+				break;
+
+			case FXPWriteOperation::CacheSave:
+				if(success) {
+					try {
+						std::ifstream file(activeFXPWritePath, std::ios::binary | std::ios::ate);
+						if(file.is_open()) {
+							std::streamsize size = file.tellg();
+							file.seekg(0, std::ios::beg);
+
+							cachedFXP.resize(size);
+							if(file.read(reinterpret_cast<char*>(cachedFXP.data()), size)) {
+								fxpCacheValid = true;
+								saveCacheToGlobal();
+								ofLogVerbose("scVST") << "FXP cached successfully for node '"
+													 << activeFXPWriteNodeKey << "' (" << size << " bytes)";
+							}
+							file.close();
+						}
+					} catch(const std::exception& e) {
+						ofLogWarning("scVST") << "Error caching FXP for node '" << activeFXPWriteNodeKey
+											 << "': " << e.what();
+						fxpCacheValid = false;
+					}
+				}
+
+				fxpCacheSaveInProgress.store(false, std::memory_order_release);
+				try {
+					if(!activeFXPWritePath.empty()) ofFile::removeFile(activeFXPWritePath);
+				} catch(...) {}
+
+				if(fxpCacheSavePending.exchange(false, std::memory_order_acq_rel)) {
+					scheduleImmediateFXPCache();
+				}
+				break;
+
+			case FXPWriteOperation::UserExport:
+				if(!success) {
+					ofLogWarning("scVST") << "Failed to export FXP preset to: " << activeFXPWritePath;
+				}
+				break;
+
+			case FXPWriteOperation::SyncSave:
+				waitingForSyncFXPSave = false;
+				if(success) {
+					applySyncFXPToAllOtherInstances();
+				} else {
+					ofLogError("scVST") << "❌ FXP sync save failed - aborting sync";
+					resetSyncFXPState(true);
+				}
+				break;
+
+			case FXPWriteOperation::None:
+				break;
 		}
-		
-		// Handle sync FXP save
-		if(waitingForSyncFXPSave && nodeID == syncSourceNodeID) {
-			waitingForSyncFXPSave = false;
-			/*
-			 ofLogNotice("scVST") << "🎯 FXP sync save " << (success ? "succeeded" : "failed")
-			 << " from node " << nodeID;
-			 */
-			if(success) {
-				// Now load this FXP into all OTHER instances
-				applySyncFXPToAllOtherInstances();
-			} else {
-				ofLogError("scVST") << "❌ FXP sync save failed - aborting sync";
-				
-				// Reset sync state on failure
-				instancesBeingSynced.clear();
-				syncInProgress = false;
-				
-				cleanupTempSyncFXPFile();
-			}
-		}
+
+		clearActiveFXPWriteState();
 	}
 }
 
@@ -4151,7 +4269,7 @@ void scVST::handleVSTPresetRead(ofxOscMessage& msg) {
 			waitingForFXPLoad = false;
 		}
 		
-		if(!tempSyncFXPPath.empty()) {
+		if(activeFXPReadOperation == FXPReadOperation::SyncLoad) {
 			/*
 			 ofLogNotice("scVST") << "🎯 Sync FXP load " << (success ? "succeeded" : "failed")
 			 << " on instance " << nodeID;
@@ -4176,25 +4294,19 @@ void scVST::handleVSTPresetRead(ofxOscMessage& msg) {
 					
 					// FXP PRESET LOADING: Clear flag after brief delay to allow parameter processing
 					ofSleepMillis(500); // Allow time for all parameter updates to be processed
-					isFXPLoading.store(false, std::memory_order_release);
 					ofLogNotice("scVST") << "FXP load complete - disabling blocking locks";
 					
 					// Optional: Update GUI parameters to reflect the new state
 					queryVSTParametersAfterSync();
 					
 					// Clean up and reset sync state
-					cleanupTempSyncFXPFile();
-					syncFXPAppliedInstances.clear();
-					instancesBeingSynced.clear();
-					syncSourceNodeID = -1;
-					
-					// CRITICAL: Mark sync as complete
-					syncInProgress = false;
+					resetSyncFXPState(true);
 					
 					//ofLogNotice("scVST") << "🔓 Sync complete - feedback protection disabled";
 				}
 			} else {
 				ofLogError("scVST") << "❌ Sync FXP load failed on instance " << nodeID;
+				resetSyncFXPState(true);
 			}
 		}
 		
@@ -4202,9 +4314,6 @@ void scVST::handleVSTPresetRead(ofxOscMessage& msg) {
 		
 		// Clean up temp file after a delay
 		if(success) {
-			// Use a timer to clean up the file after a short delay
-			auto cleanupTime = ofGetElapsedTimeMillis() + 1000; // 1 second delay
-			// Note: You might want to implement a cleanup timer or just clean up immediately
 			cleanupTempFXPFile();
 		}
 	}
@@ -4235,6 +4344,32 @@ void scVST::cleanupTempFXPFile() {
 			ofLogWarning("scVST") << "Could not remove temporary FXP file: " << e.what();
 		}
 		tempFXPPath.clear();
+	}
+}
+
+void scVST::clearActiveFXPWriteState() {
+	activeFXPWriteOperation = FXPWriteOperation::None;
+	activeFXPWriteNodeID = -1;
+	activeFXPWritePath.clear();
+	activeFXPWriteNodeKey.clear();
+	activeFXPWriteStartTime = 0;
+}
+
+void scVST::resetSyncFXPState(bool clearLoadingFlag) {
+	waitingForSyncFXPSave = false;
+	instancesBeingSynced.clear();
+	syncFXPAppliedInstances.clear();
+	syncInProgress = false;
+	syncSourceNodeID = -1;
+	activeFXPReadOperation = FXPReadOperation::None;
+	cleanupTempSyncFXPFile();
+
+	if(clearLoadingFlag) {
+		isFXPLoading.store(false, std::memory_order_release);
+	}
+
+	if(fxpCacheSavePending.exchange(false, std::memory_order_acq_rel)) {
+		scheduleImmediateFXPCache();
 	}
 }
 
@@ -4604,14 +4739,9 @@ void scVST::sendModWheel(float value) {
 }
 
 void scVST::handleDynamicParameterChange(int paramIndex, const vector<float>& values) {
-	// OPTIMIZATION: Prevent feedback loops with minimal locking
-	{
-		std::lock_guard<std::mutex> lock(feedbackMutex);
-		if(suppressingFeedback.find(paramIndex) != suppressingFeedback.end()) {
-			return;
-		}
-		suppressingFeedback.insert(paramIndex);
-	}
+	// OPTIMIZATION: Keep feedback suppression active for echoed VST messages,
+	// but never drop fresh GUI/LFO-driven changes while suppression is active.
+	suppressFeedbackFor(paramIndex, ofGetElapsedTimeMillis() + 100);
 
 	// OPTIMIZATION: Avoid redundant size checks
 	const size_t valueCount = values.size();
@@ -4623,10 +4753,6 @@ void scVST::handleDynamicParameterChange(int paramIndex, const vector<float>& va
 		setVSTParameterVectorDirectToAll(paramIndex, values);
 	}
 
-	// OPTIMIZATION: Set up delayed clearing of feedback suppression
-	// Cache time to avoid multiple calls
-	const uint64_t clearTime = ofGetElapsedTimeMillis() + 100;
-	feedbackClearTimes[paramIndex] = clearTime;
 }
 
 void scVST::propagateFirstInstanceToAll() {
@@ -4744,11 +4870,9 @@ void scVST::propagateFirstInstanceToAll() {
 	}
 	
 	// Apply to all other instances
-	{
-		std::lock_guard<std::mutex> lock(feedbackMutex);
-		for(auto& param : parametersToPropagate) {
-			suppressingFeedback.insert(param.first);
-		}
+	const uint64_t clearTime = ofGetElapsedTimeMillis() + 200;
+	for(auto& param : parametersToPropagate) {
+		suppressFeedbackFor(param.first, clearTime);
 	}
 	
 	bool skipFirst = true;
@@ -4779,15 +4903,6 @@ void scVST::propagateFirstInstanceToAll() {
 				appliedCount++;
 				ofSleepMillis(50); // Small delay between instances
 			}
-		}
-	}
-	
-	// Clear feedback suppression
-	auto clearTime = ofGetElapsedTimeMillis() + 200;
-	{
-		std::lock_guard<std::mutex> lock(feedbackMutex);
-		for(auto& param : parametersToPropagate) {
-			feedbackClearTimes[param.first] = clearTime;
 		}
 	}
 	
@@ -4866,6 +4981,9 @@ void scVST::presetWillBeLoaded(){
 	
 	// Clear saved parameter names from previous preset
 	savedParameterNames.clear();
+	for(int i = 0; i < 1024; ++i) {
+		clearSavedParameterNameSlot(i);
+	}
 	
 	// Use the force removal to ensure parameters are cleared even during preset loading
 	removeAllDynamicParametersForce();
@@ -4885,12 +5003,8 @@ void scVST::presetHasLoaded(){
 	// Still keep preset loading active if we have pending VST data
 	if(!hasPendingPresetData) {
 		isPresetLoading = false;
-		oceanodePresetLoading = false;  // NEW: Clear Oceanode preset loading flag
-		resetVSTModificationTracking(); // NEW: Reset modification tracking after successful preset load
-		//ofLogNotice("scVST") << "🎉 Preset loading complete - both flags = FALSE, VST modification tracking reset";
-	} else {
-		//ofLogNotice("scVST") << "⏳ Preset loaded but VST sync pending - keeping flags = TRUE";
-		// Keep both flags true until VST sync is done
+		oceanodePresetLoading = false;
+		resetVSTModificationTracking();
 	}
 }
 
@@ -4898,40 +5012,19 @@ void scVST::handleVSTUpdate(ofxOscMessage& msg) {
 	if (msg.getNumArgs() >= 2) {
 		int nodeID = msg.getArgAsInt32(0);
 		
-		// Verify this is our VST instance
 		if (!isMyVSTInstance(nodeID)) return;
 		
-		// CRITICAL: Ignore /vst_update if we're currently syncing
 		if (syncInProgress) {
-			/*
-			 ofLogNotice("scVST") << "🔒 Ignoring /vst_update from node " << nodeID
-			 << " - sync already in progress (preventing feedback loop)";
-			 */
 			return;
 		}
 		
-		// NEW: Ignore /vst_update during preset loading
 		if (isPresetLoading || hasPendingPresetData) {
-			/*
-			 ofLogNotice("scVST") << "🔒 Ignoring /vst_update from node " << nodeID
-			 << " - preset loading in progress (avoiding FXP sync cascade)";
-			 */
 			return;
 		}
 		
-		// CRITICAL: Ignore /vst_update from instances we're currently loading FXP into
 		if (instancesBeingSynced.count(nodeID) > 0) {
-			/*
-			 ofLogNotice("scVST") << "🔒 Ignoring /vst_update from node " << nodeID
-			 << " - this instance is being synced (preventing feedback loop)";
-			 */
 			return;
 		}
-		/*
-		 ofLogNotice("scVST") << "=== VST UPDATE RECEIVED ===";
-		 ofLogNotice("scVST") << "VST internal state changed on node " << nodeID
-		 << " (probably preset loaded in GUI)";
-		 */
 		
 		// Check if this is the first instance for its server (we only sync FROM those)
 		if(firstInstanceNodeIDs.count(nodeID) > 0) {
@@ -4950,6 +5043,11 @@ void scVST::syncFirstInstanceToAllViaFXP(int sourceNodeID) {
 	// Prevent multiple concurrent syncs
 	if (syncInProgress) {
 		ofLogWarning("scVST") << "⚠️ Sync already in progress - ignoring new sync request";
+		return;
+	}
+
+	if(activeFXPWriteOperation != FXPWriteOperation::None) {
+		ofLogWarning("scVST") << "Cannot start FXP sync while another FXP write operation is active";
 		return;
 	}
 	
@@ -4980,6 +5078,11 @@ void scVST::syncFirstInstanceToAllViaFXP(int sourceNodeID) {
 	// Create temporary FXP file for sync
 	tempSyncFXPPath = createTempSyncFXPPath();
 	waitingForSyncFXPSave = true;
+	activeFXPWriteOperation = FXPWriteOperation::SyncSave;
+	activeFXPWriteNodeID = sourceNodeID;
+	activeFXPWritePath = tempSyncFXPPath;
+	activeFXPWriteNodeKey = getNodeCacheKey();
+	activeFXPWriteStartTime = ofGetElapsedTimeMillis();
 	syncSourceNodeID = sourceNodeID;
 	syncFXPAppliedInstances.clear();
 	instancesBeingSynced.clear();
@@ -5018,10 +5121,11 @@ void scVST::syncFirstInstanceToAllViaFXP(int sourceNodeID) {
 
 void scVST::applySyncFXPToAllOtherInstances() {
 	//ofLogNotice("scVST") << "🔄 Applying sync FXP to all other instances";
-	
+		
 	int appliedCount = 0;
 	bool skipFirst = true;
-	
+	activeFXPReadOperation = FXPReadOperation::SyncLoad;
+		
 	for(auto& serverInstances : synthInstances) {
 		if(serverInstances.first == nullptr) continue;
 		
@@ -5055,9 +5159,7 @@ void scVST::applySyncFXPToAllOtherInstances() {
 	
 	if(appliedCount == 0) {
 		// No other instances to sync to - clean up immediately and reset sync state
-		instancesBeingSynced.clear();
-		syncInProgress = false;
-		cleanupTempSyncFXPFile();
+		resetSyncFXPState(false);
 		
 		//ofLogNotice("scVST") << "🔓 No instances to sync - feedback protection disabled";
 	}
@@ -5147,10 +5249,6 @@ void scVST::checkAndConvertVectorToScalar(int paramIndex) {
 	}
 }
 
-// Add this method declaration to scVST.h
-void convertVectorParameterToScalar(int paramIndex, float scalarValue);
-
-// Implementation of vector-to-scalar conversion
 void scVST::convertVectorParameterToScalar(int paramIndex, float scalarValue) {
 	if(dynamicVectorParameters.count(paramIndex) == 0) {
 		//ofLogWarning("scVST") << "Cannot convert parameter " << paramIndex << " - not found";
@@ -5195,6 +5293,13 @@ void scVST::saveFXPToUserChosenPath() {
 		ofLogWarning("scVST") << "No VST instances available for FXP save";
 		return;
 	}
+
+	if(activeFXPWriteOperation != FXPWriteOperation::None ||
+	   activeFXPReadOperation != FXPReadOperation::None ||
+	   syncInProgress) {
+		ofLogWarning("scVST") << "Cannot export FXP while another FXP operation is active";
+		return;
+	}
 	
 	// Find first instance
 	ofxSCSynth* firstInstance = nullptr;
@@ -5232,30 +5337,12 @@ void scVST::saveFXPToUserChosenPath() {
 		}
 		
 		//ofLogNotice("scVST") << "Saving FXP preset to: " << savePath;
-		
-		// Create a listener for the write completion
-		auto writeListener = std::make_shared<ofEventListener>();
-		*writeListener = firstInstance->newFeedbackMessage.newListener([this, savePath, writeListener](ofxOscMessage& msg) -> void {
-			if(msg.getAddress() == "/vst_program_write") {
-				if(msg.getNumArgs() >= 3) {
-					int nodeID = msg.getArgAsInt32(0);
-					bool success = msg.getArgAsFloat(2) > 0.5f;
-					
-					if(this->isMyVSTInstance(nodeID)) {
-						/*
-						 if(success) {
-						 ofLogNotice("scVST") << "✅ FXP preset saved successfully to: " << savePath;
-						 } else {
-						 ofLogError("scVST") << "❌ Failed to save FXP preset to: " << savePath;
-						 }
-						 */
-						
-						// Remove this listener (one-shot)
-						// The shared_ptr will clean itself up when this lambda ends
-					}
-				}
-			}
-		});
+
+		activeFXPWriteOperation = FXPWriteOperation::UserExport;
+		activeFXPWriteNodeID = firstInstance->nodeID;
+		activeFXPWritePath = savePath;
+		activeFXPWriteNodeKey.clear();
+		activeFXPWriteStartTime = ofGetElapsedTimeMillis();
 		
 		// Send the write command
 		ofxOscMessage writeMsg;
@@ -5354,10 +5441,20 @@ void scVST::saveFXPToCache() {
 		return;
 	}
 
-	if(fxpCacheSaveInProgress.load(std::memory_order_acquire)) {
+	if(syncInProgress ||
+	   activeFXPReadOperation != FXPReadOperation::None ||
+	   isFXPLoading.load(std::memory_order_acquire)) {
 		fxpCacheSavePending.store(true, std::memory_order_release);
 		ofLogVerbose("scVST") << "saveFXPToCache deferred for node '" << nodeKey
-							 << "' because another cache save is already in progress";
+							 << "' until FXP loading/sync completes";
+		return;
+	}
+
+	if(fxpCacheSaveInProgress.load(std::memory_order_acquire) ||
+	   activeFXPWriteOperation != FXPWriteOperation::None) {
+		fxpCacheSavePending.store(true, std::memory_order_release);
+		ofLogVerbose("scVST") << "saveFXPToCache deferred for node '" << nodeKey
+							 << "' because another FXP write operation is already in progress";
 		return;
 	}
 	
@@ -5376,64 +5473,16 @@ void scVST::saveFXPToCache() {
 	if(!firstInstance || !firstServer) {
 		return;
 	}
-	
+
 	ofLogVerbose("scVST") << "💾 Saving current VST state to cache for node '" << nodeKey << "'";
 	fxpCacheSaveInProgress.store(true, std::memory_order_release);
-	
-	// Create temporary file for FXP data
 	string tempPath = createTempFXPPath();
-	
-	// Set up one-shot listener for write completion
-	auto writeListener = std::make_shared<ofEventListener>();
-	*writeListener = firstInstance->newFeedbackMessage.newListener([this, tempPath, nodeKey, writeListener](ofxOscMessage& msg) -> void {
-		if(msg.getAddress() == "/vst_program_write") {
-			if(msg.getNumArgs() >= 3) {
-				int nodeID = msg.getArgAsInt32(0);
-				bool success = msg.getArgAsFloat(2) > 0.5f;
-				
-				if(this->isMyVSTInstance(nodeID)) {
-					if(success) {
-						try {
-							// Read FXP file into local cache
-							std::ifstream file(tempPath, std::ios::binary | std::ios::ate);
-							if(file.is_open()) {
-								std::streamsize size = file.tellg();
-								file.seekg(0, std::ios::beg);
-								
-								this->cachedFXP.resize(size);
-								if(file.read(reinterpret_cast<char*>(this->cachedFXP.data()), size)) {
-									this->fxpCacheValid = true;
-									
-									// CRITICAL: Also save to global cache immediately
-									this->saveCacheToGlobal();
-									
-										ofLogVerbose("scVST") << "FXP cached successfully for node '"
-														 << nodeKey << "' (" << size << " bytes)";
-								}
-								file.close();
-							}
-						} catch(const std::exception& e) {
-							ofLogWarning("scVST") << "Error caching FXP for node '" << nodeKey << "': " << e.what();
-							this->fxpCacheValid = false;
-						}
-					}
-					
-					this->fxpCacheSaveInProgress.store(false, std::memory_order_release);
-					bool scheduleFollowUpSave = this->fxpCacheSavePending.exchange(false, std::memory_order_acq_rel);
-					
-					// Clean up temp file
-					try {
-						ofFile::removeFile(tempPath);
-					} catch(...) {}
-					
-					if(scheduleFollowUpSave) {
-						this->scheduleImmediateFXPCache();
-					}
-				}
-			}
-		}
-	});
-	
+	activeFXPWriteOperation = FXPWriteOperation::CacheSave;
+	activeFXPWriteNodeID = firstInstance->nodeID;
+	activeFXPWritePath = tempPath;
+	activeFXPWriteNodeKey = nodeKey;
+	activeFXPWriteStartTime = ofGetElapsedTimeMillis();
+
 	// Send async write command
 	ofxOscMessage writeMsg;
 	writeMsg.setAddress("/u_cmd");
@@ -5996,105 +6045,7 @@ void scVST::propagateFirstInstanceViaFXP() {
 	}
 	
 	ofLogNotice("scVST") << "Propagating complete VST state from instance " << firstInstance->nodeID;
-	
-	// Create temporary FXP file for propagation
-	string tempPropagatePathLocal = createTempPropagateFXPPath();
-	
-	// Set up listener for write completion
-	bool propagateWriteComplete = false;
-	bool propagateWriteSuccess = false;
-	
-	auto writeListener = std::make_shared<ofEventListener>();
-	*writeListener = firstInstance->newFeedbackMessage.newListener([&propagateWriteComplete, &propagateWriteSuccess, firstInstance](ofxOscMessage& msg) -> void {
-		if(msg.getAddress() == "/vst_program_write") {
-			if(msg.getNumArgs() >= 3) {
-				int nodeID = msg.getArgAsInt32(0);
-				if(nodeID == firstInstance->nodeID) {
-					propagateWriteSuccess = msg.getArgAsFloat(2) > 0.5f;
-					propagateWriteComplete = true;
-				}
-			}
-		}
-	});
-	
-	// Request first instance to save its current state
-	ofxOscMessage writeMsg;
-	writeMsg.setAddress("/u_cmd");
-	writeMsg.addIntArg(firstInstance->nodeID);
-	writeMsg.addIntArg(2);
-	writeMsg.addStringArg("/program_write");
-	writeMsg.addStringArg(tempPropagatePathLocal);
-	writeMsg.addIntArg(1); // async = true
-	firstServer->sendMsg(writeMsg);
-	
-	// Wait for write completion with active processing
-	ofLogNotice("scVST") << "Waiting for FXP save from first instance...";
-	int maxWait = 50; // 5 seconds
-	int waitCount = 0;
-	
-	while(!propagateWriteComplete && waitCount < maxWait) {
-		firstServer->process();
-		ofSleepMillis(100);
-		waitCount++;
-	}
-	
-	if(propagateWriteComplete && propagateWriteSuccess) {
-		ofLogNotice("scVST") << "✅ FXP saved, now applying to other instances...";
-		
-		// Apply to all OTHER instances (skip first)
-		int appliedCount = 0;
-		bool skipFirst = true;
-		
-		for(auto& serverInstances : synthInstances) {
-			if(serverInstances.first == nullptr) continue;
-			
-			for(auto synth : serverInstances.second) {
-				if(synth != nullptr) {
-					// Skip the first instance (source)
-					if(skipFirst) {
-						skipFirst = false;
-						continue;
-					}
-					
-					ofLogNotice("scVST") << "📤 Applying FXP to instance " << synth->nodeID;
-					
-					// Send program_read command
-					ofxOscMessage readMsg;
-					readMsg.setAddress("/u_cmd");
-					readMsg.addIntArg(synth->nodeID);
-					readMsg.addIntArg(2);
-					readMsg.addStringArg("/program_read");
-					readMsg.addStringArg(tempPropagatePathLocal);
-					readMsg.addIntArg(1); // async = true
-					serverInstances.first->sendMsg(readMsg);
-					
-					appliedCount++;
-					
-					// Small delay between instances to avoid overwhelming
-					ofSleepMillis(50);
-				}
-			}
-		}
-		
-		ofLogNotice("scVST") << "✅ Propagated FXP to " << appliedCount << " instances";
-		
-		// Clean up temp file after a delay
-		ofSleepMillis(1000); // Give time for all loads to complete
-		try {
-			ofFile::removeFile(tempPropagatePathLocal);
-			ofLogVerbose("scVST") << "Cleaned up propagate FXP file";
-		} catch(...) {
-			ofLogWarning("scVST") << "Could not clean up propagate FXP file";
-		}
-		
-	} else {
-		ofLogError("scVST") << "❌ Failed to save FXP from first instance - propagation aborted";
-		
-		// Clean up temp file
-		try {
-			ofFile::removeFile(tempPropagatePathLocal);
-		} catch(...) {}
-	}
+	syncFirstInstanceToAllViaFXP(firstInstance->nodeID);
 }
 
 std::string scVST::createTempPropagateFXPPath() {

@@ -52,12 +52,12 @@ public:
 		ofLogNotice("scVST") << "Starting scVST destructor for node '" << nodeKey << "'";
 		
 		try {
-			// FIRST: Save current cache to global storage before cleanup
+			// Persist the last known FXP cache before tearing the node down.
 			if(fxpCacheValid && !cachedFXP.empty()) {
 				saveCacheToGlobal();
 			}
 			
-			// Clear pending preset data first to avoid JSON destruction issues
+			// Clear pending preset data before the backing JSON starts destructing.
 			hasPendingPresetData = false;
 			try {
 				pendingPresetData.clear();
@@ -65,10 +65,9 @@ public:
 				// Ignore JSON clearing errors during destruction
 			}
 			
-			// Stop the parameter timer
 			parameterTimerActive = false;
 			
-			// Clear all event listeners FIRST to prevent callbacks after destruction
+			// Listeners go first so callbacks cannot fire during cleanup.
 			try {
 				listeners.unsubscribeAll();
 			} catch(const std::exception& e) {
@@ -77,7 +76,7 @@ public:
 				ofLogWarning("scVST") << "Unknown error unsubscribing listeners";
 			}
 			
-			// Remove all dynamic parameters from GUI before freeing synths
+			// Remove GUI-owned parameters before freeing synth instances.
 			try {
 				removeAllDynamicParameters();
 			} catch(const std::exception& e) {
@@ -86,7 +85,6 @@ public:
 				ofLogWarning("scVST") << "Unknown error removing dynamic parameters";
 			}
 			
-			// Free all VST instances
 			try {
 				freeAll();
 			} catch(const std::exception& e) {
@@ -95,7 +93,6 @@ public:
 				ofLogError("scVST") << "Unknown error freeing all VST instances";
 			}
 			
-			// Clear all maps
 			try {
 				parameterInfoMap.clear();
 				dynamicParameters.clear();
@@ -146,10 +143,10 @@ public:
 	void presetRecallAfterSettingParameters(ofJson &json);
 	void loadBeforeConnections(ofJson &json);
 	
-	// Eduard's two-phase approach
+	// Node creation and graph placement
 	void buildSynth(ofxSCServer* server);
 	void createSynth(ofxSCServer* server);
-	void moveSynthBefore(ofxSCServer* server, int nodeID);  // NEW
+	void moveSynthBefore(ofxSCServer* server, int nodeID);
 
 	void free(ofxSCServer* server);
 	void freeAll();
@@ -159,13 +156,26 @@ public:
 	void resetInputBusses(ofxSCServer* server, int targetBus = 0) override;
 
 	int getOutputBusIndex(ofxSCServer* server, int index);
-	int getLastSynthID(ofxSCServer* server);                // NEW
+	int getLastSynthID(ofxSCServer* server);
 
 	ofEvent<void> resendParams;
 	
 protected:
 	
 private:
+	enum class FXPWriteOperation {
+		None,
+		PresetSave,
+		CacheSave,
+		UserExport,
+		SyncSave
+	};
+
+	enum class FXPReadOperation {
+		None,
+		SyncLoad
+	};
+
 	
 	struct MidiCCParameter {
 		int ccNumber;
@@ -188,13 +198,13 @@ private:
 	void applyPendingPresetData();
 	void setupParameterTimer(int delayMs);
 	
-		// Multi-instance helpers
-		int calculateNumInstances() const;
-		void createVSTInstances(ofxSCServer* server);
-		void freeVSTInstances(ofxSCServer* server);
-		bool isMyVSTInstance(int nodeID) const;
-		void rebuildInstanceLookupCache();
-		void clearInstanceLookupCache();
+	// Multi-instance helpers
+	int calculateNumInstances() const;
+	void createVSTInstances(ofxSCServer* server);
+	void freeVSTInstances(ofxSCServer* server);
+	bool isMyVSTInstance(int nodeID) const;
+	void rebuildInstanceLookupCache();
+	void clearInstanceLookupCache();
 	
 	// VST OSC message handlers
 	void handleVSTParam(ofxOscMessage& msg);
@@ -205,28 +215,46 @@ private:
 	void setVSTProgram(int programIndex);
 	void sendMidiProgramChange(int channel, int program, ofxSCServer* server, ofxSCSynth* synth);
 	
-	// MIDI functionality (integrated from scVSTI)
+	// MIDI handling
 	void processGates(vector<int>& gates);
-	void sendMidiNoteOn(int channel, int pitch, int velocity, int instanceIndex = -1);  // NEW: Instance routing
-	void sendMidiNoteOff(int channel, int pitch, int instanceIndex = -1);              // NEW: Instance routing
+	void sendMidiNoteOn(int channel, int pitch, int velocity, int instanceIndex = -1);
+	void sendMidiNoteOff(int channel, int pitch, int instanceIndex = -1);
 	void sendMidiToInstance(ofxSCServer* server, ofxSCSynth* synth, int channel, int status, int data1, int data2);
 	void sendPitchBend(float value);
 	void sendModWheel(float value);
 		
 	
-	// Parameter management UI helpers
+	// Dynamic parameter lifecycle
 	void removeAllDynamicParameters();
 	void removeAllDynamicParametersForce(); // Force removal even during preset loading
 	void clearParameterMaps(); // Clear all parameter tracking maps
 	void validateParameterConsistency(); // Validate parameter state consistency
 	
-	// NEW: Dynamic parameter vector handling
+	// Dynamic parameter feedback and propagation
 	void handleDynamicParameterChange(int paramIndex, const vector<float>& values);
 	void propagateParameterToOtherInstances(int sourceNodeID, int paramIndex, float value);
 	void propagateFirstInstanceToAll();
 	void handleInstanceAwareParameterChange(int paramIndex, const vector<float>& values);
 	bool shouldPropagateFromVSTGUI(int paramIndex, int sourceNodeID);
+	void applyGUIParameterValueFromVST(int paramIndex, float value, int sourceNodeID);
 	void updateParameterValueFromVST(int paramIndex, float value, int sourceNodeID);
+	void queueGUIParameterUpdate(int paramIndex, float value, int sourceNodeID);
+	void flushPendingGUIParameterUpdates();
+	bool isFeedbackSuppressed(int paramIndex, uint64_t currentTime) const;
+	void suppressFeedbackFor(int paramIndex, uint64_t untilTime);
+	void clearAllFeedbackSuppression();
+	void cacheParameterInfoSlot(int paramIndex);
+	void clearParameterInfoSlot(int paramIndex);
+	// Fast-slot helpers fall back to the canonical maps when a cache entry is stale.
+	void cacheDynamicScalarParameterSlot(int paramIndex, const shared_ptr<ofxOceanodeParameter<float>>& param);
+	void cacheDynamicVectorParameterSlot(int paramIndex, const shared_ptr<ofxOceanodeParameter<vector<float>>>& param);
+	void clearDynamicParameterSlots(int paramIndex);
+	shared_ptr<ofxOceanodeParameter<float>> resolveDynamicScalarParameterSlot(int paramIndex);
+	shared_ptr<ofxOceanodeParameter<vector<float>>> resolveDynamicVectorParameterSlot(int paramIndex);
+	bool isParameterPublished(int paramIndex);
+	void cacheSavedParameterNameSlot(int paramIndex, const std::string& name);
+	void clearSavedParameterNameSlot(int paramIndex);
+	void clearAllParameterSlotCaches();
 	int getInstanceIndexFromNodeID(int nodeID);
 		
 	// Restore methods
@@ -244,12 +272,22 @@ private:
 	std::string tempFXPPath;             // Temporary file path for FXP operations
 	bool waitingForFXPSave;              // Flag to track if we're waiting for FXP save completion
 	bool waitingForFXPLoad;              // Flag to track if we're waiting for FXP load completion
+	bool lastFXPWriteSucceeded;
+	FXPWriteOperation activeFXPWriteOperation;
+	FXPReadOperation activeFXPReadOperation;
+	int activeFXPWriteNodeID;
+	std::string activeFXPWritePath;
+	std::string activeFXPWriteNodeKey;
+	uint64_t activeFXPWriteStartTime;
+	static const uint64_t FXP_WRITE_TIMEOUT_MS = 10000;
 
 	void applyFXPToInstance(int nodeID);
 	void handleVSTPresetWrite(ofxOscMessage& msg);
 	void handleVSTPresetRead(ofxOscMessage& msg);
 	std::string createTempFXPPath();
 	void cleanupTempFXPFile();
+	void clearActiveFXPWriteState();
+	void resetSyncFXPState(bool clearLoadingFlag);
 	
 	// Base64 encoding/decoding helpers
 	std::string base64Encode(const std::vector<uint8_t>& data);
@@ -263,7 +301,7 @@ private:
 	void setVSTParameterVectorDirectToAll(int paramIndex, const vector<float>& values);
 	void activateParameterBindings();
 	
-	// Add these method declarations to scVST.h (in the private section)
+	// FXP sync helpers
 	void handleVSTUpdate(ofxOscMessage& msg);
 	void syncFirstInstanceToAllViaFXP(int sourceNodeID);
 	void applySyncFXPToAllOtherInstances();
@@ -271,13 +309,12 @@ private:
 	std::string createTempSyncFXPPath();
 	void cleanupTempSyncFXPFile();
 
-	// Add these member variables to scVST.h (private section)
 	std::string tempSyncFXPPath;
 	bool waitingForSyncFXPSave;
 	std::set<int> syncFXPAppliedInstances;
-	int syncSourceNodeID; // Track which instance we're syncing from
-	bool syncInProgress; // CRITICAL: Prevent feedback loops
-	std::set<int> instancesBeingSynced; // Track which instances are receiving FXP
+	int syncSourceNodeID;
+	bool syncInProgress;
+	std::set<int> instancesBeingSynced;
 
 	void checkAndConvertVectorToScalar(int paramIndex);
 	void convertVectorParameterToScalar(int paramIndex, float scalarValue);
@@ -286,51 +323,47 @@ private:
 	void saveFXPToUserChosenPath();
 	ofParameter<void> saveFXPToDisk;
 	
-	// Periodic FXP caching for state preservation during graph recomputation
-	 std::vector<uint8_t> cachedFXP;
-	 bool fxpCacheValid;
-	 uint64_t fxpCacheScheduledTime;
-	 bool fxpCacheScheduled;
+	// Cached FXP snapshots used for preset save and graph re-evaluation.
+	std::vector<uint8_t> cachedFXP;
+	bool fxpCacheValid;
+	uint64_t fxpCacheScheduledTime;
+	bool fxpCacheScheduled;
 	 
-	 // Per-plugin FXP caching for BOTH preset saving AND graph recomputation
-	std::map<std::string, std::vector<uint8_t>> cachedFXPs;        // pluginPath -> FXP data
-	std::atomic<bool> fxpCacheSaveInProgress;   // Prevent overlapping FXP cache writes
-	std::atomic<bool> fxpCacheSavePending;      // Coalesce repeated save requests while busy
+	// Per-plugin cache keeps the last known good state when instances are rebuilt.
+	std::map<std::string, std::vector<uint8_t>> cachedFXPs;
+	std::atomic<bool> fxpCacheSaveInProgress;
+	std::atomic<bool> fxpCacheSavePending;
 	
-	// NEW: State tracking for smart FXP source selection
-	bool oceanodePresetLoading;           // Track if Oceanode preset is currently loading
-	bool vstStateModifiedSincePreset;     // Track if VST has been modified since last preset load
-	uint64_t lastParameterChangeTime;     // Timestamp of last parameter change for debouncing
-	uint64_t parameterDebounceDelay;      // Configurable debounce delay (default 1000ms)
-	bool parameterCacheScheduled;         // Track if parameter-triggered cache is scheduled
+	// State used to choose between preset FXP data and the live cache.
+	bool oceanodePresetLoading;
+	bool vstStateModifiedSincePreset;
+	uint64_t lastParameterChangeTime;
+	uint64_t parameterDebounceDelay;
+	bool parameterCacheScheduled;
 	
-	// FXP PRESET LOADING: Critical flag to ensure reliable parameter updates during FXP load
-	std::atomic<bool> isFXPLoading;       // Track if FXP preset is currently being loaded
-	uint64_t fxpLoadStartTime;            // Timestamp when FXP load started
-	static const uint64_t FXP_LOAD_TIMEOUT_MS = 10000; // 10 second timeout for FXP loading (increased for complex plugins)
+	// FXP recall temporarily switches parameter feedback to the immediate path.
+	std::atomic<bool> isFXPLoading;
+	uint64_t fxpLoadStartTime;
+	static const uint64_t FXP_LOAD_TIMEOUT_MS = 10000;
 	
-		// Methods for FXP management
-		void scheduleImmediateFXPCache();
-		void scheduleDebouncedFXPCache(int delayMs = 5000);
-		void updateFXPCacheIfNeeded();
-		void saveFXPToCache();
+	void scheduleImmediateFXPCache();
+	void scheduleDebouncedFXPCache(int delayMs = 5000);
+	void updateFXPCacheIfNeeded();
+	void saveFXPToCache();
 		
-		// NEW: Enhanced caching methods
-		void scheduleParameterDebouncedCache();
-		void updateParameterDebouncedCacheIfNeeded();
-		bool shouldUsePresetFXP() const;
-		bool shouldUseCachedFXP() const;
-		void resetVSTModificationTracking();
+	void scheduleParameterDebouncedCache();
+	void updateParameterDebouncedCacheIfNeeded();
+	bool shouldUsePresetFXP() const;
+	bool shouldUseCachedFXP() const;
+	void resetVSTModificationTracking();
 		
-		// Helper methods
-		std::string getPluginCacheKey() const { return currentPluginPath; }
+	std::string getPluginCacheKey() const { return currentPluginPath; }
 
-	// Add these static members for global FXP caching
-	static std::map<std::string, std::vector<uint8_t>> globalFXPCache;  // nodeName -> FXP data
-	static std::map<std::string, bool> globalFXPCacheValid;            // nodeName -> validity
-	static std::mutex globalCacheMutex;                                // Thread safety
+	// Global cache preserves the last state for each node key across instance rebuilds.
+	static std::map<std::string, std::vector<uint8_t>> globalFXPCache;
+	static std::map<std::string, bool> globalFXPCacheValid;
+	static std::mutex globalCacheMutex;
 
-	// Add these helper methods
 	std::string getNodeCacheKey();
 	void loadCacheFromGlobal();
 	void saveCacheToGlobal();
@@ -382,7 +415,7 @@ private:
 	// Core parameters
 	ofParameter<int> numChannels;
 	ofParameter<int> pluginSelector;
-	ofParameter<float> mix;  // NEW: Dry/wet mix control (0=bypass, 1=100% wet)
+	ofParameter<float> mix;
 	
 	// VST management
 	ofParameter<void> openEditor;
@@ -397,13 +430,13 @@ private:
 	ofParameter<float> pitchBend;
 	ofParameter<float> modWheel;
 	ofParameter<int> midiChannel;
-	ofParameter<vector<int>> instance;  // NEW: Instance routing parameter
+	ofParameter<vector<int>> instance;
 	ofParameter<bool> singleInstance;   // one plugin instance handles all channels
 
 	
 	// Inspector parameters
 	ofParameter<bool> enableMultithreading;
-	ofParameter<bool> monoInstancing;   // NEW: Mono/Stereo instancing mode
+	ofParameter<bool> monoInstancing;
 	ofParameter<void> removeAllParams;
 	
 	// Plugin discovery
@@ -414,18 +447,21 @@ private:
 	// Parameter management
 	std::map<int, VSTParameterInfo> parameterInfoMap;
 	std::map<int, shared_ptr<ofxOceanodeParameter<float>>> dynamicParameters;           // Scalar parameters
-	std::map<int, shared_ptr<ofxOceanodeParameter<vector<float>>>> dynamicVectorParameters; // NEW: Vector parameters
+	std::map<int, shared_ptr<ofxOceanodeParameter<vector<float>>>> dynamicVectorParameters;
 	std::map<int, shared_ptr<ofParameter<float>>> dynamicFloatParameters; // Keep parameters alive
-	std::map<int, shared_ptr<ofParameter<vector<float>>>> dynamicVectorFloatParameters; // NEW: Keep vector parameters alive
+	std::map<int, shared_ptr<ofParameter<vector<float>>>> dynamicVectorFloatParameters; // Keep parameters alive
 	std::map<int, shared_ptr<ofParameter<string>>> dynamicStringParameters; // Keep name editors alive
 	std::map<int, shared_ptr<ofParameter<void>>> dynamicRemovalButtons; // Remove parameter buttons
 	
 	// Store saved parameter names during preset loading to restore after VST queries
 	std::map<int, std::string> savedParameterNames;
+	std::array<VSTParameterInfo*, 1024> parameterInfoSlots;
+	std::array<shared_ptr<ofxOceanodeParameter<float>>, 1024> dynamicScalarParameterSlots;
+	std::array<shared_ptr<ofxOceanodeParameter<vector<float>>>, 1024> dynamicVectorParameterSlots;
+	std::array<std::string, 1024> savedParameterNameSlots;
+	std::array<uint8_t, 1024> savedParameterNamePresent;
 	
-	std::set<int> suppressingFeedback; // Track parameters currently being set to prevent feedback
-	std::mutex feedbackMutex;          // Thread safety for feedback prevention
-	std::map<int, uint64_t> feedbackClearTimes;
+	std::array<std::atomic<uint64_t>, 1024> feedbackSuppressUntil;
 	
 	// Last touched parameter tracking
 	int lastTouchedIndex;
@@ -484,64 +520,35 @@ private:
 	vector<float> currentCCStates;         // Track current CC values
 	void handleVSTMidi(ofxOscMessage& msg);
 	
-	// MIDI output batching for performance
+	// MIDI output batching
 	std::atomic<bool> midiOutputDirty;
 	uint64_t lastMidiUpdateTime;
 	std::mutex midiUpdateMutex;
 	void updateMidiOutputs();
 
-	// PERFORMANCE: Throttling and timing variables
+	// Update scheduling
 	uint64_t lastMaintenanceTime;
 	uint64_t maintenanceIntervalMs;
 	uint64_t lastParamThrottleCleanup;
 	uint64_t paramThrottleCleanupInterval;
 
-	// PERFORMANCE: Lock-free parameter update tracking
+	// Hot-path parameter feedback state
 	std::atomic<uint64_t> parameterUpdateGeneration[1024];
 	std::atomic<bool> parameterDirty[1024];
 	static const uint64_t PARAM_UPDATE_THROTTLE_MS = 16;
 	
-	// PERFORMANCE: Batch parameter processing
-	struct PendingParameterUpdate {
-		int nodeID;
-		int paramIndex;
-		float value;
-		uint64_t timestamp;
-	};
-	std::vector<PendingParameterUpdate> pendingParameterUpdates;
-	std::mutex pendingUpdatesMutex;
-	static const size_t MAX_PENDING_UPDATES = 1024;
+	// Batched GUI mirroring of VST feedback
 	static const uint64_t BATCH_PROCESS_INTERVAL_MS = 8;
 	uint64_t lastBatchProcessTime;
-	std::array<float, 1024> batchedLatestValues;
-	std::array<int, 1024> batchedLatestNodeIDs;
-	std::array<uint8_t, 1024> batchedParamSeen;
-	std::vector<int> batchedUpdatedParamIndices;
+	std::array<std::atomic<float>, 1024> latestParameterValues;
+	std::array<std::atomic<int>, 1024> latestParameterNodeIDs;
+	std::array<float, 1024> pendingGUIValues;
+	std::array<int, 1024> pendingGUINodeIDs;
+	std::array<uint8_t, 1024> pendingGUISeen;
+	std::vector<int> pendingGUIParamIndices;
 	
-	// PERFORMANCE: Pre-allocated string cache to avoid allocations in hot paths
-	std::string cachedAddressString;
-	
-	// PERFORMANCE: Batch OSC message processing
-	std::vector<ofxOscMessage> pendingOscMessages;
-	std::mutex oscMessageMutex;
-	static const size_t MAX_PENDING_OSC_MESSAGES = 512;
-	
-	// PERFORMANCE: OSC Message pooling
-	class OSCMessagePool {
-	private:
-		std::vector<std::unique_ptr<ofxOscMessage>> pool;
-		std::mutex poolMutex;
-	public:
-		std::unique_ptr<ofxOscMessage> acquire();
-		void release(std::unique_ptr<ofxOscMessage> msg);
-	};
-	OSCMessagePool oscPool;
-	
-	// PERFORMANCE: Optimized methods
+	// Internal batch helpers
 	void processPendingParameterUpdates();
-	void handleVSTParamOptimized(ofxOscMessage& msg);
-	void loadSelectedPluginOptimized();
-	void sendParameterUpdateOptimized(int nodeID, int paramIndex, float value);
 
 };
 
