@@ -11,6 +11,7 @@
 #include "ofxSCSynth.h"
 #include "imgui.h"
 #include "ofxOceanodeShared.h"
+#include <algorithm>
 #include <set>
 #include <unordered_set>
 #include <vector>
@@ -63,6 +64,8 @@ scVST::scVST() : scNode("VST") {
 	lastParameterChangeTime = 0;
 	parameterDebounceDelay = 1000; // 1 second default debounce
 	parameterCacheScheduled = false;
+	fxpCacheSaveInProgress.store(false, std::memory_order_relaxed);
+	fxpCacheSavePending.store(false, std::memory_order_relaxed);
 	
 	// FXP PRESET LOADING: Initialize critical flag for reliable FXP loading
 	isFXPLoading.store(false, std::memory_order_relaxed);
@@ -87,6 +90,8 @@ scVST::scVST() : scNode("VST") {
 	// PERFORMANCE: Pre-allocate batch processing
 	pendingParameterUpdates.reserve(MAX_PENDING_UPDATES);
 	lastBatchProcessTime = 0;
+	batchedUpdatedParamIndices.reserve(MAX_PENDING_UPDATES);
+	batchedParamSeen.fill(0);
 	
 	// PERFORMANCE: Pre-allocate string cache to avoid allocations
 	cachedAddressString.reserve(32);
@@ -726,16 +731,26 @@ void scVST::processPendingParameterUpdates() {
 		pendingParameterUpdates.reserve(MAX_PENDING_UPDATES);
 	}
 	
-	// Group updates by parameter to avoid redundant updates
-	std::map<int, std::pair<float, int>> latestValues; // paramIndex -> (value, nodeID)
+	batchedUpdatedParamIndices.clear();
+
+	// Group updates by parameter using fixed-size scratch buffers to avoid map allocations
 	for(const auto& update : updates) {
-		latestValues[update.paramIndex] = {update.value, update.nodeID};
+		if(!batchedParamSeen[update.paramIndex]) {
+			batchedParamSeen[update.paramIndex] = 1;
+			batchedUpdatedParamIndices.push_back(update.paramIndex);
+		}
+
+		batchedLatestValues[update.paramIndex] = update.value;
+		batchedLatestNodeIDs[update.paramIndex] = update.nodeID;
 	}
+
+	// Preserve the previous std::map iteration order: ascending parameter index
+	std::sort(batchedUpdatedParamIndices.begin(), batchedUpdatedParamIndices.end());
 	
 	// Apply only the latest value for each parameter
-	for(const auto& [paramIndex, valueAndNode] : latestValues) {
-		float value = valueAndNode.first;
-		int nodeID = valueAndNode.second;
+	for(int paramIndex : batchedUpdatedParamIndices) {
+		float value = batchedLatestValues[paramIndex];
+		int nodeID = batchedLatestNodeIDs[paramIndex];
 		
 		// Update parameter info
 		if(parameterInfoMap.count(paramIndex) == 0) {
@@ -759,6 +774,8 @@ void scVST::processPendingParameterUpdates() {
 		if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
 			propagateParameterToOtherInstances(nodeID, paramIndex, value);
 		}
+
+		batchedParamSeen[paramIndex] = 0;
 	}
 }
 
@@ -872,8 +889,45 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 		uint64_t currentTime = ofGetElapsedTimeMillis();
 		
 		if(useFXPLoading) {
+			// During FXP loading, keep the original immediate path for reliable recall
+			// Only update lastTouchedIndex if this parameter is NOT already published
+			// This prevents automated parameters from overriding manual GUI tweaks
+			bool isAlreadyPublished = (dynamicParameters.count(paramIndex) > 0 ||
+									   dynamicVectorParameters.count(paramIndex) > 0);
+			
+			if (!isAlreadyPublished) {
+				lastTouchedIndex = paramIndex;
+				lastTouchedTime = currentTime;
+				ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
+				<< " from node " << nodeID << " (updating lastTouchedIndex for addLast)";
+			}
+			
+			// Update parameter info
+			if(parameterInfoMap.count(paramIndex) == 0) {
+				VSTParameterInfo info;
+				info.index = paramIndex;
+				
+				// Check if we have a saved name from preset loading
+				if(savedParameterNames.count(paramIndex) > 0) {
+					info.displayName = savedParameterNames[paramIndex];
+				} else {
+					info.displayName = "Param" + ofToString(paramIndex);
+				}
+				
+				info.value = value;
+				parameterInfoMap[paramIndex] = info;
+			} else {
+				parameterInfoMap[paramIndex].value = value;
+			}
+			
 			// During FXP loading, process immediately without throttling
 			updateParameterValueFromVST(paramIndex, value, nodeID);
+			
+			// ONLY propagate if this change came from GUI interaction on the first instance
+			// AND we don't have a vector parameter controlling this parameter
+			if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
+				propagateParameterToOtherInstances(nodeID, paramIndex, value);
+			}
 		} else {
 			// PERFORMANCE: Lock-free throttling using atomics
 			uint64_t lastUpdate = parameterUpdateGeneration[paramIndex].load(std::memory_order_acquire);
@@ -898,45 +952,18 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 					parameterDirty[paramIndex].store(true, std::memory_order_release);
 				}
 			}
-		}
-		
-		// Only update lastTouchedIndex if this parameter is NOT already published
-		// This prevents automated parameters from overriding manual GUI tweaks
-		bool isAlreadyPublished = (dynamicParameters.count(paramIndex) > 0 ||
-								   dynamicVectorParameters.count(paramIndex) > 0);
-		
-		if (!isAlreadyPublished) {
-			lastTouchedIndex = paramIndex;
-			lastTouchedTime = ofGetElapsedTimeMillis();
-			ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
-			<< " from node " << nodeID << " (updating lastTouchedIndex for addLast)";
-		}
-		
-		// Update parameter info
-		if(parameterInfoMap.count(paramIndex) == 0) {
-			VSTParameterInfo info;
-			info.index = paramIndex;
+
+			// Keep last-touched tracking immediate, but let the batch processor own
+			// parameterInfoMap updates, GUI updates, and propagation in steady state.
+			bool isAlreadyPublished = (dynamicParameters.count(paramIndex) > 0 ||
+									   dynamicVectorParameters.count(paramIndex) > 0);
 			
-			// Check if we have a saved name from preset loading
-			if(savedParameterNames.count(paramIndex) > 0) {
-				info.displayName = savedParameterNames[paramIndex];
-			} else {
-				info.displayName = "Param" + ofToString(paramIndex);
+			if (!isAlreadyPublished) {
+				lastTouchedIndex = paramIndex;
+				lastTouchedTime = currentTime;
+				ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
+				<< " from node " << nodeID << " (updating lastTouchedIndex for addLast)";
 			}
-			
-			info.value = value;
-			parameterInfoMap[paramIndex] = info;
-		} else {
-			parameterInfoMap[paramIndex].value = value;
-		}
-		
-		// Update GUI parameter if it exists (but prevent recursion)
-		updateParameterValueFromVST(paramIndex, value, nodeID);
-		
-		// ONLY propagate if this change came from GUI interaction on the first instance
-		// AND we don't have a vector parameter controlling this parameter
-		if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
-			propagateParameterToOtherInstances(nodeID, paramIndex, value);
 		}
 	}
 }
@@ -1003,19 +1030,22 @@ void scVST::updateParameterValueFromVST(int paramIndex, float value, int sourceN
 		const auto& currentValues = param.get();
 
 		if(currentValues.size() == 1) {
-			// OPTIMIZATION: Scalar mode - avoid temporary vector allocation
-			static thread_local vector<float> scalarVec(1);
-			scalarVec[0] = value;
-			param.setWithoutEventNotifications(scalarVec);
+			// OPTIMIZATION: Scalar mode - avoid redundant writes and temporary allocation
+			if(currentValues[0] != value) {
+				static thread_local vector<float> scalarVec(1);
+				scalarVec[0] = value;
+				param.setWithoutEventNotifications(scalarVec);
+			}
 		} else {
 			// OPTIMIZATION: Vector mode - only update if needed
 			int instanceIndex = getInstanceIndexFromNodeID(sourceNodeID);
 			if(instanceIndex >= 0 && instanceIndex < static_cast<int>(currentValues.size())) {
 				// OPTIMIZATION: Only update if value actually changed
 				if(currentValues[instanceIndex] != value) {
-					vector<float> newValues = currentValues; // Copy
-					newValues[instanceIndex] = value;
-					param.setWithoutEventNotifications(newValues);
+					static thread_local vector<float> vectorScratch;
+					vectorScratch.assign(currentValues.begin(), currentValues.end());
+					vectorScratch[instanceIndex] = value;
+					param.setWithoutEventNotifications(vectorScratch);
 				}
 			}
 		}
@@ -1024,7 +1054,10 @@ void scVST::updateParameterValueFromVST(int paramIndex, float value, int sourceN
 	// OPTIMIZATION: Update scalar parameter if it exists (legacy support)
 	auto scalarIt = dynamicParameters.find(paramIndex);
 	if(scalarIt != dynamicParameters.end()) {
-		scalarIt->second->getParameter().setWithoutEventNotifications(value);
+		auto& scalarParam = scalarIt->second->getParameter();
+		if(scalarParam.get() != value) {
+			scalarParam.setWithoutEventNotifications(value);
+		}
 	}
 
 	// OPTIMIZATION: Always update parameter info map
@@ -1035,18 +1068,8 @@ void scVST::updateParameterValueFromVST(int paramIndex, float value, int sourceN
 }
 
 int scVST::getInstanceIndexFromNodeID(int nodeID) {
-	int instanceIndex = 0;
-	for(auto& serverInstances : synthInstances) {
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
-				if(synth->nodeID == nodeID) {
-					return instanceIndex;
-				}
-				instanceIndex++;
-			}
-		}
-	}
-	return -1; // Not found
+	auto it = nodeIDToInstanceIndex.find(nodeID);
+	return it != nodeIDToInstanceIndex.end() ? it->second : -1;
 }
 
 void scVST::propagateParameterToOtherInstances(int sourceNodeID, int paramIndex, float value) {
@@ -1071,25 +1094,22 @@ void scVST::propagateParameterToOtherInstances(int sourceNodeID, int paramIndex,
 	 << " from node " << sourceNodeID << " to other instances (GUI-initiated)";
 	 */
 	// Apply to all OTHER instances (not the source)
-	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr && synth->nodeID != sourceNodeID) { // Skip source instance
-				try {
-					ofxOscMessage setMsg;
-					setMsg.setAddress("/u_cmd");
-					setMsg.addIntArg(synth->nodeID);
-					setMsg.addIntArg(2);
-					setMsg.addStringArg("/set");
-					setMsg.addIntArg(paramIndex);
-					setMsg.addFloatArg(value);
-					serverInstances.first->sendMsg(setMsg);
-					
-					//ofLogVerbose("scVST") << "Propagated to instance " << synth->nodeID;
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error propagating parameter to synth " << synth->nodeID << ": " << e.what();
-				}
+	static thread_local ofxOscMessage setMsg;
+	for(const auto& target : activeInstanceTargets) {
+		if(target.synth->nodeID != sourceNodeID) { // Skip source instance
+			try {
+				setMsg.clear();
+				setMsg.setAddress("/u_cmd");
+				setMsg.addIntArg(target.synth->nodeID);
+				setMsg.addIntArg(2);
+				setMsg.addStringArg("/set");
+				setMsg.addIntArg(paramIndex);
+				setMsg.addFloatArg(value);
+				target.server->sendMsg(setMsg);
+				
+				//ofLogVerbose("scVST") << "Propagated to instance " << target.synth->nodeID;
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Error propagating parameter to synth " << target.synth->nodeID << ": " << e.what();
 			}
 		}
 	}
@@ -1114,18 +1134,8 @@ bool scVST::shouldPropagateFromVSTGUI(int paramIndex, int sourceNodeID) {
 		}
 	}
 	
-	// Check if this is the first instance (only first instance GUI changes should propagate)
-	bool isFirstInstance = false;
-	for(auto& serverInstances : synthInstances) {
-		if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
-			if(serverInstances.second[0]->nodeID == sourceNodeID) {
-				isFirstInstance = true;
-				break;
-			}
-		}
-	}
-	
-	if(!isFirstInstance) {
+	// Check if this is the first instance for its server
+	if(firstInstanceNodeIDs.count(sourceNodeID) == 0) {
 		//ofLogVerbose("scVST") << "Not propagating param " << paramIndex << " - not from first instance";
 		return false;
 	}
@@ -1176,54 +1186,48 @@ void scVST::handleInstanceAwareParameterChange(int paramIndex, const vector<floa
 	 << " with " << values.size() << " values (USER-initiated)";
 	 */
 	// Apply parameter values to specific instances
-	int instanceIndex = 0;
-	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
-				try {
-					float value;
-					
-					if(values.size() == 1) {
-						// Scalar value - broadcast to all instances
-						value = values[0];
-						/*
-						 ofLogVerbose("scVST") << "Broadcasting scalar value " << value
-						 << " to instance " << instanceIndex << " (node " << synth->nodeID << ")";
-						 */
-					}
-					else if(instanceIndex < values.size()) {
-						// Vector value - use specific value for this instance
-						value = values[instanceIndex];
-						/*
-						 ofLogVerbose("scVST") << "Setting instance " << instanceIndex
-						 << " (node " << synth->nodeID << ") to value " << value;
-						 */
-					}
-					else {
-						// Vector is shorter than number of instances - use last value
-						value = values.back();
-						/*
-						 ofLogVerbose("scVST") << "Using last value " << value
-						 << " for instance " << instanceIndex << " (node " << synth->nodeID << ")";
-						 */
-					}
-					
-					ofxOscMessage setMsg;
-					setMsg.setAddress("/u_cmd");
-					setMsg.addIntArg(synth->nodeID);
-					setMsg.addIntArg(2);
-					setMsg.addStringArg("/set");
-					setMsg.addIntArg(paramIndex);
-					setMsg.addFloatArg(value);
-					serverInstances.first->sendMsg(setMsg);
-					
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error setting parameter on synth " << synth->nodeID << ": " << e.what();
-				}
+	static thread_local ofxOscMessage setMsg;
+	for(size_t instanceIndex = 0; instanceIndex < activeInstanceTargets.size(); ++instanceIndex) {
+		const auto& target = activeInstanceTargets[instanceIndex];
+		try {
+			float value;
+			
+			if(values.size() == 1) {
+				// Scalar value - broadcast to all instances
+				value = values[0];
+				/*
+				 ofLogVerbose("scVST") << "Broadcasting scalar value " << value
+				 << " to instance " << instanceIndex << " (node " << target.synth->nodeID << ")";
+				 */
 			}
-			instanceIndex++;
+			else if(instanceIndex < values.size()) {
+				// Vector value - use specific value for this instance
+				value = values[instanceIndex];
+				/*
+				 ofLogVerbose("scVST") << "Setting instance " << instanceIndex
+				 << " (node " << target.synth->nodeID << ") to value " << value;
+				 */
+			}
+			else {
+				// Vector is shorter than number of instances - use last value
+				value = values.back();
+				/*
+				 ofLogVerbose("scVST") << "Using last value " << value
+				 << " for instance " << instanceIndex << " (node " << target.synth->nodeID << ")";
+				 */
+			}
+			
+			setMsg.clear();
+			setMsg.setAddress("/u_cmd");
+			setMsg.addIntArg(target.synth->nodeID);
+			setMsg.addIntArg(2);
+			setMsg.addStringArg("/set");
+			setMsg.addIntArg(paramIndex);
+			setMsg.addFloatArg(value);
+			target.server->sendMsg(setMsg);
+			
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error setting parameter on synth " << target.synth->nodeID << ": " << e.what();
 		}
 	}
 	
@@ -1251,12 +1255,13 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 				totalExpectedInstances += serverInstances.second.size();
 			}
 			
-			ofLogNotice("scVST") << "✅ VST instance " << nodeID << " loaded successfully ("
-								<< readyInstances.size() << "/" << totalExpectedInstances << " ready)";
+				ofLogVerbose("scVST") << "VST instance " << nodeID << " loaded successfully ("
+									 << readyInstances.size() << "/" << totalExpectedInstances << " ready)";
 			
 			// When ALL instances are ready, apply FXP to all at once
 			if(areAllInstancesReady()) {
-				ofLogNotice("scVST") << "🎉 All " << totalExpectedInstances << " VST instances ready! Applying state restoration...";
+					ofLogVerbose("scVST") << "All " << totalExpectedInstances
+									 << " VST instances ready; applying state restoration";
 				
 				// CRITICAL: Stop the timer - event-driven approach takes over
 				parameterTimerActive = false;
@@ -1266,7 +1271,8 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 				
 				// Priority 1: During Oceanode preset loading - ALWAYS use preset FXP data
 				if(oceanodePresetLoading && hasSavedFXPData) {
-					ofLogNotice("scVST") << "🔄 Restoring VST state from Oceanode preset FXP (preset loading) for node '" << nodeKey << "'";
+						ofLogVerbose("scVST") << "Restoring VST state from Oceanode preset FXP for node '"
+										 << nodeKey << "'";
 					for(auto& serverInstances : synthInstances) {
 						for(auto synth : serverInstances.second) {
 							if(synth != nullptr && fxpAppliedInstances.count(synth->nodeID) == 0) {
@@ -1277,7 +1283,8 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 				}
 				// Priority 2: VST has been modified since preset load - use cached FXP data
 				else if(shouldUseCachedFXP()) {
-					ofLogNotice("scVST") << "🔄 Restoring VST state from cache (VST modified since preset) for node '" << nodeKey << "' (" << cachedFXP.size() << " bytes)";
+						ofLogVerbose("scVST") << "Restoring VST state from cache for node '"
+										 << nodeKey << "' (" << cachedFXP.size() << " bytes)";
 					
 					// Create temp file with this node's cached FXP
 					string tempPath = createTempFXPPath();
@@ -1304,7 +1311,7 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 								}
 							}
 							
-							ofLogNotice("scVST") << "✅ VST state restoration commands sent to all instances (parallel)";
+								ofLogVerbose("scVST") << "VST state restoration commands sent to all instances";
 							
 						}
 					} catch(const std::exception& e) {
@@ -1338,19 +1345,19 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 					}
 				}
 				else {
-					ofLogNotice("scVST") << "ℹ️ No FXP to apply - using default VST state";
+						ofLogVerbose("scVST") << "No FXP to apply; using default VST state";
 				}
 				
 				// FXP PRESET LOADING: Wait for FXP to be processed, then clear flag
 				if(hasSavedFXPData || fxpCacheValid) {
 					ofSleepMillis(500); // Allow time for all parameter updates to be processed
-					ofLogNotice("scVST") << "FXP load complete - disabling blocking locks";
+						ofLogVerbose("scVST") << "FXP load complete; disabling blocking locks";
 				}
 				isFXPLoading.store(false, std::memory_order_release);
 				
 				// CRITICAL: Apply pending GUI parameters now that VST is ready
 				if(hasPendingPresetData) {
-					ofLogNotice("scVST") << "🎯 Applying pending GUI parameters (VST ready event)";
+						ofLogVerbose("scVST") << "Applying pending GUI parameters after VST ready event";
 					ofSleepMillis(200); // Let FXP settle first
 					applyPendingPresetData();
 				}
@@ -2463,7 +2470,7 @@ void scVST::setVSTParameter(int paramIndex, float value) {
 		return;
 	}
 	
-	if(synthInstances.empty()) {
+	if(activeInstanceTargets.empty()) {
 		ofLogWarning("scVST") << "No VST instances available to set parameter";
 		return;
 	}
@@ -2482,24 +2489,19 @@ void scVST::setVSTParameter(int paramIndex, float value) {
 	parameterUpdateGeneration[paramIndex].store(ofGetElapsedTimeMillis(), std::memory_order_release);
 	
 	// Apply parameter change to ALL instances
-	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
-				try {
-					ofxOscMessage setMsg;
-					setMsg.setAddress("/u_cmd");
-					setMsg.addIntArg(synth->nodeID);
-					setMsg.addIntArg(2);
-					setMsg.addStringArg("/set");
-					setMsg.addIntArg(paramIndex);
-					setMsg.addFloatArg(value);
-					serverInstances.first->sendMsg(setMsg);
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error setting parameter on synth " << synth->nodeID << ": " << e.what();
-				}
-			}
+	static thread_local ofxOscMessage setMsg;
+	for(const auto& target : activeInstanceTargets) {
+		try {
+			setMsg.clear();
+			setMsg.setAddress("/u_cmd");
+			setMsg.addIntArg(target.synth->nodeID);
+			setMsg.addIntArg(2);
+			setMsg.addStringArg("/set");
+			setMsg.addIntArg(paramIndex);
+			setMsg.addFloatArg(value);
+			target.server->sendMsg(setMsg);
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error setting parameter on synth " << target.synth->nodeID << ": " << e.what();
 		}
 	}
 	
@@ -2509,14 +2511,7 @@ void scVST::setVSTParameter(int paramIndex, float value) {
 }
 
 bool scVST::isMyVSTInstance(int nodeID) const {
-	for(auto& serverInstances : synthInstances) {
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr && synth->nodeID == nodeID) {
-				return true;
-			}
-		}
-	}
-	return false;
+	return ownedNodeIDs.count(nodeID) > 0;
 }
 
 void scVST::processGates(vector<int> &gates){
@@ -3719,7 +3714,7 @@ void scVST::setVSTParameterDirectToAll(int paramIndex, float value) {
 		return;
 	}
 
-	if(__builtin_expect(synthInstances.empty(), 0)) {
+	if(__builtin_expect(activeInstanceTargets.empty(), 0)) {
 		ofLogVerbose("scVST") << "No VST instances available to set parameter";
 		return;
 	}
@@ -3727,31 +3722,21 @@ void scVST::setVSTParameterDirectToAll(int paramIndex, float value) {
 	// OPTIMIZATION: Pre-build OSC message template outside the loop
 	// All instances get the same parameter value, so we can reuse the message structure
 	static thread_local ofxOscMessage setMsg;
-	setMsg.clear();
-	setMsg.setAddress("/u_cmd");
 
 	// Apply parameter change to ALL instances WITHOUT feedback suppression
-	for(auto& serverInstances : synthInstances) {
-		ofxSCServer* server = serverInstances.first;
-		if(__builtin_expect(server == nullptr, 0)) continue;
-
-		const auto& synths = serverInstances.second;
-		for(auto synth : synths) {
-			if(__builtin_expect(synth != nullptr, 1)) {
-				try {
-					// OPTIMIZATION: Reuse message, only update nodeID
-					setMsg.clear();
-					setMsg.setAddress("/u_cmd");
-					setMsg.addIntArg(synth->nodeID);
-					setMsg.addIntArg(2);
-					setMsg.addStringArg("/set");
-					setMsg.addIntArg(paramIndex);
-					setMsg.addFloatArg(value);
-					server->sendMsg(setMsg);
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error setting parameter on synth " << synth->nodeID << ": " << e.what();
-				}
-			}
+	for(const auto& target : activeInstanceTargets) {
+		try {
+			// OPTIMIZATION: Reuse message, only update nodeID
+			setMsg.clear();
+			setMsg.setAddress("/u_cmd");
+			setMsg.addIntArg(target.synth->nodeID);
+			setMsg.addIntArg(2);
+			setMsg.addStringArg("/set");
+			setMsg.addIntArg(paramIndex);
+			setMsg.addFloatArg(value);
+			target.server->sendMsg(setMsg);
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error setting parameter on synth " << target.synth->nodeID << ": " << e.what();
 		}
 	}
 }
@@ -3763,7 +3748,7 @@ void scVST::setVSTParameterVectorDirectToAll(int paramIndex, const vector<float>
 		return;
 	}
 
-	if(__builtin_expect(synthInstances.empty(), 0)) {
+	if(__builtin_expect(activeInstanceTargets.empty(), 0)) {
 		ofLogVerbose("scVST") << "No VST instances available to set parameter";
 		return;
 	}
@@ -3776,38 +3761,29 @@ void scVST::setVSTParameterVectorDirectToAll(int paramIndex, const vector<float>
 	static thread_local ofxOscMessage setMsg;
 
 	// Apply parameter changes to instances based on vector indices
-	int instanceIndex = 0;
-	for(auto& serverInstances : synthInstances) {
-		ofxSCServer* server = serverInstances.first;
-		if(__builtin_expect(server == nullptr, 0)) continue;
-
-		const auto& synths = serverInstances.second;
-		for(auto synth : synths) {
-			if(__builtin_expect(synth != nullptr, 1)) {
-				try {
-					// OPTIMIZATION: Use array-style access when in bounds
-					float value;
-					if(__builtin_expect(instanceIndex < static_cast<int>(valuesSize), 1)) {
-						value = values[instanceIndex];
-					} else {
-						value = fallbackValue;
-					}
-
-					// OPTIMIZATION: Reuse message object
-					setMsg.clear();
-					setMsg.setAddress("/u_cmd");
-					setMsg.addIntArg(synth->nodeID);
-					setMsg.addIntArg(2);
-					setMsg.addStringArg("/set");
-					setMsg.addIntArg(paramIndex);
-					setMsg.addFloatArg(value);
-					server->sendMsg(setMsg);
-
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error setting parameter on synth " << synth->nodeID << ": " << e.what();
-				}
+	for(size_t instanceIndex = 0; instanceIndex < activeInstanceTargets.size(); ++instanceIndex) {
+		const auto& target = activeInstanceTargets[instanceIndex];
+		try {
+			// OPTIMIZATION: Use array-style access when in bounds
+			float value;
+			if(__builtin_expect(instanceIndex < valuesSize, 1)) {
+				value = values[instanceIndex];
+			} else {
+				value = fallbackValue;
 			}
-			instanceIndex++;
+
+			// OPTIMIZATION: Reuse message object
+			setMsg.clear();
+			setMsg.setAddress("/u_cmd");
+			setMsg.addIntArg(target.synth->nodeID);
+			setMsg.addIntArg(2);
+			setMsg.addStringArg("/set");
+			setMsg.addIntArg(paramIndex);
+			setMsg.addFloatArg(value);
+			target.server->sendMsg(setMsg);
+
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error setting parameter on synth " << target.synth->nodeID << ": " << e.what();
 		}
 	}
 }
@@ -3831,8 +3807,10 @@ void scVST::createVSTInstances(ofxSCServer* server) {
 		string synthDefName = monoInstancing.get() ? "vstMono" : "vstStereo";
 		synthInstances[server][i] = new ofxSCSynth(synthDefName, server);
 		
-		//ofLogNotice("scVST") << "Created VST instance " << i << " using " << synthDefName;
+			//ofLogNotice("scVST") << "Created VST instance " << i << " using " << synthDefName;
 	}
+
+	rebuildInstanceLookupCache();
 }
 
 void scVST::freeVSTInstances(ofxSCServer* server) {
@@ -3853,6 +3831,7 @@ void scVST::freeVSTInstances(ofxSCServer* server) {
 	
 	// Clear the original vector immediately to prevent further access
 	synthInstances[server].clear();
+	rebuildInstanceLookupCache();
 	
 	// Now safely delete each instance
 	for(auto synth : instancesCopy) {
@@ -3928,6 +3907,7 @@ void scVST::freeAll() {
 	
 	// Clear the entire map
 	synthInstances.clear();
+	clearInstanceLookupCache();
 	
 	//ofLogNotice("scVST") << "Finished freeing all VST instances";
 }
@@ -3941,11 +3921,46 @@ void scVST::free(ofxSCServer* server) {
 	try {
 		freeVSTInstances(server);
 		synthInstances.erase(server);
+		rebuildInstanceLookupCache();
 	} catch(const std::exception& e) {
 		ofLogError("scVST") << "Error in free(): " << e.what();
 	} catch(...) {
 		ofLogError("scVST") << "Unknown error in free()";
 	}
+}
+
+void scVST::rebuildInstanceLookupCache() {
+	ownedNodeIDs.clear();
+	firstInstanceNodeIDs.clear();
+	nodeIDToInstanceIndex.clear();
+	activeInstanceTargets.clear();
+
+	int instanceIndex = 0;
+	for(auto& serverInstances : synthInstances) {
+		if(serverInstances.first == nullptr) continue;
+		bool firstForServer = true;
+		for(auto synth : serverInstances.second) {
+			if(synth == nullptr) continue;
+
+			activeInstanceTargets.push_back({serverInstances.first, synth});
+			if(synth->nodeID <= 0) continue;
+
+			ownedNodeIDs.insert(synth->nodeID);
+			nodeIDToInstanceIndex[synth->nodeID] = instanceIndex++;
+
+			if(firstForServer) {
+				firstInstanceNodeIDs.insert(synth->nodeID);
+				firstForServer = false;
+			}
+		}
+	}
+}
+
+void scVST::clearInstanceLookupCache() {
+	ownedNodeIDs.clear();
+	firstInstanceNodeIDs.clear();
+	nodeIDToInstanceIndex.clear();
+	activeInstanceTargets.clear();
 }
 
 void scVST::buildSynth(ofxSCServer* server) {
@@ -4045,21 +4060,12 @@ void scVST::buildSynth(ofxSCServer* server) {
 						}
 					}
 					else if (address == "/vst_update") {
-						ofLogNotice("scVST") << "🔍 /vst_update received from node " << msg.getArgAsInt32(0);
-						
 						this->handleVSTUpdate(msg);
-						
-						// Debug the cache scheduling:
-						ofLogNotice("scVST") << "🔍 About to schedule cache - oceanodePresetLoading:" << this->oceanodePresetLoading
-						<< " hasPendingPresetData:" << this->hasPendingPresetData;
-						
+
 						if (!this->oceanodePresetLoading && !this->hasPendingPresetData) {
-							ofLogNotice("scVST") << "✅ Scheduling immediate FXP cache";
 							// Mark VST as modified and schedule cache
 							this->vstStateModifiedSincePreset = true;
 							this->scheduleImmediateFXPCache();
-						} else {
-							ofLogNotice("scVST") << "❌ Cache scheduling blocked";
 						}
 						
 						if (msg.getNumArgs() >= 2) {
@@ -4278,6 +4284,8 @@ void scVST::createSynth(ofxSCServer* server){
 			 */
 		}
 	}
+
+	rebuildInstanceLookupCache();
 	
 	// Phase 2: Load the selected plugin on all instances (parallel)
 	if (!currentPluginPath.empty()) {
@@ -4925,18 +4933,8 @@ void scVST::handleVSTUpdate(ofxOscMessage& msg) {
 		 << " (probably preset loaded in GUI)";
 		 */
 		
-		// Check if this is the first instance (we only sync FROM the first instance)
-		bool isFirstInstance = false;
-		for(auto& serverInstances : synthInstances) {
-			if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
-				if(serverInstances.second[0]->nodeID == nodeID) {
-					isFirstInstance = true;
-					break;
-				}
-			}
-		}
-		
-		if(isFirstInstance) {
+		// Check if this is the first instance for its server (we only sync FROM those)
+		if(firstInstanceNodeIDs.count(nodeID) > 0) {
 			//ofLogNotice("scVST") << "🎯 Update came from first instance - syncing to all others via FXP";
 			syncFirstInstanceToAllViaFXP(nodeID);
 		} else {
@@ -5272,18 +5270,10 @@ void scVST::saveFXPToUserChosenPath() {
 }
 
 void scVST::scheduleImmediateFXPCache() {
-	std::string nodeKey = getNodeCacheKey();
-	ofLogNotice("scVST") << "🔍 scheduleImmediateFXPCache for node '" << nodeKey << "' - pluginLoaded:" << pluginLoaded
-	<< " synthInstances.empty:" << synthInstances.empty()
-	<< " oceanodePresetLoading:" << oceanodePresetLoading
-	<< " hasPendingPresetData:" << hasPendingPresetData;
-	
 	if(!pluginLoaded || synthInstances.empty() || oceanodePresetLoading || hasPendingPresetData) {
-		ofLogNotice("scVST") << "❌ FXP cache scheduling blocked for node '" << nodeKey << "'";
 		return;
 	}
 	
-	ofLogNotice("scVST") << "✅ FXP cache scheduled for node '" << nodeKey << "' at " << (ofGetElapsedTimeMillis() + 100);
 	fxpCacheScheduledTime = ofGetElapsedTimeMillis() + 100;
 	fxpCacheScheduled = true;
 }
@@ -5321,7 +5311,8 @@ void scVST::updateParameterDebouncedCacheIfNeeded() {
 		parameterCacheScheduled = false;
 		
 		std::string nodeKey = getNodeCacheKey();
-		ofLogNotice("scVST") << "⏰ Debounce period elapsed for node '" << nodeKey << "' - saving FXP to cache";
+		ofLogVerbose("scVST") << "Debounce period elapsed for node '" << nodeKey
+							 << "'; saving FXP to cache";
 		
 		saveFXPToCache();
 	}
@@ -5351,16 +5342,22 @@ void scVST::resetVSTModificationTracking() {
 	lastParameterChangeTime = 0;
 	parameterCacheScheduled = false;
 	
-	std::string nodeKey = getNodeCacheKey();
-	ofLogNotice("scVST") << "🔄 Reset VST modification tracking for node '" << nodeKey << "'";
 }
 
 void scVST::saveFXPToCache() {
 	std::string nodeKey = getNodeCacheKey();
-	ofLogNotice("scVST") << "💾 saveFXPToCache called for node '" << nodeKey << "' - current fxpCacheValid:" << fxpCacheValid;
+	ofLogVerbose("scVST") << "saveFXPToCache called for node '" << nodeKey
+						 << "' - current fxpCacheValid:" << fxpCacheValid;
 	
 	if(synthInstances.empty() || oceanodePresetLoading || hasPendingPresetData) {
-		ofLogNotice("scVST") << "❌ saveFXPToCache blocked for node '" << nodeKey << "'";
+		ofLogVerbose("scVST") << "saveFXPToCache blocked for node '" << nodeKey << "'";
+		return;
+	}
+
+	if(fxpCacheSaveInProgress.load(std::memory_order_acquire)) {
+		fxpCacheSavePending.store(true, std::memory_order_release);
+		ofLogVerbose("scVST") << "saveFXPToCache deferred for node '" << nodeKey
+							 << "' because another cache save is already in progress";
 		return;
 	}
 	
@@ -5381,6 +5378,7 @@ void scVST::saveFXPToCache() {
 	}
 	
 	ofLogVerbose("scVST") << "💾 Saving current VST state to cache for node '" << nodeKey << "'";
+	fxpCacheSaveInProgress.store(true, std::memory_order_release);
 	
 	// Create temporary file for FXP data
 	string tempPath = createTempFXPPath();
@@ -5393,35 +5391,44 @@ void scVST::saveFXPToCache() {
 				int nodeID = msg.getArgAsInt32(0);
 				bool success = msg.getArgAsFloat(2) > 0.5f;
 				
-				if(this->isMyVSTInstance(nodeID) && success) {
-					try {
-						// Read FXP file into local cache
-						std::ifstream file(tempPath, std::ios::binary | std::ios::ate);
-						if(file.is_open()) {
-							std::streamsize size = file.tellg();
-							file.seekg(0, std::ios::beg);
-							
-							this->cachedFXP.resize(size);
-							if(file.read(reinterpret_cast<char*>(this->cachedFXP.data()), size)) {
-								this->fxpCacheValid = true;
+				if(this->isMyVSTInstance(nodeID)) {
+					if(success) {
+						try {
+							// Read FXP file into local cache
+							std::ifstream file(tempPath, std::ios::binary | std::ios::ate);
+							if(file.is_open()) {
+								std::streamsize size = file.tellg();
+								file.seekg(0, std::ios::beg);
 								
-								// CRITICAL: Also save to global cache immediately
-								this->saveCacheToGlobal();
-								
-								ofLogNotice("scVST") << "✅ FXP cached successfully for node '" << nodeKey
-								<< "' (" << size << " bytes)";
+								this->cachedFXP.resize(size);
+								if(file.read(reinterpret_cast<char*>(this->cachedFXP.data()), size)) {
+									this->fxpCacheValid = true;
+									
+									// CRITICAL: Also save to global cache immediately
+									this->saveCacheToGlobal();
+									
+										ofLogVerbose("scVST") << "FXP cached successfully for node '"
+														 << nodeKey << "' (" << size << " bytes)";
+								}
+								file.close();
 							}
-							file.close();
+						} catch(const std::exception& e) {
+							ofLogWarning("scVST") << "Error caching FXP for node '" << nodeKey << "': " << e.what();
+							this->fxpCacheValid = false;
 						}
-					} catch(const std::exception& e) {
-						ofLogWarning("scVST") << "Error caching FXP for node '" << nodeKey << "': " << e.what();
-						this->fxpCacheValid = false;
 					}
+					
+					this->fxpCacheSaveInProgress.store(false, std::memory_order_release);
+					bool scheduleFollowUpSave = this->fxpCacheSavePending.exchange(false, std::memory_order_acq_rel);
 					
 					// Clean up temp file
 					try {
 						ofFile::removeFile(tempPath);
 					} catch(...) {}
+					
+					if(scheduleFollowUpSave) {
+						this->scheduleImmediateFXPCache();
+					}
 				}
 			}
 		}

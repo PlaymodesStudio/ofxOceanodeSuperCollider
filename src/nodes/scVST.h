@@ -12,10 +12,13 @@
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
 #include "ofxOsc.h"
+#include <array>
 #include <mutex>
 #include <set>
 #include <map>
 #include <atomic>
+#include <unordered_map>
+#include <unordered_set>
 
 class ofxSCSynth;
 class ofxSCServer;
@@ -185,11 +188,13 @@ private:
 	void applyPendingPresetData();
 	void setupParameterTimer(int delayMs);
 	
-	// Multi-instance helpers
-	int calculateNumInstances() const;
-	void createVSTInstances(ofxSCServer* server);
-	void freeVSTInstances(ofxSCServer* server);
-	bool isMyVSTInstance(int nodeID) const;
+		// Multi-instance helpers
+		int calculateNumInstances() const;
+		void createVSTInstances(ofxSCServer* server);
+		void freeVSTInstances(ofxSCServer* server);
+		bool isMyVSTInstance(int nodeID) const;
+		void rebuildInstanceLookupCache();
+		void clearInstanceLookupCache();
 	
 	// VST OSC message handlers
 	void handleVSTParam(ofxOscMessage& msg);
@@ -287,8 +292,10 @@ private:
 	 uint64_t fxpCacheScheduledTime;
 	 bool fxpCacheScheduled;
 	 
-	// Per-plugin FXP caching for BOTH preset saving AND graph recomputation
+	 // Per-plugin FXP caching for BOTH preset saving AND graph recomputation
 	std::map<std::string, std::vector<uint8_t>> cachedFXPs;        // pluginPath -> FXP data
+	std::atomic<bool> fxpCacheSaveInProgress;   // Prevent overlapping FXP cache writes
+	std::atomic<bool> fxpCacheSavePending;      // Coalesce repeated save requests while busy
 	
 	// NEW: State tracking for smart FXP source selection
 	bool oceanodePresetLoading;           // Track if Oceanode preset is currently loading
@@ -362,7 +369,15 @@ private:
 	int oldNumChannels = 0;
 	
 	// Multi-instance VST support - each server can have multiple VST instances
+	struct InstanceSendTarget {
+		ofxSCServer* server;
+		ofxSCSynth* synth;
+	};
 	std::map<ofxSCServer*, std::vector<ofxSCSynth*>> synthInstances;
+	std::unordered_set<int> ownedNodeIDs;
+	std::unordered_set<int> firstInstanceNodeIDs;
+	std::unordered_map<int, int> nodeIDToInstanceIndex;
+	std::vector<InstanceSendTarget> activeInstanceTargets;
 	
 	// Core parameters
 	ofParameter<int> numChannels;
@@ -498,6 +513,10 @@ private:
 	static const size_t MAX_PENDING_UPDATES = 1024;
 	static const uint64_t BATCH_PROCESS_INTERVAL_MS = 8;
 	uint64_t lastBatchProcessTime;
+	std::array<float, 1024> batchedLatestValues;
+	std::array<int, 1024> batchedLatestNodeIDs;
+	std::array<uint8_t, 1024> batchedParamSeen;
+	std::vector<int> batchedUpdatedParamIndices;
 	
 	// PERFORMANCE: Pre-allocated string cache to avoid allocations in hot paths
 	std::string cachedAddressString;
