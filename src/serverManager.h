@@ -45,7 +45,8 @@ struct scPreferences{
     int numRGens = 64; //r
     int maxLogins = 1; //l
     float safetyClipThreshold = 1.26; //s
-    std::string deviceName = "nil"; //H
+    std::string deviceName = "nil"; //H (output device, second arg)
+    std::string inputDeviceName = "nil"; //H (input device, first arg)
     int verbosity = 0;
     std::string ugensPlugins = ""; //-U (list of paths separated by :)
 };
@@ -80,7 +81,7 @@ public:
     void removeOutput(scOutput* output);
     
     void setAudioDevices(std::vector<std::string> audioDevices){audioDeviceNames = audioDevices;}
-    void setAudioDeviceName(const std::string& deviceName, int inputChannels = 0, int outputChannels = 0);
+    void setAudioDeviceNames(const std::string& outputDeviceName, const std::string& inputDeviceName, int inputChannels = 0, int outputChannels = 0);
     
     ofxSCServer* getServer(){return server;}
     static int getSampleRateForServer(ofxSCServer* server);

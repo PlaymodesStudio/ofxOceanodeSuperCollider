@@ -171,7 +171,8 @@ void serverManager::draw(){
     ImGui::InputInt("Max Logins", &preferences.maxLogins);
     ImGui::InputFloat("Safety Clip Th", &preferences.safetyClipThreshold);
     
-    ImGui::Text("Audio Device: %s", preferences.deviceName == "nil" ? "Default" : preferences.deviceName.c_str());
+    ImGui::Text("Output Device: %s", preferences.deviceName == "nil" ? "Default" : preferences.deviceName.c_str());
+    ImGui::Text("Input Device: %s", preferences.inputDeviceName == "nil" ? "Default" : preferences.inputDeviceName.c_str());
     
     //Device name;
     bool verb = preferences.verbosity;
@@ -240,25 +241,25 @@ void serverManager::prepareForRestart(){
     }
 }
 
-void serverManager::setAudioDeviceName(const std::string& deviceName, int inputChannels, int outputChannels){
+void serverManager::setAudioDeviceNames(const std::string& outputDeviceName, const std::string& inputDeviceName, int inputChannels, int outputChannels){
     if(configuredNumInputBusChannels < 0) configuredNumInputBusChannels = preferences.numInputBusChannels;
     if(configuredNumOutputBusChannels < 0) configuredNumOutputBusChannels = preferences.numOutputBusChannels;
 
-    preferences.deviceName = (deviceName.empty() || deviceName == "Default") ? "nil" : deviceName;
+    preferences.deviceName = (outputDeviceName.empty() || outputDeviceName == "Default") ? "nil" : outputDeviceName;
+    preferences.inputDeviceName = (inputDeviceName.empty() || inputDeviceName == "Default") ? "nil" : inputDeviceName;
     preferences.numInputBusChannels = configuredNumInputBusChannels;
     preferences.numOutputBusChannels = configuredNumOutputBusChannels;
 
-    if(preferences.deviceName != "nil"){
-        if(inputChannels > 0 && configuredNumInputBusChannels > inputChannels){
-            ofLogNotice("serverManager") << "Clamping SC input channels for " << preferences.deviceName
-                << " from " << configuredNumInputBusChannels << " to " << inputChannels;
-            preferences.numInputBusChannels = inputChannels;
-        }
-        if(outputChannels > 0 && configuredNumOutputBusChannels > outputChannels){
-            ofLogNotice("serverManager") << "Clamping SC output channels for " << preferences.deviceName
-                << " from " << configuredNumOutputBusChannels << " to " << outputChannels;
-            preferences.numOutputBusChannels = outputChannels;
-        }
+    if(inputChannels > 0 && configuredNumInputBusChannels > inputChannels){
+        ofLogNotice("serverManager") << "Clamping SC input channels for "
+            << (preferences.inputDeviceName != "nil" ? preferences.inputDeviceName : preferences.deviceName)
+            << " from " << configuredNumInputBusChannels << " to " << inputChannels;
+        preferences.numInputBusChannels = inputChannels;
+    }
+    if(preferences.deviceName != "nil" && outputChannels > 0 && configuredNumOutputBusChannels > outputChannels){
+        ofLogNotice("serverManager") << "Clamping SC output channels for " << preferences.deviceName
+            << " from " << configuredNumOutputBusChannels << " to " << outputChannels;
+        preferences.numOutputBusChannels = outputChannels;
     }
 }
 

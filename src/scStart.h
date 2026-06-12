@@ -78,10 +78,15 @@ public:
             termcmd += " -r " + ofToString(launchPrefs.numRGens);
             termcmd += " -l " + ofToString(launchPrefs.maxLogins);
             termcmd += " -s " + ofToString(launchPrefs.safetyClipThreshold);
-            if(launchPrefs.deviceName == "nil"){
+            const bool hasOutputDevice = launchPrefs.deviceName != "nil" && !launchPrefs.deviceName.empty();
+            const bool hasInputDevice = launchPrefs.inputDeviceName != "nil" && !launchPrefs.inputDeviceName.empty();
+            if(!hasOutputDevice && !hasInputDevice){
                 termcmd += " -H nil";
             }else{
-                termcmd += " -H " + shellQuote("") + " " + shellQuote(launchPrefs.deviceName);
+                // scsynth's two-argument form: -H <inputDevice> <outputDevice>.
+                // An empty string means "use the system default" for that side.
+                termcmd += " -H " + shellQuote(hasInputDevice ? launchPrefs.inputDeviceName : "")
+                         + " " + shellQuote(hasOutputDevice ? launchPrefs.deviceName : "");
             }
             termcmd += " -D 0 "; //Deactivate synthdefs
             std::string pluginsPath = scPath.substr(0, scPath.size()-7);

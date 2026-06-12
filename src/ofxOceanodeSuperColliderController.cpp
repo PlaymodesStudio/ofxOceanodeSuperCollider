@@ -17,9 +17,11 @@ ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOc
     stereomix = true;
     stereomixSize = 4;
     audioDevice = 0;
+    audioInputDevice = 0;
     sampleRate = 0;
     selectedSampleRate = scPreferences().hardwareSampleRate;
     selectedAudioDeviceName = "nil";
+    selectedAudioInputDeviceName = "nil";
 	mute = false;
 	
 	reloadAudioDevices();
@@ -36,8 +38,10 @@ void ofxOceanodeSuperColliderController::createServers(){
             outputServers.back()->setAudioDevices(audioDeviceNames);
             if(outputServers.size() == 1){
                 selectedAudioDeviceName = outputServers.back()->preferences.deviceName;
+                selectedAudioInputDeviceName = outputServers.back()->preferences.inputDeviceName;
                 selectedSampleRate = outputServers.back()->preferences.hardwareSampleRate;
                 syncAudioDeviceSelection();
+                syncAudioInputDeviceSelection();
                 syncSampleRateSelection();
             }
         }
@@ -64,8 +68,10 @@ void ofxOceanodeSuperColliderController::setup(){
 		stereomixSize = json["stereomixsize"];
 		stereomix = json["stereomix"];
         selectedAudioDeviceName = json.value<std::string>("deviceName", selectedAudioDeviceName);
+        selectedAudioInputDeviceName = json.value<std::string>("inputDeviceName", selectedAudioInputDeviceName);
         selectedSampleRate = json.value<int>("sampleRate", selectedSampleRate);
         syncAudioDeviceSelection();
+        syncAudioInputDeviceSelection();
         syncSampleRateSelection();
 	}
 	// apply preferences to output servers
@@ -110,17 +116,31 @@ void ofxOceanodeSuperColliderController::draw(){
     if(ImGui::Button("Refresh Audio Devices")){
         reloadAudioDevices();
         syncAudioDeviceSelection();
+        syncAudioInputDeviceSelection();
         for(auto s : outputServers) s->setAudioDevices(audioDeviceNames);
     }
 
-    ImGui::TextUnformatted("Audio Device");
+    ImGui::TextUnformatted("Output Device");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    if(ImGui::Combo("##Audio Device", &audioDevice, vector_getter, static_cast<void*>(&audioDeviceNames), audioDeviceNames.size())){
+    if(ImGui::Combo("##Output Device", &audioDevice, vector_getter, static_cast<void*>(&audioDeviceNames), audioDeviceNames.size())){
         const std::string newAudioDeviceName = getAudioDeviceNameFromSelection();
         if(newAudioDeviceName != selectedAudioDeviceName){
             ofLogNotice("ofxOceanodeSuperColliderController") << "Switching audio output device to "
                 << (newAudioDeviceName == "nil" ? "Default" : newAudioDeviceName);
             selectedAudioDeviceName = newAudioDeviceName;
+            syncSampleRateSelection();
+            applyAudioDeviceToServers(true);
+        }
+    }
+
+    ImGui::TextUnformatted("Input Device");
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    if(ImGui::Combo("##Input Device", &audioInputDevice, vector_getter, static_cast<void*>(&inputDeviceNames), inputDeviceNames.size())){
+        const std::string newInputDeviceName = getAudioInputDeviceNameFromSelection();
+        if(newInputDeviceName != selectedAudioInputDeviceName){
+            ofLogNotice("ofxOceanodeSuperColliderController") << "Switching audio input device to "
+                << (newInputDeviceName == "nil" ? "Default" : newInputDeviceName);
+            selectedAudioInputDeviceName = newInputDeviceName;
             syncSampleRateSelection();
             applyAudioDeviceToServers(true);
         }
@@ -220,6 +240,18 @@ void ofxOceanodeSuperColliderController::reloadAudioDevices(){
         rates.erase(std::unique(rates.begin(), rates.end()), rates.end());
         audioDeviceSampleRates.push_back(rates);
     }
+
+    // Input dropdown only lists devices that actually have input channels
+    inputDeviceNames = {"Default"};
+    inputDeviceSuperColliderNames = {"nil"};
+    inputDeviceFullIndices = {0};
+    for(int i = 1; i < (int)audioDeviceNames.size(); i++){
+        if(audioDeviceInputChannels[i] > 0){
+            inputDeviceNames.push_back(audioDeviceNames[i]);
+            inputDeviceSuperColliderNames.push_back(audioDeviceSuperColliderNames[i]);
+            inputDeviceFullIndices.push_back(i);
+        }
+    }
     syncSampleRateSelection();
 }
 
@@ -246,6 +278,7 @@ void ofxOceanodeSuperColliderController::saveConfig(std::string filepath, scPref
     json["maxLogins"] = prefs.maxLogins;
     json["safetyClipThreshold"] = prefs.safetyClipThreshold;
     json["deviceName"] = prefs.deviceName;
+    json["inputDeviceName"] = prefs.inputDeviceName;
     json["verbosity"] = prefs.verbosity;
     json["ugensPlugins"] = prefs.ugensPlugins;
     
@@ -260,6 +293,7 @@ void ofxOceanodeSuperColliderController::saveControllerConfig(std::string filepa
 	json["stereomixsize"] = stereomixSize;
 	json["stereomix"] = stereomix;
     json["deviceName"] = selectedAudioDeviceName;
+    json["inputDeviceName"] = selectedAudioInputDeviceName;
     json["sampleRate"] = selectedSampleRate;
 
 	ofSavePrettyJson(filepath, json);
@@ -289,6 +323,7 @@ void ofxOceanodeSuperColliderController::loadConfig(std::string filepath, scPref
         prefs.maxLogins = json["maxLogins"];
         prefs.safetyClipThreshold = json["safetyClipThreshold"];
         prefs.deviceName = json.value<std::string>("deviceName", "nil");
+        prefs.inputDeviceName = json.value<std::string>("inputDeviceName", "nil");
         prefs.verbosity = json["verbosity"];
         prefs.ugensPlugins = json["ugensPlugins"];
     }
@@ -317,6 +352,29 @@ void ofxOceanodeSuperColliderController::syncAudioDeviceSelection(){
     audioDevice = 0;
 }
 
+void ofxOceanodeSuperColliderController::syncAudioInputDeviceSelection(){
+    if(selectedAudioInputDeviceName.empty() || selectedAudioInputDeviceName == "Default"){
+        selectedAudioInputDeviceName = "nil";
+    }
+
+    audioInputDevice = 0;
+    if(selectedAudioInputDeviceName == "nil"){
+        return;
+    }
+
+    for(int i = 0; i < (int)inputDeviceSuperColliderNames.size(); i++){
+        if(inputDeviceSuperColliderNames[i] == selectedAudioInputDeviceName){
+            audioInputDevice = i;
+            return;
+        }
+    }
+
+    ofLogWarning("ofxOceanodeSuperColliderController") << "Saved audio input device \"" << selectedAudioInputDeviceName
+        << "\" is not available on this computer. Falling back to the system default device.";
+    selectedAudioInputDeviceName = "nil";
+    audioInputDevice = 0;
+}
+
 void ofxOceanodeSuperColliderController::syncSampleRateSelection(){
     if(selectedSampleRate <= 0){
         selectedSampleRate = scPreferences().hardwareSampleRate;
@@ -327,6 +385,31 @@ void ofxOceanodeSuperColliderController::syncSampleRateSelection(){
 
     if(audioDevice >= 0 && audioDevice < (int)audioDeviceSampleRates.size()){
         sampleRateValues = audioDeviceSampleRates[audioDevice];
+    }
+
+    // scsynth needs input and output devices running at the same rate,
+    // so only offer rates both devices support when they differ
+    if(audioInputDevice > 0 && audioInputDevice < (int)inputDeviceFullIndices.size()){
+        const int fullIndex = inputDeviceFullIndices[audioInputDevice];
+        if(fullIndex != audioDevice && fullIndex < (int)audioDeviceSampleRates.size() && !audioDeviceSampleRates[fullIndex].empty()){
+            const auto &inputRates = audioDeviceSampleRates[fullIndex];
+            if(sampleRateValues.empty()){
+                sampleRateValues = inputRates;
+            }else{
+                vector<int> commonRates;
+                for(int rate : sampleRateValues){
+                    if(std::find(inputRates.begin(), inputRates.end(), rate) != inputRates.end()){
+                        commonRates.push_back(rate);
+                    }
+                }
+                if(!commonRates.empty()){
+                    sampleRateValues = commonRates;
+                }else{
+                    ofLogWarning("ofxOceanodeSuperColliderController")
+                        << "Input and output devices share no common sample rate. scsynth may fail to boot.";
+                }
+            }
+        }
     }
 
     if(sampleRateValues.empty()){
@@ -368,6 +451,22 @@ std::string ofxOceanodeSuperColliderController::getAudioDeviceNameFromSelection(
     return audioDeviceSuperColliderNames[audioDevice];
 }
 
+bool ofxOceanodeSuperColliderController::hasAvailableAudioInputDevice(const std::string& deviceName) const{
+    if(deviceName.empty() || deviceName == "Default" || deviceName == "nil"){
+        return true;
+    }
+
+    return std::find(inputDeviceSuperColliderNames.begin(), inputDeviceSuperColliderNames.end(), deviceName)
+        != inputDeviceSuperColliderNames.end();
+}
+
+std::string ofxOceanodeSuperColliderController::getAudioInputDeviceNameFromSelection() const{
+    if(audioInputDevice <= 0 || audioInputDevice >= (int)inputDeviceSuperColliderNames.size()){
+        return "nil";
+    }
+    return inputDeviceSuperColliderNames[audioInputDevice];
+}
+
 int ofxOceanodeSuperColliderController::getSampleRateFromSelection() const{
     if(sampleRate < 0 || sampleRate >= (int)sampleRateValues.size()){
         return selectedSampleRate;
@@ -384,14 +483,32 @@ void ofxOceanodeSuperColliderController::applyAudioDeviceToServers(bool restartS
         syncSampleRateSelection();
     }
 
-    const int inputChannels = (audioDevice >= 0 && audioDevice < (int)audioDeviceInputChannels.size()) ? audioDeviceInputChannels[audioDevice] : 0;
+    const bool requestedInputDeviceAvailable = hasAvailableAudioInputDevice(selectedAudioInputDeviceName);
+    const std::string inputDeviceName = requestedInputDeviceAvailable ? getAudioInputDeviceNameFromSelection() : "nil";
+    if(!requestedInputDeviceAvailable){
+        selectedAudioInputDeviceName = "nil";
+        audioInputDevice = 0;
+        syncSampleRateSelection();
+    }
+
+    // Input channel count comes from the explicit input device when one is
+    // selected, otherwise from the output device (which also feeds the input
+    // side when no input device is set, matching previous behavior)
+    int inputChannels = 0;
+    if(audioInputDevice > 0 && audioInputDevice < (int)inputDeviceFullIndices.size()){
+        const int fullIndex = inputDeviceFullIndices[audioInputDevice];
+        if(fullIndex < (int)audioDeviceInputChannels.size()) inputChannels = audioDeviceInputChannels[fullIndex];
+    }else if(audioDevice >= 0 && audioDevice < (int)audioDeviceInputChannels.size()){
+        inputChannels = audioDeviceInputChannels[audioDevice];
+    }
     const int outputChannels = (audioDevice >= 0 && audioDevice < (int)audioDeviceOutputChannels.size()) ? audioDeviceOutputChannels[audioDevice] : 0;
     selectedAudioDeviceName = deviceName;
+    selectedAudioInputDeviceName = inputDeviceName;
     selectedSampleRate = getSampleRateFromSelection();
 
     for(auto s : outputServers){
         s->setAudioDevices(audioDeviceNames);
-        s->setAudioDeviceName(deviceName, inputChannels, outputChannels);
+        s->setAudioDeviceNames(deviceName, inputDeviceName, inputChannels, outputChannels);
         s->setHardwareSampleRate(selectedSampleRate);
     }
 
