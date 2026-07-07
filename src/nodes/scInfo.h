@@ -126,18 +126,27 @@ public:
             if(ImGui::Begin((modCanvasID + "SC Info " +
                 ofToString(getNumIdentifier())).c_str(), (bool *)&showWindow.get())){
                 auto size = ImGui::GetContentRegionAvail();
-                if(synth != nullptr){
-                    ImGui::PlotHistogram("", &ampBus->readValues[0], ampBus->readValues.size(), 0, NULL, 0, 1, size);
-                    ImGui::SameLine(7);
-                    vector<float> peakValues(0, size.x);
-                    int eachChannelSize = size.x / peakBus->readValues.size();
-                    for(int i = 0; i < peakBus->readValues.size(); i++){
-                        vector<float> vals(eachChannelSize, peakBus->readValues[i]);
-                        peakValues.insert(peakValues.begin() + ( i * eachChannelSize), vals.begin(), vals.end());
+                size.x = std::max(1.0f, size.x);
+                size.y = std::max(1.0f, size.y);
+                if(synth != nullptr && ampBus != nullptr && peakBus != nullptr){
+                    bool drewAmpPlot = false;
+                    if(!ampBus->readValues.empty()){
+                        ImGui::PlotHistogram("##scinfo_amp", ampBus->readValues.data(), (int)ampBus->readValues.size(), 0, NULL, 0, 1, size);
+                        drewAmpPlot = true;
                     }
-                    
-                    
-                    ImGui::PlotLines("", &peakValues[0], peakValues.size(), 0, NULL, 0, 1, size);
+                    if(!peakBus->readValues.empty()){
+                        if(drewAmpPlot) ImGui::SameLine(7);
+                        vector<float> peakValues;
+                        int eachChannelSize = std::max(1, (int)size.x / (int)peakBus->readValues.size());
+                        peakValues.reserve(eachChannelSize * peakBus->readValues.size());
+                        for(int i = 0; i < peakBus->readValues.size(); i++){
+                            vector<float> vals(eachChannelSize, peakBus->readValues[i]);
+                            peakValues.insert(peakValues.end(), vals.begin(), vals.end());
+                        }
+                        if(!peakValues.empty()){
+                            ImGui::PlotLines("##scinfo_peak", peakValues.data(), (int)peakValues.size(), 0, NULL, 0, 1, size);
+                        }
+                    }
                     ampBus->requestValues();
                     peakBus->requestValues();
                 }
