@@ -57,8 +57,6 @@ scVST::scVST() : scNode("VST") {
 	
 	lastMaintenanceTime = 0;
 	maintenanceIntervalMs = 50;
-	lastParamThrottleCleanup = 0;
-	paramThrottleCleanupInterval = 5000;
 	
 	for(int i = 0; i < 1024; i++) {
 		parameterUpdateGeneration[i].store(0, std::memory_order_relaxed);
@@ -71,6 +69,9 @@ scVST::scVST() : scNode("VST") {
 	lastBatchProcessTime = 0;
 	pendingGUISeen.fill(0);
 	pendingGUIParamIndices.reserve(128);
+	dirtyParameterIndices.reserve(128);
+	pendingParameterSetSeen.fill(0);
+	pendingParameterSetIndices.reserve(128);
 }
 
 void scVST::setup(){
@@ -94,6 +95,18 @@ void scVST::setup(){
 	}
 	pendingGUISeen.fill(0);
 	pendingGUIParamIndices.clear();
+	{
+		std::lock_guard<std::mutex> lock(dirtyParameterMutex);
+		dirtyParameterIndices.clear();
+	}
+	pendingParameterSetSeen.fill(0);
+	for(auto& values : pendingParameterSetValues) {
+		values.clear();
+	}
+	{
+		std::lock_guard<std::mutex> lock(pendingParameterSetMutex);
+		pendingParameterSetIndices.clear();
+	}
 	clearAllFeedbackSuppression();
 	
 	// Inputs and outputs need to exist before preset loading can trigger upstream updates.
@@ -458,6 +471,7 @@ void scVST::setup(){
 		if(currentTime - lastBatchProcessTime >= BATCH_PROCESS_INTERVAL_MS) {
 			processPendingParameterUpdates();
 			flushPendingGUIParameterUpdates();
+			flushPendingVSTParameterSets();
 			lastBatchProcessTime = currentTime;
 		}
 		
@@ -538,18 +552,6 @@ void scVST::setup(){
 		
 		updateFXPCacheIfNeeded();
 		updateParameterDebouncedCacheIfNeeded();
-		
-		if(currentTime - lastParamThrottleCleanup > paramThrottleCleanupInterval) {
-			lastParamThrottleCleanup = currentTime;
-			for(int i = 0; i < 1024; i++) {
-				if(parameterDirty[i].load(std::memory_order_acquire)) {
-					uint64_t lastUpdate = parameterUpdateGeneration[i].load(std::memory_order_acquire);
-					if(currentTime - lastUpdate > 1000) {
-						parameterDirty[i].store(false, std::memory_order_release);
-					}
-				}
-			}
-		}
 	}));
 	
 	loadCacheFromGlobal();
@@ -711,11 +713,31 @@ void scVST::searchForVSTPlugins() {
 		pluginPaths.push_back("");
 	}}
 
+void scVST::markParameterDirty(int paramIndex) {
+	if(paramIndex < 0 || paramIndex >= 1024) return;
+
+	if(!parameterDirty[paramIndex].exchange(true, std::memory_order_acq_rel)) {
+		std::lock_guard<std::mutex> lock(dirtyParameterMutex);
+		dirtyParameterIndices.push_back(paramIndex);
+	}
+}
+
 void scVST::processPendingParameterUpdates() {
-	for(int paramIndex = 0; paramIndex < 1024; ++paramIndex) {
-		if(!parameterDirty[paramIndex].exchange(false, std::memory_order_acq_rel)) {
+	static thread_local std::vector<int> indicesToProcess;
+	indicesToProcess.clear();
+
+	{
+		std::lock_guard<std::mutex> lock(dirtyParameterMutex);
+		indicesToProcess.swap(dirtyParameterIndices);
+	}
+
+	for(int paramIndex : indicesToProcess) {
+		if(paramIndex < 0 || paramIndex >= 1024) {
 			continue;
 		}
+
+		// Clear before reading latest values so concurrent updates queue a follow-up flush.
+		parameterDirty[paramIndex].store(false, std::memory_order_release);
 
 		float value = latestParameterValues[paramIndex].load(std::memory_order_acquire);
 		int nodeID = latestParameterNodeIDs[paramIndex].load(std::memory_order_acquire);
@@ -767,6 +789,78 @@ void scVST::flushPendingGUIParameterUpdates() {
 	}
 
 	pendingGUIParamIndices.clear();
+}
+
+void scVST::queueVSTParameterSet(int paramIndex, const vector<float>& values) {
+	if(paramIndex < 0 || paramIndex >= 1024 || values.empty()) {
+		return;
+	}
+
+	std::lock_guard<std::mutex> lock(pendingParameterSetMutex);
+	if(!pendingParameterSetSeen[paramIndex]) {
+		pendingParameterSetSeen[paramIndex] = 1;
+		pendingParameterSetIndices.push_back(paramIndex);
+	}
+	pendingParameterSetValues[paramIndex] = values;
+}
+
+void scVST::flushPendingVSTParameterSets() {
+	static thread_local std::vector<int> indicesToFlush;
+	static thread_local std::vector<float> valuesToSend;
+	indicesToFlush.clear();
+
+	{
+		std::lock_guard<std::mutex> lock(pendingParameterSetMutex);
+		indicesToFlush.swap(pendingParameterSetIndices);
+	}
+
+	if(indicesToFlush.empty()) return;
+	if(activeInstanceTargets.empty()) {
+		std::lock_guard<std::mutex> lock(pendingParameterSetMutex);
+		for(int paramIndex : indicesToFlush) {
+			if(paramIndex >= 0 && paramIndex < 1024) {
+				pendingParameterSetSeen[paramIndex] = 0;
+				pendingParameterSetValues[paramIndex].clear();
+			}
+		}
+		return;
+	}
+
+	static thread_local ofxOscMessage setMsg;
+	for(int paramIndex : indicesToFlush) {
+		if(paramIndex < 0 || paramIndex >= 1024) continue;
+
+		{
+			std::lock_guard<std::mutex> lock(pendingParameterSetMutex);
+			valuesToSend = pendingParameterSetValues[paramIndex];
+			pendingParameterSetValues[paramIndex].clear();
+			pendingParameterSetSeen[paramIndex] = 0;
+		}
+
+		if(valuesToSend.empty()) continue;
+
+		const size_t valueCount = valuesToSend.size();
+		const float fallbackValue = valuesToSend.back();
+		for(size_t instanceIndex = 0; instanceIndex < activeInstanceTargets.size(); ++instanceIndex) {
+			const auto& target = activeInstanceTargets[instanceIndex];
+			const float value = valueCount == 1 || instanceIndex >= valueCount ?
+								fallbackValue : valuesToSend[instanceIndex];
+
+			try {
+				setMsg.clear();
+				setMsg.setAddress("/u_cmd");
+				setMsg.addIntArg(target.synth->nodeID);
+				setMsg.addIntArg(2);
+				setMsg.addStringArg("/set");
+				setMsg.addIntArg(paramIndex);
+				setMsg.addFloatArg(value);
+				target.server->sendMsg(setMsg);
+			} catch(const std::exception& e) {
+				ofLogError("scVST") << "Error setting batched parameter on synth "
+									<< target.synth->nodeID << ": " << e.what();
+			}
+		}
+	}
 }
 
 bool scVST::isFeedbackSuppressed(int paramIndex, uint64_t currentTime) const {
@@ -1019,7 +1113,7 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 				// so we always keep the latest value for the next flush.
 				latestParameterValues[paramIndex].store(value, std::memory_order_release);
 				latestParameterNodeIDs[paramIndex].store(nodeID, std::memory_order_release);
-				parameterDirty[paramIndex].store(true, std::memory_order_release);
+				markParameterDirty(paramIndex);
 				parameterUpdateGeneration[paramIndex].store(currentTime, std::memory_order_release);
 			} else {
 				uint64_t lastUpdate = parameterUpdateGeneration[paramIndex].load(std::memory_order_acquire);
@@ -1036,7 +1130,7 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 				
 				latestParameterValues[paramIndex].store(value, std::memory_order_release);
 				latestParameterNodeIDs[paramIndex].store(nodeID, std::memory_order_release);
-				parameterDirty[paramIndex].store(true, std::memory_order_release);
+				markParameterDirty(paramIndex);
 			}
 			
 			if (!isAlreadyPublished) {
@@ -1069,7 +1163,7 @@ void scVST::handleVSTAuto(ofxOscMessage& msg) {
 			if(isAlreadyPublished) {
 				latestParameterValues[paramIndex].store(value, std::memory_order_release);
 				latestParameterNodeIDs[paramIndex].store(nodeID, std::memory_order_release);
-				parameterDirty[paramIndex].store(true, std::memory_order_release);
+				markParameterDirty(paramIndex);
 				parameterUpdateGeneration[paramIndex].store(currentTime, std::memory_order_release);
 			} else {
 				uint64_t lastUpdate = parameterUpdateGeneration[paramIndex].load(std::memory_order_acquire);
@@ -1086,7 +1180,7 @@ void scVST::handleVSTAuto(ofxOscMessage& msg) {
 				
 				latestParameterValues[paramIndex].store(value, std::memory_order_release);
 				latestParameterNodeIDs[paramIndex].store(nodeID, std::memory_order_release);
-				parameterDirty[paramIndex].store(true, std::memory_order_release);
+				markParameterDirty(paramIndex);
 			}
 		}
 		
@@ -2638,34 +2732,18 @@ void scVST::processGates(vector<int> &gates){
 
 void scVST::sendMidiNoteOn(int channel, int pitch, int velocity, int instanceIndex) {
 	// OPTIMIZATION: Early validation
-	if(synthInstances.empty()) return;
+	if(activeInstanceTargets.empty()) return;
 
 	if(instanceIndex == 0) {
-		// OPTIMIZATION: Route to all instances - cache iterator end
-		for(auto& serverInstances : synthInstances){
-			ofxSCServer* server = serverInstances.first;
-			const auto& synths = serverInstances.second;
-			for(auto synth : synths){
-				if(synth != nullptr){
-					sendMidiToInstance(server, synth, channel, 0x90, pitch, velocity);
-				}
-			}
+		for(const auto& target : activeInstanceTargets) {
+			sendMidiToInstance(target.server, target.synth, channel, 0x90, pitch, velocity);
 		}
 	} else if(instanceIndex > 0) {
-		// OPTIMIZATION: Route to specific instance with early exit
-		int currentInstance = 1;
-		for(auto& serverInstances : synthInstances){
-			ofxSCServer* server = serverInstances.first;
-			const auto& synths = serverInstances.second;
-			for(auto synth : synths){
-				if(synth != nullptr){
-					if(currentInstance == instanceIndex) {
-						sendMidiToInstance(server, synth, channel, 0x90, pitch, velocity);
-						return;
-					}
-					currentInstance++;
-				}
-			}
+		const size_t targetIndex = static_cast<size_t>(instanceIndex - 1);
+		if(targetIndex < activeInstanceTargets.size()) {
+			const auto& target = activeInstanceTargets[targetIndex];
+			sendMidiToInstance(target.server, target.synth, channel, 0x90, pitch, velocity);
+			return;
 		}
 		// Only log warning in verbose mode to reduce overhead
 		ofLogVerbose("scVST") << "Instance " << instanceIndex << " not found for MIDI note on";
@@ -2674,34 +2752,18 @@ void scVST::sendMidiNoteOn(int channel, int pitch, int velocity, int instanceInd
 
 void scVST::sendMidiNoteOff(int channel, int pitch, int instanceIndex) {
 	// OPTIMIZATION: Early validation
-	if(synthInstances.empty()) return;
+	if(activeInstanceTargets.empty()) return;
 
 	if(instanceIndex == 0) {
-		// OPTIMIZATION: Route to all instances - cache iterator end
-		for(auto& serverInstances : synthInstances){
-			ofxSCServer* server = serverInstances.first;
-			const auto& synths = serverInstances.second;
-			for(auto synth : synths){
-				if(synth != nullptr){
-					sendMidiToInstance(server, synth, channel, 0x80, pitch, 0x40);
-				}
-			}
+		for(const auto& target : activeInstanceTargets) {
+			sendMidiToInstance(target.server, target.synth, channel, 0x80, pitch, 0x40);
 		}
 	} else if(instanceIndex > 0) {
-		// OPTIMIZATION: Route to specific instance with early exit
-		int currentInstance = 1;
-		for(auto& serverInstances : synthInstances){
-			ofxSCServer* server = serverInstances.first;
-			const auto& synths = serverInstances.second;
-			for(auto synth : synths){
-				if(synth != nullptr){
-					if(currentInstance == instanceIndex) {
-						sendMidiToInstance(server, synth, channel, 0x80, pitch, 0x40);
-						return;
-					}
-					currentInstance++;
-				}
-			}
+		const size_t targetIndex = static_cast<size_t>(instanceIndex - 1);
+		if(targetIndex < activeInstanceTargets.size()) {
+			const auto& target = activeInstanceTargets[targetIndex];
+			sendMidiToInstance(target.server, target.synth, channel, 0x80, pitch, 0x40);
+			return;
 		}
 		// Only log warning in verbose mode to reduce overhead
 		ofLogVerbose("scVST") << "Instance " << instanceIndex << " not found for MIDI note off";
@@ -4686,18 +4748,18 @@ void scVST::sendMidiToInstance(ofxSCServer* server, ofxSCSynth* synth, int chann
 	m.addIntArg(2); // VSTPlugin synthIndex
 	m.addStringArg("/midi_msg"); // MIDI command
 
-	// OPTIMIZATION: Reserve MIDI message capacity upfront and use emplace_back
-	vector<uint8_t> midiBytes;
-	midiBytes.reserve(3); // Always 3 bytes for standard MIDI messages
-	midiBytes.push_back(status | ((channel - 1) & 0x0F)); // Status + channel (0-based)
-	midiBytes.push_back(data1 & 0x7F); // Data 1
+	uint8_t midiBytes[3];
+	size_t midiByteCount = 2;
+	midiBytes[0] = status | ((channel - 1) & 0x0F); // Status + channel (0-based)
+	midiBytes[1] = data1 & 0x7F; // Data 1
 	if(status != 0xC0 && status != 0xD0) { // Program change and channel pressure have only 2 bytes
-		midiBytes.push_back(data2 & 0x7F); // Data 2
+		midiBytes[2] = data2 & 0x7F; // Data 2
+		midiByteCount = 3;
 	}
 	
 	// Convert to buffer
 	ofBuffer buffer;
-	buffer.set(reinterpret_cast<const char*>(midiBytes.data()), midiBytes.size());
+	buffer.set(reinterpret_cast<const char*>(midiBytes), midiByteCount);
 	m.addBlobArg(buffer);
 	m.addFloatArg(0.0f); // detune
 	server->sendMsg(m);
@@ -4711,14 +4773,8 @@ void scVST::sendPitchBend(float value) {
 	int msb = (bendValue >> 7) & 0x7F;
 	
 	// Send to all instances
-	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
-				sendMidiToInstance(serverInstances.first, synth, midiChannel.get(), 0xE0, lsb, msb);
-			}
-		}
+	for(const auto& target : activeInstanceTargets) {
+		sendMidiToInstance(target.server, target.synth, midiChannel.get(), 0xE0, lsb, msb);
 	}
 }
 
@@ -4727,14 +4783,8 @@ void scVST::sendModWheel(float value) {
 	int ccValue = (int)(ofClamp(value, 0.0f, 1.0f) * 127.0f);
 	
 	// Send to all instances
-	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
-				sendMidiToInstance(serverInstances.first, synth, midiChannel.get(), 0xB0, 1, ccValue);
-			}
-		}
+	for(const auto& target : activeInstanceTargets) {
+		sendMidiToInstance(target.server, target.synth, midiChannel.get(), 0xB0, 1, ccValue);
 	}
 }
 
@@ -4743,15 +4793,7 @@ void scVST::handleDynamicParameterChange(int paramIndex, const vector<float>& va
 	// but never drop fresh GUI/LFO-driven changes while suppression is active.
 	suppressFeedbackFor(paramIndex, ofGetElapsedTimeMillis() + 100);
 
-	// OPTIMIZATION: Avoid redundant size checks
-	const size_t valueCount = values.size();
-	if(valueCount == 1) {
-		// Scalar value - broadcast to all instances
-		setVSTParameterDirectToAll(paramIndex, values[0]);
-	} else if(valueCount > 1) {
-		// Vector value - send per-instance values
-		setVSTParameterVectorDirectToAll(paramIndex, values);
-	}
+	queueVSTParameterSet(paramIndex, values);
 
 }
 
@@ -5595,7 +5637,7 @@ void scVST::setTempo(float bpm) {
 }
 
 void scVST::setTimeSignature(int num, int denom) {
-	if(synthInstances.empty()) {
+	if(activeInstanceTargets.empty()) {
 		ofLogWarning("scVST") << "No VST instances available for time signature control";
 		return;
 	}
@@ -5603,24 +5645,20 @@ void scVST::setTimeSignature(int num, int denom) {
 	//ofLogNotice("scVST") << "Setting time signature to " << num << "/" << denom;
 	
 	// Note: /time_sig takes int arguments, not float
-	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
-				try {
-					ofxOscMessage timeSigMsg;
-					timeSigMsg.setAddress("/u_cmd");
-					timeSigMsg.addIntArg(synth->nodeID);
-					timeSigMsg.addIntArg(2);
-					timeSigMsg.addStringArg("/time_sig");
-					timeSigMsg.addIntArg(num);
-					timeSigMsg.addIntArg(denom);
-					serverInstances.first->sendMsg(timeSigMsg);
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error setting time signature on synth " << synth->nodeID << ": " << e.what();
-				}
-			}
+	static thread_local ofxOscMessage timeSigMsg;
+	for(const auto& target : activeInstanceTargets) {
+		try {
+			timeSigMsg.clear();
+			timeSigMsg.setAddress("/u_cmd");
+			timeSigMsg.addIntArg(target.synth->nodeID);
+			timeSigMsg.addIntArg(2);
+			timeSigMsg.addStringArg("/time_sig");
+			timeSigMsg.addIntArg(num);
+			timeSigMsg.addIntArg(denom);
+			target.server->sendMsg(timeSigMsg);
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error setting time signature on synth "
+								<< target.synth->nodeID << ": " << e.what();
 		}
 	}
 }
@@ -5679,29 +5717,24 @@ void scVST::handleTransportPosition(ofxOscMessage& msg) {
 }
 
 void scVST::sendTransportCommandToAllInstances(const std::string& command, const std::vector<float>& args) {
-	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
-				try {
-					ofxOscMessage transportMsg;
-					transportMsg.setAddress("/u_cmd");
-					transportMsg.addIntArg(synth->nodeID);
-					transportMsg.addIntArg(2);
-					transportMsg.addStringArg(command);
-					
-					// Add arguments
-					for(float arg : args) {
-						transportMsg.addFloatArg(arg);
-					}
-					
-					serverInstances.first->sendMsg(transportMsg);
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error sending transport command " << command
-					<< " to synth " << synth->nodeID << ": " << e.what();
-				}
+	static thread_local ofxOscMessage transportMsg;
+	for(const auto& target : activeInstanceTargets) {
+		try {
+			transportMsg.clear();
+			transportMsg.setAddress("/u_cmd");
+			transportMsg.addIntArg(target.synth->nodeID);
+			transportMsg.addIntArg(2);
+			transportMsg.addStringArg(command);
+			
+			// Add arguments
+			for(float arg : args) {
+				transportMsg.addFloatArg(arg);
 			}
+			
+			target.server->sendMsg(transportMsg);
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error sending transport command " << command
+								<< " to synth " << target.synth->nodeID << ": " << e.what();
 		}
 	}
 }
@@ -5945,7 +5978,7 @@ void scVST::sendMidiCC(int ccNumber, float value) {
 		return;
 	}
 	
-	if(synthInstances.empty()) {
+	if(activeInstanceTargets.empty()) {
 		ofLogWarning("scVST") << "No VST instances available for MIDI CC";
 		return;
 	}
@@ -5957,18 +5990,13 @@ void scVST::sendMidiCC(int ccNumber, float value) {
 	<< " (float: " << value << ") to all VST instances";
 	
 	// Send to all instances
-	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
-				try {
-					// Use existing sendMidiToInstance method with CC message (0xB0)
-					sendMidiToInstance(serverInstances.first, synth, midiChannel.get(), 0xB0, ccNumber, midiValue);
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error sending MIDI CC to synth " << synth->nodeID << ": " << e.what();
-				}
-			}
+	for(const auto& target : activeInstanceTargets) {
+		try {
+			// Use existing sendMidiToInstance method with CC message (0xB0)
+			sendMidiToInstance(target.server, target.synth, midiChannel.get(), 0xB0, ccNumber, midiValue);
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "Error sending MIDI CC to synth "
+								<< target.synth->nodeID << ": " << e.what();
 		}
 	}
 }

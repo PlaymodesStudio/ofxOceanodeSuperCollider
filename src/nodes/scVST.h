@@ -529,12 +529,12 @@ private:
 	// Update scheduling
 	uint64_t lastMaintenanceTime;
 	uint64_t maintenanceIntervalMs;
-	uint64_t lastParamThrottleCleanup;
-	uint64_t paramThrottleCleanupInterval;
 
 	// Hot-path parameter feedback state
 	std::atomic<uint64_t> parameterUpdateGeneration[1024];
 	std::atomic<bool> parameterDirty[1024];
+	std::mutex dirtyParameterMutex;
+	std::vector<int> dirtyParameterIndices;
 	static const uint64_t PARAM_UPDATE_THROTTLE_MS = 16;
 	
 	// Batched GUI mirroring of VST feedback
@@ -546,9 +546,18 @@ private:
 	std::array<int, 1024> pendingGUINodeIDs;
 	std::array<uint8_t, 1024> pendingGUISeen;
 	std::vector<int> pendingGUIParamIndices;
+
+	// Batched outgoing VST parameter sets
+	std::array<std::vector<float>, 1024> pendingParameterSetValues;
+	std::array<uint8_t, 1024> pendingParameterSetSeen;
+	std::vector<int> pendingParameterSetIndices;
+	std::mutex pendingParameterSetMutex;
 	
 	// Internal batch helpers
+	void markParameterDirty(int paramIndex);
 	void processPendingParameterUpdates();
+	void queueVSTParameterSet(int paramIndex, const vector<float>& values);
+	void flushPendingVSTParameterSets();
 
 };
 
