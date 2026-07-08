@@ -2892,13 +2892,26 @@ void scRhythmBox::drawTrack(int ti) {
            td.stepProbGroup.resize(ns, 0);
            
            bool groupChanged = false;
+           const float groupCellH = ImGui::GetFrameHeight() + 16.0f;
+           const float groupInputPadX = 2.0f;
+           const ImVec2 groupRowStart = ImGui::GetCursorScreenPos();
+           static constexpr ImVec4 groupInputColors[10] = {
+               {0.27f, 0.53f, 0.95f, 1.f},
+               {0.95f, 0.28f, 0.30f, 1.f},
+               {0.28f, 0.82f, 0.48f, 1.f},
+               {0.95f, 0.60f, 0.18f, 1.f},
+               {0.72f, 0.38f, 0.92f, 1.f},
+               {0.20f, 0.84f, 0.90f, 1.f},
+               {0.94f, 0.88f, 0.20f, 1.f},
+               {0.80f, 0.32f, 0.70f, 1.f},
+               {0.45f, 0.75f, 0.35f, 1.f},
+               {0.85f, 0.45f, 0.65f, 1.f},
+           };
            for(int si = 0; si < ns; si++) {
-               if(si > 0) ImGui::SameLine(0, STEP_GAP);
                int pai = ((si - td.shift) % ns + ns) % ns;
                int& groupVal = td.stepProbGroup[pai];
-               
-               ImVec2 pos = ImGui::GetCursorScreenPos();
-               ImGui::SetNextItemWidth(sw);
+               ImVec2 pos(groupRowStart.x + si * (sw + STEP_GAP), groupRowStart.y);
+               ImVec2 bmax(pos.x + sw, pos.y + groupCellH);
                
                // Determine if this step should be greyed out
                bool isGreyedOut = false;
@@ -2914,34 +2927,74 @@ void scRhythmBox::drawTrack(int ti) {
                    }
                    isGreyedOut = !isFirstInGroup;
                }
-               
-               // Style the input field
-               if(isGreyedOut) {
-                   ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
-                   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+
+               ImVec4 baseColor = groupInputColors[groupVal % 10];
+               ImVec4 cellColor = groupVal == 0
+                   ? beatPalette[(si / tc.stepsPerBeat) % 2].off
+                   : ImVec4(baseColor.x * 0.18f, baseColor.y * 0.18f, baseColor.z * 0.18f, 1.0f);
+               ImVec4 frameColor = groupVal == 0
+                   ? ImVec4(0.10f, 0.11f, 0.13f, 1.0f)
+                   : ImVec4(baseColor.x * 0.28f, baseColor.y * 0.28f, baseColor.z * 0.28f, 1.0f);
+               ImVec4 textColor = isGreyedOut
+                   ? ImVec4(0.55f, 0.55f, 0.55f, 1.0f)
+                   : ImVec4(0.92f, 0.94f, 0.96f, 1.0f);
+               if(si == visualPlayhead) {
+                   cellColor = playheadCol;
+                   frameColor = ImVec4(0.72f, 0.58f, 0.10f, 1.0f);
+                   textColor = ImVec4(0.08f, 0.07f, 0.03f, 1.0f);
+               } else if(isGreyedOut) {
+                   cellColor = ImVec4(cellColor.x * 0.55f, cellColor.y * 0.55f, cellColor.z * 0.55f, 1.0f);
+                   frameColor = ImVec4(frameColor.x * 0.55f, frameColor.y * 0.55f, frameColor.z * 0.55f, 1.0f);
                }
+
+               dl->AddRectFilled(pos, bmax, ImGui::ColorConvertFloat4ToU32(cellColor), STEP_ROUND);
+               dl->AddRect(pos, bmax, ImGui::ColorConvertFloat4ToU32(frameColor), STEP_ROUND);
+
+               std::string stepLabel = ofToString(si + 1);
+               ImVec2 labelSize = ImGui::CalcTextSize(stepLabel.c_str());
+               dl->AddText(ImVec2(pos.x + std::max(0.0f, (sw - labelSize.x) * 0.5f), pos.y + 2.0f),
+                           ImGui::ColorConvertFloat4ToU32(textColor),
+                           stepLabel.c_str());
+               
+               ImGui::SetCursorScreenPos(ImVec2(pos.x + groupInputPadX, pos.y + 14.0f));
+               ImGui::SetNextItemWidth(std::max(1.0f, sw - groupInputPadX * 2.0f));
+               ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1.0f, 1.0f));
+               ImGui::PushStyleColor(ImGuiCol_FrameBg, frameColor);
+               ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(std::min(frameColor.x + 0.10f, 1.0f),
+                                                                      std::min(frameColor.y + 0.10f, 1.0f),
+                                                                      std::min(frameColor.z + 0.10f, 1.0f),
+                                                                      1.0f));
+               ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(std::min(frameColor.x + 0.18f, 1.0f),
+                                                                     std::min(frameColor.y + 0.18f, 1.0f),
+                                                                     std::min(frameColor.z + 0.18f, 1.0f),
+                                                                     1.0f));
+               ImGui::PushStyleColor(ImGuiCol_Text, textColor);
                
                std::string gid = "##grp" + ofToString(si);
-               if(ImGui::InputInt(gid.c_str(), &groupVal, 0, 0)) {
+               if(ImGui::DragInt(gid.c_str(), &groupVal, 0.05f, 0, 99, "%d")) {
                    groupVal = ofClamp(groupVal, 0, 99); // Limit to reasonable range
                    groupChanged = true;
                }
-               
-               if(isGreyedOut) {
-                   ImGui::PopStyleColor(2);
+
+               if(ImGui::IsItemHovered() && ImGui::IsMouseClicked(1)) {
+                   groupVal = 0;
+                   groupChanged = true;
                }
+               ImGui::PopStyleColor(4);
+               ImGui::PopStyleVar();
                
                // Tooltip
                if(ImGui::IsItemHovered()) {
                    if(groupVal == 0) {
-                       ImGui::SetTooltip("Individual probability (independent coin flip)");
+                       ImGui::SetTooltip("Step %d: individual probability (independent coin flip).\nDrag to assign a group; right-click resets to 0.", si + 1);
                    } else if(isGreyedOut) {
-                       ImGui::SetTooltip("Group %d member (follows first step in group)", groupVal);
+                       ImGui::SetTooltip("Step %d: group %d member (follows first step in group).\nRight-click resets to 0.", si + 1, groupVal);
                    } else {
-                       ImGui::SetTooltip("Group %d leader (determines group probability)", groupVal);
+                       ImGui::SetTooltip("Step %d: group %d leader (determines group probability).\nRight-click resets to 0.", si + 1, groupVal);
                    }
                }
            }
+           ImGui::SetCursorScreenPos(ImVec2(groupRowStart.x, groupRowStart.y + groupCellH));
            
            if(groupChanged) {
                // Update the probability logic when groups change
