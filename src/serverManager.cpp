@@ -73,6 +73,11 @@ void serverManager::setup(){
         nodesList.clear();
         for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
         busses.clear();
+
+        // Server initialization resets the audio bus allocator, so the old
+        // reserved silent bus address may now point to a live allocation.
+        busFromSilent.reset();
+        busFromSilent = std::make_unique<ofxSCBus>(RATE_AUDIO, MAX_NODE_CHANNELS, server);
         recomputeGraph();
         
         setVolume(volume);
