@@ -107,22 +107,24 @@ scDynGenPolyNode::~scDynGenPolyNode() {
         if(slotIndex >= 0) {
             int hash = getSlotHash();
             for(auto& pair : synthInstances) {
-                bool sentFree = false;
+                // DynGen code must remain alive until every UGen using it has
+                // been removed.  Sending dyngenfree first can race the audio
+                // thread and leave a voice executing released JIT code.
+                bool wasLatency = pair.first->getBLatency();
+                pair.first->setBLatency(false);
                 for(auto& voice : pair.second) {
                     if(!voice.synth) continue;
-                    if(!sentFree) {
-                        ofxOscMessage freeMsg;
-                        freeMsg.setAddress("/cmd");
-                        freeMsg.addStringArg("dyngenfree");
-                        freeMsg.addIntArg(hash);
-                        pair.first->sendMsg(freeMsg);
-                        sentFree = true;
-                    }
-
                     voice.synth->free();
                     delete voice.synth;
                     voice.synth = nullptr;
                 }
+
+                ofxOscMessage freeMsg;
+                freeMsg.setAddress("/cmd");
+                freeMsg.addStringArg("dyngenfree");
+                freeMsg.addIntArg(hash);
+                pair.first->sendMsg(freeMsg);
+                pair.first->setBLatency(wasLatency);
             }
             synthInstances.clear();
             releaseSlot(slotIndex);
@@ -170,17 +172,52 @@ void scDynGenPolyNode::setup() {
         editorBuf[kBufSize - 1] = '\0';
 
         auto anns = parseAnnotations(code);
+        bool applyDefaults = applyDefaultsOnNextCodeLoad;
+        applyDefaultsOnNextCodeLoad = false;
         mergeParamNames(anns);
         updateParamCount((int)anns.size(), anns);
+
+        // Loading a script is equivalent to selecting its initial preset.
+        // updateParamCount intentionally preserves existing values when the
+        // names/count match, so explicitly apply annotation defaults here.
+        // Live editor updates do not set this flag and retain their controls.
+        if(applyDefaults) {
+            int count = std::min((int)anns.size(), activeParamCount);
+            for(int i = 0; i < count; i++) {
+                paramSlots[i].param.set(std::vector<float>{anns[i].defVal});
+            }
+        }
 
         if(codeRequiresRecreate) {
             codeRequiresRecreate = false;
             for(auto& pair : synthInstances) {
-                bool wasLatency = pair.first->getBLatency();
-                pair.first->setBLatency(false);
-                sendCodeToServer(pair.first);
-                pair.first->setBLatency(wasLatency);
-                rebuildServerVoices(pair.first);
+                auto* server = pair.first;
+                auto& voices = pair.second;
+
+                // Do not hot-swap code while addAction=replace destroys the
+                // old DynGen UGens.  Long scripts make the asynchronous JIT
+                // swap overlap that destructor and can crash scsynth inside
+                // DynGen::~DynGen / Library::deleteOldCode.
+                //
+                // Queue the old voices for immediate removal first, then send
+                // the new script, and instantiate fresh voices at the server's
+                // normal latency.  This keeps released JIT code off the audio
+                // thread without changing any global server-manager logic.
+                bool wasLatency = server->getBLatency();
+                server->setBLatency(false);
+                for(auto& voice : voices) {
+                    if(!voice.synth) continue;
+                    voice.synth->free();
+                    delete voice.synth;
+                    voice.synth = nullptr;
+                }
+                voices.clear();
+
+                sendCodeToServer(server);
+
+                server->setBLatency(true);
+                rebuildServerVoices(server);
+                server->setBLatency(wasLatency);
             }
         } else {
             sendCodeToAllServers();
@@ -442,7 +479,7 @@ void scDynGenPolyNode::loadBeforeConnections(ofJson& json) {
 
 std::string scDynGenPolyNode::getSynthDefName() const {
     int slot = (slotIndex >= 0) ? slotIndex : 0;
-    return "DynGenWrapper_1_" + std::to_string(slot);
+    return "DynGenPolyWrapper_" + std::to_string(slot);
 }
 
 int scDynGenPolyNode::getSlotHash() const {
@@ -496,10 +533,14 @@ void scDynGenPolyNode::sendCodeToServer(ofxSCServer* server) {
 
     const std::string code(editorBuf);
     int hash = getSlotHash();
-    int numParams = (int)accParamNames.size();
+    // The wrapper exposes Oceanode controls as audio inputs (in(1), in(2),
+    // ...), not as DynGen's native _parameter variables.  The annotation
+    // names are UI metadata only.  Registering all of them with dyngenscript
+    // is both unnecessary and, with large scripts such as SteamPipe, triggers
+    // a DynGen 0.6.1 payload-cleanup crash in scsynth.
+    constexpr int numParams = 0;
 
     size_t estimatedSize = 32 + code.size() + 4;
-    for(auto& p : accParamNames) estimatedSize += p.size() + 8;
 
     static constexpr size_t kOscThreshold = 16000;
 
@@ -510,7 +551,6 @@ void scDynGenPolyNode::sendCodeToServer(ofxSCServer* server) {
         msg.addIntArg(hash);
         msg.addStringArg(code);
         msg.addIntArg(numParams);
-        for(auto& p : accParamNames) msg.addStringArg("_" + p);
         server->sendMsg(msg);
     } else {
         std::string tmpPath = ofGetTimestampString(
@@ -530,7 +570,6 @@ void scDynGenPolyNode::sendCodeToServer(ofxSCServer* server) {
         msg.addIntArg(hash);
         msg.addStringArg(tmpPath);
         msg.addIntArg(numParams);
-        for(auto& p : accParamNames) msg.addStringArg("_" + p);
         server->sendMsg(msg);
     }
 }
@@ -755,6 +794,7 @@ void scDynGenPolyNode::loadScriptFile(const std::string& path) {
     std::string code((std::istreambuf_iterator<char>(f)),
                      std::istreambuf_iterator<char>());
     codeRequiresRecreate = true;
+    applyDefaultsOnNextCodeLoad = true;
     eel2CodeParam.set(code);
     eel2StatusMsg = "Loaded: " + ofFilePath::getFileName(path);
     scriptListDirty = false;
@@ -810,7 +850,7 @@ Output ONLY valid EEL2 code. No markdown, no code fences, no prose before or aft
 === OCEANODE PARAM DECLARATION ===
 // @param lines are Oceanode UI annotations:
 //@param Name : default, min, max
-Maximum 8 params (p0..p7). These are not native DynGen @param declarations.
+Maximum 64 params (p0..p63). These are not native DynGen @param declarations.
 Do not output native DynGen @param lines and do not use _paramName variables.
 
 === INPUT LAYOUT FOR THIS NODE ===

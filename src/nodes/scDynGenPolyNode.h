@@ -29,7 +29,7 @@ class ofxSCSynth;
 class scDynGenPolyNode : public scNode {
 public:
     static constexpr int kMaxSlots  = 16;
-    static constexpr int kMaxParams = 8;
+    static constexpr int kMaxParams = 64;
     static constexpr int kMaxChans  = 16;
 
     static const int kSlotHashes[kMaxSlots];
@@ -153,6 +153,7 @@ private:
     char llmPromptBuf[2048] = {};
 
     bool codeRequiresRecreate = false;
+    bool applyDefaultsOnNextCodeLoad = false;
 
     static std::string buildDynGenPolySystemPrompt();
     static std::string callAnthropicAPI(const std::string& fullPrompt,
