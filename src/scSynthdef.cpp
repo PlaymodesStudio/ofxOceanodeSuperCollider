@@ -8,7 +8,12 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "scSynthdef.h"
 #include "ofxSCSynth.h"
+#include "ofxSCBus.h"
+#include <cmath>
 
+namespace {
+const int MAX_SERIAL_ITERATIONS = 32;
+}
 
 scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synthDescription), synthdefName(_synthDescription.name), scNode(_synthDescription.name + "*"){
     description = synthDescription.description;
@@ -33,22 +38,37 @@ void scSynthdef::setup(){
     }
     
     addParameter(numChannels.set("N Chan", 1, 1, MAX_NODE_CHANNELS));
+    const bool canUseSerialIterations = supportsSerialIterations();
+    iterations.set("Iter", 1, 1, canUseSerialIterations ? MAX_SERIAL_ITERATIONS : 1);
+    if(canUseSerialIterations){
+        addInspectorParameter(iterations);
+    }
     
     oldNumChannels = numChannels;
+    oldIterations = iterations;
     listeners.push(numChannels.newListener([this](int &i){
         if(i < 1 || i > MAX_NODE_CHANNELS) return;
         if(oldNumChannels != numChannels || variableChanged){
-            for(auto &synth : synths){
-                ofxSCSynth *newSynth = new ofxSCSynth(getSynthdefFilename(), synth.first);
-                newSynth->createAndRun(4, synth.second->nodeID, getActive()); //replace synth
-                delete synth.second;
-                synth.second = newSynth;
+            for(auto &synthServer : synths){
+                replaceSynthChain(synthServer.first);
             }
             resendParams.notify();
         }
         oldNumChannels = numChannels;
         variableChanged = false;
     }));
+    if(canUseSerialIterations){
+        listeners.push(iterations.newListener([this](int &i){
+            if(i < 1 || i > MAX_SERIAL_ITERATIONS) return;
+            if(oldIterations != iterations){
+                for(auto &synthServer : synths){
+                    replaceSynthChain(synthServer.first);
+                }
+                resendParams.notify();
+            }
+            oldIterations = iterations;
+        }));
+    }
     
     
     for(auto variable : synthDescription.variables){
@@ -99,10 +119,10 @@ void scSynthdef::setup(){
                         return;
                     }
                 }
-                for(auto synthServer : synths){
-                    if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
-                    else synthServer.second->set(toSendName, vi);
-                }
+                forEachSynth([&](ofxSCSynth* synth){
+                    if(vi->size() == 1) synth->setMultiple(toSendName, vi->at(0), numChannels);
+                    else synth->set(toSendName, vi);
+                });
             };
             
             listeners.push(vi.newListener([setValuesToSynths](vector<int> &vi_){
@@ -123,10 +143,10 @@ void scSynthdef::setup(){
                         return;
                     }
                 }
-                for(auto synthServer : synths){
-                    if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
-                    else synthServer.second->set(toSendName, vf);
-                }
+                forEachSynth([&](ofxSCSynth* synth){
+                    if(vf->size() == 1) synth->setMultiple(toSendName, vf->at(0), numChannels);
+                    else synth->set(toSendName, vf);
+                });
             };
             
             listeners.push(vf.newListener([setValuesToSynths](vector<float> &vf_){
@@ -146,9 +166,9 @@ void scSynthdef::setup(){
                     ofLog() << "Trying to send a nan value";
                     return;
                 }
-                for(auto synthServer : synths){
-                    synthServer.second->set(toSendName, i);
-                }
+                forEachSynth([&](ofxSCSynth* synth){
+                    synth->set(toSendName, i);
+                });
             };
             
             listeners.push(i.newListener([setValuesToSynths](int &i_){
@@ -167,9 +187,9 @@ void scSynthdef::setup(){
                     ofLog() << "Trying to send a nan value";
                     return;
                 }
-                for(auto synthServer : synths){
-                    synthServer.second->set(toSendName, f);
-                }
+                forEachSynth([&](ofxSCSynth* synth){
+                    synth->set(toSendName, f);
+                });
             };
             
             listeners.push(f.newListener([setValuesToSynths](float &f_){
@@ -188,9 +208,9 @@ void scSynthdef::setup(){
                     ofLog() << "Trying to send a nan value";
                     return;
                 }
-                for(auto synthServer : synths){
-                    synthServer.second->set(toSendName, b);
-                }
+                forEachSynth([&](ofxSCSynth* synth){
+                    synth->set(toSendName, b);
+                });
             };
             
             listeners.push(b.newListener([this, setValuesToSynths](bool &b_){
@@ -208,10 +228,10 @@ void scSynthdef::setup(){
                         return;
                     }
                 }
-                for(auto synthServer : synths){
-                    if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
-                    else synthServer.second->set(toSendName, vi);
-                }
+                forEachSynth([&](ofxSCSynth* synth){
+                    if(vi->size() == 1) synth->setMultiple(toSendName, vi->at(0), numChannels);
+                    else synth->set(toSendName, vi);
+                });
             };
             
             listeners.push(vi.newListener([setValuesToSynths](vector<int> &vi_){
@@ -231,10 +251,10 @@ void scSynthdef::setup(){
                         return;
                     }
                 }
-                for(auto synthServer : synths){
-                    if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
-                    else synthServer.second->set(toSendName, vi);
-                }
+                forEachSynth([&](ofxSCSynth* synth){
+                    if(vi->size() == 1) synth->setMultiple(toSendName, vi->at(0), numChannels);
+                    else synth->set(toSendName, vi);
+                });
             };
             
             listeners.push(vi.newListener([this, setValuesToSynths](vector<int> &vi_){
@@ -255,10 +275,10 @@ void scSynthdef::setup(){
                         return;
                     }
                 }
-                for(auto synthServer : synths){
-                    if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
-                    else synthServer.second->set(toSendName, vf);
-                }
+                forEachSynth([&](ofxSCSynth* synth){
+                    if(vf->size() == 1) synth->setMultiple(toSendName, vf->at(0), numChannels);
+                    else synth->set(toSendName, vf);
+                });
             };
             
             listeners.push(vf.newListener([this, setValuesToSynths](vector<float> &vf_){
@@ -279,15 +299,19 @@ void scSynthdef::setup(){
             
             
             listeners.push(resetAudioRateBusAssignments.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, int> busAssignmentInfo){
-                synths[busAssignmentInfo.first]->set(toSendName + "_sel", 0);
-                synths[busAssignmentInfo.first]->mapan(toSendName + "_ar", busAssignmentInfo.second, MAX_NODE_CHANNELS);
+                forEachSynth(busAssignmentInfo.first, [&](ofxSCSynth* synth){
+                    synth->set(toSendName + "_sel", 0);
+                    synth->mapan(toSendName + "_ar", busAssignmentInfo.second, MAX_NODE_CHANNELS);
+                });
             }));
             
             listeners.push(setAudioRateBusAssignment.newListener([this, toSendName, availableInput](std::tuple<ofxSCServer*, scNode*, int> busAssignmentInfo){
                 const auto [server, node, bus] = busAssignmentInfo;
                 if(availableInput->getNodeRef() == node){
-                    synths[server]->set(toSendName + "_sel", 1);
-                    synths[server]->mapan(toSendName + "_ar", bus, MAX_NODE_CHANNELS);
+                    forEachSynth(server, [&](ofxSCSynth* synth){
+                        synth->set(toSendName + "_sel", 1);
+                        synth->mapan(toSendName + "_ar", bus, MAX_NODE_CHANNELS);
+                    });
                 }
             }));
         }
@@ -298,27 +322,13 @@ void scSynthdef::setup(){
     
     listeners.push(resendParams.newListener([this](){
         for(auto synthServer : synths){
-            if(synthServer.second != nullptr){
-                synthServer.second->set("inChannels", numChannels);
-            }
-        }
-        for(auto synthServer : synths){
-            for(int i = 0; i < inputs.size(); i++){
-                if(inputBuses[synthServer.first].count(inputs[i]->getNodeRef()) == 1){
-                    string paramName = ofToLower(inputs[i].getName());
-                    if(synthServer.second != nullptr){
-                        synthServer.second->set(paramName, inputBuses[synthServer.first][inputs[i]->getNodeRef()]);
-                    }
+            configureSynthRouting(synthServer.first, synthServer.second, 0);
+            if(serialSynths.count(synthServer.first) != 0){
+                for(int i = 0; i < serialSynths[synthServer.first].size(); i++){
+                    configureSynthRouting(synthServer.first, serialSynths[synthServer.first][i], i + 1);
                 }
             }
-            for(int i = 0; i < outputs.size(); i++){
-                if(outputBuses[synthServer.first].count(outputs[i]->getIndex()) == 1){
-                    string paramName = ofToLower(outputs[i].getName());
-                    if(synthServer.second != nullptr){
-                        synthServer.second->set(paramName, outputBuses[synthServer.first][outputs[i]->getIndex()]);
-                    }
-                }
-            }
+            configureCompensationRouting(synthServer.first);
         }
     }));
     
@@ -336,49 +346,342 @@ void scSynthdef::setup(){
 }
 
 void scSynthdef::activate(){
-    for(auto &synth : synths) synth.second->run(true);
+    forEachSynth([](ofxSCSynth* synth){
+        synth->run(true);
+    });
+    for(auto &synthServer : compensationSynths){
+        if(synthServer.second != nullptr) synthServer.second->run(true);
+    }
 }
 
 void scSynthdef::deactivate(){
-    for(auto &synth : synths) synth.second->run(false);
+    forEachSynth([](ofxSCSynth* synth){
+        synth->run(false);
+    });
+    for(auto &synthServer : compensationSynths){
+        if(synthServer.second != nullptr) synthServer.second->run(false);
+    }
 }
 
 void scSynthdef::buildSynth(ofxSCServer* server){
-    synths[server] = new ofxSCSynth(getSynthdefFilename(), server);
+    buildSynthChain(server);
 }
 
 void scSynthdef::createSynth(ofxSCServer* server){
     if(synths.count(server) == 0) return;
     resendParams.notify();
-    synths[server]->createAndRun(0, 1, getActive());
+    createSynthChain(server);
 }
 
 void scSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
     if(synths.count(server) == 0) return;
     resendParams.notify();
-    synths[server]->moveBefore(nodeID);
+    int nextTarget = nodeID;
+    if(compensationSynths.count(server) != 0 && compensationSynths[server] != nullptr){
+        compensationSynths[server]->moveBefore(nextTarget);
+        nextTarget = compensationSynths[server]->nodeID;
+    }
+    auto &chain = serialSynths[server];
+    for(auto it = chain.rbegin(); it != chain.rend(); ++it){
+        if(*it == nullptr) continue;
+        (*it)->moveBefore(nextTarget);
+        nextTarget = (*it)->nodeID;
+    }
+    if(synths[server] != nullptr) synths[server]->moveBefore(nextTarget);
 }
 
 void scSynthdef::free(ofxSCServer* server){
-    if(synths.count(server) == 1){
+    freeCompensationSynth(server);
+    freeSynthChain(server);
+    freeSerialBuses(server);
+    compensationSynths.erase(server);
+    synths.erase(server);
+    serialSynths.erase(server);
+    serialBuses.erase(server);
+    inputBuses.erase(server);
+    outputBuses.erase(server);
+    defaultInputBuses.erase(server);
+}
+
+void scSynthdef::freeAll(){
+    for(auto &synthServer : compensationSynths){
+        if(synthServer.second == nullptr) continue;
+        synthServer.second->free();
+        delete synthServer.second;
+    }
+    for(auto &synthServer : synths){
+        if(synthServer.second == nullptr) continue;
+        synthServer.second->free();
+        delete synthServer.second;
+    }
+    for(auto &synthServer : serialSynths){
+        for(auto synth : synthServer.second){
+            if(synth == nullptr) continue;
+            synth->free();
+            delete synth;
+        }
+    }
+    for(auto &busServer : serialBuses){
+        for(auto bus : busServer.second){
+            if(bus == nullptr) continue;
+            bus->free();
+            delete bus;
+        }
+    }
+    compensationSynths.clear();
+    synths.clear();
+    serialSynths.clear();
+    serialBuses.clear();
+    inputBuses.clear();
+    outputBuses.clear();
+    defaultInputBuses.clear();
+}
+
+bool scSynthdef::supportsSerialIterations() const{
+    int inputCount = 0;
+    int outputCount = 0;
+    for(auto spec : synthDescription.params){
+        const auto &specMap = spec.second;
+        auto unitsIt = specMap.find("units");
+        if(unitsIt == specMap.end()) continue;
+        if(unitsIt->second == "input") inputCount++;
+        else if(unitsIt->second == "output") outputCount++;
+    }
+    return inputCount == 1 && outputCount == 1;
+}
+
+int scSynthdef::getEffectiveIterations() const{
+    if(!supportsSerialIterations()) return 1;
+    return ofClamp(iterations.get(), 1, MAX_SERIAL_ITERATIONS);
+}
+
+bool scSynthdef::usesIterationCompensation() const{
+    return getEffectiveIterations() > 1;
+}
+
+void scSynthdef::freeSerialBuses(ofxSCServer* server){
+    if(serialBuses.count(server) == 0) return;
+    for(auto bus : serialBuses[server]){
+        if(bus == nullptr) continue;
+        bus->free();
+        delete bus;
+    }
+    serialBuses[server].clear();
+}
+
+void scSynthdef::freeCompensationSynth(ofxSCServer* server){
+    if(compensationSynths.count(server) == 0) return;
+    if(compensationSynths[server] != nullptr){
+        compensationSynths[server]->free();
+        delete compensationSynths[server];
+    }
+    compensationSynths[server] = nullptr;
+}
+
+void scSynthdef::freeSynthChain(ofxSCServer* server){
+    if(synths.count(server) == 1 && synths[server] != nullptr){
         synths[server]->free();
         delete synths[server];
         synths.erase(server);
     }
+    freeSerialSynths(server);
 }
 
-void scSynthdef::freeAll(){
-    for(auto &synth : synths) synth.second->free();
-    synths.clear();
+void scSynthdef::freeSerialSynths(ofxSCServer* server){
+    if(serialSynths.count(server) == 0) return;
+    for(auto synth : serialSynths[server]){
+        if(synth == nullptr) continue;
+        synth->free();
+        delete synth;
+    }
+    serialSynths[server].clear();
+}
+
+void scSynthdef::createSerialResources(ofxSCServer* server){
+    const int chainSize = getEffectiveIterations();
+    auto &tail = serialSynths[server];
+    tail.reserve(chainSize - 1);
+    for(int i = 1; i < chainSize; i++){
+        tail.push_back(new ofxSCSynth(getSynthdefFilename(), server));
+    }
+
+    auto &buses = serialBuses[server];
+    const int busCount = usesIterationCompensation() ? chainSize : chainSize - 1;
+    buses.reserve(busCount);
+    for(int i = 0; i < busCount; i++){
+        buses.push_back(new ofxSCBus(RATE_AUDIO, MAX_NODE_CHANNELS, server));
+    }
+
+    if(usesIterationCompensation()){
+        compensationSynths[server] = new ofxSCSynth(getCompensationSynthdefFilename(), server);
+    }
+}
+
+void scSynthdef::buildSynthChain(ofxSCServer* server){
+    if(server == nullptr) return;
+    freeCompensationSynth(server);
+    freeSynthChain(server);
+    freeSerialBuses(server);
+    synths[server] = new ofxSCSynth(getSynthdefFilename(), server);
+    createSerialResources(server);
+}
+
+void scSynthdef::replaceSynthChain(ofxSCServer* server){
+    if(server == nullptr) return;
+
+    ofxSCSynth* oldCompensationSynth = compensationSynths.count(server) == 0 ? nullptr : compensationSynths[server];
+    auto oldBuses = serialBuses[server];
+    ofxSCSynth* oldHead = synths.count(server) == 0 ? nullptr : synths[server];
+    const int anchorNodeID = oldHead == nullptr ? -1 : oldHead->nodeID;
+
+    // Remove the old serial tail before inserting the replacement chain so a
+    // live Iter change cannot leave old and new final stages summing together.
+    freeSerialSynths(server);
+    if(oldCompensationSynth != nullptr){
+        oldCompensationSynth->free();
+        delete oldCompensationSynth;
+    }
+
+    compensationSynths.erase(server);
+    serialBuses[server].clear();
+
+    auto newSynth = new ofxSCSynth(getSynthdefFilename(), server);
+    synths[server] = newSynth;
+    createSerialResources(server);
+
+    resendParams.notify();
+
+    configureSynthRouting(server, newSynth, 0);
+    if(anchorNodeID > 0) newSynth->createAndRun(4, anchorNodeID, getActive());
+    else newSynth->createAndRun(0, 1, getActive());
+
+    int previousNodeID = newSynth->nodeID;
+    auto &tail = serialSynths[server];
+    for(int i = 0; i < tail.size(); i++){
+        auto synth = tail[i];
+        if(synth == nullptr) continue;
+        configureSynthRouting(server, synth, i + 1);
+        synth->createAndRun(3, previousNodeID, getActive());
+        previousNodeID = synth->nodeID;
+    }
+    configureCompensationRouting(server);
+    if(compensationSynths.count(server) != 0 && compensationSynths[server] != nullptr){
+        compensationSynths[server]->createAndRun(3, previousNodeID, getActive());
+    }
+
+    if(oldHead != nullptr){
+        delete oldHead;
+    }
+    for(auto bus : oldBuses){
+        if(bus == nullptr) continue;
+        bus->free();
+        delete bus;
+    }
+}
+
+void scSynthdef::createSynthChain(ofxSCServer* server){
+    if(server == nullptr) return;
+    if(synths.count(server) == 0 || synths[server] == nullptr){
+        buildSynthChain(server);
+    }
+
+    configureSynthRouting(server, synths[server], 0);
+    synths[server]->createAndRun(0, 1, getActive());
+
+    int previousNodeID = synths[server]->nodeID;
+    auto &tail = serialSynths[server];
+    for(int i = 0; i < tail.size(); i++){
+        auto synth = tail[i];
+        if(synth == nullptr) continue;
+        configureSynthRouting(server, synth, i + 1);
+        synth->createAndRun(3, previousNodeID, getActive());
+        previousNodeID = synth->nodeID;
+    }
+    configureCompensationRouting(server);
+    if(compensationSynths.count(server) != 0 && compensationSynths[server] != nullptr){
+        compensationSynths[server]->createAndRun(3, previousNodeID, getActive());
+    }
+}
+
+void scSynthdef::configureSynthRouting(ofxSCServer* server, ofxSCSynth* synth, int iterationIndex){
+    if(server == nullptr || synth == nullptr) return;
+
+    synth->set("inChannels", numChannels);
+
+    const int chainSize = getEffectiveIterations();
+    if(chainSize > 1 && inputs.size() == 1 && outputs.size() == 1){
+        string inputParamName = ofToLower(inputs[0].getName());
+        string outputParamName = ofToLower(outputs[0].getName());
+
+        int inputBus = defaultInputBuses.count(server) == 1 ? defaultInputBuses[server] : 0;
+        scNode* inputNode = inputs[0]->getNodeRef();
+        if(inputBuses[server].count(inputNode) == 1){
+            inputBus = inputBuses[server][inputNode];
+        }
+
+        int outputBus = 0;
+        if(outputBuses[server].count(outputs[0]->getIndex()) == 1){
+            outputBus = outputBuses[server][outputs[0]->getIndex()];
+        }
+
+        int currentInputBus = inputBus;
+        int currentOutputBus = outputBus;
+        if(iterationIndex > 0 && iterationIndex - 1 < serialBuses[server].size()){
+            currentInputBus = serialBuses[server][iterationIndex - 1]->index;
+        }
+        if(iterationIndex < serialBuses[server].size()){
+            currentOutputBus = serialBuses[server][iterationIndex]->index;
+        }
+
+        synth->set(inputParamName, currentInputBus);
+        synth->set(outputParamName, currentOutputBus);
+        return;
+    }
+
+    for(int i = 0; i < inputs.size(); i++){
+        string paramName = ofToLower(inputs[i].getName());
+        int bus = defaultInputBuses.count(server) == 1 ? defaultInputBuses[server] : 0;
+        scNode* inputNode = inputs[i]->getNodeRef();
+        if(inputBuses[server].count(inputNode) == 1){
+            bus = inputBuses[server][inputNode];
+        }
+        synth->set(paramName, bus);
+    }
+
+    for(int i = 0; i < outputs.size(); i++){
+        if(outputBuses[server].count(outputs[i]->getIndex()) == 1){
+            string paramName = ofToLower(outputs[i].getName());
+            synth->set(paramName, outputBuses[server][outputs[i]->getIndex()]);
+        }
+    }
+}
+
+void scSynthdef::configureCompensationRouting(ofxSCServer* server){
+    if(server == nullptr || !usesIterationCompensation()) return;
+    if(compensationSynths.count(server) == 0 || compensationSynths[server] == nullptr) return;
+
+    const int chainSize = getEffectiveIterations();
+    if(serialBuses[server].size() < chainSize || outputs.size() != 1) return;
+
+    int outputBus = 0;
+    if(outputBuses[server].count(outputs[0]->getIndex()) == 1){
+        outputBus = outputBuses[server][outputs[0]->getIndex()];
+    }
+
+    auto synth = compensationSynths[server];
+    const float gain = 1.0f / std::sqrt(static_cast<float>(chainSize));
+    synth->set("inChannels", numChannels);
+    synth->set("in", serialBuses[server][chainSize - 1]->index);
+    synth->set("out", outputBus);
+    synth->setMultiple("gain", gain, numChannels.get());
 }
 
 void scSynthdef::setOutputBus(ofxSCServer* server, int index, int bus){
     outputBuses[server][index] = bus;
     for(int i = 0; i < outputs.size(); i++){
         if(outputs[i]->getIndex() == index){
-            string paramName = ofToLower(outputs[i].getName());
             if(synths.count(server) != 0){
-                synths[server]->set(paramName, bus);
+                resendParams.notify();
             }
         }
     }
@@ -388,9 +691,8 @@ void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
     inputBuses[server][node] = bus;
     for(int i = 0; i < inputs.size(); i++){
         if(inputs[i]->getNodeRef() == node){
-            string paramName = ofToLower(inputs[i].getName());
             if(synths.count(server) != 0){
-                synths[server]->set(paramName, bus);
+                resendParams.notify();
             }
         }
     }
@@ -401,10 +703,8 @@ void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
 void scSynthdef::resetInputBusses(ofxSCServer* server, int targetBus){
     if(synths.count(server) == 0) return;
     inputBuses[server].clear();
-    for(int i = 0; i < inputs.size(); i++){
-        string paramName = ofToLower(inputs[i].getName());
-        synths[server]->set(paramName, targetBus);
-    }
+    defaultInputBuses[server] = targetBus;
+    resendParams.notify();
     auto args = std::make_pair(server, targetBus);
     resetAudioRateBusAssignments.notify(args);
 }
@@ -576,4 +876,8 @@ string scSynthdef::getSynthdefFilename(){
         filename += "_" + ofToString(getParameter<int>(variable.first));
     }
     return filename;
+}
+
+string scSynthdef::getCompensationSynthdefFilename(){
+    return "LinearGain" + ofToString(numChannels);
 }
