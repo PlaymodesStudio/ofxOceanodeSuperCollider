@@ -5448,7 +5448,14 @@ void scRhythmBox::presetRecallAfterSettingParameters(ofJson& j) {
         for(int ti = 0; ti < MAX_TRACKS; ti++) {
             if(pathsToLoad[ti].empty()) continue;
             std::string absPath = resolveToAbsolutePath(pathsToLoad[ti]);
-            if(!std::filesystem::exists(absPath)) continue;
+            if(!std::filesystem::exists(absPath)) {
+                // Keep the unresolved value visible/serializable instead of
+                // losing it when freeAllSamples() clears samplePaths.
+                samplePaths[ti] = pathsToLoad[ti];
+                ofLogWarning("scRhythmBox") << "Missing sample for track " << ti
+                                             << ": " << absPath;
+                continue;
+            }
             loadSampleForTrack(ti, absPath);   // sets samplePaths[ti] = absPath at end
         }
     }
@@ -5546,6 +5553,22 @@ std::string scRhythmBox::resolveToAbsolutePath(const std::string& inputPath) con
     if(s.size() >= 2 && s[0] == '.' && s[1] == '/') s = s.substr(2);
 
     if(!s.empty() && s[0] == '/') return s;  // already absolute
+
+    // Embedded preset samples belong to the preset being loaded, not to the
+    // preset name stored when they were saved.  This keeps duplicated, moved
+    // and renamed presets self-contained and also prevents a stale path from
+    // loading a same-named sample from another preset that still exists.
+    if(s.rfind("Presets/", 0) == 0) {
+        const std::string currentPresetPath = ofxOceanodeShared::getCurrentPresetPath();
+        if(!currentPresetPath.empty()) {
+            const std::filesystem::path localSample =
+                std::filesystem::path(ofToDataPath(currentPresetPath, true)) /
+                "samples" /
+                std::filesystem::path(s).filename();
+            if(std::filesystem::exists(localSample))
+                return localSample.string();
+        }
+    }
 
     bool isKnownRelative = (s.rfind("Macros/", 0) == 0) ||
                            (s.rfind("Presets/", 0) == 0) ||
@@ -5801,7 +5824,10 @@ void scRhythmBox::loadProject(const std::string& projectPath) {
                 std::string absPath = resolveToAbsolutePath(pathsToLoad[ti]);
                 ofLogNotice("scRhythmBox::loadProject") << "  track " << ti << " sample: " << absPath
                     << (std::filesystem::exists(absPath) ? " [EXISTS]" : " [MISSING]");
-                if(!std::filesystem::exists(absPath)) continue;
+                if(!std::filesystem::exists(absPath)) {
+                    samplePaths[ti] = pathsToLoad[ti];
+                    continue;
+                }
                 loadSampleForTrack(ti, absPath);
                 loaded++;
             }
