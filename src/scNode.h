@@ -48,7 +48,7 @@ public:
     void addInput(std::string name);
     void addOutput(std::string name);
     
-    bool appendOrderedNodes(vector<scNode*> &nodesList, map<scNode*, std::pair<int, vector<int>>> &visitedNodeChilds, vector<scNode*> parents = {});
+    virtual bool appendOrderedNodes(vector<scNode*> &nodesList, map<scNode*, std::pair<int, vector<int>>> &visitedNodeChilds, vector<scNode*> parents = {});
     
     void getConnections(std::map<nodePort, vector<scNode*>> &connections);
     

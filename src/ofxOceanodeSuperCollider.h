@@ -59,6 +59,7 @@
 #include "nodes/scMultiTrackRecorder.h"
 #include "nodes/scGrainBox.h"
 #include "nodes/scPolyComb.h"
+#include "nodes/scFeedbackNode.h"
 
 
 
@@ -82,7 +83,9 @@ static void registerModels(ofxOceanode &o){
 					}else if(desc.type == "events"){
 
 					}else{
-						if(desc.category != ""){
+						if(desc.name == "FeedbackNode"){
+							o.registerModel<scFeedbackNode>(desc.category.empty() ? "SuperCollider" : "SuperCollider/" + desc.category, desc);
+						}else if(desc.category != ""){
 							o.registerModel<scSynthdef>("SuperCollider/" + desc.category, desc);
 						}else{
 							o.registerModel<scSynthdef>("SuperCollider", desc);
