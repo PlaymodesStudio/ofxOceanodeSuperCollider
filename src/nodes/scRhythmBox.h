@@ -8,9 +8,9 @@
 //
 //  Architecture:
 //    • Inherits scNode for proper SC signal-graph integration.
-//    • Pre-allocates MAX_TRACKS output ports at setup(); only numTracks are active.
-//    • One "RhythmBoxTrack" synth instance per track per SC server.
-//    • One mono sample buffer per track per server (via ofxSCBuffer::readChannel).
+//    • Adds/removes output ports with the active typed tracks.
+//    • One type-specific RhythmBox synth instance per track per SC server.
+//    • One sample buffer per sample/slice track per server.
 //    • Slot system: MAX_SLOTS independent snapshots of all per-track data.
 //    • Floating ImGui window: left = file browser, right = scrollable track rows.
 //
@@ -35,6 +35,7 @@
 
 class scRhythmBox : public scNode {
 public:
+    enum class TrackType : int { Sample, Slice, Kick, Noise, Snare, Click };
     // ── Constants ─────────────────────────────────────────────────────────────
     static constexpr int   MAX_TRACKS  = 8;
     static constexpr int   MAX_STEPS   = 64;
@@ -50,6 +51,8 @@ public:
     /// Per-track global configuration — identical across all slots for a given track.
     struct TrackConfig {
         std::string name          = "Track";
+        TrackType   type          = TrackType::Sample;
+        bool        minimized     = false;
         int         numBeats      = 4;
         int         stepsPerBeat  = 4;
 
@@ -66,11 +69,43 @@ public:
 
         // ENV tab: global amplitude envelope
         bool        envEnabled     = false;
-        float       envAttack      = 0.01f;
-        float       envHold        = 0.0f;
+        float       envAttack      = 0.0f;
+        int         envHoldSteps   = 0;    // tempo-synced hold length (0..64 sequencer steps)
         float       envDecay       = 0.3f;
         float       envCurveA      = 0.0f;
         float       envCurveD      = 0.0f;
+        // Noise uses the same envelope editor as samples, extended to ADSR.
+        float       envSustain     = 1.0f;
+        float       envRelease     = 0.2f;
+
+        // Dedicated filter modes are used by noise/click: LP, HP or BP.
+        int         filterMode     = 0;     // 0=legacy CUT, 1=LP, 2=HP, 3=BP
+        bool        filterRandom   = false;
+        float       filterRandomRange = 0.0f; // multiplicative CUT deviation per loop
+
+        // Kick synth: fast, curved pitch AD and waveform/PM controls.
+        int         kickWaveType   = 0;     // 0=PM sine, 1=pulse
+        float       kickStartNote  = 105.0f;
+        float       kickEndNote    = 36.0f;
+        float       kickPitchAttack = 0.0001f;
+        float       kickPitchDecay  = 0.18f;
+        float       kickPitchCurve  = -12.0f;
+        float       kickPMPitch     = 0.0f;
+        float       kickPMIndex     = 0.0f;
+
+        // Noise synth.
+        int         noiseType      = 0;     // white, pink, crackle, dust
+        float       noiseDensity   = 0.5f;
+
+        // Minimal 909-style snare controls. hiRel is per-step in TrackData.
+        float       snareToneNote  = 58.0f;
+        float       snareToneDecay = 0.11f;
+        float       snareToneLevel = 0.7f;
+        float       snareNoiseFreq = 2810.0f;
+        float       snareNoiseLevel = 1.0f;
+
+        // Click comb global pitch octave. Per-step comb pitch is 0..12 semitones.
+        int         clickCombOctave = 3;
 
         // EQ tab: 3-band insert EQ (HP → Peak → LP)
         bool        eqEnabled      = false;
@@ -101,8 +136,6 @@ public:
         float       globalStepProbSub = 1.0f; // global step-prob multiplier (0..1, 1=full prob)
         float       globalCut      = 0.0f;  // global cut offset (-1..1, additive to per-step cut)
         float       globalPanOffset = 0.0f; // global pan offset (-1..1, additive to per-step pan)
-        float       globalRevSend  = 0.0f;  // global reverb send additive (0..1)
-        float       globalEchoSend = 0.0f;  // global echo send additive (0..1)
         float       globalRes      = 0.0f;  // global resonance additive (0..1)
 
         // AMP tab: beat-synced amplitude LFO
@@ -116,7 +149,8 @@ public:
         // AMP tab: per-step envelope decay offset
         float       decayRange     = 1.0f;   // max seconds of decay offset (±decayRange)
 
-        // Slicer mode: sample divided into N slices (N=numSteps); each step triggers one slice
+        // Slice-track settings. slicerMode is only a legacy preset/wire mirror;
+        // TrackType::Slice is authoritative and the UI cannot switch types in place.
         bool        slicerMode     = false;
         bool        sliceFit       = false;  // stretch each slice to exactly one step duration
         int         sliceGrid      = 0;      // 0=off, N>0: grid snap divisions for slice boundaries
@@ -128,24 +162,11 @@ public:
         int getNumSteps() const { return std::min(numBeats * stepsPerBeat, MAX_STEPS); }
     };
 
-    /// Per-track per-slot data — shift, step patterns, and per-slot FX settings.
+    /// Per-track per-slot data — shift, step patterns, arps and stutter settings.
     struct TrackData {
         int                shift     = 0;
         int                activeTab = -1;  // -1=none  0=VOL … 8=ENV
 
-        // FX: Reverb (FreeVerb2) — per-slot
-        float revRoom      = 0.7f;
-        float revDamp      = 0.5f;
-        float revTailLP    = 8000.0f;  // 1-pole LP cutoff on reverb tail (Hz)
-        float revTailHP    = 20.0f;    // 1-pole HP cutoff on reverb tail (Hz)
-        // FX: Echo (delay with resonant HP/LP filter) — per-slot
-        int   echoMode      = 0;      // 0=beats, 1=pitch (1/Hz)
-        float echoBeats     = 1.0f;
-        float echoPitchNote = 69.0f; // MIDI note → converted to Hz before sending to SC
-        float echoFeedback = 0.40f;
-        float echoRes      = 0.0f;
-        float echoHPF      = 200.0f;
-        float echoLPF      = 8000.0f;
         // ARP: simple arpeggiation — per-slot
         bool  arpEnabled      = false;
         float arpInterval     = 7.0f;   // semitones per arp step (±24)
@@ -154,7 +175,7 @@ public:
         int   arpSpeedMode    = 0;      // 0=divisions/beat, 1=MIDI pitch→Hz
         bool  globalArpEnabled = false; // override: all steps use arp with globalArpSpeed
         float globalArpSpeed   = 4.0f;  // global arp speed (div/beat or MIDI note)
-        // STUT: multi-tap echo per step — per-slot
+        // STUT: multi-tap retrigger per step — per-slot
         bool  stuttEnabled  = false;
         int   stuttNumTaps  = 3;     // number of echo taps (1..16)
         float stuttFadeVol  = 0.7f;  // per-tap volume multiplier (0..1)
@@ -171,8 +192,6 @@ public:
         std::vector<float> stepRes;     // 0..1 resonance
         std::vector<int>   stepPitch;   // -12..12 semitones per step
         std::vector<bool>  stepReverse; // true = play sample backwards for this step
-        std::vector<float> stepRevSend;  // 0..1 reverb send amount per step
-        std::vector<float> stepEchoSend; // 0..1 echo send amount per step
         std::vector<bool>  stepArp;      // true = arp enabled for this step
         std::vector<float> stepArpSpeed; // arp retrigger speed per step (divisions/beat)
         std::vector<bool>  stepStut;     // true = stutter echo enabled for this step
@@ -180,6 +199,10 @@ public:
         std::vector<int>   stepSlice;         // which slice index plays at each step (slicer mode)
         std::vector<bool>  stepSliceOn;       // per-step silence flag for slicer mode (true=play, false=silence)
         std::vector<float> stepDecayOffset;   // per-step decay time offset (-1..1, scaled by decayRange)
+        std::vector<float> stepShape;         // kick tanh drive amount (0=bypass)
+        std::vector<float> stepHiRel;         // snare noise release (seconds)
+        std::vector<float> stepCombPitch;     // click comb pitch class (0..12 semitones)
+        std::vector<float> stepCombDecay;     // click comb decay time (seconds)
 
         void resizeSteps() {
             // Always grow to MAX_STEPS — never shrink.
@@ -192,16 +215,22 @@ public:
             stepRes     .resize(MAX_STEPS, 0.0f);
             stepPitch   .resize(MAX_STEPS, 0);
             stepReverse .resize(MAX_STEPS, false);
-            stepRevSend .resize(MAX_STEPS, 0.0f);
-            stepEchoSend.resize(MAX_STEPS, 0.0f);
             stepArp      .resize(MAX_STEPS, false);
             stepArpSpeed .resize(MAX_STEPS, 4.0f);
             stepStut     .resize(MAX_STEPS, false);
             stepStutSpeed.resize(MAX_STEPS, 4.0f);
-            stepSlice       .resize(MAX_STEPS, 0);
-            for(int i = 0; i < MAX_STEPS; i++) stepSlice[i] = i;
+            // Preserve authored slice mappings when Beats or Steps/Beat changes.
+            // Only genuinely new entries receive the identity mapping.
+            const size_t oldSliceSize = stepSlice.size();
+            stepSlice.resize(MAX_STEPS, 0);
+            for(size_t i = oldSliceSize; i < stepSlice.size(); ++i)
+                stepSlice[i] = (int)i;
             stepSliceOn     .resize(MAX_STEPS, true);
             stepDecayOffset .resize(MAX_STEPS, 0.0f);
+            stepShape       .resize(MAX_STEPS, 0.0f);
+            stepHiRel       .resize(MAX_STEPS, 0.725f);
+            stepCombPitch   .resize(MAX_STEPS, 0.0f);
+            stepCombDecay   .resize(MAX_STEPS, 0.0f);
         }
     };
 
@@ -252,7 +281,7 @@ private:
     ofParameter<bool>          showWindow;
     ofParameter<int>           resetSeq;      // 0/1 — trigger fires on rising edge 0→1
     ofParameter<bool>          playSeq;       // play/stop toggle — rising edge resets phasor
-    ofParameter<int>           numTracksP;   // 1..MAX_TRACKS — number of active tracks
+    ofParameter<int>           numTracksP;   // 0..MAX_TRACKS — number of active tracks
     ofParameter<vector<float>> transposeP;   // per-track transpose in semitones (-24..24)
     ofParameter<float>         masterVolP;   // master output volume multiplier (0..2)
     ofParameter<vector<float>> globalVolP;          // per-track output volume (0..1)
@@ -260,8 +289,6 @@ private:
     ofParameter<vector<float>> globalStepProbSubP;  // per-track global step-prob reduction (0..1)
     ofParameter<vector<float>> globalCutP;          // per-track global cut offset (-1..1)
     ofParameter<vector<float>> globalPanOffsetP;    // per-track global pan offset (-1..1)
-    ofParameter<vector<float>> globalRevSendP;      // per-track global reverb send (0..1)
-    ofParameter<vector<float>> globalEchoSendP;     // per-track global echo send (0..1)
     ofParameter<vector<float>> globalResP;          // per-track global resonance additive (0..1)
     ofParameter<vector<int>>   muteP;        // per-track mute state: 0=unmuted, 1=muted
     ofParameter<vector<int>>   soloP;        // per-track solo state: 0=off, 1=soloed
@@ -272,8 +299,10 @@ private:
     ofParameter<vector<int>>   gateOut;      // per-track gate state (0 or 1)
 
     // ── Multitrack ────────────────────────────────────────────────────────────
-    int numTracks = 1;  // current active track count (driven by numTracksP)
-    void setNumTracks(int n);  // handles all add/remove logic for tracks
+    int numTracks = 0;  // current active track count (driven by numTracksP)
+    void setNumTracks(int n, TrackType newTrackType = TrackType::Sample);  // handles all add/remove logic for tracks
+    void addTrack(TrackType type);
+    void removeTrack(int trackIndex);
 
     // ── Track config (global per-track, shared across all slots) ─────────────
     std::vector<TrackConfig> trackConfigs;  // size MAX_TRACKS
@@ -286,7 +315,7 @@ private:
 
     TrackData&       track(int ti);
     const TrackData& track(int ti) const;
-    void initSlots();                      // allocate slots with 1 track each
+    void initSlots();                      // allocate slots for the active tracks
     void reloadCurrentSlot();             // update step/timing params on running synth (no sample reload)
 
     // ── SC synth resources ────────────────────────────────────────────────────
@@ -329,6 +358,7 @@ private:
     void sendStepDataDirect(ofxSCSynth* s, const TrackData& td, ofxSCServer* srv);
     void sendStepDataToAll(int ti);
     void fireStepParams(int ti);
+    void sendTypedConfigToAll(int ti);
     void sendBpmToAll();
     void updateActiveStates(); // recompute SC 'active' for all tracks (mute + solo)
 
@@ -403,8 +433,6 @@ private:
     static std::vector<bool> euclideanRhythm(int k, int n);
 
     // ── Internal flags ────────────────────────────────────────────────────────
-    float    fxColW          = 210.0f; // FX column width (right panel)
-
     int      lastResetVal    = 0;   // previous value of resetSeq — detect rising edge 0→1
     bool     lastPlayVal     = false; // previous value of playSeq — detect rising edge false→true
     int  sliderPaintTrack    = -1;   // track index owning current slider paint gesture (-1 = none)
@@ -412,14 +440,15 @@ private:
     int  resPaintTrack       = -1;   // track index owning current RES slider paint gesture (-1 = none)
     int  stepPaintTrack      = -1;   // track index owning current step-on paint gesture (-1 = none)
     bool stepPaintValue      = false; // value being stamped during a step-on paint gesture
-    int  revPaintTrack       = -1;   // track index owning current REV tab paint gesture (-1 = none)
-    bool revPaintValue       = false; // value being stamped during a REV paint gesture
+    int  revPaintTrack       = -1;   // track index owning current reverse paint gesture (-1 = none)
+    bool revPaintValue       = false; // value being stamped during a reverse paint gesture
     int  arpPaintTrack       = -1;   // track index owning current ARP step paint gesture (-1 = none)
     bool arpPaintValue       = false; // value being stamped during an ARP step paint gesture
     int  stuttPaintTrack     = -1;   // track index owning current STUT step paint gesture (-1 = none)
     bool stuttPaintValue     = false; // value being stamped during a STUT step paint gesture
     int  browserSel          = -1;   // keyboard-selected entry index in file browser (-1 = none)
     float browserW           = 220.0f; // file browser panel width (resizable)
+    int  pendingTrackRemoval = -1;   // deferred until after the current ImGui track loop
 
     // ── Per-track step-data ofParameters (FM7Drone listener pattern) ─────────
     // Storing step arrays as ofParameters means any .set() call — from preset
@@ -434,8 +463,6 @@ private:
     std::vector<ofParameter<vector<float>>> pStepRes;
     std::vector<ofParameter<vector<int>>>   pStepPitch;
     std::vector<ofParameter<vector<float>>> pStepReverse;
-    std::vector<ofParameter<vector<float>>> pStepRevSend;
-    std::vector<ofParameter<vector<float>>> pStepEchoSend;
     std::vector<ofParameter<vector<float>>> pStepArp;
     std::vector<ofParameter<vector<float>>> pStepArpSpeed;
     std::vector<ofParameter<vector<float>>> pStepStut;
@@ -444,6 +471,10 @@ private:
     std::vector<ofParameter<vector<float>>> pStepSliceEnd;      // [MAX_TRACKS] slice end   (0..1) per step
     std::vector<ofParameter<vector<float>>> pStepSliceOn;       // [MAX_TRACKS] per-step silence flag (1=play)
     std::vector<ofParameter<vector<float>>> pStepDecayOffset;   // [MAX_TRACKS] per-step decay offset (-1..1)
+    std::vector<ofParameter<vector<float>>> pStepShape;
+    std::vector<ofParameter<vector<float>>> pStepHiRel;
+    std::vector<ofParameter<vector<float>>> pStepCombPitch;
+    std::vector<ofParameter<vector<float>>> pStepCombDecay;
 
     // ── Event listeners ───────────────────────────────────────────────────────
     ofEventListeners nodeListeners;
