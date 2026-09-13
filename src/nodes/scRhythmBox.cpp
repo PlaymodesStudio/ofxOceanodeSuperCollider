@@ -289,8 +289,6 @@ void scRhythmBox::setup() {
     pStepReverse .resize(MAX_TRACKS);
     pStepArp     .resize(MAX_TRACKS);
     pStepArpSpeed.resize(MAX_TRACKS);
-    pStepStut      .resize(MAX_TRACKS);
-    pStepStutSpeed .resize(MAX_TRACKS);
     pStepSliceStart   .resize(MAX_TRACKS);
     pStepSliceEnd     .resize(MAX_TRACKS);
     pStepSliceOn      .resize(MAX_TRACKS);
@@ -319,13 +317,6 @@ void scRhythmBox::setup() {
             vector<float> lo(MAX_STEPS, 0.0f);
             vector<float> hi(MAX_STEPS, 127.0f);
             pStepArpSpeed[ti].set("stepArpSpeed_"+ofToString(ti), fours, lo, hi);
-        }
-        pStepStut    [ti].set("stepStut_"     +ofToString(ti), zeros, zeros, ones);
-        {
-            vector<float> fours(MAX_STEPS, 4.0f);
-            vector<float> lo(MAX_STEPS, 0.25f);
-            vector<float> hi(MAX_STEPS, 64.0f);
-            pStepStutSpeed[ti].set("stepStutSpeed_"+ofToString(ti), fours, lo, hi);
         }
         // stepSliceStart / stepSliceEnd / stepSliceOn — slicer mode arrays
         {
@@ -398,14 +389,6 @@ void scRhythmBox::setup() {
         nodeListeners.push(pStepArpSpeed[ti].newListener([this, ti](vector<float>& v){
             for(auto& [srv, synths] : trackSynths)
                 if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepArpSpeed", v);
-        }));
-        nodeListeners.push(pStepStut[ti].newListener([this, ti](vector<float>& v){
-            for(auto& [srv, synths] : trackSynths)
-                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepStut", v);
-        }));
-        nodeListeners.push(pStepStutSpeed[ti].newListener([this, ti](vector<float>& v){
-            for(auto& [srv, synths] : trackSynths)
-                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepStutSpeed", v);
         }));
         nodeListeners.push(pStepSliceStart[ti].newListener([this, ti](vector<float>& v){
             for(auto& [srv, synths] : trackSynths)
@@ -622,12 +605,6 @@ void scRhythmBox::moveSynthBefore(ofxSCServer* srv, int nodeID) {
             s->set("arpSpeedMode",     (float)tdi.arpSpeedMode);
             s->set("globalArpEnabled", tdi.globalArpEnabled ? 1.0f : 0.0f);
             s->set("globalArpSpeed",   tdi.globalArpSpeed);
-            s->set("stuttEnabled",     tdi.stuttEnabled ? 1.0f : 0.0f);
-            s->set("stuttNumTaps",  (float)tdi.stuttNumTaps);
-            s->set("stuttFadeVol",  tdi.stuttFadeVol);
-            s->set("stuttFadeCut",  tdi.stuttFadeCut);
-            s->set("stuttInterval", tdi.stuttInterval);
-            s->set("stuttRes",      tdi.stuttRes);
             s->set("globalStepProbSub", tci.globalStepProbSub);
             s->set("globalCut",         tci.globalCut);
             s->set("globalPanOffset",   tci.globalPanOffset);
@@ -735,12 +712,6 @@ void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("arpSpeedMode",     (float)td.arpSpeedMode);
     s->set("globalArpEnabled", td.globalArpEnabled ? 1.0f : 0.0f);
     s->set("globalArpSpeed",   td.globalArpSpeed);
-    s->set("stuttEnabled",     td.stuttEnabled ? 1.0f : 0.0f);
-    s->set("stuttNumTaps",  (float)td.stuttNumTaps);
-    s->set("stuttFadeVol",  td.stuttFadeVol);
-    s->set("stuttFadeCut",  td.stuttFadeCut);
-    s->set("stuttInterval", td.stuttInterval);
-    s->set("stuttRes",      td.stuttRes);
     s->set("globalStepProbSub", tc.globalStepProbSub);
     s->set("globalCut",         tc.globalCut);
     s->set("globalPanOffset",   tc.globalPanOffset);
@@ -888,7 +859,6 @@ void scRhythmBox::fireStepParams(int ti) {
                   cut     (MAX_STEPS, 0.f), res     (MAX_STEPS, 0.f),
                   rev     (MAX_STEPS, 0.f),
                   arp      (MAX_STEPS, 0.f), arpSpeed (MAX_STEPS, 4.0f),
-                  stut     (MAX_STEPS, 0.f), stutSpeed(MAX_STEPS, 4.0f),
                   shape    (MAX_STEPS, 0.f), hiRel(MAX_STEPS, 0.725f),
                   combPitch(MAX_STEPS, 0.f), combDecay(MAX_STEPS, 0.f);
     vector<int>   pitch(MAX_STEPS, 0);
@@ -905,8 +875,6 @@ void scRhythmBox::fireStepParams(int ti) {
         rev     [i] = (i < (int)td.stepReverse.size()  && td.stepReverse[i])  ? 1.f : 0.f;
         arp     [i] = (i < (int)td.stepArp.size()       && td.stepArp[i])    ? 1.f : 0.f;
         arpSpeed[i] = (i < (int)td.stepArpSpeed.size())  ? td.stepArpSpeed[i] : 4.0f;
-        stut    [i] = (i < (int)td.stepStut.size()      && td.stepStut[i])   ? 1.f : 0.f;
-        stutSpeed[i]= (i < (int)td.stepStutSpeed.size()) ? td.stepStutSpeed[i]: 4.0f;
         shape[i]   = (i < (int)td.stepShape.size()) ? td.stepShape[i] : 0.0f;
         hiRel[i]   = (i < (int)td.stepHiRel.size()) ? td.stepHiRel[i] : 0.725f;
         combPitch[i] = (i < (int)td.stepCombPitch.size()) ? td.stepCombPitch[i] : 0.0f;
@@ -924,8 +892,6 @@ void scRhythmBox::fireStepParams(int ti) {
     pStepReverse [ti].set(rev);
     pStepArp     [ti].set(arp);
     pStepArpSpeed[ti].set(arpSpeed);
-    pStepStut    [ti].set(stut);
-    pStepStutSpeed[ti].set(stutSpeed);
     pStepShape[ti].set(shape);
     pStepHiRel[ti].set(hiRel);
     pStepCombPitch[ti].set(combPitch);
@@ -1320,6 +1286,9 @@ void scRhythmBox::reloadCurrentSlot() {
             s->set("globalPanOffset",   tci.globalPanOffset);
             s->set("globalRes",         tci.globalRes);
             s->set("clickCombOctave",   (float)tci.clickCombOctave);
+            s->set("filterMode",        (float)tci.filterMode);
+            s->set("filterRandom",      tci.filterRandom ? 1.0f : 0.0f);
+            s->set("filterRandomRange", tci.filterRandomRange);
         }
     }
     // Fire step params — one call per track covers all servers via the pStep* listener.
@@ -2567,15 +2536,16 @@ void scRhythmBox::drawTrack(int ti) {
 
     // ── Tab row ───────────────────────────────────────────────────────────────
     // 0:VOL  1:PROB  2:PAN  3:FLT  4:PITCH  5:WAV/SLICE/SYNTH/COMB
-    // 6:AMP  7:EQ  8:EUC  9:REV(reverse)  11:ARP  12:STUT  13:SHAPER
+    // 6:AMP  7:EQ  8:EUC  9:REV(reverse)  11:ARP  13:SHAPER
     const char* sourceTab = isSampleTrack ? (tc.type == TrackType::Slice ? "SLICE" : "WAV")
                           : (tc.type == TrackType::Click ? "COMB" : "SYNTH");
     const char* tabLabels[] = { "VOL","PROB","PAN","FLT","PITCH", sourceTab,
-                                 "AMP","EQ","EUC","REV","","ARP","STUT","SHAPER" };
+                                 "AMP","EQ","EUC","REV","","ARP","","SHAPER" };
     auto tabVisible = [&](int t) {
         if(t == 9 && !isSampleTrack) return false;
         if(t == 10) return false;
-        if(t == 13 && tc.type != TrackType::Kick) return false;
+        if(t == 12) return false;
+        if(t == 13 && tc.type != TrackType::Kick && tc.type != TrackType::Sample) return false;
         if(t == 6 && tc.type == TrackType::Click) return false;
         return true;
     };
@@ -2705,7 +2675,7 @@ void scRhythmBox::drawTrack(int ti) {
                 v[ti] = gco; globalCutP.set(v);
             }
             if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Global cut offset (-1..1)\nAdded to per-step cut+stutter offset, clipped to -1..1.\n-1..0 = LP region, 0..1 = HP region.");
+                ImGui::SetTooltip("Global cut offset (-1..1)\nAdded to per-step cut, clipped to -1..1.\n-1..0 = LP region, 0..1 = HP region.");
             
             ImGui::SameLine(0, 20);
             ImGui::TextUnformatted("Global Res:");
@@ -3037,11 +3007,11 @@ void scRhythmBox::drawTrack(int ti) {
        td.stepRes.resize(ns, 0.0f);
        
        ImGui::Spacing();
-       if(!isSampleTrack) {
-           const char* modes[] = { "CUT (LP/HP)", "LP", "HP", "BP" };
+       {
+           const char* modes[] = { "CUT (LP/HP)", "LP", "HP", "BP", "LPHP 4P" };
            ImGui::TextUnformatted("Mode:"); ImGui::SameLine(0, 6);
-           ImGui::SetNextItemWidth(120.0f);
-           bool typedChanged = ImGui::Combo("##filtermode", &tc.filterMode, modes, 4);
+           ImGui::SetNextItemWidth(132.0f);
+           bool typedChanged = ImGui::Combo("##filtermode", &tc.filterMode, modes, 5);
            if(tc.type == TrackType::Noise || tc.type == TrackType::Click) {
                ImGui::SameLine(0, 12);
                if(ImGui::Button(tc.filterRandom ? "RANDOM ON" : "RANDOM")) {
@@ -4635,7 +4605,7 @@ void scRhythmBox::drawTrack(int ti) {
                     ImGui::SetTooltip("%.2f div/beat (%s)", spd, n);
                 }
             } else {
-                // MIDI mode: note number → Hz (tonal stutter)
+                // MIDI mode: note number → Hz (tonal retriggering)
                 if(ImGui::DragFloat("##as", &spd, 1.0f, 0.0f, 127.0f, "%.0f")) {
                     spd = ofClamp(std::round(spd), 0.0f, 127.0f);
                     arpChanged = true;
@@ -4817,185 +4787,9 @@ void scRhythmBox::drawTrack(int ti) {
         ImGui::Spacing();
     }
 
-    // ── STUT (multi-tap retrigger) tab (tab 12) ──────────────────────────────
-    if(td.activeTab == 12) {
-        td.stepStut     .resize(ns, false);
-        td.stepStutSpeed.resize(ns, 4.0f);
-
-        bool stutChanged = false;
-        ImGui::Spacing();
-
-        // ── Row 1: per-step stutter enable toggles ────────────────────────────
-        for(int si = 0; si < ns; si++) {
-            if(si > 0) ImGui::SameLine(0, STEP_GAP);
-            int  ri         = ((si - td.shift) % ns + ns) % ns;
-            int  beatGroup  = (si / tc.stepsPerBeat) % 2;
-            bool isPlayhead = (si == visualPlayhead);
-            bool isStut     = (ri < (int)td.stepStut.size()) && td.stepStut[ri];
-
-            ImVec2 pos = ImGui::GetCursorScreenPos();
-            ImGui::InvisibleButton(("##stutstep" + ofToString(si)).c_str(), ImVec2(sw, STEP_H));
-
-            bool mouseDown = ImGui::IsMouseDown(0);
-            if(ImGui::IsItemActivated() && stuttPaintTrack == -1) {
-                stuttPaintTrack = ti;
-                stuttPaintValue = !isStut;
-            }
-            if(stuttPaintTrack == ti && mouseDown && ImGui::IsItemHovered()) {
-                if(ri < (int)td.stepStut.size() && td.stepStut[ri] != stuttPaintValue) {
-                    td.stepStut[ri] = stuttPaintValue;
-                    stutChanged = true;
-                }
-            }
-            if(ImGui::IsItemClicked(1)) {
-                if(ri < (int)td.stepStut.size()) td.stepStut[ri] = false;
-                stutChanged = true;
-            }
-
-            ImU32 bgCol   = isStut ? IM_COL32(200, 120, 40, 255)
-                                   : ImGui::ColorConvertFloat4ToU32(isPlayhead ? playheadCol : beatPalette[beatGroup].off);
-            ImU32 textCol = isStut ? IM_COL32(255,255,255,255) : IM_COL32(100,100,100,180);
-            ImVec2 bmax   = {pos.x + sw, pos.y + STEP_H};
-            dl->AddRectFilled(pos, bmax, bgCol, STEP_ROUND);
-            if(isPlayhead && !isStut)
-                dl->AddRectFilled(pos, {bmax.x, pos.y + 3.f}, IM_COL32(255,255,255,220), STEP_ROUND);
-            dl->AddText({pos.x + sw*0.5f - 4.f, pos.y + STEP_H*0.5f - 7.f}, textCol, "E");
-        }
-        if(!ImGui::IsMouseDown(0) && stuttPaintTrack == ti) stuttPaintTrack = -1;
-
-        // ── Row 2: per-step stutter speed (divisions/beat) ────────────────────
-        ImGui::Spacing();
-        for(int si = 0; si < ns; si++) {
-            if(si > 0) ImGui::SameLine(0, STEP_GAP);
-            int ri      = ((si - td.shift) % ns + ns) % ns;
-            bool isStut = (ri < (int)td.stepStut.size()) && td.stepStut[ri];
-            float& spd  = (ri < (int)td.stepStutSpeed.size()) ? td.stepStutSpeed[ri]
-                                                               : td.stepStutSpeed[0];
-            ImGui::PushID(si + 2000);
-            if(!isStut) ImGui::BeginDisabled();
-            ImGui::SetNextItemWidth(sw);
-            if(ImGui::DragFloat("##ss", &spd, 0.25f, 0.25f, 64.0f, "%.2g")) {
-                spd = std::max(0.25f, spd);
-                stutChanged = true;
-            }
-            if(ImGui::IsItemHovered()) {
-                const char* n = (spd <= 0.26f) ? "whole" : (spd <= 0.51f) ? "half" :
-                                (spd <= 1.01f) ? "quarter" : (spd <= 2.01f) ? "8th" :
-                                (spd <= 4.01f) ? "16th"    : (spd <= 8.01f) ? "32nd" : "fast";
-                ImGui::SetTooltip("%.2f div/beat (%s)", spd, n);
-            }
-            if(!isStut) ImGui::EndDisabled();
-            ImGui::PopID();
-        }
-
-        if(stutChanged) sendStepDataToAll(ti);
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // ── STUT ON/OFF button ────────────────────────────────────────────────
-        {
-            bool en = td.stuttEnabled;
-            ImVec4 enCol = en ? ImVec4(0.72f, 0.45f, 0.15f, 1.f) : ImVec4(0.20f, 0.22f, 0.28f, 1.f);
-            ImVec4 enHov = en ? ImVec4(0.82f, 0.55f, 0.25f, 1.f) : ImVec4(0.28f, 0.32f, 0.40f, 1.f);
-            ImGui::PushStyleColor(ImGuiCol_Button,        enCol);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, enHov);
-            if(ImGui::Button(en ? "STUT ON##stut" : "STUT OFF##stut", {88.f, 22.f})) {
-                td.stuttEnabled = !td.stuttEnabled;
-                for(auto& [srv, synths] : trackSynths)
-                    if(ti < (int)synths.size() && synths[ti])
-                        synths[ti]->set("stuttEnabled", td.stuttEnabled ? 1.0f : 0.0f);
-            }
-            ImGui::PopStyleColor(2);
-        }
-
-        if(!td.stuttEnabled) ImGui::BeginDisabled();
-        ImGui::Spacing();
-
-        // ── Taps / FadeVol / FadeCut / Interval — single row ─────────────────
-        ImGui::TextUnformatted("Taps");
-        ImGui::SameLine(0, 4);
-        {
-            int taps = td.stuttNumTaps;
-            ImGui::SetNextItemWidth(50.0f);
-            if(ImGui::DragInt("##stuttaps", &taps, 1, 1, 16)) {
-                taps = ofClamp(taps, 1, 16);
-                td.stuttNumTaps = taps;
-                for(auto& [srv, synths] : trackSynths)
-                    if(ti < (int)synths.size() && synths[ti])
-                        synths[ti]->set("stuttNumTaps", (float)td.stuttNumTaps);
-            }
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Number of echo taps");
-        }
-        ImGui::SameLine(0, 8);
-        ImGui::TextUnformatted("Vol");
-        ImGui::SameLine(0, 4);
-        {
-            float fv = td.stuttFadeVol;
-            ImGui::SetNextItemWidth(58.0f);
-            if(ImGui::DragFloat("##stuttfadevol", &fv, 0.01f, 0.0f, 1.0f, "%.2f")) {
-                fv = ofClamp(fv, 0.0f, 1.0f);
-                td.stuttFadeVol = fv;
-                for(auto& [srv, synths] : trackSynths)
-                    if(ti < (int)synths.size() && synths[ti])
-                        synths[ti]->set("stuttFadeVol", td.stuttFadeVol);
-            }
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Volume factor per tap (0=silence, 1=no fade)");
-        }
-        ImGui::SameLine(0, 8);
-        ImGui::TextUnformatted("Cut");
-        ImGui::SameLine(0, 4);
-        {
-            float fc = td.stuttFadeCut;
-            ImGui::SetNextItemWidth(58.0f);
-            if(ImGui::DragFloat("##stuttfadecut", &fc, 0.01f, -1.0f, 1.0f, "%.2f")) {
-                fc = ofClamp(fc, -1.0f, 1.0f);
-                td.stuttFadeCut = fc;
-                for(auto& [srv, synths] : trackSynths)
-                    if(ti < (int)synths.size() && synths[ti])
-                        synths[ti]->set("stuttFadeCut", td.stuttFadeCut);
-            }
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Filter shift per tap (-1=LP, 0=none, +1=HP)");
-        }
-        ImGui::SameLine(0, 8);
-        ImGui::TextUnformatted("Intv");
-        ImGui::SameLine(0, 4);
-        {
-            float intv = td.stuttInterval;
-            ImGui::SetNextItemWidth(54.0f);
-            if(ImGui::DragFloat("##stuttinterval", &intv, 1.0f, -24.0f, 24.0f, "%.0f")) {
-                intv = std::round(ofClamp(intv, -24.0f, 24.0f));
-                td.stuttInterval = intv;
-                for(auto& [srv, synths] : trackSynths)
-                    if(ti < (int)synths.size() && synths[ti])
-                        synths[ti]->set("stuttInterval", td.stuttInterval);
-            }
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Semitone shift per tap");
-        }
-        ImGui::SameLine(0, 8);
-        ImGui::TextUnformatted("Res");
-        ImGui::SameLine(0, 4);
-        {
-            float res = td.stuttRes;
-            ImGui::SetNextItemWidth(54.0f);
-            if(ImGui::DragFloat("##stuttres", &res, 0.01f, 0.0f, 1.0f, "%.2f")) {
-                res = ofClamp(res, 0.0f, 1.0f);
-                td.stuttRes = res;
-                for(auto& [srv, synths] : trackSynths)
-                    if(ti < (int)synths.size() && synths[ti])
-                        synths[ti]->set("stuttRes", td.stuttRes);
-            }
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Resonance boost on stutter filter taps");
-        }
-
-        if(!td.stuttEnabled) ImGui::EndDisabled();
-        ImGui::Spacing();
-    }
-
-    if(td.activeTab == 13 && tc.type == TrackType::Kick) {
+    if(td.activeTab == 13 && (tc.type == TrackType::Kick || tc.type == TrackType::Sample)) {
         td.stepShape.resize(MAX_STEPS, 0.0f);
-        ImGui::TextDisabled("Tanh drive per step: 0 = clean, higher values = more distortion.");
+        ImGui::TextDisabled("Tanh clipper drive per step: 0 = clean, higher values = more distortion.");
         bool changed = false;
         for(int si = 0; si < ns; ++si) {
             if(si) ImGui::SameLine(0, STEP_GAP);
@@ -5004,7 +4798,7 @@ void scRhythmBox::drawTrack(int ti) {
             changed |= ImGui::VSliderFloat("##shape", {sw, PARAM_H}, &td.stepShape[i], 0.f, 20.f, "");
             if(ImGui::IsItemHovered() && ImGui::IsMouseClicked(1)) { td.stepShape[i] = 0.f; changed = true; }
             if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Tanh drive: %.2f\nRight-click to bypass", td.stepShape[i]);
+                ImGui::SetTooltip("Tanh clipper drive: %.2f\nRight-click to bypass", td.stepShape[i]);
             ImGui::PopID();
         }
         if(changed) fireStepParams(ti);
@@ -5138,7 +4932,7 @@ static void deserializeTrackConfig(const ofJson& j, scRhythmBox::TrackConfig& tc
     if(j.contains("envSustain"))    tc.envSustain     = j["envSustain"].get<float>();
     if(j.contains("envRelease"))    tc.envRelease     = j["envRelease"].get<float>();
     if(j.contains("decayRange"))    tc.decayRange     = j["decayRange"].get<float>();
-    if(j.contains("filterMode"))    tc.filterMode     = j["filterMode"].get<int>();
+    if(j.contains("filterMode"))    tc.filterMode     = ofClamp(j["filterMode"].get<int>(), 0, 4);
     if(j.contains("filterRandom"))  tc.filterRandom   = j["filterRandom"].get<bool>();
     if(j.contains("filterRandomRange")) tc.filterRandomRange = j["filterRandomRange"].get<float>();
     if(j.contains("kickWaveType")) tc.kickWaveType = j["kickWaveType"].get<int>();
@@ -5253,18 +5047,6 @@ static ofJson serializeTrackData(const scRhythmBox::TrackData& td) {
     j["arpSpeedMode"]     = td.arpSpeedMode;
     j["globalArpEnabled"] = td.globalArpEnabled;
     j["globalArpSpeed"]   = td.globalArpSpeed;
-    // STUT params — per-slot
-    j["stuttEnabled"]  = td.stuttEnabled;
-    j["stuttNumTaps"]  = td.stuttNumTaps;
-    j["stuttFadeVol"]  = td.stuttFadeVol;
-    j["stuttFadeCut"]  = td.stuttFadeCut;
-    j["stuttInterval"] = td.stuttInterval;
-    j["stuttRes"]      = td.stuttRes;
-    ofJson sStut = ofJson::array(), sStutSpeed = ofJson::array();
-    for(bool  v : td.stepStut)      sStut     .push_back(v);
-    for(float v : td.stepStutSpeed) sStutSpeed.push_back(v);
-    j["stepStut"]      = sStut;
-    j["stepStutSpeed"] = sStutSpeed;
     ofJson shape = ofJson::array(), hiRel = ofJson::array(), combPitch = ofJson::array();
     ofJson combDecay = ofJson::array();
     for(float v : td.stepShape) shape.push_back(v);
@@ -5286,6 +5068,7 @@ static void deserializeTrackData(const ofJson& j, scRhythmBox::TrackData& td,
                                  const scRhythmBox::TrackConfig& tc) {
     if(j.contains("shift"))    td.shift    = j["shift"].get<int>();
     if(j.contains("activeTab"))td.activeTab= j["activeTab"].get<int>();
+    if(td.activeTab == 12) td.activeTab = -1; // Removed tab index; old presets open with no tab.
 
     td.resizeSteps();
     int n = tc.getNumSteps();
@@ -5341,23 +5124,6 @@ static void deserializeTrackData(const ofJson& j, scRhythmBox::TrackData& td,
     if(j.contains("arpSpeedMode"))     td.arpSpeedMode     = j["arpSpeedMode"].get<int>();
     if(j.contains("globalArpEnabled")) td.globalArpEnabled = j["globalArpEnabled"].get<bool>();
     if(j.contains("globalArpSpeed"))   td.globalArpSpeed   = j["globalArpSpeed"].get<float>();
-    // STUT params — per-slot (missing in old presets → defaults from struct)
-    if(j.contains("stuttEnabled"))  td.stuttEnabled  = j["stuttEnabled"].get<bool>();
-    if(j.contains("stuttNumTaps"))  td.stuttNumTaps  = j["stuttNumTaps"].get<int>();
-    if(j.contains("stuttFadeVol"))  td.stuttFadeVol  = j["stuttFadeVol"].get<float>();
-    if(j.contains("stuttFadeCut"))  td.stuttFadeCut  = j["stuttFadeCut"].get<float>();
-    if(j.contains("stuttInterval")) td.stuttInterval = j["stuttInterval"].get<float>();
-    if(j.contains("stuttRes"))      td.stuttRes      = j["stuttRes"].get<float>();
-    if(j.contains("stepStut")) {
-        auto& arr = j["stepStut"];
-        for(int i = 0; i < n && i < (int)arr.size(); i++)
-            td.stepStut[i] = arr[i].get<bool>();
-    }
-    if(j.contains("stepStutSpeed")) {
-        auto& arr = j["stepStutSpeed"];
-        for(int i = 0; i < n && i < (int)arr.size(); i++)
-            td.stepStutSpeed[i] = arr[i].get<float>();
-    }
     loadArr("stepShape", td.stepShape);
     loadArr("stepHiRel", td.stepHiRel);
     loadArr("stepCombPitch", td.stepCombPitch);

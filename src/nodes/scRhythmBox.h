@@ -78,8 +78,8 @@ public:
         float       envSustain     = 1.0f;
         float       envRelease     = 0.2f;
 
-        // Dedicated filter modes are used by noise/click: LP, HP or BP.
-        int         filterMode     = 0;     // 0=legacy CUT, 1=LP, 2=HP, 3=BP
+        // Filter mode for every track: legacy bipolar CUT, fixed LP/HP/BP, or 4-pole LP/HP.
+        int         filterMode     = 0;     // 0=legacy CUT, 1=LP, 2=HP, 3=BP, 4=LPHP4
         bool        filterRandom   = false;
         float       filterRandomRange = 0.0f; // multiplicative CUT deviation per loop
 
@@ -162,7 +162,7 @@ public:
         int getNumSteps() const { return std::min(numBeats * stepsPerBeat, MAX_STEPS); }
     };
 
-    /// Per-track per-slot data — shift, step patterns, arps and stutter settings.
+    /// Per-track per-slot data — shift, step patterns and arpeggiator settings.
     struct TrackData {
         int                shift     = 0;
         int                activeTab = -1;  // -1=none  0=VOL … 8=ENV
@@ -175,14 +175,6 @@ public:
         int   arpSpeedMode    = 0;      // 0=divisions/beat, 1=MIDI pitch→Hz
         bool  globalArpEnabled = false; // override: all steps use arp with globalArpSpeed
         float globalArpSpeed   = 4.0f;  // global arp speed (div/beat or MIDI note)
-        // STUT: multi-tap retrigger per step — per-slot
-        bool  stuttEnabled  = false;
-        int   stuttNumTaps  = 3;     // number of echo taps (1..16)
-        float stuttFadeVol  = 0.7f;  // per-tap volume multiplier (0..1)
-        float stuttFadeCut  = 0.0f;  // per-tap filter shift (-1..1)
-        float stuttInterval = 0.0f;  // semitones per tap (-24..24)
-        float stuttRes      = 0.0f;  // resonance added to filter on stutter taps (0..1)
-
         std::vector<bool>  stepOn;
         std::vector<float> stepVol;
         std::vector<float> stepProb;
@@ -194,8 +186,6 @@ public:
         std::vector<bool>  stepReverse; // true = play sample backwards for this step
         std::vector<bool>  stepArp;      // true = arp enabled for this step
         std::vector<float> stepArpSpeed; // arp retrigger speed per step (divisions/beat)
-        std::vector<bool>  stepStut;     // true = stutter echo enabled for this step
-        std::vector<float> stepStutSpeed;// stutter retrigger speed per step (divisions/beat)
         std::vector<int>   stepSlice;         // which slice index plays at each step (slicer mode)
         std::vector<bool>  stepSliceOn;       // per-step silence flag for slicer mode (true=play, false=silence)
         std::vector<float> stepDecayOffset;   // per-step decay time offset (-1..1, scaled by decayRange)
@@ -217,8 +207,6 @@ public:
             stepReverse .resize(MAX_STEPS, false);
             stepArp      .resize(MAX_STEPS, false);
             stepArpSpeed .resize(MAX_STEPS, 4.0f);
-            stepStut     .resize(MAX_STEPS, false);
-            stepStutSpeed.resize(MAX_STEPS, 4.0f);
             // Preserve authored slice mappings when Beats or Steps/Beat changes.
             // Only genuinely new entries receive the identity mapping.
             const size_t oldSliceSize = stepSlice.size();
@@ -444,8 +432,6 @@ private:
     bool revPaintValue       = false; // value being stamped during a reverse paint gesture
     int  arpPaintTrack       = -1;   // track index owning current ARP step paint gesture (-1 = none)
     bool arpPaintValue       = false; // value being stamped during an ARP step paint gesture
-    int  stuttPaintTrack     = -1;   // track index owning current STUT step paint gesture (-1 = none)
-    bool stuttPaintValue     = false; // value being stamped during a STUT step paint gesture
     int  browserSel          = -1;   // keyboard-selected entry index in file browser (-1 = none)
     float browserW           = 220.0f; // file browser panel width (resizable)
     int  pendingTrackRemoval = -1;   // deferred until after the current ImGui track loop
@@ -465,8 +451,6 @@ private:
     std::vector<ofParameter<vector<float>>> pStepReverse;
     std::vector<ofParameter<vector<float>>> pStepArp;
     std::vector<ofParameter<vector<float>>> pStepArpSpeed;
-    std::vector<ofParameter<vector<float>>> pStepStut;
-    std::vector<ofParameter<vector<float>>> pStepStutSpeed;
     std::vector<ofParameter<vector<float>>> pStepSliceStart;    // [MAX_TRACKS] slice start (0..1) per step
     std::vector<ofParameter<vector<float>>> pStepSliceEnd;      // [MAX_TRACKS] slice end   (0..1) per step
     std::vector<ofParameter<vector<float>>> pStepSliceOn;       // [MAX_TRACKS] per-step silence flag (1=play)
