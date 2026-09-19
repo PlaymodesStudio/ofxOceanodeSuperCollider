@@ -46,7 +46,7 @@ public:
         }
         reboot = true;
         if(isThreadRunning()){
-            ofSystem("killall scsynth");
+            ofSystem("killall scsynth 2>/dev/null");
         }else{
             startThread();
         }
@@ -138,7 +138,7 @@ public:
     
     void killServer(){
         reboot = false;
-        ofSystem("killall scsynth");
+        ofSystem("killall scsynth 2>/dev/null");
         waitForThread(false);
     }
     
