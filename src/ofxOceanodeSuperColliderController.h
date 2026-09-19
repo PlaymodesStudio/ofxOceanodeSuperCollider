@@ -9,6 +9,8 @@
 
 
 #include "ofxOceanodeBaseController.h"
+#include <atomic>
+#include <thread>
 
 class scStart;
 class ofxSCServer;
@@ -18,14 +20,22 @@ class scPreferences;
 class ofxOceanodeSuperColliderController : public ofxOceanodeBaseController{
 public:
     ofxOceanodeSuperColliderController();
-    ~ofxOceanodeSuperColliderController(){};
+    ~ofxOceanodeSuperColliderController();
     
     void createServers();
     
     void setup();
+    void update() override;
     void draw();
     
     void killServers();
+
+    // Starts/stops a frame-stepped NRT capture controlled by an external node.
+    // When manualStop is true, endNRTRecording() defines the exact duration.
+    bool beginNRTRecording(int serverIndex, int outputChannels, const std::string& outputPath, bool manualStop = true);
+    bool endNRTRecording(bool cancelled = false);
+    bool isNRTRecordingActive() const { return nrtCaptureActive; }
+    bool isNRTRendering() const { return nrtRendering.load(); }
 
     void saveConfig(std::string filepath, scPreferences prefs);
 	void saveControllerConfig(std::string filepath);
@@ -46,6 +56,9 @@ private:
     std::string getAudioInputDeviceNameFromSelection() const;
     int getSampleRateFromSelection() const;
     void applyAudioDeviceToServers(bool restartServers);
+    void startNRTRender();
+    void completeNRTCapture(bool cancelled = false, double durationOverride = -1.0);
+    void joinFinishedNRTThread();
 
     float volume;
     bool mute;
@@ -69,6 +82,19 @@ private:
     vector<string> sampleRateNames;
     vector<int> sampleRateValues;
     vector<serverManager*> outputServers;
+
+    bool nrtCaptureActive = false;
+    std::atomic<bool> nrtRendering{false};
+    std::thread nrtRenderThread;
+    std::string nrtOutputPath = "Supercollider/NRT/oceanode-render.wav";
+    std::string nrtStatus;
+    float nrtDuration = 10.0f;
+    int nrtOutputChannels = 2;
+    int nrtServer = 0;
+    int nrtRenderResult = 0;
+    bool nrtManualStop = false;
+    std::string nrtCaptureOutputPath;
+    int nrtCaptureOutputChannels = 2;
 };
 
 #endif /* ofxOceanodeSuperColliderController_h */

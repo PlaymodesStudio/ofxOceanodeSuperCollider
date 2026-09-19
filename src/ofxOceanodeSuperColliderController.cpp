@@ -9,7 +9,10 @@
 #include "ofxSCServer.h"
 #include "imgui.h"
 #include "serverManager.h"
+#include "ofxOceanodeTime.h"
 #include <algorithm>
+#include <array>
+#include <cstring>
 
 ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOceanodeBaseController("SuperCollider"){
     volume = 1;
@@ -25,6 +28,115 @@ ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOc
 	mute = false;
 	
 	reloadAudioDevices();
+}
+
+ofxOceanodeSuperColliderController::~ofxOceanodeSuperColliderController(){
+    if(nrtCaptureActive) completeNRTCapture(true);
+    if(nrtRenderThread.joinable()) nrtRenderThread.join();
+}
+
+void ofxOceanodeSuperColliderController::update(){
+    joinFinishedNRTThread();
+    if(!nrtCaptureActive) return;
+
+    const double currentTime = ofxOceanodeTime::getInstance()->getGlobalTimeState().time;
+    if(!nrtManualStop && currentTime >= std::max(0.01f, nrtDuration)){
+        completeNRTCapture(false);
+    }
+}
+
+void ofxOceanodeSuperColliderController::joinFinishedNRTThread(){
+    if(nrtRenderThread.joinable() && !nrtRendering.load()){
+        nrtRenderThread.join();
+        nrtStatus = nrtRenderResult == 0 ? "NRT render complete" : "NRT render failed";
+    }
+}
+
+void ofxOceanodeSuperColliderController::startNRTRender(){
+    beginNRTRecording(nrtServer, nrtOutputChannels, nrtOutputPath, false);
+}
+
+bool ofxOceanodeSuperColliderController::beginNRTRecording(int serverIndex, int outputChannels, const std::string& outputPath, bool manualStop){
+    if(nrtCaptureActive || nrtRendering.load() || outputServers.empty()) return false;
+    joinFinishedNRTThread();
+
+    if(serverIndex < 0 || serverIndex >= (int)outputServers.size()) serverIndex = 0;
+    nrtServer = serverIndex;
+    serverManager* manager = outputServers[nrtServer];
+    if(manager == nullptr || manager->getServer() == nullptr){
+        nrtStatus = "Selected server is not available";
+        return false;
+    }
+    if(!manager->beginNRTCapture()){
+        nrtStatus = "Server must be booted and initialized before NRT capture";
+        return false;
+    }
+
+    int maxChannels = std::max(1, manager->preferences.numOutputBusChannels);
+    nrtCaptureOutputChannels = std::max(1, std::min(outputChannels, maxChannels));
+    nrtCaptureOutputPath = outputPath.empty() ? nrtOutputPath : outputPath;
+    nrtManualStop = manualStop;
+
+    manager->getServer()->setNRTTimeProvider([](){
+        return ofxOceanodeTime::getInstance()->getGlobalTimeState().time;
+    });
+    manager->getServer()->setNRTTimeProviderEnabled(true);
+
+    const std::string absoluteOutputPath = ofToDataPath(nrtCaptureOutputPath, true);
+    ofDirectory::createDirectory(ofFilePath::getEnclosingDirectory(absoluteOutputPath), true, false);
+    ofxOceanodeTime::getInstance()->setFrameMode(true);
+    ofxOceanodeTime::getInstance()->resetTransportToStart();
+    ofxOceanodeTime::getInstance()->setIsPlaying(true);
+    nrtCaptureActive = true;
+    nrtStatus = "Capturing frame-stepped OSC score";
+    return true;
+}
+
+bool ofxOceanodeSuperColliderController::endNRTRecording(bool cancelled){
+    if(!nrtCaptureActive || !nrtManualStop) return false;
+
+    // An externally controlled recording uses the actual frame-stepped
+    // transport time, so the WAV duration matches the texture sequence.
+    const double duration = std::max(0.01, ofxOceanodeTime::getInstance()->getGlobalTimeState().time);
+    completeNRTCapture(cancelled, duration);
+    return true;
+}
+
+void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, double durationOverride){
+    if(!nrtCaptureActive) return;
+    if(nrtServer < 0 || nrtServer >= (int)outputServers.size()) nrtServer = 0;
+    serverManager* manager = outputServers[nrtServer];
+    const double duration = durationOverride > 0.0 ? durationOverride : std::max(0.01f, nrtDuration);
+    const int outputChannels = std::max(1, nrtCaptureOutputChannels);
+    const std::string outputPath = ofToDataPath(nrtCaptureOutputPath.empty() ? nrtOutputPath : nrtCaptureOutputPath, true);
+    const std::string scorePath = outputPath + ".osc";
+
+    if(manager != nullptr && manager->getServer() != nullptr){
+        manager->getServer()->setNRTTimeProviderEnabled(false);
+        manager->endNRTCapture(cancelled ? -1.0 : duration);
+    }
+    ofxOceanodeTime::getInstance()->setIsPlaying(false);
+    ofxOceanodeTime::getInstance()->setFrameMode(false);
+    nrtCaptureActive = false;
+    nrtManualStop = false;
+    nrtCaptureOutputPath.clear();
+
+    if(cancelled){
+        nrtStatus = "NRT capture cancelled";
+        return;
+    }
+
+    if(manager == nullptr || !manager->writeNRTScore(scorePath, duration)){
+        nrtStatus = "Could not write NRT score";
+        return;
+    }
+
+    nrtRendering = true;
+    nrtStatus = "Rendering WAV with scsynth -N";
+    nrtRenderThread = std::thread([this, manager, scorePath, outputPath, outputChannels](){
+        nrtRenderResult = manager->renderNRT(scorePath, outputPath, outputChannels);
+        nrtRendering = false;
+    });
 }
 
 void ofxOceanodeSuperColliderController::createServers(){
@@ -102,6 +214,48 @@ void ofxOceanodeSuperColliderController::draw(){
     if(ImGui::Button("Load Defs")){
         for(auto s : outputServers) s->loadDefs();
     }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Non-realtime WAV rendering");
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputFloat("Duration (s)", &nrtDuration, 1.0f, 10.0f, "%.2f");
+    nrtDuration = std::max(0.01f, nrtDuration);
+
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputInt("WAV channels", &nrtOutputChannels);
+    int maxNrtChannels = 128;
+    if(nrtServer >= 0 && nrtServer < (int)outputServers.size() && outputServers[nrtServer] != nullptr){
+        maxNrtChannels = std::max(1, outputServers[nrtServer]->preferences.numOutputBusChannels);
+    }
+    nrtOutputChannels = std::max(1, std::min(nrtOutputChannels, maxNrtChannels));
+
+    std::array<char, 512> outputBuffer{};
+    std::strncpy(outputBuffer.data(), nrtOutputPath.c_str(), outputBuffer.size() - 1);
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    if(ImGui::InputText("Output WAV", outputBuffer.data(), outputBuffer.size())){
+        nrtOutputPath = outputBuffer.data();
+    }
+
+    if(outputServers.size() > 1){
+        std::vector<std::string> serverLabels;
+        for(std::size_t i = 0; i < outputServers.size(); i++) serverLabels.push_back("Server " + ofToString(i));
+        auto getter = [](void* data, int index, const char** out){
+            auto& labels = *static_cast<std::vector<std::string>*>(data);
+            if(index < 0 || index >= (int)labels.size()) return false;
+            *out = labels[index].c_str();
+            return true;
+        };
+        ImGui::Combo("NRT Server", &nrtServer, getter, &serverLabels, (int)serverLabels.size());
+    }
+
+    if(!nrtCaptureActive && !nrtRendering.load()){
+        if(ImGui::Button("Render NRT WAV")) startNRTRender();
+    }else if(nrtCaptureActive){
+        if(ImGui::Button("Cancel NRT Capture")) completeNRTCapture(true);
+    }else{
+        ImGui::TextUnformatted("Rendering...");
+    }
+    if(!nrtStatus.empty()) ImGui::TextWrapped("%s", nrtStatus.c_str());
     
     ImGui::Separator();
 

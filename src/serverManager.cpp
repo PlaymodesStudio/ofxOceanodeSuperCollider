@@ -13,8 +13,30 @@
 #include "scStart.h"
 #include "scOutput.h"
 #include "ofxOceanodeShared.h"
+#include <algorithm>
+#include <cstdlib>
+#include <sstream>
 
 std::map<ofxSCServer*, int> serverManager::serverSampleRates;
+
+namespace {
+std::string shellQuote(const std::string& value){
+    std::string quoted = "'";
+    for(char c : value){
+        if(c == '\'') quoted += "'\\''";
+        else quoted += c;
+    }
+    quoted += "'";
+    return quoted;
+}
+
+std::string getScPluginPath(const std::string& scsynthPath){
+    const std::string scRoot = scsynthPath.substr(0, scsynthPath.size() - 7);
+    return scRoot.find("/SuperCollider.app/") != std::string::npos
+        ? scRoot + "plugins"
+        : scRoot;
+}
+}
 
 serverManager::serverManager(){
     initialized = false;
@@ -291,6 +313,109 @@ void serverManager::loadDefs(){
     }
 }
 
+bool serverManager::beginNRTCapture(){
+    if(server == nullptr || !initialized) return false;
+
+    // Keep the live graph out of the score while using the normal graph
+    // builder to replay its complete state at score time zero.
+    server->beginNRTCapture(true);
+    teardownGraphForPresetLoad();
+    server->clearNRTScore();
+    server->setNRTTime(0.0);
+
+    ofxOscMessage group;
+    group.setAddress("/g_new");
+    group.addIntArg(1);
+    group.addIntArg(0);
+    group.addIntArg(0);
+    server->sendMsg(group);
+
+    loadNRTSynthdefs();
+    recomputeGraph();
+    return true;
+}
+
+void serverManager::loadNRTSynthdefs(){
+    // The NRT renderer is a separate scsynth process. Load only the current
+    // preset's definitions instead of replaying the entire Synthdefs tree.
+    const std::string presetPath = ofxOceanodeShared::getCurrentPresetPath();
+    const std::string absolutePresetPath = ofToDataPath(presetPath, true);
+    if(!presetPath.empty() && ofDirectory::doesDirectoryExist(absolutePresetPath)){
+        loadSynthdefsFromPreset(presetPath, true, false);
+    }else{
+        ofLogWarning("serverManager") << "NRT capture has no valid current preset; loading the complete Synthdefs tree";
+        loadDefs();
+    }
+
+    // Output is a legacy SynthDef without a .txarcmeta descriptor.
+    const std::string outputSynthDef = ofToDataPath(
+        std::string(SYNTHDEF_DIRECTORY) + "/Defaults/output.scsyndef", true);
+    if(ofFile::doesFileExist(outputSynthDef)){
+        ofxOscMessage message;
+        message.setAddress("/d_load");
+        message.addStringArg(outputSynthDef);
+        server->sendMsg(message);
+    }
+}
+
+void serverManager::endNRTCapture(double endTime){
+    if(server == nullptr) return;
+    server->endNRTCapture(endTime);
+
+    // The model graph was rebuilt for the score. Rebuild it once more against
+    // the realtime server so normal playback continues without stale node
+    // handles or bus allocations.
+    teardownGraphForPresetLoad();
+    recomputeGraph();
+}
+
+bool serverManager::writeNRTScore(const std::string& path, double endTime) const{
+    return server != nullptr && server->writeNRTScore(path, endTime);
+}
+
+std::size_t serverManager::getNRTEventCount() const{
+    return server != nullptr ? server->getNRTEventCount() : 0;
+}
+
+int serverManager::renderNRT(const std::string& scorePath, const std::string& outputPath, int outputChannels) const{
+    if(server == nullptr) return -1;
+
+    std::string scPath = ofToDataPath("Supercollider/Scsynth/bin/scsynth", true);
+    if(!ofFile::doesFileExist(scPath)) scPath = "/Applications/SuperCollider.app/Contents/Resources/scsynth";
+
+    const auto &p = preferences;
+    outputChannels = std::max(1, std::min(outputChannels, p.numOutputBusChannels));
+    std::ostringstream command;
+    command << shellQuote(scPath) << " -N " << shellQuote(scorePath) << " _ "
+            << shellQuote(outputPath) << " " << p.hardwareSampleRate
+            << " WAVE float"
+            << " -o " << outputChannels
+            << " -i " << p.numInputBusChannels
+            << " -a " << p.numAudioBusChannels
+            << " -c " << p.numControlBusChannels
+            << " -b " << p.numBuffers
+            << " -n " << p.maxNodes
+            << " -d " << p.maxSynthDefs
+            << " -m " << p.memSize
+            << " -w " << p.numWireBufs
+            << " -r " << p.numRGens
+            << " -l " << p.maxLogins
+            << " -z " << p.blockSize
+            << " -D 0";
+    if(!p.ugensPlugins.empty()){
+        // scsynth does not search its standard plugin locations when -U is
+        // supplied. Keep the bundled SuperCollider plugins available in NRT
+        // renders, in addition to Oceanode's optional custom UGen folder.
+        command << " -U " << shellQuote(ofToDataPath(p.ugensPlugins, true) + ":" + getScPluginPath(scPath));
+    }
+    // scsynth prints one progress line per score packet on stdout in NRT mode.
+    // Leave stderr untouched so actual diagnostics remain visible.
+    command << " > /dev/null";
+
+    ofLogNotice("serverManager") << "Rendering SuperCollider NRT score: " << outputPath;
+    return std::system(command.str().c_str());
+}
+
 void serverManager::setVolume(float _volume){
     volume = _volume;
     for(auto &o : outputs) o->setVolume(volume);
@@ -506,13 +631,13 @@ void serverManager::recomputeGraph(){
     graphComputed.notify();
 }
 
-void serverManager::loadSynthdefsFromPreset(std::string path){
+void serverManager::loadSynthdefsFromPreset(const std::string& path, bool forceLoad, bool waitForLoad){
     //TODO: clear all loaded definitions, via /d_free message https://doc.sccode.org/Reference/Server-Command-Reference.html
     
 //    std::set<std::string> synthsList;
     std::set<std::string> synthsList;
     
-    std::function<void(std::string)> checkSynthsInPreset = [this, &checkSynthsInPreset, &synthsList](std::string path){
+    std::function<void(const std::string&)> checkSynthsInPreset = [this, &checkSynthsInPreset, &synthsList, forceLoad](const std::string& path){
         ofJson json = ofLoadJson(path + "/modules.json");
         
         if(json.empty()){
@@ -527,7 +652,7 @@ void serverManager::loadSynthdefsFromPreset(std::string path){
                 ofStringReplace(synthdefName, "*", "");
                 
                 if(version2){
-                    if(alreadyLoadedSynthsList.count(synthdefName) == 0){
+                    if(forceLoad || alreadyLoadedSynthsList.count(synthdefName) == 0){
                         synthsList.insert(synthdefName);
                     }
                 }
@@ -565,27 +690,15 @@ void serverManager::loadSynthdefsFromPreset(std::string path){
     };
     
     checkSynthsInPreset(path);
-    
-    
-    std::function<std::string(std::string, std::string)> searchForPathInDirectory = [&searchForPathInDirectory](std::string synthdefName, std::string searchPath)->std::string{
-        ofDirectory dir(searchPath);
-        dir.sort();
-        for(auto &file : dir.getFiles()){
-            if(file.isDirectory()){
-                string path = searchForPathInDirectory(synthdefName, file.getAbsolutePath());
-                if(path != "") return path;
-            }else{
-                if(file.getFileName() == (synthdefName + ".txarcmeta")){
-                    return dir.getAbsolutePath();
-                }
-            }
-        }
-        return "";
-    };
-    
+
     for(auto &synthdef : synthsList){
-        alreadyLoadedSynthsList.insert(synthdef);
-        std::string path = synthdefFolders[synthdef];
+        auto folder = synthdefFolders.find(synthdef);
+        if(folder == synthdefFolders.end() || folder->second.empty()){
+            ofLogWarning("serverManager") << "Could not find SynthDef folder for " << synthdef;
+            continue;
+        }
+        if(!forceLoad) alreadyLoadedSynthsList.insert(synthdef);
+        std::string path = folder->second;
         
         ofxOscMessage m;
         m.setAddress("/d_loadDir");
@@ -593,7 +706,7 @@ void serverManager::loadSynthdefsFromPreset(std::string path){
         server->sendMsg(m);
     }
     
-    ofSleepMillis(100 * synthsList.size());
+    if(waitForLoad) ofSleepMillis(100 * synthsList.size());
 }
 
 

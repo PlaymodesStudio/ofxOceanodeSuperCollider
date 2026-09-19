@@ -8,14 +8,13 @@
 #ifndef serverManager_h
 #define serverManager_h
 
-#include <stdio.h>
 #include <vector>
 #include <map>
 #include <string>
 #include <ofConstants.h>
 #include <ofEvent.h>
 #include <set>
-#include <string>
+#include <memory>
 
 class ofxSCServer;
 class ofxSCSynth;
@@ -64,6 +63,15 @@ public:
     void kill();
     void prepareForRestart();
     void loadDefs();
+
+    // Capture the same OSC graph used by realtime SC and prepare it for NRT.
+    // The graph is restored to realtime operation when endNRTCapture() is
+    // called, so nodes and SynthDefs do not need a second implementation.
+    bool beginNRTCapture();
+    void endNRTCapture(double endTime = -1.0);
+    bool writeNRTScore(const std::string& path, double endTime = -1.0) const;
+    std::size_t getNRTEventCount() const;
+    int renderNRT(const std::string& scorePath, const std::string& outputPath, int outputChannels = 2) const;
     
     void setVolume(float volume);
     void setDelay(int delay);
@@ -106,8 +114,9 @@ public:
     scPreferences preferences;
     ofEvent<void> graphComputed;
 private:
+    void loadNRTSynthdefs();
     
-    void loadSynthdefsFromPreset(std::string path);
+    void loadSynthdefsFromPreset(const std::string& path, bool forceLoad = false, bool waitForLoad = true);
 
     std::vector<scNode*> connectedNodes; //List of all nodes
     

@@ -60,6 +60,7 @@
 #include "nodes/scGrainBox.h"
 #include "nodes/scPolyComb.h"
 #include "nodes/scFeedbackNode.h"
+#include "nodes/scNRTRecorder.h"
 
 
 
@@ -180,6 +181,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scMultiTrackRecorder>("SuperCollider", controller->getServers());
 	o.registerModel<scGrainBox>("SuperCollider", controller->getServers());
 	o.registerModel<scPolyComb>("SuperCollider");
+	o.registerModel<scNRTRecorder>("SuperCollider", controller.get());
 
 }
 
