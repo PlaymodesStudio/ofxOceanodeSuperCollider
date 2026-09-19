@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Claude Code local state / worktrees
+.claude/
+**/.claude/
+
+# openFrameworks build output
+example/obj/
+example/bin/example.app/
+example/openFrameworks-Info.plist
+
+# Scratch / generated output
+tmp/
+output/
+__pycache__/
+*.pyc
