@@ -1,0 +1,53 @@
+{
+  "name": "SteamPipe",
+  "author": "Martijn Zwartjes",
+  "year": 2002,
+  "source": {
+    "instrument": "/Users/santiagovilanova/Desktop/SteamPipe.ism",
+    "ensemble": "/Users/santiagovilanova/Documents/ENSEMBLES_REAKTOR/SteamPipe_santi_2.ens",
+    "format": "NRKT proprietary binary"
+  },
+  "extraction": {
+    "level": "binary macro hierarchy plus functional graph",
+    "wire_level_exact": true,
+    "ism_connections": 989,
+    "ensemble_connections": 991,
+    "resolved_connection_ratio": 1.0,
+    "module_semantics_complete": false,
+    "binary_parser": "parse_nrkt.py",
+    "snapshot": "066 Pizz"
+  },
+  "nodes": [
+    { "id": "midi", "label": "MIDI", "role": "pitch, gate, velocity and modulation wheel" },
+    { "id": "envelope", "label": "Envelope", "role": "ADSR with velocity amount and keyboard scaling" },
+    { "id": "steam", "label": "Steam generator", "role": "DC/noise crossfade and tracked noise filter" },
+    { "id": "pipe", "label": "Pipe resonator", "role": "pitch-tuned delay and feedback resonator" },
+    { "id": "push_pull", "label": "Push-Pull", "role": "DC offset and recirculating steam interaction" },
+    { "id": "allpass", "label": "Allpass", "role": "optional tuned all-pass/diffusion delay" },
+    { "id": "saturation", "label": "Saturation", "role": "soft saturation to clipping with asymmetry" },
+    { "id": "mw_filter", "label": "MW Filter", "role": "mod-wheel-interpolated high-pass and low-pass formants" },
+    { "id": "stereo_wide", "label": "Two unnamed transforms", "role": "left/right signal transformation before output gain" },
+    { "id": "delay", "label": "DelayS", "role": "in-series filtered stereo delay" },
+    { "id": "reverb", "label": "Reverb Unit", "role": "pre-delay, early diffusion and modulated late field" },
+    { "id": "gain", "label": "Output gain", "role": "master gain and level metering" },
+    { "id": "out", "label": "Stereo output", "role": "left and right audio output" }
+  ],
+  "edges": [
+    { "from": "midi", "to": "envelope", "kind": "control" },
+    { "from": "midi", "to": "steam", "kind": "tracking" },
+    { "from": "envelope", "to": "steam", "kind": "amplitude" },
+    { "from": "steam", "to": "pipe", "kind": "audio" },
+    { "from": "pipe", "to": "push_pull", "kind": "feedback-send" },
+    { "from": "push_pull", "to": "pipe", "kind": "feedback-return" },
+    { "from": "midi", "to": "pipe", "kind": "pitch-and-modulation" },
+    { "from": "pipe", "to": "allpass", "kind": "audio" },
+    { "from": "allpass", "to": "saturation", "kind": "audio" },
+    { "from": "saturation", "to": "mw_filter", "kind": "audio" },
+    { "from": "midi", "to": "mw_filter", "kind": "key-and-wheel-tracking" },
+    { "from": "mw_filter", "to": "stereo_wide", "kind": "audio" },
+    { "from": "stereo_wide", "to": "gain", "kind": "audio", "verified": true },
+    { "from": "gain", "to": "delay", "kind": "audio", "verified": true },
+    { "from": "delay", "to": "reverb", "kind": "audio", "verified": true },
+    { "from": "reverb", "to": "out", "kind": "audio", "verified": true }
+  ]
+}
