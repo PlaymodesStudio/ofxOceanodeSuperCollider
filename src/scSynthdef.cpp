@@ -8,6 +8,8 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "scSynthdef.h"
 #include "ofxSCSynth.h"
+#include "ofxSCServer.h"
+#include "ofxOceanodeScheduling.h"
 
 
 scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synthDescription), synthdefName(_synthDescription.name), scNode(_synthDescription.name + "*"){
@@ -83,6 +85,11 @@ void scSynthdef::setup(){
         }
         
         std::function<void()> setValuesToSynths;
+        // The same send, for a value that is not (yet) the parameter's own:
+        // the timeline hands a value here before the playhead reaches it, and
+        // it goes out inside an ofxSCServer::ScopedTimetag, so scsynth applies
+        // it at that exact instant instead of on arrival.
+        std::function<void(const std::string&)> setScheduledValueToSynths;
         
         if(unitWithoutAudio == "vi"){
             ofParameter<vector<int>> vi;
@@ -105,7 +112,18 @@ void scSynthdef::setup(){
                 }
             };
             
+            setScheduledValueToSynths = [this, toSendName](const std::string& text){
+                std::vector<int> values;
+                for(const auto& token : ofSplitString(text, ",", true, true)) values.push_back(ofToInt(token));
+                if(values.empty()) return;
+                for(auto synthServer : synths){
+                    if(values.size() == 1) synthServer.second->setMultiple(toSendName, values[0], numChannels.get());
+                    else synthServer.second->set(toSendName, values);
+                }
+            };
+
             listeners.push(vi.newListener([setValuesToSynths](vector<int> &vi_){
+                if(ofxOceanodeScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths();
             }));
         }
@@ -129,7 +147,18 @@ void scSynthdef::setup(){
                 }
             };
             
+            setScheduledValueToSynths = [this, toSendName](const std::string& text){
+                std::vector<float> values;
+                for(const auto& token : ofSplitString(text, ",", true, true)) values.push_back(ofToFloat(token));
+                if(values.empty()) return;
+                for(auto synthServer : synths){
+                    if(values.size() == 1) synthServer.second->setMultiple(toSendName, values[0], numChannels.get());
+                    else synthServer.second->set(toSendName, values);
+                }
+            };
+
             listeners.push(vf.newListener([setValuesToSynths](vector<float> &vf_){
+                if(ofxOceanodeScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths();
             }));
         }
@@ -151,7 +180,13 @@ void scSynthdef::setup(){
                 }
             };
             
+            setScheduledValueToSynths = [this, toSendName](const std::string& text){
+                const int value = ofToInt(text);
+                for(auto synthServer : synths) synthServer.second->set(toSendName, value);
+            };
+
             listeners.push(i.newListener([setValuesToSynths](int &i_){
+                if(ofxOceanodeScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths();
             }));
         }
@@ -172,7 +207,14 @@ void scSynthdef::setup(){
                 }
             };
             
+            setScheduledValueToSynths = [this, toSendName](const std::string& text){
+                const double value = ofToFloat(text);
+                if(std::isnan(value)) return;
+                for(auto synthServer : synths) synthServer.second->set(toSendName, value);
+            };
+
             listeners.push(f.newListener([setValuesToSynths](float &f_){
+                if(ofxOceanodeScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths();
             }));
         }
@@ -193,7 +235,13 @@ void scSynthdef::setup(){
                 }
             };
             
+            setScheduledValueToSynths = [this, toSendName](const std::string& text){
+                const int value = ofToBool(text) ? 1 : 0;
+                for(auto synthServer : synths) synthServer.second->set(toSendName, value);
+            };
+
             listeners.push(b.newListener([this, setValuesToSynths](bool &b_){
+                if(ofxOceanodeScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths();
             }));
         }
@@ -291,6 +339,22 @@ void scSynthdef::setup(){
                 }
             }));
         }
+        // Timestamped path. The timeline calls this with the value a discrete
+        // lane will hold at an exact instant, shortly before that instant; the
+        // parameter itself is still set on the frame the playhead crosses the
+        // event, with its own send suppressed (see the listeners above) so the
+        // value is not also sent untimed.
+        if(parameterReference != nullptr && setScheduledValueToSynths){
+            ofxOceanodeScheduling::registerParameterTarget(parameterReference.get(), this,
+                [this, setScheduledValueToSynths](const ofxOceanodeScheduledParameterEvent& event) -> bool {
+                    if(synths.empty()) return false;
+                    ofxSCServer::ScopedTimetag timetag(
+                        ofxSCServer::timetagForSteadyTimeUs(event.dueSteadyTimeUs));
+                    setScheduledValueToSynths(event.value);
+                    return true;
+                });
+        }
+
         listeners.push(resendParams.newListener([setValuesToSynths]{
             setValuesToSynths();
         }));

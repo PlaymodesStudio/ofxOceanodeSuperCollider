@@ -42,7 +42,7 @@
 #include "nodes/scFM7.h"
 #include "nodes/scFM7Drone.h"
 #include "nodes/scDoubleBuffer.h"
-#include "nodes/waveTrack.h"
+#include "nodes/timelineWaveTrack.h"
 #include "nodes/scGraphicEQ.h"
 #include "nodes/scFFT.h"
 #include "nodes/scFFTHD.h"
@@ -163,7 +163,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scFM7>("SuperCollider");
 	o.registerModel<scFM7Drone>("SuperCollider");
 	o.registerModel<scDoubleBuffer>("SuperCollider", controller->getServers());
-	o.registerModel<waveTrack>("SuperCollider", controller->getServers());
+	o.registerModel<timelineWaveTrack>("SuperCollider", controller->getServers());
 	o.registerModel<scGraphicEQ>("SuperCollider");
 	o.registerModel<scPolyphonicArpeggiator>("SuperCollider");
 	o.registerModel<scBufferBrowser>("SuperCollider", controller->getServers());
