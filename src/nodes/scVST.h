@@ -293,7 +293,9 @@ private:
 	// Emits /program_read for nodeID straight after its /open, with no reply
 	// awaited. Returns false when there is no state to restore.
 	bool sendNRTStateRestore(ofxSCServer* server, int nodeID);
+	bool nrtRestoreAlreadySent(int nodeID) const;
 	std::string nrtStatePath;
+	std::set<int> nrtRestoreSent;
 	void handleVSTPresetWrite(ofxOscMessage& msg);
 	void handleVSTPresetRead(ofxOscMessage& msg);
 	std::string createTempFXPPath();

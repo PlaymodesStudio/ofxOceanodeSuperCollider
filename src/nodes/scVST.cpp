@@ -1489,7 +1489,12 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 	}
 }
 
+bool scVST::nrtRestoreAlreadySent(int nodeID) const {
+	return nrtRestoreSent.count(nodeID) != 0;
+}
+
 void scVST::prepareForNRTCapture() {
+	nrtRestoreSent.clear();
 	// Pull the plugin's current program back out of the server while it can
 	// still answer. saveFXPToCache() refreshes cachedFXP from the running
 	// plugin, so an edit made in the plugin's own editor -- which Oceanode
@@ -1504,6 +1509,7 @@ bool scVST::isNRTCapturePreparationPending() const {
 
 bool scVST::sendNRTStateRestore(ofxSCServer* server, int nodeID) {
 	if(server == nullptr) return false;
+	nrtRestoreSent.insert(nodeID);
 
 	// Prefer what the plugin is holding right now; fall back to the program
 	// the Oceanode preset carried. A pointer, not a reference: a ternary
@@ -1548,6 +1554,11 @@ bool scVST::sendNRTStateRestore(ofxSCServer* server, int nodeID) {
 }
 
 void scVST::applyFXPToInstance(int nodeID) {
+	// While capturing, the state was already written into the score right
+	// after /open. The live server still answers /vst_open (the capture is no
+	// longer send-suppressed), so this would append a second, redundant
+	// /program_read at whatever time the reply happened to arrive.
+	if(nrtRestoreAlreadySent(nodeID)) return;
 	if(!hasSavedFXPData) {
 		ofLogWarning("scVST") << "No FXP data to apply to instance " << nodeID;
 		return;
@@ -4565,7 +4576,10 @@ void scVST::createSynth(ofxSCServer* server){
 				openMsg.addStringArg("/open");
 				openMsg.addStringArg(currentPluginPath);
 				openMsg.addIntArg(capturing ? 0 : 1); // Request GUI editor
-				openMsg.addIntArg(enableMultithreading.get() ? 1 : 0);
+				// Offline there is no realtime deadline to meet, and VSTPlugin's
+				// worker thread only adds a second clock to a render whose whole
+				// point is determinism.
+				openMsg.addIntArg((capturing || !enableMultithreading.get()) ? 0 : 1);
 				openMsg.addIntArg(0); // Normal mode
 				server->sendMsg(openMsg);
 
