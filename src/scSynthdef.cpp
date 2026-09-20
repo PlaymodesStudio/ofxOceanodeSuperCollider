@@ -9,7 +9,7 @@
 #include "scSynthdef.h"
 #include "ofxSCSynth.h"
 #include "ofxSCServer.h"
-#include "ofxOceanodeScheduling.h"
+#include "scSchedulingCompat.h"
 
 
 scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synthDescription), synthdefName(_synthDescription.name), scNode(_synthDescription.name + "*"){
@@ -123,7 +123,7 @@ void scSynthdef::setup(){
             };
 
             listeners.push(vi.newListener([setValuesToSynths](vector<int> &vi_){
-                if(ofxOceanodeScheduling::isBackendSendSuppressed()) return;
+                if(scScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths();
             }));
         }
@@ -158,7 +158,7 @@ void scSynthdef::setup(){
             };
 
             listeners.push(vf.newListener([setValuesToSynths](vector<float> &vf_){
-                if(ofxOceanodeScheduling::isBackendSendSuppressed()) return;
+                if(scScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths();
             }));
         }
@@ -186,7 +186,7 @@ void scSynthdef::setup(){
             };
 
             listeners.push(i.newListener([setValuesToSynths](int &i_){
-                if(ofxOceanodeScheduling::isBackendSendSuppressed()) return;
+                if(scScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths();
             }));
         }
@@ -214,7 +214,7 @@ void scSynthdef::setup(){
             };
 
             listeners.push(f.newListener([setValuesToSynths](float &f_){
-                if(ofxOceanodeScheduling::isBackendSendSuppressed()) return;
+                if(scScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths();
             }));
         }
@@ -241,7 +241,7 @@ void scSynthdef::setup(){
             };
 
             listeners.push(b.newListener([this, setValuesToSynths](bool &b_){
-                if(ofxOceanodeScheduling::isBackendSendSuppressed()) return;
+                if(scScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths();
             }));
         }
@@ -345,12 +345,12 @@ void scSynthdef::setup(){
         // event, with its own send suppressed (see the listeners above) so the
         // value is not also sent untimed.
         if(parameterReference != nullptr && setScheduledValueToSynths){
-            ofxOceanodeScheduling::registerParameterTarget(parameterReference.get(), this,
-                [this, setScheduledValueToSynths](const ofxOceanodeScheduledParameterEvent& event) -> bool {
+            scScheduling::registerParameterTarget(parameterReference.get(), this,
+                [this, setScheduledValueToSynths](uint64_t dueSteadyTimeUs, const std::string& value) -> bool {
                     if(synths.empty()) return false;
                     ofxSCServer::ScopedTimetag timetag(
-                        ofxSCServer::timetagForSteadyTimeUs(event.dueSteadyTimeUs));
-                    setScheduledValueToSynths(event.value);
+                        ofxSCServer::timetagForSteadyTimeUs(dueSteadyTimeUs));
+                    setScheduledValueToSynths(value);
                     return true;
                 });
         }

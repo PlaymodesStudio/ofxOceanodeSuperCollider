@@ -1,6 +1,10 @@
 #ifndef timelineWaveTrack_h
 #define timelineWaveTrack_h
 
+#include "ofxOceanodeSuperColliderConfig.h"
+
+#if OFXOCEANODESC_HAS_TIMELINE
+
 #include "scNode.h"
 #include "ofxOceanodeTimeline.h"
 #include "ofxOceanodeContainer.h"
@@ -436,5 +440,7 @@ private:
         voice.tailing = false;
     }
 };
+
+#endif // OFXOCEANODESC_HAS_TIMELINE
 
 #endif

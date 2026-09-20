@@ -9,10 +9,13 @@
 #include "ofxSCServer.h"
 #include "imgui.h"
 #include "serverManager.h"
-#include "ofxOceanodeTime.h"
+#include "ofxOceanodeSuperColliderConfig.h"
 #include <algorithm>
+#if OFXOCEANODESC_HAS_TIMELINE
+#include "ofxOceanodeTime.h"
 #include <array>
 #include <cstring>
+#endif // OFXOCEANODESC_HAS_TIMELINE
 
 ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOceanodeBaseController("SuperCollider"){
     volume = 1;
@@ -31,10 +34,13 @@ ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOc
 }
 
 ofxOceanodeSuperColliderController::~ofxOceanodeSuperColliderController(){
+#if OFXOCEANODESC_HAS_TIMELINE
     if(nrtCaptureActive) completeNRTCapture(true);
     if(nrtRenderThread.joinable()) nrtRenderThread.join();
+#endif // OFXOCEANODESC_HAS_TIMELINE
 }
 
+#if OFXOCEANODESC_HAS_TIMELINE
 void ofxOceanodeSuperColliderController::update(){
     joinFinishedNRTThread();
     if(!nrtCaptureActive) return;
@@ -139,6 +145,8 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
     });
 }
 
+#endif // OFXOCEANODESC_HAS_TIMELINE
+
 void ofxOceanodeSuperColliderController::createServers(){
     ofDirectory dir;
     dir.open(ofToDataPath("Supercollider/Config/Server"));
@@ -215,6 +223,7 @@ void ofxOceanodeSuperColliderController::draw(){
         for(auto s : outputServers) s->loadDefs();
     }
 
+#if OFXOCEANODESC_HAS_TIMELINE
     ImGui::Separator();
     ImGui::TextUnformatted("Non-realtime WAV rendering");
     ImGui::SetNextItemWidth(110.0f);
@@ -256,6 +265,7 @@ void ofxOceanodeSuperColliderController::draw(){
         ImGui::TextUnformatted("Rendering...");
     }
     if(!nrtStatus.empty()) ImGui::TextWrapped("%s", nrtStatus.c_str());
+#endif // OFXOCEANODESC_HAS_TIMELINE
     
     ImGui::Separator();
 

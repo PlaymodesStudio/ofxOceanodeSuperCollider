@@ -42,7 +42,9 @@
 #include "nodes/scFM7.h"
 #include "nodes/scFM7Drone.h"
 #include "nodes/scDoubleBuffer.h"
+#if OFXOCEANODESC_HAS_TIMELINE
 #include "nodes/timelineWaveTrack.h"
+#endif // OFXOCEANODESC_HAS_TIMELINE
 #include "nodes/scGraphicEQ.h"
 #include "nodes/scFFT.h"
 #include "nodes/scFFTHD.h"
@@ -60,7 +62,9 @@
 #include "nodes/scGrainBox.h"
 #include "nodes/scPolyComb.h"
 #include "nodes/scFeedbackNode.h"
+#if OFXOCEANODESC_HAS_TIMELINE
 #include "nodes/scNRTRecorder.h"
+#endif // OFXOCEANODESC_HAS_TIMELINE
 
 
 
@@ -164,7 +168,9 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scFM7>("SuperCollider");
 	o.registerModel<scFM7Drone>("SuperCollider");
 	o.registerModel<scDoubleBuffer>("SuperCollider", controller->getServers());
+#if OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<timelineWaveTrack>("SuperCollider", controller->getServers());
+#endif // OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<scGraphicEQ>("SuperCollider");
 	o.registerModel<scPolyphonicArpeggiator>("SuperCollider");
 	o.registerModel<scBufferBrowser>("SuperCollider", controller->getServers());
@@ -181,7 +187,9 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scMultiTrackRecorder>("SuperCollider", controller->getServers());
 	o.registerModel<scGrainBox>("SuperCollider", controller->getServers());
 	o.registerModel<scPolyComb>("SuperCollider");
+#if OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<scNRTRecorder>("SuperCollider", controller.get());
+#endif // OFXOCEANODESC_HAS_TIMELINE
 
 }
 

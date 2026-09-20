@@ -6,6 +6,10 @@
 #ifndef scNRTRecorder_h
 #define scNRTRecorder_h
 
+#include "ofxOceanodeSuperColliderConfig.h"
+
+#if OFXOCEANODESC_HAS_TIMELINE
+
 #include "ofxOceanodeNodeModel.h"
 #include "ofxOceanodeSuperColliderController.h"
 
@@ -53,5 +57,7 @@ private:
     ofEventListener recordListener;
     bool suppressRecordListener = false;
 };
+
+#endif // OFXOCEANODESC_HAS_TIMELINE
 
 #endif /* scNRTRecorder_h */

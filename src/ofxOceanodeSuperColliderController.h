@@ -9,8 +9,11 @@
 
 
 #include "ofxOceanodeBaseController.h"
+#include "ofxOceanodeSuperColliderConfig.h"
+#if OFXOCEANODESC_HAS_TIMELINE
 #include <atomic>
 #include <thread>
+#endif // OFXOCEANODESC_HAS_TIMELINE
 
 class scStart;
 class ofxSCServer;
@@ -25,17 +28,23 @@ public:
     void createServers();
     
     void setup();
+#if OFXOCEANODESC_HAS_TIMELINE
     void update() override;
+#endif // OFXOCEANODESC_HAS_TIMELINE
     void draw();
     
     void killServers();
 
+#if OFXOCEANODESC_HAS_TIMELINE
     // Starts/stops a frame-stepped NRT capture controlled by an external node.
     // When manualStop is true, endNRTRecording() defines the exact duration.
+    // Needs ofxOceanode's frame-stepped transport, so it is only available
+    // together with the timeline.
     bool beginNRTRecording(int serverIndex, int outputChannels, const std::string& outputPath, bool manualStop = true);
     bool endNRTRecording(bool cancelled = false);
     bool isNRTRecordingActive() const { return nrtCaptureActive; }
     bool isNRTRendering() const { return nrtRendering.load(); }
+#endif // OFXOCEANODESC_HAS_TIMELINE
 
     void saveConfig(std::string filepath, scPreferences prefs);
 	void saveControllerConfig(std::string filepath);
@@ -56,9 +65,11 @@ private:
     std::string getAudioInputDeviceNameFromSelection() const;
     int getSampleRateFromSelection() const;
     void applyAudioDeviceToServers(bool restartServers);
+#if OFXOCEANODESC_HAS_TIMELINE
     void startNRTRender();
     void completeNRTCapture(bool cancelled = false, double durationOverride = -1.0);
     void joinFinishedNRTThread();
+#endif // OFXOCEANODESC_HAS_TIMELINE
 
     float volume;
     bool mute;
@@ -83,6 +94,7 @@ private:
     vector<int> sampleRateValues;
     vector<serverManager*> outputServers;
 
+#if OFXOCEANODESC_HAS_TIMELINE
     bool nrtCaptureActive = false;
     std::atomic<bool> nrtRendering{false};
     std::thread nrtRenderThread;
@@ -95,6 +107,7 @@ private:
     bool nrtManualStop = false;
     std::string nrtCaptureOutputPath;
     int nrtCaptureOutputChannels = 2;
+#endif // OFXOCEANODESC_HAS_TIMELINE
 };
 
 #endif /* ofxOceanodeSuperColliderController_h */

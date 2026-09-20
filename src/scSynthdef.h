@@ -10,7 +10,7 @@
 
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
-#include "ofxOceanodeScheduling.h"
+#include "scSchedulingCompat.h"
 
 class ofxSCSynth;
 class ofxSCServer;
@@ -32,7 +32,7 @@ public:
     ~scSynthdef(){
         // Every scheduled-event handler this node registered points at members
         // that are about to go away.
-        ofxOceanodeScheduling::unregisterOwner(this);
+        scScheduling::unregisterOwner(this);
         freeAll();
     }
     
