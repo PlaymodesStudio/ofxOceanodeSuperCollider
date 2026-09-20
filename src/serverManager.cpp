@@ -16,13 +16,25 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#if !defined(_WIN32)
+    #include <cerrno>
+    #include <fcntl.h>
+    #include <spawn.h>
+    #include <sys/wait.h>
+    #include <unistd.h>
+    extern char **environ;
+#endif
 #include <map>
 #include <set>
 #include <sstream>
+#include <cstring>
 
 std::map<ofxSCServer*, int> serverManager::serverSampleRates;
 
 namespace {
+#if defined(_WIN32)
+// Only the Windows path still goes through a shell; elsewhere scsynth is
+// spawned directly with an argument vector, so nothing needs quoting.
 std::string shellQuote(const std::string& value){
     std::string quoted = "'";
     for(char c : value){
@@ -32,6 +44,7 @@ std::string shellQuote(const std::string& value){
     quoted += "'";
     return quoted;
 }
+#endif
 
 std::string getScPluginPath(const std::string& scsynthPath){
     const std::string scRoot = scsynthPath.substr(0, scsynthPath.size() - 7);
@@ -547,39 +560,91 @@ int serverManager::renderNRT(const std::string& scorePath, const std::string& ou
 
     const auto &p = preferences;
     outputChannels = std::max(1, std::min(outputChannels, p.numOutputBusChannels));
-    std::ostringstream command;
-    command << shellQuote(scPath) << " -N " << shellQuote(scorePath) << " _ "
-            << shellQuote(outputPath) << " " << p.hardwareSampleRate
-            << " WAVE float"
-            << " -o " << outputChannels
-            << " -i " << p.numInputBusChannels
-            << " -a " << p.numAudioBusChannels
-            << " -c " << p.numControlBusChannels
-            << " -b " << p.numBuffers
-            << " -n " << p.maxNodes
-            << " -d " << p.maxSynthDefs
-            << " -m " << p.memSize
-            << " -w " << p.numWireBufs
-            << " -r " << p.numRGens
-            << " -l " << p.maxLogins
-            << " -z " << p.blockSize
-            << " -D 0";
+
+    std::vector<std::string> args{
+        scPath, "-N", scorePath, "_", outputPath,
+        ofToString(p.hardwareSampleRate), "WAVE", "float",
+        "-o", ofToString(outputChannels),
+        "-i", ofToString(p.numInputBusChannels),
+        "-a", ofToString(p.numAudioBusChannels),
+        "-c", ofToString(p.numControlBusChannels),
+        "-b", ofToString(p.numBuffers),
+        "-n", ofToString(p.maxNodes),
+        "-d", ofToString(p.maxSynthDefs),
+        "-m", ofToString(p.memSize),
+        "-w", ofToString(p.numWireBufs),
+        "-r", ofToString(p.numRGens),
+        "-l", ofToString(p.maxLogins),
+        "-z", ofToString(p.blockSize),
+        "-D", "0"
+    };
     if(!p.ugensPlugins.empty()){
         // scsynth does not search its standard plugin locations when -U is
         // supplied. Keep the bundled SuperCollider plugins available in NRT
         // renders, in addition to Oceanode's optional custom UGen folder.
-        command << " -U " << shellQuote(ofToDataPath(p.ugensPlugins, true) + ":" + getScPluginPath(scPath));
+        args.push_back("-U");
+        args.push_back(ofToDataPath(p.ugensPlugins, true) + ":" + getScPluginPath(scPath));
     }
+
     // scsynth prints one progress line per score packet in NRT mode, which
     // would bury the console -- but its failures ("SynthDef not found", bus
     // and node errors) go to the same stream, and those are exactly what is
     // needed when a render comes out silent. Keep the lot in a log beside the
     // audio rather than discarding it.
     const std::string logPath = outputPath + ".log";
-    command << " > " << shellQuote(logPath) << " 2>&1";
 
     ofLogNotice("serverManager") << "Rendering SuperCollider NRT score: " << outputPath;
-    const int result = std::system(command.str().c_str());
+    const uint64_t startedAt = ofGetElapsedTimeMillis();
+    int result = -1;
+
+#if defined(_WIN32)
+    std::ostringstream command;
+    for(const auto& arg : args) command << shellQuote(arg) << " ";
+    command << " > " << shellQuote(logPath) << " 2>&1";
+    result = std::system(command.str().c_str());
+#else
+    // Deliberately not std::system(): on macOS it is serialised by a global
+    // lock inside libc, so several render threads calling it queue up one
+    // behind another and parallel rendering quietly becomes sequential --
+    // four files finishing exactly one render apart rather than together.
+    // posix_spawn has no such lock, and skipping the shell means no quoting
+    // and no argument whose spacing can be misread.
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for(auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
+    argv.push_back(nullptr);
+
+    posix_spawn_file_actions_t actions;
+    if(posix_spawn_file_actions_init(&actions) != 0){
+        ofLogError("serverManager") << "NRT render: cannot prepare the child process";
+        return -1;
+    }
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, logPath.c_str(),
+                                     O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
+
+    pid_t pid = -1;
+    const int spawned = posix_spawn(&pid, scPath.c_str(), &actions, nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    if(spawned != 0){
+        ofLogError("serverManager") << "NRT render: could not start " << scPath
+                                    << " (" << strerror(spawned) << ")";
+        return -1;
+    }
+
+    int status = 0;
+    while(waitpid(pid, &status, 0) < 0){
+        if(errno != EINTR){
+            ofLogError("serverManager") << "NRT render: lost track of scsynth (" << strerror(errno) << ")";
+            return -1;
+        }
+    }
+    result = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+
+    const double seconds = (ofGetElapsedTimeMillis() - startedAt) / 1000.0;
+    ofLogNotice("serverManager") << "NRT render finished in " << seconds << " s: " << outputPath
+                                 << " (real-time memory " << (p.memSize / 1024) << " MB)";
 
     // Surface anything that looks like a failure, so a silent render explains
     // itself in the console instead of only in the log.

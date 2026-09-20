@@ -406,6 +406,7 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
     const bool removeDC = nrtRemoveDC;
     nrtRenderThread = std::thread([this, manager, jobs, outputChannels, workerCount, removeDC](){
         nrtRenderResult = 0;
+        const uint64_t startedAt = ofGetElapsedTimeMillis();
         // Every job is an independent scsynth process over the same score, so
         // they can run side by side; sequentially, a set of stems costs one
         // full pass over the patch per file.
@@ -430,6 +431,14 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
             });
         }
         for(auto& worker : workers) worker.join();
+
+        // Each job logs its own duration. If the total is close to their sum
+        // the jobs did not overlap, whatever the worker count says; if it is
+        // close to the longest one, they did.
+        const double seconds = (ofGetElapsedTimeMillis() - startedAt) / 1000.0;
+        ofLogNotice("ofxOceanodeSuperColliderController")
+            << "NRT: rendered " << jobs.size() << " file(s) in " << seconds
+            << " s, up to " << workerCount << " at a time";
         nrtRendering = false;
     });
 }
