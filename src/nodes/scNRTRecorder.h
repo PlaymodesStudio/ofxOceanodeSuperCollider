@@ -138,10 +138,12 @@ private:
             state.fraction = controller->getNRTCaptureProgress();
             state.busy = true;
         }else if(controller->isNRTRendering()){
+            // Files finished, not "now on file N": the jobs run concurrently,
+            // so there is no single current one. Starting at 0/5 says so.
             const int total = std::max(1, controller->getNRTRenderJobCount());
-            const int current = std::min(total, controller->getNRTRenderJobsDone() + 1);
+            const int done = std::min(total, controller->getNRTRenderJobsDone());
             state.color = kRendering;
-            state.caption = "Rendering " + ofToString(current) + "/" + ofToString(total);
+            state.caption = "Rendering " + ofToString(done) + "/" + ofToString(total);
             state.fraction = controller->getNRTRenderProgress();
             state.busy = true;
         }else if(controller->isNRTArmed()){
@@ -209,7 +211,7 @@ private:
         drawList->AddRect(min, max, kTroughEdge, kRound * zoom);
 
         std::string caption = state.caption;
-        if(state.fraction >= 0.0f) caption += "  " + ofToString(state.fraction * 100.0f, 0) + "%";
+        if(state.fraction >= 0.0f) caption += "  " + ofToString(state.fraction * 100.0f, 1) + "%";
         const ImVec2 textSize = ImGui::CalcTextSize(caption.c_str());
         if(textSize.x < span - 4.0f * zoom){
             drawList->AddText(ImVec2(min.x + 4.0f * zoom,

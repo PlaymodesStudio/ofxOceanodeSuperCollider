@@ -364,12 +364,22 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
     }
 
     // What the progress bar reads while the render runs. scsynth reports no
-    // progress, so the only live signal is the output file growing: every job
-    // renders the same span at the same rate and width, so one expected size
-    // covers them all.
+    // progress of its own, so the only live signal is the output files
+    // growing: every job renders the same span at the same rate and width, so
+    // one expected size covers them all.
     nrtRenderOutputs.clear();
     for(const auto& job : jobs) nrtRenderOutputs.push_back(job.output);
     nrtRenderJobsDone = 0;
+
+    // Empty each target before any worker starts. A file left by an earlier
+    // render is exactly the size a finished one will be, so progress measured
+    // from file size would count it as complete the moment the render begins
+    // -- with four stale stems and one real job the bar jumps straight to 80%
+    // and then barely moves. Truncating also means a failed render leaves an
+    // empty file rather than the previous take wearing the new take's name.
+    for(const auto& path : nrtRenderOutputs){
+        std::ofstream truncate(path, std::ios::binary | std::ios::trunc);
+    }
     const long long frames = (long long)std::llround((double)duration *
                                                      (double)manager->preferences.hardwareSampleRate);
     // 44-byte canonical WAVE header, 32-bit float samples.
