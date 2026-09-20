@@ -65,6 +65,7 @@ public:
     
     int getLastSynthID(ofxSCServer* server) override;
 
+    void resendParametersForNRT() override { resendParams.notify(); }
     ofEvent<void> resendParams;
 
     static oldSynthdefDesc readAndCreateSynthdef(string file);

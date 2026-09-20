@@ -158,6 +158,7 @@ public:
 	int getOutputBusIndex(ofxSCServer* server, int index);
 	int getLastSynthID(ofxSCServer* server);
 
+	void resendParametersForNRT() override { resendParams.notify(); }
 	ofEvent<void> resendParams;
 	
 protected:

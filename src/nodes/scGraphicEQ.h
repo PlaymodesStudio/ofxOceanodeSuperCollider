@@ -54,6 +54,7 @@ public:
     int  getLastSynthID(ofxSCServer* server) override;
 
     // Events for parameter synchronization (matching scSynthdef pattern)
+    void resendParametersForNRT() override { resendParams.notify(); }
     ofEvent<void> resendParams;
     ofEvent<std::pair<ofxSCServer*, int>> resetAudioRateBusAssignments;
 

@@ -57,6 +57,10 @@ void scOutput::setup(){
 
 }
 
+int scOutput::getSynthNodeID() const{
+    return synth != nullptr ? synth->nodeID : -1;
+}
+
 void scOutput::setVolume(float _volume){
     volume = _volume;
     if(synth != nullptr){
@@ -96,7 +100,7 @@ void scOutput::deactivate(){
 
 void scOutput::buildSynth(ofxSCServer *server){
     if(server == outputServers[serverIndex]->getServer()){
-        synth = new ofxSCSynth("output", server);
+        synth = new ofxSCSynth(getSynthDefName(), server);
     }
 }
 

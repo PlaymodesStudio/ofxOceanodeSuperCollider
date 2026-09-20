@@ -69,6 +69,11 @@ public:
     
     int getLastSynthID(ofxSCServer* server) override;
     
+    void resendParametersForNRT() override { resendParams.notify(); }
+    // The generic mixer SynthDefs are mixer points as much as the C++ one.
+    bool isNRTStemPoint() const override {
+        return synthdefName.rfind("PolyMixer", 0) == 0 || synthdefName.rfind("Mixer", 0) == 0;
+    }
     ofEvent<void> resendParams;
     ofEvent<std::pair<ofxSCServer*, int>> resetAudioRateBusAssignments;
     ofEvent<std::tuple<ofxSCServer*, scNode*, int>> setAudioRateBusAssignment;

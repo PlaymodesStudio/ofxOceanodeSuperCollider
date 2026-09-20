@@ -34,6 +34,12 @@ public:
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;
     void moveSynthBefore(ofxSCServer* server, int nodeID) override;
+    // The master: its input is the full mix.
+    bool isNRTStemPoint() const override { return true; }
+    // The SynthDef this node instantiates. Editing a captured NRT score means
+    // finding that synth inside the score, which is done by this name.
+    static const char* getSynthDefName(){ return "output"; }
+    int getSynthNodeID() const;
     void free(ofxSCServer* server) override;
     
     bool isInputConnected(){return inputs[0]->getNodeRef() != nullptr;}

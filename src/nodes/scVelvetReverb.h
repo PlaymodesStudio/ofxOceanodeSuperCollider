@@ -50,6 +50,7 @@ public:
     int  getOutputBusIndex(ofxSCServer* server, int index) override;
     int  getLastSynthID(ofxSCServer* server)               override;
 
+    void resendParametersForNRT() override { resendParams.notify(); }
     ofEvent<void> resendParams;
     int           oldNumChannels = 0;
 

@@ -220,6 +220,7 @@ public:
     }
 
     // Public so external code / preset lifecycle can re-push params
+    void resendParametersForNRT() override { resendParams.notify(); }
     ofEvent<void> resendParams;
 
 private:

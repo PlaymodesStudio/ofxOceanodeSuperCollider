@@ -58,6 +58,7 @@ public:
     void presetRecallAfterSettingParameters(ofJson& json) override;
     void loadBeforeConnections(ofJson& json) override;
 
+    void resendParametersForNRT() override { resendParams.notify(); }
     ofEvent<void> resendParams;
     int oldNumChannels = 0;
 

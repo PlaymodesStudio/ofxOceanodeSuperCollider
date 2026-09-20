@@ -78,6 +78,7 @@ public:
     void activate() override;
     void deactivate() override;
 
+    void resendParametersForNRT() override { resendParams.notify(); }
     ofEvent<void> resendParams;
 
     void presetSave(ofJson &json) override;

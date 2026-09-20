@@ -51,6 +51,9 @@ private:
 	std::map<ofxSCServer*, std::map<int, int>> outputBuses;
 	
 	// Event system for parameter synchronization (following scSynthDef pattern)
+public:
+	void resendParametersForNRT() override { resendParams.notify(); }
+private:
 	ofEvent<void> resendParams;
 	ofEvent<std::pair<ofxSCServer*, int>> resetAudioRateBusAssignments;
 	

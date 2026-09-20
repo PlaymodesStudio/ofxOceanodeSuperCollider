@@ -45,9 +45,12 @@ public:
 	
 	void setOutputBus(ofxSCServer* server, int index, int bus);
 	void setInputBus(ofxSCServer* server, scNode* node, int bus);
+	// Every connected track input is a stem.
+	bool isNRTStemPoint() const override { return true; }
 	
 	int getOutputBusIndex(ofxSCServer* server, int index);
 	
+	void resendParametersForNRT() override { resendParams.notify(); }
 	ofEvent<void> resendParams;
 	void update(ofEventArgs &args) override;
 	void draw(ofEventArgs &args) override;

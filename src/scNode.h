@@ -56,6 +56,17 @@ public:
     
     virtual void buildSynth(ofxSCServer* server){};
 
+    // A node whose inputs are each worth rendering on their own: a mixer
+    // point. Every connected input of one becomes a stem in an NRT render.
+    virtual bool isNRTStemPoint() const { return false; };
+
+    // Push every parameter's current value, whether or not it changed. A
+    // score needs the patch's complete state at time zero: a parameter nobody
+    // has touched is never sent, so the render would run on the SynthDef's own
+    // default until the first change -- a trigger left at its default fires a
+    // note at the top of the render that was never played.
+    virtual void resendParametersForNRT(){};
+
     // Called once while the realtime server is still reachable, immediately
     // before an NRT capture switches the server to capture-only. A node whose
     // state lives inside the server (a VST plugin's program, say) uses this to
