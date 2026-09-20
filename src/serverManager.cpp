@@ -322,9 +322,14 @@ bool serverManager::beginNRTCapture(){
     // Once capture starts nothing is transmitted, so no reply can arrive.
     prepareNodesForNRTCapture();
 
-    // Keep the live graph out of the score while using the normal graph
-    // builder to replay its complete state at score time zero.
-    server->beginNRTCapture(true);
+    // Capture, but keep transmitting. A patch whose visuals are driven by
+    // audio analysis coming back from the server -- an envelope follower
+    // polling a control bus, say -- depends on those replies: in capture-only
+    // mode the requests never leave, nothing answers, the analysis freezes,
+    // and every texture and trigger derived from it freezes with it. The
+    // score stays correct either way, because event times come from the
+    // frame-stepped transport rather than from when a message went out.
+    server->beginNRTCapture(false);
     teardownGraphForPresetLoad();
     server->clearNRTScore();
     server->setNRTTime(0.0);
