@@ -55,6 +55,15 @@ public:
     int getNumOutputs(){return outputs.size();};
     
     virtual void buildSynth(ofxSCServer* server){};
+
+    // Called once while the realtime server is still reachable, immediately
+    // before an NRT capture switches the server to capture-only. A node whose
+    // state lives inside the server (a VST plugin's program, say) uses this to
+    // pull that state back, because once capture starts nothing is transmitted
+    // and no reply can ever arrive.
+    virtual void prepareForNRTCapture(){};
+    // True while that pull is still in flight.
+    virtual bool isNRTCapturePreparationPending() const { return false; };
     virtual void createSynth(ofxSCServer* server){};
     virtual void moveSynthBefore(ofxSCServer* server, int nodeID){};
     virtual void free(ofxSCServer* server){};

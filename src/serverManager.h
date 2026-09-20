@@ -115,6 +115,7 @@ public:
     ofEvent<void> graphComputed;
 private:
     void loadNRTSynthdefs();
+    void prepareNodesForNRTCapture();
     
     void loadSynthdefsFromPreset(const std::string& path, bool forceLoad = false, bool waitForLoad = true);
 

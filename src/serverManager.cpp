@@ -316,6 +316,11 @@ void serverManager::loadDefs(){
 bool serverManager::beginNRTCapture(){
     if(server == nullptr || !initialized) return false;
 
+    // Must happen first: some nodes hold their real state inside the server
+    // rather than in their own parameters, and pulling it back needs a reply.
+    // Once capture starts nothing is transmitted, so no reply can arrive.
+    prepareNodesForNRTCapture();
+
     // Keep the live graph out of the score while using the normal graph
     // builder to replay its complete state at score time zero.
     server->beginNRTCapture(true);
@@ -333,6 +338,36 @@ bool serverManager::beginNRTCapture(){
     loadNRTSynthdefs();
     recomputeGraph();
     return true;
+}
+
+void serverManager::prepareNodesForNRTCapture(){
+    if(server == nullptr) return;
+
+    bool anyPending = false;
+    for(auto node : connectedNodes){
+        if(node == nullptr) continue;
+        node->prepareForNRTCapture();
+        anyPending = anyPending || node->isNRTCapturePreparationPending();
+    }
+    if(!anyPending) return;
+
+    // Pump the server so the replies that complete those pulls arrive. The
+    // timeout keeps a plugin that never answers from blocking the render; the
+    // capture then simply falls back to the last state the node had cached.
+    const uint64_t deadline = ofGetElapsedTimeMillis() + 2000;
+    while(ofGetElapsedTimeMillis() < deadline){
+        server->process();
+        anyPending = false;
+        for(auto node : connectedNodes){
+            if(node != nullptr && node->isNRTCapturePreparationPending()){
+                anyPending = true;
+                break;
+            }
+        }
+        if(!anyPending) return;
+        ofSleepMillis(5);
+    }
+    ofLogWarning("serverManager") << "NRT capture: some nodes did not finish saving their state in time";
 }
 
 void serverManager::loadNRTSynthdefs(){

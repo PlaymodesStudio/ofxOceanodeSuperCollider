@@ -1489,6 +1489,64 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 	}
 }
 
+void scVST::prepareForNRTCapture() {
+	// Pull the plugin's current program back out of the server while it can
+	// still answer. saveFXPToCache() refreshes cachedFXP from the running
+	// plugin, so an edit made in the plugin's own editor -- which Oceanode
+	// never sees as a parameter change -- still reaches the render.
+	nrtStatePath.clear();
+	saveFXPToCache();
+}
+
+bool scVST::isNRTCapturePreparationPending() const {
+	return fxpCacheSaveInProgress.load(std::memory_order_acquire);
+}
+
+bool scVST::sendNRTStateRestore(ofxSCServer* server, int nodeID) {
+	if(server == nullptr) return false;
+
+	// Prefer what the plugin is holding right now; fall back to the program
+	// the Oceanode preset carried. A pointer, not a reference: a ternary
+	// mixing these with an empty temporary would silently copy the blob.
+	const std::vector<uint8_t>* state = nullptr;
+	if(fxpCacheValid && !cachedFXP.empty()) state = &cachedFXP;
+	else if(hasSavedFXPData && !savedFXPData.empty()) state = &savedFXPData;
+	if(state == nullptr) {
+		ofLogWarning("scVST") << "NRT capture: no stored plugin state for '"
+							  << getNodeCacheKey() << "'; it will render at its defaults";
+		return false;
+	}
+
+	// One file per capture, shared by every instance: the render runs later,
+	// on another thread, so it has to outlive this function.
+	if(nrtStatePath.empty()) {
+		try {
+			const std::string path = createTempFXPPath();
+			std::ofstream file(path, std::ios::binary);
+			if(!file.is_open()) {
+				ofLogError("scVST") << "NRT capture: cannot write plugin state to " << path;
+				return false;
+			}
+			file.write(reinterpret_cast<const char*>(state->data()), state->size());
+			file.close();
+			nrtStatePath = path;
+		} catch(const std::exception& e) {
+			ofLogError("scVST") << "NRT capture: error writing plugin state: " << e.what();
+			return false;
+		}
+	}
+
+	ofxOscMessage readMsg;
+	readMsg.setAddress("/u_cmd");
+	readMsg.addIntArg(nodeID);
+	readMsg.addIntArg(2);
+	readMsg.addStringArg("/program_read");
+	readMsg.addStringArg(nrtStatePath);
+	readMsg.addIntArg(1); // async, as in realtime
+	server->sendMsg(readMsg);
+	return true;
+}
+
 void scVST::applyFXPToInstance(int nodeID) {
 	if(!hasSavedFXPData) {
 		ofLogWarning("scVST") << "No FXP data to apply to instance " << nodeID;
@@ -4488,29 +4546,42 @@ void scVST::createSynth(ofxSCServer* server){
 	if (!currentPluginPath.empty()) {
 		ofLogNotice("scVST") << "📤 Loading plugin on all instances (parallel): " << currentPluginPath;
 		
+		// An NRT capture records these messages into a score instead of
+		// sending them, so nothing ever replies and the /vst_open handshake
+		// that normally restores the plugin's program cannot happen. The
+		// state is written straight after each /open instead, and the
+		// offline renderer has no use for an editor window.
+		const bool capturing = server->isNRTCapturing();
+
 		// Send all open commands without delays
 		for(int i = 0; i < synthInstances[server].size(); i++) {
 			if(synthInstances[server][i] != nullptr) {
+				const int nodeID = synthInstances[server][i]->nodeID;
 				// Open the VST plugin - NO DELAY between instances
 				ofxOscMessage openMsg;
 				openMsg.setAddress("/u_cmd");
-				openMsg.addIntArg(synthInstances[server][i]->nodeID);
+				openMsg.addIntArg(nodeID);
 				openMsg.addIntArg(2); // Keep synthIndex as 2 per Oceanode requirements
 				openMsg.addStringArg("/open");
 				openMsg.addStringArg(currentPluginPath);
-				openMsg.addIntArg(1); // Request GUI editor
+				openMsg.addIntArg(capturing ? 0 : 1); // Request GUI editor
 				openMsg.addIntArg(enableMultithreading.get() ? 1 : 0);
 				openMsg.addIntArg(0); // Normal mode
 				server->sendMsg(openMsg);
-				
+
+				if(capturing) sendNRTStateRestore(server, nodeID);
+
 				//ofLogVerbose("scVST") << "Sent plugin open to instance " << i;
 			}
 		}
 		
-		// Brief processing time to kickstart plugin loading
-		for(int i = 0; i < 5; i++) {
-			server->process();
-			ofSleepMillis(10);
+		// Brief processing time to kickstart plugin loading. Pointless while
+		// capturing: nothing was transmitted, so there is nothing to answer.
+		if(!capturing) {
+			for(int i = 0; i < 5; i++) {
+				server->process();
+				ofSleepMillis(10);
+			}
 		}
 		
 		pluginLoaded = true;

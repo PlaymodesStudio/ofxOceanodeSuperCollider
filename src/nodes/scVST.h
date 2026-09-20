@@ -282,6 +282,18 @@ private:
 	static const uint64_t FXP_WRITE_TIMEOUT_MS = 10000;
 
 	void applyFXPToInstance(int nodeID);
+
+	// --- Non-realtime capture -------------------------------------------
+	// A VST's real state lives inside the plugin, and normally only reaches
+	// the server through the /vst_open handshake. An NRT score has no
+	// handshake, so the state has to be pulled back before capture starts
+	// and written into the score unconditionally afterwards.
+	void prepareForNRTCapture() override;
+	bool isNRTCapturePreparationPending() const override;
+	// Emits /program_read for nodeID straight after its /open, with no reply
+	// awaited. Returns false when there is no state to restore.
+	bool sendNRTStateRestore(ofxSCServer* server, int nodeID);
+	std::string nrtStatePath;
 	void handleVSTPresetWrite(ofxOscMessage& msg);
 	void handleVSTPresetRead(ofxOscMessage& msg);
 	std::string createTempFXPPath();
