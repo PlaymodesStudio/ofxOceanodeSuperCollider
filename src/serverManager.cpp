@@ -357,6 +357,17 @@ bool serverManager::beginNRTCapture(){
     server->sendMsg(group);
 
     loadNRTSynthdefs();
+    // Samples are read once when a preset loads, so a capture that starts
+    // later never sees the command. Replay them here, while the score is
+    // still at time zero and before any synth exists to read them.
+    const int unrecoverableBuffers = server->replayBuffersForNRT();
+    if(unrecoverableBuffers > 0){
+        ofLogWarning("serverManager")
+            << "NRT capture: " << unrecoverableBuffers
+            << " buffer(s) hold audio that was recorded or generated into the"
+            << " server rather than read from a file; those will be silent in"
+            << " the render";
+    }
     recomputeGraph();
     return true;
 }
