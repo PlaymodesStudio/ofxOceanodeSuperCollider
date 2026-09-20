@@ -11,6 +11,9 @@
 #include "serverManager.h"
 #include "ofxOceanodeSuperColliderConfig.h"
 #include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <fstream>
 #if OFXOCEANODESC_HAS_TIMELINE
 #include "ofxOceanodeTime.h"
 #include <array>
@@ -43,6 +46,7 @@ ofxOceanodeSuperColliderController::~ofxOceanodeSuperColliderController(){
 #if OFXOCEANODESC_HAS_TIMELINE
 void ofxOceanodeSuperColliderController::update(){
     joinFinishedNRTThread();
+    updateNRTArming();
     if(!nrtCaptureActive) return;
 
     const double currentTime = ofxOceanodeTime::getInstance()->getGlobalTimeState().time;
@@ -62,8 +66,52 @@ void ofxOceanodeSuperColliderController::startNRTRender(){
     beginNRTRecording(nrtServer, nrtOutputChannels, nrtOutputPath, false);
 }
 
-bool ofxOceanodeSuperColliderController::beginNRTRecording(int serverIndex, int outputChannels, const std::string& outputPath, bool manualStop){
+std::vector<ofxOceanodeSuperColliderController::NRTSource>
+ofxOceanodeSuperColliderController::buildNRTSources(serverManager* manager) const{
+    using Kind = NRTSource::Kind;
+    std::vector<NRTSource> sources;
+    sources.push_back({Kind::Master, "Master", "", -1});
+    if(manager == nullptr) return sources;
+
+    const auto stems = manager->getNRTStems();
+    if(stems.empty()) return sources;
+
+    sources.push_back({Kind::AllStems, "All stems", "", -1});
+
+    // One group per mixer next, in the order the mixers appear in the graph,
+    // so the common case -- record this mixer's tracks -- stays near the top.
+    std::vector<std::string> mixers;
+    for(const auto& stem : stems){
+        if(std::find(mixers.begin(), mixers.end(), stem.mixerName) != mixers.end()) continue;
+        mixers.push_back(stem.mixerName);
+    }
+    for(const auto& mixer : mixers){
+        sources.push_back({Kind::Mixer, mixer + " (all)", mixer, -1});
+    }
+
+    // Then every stem on its own, labelled by the mixer it belongs to.
+    for(std::size_t i = 0; i < stems.size(); i++){
+        sources.push_back({Kind::Stem, stems[i].mixerName + " / " + stems[i].name,
+                           stems[i].mixerName, (int)i});
+    }
+    return sources;
+}
+
+std::vector<ofxOceanodeSuperColliderController::NRTSource>
+ofxOceanodeSuperColliderController::getNRTSources(int serverIndex) const{
+    if(serverIndex < 0 || serverIndex >= (int)outputServers.size()) return buildNRTSources(nullptr);
+    return buildNRTSources(outputServers[serverIndex]);
+}
+
+std::vector<std::string> ofxOceanodeSuperColliderController::getNRTSourceNames(int serverIndex) const{
+    std::vector<std::string> names;
+    for(const auto& source : getNRTSources(serverIndex)) names.push_back(source.label);
+    return names;
+}
+
+bool ofxOceanodeSuperColliderController::armNRTRecording(int serverIndex, int outputChannels, const std::string& outputPath){
     if(nrtCaptureActive || nrtRendering.load() || outputServers.empty()) return false;
+    if(nrtArmState != NRTArmState::Disarmed) return isNRTArmed();
     joinFinishedNRTThread();
 
     if(serverIndex < 0 || serverIndex >= (int)outputServers.size()) serverIndex = 0;
@@ -73,15 +121,132 @@ bool ofxOceanodeSuperColliderController::beginNRTRecording(int serverIndex, int 
         nrtStatus = "Selected server is not available";
         return false;
     }
-    if(!manager->beginNRTCapture()){
-        nrtStatus = "Server must be booted and initialized before NRT capture";
+
+    // Any rebuild we cause ourselves is expected; a rebuild from anywhere else
+    // means the patch changed and whatever we armed is stale.
+    nrtGraphListeners.unsubscribeAll();
+    nrtSelfRebuild = true;
+    const bool started = manager->beginNRTCapture();
+    nrtSelfRebuild = false;
+    if(!started){
+        nrtStatus = "Server must be booted and initialized before arming";
         return false;
     }
 
-    int maxChannels = std::max(1, manager->preferences.numOutputBusChannels);
+    const int maxChannels = std::max(1, manager->preferences.numOutputBusChannels);
     nrtCaptureOutputChannels = std::max(1, std::min(outputChannels, maxChannels));
     nrtCaptureOutputPath = outputPath.empty() ? nrtOutputPath : outputPath;
+
+    nrtGraphListeners.push(manager->graphComputed.newListener([this](){
+        if(nrtSelfRebuild) return;
+        if(nrtArmState == NRTArmState::Disarmed || nrtCaptureActive) return;
+        ofLogWarning("ofxOceanodeSuperColliderController")
+            << "NRT: the patch changed after arming; disarming";
+        disarmNRTRecording();
+    }));
+
+    // Ask the server to report when the setup has actually finished. Loading
+    // the SynthDef tree alone takes seconds, and the parameter state that
+    // follows it is the part that has to land at score time zero.
+    manager->getServer()->requestNRTSync();
+    // Arming can take many seconds. Whatever the patch plays while it waits
+    // belongs to before the recording, not to score time zero.
+    manager->getServer()->setNRTEventsSuppressed(true);
+
+    nrtSettleDeadline = ofGetElapsedTimeMillis() + 60000;
+    nrtArmState = NRTArmState::Settling;
+    nrtStatus = "Arming: loading SynthDefs";
+    return true;
+}
+
+void ofxOceanodeSuperColliderController::updateNRTArming(){
+    if(nrtArmState != NRTArmState::Settling || nrtCaptureActive) return;
+    if(nrtServer < 0 || nrtServer >= (int)outputServers.size()) return;
+    serverManager* manager = outputServers[nrtServer];
+    if(manager == nullptr || manager->getServer() == nullptr) return;
+
+    const bool timedOut = ofGetElapsedTimeMillis() > nrtSettleDeadline;
+    const bool syncPending = manager->getServer()->isNRTSyncPending();
+
+    // The only thing that has to finish before arming is the server's own
+    // work. /sync is answered once every asynchronous command issued before it
+    // has completed, which here means the SynthDef tree has finished loading
+    // and the synths exist.
+    //
+    // Waiting for the capture to also fall quiet does not work: a patch
+    // resends some parameters every frame whether or not they changed, so the
+    // score never stops growing and arming would never finish. It is not
+    // needed either -- the complete parameter state is written explicitly at
+    // score time zero when recording starts.
+    if(syncPending && !timedOut){
+        nrtStatus = "Arming: loading SynthDefs";
+        return;
+    }
+    if(syncPending){
+        ofLogWarning("ofxOceanodeSuperColliderController")
+            << "NRT: the server never answered /sync; arming anyway";
+    }
+
+    // From here until recording starts, every frame would otherwise stack more
+    // messages onto score time zero.
+    manager->getServer()->setNRTCaptureSuspended(true);
+    nrtArmState = NRTArmState::Armed;
+    nrtStatus = "Armed: " + ofToString((int)manager->getNRTEventCount()) + " events at time zero";
+    ofLogNotice("ofxOceanodeSuperColliderController") << "NRT: " << nrtStatus;
+}
+
+void ofxOceanodeSuperColliderController::disarmNRTRecording(){
+    if(nrtArmState == NRTArmState::Disarmed) return;
+    nrtGraphListeners.unsubscribeAll();
+    if(nrtServer >= 0 && nrtServer < (int)outputServers.size()){
+        serverManager* manager = outputServers[nrtServer];
+        if(manager != nullptr){
+            if(manager->getServer() != nullptr){
+                manager->getServer()->setNRTEventsSuppressed(false);
+                manager->getServer()->setNRTCaptureSuspended(false);
+                manager->getServer()->setNRTTimeProviderEnabled(false);
+            }
+            // Puts the graph back on the realtime server.
+            nrtSelfRebuild = true;
+            manager->endNRTCapture(-1.0);
+            nrtSelfRebuild = false;
+        }
+    }
+    nrtArmState = NRTArmState::Disarmed;
+    nrtStatus = "Disarmed";
+}
+
+bool ofxOceanodeSuperColliderController::beginNRTRecording(int serverIndex, int outputChannels, const std::string& outputPath, bool manualStop){
+    if(nrtCaptureActive || nrtRendering.load() || outputServers.empty()) return false;
+
+    if(nrtArmState != NRTArmState::Armed){
+        // Recording without arming still works, but the graph is settling while
+        // the clock already runs, so the opening of the render arrives late.
+        ofLogWarning("ofxOceanodeSuperColliderController")
+            << "NRT: recording was started before arming finished; the first"
+            << " moments of the render may be missing their initial state";
+        if(nrtArmState == NRTArmState::Disarmed &&
+           !armNRTRecording(serverIndex, outputChannels, outputPath)) return false;
+    }
+
+    serverManager* manager = outputServers[nrtServer];
+    if(manager == nullptr || manager->getServer() == nullptr){
+        nrtStatus = "Selected server is not available";
+        return false;
+    }
     nrtManualStop = manualStop;
+
+    // Everything captured from here belongs on the transport's clock; what came
+    // before it is the graph's opening state and is already at time zero.
+    manager->getServer()->setNRTEventsSuppressed(false);
+    manager->getServer()->setNRTCaptureSuspended(false);
+
+    // Write the patch's complete state before the clock starts. Parameters are
+    // only sent when they change, so one that nobody has touched since the
+    // preset loaded has never been sent at all -- the render would run on the
+    // SynthDef's default until its first change. A trigger left at its default
+    // fires a note at the top of the render that was never played.
+    manager->resendAllParametersForNRT();
 
     manager->getServer()->setNRTTimeProvider([](){
         return ofxOceanodeTime::getInstance()->getGlobalTimeState().time;
@@ -94,6 +259,8 @@ bool ofxOceanodeSuperColliderController::beginNRTRecording(int serverIndex, int 
     ofxOceanodeTime::getInstance()->resetTransportToStart();
     ofxOceanodeTime::getInstance()->setIsPlaying(true);
     nrtCaptureActive = true;
+    nrtArmState = NRTArmState::Disarmed;
+    nrtGraphListeners.unsubscribeAll();
     nrtStatus = "Capturing frame-stepped OSC score";
     return true;
 }
@@ -137,12 +304,259 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
         return;
     }
 
+    // One job per file. Each is the same capture; a stem only differs by which
+    // bus the file-writing synth reads, so no second capture is needed.
+    struct renderJob { std::string score, output, label; };
+    std::vector<renderJob> jobs;
+
+    const auto stems = manager->getNRTStems();
+    const std::string base = ofFilePath::removeExt(outputPath);
+    const std::string ext = "." + ofFilePath::getFileExt(outputPath);
+
+    auto addStem = [&](const serverManager::NRTStem& stem, const std::string& path){
+        const std::string stemScore = path + ".osc";
+        if(!manager->writeNRTStemScore(stemScore, duration, stem.bus)){
+            ofLogWarning("ofxOceanodeSuperColliderController")
+                << "NRT: could not write the score for stem " << stem.name;
+            return;
+        }
+        jobs.push_back({stemScore, path, stem.name});
+    };
+
+    // Same list the Source dropdown was built from, so an index means the same
+    // thing here as it did in the node.
+    const auto sources = buildNRTSources(manager);
+    const NRTSource* selected = (nrtSource > 0 && nrtSource < (int)sources.size())
+                              ? &sources[nrtSource] : nullptr;
+    const bool withMaster = nrtRecordStems;
+
+    // Every file is named after the requested output path with what it holds
+    // appended, so a set of renders sorts together and the mix is never
+    // mistaken for a stem -- the requested path is never written to itself.
+    const std::string masterPath = base + "_MasterMix" + ext;
+    if(selected == nullptr || withMaster) jobs.push_back({scorePath, masterPath, "master"});
+
+    if(selected != nullptr){
+        switch(selected->kind){
+            case NRTSource::Kind::AllStems:
+                for(const auto& stem : stems) addStem(stem, base + "_" + stem.name + ext);
+                break;
+            case NRTSource::Kind::Mixer:
+                for(const auto& stem : stems){
+                    if(stem.mixerName != selected->mixerName) continue;
+                    addStem(stem, base + "_" + stem.name + ext);
+                }
+                break;
+            case NRTSource::Kind::Stem:
+                if(selected->stemIndex >= 0 && selected->stemIndex < (int)stems.size()){
+                    const auto& stem = stems[selected->stemIndex];
+                    addStem(stem, base + "_" + stem.name + ext);
+                }
+                break;
+            case NRTSource::Kind::Master:
+                break;
+        }
+    }
+
+    if(jobs.empty()){
+        nrtStatus = "Nothing to render";
+        return;
+    }
+
+    // What the progress bar reads while the render runs. scsynth reports no
+    // progress, so the only live signal is the output file growing: every job
+    // renders the same span at the same rate and width, so one expected size
+    // covers them all.
+    nrtRenderOutputs.clear();
+    for(const auto& job : jobs) nrtRenderOutputs.push_back(job.output);
+    nrtRenderJobsDone = 0;
+    const long long frames = (long long)std::llround((double)duration *
+                                                     (double)manager->preferences.hardwareSampleRate);
+    // 44-byte canonical WAVE header, 32-bit float samples.
+    nrtRenderExpectedBytes = 44 + frames * (long long)std::max(1, outputChannels) * 4;
+
     nrtRendering = true;
-    nrtStatus = "Rendering WAV with scsynth -N";
-    nrtRenderThread = std::thread([this, manager, scorePath, outputPath, outputChannels](){
-        nrtRenderResult = manager->renderNRT(scorePath, outputPath, outputChannels);
+    // ofClamp() is float-only; keep this integral so std::min deduces.
+    const int allowedParallel = std::max(1, std::min(8, nrtMaxParallelRenders));
+    const int workerCount = std::max(1, std::min((int)jobs.size(), allowedParallel));
+    nrtStatus = "Rendering " + ofToString((int)jobs.size()) + " file(s) with scsynth -N";
+    const bool removeDC = nrtRemoveDC;
+    nrtRenderThread = std::thread([this, manager, jobs, outputChannels, workerCount, removeDC](){
+        nrtRenderResult = 0;
+        // Every job is an independent scsynth process over the same score, so
+        // they can run side by side; sequentially, a set of stems costs one
+        // full pass over the patch per file.
+        std::atomic<std::size_t> nextJob{0};
+        std::vector<std::thread> workers;
+        workers.reserve(workerCount);
+        for(int worker = 0; worker < workerCount; worker++){
+            workers.emplace_back([this, manager, &jobs, outputChannels, &nextJob, removeDC](){
+                for(;;){
+                    const std::size_t i = nextJob.fetch_add(1);
+                    if(i >= jobs.size()) return;
+                    const int result = manager->renderNRT(jobs[i].score, jobs[i].output, outputChannels);
+                    if(result != 0){
+                        nrtRenderResult = result;
+                        ofLogError("ofxOceanodeSuperColliderController")
+                            << "NRT: render failed for " << jobs[i].label;
+                    }else if(removeDC){
+                        removeDCOffsetInPlace(jobs[i].output);
+                    }
+                    nrtRenderJobsDone.fetch_add(1);
+                }
+            });
+        }
+        for(auto& worker : workers) worker.join();
         nrtRendering = false;
     });
+}
+
+bool ofxOceanodeSuperColliderController::removeDCOffsetInPlace(const std::string& wavPath,
+                                                               double cornerHz){
+    std::fstream file(wavPath, std::ios::in | std::ios::out | std::ios::binary);
+    if(!file.is_open()){
+        ofLogWarning("ofxOceanodeSuperColliderController") << "DC removal: cannot open " << wavPath;
+        return false;
+    }
+
+    auto readU32 = [&file](std::uint32_t& value){
+        unsigned char raw[4];
+        if(!file.read(reinterpret_cast<char*>(raw), 4)) return false;
+        value = (std::uint32_t)raw[0] | ((std::uint32_t)raw[1] << 8)
+              | ((std::uint32_t)raw[2] << 16) | ((std::uint32_t)raw[3] << 24);
+        return true;
+    };
+    auto readU16 = [&file](std::uint16_t& value){
+        unsigned char raw[2];
+        if(!file.read(reinterpret_cast<char*>(raw), 2)) return false;
+        value = (std::uint16_t)((std::uint32_t)raw[0] | ((std::uint32_t)raw[1] << 8));
+        return true;
+    };
+
+    char riff[4], wave[4];
+    std::uint32_t riffSize = 0;
+    if(!file.read(riff, 4) || !readU32(riffSize) || !file.read(wave, 4)) return false;
+    if(std::memcmp(riff, "RIFF", 4) != 0 || std::memcmp(wave, "WAVE", 4) != 0){
+        ofLogWarning("ofxOceanodeSuperColliderController") << "DC removal: not a RIFF/WAVE file: " << wavPath;
+        return false;
+    }
+
+    // Walk the chunks: scsynth writes fmt before data, but never assume it.
+    std::uint16_t format = 0, channels = 0, bits = 0;
+    std::uint32_t sampleRate = 0;
+    std::streamoff dataStart = 0;
+    std::uint64_t dataBytes = 0;
+    for(;;){
+        char id[4];
+        std::uint32_t size = 0;
+        if(!file.read(id, 4) || !readU32(size)) break;
+        const std::streamoff body = file.tellg();
+        if(std::memcmp(id, "fmt ", 4) == 0 && size >= 16){
+            std::uint16_t ignored16 = 0;
+            std::uint32_t ignored32 = 0;
+            if(!readU16(format) || !readU16(channels) || !readU32(sampleRate) ||
+               !readU32(ignored32) || !readU16(ignored16) || !readU16(bits)) return false;
+        }else if(std::memcmp(id, "data", 4) == 0){
+            dataStart = body;
+            dataBytes = size;
+            break;
+        }
+        file.clear();
+        file.seekg(body + (std::streamoff)size + (std::streamoff)(size & 1), std::ios::beg);
+    }
+
+    // WAVE_FORMAT_IEEE_FLOAT, which is what scsynth writes for "WAVE float".
+    if(dataStart == 0 || channels == 0 || format != 3 || bits != 32){
+        ofLogWarning("ofxOceanodeSuperColliderController")
+            << "DC removal: skipping " << wavPath << " (format " << format
+            << ", " << bits << " bit, " << channels << " ch)";
+        return false;
+    }
+
+    const std::uint64_t frames = dataBytes / ((std::uint64_t)channels * 4ull);
+    if(frames == 0) return true;
+
+    // y[n] = x[n] - x[n-1] + coef * y[n-1], per channel, exactly LeakDC -- but
+    // with the coefficient solved from the corner frequency and this file's
+    // own rate, so a 48k or 96k render gets the same filter, not a different
+    // one. The clamp keeps a silly corner from making the filter unstable or
+    // a no-op.
+    const double rate = sampleRate > 0 ? (double)sampleRate : 44100.0;
+    const double twoPi = 6.283185307179586;
+    const double coef = std::min(0.9999999,
+                                 std::max(0.9, 1.0 - twoPi * std::max(0.0, cornerHz) / rate));
+    std::vector<double> lastIn((std::size_t)channels, 0.0);
+    std::vector<double> lastOut((std::size_t)channels, 0.0);
+    // Taking an offset out lifts the waveform off centre, so a file that
+    // already sat near full scale can end up past it. The float file holds it
+    // fine, but converting to 16- or 24-bit later would clip, so say so.
+    double peak = 0.0;
+
+    const std::size_t blockFrames = 16384;
+    std::vector<float> block(blockFrames * (std::size_t)channels);
+    std::uint64_t done = 0;
+    while(done < frames){
+        const std::size_t count = (std::size_t)std::min<std::uint64_t>(blockFrames, frames - done);
+        const std::streamoff offset = dataStart + (std::streamoff)(done * (std::uint64_t)channels * 4ull);
+        const std::streamsize bytes = (std::streamsize)(count * (std::size_t)channels * sizeof(float));
+
+        file.clear();
+        file.seekg(offset, std::ios::beg);
+        if(!file.read(reinterpret_cast<char*>(block.data()), bytes)) return false;
+
+        for(std::size_t frame = 0; frame < count; frame++){
+            for(std::size_t channel = 0; channel < (std::size_t)channels; channel++){
+                const std::size_t i = frame * (std::size_t)channels + channel;
+                const double in = (double)block[i];
+                const double out = in - lastIn[channel] + coef * lastOut[channel];
+                lastIn[channel] = in;
+                lastOut[channel] = out;
+                block[i] = (float)out;
+                peak = std::max(peak, std::abs(out));
+            }
+        }
+
+        file.clear();
+        file.seekp(offset, std::ios::beg);
+        if(!file.write(reinterpret_cast<const char*>(block.data()), bytes)) return false;
+        done += count;
+    }
+
+    file.flush();
+    if(peak > 1.0){
+        ofLogWarning("ofxOceanodeSuperColliderController")
+            << "DC removal: " << wavPath << " now peaks at " << peak
+            << " (" << (20.0 * std::log10(peak)) << " dBFS). The float file keeps it,"
+            << " but converting to fixed point will clip.";
+    }
+    return file.good();
+}
+
+float ofxOceanodeSuperColliderController::getNRTRenderProgress() const{
+    if(!nrtRendering.load()) return -1.0f;
+    const int count = (int)nrtRenderOutputs.size();
+    if(count <= 0) return -1.0f;
+    const long long expected = nrtRenderExpectedBytes.load();
+    if(expected <= 0) return ofClamp((float)nrtRenderJobsDone.load() / (float)count, 0.0f, 1.0f);
+
+    // Summing every file's own fraction works whether the jobs run one after
+    // another or side by side; a file not started yet simply contributes zero.
+    float total = 0.0f;
+    for(const auto& path : nrtRenderOutputs){
+        ofFile file(path);
+        if(!file.exists()) continue;
+        total += ofClamp((float)((double)file.getSize() / (double)expected), 0.0f, 1.0f);
+    }
+    return ofClamp(total / (float)count, 0.0f, 1.0f);
+}
+
+float ofxOceanodeSuperColliderController::getNRTCaptureProgress() const{
+    // An externally stopped capture has no known end, so there is nothing
+    // honest to show; the bar falls back to an indeterminate sweep.
+    if(!nrtCaptureActive || nrtManualStop) return -1.0f;
+    const float total = std::max(0.01f, nrtDuration);
+    const double now = ofxOceanodeTime::getInstance()->getGlobalTimeState().time;
+    return ofClamp((float)(now / (double)total), 0.0f, 1.0f);
 }
 
 #endif // OFXOCEANODESC_HAS_TIMELINE

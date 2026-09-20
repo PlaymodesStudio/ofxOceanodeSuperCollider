@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <map>
+#include <set>
 #include <sstream>
 
 std::map<ofxSCServer*, int> serverManager::serverSampleRates;
@@ -423,8 +425,114 @@ void serverManager::endNRTCapture(double endTime){
     recomputeGraph();
 }
 
+std::vector<serverManager::NRTStem> serverManager::getNRTStems() const{
+    // Walk upstream while the chain is unambiguous. The node feeding a mixer
+    // is usually the last effect in a chain -- a panner, say -- which says
+    // nothing useful; the node at the head of that chain is the layer, and is
+    // what a stem should be called.
+    auto originOf = [this](scNode* node) -> scNode* {
+        scNode* current = node;
+        for(int depth = 0; depth < 64 && current != nullptr; depth++){
+            scNode* single = nullptr;
+            int count = 0;
+            for(const auto& link : nodeLinks){
+                if(link.destination != current) continue;
+                count++;
+                single = link.source;
+            }
+            // No source: the head of the chain. More than one: a sub-mix,
+            // where the chain's identity is the node itself.
+            if(count != 1) return current;
+            current = single;
+        }
+        return current;
+    };
+
+    // The busses feeding the file-writing synths are the master, which the
+    // main render already covers.
+    std::set<int> masterBusses;
+    for(const auto& link : nodeLinks){
+        if(link.destination == nullptr) continue;
+        for(auto output : outputs){
+            if((scNode*)output == link.destination) masterBusses.insert(link.bus);
+        }
+    }
+
+    // Mixer labels are what the Source dropdown groups by, so they have to be
+    // stable and unique even when two mixers carry the same node name.
+    std::vector<NRTStem> stems;
+    std::map<std::string, int> used;
+    std::map<const scNode*, std::string> mixerNames;
+    std::map<std::string, int> usedMixerNames;
+    std::set<int> takenBusses;
+    for(const auto& link : nodeLinks){
+        if(link.destination == nullptr || !link.destination->isNRTStemPoint()) continue;
+        if(link.source == nullptr || link.bus < 0) continue;
+        if(masterBusses.count(link.bus) != 0) continue;
+        // Several sources can share one bus; that bus is a single stem.
+        if(!takenBusses.insert(link.bus).second) continue;
+
+        scNode* origin = originOf(link.source);
+        std::string name = origin != nullptr ? origin->getParameterGroup().getName()
+                                             : link.source->getParameterGroup().getName();
+        ofStringReplace(name, "*", "");
+        ofStringReplace(name, " ", "_");
+        ofStringReplace(name, "/", "_");
+        name = ofTrim(name);
+        if(name.empty()) name = "stem";
+
+        // Two tracks can share an origin; keep both, distinguished.
+        const int seen = used[name]++;
+        if(seen > 0) name += "_" + ofToString(seen + 1);
+
+        auto mixerEntry = mixerNames.find(link.destination);
+        if(mixerEntry == mixerNames.end()){
+            std::string mixerName = link.destination->getParameterGroup().getName();
+            ofStringReplace(mixerName, "*", "");
+            mixerName = ofTrim(mixerName);
+            if(mixerName.empty()) mixerName = "Mixer";
+            const int mixerSeen = usedMixerNames[mixerName]++;
+            if(mixerSeen > 0) mixerName += " " + ofToString(mixerSeen + 1);
+            mixerEntry = mixerNames.emplace(link.destination, mixerName).first;
+        }
+
+        stems.push_back({name, link.bus, mixerEntry->second});
+    }
+    return stems;
+}
+
+void serverManager::resendAllParametersForNRT(){
+    for(auto node : connectedNodes){
+        if(node != nullptr) node->resendParametersForNRT();
+    }
+}
+
 bool serverManager::writeNRTScore(const std::string& path, double endTime) const{
     return server != nullptr && server->writeNRTScore(path, endTime);
+}
+
+bool serverManager::writeNRTStemScore(const std::string& path, double endTime, int bus) const{
+    if(server == nullptr) return false;
+    // The id has to come from the score, not from the live scOutput. The
+    // server goes on allocating node ids after the capture, so by the time a
+    // stem is written the output synth reports an id that does not exist
+    // inside the score; scsynth then answers "Node not found" and renders the
+    // untouched master, which looks exactly like a stem that failed to
+    // isolate. Fail loudly instead of writing a score that silently produces
+    // another copy of the mix.
+    const int outputNode = server->findNRTNodeID(scOutput::getSynthDefName());
+    if(outputNode <= 0){
+        ofLogError("serverManager") << "NRT stems: the capture contains no '"
+                                    << scOutput::getSynthDefName()
+                                    << "' synth to redirect; cannot isolate a stem";
+        return false;
+    }
+    ofxOscMessage redirect;
+    redirect.setAddress("/n_set");
+    redirect.addIntArg(outputNode);
+    redirect.addStringArg("in");
+    redirect.addFloatArg((float)bus);
+    return server->writeNRTScore(path, endTime, {redirect});
 }
 
 std::size_t serverManager::getNRTEventCount() const{
@@ -661,6 +769,8 @@ void serverManager::recomputeGraph(){
                 (*it)->resetInputBusses(server, busFromSilent->index);
             }
                 
+        nodeLinks.clear();
+
         //Create outputBusses for all nodes except scOutput
         for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
             for(int i = 0; i < (*it)->getNumOutputs() ; i++){
@@ -681,6 +791,7 @@ void serverManager::recomputeGraph(){
                         busindex = c.first.getBusIndex(server); // fallback for self-managed buses (e.g. mix bus)
                     dest->setInputBus(server, c.first.getNodeRef(), busindex);
                     inputBussesRefToNode[dest].push_back(busindex);
+                    nodeLinks.push_back({c.first.getNodeRef(), dest, busindex});
                 }
             }
         

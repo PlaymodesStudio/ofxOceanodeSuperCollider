@@ -69,7 +69,24 @@ public:
     // called, so nodes and SynthDefs do not need a second implementation.
     bool beginNRTCapture();
     void endNRTCapture(double endTime = -1.0);
+    // Writes the patch's complete parameter state into the score. Called the
+    // moment a capture starts rolling, while the clock still reads zero.
+    void resendAllParametersForNRT();
+
+    // One renderable layer: the audio arriving on `bus`, named after the
+    // subgraph that produces it.
+    struct NRTStem {
+        std::string name;
+        int bus = -1;
+        // The mixer this input arrives at, so stems can be grouped by mixer.
+        std::string mixerName;
+    };
+    // Every connected input of every mixer point in the graph. Empty inputs
+    // are skipped, so a track with nothing patched in produces no file.
+    std::vector<NRTStem> getNRTStems() const;
     bool writeNRTScore(const std::string& path, double endTime = -1.0) const;
+    // Same capture, but the file-writing synth reads `bus` instead.
+    bool writeNRTStemScore(const std::string& path, double endTime, int bus) const;
     std::size_t getNRTEventCount() const;
     int renderNRT(const std::string& scorePath, const std::string& outputPath, int outputChannels = 2) const;
     
@@ -137,6 +154,10 @@ private:
     std::vector<ofxSCBus> busses;
     std::map<scNode*, std::map<int, int>> outputBussesRefToNode;
     std::map<scNode*, std::vector<int>> inputBussesRefToNode;
+    // source -> destination, with the bus between them, recorded as the graph
+    // is built. Gives both the stem list and the chain to walk for its name.
+    struct nodeLink { scNode* source = nullptr; scNode* destination = nullptr; int bus = -1; };
+    std::vector<nodeLink> nodeLinks;
     std::map<nodePort, std::vector<scNode*>> connections;
     
     std::unique_ptr<ofxSCBus> busFromSilent;
