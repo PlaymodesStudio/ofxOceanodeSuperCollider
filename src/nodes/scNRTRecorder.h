@@ -14,13 +14,17 @@
 #include "ofxOceanodeSuperColliderController.h"
 
 // Starts a frame-stepped SuperCollider NRT capture while Record is true.
-// Record is deliberately an output parameter so it can drive another node,
-// for example the original Texture Recorder's Record input.
+//
+// Record is an ordinary parameter, so it has both an inlet and an outlet: it
+// can be driven by an external modulator and still drive another node, for
+// example the original Texture Recorder's Record input, which keeps the audio
+// render and the frame sequence in step. It is kept out of presets so that
+// recalling one never starts a render on its own.
 class scNRTRecorder : public ofxOceanodeNodeModel {
 public:
     explicit scNRTRecorder(ofxOceanodeSuperColliderController* controller)
     : ofxOceanodeNodeModel("SC NRT Recorder"), controller(controller) {
-        addOutputParameter(record.set("Record", false), ofxOceanodeParameterFlags_DisableSavePreset);
+        addParameter(record.set("Record", false), ofxOceanodeParameterFlags_DisableSavePreset);
         addParameter(server.set("Server", 0, 0, 127));
         addParameter(channels.set("Channels", 2, 1, 128));
         addParameter(filename.set("Filename", "Supercollider/NRT/recording.wav"));
