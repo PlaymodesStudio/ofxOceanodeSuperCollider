@@ -352,7 +352,7 @@ void serverManager::prepareNodesForNRTCapture(){
     if(server == nullptr) return;
 
     bool anyPending = false;
-    for(auto node : connectedNodes){
+    for(auto node : nodesList){
         if(node == nullptr) continue;
         node->prepareForNRTCapture();
         anyPending = anyPending || node->isNRTCapturePreparationPending();
@@ -366,7 +366,7 @@ void serverManager::prepareNodesForNRTCapture(){
     while(ofGetElapsedTimeMillis() < deadline){
         server->process();
         anyPending = false;
-        for(auto node : connectedNodes){
+        for(auto node : nodesList){
             if(node != nullptr && node->isNRTCapturePreparationPending()){
                 anyPending = true;
                 break;
@@ -502,7 +502,7 @@ std::vector<serverManager::NRTStem> serverManager::getNRTStems() const{
 }
 
 void serverManager::resendAllParametersForNRT(){
-    for(auto node : connectedNodes){
+    for(auto node : nodesList){
         if(node != nullptr) node->resendParametersForNRT();
     }
 }

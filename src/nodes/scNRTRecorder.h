@@ -61,7 +61,7 @@ public:
         addParameter(withMaster.set("With Master", false));
         addParameter(removeDC.set("Remove DC", false));
         addOutputParameter(status.set("Status", "Disarmed"));
-        addInspectorParameter(parallel.set("Parallel Renders", 2, 1, 8));
+        addInspectorParameter(parallel.set("Parallel Renders", 4, 1, 8));
 
         listeners.push(arm.newListener([this](bool& value){ onArmChanged(value); }));
         listeners.push(record.newListener([this](bool& value){ onRecordChanged(value); }));

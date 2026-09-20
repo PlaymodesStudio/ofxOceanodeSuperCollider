@@ -95,8 +95,9 @@ public:
     int getNRTRenderJobsDone() const { return nrtRenderJobsDone.load(); }
     int getNRTRenderJobCount() const { return (int)nrtRenderOutputs.size(); }
     // How many scsynth processes the render may run at once. Each is a full
-    // pass over the patch, so they scale with cores; they also each load the
-    // plugins, so a heavy VST patch may want fewer.
+    // pass over the patch and they are independent processes, so a set of
+    // stems costs roughly one render's wall time when this matches the file
+    // count. Each also loads the plugins, so a heavy VST patch may want fewer.
     void setNRTMaxParallelRenders(int count){ nrtMaxParallelRenders = count; }
     // Run a DC blocker over every rendered file before it is handed over, the
     // same one-pole difference filter SuperCollider's LeakDC uses. Offline
@@ -196,7 +197,7 @@ private:
     // Bumped by whichever worker finishes a file, read by the GUI.
     std::atomic<int> nrtRenderJobsDone{0};
     std::atomic<long long> nrtRenderExpectedBytes{0};
-    int nrtMaxParallelRenders = 2;
+    int nrtMaxParallelRenders = 4;
     bool nrtRemoveDC = false;
     std::string nrtCaptureOutputPath;
     int nrtCaptureOutputChannels = 2;

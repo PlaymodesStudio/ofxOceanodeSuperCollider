@@ -136,8 +136,6 @@ private:
     
     void loadSynthdefsFromPreset(const std::string& path, bool forceLoad = false, bool waitForLoad = true);
 
-    std::vector<scNode*> connectedNodes; //List of all nodes
-    
     ofEventListeners listeners;
     
     ofxSCSynth *synth;
