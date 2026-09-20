@@ -377,15 +377,28 @@ void serverManager::prepareNodesForNRTCapture(){
 }
 
 void serverManager::loadNRTSynthdefs(){
-    // The NRT renderer is a separate scsynth process. Load only the current
-    // preset's definitions instead of replaying the entire Synthdefs tree.
+    // The renderer is a separate scsynth process with an empty SynthDef
+    // table, so it needs everything the realtime server has -- which it got
+    // in two stages: loadDefs() at boot, then the preset's own definitions.
+    // Both are replayed here, in that order.
+    //
+    // The preset pass alone is not enough. It derives SynthDef names from the
+    // module names in modules.json, which only maps for the generic
+    // scSynthdef-driven nodes (the ones whose names carry a '*'). A
+    // hand-written node's SynthDef -- vstStereo for SC VST, a2k1 for SC A2k,
+    // polyMixerTrack2 for SC PolyMixerTrack -- has no such mapping and was
+    // silently skipped, so those /s_new calls failed with "SynthDef not
+    // found", every later command addressed to those nodes failed too, and
+    // the render came out silent.
+    loadDefs();
+
     const std::string presetPath = ofxOceanodeShared::getCurrentPresetPath();
     const std::string absolutePresetPath = ofToDataPath(presetPath, true);
     if(!presetPath.empty() && ofDirectory::doesDirectoryExist(absolutePresetPath)){
         loadSynthdefsFromPreset(presetPath, true, false);
     }else{
-        ofLogWarning("serverManager") << "NRT capture has no valid current preset; loading the complete Synthdefs tree";
-        loadDefs();
+        ofLogWarning("serverManager") << "NRT capture has no valid current preset;"
+                                      << " only the boot-time SynthDefs were loaded";
     }
 
     // Output is a legacy SynthDef without a .txarcmeta descriptor.
