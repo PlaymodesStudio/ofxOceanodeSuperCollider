@@ -323,11 +323,24 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
         jobs.push_back({stemScore, path, stem.name});
     };
 
-    // Same list the Source dropdown was built from, so an index means the same
-    // thing here as it did in the node.
+    // Resolve the choice by label. This list is built from the graph as it
+    // stands after arming rebuilt it, which is not necessarily in the same
+    // order as the list the dropdown was filled from, so a position is not a
+    // stable way to name a stem.
     const auto sources = buildNRTSources(manager);
-    const NRTSource* selected = (nrtSource > 0 && nrtSource < (int)sources.size())
-                              ? &sources[nrtSource] : nullptr;
+    const NRTSource* selected = nullptr;
+    if(!nrtSourceLabel.empty() && !sources.empty() && nrtSourceLabel != sources.front().label){
+        for(const auto& source : sources){
+            if(source.label != nrtSourceLabel) continue;
+            selected = &source;
+            break;
+        }
+        if(selected == nullptr){
+            ofLogWarning("ofxOceanodeSuperColliderController")
+                << "NRT: the selected source \"" << nrtSourceLabel
+                << "\" is not in the graph any more; rendering the master instead";
+        }
+    }
     const bool withMaster = nrtRecordStems;
 
     // Every file is named after the requested output path with what it holds

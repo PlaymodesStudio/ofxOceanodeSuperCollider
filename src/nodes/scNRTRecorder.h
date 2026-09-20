@@ -226,13 +226,39 @@ private:
     // stems on their own.
     void refreshSourceOptions(){
         if(controller == nullptr) return;
+        // Arming tears the graph down and rebuilds it, so the list churns --
+        // briefly down to "Master" alone -- exactly while a choice is waiting
+        // to be used. Refreshing through that would clamp the selection to
+        // zero and silently render something the user never picked, so the
+        // list is frozen from the moment the node is armed until it is idle
+        // again.
+        if(controller->isNRTSettling() || controller->isNRTArmed() ||
+           controller->isNRTRecordingActive() || controller->isNRTRendering()) return;
+
         std::vector<std::string> next = controller->getNRTSourceNames(server.get());
         if(next == sourceOptions) return;
+
+        // Keep the choice itself, not its position: a repatch can insert or
+        // drop entries above it, which would otherwise silently slide the
+        // selection onto a different stem.
+        const std::string chosen = selectedSourceLabel();
         sourceOptions = std::move(next);
 
+        int restored = 0;
+        for(std::size_t i = 0; i < sourceOptions.size(); i++){
+            if(sourceOptions[i] != chosen) continue;
+            restored = (int)i;
+            break;
+        }
         const int last = std::max(0, (int)sourceOptions.size() - 1);
-        source.set("Source", std::min(std::max(source.get(), 0), last), 0, last);
+        source.set("Source", std::min(restored, last), 0, last);
         if(sourceParameter != nullptr) sourceParameter->setDropdownOptions(sourceOptions);
+    }
+
+    std::string selectedSourceLabel() const {
+        const int index = source.get();
+        if(index < 0 || index >= (int)sourceOptions.size()) return "";
+        return sourceOptions[(std::size_t)index];
     }
 
     // --- control ---------------------------------------------------------
@@ -269,7 +295,7 @@ private:
         }
         // These only matter once the capture is done, but they are read then
         // from whatever the node last pushed, so push them before starting.
-        controller->setNRTSource(source.get());
+        controller->setNRTSource(selectedSourceLabel());
         controller->setNRTRecordStems(withMaster.get());
         controller->setNRTRemoveDC(removeDC.get());
         if(!controller->beginNRTRecording(server.get(), channels.get(), filename.get())) setRecord(false);

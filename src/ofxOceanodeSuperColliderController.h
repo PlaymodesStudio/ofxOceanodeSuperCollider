@@ -78,11 +78,15 @@ public:
         std::string mixerName;  // set for Mixer and Stem
         int stemIndex = -1;     // set for Stem
     };
-    // Index into this is what setNRTSource() takes.
     std::vector<NRTSource> getNRTSources(int serverIndex) const;
     // Just the labels, for the dropdown.
     std::vector<std::string> getNRTSourceNames(int serverIndex) const;
-    void setNRTSource(int sourceIndex){ nrtSource = sourceIndex; }
+    // The choice travels as its label, never as a position. Arming rebuilds
+    // the graph, so the list the render resolves against is not the same list
+    // object the dropdown was filled from, and a position in one can mean a
+    // different stem in the other. An empty label, or one that is no longer in
+    // the graph, renders the master.
+    void setNRTSource(const std::string& label){ nrtSourceLabel = label; }
     bool endNRTRecording(bool cancelled = false);
     bool isNRTRecordingActive() const { return nrtCaptureActive; }
     bool isNRTRendering() const { return nrtRendering.load(); }
@@ -190,7 +194,7 @@ private:
     std::atomic<int> nrtRenderResult{0};
     bool nrtManualStop = false;
     bool nrtRecordStems = false;
-    int nrtSource = 0;
+    std::string nrtSourceLabel;
     // Filled on the GUI thread before the workers start and never written
     // again, so the workers only ever read it.
     std::vector<std::string> nrtRenderOutputs;
