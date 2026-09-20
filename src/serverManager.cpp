@@ -15,6 +15,7 @@
 #include "ofxOceanodeShared.h"
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <sstream>
 
 std::map<ofxSCServer*, int> serverManager::serverSampleRates;
@@ -443,12 +444,38 @@ int serverManager::renderNRT(const std::string& scorePath, const std::string& ou
         // renders, in addition to Oceanode's optional custom UGen folder.
         command << " -U " << shellQuote(ofToDataPath(p.ugensPlugins, true) + ":" + getScPluginPath(scPath));
     }
-    // scsynth prints one progress line per score packet on stdout in NRT mode.
-    // Leave stderr untouched so actual diagnostics remain visible.
-    command << " > /dev/null";
+    // scsynth prints one progress line per score packet in NRT mode, which
+    // would bury the console -- but its failures ("SynthDef not found", bus
+    // and node errors) go to the same stream, and those are exactly what is
+    // needed when a render comes out silent. Keep the lot in a log beside the
+    // audio rather than discarding it.
+    const std::string logPath = outputPath + ".log";
+    command << " > " << shellQuote(logPath) << " 2>&1";
 
     ofLogNotice("serverManager") << "Rendering SuperCollider NRT score: " << outputPath;
-    return std::system(command.str().c_str());
+    const int result = std::system(command.str().c_str());
+
+    // Surface anything that looks like a failure, so a silent render explains
+    // itself in the console instead of only in the log.
+    std::ifstream log(logPath);
+    if(log.is_open()){
+        int reported = 0;
+        for(std::string line; std::getline(log, line); ){
+            if(line.find("FAILURE") == std::string::npos &&
+               line.find("ERROR") == std::string::npos &&
+               line.find("exception") == std::string::npos) continue;
+            if(++reported > 20){
+                ofLogError("serverManager") << "NRT render: further errors in " << logPath;
+                break;
+            }
+            ofLogError("serverManager") << "NRT render: " << line;
+        }
+        if(reported == 0 && result != 0){
+            ofLogError("serverManager") << "NRT render: scsynth exited with " << result
+                                        << "; see " << logPath;
+        }
+    }
+    return result;
 }
 
 void serverManager::setVolume(float _volume){
