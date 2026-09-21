@@ -56,7 +56,12 @@ public:
         addParameter(server.set("Server", 0, 0, 127));
         addParameter(channels.set("Channels", 2, 1, 128));
         addParameter(filename.set("Filename", "Supercollider/NRT/recording.wav"));
-        refreshSourceOptions();
+        // Seeded, not read from the graph. A node is constructed part-way
+        // through a preset load, when the old patch has been freed and the new
+        // one does not exist yet -- reading the graph there walks pointers to
+        // nodes that are already gone. update() fills the real list on the
+        // first frame, by which point the graph is whole again.
+        sourceOptions = {"Master"};
         sourceParameter = addParameterDropdown(source, "Source", 0, sourceOptions);
         addParameter(withMaster.set("With Master", false));
         addParameter(removeDC.set("Remove DC", false));

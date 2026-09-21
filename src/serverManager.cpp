@@ -737,6 +737,11 @@ void serverManager::teardownGraphForPresetLoad(){
     outputBussesRefToNode.clear();
     inputBussesRefToNode.clear();
     connections.clear();
+    // Every link holds raw pointers to nodes that are about to be freed just
+    // below. Anything reading them between here and the next recomputeGraph()
+    // -- a node constructed later in the same preset load, for instance --
+    // would dereference freed memory.
+    nodeLinks.clear();
     nodesListChanged = true;
 
     const int silentBusIndex = busFromSilent != nullptr ? busFromSilent->index : 0;
@@ -829,6 +834,12 @@ void serverManager::recomputeGraph(){
         for(auto &node : toCreateNodes){
             nodeDestroyedListeners[node] = node->destroyedNode.newListener([this, node](){
                 nodesList.erase(std::remove(nodesList.begin(), nodesList.end(), node), nodesList.end());
+                // Drop its links too: they are raw pointers to the node that
+                // is being destroyed right now.
+                nodeLinks.erase(std::remove_if(nodeLinks.begin(), nodeLinks.end(),
+                                               [node](const nodeLink& link){
+                                                   return link.source == node || link.destination == node;
+                                               }), nodeLinks.end());
                 nodesListChanged = true;
             });
         }
