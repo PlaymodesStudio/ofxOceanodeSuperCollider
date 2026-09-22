@@ -22,6 +22,42 @@ std::map<std::string, bool> scVST::globalFXPCacheValid;
 std::mutex scVST::globalCacheMutex;
 
 scVST::scVST() : scNode("VST") {
+	description = R"SCVST_HELP(SuperCollider VST and VST3 host with audio, MIDI, transport, preset-state recall and multi-instancing.
+
+AUDIO AND INSTANCING
+N Chan is the node's total audio-channel count. Mix ranges from dry at 0 to fully processed at 1.
+
+Single Instance ON: creates one plugin instance for the complete channel set. Use this only when the plugin supports the required multichannel layout.
+
+Single Instance OFF, Mono Instancing ON: creates one mono plugin instance per channel. For example, 10 channels create 10 independent VSTs.
+
+Single Instance OFF, Mono Instancing OFF: creates one stereo plugin instance per channel pair. For example, 10 channels create 5 independent VSTs. An odd final channel still uses the last stereo instance.
+
+Single Instance and Mono Instancing are mutually exclusive. Changing either mode or N Chan rebuilds the plugin instances. Multi-instancing runs complete independent copies of the plugin, so DSP and memory use scale with the number of instances.
+
+PLUGIN STATE AND CONTROLS
+Plugin selects and loads a VST. Editor opens the first instance, which acts as the master for editor-originated changes. Control changes and complete preset or program changes made in that editor are propagated to the peer instances.
+
+Propagate explicitly copies the first instance's complete FXP state to every other instance. Use it after changing state inside a plugin if that plugin did not report the change automatically.
+
+To expose a VST control in Oceanode, move it in the plugin editor and press Add Last. A published parameter with one value broadcasts to all instances. A vector assigns one value per actual VST instance; if the vector is shorter, its last value is reused. In stereo mode the vector addresses stereo instances, not individual audio channels. Remove All Params removes all published VST controls.
+
+Oceanode presets store the selected plugin path, published controls and complete FXP state. Save FXP to Disk exports the first instance's state. Program sends both MIDI and direct VST program changes to all instances and is intentionally not stored as a normal parameter.
+
+MIDI AND GATES
+Pitch defines the voice count and contains MIDI note numbers. Gate produces note-on and note-off edges. A one-value Gate is applied to every Pitch voice; a Gate vector addresses voices individually. Velocity can likewise be one shared value or one value per voice.
+
+Instance routes each voice to an actual VST instance and is zero-based: 0 is the first instance, 1 the second, and so on. Use -1 to broadcast that voice to every instance. In mono mode instance indices correspond to channels; in stereo mode they correspond to channel pairs; in Single Instance mode only instance 0 exists.
+
+Note-off is sent back to the same instance that received note-on, even if Instance changes while the gate is held. MIDI Chan selects the MIDI channel. PitchBend, ModWheel and dynamically added MIDI CC controls are broadcast to all instances.
+
+Note Out and CC Out are 128-value normalized state vectors for MIDI emitted by the first plugin instance. In the inspector, choose CC Number and press Add MIDI CC to publish an outgoing CC control; Remove All CC removes those controls.
+
+TRANSPORT
+Play, Position, Reset, BPM and the inspector time-signature controls drive the hosted plugins. QueryPosition requests the current transport position. Transport commands are sent to all active instances.
+
+ADVANCED
+Multithreading asks VSTPlugin to run plugins on worker threads during realtime operation. Its benefit depends on the plugin and instance count. Allow all instances to finish loading before sending gates or automation.)SCVST_HELP";
 	isPresetLoading = false;
 	pluginLoaded = false;
 	hasPendingPresetData = false;
@@ -67,8 +103,13 @@ scVST::scVST() : scNode("VST") {
 	}
 	
 	lastBatchProcessTime = 0;
+	dirtyParameterWorkPending.store(false, std::memory_order_relaxed);
+	pendingParameterSetWorkPending.store(false, std::memory_order_relaxed);
 	pendingGUISeen.fill(0);
 	pendingGUIParamIndices.reserve(128);
+	pendingPropagationSeen.fill(0);
+	pendingPropagationSourceNodeIDs.fill(-1);
+	pendingPropagationIndices.reserve(128);
 	dirtyParameterIndices.reserve(128);
 	pendingParameterSetSeen.fill(0);
 	pendingParameterSetIndices.reserve(128);
@@ -95,10 +136,14 @@ void scVST::setup(){
 	}
 	pendingGUISeen.fill(0);
 	pendingGUIParamIndices.clear();
+	pendingPropagationSeen.fill(0);
+	pendingPropagationSourceNodeIDs.fill(-1);
+	pendingPropagationIndices.clear();
 	{
 		std::lock_guard<std::mutex> lock(dirtyParameterMutex);
 		dirtyParameterIndices.clear();
 	}
+	dirtyParameterWorkPending.store(false, std::memory_order_relaxed);
 	pendingParameterSetSeen.fill(0);
 	for(auto& values : pendingParameterSetValues) {
 		values.clear();
@@ -107,6 +152,7 @@ void scVST::setup(){
 		std::lock_guard<std::mutex> lock(pendingParameterSetMutex);
 		pendingParameterSetIndices.clear();
 	}
+	pendingParameterSetWorkPending.store(false, std::memory_order_relaxed);
 	clearAllFeedbackSuppression();
 	
 	// Inputs and outputs need to exist before preset loading can trigger upstream updates.
@@ -155,7 +201,8 @@ void scVST::setup(){
 									 ofxOceanodeParameterFlags_DisableSaveProject);
 	
 	
-	addParameter(instance.set("Instance", {0}, {0}, {64}));
+	// Zero-based instance routing: 0 is the first VST, -1 broadcasts to all.
+	addParameter(instance.set("Instance", {-1}, {-1}, {MAX_NODE_CHANNELS - 1}));
 	addParameter(midiChannel.set("MIDI Chan", 1, 1, 16));
 	
 	addParameter(pitch.set("Pitch", {60}, {0}, {127}));
@@ -243,14 +290,17 @@ void scVST::setup(){
 	addInspectorParameter(saveFXPToDisk.set("Save FXP to Disk"));
 	
 	listeners.push(singleInstance.newListener([this](bool &b){
-		for (auto &serverInstances : synthInstances) {
-			if (serverInstances.first) {
-				freeVSTInstances(serverInstances.first);
-				createVSTInstances(serverInstances.first);
-				createSynth(serverInstances.first);
-			}
+		// These are topology choices, not two independent flags.  Keeping both
+		// true used to create one vstMono synth while the UI claimed mono
+		// multi-instancing was active.
+		if(b && monoInstancing.get()) {
+			monoInstancing.setWithoutEventNotifications(false);
 		}
-		resendParams.notify();
+
+		std::vector<ofxSCServer*> servers;
+		servers.reserve(synthInstances.size());
+		for(const auto& entry : synthInstances) if(entry.first) servers.push_back(entry.first);
+		for(auto* server : servers) rebuildVSTInstances(server);
 	}));
 	
 	
@@ -324,7 +374,10 @@ void scVST::setup(){
 	
 	listeners.push(numChannels.newListener([this](int &i){
 		if(oldNumChannels != i) {
-			resendParams.notify();
+			std::vector<ofxSCServer*> servers;
+			servers.reserve(synthInstances.size());
+			for(const auto& entry : synthInstances) if(entry.first) servers.push_back(entry.first);
+			for(auto* server : servers) rebuildVSTInstances(server);
 		}
 		oldNumChannels = i;
 	}));
@@ -341,23 +394,14 @@ void scVST::setup(){
 	}));
 	
 	listeners.push(monoInstancing.newListener([this](bool &mono){
-		/*
-		 ofLogNotice("scVST") << "Instancing mode changed to " << (mono ? "mono" : "stereo")
-		 << ", will need " << calculateNumInstances() << " instances";
-		 */
-		// Need to recreate instances with new channel configuration
-		for(auto& serverInstances : synthInstances) {
-			if(serverInstances.first != nullptr) {
-				// Free existing instances
-				freeVSTInstances(serverInstances.first);
-				
-				// Create new instances with correct configuration
-				createVSTInstances(serverInstances.first);
-				createSynth(serverInstances.first);
-			}
+		if(mono && singleInstance.get()) {
+			singleInstance.setWithoutEventNotifications(false);
 		}
-		
-		resendParams.notify();
+
+		std::vector<ofxSCServer*> servers;
+		servers.reserve(synthInstances.size());
+		for(const auto& entry : synthInstances) if(entry.first) servers.push_back(entry.first);
+		for(auto* server : servers) rebuildVSTInstances(server);
 	}));
 	
 	listeners.push(openEditor.newListener([this]{
@@ -453,7 +497,6 @@ void scVST::setup(){
 		for(auto& serverInstances : synthInstances){
 			for(auto synth : serverInstances.second){
 				if(synth != nullptr){
-					synth->set("inChannels", numChannels);
 					synth->set("mix", mix);
 				}
 			}
@@ -469,9 +512,13 @@ void scVST::setup(){
 		uint64_t currentTime = ofGetElapsedTimeMillis();
 		
 		if(currentTime - lastBatchProcessTime >= BATCH_PROCESS_INTERVAL_MS) {
-			processPendingParameterUpdates();
-			flushPendingGUIParameterUpdates();
-			flushPendingVSTParameterSets();
+			if(dirtyParameterWorkPending.exchange(false, std::memory_order_acq_rel)) {
+				processPendingParameterUpdates();
+				flushPendingGUIParameterUpdates();
+			}
+			if(pendingParameterSetWorkPending.exchange(false, std::memory_order_acq_rel)) {
+				flushPendingVSTParameterSets();
+			}
 			lastBatchProcessTime = currentTime;
 		}
 		
@@ -720,6 +767,7 @@ void scVST::markParameterDirty(int paramIndex) {
 		std::lock_guard<std::mutex> lock(dirtyParameterMutex);
 		dirtyParameterIndices.push_back(paramIndex);
 	}
+	dirtyParameterWorkPending.store(true, std::memory_order_release);
 }
 
 void scVST::processPendingParameterUpdates() {
@@ -763,11 +811,14 @@ void scVST::processPendingParameterUpdates() {
 		// GUI writes are flushed once per update tick to keep OSC feedback cheap.
 		queueGUIParameterUpdate(paramIndex, value, nodeID);
 		
-		// Handle propagation if needed
-		if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
-			propagateParameterToOtherInstances(nodeID, paramIndex, value);
-		}
+		// The propagation helper performs the eligibility check once.
+		propagateParameterToOtherInstances(nodeID, paramIndex, value);
 	}
+
+	// A VST preset can report hundreds of parameters in one burst.  Send only
+	// the latest value for each parameter and pack many pairs into each VST
+	// command instead of emitting one OSC datagram per parameter/instance.
+	flushPendingVSTGUIPropagation();
 }
 
 void scVST::queueGUIParameterUpdate(int paramIndex, float value, int sourceNodeID) {
@@ -802,65 +853,85 @@ void scVST::queueVSTParameterSet(int paramIndex, const vector<float>& values) {
 		pendingParameterSetIndices.push_back(paramIndex);
 	}
 	pendingParameterSetValues[paramIndex] = values;
+	pendingParameterSetWorkPending.store(true, std::memory_order_release);
 }
 
 void scVST::flushPendingVSTParameterSets() {
 	static thread_local std::vector<int> indicesToFlush;
-	static thread_local std::vector<float> valuesToSend;
+	static thread_local std::array<std::vector<float>, 1024> valuesToFlush;
 	indicesToFlush.clear();
 
 	{
 		std::lock_guard<std::mutex> lock(pendingParameterSetMutex);
 		indicesToFlush.swap(pendingParameterSetIndices);
+		for(int paramIndex : indicesToFlush) {
+			if(paramIndex < 0 || paramIndex >= 1024) continue;
+			valuesToFlush[paramIndex].clear();
+			valuesToFlush[paramIndex].swap(pendingParameterSetValues[paramIndex]);
+			pendingParameterSetSeen[paramIndex] = 0;
+		}
 	}
 
 	if(indicesToFlush.empty()) return;
 	if(activeInstanceTargets.empty()) {
-		std::lock_guard<std::mutex> lock(pendingParameterSetMutex);
-		for(int paramIndex : indicesToFlush) {
-			if(paramIndex >= 0 && paramIndex < 1024) {
-				pendingParameterSetSeen[paramIndex] = 0;
-				pendingParameterSetValues[paramIndex].clear();
-			}
-		}
 		return;
 	}
 
-	static thread_local ofxOscMessage setMsg;
-	for(int paramIndex : indicesToFlush) {
-		if(paramIndex < 0 || paramIndex >= 1024) continue;
+	static constexpr int MAX_PARAMS_PER_MESSAGE = 64;
+	static constexpr int MAX_MESSAGES_PER_BUNDLE = 8;
+	std::map<ofxSCServer*, ofxOscBundle> bundles;
+	std::map<ofxSCServer*, int> bundleMessageCounts;
 
-		{
-			std::lock_guard<std::mutex> lock(pendingParameterSetMutex);
-			valuesToSend = pendingParameterSetValues[paramIndex];
-			pendingParameterSetValues[paramIndex].clear();
-			pendingParameterSetSeen[paramIndex] = 0;
-		}
+	auto flushServerBundle = [&](ofxSCServer* server) {
+		if(server == nullptr || bundleMessageCounts[server] == 0) return;
+		server->sendBundle(bundles[server]);
+		bundles[server].clear();
+		bundleMessageCounts[server] = 0;
+	};
 
-		if(valuesToSend.empty()) continue;
+	for(size_t instanceIndex = 0; instanceIndex < activeInstanceTargets.size(); ++instanceIndex) {
+		const auto& target = activeInstanceTargets[instanceIndex];
+		if(target.server == nullptr || target.synth == nullptr) continue;
 
-		const size_t valueCount = valuesToSend.size();
-		const float fallbackValue = valuesToSend.back();
-		for(size_t instanceIndex = 0; instanceIndex < activeInstanceTargets.size(); ++instanceIndex) {
-			const auto& target = activeInstanceTargets[instanceIndex];
-			const float value = valueCount == 1 || instanceIndex >= valueCount ?
-								fallbackValue : valuesToSend[instanceIndex];
+		ofxOscMessage setMsg;
+		int pairCount = 0;
+		auto beginMessage = [&]() {
+			setMsg.clear();
+			setMsg.setAddress("/u_cmd");
+			setMsg.addIntArg(target.synth->nodeID);
+			setMsg.addIntArg(2);
+			setMsg.addStringArg("/set");
+			pairCount = 0;
+		};
+		auto finishMessage = [&]() {
+			if(pairCount == 0) return;
+			bundles[target.server].addMessage(setMsg);
+			if(++bundleMessageCounts[target.server] >= MAX_MESSAGES_PER_BUNDLE) {
+				flushServerBundle(target.server);
+			}
+		};
 
-			try {
-				setMsg.clear();
-				setMsg.setAddress("/u_cmd");
-				setMsg.addIntArg(target.synth->nodeID);
-				setMsg.addIntArg(2);
-				setMsg.addStringArg("/set");
-				setMsg.addIntArg(paramIndex);
-				setMsg.addFloatArg(value);
-				target.server->sendMsg(setMsg);
-			} catch(const std::exception& e) {
-				ofLogError("scVST") << "Error setting batched parameter on synth "
-									<< target.synth->nodeID << ": " << e.what();
+		beginMessage();
+		for(int paramIndex : indicesToFlush) {
+			if(paramIndex < 0 || paramIndex >= 1024) continue;
+			const auto& values = valuesToFlush[paramIndex];
+			if(values.empty()) continue;
+
+			// A scalar is broadcast.  A vector addresses actual VST instances;
+			// shorter vectors retain the established last-value fallback.
+			const float value = values.size() == 1 || instanceIndex >= values.size() ?
+				values.back() : values[instanceIndex];
+			setMsg.addIntArg(paramIndex);
+			setMsg.addFloatArg(value);
+			if(++pairCount >= MAX_PARAMS_PER_MESSAGE) {
+				finishMessage();
+				beginMessage();
 			}
 		}
+		finishMessage();
 	}
+
+	for(auto& entry : bundles) flushServerBundle(entry.first);
 }
 
 bool scVST::isFeedbackSuppressed(int paramIndex, uint64_t currentTime) const {
@@ -1051,11 +1122,9 @@ void scVST::loadSelectedPlugin() {
 }
 
 bool scVST::areAllInstancesReady() {
-	int expectedInstances = 0;
-	for(auto& serverInstances : synthInstances) {
-		expectedInstances += serverInstances.second.size();
-	}
-	return readyInstances.size() >= expectedInstances;
+	// activeInstanceTargets is rebuilt whenever the topology changes, so it is
+	// also the cached expected-instance count for high-rate automation checks.
+	return readyInstances.size() >= activeInstanceTargets.size();
 }
 
 void scVST::handleVSTParam(ofxOscMessage& msg) {
@@ -1102,9 +1171,7 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 			
 			updateParameterValueFromVST(paramIndex, value, nodeID);
 			
-			if(shouldPropagateFromVSTGUI(paramIndex, nodeID)) {
-				propagateParameterToOtherInstances(nodeID, paramIndex, value);
-			}
+			propagateParameterToOtherInstances(nodeID, paramIndex, value);
 		} else {
 			bool isAlreadyPublished = isParameterPublished(paramIndex);
 
@@ -1241,40 +1308,93 @@ int scVST::getInstanceIndexFromNodeID(int nodeID) {
 }
 
 void scVST::propagateParameterToOtherInstances(int sourceNodeID, int paramIndex, float value) {
-	// Check if we should propagate (redundant check for safety)
-	if(!shouldPropagateFromVSTGUI(paramIndex, sourceNodeID)) {
-		return;
+	if(paramIndex < 0 || paramIndex >= 1024 ||
+	   !shouldPropagateFromVSTGUI(paramIndex, sourceNodeID)) return;
+
+	if(!pendingPropagationSeen[paramIndex]) {
+		pendingPropagationSeen[paramIndex] = 1;
+		pendingPropagationIndices.push_back(paramIndex);
 	}
-	suppressFeedbackFor(paramIndex, ofGetElapsedTimeMillis() + 50);
-	/*
-	 ofLogNotice("scVST") << "Propagating parameter " << paramIndex << " = " << value
-	 << " from node " << sourceNodeID << " to other instances (GUI-initiated)";
-	 */
-	// Apply to all OTHER instances (not the source)
-	static thread_local ofxOscMessage setMsg;
-	for(const auto& target : activeInstanceTargets) {
-		if(target.synth->nodeID != sourceNodeID) { // Skip source instance
-			try {
-				setMsg.clear();
-				setMsg.setAddress("/u_cmd");
-				setMsg.addIntArg(target.synth->nodeID);
-				setMsg.addIntArg(2);
-				setMsg.addStringArg("/set");
-				setMsg.addIntArg(paramIndex);
-				setMsg.addFloatArg(value);
-				target.server->sendMsg(setMsg);
-				
-				//ofLogVerbose("scVST") << "Propagated to instance " << target.synth->nodeID;
-			} catch(const std::exception& e) {
-				ofLogError("scVST") << "Error propagating parameter to synth " << target.synth->nodeID << ": " << e.what();
-			}
+	pendingPropagationValues[paramIndex] = value;
+	pendingPropagationSourceNodeIDs[paramIndex] = sourceNodeID;
+}
+
+void scVST::flushPendingVSTGUIPropagation() {
+	if(pendingPropagationIndices.empty()) return;
+
+	static constexpr int MAX_PARAMS_PER_MESSAGE = 64;
+	static constexpr int MAX_MESSAGES_PER_BUNDLE = 8;
+	const uint64_t suppressUntil = ofGetElapsedTimeMillis() + 75;
+
+	for(int paramIndex : pendingPropagationIndices) {
+		if(paramIndex >= 0 && paramIndex < 1024) {
+			suppressFeedbackFor(paramIndex, suppressUntil);
 		}
 	}
-	
+
+	std::map<ofxSCServer*, ofxOscBundle> bundles;
+	std::map<ofxSCServer*, int> bundleMessageCounts;
+
+	auto flushServerBundle = [&](ofxSCServer* server) {
+		if(server == nullptr || bundleMessageCounts[server] == 0) return;
+		server->sendBundle(bundles[server]);
+		bundles[server].clear();
+		bundleMessageCounts[server] = 0;
+	};
+
+	for(const auto& target : activeInstanceTargets) {
+		if(target.server == nullptr || target.synth == nullptr) continue;
+
+		ofxOscMessage setMsg;
+		int pairCount = 0;
+		auto beginMessage = [&]() {
+			setMsg.clear();
+			setMsg.setAddress("/u_cmd");
+			setMsg.addIntArg(target.synth->nodeID);
+			setMsg.addIntArg(2);
+			setMsg.addStringArg("/set");
+			pairCount = 0;
+		};
+		auto finishMessage = [&]() {
+			if(pairCount == 0) return;
+			bundles[target.server].addMessage(setMsg);
+			if(++bundleMessageCounts[target.server] >= MAX_MESSAGES_PER_BUNDLE) {
+				flushServerBundle(target.server);
+			}
+		};
+
+		beginMessage();
+		for(int paramIndex : pendingPropagationIndices) {
+			if(paramIndex < 0 || paramIndex >= 1024) continue;
+			if(pendingPropagationSourceNodeIDs[paramIndex] == target.synth->nodeID) continue;
+
+			setMsg.addIntArg(paramIndex);
+			setMsg.addFloatArg(pendingPropagationValues[paramIndex]);
+			if(++pairCount >= MAX_PARAMS_PER_MESSAGE) {
+				finishMessage();
+				beginMessage();
+			}
+		}
+		finishMessage();
+	}
+
+	for(auto& entry : bundles) flushServerBundle(entry.first);
+
+	for(int paramIndex : pendingPropagationIndices) {
+		if(paramIndex >= 0 && paramIndex < 1024) {
+			pendingPropagationSeen[paramIndex] = 0;
+			pendingPropagationSourceNodeIDs[paramIndex] = -1;
+		}
+	}
+	pendingPropagationIndices.clear();
 }
 
 bool scVST::shouldPropagateFromVSTGUI(int paramIndex, int sourceNodeID) {
 	if(isPresetLoading || hasPendingPresetData) {
+		return false;
+	}
+	if(syncInProgress || isFXPLoading.load(std::memory_order_acquire) ||
+	   activeInstanceTargets.size() < 2) {
 		return false;
 	}
 
@@ -1288,7 +1408,7 @@ bool scVST::shouldPropagateFromVSTGUI(int paramIndex, int sourceNodeID) {
 	
 	auto vectorParam = resolveDynamicVectorParameterSlot(paramIndex);
 	if(vectorParam) {
-		auto values = vectorParam->getParameter().get();
+		const auto& values = vectorParam->getParameter().get();
 		
 		if(values.size() > 1) {
 			return false;
@@ -2734,8 +2854,17 @@ void scVST::processGates(vector<int> &gates){
 	// Resize our internal tracking vectors to match the polyphony count (Pitch Size)
 	// We do NOT resize the 'gates' vector itself to preserve the GUI slider.
 	if (previousGates.size() != numVoices) {
+		// Release voices that disappear while their gates are still high.
+		for(size_t i = numVoices; i < activeNotes.size(); ++i) {
+			if(activeNotes[i] >= 0) {
+				const int targetInstance = i < activeNoteInstances.size() ?
+					activeNoteInstances[i] : -1;
+				sendMidiNoteOff(channelNum, activeNotes[i], targetInstance);
+			}
+		}
 		previousGates.resize(numVoices, 0);
 		activeNotes.resize(numVoices, -1);
+		activeNoteInstances.resize(numVoices, -1);
 	}
 
 	// OPTIMIZATION: Pre-compute scalar/broadcast values
@@ -2743,7 +2872,8 @@ void scVST::processGates(vector<int> &gates){
 	const bool velocityBroadcast = (velocitySize == 1);
 	const bool instanceBroadcast = (instanceSize == 1);
 	const float scalarVelocity = velocitySize > 0 ? ofClamp(currentVelocity[0], 0.0f, 1.0f) : 0.5f;
-	const int scalarInstance = instanceSize > 0 ? ofClamp(currentInstance[0], 0, 64) : 0;
+	const int scalarInstance = instanceSize > 0 ?
+		ofClamp(currentInstance[0], -1, MAX_NODE_CHANNELS - 1) : -1;
 
 	// Process each voice based on the Pitch vector size
 	for (size_t i = 0; i < numVoices; i++) {
@@ -2774,23 +2904,25 @@ void scVST::processGates(vector<int> &gates){
 
 			// OPTIMIZATION: Get instance using pre-computed values
 			int targetInstance = instanceBroadcast ? scalarInstance :
-								(i < instanceSize ? ofClamp(currentInstance[i], 0, 64) : scalarInstance);
+								(i < instanceSize ?
+								 ofClamp(currentInstance[i], -1, MAX_NODE_CHANNELS - 1) :
+								 scalarInstance);
 
 			int midiVelocity = static_cast<int>(vel * 127.0f);
 
 			sendMidiNoteOn(channelNum, noteNumber, midiVelocity, targetInstance);
 			activeNotes[i] = noteNumber;
+			activeNoteInstances[i] = targetInstance;
 		}
 
 		// Falling edge - gate went from 1 to 0
 		else if (currentGate == 0 && previousGate == 1) {
 			if (activeNotes[i] >= 0) {
-				// OPTIMIZATION: Get instance using pre-computed values
-				int targetInstance = instanceBroadcast ? scalarInstance :
-									(i < instanceSize ? ofClamp(currentInstance[i], 0, 64) : scalarInstance);
-
+				// Release the same target used by note-on even if Instance changed.
+				const int targetInstance = activeNoteInstances[i];
 				sendMidiNoteOff(channelNum, activeNotes[i], targetInstance);
 				activeNotes[i] = -1;
+				activeNoteInstances[i] = -1;
 			}
 		}
 
@@ -2803,12 +2935,12 @@ void scVST::sendMidiNoteOn(int channel, int pitch, int velocity, int instanceInd
 	// OPTIMIZATION: Early validation
 	if(activeInstanceTargets.empty()) return;
 
-	if(instanceIndex == 0) {
+	if(instanceIndex < 0) {
 		for(const auto& target : activeInstanceTargets) {
 			sendMidiToInstance(target.server, target.synth, channel, 0x90, pitch, velocity);
 		}
-	} else if(instanceIndex > 0) {
-		const size_t targetIndex = static_cast<size_t>(instanceIndex - 1);
+	} else {
+		const size_t targetIndex = static_cast<size_t>(instanceIndex);
 		if(targetIndex < activeInstanceTargets.size()) {
 			const auto& target = activeInstanceTargets[targetIndex];
 			sendMidiToInstance(target.server, target.synth, channel, 0x90, pitch, velocity);
@@ -2823,12 +2955,12 @@ void scVST::sendMidiNoteOff(int channel, int pitch, int instanceIndex) {
 	// OPTIMIZATION: Early validation
 	if(activeInstanceTargets.empty()) return;
 
-	if(instanceIndex == 0) {
+	if(instanceIndex < 0) {
 		for(const auto& target : activeInstanceTargets) {
 			sendMidiToInstance(target.server, target.synth, channel, 0x80, pitch, 0x40);
 		}
-	} else if(instanceIndex > 0) {
-		const size_t targetIndex = static_cast<size_t>(instanceIndex - 1);
+	} else {
+		const size_t targetIndex = static_cast<size_t>(instanceIndex);
 		if(targetIndex < activeInstanceTargets.size()) {
 			const auto& target = activeInstanceTargets[targetIndex];
 			sendMidiToInstance(target.server, target.synth, channel, 0x80, pitch, 0x40);
@@ -4037,11 +4169,60 @@ void scVST::createVSTInstances(ofxSCServer* server) {
 		// Choose the appropriate SynthDef based on instancing mode
 		string synthDefName = monoInstancing.get() ? "vstMono" : "vstStereo";
 		synthInstances[server][i] = new ofxSCSynth(synthDefName, server);
+		attachVSTFeedbackListener(synthInstances[server][i]);
 		
 			//ofLogNotice("scVST") << "Created VST instance " << i << " using " << synthDefName;
 	}
 
 	rebuildInstanceLookupCache();
+}
+
+void scVST::rebuildVSTInstances(ofxSCServer* server) {
+	if(server == nullptr || synthInstances.count(server) == 0) return;
+
+	// Preserve the graph routing owned by serverManager.  Rebuilding only the
+	// plugin synths must not make them fall back to hardware bus zero.
+	const auto savedOutputs = outputBuses[server];
+	const auto savedInputs = inputBuses[server];
+	const auto defaultInputIt = defaultInputBuses.find(server);
+	const int savedDefaultInput = defaultInputIt != defaultInputBuses.end() ?
+		defaultInputIt->second : 0;
+
+	if(syncInProgress || activeFXPReadOperation != FXPReadOperation::None ||
+	   activeFXPWriteOperation == FXPWriteOperation::SyncSave) {
+		resetSyncFXPState(true);
+	}
+	pendingPropagationSeen.fill(0);
+	pendingPropagationSourceNodeIDs.fill(-1);
+	pendingPropagationIndices.clear();
+	for(auto* synth : synthInstances[server]) {
+		if(synth != nullptr && synth->nodeID > 0) {
+			readyInstances.erase(synth->nodeID);
+			fxpAppliedInstances.erase(synth->nodeID);
+			nrtRestoreSent.erase(synth->nodeID);
+		}
+	}
+
+	freeVSTInstances(server);
+	createVSTInstances(server);
+
+	for(const auto& output : savedOutputs) {
+		setOutputBus(server, output.first, output.second);
+	}
+	if(savedInputs.empty()) {
+		for(auto* synth : synthInstances[server]) {
+			if(synth != nullptr) {
+				synth->set("in", savedDefaultInput);
+				synth->set("inChannels", 0);
+			}
+		}
+	} else {
+		for(const auto& input : savedInputs) {
+			setInputBus(server, input.first, input.second);
+		}
+	}
+
+	createSynth(server);
 }
 
 void scVST::freeVSTInstances(ofxSCServer* server) {
@@ -4068,6 +4249,9 @@ void scVST::freeVSTInstances(ofxSCServer* server) {
 	for(auto synth : instancesCopy) {
 		if(synth != nullptr) {
 			try {
+				// Detach before destroying the event owner.  Runtime topology
+				// changes will attach a fresh listener to every replacement synth.
+				vstFeedbackListeners.erase(synth);
 				// First try to send a close message to the VST plugin
 				try {
 					ofxOscMessage closeMsg;
@@ -4194,112 +4378,96 @@ void scVST::clearInstanceLookupCache() {
 	activeInstanceTargets.clear();
 }
 
+void scVST::attachVSTFeedbackListener(ofxSCSynth* synth) {
+	if(synth == nullptr) return;
+	vstFeedbackListeners.erase(synth);
+	vstFeedbackListeners[synth] = synth->newFeedbackMessage.newListener(
+		[this](ofxOscMessage& msg) { handleVSTFeedbackMessage(msg); });
+}
+
+void scVST::handleVSTFeedbackMessage(ofxOscMessage& msg) {
+	try {
+		const string& address = msg.getAddress();
+		if(address.empty() || address[0] != '/') return;
+
+		if(address == "/vst_param") {
+			handleVSTParam(msg);
+			if(!oceanodePresetLoading && !hasPendingPresetData &&
+			   msg.getNumArgs() >= 3) {
+				int paramIndex = (int)msg.getArgAsFloat(2);
+				if(!isFeedbackSuppressed(paramIndex, ofGetElapsedTimeMillis())) {
+					vstStateModifiedSincePreset = true;
+					scheduleParameterDebouncedCache();
+				}
+			}
+		}
+		else if(address == "/vst_auto") {
+			handleVSTAuto(msg);
+			if(!oceanodePresetLoading && !hasPendingPresetData &&
+			   msg.getNumArgs() >= 3) {
+				int paramIndex = (int)msg.getArgAsFloat(2);
+				if(!isFeedbackSuppressed(paramIndex, ofGetElapsedTimeMillis())) {
+					vstStateModifiedSincePreset = true;
+					scheduleParameterDebouncedCache();
+				}
+			}
+		}
+		else if(address == "/vst_transport") handleTransportPosition(msg);
+		else if(address == "/vst_open") handleVSTOpen(msg);
+		else if(address == "/vst_midi") handleVSTMidi(msg);
+		else if(address == "/vst_program_index") {
+			if(msg.getNumArgs() >= 3) {
+				int nodeID = msg.getArgAsInt32(0);
+				int programIndex = (int)msg.getArgAsFloat(2);
+				if(isMyVSTInstance(nodeID) && !oceanodePresetLoading) {
+					vstProgram.setWithoutEventNotifications(programIndex);
+					vstStateModifiedSincePreset = true;
+					scheduleImmediateFXPCache();
+				}
+			}
+		}
+		else if(address == "/vst_program_write") handleVSTPresetWrite(msg);
+		else if(address == "/vst_program_read") handleVSTPresetRead(msg);
+		else if(address == "/vst_set") {
+			if(msg.getNumArgs() >= 4) {
+				int paramIndex = (int)msg.getArgAsFloat(2);
+				float value = msg.getArgAsFloat(3);
+				if(parameterInfoMap.count(paramIndex) == 0) {
+					VSTParameterInfo info;
+					info.index = paramIndex;
+					info.displayName = "Param" + ofToString(paramIndex);
+					info.value = value;
+					parameterInfoMap[paramIndex] = info;
+					cacheParameterInfoSlot(paramIndex);
+				} else {
+					parameterInfoMap[paramIndex].value = value;
+				}
+				updateParameterValue(paramIndex, value);
+			}
+		}
+		else if(address == "/vst_update") {
+			handleVSTUpdate(msg);
+			// A full-program update on the first instance is already copied by
+			// the FXP sync path.  Do not also query and fan out hundreds of
+			// individual parameters while that transfer is in flight.
+			if(!oceanodePresetLoading && !hasPendingPresetData) {
+				vstStateModifiedSincePreset = true;
+				scheduleImmediateFXPCache();
+			}
+			if(!syncInProgress && msg.getNumArgs() >= 2) {
+				int nodeID = msg.getArgAsInt32(0);
+				if(isMyVSTInstance(nodeID)) queryVSTParametersAfterUpdate(nodeID);
+			}
+		}
+	} catch(const std::exception& e) {
+		ofLogError("scVST") << "Error in OSC feedback listener: " << e.what();
+	} catch(...) {
+		ofLogError("scVST") << "Unknown error in OSC feedback listener";
+	}
+}
+
 void scVST::buildSynth(ofxSCServer* server) {
 	createVSTInstances(server);
-
-	for(auto synth : synthInstances[server]) {
-		if(synth != nullptr) {
-			listeners.push(synth->newFeedbackMessage.newListener([this](ofxOscMessage& msg) -> void {
-				if(this == nullptr) return;
-				
-				try {
-					const string& address = msg.getAddress();
-					
-					if (address[0] != '/') return;
-					
-					if (address == "/vst_param") {
-						this->handleVSTParam(msg);
-						
-						if (!this->oceanodePresetLoading && !this->hasPendingPresetData && !this->parameterCacheScheduled) {
-							if (msg.getNumArgs() >= 3) {
-								int paramIndex = (int)msg.getArgAsFloat(2);
-								if (!this->isFeedbackSuppressed(paramIndex, ofGetElapsedTimeMillis())) {
-									this->vstStateModifiedSincePreset = true;
-									this->scheduleParameterDebouncedCache();
-								}
-							}
-						}
-					}
-					else if (address == "/vst_auto") {
-						this->handleVSTAuto(msg);
-						
-						if (!this->oceanodePresetLoading && !this->hasPendingPresetData && !this->parameterCacheScheduled) {
-							this->vstStateModifiedSincePreset = true;
-							this->scheduleParameterDebouncedCache();
-						}
-					}
-					else if (address == "/vst_transport") {
-						this->handleTransportPosition(msg);
-					}
-					else if (address == "/vst_open") {
-						this->handleVSTOpen(msg);
-					}
-					else if (address == "/vst_midi") {
-						this->handleVSTMidi(msg);
-					}
-					else if (address == "/vst_program_index") {
-						if (msg.getNumArgs() >= 3) {
-							int nodeID = msg.getArgAsInt32(0);
-							int programIndex = (int)msg.getArgAsFloat(2);
-							if (this->isMyVSTInstance(nodeID)) {
-								if(!this->oceanodePresetLoading) {
-									this->vstProgram.setWithoutEventNotifications(programIndex);
-									
-									this->vstStateModifiedSincePreset = true;
-									this->scheduleImmediateFXPCache();
-								}
-							}
-						}
-					}
-					else if (address == "/vst_program_write") {
-						this->handleVSTPresetWrite(msg);
-					}
-					else if (address == "/vst_program_read") {
-						this->handleVSTPresetRead(msg);
-					}
-					else if (address == "/vst_set") {
-						if (msg.getNumArgs() >= 4) {
-							int paramIndex = (int)msg.getArgAsFloat(2);
-							float value = msg.getArgAsFloat(3);
-							
-							if(this->parameterInfoMap.count(paramIndex) == 0) {
-								VSTParameterInfo info;
-								info.index = paramIndex;
-								info.displayName = "Param" + ofToString(paramIndex);
-								info.value = value;
-								this->parameterInfoMap[paramIndex] = info;
-								this->cacheParameterInfoSlot(paramIndex);
-							} else {
-								this->parameterInfoMap[paramIndex].value = value;
-							}
-							
-							this->updateParameterValue(paramIndex, value);
-						}
-					}
-					else if (address == "/vst_update") {
-						this->handleVSTUpdate(msg);
-
-						if (!this->oceanodePresetLoading && !this->hasPendingPresetData) {
-							this->vstStateModifiedSincePreset = true;
-							this->scheduleImmediateFXPCache();
-						}
-						
-						if (msg.getNumArgs() >= 2) {
-							int nodeID = msg.getArgAsInt32(0);
-							if (this->isMyVSTInstance(nodeID)) {
-								this->queryVSTParametersAfterUpdate(nodeID);
-							}
-						}
-					}
-					
-				} catch(const std::exception& e) {
-					ofLogError("scVST") << "Error in OSC feedback listener: " << e.what();
-				} catch(...) {
-					ofLogError("scVST") << "Unknown error in OSC feedback listener";
-				}
-			}));
-		}
-	}
 }
 
 void scVST::handleVSTPresetWrite(ofxOscMessage& msg) {
@@ -4658,6 +4826,7 @@ int scVST::getLastSynthID(ofxSCServer* server){
 
 void scVST::resetInputBusses(ofxSCServer* server, int targetBus){
 	inputBuses[server].clear();
+	defaultInputBuses[server] = targetBus;
 	
 	if(synthInstances.count(server) == 0) return;
 	
@@ -5140,6 +5309,7 @@ void scVST::handleVSTUpdate(ofxOscMessage& msg) {
 		int nodeID = msg.getArgAsInt32(0);
 		
 		if (!isMyVSTInstance(nodeID)) return;
+		if (activeInstanceTargets.size() < 2) return;
 		
 		if (syncInProgress) {
 			return;
@@ -5343,7 +5513,7 @@ void scVST::checkAndConvertVectorToScalar(int paramIndex) {
 	if(dynamicVectorParameters.count(paramIndex) == 0) return;
 	
 	auto vectorParam = dynamicVectorParameters[paramIndex];
-	auto currentValues = vectorParam->getParameter().get();
+	const auto& currentValues = vectorParam->getParameter().get();
 	
 	// Check if this parameter has any connections
 	bool hasConnections = vectorParam->hasInConnection();
@@ -5509,11 +5679,8 @@ void scVST::scheduleParameterDebouncedCache() {
 		return;
 	}
 	
-	std::string nodeKey = getNodeCacheKey();
 	lastParameterChangeTime = ofGetElapsedTimeMillis();
 	parameterCacheScheduled = true;
-	
-	ofLogVerbose("scVST") << "📅 Parameter change detected for node '" << nodeKey << "' - debounce timer reset";
 }
 
 // NEW: Update debounced parameter cache
@@ -6177,7 +6344,7 @@ std::string scVST::createTempPropagateFXPPath() {
 }
 
 void scVST::handleVSTMidi(ofxOscMessage& msg) {
-	if (msg.getNumArgs() >= 3) {
+	if (msg.getNumArgs() >= 4) {
 		int nodeID = msg.getArgAsInt32(0);
 		
 		// PERFORMANCE: Quick checks without logging
@@ -6186,18 +6353,14 @@ void scVST::handleVSTMidi(ofxOscMessage& msg) {
 		int instanceIndex = getInstanceIndexFromNodeID(nodeID);
 		if(instanceIndex != 0) return; // Only first instance
 		
-		// PERFORMANCE: Pre-allocate vector with known size to avoid reallocation
 		int numMidiArgs = msg.getNumArgs() - 2;
-		if(numMidiArgs <= 0) return;
-		
-		vector<uint8_t> midiBytes;
-		midiBytes.reserve(numMidiArgs);  // OPTIMIZATION: Reserve space upfront
-		for(int i = 2; i < msg.getNumArgs(); i++) {
-			midiBytes.push_back((uint8_t)msg.getArgAsFloat(i));
-		}
-		
-		if(midiBytes.size() >= 2) {
-			uint8_t status = midiBytes[0];
+		if(numMidiArgs >= 2) {
+			// MIDI messages handled here are at most three relevant bytes. Reading
+			// them directly avoids a heap allocation for every feedback event.
+			uint8_t status = static_cast<uint8_t>(msg.getArgAsFloat(2));
+			uint8_t data1 = static_cast<uint8_t>(msg.getArgAsFloat(3));
+			uint8_t data2 = numMidiArgs >= 3 ?
+				static_cast<uint8_t>(msg.getArgAsFloat(4)) : 0;
 			uint8_t statusType = status & 0xF0;
 			
 			// PERFORMANCE: Skip timing messages early
@@ -6213,10 +6376,10 @@ void scVST::handleVSTMidi(ofxOscMessage& msg) {
 					return;
 				}
 				
-				if(statusType == 0x90 && midiBytes.size() >= 3) {
+				if(statusType == 0x90 && numMidiArgs >= 3) {
 					// Note On
-					uint8_t note = midiBytes[1] & 0x7F;
-					uint8_t velocity = midiBytes[2] & 0x7F;
+					uint8_t note = data1 & 0x7F;
+					uint8_t velocity = data2 & 0x7F;
 					
 					if(note < 128) {
 						float newValue = (velocity > 0) ? (velocity / 127.0f) : 0.0f;
@@ -6226,19 +6389,19 @@ void scVST::handleVSTMidi(ofxOscMessage& msg) {
 						}
 					}
 				}
-				else if(statusType == 0x80 && midiBytes.size() >= 3) {
+				else if(statusType == 0x80 && numMidiArgs >= 3) {
 					// Note Off
-					uint8_t note = midiBytes[1] & 0x7F;
+					uint8_t note = data1 & 0x7F;
 					
 					if(note < 128 && currentNoteStates[note] != 0.0f) {
 						currentNoteStates[note] = 0.0f;
 						dataChanged = true;
 					}
 				}
-				else if(statusType == 0xB0 && midiBytes.size() >= 3) {
+				else if(statusType == 0xB0 && numMidiArgs >= 3) {
 					// Control Change
-					uint8_t ccNumber = midiBytes[1] & 0x7F;
-					uint8_t ccValue = midiBytes[2] & 0x7F;
+					uint8_t ccNumber = data1 & 0x7F;
+					uint8_t ccValue = data2 & 0x7F;
 					
 					if(ccNumber < 128) {
 						float newValue = ccValue / 127.0f;

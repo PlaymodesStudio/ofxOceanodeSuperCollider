@@ -203,6 +203,9 @@ private:
 	int calculateNumInstances() const;
 	void createVSTInstances(ofxSCServer* server);
 	void freeVSTInstances(ofxSCServer* server);
+	void rebuildVSTInstances(ofxSCServer* server);
+	void attachVSTFeedbackListener(ofxSCSynth* synth);
+	void handleVSTFeedbackMessage(ofxOscMessage& msg);
 	bool isMyVSTInstance(int nodeID) const;
 	void rebuildInstanceLookupCache();
 	void clearInstanceLookupCache();
@@ -234,6 +237,7 @@ private:
 	// Dynamic parameter feedback and propagation
 	void handleDynamicParameterChange(int paramIndex, const vector<float>& values);
 	void propagateParameterToOtherInstances(int sourceNodeID, int paramIndex, float value);
+	void flushPendingVSTGUIPropagation();
 	void propagateFirstInstanceToAll();
 	void handleInstanceAwareParameterChange(int paramIndex, const vector<float>& values);
 	bool shouldPropagateFromVSTGUI(int paramIndex, int sourceNodeID);
@@ -426,6 +430,7 @@ private:
 	std::unordered_set<int> firstInstanceNodeIDs;
 	std::unordered_map<int, int> nodeIDToInstanceIndex;
 	std::vector<InstanceSendTarget> activeInstanceTargets;
+	std::map<ofxSCSynth*, ofEventListener> vstFeedbackListeners;
 	
 	// Core parameters
 	ofParameter<int> numChannels;
@@ -498,10 +503,12 @@ private:
 	// MIDI state tracking (from scVSTI)
 	vector<int> previousGates;
 	vector<int> activeNotes; // Store currently playing notes to send note offs
+	vector<int> activeNoteInstances; // Exact zero-based target used by each note-on
 	
 	// Bus management - now handles multiple instances per server
 	std::map<ofxSCServer*, std::map<int, int>> outputBuses;
 	std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
+	std::map<ofxSCServer*, int> defaultInputBuses;
 	
 	//MIDI CC
 	std::map<int, MidiCCParameter> midiCCParameters; // CC number -> parameter info
@@ -548,6 +555,7 @@ private:
 	// Hot-path parameter feedback state
 	std::atomic<uint64_t> parameterUpdateGeneration[1024];
 	std::atomic<bool> parameterDirty[1024];
+	std::atomic<bool> dirtyParameterWorkPending;
 	std::mutex dirtyParameterMutex;
 	std::vector<int> dirtyParameterIndices;
 	static const uint64_t PARAM_UPDATE_THROTTLE_MS = 16;
@@ -562,10 +570,18 @@ private:
 	std::array<uint8_t, 1024> pendingGUISeen;
 	std::vector<int> pendingGUIParamIndices;
 
+	// GUI edits from the first plugin instance are coalesced once per update
+	// tick, then sent to every peer instance using multi-pair /set messages.
+	std::array<float, 1024> pendingPropagationValues;
+	std::array<int, 1024> pendingPropagationSourceNodeIDs;
+	std::array<uint8_t, 1024> pendingPropagationSeen;
+	std::vector<int> pendingPropagationIndices;
+
 	// Batched outgoing VST parameter sets
 	std::array<std::vector<float>, 1024> pendingParameterSetValues;
 	std::array<uint8_t, 1024> pendingParameterSetSeen;
 	std::vector<int> pendingParameterSetIndices;
+	std::atomic<bool> pendingParameterSetWorkPending;
 	std::mutex pendingParameterSetMutex;
 	
 	// Internal batch helpers
