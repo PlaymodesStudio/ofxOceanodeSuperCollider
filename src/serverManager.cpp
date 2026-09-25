@@ -128,19 +128,16 @@ void serverManager::setup(){
 }
 
 void serverManager::draw(){
-    if(ImGui::Button("Boot Server")){
+    if(ImGui::MenuItem("Boot Server")){
         boot();
     }
-    
-    ImGui::SameLine();
-    if(ImGui::Button("Kill Server")){
+
+    if(ImGui::MenuItem("Kill Server")){
         if(preferences.local){
             kill();
         }
     }
-    
-    ImGui::SameLine();
-    
+
     if(ImGui::Checkbox("Local", &preferences.local)){
         if(!preferences.local){
             if(sc != nullptr){
@@ -152,92 +149,108 @@ void serverManager::draw(){
             sc = new scStart(preferences);
         }
     }
-    
+
     if(ImGui::Checkbox("Load Synthdefs On Preset", &preferences.loadOnPreset)){
         if(!preferences.loadOnPreset){
             loadDefs();
         }
     }
-    
-    if(ImGui::Button("Load Defs")){
+
+    if(ImGui::MenuItem("Load Defs")){
         loadDefs();
     }
-    
+
     ImGui::Separator();
-    
+
+    ImGui::PushItemWidth(ImGui::GetFontSize() * 12.0f);
     if(ImGui::SliderFloat("Volume", &volume, 0, 1)){
         setVolume(volume);
     }
-    
-    ImGui::SameLine();
-    
+
     if(ImGui::Checkbox("Mute", &mute)){
         if(mute) setVolume(0);
         else setVolume(volume);
     }
-    
+
     if(ImGui::SliderInt("Delay", &delay, 0, 5000)){
         setDelay(delay);
     }
-    
-    ImGui::Separator();
-    
-    ImGui::InputInt("Udp Port", &preferences.udpPort);
-    
-    
-    int intaddress[4] = {0, 0, 0, 0};
-    vector<string> splitAddress = ofSplitString(preferences.bindAddress, ".");
-    for(int i = 0; i < 4; i++){
-        intaddress[i] = ofToInt(splitAddress[i]);
-    }
-    if(ImGui::InputInt4("Bind Address", &intaddress[0])){
-        string newAddress = ofToString(intaddress[0]) + "."
-                            + ofToString(intaddress[1]) + "."
-                            + ofToString(intaddress[2]) + "."
-                            + ofToString(intaddress[3]) + ".";
-        preferences.bindAddress = newAddress;
-    }
-    
-    ImGui::InputInt("Audio Busses", &preferences.numAudioBusChannels);
-    ImGui::InputInt("Control Busses", &preferences.numControlBusChannels);
-    ImGui::InputInt("Input Channels", &preferences.numInputBusChannels);
-    ImGui::InputInt("Output Channels", &preferences.numOutputBusChannels);
-    ImGui::InputInt("Block Size", &preferences.blockSize);
-    ImGui::InputInt("Buffer Size", &preferences.hardwareBufferSize);
-    ImGui::InputInt("Sampling Rate", &preferences.hardwareSampleRate);
-    ImGui::InputInt("Num Buffers", &preferences.numBuffers);
-    ImGui::InputInt("Max Nodes", &preferences.maxNodes);
-    ImGui::InputInt("Max Synthdefs", &preferences.maxSynthDefs);
-    ImGui::InputInt("Mem Size", &preferences.memSize);
-    ImGui::InputInt("Num Wire Bufs", &preferences.numWireBufs);
-    ImGui::InputInt("Num R Gens", &preferences.numRGens);
-    ImGui::InputInt("Max Logins", &preferences.maxLogins);
-    ImGui::InputFloat("Safety Clip Th", &preferences.safetyClipThreshold);
-    
-    ImGui::Text("Output Device: %s", preferences.deviceName == "nil" ? "Default" : preferences.deviceName.c_str());
-    ImGui::Text("Input Device: %s", preferences.inputDeviceName == "nil" ? "Default" : preferences.inputDeviceName.c_str());
-    
-    //Device name;
-    bool verb = preferences.verbosity;
-    if(ImGui::Checkbox("Verbosity", &verb)){
-        if(verb) preferences.verbosity = 1;
-        else preferences.verbosity = 0;
-    }
 
-    bool localUgens = (preferences.ugensPlugins != "");
-    if(ImGui::Checkbox("LocalUgens", &localUgens)){
-        if(localUgens)
-            preferences.ugensPlugins = ofToDataPath("Supercollider/Ugens", true);
-        else
-            preferences.ugensPlugins = "";
+    ImGui::Separator();
+    ImGui::PopItemWidth();
+
+    if(ImGui::BeginMenu("Connection")){
+        ImGui::PushItemWidth(ImGui::GetFontSize() * 18.0f);
+        ImGui::InputInt("Udp Port", &preferences.udpPort);
+
+        int intaddress[4] = {0, 0, 0, 0};
+        vector<string> splitAddress = ofSplitString(preferences.bindAddress, ".");
+        for(int i = 0; i < 4; i++){
+            intaddress[i] = ofToInt(splitAddress[i]);
+        }
+        if(ImGui::InputInt4("Bind Address", &intaddress[0])){
+            string newAddress = ofToString(intaddress[0]) + "."
+                                + ofToString(intaddress[1]) + "."
+                                + ofToString(intaddress[2]) + "."
+                                + ofToString(intaddress[3]) + ".";
+            preferences.bindAddress = newAddress;
+        }
+
+        ImGui::PopItemWidth();
+        ImGui::EndMenu();
     }
-    
-    if(ImGui::Checkbox("Dump Osc", &dumpOsc)){
-        ofxOscMessage m;
-        m.setAddress("/dumpOSC");
-        if(dumpOsc) m.addIntArg(1);
-        else m.addIntArg(0);
-        server->sendMsg(m);
+    if(ImGui::BeginMenu("Audio")){
+        ImGui::PushItemWidth(ImGui::GetFontSize() * 12.0f);
+        ImGui::InputInt("Audio Busses", &preferences.numAudioBusChannels);
+        ImGui::InputInt("Control Busses", &preferences.numControlBusChannels);
+        ImGui::InputInt("Input Channels", &preferences.numInputBusChannels);
+        ImGui::InputInt("Output Channels", &preferences.numOutputBusChannels);
+        ImGui::InputInt("Block Size", &preferences.blockSize);
+        ImGui::InputInt("Buffer Size", &preferences.hardwareBufferSize);
+        ImGui::InputInt("Sampling Rate", &preferences.hardwareSampleRate);
+        ImGui::InputFloat("Safety Clip Th", &preferences.safetyClipThreshold);
+
+        ImGui::Text("Output Device: %s", preferences.deviceName == "nil" ? "Default" : preferences.deviceName.c_str());
+        ImGui::Text("Input Device: %s", preferences.inputDeviceName == "nil" ? "Default" : preferences.inputDeviceName.c_str());
+
+        ImGui::PopItemWidth();
+        ImGui::EndMenu();
+    }
+    if(ImGui::BeginMenu("Resources")){
+        ImGui::PushItemWidth(ImGui::GetFontSize() * 12.0f);
+        ImGui::InputInt("Num Buffers", &preferences.numBuffers);
+        ImGui::InputInt("Max Nodes", &preferences.maxNodes);
+        ImGui::InputInt("Max Synthdefs", &preferences.maxSynthDefs);
+        ImGui::InputInt("Mem Size", &preferences.memSize);
+        ImGui::InputInt("Num Wire Bufs", &preferences.numWireBufs);
+        ImGui::InputInt("Num R Gens", &preferences.numRGens);
+        ImGui::InputInt("Max Logins", &preferences.maxLogins);
+        ImGui::PopItemWidth();
+        ImGui::EndMenu();
+    }
+    if(ImGui::BeginMenu("Diagnostics")){
+        bool verb = preferences.verbosity;
+        if(ImGui::Checkbox("Verbosity", &verb)){
+            if(verb) preferences.verbosity = 1;
+            else preferences.verbosity = 0;
+        }
+
+        bool localUgens = (preferences.ugensPlugins != "");
+        if(ImGui::Checkbox("LocalUgens", &localUgens)){
+            if(localUgens)
+                preferences.ugensPlugins = ofToDataPath("Supercollider/Ugens", true);
+            else
+                preferences.ugensPlugins = "";
+        }
+
+        if(ImGui::Checkbox("Dump Osc", &dumpOsc)){
+            ofxOscMessage m;
+            m.setAddress("/dumpOSC");
+            if(dumpOsc) m.addIntArg(1);
+            else m.addIntArg(0);
+            server->sendMsg(m);
+        }
+        ImGui::EndMenu();
     }
 }
 

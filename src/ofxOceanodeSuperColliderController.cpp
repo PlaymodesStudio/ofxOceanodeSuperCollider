@@ -973,61 +973,102 @@ void ofxOceanodeSuperColliderController::setup(){
 }
 
 void ofxOceanodeSuperColliderController::draw(){
-    if(ImGui::Button("Boot Servers")){
+    if(ImGui::MenuItem("Boot Servers")){
         for(auto s : outputServers) s->boot();
     }
-    
-    ImGui::SameLine();
-    if(ImGui::Button("Kill Server")){
+    if(ImGui::MenuItem("Kill Servers")){
         for(auto s : outputServers) s->kill();
     }
-    
-    ImGui::SameLine();
-    
-    if(ImGui::Button("Load Defs")){
+    if(ImGui::MenuItem("Load Defs")){
         for(auto s : outputServers) s->loadDefs();
     }
-
 #if OFXOCEANODESC_HAS_TIMELINE
-    ImGui::Separator();
-    ImGui::TextUnformatted("Non-realtime WAV rendering");
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputFloat("Duration (s)", &nrtDuration, 1.0f, 10.0f, "%.2f");
-    nrtDuration = std::max(0.01f, nrtDuration);
+    if(ImGui::BeginMenu("NRT Rendering")){
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);
+        ImGui::InputFloat("Duration (s)", &nrtDuration, 1.0f, 10.0f, "%.2f");
+        nrtDuration = std::max(0.01f, nrtDuration);
 
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputInt("WAV channels", &nrtOutputChannels);
-    // Every server renders the same width, so the narrowest one sets it.
-    int maxNrtChannels = std::numeric_limits<int>::max();
-    for(auto s : outputServers){
-        if(s != nullptr) maxNrtChannels = std::min(maxNrtChannels, std::max(1, s->preferences.numOutputBusChannels));
-    }
-    if(maxNrtChannels == std::numeric_limits<int>::max()) maxNrtChannels = 128;
-    nrtOutputChannels = std::max(1, std::min(nrtOutputChannels, maxNrtChannels));
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);
+        ImGui::InputInt("WAV channels", &nrtOutputChannels);
+        // Every server renders the same width, so the narrowest one sets it.
+        int maxNrtChannels = std::numeric_limits<int>::max();
+        for(auto s : outputServers){
+            if(s != nullptr) maxNrtChannels = std::min(maxNrtChannels, std::max(1, s->preferences.numOutputBusChannels));
+        }
+        if(maxNrtChannels == std::numeric_limits<int>::max()) maxNrtChannels = 128;
+        nrtOutputChannels = std::max(1, std::min(nrtOutputChannels, maxNrtChannels));
 
-    std::array<char, 512> outputBuffer{};
-    std::strncpy(outputBuffer.data(), nrtOutputPath.c_str(), outputBuffer.size() - 1);
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    if(ImGui::InputText("Output WAV", outputBuffer.data(), outputBuffer.size())){
-        nrtOutputPath = outputBuffer.data();
-    }
+        std::array<char, 512> outputBuffer{};
+        std::strncpy(outputBuffer.data(), nrtOutputPath.c_str(), outputBuffer.size() - 1);
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24.0f);
+        if(ImGui::InputText("Output WAV", outputBuffer.data(), outputBuffer.size())){
+            nrtOutputPath = outputBuffer.data();
+        }
 
-    if(outputServers.size() > 1){
-        ImGui::TextWrapped("Renders every server with a connected Output; the WAV is their sum.");
-    }
+        if(outputServers.size() > 1){
+            ImGui::TextWrapped("Renders every server with a connected Output; the WAV is their sum.");
+        }
 
-    if(!nrtCaptureActive && !nrtRendering.load()){
-        if(ImGui::Button("Render NRT WAV")) startNRTRender();
-    }else if(nrtCaptureActive){
-        if(ImGui::Button("Cancel NRT Capture")) completeNRTCapture(true);
-    }else{
-        ImGui::TextUnformatted("Rendering...");
+        if(!nrtCaptureActive && !nrtRendering.load()){
+            if(ImGui::Button("Render NRT WAV")) startNRTRender();
+        }else if(nrtCaptureActive){
+            if(ImGui::Button("Cancel NRT Capture")) completeNRTCapture(true);
+        }else{
+            ImGui::TextUnformatted("Rendering...");
+        }
+        if(!nrtStatus.empty()) ImGui::TextWrapped("%s", nrtStatus.c_str());
+        ImGui::EndMenu();
     }
-    if(!nrtStatus.empty()) ImGui::TextWrapped("%s", nrtStatus.c_str());
 #endif // OFXOCEANODESC_HAS_TIMELINE
-    
-    ImGui::Separator();
 
+    ImGui::Separator();
+    ImGui::PushItemWidth(ImGui::GetFontSize() * 12.0f);
+    if(ImGui::SliderFloat("Master Volume", &volume, 0, 1)){
+        for(auto &n : outputServers){
+            n->setVolume(volume);
+        }
+    }
+    if(ImGui::Checkbox("Master Mute", &mute)){
+        for(auto &n : outputServers){
+            if(mute) n->setVolume(0);
+            else n->setVolume(volume);
+        }
+    }
+    ImGui::PopItemWidth();
+
+    ImGui::Separator();
+    if(ImGui::BeginMenu("Audio Devices")){
+        drawAudioDevices();
+        ImGui::EndMenu();
+    }
+    if(ImGui::BeginMenu("Master Settings")){
+        drawMasterSettings();
+        ImGui::EndMenu();
+    }
+    if(ImGui::BeginMenu("Servers")){
+        for(int i = 0; i < outputServers.size(); i++){
+            ImGui::PushID(i);
+            if(ImGui::BeginMenu(("Server " + ofToString(i)).c_str())){
+                outputServers[i]->draw();
+                ImGui::EndMenu();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndMenu();
+    }
+
+    ImGui::Separator();
+    if(ImGui::MenuItem("Save Controller Settings")){
+        saveControllerConfig("Supercollider/Config/Controller/ControllerPreferences.json");
+    }
+    if(ImGui::MenuItem("Save Server Settings")){
+        for(int i = 0; i < outputServers.size(); i++){
+            saveConfig("Supercollider/Config/Server/ServerPreferences_" + ofToString(i) + ".json", outputServers[i]->preferences);
+        }
+    }
+}
+
+void ofxOceanodeSuperColliderController::drawAudioDevices(){
     auto vector_getter = [](void* vec, int idx, const char** out_text)
     {
         auto& vector = *static_cast<std::vector<std::string>*>(vec);
@@ -1044,7 +1085,7 @@ void ofxOceanodeSuperColliderController::draw(){
     }
 
     ImGui::TextUnformatted("Output Device");
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24.0f);
     if(ImGui::Combo("##Output Device", &audioDevice, vector_getter, static_cast<void*>(&audioDeviceNames), audioDeviceNames.size())){
         const std::string newAudioDeviceName = getAudioDeviceNameFromSelection();
         if(newAudioDeviceName != selectedAudioDeviceName){
@@ -1057,7 +1098,7 @@ void ofxOceanodeSuperColliderController::draw(){
     }
 
     ImGui::TextUnformatted("Input Device");
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24.0f);
     if(ImGui::Combo("##Input Device", &audioInputDevice, vector_getter, static_cast<void*>(&inputDeviceNames), inputDeviceNames.size())){
         const std::string newInputDeviceName = getAudioInputDeviceNameFromSelection();
         if(newInputDeviceName != selectedAudioInputDeviceName){
@@ -1070,7 +1111,7 @@ void ofxOceanodeSuperColliderController::draw(){
     }
 
     ImGui::TextUnformatted("Sample Rate");
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24.0f);
     if(ImGui::Combo("##Sample Rate", &sampleRate, vector_getter, static_cast<void*>(&sampleRateNames), sampleRateNames.size())){
         const int newSampleRate = getSampleRateFromSelection();
         if(newSampleRate > 0 && newSampleRate != selectedSampleRate){
@@ -1079,62 +1120,28 @@ void ofxOceanodeSuperColliderController::draw(){
             applyAudioDeviceToServers(true);
         }
     }
+}
 
-    ImGui::Separator();
-    
-    if(ImGui::SliderFloat("Master Volume", &volume, 0, 1)){
-        for(auto &n : outputServers){
-            n->setVolume(volume);
-        }
-    }
-    
-    ImGui::SameLine();
-    
-    if(ImGui::Checkbox("Master Mute", &mute)){
-        for(auto &n : outputServers){
-            if(mute) n->setVolume(0);
-            else n->setVolume(volume);
-        }
-    }
-    
+void ofxOceanodeSuperColliderController::drawMasterSettings(){
+    ImGui::PushItemWidth(ImGui::GetFontSize() * 12.0f);
     if(ImGui::SliderInt("Master Delay", &delay, 0, 5000)){
         for(auto &n : outputServers){
             n->setDelay(delay);
         }
     }
-    
+
     if(ImGui::Checkbox("StereoMix", &stereomix)){
         for(auto &n : outputServers){
             n->setStereoMix(stereomix);
         }
     }
-    
-    ImGui::SameLine();
-    
+
     if(ImGui::SliderInt("StereoMix Size", &stereomixSize, 2, 100)){
         for(auto &n : outputServers){
             n->setStereoMixSize(stereomixSize);
         }
     }
-	if(ImGui::Button("[Save SC Controller Settings]"))
-	{
-		saveControllerConfig("Supercollider/Config/Controller/ControllerPreferences.json");
-	}
-
-    ImGui::Separator();
-    
-    for(int i = 0; i < outputServers.size(); i++){
-        if(ImGui::TreeNode(("Server " + ofToString(i)).c_str())){
-            outputServers[i]->draw();
-            ImGui::TreePop();
-        }
-    }
-    
-    if(ImGui::Button("[Save Server Settings]")){
-        for(int i = 0; i < outputServers.size(); i++){
-            saveConfig("Supercollider/Config/Server/ServerPreferences_" + ofToString(i) + ".json", outputServers[i]->preferences);
-        }
-    }
+    ImGui::PopItemWidth();
 }
 
 void ofxOceanodeSuperColliderController::killServers(){
