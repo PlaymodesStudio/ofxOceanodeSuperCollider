@@ -735,7 +735,6 @@ void serverManager::teardownGraphForPresetLoad(){
     if(server == nullptr) return;
 
     outputBussesRefToNode.clear();
-    inputBussesRefToNode.clear();
     connections.clear();
     // Every link holds raw pointers to nodes that are about to be freed just
     // below. Anything reading them between here and the next recomputeGraph()
@@ -781,7 +780,6 @@ void serverManager::recomputeGraph(){
 //        for(auto &b : busses) b.free();
         
         outputBussesRefToNode.clear();
-        inputBussesRefToNode.clear();
         
         std::vector<scNode*> newNodesList;
         std::map<scNode*, std::pair<int, std::vector<int>>> nodeChilds;
@@ -829,6 +827,14 @@ void serverManager::recomputeGraph(){
             if(node != nullptr)
                 node->free(server);
         }
+        // What remains in nodesList here is exactly the nodes leaving the
+        // graph, so stop listening for their destruction. This loop used to
+        // run after the clear() below, over an empty list, and so never
+        // erased anything: every node that had ever been in the graph kept a
+        // live listener, and the map grew for the life of the session.
+        for(auto &node : nodesList){
+            nodeDestroyedListeners.erase(node);
+        }
         nodesList.clear();
         
         for(auto &node : toCreateNodes){
@@ -842,10 +848,6 @@ void serverManager::recomputeGraph(){
                                                }), nodeLinks.end());
                 nodesListChanged = true;
             });
-        }
-        
-        for(auto &node : nodesList){
-            nodeDestroyedListeners.erase(node);
         }
         
             
@@ -877,7 +879,6 @@ void serverManager::recomputeGraph(){
                     else
                         busindex = c.first.getBusIndex(server); // fallback for self-managed buses (e.g. mix bus)
                     dest->setInputBus(server, c.first.getNodeRef(), busindex);
-                    inputBussesRefToNode[dest].push_back(busindex);
                     nodeLinks.push_back({c.first.getNodeRef(), dest, busindex});
                 }
             }

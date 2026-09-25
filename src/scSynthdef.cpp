@@ -100,12 +100,8 @@ void scSynthdef::setup(){
                                 vector<int>(1, ofToInt(specMap["maxval"]))));
             
             setValuesToSynths = [this, toSendName, vi](){
-                for(auto i : vi.get()) {
-                    if(std::isnan(i)){
-                        ofLog() << "Trying to send a nan value";
-                        return;
-                    }
-                }
+                // No NaN check: these are integers, and std::isnan(int)
+                // is always false, so the loop that stood here never fired.
                 for(auto synthServer : synths){
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
@@ -250,12 +246,8 @@ void scSynthdef::setup(){
             addParameter(vi.set(paramName, {-1}, {-1}, {INT_MAX}));
             
             setValuesToSynths = [this, toSendName, vi](){
-                for(auto i : vi.get()) {
-                    if(std::isnan(i)){
-                        ofLog() << "Trying to send a nan value";
-                        return;
-                    }
-                }
+                // No NaN check: these are integers, and std::isnan(int)
+                // is always false, so the loop that stood here never fired.
                 for(auto synthServer : synths){
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
@@ -273,12 +265,8 @@ void scSynthdef::setup(){
             parameterReference = addParameterDropdown(vi, paramName, ofToInt(specMap["default"]), splitString);
             
             setValuesToSynths = [this, toSendName, vi](){
-                for(auto i : vi.get()) {
-                    if(std::isnan(i)){
-                        ofLog() << "Trying to send a nan value";
-                        return;
-                    }
-                }
+                // No NaN check: these are integers, and std::isnan(int)
+                // is always false, so the loop that stood here never fired.
                 for(auto synthServer : synths){
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);

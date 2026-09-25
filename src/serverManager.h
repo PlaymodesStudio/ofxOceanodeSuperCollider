@@ -145,13 +145,11 @@ private:
     
     std::vector<scOutput*> outputs;
     std::vector<scNode*> nodesList;
-    std::map<scNode*, std::map<int, std::vector<ofxSCSynth*>>> synthMap;
 
     static std::map<ofxSCServer*, int> serverSampleRates;
     
     std::vector<ofxSCBus> busses;
     std::map<scNode*, std::map<int, int>> outputBussesRefToNode;
-    std::map<scNode*, std::vector<int>> inputBussesRefToNode;
     // source -> destination, with the bus between them, recorded as the graph
     // is built. Gives both the stem list and the chain to walk for its name.
     struct nodeLink { scNode* source = nullptr; scNode* destination = nullptr; int bus = -1; };
