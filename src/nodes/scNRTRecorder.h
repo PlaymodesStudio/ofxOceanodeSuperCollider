@@ -33,9 +33,8 @@
 // Source picks what is written: "Master" is the full mix, "All stems" every
 // mixer input in the graph, "<mixer> (all)" that one mixer's inputs, and
 // "<mixer> / <stem>" a single chain on its own. With Master adds the full mix
-// alongside. Files are named after Filename with what they hold appended --
-// <name>_MasterMix.wav for the mix, <name>_<stem>.wav for each stem -- so
-// Filename itself is never written to.
+// alongside. The master is written to Filename exactly; stems append their
+// names as <name>_<stem>.wav.
 //
 // Remove DC runs a LeakDC-style filter over each finished file, with its
 // corner at 3.5 Hz so it takes out offset and drift without thinning the low

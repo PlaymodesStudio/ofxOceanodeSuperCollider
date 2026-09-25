@@ -343,10 +343,11 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
     }
     const bool withMaster = nrtRecordStems;
 
-    // Every file is named after the requested output path with what it holds
-    // appended, so a set of renders sorts together and the mix is never
-    // mistaken for a stem -- the requested path is never written to itself.
-    const std::string masterPath = base + "_MasterMix" + ext;
+    // The master uses the requested path exactly. Besides making the Filename
+    // parameter truthful, this lets downstream recorder nodes consume it
+    // directly. Stems retain their suffixes so a multi-file render still has
+    // unique targets beside the master.
+    const std::string masterPath = outputPath;
     if(selected == nullptr || withMaster) jobs.push_back({scorePath, masterPath, "master"});
 
     if(selected != nullptr){

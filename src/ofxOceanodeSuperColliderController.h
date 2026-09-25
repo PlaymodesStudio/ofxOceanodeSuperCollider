@@ -62,9 +62,8 @@ public:
     // Needs ofxOceanode's frame-stepped transport, so it is only available
     // together with the timeline.
     bool beginNRTRecording(int serverIndex, int outputChannels, const std::string& outputPath, bool manualStop = true);
-    // Also write the full mix alongside whatever Source selects. Every file
-    // is named after the output path with what it holds appended, so the mix
-    // lands beside its stems rather than on top of one.
+    // Also write the full mix alongside whatever Source selects. The master
+    // uses the requested output path exactly; stems append their own names.
     void setNRTRecordStems(bool recordStems){ nrtRecordStems = recordStems; }
 
     // One entry of the Source dropdown, in the order they are listed: the
