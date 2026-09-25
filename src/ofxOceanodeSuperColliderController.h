@@ -35,7 +35,8 @@ public:
 #if OFXOCEANODESC_HAS_TIMELINE
     void update() override;
 #endif // OFXOCEANODESC_HAS_TIMELINE
-    void draw();
+    void draw() override;
+    bool isMenuController() const override { return true; }
     
     void killServers();
 
@@ -136,7 +137,9 @@ public:
     
     vector<serverManager*> getServers(){return outputServers;}
 private:
-    
+    void drawAudioDevices();
+    void drawMasterSettings();
+
     void reloadAudioDevices();
     void syncAudioDeviceSelection();
     void syncAudioInputDeviceSelection();
