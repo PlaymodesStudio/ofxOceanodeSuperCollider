@@ -140,15 +140,17 @@ public:
                         int eachChannelSize = std::max(1, (int)size.x / (int)peakBus->readValues.size());
                         peakValues.reserve(eachChannelSize * peakBus->readValues.size());
                         for(int i = 0; i < peakBus->readValues.size(); i++){
-                            vector<float> vals(eachChannelSize, peakBus->readValues[i]);
-                            peakValues.insert(peakValues.end(), vals.begin(), vals.end());
+                            // Same run of repeated values, without building a
+                            // temporary vector per channel to copy it from.
+                            peakValues.insert(peakValues.end(), eachChannelSize, peakBus->readValues[i]);
                         }
                         if(!peakValues.empty()){
                             ImGui::PlotLines("##scinfo_peak", peakValues.data(), (int)peakValues.size(), 0, NULL, 0, 1, size);
                         }
                     }
-                    ampBus->requestValues();
-                    peakBus->requestValues();
+                    // No request here: update() already asks for all three
+                    // buses every frame, so asking again only doubled the
+                    // OSC traffic in both directions while the window is open.
                 }
             }
             ImGui::End();

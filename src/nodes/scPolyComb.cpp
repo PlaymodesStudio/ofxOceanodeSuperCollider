@@ -1090,7 +1090,7 @@ void scPolyComb::drawPolyCombWindow() {
 
 // Helper: scalar slider that broadcasts to all voices in a per-voice vector param
 static bool scalarSlider(const char* label, ofParameter<vector<float>>& p, float min, float max) {
-    auto v = p.get();
+    const auto& v = p.get();   // only v[0] is read; no copy of the whole vector
     float val = v.empty() ? min : v[0];
     if (ImGui::SliderFloat(label, &val, min, max)) {
         broadcastVectorParam(p, val);
@@ -1100,7 +1100,7 @@ static bool scalarSlider(const char* label, ofParameter<vector<float>>& p, float
 }
 
 static bool scalarDiscreteSlider(const char* label, ofParameter<vector<float>>& p, int min, int max) {
-    auto v = p.get();
+    const auto& v = p.get();   // only v[0] is read; no copy of the whole vector
     int val = v.empty() ? min : ofClamp((int)std::round(v[0]), min, max);
     if (ImGui::SliderInt(label, &val, min, max)) {
         broadcastVectorParam(p, (float)val);
@@ -1119,7 +1119,7 @@ static bool scalarIntSlider(const char* label, ofParameter<int>& p, int min, int
 }
 
 static bool scalarEnumCombo(const char* label, ofParameter<vector<float>>& p, const char* const items[], int itemCount) {
-    auto v = p.get();
+    const auto& v = p.get();   // only v[0] is read; no copy of the whole vector
     int value = v.empty() ? 0 : ofClamp((int)std::round(v[0]), 0, std::max(itemCount - 1, 0));
     if (ImGui::BeginCombo(label, items[value])) {
         for (int i = 0; i < itemCount; i++) {

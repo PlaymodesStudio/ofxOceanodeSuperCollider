@@ -2729,6 +2729,14 @@ void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
 	drawList->AddRectFilled(vuStart, vuEnd, IM_COL32(20, 20, 20, 255));
 	drawList->AddRect(vuStart, vuEnd, IM_COL32(80, 80, 80, 255), 0.0f, 0, 1.0f);
 	
+	// Peak line tracking coefficients. They depend only on the two settings,
+	// not on the channel, so they are worked out once per meter rather than
+	// once per channel (two expf calls each, every frame).
+	float attackMs = masterVUAttack.get();
+	float releaseMs = masterVURelease.get();
+	float attackCoeff = 1.0f - expf(-1000.0f / (attackMs * 60.0f));
+	float releaseCoeff = 1.0f - expf(-1000.0f / (releaseMs * 60.0f));
+
 	// Draw each channel as a horizontal bar stacked vertically
 	for (int ch = 0; ch < numChans; ch++) {
 		float ampLevel = ofClamp(vuLevels[ch], 0.0f, 2.0f);
@@ -2740,14 +2748,7 @@ void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
 		
 		drawList->AddRectFilled(channelStart, channelEnd, IM_COL32(30, 30, 30, 255));
 		
-		// Peak line tracking
-		float attackMs = masterVUAttack.get();
-		float releaseMs = masterVURelease.get();
-
-		
-		float attackCoeff = 1.0f - expf(-1000.0f / (attackMs * 60.0f));
-		float releaseCoeff = 1.0f - expf(-1000.0f / (releaseMs * 60.0f));
-		
+		// Peak line tracking (coefficients computed above the loop)
 		// CRITICAL: Extra bounds check before accessing array
 		if (ch < trackPeakLevels[trackIndex].size() &&
 			ch < trackPeakDecayTimers[trackIndex].size()) {

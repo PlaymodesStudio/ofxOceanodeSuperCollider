@@ -89,7 +89,15 @@ public:
 
     void update(ofEventArgs&) override {
         if(controller == nullptr) return;
-        refreshSourceOptions();
+        // Building the source list walks every link in the graph, and the
+        // list only changes when the patch does. Four times a second follows
+        // a repatch closely enough; every frame was waste.
+        const uint64_t now = ofGetElapsedTimeMillis();
+        if(sourceRefreshPending || now - lastSourceRefreshMs >= 250){
+            refreshSourceOptions();
+            lastSourceRefreshMs = now;
+            sourceRefreshPending = false;
+        }
 
         const bool isReady = controller->isNRTArmed();
         if(ready.get() != isReady) ready = isReady;
@@ -352,6 +360,9 @@ private:
     ofEventListeners listeners;
     bool suppressArm = false;
     bool suppressRecord = false;
+    // The first update refreshes at once so the dropdown is filled on frame one.
+    bool sourceRefreshPending = true;
+    uint64_t lastSourceRefreshMs = 0;
     bool waitingForRender = false;
 };
 
