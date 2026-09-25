@@ -46,12 +46,15 @@ public:
     // rather than reach the member through `this`, which does not compile.
     explicit scNRTRecorder(ofxOceanodeSuperColliderController* superColliderController)
     : ofxOceanodeNodeModel("SC NRT Recorder"), controller(superColliderController) {
+        addSeparator("Capture");
         addParameter(arm.set("Arm", false), ofxOceanodeParameterFlags_DisableSavePreset);
         // The lamp below replaces this checkbox; the outlet stays patchable.
         addOutputParameter(ready.set("Ready", false), ofxOceanodeParameterFlags_NoGuiWidget);
         addCustomRegion(stateRegion.set("State", [this](){ drawState(); }),
                         [this](){ drawState(); });
         addParameter(record.set("Record", false), ofxOceanodeParameterFlags_DisableSavePreset);
+
+        addSeparator("Render");
         addParameter(server.set("Server", 0, 0, 127));
         addParameter(channels.set("Channels", 2, 1, 128));
         addParameter(filename.set("Filename", "Supercollider/NRT/recording.wav"));
@@ -64,6 +67,9 @@ public:
         sourceParameter = addParameterDropdown(source, "Source", 0, sourceOptions);
         addParameter(withMaster.set("With Master", false));
         addParameter(removeDC.set("Remove DC", false));
+
+        addSeparator("Output");
+        addOutputParameter(finished.set("Finished"), ofxOceanodeParameterFlags_DisableSavePreset);
         addOutputParameter(status.set("Status", "Disarmed"));
         addInspectorParameter(parallel.set("Parallel Renders", 4, 1, 8));
 
@@ -89,6 +95,24 @@ public:
         if(ready.get() != isReady) ready = isReady;
         const std::string current = controller->getNRTStatus();
         if(status.get() != current) status = current;
+
+        // endNRTRecording() starts the asynchronous scsynth render. Only fire
+        // after that render (and optional DC cleanup) has fully completed, so
+        // a downstream FFmpeg node never opens a WAV that is still growing.
+        if(waitingForRender && !controller->isNRTRecordingActive() &&
+           !controller->isNRTRendering()){
+            if(current == "NRT render complete"){
+                finished.trigger();
+                waitingForRender = false;
+            }else if(current.rfind("Rendering ", 0) != 0){
+                // A non-rendering terminal status is a failure (or there was
+                // nothing to render), so do not tell downstream nodes that a
+                // usable WAV exists. If the worker only just stopped, the
+                // controller still says "Rendering" until it joins it on the
+                // next update; keep waiting through that one-frame handoff.
+                waitingForRender = false;
+            }
+        }
 
         // The controller disarms itself when the patch changes underneath it,
         // so the button has to follow it back down.
@@ -293,7 +317,7 @@ private:
     void onRecordChanged(bool value){
         if(suppressRecord || controller == nullptr) return;
         if(!value){
-            controller->endNRTRecording(false);
+            waitingForRender = controller->endNRTRecording(false);
             setArm(false);
             return;
         }
@@ -318,6 +342,7 @@ private:
     ofParameter<int> source;
     ofParameter<bool> withMaster;
     ofParameter<bool> removeDC;
+    ofParameter<void> finished;
     ofParameter<std::string> status;
     ofParameter<int> parallel;
 
@@ -327,6 +352,7 @@ private:
     ofEventListeners listeners;
     bool suppressArm = false;
     bool suppressRecord = false;
+    bool waitingForRender = false;
 };
 
 #endif // OFXOCEANODESC_HAS_TIMELINE
