@@ -128,7 +128,23 @@ void scBufferBrowser::drawBrowserContents() {
         }
     }
 
-    for(int i = 0; i < (int)browseEntries.size(); i++) {
+    // Draw only the rows in view (see scRhythmBox's browser for the reasoning).
+    // The focused row re-centres itself while this window has focus, which it
+    // can only do if drawn, so when it is not fully in view the whole list is
+    // drawn as before and it re-centres; clipping resumes on the next frame.
+    const int n = (int)browseEntries.size();
+    const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
+    const float focusTop = ImGui::GetCursorPosY() + focusIndex * rowHeight;
+    const bool followsFocus = focusIndex >= 0 && ImGui::IsWindowFocused();
+    const bool clipRows = !followsFocus ||
+        (focusTop >= ImGui::GetScrollY() &&
+         focusTop + ImGui::GetTextLineHeight() <= ImGui::GetScrollY() + ImGui::GetWindowHeight());
+
+    // A click on a folder is acted on after the loop, never inside it: the
+    // loop always completes, and refreshBrowseDir() never runs while entry
+    // still refers into the list it is about to clear.
+    std::string navigateTo;
+    auto drawRow = [&](int i) {
         auto& entry = browseEntries[i];
 
         std::string prefix;
@@ -152,9 +168,7 @@ void scBufferBrowser::drawBrowserContents() {
 
         if(ImGui::Selectable(label.c_str(), highlight, ImGuiSelectableFlags_AllowDoubleClick)) {
             if(entry.isDir) {
-                refreshBrowseDir(entry.fullPath);
-                if(highlight) ImGui::PopStyleColor();
-                break;
+                navigateTo = entry.fullPath;   // acted on after the loop
             } else {
                 focusIndex = i;
                 if(ImGui::IsMouseDoubleClicked(0)) {
@@ -170,7 +184,19 @@ void scBufferBrowser::drawBrowserContents() {
         if(highlight) ImGui::PopStyleColor();
         if(isFocused && ImGui::IsWindowFocused()) ImGui::SetScrollHereY(0.5f);
         if(!entry.isDir && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entry.name.c_str());
+    };
+
+    if(clipRows) {
+        ImGuiListClipper clipper;
+        clipper.Begin(n);
+        while(clipper.Step())
+            for(int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) drawRow(i);
+        clipper.End();
+    } else {
+        for(int i = 0; i < n; i++) drawRow(i);
     }
+
+    if(!navigateTo.empty()) refreshBrowseDir(navigateTo);
 
     ImGui::EndChild();
 }
@@ -295,7 +321,7 @@ void scBufferBrowser::presetRecallAfterSettingParameters(ofJson& json) {
 // File browser
 // ════════════════════════════════════════════════════════════════════════════
 
-void scBufferBrowser::refreshBrowseDir(const std::string& dir) {
+void scBufferBrowser::refreshBrowseDir(std::string dir) {
     browseEntries.clear();
     selectedIndices.clear();
     focusIndex = -1;

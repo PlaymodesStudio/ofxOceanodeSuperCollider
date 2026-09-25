@@ -1813,8 +1813,25 @@ void scRhythmBox::drawBrowser(float /*w*/, float /*h*/) {
         }
     }
 
-    bool navigated = false;
-    for(int i = 0; i < n && !navigated; i++) {
+    // Draw only the rows in view: a large samples folder is otherwise
+    // thousands of widgets per frame to show the thirty or so that fit.
+    //
+    // The selected row re-centres itself every frame (SetScrollHereY below),
+    // which it can only do if it is drawn. The arrow keys can put it off
+    // screen -- the list keeps its scroll between folders, so entering one and
+    // pressing Down selects row 0 wherever the view happens to be -- so when it
+    // is not fully in view the whole list is drawn, exactly as before, and it
+    // re-centres. From the next frame on it is in view and clipping resumes.
+    const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
+    const float selectedTop = ImGui::GetCursorPosY() + browserSel * rowHeight;
+    const bool clipRows = browserSel < 0 ||
+        (selectedTop >= ImGui::GetScrollY() &&
+         selectedTop + ImGui::GetTextLineHeight() <= ImGui::GetScrollY() + ImGui::GetWindowHeight());
+
+    // A click on a folder is acted on after the loop rather than inside it, so
+    // the loop never stops part-way and the clipper always runs to completion.
+    std::string navigateTo;
+    auto drawRow = [&](int i) {
         auto& e = browseEntries[i];
         ImGui::PushID(i);
 
@@ -1825,12 +1842,7 @@ void scRhythmBox::drawBrowser(float /*w*/, float /*h*/) {
 
         if(ImGui::Selectable(lbl.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
             if(e.isDir) {
-                std::string navPath = e.fullPath;  // copy before refreshBrowse clears browseEntries
-                browserSel = -1;
-                ImGui::PopID();
-                refreshBrowse(navPath);
-                navigated = true;
-                break;
+                navigateTo = e.fullPath;   // acted on after the loop
             } else {
                 browserSel = i;           // highlight moves to clicked row
                 triggerPreview(e.fullPath);
@@ -1853,6 +1865,21 @@ void scRhythmBox::drawBrowser(float /*w*/, float /*h*/) {
             ImGui::SetTooltip("%s", e.fullPath.c_str());
 
         ImGui::PopID();
+    };
+
+    if(clipRows) {
+        ImGuiListClipper clipper;
+        clipper.Begin(n);
+        while(clipper.Step())
+            for(int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) drawRow(i);
+        clipper.End();
+    } else {
+        for(int i = 0; i < n; i++) drawRow(i);
+    }
+
+    if(!navigateTo.empty()) {
+        browserSel = -1;
+        refreshBrowse(navigateTo);
     }
     ImGui::EndChild();
 }
@@ -1967,7 +1994,7 @@ void scRhythmBox::drawTrack(int ti) {
         ImVec2 trackAreaMin = {cardMin.x + accentBarW, cardMin.y};
         ImVec2 trackAreaMax = {cardMax.x, cardMax.y};
         ImGui::SetCursorScreenPos(trackAreaMin);
-        ImGui::InvisibleButton(("##trackarea" + ofToString(ti)).c_str(),
+        ImGui::InvisibleButton(("##trackarea" + std::to_string(ti)).c_str(),
                               ImVec2(trackAreaMax.x - trackAreaMin.x, trackAreaMax.y - trackAreaMin.y));
 
         if(allowSampleDrop && ImGui::BeginDragDropTarget()) {
@@ -2372,7 +2399,7 @@ void scRhythmBox::drawTrack(int ti) {
             int  beatGroup  = (si / tc.stepsPerBeat) % 2;
 
             ImVec2 pos = ImGui::GetCursorScreenPos();
-            std::string bid = "##s" + ofToString(si);
+            std::string bid = "##s" + std::to_string(si);
             ImGui::InvisibleButton(bid.c_str(), ImVec2(sw, STEP_H));
 
             if(ImGui::IsItemActive() && stepPaintTrack == -1) {
@@ -2700,7 +2727,7 @@ void scRhythmBox::drawTrack(int ti) {
             float& val = (*cfg.vec)[pai];
 
             ImVec2 pos = ImGui::GetCursorScreenPos();
-            std::string sid = "##sl" + ofToString(si);
+            std::string sid = "##sl" + std::to_string(si);
             ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
 
             // Click+drag to set value — paints any column the mouse X overlaps.
@@ -2966,7 +2993,7 @@ void scRhythmBox::drawTrack(int ti) {
                                                                      1.0f));
                ImGui::PushStyleColor(ImGuiCol_Text, textColor);
                
-               std::string gid = "##grp" + ofToString(si);
+               std::string gid = "##grp" + std::to_string(si);
                if(ImGui::DragInt(gid.c_str(), &groupVal, 0.05f, 0, 99, "%d")) {
                    groupVal = ofClamp(groupVal, 0, 99); // Limit to reasonable range
                    groupChanged = true;
@@ -3037,7 +3064,7 @@ void scRhythmBox::drawTrack(int ti) {
            float& cutVal = td.stepCut[pai];
            
            ImVec2 pos = ImGui::GetCursorScreenPos();
-           std::string sid = "##cut" + ofToString(si);
+           std::string sid = "##cut" + std::to_string(si);
            ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
            
            // Mouse interaction for CUT
@@ -3084,7 +3111,7 @@ void scRhythmBox::drawTrack(int ti) {
            float& resVal = td.stepRes[pai];
            
            ImVec2 pos = ImGui::GetCursorScreenPos();
-           std::string sid = "##res" + ofToString(si);
+           std::string sid = "##res" + std::to_string(si);
            ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
            
            // Mouse interaction for RES
@@ -3139,7 +3166,7 @@ void scRhythmBox::drawTrack(int ti) {
             int& val = td.stepPitch[pai];
 
             ImVec2 pos = ImGui::GetCursorScreenPos();
-            std::string sid = "##sp" + ofToString(si);
+            std::string sid = "##sp" + std::to_string(si);
             ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
 
             // Click+drag: map Y to semitone integer
@@ -4214,7 +4241,7 @@ void scRhythmBox::drawTrack(int ti) {
             float& val = td.stepDecayOffset[pai];
             
             ImVec2 pos = ImGui::GetCursorScreenPos();
-            std::string sid = "##decay" + ofToString(si);
+            std::string sid = "##decay" + std::to_string(si);
             ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
             
             // Click+drag to set value — paints any column the mouse X overlaps.
@@ -4481,7 +4508,7 @@ void scRhythmBox::drawTrack(int ti) {
             bool isRev      = (ri < (int)td.stepReverse.size()) && td.stepReverse[ri];
 
             ImVec2 pos  = ImGui::GetCursorScreenPos();
-            std::string sid = "##rev" + ofToString(si);
+            std::string sid = "##rev" + std::to_string(si);
             ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, STEP_H));
 
             // Paint gesture: latch value on first press, then apply across any
@@ -4549,7 +4576,7 @@ void scRhythmBox::drawTrack(int ti) {
             bool isArp      = (ri < (int)td.stepArp.size()) && td.stepArp[ri];
 
             ImVec2 pos = ImGui::GetCursorScreenPos();
-            ImGui::InvisibleButton(("##arpstep" + ofToString(si)).c_str(), ImVec2(sw, STEP_H));
+            ImGui::InvisibleButton(("##arpstep" + std::to_string(si)).c_str(), ImVec2(sw, STEP_H));
 
             bool mouseDown = ImGui::IsMouseDown(0);
             if(ImGui::IsItemActivated() && arpPaintTrack == -1) {

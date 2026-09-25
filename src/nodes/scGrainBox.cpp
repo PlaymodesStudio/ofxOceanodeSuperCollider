@@ -1256,8 +1256,25 @@ void scGrainBox::drawBrowser(float /*w*/, float /*h*/) {
         }
     }
 
-    bool navigated = false;
-    for(int i = 0; i < n && !navigated; i++) {
+    // Draw only the rows in view: a large samples folder is otherwise
+    // thousands of widgets per frame to show the thirty or so that fit.
+    //
+    // The selected row re-centres itself every frame (SetScrollHereY below),
+    // which it can only do if it is drawn. The arrow keys can put it off
+    // screen -- the list keeps its scroll between folders, so entering one and
+    // pressing Down selects row 0 wherever the view happens to be -- so when it
+    // is not fully in view the whole list is drawn, exactly as before, and it
+    // re-centres. From the next frame on it is in view and clipping resumes.
+    const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
+    const float selectedTop = ImGui::GetCursorPosY() + browserSel * rowHeight;
+    const bool clipRows = browserSel < 0 ||
+        (selectedTop >= ImGui::GetScrollY() &&
+         selectedTop + ImGui::GetTextLineHeight() <= ImGui::GetScrollY() + ImGui::GetWindowHeight());
+
+    // A click on a folder is acted on after the loop rather than inside it, so
+    // the loop never stops part-way and the clipper always runs to completion.
+    std::string navigateTo;
+    auto drawRow = [&](int i) {
         auto& e = browseEntries[i];
         ImGui::PushID(i);
 
@@ -1266,12 +1283,7 @@ void scGrainBox::drawBrowser(float /*w*/, float /*h*/) {
 
         if(ImGui::Selectable(lbl.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
             if(e.isDir) {
-                std::string navPath = e.fullPath;
-                browserSel = -1;
-                ImGui::PopID();
-                refreshBrowse(navPath);
-                navigated = true;
-                break;
+                navigateTo = e.fullPath;   // acted on after the loop
             } else {
                 browserSel = i;
                 triggerPreview(e.fullPath);
@@ -1296,6 +1308,21 @@ void scGrainBox::drawBrowser(float /*w*/, float /*h*/) {
             ImGui::SetTooltip("%s", e.fullPath.c_str());
 
         ImGui::PopID();
+    };
+
+    if(clipRows) {
+        ImGuiListClipper clipper;
+        clipper.Begin(n);
+        while(clipper.Step())
+            for(int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) drawRow(i);
+        clipper.End();
+    } else {
+        for(int i = 0; i < n; i++) drawRow(i);
+    }
+
+    if(!navigateTo.empty()) {
+        browserSel = -1;
+        refreshBrowse(navigateTo);
     }
     ImGui::EndChild();
 }

@@ -47,7 +47,9 @@ private:
     std::vector<BrowseEntry> browseEntries;
     int                      focusIndex = -1;  // keyboard cursor in browseEntries
 
-    void refreshBrowseDir(const std::string& dir);
+    // By value on purpose: callers pass entry.fullPath, a string inside the
+    // very list this function clears first.
+    void refreshBrowseDir(std::string dir);
 
     // ── Multi-selection ─────────────────────────────────────────────────────
     // Tracks which file entries are selected (indices into browseEntries).
