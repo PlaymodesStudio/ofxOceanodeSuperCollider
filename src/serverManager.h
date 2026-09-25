@@ -88,6 +88,9 @@ public:
     // Same capture, but the file-writing synth reads `bus` instead.
     bool writeNRTStemScore(const std::string& path, double endTime, int bus) const;
     std::size_t getNRTEventCount() const;
+    // Whether any Output on this server has something patched into it. A
+    // server with none makes no sound, so an offline render can skip it.
+    bool hasConnectedOutput() const;
     int renderNRT(const std::string& scorePath, const std::string& outputPath, int outputChannels = 2) const;
     
     void setVolume(float volume);

@@ -12,8 +12,10 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #if OFXOCEANODESC_HAS_TIMELINE
 #include "ofxOceanodeTime.h"
 #include <array>
@@ -63,14 +65,16 @@ void ofxOceanodeSuperColliderController::joinFinishedNRTThread(){
 }
 
 void ofxOceanodeSuperColliderController::startNRTRender(){
-    beginNRTRecording(nrtServer, nrtOutputChannels, nrtOutputPath, false);
+    // Every server with a connected Output is captured; the index is unused.
+    beginNRTRecording(0, nrtOutputChannels, nrtOutputPath, false);
 }
 
 std::vector<ofxOceanodeSuperColliderController::NRTSource>
 ofxOceanodeSuperColliderController::buildNRTSources(serverManager* manager) const{
     using Kind = NRTSource::Kind;
     std::vector<NRTSource> sources;
-    sources.push_back({Kind::Master, "Master", "", -1});
+    // No stems from this server. Whatever it plays is still in the master.
+    sources.push_back({Kind::None, "None", "", -1});
     if(manager == nullptr) return sources;
 
     const auto stems = manager->getNRTStems();
@@ -109,49 +113,98 @@ std::vector<std::string> ofxOceanodeSuperColliderController::getNRTSourceNames(i
     return names;
 }
 
+std::vector<int> ofxOceanodeSuperColliderController::findNRTServers() const{
+    // A server with nothing patched into an Output sends nothing to the
+    // device, so it has nothing to add to the render. One that does is
+    // included even if it is not booted, so that arming fails and says so
+    // rather than quietly rendering without it.
+    std::vector<int> found;
+    for(int i = 0; i < (int)outputServers.size(); i++){
+        if(outputServers[i] != nullptr && outputServers[i]->hasConnectedOutput()) found.push_back(i);
+    }
+    return found;
+}
+
 bool ofxOceanodeSuperColliderController::armNRTRecording(int serverIndex, int outputChannels, const std::string& outputPath){
     if(nrtCaptureActive || nrtRendering.load() || outputServers.empty()) return false;
     if(nrtArmState != NRTArmState::Disarmed) return isNRTArmed();
     joinFinishedNRTThread();
+    // Every server that plays is captured, whichever one the caller names.
+    (void)serverIndex;
 
-    if(serverIndex < 0 || serverIndex >= (int)outputServers.size()) serverIndex = 0;
-    nrtServer = serverIndex;
-    serverManager* manager = outputServers[nrtServer];
-    if(manager == nullptr || manager->getServer() == nullptr){
-        nrtStatus = "Selected server is not available";
+    const std::vector<int> found = findNRTServers();
+    if(found.empty()){
+        nrtStatus = "Nothing is connected to an Output";
+        return false;
+    }
+    // The master is the servers' files added sample by sample, which only
+    // lines up when they all run at one rate.
+    const int rate = outputServers[found.front()]->getSampleRate();
+    for(int index : found){
+        if(outputServers[index]->getSampleRate() == rate) continue;
+        nrtStatus = "Servers run at different sample rates; cannot mix them";
         return false;
     }
 
     // Any rebuild we cause ourselves is expected; a rebuild from anywhere else
     // means the patch changed and whatever we armed is stale.
     nrtGraphListeners.unsubscribeAll();
+    nrtServers.clear();
     nrtSelfRebuild = true;
-    const bool started = manager->beginNRTCapture();
+    int failed = -1;
+    for(int index : found){
+        if(!outputServers[index]->beginNRTCapture()){
+            failed = index;
+            break;
+        }
+        nrtServers.push_back(index);
+    }
+    if(failed >= 0){
+        // A render missing one server is exactly the incomplete take this is
+        // here to prevent, so put back the ones already started and stop.
+        for(int index : nrtServers) outputServers[index]->endNRTCapture(-1.0);
+        nrtServers.clear();
+    }
     nrtSelfRebuild = false;
-    if(!started){
-        nrtStatus = "Server must be booted and initialized before arming";
+    if(failed >= 0){
+        nrtStatus = found.size() > 1
+            ? "Server " + ofToString(failed) + " must be booted and initialized before arming"
+            : "Server must be booted and initialized before arming";
         return false;
     }
 
-    const int maxChannels = std::max(1, manager->preferences.numOutputBusChannels);
+    // Every server renders the same channels, so the narrowest one sets them.
+    int maxChannels = std::numeric_limits<int>::max();
+    for(int index : nrtServers){
+        maxChannels = std::min(maxChannels, std::max(1, outputServers[index]->preferences.numOutputBusChannels));
+    }
     nrtCaptureOutputChannels = std::max(1, std::min(outputChannels, maxChannels));
     nrtCaptureOutputPath = outputPath.empty() ? nrtOutputPath : outputPath;
 
-    nrtGraphListeners.push(manager->graphComputed.newListener([this](){
-        if(nrtSelfRebuild) return;
-        if(nrtArmState == NRTArmState::Disarmed || nrtCaptureActive) return;
-        ofLogWarning("ofxOceanodeSuperColliderController")
-            << "NRT: the patch changed after arming; disarming";
-        disarmNRTRecording();
-    }));
+    // A repatch on any server makes the arm stale -- including one on a server
+    // that was silent when arming and plays now, which the render would miss.
+    for(auto manager : outputServers){
+        if(manager == nullptr) continue;
+        nrtGraphListeners.push(manager->graphComputed.newListener([this](){
+            if(nrtSelfRebuild) return;
+            if(nrtArmState == NRTArmState::Disarmed || nrtCaptureActive) return;
+            ofLogWarning("ofxOceanodeSuperColliderController")
+                << "NRT: the patch changed after arming; disarming";
+            disarmNRTRecording();
+        }));
+    }
 
-    // Ask the server to report when the setup has actually finished. Loading
-    // the SynthDef tree alone takes seconds, and the parameter state that
-    // follows it is the part that has to land at score time zero.
-    manager->getServer()->requestNRTSync();
-    // Arming can take many seconds. Whatever the patch plays while it waits
-    // belongs to before the recording, not to score time zero.
-    manager->getServer()->setNRTEventsSuppressed(true);
+    for(int index : nrtServers){
+        ofxSCServer* server = outputServers[index]->getServer();
+        // Ask the server to report when the setup has actually finished.
+        // Loading the SynthDef tree alone takes seconds, and the parameter
+        // state that follows it is the part that has to land at score time
+        // zero.
+        server->requestNRTSync();
+        // Arming can take many seconds. Whatever the patch plays while it
+        // waits belongs to before the recording, not to score time zero.
+        server->setNRTEventsSuppressed(true);
+    }
 
     nrtSettleDeadline = ofGetElapsedTimeMillis() + 60000;
     nrtArmState = NRTArmState::Settling;
@@ -161,17 +214,19 @@ bool ofxOceanodeSuperColliderController::armNRTRecording(int serverIndex, int ou
 
 void ofxOceanodeSuperColliderController::updateNRTArming(){
     if(nrtArmState != NRTArmState::Settling || nrtCaptureActive) return;
-    if(nrtServer < 0 || nrtServer >= (int)outputServers.size()) return;
-    serverManager* manager = outputServers[nrtServer];
-    if(manager == nullptr || manager->getServer() == nullptr) return;
+    if(nrtServers.empty()) return;
 
     const bool timedOut = ofGetElapsedTimeMillis() > nrtSettleDeadline;
-    const bool syncPending = manager->getServer()->isNRTSyncPending();
+    bool syncPending = false;
+    for(int index : nrtServers){
+        ofxSCServer* server = outputServers[index]->getServer();
+        if(server != nullptr && server->isNRTSyncPending()) syncPending = true;
+    }
 
-    // The only thing that has to finish before arming is the server's own
+    // The only thing that has to finish before arming is the servers' own
     // work. /sync is answered once every asynchronous command issued before it
     // has completed, which here means the SynthDef tree has finished loading
-    // and the synths exist.
+    // and the synths exist. With several servers, all of them.
     //
     // Waiting for the capture to also fall quiet does not work: a patch
     // resends some parameters every frame whether or not they changed, so the
@@ -184,34 +239,40 @@ void ofxOceanodeSuperColliderController::updateNRTArming(){
     }
     if(syncPending){
         ofLogWarning("ofxOceanodeSuperColliderController")
-            << "NRT: the server never answered /sync; arming anyway";
+            << "NRT: a server never answered /sync; arming anyway";
     }
 
     // From here until recording starts, every frame would otherwise stack more
     // messages onto score time zero.
-    manager->getServer()->setNRTCaptureSuspended(true);
+    std::size_t events = 0;
+    for(int index : nrtServers){
+        serverManager* manager = outputServers[index];
+        if(manager->getServer() != nullptr) manager->getServer()->setNRTCaptureSuspended(true);
+        events += manager->getNRTEventCount();
+    }
     nrtArmState = NRTArmState::Armed;
-    nrtStatus = "Armed: " + ofToString((int)manager->getNRTEventCount()) + " events at time zero";
+    nrtStatus = "Armed: " + ofToString((int)events) + " events at time zero";
+    if(nrtServers.size() > 1) nrtStatus += " on " + ofToString((int)nrtServers.size()) + " servers";
     ofLogNotice("ofxOceanodeSuperColliderController") << "NRT: " << nrtStatus;
 }
 
 void ofxOceanodeSuperColliderController::disarmNRTRecording(){
     if(nrtArmState == NRTArmState::Disarmed) return;
     nrtGraphListeners.unsubscribeAll();
-    if(nrtServer >= 0 && nrtServer < (int)outputServers.size()){
-        serverManager* manager = outputServers[nrtServer];
-        if(manager != nullptr){
-            if(manager->getServer() != nullptr){
-                manager->getServer()->setNRTEventsSuppressed(false);
-                manager->getServer()->setNRTCaptureSuspended(false);
-                manager->getServer()->setNRTTimeProviderEnabled(false);
-            }
-            // Puts the graph back on the realtime server.
-            nrtSelfRebuild = true;
-            manager->endNRTCapture(-1.0);
-            nrtSelfRebuild = false;
+    for(int index : nrtServers){
+        serverManager* manager = outputServers[index];
+        if(manager == nullptr) continue;
+        if(manager->getServer() != nullptr){
+            manager->getServer()->setNRTEventsSuppressed(false);
+            manager->getServer()->setNRTCaptureSuspended(false);
+            manager->getServer()->setNRTTimeProviderEnabled(false);
         }
+        // Puts the graph back on the realtime server.
+        nrtSelfRebuild = true;
+        manager->endNRTCapture(-1.0);
+        nrtSelfRebuild = false;
     }
+    nrtServers.clear();
     nrtArmState = NRTArmState::Disarmed;
     nrtStatus = "Disarmed";
 }
@@ -229,29 +290,41 @@ bool ofxOceanodeSuperColliderController::beginNRTRecording(int serverIndex, int 
            !armNRTRecording(serverIndex, outputChannels, outputPath)) return false;
     }
 
-    serverManager* manager = outputServers[nrtServer];
-    if(manager == nullptr || manager->getServer() == nullptr){
+    if(nrtServers.empty()){
         nrtStatus = "Selected server is not available";
         return false;
+    }
+    for(int index : nrtServers){
+        if(outputServers[index] == nullptr || outputServers[index]->getServer() == nullptr){
+            nrtStatus = "Selected server is not available";
+            return false;
+        }
     }
     nrtManualStop = manualStop;
 
     // Everything captured from here belongs on the transport's clock; what came
     // before it is the graph's opening state and is already at time zero.
-    manager->getServer()->setNRTEventsSuppressed(false);
-    manager->getServer()->setNRTCaptureSuspended(false);
+    // Every server opens before any resend: a node playing on two servers
+    // sends its parameters to both, and a server still muted would drop them.
+    for(int index : nrtServers){
+        outputServers[index]->getServer()->setNRTEventsSuppressed(false);
+        outputServers[index]->getServer()->setNRTCaptureSuspended(false);
+    }
 
     // Write the patch's complete state before the clock starts. Parameters are
     // only sent when they change, so one that nobody has touched since the
     // preset loaded has never been sent at all -- the render would run on the
     // SynthDef's default until its first change. A trigger left at its default
     // fires a note at the top of the render that was never played.
-    manager->resendAllParametersForNRT();
+    for(int index : nrtServers) outputServers[index]->resendAllParametersForNRT();
 
-    manager->getServer()->setNRTTimeProvider([](){
-        return ofxOceanodeTime::getInstance()->getGlobalTimeState().time;
-    });
-    manager->getServer()->setNRTTimeProviderEnabled(true);
+    for(int index : nrtServers){
+        ofxSCServer* server = outputServers[index]->getServer();
+        server->setNRTTimeProvider([](){
+            return ofxOceanodeTime::getInstance()->getGlobalTimeState().time;
+        });
+        server->setNRTTimeProviderEnabled(true);
+    }
 
     const std::string absoluteOutputPath = ofToDataPath(nrtCaptureOutputPath, true);
     ofDirectory::createDirectory(ofFilePath::getEnclosingDirectory(absoluteOutputPath), true, false);
@@ -277,14 +350,15 @@ bool ofxOceanodeSuperColliderController::endNRTRecording(bool cancelled){
 
 void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, double durationOverride){
     if(!nrtCaptureActive) return;
-    if(nrtServer < 0 || nrtServer >= (int)outputServers.size()) nrtServer = 0;
-    serverManager* manager = outputServers[nrtServer];
     const double duration = durationOverride > 0.0 ? durationOverride : std::max(0.01f, nrtDuration);
     const int outputChannels = std::max(1, nrtCaptureOutputChannels);
     const std::string outputPath = ofToDataPath(nrtCaptureOutputPath.empty() ? nrtOutputPath : nrtCaptureOutputPath, true);
-    const std::string scorePath = outputPath + ".osc";
 
-    if(manager != nullptr && manager->getServer() != nullptr){
+    const std::vector<int> captured = nrtServers;
+    nrtServers.clear();
+    for(int index : captured){
+        serverManager* manager = outputServers[index];
+        if(manager == nullptr || manager->getServer() == nullptr) continue;
         manager->getServer()->setNRTTimeProviderEnabled(false);
         manager->endNRTCapture(cancelled ? -1.0 : duration);
     }
@@ -298,79 +372,122 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
         nrtStatus = "NRT capture cancelled";
         return;
     }
-
-    if(manager == nullptr || !manager->writeNRTScore(scorePath, duration)){
+    if(captured.empty()){
         nrtStatus = "Could not write NRT score";
         return;
     }
 
-    // One job per file. Each is the same capture; a stem only differs by which
+    // One job per file. A stem only differs from its server's master by which
     // bus the file-writing synth reads, so no second capture is needed.
-    struct renderJob { std::string score, output, label; };
+    struct renderJob { serverManager* manager; std::string score, output, label; };
     std::vector<renderJob> jobs;
 
-    const auto stems = manager->getNRTStems();
+    // With several servers, every file a server produces on its own carries
+    // the server's number, since two servers can easily both have a mixer or
+    // a track of the same name. A single server keeps the plain names.
+    const bool multiServer = captured.size() > 1;
     const std::string base = ofFilePath::removeExt(outputPath);
     const std::string ext = "." + ofFilePath::getFileExt(outputPath);
-
-    auto addStem = [&](const serverManager::NRTStem& stem, const std::string& path){
-        const std::string stemScore = path + ".osc";
-        if(!manager->writeNRTStemScore(stemScore, duration, stem.bus)){
-            ofLogWarning("ofxOceanodeSuperColliderController")
-                << "NRT: could not write the score for stem " << stem.name;
-            return;
-        }
-        jobs.push_back({stemScore, path, stem.name});
+    auto serverFile = [&](int index, const std::string& name){
+        return base + (multiServer ? "_S" + ofToString(index) : std::string()) + "_" + name + ext;
     };
 
-    // Resolve the choice by label. This list is built from the graph as it
-    // stands after arming rebuilt it, which is not necessarily in the same
-    // order as the list the dropdown was filled from, so a position is not a
-    // stable way to name a stem.
-    const auto sources = buildNRTSources(manager);
-    const NRTSource* selected = nullptr;
-    if(!nrtSourceLabel.empty() && !sources.empty() && nrtSourceLabel != sources.front().label){
-        for(const auto& source : sources){
-            if(source.label != nrtSourceLabel) continue;
-            selected = &source;
-            break;
-        }
-        if(selected == nullptr){
-            ofLogWarning("ofxOceanodeSuperColliderController")
-                << "NRT: the selected source \"" << nrtSourceLabel
-                << "\" is not in the graph any more; rendering the master instead";
-        }
-    }
-    const bool withMaster = nrtRecordStems;
+    // Stems first, server by server, each resolved against its own list.
+    std::vector<renderJob> stemJobs;
+    for(int index : captured){
+        serverManager* manager = outputServers[index];
+        if(manager == nullptr) continue;
+        const auto stems = manager->getNRTStems();
 
-    // The master uses the requested path exactly. Besides making the Filename
-    // parameter truthful, this lets downstream recorder nodes consume it
-    // directly. Stems retain their suffixes so a multi-file render still has
-    // unique targets beside the master.
-    const std::string masterPath = outputPath;
-    if(selected == nullptr || withMaster) jobs.push_back({scorePath, masterPath, "master"});
+        // Resolve the choice by label. This list is built from the graph as it
+        // stands after arming rebuilt it, which is not necessarily in the same
+        // order as the list the dropdown was filled from, so a position is not
+        // a stable way to name a stem.
+        const std::string label = index < (int)nrtSourceLabels.size() ? nrtSourceLabels[(std::size_t)index] : "";
+        const auto sources = buildNRTSources(manager);
+        const NRTSource* selected = nullptr;
+        if(!label.empty() && !sources.empty() && label != sources.front().label){
+            for(const auto& source : sources){
+                if(source.label != label) continue;
+                selected = &source;
+                break;
+            }
+            if(selected == nullptr){
+                ofLogWarning("ofxOceanodeSuperColliderController")
+                    << "NRT: the selected source \"" << label << "\" on server " << index
+                    << " is not in the graph any more; no stems from that server";
+            }
+        }
+        if(selected == nullptr) continue;
 
-    if(selected != nullptr){
+        auto addStem = [&](const serverManager::NRTStem& stem){
+            const std::string path = serverFile(index, stem.name);
+            const std::string stemScore = path + ".osc";
+            if(!manager->writeNRTStemScore(stemScore, duration, stem.bus)){
+                ofLogWarning("ofxOceanodeSuperColliderController")
+                    << "NRT: could not write the score for stem " << stem.name;
+                return;
+            }
+            stemJobs.push_back({manager, stemScore, path, stem.name});
+        };
         switch(selected->kind){
             case NRTSource::Kind::AllStems:
-                for(const auto& stem : stems) addStem(stem, base + "_" + stem.name + ext);
+                for(const auto& stem : stems) addStem(stem);
                 break;
             case NRTSource::Kind::Mixer:
                 for(const auto& stem : stems){
-                    if(stem.mixerName != selected->mixerName) continue;
-                    addStem(stem, base + "_" + stem.name + ext);
+                    if(stem.mixerName == selected->mixerName) addStem(stem);
                 }
                 break;
             case NRTSource::Kind::Stem:
                 if(selected->stemIndex >= 0 && selected->stemIndex < (int)stems.size()){
-                    const auto& stem = stems[selected->stemIndex];
-                    addStem(stem, base + "_" + stem.name + ext);
+                    addStem(stems[(std::size_t)selected->stemIndex]);
                 }
                 break;
-            case NRTSource::Kind::Master:
+            case NRTSource::Kind::None:
                 break;
         }
     }
+
+    // The master uses the requested path exactly. Besides making the Filename
+    // parameter truthful, this lets downstream recorder nodes consume it
+    // directly. It is written when asked for, and whenever there are no stems
+    // at all, so a render never produces nothing.
+    const bool withMaster = nrtRecordStems || stemJobs.empty();
+    const bool keepServerMasters = multiServer && nrtServerMasters;
+    const std::string masterPath = outputPath;
+    // Per-server masters that are added up into masterPath once rendered.
+    std::vector<std::string> serverMasters;
+
+    if(!multiServer){
+        if(withMaster){
+            serverManager* manager = outputServers[captured.front()];
+            const std::string scorePath = outputPath + ".osc";
+            if(manager == nullptr || !manager->writeNRTScore(scorePath, duration)){
+                nrtStatus = "Could not write NRT score";
+                return;
+            }
+            jobs.push_back({manager, scorePath, masterPath, "master"});
+        }
+    }else if(withMaster || keepServerMasters){
+        // The device plays every server into the same outputs, so what it
+        // plays is their sum. Each server renders its own master and they are
+        // added together afterwards; they share the transport's clock and the
+        // rate, so they line up to the sample.
+        for(int index : captured){
+            serverManager* manager = outputServers[index];
+            const std::string path = serverFile(index, "MasterMix");
+            const std::string scorePath = path + ".osc";
+            if(manager == nullptr || !manager->writeNRTScore(scorePath, duration)){
+                nrtStatus = "Could not write NRT score";
+                return;
+            }
+            jobs.push_back({manager, scorePath, path, "server " + ofToString(index) + " master"});
+            serverMasters.push_back(path);
+        }
+    }
+    jobs.insert(jobs.end(), stemJobs.begin(), stemJobs.end());
+    const std::string mixInto = multiServer && withMaster ? masterPath : std::string();
 
     if(jobs.empty()){
         nrtStatus = "Nothing to render";
@@ -391,11 +508,15 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
     // -- with four stale stems and one real job the bar jumps straight to 80%
     // and then barely moves. Truncating also means a failed render leaves an
     // empty file rather than the previous take wearing the new take's name.
+    // The summed master is not a job, but the same goes for it.
     for(const auto& path : nrtRenderOutputs){
         std::ofstream truncate(path, std::ios::binary | std::ios::trunc);
     }
+    if(!mixInto.empty()){
+        std::ofstream truncate(mixInto, std::ios::binary | std::ios::trunc);
+    }
     const long long frames = (long long)std::llround((double)duration *
-                                                     (double)manager->preferences.hardwareSampleRate);
+                                                     (double)outputServers[captured.front()]->preferences.hardwareSampleRate);
     // 44-byte canonical WAVE header, 32-bit float samples.
     nrtRenderExpectedBytes = 44 + frames * (long long)std::max(1, outputChannels) * 4;
 
@@ -405,26 +526,30 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
     const int workerCount = std::max(1, std::min((int)jobs.size(), allowedParallel));
     nrtStatus = "Rendering " + ofToString((int)jobs.size()) + " file(s) with scsynth -N";
     const bool removeDC = nrtRemoveDC;
-    nrtRenderThread = std::thread([this, manager, jobs, outputChannels, workerCount, removeDC](){
+    nrtRenderThread = std::thread([this, jobs, outputChannels, workerCount, removeDC,
+                                   mixInto, serverMasters, keepServerMasters](){
         nrtRenderResult = 0;
         const uint64_t startedAt = ofGetElapsedTimeMillis();
-        // Every job is an independent scsynth process over the same score, so
+        // Every job is an independent scsynth process over its own score, so
         // they can run side by side; sequentially, a set of stems costs one
         // full pass over the patch per file.
         std::atomic<std::size_t> nextJob{0};
         std::vector<std::thread> workers;
         workers.reserve(workerCount);
         for(int worker = 0; worker < workerCount; worker++){
-            workers.emplace_back([this, manager, &jobs, outputChannels, &nextJob, removeDC](){
+            workers.emplace_back([this, &jobs, outputChannels, &nextJob, removeDC](){
                 for(;;){
                     const std::size_t i = nextJob.fetch_add(1);
                     if(i >= jobs.size()) return;
-                    const int result = manager->renderNRT(jobs[i].score, jobs[i].output, outputChannels);
+                    const int result = jobs[i].manager->renderNRT(jobs[i].score, jobs[i].output, outputChannels);
                     if(result != 0){
                         nrtRenderResult = result;
                         ofLogError("ofxOceanodeSuperColliderController")
                             << "NRT: render failed for " << jobs[i].label;
                     }else if(removeDC){
+                        // The filter is linear and starts from rest, so
+                        // filtering each server's master and then adding
+                        // them is the same as filtering their sum.
                         removeDCOffsetInPlace(jobs[i].output);
                     }
                     nrtRenderJobsDone.fetch_add(1);
@@ -432,6 +557,20 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
             });
         }
         for(auto& worker : workers) worker.join();
+
+        if(!mixInto.empty()){
+            if(nrtRenderResult != 0){
+                ofLogError("ofxOceanodeSuperColliderController")
+                    << "NRT: a server's render failed, so the servers were not mixed into "
+                    << mixInto << "; their own masters are left beside it";
+            }else if(!sumFloatWavs(serverMasters, mixInto)){
+                nrtRenderResult = -1;
+                ofLogError("ofxOceanodeSuperColliderController")
+                    << "NRT: could not mix the servers' masters into " << mixInto;
+            }else if(!keepServerMasters){
+                for(const auto& path : serverMasters) std::remove(path.c_str());
+            }
+        }
 
         // Each job logs its own duration. If the total is close to their sum
         // the jobs did not overlap, whatever the worker count says; if it is
@@ -442,6 +581,185 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
             << " s, up to " << workerCount << " at a time";
         nrtRendering = false;
     });
+}
+
+namespace {
+// Where the samples of a 32-bit float RIFF/WAVE file are, and their shape.
+struct floatWavLayout {
+    std::uint16_t channels = 0;
+    std::uint32_t sampleRate = 0;
+    std::streamoff dataStart = 0;
+    std::uint64_t frames = 0;
+};
+
+std::uint32_t readLE32(const unsigned char* raw){
+    return (std::uint32_t)raw[0] | ((std::uint32_t)raw[1] << 8)
+         | ((std::uint32_t)raw[2] << 16) | ((std::uint32_t)raw[3] << 24);
+}
+
+// Walks the chunks to fmt and data; scsynth writes fmt first, but nothing
+// here assumes it. False for anything but 32-bit IEEE float, plain or in a
+// WAVE_FORMAT_EXTENSIBLE wrapper.
+bool readFloatWavLayout(std::istream& file, floatWavLayout& layout){
+    file.seekg(0, std::ios::end);
+    const std::streamoff fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    unsigned char head[12];
+    if(!file.read(reinterpret_cast<char*>(head), 12)) return false;
+    if(std::memcmp(head, "RIFF", 4) != 0 || std::memcmp(head + 8, "WAVE", 4) != 0) return false;
+
+    std::uint16_t format = 0, bits = 0;
+    bool haveFormat = false;
+    std::uint64_t dataBytes = 0;
+    for(;;){
+        unsigned char chunk[8];
+        if(!file.read(reinterpret_cast<char*>(chunk), 8)) return false;
+        const std::uint32_t size = readLE32(chunk + 4);
+        const std::streamoff body = file.tellg();
+        if(std::memcmp(chunk, "fmt ", 4) == 0 && size >= 16){
+            unsigned char fmt[40] = {};
+            const std::streamsize want = (std::streamsize)std::min<std::uint32_t>(size, 40);
+            if(!file.read(reinterpret_cast<char*>(fmt), want)) return false;
+            format = (std::uint16_t)(fmt[0] | (fmt[1] << 8));
+            layout.channels = (std::uint16_t)(fmt[2] | (fmt[3] << 8));
+            layout.sampleRate = readLE32(fmt + 4);
+            bits = (std::uint16_t)(fmt[14] | (fmt[15] << 8));
+            // WAVE_FORMAT_EXTENSIBLE: the real format is the first two bytes
+            // of the sub-format GUID.
+            if(format == 0xFFFE && want >= 26) format = (std::uint16_t)(fmt[24] | (fmt[25] << 8));
+            haveFormat = true;
+        }else if(std::memcmp(chunk, "data", 4) == 0){
+            layout.dataStart = body;
+            // A writer that never came back to fill in the size leaves it
+            // wrong; the file's own length is the one that cannot lie.
+            dataBytes = std::min<std::uint64_t>(size, (std::uint64_t)std::max<std::streamoff>(0, fileSize - body));
+            break;
+        }
+        file.clear();
+        file.seekg(body + (std::streamoff)size + (std::streamoff)(size & 1), std::ios::beg);
+    }
+    if(!haveFormat || format != 3 || bits != 32 || layout.channels == 0) return false;
+    layout.frames = dataBytes / ((std::uint64_t)layout.channels * 4ull);
+    return true;
+}
+
+void writeLE16(std::ostream& out, std::uint16_t value){
+    const unsigned char raw[2] = {(unsigned char)(value & 0xFF), (unsigned char)(value >> 8)};
+    out.write(reinterpret_cast<const char*>(raw), 2);
+}
+
+void writeLE32(std::ostream& out, std::uint32_t value){
+    const unsigned char raw[4] = {(unsigned char)(value & 0xFF), (unsigned char)((value >> 8) & 0xFF),
+                                  (unsigned char)((value >> 16) & 0xFF), (unsigned char)(value >> 24)};
+    out.write(reinterpret_cast<const char*>(raw), 4);
+}
+} // namespace
+
+bool ofxOceanodeSuperColliderController::sumFloatWavs(const std::vector<std::string>& inputs,
+                                                      const std::string& output){
+    if(inputs.empty()) return false;
+
+    std::vector<std::ifstream> files;
+    std::vector<floatWavLayout> layouts;
+    files.reserve(inputs.size());
+    layouts.reserve(inputs.size());
+    for(const auto& path : inputs){
+        files.emplace_back(path, std::ios::binary);
+        floatWavLayout layout;
+        if(!files.back().is_open() || !readFloatWavLayout(files.back(), layout)){
+            ofLogWarning("ofxOceanodeSuperColliderController")
+                << "WAV mix: cannot read " << path << " as a 32-bit float WAV";
+            return false;
+        }
+        layouts.push_back(layout);
+    }
+
+    const std::uint16_t channels = layouts.front().channels;
+    const std::uint32_t sampleRate = layouts.front().sampleRate;
+    std::uint64_t frames = 0;
+    for(std::size_t i = 0; i < layouts.size(); i++){
+        if(layouts[i].channels != channels || layouts[i].sampleRate != sampleRate){
+            ofLogWarning("ofxOceanodeSuperColliderController")
+                << "WAV mix: " << inputs[i] << " has " << layouts[i].channels << " channels at "
+                << layouts[i].sampleRate << " Hz, but " << inputs.front() << " has "
+                << channels << " at " << sampleRate << " Hz";
+            return false;
+        }
+        frames = std::max(frames, layouts[i].frames);
+    }
+
+    // RIFF with an 18-byte fmt chunk and a fact chunk, which is what the
+    // format asks of anything that is not integer PCM.
+    const std::uint64_t dataBytes = frames * (std::uint64_t)channels * 4ull;
+    const std::uint64_t riffSize = 4 + (8 + 18) + (8 + 4) + (8 + dataBytes);
+    if(riffSize > 0xFFFFFFFFull){
+        ofLogWarning("ofxOceanodeSuperColliderController")
+            << "WAV mix: " << output << " would pass the 4 GB limit of a WAV file";
+        return false;
+    }
+
+    std::ofstream out(output, std::ios::binary | std::ios::trunc);
+    if(!out.is_open()){
+        ofLogWarning("ofxOceanodeSuperColliderController") << "WAV mix: cannot write " << output;
+        return false;
+    }
+    out.write("RIFF", 4);
+    writeLE32(out, (std::uint32_t)riffSize);
+    out.write("WAVE", 4);
+    out.write("fmt ", 4);
+    writeLE32(out, 18);
+    writeLE16(out, 3);                                  // WAVE_FORMAT_IEEE_FLOAT
+    writeLE16(out, channels);
+    writeLE32(out, sampleRate);
+    writeLE32(out, sampleRate * (std::uint32_t)channels * 4u);
+    writeLE16(out, (std::uint16_t)(channels * 4u));     // block align
+    writeLE16(out, 32);
+    writeLE16(out, 0);                                  // no extra format bytes
+    out.write("fact", 4);
+    writeLE32(out, 4);
+    writeLE32(out, (std::uint32_t)frames);
+    out.write("data", 4);
+    writeLE32(out, (std::uint32_t)dataBytes);
+
+    for(std::size_t i = 0; i < files.size(); i++){
+        files[i].clear();
+        files[i].seekg(layouts[i].dataStart, std::ios::beg);
+    }
+
+    // Each server's own safety clip keeps it at full scale or below, but the
+    // device adds them after that, so the sum can go past it -- exactly as it
+    // does live. The float file keeps it; converting to fixed point would not.
+    double peak = 0.0;
+    const std::size_t blockFrames = 16384;
+    std::vector<float> sum(blockFrames * channels);
+    std::vector<float> block(blockFrames * channels);
+    std::uint64_t done = 0;
+    while(done < frames){
+        const std::size_t count = (std::size_t)std::min<std::uint64_t>(blockFrames, frames - done);
+        std::fill(sum.begin(), sum.begin() + (std::ptrdiff_t)(count * channels), 0.0f);
+        for(std::size_t i = 0; i < files.size(); i++){
+            if(layouts[i].frames <= done) continue;   // this one has ended: silence
+            const std::size_t available = (std::size_t)std::min<std::uint64_t>(count, layouts[i].frames - done);
+            const std::streamsize bytes = (std::streamsize)(available * channels * sizeof(float));
+            if(!files[i].read(reinterpret_cast<char*>(block.data()), bytes)){
+                ofLogWarning("ofxOceanodeSuperColliderController") << "WAV mix: read failed in " << inputs[i];
+                return false;
+            }
+            for(std::size_t s = 0; s < available * channels; s++) sum[s] += block[s];
+        }
+        for(std::size_t s = 0; s < count * channels; s++) peak = std::max(peak, (double)std::abs(sum[s]));
+        out.write(reinterpret_cast<const char*>(sum.data()), (std::streamsize)(count * channels * sizeof(float)));
+        done += count;
+    }
+    out.flush();
+    if(peak > 1.0){
+        ofLogWarning("ofxOceanodeSuperColliderController")
+            << "WAV mix: " << output << " peaks at " << peak << " ("
+            << (20.0 * std::log10(peak)) << " dBFS). The float file keeps it,"
+            << " but converting to fixed point will clip.";
+    }
+    return out.good();
 }
 
 bool ofxOceanodeSuperColliderController::removeDCOffsetInPlace(const std::string& wavPath,
@@ -679,10 +997,12 @@ void ofxOceanodeSuperColliderController::draw(){
 
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputInt("WAV channels", &nrtOutputChannels);
-    int maxNrtChannels = 128;
-    if(nrtServer >= 0 && nrtServer < (int)outputServers.size() && outputServers[nrtServer] != nullptr){
-        maxNrtChannels = std::max(1, outputServers[nrtServer]->preferences.numOutputBusChannels);
+    // Every server renders the same width, so the narrowest one sets it.
+    int maxNrtChannels = std::numeric_limits<int>::max();
+    for(auto s : outputServers){
+        if(s != nullptr) maxNrtChannels = std::min(maxNrtChannels, std::max(1, s->preferences.numOutputBusChannels));
     }
+    if(maxNrtChannels == std::numeric_limits<int>::max()) maxNrtChannels = 128;
     nrtOutputChannels = std::max(1, std::min(nrtOutputChannels, maxNrtChannels));
 
     std::array<char, 512> outputBuffer{};
@@ -693,15 +1013,7 @@ void ofxOceanodeSuperColliderController::draw(){
     }
 
     if(outputServers.size() > 1){
-        std::vector<std::string> serverLabels;
-        for(std::size_t i = 0; i < outputServers.size(); i++) serverLabels.push_back("Server " + ofToString(i));
-        auto getter = [](void* data, int index, const char** out){
-            auto& labels = *static_cast<std::vector<std::string>*>(data);
-            if(index < 0 || index >= (int)labels.size()) return false;
-            *out = labels[index].c_str();
-            return true;
-        };
-        ImGui::Combo("NRT Server", &nrtServer, getter, &serverLabels, (int)serverLabels.size());
+        ImGui::TextWrapped("Renders every server with a connected Output; the WAV is their sum.");
     }
 
     if(!nrtCaptureActive && !nrtRendering.load()){

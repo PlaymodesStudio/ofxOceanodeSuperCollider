@@ -51,6 +51,13 @@ public:
     // time zero -- which is where a patch's opening state belongs. Recording
     // then only has to start the clock, which is instant, so it can be driven
     // from another node without the first seconds arriving late.
+    //
+    // Every server with something connected to an Output is captured and
+    // rendered, whatever serverIndex says; the argument stays for existing
+    // callers. The audio device plays all the servers at once, so recording
+    // one of them alone leaves part of the patch out. With more than one, the
+    // master is their sum, sample by sample, and each server's stems come
+    // from its own render.
     bool armNRTRecording(int serverIndex, int outputChannels, const std::string& outputPath);
     void disarmNRTRecording();
     bool isNRTArmed() const { return nrtArmState == NRTArmState::Armed; }
@@ -65,14 +72,19 @@ public:
     // Also write the full mix alongside whatever Source selects. The master
     // uses the requested output path exactly; stems append their own names.
     void setNRTRecordStems(bool recordStems){ nrtRecordStems = recordStems; }
+    // With more than one server captured, also keep each server's own master
+    // beside the summed one, as <name>_S<n>_MasterMix.wav. They are rendered
+    // anyway to build the sum, so keeping them costs no extra render.
+    void setNRTServerMasters(bool keep){ nrtServerMasters = keep; }
+    int getNRTServerCount() const { return (int)outputServers.size(); }
 
-    // One entry of the Source dropdown, in the order they are listed: the
-    // master, every stem at once, then one entry per mixer covering that
+    // One entry of a server's Source dropdown, in the order they are listed:
+    // no stems, every stem at once, then one entry per mixer covering that
     // mixer's inputs, then each stem on its own. Stem busses are pre-fader,
     // so they do not sum back to the master.
     struct NRTSource {
-        enum class Kind { Master, AllStems, Mixer, Stem };
-        Kind kind = Kind::Master;
+        enum class Kind { None, AllStems, Mixer, Stem };
+        Kind kind = Kind::None;
         std::string label;
         std::string mixerName;  // set for Mixer and Stem
         int stemIndex = -1;     // set for Stem
@@ -84,8 +96,13 @@ public:
     // the graph, so the list the render resolves against is not the same list
     // object the dropdown was filled from, and a position in one can mean a
     // different stem in the other. An empty label, or one that is no longer in
-    // the graph, renders the master.
-    void setNRTSource(const std::string& label){ nrtSourceLabel = label; }
+    // the graph, takes no stems from that server. When no server gives any
+    // stems, the master is rendered whatever setNRTRecordStems() says.
+    //
+    // setNRTSources() takes one label per server, by server index;
+    // setNRTSource() is the single-server form and sets server 0 only.
+    void setNRTSources(const std::vector<std::string>& labels){ nrtSourceLabels = labels; }
+    void setNRTSource(const std::string& label){ nrtSourceLabels.assign(1, label); }
     bool endNRTRecording(bool cancelled = false);
     bool isNRTRecordingActive() const { return nrtCaptureActive; }
     bool isNRTRendering() const { return nrtRendering.load(); }
@@ -139,6 +156,14 @@ private:
     // Same list as getNRTSources(), built straight from a manager so that the
     // dropdown and the render agree on what every index means.
     std::vector<NRTSource> buildNRTSources(serverManager* manager) const;
+    // The servers a capture covers: every one with an Output that has
+    // something patched into it, by index.
+    std::vector<int> findNRTServers() const;
+    // Adds 32-bit float WAVs sample by sample into a new file at `output`.
+    // They must agree on channel count and rate; a shorter one counts as
+    // silence past its end. Returns false, and writes nothing usable, on any
+    // file it cannot read.
+    static bool sumFloatWavs(const std::vector<std::string>& inputs, const std::string& output);
     // In-place DC removal on a 32-bit float WAV, per channel, streamed so the
     // file is never held in memory. The filter is LeakDC's, but its corner is
     // given in Hz and the coefficient derived from the file's own sample rate:
@@ -188,12 +213,15 @@ private:
     std::string nrtStatus;
     float nrtDuration = 10.0f;
     int nrtOutputChannels = 2;
-    int nrtServer = 0;
+    // Indices of the servers being captured, set when arming.
+    std::vector<int> nrtServers;
     // Written by every render worker, so it cannot be a plain int.
     std::atomic<int> nrtRenderResult{0};
     bool nrtManualStop = false;
     bool nrtRecordStems = false;
-    std::string nrtSourceLabel;
+    bool nrtServerMasters = false;
+    // One per server, by server index.
+    std::vector<std::string> nrtSourceLabels;
     // Filled on the GUI thread before the workers start and never written
     // again, so the workers only ever read it.
     std::vector<std::string> nrtRenderOutputs;

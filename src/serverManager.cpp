@@ -559,6 +559,13 @@ bool serverManager::writeNRTStemScore(const std::string& path, double endTime, i
     return server->writeNRTScore(path, endTime, {redirect});
 }
 
+bool serverManager::hasConnectedOutput() const{
+    for(auto output : outputs){
+        if(output != nullptr && output->isInputConnected()) return true;
+    }
+    return false;
+}
+
 std::size_t serverManager::getNRTEventCount() const{
     return server != nullptr ? server->getNRTEventCount() : 0;
 }

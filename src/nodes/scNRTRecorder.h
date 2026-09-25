@@ -30,11 +30,21 @@
 // also drives the frames, and both are kept out of presets so that recalling
 // one never starts a render on its own.
 //
-// Source picks what is written: "Master" is the full mix, "All stems" every
-// mixer input in the graph, "<mixer> (all)" that one mixer's inputs, and
-// "<mixer> / <stem>" a single chain on its own. With Master adds the full mix
-// alongside. The master is written to Filename exactly; stems append their
-// names as <name>_<stem>.wav.
+// Every server with something connected to an Output is recorded. The master
+// is written to Filename exactly; with more than one server it is their sum,
+// which is what the audio device plays.
+//
+// There is one Source dropdown per server ("Source" is server 0, then
+// "Source 1", "Source 2", ...), each picking that server's stems: "None",
+// "All stems" every mixer input on it, "<mixer> (all)" that one mixer's
+// inputs, and "<mixer> / <stem>" a single chain on its own. Stems append their
+// names as <name>_<stem>.wav, and with more than one server also the server's
+// number, as <name>_S1_<stem>.wav. The master is written when no dropdown
+// picks any stems, and alongside them when With Master is on. Server Masters
+// also keeps each server's own master, as <name>_S1_MasterMix.wav.
+//
+// The Server parameter no longer chooses anything; it is kept, hidden, so
+// that presets that set it still load.
 //
 // Remove DC runs a LeakDC-style filter over each finished file, with its
 // corner at 3.5 Hz so it takes out offset and drift without thinning the low
@@ -55,7 +65,7 @@ public:
         addParameter(record.set("Record", false), ofxOceanodeParameterFlags_DisableSavePreset);
 
         addSeparator("Render");
-        addParameter(server.set("Server", 0, 0, 127));
+        addParameter(server.set("Server", 0, 0, 127), ofxOceanodeParameterFlags_NoGuiWidget);
         addParameter(channels.set("Channels", 2, 1, 128));
         addParameter(filename.set("Filename", "Supercollider/NRT/recording.wav"));
         // Seeded, not read from the graph. A node is constructed part-way
@@ -63,9 +73,19 @@ public:
         // one does not exist yet -- reading the graph there walks pointers to
         // nodes that are already gone. update() fills the real list on the
         // first frame, by which point the graph is whole again.
-        sourceOptions = {"Master"};
-        sourceParameter = addParameterDropdown(source, "Source", 0, sourceOptions);
+        //
+        // One per server. The count is fixed when the servers are created at
+        // startup, so it never changes under a patch.
+        const int serverCount = controller != nullptr ? std::max(1, controller->getNRTServerCount()) : 1;
+        sources.resize((std::size_t)serverCount);
+        for(int i = 0; i < serverCount; i++){
+            auto& picker = sources[(std::size_t)i];
+            picker.name = i == 0 ? "Source" : "Source " + ofToString(i);
+            picker.options = {"None"};
+            picker.parameter = addParameterDropdown(picker.value, picker.name, 0, picker.options);
+        }
         addParameter(withMaster.set("With Master", false));
+        addParameter(serverMasters.set("Server Masters", false));
         addParameter(removeDC.set("Remove DC", false));
 
         addSeparator("Output");
@@ -257,44 +277,49 @@ private:
     }
 
     // --- sources ---------------------------------------------------------
-    // The list comes from the live graph, so it follows repatching: "Master",
-    // "All stems", one entry per mixer covering that mixer's inputs, then the
-    // stems on their own.
+    // Each list comes from its server's live graph, so it follows repatching:
+    // "None", "All stems", one entry per mixer covering that mixer's inputs,
+    // then the stems on their own.
     void refreshSourceOptions(){
         if(controller == nullptr) return;
-        // Arming tears the graph down and rebuilds it, so the list churns --
-        // briefly down to "Master" alone -- exactly while a choice is waiting
+        // Arming tears the graph down and rebuilds it, so the lists churn --
+        // briefly down to "None" alone -- exactly while a choice is waiting
         // to be used. Refreshing through that would clamp the selection to
         // zero and silently render something the user never picked, so the
-        // list is frozen from the moment the node is armed until it is idle
+        // lists are frozen from the moment the node is armed until it is idle
         // again.
         if(controller->isNRTSettling() || controller->isNRTArmed() ||
            controller->isNRTRecordingActive() || controller->isNRTRendering()) return;
 
-        std::vector<std::string> next = controller->getNRTSourceNames(server.get());
-        if(next == sourceOptions) return;
+        for(std::size_t i = 0; i < sources.size(); i++){
+            auto& picker = sources[i];
+            std::vector<std::string> next = controller->getNRTSourceNames((int)i);
+            if(next == picker.options) continue;
 
-        // Keep the choice itself, not its position: a repatch can insert or
-        // drop entries above it, which would otherwise silently slide the
-        // selection onto a different stem.
-        const std::string chosen = selectedSourceLabel();
-        sourceOptions = std::move(next);
+            // Keep the choice itself, not its position: a repatch can insert
+            // or drop entries above it, which would otherwise silently slide
+            // the selection onto a different stem.
+            const std::string chosen = selectedSourceLabel(i);
+            picker.options = std::move(next);
 
-        int restored = 0;
-        for(std::size_t i = 0; i < sourceOptions.size(); i++){
-            if(sourceOptions[i] != chosen) continue;
-            restored = (int)i;
-            break;
+            int restored = 0;
+            for(std::size_t option = 0; option < picker.options.size(); option++){
+                if(picker.options[option] != chosen) continue;
+                restored = (int)option;
+                break;
+            }
+            const int last = std::max(0, (int)picker.options.size() - 1);
+            picker.value.set(picker.name, std::min(restored, last), 0, last);
+            if(picker.parameter != nullptr) picker.parameter->setDropdownOptions(picker.options);
         }
-        const int last = std::max(0, (int)sourceOptions.size() - 1);
-        source.set("Source", std::min(restored, last), 0, last);
-        if(sourceParameter != nullptr) sourceParameter->setDropdownOptions(sourceOptions);
     }
 
-    std::string selectedSourceLabel() const {
-        const int index = source.get();
-        if(index < 0 || index >= (int)sourceOptions.size()) return "";
-        return sourceOptions[(std::size_t)index];
+    std::string selectedSourceLabel(std::size_t serverIndex) const {
+        if(serverIndex >= sources.size()) return "";
+        const auto& picker = sources[serverIndex];
+        const int index = picker.value.get();
+        if(index < 0 || index >= (int)picker.options.size()) return "";
+        return picker.options[(std::size_t)index];
     }
 
     // --- control ---------------------------------------------------------
@@ -331,8 +356,11 @@ private:
         }
         // These only matter once the capture is done, but they are read then
         // from whatever the node last pushed, so push them before starting.
-        controller->setNRTSource(selectedSourceLabel());
+        std::vector<std::string> labels;
+        for(std::size_t i = 0; i < sources.size(); i++) labels.push_back(selectedSourceLabel(i));
+        controller->setNRTSources(labels);
         controller->setNRTRecordStems(withMaster.get());
+        controller->setNRTServerMasters(serverMasters.get());
         controller->setNRTRemoveDC(removeDC.get());
         if(!controller->beginNRTRecording(server.get(), channels.get(), filename.get())) setRecord(false);
     }
@@ -347,15 +375,20 @@ private:
     ofParameter<int> server;
     ofParameter<int> channels;
     ofParameter<std::string> filename;
-    ofParameter<int> source;
+    // One Source dropdown per server, by server index.
+    struct sourcePicker {
+        std::string name;
+        ofParameter<int> value;
+        std::shared_ptr<ofxOceanodeParameter<int>> parameter;
+        std::vector<std::string> options;
+    };
+    std::vector<sourcePicker> sources;
     ofParameter<bool> withMaster;
+    ofParameter<bool> serverMasters;
     ofParameter<bool> removeDC;
     ofParameter<void> finished;
     ofParameter<std::string> status;
     ofParameter<int> parallel;
-
-    std::shared_ptr<ofxOceanodeParameter<int>> sourceParameter;
-    std::vector<std::string> sourceOptions;
 
     ofEventListeners listeners;
     bool suppressArm = false;
