@@ -238,8 +238,6 @@ private:
 	void handleDynamicParameterChange(int paramIndex, const vector<float>& values);
 	void propagateParameterToOtherInstances(int sourceNodeID, int paramIndex, float value);
 	void flushPendingVSTGUIPropagation();
-	void propagateFirstInstanceToAll();
-	void handleInstanceAwareParameterChange(int paramIndex, const vector<float>& values);
 	bool shouldPropagateFromVSTGUI(int paramIndex, int sourceNodeID);
 	void applyGUIParameterValueFromVST(int paramIndex, float value, int sourceNodeID);
 	void updateParameterValueFromVST(int paramIndex, float value, int sourceNodeID);
@@ -583,6 +581,14 @@ private:
 	std::vector<int> pendingParameterSetIndices;
 	std::atomic<bool> pendingParameterSetWorkPending;
 	std::mutex pendingParameterSetMutex;
+	// Reused by flushPendingVSTParameterSets() so each flush builds into
+	// storage that already has capacity instead of allocating afresh.
+	struct PendingSetBundle {
+		ofxSCServer* server = nullptr;
+		ofxOscBundle bundle;
+		int messageCount = 0;
+	};
+	std::vector<PendingSetBundle> pendingSetBundles;
 	
 	// Internal batch helpers
 	void markParameterDirty(int paramIndex);

@@ -17,6 +17,13 @@
 #include <vector>
 #include <fstream>
 
+namespace {
+// ofLog writes every << into its stream before it checks the log level, so a
+// disabled verbose line still pays for formatting the whole message. Paths
+// that run per message test this first and skip the work when no one listens.
+inline bool scVSTVerbose(){ return ofGetLogLevel("scVST") <= OF_LOG_VERBOSE; }
+}
+
 std::map<std::string, std::vector<uint8_t>> scVST::globalFXPCache;
 std::map<std::string, bool> scVST::globalFXPCacheValid;
 std::mutex scVST::globalCacheMutex;
@@ -879,39 +886,43 @@ void scVST::flushPendingVSTParameterSets() {
 
 	static constexpr int MAX_PARAMS_PER_MESSAGE = 64;
 	static constexpr int MAX_MESSAGES_PER_BUNDLE = 8;
-	std::map<ofxSCServer*, ofxOscBundle> bundles;
-	std::map<ofxSCServer*, int> bundleMessageCounts;
 
-	auto flushServerBundle = [&](ofxSCServer* server) {
-		if(server == nullptr || bundleMessageCounts[server] == 0) return;
-		server->sendBundle(bundles[server]);
-		bundles[server].clear();
-		bundleMessageCounts[server] = 0;
+	// One bundle per server, kept between flushes. clear() keeps a bundle's
+	// message capacity, so after the first flush nothing reallocates -- and
+	// that matters, because ofxOscMessage has no move constructor: every
+	// reallocation deep-copies each message and every one of its arguments.
+	// There are one to three servers, so a linear search beats the map that
+	// used to be rebuilt, node by node, on every flush.
+	if(pendingSetBundles.empty()) pendingSetBundles.reserve(4);
+	auto slotFor = [this](ofxSCServer* server) -> PendingSetBundle& {
+		for(auto& slot : pendingSetBundles) if(slot.server == server) return slot;
+		pendingSetBundles.push_back(PendingSetBundle{server, ofxOscBundle(), 0});
+		return pendingSetBundles.back();
+	};
+	auto flushSlot = [](PendingSetBundle& slot) {
+		if(slot.messageCount == 0) return;
+		slot.server->sendBundle(slot.bundle);
+		slot.bundle.clear();
+		slot.messageCount = 0;
 	};
 
 	for(size_t instanceIndex = 0; instanceIndex < activeInstanceTargets.size(); ++instanceIndex) {
 		const auto& target = activeInstanceTargets[instanceIndex];
 		if(target.server == nullptr || target.synth == nullptr) continue;
 
-		ofxOscMessage setMsg;
+		PendingSetBundle& slot = slotFor(target.server);
+		// Each message is built in place inside the bundle rather than assembled
+		// on its own and then copied in, which allocated every argument twice.
+		// A message is only opened once it has a pair to carry, so none is ever
+		// left empty. The pointer is never held across another addMessage().
+		ofxOscMessage* message = nullptr;
 		int pairCount = 0;
-		auto beginMessage = [&]() {
-			setMsg.clear();
-			setMsg.setAddress("/u_cmd");
-			setMsg.addIntArg(target.synth->nodeID);
-			setMsg.addIntArg(2);
-			setMsg.addStringArg("/set");
-			pairCount = 0;
-		};
-		auto finishMessage = [&]() {
-			if(pairCount == 0) return;
-			bundles[target.server].addMessage(setMsg);
-			if(++bundleMessageCounts[target.server] >= MAX_MESSAGES_PER_BUNDLE) {
-				flushServerBundle(target.server);
-			}
+		auto closeMessage = [&]() {
+			if(message == nullptr) return;
+			message = nullptr;
+			if(++slot.messageCount >= MAX_MESSAGES_PER_BUNDLE) flushSlot(slot);
 		};
 
-		beginMessage();
 		for(int paramIndex : indicesToFlush) {
 			if(paramIndex < 0 || paramIndex >= 1024) continue;
 			const auto& values = valuesToFlush[paramIndex];
@@ -921,17 +932,24 @@ void scVST::flushPendingVSTParameterSets() {
 			// shorter vectors retain the established last-value fallback.
 			const float value = values.size() == 1 || instanceIndex >= values.size() ?
 				values.back() : values[instanceIndex];
-			setMsg.addIntArg(paramIndex);
-			setMsg.addFloatArg(value);
-			if(++pairCount >= MAX_PARAMS_PER_MESSAGE) {
-				finishMessage();
-				beginMessage();
+
+			if(message == nullptr) {
+				slot.bundle.addMessage(ofxOscMessage());
+				message = &slot.bundle.getMessageAt(slot.bundle.getMessageCount() - 1);
+				message->setAddress("/u_cmd");
+				message->addIntArg(target.synth->nodeID);
+				message->addIntArg(2);
+				message->addStringArg("/set");
+				pairCount = 0;
 			}
+			message->addIntArg(paramIndex);
+			message->addFloatArg(value);
+			if(++pairCount >= MAX_PARAMS_PER_MESSAGE) closeMessage();
 		}
-		finishMessage();
+		closeMessage();
 	}
 
-	for(auto& entry : bundles) flushServerBundle(entry.first);
+	for(auto& slot : pendingSetBundles) flushSlot(slot);
 }
 
 bool scVST::isFeedbackSuppressed(int paramIndex, uint64_t currentTime) const {
@@ -1147,8 +1165,10 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 			if (!isAlreadyPublished) {
 				lastTouchedIndex = paramIndex;
 				lastTouchedTime = currentTime;
-				ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
-				<< " from node " << nodeID << " (updating lastTouchedIndex for addLast)";
+				if(scVSTVerbose()) {
+					ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
+					<< " from node " << nodeID << " (updating lastTouchedIndex for addLast)";
+				}
 			}
 			
 			auto infoSlot = parameterInfoSlots[paramIndex];
@@ -1203,8 +1223,10 @@ void scVST::handleVSTParam(ofxOscMessage& msg) {
 			if (!isAlreadyPublished) {
 				lastTouchedIndex = paramIndex;
 				lastTouchedTime = currentTime;
-				ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
-				<< " from node " << nodeID << " (updating lastTouchedIndex for addLast)";
+				if(scVSTVerbose()) {
+					ofLogVerbose("scVST") << "VST Parameter " << paramIndex << " = " << value
+					<< " from node " << nodeID << " (updating lastTouchedIndex for addLast)";
+				}
 			}
 		}
 	}
@@ -1421,62 +1443,6 @@ bool scVST::shouldPropagateFromVSTGUI(int paramIndex, int sourceNodeID) {
 }
 
 
-
-void scVST::handleInstanceAwareParameterChange(int paramIndex, const vector<float>& values) {
-	// Mark the parameter as locally-driven so echoed VST feedback is ignored,
-	// but do not drop fresh GUI/LFO changes while suppression is active.
-	suppressFeedbackFor(paramIndex, ofGetElapsedTimeMillis() + 100);
-	/*
-	 ofLogNotice("scVST") << "Instance-aware parameter change: param " << paramIndex
-	 << " with " << values.size() << " values (USER-initiated)";
-	 */
-	// Apply parameter values to specific instances
-	static thread_local ofxOscMessage setMsg;
-	for(size_t instanceIndex = 0; instanceIndex < activeInstanceTargets.size(); ++instanceIndex) {
-		const auto& target = activeInstanceTargets[instanceIndex];
-		try {
-			float value;
-			
-			if(values.size() == 1) {
-				// Scalar value - broadcast to all instances
-				value = values[0];
-				/*
-				 ofLogVerbose("scVST") << "Broadcasting scalar value " << value
-				 << " to instance " << instanceIndex << " (node " << target.synth->nodeID << ")";
-				 */
-			}
-			else if(instanceIndex < values.size()) {
-				// Vector value - use specific value for this instance
-				value = values[instanceIndex];
-				/*
-				 ofLogVerbose("scVST") << "Setting instance " << instanceIndex
-				 << " (node " << target.synth->nodeID << ") to value " << value;
-				 */
-			}
-			else {
-				// Vector is shorter than number of instances - use last value
-				value = values.back();
-				/*
-				 ofLogVerbose("scVST") << "Using last value " << value
-				 << " for instance " << instanceIndex << " (node " << target.synth->nodeID << ")";
-				 */
-			}
-			
-			setMsg.clear();
-			setMsg.setAddress("/u_cmd");
-			setMsg.addIntArg(target.synth->nodeID);
-			setMsg.addIntArg(2);
-			setMsg.addStringArg("/set");
-			setMsg.addIntArg(paramIndex);
-			setMsg.addFloatArg(value);
-			target.server->sendMsg(setMsg);
-			
-		} catch(const std::exception& e) {
-			ofLogError("scVST") << "Error setting parameter on synth " << target.synth->nodeID << ": " << e.what();
-		}
-	}
-	
-}
 
 void scVST::handleVSTOpen(ofxOscMessage& msg) {
 	if (msg.getNumArgs() >= 5) {
@@ -3926,8 +3892,11 @@ void scVST::activateParameterBindings() {
 	resetVSTModificationTracking(); // NEW: Reset modification tracking after successful VST sync
 	//ofLogNotice("scVST") << "🔓 Set both preset loading flags = FALSE, reset VST modification tracking - parameter listeners now active";
 	
-	// Small delay to ensure the flag change is processed
-	ofSleepMillis(100);
+	// No wait here. This used to sleep 100 ms "to ensure the flag change is
+	// processed", but the flags are plain members read on this same thread --
+	// scVST starts no threads, and server replies are handled on the main
+	// thread -- so there is nothing to wait for. Nothing is sent before the
+	// test below, and that only queues a set for the next batch flush.
 	
 	// Test the bindings
 	int testParameterIndex = -1;
@@ -3957,9 +3926,12 @@ void scVST::activateParameterBindings() {
 	for(auto& param : dynamicVectorParameters) {
 		int paramIndex = param.first;
 		if(parameterInfoMap.count(paramIndex) > 0) {
-			vector<float> currentValues = param.second->getParameter().get();
-			ofLogVerbose("scVST") << "Parameter " << paramIndex << " bound with "
-			<< currentValues.size() << " values";
+			// Only the size is logged, so read it through the reference rather
+			// than copying the whole vector for every bound parameter.
+			if(scVSTVerbose()) {
+				ofLogVerbose("scVST") << "Parameter " << paramIndex << " bound with "
+				<< param.second->getParameter().get().size() << " values";
+			}
 			boundParameters++;
 		}
 	}
@@ -3990,6 +3962,7 @@ void scVST::syncGUIParametersToVST(ofJson &nodeJson) {
 	
 	for(auto& item : nodeJson["vstParameters"].items()) {
 		try {
+			const int sentBefore = sentCount;
 			int paramIndex = ofToInt(item.key());
 			if(item.value().is_object()) {
 				
@@ -4034,8 +4007,12 @@ void scVST::syncGUIParametersToVST(ofJson &nodeJson) {
 					skippedCount++;
 				}
 				
-				// Small delay between parameters
-				if(sentCount % 5 == 0) {
+				// Pause after every fifth parameter actually sent. Testing
+				// sentCount alone also slept after any skipped parameter that
+				// happened to land while sentCount sat on a multiple of five --
+				// including every skip before the first send -- yet a skip sends
+				// nothing, so there was nothing to pace.
+				if(sentCount > sentBefore && sentCount % 5 == 0) {
 					for(auto& serverInstances : synthInstances) {
 						serverInstances.first->process();
 					}
@@ -5049,160 +5026,6 @@ void scVST::handleDynamicParameterChange(int paramIndex, const vector<float>& va
 
 	queueVSTParameterSet(paramIndex, values);
 
-}
-
-void scVST::propagateFirstInstanceToAll() {
-	if(synthInstances.empty()) {
-		ofLogWarning("scVST") << "No VST instances available for propagation";
-		return;
-	}
-	
-	// Find first instance
-	ofxSCSynth* firstInstance = nullptr;
-	ofxSCServer* firstServer = nullptr;
-	
-	for(auto& serverInstances : synthInstances) {
-		if(!serverInstances.second.empty() && serverInstances.second[0] != nullptr) {
-			firstInstance = serverInstances.second[0];
-			firstServer = serverInstances.first;
-			break;
-		}
-	}
-	
-	if(!firstInstance || !firstServer) {
-		ofLogError("scVST") << "Could not find first VST instance for propagation";
-		return;
-	}
-	
-	//ofLogNotice("scVST") << "=== PROPAGATING FROM INSTANCE " << firstInstance->nodeID << " ===";
-	
-	// Capture parameters using the same proven method as presetSave
-	int initialParamCount = parameterInfoMap.size();
-	
-	// Method 1: Individual parameter queries (most reliable)
-	for(int paramIndex = 0; paramIndex < 256; paramIndex++) {
-		ofxOscMessage getParamMsg;
-		getParamMsg.setAddress("/u_cmd");
-		getParamMsg.addIntArg(firstInstance->nodeID);
-		getParamMsg.addIntArg(2);
-		getParamMsg.addStringArg("/get");
-		getParamMsg.addIntArg(paramIndex);
-		firstServer->sendMsg(getParamMsg);
-		
-		// Essential: Force OSC processing regularly
-		if(paramIndex % 10 == 0) {
-			firstServer->process();
-			ofSleepMillis(5);
-		}
-	}
-	
-	// Method 2: Bulk queries for efficiency
-	for(int startParam = 0; startParam < 256; startParam += 16) {
-		ofxOscMessage getBulkMsg;
-		getBulkMsg.setAddress("/u_cmd");
-		getBulkMsg.addIntArg(firstInstance->nodeID);
-		getBulkMsg.addIntArg(2);
-		getBulkMsg.addStringArg("/getn");
-		getBulkMsg.addIntArg(startParam);
-		getBulkMsg.addIntArg(16);
-		firstServer->sendMsg(getBulkMsg);
-		
-		firstServer->process();
-		ofSleepMillis(10);
-	}
-	
-	// Wait for responses with active OSC processing
-	//ofLogNotice("scVST") << "Capturing parameter state...";
-	for(int i = 0; i < 100; i++) {
-		firstServer->process();
-		ofSleepMillis(20);
-		
-		// Check progress periodically
-		if(i % 25 == 0) {
-			int currentCount = parameterInfoMap.size();
-			if(currentCount > initialParamCount + 20) {
-				//ofLogNotice("scVST") << "Good progress, finishing capture early";
-				break;
-			}
-		}
-	}
-	
-	// Final processing burst
-	for(int i = 0; i < 10; i++) {
-		firstServer->process();
-		ofSleepMillis(10);
-	}
-	
-	// Collect all parameters to propagate
-	std::map<int, float> parametersToPropagate;
-	
-	// Priority 1: GUI parameters (user is actively controlling these)
-	for(auto& param : dynamicVectorParameters) {
-		int paramIndex = param.first;
-		auto values = param.second->getParameter().get();
-		if(!values.empty()) {
-			parametersToPropagate[paramIndex] = values[0];
-		}
-	}
-	
-	for(auto& param : dynamicParameters) {
-		int paramIndex = param.first;
-		parametersToPropagate[paramIndex] = param.second->getParameter().get();
-	}
-	
-	// Priority 2: Captured parameters from VST
-	for(auto& info : parameterInfoMap) {
-		int paramIndex = info.first;
-		if(parametersToPropagate.count(paramIndex) == 0) {
-			parametersToPropagate[paramIndex] = info.second.value;
-		}
-	}
-	
-	//ofLogNotice("scVST") << "Propagating " << parametersToPropagate.size() << " parameters";
-	
-	if(parametersToPropagate.empty()) {
-		ofLogError("scVST") << "No parameters to propagate";
-		return;
-	}
-	
-	// Apply to all other instances
-	const uint64_t clearTime = ofGetElapsedTimeMillis() + 200;
-	for(auto& param : parametersToPropagate) {
-		suppressFeedbackFor(param.first, clearTime);
-	}
-	
-	bool skipFirst = true;
-	int appliedCount = 0;
-	
-	for(auto& serverInstances : synthInstances) {
-		if(serverInstances.first == nullptr) continue;
-		
-		for(auto synth : serverInstances.second) {
-			if(synth != nullptr) {
-				if(skipFirst) {
-					skipFirst = false;
-					continue;
-				}
-				
-				// Apply all parameters to this instance
-				for(auto& param : parametersToPropagate) {
-					ofxOscMessage setMsg;
-					setMsg.setAddress("/u_cmd");
-					setMsg.addIntArg(synth->nodeID);
-					setMsg.addIntArg(2);
-					setMsg.addStringArg("/set");
-					setMsg.addIntArg(param.first);
-					setMsg.addFloatArg(param.second);
-					serverInstances.first->sendMsg(setMsg);
-				}
-				
-				appliedCount++;
-				ofSleepMillis(50); // Small delay between instances
-			}
-		}
-	}
-	
-	//ofLogNotice("scVST") << "Successfully propagated to " << appliedCount << " instances";
 }
 
 void scVST::drawSeparator() {
@@ -6238,8 +6061,10 @@ void scVST::sendMidiCC(int ccNumber, float value) {
 	// Convert float (0.0-1.0) to MIDI value (0-127)
 	int midiValue = (int)(ofClamp(value, 0.0f, 1.0f) * 127.0f);
 	
-	ofLogVerbose("scVST") << "Sending MIDI CC " << ccNumber << " = " << midiValue
-	<< " (float: " << value << ") to all VST instances";
+	if(scVSTVerbose()) {
+		ofLogVerbose("scVST") << "Sending MIDI CC " << ccNumber << " = " << midiValue
+		<< " (float: " << value << ") to all VST instances";
+	}
 	
 	// Send to all instances
 	for(const auto& target : activeInstanceTargets) {
