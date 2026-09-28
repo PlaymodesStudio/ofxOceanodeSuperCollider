@@ -54,12 +54,20 @@ scRhythmBox::scRhythmBox(vector<serverManager*> servers)
             break;
         }
     }
+    browser.setPreviewServer(previewServer);
 
     // Pre-allocate per-track storage (active tracks are 0..numTracks-1)
     trackBufs.resize(MAX_TRACKS);
     samplePaths.resize(MAX_TRACKS);
     waveformPeaks.resize(MAX_TRACKS);
     currentStep.assign(MAX_TRACKS, 0);
+#if OFXOCEANODESC_HAS_TRANSPORT
+    stepClocks.assign(MAX_TRACKS, scTransportSync::StepClock{});
+    syncSpb.assign(MAX_TRACKS, -1);
+    syncNs.assign(MAX_TRACKS, -1);
+    hardCounters.assign(MAX_TRACKS, 0.0);
+    needHard.assign(MAX_TRACKS, true);
+#endif
     
     // Initialize project functionality
     projectsDirectory = getProjectsDirectory();
@@ -150,25 +158,35 @@ void scRhythmBox::setup() {
     // Uses MAX_TRACKS as a sentinel index so getOutputBusIndex can distinguish it.
     addOutputParameter(mixOutParam.set("Mix", nodePort(MAX_TRACKS, this)));
 
+#if OFXOCEANODESC_HAS_TRANSPORT
+    // Inspector: lock every track's step clock to the global transport.
+    // While on, the node's Play / Reset / Stop / BPM are ignored by the synths:
+    // transport play/stop and tempo drive them.
+    addInspectorParameter(syncToTransportP.set("Sync To Transport", false));
+    addInspectorParameter(beatOffsetP.set("Beat Offset", 0.0f, -64.0f, 64.0f));
+#endif
+
     // ── Slot / track data initialisation ─────────────────────────────────────
     initSlots();
 
     // ── File browser default location ─────────────────────────────────────────
-    browseDir = ofToDataPath("Supercollider/Samples", true);
-    if(!std::filesystem::exists(browseDir))
-        browseDir = ofFilePath::getUserHomeDir();
-    refreshBrowse(browseDir);
+    {
+        std::string dir = ofToDataPath("Supercollider/Samples", true);
+        if(!std::filesystem::exists(dir))
+            dir = ofFilePath::getUserHomeDir();
+        refreshBrowse(dir);
+    }
 
     // ── Parameter listeners ───────────────────────────────────────────────────
     nodeListeners.push(resetSeq.newListener([this](int& v) {
-        // Mirror the resetSeq value (0 or 1) to the SC 'reset' arg on every change.
-        // The SynthDef uses HPZ1.kr(reset) to detect the 0→1 rising edge and fires
-        // a one-shot resetTrig that immediately advances the Stepper to step 0.
-        // Sending both the rising (1) and falling (0) edges keeps HPZ1 aligned for
-        // future resets without requiring synth recreation.
+        // A 0→1 rising edge of resetSeq requests a reset. It is sent to SC as an
+        // ever-increasing counter on the 'reset' control (HPZ1.kr(reset) > 0 fires
+        // on every increment). The old 1-then-0 mirror lost resets whenever both
+        // /n_set messages reached scsynth within the same control block.
+        // (In Sync To Transport mode the synths ignore it: the transport drives them.)
+        const bool rising = (v > 0 && lastResetVal <= 0);
         lastResetVal = v;
-        for(auto& [srv, synths] : trackSynths)
-            for(auto* s : synths) if(s) s->set("reset", (float)v);
+        if(rising) sendResetTo(0, numTracks);
     }));
 
     nodeListeners.push(playSeq.newListener([this](bool& v) {
@@ -272,6 +290,18 @@ void scRhythmBox::setup() {
     nodeListeners.push(numTracksP.newListener([this](int& n) {
         setNumTracks(n);
     }));
+
+#if OFXOCEANODESC_HAS_TRANSPORT
+    nodeListeners.push(syncToTransportP.newListener([this](bool& on) {
+        handleSyncChanged(on);
+    }));
+    nodeListeners.push(beatOffsetP.newListener([this](float& /*v*/) {
+        if(!syncToTransportP.get()) return;
+        // The position jumps: re-anchor every track hard.
+        for(int ti = 0; ti < MAX_TRACKS; ti++) needHard[ti] = true;
+        follower.requestAnchor();
+    }));
+#endif
 
     nodeListeners.push(currentSlotP.newListener([this](int& /*s*/) {
         reloadCurrentSlot();
@@ -453,6 +483,9 @@ void scRhythmBox::update(ofEventArgs& /*args*/) {
         gateOut.set(gv);
     }
 
+#if OFXOCEANODESC_HAS_TRANSPORT
+    if(syncToTransportP.get()) updateTransportSync();
+#endif
 }
 
 void scRhythmBox::draw(ofEventArgs& /*args*/) {
@@ -465,7 +498,8 @@ void scRhythmBox::draw(ofEventArgs& /*args*/) {
 
 void scRhythmBox::setBpm(float bpm) {
     currentBpm = bpm;
-    sendBpmToAll();
+    // In Sync To Transport mode the tempo arrives with the anchors instead.
+    if(!isSyncing()) sendBpmToAll();
 }
 
 void scRhythmBox::activate() {
@@ -557,7 +591,7 @@ void scRhythmBox::moveSynthBefore(ofxSCServer* srv, int nodeID) {
         if(ti < numTracks) {
             const TrackData&   tdi = track(ti);
             const TrackConfig& tci = trackConfig(ti);
-            s->set("bpm",           currentBpm);
+            s->set("bpm",           effectiveBpm());
             s->set("numBeats",      (float)tci.numBeats);
             s->set("stepsPerBeat",  (float)tci.stepsPerBeat);
             s->set("numSteps",      (float)tci.getNumSteps());
@@ -659,7 +693,7 @@ void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
     trackSynths[srv][ti] = s;
 
     // Set timing and sample parameters
-    s->set("bpm",           currentBpm);
+    s->set("bpm",           effectiveBpm());
     s->set("numBeats",      (float)tc.numBeats);
     s->set("stepsPerBeat",  (float)tc.stepsPerBeat);
     s->set("shift",         (float)td.shift);
@@ -670,8 +704,25 @@ void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
     s->set("globalProb",    tc.globalProb);
     s->set("sequenceProb",  tc.sequenceProb);
     s->set("bufnum",        bufnum);
-    s->set("reset",         0);
+    // Current reset counter value: a new synth must not see a change at start.
+    s->set("reset",         resetCounter);
     s->set("play",          playSeq.get() ? 1.0f : 0.0f);
+#if OFXOCEANODESC_HAS_TRANSPORT
+    if(syncToTransportP.get()) {
+        // Hold (run=0) until the next anchor, which positions this track at the
+        // current transport position (hard anchor: it joins without a re-reset
+        // of the other tracks).
+        s->set("sync",       1.0f);
+        s->set("run",        0.0f);
+        s->set("anchorId",   anchorIdCounter);
+        s->set("anchorHard", hardCounters[ti]);
+        s->set("anchorPos",  0.0f);
+        s->set("anchorFire", 0.0f);
+        stepClocks[ti].reset();
+        needHard[ti] = true;
+        follower.requestAnchor();
+    }
+#endif
     s->set("active",        (getActive() && !tc.muted) ? 1.0f : 0.0f);
     s->set("mono",          tc.monoMode      ? 1.0f : 0.0f);
     s->set("volLatch",      tc.volLatch       ? 1.0f : 0.0f);
@@ -1035,14 +1086,10 @@ void scRhythmBox::setNumTracks(int n, TrackType newTrackType) {
             // Reset already-running synths so their Phasors align to 0.
             // Only touches ti < old — those synths have been live long enough
             // to have received /n_go, so set() sends /n_setn immediately.
-            for(int ti = 0; ti < old; ti++) {
-                for(auto& [srv, synths] : trackSynths) {
-                    if(ti < (int)synths.size() && synths[ti]) {
-                        synths[ti]->set("reset", 1.0f);
-                        synths[ti]->set("reset", 0.0f);
-                    }
-                }
-            }
+            // In Sync To Transport mode nothing is reset: the new tracks join at
+            // the current transport position (createTrackSynth asked for an anchor).
+            if(!isSyncing())
+                sendResetTo(0, old);
         } else {
             for(int ti = old - 1; ti >= n; ti--) {
                 // Free synths
@@ -1096,9 +1143,34 @@ void scRhythmBox::removeTrack(int trackIndex) {
 }
 
 void scRhythmBox::sendBpmToAll() {
+    const float bpm = effectiveBpm();
     for(auto& [srv, synths] : trackSynths)
         for(auto* s : synths)
-            if(s) s->set("bpm", currentBpm);
+            if(s) s->set("bpm", bpm);
+}
+
+void scRhythmBox::sendResetTo(int firstTrack, int endTrack) {
+    // One increment per reset request; the SynthDef fires on every increment,
+    // so two requests landing in the same control block still reset (once).
+    resetCounter += 1.0;
+    for(auto& [srv, synths] : trackSynths)
+        for(int ti = std::max(0, firstTrack); ti < endTrack && ti < (int)synths.size(); ti++)
+            if(synths[ti]) synths[ti]->set("reset", resetCounter);
+}
+
+bool scRhythmBox::isSyncing() const {
+#if OFXOCEANODESC_HAS_TRANSPORT
+    return syncToTransportP.get();
+#else
+    return false;
+#endif
+}
+
+float scRhythmBox::effectiveBpm() const {
+#if OFXOCEANODESC_HAS_TRANSPORT
+    if(syncToTransportP.get()) return syncBpm;
+#endif
+    return currentBpm;
 }
 
 void scRhythmBox::updateActiveStates() {
@@ -1542,57 +1614,7 @@ std::vector<bool> scRhythmBox::euclideanRhythm(int k, int n) {
 // File browser
 // ════════════════════════════════════════════════════════════════════════════
 
-void scRhythmBox::refreshBrowse(const std::string& dir) {
-    browseEntries.clear();
-    browseDir = dir;
-    if(!std::filesystem::exists(dir)) return;
-    try {
-        std::vector<BrowseEntry> dirs, files;
-        for(auto& e : std::filesystem::directory_iterator(dir)) {
-            std::string n = e.path().filename().string();
-            if(n.empty() || n.front() == '.') continue;
-            if(e.is_directory()) {
-                dirs.push_back({true, n, e.path().string()});
-            } else {
-                std::string ext = ofToLower(e.path().extension().string());
-                if(ext == ".wav" || ext == ".aif" || ext == ".aiff")
-                    files.push_back({false, n, e.path().string()});
-            }
-        }
-        std::sort(dirs.begin(),  dirs.end(),  [](auto& a, auto& b){ return a.name < b.name; });
-        std::sort(files.begin(), files.end(), [](auto& a, auto& b){ return a.name < b.name; });
-        browseEntries.insert(browseEntries.end(), dirs.begin(),  dirs.end());
-        browseEntries.insert(browseEntries.end(), files.begin(), files.end());
-    } catch(const std::exception& e) {
-        ofLogWarning("scRhythmBox") << "refreshBrowse: " << e.what();
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// Preview playback
-// ════════════════════════════════════════════════════════════════════════════
-
-void scRhythmBox::triggerPreview(const std::string& path) {
-    stopPreview();
-    if(path.empty() || !previewServer) return;
-    try {
-        previewBuf = new ofxSCBuffer(0, 0, previewServer);
-        previewBuf->read(path);
-        previewSynth = new ofxSCSynth("BufferBrowserPreview", previewServer);
-        previewSynth->set("bufnum", previewBuf->index);
-        previewSynth->set("out",    0);
-        previewSynth->set("gain",   0.7f);
-        previewSynth->addToTail();
-    } catch(const std::exception& e) {
-        ofLogError("scRhythmBox") << "preview: " << e.what();
-        stopPreview();
-    }
-}
-
-void scRhythmBox::stopPreview() {
-    if(previewSynth) { previewSynth->free(); delete previewSynth; previewSynth = nullptr; }
-    if(previewBuf)   { previewBuf->free();   delete previewBuf;   previewBuf   = nullptr; }
-}
+// refreshBrowse / triggerPreview / stopPreview: see scSampleBrowser.h
 
 void scRhythmBox::stopSlicePreview(int ti) {
     if(ti < 0 || ti >= MAX_TRACKS) return;
@@ -1763,125 +1785,10 @@ void scRhythmBox::drawSequencerWindow() {
 // ImGui – File browser panel
 // ════════════════════════════════════════════════════════════════════════════
 
-void scRhythmBox::drawBrowser(float /*w*/, float /*h*/) {
-    // Navigation bar
-    if(ImGui::Button("...")) {
-        auto res = ofSystemLoadDialog("Select Samples Folder", true, browseDir);
-        if(res.bSuccess) refreshBrowse(res.getPath());
-    }
-    ImGui::SameLine();
-    // Store filename in a local to avoid dangling-pointer UB (filename() returns
-    // a temporary path whose .string() temporary is destroyed before TextUnformatted reads it).
-    {
-        std::string dirName = std::filesystem::path(browseDir).filename().string();
-        if(dirName.empty()) dirName = browseDir; // root or drive letter
-        ImGui::TextUnformatted(dirName.c_str());
-    }
-
-    if(ImGui::Button("^ ..")) {
-        auto parent = std::filesystem::path(browseDir).parent_path().string();
-        if(!parent.empty() && parent != browseDir)
-            refreshBrowse(parent);
-    }
-    ImGui::Separator();
-
-    int n = (int)browseEntries.size();
-    browserSel = std::min(browserSel, n - 1); // clamp after any refresh
-
-    ImGui::BeginChild("##blist", ImVec2(0, 0), false);
-
-    // ── Keyboard navigation (only when this child is focused / hovered) ───────
-    if(ImGui::IsWindowFocused() || ImGui::IsWindowHovered()) {
-        if(ImGui::IsKeyPressed(ImGuiKey_DownArrow) && n > 0) {
-            browserSel = std::min(browserSel + 1, n - 1);
-            if(browserSel >= 0 && browserSel < n && !browseEntries[browserSel].isDir)
-                triggerPreview(browseEntries[browserSel].fullPath);
-        }
-        if(ImGui::IsKeyPressed(ImGuiKey_UpArrow) && n > 0) {
-            browserSel = std::max(browserSel - 1, 0);
-            if(browserSel >= 0 && browserSel < n && !browseEntries[browserSel].isDir)
-                triggerPreview(browseEntries[browserSel].fullPath);
-        }
-        if(ImGui::IsKeyPressed(ImGuiKey_Enter) && browserSel >= 0 && browserSel < n) {
-            if(browseEntries[browserSel].isDir) {
-                std::string navPath = browseEntries[browserSel].fullPath;
-                browserSel = -1;
-                refreshBrowse(navPath);
-                n = 0; // skip the for loop below — browseEntries is rebuilt
-            }
-            // files: already previewing from arrow key; Enter just confirms
-        }
-    }
-
-    // Draw only the rows in view: a large samples folder is otherwise
-    // thousands of widgets per frame to show the thirty or so that fit.
-    //
-    // The selected row re-centres itself every frame (SetScrollHereY below),
-    // which it can only do if it is drawn. The arrow keys can put it off
-    // screen -- the list keeps its scroll between folders, so entering one and
-    // pressing Down selects row 0 wherever the view happens to be -- so when it
-    // is not fully in view the whole list is drawn, exactly as before, and it
-    // re-centres. From the next frame on it is in view and clipping resumes.
-    const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
-    const float selectedTop = ImGui::GetCursorPosY() + browserSel * rowHeight;
-    const bool clipRows = browserSel < 0 ||
-        (selectedTop >= ImGui::GetScrollY() &&
-         selectedTop + ImGui::GetTextLineHeight() <= ImGui::GetScrollY() + ImGui::GetWindowHeight());
-
-    // A click on a folder is acted on after the loop rather than inside it, so
-    // the loop never stops part-way and the clipper always runs to completion.
-    std::string navigateTo;
-    auto drawRow = [&](int i) {
-        auto& e = browseEntries[i];
-        ImGui::PushID(i);
-
-        std::string lbl = (e.isDir ? "[D] " : "    ") + e.name;
-        // Single unified selection highlight: browserSel is the source of truth.
-        // Clicking a file sets browserSel so there is never more than one highlighted row.
-        bool selected = (i == browserSel);
-
-        if(ImGui::Selectable(lbl.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
-            if(e.isDir) {
-                navigateTo = e.fullPath;   // acted on after the loop
-            } else {
-                browserSel = i;           // highlight moves to clicked row
-                triggerPreview(e.fullPath);
-            }
-        }
-
-        // Auto-scroll to keep the keyboard-selected item visible
-        if(selected) ImGui::SetScrollHereY(0.5f);
-
-        // Drag source for audio files → drop onto track name
-        if(!e.isDir) {
-            if(ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-                ImGui::SetDragDropPayload("FSS_SAMPLE", e.fullPath.c_str(), e.fullPath.size() + 1);
-                ImGui::TextUnformatted(("  " + e.name).c_str());
-                ImGui::EndDragDropSource();
-            }
-        }
-
-        if(!e.isDir && ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", e.fullPath.c_str());
-
-        ImGui::PopID();
-    };
-
-    if(clipRows) {
-        ImGuiListClipper clipper;
-        clipper.Begin(n);
-        while(clipper.Step())
-            for(int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) drawRow(i);
-        clipper.End();
-    } else {
-        for(int i = 0; i < n; i++) drawRow(i);
-    }
-
-    if(!navigateTo.empty()) {
-        browserSel = -1;
-        refreshBrowse(navigateTo);
-    }
-    ImGui::EndChild();
+void scRhythmBox::drawBrowser(float w, float h) {
+    // The shared browser component (the former body of this function):
+    // click / arrow keys preview a file, drag it onto a track to assign it.
+    browser.draw(w, h);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -5203,7 +5110,7 @@ static int inferRhythmBoxTrackCount(const ofJson& j, int fallback) {
 }
 
 void scRhythmBox::serializeSlots(ofJson& j) const {
-    j["browseDir"]   = browseDir;
+    j["browseDir"]   = browser.getDir();
     j["currentSlot"] = currentSlotP.get();
     j["numTracks"]   = numTracks;
     j["swingAmount"] = swingP.get();
@@ -5328,6 +5235,12 @@ void scRhythmBox::loadBeforeConnections(ofJson& j) {
     // called AFTER connections are remade, so we must add the ports here instead.
     const int n = inferRhythmBoxTrackCount(j, numTracks);
     if(n != numTracks) setNumTracks(n);
+#if OFXOCEANODESC_HAS_TRANSPORT
+    // Restore the clock mode before the synths are (re)built, like the Phasor.
+    // Old presets have no key: stays false (free-running, as before).
+    deserializeParameter(j, syncToTransportP);
+    deserializeParameter(j, beatOffsetP);
+#endif
 }
 
 void scRhythmBox::presetRecallAfterSettingParameters(ofJson& j) {
@@ -5883,6 +5796,11 @@ void scRhythmBox::drawProjectMenu() {
     // ── Transport + Master Volume ─────────────────────────────────────────────
     ImGui::Spacing();
 
+    // In Sync To Transport mode the global transport drives play/stop/position:
+    // the node's own Play / Stop / Reset are disabled (the synths ignore them).
+    const bool transportLocked = isSyncing();
+    if(transportLocked) ImGui::BeginDisabled();
+
     // Play button (green when active)
     bool playing = playSeq.get();
     if(playing) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.6f, 0.15f, 1.0f));
@@ -5903,10 +5821,16 @@ void scRhythmBox::drawProjectMenu() {
 
     ImGui::SameLine(0, 6);
 
-    // Reset button — pulses resetSeq 0→1→0
+    // Reset button — pulses resetSeq 0→1→0 (one reset-counter increment in SC)
     if(ImGui::Button("Reset")) {
         resetSeq.set(1);
         resetSeq.set(0);
+    }
+    if(transportLocked) {
+        ImGui::EndDisabled();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Synced to the global transport (inspector: Sync To Transport).\n"
+                              "Play / Stop / Reset follow the transport.");
     }
 
     ImGui::SameLine(0, 20);
@@ -5949,3 +5873,120 @@ void scRhythmBox::drawProjectMenu() {
             ImGui::SetTooltip("Global step-probability reduction (subtracts from per-step prob before gate)\n0 = no reduction, 1 = all steps silenced");
     }
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// Sync To Transport
+// ════════════════════════════════════════════════════════════════════════════
+#if OFXOCEANODESC_HAS_TRANSPORT
+
+void scRhythmBox::handleSyncChanged(bool on) {
+    if(on) {
+        // Start from scratch: the first poll anchors every track (hard) at the
+        // current transport position. "sync"=1 is sent with that anchor (same
+        // timetag), so the synths switch clocks exactly at the anchor instant.
+        follower.reset();
+        for(int ti = 0; ti < MAX_TRACKS; ti++) {
+            stepClocks[ti].reset();
+            syncSpb[ti] = -1;
+            syncNs[ti]  = -1;
+            needHard[ti] = true;
+        }
+        syncBpm = getFrameTransportState().current.bpm;
+    } else {
+        // Back to the free clock. It kept running in the background with the
+        // node's own Play state (Play/Reset are still forwarded to SC while
+        // syncing, the synths just ignore them), so it simply resumes from
+        // wherever it is, at the node's BPM.
+        // Timetag it no earlier than the last anchor sent: anchors go out ahead
+        // of time (server latency, pre-sent loop wraps), and an untimed sync=0
+        // could otherwise be overridden by one of them landing afterwards.
+        scTransportSync::Anchor off;
+        off.steadyTimeUs = std::max(getFrameTransportState().current.steadyTimeUs, lastAnchorUs);
+        scTransportSync::AnchorScope scope(off);
+        for(auto& [srv, synths] : trackSynths)
+            for(auto* s : synths)
+                if(s) {
+                    s->set("sync", 0.0f);
+                    s->set("run",  0.0f);
+                    s->set("bpm",  currentBpm);
+                }
+    }
+}
+
+void scRhythmBox::updateTransportSync() {
+    const auto frame = getFrameTransportState();
+    const double offset = beatOffsetP.get();
+
+    // Pattern geometry (Steps/Beat, Beats) may change from the GUI, a slot
+    // switch, a preset or a track swap: re-anchor that track, hard.
+    for(int ti = 0; ti < numTracks && ti < MAX_TRACKS; ti++) {
+        const TrackConfig& tc = trackConfigs[ti];
+        const int spb = std::max(1, tc.stepsPerBeat);
+        const int ns  = std::max(1, tc.getNumSteps());
+        if(syncSpb[ti] != spb || syncNs[ti] != ns) {
+            syncSpb[ti] = spb;
+            syncNs[ti]  = ns;
+            stepClocks[ti].setPatternLength((double)ns);
+            needHard[ti] = true;
+            follower.requestAnchor();
+        }
+    }
+
+    for(const auto& a : follower.poll(frame))
+        sendAnchor(a);
+
+    // Playhead: computed from the transport beat (no SC read-back lag).
+    const double beat = frame.current.beatPosition;
+    for(int ti = 0; ti < numTracks && ti < (int)currentStep.size(); ti++) {
+        const double pos = (beat + offset) * std::max(1, syncSpb[ti]);
+        const double ns  = std::max(1, syncNs[ti]);
+        currentStep[ti] = (int)std::floor(scTransportSync::positiveMod(std::floor(pos), ns));
+    }
+}
+
+void scRhythmBox::sendAnchor(const scTransportSync::Anchor& a) {
+    const double offset = beatOffsetP.get();
+    syncBpm = a.bpm;
+    lastAnchorUs = std::max(lastAnchorUs, a.steadyTimeUs);
+    anchorIdCounter += 1.0;
+
+    // A synth not confirmed by /n_go yet would store these sets and flush them
+    // later WITHOUT the timetag: skip it and anchor it (hard) next frame.
+    std::vector<bool> trackPending(numTracks, false);
+    for(auto& [srv, synths] : trackSynths)
+        for(int ti = 0; ti < numTracks && ti < (int)synths.size(); ti++)
+            if(synths[ti] && !synths[ti]->isCreated()) trackPending[ti] = true;
+
+    std::vector<scTransportSync::StepAnchor> anchors(numTracks);
+    std::vector<bool> fire(numTracks, false);
+    bool anyPending = false;
+    for(int ti = 0; ti < numTracks && ti < MAX_TRACKS; ti++) {
+        const double stepPos = (a.beat + offset) * std::max(1, syncSpb[ti]);
+        anchors[ti] = stepClocks[ti].make(stepPos, a.discontinuity, a.playing);
+        const bool hard = anchors[ti].hard || needHard[ti];
+        if(hard) hardCounters[ti] += 1.0;
+        fire[ti] = hard && anchors[ti].fire;
+        needHard[ti] = trackPending[ti];
+        anyPending = anyPending || trackPending[ti];
+    }
+
+    {
+        scTransportSync::AnchorScope scope(a);
+        for(auto& [srv, synths] : trackSynths) {
+            for(int ti = 0; ti < numTracks && ti < (int)synths.size(); ti++) {
+                auto* s = synths[ti];
+                if(!s || !s->isCreated()) continue;
+                s->set("sync",       1.0f);
+                s->set("bpm",        a.bpm);
+                s->set("run",        a.playing ? 1.0f : 0.0f);
+                s->set("anchorPos",  anchors[ti].pos);
+                s->set("anchorFire", fire[ti] ? 1.0f : 0.0f);
+                s->set("anchorHard", hardCounters[ti]);
+                s->set("anchorId",   anchorIdCounter);   // last: starts the new anchor
+            }
+        }
+    }
+    if(anyPending) follower.requestAnchor();
+}
+
+#endif // OFXOCEANODESC_HAS_TRANSPORT

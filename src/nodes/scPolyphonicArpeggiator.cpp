@@ -3,6 +3,26 @@
 #include "ofxSCSynth.h"
 #include "imgui.h"
 #include <chrono>
+#include <cmath>
+#include <cstdint>
+
+namespace {
+// Each arpeggiator gets its own server random generator (RandID). scsynth has
+// numRGens generators (64 by default, ids >= that are ignored); generator 0 is
+// the default of every other synth, so hand out 1..63 round-robin.
+int allocateRandomGeneratorId() {
+    static int next = 0;
+    const int id = 1 + (next % 63);
+    next++;
+    return id;
+}
+
+int64_t positiveMod64(int64_t value, int64_t length) {
+    if(length <= 0) return 0;
+    int64_t r = value % length;
+    return r < 0 ? r + length : r;
+}
+}
 
 // ═══════════════════════════════════════════════════════════
 // CONSTRUCTOR / DESTRUCTOR
@@ -11,6 +31,7 @@
 scPolyphonicArpeggiator::scPolyphonicArpeggiator() : scNode("Poly Arpeggiator AR") {
     rng = std::mt19937(std::chrono::steady_clock::now().time_since_epoch().count());
     dist01 = std::uniform_real_distribution<float>(0.0f, 1.0f);
+    randomGeneratorId = allocateRandomGeneratorId();
 
     expandedScale.reserve(128);
     currentPitches.resize(MAX_SEQUENCE_SIZE, 60.0f);
@@ -41,7 +62,10 @@ void scPolyphonicArpeggiator::setup() {
                   "audio-rate gate/pitch/velocity/duration outputs per voice. "
                   "Scale, pattern and euclidean data are pre-computed in C++ "
                   "and uploaded to the SynthDef. Timing-critical logic "
-                  "(step counter, gate envelopes, strum) runs in SuperCollider.";
+                  "(step counter, gate envelopes, strum) runs in SuperCollider. "
+                  "Inspector 'Sync To Transport': the step clock follows the global "
+                  "transport ((beat + Beat Offset) * Div steps) instead of the Trig "
+                  "input; Trig and Reset are then ignored.";
 
     // ── SC INPUT ──
     scNode::addInput("Trig");
@@ -130,6 +154,17 @@ void scPolyphonicArpeggiator::setup() {
     addInspectorParameter(patternHeight.set("Pattern Height", 100.0f, 50.0f, 200.0f));
     addInspectorParameter(euclideanHeight.set("Euclidean Height", 80.0f, 40.0f, 150.0f));
 
+#if OFXOCEANODESC_HAS_TRANSPORT
+    // ── SYNC TO TRANSPORT (inspector; saved with the node like any parameter) ──
+    // Off (default): the step clock is the Trig input, as before.
+    // On: steps = (transport beat + Beat Offset) * Div; the Trig input and the
+    // Reset button are ignored (the transport owns position and tempo).
+    addInspectorParameter(syncToTransport.set("Sync To Transport", false));
+    addInspectorParameter(syncDiv.set("Div", 4.0f, 0.125f, 64.0f));
+    addInspectorParameter(beatOffset.set("Beat Offset", 0.0f, -64.0f, 64.0f));
+    stepClock.setPatternLength(1); // period 2048 steps, see sendTransportAnchors()
+#endif
+
     uiPattern.set("Pattern Display", [this](){ drawPatternDisplay(); });
     addCustomRegion(uiPattern, [this](){ drawPatternDisplay(); });
 
@@ -138,12 +173,31 @@ void scPolyphonicArpeggiator::setup() {
 
     // ── EVENT LISTENERS ──
 
-    // Reset fires a single-sample pulse into the SC synth via the \reset parameter
+    // Reset: \reset is a counter on the SC side (Changed.kr), so every press
+    // works. Ignored in Sync To Transport mode (the transport owns position).
     listeners.push(reset.newListener([this](void){
+#if OFXOCEANODESC_HAS_TRANSPORT
+        if(syncToTransport) return;
+#endif
+        resetCounter = resetCounter % (1 << 20) + 1; // always differs from the previous value
         for(auto& pair : synthInstances) {
-            if(pair.second) pair.second->set("reset", 1.0f);
+            if(pair.second) pair.second->set("reset", (float)resetCounter);
         }
     }));
+
+#if OFXOCEANODESC_HAS_TRANSPORT
+    listeners.push(syncToTransport.newListener([this](bool& v){ handleSyncToTransportChanged(v); }));
+    // A new step scale or offset is a jump: re-anchor from scratch.
+    listeners.push(syncDiv.newListener([this](float& v){
+        for(auto& pair : synthInstances) if(pair.second) pair.second->set("div", v);
+        follower.reset();
+        stepClock.reset();
+    }));
+    listeners.push(beatOffset.newListener([this](float&){
+        follower.reset();
+        stepClock.reset();
+    }));
+#endif
 
     // Euclidean gate pattern
     auto rebuildGate = [this](int&){
@@ -218,6 +272,7 @@ void scPolyphonicArpeggiator::setup() {
         rebuildPitchSequence();
         uploadArraysToSynths();
         uploadScalarParamsToSynths();
+        requestSyncAnchor(); // \seqbase depends on seqSize
     }));
 
     // Polyphony change — just send the scalar to SC; no synth recreation needed.
@@ -230,7 +285,7 @@ void scPolyphonicArpeggiator::setup() {
 
     // Scalar parameters — send directly to SC synths
     listeners.push(polyInterval.newListener([this](int&){ uploadScalarParamsToSynths(); }));
-    listeners.push(skipSteps.newListener([this](int&){ uploadScalarParamsToSynths(); }));
+    listeners.push(skipSteps.newListener([this](int&){ uploadScalarParamsToSynths(); requestSyncAnchor(); }));
     listeners.push(strum.newListener([this](float&){ uploadScalarParamsToSynths(); }));
     listeners.push(strumRndm.newListener([this](float&){ uploadScalarParamsToSynths(); }));
     listeners.push(strumDir.newListener([this](int&){ uploadScalarParamsToSynths(); }));
@@ -242,7 +297,13 @@ void scPolyphonicArpeggiator::setup() {
     listeners.push(durEucStrength.newListener([this](int&){ uploadScalarParamsToSynths(); }));
     listeners.push(stepChance.newListener([this](float&){ uploadScalarParamsToSynths(); }));
     listeners.push(noteChance.newListener([this](float&){ uploadScalarParamsToSynths(); }));
-    listeners.push(seed.newListener([this](int&){ uploadScalarParamsToSynths(); }));
+    // Seed also drives the C++ random (random pattern, pitch deviations)
+    listeners.push(seed.newListener([this](int&){
+        rebuildDeviations();
+        rebuildPitchSequence();
+        uploadArraysToSynths();
+        uploadScalarParamsToSynths();
+    }));
 
     // ── RESEND PARAMS (called by graph optimizer before createAndRun / moveBefore) ──
     listeners.push(resendParams.newListener([this](){
@@ -253,6 +314,12 @@ void scPolyphonicArpeggiator::setup() {
             if(!pair.second) continue;
             auto* server = pair.first;
             auto* s = pair.second;
+            s->set("rid",   (float)randomGeneratorId); // \rid is .ir: only effective in /s_new
+            s->set("reset", (float)resetCounter);      // same value: no reset
+#if OFXOCEANODESC_HAS_TRANSPORT
+            s->set("sync", syncToTransport ? 1.0f : 0.0f);
+            s->set("div",  syncDiv.get());
+#endif
             // Resend input bus (trig)
             for(int i = 0; i < (int)inputs.size(); i++) {
                 auto* nodeRef = inputs[i]->getNodeRef();
@@ -265,6 +332,7 @@ void scPolyphonicArpeggiator::setup() {
                     s->set(busNames[i], outputBuses[server].at(i));
             }
         }
+        requestSyncAnchor();
     }));
 
     // ── INITIALISE ──
@@ -284,7 +352,95 @@ void scPolyphonicArpeggiator::setup() {
 
 void scPolyphonicArpeggiator::update(ofEventArgs &e) {
     if(isMorphing) updateMorph();
+#if OFXOCEANODESC_HAS_TRANSPORT
+    if(syncToTransport) sendTransportAnchors();
+#endif
 }
+
+// ═══════════════════════════════════════════════════════════
+// SYNC TO TRANSPORT
+// ═══════════════════════════════════════════════════════════
+
+void scPolyphonicArpeggiator::requestSyncAnchor() {
+#if OFXOCEANODESC_HAS_TRANSPORT
+    if(syncToTransport) follower.requestAnchor();
+#endif
+}
+
+#if OFXOCEANODESC_HAS_TRANSPORT
+void scPolyphonicArpeggiator::handleSyncToTransportChanged(bool enabled) {
+    if(enabled) {
+        follower.reset();   // first poll: a hard anchor at the current position
+        stepClock.reset();
+        forceHardAnchor = true;
+    }
+    // Off: the SC side falls back to the Trig-input clock, whose step counter
+    // simply continues from where it was (press Reset to restart it).
+    for(auto& pair : synthInstances) {
+        if(!pair.second) continue;
+        pair.second->set("div",  syncDiv.get());
+        pair.second->set("sync", enabled ? 1.0f : 0.0f);
+    }
+}
+
+// Pattern lengths and float32: SC only ever computes
+//   stepIndex = (\seqbase + elapsed * (skip + 1)) % seqSize
+//   hashKey   =  \hashbase + elapsed
+// where elapsed = floor(pos) - floor(anchorPos) is the (small) number of steps
+// since the anchor. \seqbase and \hashbase are computed here from the TRUE
+// absolute step with 64-bit integers, so the indices are exact whatever the
+// StepClock period. The period therefore only has to keep \anchorPos small for
+// float32 precision: StepClock's default 2048 steps (setPatternLength(1)) gives
+// a resolution of ~2.4e-4 step, and its rebase every 2048 steps is harmless
+// because nothing on the SC side depends on the position modulo anything.
+void scPolyphonicArpeggiator::sendTransportAnchors() {
+    const auto frame = getFrameTransportState();
+    const auto anchors = follower.poll(frame);
+    if(anchors.empty()) return;
+
+    const double div = std::max(0.001, (double)syncDiv.get());
+    const int64_t skipMul = std::max(1, skipSteps.get() + 1);
+    const int64_t size = std::max(1, seqSize.get());
+    const int64_t period = (int64_t)std::llround(stepClock.getPeriod());
+
+    for(const auto& a : anchors) {
+        const double stepPos = (a.beat + (double)beatOffset.get()) * div;
+        const scTransportSync::StepAnchor sa = stepClock.make(stepPos, a.discontinuity, a.playing);
+        const bool hard = sa.hard || forceHardAnchor;
+        forceHardAnchor = false;
+
+        // Absolute step index at floor(anchorPos). StepClock may round the
+        // position onto the next step (anchorFire), so take floor(sa.pos) and
+        // recover which absolute step it is congruent to near floor(stepPos).
+        const int64_t k = (int64_t)std::floor(stepPos);
+        int64_t delta = (int64_t)std::floor(sa.pos) - positiveMod64(k, period);
+        if(delta > period / 2) delta -= period;
+        else if(delta < -period / 2) delta += period;
+        const int64_t absStep = k + delta;
+
+        const float seqBase  = (float)positiveMod64(absStep * skipMul, size);
+        const float hashBase = (float)positiveMod64(absStep, (int64_t)1 << 22);
+
+        anchorIdCounter = anchorIdCounter % (1 << 20) + 1;
+        if(hard) anchorHardCounter = anchorHardCounter % (1 << 20) + 1;
+
+        scTransportSync::AnchorScope scope(a);
+        for(auto& pair : synthInstances) {
+            auto* s = pair.second;
+            if(!s) continue;
+            s->set("bpm",        a.bpm);
+            s->set("div",        (float)div);
+            s->set("run",        a.playing ? 1.0f : 0.0f); // stop: no new steps; sounding notes finish
+            s->set("anchorPos",  (float)sa.pos);
+            s->set("anchorFire", sa.fire ? 1.0f : 0.0f);
+            s->set("seqbase",    seqBase);
+            s->set("hashbase",   hashBase);
+            if(hard) s->set("anchorHard", (float)anchorHardCounter);
+            s->set("anchorId",   (float)anchorIdCounter);
+        }
+    }
+}
+#endif
 
 // ═══════════════════════════════════════════════════════════
 // SC NODE — SYNTH LIFECYCLE
@@ -300,6 +456,14 @@ void scPolyphonicArpeggiator::createSynth(ofxSCServer* server) {
     if(synthInstances.count(server) == 0) return;
     // Notify first so all buses and params are queued as init-args in /s_new
     resendParams.notify();
+#if OFXOCEANODESC_HAS_TRANSPORT
+    if(syncToTransport) {
+        // Start holding; the next update() sends a hard anchor.
+        synthInstances[server]->set("run", 0.0f);
+        forceHardAnchor = true;
+        follower.requestAnchor();
+    }
+#endif
     synthInstances[server]->createAndRun(0, 1, getActive());
 }
 
@@ -372,6 +536,10 @@ void scPolyphonicArpeggiator::setOutputBus(ofxSCServer* server, int index, int b
 void scPolyphonicArpeggiator::activate() {
     for(auto& pair : synthInstances)
         if(pair.second) pair.second->run(true);
+#if OFXOCEANODESC_HAS_TRANSPORT
+    // The synth was paused: re-position it (without firing the missed steps).
+    if(syncToTransport) { forceHardAnchor = true; follower.requestAnchor(); }
+#endif
 }
 
 void scPolyphonicArpeggiator::deactivate() {
@@ -500,6 +668,8 @@ float scPolyphonicArpeggiator::getScaleDegree(int index) {
 void scPolyphonicArpeggiator::rebuildDeviations() {
     int sz = seqSize.get();
     if(sz <= 0) return;
+    // Seed > 0: same deviations for the same parameters (presets reproduce)
+    if(seed.get() > 0) rng.seed((uint32_t)seed.get() * 2654435761u + 1u);
     deviationValues.resize(sz, 0.0f);
     for(int i = 0; i < sz; i++) {
         float deviation = 0.0f;
@@ -546,6 +716,7 @@ void scPolyphonicArpeggiator::rebuildPitchSequence() {
     } else if(mode == 1) {
         for(int i = sz - 1; i >= 0; i--) pattern.push_back(i);
     } else if(mode == 2) {
+        if(seed.get() > 0) rng.seed((uint32_t)seed.get() * 2654435761u + 2u);
         for(int i = 0; i < sz; i++) {
             std::uniform_int_distribution<int> randDist(0, sz - 1);
             pattern.push_back(randDist(rng));

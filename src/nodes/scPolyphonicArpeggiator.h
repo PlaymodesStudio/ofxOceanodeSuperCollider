@@ -5,6 +5,7 @@
 #include "scNode.h"
 #include "ofxSCSynth.h"
 #include "imgui.h"
+#include "scTransportSync.h"
 #include <random>
 #include <algorithm>
 
@@ -174,8 +175,29 @@ private:
     vector<float> deviationValues;
 
     // ── Random ──
+    // Seed > 0: re-seeded from Seed before every rebuild (reproducible presets);
+    // Seed == 0: time-seeded at construction, a new draw on every rebuild.
     std::mt19937 rng;
     std::uniform_real_distribution<float> dist01;
+
+    // ── SC-side state ──
+    int resetCounter = 0;      // \reset is a counter: every change is one reset
+    int randomGeneratorId = 0; // \rid: this node's RandID on the server (1..63)
+
+#if OFXOCEANODESC_HAS_TRANSPORT
+    // ── Sync To Transport (inspector) ──
+    ofParameter<bool>  syncToTransport;
+    ofParameter<float> syncDiv;     // steps per beat
+    ofParameter<float> beatOffset;  // beats
+    scTransportSync::Follower follower;
+    scTransportSync::StepClock stepClock;
+    int anchorIdCounter = 0;
+    int anchorHardCounter = 0;
+    bool forceHardAnchor = false;   // next anchor resets the "highest step fired" (new synth)
+    void sendTransportAnchors();
+    void handleSyncToTransportChanged(bool enabled);
+#endif
+    void requestSyncAnchor();       // re-send the pattern bases (no-op when not syncing)
 
     // ── Helpers ──
     void generateEuclideanPattern(vector<bool>& pattern, int length, int hits, int offset);

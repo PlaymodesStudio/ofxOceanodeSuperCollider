@@ -21,6 +21,7 @@
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
 #include "serverManager.h"
+#include "scEQEditor.h"
 #include <map>
 #include <array>
 #include <cmath>
@@ -111,26 +112,19 @@ private:
     static constexpr float FFT_FREQ_MAX    = 22050.0f;
     static constexpr float FFT_DB_FLOOR    = -80.0f;
 
-    std::array<float, NUM_FREQ_POINTS> combinedCurveDb;
     std::array<float, NUM_BINS>        fftMagnitudes;
     float                              fftSmoothingCoeff = 0.65f;
     bool                               curveNeedsUpdate  = true;
 
-    // Biquad coefficient set
-    struct BiquadCoeffs { float b0, b1, b2, a1, a2; };
-
-    static BiquadCoeffs computeLowShelf (float freqHz, float gainDb, float slope,   float sr);
-    static BiquadCoeffs computeHighShelf(float freqHz, float gainDb, float slope,   float sr);
-    static BiquadCoeffs computePeakEQ   (float freqHz, float gainDb, float qFactor, float sr);
-    static float        computeMagnitudeDb(const BiquadCoeffs& c, float freqHz, float sr);
+    // Curve display + response computation: shared component (scEQEditor.h),
+    // also used by scGrainBox's FX EQ. Display-only here (no handles).
+    scEQEditor eqEditor;
 
     float getDisplaySampleRate() const;
     void recomputeEQCurve();
 
     // --- ImGui visualization ---
     void drawEQWidget();
-    static float logFreqToX(float freq, float xStart, float width);
-    static float dbToY(float db, float yStart, float height);
 
     // --- SC helpers ---
     std::string getSynthDefName() const;

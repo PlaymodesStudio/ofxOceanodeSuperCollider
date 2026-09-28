@@ -20,12 +20,14 @@
 #include "ofxOceanodeNodeModel.h"
 #include "ofxOceanodeShared.h"
 #include "scNode.h"
+#include "scTransportSync.h"   // guarded inside by OFXOCEANODESC_HAS_TRANSPORT
 #include "serverManager.h"
 #include "ofxSuperCollider.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "ofxSCBus.h"
 #include "imgui.h"
+#include "scSampleBrowser.h"
 #include <vector>
 #include <string>
 #include <map>
@@ -350,20 +352,13 @@ private:
     void sendBpmToAll();
     void updateActiveStates(); // recompute SC 'active' for all tracks (mute + solo)
 
-    // ── File browser ──────────────────────────────────────────────────────────
-    struct BrowseEntry { bool isDir; std::string name, fullPath; };
-    std::string              browseDir;
-    std::vector<BrowseEntry> browseEntries;
+    // ── File browser + preview (shared component, see scSampleBrowser.h) ─────
+    scSampleBrowser browser{"scRhythmBox"};
+    void refreshBrowse(const std::string& dir) { browser.refresh(dir); }
+    void stopPreview()                         { browser.stopPreview(); }
 
-    void refreshBrowse(const std::string& dir);
-
-    // ── Preview playback ──────────────────────────────────────────────────────
+    // Server used for the browser preview and the slice previews
     ofxSCServer* previewServer = nullptr;
-    ofxSCBuffer* previewBuf    = nullptr;
-    ofxSCSynth*  previewSynth  = nullptr;
-
-    void triggerPreview(const std::string& path);
-    void stopPreview();
 
     // ── Slice preview (per-track; plays a single slice on demand) ─────────────
     ofxSCSynth*  slicePreviewSynths[MAX_TRACKS];   // one-shot preview synth per track
@@ -422,6 +417,13 @@ private:
 
     // ── Internal flags ────────────────────────────────────────────────────────
     int      lastResetVal    = 0;   // previous value of resetSeq — detect rising edge 0→1
+    // Reset requests go to SC as an ever-increasing counter on the 'reset'
+    // control (the SynthDef fires on every increment). A 1-then-0 pulse is
+    // lost when both /n_set land in the same control block.
+    double   resetCounter    = 0.0;
+    void     sendResetTo(int firstTrack, int endTrack); // bump counter, send to tracks [first, end)
+    bool     isSyncing() const;   // Sync To Transport active (false without transport support)
+    float    effectiveBpm() const; // bpm the synths should run at (transport bpm when syncing)
     bool     lastPlayVal     = false; // previous value of playSeq — detect rising edge false→true
     int  sliderPaintTrack    = -1;   // track index owning current slider paint gesture (-1 = none)
     int  cutPaintTrack       = -1;   // track index owning current CUT slider paint gesture (-1 = none)
@@ -432,9 +434,30 @@ private:
     bool revPaintValue       = false; // value being stamped during a reverse paint gesture
     int  arpPaintTrack       = -1;   // track index owning current ARP step paint gesture (-1 = none)
     bool arpPaintValue       = false; // value being stamped during an ARP step paint gesture
-    int  browserSel          = -1;   // keyboard-selected entry index in file browser (-1 = none)
     float browserW           = 220.0f; // file browser panel width (resizable)
     int  pendingTrackRemoval = -1;   // deferred until after the current ImGui track loop
+
+#if OFXOCEANODESC_HAS_TRANSPORT
+    // ── Sync To Transport (inspector) ─────────────────────────────────────────
+    // Each track's step position = (transportBeat + beatOffset) * stepsPerBeat,
+    // wrapped to its numSteps. The SC clock is re-anchored with timetagged
+    // anchors (see scTransportSync.h). Play/Reset/Stop/BPM of the node are
+    // ignored by the synths while syncing (the transport drives them).
+    ofParameter<bool>  syncToTransportP;
+    ofParameter<float> beatOffsetP;
+    scTransportSync::Follower                follower;
+    std::vector<scTransportSync::StepClock>  stepClocks;   // [MAX_TRACKS]
+    std::vector<int>    syncSpb;        // stepsPerBeat last anchored per track (-1 = unknown)
+    std::vector<int>    syncNs;         // numSteps last anchored per track (-1 = unknown)
+    std::vector<double> hardCounters;   // per-track "anchorHard" counter (only increases)
+    std::vector<bool>   needHard;       // next anchor for this track must be hard (new synth, geometry change)
+    double anchorIdCounter = 0.0;       // "anchorId" counter shared by all tracks (only increases)
+    float  syncBpm = 120.0f;            // tempo of the last anchor
+    uint64_t lastAnchorUs = 0;          // steady time of the latest anchor sent (ordering of the sync-off message)
+    void handleSyncChanged(bool on);
+    void updateTransportSync();
+    void sendAnchor(const scTransportSync::Anchor& a);
+#endif
 
     // ── Per-track step-data ofParameters (FM7Drone listener pattern) ─────────
     // Storing step arrays as ofParameters means any .set() call — from preset

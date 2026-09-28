@@ -25,7 +25,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 scGraphicEQ::scGraphicEQ() : scNode("Graphic EQ") {
-    combinedCurveDb.fill(0.0f);
     fftMagnitudes.fill(0.0f);
 }
 
@@ -510,90 +509,8 @@ void scGraphicEQ::restoreFullState(ofxSCServer* server) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Biquad coefficient computation (Robert Bristow-Johnson Audio EQ Cookbook)
+// EQ curve (biquad response and drawing: scEQEditor.h)
 // ─────────────────────────────────────────────────────────────────────────────
-
-scGraphicEQ::BiquadCoeffs scGraphicEQ::computeLowShelf(
-    float freqHz, float gainDb, float slope, float sr)
-{
-    float freq = ofClamp(freqHz, 10.0f, sr * 0.499f);
-    float A    = std::pow(10.0f, gainDb / 40.0f);
-    float w0   = 2.0f * (float)M_PI * freq / sr;
-    float cosW = std::cos(w0);
-    float sinW = std::sin(w0);
-    float alpha = sinW / 2.0f * std::sqrt((A + 1.0f/A) * (1.0f/slope - 1.0f) + 2.0f);
-    float sqA  = std::sqrt(A);
-
-    float b0 =  A * ((A+1) - (A-1)*cosW + 2.0f*sqA*alpha);
-    float b1 = 2.0f*A * ((A-1) - (A+1)*cosW);
-    float b2 =  A * ((A+1) - (A-1)*cosW - 2.0f*sqA*alpha);
-    float a0 =       (A+1) + (A-1)*cosW + 2.0f*sqA*alpha;
-    float a1 = -2.0f * ((A-1) + (A+1)*cosW);
-    float a2 =       (A+1) + (A-1)*cosW - 2.0f*sqA*alpha;
-
-    return { b0/a0, b1/a0, b2/a0, a1/a0, a2/a0 };
-}
-
-scGraphicEQ::BiquadCoeffs scGraphicEQ::computeHighShelf(
-    float freqHz, float gainDb, float slope, float sr)
-{
-    float freq = ofClamp(freqHz, 10.0f, sr * 0.499f);
-    float A    = std::pow(10.0f, gainDb / 40.0f);
-    float w0   = 2.0f * (float)M_PI * freq / sr;
-    float cosW = std::cos(w0);
-    float sinW = std::sin(w0);
-    float alpha = sinW / 2.0f * std::sqrt((A + 1.0f/A) * (1.0f/slope - 1.0f) + 2.0f);
-    float sqA  = std::sqrt(A);
-
-    float b0 =  A * ((A+1) + (A-1)*cosW + 2.0f*sqA*alpha);
-    float b1 = -2.0f*A * ((A-1) + (A+1)*cosW);
-    float b2 =  A * ((A+1) + (A-1)*cosW - 2.0f*sqA*alpha);
-    float a0 =       (A+1) - (A-1)*cosW + 2.0f*sqA*alpha;
-    float a1 =  2.0f * ((A-1) - (A+1)*cosW);
-    float a2 =       (A+1) - (A-1)*cosW - 2.0f*sqA*alpha;
-
-    return { b0/a0, b1/a0, b2/a0, a1/a0, a2/a0 };
-}
-
-scGraphicEQ::BiquadCoeffs scGraphicEQ::computePeakEQ(
-    float freqHz, float gainDb, float qFactor, float sr)
-{
-    float freq = ofClamp(freqHz, 10.0f, sr * 0.499f);
-    float q    = std::max(qFactor, 0.01f);
-    float A    = std::pow(10.0f, gainDb / 40.0f);
-    float w0   = 2.0f * (float)M_PI * freq / sr;
-    float cosW = std::cos(w0);
-    float sinW = std::sin(w0);
-    float alpha = sinW / (2.0f * q);
-
-    float b0 =  1.0f + alpha * A;
-    float b1 = -2.0f * cosW;
-    float b2 =  1.0f - alpha * A;
-    float a0 =  1.0f + alpha / A;
-    float a1 = -2.0f * cosW;
-    float a2 =  1.0f - alpha / A;
-
-    return { b0/a0, b1/a0, b2/a0, a1/a0, a2/a0 };
-}
-
-float scGraphicEQ::computeMagnitudeDb(const BiquadCoeffs& c, float freqHz, float sr) {
-    float freq = ofClamp(freqHz, 10.0f, sr * 0.499f);
-    float w    = 2.0f * (float)M_PI * freq / sr;
-    float cw   = std::cos(w);
-    float c2w  = std::cos(2.0f * w);
-
-    float numRe = c.b0 + c.b1*cw + c.b2*c2w;
-    float numIm = -(c.b1*std::sin(w) + c.b2*std::sin(2.0f*w));
-    float denRe = 1.0f + c.a1*cw + c.a2*c2w;
-    float denIm = -(c.a1*std::sin(w) + c.a2*std::sin(2.0f*w));
-
-    float numSq = numRe*numRe + numIm*numIm;
-    float denSq = denRe*denRe + denIm*denIm;
-
-    if(denSq < 1e-12f) return 0.0f;
-    float mag = std::sqrt(numSq / denSq);
-    return 20.0f * std::log10f(std::max(mag, 1e-12f));
-}
 
 float scGraphicEQ::getDisplaySampleRate() const {
     if(!synthInstances.empty() && synthInstances.begin()->first != nullptr) {
@@ -611,45 +528,13 @@ void scGraphicEQ::recomputeEQCurve() {
     auto p0hz = [&](const vector<float>& v, float defPitch) -> float {
         return pitchToHz(v.empty() ? defPitch : v[0]);
     };
-    const float sr = getDisplaySampleRate();
-
-    BiquadCoeffs band1 = computeLowShelf (p0hz(b1pitch, 46.f),  v0(b1gain, 0.f), v0(b1slope, 1.f), sr);
-    BiquadCoeffs band2 = computePeakEQ   (p0hz(b2pitch, 71.f),  v0(b2gain, 0.f), v0(b2q, 1.f),     sr);
-    BiquadCoeffs band3 = computePeakEQ   (p0hz(b3pitch, 84.f),  v0(b3gain, 0.f), v0(b3q, 1.f),     sr);
-    BiquadCoeffs band4 = computePeakEQ   (p0hz(b4pitch, 96.f),  v0(b4gain, 0.f), v0(b4q, 1.f),     sr);
-    BiquadCoeffs band5 = computeHighShelf(p0hz(b5pitch, 115.f), v0(b5gain, 0.f), v0(b5slope, 1.f), sr);
-
-    float logMin = std::log10f(FREQ_MIN);
-    float logMax = std::log10f(FREQ_MAX);
-
-    for(int i = 0; i < NUM_FREQ_POINTS; i++) {
-        float t    = (float)i / (float)(NUM_FREQ_POINTS - 1);
-        float freq = std::pow(10.0f, logMin + t * (logMax - logMin));
-
-        float db = computeMagnitudeDb(band1, freq, sr)
-                 + computeMagnitudeDb(band2, freq, sr)
-                 + computeMagnitudeDb(band3, freq, sr)
-                 + computeMagnitudeDb(band4, freq, sr)
-                 + computeMagnitudeDb(band5, freq, sr);
-
-        combinedCurveDb[i] = ofClamp(db, GAIN_MIN_DB - 3.0f, GAIN_MAX_DB + 3.0f);
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ImGui visualization helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-float scGraphicEQ::logFreqToX(float freq, float xStart, float width) {
-    float logMin = std::log10f(FREQ_MIN);
-    float logMax = std::log10f(FREQ_MAX);
-    float t = (std::log10f(ofClamp(freq, FREQ_MIN, FREQ_MAX)) - logMin) / (logMax - logMin);
-    return xStart + t * width;
-}
-
-float scGraphicEQ::dbToY(float db, float yStart, float height) {
-    float t = (GAIN_MAX_DB - db) / (GAIN_MAX_DB - GAIN_MIN_DB);
-    return yStart + ofClamp(t, 0.0f, 1.0f) * height;
+    eqEditor.dbRange = GAIN_MAX_DB;
+    eqEditor.bands[0] = { p0hz(b1pitch, 46.f),  v0(b1gain, 0.f), v0(b1slope, 1.f) };
+    eqEditor.bands[1] = { p0hz(b2pitch, 71.f),  v0(b2gain, 0.f), v0(b2q, 1.f)     };
+    eqEditor.bands[2] = { p0hz(b3pitch, 84.f),  v0(b3gain, 0.f), v0(b3q, 1.f)     };
+    eqEditor.bands[3] = { p0hz(b4pitch, 96.f),  v0(b4gain, 0.f), v0(b4q, 1.f)     };
+    eqEditor.bands[4] = { p0hz(b5pitch, 115.f), v0(b5gain, 0.f), v0(b5slope, 1.f) };
+    eqEditor.recompute(getDisplaySampleRate());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -658,117 +543,7 @@ float scGraphicEQ::dbToY(float db, float yStart, float height) {
 
 void scGraphicEQ::drawEQWidget() {
     float zoom = ofxOceanodeShared::getZoomLevel();
-
-    ImDrawList* dl     = ImGui::GetWindowDrawList();
-    ImVec2      cursor = ImGui::GetCursorScreenPos();
-
-    const float W   = widgetWidth.get() * zoom;
-    const float H   = widgetHeight.get() * zoom;
-    const float pad = 2.0f * zoom;
-    const float xS  = cursor.x + pad;
-    const float yS  = cursor.y + pad;
-    const float xE  = xS + W;
-    const float yE  = yS + H;
-
-    // Background
-    dl->AddRectFilled(ImVec2(xS, yS), ImVec2(xE, yE), IM_COL32(12, 14, 20, 255));
-    dl->AddRect(ImVec2(xS, yS), ImVec2(xE, yE), IM_COL32(70, 70, 90, 255));
-
-    // ── Frequency grid (vertical) ─────────────────────────────────────────
-    static const float gridFreqs[]  = { 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000 };
-    static const char* gridLabels[] = { "20", "50", "100", "200", "500", "1k", "2k", "5k", "10k", "20k" };
-    for(int g = 0; g < 10; g++) {
-        float gx = logFreqToX(gridFreqs[g], xS, W);
-        dl->AddLine(ImVec2(gx, yS), ImVec2(gx, yE - 14.0f * zoom), IM_COL32(40, 40, 55, 200));
-        dl->AddText(ImVec2(gx + 2.0f * zoom, yE - 14.0f * zoom), IM_COL32(100, 100, 120, 220), gridLabels[g]);
-    }
-
-    // ── dB grid (horizontal) ─────────────────────────────────────────────
-    static const float dbGrid[] = { -48, -36, -24, -12, 0, 12, 24, 36, 48 };
-    for(float db : dbGrid) {
-        float gy    = dbToY(db, yS, H);
-        ImU32 color = (db == 0.0f) ? IM_COL32(200, 200, 200, 160) : IM_COL32(40, 40, 55, 160);
-        dl->AddLine(ImVec2(xS, gy), ImVec2(xE, gy), color);
-        if(db != GAIN_MIN_DB && db != GAIN_MAX_DB) {
-            char label[8]; sprintf(label, "%+.0f", db);
-            dl->AddText(ImVec2(xS + 2.0f * zoom, gy - 11.0f * zoom), IM_COL32(90, 90, 110, 200), label);
-        }
-    }
-
-    // ── Optional FFT spectrum overlay ─────────────────────────────────────
-    if(showFFT.get()) {
-        const float fftLogRatio = std::log(FFT_FREQ_MAX / FFT_FREQ_MIN);
-        const float eqLogMin    = std::log10f(FREQ_MIN);
-        const float eqLogMax    = std::log10f(FREQ_MAX);
-
-        for(int b = 0; b < NUM_BINS; b++) {
-            float fc1 = FFT_FREQ_MIN * std::exp(fftLogRatio * (float)b       / (float)NUM_BINS);
-            float fc2 = FFT_FREQ_MIN * std::exp(fftLogRatio * (float)(b + 1) / (float)NUM_BINS);
-
-            if(fc2 <= FREQ_MIN) continue;
-            if(fc1 >= FREQ_MAX) break;
-            fc1 = std::max(fc1, FREQ_MIN);
-            fc2 = std::min(fc2, FREQ_MAX);
-
-            float x1 = xS + W * ofClamp((std::log10f(fc1) - eqLogMin) / (eqLogMax - eqLogMin), 0.0f, 1.0f);
-            float x2 = xS + W * ofClamp((std::log10f(fc2) - eqLogMin) / (eqLogMax - eqLogMin), 0.0f, 1.0f);
-            if(x2 <= x1) continue;
-
-            float mag   = fftMagnitudes[b];
-            float magDb = 20.0f * std::log10f(std::max(mag, 1e-12f));
-            float barH  = H * ofClamp((magDb - FFT_DB_FLOOR) / (-FFT_DB_FLOOR), 0.0f, 1.0f);
-            float barTop = yE - barH;
-
-            dl->AddRectFilled(ImVec2(x1, barTop), ImVec2(x2, yE),
-                              IM_COL32(60, 160, 80, 65));
-        }
-    }
-
-    // ── Band frequency markers (channel 0 pitch → Hz) ────────────────────
-    auto p0hz = [&](const vector<float>& v, float defPitch) -> float {
-        return pitchToHz(v.empty() ? defPitch : v[0]);
-    };
-    const float  bandFreqs[5]  = {
-        p0hz(b1pitch, 46.f), p0hz(b2pitch, 71.f), p0hz(b3pitch, 84.f),
-        p0hz(b4pitch, 96.f), p0hz(b5pitch, 115.f)
-    };
-    const ImU32  bandColors[5] = {
-        IM_COL32(100, 200, 255, 140),
-        IM_COL32(100, 255, 150, 140),
-        IM_COL32(255, 220, 80,  140),
-        IM_COL32(255, 140, 80,  140),
-        IM_COL32(210, 100, 255, 140),
-    };
-    for(int b = 0; b < 5; b++) {
-        float bx = logFreqToX(bandFreqs[b], xS, W);
-        dl->AddLine(ImVec2(bx, yS), ImVec2(bx, yE - 14.0f * zoom), bandColors[b]);
-    }
-
-    // ── 0 dB reference line — drawn BEFORE curve so curve sits on top ─────
-    {
-        float y0 = dbToY(0.0f, yS, H);
-        dl->AddLine(ImVec2(xS, y0), ImVec2(xE, y0), IM_COL32(220, 220, 220, 180), 1.0f);
-    }
-
-    // ── EQ curve (channel 0) ──────────────────────────────────────────────
-    {
-        float logMin = std::log10f(FREQ_MIN);
-        float logMax = std::log10f(FREQ_MAX);
-        for(int i = 0; i < NUM_FREQ_POINTS - 1; i++) {
-            float t1 = (float)i       / (float)(NUM_FREQ_POINTS - 1);
-            float t2 = (float)(i + 1) / (float)(NUM_FREQ_POINTS - 1);
-            float freq1 = std::pow(10.0f, logMin + t1 * (logMax - logMin));
-            float freq2 = std::pow(10.0f, logMin + t2 * (logMax - logMin));
-
-            float x1 = logFreqToX(freq1, xS, W);
-            float y1 = dbToY(combinedCurveDb[i],   yS, H);
-            float x2 = logFreqToX(freq2, xS, W);
-            float y2 = dbToY(combinedCurveDb[i+1], yS, H);
-
-            dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), IM_COL32(80, 210, 255, 255), 2.0f);
-        }
-    }
-
-    ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + H + 2.0f * pad));
-    ImGui::Dummy(ImVec2(W, 4.0f * zoom));
+    static const scEQEditor::Colors colors = scEQEditor::defaultColors();
+    eqEditor.draw(widgetWidth.get() * zoom, widgetHeight.get() * zoom, colors, false,
+                  showFFT.get() ? fftMagnitudes.data() : nullptr, NUM_BINS);
 }

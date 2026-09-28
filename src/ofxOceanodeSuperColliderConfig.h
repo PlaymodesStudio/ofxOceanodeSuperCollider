@@ -35,4 +35,27 @@
 	#endif
 #endif
 
+// ---------------------------------------------------------------------------
+// Optional ofxOceanode global transport
+//
+// Nodes with a step/phase clock (RhythmBox, Polyphonic Arpeggiator, GrainBox)
+// can follow ofxOceanode's global transport ("Sync To Transport"). The
+// transport only exists on branches that define OFX_OCEANODE_HAS_GLOBAL_TRANSPORT
+// in ofxOceanodeTransport.h; without it those options are compiled out and
+// the nodes run free, as before. Define OFXOCEANODESC_HAS_TRANSPORT to 0 or 1
+// in your project to override.
+// ---------------------------------------------------------------------------
+#ifndef OFXOCEANODESC_HAS_TRANSPORT
+	#if defined(__has_include)
+		#if __has_include("ofxOceanodeTransport.h")
+			#include "ofxOceanodeTransport.h"
+		#endif
+	#endif
+	#if defined(OFX_OCEANODE_HAS_GLOBAL_TRANSPORT)
+		#define OFXOCEANODESC_HAS_TRANSPORT 1
+	#else
+		#define OFXOCEANODESC_HAS_TRANSPORT 0
+	#endif
+#endif
+
 #endif /* ofxOceanodeSuperCollider_h */
