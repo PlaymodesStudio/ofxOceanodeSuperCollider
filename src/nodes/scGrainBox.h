@@ -285,7 +285,10 @@ private:
     bool       eqCurveDirty = true;
     void       drawEqSection(float w, float h);
     ofParameter<float> echoDelayP, echoFeedP, echoCutoffP, echoMixP;
+    ofParameter<int>   echoFilterP;      // echo.scd \filtertype: 0 LowPass 1 HighPass 2 BandPass 3 PeakEQ
+    ofParameter<float> echoResonanceP;   // echo.scd \resonance
     ofParameter<float> revSizeP, revDecayP, revPredelayP, revLowpassP, revMixP;
+    ofParameter<float> revPositionP, revSpreadP;   // early/late balance, stereo spread
     struct FxState {
         std::vector<int>       plan;                 // enabled + loaded stages, in order
         ofxSCSynth*            synths[FX_COUNT] = {nullptr, nullptr, nullptr};

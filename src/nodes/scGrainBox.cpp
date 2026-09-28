@@ -299,11 +299,15 @@ void scGrainBox::setup() {
     echoFeedP.set   ("Echo Feed",    0.5f,   0.0f,     1.0f);
     echoCutoffP.set ("Echo Cutoff", 60.0f,  12.0f,   120.0f);   // MIDI note, as the Echo SynthDef
     echoMixP.set    ("Echo Mix",     0.35f,  0.0f,     1.0f);
+    echoFilterP.set ("Echo Filter",  0, 0, 3);
+    echoResonanceP.set("Echo Resonance", 0.2f, 0.0f,   1.0f);
     revSizeP.set    ("Rev Size",    30.0f,   0.0f,    60.0f);
     revDecayP.set   ("Rev Decay",    4.0f,   0.05f,   60.0f);
     revPredelayP.set("Rev Predelay",20.0f,   0.0f,  1000.0f);   // ms
     revLowpassP.set ("Rev Lowpass", 10000.0f, 20.0f, 20000.0f);
     revMixP.set     ("Rev Mix",      0.33f,  0.0f,     1.0f);
+    revPositionP.set("Rev Position", 0.8f,   0.0f,     1.0f);    // SpaceMaster \position (early -> late)
+    revSpreadP.set  ("Rev Spread",   0.15f, -1.0f,     1.0f);    // SpaceMaster \spread
 
 #if OFXOCEANODESC_HAS_TRANSPORT
     // In Sync To Transport mode the auto-trigger grid, the LFOs and TrigDur
@@ -372,11 +376,18 @@ void scGrainBox::setup() {
     fxParamListener(echoFeedP,    FX_ECHO);
     fxParamListener(echoCutoffP,  FX_ECHO);
     fxParamListener(echoMixP,     FX_ECHO);
+    fxParamListener(echoResonanceP, FX_ECHO);
+    nodeListeners.push(echoFilterP.newListener([this](int&) {
+        for(auto& [srv, st] : fx)
+            if(st.synths[FX_ECHO]) sendFxParams(FX_ECHO, st.synths[FX_ECHO]);
+    }));
     fxParamListener(revSizeP,     FX_REVERB);
     fxParamListener(revDecayP,    FX_REVERB);
     fxParamListener(revPredelayP, FX_REVERB);
     fxParamListener(revLowpassP,  FX_REVERB);
     fxParamListener(revMixP,      FX_REVERB);
+    fxParamListener(revPositionP, FX_REVERB);
+    fxParamListener(revSpreadP,   FX_REVERB);
 
 #if OFXOCEANODESC_HAS_TRANSPORT
     nodeListeners.push(syncToTransportP.newListener([this](bool& on) {
@@ -1326,6 +1337,10 @@ void scGrainBox::sendFxParams(int stage, ofxSCSynth* s) {
             s->set("feed",   vec(echoFeedP.get()));
             s->set("cutoff", vec(echoCutoffP.get()));
             s->set("mix",    vec(echoMixP.get()));
+            // OceanodeParameterDropdown.ar(\filtertype, ...): a plain "filtertype"
+            // control of n values (the item index as a float)
+            s->set("filtertype", vec((float)std::max(0, std::min(3, echoFilterP.get()))));
+            s->set("resonance",  vec(echoResonanceP.get()));
             break;
         case FX_REVERB:
             s->set("size",     vec(revSizeP.get()));
@@ -1333,6 +1348,8 @@ void scGrainBox::sendFxParams(int stage, ofxSCSynth* s) {
             s->set("predelay", vec(revPredelayP.get()));
             s->set("lowpass",  vec(revLowpassP.get()));
             s->set("mix",      vec(revMixP.get()));
+            s->set("position", vec(revPositionP.get()));
+            s->set("spread",   vec(revSpreadP.get()));
             break;
         default: break;
     }
@@ -2055,7 +2072,9 @@ void scGrainBox::initializePublishableEditorParameters() {
     for(int b = 0; b < 5; b++) { regG(eqGainP[b]); regG(eqFreqP[b]); regG(eqShapeP[b]); }
     regG(eqMixP);
     regG(echoDelayP);  regG(echoFeedP);  regG(echoCutoffP); regG(echoMixP);
+    regG(echoFilterP); regG(echoResonanceP);
     regG(revSizeP);    regG(revDecayP);  regG(revPredelayP); regG(revLowpassP); regG(revMixP);
+    regG(revPositionP); regG(revSpreadP);
 }
 
 const scGrainBox::EditorPublishAction* scGrainBox::findPublishableEditorParameter(const std::string& key) const {
@@ -2373,6 +2392,8 @@ void scGrainBox::presetRecallAfterSettingParameters(ofJson& j) {
         rs(echoDelayP, 0.2f); rs(echoFeedP, 0.5f); rs(echoCutoffP, 60.0f); rs(echoMixP, 0.35f);
         rs(revSizeP, 30.0f); rs(revDecayP, 4.0f); rs(revPredelayP, 20.0f);
         rs(revLowpassP, 10000.0f); rs(revMixP, 0.33f);
+        rs(revPositionP, 0.8f); rs(revSpreadP, 0.15f);
+        rs(echoFilterP, 0); rs(echoResonanceP, 0.2f);
         for(auto& ph : playheads) {
             rs(ph->mute, false); rs(ph->solo, false);
             rs(ph->filterType, 0); rs(ph->cutoff, 1000.0f); rs(ph->filterQ, 0.707f);
@@ -3023,6 +3044,21 @@ void scGrainBox::drawPlayheadHeader(Playhead& ph, float /*w*/) {
     if(nv == 1) ImGui::Text("out %d of %d", off + 1, N);
     else        ImGui::Text("outs %d-%d of %d", off + 1, off + nv, N);
     ImGui::PopStyleColor();
+
+    // Mute / Solo: the same parameters as the Global tab's M / S row
+    ImGui::SameLine(0, gap);
+    auto toggleBtn = [&](const char* lbl, ofParameter<bool>& b, ImU32 onCol, const char* tip) {
+        const bool on = b.get();
+        if(on) ImGui::PushStyleColor(ImGuiCol_Button, onCol);
+        if(ImGui::Button(lbl, ImVec2(ImGui::GetFrameHeight() * 1.2f, 0))) b.set(!on);
+        if(on) ImGui::PopStyleColor();
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        drawPublishedCurrentItemUnderline(b.getEscapedName());
+        drawNodePublishContextMenu(b.getEscapedName());
+    };
+    toggleBtn("M##phMute", ph.mute, gbAccent(ph.index, 150, 0.6f), "Mute this playhead");
+    ImGui::SameLine(0, 2.0f * zoom);
+    toggleBtn("S##phSolo", ph.solo, gbAccent(ph.index, 200, 0.9f), "Solo: only soloed playheads sound");
     ImGui::Spacing();
 }
 
@@ -3281,7 +3317,15 @@ void scGrainBox::drawFxPanel(float w) {
     // One row: EQ (half width) | Echo | Reverb (a quarter each)
     const float halfW = (w - m) * 0.5f;
     const float colW  = (halfW - 2.0f * m) * 0.5f;
-    const float colH  = ImGui::GetFrameHeightWithSpacing() * 6.5f + 8.0f * zoom;
+    // Narrow columns: label above the slider, so the slider keeps its width
+    const bool  stacked = colW - lw - m < 70.0f * zoom;
+    // Height from the actual row count (Reverb: header + 7 sliders), so no
+    // row is ever clipped at any window size / zoom
+    const int   revRows = 7;
+    const float rowH    = ImGui::GetFrameHeightWithSpacing()
+                        + (stacked ? ImGui::GetTextLineHeightWithSpacing() : 0.0f);
+    const float colH    = ImGui::GetFrameHeightWithSpacing() + revRows * rowH
+                        + ImGui::GetStyle().WindowPadding.y * 2.0f + 6.0f * zoom;
 
     gbSectionHeader("FX   (EQ -> Echo -> Reverb, after every playhead)", w - m, zoom);
 
@@ -3290,8 +3334,11 @@ void scGrainBox::drawFxPanel(float w) {
         const std::string key = p.getEscapedName();
         ImGui::TextUnformatted(label);
         drawPublishedCurrentItemUnderline(key);
-        ImGui::SameLine(lw);
-        ImGui::SetNextItemWidth(std::max(40.0f * zoom, colW - lw - m));
+        if(stacked) ImGui::SetNextItemWidth(std::max(40.0f * zoom, colW - m));
+        else {
+            ImGui::SameLine(lw);
+            ImGui::SetNextItemWidth(std::max(40.0f * zoom, colW - lw - m));
+        }
         float v = p.get();
         if(gbSliderFloat(id, &v, p.getMin(), p.getMax(), fmt, flags)) p.set(v);
         drawNodePublishContextMenu(key);
@@ -3346,6 +3393,21 @@ void scGrainBox::drawFxPanel(float w) {
     slider("Delay",  "##ecdel", echoDelayP,  "%.3f s", ImGuiSliderFlags_Logarithmic);
     slider("Feed",   "##ecfb",  echoFeedP);
     slider("Cutoff", "##eccut", echoCutoffP, "%.0f (note)");
+    {   // filter type (echo.scd's dropdown)
+        static const char* echoFilters[4] = {"LowPass", "HighPass", "BandPass", "PeakEQ"};
+        const std::string key = echoFilterP.getEscapedName();
+        ImGui::TextUnformatted("Filter");
+        drawPublishedCurrentItemUnderline(key);
+        if(stacked) ImGui::SetNextItemWidth(std::max(40.0f * zoom, colW - m));
+        else {
+            ImGui::SameLine(lw);
+            ImGui::SetNextItemWidth(std::max(40.0f * zoom, colW - lw - m));
+        }
+        int ft = std::max(0, std::min(3, echoFilterP.get()));
+        if(ImGui::Combo("##ecflt", &ft, echoFilters, 4)) echoFilterP.set(ft);
+        drawNodePublishContextMenu(key);
+    }
+    slider("Reso",   "##ecres", echoResonanceP);
     slider("Mix",    "##ecmix", echoMixP);
     if(!fxOnP[FX_ECHO].get()) ImGui::EndDisabled();
     ImGui::EndChild();
@@ -3358,6 +3420,8 @@ void scGrainBox::drawFxPanel(float w) {
     slider("Decay",    "##rvdec",  revDecayP,    "%.2f s", ImGuiSliderFlags_Logarithmic);
     slider("Predelay", "##rvpre",  revPredelayP, "%.0f ms");
     slider("Lowpass",  "##rvlp",   revLowpassP,  "%.0f Hz", ImGuiSliderFlags_Logarithmic);
+    slider("Position", "##rvpos",  revPositionP, "%.2f");
+    slider("Spread",   "##rvspr",  revSpreadP,   "%+.2f");
     slider("Mix",      "##rvmix",  revMixP);
     if(!fxOnP[FX_REVERB].get()) ImGui::EndDisabled();
     ImGui::EndChild();
