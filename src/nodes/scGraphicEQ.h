@@ -37,6 +37,7 @@ public:
 
     void setup() override;
     void update(ofEventArgs &args) override;
+    void draw(ofEventArgs &args) override;
 
     void activate() override;
     void deactivate() override;
@@ -65,7 +66,7 @@ private:
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
     std::map<ofxSCServer*, std::map<int, int>>     outputBuses;
 
-    // Optional FFT analysis (per-server, when showFFT is true)
+    // Optional FFT analysis (per-server, while the window shows the FFT)
     std::map<ofxSCServer*, ofxSCSynth*> fftSynthInstances;
     std::map<ofxSCServer*, ofxSCBus*>   fftBuses;
 
@@ -88,10 +89,31 @@ private:
     // Dry/wet mix (0 = dry, 1 = wet) — vector for per-channel modulation
     ofParameter<vector<float>> mix;
 
-    // --- Inspector-only parameters ---
-    ofParameter<bool>  showFFT;
-    ofParameter<float> widgetWidth;
-    ofParameter<float> widgetHeight;
+    // --- Editor window (dockable ImGui window with interactive curve) ---
+    ofParameter<bool>  showWindow;       // node GUI: open / close the editor window
+    ofParameter<bool>  windowFFT;        // inspector: FFT overlay in the window
+    ofParameter<int>   windowDbRange;    // inspector: window display range (+/- dB)
+    scEQEditor         windowEditor;     // interactive editor (own drag / hover state)
+    bool               windowCurveDirty = true;
+    void drawEditorWindow();
+    // Writes an edited band (Hz / dB / shape) back to the band's parameters.
+    // Multi-channel vectors keep their per-channel offsets (element 0 is moved,
+    // the others follow by the same delta).
+    void applyBandEdit(int band, const scEQEditor::Band& bd);
+
+    // FFT analysis runs while the window is shown with its FFT overlay on
+    bool fftWanted() const { return showWindow.get() && windowFFT.get(); }
+    void updateFFTState();
+
+    // "Params In Node" (window toggle, saved as an inspector parameter): when
+    // off, the band parameters and their separators get NoGuiWidget — hidden
+    // from the node GUI but still saved, modulatable and connected. A band
+    // parameter with a connection stays visible so its cable has a pin.
+    ofParameter<bool>  showParamsInNode;
+    std::vector<std::shared_ptr<ofxOceanodeAbstractParameter>> bandParamHandles[5];
+    ofxOceanodeAbstractParameter* bandSeparators[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+    ofxOceanodeAbstractParameter* lastAddedParameter();
+    void applyParamVisibility();
 
     // --- EQ curve visualization ---
     static constexpr int   NUM_FREQ_POINTS = 256;
@@ -106,6 +128,9 @@ private:
     // Convert MIDI note (float, supports fractional) to Hz
     static float pitchToHz(float midi) {
         return 440.0f * std::pow(2.0f, (midi - 69.0f) / 12.0f);
+    }
+    static float hzToPitch(float hz) {
+        return 69.0f + 12.0f * std::log2(std::max(hz, 1.0f) / 440.0f);
     }
     static constexpr int   NUM_BINS        = 128;
     static constexpr float FFT_FREQ_MIN    = 20.0f;
@@ -122,9 +147,6 @@ private:
 
     float getDisplaySampleRate() const;
     void recomputeEQCurve();
-
-    // --- ImGui visualization ---
-    void drawEQWidget();
 
     // --- SC helpers ---
     std::string getSynthDefName() const;

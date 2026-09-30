@@ -15,6 +15,7 @@
 #include "ofxOceanodeShared.h"
 #include <cmath>
 #include <algorithm>
+#include <cfloat>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -78,6 +79,7 @@ vector<float> scGraphicEQ::qToRq(const vector<float>& qVec, int nCh) const {
 
 void scGraphicEQ::setup() {
     // ── Core ────────────────────────────────────────────────────────────────
+    addParameter(showWindow.set("Show", false));
     addParameter(numChannels.set("Num Channels", 2, 1, MAX_NODE_CHANNELS));
     oldNumChannels = numChannels;
 
@@ -99,42 +101,52 @@ void scGraphicEQ::setup() {
 
     // ── Band 1: Low Shelf ────────────────────────────────────────────────────
     addSeparator("Band 1 — Low Shelf", ofColor(100, 180, 255));
-    addParameter(b1gain.set("B1 Gain",  gainDef,             gainMin,  gainMax));
-    addParameter(b1pitch.set("B1 Pitch",vector<float>{46.0f}, pitchMin, pitchMax));
-    addParameter(b1slope.set("B1 Slope",slopeDef,            slopeMin, slopeMax));
+    bandSeparators[0] = lastAddedParameter();
+    bandParamHandles[0] = {
+        addParameter(b1gain.set("B1 Gain",  gainDef,             gainMin,  gainMax)),
+        addParameter(b1pitch.set("B1 Pitch",vector<float>{46.0f}, pitchMin, pitchMax)),
+        addParameter(b1slope.set("B1 Slope",slopeDef,            slopeMin, slopeMax)) };
 
     // ── Band 2: Low-Mid Peak ─────────────────────────────────────────────────
     addSeparator("Band 2 — Low Mid", ofColor(100, 220, 140));
-    addParameter(b2gain.set("B2 Gain",  gainDef,             gainMin,  gainMax));
-    addParameter(b2pitch.set("B2 Pitch",vector<float>{71.0f}, pitchMin, pitchMax));
-    addParameter(b2q.set("B2 Q",        qDef,                qMin,     qMax));
+    bandSeparators[1] = lastAddedParameter();
+    bandParamHandles[1] = {
+        addParameter(b2gain.set("B2 Gain",  gainDef,             gainMin,  gainMax)),
+        addParameter(b2pitch.set("B2 Pitch",vector<float>{71.0f}, pitchMin, pitchMax)),
+        addParameter(b2q.set("B2 Q",        qDef,                qMin,     qMax)) };
 
     // ── Band 3: Mid Peak ─────────────────────────────────────────────────────
     addSeparator("Band 3 — Mid", ofColor(220, 200, 80));
-    addParameter(b3gain.set("B3 Gain",  gainDef,             gainMin,  gainMax));
-    addParameter(b3pitch.set("B3 Pitch",vector<float>{84.0f}, pitchMin, pitchMax));
-    addParameter(b3q.set("B3 Q",        qDef,                qMin,     qMax));
+    bandSeparators[2] = lastAddedParameter();
+    bandParamHandles[2] = {
+        addParameter(b3gain.set("B3 Gain",  gainDef,             gainMin,  gainMax)),
+        addParameter(b3pitch.set("B3 Pitch",vector<float>{84.0f}, pitchMin, pitchMax)),
+        addParameter(b3q.set("B3 Q",        qDef,                qMin,     qMax)) };
 
     // ── Band 4: High-Mid Peak ────────────────────────────────────────────────
     addSeparator("Band 4 — High Mid", ofColor(255, 140, 80));
-    addParameter(b4gain.set("B4 Gain",  gainDef,             gainMin,  gainMax));
-    addParameter(b4pitch.set("B4 Pitch",vector<float>{96.0f}, pitchMin, pitchMax));
-    addParameter(b4q.set("B4 Q",        qDef,                qMin,     qMax));
+    bandSeparators[3] = lastAddedParameter();
+    bandParamHandles[3] = {
+        addParameter(b4gain.set("B4 Gain",  gainDef,             gainMin,  gainMax)),
+        addParameter(b4pitch.set("B4 Pitch",vector<float>{96.0f}, pitchMin, pitchMax)),
+        addParameter(b4q.set("B4 Q",        qDef,                qMin,     qMax)) };
 
     // ── Band 5: High Shelf ───────────────────────────────────────────────────
     addSeparator("Band 5 — High Shelf", ofColor(200, 100, 255));
-    addParameter(b5gain.set("B5 Gain",  gainDef,              gainMin,  gainMax));
-    addParameter(b5pitch.set("B5 Pitch",vector<float>{115.0f}, pitchMin, pitchMax));
-    addParameter(b5slope.set("B5 Slope",slopeDef,             slopeMin, slopeMax));
+    bandSeparators[4] = lastAddedParameter();
+    bandParamHandles[4] = {
+        addParameter(b5gain.set("B5 Gain",  gainDef,              gainMin,  gainMax)),
+        addParameter(b5pitch.set("B5 Pitch",vector<float>{115.0f}, pitchMin, pitchMax)),
+        addParameter(b5slope.set("B5 Slope",slopeDef,             slopeMin, slopeMax)) };
 
     // ── Output ───────────────────────────────────────────────────────────────
     addSeparator("Output", ofColor(180));
     addParameter(mix.set("Mix", mixDef, mixMin, mixMax));
 
     // ── Inspector only ──────────────────────────────────────────────────────
-    addInspectorParameter(showFFT.set("Show FFT", false));
-    addInspectorParameter(widgetWidth.set("Widget Width",  240.0f, 150.0f, 800.0f));
-    addInspectorParameter(widgetHeight.set("Widget Height", 160.0f,  80.0f, 400.0f));
+    addInspectorParameter(showParamsInNode.set("Params In Node", true));
+    addInspectorParameter(windowFFT.set("Window FFT", true));
+    addInspectorParameter(windowDbRange.set("Window dB Range", 24, 6, 48));
 
     // ── Audio ports ─────────────────────────────────────────────────────────
     scNode::addInput("In");
@@ -153,6 +165,8 @@ void scGraphicEQ::setup() {
                     newSynth->createAndRun(4, oldID, getActive()); // kAddAction_replace
                     delete pair.second;
                     pair.second = newSynth;
+                    // fftanalyzerN depends on the channel count too
+                    if(fftSynthInstances.count(srv)) createFFTSynth(srv);
                 }
             }
             resendParams.notify();
@@ -186,15 +200,11 @@ void scGraphicEQ::setup() {
         resendParams.notify();
     }));
 
-    // showFFT toggle
-    listeners.push(showFFT.newListener([this](bool &v) {
-        if(v) {
-            for(auto& pair : synthInstances)
-                if(pair.second) createFFTSynth(pair.first);
-        } else {
-            freeAllFFTSynths();
-        }
-    }));
+    // FFT analysis: window overlay (Show + Window FFT)
+    listeners.push(showParamsInNode.newListener([this](bool &) { applyParamVisibility(); }));
+    listeners.push(showWindow.newListener([this](bool &) { updateFFTState(); }));
+    listeners.push(windowFFT.newListener([this](bool &)  { updateFFTState(); }));
+    listeners.push(windowDbRange.newListener([this](int &) { windowCurveDirty = true; }));
 
     // resendParams event listener - centralized parameter synchronization
     listeners.push(resendParams.newListener([this]() {
@@ -215,12 +225,6 @@ void scGraphicEQ::setup() {
         }
     }));
 
-    // EQ curve widget
-    addCustomRegion(
-        ofParameter<std::function<void()>>().set("EQ Display", [this](){ drawEQWidget(); }),
-        ofParameter<std::function<void()>>().set("EQ Display", [this](){ drawEQWidget(); })
-    );
-
     recomputeEQCurve();
 }
 
@@ -229,12 +233,17 @@ void scGraphicEQ::setup() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void scGraphicEQ::update(ofEventArgs &args) {
+    // Connections can appear / disappear at any time (a connected band
+    // parameter stays visible while the others are hidden)
+    if(!showParamsInNode.get()) applyParamVisibility();
+
     if(curveNeedsUpdate) {
         recomputeEQCurve();
         curveNeedsUpdate = false;
+        windowCurveDirty = true;
     }
 
-    if(showFFT.get()) {
+    if(fftWanted()) {
         for(auto& pair : fftBuses) {
             if(!pair.second) continue;
             const vector<float>& raw = pair.second->readValues;
@@ -284,7 +293,7 @@ void scGraphicEQ::createSynth(ofxSCServer* server) {
         resendParams.notify();
         synthInstances[server]->createAndRun(0, 1, getActive());
 
-        if(showFFT.get()) createFFTSynth(server);
+        if(fftWanted()) createFFTSynth(server);
 
     } catch(const std::exception& e) {
         ofLogError("scGraphicEQ") << "createSynth error: " << e.what();
@@ -348,7 +357,7 @@ void scGraphicEQ::setOutputBus(ofxSCServer* server, int index, int bus) {
         try {
             synthInstances[server]->set("out", bus);
 
-            if(index == 0 && showFFT.get() &&
+            if(index == 0 &&
                fftSynthInstances.count(server) && fftSynthInstances[server]) {
                 fftSynthInstances[server]->set("in", bus);
             }
@@ -373,7 +382,7 @@ void scGraphicEQ::moveSynthBefore(ofxSCServer* server, int nodeID) {
         resendParams.notify();
         synthInstances[server]->moveBefore(nodeID);
 
-        if(showFFT.get() && fftSynthInstances.count(server) && fftSynthInstances[server]) {
+        if(fftSynthInstances.count(server) && fftSynthInstances[server]) {
             fftSynthInstances[server]->moveBefore(nodeID);
         }
     } catch(const std::exception& e) {
@@ -384,7 +393,7 @@ void scGraphicEQ::moveSynthBefore(ofxSCServer* server, int nodeID) {
 int scGraphicEQ::getLastSynthID(ofxSCServer* server) {
     if(!server) return -1;
 
-    if(showFFT.get() && fftSynthInstances.count(server) && fftSynthInstances[server])
+    if(fftSynthInstances.count(server) && fftSynthInstances[server])
         return fftSynthInstances[server]->nodeID;
 
     auto it = synthInstances.find(server);
@@ -447,6 +456,15 @@ void scGraphicEQ::freeFFTSynth(ofxSCServer* server) {
         fftBuses[server]->free();
         delete fftBuses[server];
         fftBuses.erase(server);
+    }
+}
+
+void scGraphicEQ::updateFFTState() {
+    if(fftWanted()) {
+        for(auto& pair : synthInstances)
+            if(pair.second && !fftSynthInstances.count(pair.first)) createFFTSynth(pair.first);
+    } else {
+        freeAllFFTSynths();
     }
 }
 
@@ -538,12 +556,224 @@ void scGraphicEQ::recomputeEQCurve() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drawEQWidget()
+// Band parameter visibility in the node GUI ("Params In Node")
 // ─────────────────────────────────────────────────────────────────────────────
 
-void scGraphicEQ::drawEQWidget() {
-    float zoom = ofxOceanodeShared::getZoomLevel();
-    static const scEQEditor::Colors colors = scEQEditor::defaultColors();
-    eqEditor.draw(widgetWidth.get() * zoom, widgetHeight.get() * zoom, colors, false,
-                  showFFT.get() ? fftMagnitudes.data() : nullptr, NUM_BINS);
+ofxOceanodeAbstractParameter* scGraphicEQ::lastAddedParameter() {
+    auto& group = getParameterGroup();
+    if(group.size() == 0) return nullptr;
+    return &static_cast<ofxOceanodeAbstractParameter&>(group.get(group.size() - 1));
+}
+
+void scGraphicEQ::applyParamVisibility() {
+    const bool show = showParamsInNode.get();
+    auto setHidden = [](ofxOceanodeAbstractParameter* p, bool hidden) {
+        if(!p) return;
+        const ofxOceanodeParameterFlags f = p->getFlags();
+        const ofxOceanodeParameterFlags nf = hidden ? (f | ofxOceanodeParameterFlags_NoGuiWidget)
+                                                    : (f & ~ofxOceanodeParameterFlags_NoGuiWidget);
+        if(nf != f) p->setFlags(nf);
+    };
+    for(int b = 0; b < 5; b++) {
+        bool anyVisible = false;
+        for(auto& h : bandParamHandles[b]) {
+            if(!h) continue;
+            const bool visible = show || h->hasInConnection() || h->hasOutConnections();
+            setHidden(h.get(), !visible);
+            anyVisible = anyVisible || visible;
+        }
+        setHidden(bandSeparators[b], !anyVisible);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Editor window: dockable ImGui window with the interactive curve editor
+// (scEQEditor handles, as in scGrainBox's FX EQ) over the FFT of the output.
+//   drag a handle: frequency / gain (Shift: fine), wheel: Q / slope,
+//   double-click: 0 dB, right-click: exact values.
+// ─────────────────────────────────────────────────────────────────────────────
+
+void scGraphicEQ::draw(ofEventArgs &) {
+    if(showWindow.get()) drawEditorWindow();
+}
+
+void scGraphicEQ::applyBandEdit(int band, const scEQEditor::Band& bd) {
+    if(band < 0 || band >= scEQEditor::NUM_BANDS) return;
+    ofParameter<vector<float>>* gainP[5]  = { &b1gain,  &b2gain,  &b3gain,  &b4gain,  &b5gain  };
+    ofParameter<vector<float>>* pitchP[5] = { &b1pitch, &b2pitch, &b3pitch, &b4pitch, &b5pitch };
+    ofParameter<vector<float>>* shapeP[5] = { &b1slope, &b2q,     &b3q,     &b4q,     &b5slope };
+
+    // Moves element 0 to newV0; other channels follow by the same delta
+    // (additive) or ratio (multiplicative), clamped to the parameter range.
+    auto shift = [](ofParameter<vector<float>>& p, float newV0, bool multiplicative) {
+        const vector<float>& cur = p.get();
+        const float lo = p.getMin().empty() ? -FLT_MAX : p.getMin()[0];
+        const float hi = p.getMax().empty() ?  FLT_MAX : p.getMax()[0];
+        newV0 = ofClamp(newV0, lo, hi);
+        vector<float> v = cur.empty() ? vector<float>{ newV0 } : cur;
+        const float old0 = v[0];
+        for(size_t i = 0; i < v.size(); i++) {
+            float nv;
+            if(i == 0)               nv = newV0;
+            else if(multiplicative)  nv = old0 > 0.0f ? v[i] * (newV0 / old0) : newV0;
+            else                     nv = v[i] + (newV0 - old0);
+            v[i] = ofClamp(nv, lo, hi);
+        }
+        if(v != cur) p.set(v);
+    };
+
+    shift(*pitchP[band], hzToPitch(bd.freqHz), false);
+    shift(*gainP[band],  bd.gainDb,            false);
+    shift(*shapeP[band], bd.shape,             true);
+}
+
+void scGraphicEQ::drawEditorWindow() {
+    const float zoom = ofxOceanodeShared::getZoomLevel();
+
+    ImGui::SetNextWindowSize(ImVec2(640 * zoom, 360 * zoom), ImGuiCond_FirstUseEver);
+    std::string title = "Graphic EQ " + ofToString(getNumIdentifier());
+    bool open = true;
+    const bool visible = ImGui::Begin(title.c_str(), &open,
+                                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if(!visible) {
+        ImGui::End();
+        if(!open) showWindow = false;
+        return;
+    }
+
+    static const char* bandShort[5] = { "LS", "LM", "MID", "HM", "HS" };
+    static const scEQEditor::Colors col = [] {
+        scEQEditor::Colors c = scEQEditor::defaultColors();
+        c.fft = IM_COL32(60, 170, 90, 95);
+        return c;
+    }();
+
+    // ── Toolbar ──────────────────────────────────────────────────────────────
+    {
+        bool f = windowFFT.get();
+        if(ImGui::Checkbox("FFT", &f)) windowFFT = f;
+
+        ImGui::SameLine();
+        static const int ranges[] = { 6, 12, 24, 48 };
+        char rl[16]; std::snprintf(rl, sizeof(rl), "+/-%d dB", windowDbRange.get());
+        ImGui::SetNextItemWidth(90 * zoom);
+        if(ImGui::BeginCombo("##gEqRange", rl)) {
+            for(int r : ranges) {
+                char l[16]; std::snprintf(l, sizeof(l), "+/-%d dB", r);
+                if(ImGui::Selectable(l, windowDbRange.get() == r)) windowDbRange = r;
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::SameLine();
+        float m = mix.get().empty() ? 1.0f : mix.get()[0];
+        ImGui::SetNextItemWidth(120 * zoom);
+        if(ImGui::SliderFloat("Mix", &m, 0.0f, 1.0f, "%.2f")) {
+            vector<float> v = mix.get();
+            if(v.empty()) v = { m };
+            const float d = m - v[0];
+            for(auto& x : v) x = ofClamp(x + d, 0.0f, 1.0f);
+            v[0] = m;
+            mix = v;
+        }
+
+        ImGui::SameLine();
+        bool pin = showParamsInNode.get();
+        if(ImGui::Checkbox("Show parameters in node", &pin)) showParamsInNode = pin;
+
+        ImGui::SameLine();
+        if(ImGui::Button("Flat")) {
+            for(auto* g : { &b1gain, &b2gain, &b3gain, &b4gain, &b5gain })
+                g->set(vector<float>(std::max<size_t>(1, g->get().size()), 0.0f));
+        }
+
+        bool perChannel = false;
+        for(auto* p : { &b1gain, &b2gain, &b3gain, &b4gain, &b5gain,
+                        &b1pitch, &b2pitch, &b3pitch, &b4pitch, &b5pitch,
+                        &b1slope, &b2q, &b3q, &b4q, &b5slope })
+            if(p->get().size() > 1) { perChannel = true; break; }
+        if(perChannel) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(curve: ch 1, edits keep channel offsets)");
+        }
+    }
+
+    // ── Curve editor ─────────────────────────────────────────────────────────
+    const ImVec2 avail   = ImGui::GetContentRegionAvail();
+    const float  pad     = 2.0f * zoom;
+    const float  rowH    = ImGui::GetTextLineHeightWithSpacing();
+    const float  W       = std::max(160.0f * zoom, avail.x - 2.0f * pad);
+    const float  H       = std::max(80.0f * zoom, avail.y - 2.0f * pad - 4.0f * zoom - rowH);
+
+    // Parameters (channel 0) → editor
+    windowEditor.bands     = eqEditor.bands;
+    windowEditor.dbRange   = (float)windowDbRange.get();
+    windowEditor.gainLimit = GAIN_MAX_DB;
+    windowEditor.qMin      = b2q.getMin().empty()     ? 0.1f  : b2q.getMin()[0];
+    windowEditor.qMax      = b2q.getMax().empty()     ? 20.0f : b2q.getMax()[0];
+    windowEditor.slopeMin  = b1slope.getMin().empty() ? 0.1f  : b1slope.getMin()[0];
+    windowEditor.slopeMax  = b1slope.getMax().empty() ? 4.0f  : b1slope.getMax()[0];
+    if(windowCurveDirty) {
+        windowEditor.recompute(getDisplaySampleRate());
+        windowCurveDirty = false;
+    }
+
+    // Right-click on a handle: exact values
+    windowEditor.bandMenu = [this](int b) {
+        ImGui::TextUnformatted(scEQEditor::bandName(b));
+        ImGui::Separator();
+        scEQEditor::Band bd = windowEditor.bands[b];
+        bool changed = false;
+        float pitch = hzToPitch(bd.freqHz);
+        ImGui::SetNextItemWidth(140.0f * ofxOceanodeShared::getZoomLevel());
+        if(ImGui::DragFloat("Pitch", &pitch, 0.05f, PITCH_MIN, PITCH_MAX, "%.2f")) {
+            bd.freqHz = pitchToHz(pitch); changed = true;
+        }
+        ImGui::SameLine(); ImGui::TextDisabled("%.1f Hz", bd.freqHz);
+        ImGui::SetNextItemWidth(140.0f * ofxOceanodeShared::getZoomLevel());
+        if(ImGui::DragFloat("Gain", &bd.gainDb, 0.05f, GAIN_MIN_DB, GAIN_MAX_DB, "%+.2f dB")) changed = true;
+        const bool shelf = scEQEditor::isShelf(b);
+        ImGui::SetNextItemWidth(140.0f * ofxOceanodeShared::getZoomLevel());
+        if(ImGui::DragFloat(shelf ? "Slope" : "Q", &bd.shape, 0.01f,
+                            shelf ? windowEditor.slopeMin : windowEditor.qMin,
+                            shelf ? windowEditor.slopeMax : windowEditor.qMax, "%.2f")) changed = true;
+        if(ImGui::Button("0 dB")) { bd.gainDb = 0.0f; changed = true; }
+        if(changed) {
+            windowEditor.bands[b] = bd;
+            applyBandEdit(b, bd);
+            windowCurveDirty = true;
+        }
+    };
+
+    const bool withFFT = windowFFT.get() && !fftSynthInstances.empty();
+    if(windowEditor.draw(W, H, col, true, withFFT ? fftMagnitudes.data() : nullptr, NUM_BINS, "##gEqWindowCurve")) {
+        for(int b = 0; b < scEQEditor::NUM_BANDS; b++) {
+            const auto& nb = windowEditor.bands[b];
+            const auto& ob = eqEditor.bands[b];
+            if(nb.freqHz != ob.freqHz || nb.gainDb != ob.gainDb || nb.shape != ob.shape)
+                applyBandEdit(b, nb);
+        }
+        windowEditor.recompute(getDisplaySampleRate());   // no one-frame lag while dragging
+    }
+
+    // ── Band readouts ────────────────────────────────────────────────────────
+    {
+        const float x0   = ImGui::GetCursorPosX();
+        const float colW = W / (float)scEQEditor::NUM_BANDS;
+        for(int b = 0; b < scEQEditor::NUM_BANDS; b++) {
+            if(b > 0) ImGui::SameLine(x0 + colW * b);
+            const auto& bd = windowEditor.bands[b];
+            ImU32 c = col.bandMarker[b] | IM_COL32(0, 0, 0, 255);
+            char freq[16];
+            if(bd.freqHz >= 1000.0f) std::snprintf(freq, sizeof(freq), "%.2fk", bd.freqHz / 1000.0f);
+            else                     std::snprintf(freq, sizeof(freq), "%.0f", bd.freqHz);
+            ImGui::PushStyleColor(ImGuiCol_Text, c);
+            ImGui::Text("%s %s %+.1f %s%.2f", bandShort[b], freq, bd.gainDb,
+                        scEQEditor::isShelf(b) ? "S" : "Q", bd.shape);
+            ImGui::PopStyleColor();
+        }
+    }
+
+    ImGui::End();
+    if(!open) showWindow = false;
 }
