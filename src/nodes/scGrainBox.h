@@ -62,7 +62,7 @@ public:
     static constexpr int   NUM_LFO             = 7;   // Pos Dur Pitch Amp Pan TrRt Cut
     static constexpr int   LFO_AMP             = 3;
     static constexpr int   LFO_TRRT            = 5;
-    static constexpr int   LFO_CUT             = 6;   // filtered SynthDefs only
+    static constexpr int   LFO_CUT             = 6;   // output filter cutoff
     static const char* LFO_TARGET_NAMES[NUM_LFO];   // defined in .cpp
 
     // ── Constructor / Destructor ──────────────────────────────────────────────
@@ -84,9 +84,9 @@ public:
     int  getOutputBusIndex(ofxSCServer* s, int idx)     override;
     void moveSynthBefore(ofxSCServer* s, int nodeID)    override;
     int  getLastSynthID(ofxSCServer* s)                 override;
-    // No audio inputs:
-    void setInputBus(ofxSCServer*, scNode*, int)        override {}
-    void resetInputBusses(ofxSCServer*, int)            override {}
+    // Audio input ("In"): recorded by the live playheads' GrainBoxRec synths
+    void setInputBus(ofxSCServer* s, scNode* node, int bus) override;
+    void resetInputBusses(ofxSCServer* s, int targetBus)    override;
 
     // ── Preset serialization ──────────────────────────────────────────────────
     void presetSave(ofJson& j)                          override;
@@ -104,6 +104,7 @@ private:
     struct SampleData {
         std::string        path;
         std::vector<float> peaks;             // WAVEFORM_BINS peak values 0..1
+        std::vector<float> lows;              // Live only: signed min per bin (peaks = signed max)
         float              durationSecs = 0.0f;
         int                numChannels  = 1;  // from the WAV header, 1..MAX_SAMPLE_CHANNELS
         std::map<ofxSCServer*, std::vector<ofxSCBuffer*>> bufs;
@@ -159,6 +160,9 @@ private:
         ofParameter<int>           syncGate;
         // Grain
         ofParameter<vector<float>> amp, pitch, duration, position, panAz;
+        ofParameter<vector<float>> reverse;          // per-grain probability of playing backwards
+        // Pitch to scale: 0 Off, 1 Chromatic ... 11 Custom (scaleMask bits, relative to root)
+        ofParameter<int>           scaleType, scaleRoot, scaleMask;
         ofParameter<bool>          dynamicDur, trigDur;
         // Jitter
         ofParameter<bool>          uniqueJit;
@@ -166,13 +170,15 @@ private:
         // Region / envelope / levels
         ofParameter<float>         inPoint, outPoint;
         ofParameter<float>         envAttack, envRelease, envTension;
+        ofParameter<int>           envShape;         // 0 Custom (attack/release/tension) .. 6 Rectangular
         ofParameter<vector<float>> levels;
         // Output channels: Channels 0 = follow the node's N Chan; Offset = first
         // output channel (clamped so offset + channels <= N Chan)
         ofParameter<int>           channels, chanOffset;
         // Mixing (global tab): phgain = 0 when muted, or when another playhead is soloed
         ofParameter<bool>          mute, solo;
-        // Filter: 0 = Off (GrainBox_K_N), 1 LPF2, 2 BPF, 3 Notch, 4 HPF2 (GrainBox_F_K_N)
+        // Filter: 0 = Off, 1 LPF2, 2 BPF, 3 Notch, 4 HPF2 (output filter in GrainBox_K_N;
+        // latchCut is kept only so older presets load; it no longer does anything)
         ofParameter<int>           filterType;
         ofParameter<float>         cutoff, filterQ;
         // Latch: Amp / Cut LFO (+ base + jitter) sampled at each grain's trigger
@@ -185,6 +191,26 @@ private:
         // ownSample (then `own`, loaded from the browser while its tab is active)
         bool        ownSample = false;
         SampleData  own;
+        // Live input (any playhead): a rolling mono buffer recorded from the
+        // node's input; `live` is its SampleData (peaks in age order, 0 = newest)
+        bool        liveInput = false;
+        SampleData  live;
+        ofParameter<float> liveLength;              // seconds (buffer length)
+        ofParameter<bool>  freeze;                  // stop recording
+        std::vector<float> liveRing;                // signed max per bin, buffer order
+        std::vector<float> liveRingMin;             // signed min per bin
+        float              liveHead = 0.0f;         // write position 0..1
+        float              liveResizeAt = -1.0f;    // debounced re-allocation after a length change
+        struct LiveSC {
+            ofxSCBuffer*    buf      = nullptr;
+            ofxSCBus*       phaseBus = nullptr;     // audio, 1 channel
+            ofxSCSynth*     rec      = nullptr;
+            ofEventListener recListener;
+        };
+        std::map<ofxSCServer*, LiveSC> liveSC;
+        // CPU: paused (n_run 0) while muted / excluded by solo
+        bool               isPaused = false;
+        float              pauseAt  = -1.0f;
 
         // SC state
         std::map<ofxSCServer*, ofxSCSynth*>     synths;
@@ -245,6 +271,30 @@ private:
     void setBufnums(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv);
     void setOwnSample(Playhead& ph, bool own);
 
+    // ── Live input ────────────────────────────────────────────────────────────
+    std::map<ofxSCServer*, int> inputBuses;          // the "In" port's bus per server
+    std::map<ofxSCServer*, std::deque<ofxSCSynth*>> recOrder;   // recorders, front = earliest
+    void setLiveInput(Playhead& ph, bool on);
+    void ensureLiveResources(Playhead& ph, ofxSCServer* srv);   // buffer + phase bus
+    void createLiveRecorder(Playhead& ph, ofxSCServer* srv);    // before the earliest synth
+    void freeLiveRecorder(Playhead& ph, ofxSCServer* srv);
+    void freeLiveResources(Playhead& ph, ofxSCServer* srv);     // recorder + buffer + bus
+    void resizeLiveBuffers(Playhead& ph);
+    void setLiveArgs(Playhead& ph, ofxSCSynth* s);
+    void setRecArgs(Playhead& ph, ofxSCSynth* rec, ofxSCServer* srv);
+    ofxSCSynth* earliestRecorder(ofxSCServer* srv);
+    void updateLivePeaks(Playhead& ph);             // ring (buffer order) -> age order
+
+    // ── Scale ─────────────────────────────────────────────────────────────────
+    int  scaleMaskFor(const Playhead& ph) const;    // 12 bits, relative to the root
+    void setScaleArgs(Playhead& ph, ofxSCSynth* s);
+
+    // ── CPU ───────────────────────────────────────────────────────────────────
+    bool visOn = true;                  // /grainTrig replies wanted (window open)
+    bool windowDrawn = false;           // set by the window's draw, read by update
+    void sendVis();
+    void updatePausing();
+
     // ── Waveform display ──────────────────────────────────────────────────────
     void loadWaveformData(SampleData& sd, const std::string& path);
 
@@ -265,7 +315,35 @@ private:
     // after jitter + LFO; chance is a threshold) to every playhead's values
     ofParameter<float> gPosP, gDurP, gChanceP;
     std::vector<float> withOffset(const vector<float>& v, int n, float off) const;
-    void sendOffsetParams(Playhead& ph);
+    void sendOffsetParams(Playhead& ph);   // every time-dependent value (see Time units)
+
+    // ── Time units (global): the time-dependent parameters (Position, Duration,
+    //    In/Out, PosJit, DurJit, LFO Pos/Dur strength, global Position/Duration
+    //    offsets) are STORED in the current unit; they are converted to the
+    //    SynthDef's relative values when sent. 0 Relative (as always), 1 ms, 2 Beats.
+    ofParameter<int> timeUnitsP;
+    int   timeUnitsCur  = 0;       // unit the stored values are in
+    bool  loadingPreset = false;   // no conversion while a preset sets the values
+    float lastTimeBpm   = -1.0f;
+    bool  timeDirty     = false;   // lengths changed: ranges + re-send (update)
+    double unitToSec(double u) const;
+    double secToUnit(double s) const;
+    float lengthSec(const Playhead& ph) const;   // sample, or Live Len
+    float inRelOf(const Playhead& ph) const;     // In / Out as the SynthDef's 0..1
+    float outRelOf(const Playhead& ph) const;
+    float posScaleSec(const Playhead& ph) const; // seconds per unit of raw position
+    float posOffsetSec(const Playhead& ph) const;// Live: delay of raw position 0
+    float durScaleSec(const Playhead& ph) const; // seconds per unit of duration
+    std::vector<float> posSend(const Playhead& ph, int n) const;
+    std::vector<float> durSend(const Playhead& ph, int n) const;
+    std::vector<float> posAmtSend(const Playhead& ph, const vector<float>& v, int n) const;
+    std::vector<float> durAmtSend(const Playhead& ph, const vector<float>& v, int n) const;
+    std::vector<float> lfoStrSend(const Playhead& ph, int t, int n) const;
+    void convertTimeUnits(int from, int to);
+    void updateTimeRanges();
+    const char* timeFmt() const;   // slider format of the current unit
+    float relToDisplay(const Playhead& ph, float rel) const;   // waveform x of a relative position
+    float displayToRel(const Playhead& ph, float x) const;
     void sendMixParams();                          // transpose/volume/speed/phgain → every synth
     float phGainFor(const Playhead& ph) const;     // mute / solo
     void  setMixArgs(Playhead& ph, ofxSCSynth* s);
@@ -295,11 +373,10 @@ private:
         std::vector<ofxSCBus*> buses;                // input bus of each planned stage
     };
     std::map<ofxSCServer*, FxState> fx;
-    std::map<ofxSCServer*, float>   fxDefsRequestedAt;   // /d_loadDir sent (s since start)
     bool fxPending = false;                              // a stage waits for its defs
     std::string fxDefName(int stage) const;
     bool fxStageReady(int stage, ofxSCServer* srv) const;
-    void requestFxDefs(ofxSCServer* srv, bool force);
+    void requireFxSynthdefs();                          // serverManager loads their folders
     std::vector<int> computeFxPlan(ofxSCServer* srv) const;
     void planFx(ofxSCServer* srv);                       // plan + buses (no synths)
     void createFxSynths(ofxSCServer* srv);               // after playhead 1's synth

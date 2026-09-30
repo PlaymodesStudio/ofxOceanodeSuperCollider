@@ -16,7 +16,8 @@
 const char* scGrainBox::LFO_TARGET_NAMES[scGrainBox::NUM_LFO] = {"Pos","Dur","Pitch","Amp","Pan","TrRt","Cut"};
 
 namespace {
-// Index 6 (Cut) exists only in the filtered SynthDefs (GrainBox_F_K_N).
+// Index 6 (Cut) drives the playhead's output filter (control rate, one value
+// per output channel).
 const char* kLfoSCShape[7]  = {"lfoShapePos","lfoShapeDur","lfoShapePitch","lfoShapeAmp","lfoShapePan","lfoShapeTrRt","lfoShapeCut"};
 const char* kLfoSCSpeed[7]  = {"lfoSpeedPos","lfoSpeedDur","lfoSpeedPitch","lfoSpeedAmp","lfoSpeedPan","lfoSpeedTrRt","lfoSpeedCut"};
 const char* kLfoSCPhase[7]  = {"lfoPhasePos","lfoPhaseDur","lfoPhasePitch","lfoPhaseAmp","lfoPhasePan","lfoPhaseTrRt","lfoPhaseCut"};
@@ -219,6 +220,12 @@ scGrainBox::~scGrainBox() {
             for(auto& [srv, bufs] : ph->own.bufs)
                 for(auto* b : bufs) { if(b) { if(bufferIsLive(srv, b)) b->free(); delete b; } }
             ph->own.bufs.clear();
+            for(auto& [srv, l] : ph->liveSC) {
+                if(l.rec) { l.rec->free(); delete l.rec; }
+                if(l.buf) { if(bufferIsLive(srv, l.buf)) l.buf->free(); delete l.buf; }
+                if(l.phaseBus) { if(gbBusIsLive(srv, l.phaseBus)) l.phaseBus->free(); delete l.phaseBus; }
+            }
+            ph->liveSC.clear();
         }
 
         for(auto& [srv, bufs] : mainSample.bufs) {
@@ -281,6 +288,7 @@ void scGrainBox::setup() {
     gPosP.set      ("Global Position", 0.0f, -1.0f, 1.0f);
     gDurP.set      ("Global Duration", 0.0f, -1.0f, 1.0f);
     gChanceP.set   ("Global Chance",   0.0f, -1.0f, 1.0f);
+    timeUnitsP.set ("Time Units", 0, 0, 2);   // 0 Relative, 1 ms, 2 Beats
     fxOnP[FX_EQ].set     ("EQ On",     false);
     fxOnP[FX_ECHO].set   ("Echo On",   false);
     fxOnP[FX_REVERB].set ("Reverb On", false);
@@ -319,7 +327,9 @@ void scGrainBox::setup() {
 #endif
 
     // Output port
+    scNode::addInput("In");     // live input (recorded by Live playheads)
     scNode::addOutput("Out");
+    requireFxSynthdefs();
 
     // ── Pre-allocate env buffers for all servers. The data travels as the
     //    /b_alloc completion message (see ensureEnvBuffer), so it is written
@@ -349,6 +359,14 @@ void scGrainBox::setup() {
     nodeListeners.push(transposeP.newListener([this](float&) { sendMixParams(); }));
     nodeListeners.push(volumeP.newListener([this](float&)    { sendMixParams(); }));
     nodeListeners.push(speedP.newListener([this](float&)     { sendMixParams(); }));
+    // Time units: convert the stored values (no jump), or, while a preset is
+    // setting them (already in its unit), just adopt the unit
+    nodeListeners.push(timeUnitsP.newListener([this](int& m) {
+        const int to = std::max(0, std::min(2, m));
+        if(to == timeUnitsCur) { updateTimeRanges(); return; }
+        if(loadingPreset) { timeUnitsCur = to; updateTimeRanges(); timeDirty = true; return; }
+        convertTimeUnits(timeUnitsCur, to);
+    }));
     for(auto* gp : {&gPosP, &gDurP, &gChanceP})
         nodeListeners.push(gp->newListener([this](float&) {
             for(auto& ph : playheads) sendOffsetParams(*ph);
@@ -420,6 +438,10 @@ void scGrainBox::createPlayheadParameters(Playhead& ph) {
     ph.duration.set       ("Duration"     + x, {0.1f},   {0.0f},   {1.0f});
     ph.position.set       ("Position"     + x, {0.0f},   {0.0f},   {1.0f});
     ph.panAz.set          ("PanAz"        + x, {0.0f},   {0.0f},   {2.0f});
+    ph.reverse.set        ("Reverse"      + x, {0.0f},   {0.0f},   {1.0f});
+    ph.scaleType.set      ("Scale"        + x, 0, 0, 11);
+    ph.scaleRoot.set      ("Root"         + x, 0, 0, 11);
+    ph.scaleMask.set      ("ScaleMask"    + x, 4095, 0, 4095);   // Custom: bit k = root + k allowed
 
     ph.uniqueJit.set      ("UniqueJit"    + x, false);
     ph.posJit.set         ("PosJit"       + x, {0.0f},   {0.0f},   {1.0f});
@@ -433,6 +455,9 @@ void scGrainBox::createPlayheadParameters(Playhead& ph) {
     ph.envAttack.set      ("EnvAttack"    + x, 0.1f, 0.0f, 1.0f);
     ph.envRelease.set     ("EnvRelease"   + x, 0.1f, 0.0f, 1.0f);
     ph.envTension.set     ("EnvTension"   + x, 0.0f, -1.0f, 1.0f);
+    ph.envShape.set       ("EnvShape"     + x, 0, 0, 6);
+    ph.liveLength.set     ("Live Length"  + x, 4.0f, 1.0f, 30.0f);
+    ph.freeze.set         ("Freeze"       + x, false);
 
     ph.levels.set         ("Levels"       + x, {1.0f},   {0.0f},   {1.0f});
     // 0 = follow N Chan (from the offset to the last channel)
@@ -487,15 +512,247 @@ std::vector<float> scGrainBox::withOffset(const vector<float>& v, int n, float o
 
 void scGrainBox::sendOffsetParams(Playhead& ph) {
     const int nv = phChannels(ph);
-    const auto pos = withOffset(ph.position.get(), nv, gPosP.get());
-    const auto dur = withOffset(ph.duration.get(), nv, gDurP.get());
-    const auto chc = withOffset(ph.chance.get(),   nv, gChanceP.get());
+    const auto pos = posSend(ph, nv);
+    const auto dur = durSend(ph, nv);
+    const auto chc = withOffset(ph.chance.get(), nv, gChanceP.get());
+    const bool rel = (timeUnitsCur == 0);
     for(auto& [srv, s] : ph.synths) {
         if(!s) continue;
         s->set("position", pos);
         s->set("duration", dur);
         s->set("chance",   chc);
+        if(!rel) {
+            // absolute units: every one of these depends on the region / length
+            s->set("inpoint",  inRelOf(ph));
+            s->set("outpoint", outRelOf(ph));
+            s->set("posjit",   posAmtSend(ph, ph.posJit.get(), nv));
+            s->set("durjit",   durAmtSend(ph, ph.durJit.get(), nv));
+            s->set(kLfoSCStr[0], lfoStrSend(ph, 0, nv));
+            s->set(kLfoSCStr[1], lfoStrSend(ph, 1, nv));
+        }
     }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Time units
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Relative (0): the values are sent exactly as stored (today's behaviour).
+// ms (1) / Beats (2), converted when sent (at the effective bpm):
+//   file:  In / Out = time from the file start;  Position = time from In;
+//          Duration = grain length;  jitter / LFO amounts = time amounts.
+//   Live:  Position = delay behind the write head (D; the SynthDef maps raw
+//          position r to D = 30 ms + r * (Len - 60 ms));  In / Out = the
+//          delay range (same mapping);  Duration = grain length.
+namespace { constexpr float kLiveGap = 0.03f; }   // = the SynthDef's safety gap
+
+double scGrainBox::unitToSec(double u) const {
+    switch(timeUnitsCur) {
+        case 1:  return u * 0.001;
+        case 2:  return u * 60.0 / std::max(1.0, (double)effectiveBpm());
+        default: return u;
+    }
+}
+
+double scGrainBox::secToUnit(double sec) const {
+    switch(timeUnitsCur) {
+        case 1:  return sec * 1000.0;
+        case 2:  return sec * std::max(1.0, (double)effectiveBpm()) / 60.0;
+        default: return sec;
+    }
+}
+
+float scGrainBox::lengthSec(const Playhead& ph) const {
+    if(ph.liveInput) return std::max(0.1f, ph.liveLength.get());
+    const float d = sampleOf(ph).durationSecs;
+    return d > 0.0f ? d : 1.0f;
+}
+
+float scGrainBox::inRelOf(const Playhead& ph) const {
+    if(timeUnitsCur == 0) return ph.inPoint.get();
+    const float L = lengthSec(ph), sec = (float)unitToSec(ph.inPoint.get());
+    const float r = ph.liveInput ? (sec - kLiveGap) / std::max(1e-6f, L - 2.0f * kLiveGap) : sec / L;
+    return std::max(0.0f, std::min(1.0f, r));
+}
+
+float scGrainBox::outRelOf(const Playhead& ph) const {
+    if(timeUnitsCur == 0) return ph.outPoint.get();
+    const float L = lengthSec(ph), sec = (float)unitToSec(ph.outPoint.get());
+    const float r = ph.liveInput ? (sec - kLiveGap) / std::max(1e-6f, L - 2.0f * kLiveGap) : sec / L;
+    return std::max(0.0f, std::min(1.0f, r));
+}
+
+float scGrainBox::posScaleSec(const Playhead& ph) const {
+    const float L = lengthSec(ph), span = std::max(1e-6f, outRelOf(ph) - inRelOf(ph));
+    return std::max(1e-6f, span * (ph.liveInput ? std::max(1e-6f, L - 2.0f * kLiveGap) : L));
+}
+
+float scGrainBox::posOffsetSec(const Playhead& ph) const {
+    if(!ph.liveInput) return 0.0f;
+    return kLiveGap + inRelOf(ph) * std::max(1e-6f, lengthSec(ph) - 2.0f * kLiveGap);
+}
+
+float scGrainBox::durScaleSec(const Playhead& ph) const {
+    return std::max(1e-6f, std::max(1e-6f, outRelOf(ph) - inRelOf(ph)) * lengthSec(ph));
+}
+
+std::vector<float> scGrainBox::posSend(const Playhead& ph, int n) const {
+    if(timeUnitsCur == 0) return withOffset(ph.position.get(), n, gPosP.get());
+    std::vector<float> out = expandF(ph.position.get(), n);
+    const float sc = posScaleSec(ph), off = posOffsetSec(ph);
+    const float g  = (float)unitToSec(gPosP.get()) / sc;
+    for(auto& x : out) x = ((float)unitToSec(x) - off) / sc + g;
+    return out;
+}
+
+std::vector<float> scGrainBox::durSend(const Playhead& ph, int n) const {
+    if(timeUnitsCur == 0) return withOffset(ph.duration.get(), n, gDurP.get());
+    std::vector<float> out = expandF(ph.duration.get(), n);
+    const float sc = durScaleSec(ph), g = (float)unitToSec(gDurP.get());
+    for(auto& x : out) x = ((float)unitToSec(x) + g) / sc;
+    return out;
+}
+
+std::vector<float> scGrainBox::posAmtSend(const Playhead& ph, const vector<float>& v, int n) const {
+    std::vector<float> out = expandF(v, n);
+    if(timeUnitsCur == 0) return out;
+    const float sc = posScaleSec(ph);
+    for(auto& x : out) x = (float)unitToSec(x) / sc;
+    return out;
+}
+
+std::vector<float> scGrainBox::durAmtSend(const Playhead& ph, const vector<float>& v, int n) const {
+    std::vector<float> out = expandF(v, n);
+    if(timeUnitsCur == 0) return out;
+    const float sc = durScaleSec(ph);
+    for(auto& x : out) x = (float)unitToSec(x) / sc;
+    return out;
+}
+
+std::vector<float> scGrainBox::lfoStrSend(const Playhead& ph, int t, int n) const {
+    if(t == 0) return posAmtSend(ph, ph.lfo[0].strength.get(), n);   // Pos
+    if(t == 1) return durAmtSend(ph, ph.lfo[1].strength.get(), n);   // Dur
+    return expandF(ph.lfo[t].strength.get(), n);
+}
+
+const char* scGrainBox::timeFmt() const {
+    return timeUnitsCur == 1 ? "%.0f ms" : timeUnitsCur == 2 ? "%.2f b" : "%.3f";
+}
+
+// Waveform x (0..1 of the view's full width) of a relative position: files as
+// is; Live shows age (0 = now), raw r sits at D = gap + r * (Len - 2 gap)
+float scGrainBox::relToDisplay(const Playhead& ph, float rel) const {
+    if(!ph.liveInput) return rel;
+    const float L = lengthSec(ph);
+    return (kLiveGap + rel * std::max(1e-6f, L - 2.0f * kLiveGap)) / L;
+}
+
+float scGrainBox::displayToRel(const Playhead& ph, float x) const {
+    if(!ph.liveInput) return x;
+    const float L = lengthSec(ph);
+    return std::max(0.0f, std::min(1.0f, (x * L - kLiveGap) / std::max(1e-6f, L - 2.0f * kLiveGap)));
+}
+
+// Parameter ranges of the current unit: 0 .. the playhead's length (file or
+// Live Len), rounded UP to 1 / 2 / 5 x 10^k so they stay stable when the
+// length changes a little; the global offsets: +- the largest of them.
+// Values are never clamped by a range change (connections are not clipped).
+void scGrainBox::updateTimeRanges() {
+    auto nice = [](double x) {
+        if(x <= 0.0) return 1.0;
+        const double p = std::pow(10.0, std::floor(std::log10(x)));
+        for(double m : {1.0, 2.0, 5.0, 10.0}) if(m * p >= x * (1.0 - 1e-9)) return m * p;
+        return 10.0 * p;
+    };
+    float gMax = 1.0f;
+    for(auto& phPtr : playheads) {
+        Playhead& ph = *phPtr;
+        float hi = 1.0f;
+        if(timeUnitsCur != 0) hi = (float)nice(secToUnit(lengthSec(ph)));
+        gMax = std::max(gMax, hi);
+        ph.inPoint.setMin(0.0f);  ph.inPoint.setMax(hi);
+        ph.outPoint.setMin(0.0f); ph.outPoint.setMax(hi);
+        for(auto* v : {&ph.position, &ph.duration, &ph.posJit, &ph.durJit,
+                       &ph.lfo[0].strength, &ph.lfo[1].strength}) {
+            v->setMin(vector<float>{0.0f});
+            v->setMax(vector<float>{hi});
+        }
+    }
+    gPosP.setMin(-gMax); gPosP.setMax(gMax);
+    gDurP.setMin(-gMax); gDurP.setMax(gMax);
+}
+
+// Switch unit without a jump: every affected value -> relative (old unit) ->
+// new unit. Relative in/out and the scales do not depend on the unit.
+void scGrainBox::convertTimeUnits(int from, int to) {
+    if(from == to) return;
+    const double bpm = std::max(1.0, (double)effectiveBpm());
+    auto secOf  = [bpm](int m, double v) { return m == 1 ? v * 0.001 : m == 2 ? v * 60.0 / bpm : v; };
+    auto unitOf = [bpm](int m, double sec) { return m == 1 ? sec * 1000.0 : m == 2 ? sec * bpm / 60.0 : sec; };
+
+    struct Conv {
+        Playhead* ph; float inR, outR, L, ps, po, ds;
+    };
+    std::vector<Conv> cv;
+    timeUnitsCur = from;
+    for(auto& phPtr : playheads) {
+        Playhead& ph = *phPtr;
+        cv.push_back({&ph, inRelOf(ph), outRelOf(ph), lengthSec(ph),
+                      posScaleSec(ph), posOffsetSec(ph), durScaleSec(ph)});
+    }
+    const Conv c0 = cv.empty() ? Conv{nullptr, 0, 1, 1, 1, 0, 1} : cv[0];
+    const float gPosRel = from == 0 ? gPosP.get() : (float)(secOf(from, gPosP.get()) / c0.ps);
+    const float gDurRel = from == 0 ? gDurP.get() : (float)(secOf(from, gDurP.get()) / c0.ds);
+
+    struct NewVals {
+        float in, out;
+        vector<float> pos, dur, pj, dj, l0, l1;
+    };
+    std::vector<NewVals> nv;
+    for(auto& c : cv) {
+        Playhead& ph = *c.ph;
+        auto regionUnit = [&](float rel) -> float {
+            if(to == 0) return rel;
+            const double sec = ph.liveInput ? kLiveGap + rel * std::max(1e-6f, c.L - 2.0f * kLiveGap) : rel * c.L;
+            return (float)unitOf(to, sec);
+        };
+        auto convPos = [&](vector<float> v) {
+            for(auto& x : v) {
+                const double raw = from == 0 ? x : (secOf(from, x) - c.po) / c.ps;
+                x = to == 0 ? (float)raw : (float)unitOf(to, c.po + raw * c.ps);
+            }
+            return v;
+        };
+        auto convAmt = [&](vector<float> v, float scale) {
+            for(auto& x : v) {
+                const double raw = from == 0 ? x : secOf(from, x) / scale;
+                x = to == 0 ? (float)raw : (float)unitOf(to, raw * scale);
+            }
+            return v;
+        };
+        nv.push_back({regionUnit(c.inR), regionUnit(c.outR),
+                      convPos(ph.position.get()), convAmt(ph.duration.get(), c.ds),
+                      convAmt(ph.posJit.get(), c.ps), convAmt(ph.durJit.get(), c.ds),
+                      convAmt(ph.lfo[0].strength.get(), c.ps), convAmt(ph.lfo[1].strength.get(), c.ds)});
+    }
+
+    timeUnitsCur = to;
+    updateTimeRanges();
+    for(size_t k = 0; k < cv.size(); k++) {
+        Playhead& ph = *cv[k].ph;
+        ph.inPoint.set(nv[k].in);
+        ph.outPoint.set(nv[k].out);
+        ph.position.set(nv[k].pos);
+        ph.duration.set(nv[k].dur);
+        ph.posJit.set(nv[k].pj);
+        ph.durJit.set(nv[k].dj);
+        ph.lfo[0].strength.set(nv[k].l0);
+        ph.lfo[1].strength.set(nv[k].l1);
+    }
+    gPosP.set(to == 0 ? gPosRel : (float)unitOf(to, gPosRel * c0.ps));
+    gDurP.set(to == 0 ? gDurRel : (float)unitOf(to, gDurRel * c0.ds));
+    for(auto& ph : playheads) sendOffsetParams(*ph);   // one consistent state
+    lastTimeBpm = effectiveBpm();
 }
 
 // ── Per-playhead output channels ─────────────────────────────────────────────
@@ -524,10 +781,12 @@ int scGrainBox::outBusFor(const Playhead& ph, ofxSCServer* srv) const {
 }
 
 scGrainBox::SampleData& scGrainBox::sampleOf(Playhead& ph) {
+    if(ph.liveInput) return ph.live;
     return (ph.index > 0 && ph.ownSample) ? ph.own : mainSample;
 }
 
 const scGrainBox::SampleData& scGrainBox::sampleOf(const Playhead& ph) const {
+    if(ph.liveInput) return ph.live;
     return (ph.index > 0 && ph.ownSample) ? ph.own : mainSample;
 }
 
@@ -570,7 +829,7 @@ void scGrainBox::setupPlayheadListeners(Playhead& ph) {
     ph.listeners.push(ph.envTension.newListener(envListener));
 
     // Scalar synth params
-    // filteredOnly: the control exists only in GrainBox_F_K_N
+    // filteredOnly: filter / Cut-LFO controls (every GrainBox_K_N has them now)
     auto boolListener = [this, p](ofParameter<bool>& param, const std::string& name, bool filteredOnly = false) {
         p->listeners.push(param.newListener([p, name, filteredOnly](bool& v) {
             for(auto& [srv, s] : p->synths)
@@ -584,16 +843,14 @@ void scGrainBox::setupPlayheadListeners(Playhead& ph) {
     boolListener(ph.uniqueJit,  "uniquejit");
     for(int t = 0; t < NUM_LFO; t++) boolListener(ph.uniqueLfo[t], kLfoSCUnique[t], t == LFO_CUT);
     boolListener(ph.latchAmp,   "latchamp");
-    boolListener(ph.latchCut,   "latchcut", true);
 
     // Mute / solo: every playhead's gain can change (solo)
     ph.listeners.push(ph.mute.newListener([this](bool&) { sendMixParams(); }));
     ph.listeners.push(ph.solo.newListener([this](bool&) { sendMixParams(); }));
 
-    // Filter: Off <-> on switches the SynthDef family (the synth is replaced
-    // in place); otherwise its arguments are updated
+    // Filter: an output filter inside the same synth, crossfaded on/off in
+    // SC over 20 ms (no synth replacement, so no cut grains / clicks)
     ph.listeners.push(ph.filterType.newListener([this, p](int&) {
-        refreshPlayheadSynths(*p);
         for(auto& [srv, s] : p->synths) if(s && synthIsFiltered(s)) setFilterArgs(*p, s);
     }));
     ph.listeners.push(ph.cutoff.newListener([p](float& v) {
@@ -603,16 +860,16 @@ void scGrainBox::setupPlayheadListeners(Playhead& ph) {
         for(auto& [srv, s] : p->synths) if(s && synthIsFiltered(s)) s->set("filterq", v);
     }));
 
-    ph.listeners.push(ph.inPoint.newListener([this, p](float& v) {
-        for(auto& [srv, s] : p->synths) if(s) s->set("inpoint", v);
+    // In / Out: relative (as always) or, in ms / Beats, converted with every
+    // other value that depends on the region (sendOffsetParams)
+    auto regionListener = [this, p](float& v, const char* name) {
+        if(timeUnitsCur == 0) { for(auto& [srv, s] : p->synths) if(s) s->set(name, v); }
+        else                  sendOffsetParams(*p);
         if(p->index == 0)
-            sampleMsP.set(std::max(0.0f, (p->outPoint.get() - p->inPoint.get()) * mainSample.durationSecs * 1000.0f));
-    }));
-    ph.listeners.push(ph.outPoint.newListener([this, p](float& v) {
-        for(auto& [srv, s] : p->synths) if(s) s->set("outpoint", v);
-        if(p->index == 0)
-            sampleMsP.set(std::max(0.0f, (p->outPoint.get() - p->inPoint.get()) * mainSample.durationSecs * 1000.0f));
-    }));
+            sampleMsP.set(std::max(0.0f, (outRelOf(*p) - inRelOf(*p)) * mainSample.durationSecs * 1000.0f));
+    };
+    ph.listeners.push(ph.inPoint.newListener([regionListener](float& v)  { regionListener(v, "inpoint"); }));
+    ph.listeners.push(ph.outPoint.newListener([regionListener](float& v) { regionListener(v, "outpoint"); }));
 
     // Output channels / offset → another SynthDef variant or output bus
     ph.listeners.push(ph.channels.newListener([this, p](int&) { refreshPlayheadSynths(*p); }));
@@ -633,10 +890,34 @@ void scGrainBox::setupPlayheadListeners(Playhead& ph) {
     ph.listeners.push(ph.position.newListener([this, p](vector<float>&) { sendOffsetParams(*p); }));
     ph.listeners.push(ph.chance.newListener([this, p](vector<float>&)   { sendOffsetParams(*p); }));
     vfListener("panaz",            ph.panAz);
+    vfListener("reverse",          ph.reverse);
+    // Scale / root / custom mask → scaleon, scaleroot, scalemask
+    auto scaleListener = [this, p](int&) { for(auto& [srv, s] : p->synths) setScaleArgs(*p, s); };
+    ph.listeners.push(ph.scaleType.newListener(scaleListener));
+    ph.listeners.push(ph.scaleRoot.newListener(scaleListener));
+    ph.listeners.push(ph.scaleMask.newListener(scaleListener));
+    // Envelope shape → recompute + upload (like attack / release / tension)
+    ph.listeners.push(ph.envShape.newListener([this, p](int&) {
+        computeEnvData(*p);
+        p->envNeedsUpdate = true;
+    }));
+    // Live input
+    // (debounced: a drag would otherwise re-allocate every frame; see update)
+    ph.listeners.push(ph.liveLength.newListener([p](float&) { p->liveResizeAt = ofGetElapsedTimef() + 0.3f; }));
+    ph.listeners.push(ph.freeze.newListener([p](bool& v) {
+        for(auto& [srv, l] : p->liveSC) if(l.rec) l.rec->set("freeze", v ? 1.0f : 0.0f);
+    }));
     vfListener("autotrigbeatdiv",  ph.autoTrigBeatDiv);
-    vfListener("posjit",           ph.posJit);
+    // posjit / durjit: time amounts in ms / Beats
+    ph.listeners.push(ph.posJit.newListener([this, p](vector<float>& v) {
+        const auto ev = posAmtSend(*p, v, phChannels(*p));
+        for(auto& [srv, s] : p->synths) if(s) s->set("posjit", ev);
+    }));
     vfListener("pitchjit",         ph.pitchJit);
-    vfListener("durjit",           ph.durJit);
+    ph.listeners.push(ph.durJit.newListener([this, p](vector<float>& v) {
+        const auto ev = durAmtSend(*p, v, phChannels(*p));
+        for(auto& [srv, s] : p->synths) if(s) s->set("durjit", ev);
+    }));
     vfListener("ampjit",           ph.ampJit);
     vfListener("panazjit",         ph.panAzJit);
     vfListener("levels",           ph.levels);
@@ -646,7 +927,15 @@ void scGrainBox::setupPlayheadListeners(Playhead& ph) {
         vfListener(kLfoSCSpeed[t], ph.lfo[t].speed,    fo);
         vfListener(kLfoSCPhase[t], ph.lfo[t].phase,    fo);
         vfListener(kLfoSCQuant[t], ph.lfo[t].quant,    fo);
-        vfListener(kLfoSCStr[t],   ph.lfo[t].strength, fo);
+        if(t == 0 || t == 1) {
+            // Pos / Dur strength: time amounts in ms / Beats
+            ph.listeners.push(ph.lfo[t].strength.newListener([this, p, t](vector<float>&) {
+                const auto ev = lfoStrSend(*p, t, phChannels(*p));
+                for(auto& [srv, s] : p->synths) if(s) s->set(kLfoSCStr[t], ev);
+            }));
+        } else {
+            vfListener(kLfoSCStr[t],   ph.lfo[t].strength, fo);
+        }
         vfListener(kLfoSCPow[t],   ph.lfo[t].pow,      fo);
 #if OFXOCEANODESC_HAS_TRANSPORT
         // Sync mode: the LFO phase is a function of the transport beat and the
@@ -732,6 +1021,10 @@ void scGrainBox::resendParametersForNRT() {
     }
     // FX chain synths are rebuilt with the graph (captured); push their values
     sendFxParamsAll();
+    // Live recorders (their buffers are recreated empty at score time zero)
+    for(auto& ph : playheads)
+        for(auto& [srv, l] : ph->liveSC)
+            if(l.rec && srv->isNRTCapturing()) setRecArgs(*ph, l.rec, srv);
 }
 
 void scGrainBox::freePlayheadSC(Playhead& ph) {
@@ -748,6 +1041,9 @@ void scGrainBox::freePlayheadSC(Playhead& ph) {
     for(auto& [srv, bufs] : ph.own.bufs) srvs.push_back(srv);
     for(auto* srv : srvs) releaseSampleBuffers(ph.own, srv);
     ph.own.bufs.clear();
+    std::vector<ofxSCServer*> lsrvs;
+    for(auto& [srv, l] : ph.liveSC) lsrvs.push_back(srv);
+    for(auto* srv : lsrvs) freeLiveResources(ph, srv);
 }
 
 bool scGrainBox::addPlayhead() {
@@ -760,6 +1056,11 @@ bool scGrainBox::addPlayhead() {
     // Same region as playhead 1 by default (it is the same sample).
     ph.inPoint.set(ph0().inPoint.get());
     ph.outPoint.set(ph0().outPoint.get());
+    if(timeUnitsCur != 0) {
+        // the defaults are relative: Duration 0.1 of the region, in this unit
+        ph.duration.set(vector<float>{(float)secToUnit(0.1f * durScaleSec(ph))});
+        timeDirty = true;   // ranges of the new parameters
+    }
     // New playheads share playhead 1's sample and follow N Chan (offset 0).
     computeEnvData(ph);
     allocEnvBuffers(ph);   // data goes with the allocation (see ensureEnvBuffer)
@@ -858,21 +1159,25 @@ void scGrainBox::configureSynth(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv) {
     // Current counter values: a new synth must not see a change at start.
     s->set("syncgate",     ph.syncGateCount);
     s->set("trigger",      triggerCountsFor(ph));   // phChannels(ph) values
-    s->set("inpoint",      ph.inPoint.get());
-    s->set("outpoint",     ph.outPoint.get());
+    s->set("inpoint",      inRelOf(ph));
+    s->set("outpoint",     outRelOf(ph));
 
     // Vector params — expanded to the playhead's voice count so a scalar covers every voice
     const int nv = phChannels(ph);
     s->set("amp",              expandF(ph.amp.get(), nv));
     s->set("pitch",            expandF(ph.pitch.get(), nv));
-    s->set("duration",         withOffset(ph.duration.get(), nv, gDurP.get()));
-    s->set("position",         withOffset(ph.position.get(), nv, gPosP.get()));
+    s->set("duration",         durSend(ph, nv));
+    s->set("position",         posSend(ph, nv));
     s->set("panaz",            expandF(ph.panAz.get(), nv));
+    s->set("reverse",          expandF(ph.reverse.get(), nv));
+    setScaleArgs(ph, s);
+    setLiveArgs(ph, s);
+    s->set("vis",              visOn ? 1.0f : 0.0f);
     s->set("autotrigbeatdiv",  expandF(ph.autoTrigBeatDiv.get(), nv));
     s->set("chance",           withOffset(ph.chance.get(), nv, gChanceP.get()));
-    s->set("posjit",           expandF(ph.posJit.get(), nv));
+    s->set("posjit",           posAmtSend(ph, ph.posJit.get(), nv));
     s->set("pitchjit",         expandF(ph.pitchJit.get(), nv));
-    s->set("durjit",           expandF(ph.durJit.get(), nv));
+    s->set("durjit",           durAmtSend(ph, ph.durJit.get(), nv));
     s->set("ampjit",           expandF(ph.ampJit.get(), nv));
     s->set("panazjit",         expandF(ph.panAzJit.get(), nv));
     s->set("levels",           expandF(ph.levels.get(), nv));
@@ -883,7 +1188,7 @@ void scGrainBox::configureSynth(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv) {
         s->set(kLfoSCSpeed[t], expandF(ph.lfo[t].speed.get(), nv));
         s->set(kLfoSCPhase[t], expandF(ph.lfo[t].phase.get(), nv));
         s->set(kLfoSCQuant[t], expandF(ph.lfo[t].quant.get(), nv));
-        s->set(kLfoSCStr[t],   expandF(ph.lfo[t].strength.get(), nv));
+        s->set(kLfoSCStr[t],   lfoStrSend(ph, t, nv));
         s->set(kLfoSCPow[t],   expandF(ph.lfo[t].pow.get(), nv));
     }
 
@@ -922,14 +1227,9 @@ void scGrainBox::buildSynth(ofxSCServer* srv) {
         }
     }
 
-    // A server that rebooted lost every loaded SynthDef request: playhead 1's
-    // envelope buffer no longer being ours is the sign (see bufferIsLive).
-    if(ph0().envBufs.count(srv) && ph0().envBufs[srv] && !bufferIsLive(srv, ph0().envBufs[srv]))
-        fxDefsRequestedAt.erase(srv);
     // FX chain: plan (and private buses) before setOutputBus routes the
     // playheads; the FX synths are created in createSynth.
     freeFx(srv);
-    requestFxDefs(srv, srv->isNRTCapturing());
     planFx(srv);
 
     for(auto& phPtr : playheads) {
@@ -944,6 +1244,7 @@ void scGrainBox::buildSynth(ofxSCServer* srv) {
         // rebooted ones get it here — safe inside b_latency, the data is the
         // /b_alloc completion message)
         ensureEnvBuffer(ph, srv);
+        if(ph.liveInput) ensureLiveResources(ph, srv);   // bufnum0 + phasebus
         ph.synths[srv] = new ofxSCSynth(defNameFor(ph), srv);
         configureSynth(ph, ph.synths[srv], srv);
     }
@@ -983,6 +1284,13 @@ void scGrainBox::createSynth(ofxSCServer* srv) {
     }
     // FX stages right after playhead 1's synth (same bundle)
     createFxSynths(srv);
+    // Live recorders right before the earliest grain synth (after the input
+    // source, which the graph puts before this node's earliest synth)
+    for(auto& ph : playheads) {
+        ph->isPaused = false;          // created running; updatePausing re-pauses
+        ph->pauseAt  = -1.0f;
+        if(ph->liveInput) createLiveRecorder(*ph, srv);
+    }
     ofLogNotice("scGrainBox") << "createSynth AFTER: nodeID=" << ph0().synths[srv]->nodeID;
     // Refresh the envelope data (the buffers already hold it: it is sent with
     // every allocation; this only covers edits made while one was pending).
@@ -1040,6 +1348,8 @@ void scGrainBox::refreshPlayheadSynth(Playhead& ph, ofxSCServer* srv) {
     ph.synths[srv]->set("out", outBusFor(ph, srv));
     ph.synths[srv]->set("active", getActive() ? 1.0f : 0.0f);
     ph.synths[srv]->createAndRun(4, oldNodeID, getActive());
+    ph.isPaused = false;    // the new synth runs; updatePausing re-pauses it if muted
+    ph.pauseAt  = -1.0f;
 }
 
 void scGrainBox::setBufnums(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv) {
@@ -1063,6 +1373,7 @@ void scGrainBox::free(ofxSCServer* srv) {
         }
         ph->synths.erase(srv);
         ph->grainListeners.erase(srv);
+        freeLiveRecorder(*ph, srv);      // buffer + bus kept (see Live input)
     }
     freeFx(srv);
     // Sample buffers (mainSample / own samples) intentionally NOT freed here —
@@ -1146,26 +1457,327 @@ void scGrainBox::moveSynthBefore(ofxSCServer* srv, int nodeID) {
         ph.synths[srv]->moveBefore(target);
         target = ph.synths[srv]->nodeID;
     }
+    // Live recorders before every grain synth, keeping their order (the
+    // front of recOrder ends up earliest)
+    for(auto& phPtr : playheads) {
+        Playhead& ph = *phPtr;
+        if(ph.liveInput && ph.liveSC.count(srv) && ph.liveSC[srv].rec) setRecArgs(ph, ph.liveSC[srv].rec, srv);
+    }
+    if(recOrder.count(srv)) {
+        auto& order = recOrder[srv];
+        for(auto it = order.rbegin(); it != order.rend(); ++it) {
+            (*it)->moveBefore(target);
+            target = (*it)->nodeID;
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Live input
+// ════════════════════════════════════════════════════════════════════════════
+//
+// A Live playhead reads a mono rolling buffer (liveLength s) that its
+// GrainBoxRec synth records from the node's "In" port (first channel), and
+// whose write position is on a 1-channel audio bus. Buffer and bus are kept
+// across graph recomputes (like the envelope buffers: re-allocating inside
+// the b_latency window would drop the recording); the recorder synth follows
+// the graph. NRT: the buffer has no file, so the capture recreates it empty
+// at time zero (replayBuffersForNRT) and the recorder is part of the score.
+
+void scGrainBox::setInputBus(ofxSCServer* srv, scNode* /*node*/, int bus) {
+    if(!srv) return;
+    inputBuses[srv] = bus;
+    for(auto& ph : playheads) {
+        auto it = ph->liveSC.find(srv);
+        if(it != ph->liveSC.end() && it->second.rec) it->second.rec->set("in", bus);
+    }
+}
+
+void scGrainBox::resetInputBusses(ofxSCServer* srv, int targetBus) {
+    setInputBus(srv, nullptr, targetBus);
+}
+
+void scGrainBox::ensureLiveResources(Playhead& ph, ofxSCServer* srv) {
+    if(!srv) return;
+    auto& l = ph.liveSC[srv];
+    if(l.buf && !bufferIsLive(srv, l.buf)) { delete l.buf; l.buf = nullptr; }        // server rebooted
+    if(l.phaseBus && !gbBusIsLive(srv, l.phaseBus)) { delete l.phaseBus; l.phaseBus = nullptr; }
+    int srI = serverManager::getSampleRateForServer(srv);
+    if(srI < 8000) srI = 48000;            // not reported yet (server booting)
+    const float sr = (float)srI;
+    const int frames = std::max(64, (int)std::lround(ph.liveLength.get() * sr));
+    if(!l.buf) {
+        l.buf = new ofxSCBuffer(frames, 1, srv);
+        l.buf->alloc();                     // zeroed: reads silence until recorded
+    }
+    if(!l.phaseBus) l.phaseBus = new ofxSCBus(RATE_AUDIO, 1, srv);
+    ph.live.bufs[srv] = { l.buf };
+    ph.live.numChannels  = 1;
+    ph.live.durationSecs = (float)l.buf->frames / sr;
+    if((int)ph.live.peaks.size() != WAVEFORM_BINS) ph.live.peaks.assign(WAVEFORM_BINS, 0.0f);
+    if((int)ph.liveRing.size()   != WAVEFORM_BINS) ph.liveRing.assign(WAVEFORM_BINS, 0.0f);
+}
+
+void scGrainBox::setRecArgs(Playhead& ph, ofxSCSynth* rec, ofxSCServer* srv) {
+    if(!rec) return;
+    auto& l = ph.liveSC[srv];
+    rec->set("in",       inputBuses.count(srv) ? inputBuses[srv] : 0);
+    if(l.buf)      rec->set("bufnum",   l.buf->index);
+    if(l.phaseBus) rec->set("phasebus", l.phaseBus->index);
+    rec->set("freeze",   ph.freeze.get() ? 1.0f : 0.0f);
+    rec->set("vis",      visOn ? 1.0f : 0.0f);
+}
+
+void scGrainBox::setLiveArgs(Playhead& ph, ofxSCSynth* s) {
+    if(!s) return;
+    ofxSCServer* srv = nullptr;
+    for(auto& [sv, sy] : ph.synths) if(sy == s) srv = sv;
+    int bus = 0;
+    if(srv && ph.liveInput && ph.liveSC.count(srv) && ph.liveSC[srv].phaseBus) bus = ph.liveSC[srv].phaseBus->index;
+    s->set("live",     ph.liveInput ? 1.0f : 0.0f);
+    s->set("phasebus", bus);
+}
+
+// Recorder right before the earliest grain synth of this node
+void scGrainBox::createLiveRecorder(Playhead& ph, ofxSCServer* srv) {
+    ensureLiveResources(ph, srv);
+    auto& l = ph.liveSC[srv];
+    if(l.rec) return;
+    // before every other synth of this node: the earliest recorder, or the
+    // earliest grain synth
+    ofxSCSynth* before = earliestRecorder(srv);
+    if(!before) before = earliestSynth(srv, (int)playheads.size());
+    if(!before) return;
+    l.rec = new ofxSCSynth("GrainBoxRec", srv);
+    setRecArgs(ph, l.rec, srv);
+    Playhead* p = &ph;
+    // /grainRec [nodeID, replyID, max, min, position 0..1] every 8 ms: rolling
+    // min / max display (a few bins written per message)
+    l.recListener = l.rec->newFeedbackMessage.newListener([this, p, srv](ofxOscMessage& msg) {
+        if(msg.getAddress() != "/grainRec" || msg.getNumArgs() < 5) return;
+        if(!p->liveSC.count(srv) || !p->liveSC[srv].rec || msg.getArgAsInt(0) != p->liveSC[srv].rec->nodeID) return;
+        const int bins = WAVEFORM_BINS;
+        if((int)p->liveRing.size()    != bins) p->liveRing.assign(bins, 0.0f);
+        if((int)p->liveRingMin.size() != bins) p->liveRingMin.assign(bins, 0.0f);
+        const float hi  = std::max(-1.0f, std::min(1.0f, msg.getArgAsFloat(2)));
+        const float lo  = std::max(-1.0f, std::min(1.0f, msg.getArgAsFloat(3)));
+        const float pos = std::max(0.0f, std::min(0.999999f, msg.getArgAsFloat(4)));
+        // fill the bins written since the previous report
+        int from = (int)(p->liveHead * bins), to = (int)(pos * bins);
+        int count = (to - from + bins) % bins;
+        if(count > bins / 4) count = 1;     // a jump (freeze, re-alloc): mark one bin
+        for(int k = 1; k <= std::max(1, count); k++) {
+            const int b = (from + k) % bins;
+            p->liveRing[b] = hi;
+            p->liveRingMin[b] = lo;
+        }
+        p->liveHead = pos;
+    });
+    l.rec->createAndRun(2, before->nodeID, getActive());   // addBefore
+    recOrder[srv].push_front(l.rec);
+}
+
+void scGrainBox::freeLiveRecorder(Playhead& ph, ofxSCServer* srv) {
+    auto it = ph.liveSC.find(srv);
+    if(it == ph.liveSC.end()) return;
+    if(it->second.rec) {
+        auto& order = recOrder[srv];
+        order.erase(std::remove(order.begin(), order.end(), it->second.rec), order.end());
+        it->second.rec->free(); delete it->second.rec; it->second.rec = nullptr;
+    }
+}
+
+void scGrainBox::freeLiveResources(Playhead& ph, ofxSCServer* srv) {
+    freeLiveRecorder(ph, srv);
+    auto it = ph.liveSC.find(srv);
+    if(it == ph.liveSC.end()) return;
+    if(it->second.buf) { if(bufferIsLive(srv, it->second.buf)) it->second.buf->free(); delete it->second.buf; }
+    if(it->second.phaseBus) { if(gbBusIsLive(srv, it->second.phaseBus)) it->second.phaseBus->free(); delete it->second.phaseBus; }
+    ph.liveSC.erase(it);
+    ph.live.bufs.erase(srv);
+}
+
+// Live on / off: resources first (the grain synth then reads the new buffer),
+// then the synth (K = 1 variant, live args), then the recorder.
+void scGrainBox::setLiveInput(Playhead& ph, bool on) {
+    if(ph.liveInput == on) return;
+    timeDirty = true;
+    ph.liveInput = on;
+    for(auto* sm : allServers) {
+        if(!sm || !sm->getServer()) continue;
+        ofxSCServer* srv = sm->getServer();
+        const bool running = ph.synths.count(srv) && ph.synths[srv];
+        if(on) {
+            ensureLiveResources(ph, srv);
+            if(running) {
+                refreshPlayheadSynth(ph, srv);
+                setLiveArgs(ph, ph.synths[srv]);
+                createLiveRecorder(ph, srv);
+            }
+        } else {
+            if(running) {
+                refreshPlayheadSynth(ph, srv);
+                setLiveArgs(ph, ph.synths[srv]);
+            }
+            freeLiveResources(ph, srv);
+        }
+    }
+}
+
+// New length: new buffer + recorder (the old recording is dropped)
+void scGrainBox::resizeLiveBuffers(Playhead& ph) {
+    timeDirty = true;
+    for(auto* sm : allServers) {
+        if(!sm || !sm->getServer()) continue;
+        ofxSCServer* srv = sm->getServer();
+        const bool running = ph.synths.count(srv) && ph.synths[srv];
+        freeLiveResources(ph, srv);
+        ensureLiveResources(ph, srv);
+        if(running) {
+            setBufnums(ph, ph.synths[srv], srv);
+            setLiveArgs(ph, ph.synths[srv]);
+            createLiveRecorder(ph, srv);
+        }
+    }
+    std::fill(ph.liveRing.begin(), ph.liveRing.end(), 0.0f);
+    std::fill(ph.liveRingMin.begin(), ph.liveRingMin.end(), 0.0f);
+    ph.liveHead = 0.0f;
+}
+
+// Display: the ring (buffer order) re-read in age order, 0 = the write head
+void scGrainBox::updateLivePeaks(Playhead& ph) {
+    const int bins = WAVEFORM_BINS;
+    if((int)ph.liveRing.size()    != bins) ph.liveRing.assign(bins, 0.0f);
+    if((int)ph.liveRingMin.size() != bins) ph.liveRingMin.assign(bins, 0.0f);
+    if((int)ph.live.peaks.size()  != bins) ph.live.peaks.assign(bins, 0.0f);
+    if((int)ph.live.lows.size()   != bins) ph.live.lows.assign(bins, 0.0f);
+    const int head = (int)(ph.liveHead * bins);
+    for(int b = 0; b < bins; b++) {
+        const int r = ((head - b) % bins + bins) % bins;
+        ph.live.peaks[b] = ph.liveRing[r];
+        ph.live.lows[b]  = ph.liveRingMin[r];
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Scale
+// ════════════════════════════════════════════════════════════════════════════
+
+// 12-bit masks relative to the root (bit k: root + k semitones allowed)
+int scGrainBox::scaleMaskFor(const Playhead& ph) const {
+    auto bits = [](std::initializer_list<int> steps) { int m = 0; for(int k : steps) m |= 1 << k; return m; };
+    switch(ph.scaleType.get()) {
+        case 1:  return 4095;                                  // Chromatic
+        case 2:  return bits({0, 2, 4, 5, 7, 9, 11});          // Major
+        case 3:  return bits({0, 2, 3, 5, 7, 8, 10});          // Minor
+        case 4:  return bits({0, 2, 3, 5, 7, 8, 11});          // Harmonic minor
+        case 5:  return bits({0, 2, 3, 5, 7, 9, 10});          // Dorian
+        case 6:  return bits({0, 2, 4, 7, 9});                 // Pentatonic major
+        case 7:  return bits({0, 3, 5, 7, 10});                // Pentatonic minor
+        case 8:  return bits({0, 2, 4, 6, 8, 10});             // Whole tone
+        case 9:  return bits({0});                             // Octaves
+        case 10: return bits({0, 7});                          // Fifths + octaves
+        case 11: return ph.scaleMask.get() & 4095;             // Custom
+        default: return 4095;
+    }
+}
+
+// The synth snaps with ONE lookup per voice: x = (pitch - root) wrapped to
+// 0..12, bin j = floor(2x) (half-semitone bins). Within a bin round(x) is
+// constant (n0 = (j + 1) / 2, .5 rounding up), and the nearest allowed note
+// is the first allowed of n0, n0 - 1, n0 + 1, ... n0 +- 6 (ties go down):
+// table[j] = that note, relative to the octave start (may be -6..18).
+void scGrainBox::setScaleArgs(Playhead& ph, ofxSCSynth* s) {
+    if(!s) return;
+    const int mask = scaleMaskFor(ph);
+    static const int offs[13] = {0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6};
+    std::vector<float> table(24);
+    for(int j = 0; j < 24; j++) {
+        const int n0 = (j + 1) / 2;
+        int note = n0;
+        for(int off : offs) {
+            const int cand = n0 + off;
+            if((mask >> (((cand % 12) + 12) % 12)) & 1) { note = cand; break; }
+        }
+        table[j] = (float)note;
+    }
+    // an empty custom mask would allow nothing: leave the pitch alone then
+    const bool on = ph.scaleType.get() > 0 && mask != 0;
+    s->set("scaleon",    on ? 1.0f : 0.0f);
+    s->set("scaleroot",  (float)std::max(0, std::min(11, ph.scaleRoot.get())));
+    s->set("scaletable", table);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CPU: pausing muted playheads, /grainTrig only while the window is shown
+// ════════════════════════════════════════════════════════════════════════════
+
+void scGrainBox::sendVis() {
+    const float v = visOn ? 1.0f : 0.0f;
+    for(auto& ph : playheads) {
+        for(auto& [srv, s] : ph->synths) if(s) s->set("vis", v);
+        for(auto& [srv, l] : ph->liveSC) if(l.rec) l.rec->set("vis", v);
+    }
+}
+
+// A muted (or solo-excluded) playhead's synth is paused (n_run 0) once its
+// 20 ms fade (phgain lag) is over, ~70 ms after the mute; unmuting resumes it
+// at once. Every n_run is a plain timed message, so an NRT capture records
+// the same pauses. Never touches a deactivated node (deactivate pauses all).
+void scGrainBox::updatePausing() {
+    if(!getActive()) return;
+    const float now = ofGetElapsedTimef();
+    for(auto& phPtr : playheads) {
+        Playhead& ph = *phPtr;
+        const bool silent = phGainFor(ph) <= 0.0f;
+        if(silent) {
+            if(ph.isPaused) continue;
+            if(ph.pauseAt < 0.0f) { ph.pauseAt = now + 0.07f; continue; }
+            if(now < ph.pauseAt) continue;
+            for(auto& [srv, s] : ph.synths) if(s) s->run(false);
+            ph.isPaused = true;
+        } else {
+            ph.pauseAt = -1.0f;
+            if(!ph.isPaused) continue;
+            for(auto& [srv, s] : ph.synths) if(s) s->run(true);
+            ph.isPaused = false;
+        }
+    }
 }
 
 int scGrainBox::getLastSynthID(ofxSCServer* srv) {
-    // The earliest of this node's synths in SC's order (see moveSynthBefore).
+    // The earliest of this node's synths in SC's order (see moveSynthBefore):
+    // a live recorder if there is one, else the highest playhead's synth.
+    if(ofxSCSynth* r = earliestRecorder(srv)) return r->nodeID;
     ofxSCSynth* s = earliestSynth(srv, (int)playheads.size());
     return s ? s->nodeID : -1;
 }
 
+// Recorders are chained before the earliest grain synth, each before the
+// previous one: the earliest is the one of the highest live playhead.
+ofxSCSynth* scGrainBox::earliestRecorder(ofxSCServer* srv) {
+    auto it = recOrder.find(srv);
+    return (it != recOrder.end() && !it->second.empty()) ? it->second.front() : nullptr;
+}
+
 void scGrainBox::activate() {
-    for(auto& ph : playheads)
+    for(auto& ph : playheads) {
         for(auto& [srv, s] : ph->synths)
             if(s) { s->set("active", 1.0f); s->run(true); }
+        for(auto& [srv, l] : ph->liveSC) if(l.rec) l.rec->run(true);
+        ph->isPaused = false;   // updatePausing re-pauses muted playheads
+        ph->pauseAt  = -1.0f;
+    }
     for(auto& [srv, st] : fx)
         for(int stage : st.plan) if(st.synths[stage]) st.synths[stage]->run(true);
 }
 
 void scGrainBox::deactivate() {
-    for(auto& ph : playheads)
+    for(auto& ph : playheads) {
         for(auto& [srv, s] : ph->synths)
             if(s) { s->set("active", 0.0f); s->run(false); }
+        for(auto& [srv, l] : ph->liveSC) if(l.rec) l.rec->run(false);
+    }
     for(auto& [srv, st] : fx)
         for(int stage : st.plan) if(st.synths[stage]) st.synths[stage]->run(false);
 }
@@ -1174,8 +1786,10 @@ void scGrainBox::deactivate() {
 // Global mixing (transpose / volume / speed / mute / solo) and filter args
 // ════════════════════════════════════════════════════════════════════════════
 
+// Every GrainBox_K_N synth has the output filter (\filteron 0 = bypassed), so
+// every synth takes the filter and Cut-LFO controls.
 bool scGrainBox::synthIsFiltered(ofxSCSynth* s) {
-    return s && s->getName().rfind("GrainBox_F_", 0) == 0;
+    return s != nullptr;
 }
 
 // 0 when muted, or when some other playhead is soloed and this one is not
@@ -1196,10 +1810,13 @@ void scGrainBox::setMixArgs(Playhead& ph, ofxSCSynth* s) {
 
 void scGrainBox::setFilterArgs(Playhead& ph, ofxSCSynth* s) {
     if(!s) return;
-    s->set("filtertype", std::max(0, std::min(3, ph.filterType.get() - 1)));
+    // Filter parameter: 0 Off, 1 LPF2, 2 BPF, 3 Notch, 4 HPF2. Off keeps the
+    // last type so the 20 ms fade-out still filters with it.
+    s->set("filteron",   ph.filterType.get() > 0 ? 1 : 0);
+    if(ph.filterType.get() > 0)
+        s->set("filtertype", std::max(0, std::min(3, ph.filterType.get() - 1)));
     s->set("cutoff",     ph.cutoff.get());
     s->set("filterq",    ph.filterQ.get());
-    s->set("latchcut",   (int)ph.latchCut.get());
 }
 
 void scGrainBox::sendMixParams() {
@@ -1256,36 +1873,27 @@ std::string scGrainBox::fxDefName(int stage) const {
     return std::string(kFxDefBase[std::max(0, std::min(2, stage))]) + ofToString(n);
 }
 
-// Loaded for sure (Load Synthdefs On Preset off: the whole Synthdefs folder
-// is loaded at boot; no folder found: assume it is loaded like GrainBox's
-// own), or requested long enough ago.
-bool scGrainBox::fxStageReady(int stage, ofxSCServer* srv) const {
+// Loaded: serverManager loads the folders registered by requireFxSynthdefs()
+// with every other SynthDef (boot, before its initialization /sync; NRT
+// capture start, at score time 0) and, when registered on a running server,
+// right away followed by a /sync; a stage waits only until scsynth answers it
+// (areRequiredSynthdefsLoading) — no timer.
+bool scGrainBox::fxStageReady(int /*stage*/, ofxSCServer* srv) const {
     if(!srv) return false;
+    if(srv->isNRTCapturing()) return true;   // the score has the loads at time 0
     for(auto* sm : allServers)
-        if(sm && sm->getServer() == srv && !sm->preferences.loadOnPreset) return true;
-    if(gbFindSynthdefFolder(kFxDefBase[stage]).empty()) return true;
-    if(srv->isNRTCapturing()) return true;   // the capture holds the /d_loadDir before the /s_new
-    auto it = fxDefsRequestedAt.find(srv);
-    return it != fxDefsRequestedAt.end() && ofGetElapsedTimef() - it->second >= 1.5f;
+        if(sm && sm->getServer() == srv) return !sm->areRequiredSynthdefsLoading();
+    return true;
 }
 
-void scGrainBox::requestFxDefs(ofxSCServer* srv, bool force) {
-    if(!srv) return;
-    bool any = false;
-    for(int st = 0; st < FX_COUNT; st++) any = any || fxOnP[st].get();
-    if(!any) return;
-    for(auto* sm : allServers)
-        if(sm && sm->getServer() == srv && !sm->preferences.loadOnPreset && !srv->isNRTCapturing()) return;
-    if(!force && fxDefsRequestedAt.count(srv)) return;
+// Echo / SpaceMaster (~synthCreator defs, outside Defaults) and graphiceq:
+// ask every serverManager to load their folders (idempotent).
+void scGrainBox::requireFxSynthdefs() {
     for(int st = 0; st < FX_COUNT; st++) {
         const std::string folder = gbFindSynthdefFolder(kFxDefBase[st]);
         if(folder.empty()) continue;
-        ofxOscMessage m;
-        m.setAddress("/d_loadDir");
-        m.addStringArg(folder);
-        srv->sendMsg(m);
+        for(auto* sm : allServers) if(sm) sm->requireSynthdefFolder(folder);
     }
-    if(!fxDefsRequestedAt.count(srv)) fxDefsRequestedAt[srv] = ofGetElapsedTimef();
 }
 
 std::vector<int> scGrainBox::computeFxPlan(ofxSCServer* srv) const {
@@ -1399,7 +2007,6 @@ void scGrainBox::rebuildFx(ofxSCServer* srv) {
     if(!srv) return;
     const bool running = ph0().synths.count(srv) && ph0().synths[srv];
     if(!running) return;                 // planned in buildSynth when the graph is built
-    requestFxDefs(srv, false);
     planFx(srv);                         // reuses the existing buses
     for(auto& ph : playheads)
         if(ph->synths.count(srv) && ph->synths[srv]) ph->synths[srv]->set("out", outBusFor(*ph, srv));
@@ -1453,7 +2060,38 @@ void scGrainBox::update(ofEventArgs& /*args*/) {
     if(syncToTransportP.get()) updateTransportSync();
 #endif
 
-    // FX stage waiting for its SynthDefs (/d_loadDir): add it once loaded
+    // ── CPU: /grainTrig (and live peak) replies only while the window is
+    //    shown (drawn last frame, not collapsed); pause muted playheads ───
+    {
+        const bool vis = windowDrawn;
+        windowDrawn = false;
+        if(vis != visOn) {
+            visOn = vis;
+            sendVis();
+            if(!visOn) grainHighlights.clear();
+        }
+    }
+    updatePausing();
+    // Time units: Beats follow the tempo; lengths changed -> ranges + re-send
+    if(timeUnitsCur == 2 && std::abs(effectiveBpm() - lastTimeBpm) > 1e-3f) {
+        lastTimeBpm = effectiveBpm();
+        timeDirty = true;
+    }
+    if(timeDirty && !loadingPreset) {
+        timeDirty = false;
+        updateTimeRanges();
+        if(timeUnitsCur != 0) for(auto& ph : playheads) sendOffsetParams(*ph);
+        sampleMsP.set(std::max(0.0f, (outRelOf(ph0()) - inRelOf(ph0())) * mainSample.durationSecs * 1000.0f));
+    }
+    for(auto& ph : playheads)
+        if(ph->liveResizeAt > 0.0f && ofGetElapsedTimef() >= ph->liveResizeAt) {
+            ph->liveResizeAt = -1.0f;
+            if(ph->liveInput) resizeLiveBuffers(*ph);
+        }
+    if(visOn)
+        for(auto& ph : playheads) if(ph->liveInput) updateLivePeaks(*ph);
+
+    // FX stage waiting for its SynthDefs (/d_loadDir + /sync): add it once loaded
     if(fxPending) {
         bool changed = false;
         for(auto& [srv, st] : fx)
@@ -1461,7 +2099,7 @@ void scGrainBox::update(ofEventArgs& /*args*/) {
         if(changed) rebuildFxAll();
     }
 
-    // ── Update grain highlight lifetimes ─────────────────────────────────────
+    // ── Update grain highlight lifetimes (none arrive while hidden) ─────────
     for(auto it = grainHighlights.begin(); it != grainHighlights.end();) {
         it->lifeTime -= dt;
         if(it->lifeTime <= 0.0f)
@@ -1505,6 +2143,42 @@ void scGrainBox::computeEnvData(Playhead& ph) {
     float total = rawAtk + rawRel;
     float atk = (total > 1.0f) ? rawAtk / total : rawAtk;
     float rel = (total > 1.0f) ? rawRel / total : rawRel;
+
+    // Preset shapes (Custom = the attack / release / tension editor below)
+    const int shape = ph.envShape.get();
+    if(shape > 0) {
+        const int N = ENV_BUFFER_SIZE;
+        const float pi = 3.14159265358979f;
+        const float gSigma = 0.15f, gEdge = std::exp(-0.5f * (0.5f / gSigma) * (0.5f / gSigma));
+        const float pk = 6.0f, pEdge = std::exp(-pk);
+        for(int i = 0; i < N; i++) {
+            const float t = (float)i / (float)(N - 1);
+            float v = 1.0f;
+            switch(shape) {
+                case 1: v = 0.5f - 0.5f * std::cos(2.0f * pi * t); break;                        // Hann
+                case 2: {                                                                         // Gaussian (0 at the ends)
+                    const float z = (t - 0.5f) / gSigma;
+                    v = (std::exp(-0.5f * z * z) - gEdge) / (1.0f - gEdge);
+                } break;
+                case 3: case 4: {                                                                 // Percussive / reversed
+                    const float u = (shape == 3) ? t : 1.0f - t;
+                    const float a = 0.02f;                                                        // 2 % linear attack
+                    v = (u < a) ? u / a : (std::exp(-pk * (u - a) / (1.0f - a)) - pEdge) / (1.0f - pEdge);
+                } break;
+                case 5: {                                                                         // Trapezoid, 10 % fades
+                    const float f = 0.1f;
+                    v = std::min(1.0f, std::min(t / f, (1.0f - t) / f));
+                } break;
+                case 6: {                                                                         // Rectangular, 3-point fades
+                    const int f = 3;
+                    v = std::min(1.0f, (float)std::min(i, N - 1 - i) / (float)f);
+                } break;
+                default: break;
+            }
+            ph.envData[i] = std::max(0.0f, std::min(1.0f, v));
+        }
+        return;
+    }
 
     // Tension → exponent: <0 = fast start/concave, 0 = linear, >0 = slow start/convex
     float exponent = std::pow(4.0f, tension);
@@ -1559,6 +2233,7 @@ void scGrainBox::loadSampleForPlayhead(Playhead& ph, const std::string& path) {
 
 void scGrainBox::loadSampleInto(SampleData& sd, const std::string& path) {
     if(path.empty()) return;
+    timeDirty = true;        // absolute time units depend on the length
     sd.path = path;
 
     loadWaveformData(sd, path);   // sets numChannels and durationSecs from WAV header
@@ -1601,6 +2276,7 @@ void scGrainBox::releaseSampleBuffers(SampleData& sd, ofxSCServer* srv) {
 // own buffers) of the shared one; back to Shared frees the own buffers (the
 // path is kept for the next switch).
 void scGrainBox::setOwnSample(Playhead& ph, bool own) {
+    timeDirty = true;
     if(ph.index == 0 || ph.ownSample == own) return;
     ph.ownSample = own;
     if(own) {
@@ -1735,9 +2411,8 @@ void scGrainBox::loadWaveformData(SampleData& sd, const std::string& path) {
 // GrainBox_K_N: K = channels of the playhead's sample, N = its voice count
 std::string scGrainBox::defNameFor(const Playhead& ph) const {
     const int k = std::max(1, std::min(MAX_SAMPLE_CHANNELS, sampleOf(ph).numChannels));
-    // Filter on: the per-voice filtered family GrainBox_F_K_N
-    const std::string family = ph.filterType.get() > 0 ? "GrainBox_F_" : "GrainBox_";
-    return family + ofToString(k) + "_" + ofToString(phChannels(ph));
+    // One family: the filter is an output stage inside every GrainBox_K_N
+    return "GrainBox_" + ofToString(k) + "_" + ofToString(phChannels(ph));
 }
 
 float scGrainBox::effectiveBpm() const {
@@ -1759,19 +2434,23 @@ void scGrainBox::sendAllParams(Playhead& ph) {
         s->set("uniquetrig",    (int)ph.uniqueTrig.get());
         s->set("uniquejit",     (int)ph.uniqueJit.get());
         s->set("bpm",           effectiveBpm());
-        s->set("inpoint",       ph.inPoint.get());
-        s->set("outpoint",      ph.outPoint.get());
+        s->set("inpoint",       inRelOf(ph));
+        s->set("outpoint",      outRelOf(ph));
 
         s->set("amp",              expandF(ph.amp.get(), nv));
         s->set("pitch",            expandF(ph.pitch.get(), nv));
-        s->set("duration",         withOffset(ph.duration.get(), nv, gDurP.get()));
-        s->set("position",         withOffset(ph.position.get(), nv, gPosP.get()));
+        s->set("duration",         durSend(ph, nv));
+        s->set("position",         posSend(ph, nv));
         s->set("panaz",            expandF(ph.panAz.get(), nv));
+        s->set("reverse",          expandF(ph.reverse.get(), nv));
+        setScaleArgs(ph, s);
+        setLiveArgs(ph, s);
+        s->set("vis",              visOn ? 1.0f : 0.0f);
         s->set("autotrigbeatdiv",  expandF(ph.autoTrigBeatDiv.get(), nv));
         s->set("chance",           withOffset(ph.chance.get(), nv, gChanceP.get()));
-        s->set("posjit",           expandF(ph.posJit.get(), nv));
+        s->set("posjit",           posAmtSend(ph, ph.posJit.get(), nv));
         s->set("pitchjit",         expandF(ph.pitchJit.get(), nv));
-        s->set("durjit",           expandF(ph.durJit.get(), nv));
+        s->set("durjit",           durAmtSend(ph, ph.durJit.get(), nv));
         s->set("ampjit",           expandF(ph.ampJit.get(), nv));
         s->set("panazjit",         expandF(ph.panAzJit.get(), nv));
         s->set("levels",           expandF(ph.levels.get(), nv));
@@ -1786,7 +2465,7 @@ void scGrainBox::sendAllParams(Playhead& ph) {
             s->set(kLfoSCSpeed[t],   expandF(ph.lfo[t].speed.get(), nv));
             s->set(kLfoSCPhase[t],   expandF(ph.lfo[t].phase.get(), nv));
             s->set(kLfoSCQuant[t],   expandF(ph.lfo[t].quant.get(), nv));
-            s->set(kLfoSCStr[t],     expandF(ph.lfo[t].strength.get(), nv));
+            s->set(kLfoSCStr[t],     lfoStrSend(ph, t, nv));
             s->set(kLfoSCPow[t],     expandF(ph.lfo[t].pow.get(), nv));
             s->set(kLfoSCUnique[t],  (int)ph.uniqueLfo[t].get());
         }
@@ -2038,7 +2717,14 @@ void scGrainBox::initializePublishableEditorParameters() {
         regS (ph, ph.cutoff,           false);
         regS (ph, ph.filterQ,          false);
         regS (ph, ph.latchAmp,         false);
-        regS (ph, ph.latchCut,         false);
+        // Reverse, scale, envelope shape, live input (new)
+        regVF(ph, ph.reverse,          false);
+        regS (ph, ph.scaleType,        false);
+        regS (ph, ph.scaleRoot,        false);
+        regS (ph, ph.scaleMask,        false);
+        regS (ph, ph.envShape,         false);
+        regS (ph, ph.liveLength,       false);
+        regS (ph, ph.freeze,           false);
         // LFO rows (the per-target Unique toggles were node parameters; the
         // LFO settings themselves were inspector parameters)
         for(int t = 0; t < NUM_LFO; t++) {
@@ -2068,6 +2754,7 @@ void scGrainBox::initializePublishableEditorParameters() {
     regG(gPosP);
     regG(gDurP);
     regG(gChanceP);
+    regG(timeUnitsP);
     for(int st = 0; st < FX_COUNT; st++) regG(fxOnP[st]);
     for(int b = 0; b < 5; b++) { regG(eqGainP[b]); regG(eqFreqP[b]); regG(eqShapeP[b]); }
     regG(eqMixP);
@@ -2262,6 +2949,8 @@ void scGrainBox::presetSave(ofJson& j) {
         j["sampleOwn"  + ph->sfx] = ph->ownSample;
         j["samplePath" + ph->sfx] = ph->own.path;
     }
+    // Live input, any playhead ("sampleLive", "sampleLive 2"...)
+    for(auto& ph : playheads) j["sampleLive" + ph->sfx] = ph->liveInput;
     j["inpoint"]     = p0.inPoint.get();
     j["outpoint"]    = p0.outPoint.get();
     j["envAttack"]   = p0.envAttack.get();
@@ -2313,6 +3002,7 @@ void scGrainBox::presetSave(ofJson& j) {
 }
 
 void scGrainBox::loadBeforeConnections(ofJson& j) {
+    loadingPreset = true;    // cleared in presetRecallAfterSettingParameters / presetHasLoaded
 #if OFXOCEANODESC_HAS_TRANSPORT
     deserializeParameter(j, syncToTransportP);
 #endif
@@ -2347,6 +3037,7 @@ void scGrainBox::loadBeforeConnections(ofJson& j) {
 }
 
 void scGrainBox::presetRecallBeforeSettingParameters(ofJson& j) {
+    loadingPreset = true;    // values arrive in the preset's time unit (see timeUnitsP)
     int n = 1;
     if(j.contains("numPlayheads") && j["numPlayheads"].is_number()) n = j["numPlayheads"].get<int>();
     setNumPlayheads(n);
@@ -2359,6 +3050,8 @@ void scGrainBox::presetRecallBeforeSettingParameters(ofJson& j) {
 }
 
 void scGrainBox::presetHasLoaded() {
+    loadingPreset = false;
+    timeDirty = true;
     // Old project: the connections are restored now; hide what nobody uses.
     for(const auto& key : legacyAutoPublishedKeys)
         if(!parameterHasConnection(key)) unpublishEditorParameterFromNode(key);
@@ -2381,6 +3074,7 @@ void scGrainBox::presetRecallAfterSettingParameters(ofJson& j) {
             if(!j.contains(k) && !getParameterGroup().contains(k)) p.set(vector<float>{def});
         };
         rs(transposeP, 0.0f); rs(volumeP, 1.0f); rs(speedP, 1.0f);
+        rs(timeUnitsP, 0);   // before the values: old presets are Relative
         rs(gPosP, 0.0f); rs(gDurP, 0.0f); rs(gChanceP, 0.0f);
         for(int st = 0; st < FX_COUNT; st++) rs(fxOnP[st], false);
         for(int b = 0; b < 5; b++) rs(eqGainP[b], 0.0f);
@@ -2398,6 +3092,9 @@ void scGrainBox::presetRecallAfterSettingParameters(ofJson& j) {
             rs(ph->mute, false); rs(ph->solo, false);
             rs(ph->filterType, 0); rs(ph->cutoff, 1000.0f); rs(ph->filterQ, 0.707f);
             rs(ph->latchAmp, false); rs(ph->latchCut, false);
+            rs(ph->scaleType, 0); rs(ph->scaleRoot, 0); rs(ph->scaleMask, 4095);
+            rs(ph->envShape, 0); rs(ph->liveLength, 4.0f); rs(ph->freeze, false);
+            rv(ph->reverse, 0.0f);
             rs(ph->channels, 0); rs(ph->chanOffset, 0);
             rs(ph->uniqueLfo[LFO_CUT], false);
             rv(ph->lfo[LFO_CUT].shape, 0.0f); rv(ph->lfo[LFO_CUT].speed, 1.0f);
@@ -2420,6 +3117,11 @@ void scGrainBox::presetRecallAfterSettingParameters(ofJson& j) {
     if(j.contains("browseDir") && j["browseDir"].is_string()) {
         std::string d = j["browseDir"].get<std::string>();
         if(std::filesystem::exists(d)) browser.refresh(d);
+    }
+    // Live input (any playhead; "sampleLive", "sampleLive 2"...; old presets: off)
+    for(auto& ph : playheads) {
+        const std::string liveKey = "sampleLive" + ph->sfx;
+        setLiveInput(*ph, j.contains(liveKey) && j[liveKey].is_boolean() && j[liveKey].get<bool>());
     }
     // Playheads 2+: own sample or shared (old presets: shared)
     for(auto& ph : playheads) {
@@ -2490,6 +3192,8 @@ void scGrainBox::presetRecallAfterSettingParameters(ofJson& j) {
         setVf(p0.lfo[t].quant,    j, "lfoQuant" + n);
         setVf(p0.lfo[t].strength, j, "lfoStr"   + n);
     }
+    loadingPreset = false;
+    timeDirty = true;        // ranges + one consistent send (update)
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2619,6 +3323,7 @@ void scGrainBox::drawGrainBoxWindow() {
         return;
     }
     if(!open) showWindow = false;
+    windowDrawn = true;    // shown and not collapsed: grain replies wanted (see update)
 
     activePlayhead = std::max(0, std::min((int)playheads.size() - 1, activePlayhead));
 
@@ -2723,7 +3428,7 @@ void scGrainBox::drawGrainBoxWindow() {
     // ── Bottom row: 4 equal cells separated by margins ────────────────────
     //   cell 0 = envelope  |  cells 1-3 = controls (3 columns)
     float cellW   = (rightW - 3.0f * m) / 4.0f;
-    float bottomH = 290.0f * zoom;   // fixed height — not derived from window size
+    float bottomH = 345.0f * zoom;   // fixed height — not derived from window size
 
     // Cell 0 — envelope (wrapped in child so SameLine works correctly)
     ImGui::BeginChild("##gbEnvCell", ImVec2(cellW, bottomH), false,
@@ -2842,8 +3547,9 @@ void scGrainBox::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, float h)
     float visW     = std::max(0.0001f, visEnd - visStart);
     float midY     = pos.y + h * 0.5f;
 
-    float inP  = ph.inPoint.get();
-    float outP = ph.outPoint.get();
+    // In / Out as positions of the view (relative; Live: age)
+    float inP  = relToDisplay(ph, inRelOf(ph));
+    float outP = relToDisplay(ph, outRelOf(ph));
     float inNorm  = (inP  - visStart) / visW;
     float outNorm = (outP - visStart) / visW;
     float inX     = pos.x + inNorm  * w;
@@ -2862,8 +3568,8 @@ void scGrainBox::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, float h)
     for(const auto& gh : grainHighlights) {
         if(gh.playhead < 0 || gh.playhead >= (int)playheads.size()) continue;
         if(&sampleOf(*playheads[gh.playhead]) != &sd) continue;
-        // gh.position is already an absolute buffer position (0..1) from SC's usedPos
-        float normPos = (gh.position - visStart) / visW;
+        // gh.position is SC's usedPos (0..1 of the buffer; Live: of the delay range)
+        float normPos = (relToDisplay(*playheads[gh.playhead], gh.position) - visStart) / visW;
         if(normPos < -0.1f || normPos > 1.1f) continue;
 
         // grain duration (seconds) → fraction of buffer → fraction of visible window → pixels
@@ -2886,10 +3592,14 @@ void scGrainBox::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, float h)
             float norm    = visStart + ((float)i / w) * visW;
             int   binIdx  = std::max(0, std::min((int)(norm * bins), bins - 1));
             float peak    = sd.peaks[binIdx];
-            if(peak <= 0.0f) continue;
+            // Live: signed max / min (a real waveform shape); files: +-|peak|
+            const bool  signedMM = !sd.lows.empty();
+            float low     = signedMM ? sd.lows[std::min(binIdx, (int)sd.lows.size() - 1)] : -peak;
+            if(!signedMM && peak <= 0.0f) continue;
+            if(signedMM && peak <= low) { peak += 0.002f; low -= 0.002f; }   // silence: a hairline
             float px      = pos.x + (float)i;
             float py      = midY - peak * (h * 0.45f);
-            float py2     = midY + peak * (h * 0.45f);
+            float py2     = midY - low  * (h * 0.45f);
             const bool inside = norm >= inP && norm <= outP;
             // the selected playhead's accent (playhead 1: its blue, like its grains)
             dl->AddLine(ImVec2(px, py), ImVec2(px, py2),
@@ -2906,14 +3616,14 @@ void scGrainBox::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, float h)
     // ── Per-voice position cursors of every playhead on this sample
     //    (selected one on top) ──────────────────────────────────────────────
     auto drawCursors = [&](Playhead& p, bool selected) {
-        const auto& positions = p.position.get();
-        const float pIn   = p.inPoint.get();
-        const float pSpan = std::max(0.001f, p.outPoint.get() - pIn);
         const int   nv    = phChannels(p);
+        const auto  positions = posSend(p, nv);        // as sent (any time unit, + global offset)
+        const float pIn   = inRelOf(p);
+        const float pSpan = std::max(0.001f, outRelOf(p) - pIn);
         for(int i = 0; i < nv; i++) {
             float pp    = positions.empty() ? 0.0f : positions[i % (int)positions.size()];
-            pp          = std::max(0.0f, std::min(1.0f, pp + gPosP.get()));   // as the SynthDef clips it
-            float absP  = pIn + pp * pSpan;
+            pp          = std::max(0.0f, std::min(1.0f, pp));   // as the SynthDef clips it
+            float absP  = relToDisplay(p, pIn + pp * pSpan);
             float normP = (absP - visStart) / visW;
             if(normP < 0.0f || normP > 1.0f) continue;
             float x = pos.x + normP * w;
@@ -2955,14 +3665,21 @@ void scGrainBox::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, float h)
         if(ImGui::IsMouseDragging(0)) {
             // Relative drag (Shift: 10x slower): pressing / releasing Shift
             // never makes the handle jump
-            const float cur   = wavDragMode == WavDrag::InPoint ? ph.inPoint.get() : ph.outPoint.get();
+            // (in view coordinates, then back to the parameter's time unit)
+            const float cur   = wavDragMode == WavDrag::InPoint ? inP : outP;
             const float speed = ImGui::GetIO().KeyShift ? 0.1f : 1.0f;
             float absVal = cur + ImGui::GetIO().MouseDelta.x / std::max(1.0f, w) * visW * speed;
             absVal = std::max(0.0f, std::min(1.0f, absVal));
+            float rel = displayToRel(ph, absVal);
+            auto toUnit = [&](float r) -> float {
+                if(timeUnitsCur == 0) return r;
+                const float L = lengthSec(ph);
+                return (float)secToUnit(ph.liveInput ? 0.03f + r * std::max(1e-6f, L - 0.06f) : r * L);
+            };
             if(wavDragMode == WavDrag::InPoint)
-                ph.inPoint.set(std::min(absVal, ph.outPoint.get() - 0.001f));
+                ph.inPoint.set(toUnit(std::min(rel, outRelOf(ph) - 0.001f)));
             else if(wavDragMode == WavDrag::OutPoint)
-                ph.outPoint.set(std::max(absVal, ph.inPoint.get() + 0.001f));
+                ph.outPoint.set(toUnit(std::max(rel, inRelOf(ph) + 0.001f)));
         }
     }
     if(!ImGui::IsMouseDown(0))
@@ -2972,9 +3689,18 @@ void scGrainBox::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, float h)
     {
         std::string label = sd.path.empty() ? std::string("no file loaded")
                                             : std::filesystem::path(sd.path).filename().string();
-        if(ph.index > 0)
+        if(ph.liveInput)
+            label = "Live input   (left: now, right: " + ofToString(sd.durationSecs, 1) + " s ago)"
+                  + (ph.freeze.get() ? "   FROZEN" : "");
+        else if(ph.index > 0)
             label += ph.ownSample ? "   (own sample of Playhead " + ofToString(ph.index + 1) + ")"
                                   : "   (shared: Playhead 1)";
+        // Live: the write head is age 0, the left edge of the unzoomed view
+        if(ph.liveInput) {
+            const float hx = pos.x + (0.0f - visStart) / visW * w;
+            if(hx >= pos.x && hx <= end.x)
+                dl->AddLine(ImVec2(hx, pos.y), ImVec2(hx, end.y), gbPal::handleLight, 2.0f * zoom);
+        }
         dl->AddText(ImVec2(pos.x + 6 * zoom, pos.y + 4 * zoom), gbPal::textDim, label.c_str());
     }
 
@@ -3001,20 +3727,51 @@ void scGrainBox::drawPlayheadHeader(Playhead& ph, float /*w*/) {
     float zoom = ofxOceanodeShared::getZoomLevel();
     const float gap = 14.0f * zoom;
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Sample");
+    ImGui::TextUnformatted("Source");
     ImGui::SameLine();
     if(ph.index == 0) {
-        ImGui::PushStyleColor(ImGuiCol_Text, gbPal::textDim);
-        ImGui::TextUnformatted("shared by every playhead in Shared mode");
-        ImGui::PopStyleColor();
+        // Playhead 1: its sample (shared by the others in Shared mode) or Live
+        int mode = ph.liveInput ? 1 : 0;
+        const char* items[] = {"Sample (shared)", "Live input"};
+        ImGui::SetNextItemWidth(135.0f * zoom);
+        if(ImGui::Combo("##gbSampleMode", &mode, items, 2)) setLiveInput(ph, mode == 1);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Sample: the loaded sample (Shared playheads play it too).\n"
+                              "Live input: a rolling recording of the node's In port;\n"
+                              "Position = delay behind the input: Relative 0..1 = 30 ms .. Len - 30 ms,\n"
+                              "ms / Beats (Time Units, Global tab) = the delay itself.");
     } else {
-        int mode = ph.ownSample ? 1 : 0;
-        const char* items[] = {"Shared (Playhead 1)", "Own"};
-        ImGui::SetNextItemWidth(165.0f * zoom);
-        if(ImGui::Combo("##gbSampleMode", &mode, items, 2)) setOwnSample(ph, mode == 1);
+        int mode = ph.liveInput ? 2 : (ph.ownSample ? 1 : 0);
+        const char* items[] = {"Shared (Playhead 1)", "Own", "Live input"};
+        ImGui::SetNextItemWidth(150.0f * zoom);
+        if(ImGui::Combo("##gbSampleMode", &mode, items, 3)) {
+            if(mode == 2) setLiveInput(ph, true);
+            else { setLiveInput(ph, false); setOwnSample(ph, mode == 1); }
+        }
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("Shared: plays Playhead 1's sample.\nOwn: its own sample; with this tab selected,\n"
-                              "loading from the browser loads into this playhead.");
+                              "loading from the browser loads into this playhead.\n"
+                              "Live input: a rolling recording of the node's In port (first channel);\n"
+                              "Position = delay behind the input: Relative 0..1 = 30 ms .. Len - 30 ms,\n"
+                              "ms / Beats (Time Units, Global tab) = the delay itself (e.g. 500 ms = a\n"
+                              "grain delay of 500 ms at pitch 0).");
+    }
+    if(ph.liveInput) {
+        // Live: buffer length + freeze
+        ImGui::SameLine(0, 8.0f * zoom);
+        const std::string lk = ph.liveLength.getEscapedName();
+        ImGui::TextUnformatted("Len");
+        drawPublishedCurrentItemUnderline(lk);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(70.0f * zoom);
+        float len = ph.liveLength.get();
+        if(gbSliderFloat("##gbLiveLen", &len, 1.0f, 30.0f, "%.1f s")) ph.liveLength.set(len);
+        drawNodePublishContextMenu(lk);
+        ImGui::SameLine(0, 6.0f * zoom);
+        bool fz = ph.freeze.get();
+        if(ImGui::Checkbox("Freeze##gbFrz", &fz)) ph.freeze.set(fz);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Stop recording: the buffer holds its content");
+        drawNodePublishContextMenu(ph.freeze.getEscapedName(), "Freeze##gbFrz", 0.0f, true);
     }
 
     // Channels / Offset
@@ -3080,8 +3837,8 @@ void scGrainBox::drawGlobalWaveform(ImDrawList* dl, ImVec2 pos, float w, float h
 
     // Regions (bands first, so everything else draws over them)
     for(auto& p : playheads) {
-        float x0 = std::max(pos.x, xOf(p->inPoint.get()));
-        float x1 = std::min(end.x, xOf(p->outPoint.get()));
+        float x0 = std::max(pos.x, xOf(relToDisplay(*p, inRelOf(*p))));
+        float x1 = std::min(end.x, xOf(relToDisplay(*p, outRelOf(*p))));
         if(x1 > x0) dl->AddRectFilled(ImVec2(x0, pos.y), ImVec2(x1, end.y), gbAccent(p->index, 10));
     }
 
@@ -3090,7 +3847,7 @@ void scGrainBox::drawGlobalWaveform(ImDrawList* dl, ImVec2 pos, float w, float h
         if(gh.playhead < 0 || gh.playhead >= (int)playheads.size()) continue;
         const SampleData& sd = sampleOf(*playheads[gh.playhead]);
         const float bufDur = sd.durationSecs > 0.0f ? sd.durationSecs : 1.0f;
-        float x  = xOf(gh.position);
+        float x  = xOf(relToDisplay(*playheads[gh.playhead], gh.position));
         float wd = std::max(2.0f * zoom, std::min(w, gh.duration / bufDur / visW * w));
         float x2 = std::min(end.x, x + wd);
         if(x2 <= pos.x || x >= end.x) continue;
@@ -3105,37 +3862,46 @@ void scGrainBox::drawGlobalWaveform(ImDrawList* dl, ImVec2 pos, float w, float h
         const int bins = (int)sd.peaks.size();
         for(int i = 0; i < (int)w; i++) {
             float norm = visStart + ((float)i / w) * visW;
-            float peak = sd.peaks[std::max(0, std::min(bins - 1, (int)(norm * bins)))];
-            if(peak <= 0.0f) continue;
-            dl->AddLine(ImVec2(pos.x + i, midY - peak * h * 0.45f), ImVec2(pos.x + i, midY + peak * h * 0.45f), col);
+            const int b = std::max(0, std::min(bins - 1, (int)(norm * bins)));
+            float peak = sd.peaks[b];
+            float low  = sd.lows.empty() ? -peak : sd.lows[std::min(b, (int)sd.lows.size() - 1)];
+            if(sd.lows.empty() && peak <= 0.0f) continue;
+            if(peak <= low) { peak += 0.002f; low -= 0.002f; }
+            dl->AddLine(ImVec2(pos.x + i, midY - peak * h * 0.45f), ImVec2(pos.x + i, midY - low * h * 0.45f), col);
         }
     };
     // Every waveform at the same alpha, in its playhead's accent. The shared
     // sample is playhead 1's: drawn once in its blue accent, also when other
     // playheads share it (their regions, cursors and grains keep their colours).
-    drawPeaks(mainSample, gbAccent(0, gbPal::waveAlpha));
-    for(auto& p : playheads)
-        if(p->index > 0 && p->ownSample) drawPeaks(p->own, gbAccent(p->index, gbPal::waveAlpha));
+    {
+        bool mainUsed = false;
+        for(auto& p : playheads) mainUsed = mainUsed || &sampleOf(*p) == &mainSample;
+        if(mainUsed) drawPeaks(mainSample, gbAccent(0, gbPal::waveAlpha));
+    }
+    for(auto& p : playheads) {
+        if(p->liveInput)                          drawPeaks(p->live, gbAccent(p->index, gbPal::waveAlpha));
+        else if(p->index > 0 && p->ownSample)     drawPeaks(p->own,  gbAccent(p->index, gbPal::waveAlpha));
+    }
 
     // Position cursors + in/out lines, numbered at the top
     for(auto& p : playheads) {
-        const float pIn = p->inPoint.get(), pSpan = std::max(0.001f, p->outPoint.get() - pIn);
-        const auto& positions = p->position.get();
+        const float pIn = inRelOf(*p), pSpan = std::max(0.001f, outRelOf(*p) - pIn);
         const int nv = phChannels(*p);
+        const auto positions = posSend(*p, nv);       // as sent (any time unit, + global offset)
         for(int i = 0; i < nv; i++) {
             float pp = positions.empty() ? 0.0f : positions[i % (int)positions.size()];
-            pp       = std::max(0.0f, std::min(1.0f, pp + gPosP.get()));
-            float x  = xOf(pIn + pp * pSpan);
+            pp       = std::max(0.0f, std::min(1.0f, pp));
+            float x  = xOf(relToDisplay(*p, pIn + pp * pSpan));
             if(x < pos.x || x > end.x) continue;
             dl->AddLine(ImVec2(x, pos.y), ImVec2(x, end.y), gbAccent(p->index, 110, gbVoiceBrightness(i)), 1.0f * zoom);
         }
         const ImU32 lc = gbAccent(p->index, 170);
-        for(float v : {p->inPoint.get(), p->outPoint.get()}) {
-            float x = xOf(v);
+        for(float v : {inRelOf(*p), outRelOf(*p)}) {
+            float x = xOf(relToDisplay(*p, v));
             if(x < pos.x || x > end.x) continue;
             dl->AddLine(ImVec2(x, pos.y), ImVec2(x, end.y), lc, 1.0f * zoom);
         }
-        float xi = xOf(p->inPoint.get());
+        float xi = xOf(relToDisplay(*p, inRelOf(*p)));
         if(xi >= pos.x && xi <= end.x) {
             std::string num = ofToString(p->index + 1);
             dl->AddText(ImVec2(xi + 3.0f * zoom, pos.y + (4.0f + 14.0f * p->index) * zoom), lc, num.c_str());
@@ -3214,12 +3980,32 @@ void scGrainBox::drawGlobalPanel(float w) {
          "Master gain of every playhead", false);
     cell("##gbGc2", "Speed",     "##gbSpd", speedP,     "x%.3f",   ImGuiSliderFlags_Logarithmic,
          "Multiplies every auto-trigger rate (1 = as set)", true);
-    cell("##gbGc3", "Position",  "##gbGPos", gPosP,     "%+.3f",   0,
-         "Added to every playhead's Position (the result is clipped to 0..1 in SC)", false);
-    cell("##gbGc4", "Duration",  "##gbGDur", gDurP,     "%+.3f",   0,
-         "Added to every playhead's Duration (the result is clipped to 0..1 in SC)", false);
+    const char* offFmt = timeUnitsCur == 1 ? "%+.0f ms" : timeUnitsCur == 2 ? "%+.2f b" : "%+.3f";
+    cell("##gbGc3", "Position",  "##gbGPos", gPosP,     offFmt,    0,
+         "Added to every playhead's Position (the result is clipped to its region in SC)", false);
+    cell("##gbGc4", "Duration",  "##gbGDur", gDurP,     offFmt,    0,
+         "Added to every playhead's Duration (the result is clipped to its region in SC)", false);
     cell("##gbGc5", "Chance",    "##gbGChc", gChanceP,  "%+.3f",   0,
          "Added to every playhead's Chance", true);
+    {   // Time units of the time-dependent parameters
+        static const char* units[3] = {"Relative (0..1)", "ms", "Beats"};
+        const std::string key = timeUnitsP.getEscapedName();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Time Units");
+        drawPublishedCurrentItemUnderline(key);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(150.0f * zoom);
+        int tu = std::max(0, std::min(2, timeUnitsP.get()));
+        if(ImGui::Combo("##gbTimeUnits", &tu, units, 3)) timeUnitsP.set(tu);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Units of Position, Duration, In / Out, Pos / Dur jitter, the Pos / Dur LFO\n"
+                              "strength and the global Position / Duration offsets.\n"
+                              "Relative: 0..1 of the sample (Position / Duration: of the region).\n"
+                              "ms / Beats: file playheads: In / Out from the file start, Position from In;\n"
+                              "Live playheads: Position (and In / Out) = delay behind the live input.\n"
+                              "Switching converts the values (no jump). Beats follow the node / transport tempo.");
+        drawNodePublishContextMenu(key);
+    }
 
     // ── Mute / Solo ───────────────────────────────────────────────────────
     gbSectionHeader("Playheads", w - m, zoom);
@@ -3438,6 +4224,26 @@ void scGrainBox::drawEnvelopePanel(Playhead& ph, float w, float h) {
 
     float curveH  = 100.0f * zoom;   // fixed, not derived from available h
 
+    // ── Shape: Custom (attack / release / tension below) or a preset ──────
+    {
+        static const char* shapes[7] = {"Custom", "Hann", "Gaussian", "Percussive",
+                                        "Reverse Perc", "Trapezoid", "Rectangular"};
+        const std::string key = ph.envShape.getEscapedName();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + m);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Shape");
+        drawPublishedCurrentItemUnderline(key);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(std::max(60.0f * zoom, w - 2.0f * m - ImGui::CalcTextSize("Shape").x - 8.0f * zoom));
+        int sh = std::max(0, std::min(6, ph.envShape.get()));
+        if(ImGui::Combo("##gbEnvShape", &sh, shapes, 7)) ph.envShape.set(sh);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Grain envelope. Custom: the attack / release / tension editor;\n"
+                              "the others are fixed shapes (Rectangular: 3-point fades, no clicks).");
+        drawNodePublishContextMenu(key);
+    }
+    const bool customEnv = ph.envShape.get() == 0;
+
     // ── Curve display ─────────────────────────────────────────────────────
     ImVec2 pos = ImGui::GetCursorScreenPos();
     // Inset the curve area by margin
@@ -3456,18 +4262,25 @@ void scGrainBox::drawEnvelopePanel(Playhead& ph, float w, float h) {
     // Background (inset curve area)
     dl->AddRectFilled(cPos, ImVec2(cPos.x + cW, cPos.y + cH), gbPal::canvas, 3.0f * zoom);
 
-    // Curve
+    // Curve (CPU: one segment per ~pixel instead of per table point, and one
+    // polyline for the outline)
     const auto& envData = ph.envData;
     if(!envData.empty()) {
         int N = (int)envData.size();
-        for(int i = 0; i < N - 1; i++) {
-            float x1 = cPos.x + ((float)i       / (N - 1)) * cW;
-            float x2 = cPos.x + ((float)(i + 1) / (N - 1)) * cW;
-            float y1 = cPos.y + cH - envData[i]     * (cH - 2.0f * zoom);
-            float y2 = cPos.y + cH - envData[i + 1] * (cH - 2.0f * zoom);
-            dl->AddRectFilled(ImVec2(x1, y1), ImVec2(x2, cPos.y + cH), gbAccent(ph.index, 38));
-            dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), gbAccent(ph.index, 220), 1.5f * zoom);
+        const int step = std::max(1, (int)std::floor((float)(N - 1) / std::max(1.0f, cW)));
+        std::vector<ImVec2> pts;
+        pts.reserve(N / step + 2);
+        for(int i = 0; i < N; i += step) {
+            const int j = std::min(i, N - 1);
+            pts.push_back(ImVec2(cPos.x + ((float)j / (N - 1)) * cW,
+                                 cPos.y + cH - envData[j] * (cH - 2.0f * zoom)));
         }
+        if(pts.back().x < cPos.x + cW)
+            pts.push_back(ImVec2(cPos.x + cW, cPos.y + cH - envData[N - 1] * (cH - 2.0f * zoom)));
+        for(size_t k = 0; k + 1 < pts.size(); k++)
+            dl->AddRectFilled(ImVec2(pts[k].x, std::min(pts[k].y, pts[k + 1].y)),
+                              ImVec2(pts[k + 1].x, cPos.y + cH), gbAccent(ph.index, 38));
+        dl->AddPolyline(pts.data(), (int)pts.size(), gbAccent(ph.index, 220), 0, 1.5f * zoom);
     }
 
     // Attack / Release guide lines
@@ -3490,13 +4303,15 @@ void scGrainBox::drawEnvelopePanel(Playhead& ph, float w, float h) {
         dl->AddCircleFilled(p, HR * zoom, col);
         dl->AddCircle(p, HR * zoom, acc, 16, 1.5f * zoom);
     };
-    // Attack / release: light handles; tension: accent
-    drawHandle(ImVec2(atkX, cPos.y + cH * 0.25f), gbPal::handleLight);
-    drawHandle(ImVec2(relX, cPos.y + cH * 0.25f), gbPal::handleLight);
-    drawHandle(ImVec2(cPos.x + cW * 0.5f, tenY),  acc);
+    // Attack / release: light handles; tension: accent (Custom shape only)
+    if(customEnv) {
+        drawHandle(ImVec2(atkX, cPos.y + cH * 0.25f), gbPal::handleLight);
+        drawHandle(ImVec2(relX, cPos.y + cH * 0.25f), gbPal::handleLight);
+        drawHandle(ImVec2(cPos.x + cW * 0.5f, tenY),  acc);
+    }
 
     // Handle dragging
-    if(active && ImGui::IsMouseClicked(0)) {
+    if(customEnv && active && ImGui::IsMouseClicked(0)) {
         auto dist2 = [](ImVec2 a, ImVec2 b) {
             return (a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y);
         };
@@ -3539,9 +4354,11 @@ void scGrainBox::drawEnvelopePanel(Playhead& ph, float w, float h) {
         drawNodePublishContextMenu(key);
     };
 
+    if(!customEnv) ImGui::BeginDisabled();
     envSlider("Atk",     "##envAtk", ph.envAttack,  0.0f, 1.0f);
     envSlider("Rel",     "##envRel", ph.envRelease, 0.0f, 1.0f);
     envSlider("Tension", "##envTen", ph.envTension, -1.0f, 1.0f);
+    if(!customEnv) ImGui::EndDisabled();
 }
 
 // ── Controls panel ────────────────────────────────────────────────────────────
@@ -3576,7 +4393,13 @@ void scGrainBox::drawControlsPanel(Playhead& ph, float w, float h) {
         float v = getF(p);
         // Pitch / pitch jitter: Ctrl (Cmd) + drag snaps to whole semitones
         const bool semi = std::strcmp(id, "##pit") == 0 || std::strcmp(id, "##ijit") == 0;
-        if(gbSliderFloat(id, &v, mn, mx, "%.3f", 0, semi)) setAllF(p, v);
+        // time parameters: the range and format of the current Time Units
+        const bool timeP = &p == &ph.position || &p == &ph.duration || &p == &ph.posJit || &p == &ph.durJit;
+        if(timeP) {
+            mn = p.getMin().empty() ? mn : p.getMin()[0];
+            mx = p.getMax().empty() ? mx : p.getMax()[0];
+        }
+        if(gbSliderFloat(id, &v, mn, mx, timeP ? timeFmt() : "%.3f", 0, semi)) setAllF(p, v);
         drawNodePublishContextMenu(key);
     };
     auto sliderScalar = [&](const char* label, const char* id,
@@ -3587,7 +4410,10 @@ void scGrainBox::drawControlsPanel(Playhead& ph, float w, float h) {
         ImGui::SameLine(labelW);
         ImGui::SetNextItemWidth(colW - labelW - m);
         float v = p.get();
-        if(gbSliderFloat(id, &v, mn, mx)) p.set(v);
+        // In / Out: the range and format of the current Time Units
+        const bool timeP = &p == &ph.inPoint || &p == &ph.outPoint;
+        if(timeP) { mn = p.getMin(); mx = p.getMax(); }
+        if(gbSliderFloat(id, &v, mn, mx, timeP ? timeFmt() : "%.3f")) p.set(v);
         drawNodePublishContextMenu(key);
     };
     auto toggle = [&](const char* label, ofParameter<bool>& p) {
@@ -3663,9 +4489,61 @@ void scGrainBox::drawControlsPanel(Playhead& ph, float w, float h) {
     toggle("TrgDur##c", ph.trigDur);
     sliderF ("Amp",    "##amp", ph.amp,       0.f,  1.f);
     sliderF ("Pitch",  "##pit", ph.pitch,   -48.f, 48.f);
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
+        ImGui::SetTooltip("Pitch (semitones). With a Scale set, the total pitch (pitch +\n"
+                          "jitter + LFO + transpose) snaps to the nearest scale note.\n"
+                          "Shift+drag: fine (10x slower); Ctrl/Cmd+drag (after starting\n"
+                          "it): whole semitones.");
     sliderF ("Dur",    "##dur", ph.duration,  0.f,  1.f);
     sliderF ("Pos",    "##pos", ph.position,  0.f,  1.f);
     sliderF ("PanAz",  "##pan", ph.panAz,     0.f,  2.f);
+    sliderF ("Rev",    "##rev", ph.reverse,   0.f,  1.f);
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
+        ImGui::SetTooltip("Reverse: probability that a grain plays backwards (same material,\n"
+                          "from its end). Linked voices (Trigger Link) reverse together.");
+    {   // Scale + root (+ custom notes)
+        static const char* scales[12] = {"Off", "Chromatic", "Major", "Minor", "Harm. minor", "Dorian",
+                                         "Pent. major", "Pent. minor", "Whole tone", "Octaves",
+                                         "Fifths+oct", "Custom"};
+        static const char* notes[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+        const std::string sk = ph.scaleType.getEscapedName(), rk = ph.scaleRoot.getEscapedName();
+        ImGui::TextUnformatted("Scale");
+        drawPublishedCurrentItemUnderline(sk);
+        ImGui::SameLine(labelW);
+        const float rootW = 44.0f * zoom;
+        ImGui::SetNextItemWidth(std::max(50.0f * zoom, colW - labelW - m - rootW - m));
+        int st = std::max(0, std::min(11, ph.scaleType.get()));
+        if(ImGui::Combo("##gbScale", &st, scales, 12)) ph.scaleType.set(st);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Pitch to scale: the total pitch snaps to the nearest note of the scale\n"
+                              "(ties go down). Root: the scale's tonic.");
+        drawNodePublishContextMenu(sk);
+        ImGui::SameLine(0, m);
+        ImGui::SetNextItemWidth(rootW);
+        int rt = std::max(0, std::min(11, ph.scaleRoot.get()));
+        if(ImGui::Combo("##gbRoot", &rt, notes, 12)) ph.scaleRoot.set(rt);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Root");
+        drawPublishedCurrentItemUnderline(rk);
+        drawNodePublishContextMenu(rk);
+        if(st == 11) {   // Custom: one toggle per semitone above the root
+            const std::string mk = ph.scaleMask.getEscapedName();
+            const float bw = std::max(8.0f * zoom, (colW - m - 11.0f * 2.0f * zoom) / 12.0f);
+            int mask = ph.scaleMask.get();
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2.0f * zoom, m));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, ImGui::GetStyle().FramePadding.y));
+            for(int k = 0; k < 12; k++) {
+                if(k > 0) ImGui::SameLine();
+                const bool on = (mask >> k) & 1;
+                ImGui::PushID(k);
+                if(on) ImGui::PushStyleColor(ImGuiCol_Button, gbAccent(ph.index, 150, 0.7f));
+                if(ImGui::Button(notes[(k + rt) % 12], ImVec2(bw, 0))) ph.scaleMask.set(mask ^ (1 << k));
+                if(on) ImGui::PopStyleColor();
+                drawNodePublishContextMenu(mk);
+                ImGui::PopID();
+            }
+            ImGui::PopStyleVar(2);
+        }
+    }
     ImGui::Spacing();
     secHdr("Levels");
     sliderF ("Levels", "##lvl", ph.levels,    0.f,  1.f);
@@ -3811,25 +4689,37 @@ void scGrainBox::drawLFOPreview(ImDrawList* dl, ImVec2 pos, float w, float h,
     };
 
     // ── Waveform (1 cycle, phase-offset applied) ──────────────────────────────
+    // CPU: the per-pixel values only change on edit: cached by their inputs
     int    N    = (int)w;
+    static std::map<std::string, std::vector<float>> previewCache;
+    char keyBuf[128];
+    std::snprintf(keyBuf, sizeof(keyBuf), "%d|%.5f|%.3f|%.4f|%d", shape, phase, quant, powExp, N);
+    if(previewCache.size() > 256) previewCache.clear();
+    std::vector<float>& vals = previewCache[keyBuf];
+    if((int)vals.size() != N) {
+        vals.resize(std::max(0, N));
+        for(int i = 0; i < N; i++) vals[i] = lfoAt(std::fmod((float)i / (float)N + phase, 1.0f));
+    }
+    std::vector<ImVec2> line;
+    if(shape != 4) line.reserve(N);
     ImVec2 prev = {-1.0f, -1.0f};
     for(int i = 0; i < N; i++) {
         // Map pixel i → waveform phase, offset by initPhase
-        float t   = std::fmod((float)i / (float)N + phase, 1.0f);
-        float val = lfoAt(t);
+        float val = vals[i];
         float x   = pos.x + (float)i;
         float y   = pos.y + h - val * h;
         y = std::max(pos.y + 1.0f, std::min(pos.y + h - 1.0f, y));
-        if(prev.x >= 0) {
-            if(shape == 4) {
+        if(shape == 4) {
+            if(prev.x >= 0) {
                 dl->AddLine(ImVec2(prev.x, prev.y), ImVec2(x, prev.y), curve,    1.5f);
                 dl->AddLine(ImVec2(x, prev.y),      ImVec2(x, y),      curveDim, 1.0f);
-            } else {
-                dl->AddLine(prev, ImVec2(x, y), curve, 1.5f);
             }
+        } else {
+            line.push_back(ImVec2(x, y));
         }
         prev = {x, y};
     }
+    if(line.size() > 1) dl->AddPolyline(line.data(), (int)line.size(), curve, 0, 1.5f);
 
     // ── Baseline ──────────────────────────────────────────────────────────────
     float by = pos.y + h - 1.0f;
@@ -3919,20 +4809,20 @@ void scGrainBox::drawModRow(Playhead& ph, float w, float h) {
                 ImGui::SetTooltip("Link voices: every voice uses voice 1's LFO value,\n"
                                   "so all voices move together (off: each voice has its own).");
             drawNodePublishContextMenu(ph.uniqueLfo[t].getEscapedName(), "Link##lfu", 0.0f, true);
-            if(t == LFO_AMP || t == LFO_CUT) {
-                ofParameter<bool>& lp = (t == LFO_AMP) ? ph.latchAmp : ph.latchCut;
+            if(t == LFO_AMP) {
+                ofParameter<bool>& lp = ph.latchAmp;
                 bool lv = lp.get();
                 if(ImGui::Checkbox("Latch##lfl", &lv)) lp.set(lv);
                 if(ImGui::IsItemHovered())
                     ImGui::SetTooltip(t == LFO_AMP
                         ? "Latch: each grain keeps the amp (base + LFO + jitter) of its start;\n"
                           "off: the amp follows the LFO during the grain."
-                        : "Latch: each grain keeps the cutoff of its start;\n"
-                          "off: the cutoff follows the LFO continuously.");
+                        : "");
                 drawNodePublishContextMenu(lp.getEscapedName(), "Latch##lfl", 0.0f, true);
             } else {
-                // Pos / Dur / Pitch / Pan are always per grain; TrRt has no latch
-                const bool always = (t != LFO_TRRT);
+                // Pos / Dur / Pitch / Pan are always per grain; TrRt and Cut
+                // (a filter on the playhead output) have no latch
+                const bool always = (t != LFO_TRRT && t != LFO_CUT);
                 bool lv = always;
                 ImGui::BeginDisabled();
                 ImGui::Checkbox("Latch##lfl", &lv);
@@ -3941,7 +4831,10 @@ void scGrainBox::drawModRow(Playhead& ph, float w, float h) {
                     ImGui::SetTooltip(always
                         ? "Always latched: a grain takes this value when it starts\n"
                           "and keeps it for its whole duration."
-                        : "Not available: the trigger rate is not tied to one grain.");
+                        : (t == LFO_CUT
+                           ? "Not available: the filter works on the playhead's output,\n"
+                             "not per grain; the cutoff follows the LFO continuously."
+                           : "Not available: the trigger rate is not tied to one grain."));
             }
         }
 
@@ -3984,9 +4877,17 @@ void scGrainBox::drawModRow(Playhead& ph, float w, float h) {
         // Quant (integer)
         lfoSlider("Qnt", "##qnt", lfo.quant, 0.0f, 32.0f, "%.0f", true);
         // Strength (range depends on target): pitch=semitones, TrRt=beatdiv
-        lfoSlider("Str", "##str", lfo.strength, 0.0f, kLfoStrMax[t],
-                  (t == 2) ? "%.1fst" : (t == 5) ? "%.2fbd" : (t == LFO_CUT) ? "%.2foct" : "%.2f", false,
-                  t == 2);
+        if(t <= 1)   // Pos / Dur strength: a time amount in the current Time Units
+            lfoSlider("Str", "##str", lfo.strength, lfo.strength.getMin().empty() ? 0.0f : lfo.strength.getMin()[0],
+                      lfo.strength.getMax().empty() ? 1.0f : lfo.strength.getMax()[0],
+                      timeUnitsCur == 0 ? "%.2f" : timeFmt(), false);
+        else
+            lfoSlider("Str", "##str", lfo.strength, 0.0f, kLfoStrMax[t],
+                      (t == 2) ? "%.1fst" : (t == 5) ? "%.2fbd" : (t == LFO_CUT) ? "%.2foct" : "%.2f", false,
+                      t == 2);
+        if(t == 2 && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
+            ImGui::SetTooltip("Pitch LFO strength (semitones). With a Scale set, the total pitch\n"
+                              "snaps to the scale. Shift+drag: fine; Ctrl/Cmd+drag: whole semitones.");
         // Pow: >1 favours low values, <1 high ones (1 = off)
         lfoSlider("Pow", "##pow", lfo.pow, 0.1f, 10.0f, "%.2f", false, false, ImGuiSliderFlags_Logarithmic);
 
