@@ -130,6 +130,16 @@ public:
     void setSynthdefFolders(std::map<std::string, std::string> _synthdefFolders){
         synthdefFolders = _synthdefFolders;
     }
+
+    // A node that creates synths from SynthDefs outside the Defaults folder
+    // (e.g. scGrainBox's FX: Echo, SpaceMaster) registers their folder here.
+    // Registered folders are loaded by loadDefs() — at boot, before the
+    // initialization /sync, and at NRT capture start (score time 0) — and, when
+    // registered while the server runs, right away followed by a /sync:
+    // areRequiredSynthdefsLoading() is true until scsynth answers it, i.e.
+    // until every one of those /d_loadDir has completed.
+    void requireSynthdefFolder(const std::string& folder);
+    bool areRequiredSynthdefsLoading() const;
     
     scPreferences preferences;
     ofEvent<void> graphComputed;
@@ -179,6 +189,7 @@ private:
     std::map<std::string, std::string> synthdefFolders;
     
     std::set<std::string> alreadyLoadedSynthsList;
+    std::set<std::string> requiredSynthdefFolders;   // see requireSynthdefFolder
 };
 
 #endif /* serverManager_h */

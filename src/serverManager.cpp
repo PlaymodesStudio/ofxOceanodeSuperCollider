@@ -306,6 +306,23 @@ void serverManager::setAudioDeviceNames(const std::string& outputDeviceName, con
     }
 }
 
+void serverManager::requireSynthdefFolder(const std::string& folder){
+    if(folder.empty() || requiredSynthdefFolders.count(folder)) return;
+    requiredSynthdefFolders.insert(folder);
+    // Already loaded with everything else, or loaded by loadDefs() at boot.
+    if(!preferences.loadOnPreset || server == nullptr || !initialized) return;
+    ofxOscMessage m;
+    m.setAddress("/d_loadDir");
+    m.addStringArg(folder);
+    server->sendMsg(m);
+    // /synced arrives once every earlier asynchronous command has completed
+    server->requestNRTSync();
+}
+
+bool serverManager::areRequiredSynthdefsLoading() const {
+    return server != nullptr && server->isNRTSyncPending();
+}
+
 void serverManager::loadDefs(){
     ofxOscMessage m;
     m.setAddress("/d_loadDir");
@@ -316,6 +333,17 @@ void serverManager::loadDefs(){
     }
     m.addIntArg(0);
     server->sendMsg(m);
+
+    // Folders registered by nodes (requireSynthdefFolder). Only needed when the
+    // whole Synthdefs folder is not loaded, but harmless otherwise.
+    if(preferences.loadOnPreset){
+        for(const auto& folder : requiredSynthdefFolders){
+            ofxOscMessage mf;
+            mf.setAddress("/d_loadDir");
+            mf.addStringArg(folder);
+            server->sendMsg(mf);
+        }
+    }
 
     // DynGen slot SynthDefs (DynGenWrapper_N_S) live in their own subdir.
     // Copy/symlink the CompiledSynthdefs/dyngen/ output from dyngen.scd to
