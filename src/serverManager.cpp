@@ -13,6 +13,7 @@
 #include "scStart.h"
 #include "scOutput.h"
 #include "ofxOceanodeShared.h"
+#include "ofxOceanodeContainer.h"
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
@@ -831,6 +832,10 @@ void serverManager::teardownGraphForPresetLoad(){
 }
 
 void serverManager::recomputeGraph(){
+    // Output destructors still unregister themselves, but remaining input
+    // ports can reference nodes already deleted by this (or a parent) canvas.
+    // Do not traverse the graph, send synth updates or notify graph listeners.
+    if(ofxOceanodeContainer::isClearingContainers()) return;
     if(ofxOceanodeShared::isPresetLoading()) return;
     if(!initialized) return;
 //    ofLog() << "Recompute Graph";
