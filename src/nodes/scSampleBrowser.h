@@ -270,7 +270,8 @@ public:
     // in pixels). Returns true while dragging.
     static bool drawSplitter(const char* id, float& width, float splitterW, float h,
                              float minW, float maxW, float scale = 1.0f) {
-        ImGui::InvisibleButton(id, ImVec2(splitterW, h));
+        // ImGui asserts on a zero size (a window squeezed to no height)
+        ImGui::InvisibleButton(id, ImVec2(std::max(1.0f, splitterW), std::max(1.0f, h)));
         const bool hov = ImGui::IsItemHovered();
         const bool act = ImGui::IsItemActive();
         if(hov || act) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
