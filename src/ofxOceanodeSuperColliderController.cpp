@@ -51,6 +51,10 @@ void ofxOceanodeSuperColliderController::update(){
     updateNRTArming();
     if(!nrtCaptureActive) return;
 
+    // update() runs after the nodes. On the first frame after recording
+    // started, they have now evaluated the patch from the transport's start.
+    if(nrtStateResendPending && ofGetFrameNum() > nrtStateResendAfterFrame) writeNRTStateAtZero();
+
     const double currentTime = ofxOceanodeTime::getInstance()->getGlobalTimeState().time;
     if(!nrtManualStop && currentTime >= std::max(0.01f, nrtDuration)){
         completeNRTCapture(false);
@@ -311,12 +315,21 @@ bool ofxOceanodeSuperColliderController::beginNRTRecording(int serverIndex, int 
         outputServers[index]->getServer()->setNRTCaptureSuspended(false);
     }
 
-    // Write the patch's complete state before the clock starts. Parameters are
-    // only sent when they change, so one that nobody has touched since the
-    // preset loaded has never been sent at all -- the render would run on the
-    // SynthDef's default until its first change. A trigger left at its default
-    // fires a note at the top of the render that was never played.
-    for(int index : nrtServers) outputServers[index]->resendAllParametersForNRT();
+    // The patch's complete state is written at score time zero, but not yet.
+    // Parameters are only sent when they change, so one that nobody has
+    // touched since the preset loaded has never been sent at all -- the render
+    // would run on the SynthDef's default until its first change (a trigger
+    // left at its default fires a note that was never played).
+    //
+    // Writing it here, though, writes what the patch held while it was still
+    // playing live, before the transport is sent back to the start: a gate
+    // that happened to be high at that instant lands at time zero and drops
+    // on the first captured frame -- a note at the top of the render that
+    // never happens in the take. So the state is written once the patch has
+    // evaluated its first frame from the start (see update()), stamped at
+    // time zero so it supersedes anything captured there before it.
+    nrtStateResendPending = true;
+    nrtStateResendAfterFrame = ofGetFrameNum();
 
     for(int index : nrtServers){
         ofxSCServer* server = outputServers[index]->getServer();
@@ -348,8 +361,29 @@ bool ofxOceanodeSuperColliderController::endNRTRecording(bool cancelled){
     return true;
 }
 
+void ofxOceanodeSuperColliderController::writeNRTStateAtZero(){
+    nrtStateResendPending = false;
+    for(int index : nrtServers){
+        serverManager* manager = outputServers[index];
+        if(manager == nullptr) continue;
+        ofxSCServer* server = manager->getServer();
+        if(server == nullptr) continue;
+        // The score is stable-sorted by time, so this burst lands after
+        // everything already captured at zero and wins over it, and before
+        // the first frame's own changes (stamped one frame later), which it
+        // already agrees with.
+        server->setNRTTimeProviderEnabled(false);
+        server->setNRTTime(0.0);
+        manager->resendAllParametersForNRT();
+        server->setNRTTimeProviderEnabled(true);
+    }
+}
+
 void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, double durationOverride){
     if(!nrtCaptureActive) return;
+    // Stopped before the first frame ran: still give the score its state.
+    if(nrtStateResendPending && !cancelled) writeNRTStateAtZero();
+    nrtStateResendPending = false;
     const double duration = durationOverride > 0.0 ? durationOverride : std::max(0.01f, nrtDuration);
     const int outputChannels = std::max(1, nrtCaptureOutputChannels);
     const std::string outputPath = ofToDataPath(nrtCaptureOutputPath.empty() ? nrtOutputPath : nrtCaptureOutputPath, true);

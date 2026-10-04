@@ -218,6 +218,11 @@ private:
     // Written by every render worker, so it cannot be a plain int.
     std::atomic<int> nrtRenderResult{0};
     bool nrtManualStop = false;
+    // The time-zero state resend waits for the first frame evaluated from
+    // the transport's start (see beginNRTRecording / update).
+    bool nrtStateResendPending = false;
+    uint64_t nrtStateResendAfterFrame = 0;
+    void writeNRTStateAtZero();
     bool nrtRecordStems = false;
     bool nrtServerMasters = false;
     // One per server, by server index.
