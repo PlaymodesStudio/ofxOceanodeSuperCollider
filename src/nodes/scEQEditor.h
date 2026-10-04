@@ -88,7 +88,21 @@ public:
     // ── Biquad coefficients (Robert Bristow-Johnson Audio EQ Cookbook) ──────
     struct BiquadCoeffs { float b0, b1, b2, a1, a2; };
 
+    // Shelf slope S that keeps the RBJ shelf defined: alpha needs
+    // (A + 1/A) * (1/S - 1) + 2 >= 0, otherwise sqrt(< 0) = NaN (in SC's
+    // BLowShelf / BHiShelf too: the filter output becomes NaN, which then
+    // silences everything after it until the synth is replaced). Steep
+    // slopes are allowed only as far as the gain permits.
+    static float safeShelfSlope(float slope, float gainDb) {
+        const float A = std::pow(10.0f, gainDb / 40.0f);
+        const float k = 1.0f - 1.9f / (A + 1.0f / A);   // 1/S must stay above k
+        float s = std::max(0.01f, slope);
+        if(k > 0.0f) s = std::min(s, 1.0f / k);
+        return s;
+    }
+
     static BiquadCoeffs computeLowShelf(float freqHz, float gainDb, float slope, float sr) {
+        slope = safeShelfSlope(slope, gainDb);
         float freq = ofClamp(freqHz, 10.0f, sr * 0.499f);
         float A    = std::pow(10.0f, gainDb / 40.0f);
         float w0   = 2.0f * (float)M_PI * freq / sr;
@@ -108,6 +122,7 @@ public:
     }
 
     static BiquadCoeffs computeHighShelf(float freqHz, float gainDb, float slope, float sr) {
+        slope = safeShelfSlope(slope, gainDb);
         float freq = ofClamp(freqHz, 10.0f, sr * 0.499f);
         float A    = std::pow(10.0f, gainDb / 40.0f);
         float w0   = 2.0f * (float)M_PI * freq / sr;

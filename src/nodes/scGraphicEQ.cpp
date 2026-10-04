@@ -493,7 +493,14 @@ void scGraphicEQ::sendAllParamsToSynth(ofxSCServer* server) {
     try {
         synth->set("b1gain",  expandToChannels(b1gain.get(),  nCh));
         synth->set("b1freq",  pitchVecToHz(b1pitch.get(), nCh));  // pitch → Hz
-        synth->set("b1slope", expandToChannels(b1slope.get(), nCh));
+        {  // Shelf: SC's argument is rs = 1/S; "Slope" is S (as the editor draws
+            // it), kept where the shelf stays defined (no NaN at high gain)
+            auto rs = expandToChannels(b1slope.get(), nCh);
+            auto gn = expandToChannels(b1gain.get(), nCh);
+            for(size_t i = 0; i < rs.size(); i++)
+                rs[i] = 1.0f / scEQEditor::safeShelfSlope(rs[i], i < gn.size() ? gn[i] : 0.0f);
+            synth->set("b1slope", rs);
+        }
 
         synth->set("b2gain", expandToChannels(b2gain.get(), nCh));
         synth->set("b2freq", pitchVecToHz(b2pitch.get(), nCh));
@@ -509,7 +516,14 @@ void scGraphicEQ::sendAllParamsToSynth(ofxSCServer* server) {
 
         synth->set("b5gain",  expandToChannels(b5gain.get(),  nCh));
         synth->set("b5freq",  pitchVecToHz(b5pitch.get(), nCh));
-        synth->set("b5slope", expandToChannels(b5slope.get(), nCh));
+        {  // Shelf: SC's argument is rs = 1/S; "Slope" is S (as the editor draws
+            // it), kept where the shelf stays defined (no NaN at high gain)
+            auto rs = expandToChannels(b5slope.get(), nCh);
+            auto gn = expandToChannels(b5gain.get(), nCh);
+            for(size_t i = 0; i < rs.size(); i++)
+                rs[i] = 1.0f / scEQEditor::safeShelfSlope(rs[i], i < gn.size() ? gn[i] : 0.0f);
+            synth->set("b5slope", rs);
+        }
 
         // Mix: scalar (same for all channels — XFade2 in SC handles per-channel audio)
         float mixVal = mix.get().empty() ? 1.0f : mix.get()[0];
