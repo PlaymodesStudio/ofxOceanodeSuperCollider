@@ -388,7 +388,16 @@ bool serverManager::beginNRTCapture(){
     // Samples are read once when a preset loads, so a capture that starts
     // later never sees the command. Replay them here, while the score is
     // still at time zero and before any synth exists to read them.
+    // Buffer replay exists only to initialise the fresh scsynth used by the
+    // offline render. Do not also send those /b_alloc* commands to the live
+    // server: disk reads are asynchronous and would replace buffers which the
+    // realtime graph is already using. GrainBoxPoly in particular can then be
+    // rebuilt while its sample is unavailable and stay silent until another
+    // graph rebuild. Resume live transmission for the graph itself below.
+    const bool wasCaptureOnly = server->isNRTCaptureOnly();
+    server->setNRTCaptureOnly(true);
     const int unrecoverableBuffers = server->replayBuffersForNRT();
+    server->setNRTCaptureOnly(wasCaptureOnly);
     if(unrecoverableBuffers > 0){
         ofLogWarning("serverManager")
             << "NRT capture: " << unrecoverableBuffers

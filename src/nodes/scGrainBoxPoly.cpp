@@ -2952,6 +2952,22 @@ void scGrainBoxPoly::setOwnSample(Playhead& ph, bool own) {
 void scGrainBoxPoly::reloadSampleBuffersForServer(SampleData& sd, ofxSCServer* srv) {
     if(!srv) return;
 
+    // Graph rebuilds (including NRT arming) only replace synths and audio
+    // buses. Disk-backed sample buffers deliberately survive those rebuilds:
+    // reloading them here would schedule /b_free, /b_allocReadChannel and the
+    // new /s_new at the same b_latency timestamp. The read is asynchronous,
+    // so the new GrainBox synth can start against an unavailable buffer and
+    // remain silent. Only recreate buffers after a server reboot (where the
+    // allocator no longer owns these objects), or when the cached set is
+    // genuinely incomplete.
+    auto existing = sd.bufs.find(srv);
+    if(existing != sd.bufs.end() &&
+       (int)existing->second.size() == sd.numChannels &&
+       std::all_of(existing->second.begin(), existing->second.end(),
+                   [srv](ofxSCBuffer* buffer){ return bufferIsLive(srv, buffer); })){
+        return;
+    }
+
     releaseSampleBuffers(sd, srv);
 
     if(sd.path.empty()) return;

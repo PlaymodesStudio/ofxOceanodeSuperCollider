@@ -602,7 +602,7 @@ void scGraphicEQ::applyParamVisibility() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Editor window: dockable ImGui window with the interactive curve editor
-// (scEQEditor handles, as in scGrainBox's FX EQ) over the FFT of the output.
+// (scEQEditor handles, as in GrainBoxPoly's FX EQ) over the FFT of the output.
 //   drag a handle: frequency / gain (Shift: fine), wheel: Q / slope,
 //   double-click: 0 dB, right-click: exact values.
 // ─────────────────────────────────────────────────────────────────────────────

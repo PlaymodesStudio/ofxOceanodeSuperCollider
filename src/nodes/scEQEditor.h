@@ -2,7 +2,7 @@
 //  scEQEditor.h
 //  ofxOceanodeSuperCollider
 //
-//  5-band EQ curve editor shared by scGraphicEQ and scGrainBox (header-only,
+//  5-band EQ curve editor shared by scGraphicEQ and GrainBoxPoly (header-only,
 //  so no build-project change is needed). Extracted from scGraphicEQ, whose
 //  display it reproduces exactly with its default colours:
 //    • log-frequency grid (20 Hz .. 20 kHz) and dB grid, labelled
@@ -10,7 +10,7 @@
 //    • band frequency markers, 0 dB line, combined response curve computed
 //      from RBJ cookbook biquads (band 1 low shelf, 2-4 peaks, 5 high shelf),
 //      matching the graphiceqN SynthDef (BLowShelf / BPeakEQ / BHiShelf)
-//  Optional interaction (scGrainBox; scGraphicEQ leaves it off): a handle per
+//  Optional interaction (GrainBoxPoly; scGraphicEQ leaves it off): a handle per
 //  band — drag to set frequency (x) and gain (y), mouse wheel for Q / slope,
 //  double-click resets the gain to 0 dB, right-click opens bandMenu(band)
 //  (if set) in a popup. draw() returns true when it changed a band.
@@ -75,7 +75,7 @@ public:
         {4000.0f, 0.0f, 1.0f}, {12000.0f, 0.0f, 1.0f}
     }};
     float dbRange = 48.0f;   // display range: -dbRange .. +dbRange
-    // Interaction limits (scGrainBox)
+    // Interaction limits (GrainBoxPoly)
     float gainLimit = 48.0f, qMin = 0.1f, qMax = 20.0f, slopeMin = 0.1f, slopeMax = 4.0f;
 
     std::array<float, NUM_FREQ_POINTS> curveDb {};

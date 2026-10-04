@@ -59,7 +59,6 @@
 #include "nodes/pinkTromboneNode.h"
 #include "nodes/scRhythmBox.h"
 #include "nodes/scMultiTrackRecorder.h"
-#include "nodes/scGrainBox.h"
 #include "nodes/scGrainBoxPoly.h"
 #include "nodes/scBeatRepeatPro.h"
 #include "nodes/scPolyComb.h"
@@ -187,8 +186,6 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<pinkTromboneNode>("SuperCollider");
 	o.registerModel<scRhythmBox>("SuperCollider", controller->getServers());
 	o.registerModel<scMultiTrackRecorder>("SuperCollider", controller->getServers());
-	// GrainBox replaced by GrainBoxPoly (source kept in nodes/scGrainBox.*)
-	// o.registerModel<scGrainBox>("SuperCollider", controller->getServers());
 	o.registerModel<scGrainBoxPoly>("SuperCollider", controller->getServers());
 	o.registerModel<scBeatRepeatPro>("SuperCollider/Effect/Time/Looping", controller->getServers());
 	o.registerModel<scPolyComb>("SuperCollider");

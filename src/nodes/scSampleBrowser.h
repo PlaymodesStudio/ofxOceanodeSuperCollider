@@ -3,7 +3,7 @@
 //  ofxOceanodeSuperCollider
 //
 //  Sample file browser with audio preview, shared by scRhythmBox and
-//  scGrainBox (header-only, so no build-project change is needed).
+//  GrainBoxPoly (header-only, so no build-project change is needed).
 //
 //  Extracted from scRhythmBox's browser, whose behaviour and look it keeps:
 //    • "..." picks a folder, "^ .." goes to the parent folder.

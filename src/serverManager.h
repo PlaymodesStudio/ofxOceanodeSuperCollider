@@ -132,7 +132,7 @@ public:
     }
 
     // A node that creates synths from SynthDefs outside the Defaults folder
-    // (e.g. scGrainBox's FX: Echo, SpaceMaster) registers their folder here.
+    // (e.g. GrainBoxPoly's FX: Echo, SpaceMaster) registers their folder here.
     // Registered folders are loaded by loadDefs() — at boot, before the
     // initialization /sync, and at NRT capture start (score time 0) — and, when
     // registered while the server runs, right away followed by a /sync:

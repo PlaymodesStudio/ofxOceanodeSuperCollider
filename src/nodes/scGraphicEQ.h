@@ -142,7 +142,7 @@ private:
     bool                               curveNeedsUpdate  = true;
 
     // Curve display + response computation: shared component (scEQEditor.h),
-    // also used by scGrainBox's FX EQ. Display-only here (no handles).
+    // also used by GrainBoxPoly's FX EQ. Display-only here (no handles).
     scEQEditor eqEditor;
 
     float getDisplaySampleRate() const;
