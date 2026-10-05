@@ -590,6 +590,58 @@ private:
 	};
 	std::vector<PendingSetBundle> pendingSetBundles;
 	
+	// --- What each plugin instance was last sent ---------------------------
+	// Oceanode connections pass a value on every notification, changed or
+	// not, and VSTPlugin answers every /set with a /vst_param per parameter
+	// and instance. A value an instance already holds is therefore not sent
+	// again. The plugin can change its own state without us (FXP / program
+	// loads, its editor, a /vst_update), so the record is only trusted while
+	// nothing like that has happened: invalidateSentValues() drops all of it,
+	// forgetSentParameter() one parameter, and feedback reporting a different
+	// value drops that slot. While a preset or an FXP transfer is in flight
+	// nothing is recorded and everything is sent, as before.
+	struct SentParameterValues {
+		uint64_t epoch = 0;          // valid only when == sentValuesEpoch
+		std::vector<float> values;   // per activeInstanceTargets index
+		std::vector<uint8_t> known;
+	};
+	std::array<SentParameterValues, 1024> sentParameterValues;
+	uint64_t sentValuesEpoch = 1;
+	void invalidateSentValues() { ++sentValuesEpoch; }
+	void forgetSentParameter(int paramIndex) {
+		if(paramIndex >= 0 && paramIndex < 1024) sentParameterValues[paramIndex].epoch = 0;
+	}
+	bool canTrustSentValues();
+	// True when the instance already holds value; otherwise records it.
+	bool instanceAlreadyHolds(int paramIndex, size_t instanceIndex, float value);
+	void forgetSentValueOnFeedback(ofxOscMessage& msg);
+
+	// Single-valued controls sent to every instance: mix (a synth control),
+	// pitch bend and mod wheel (as the MIDI values actually sent), MIDI CCs.
+	// Reset by the same invalidations.
+	uint64_t sentControlsEpoch = 0;
+	float sentMix = 0.0f;
+	int sentPitchBend = -1;
+	int sentModWheel = -1;
+	std::array<int, 128> sentMidiCC;
+	void refreshSentControls();
+	bool controlAlreadySent(int& stored, int value);
+
+	// --- MIDI batching ------------------------------------------------------
+	// While a MidiBatch is alive, sendMidiToInstance() appends to one bundle
+	// per server instead of sending a datagram per message and instance. Same
+	// messages, same order, same send moment.
+	std::vector<std::pair<ofxSCServer*, ofxOscBundle>> midiBatchBundles;
+	int midiBatchDepth = 0;
+	struct MidiBatch {
+		explicit MidiBatch(scVST& o) : owner(o) { owner.midiBatchDepth++; }
+		~MidiBatch() { if(--owner.midiBatchDepth == 0) owner.flushMidiBatch(); }
+		MidiBatch(const MidiBatch&) = delete;
+		MidiBatch& operator=(const MidiBatch&) = delete;
+		scVST& owner;
+	};
+	void flushMidiBatch();
+
 	// Internal batch helpers
 	void markParameterDirty(int paramIndex);
 	void processPendingParameterUpdates();

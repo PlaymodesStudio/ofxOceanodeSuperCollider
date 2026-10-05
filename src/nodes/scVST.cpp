@@ -12,6 +12,8 @@
 #include "imgui.h"
 #include "ofxOceanodeShared.h"
 #include <algorithm>
+#include <limits>
+#include <cmath>
 #include <set>
 #include <unordered_set>
 #include <vector>
@@ -390,6 +392,10 @@ void scVST::setup(){
 	}));
 	
 	listeners.push(mix.newListener([this](float &m){
+		// Every synth already has this mix (resendParams still always sends it)
+		refreshSentControls();
+		if(sentMix == m) return;
+		sentMix = m;
 		// Send mix parameter to all VST instances
 		for(auto& serverInstances : synthInstances){
 			for(auto synth : serverInstances.second){
@@ -508,6 +514,8 @@ void scVST::setup(){
 				}
 			}
 		}
+		refreshSentControls();
+		sentMix = mix.get();
 	}));
 	
 	addCustomRegion(
@@ -883,6 +891,7 @@ void scVST::flushPendingVSTParameterSets() {
 	if(activeInstanceTargets.empty()) {
 		return;
 	}
+	const bool trustSentValues = canTrustSentValues();
 
 	static constexpr int MAX_PARAMS_PER_MESSAGE = 64;
 	static constexpr int MAX_MESSAGES_PER_BUNDLE = 8;
@@ -933,6 +942,9 @@ void scVST::flushPendingVSTParameterSets() {
 			const float value = values.size() == 1 || instanceIndex >= values.size() ?
 				values.back() : values[instanceIndex];
 
+			// Already there: no /set, and no /vst_param echo coming back
+			if(trustSentValues && instanceAlreadyHolds(paramIndex, instanceIndex, value)) continue;
+
 			if(message == nullptr) {
 				slot.bundle.addMessage(ofxOscMessage());
 				message = &slot.bundle.getMessageAt(slot.bundle.getMessageCount() - 1);
@@ -967,6 +979,78 @@ void scVST::suppressFeedbackFor(int paramIndex, uint64_t untilTime) {
 void scVST::clearAllFeedbackSuppression() {
 	for(auto& suppressUntil : feedbackSuppressUntil) {
 		suppressUntil.store(0, std::memory_order_relaxed);
+	}
+}
+
+bool scVST::canTrustSentValues() {
+	// A preset, an FXP read or an instance sync rewrites the plugin's state
+	// behind our back: send everything while that is in flight, as before,
+	// and start a fresh record once it is over.
+	if(isPresetLoading || oceanodePresetLoading || hasPendingPresetData ||
+	   syncInProgress || isFXPLoading.load(std::memory_order_acquire)) {
+		invalidateSentValues();
+		return false;
+	}
+	return true;
+}
+
+bool scVST::instanceAlreadyHolds(int paramIndex, size_t instanceIndex, float value) {
+	SentParameterValues& sent = sentParameterValues[paramIndex];
+	if(sent.epoch != sentValuesEpoch) {
+		sent.epoch = sentValuesEpoch;
+		sent.values.assign(activeInstanceTargets.size(), 0.0f);
+		sent.known.assign(activeInstanceTargets.size(), 0);
+	}
+	if(instanceIndex >= sent.known.size()) return false;
+	if(sent.known[instanceIndex] && sent.values[instanceIndex] == value) return true;
+	sent.values[instanceIndex] = value;
+	sent.known[instanceIndex] = 1;
+	return false;
+}
+
+void scVST::forgetSentValueOnFeedback(ofxOscMessage& msg) {
+	// /vst_param and /vst_auto: nodeID, synthIndex, paramIndex, value, ...
+	if(msg.getNumArgs() < 4) return;
+	const int paramIndex = (int)msg.getArgAsFloat(2);
+	if(paramIndex < 0 || paramIndex >= 1024) return;
+	SentParameterValues& sent = sentParameterValues[paramIndex];
+	if(sent.epoch != sentValuesEpoch) return;
+	const int nodeID = msg.getArgAsInt32(0);
+	const float reported = msg.getArgAsFloat(3);
+	for(size_t i = 0; i < activeInstanceTargets.size() && i < sent.known.size(); ++i) {
+		const auto* synth = activeInstanceTargets[i].synth;
+		if(synth == nullptr || synth->nodeID != nodeID) continue;
+		// Our own echo carries the value we sent. Anything else -- the editor,
+		// automation, a plugin that quantises -- means we no longer know what
+		// the instance holds, so the next value from Oceanode goes out again.
+		if(sent.known[i] && std::abs(sent.values[i] - reported) > 1e-6f) {
+			sent.known[i] = 0;
+		}
+	}
+}
+
+void scVST::refreshSentControls() {
+	if(sentControlsEpoch == sentValuesEpoch) return;
+	sentControlsEpoch = sentValuesEpoch;
+	sentPitchBend = -1;
+	sentModWheel = -1;
+	sentMidiCC.fill(-1);
+	sentMix = std::numeric_limits<float>::quiet_NaN();
+}
+
+bool scVST::controlAlreadySent(int& stored, int value) {
+	refreshSentControls();
+	if(stored == value) return true;
+	stored = value;
+	return false;
+}
+
+void scVST::flushMidiBatch() {
+	for(auto& entry : midiBatchBundles) {
+		if(entry.first != nullptr && entry.second.getMessageCount() > 0) {
+			entry.first->sendBundle(entry.second);
+		}
+		entry.second.clear();
 	}
 }
 
@@ -1087,6 +1171,7 @@ void scVST::loadSelectedPlugin() {
 				closeMsg.addIntArg(synth->nodeID);
 				closeMsg.addIntArg(2);
 				closeMsg.addStringArg("/close");
+				invalidateSentValues();  // /close changes the plugin state
 				serverInstances.first->sendMsg(closeMsg);
 			}
 		}
@@ -1116,6 +1201,7 @@ void scVST::loadSelectedPlugin() {
 				openMsg.addIntArg(1); // Request GUI editor
 				openMsg.addIntArg(enableMultithreading.get() ? 1 : 0);
 				openMsg.addIntArg(0); // Normal mode
+				invalidateSentValues();  // /open changes the plugin state
 				serverInstances.first->sendMsg(openMsg);
 			}
 		}
@@ -1351,6 +1437,8 @@ void scVST::flushPendingVSTGUIPropagation() {
 	for(int paramIndex : pendingPropagationIndices) {
 		if(paramIndex >= 0 && paramIndex < 1024) {
 			suppressFeedbackFor(paramIndex, suppressUntil);
+			// The peers now take the editor's value, not the last one we sent
+			forgetSentParameter(paramIndex);
 		}
 	}
 
@@ -1511,6 +1599,7 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 										readMsg.addStringArg("/program_read");
 										readMsg.addStringArg(tempPath);
 										readMsg.addIntArg(1);
+										invalidateSentValues();  // /program_read changes the plugin state
 										serverInstances.first->sendMsg(readMsg);
 									}
 								}
@@ -1541,6 +1630,7 @@ void scVST::handleVSTOpen(ofxOscMessage& msg) {
 									readMsg.addStringArg("/program_read");
 									readMsg.addStringArg(tempPath);
 									readMsg.addIntArg(1);
+									invalidateSentValues();  // /program_read changes the plugin state
 									serverInstances.first->sendMsg(readMsg);
 								}
 							}
@@ -1580,6 +1670,7 @@ bool scVST::nrtRestoreAlreadySent(int nodeID) const {
 }
 
 void scVST::prepareForNRTCapture() {
+	invalidateSentValues();
 	nrtRestoreSent.clear();
 	// Pull the plugin's current program back out of the server while it can
 	// still answer. saveFXPToCache() refreshes cachedFXP from the running
@@ -1635,6 +1726,7 @@ bool scVST::sendNRTStateRestore(ofxSCServer* server, int nodeID) {
 	readMsg.addStringArg("/program_read");
 	readMsg.addStringArg(nrtStatePath);
 	readMsg.addIntArg(1); // async, as in realtime
+	invalidateSentValues();  // /program_read changes the plugin state
 	server->sendMsg(readMsg);
 	return true;
 }
@@ -1687,6 +1779,7 @@ void scVST::applyFXPToInstance(int nodeID) {
 			readMsg.addStringArg("/program_read");
 			readMsg.addStringArg(tempFXPPath);
 			readMsg.addIntArg(1); // async = true
+			invalidateSentValues();  // /program_read changes the plugin state
 			targetServer->sendMsg(readMsg);
 			
 			//ofLogNotice("scVST") << "Sent async FXP load to instance " << nodeID;
@@ -2788,6 +2881,7 @@ void scVST::setVSTParameter(int paramIndex, float value) {
 			setMsg.addStringArg("/set");
 			setMsg.addIntArg(paramIndex);
 			setMsg.addFloatArg(value);
+			invalidateSentValues();  // set outside the batcher
 			target.server->sendMsg(setMsg);
 		} catch(const std::exception& e) {
 			ofLogError("scVST") << "Error setting parameter on synth " << target.synth->nodeID << ": " << e.what();
@@ -2801,6 +2895,8 @@ bool scVST::isMyVSTInstance(int nodeID) const {
 }
 
 void scVST::processGates(vector<int> &gates){
+	// Every note-on / note-off of this gate change leaves in one bundle per server
+	MidiBatch batch(*this);
 	// OPTIMIZATION: Cache parameter vectors to avoid repeated .get() calls
 	const auto& currentPitch = pitch.get();
 	const auto& currentVelocity = velocity.get();
@@ -4074,6 +4170,7 @@ void scVST::setVSTParameterDirectToAll(int paramIndex, float value) {
 			setMsg.addStringArg("/set");
 			setMsg.addIntArg(paramIndex);
 			setMsg.addFloatArg(value);
+			invalidateSentValues();  // set outside the batcher
 			target.server->sendMsg(setMsg);
 		} catch(const std::exception& e) {
 			ofLogError("scVST") << "Error setting parameter on synth " << target.synth->nodeID << ": " << e.what();
@@ -4120,6 +4217,7 @@ void scVST::setVSTParameterVectorDirectToAll(int paramIndex, const vector<float>
 			setMsg.addStringArg("/set");
 			setMsg.addIntArg(paramIndex);
 			setMsg.addFloatArg(value);
+			invalidateSentValues();  // set outside the batcher
 			target.server->sendMsg(setMsg);
 
 		} catch(const std::exception& e) {
@@ -4236,6 +4334,7 @@ void scVST::freeVSTInstances(ofxSCServer* server) {
 					closeMsg.addIntArg(synth->nodeID);
 					closeMsg.addIntArg(2);
 					closeMsg.addStringArg("/close");
+					invalidateSentValues();  // /close changes the plugin state
 					server->sendMsg(closeMsg);
 				} catch(const std::exception& e) {
 					ofLogWarning("scVST") << "Error sending close message to VST: " << e.what();
@@ -4322,6 +4421,7 @@ void scVST::free(ofxSCServer* server) {
 }
 
 void scVST::rebuildInstanceLookupCache() {
+	invalidateSentValues();
 	ownedNodeIDs.clear();
 	firstInstanceNodeIDs.clear();
 	nodeIDToInstanceIndex.clear();
@@ -4349,6 +4449,7 @@ void scVST::rebuildInstanceLookupCache() {
 }
 
 void scVST::clearInstanceLookupCache() {
+	invalidateSentValues();
 	ownedNodeIDs.clear();
 	firstInstanceNodeIDs.clear();
 	nodeIDToInstanceIndex.clear();
@@ -4368,6 +4469,7 @@ void scVST::handleVSTFeedbackMessage(ofxOscMessage& msg) {
 		if(address.empty() || address[0] != '/') return;
 
 		if(address == "/vst_param") {
+			forgetSentValueOnFeedback(msg);
 			handleVSTParam(msg);
 			if(!oceanodePresetLoading && !hasPendingPresetData &&
 			   msg.getNumArgs() >= 3) {
@@ -4379,6 +4481,7 @@ void scVST::handleVSTFeedbackMessage(ofxOscMessage& msg) {
 			}
 		}
 		else if(address == "/vst_auto") {
+			forgetSentValueOnFeedback(msg);
 			handleVSTAuto(msg);
 			if(!oceanodePresetLoading && !hasPendingPresetData &&
 			   msg.getNumArgs() >= 3) {
@@ -4390,12 +4493,13 @@ void scVST::handleVSTFeedbackMessage(ofxOscMessage& msg) {
 			}
 		}
 		else if(address == "/vst_transport") handleTransportPosition(msg);
-		else if(address == "/vst_open") handleVSTOpen(msg);
+		else if(address == "/vst_open") { invalidateSentValues(); handleVSTOpen(msg); }
 		else if(address == "/vst_midi") handleVSTMidi(msg);
 		else if(address == "/vst_program_index") {
 			if(msg.getNumArgs() >= 3) {
 				int nodeID = msg.getArgAsInt32(0);
 				int programIndex = (int)msg.getArgAsFloat(2);
+				if(isMyVSTInstance(nodeID)) invalidateSentValues();
 				if(isMyVSTInstance(nodeID) && !oceanodePresetLoading) {
 					vstProgram.setWithoutEventNotifications(programIndex);
 					vstStateModifiedSincePreset = true;
@@ -4404,7 +4508,7 @@ void scVST::handleVSTFeedbackMessage(ofxOscMessage& msg) {
 			}
 		}
 		else if(address == "/vst_program_write") handleVSTPresetWrite(msg);
-		else if(address == "/vst_program_read") handleVSTPresetRead(msg);
+		else if(address == "/vst_program_read") { invalidateSentValues(); handleVSTPresetRead(msg); }
 		else if(address == "/vst_set") {
 			if(msg.getNumArgs() >= 4) {
 				int paramIndex = (int)msg.getArgAsFloat(2);
@@ -4423,6 +4527,7 @@ void scVST::handleVSTFeedbackMessage(ofxOscMessage& msg) {
 			}
 		}
 		else if(address == "/vst_update") {
+			invalidateSentValues();
 			handleVSTUpdate(msg);
 			// A full-program update on the first instance is already copied by
 			// the FXP sync path.  Do not also query and fan out hundreds of
@@ -4726,6 +4831,7 @@ void scVST::createSynth(ofxSCServer* server){
 				// point is determinism.
 				openMsg.addIntArg((capturing || !enableMultithreading.get()) ? 0 : 1);
 				openMsg.addIntArg(0); // Normal mode
+				invalidateSentValues();  // /open changes the plugin state
 				server->sendMsg(openMsg);
 
 				if(capturing) sendNRTStateRestore(server, nodeID);
@@ -4922,6 +5028,7 @@ void scVST::setVSTProgram(int programIndex) {
 				m.addIntArg(2);
 				m.addStringArg("/program_set"); // Direct VST program change
 				m.addIntArg(programIndex);
+				invalidateSentValues();  // /program_set changes the plugin state
 				serverInstances.first->sendMsg(m);
 				/*
 				 ofLogNotice("scVST") << "VST program_set: " << programIndex
@@ -4935,6 +5042,7 @@ void scVST::setVSTProgram(int programIndex) {
 }
 
 void scVST::sendMidiProgramChange(int channel, int program, ofxSCServer* server, ofxSCSynth* synth) {
+	invalidateSentValues();
 	if(!server || !synth || synth->nodeID <= 0) {
 		ofLogError("scVST") << "Invalid server/synth for MIDI program change";
 		return;
@@ -4993,6 +5101,14 @@ void scVST::sendMidiToInstance(ofxSCServer* server, ofxSCSynth* synth, int chann
 	buffer.set(reinterpret_cast<const char*>(midiBytes), midiByteCount);
 	m.addBlobArg(buffer);
 	m.addFloatArg(0.0f); // detune
+	if(midiBatchDepth > 0) {
+		for(auto& entry : midiBatchBundles) {
+			if(entry.first == server) { entry.second.addMessage(m); return; }
+		}
+		midiBatchBundles.emplace_back(server, ofxOscBundle());
+		midiBatchBundles.back().second.addMessage(m);
+		return;
+	}
 	server->sendMsg(m);
 }
 
@@ -5000,8 +5116,10 @@ void scVST::sendPitchBend(float value) {
 	// Value is 0.0 to 1.0, center is 0.5
 	// MIDI pitch bend is 14-bit (0-16383), center is 8192
 	int bendValue = (int)(ofClamp(value, 0.0f, 1.0f) * 16383.0f);
+	if(controlAlreadySent(sentPitchBend, bendValue)) return;
 	int lsb = bendValue & 0x7F;
 	int msb = (bendValue >> 7) & 0x7F;
+	MidiBatch batch(*this);
 	
 	// Send to all instances
 	for(const auto& target : activeInstanceTargets) {
@@ -5012,6 +5130,8 @@ void scVST::sendPitchBend(float value) {
 void scVST::sendModWheel(float value) {
 	// Mod wheel is CC 1
 	int ccValue = (int)(ofClamp(value, 0.0f, 1.0f) * 127.0f);
+	if(controlAlreadySent(sentModWheel, ccValue)) return;
+	MidiBatch batch(*this);
 	
 	// Send to all instances
 	for(const auto& target : activeInstanceTargets) {
@@ -5091,6 +5211,7 @@ std::vector<uint8_t> scVST::base64Decode(const std::string& encoded) {
 }
 
 void scVST::presetWillBeLoaded(){
+	invalidateSentValues();
 	isPresetLoading = true;
 	oceanodePresetLoading = true;  // NEW: Track Oceanode preset loading specifically
 	
@@ -5119,6 +5240,7 @@ void scVST::activateConnections(){
 }
 
 void scVST::presetHasLoaded(){
+	invalidateSentValues();
 	// Still keep preset loading active if we have pending VST data
 	if(!hasPendingPresetData) {
 		isPresetLoading = false;
@@ -5268,6 +5390,7 @@ void scVST::applySyncFXPToAllOtherInstances() {
 				readMsg.addStringArg("/program_read");
 				readMsg.addStringArg(tempSyncFXPPath);
 				readMsg.addIntArg(1); // async = true
+				invalidateSentValues();  // /program_read changes the plugin state
 				serverInstances.first->sendMsg(readMsg);
 				
 				appliedCount++;
@@ -6060,6 +6183,8 @@ void scVST::sendMidiCC(int ccNumber, float value) {
 	
 	// Convert float (0.0-1.0) to MIDI value (0-127)
 	int midiValue = (int)(ofClamp(value, 0.0f, 1.0f) * 127.0f);
+	if(controlAlreadySent(sentMidiCC[ccNumber], midiValue)) return;
+	MidiBatch batch(*this);
 	
 	if(scVSTVerbose()) {
 		ofLogVerbose("scVST") << "Sending MIDI CC " << ccNumber << " = " << midiValue
