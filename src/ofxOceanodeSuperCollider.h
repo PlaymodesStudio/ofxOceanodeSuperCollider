@@ -37,6 +37,7 @@
 #include "nodes/scVUMeter.h"
 #include "nodes/scVST.h"
 #include "nodes/scPolyMixer.h"
+#include "nodes/scMixerPro.h"
 #include "nodes/scChannelRouterMatrix.h"
 #include "nodes/scFastEnvelopeFollower.h"
 #include "nodes/scFM7.h"
@@ -163,6 +164,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scBeatTracker>("SuperCollider", controller->getServers());
 	o.registerModel<scVST>("SuperCollider");
 	o.registerModel<scPolyMixer>("SuperCollider");
+	o.registerModel<scMixerPro>("SuperCollider", controller->getServers());
 	o.registerModel<scVUMeter>("SuperCollider");
 	o.registerModel<scChannelRouterMatrix>("SuperCollider");
 	o.registerModel<scFastEnvelopeFollower>("SuperCollider");
