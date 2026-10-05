@@ -7,6 +7,7 @@
 //
 
 #include "ofxOceanodeSuperColliderConfig.h"
+#include "scBusResend.h"
 #include "scGraphicEQ.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -379,7 +380,7 @@ void scGraphicEQ::moveSynthBefore(ofxSCServer* server, int nodeID) {
     if(!synthInstances[server]) return;
 
     try {
-        resendParams.notify();
+        scResendInOutBuses(synthInstances[server], server, inputBuses, outputBuses);  // see scBusResend.h
         synthInstances[server]->moveBefore(nodeID);
 
         if(fftSynthInstances.count(server) && fftSynthInstances[server]) {

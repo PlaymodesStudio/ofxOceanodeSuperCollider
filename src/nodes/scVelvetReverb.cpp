@@ -10,6 +10,7 @@
 //
 
 #include "scVelvetReverb.h"
+#include "scBusResend.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "ofxSuperCollider.h"
@@ -229,7 +230,7 @@ void scVelvetReverb::free(ofxSCServer* server) {
 
 void scVelvetReverb::moveSynthBefore(ofxSCServer* server, int nodeID) {
     if(!server || !synthInstances.count(server) || !synthInstances[server]) return;
-    resendParams.notify();
+    scResendInOutBuses(synthInstances[server], server, inputBuses, outputBuses);  // see scBusResend.h
     synthInstances[server]->moveBefore(nodeID);
 }
 

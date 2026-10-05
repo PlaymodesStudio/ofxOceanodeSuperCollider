@@ -11,6 +11,42 @@
 #include "ofxSCServer.h"
 #include "scSchedulingCompat.h"
 
+namespace {
+// What each synth was last sent for one parameter. Oceanode connections pass
+// the source value on every notification, changed or not, so a constant
+// parameter downstream of anything that updates per frame used to send an
+// /n_set every frame. Values are kept as double so every int32 compares exact.
+struct scSentValueCache {
+    // True when the value must go out: forced, a trigger control (those fire
+    // on every set, equal value or not), or different from the last one sent
+    // to this synth. Records it either way.
+    bool shouldSend(uint64_t currentEpoch, ofxSCSynth* synth, std::vector<double>&& value, bool force){
+        if(epoch != currentEpoch){
+            values.clear();
+            epoch = currentEpoch;
+        }
+        if(isTrigger) return true;
+        auto it = values.find(synth);
+        if(!force && it != values.end() && it->second == value) return false;
+        if(it != values.end()) it->second = std::move(value);
+        else values.emplace(synth, std::move(value));
+        return true;
+    }
+    // A timestamped send lands later than the sends around it, so what the
+    // synth holds afterwards is no longer known here.
+    void forget(){ values.clear(); }
+
+    bool isTrigger = false;
+    uint64_t epoch = 0;
+    std::map<ofxSCSynth*, std::vector<double>> values;
+};
+
+template<typename T>
+std::vector<double> sentValueKey(const std::vector<T>& values){
+    return std::vector<double>(values.begin(), values.end());
+}
+}
+
 
 scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synthDescription), synthdefName(_synthDescription.name), scNode(_synthDescription.name + "*"){
     description = synthDescription.description;
@@ -46,6 +82,7 @@ void scSynthdef::setup(){
                 delete synth.second;
                 synth.second = newSynth;
             }
+            sendCacheEpoch++;
             resendParams.notify();
         }
         oldNumChannels = numChannels;
@@ -84,7 +121,11 @@ void scSynthdef::setup(){
             hasAudioRate = true;
         }
         
-        std::function<void()> setValuesToSynths;
+        // force: send even if each synth already holds this value (synth
+        // creation, NRT state at time zero).
+        std::function<void(bool force)> setValuesToSynths;
+        auto sentCache = std::make_shared<scSentValueCache>();
+        sentCache->isTrigger = toSendName.rfind("t_", 0) == 0;
         // The same send, for a value that is not (yet) the parameter's own:
         // the timeline hands a value here before the playhead reaches it, and
         // it goes out inside an ofxSCServer::ScopedTimetag, so scsynth applies
@@ -99,16 +140,18 @@ void scSynthdef::setup(){
                                 vector<int>(1, ofToInt(specMap["minval"])),
                                 vector<int>(1, ofToInt(specMap["maxval"]))));
             
-            setValuesToSynths = [this, toSendName, vi](){
+            setValuesToSynths = [this, toSendName, vi, sentCache](bool force){
                 // No NaN check: these are integers, and std::isnan(int)
                 // is always false, so the loop that stood here never fired.
                 for(auto synthServer : synths){
+                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, sentValueKey(vi.get()), force)) continue;
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
                 }
             };
             
-            setScheduledValueToSynths = [this, toSendName](const std::string& text){
+            setScheduledValueToSynths = [this, toSendName, sentCache](const std::string& text){
+                sentCache->forget();
                 std::vector<int> values;
                 for(const auto& token : ofSplitString(text, ",", true, true)) values.push_back(ofToInt(token));
                 if(values.empty()) return;
@@ -120,7 +163,7 @@ void scSynthdef::setup(){
 
             listeners.push(vi.newListener([setValuesToSynths](vector<int> &vi_){
                 if(scScheduling::isBackendSendSuppressed()) return;
-                setValuesToSynths();
+                setValuesToSynths(false);
             }));
         }
         else if(unitWithoutAudio == "vf"){
@@ -130,7 +173,7 @@ void scSynthdef::setup(){
                                 vector<float>(1, ofToFloat(specMap["minval"])),
                                 vector<float>(1, ofToFloat(specMap["maxval"]))));
             
-            setValuesToSynths = [this, toSendName, vf](){
+            setValuesToSynths = [this, toSendName, vf, sentCache](bool force){
                 for(auto f : vf.get()) {
                     if(std::isnan(f)){
                         ofLog() << "Trying to send a nan value";
@@ -138,12 +181,14 @@ void scSynthdef::setup(){
                     }
                 }
                 for(auto synthServer : synths){
+                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, sentValueKey(vf.get()), force)) continue;
                     if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
                     else synthServer.second->set(toSendName, vf);
                 }
             };
             
-            setScheduledValueToSynths = [this, toSendName](const std::string& text){
+            setScheduledValueToSynths = [this, toSendName, sentCache](const std::string& text){
+                sentCache->forget();
                 std::vector<float> values;
                 for(const auto& token : ofSplitString(text, ",", true, true)) values.push_back(ofToFloat(token));
                 if(values.empty()) return;
@@ -155,7 +200,7 @@ void scSynthdef::setup(){
 
             listeners.push(vf.newListener([setValuesToSynths](vector<float> &vf_){
                 if(scScheduling::isBackendSendSuppressed()) return;
-                setValuesToSynths();
+                setValuesToSynths(false);
             }));
         }
         else if(unitWithoutAudio == "i"){
@@ -166,24 +211,26 @@ void scSynthdef::setup(){
                                 ofToInt(specMap["minval"]),
                                 ofToInt(specMap["maxval"])));
             
-            setValuesToSynths = [this, toSendName, i](){
+            setValuesToSynths = [this, toSendName, i, sentCache](bool force){
                 if(std::isnan(i.get())){
                     ofLog() << "Trying to send a nan value";
                     return;
                 }
                 for(auto synthServer : synths){
+                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, {(double)i.get()}, force)) continue;
                     synthServer.second->set(toSendName, i);
                 }
             };
             
-            setScheduledValueToSynths = [this, toSendName](const std::string& text){
+            setScheduledValueToSynths = [this, toSendName, sentCache](const std::string& text){
+                sentCache->forget();
                 const int value = ofToInt(text);
                 for(auto synthServer : synths) synthServer.second->set(toSendName, value);
             };
 
             listeners.push(i.newListener([setValuesToSynths](int &i_){
                 if(scScheduling::isBackendSendSuppressed()) return;
-                setValuesToSynths();
+                setValuesToSynths(false);
             }));
         }
         else if(unitWithoutAudio == "f"){
@@ -193,17 +240,19 @@ void scSynthdef::setup(){
                                 ofToFloat(specMap["minval"]),
                                 ofToFloat(specMap["maxval"])));
             
-            setValuesToSynths = [this, toSendName, f](){
+            setValuesToSynths = [this, toSendName, f, sentCache](bool force){
                 if(std::isnan(f.get())){
                     ofLog() << "Trying to send a nan value";
                     return;
                 }
                 for(auto synthServer : synths){
+                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, {(double)f.get()}, force)) continue;
                     synthServer.second->set(toSendName, f);
                 }
             };
             
-            setScheduledValueToSynths = [this, toSendName](const std::string& text){
+            setScheduledValueToSynths = [this, toSendName, sentCache](const std::string& text){
+                sentCache->forget();
                 const double value = ofToFloat(text);
                 if(std::isnan(value)) return;
                 for(auto synthServer : synths) synthServer.second->set(toSendName, value);
@@ -211,7 +260,7 @@ void scSynthdef::setup(){
 
             listeners.push(f.newListener([setValuesToSynths](float &f_){
                 if(scScheduling::isBackendSendSuppressed()) return;
-                setValuesToSynths();
+                setValuesToSynths(false);
             }));
         }
         else if(unitWithoutAudio == "b"){
@@ -221,41 +270,44 @@ void scSynthdef::setup(){
                                 ofToBool(specMap["minval"]),
                                 ofToBool(specMap["maxval"])));
             
-            setValuesToSynths = [this, toSendName, b](){
+            setValuesToSynths = [this, toSendName, b, sentCache](bool force){
                 if(std::isnan(b.get())){
                     ofLog() << "Trying to send a nan value";
                     return;
                 }
                 for(auto synthServer : synths){
+                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, {b.get() ? 1.0 : 0.0}, force)) continue;
                     synthServer.second->set(toSendName, b);
                 }
             };
             
-            setScheduledValueToSynths = [this, toSendName](const std::string& text){
+            setScheduledValueToSynths = [this, toSendName, sentCache](const std::string& text){
+                sentCache->forget();
                 const int value = ofToBool(text) ? 1 : 0;
                 for(auto synthServer : synths) synthServer.second->set(toSendName, value);
             };
 
             listeners.push(b.newListener([this, setValuesToSynths](bool &b_){
                 if(scScheduling::isBackendSendSuppressed()) return;
-                setValuesToSynths();
+                setValuesToSynths(false);
             }));
         }
         else if(unitWithoutAudio == "buffer"){
             ofParameter<vector<int>> vi;
             addParameter(vi.set(paramName, {-1}, {-1}, {INT_MAX}));
             
-            setValuesToSynths = [this, toSendName, vi](){
+            setValuesToSynths = [this, toSendName, vi, sentCache](bool force){
                 // No NaN check: these are integers, and std::isnan(int)
                 // is always false, so the loop that stood here never fired.
                 for(auto synthServer : synths){
+                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, sentValueKey(vi.get()), force)) continue;
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
                 }
             };
             
             listeners.push(vi.newListener([setValuesToSynths](vector<int> &vi_){
-                setValuesToSynths();
+                setValuesToSynths(false);
             }));
         }
         else if(unitWithoutAudio.substr(0, 2) == "d:"){ //Is dropdown
@@ -264,17 +316,18 @@ void scSynthdef::setup(){
             splitString.erase(splitString.begin());
             parameterReference = addParameterDropdown(vi, paramName, ofToInt(specMap["default"]), splitString);
             
-            setValuesToSynths = [this, toSendName, vi](){
+            setValuesToSynths = [this, toSendName, vi, sentCache](bool force){
                 // No NaN check: these are integers, and std::isnan(int)
                 // is always false, so the loop that stood here never fired.
                 for(auto synthServer : synths){
+                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, sentValueKey(vi.get()), force)) continue;
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
                     else synthServer.second->set(toSendName, vi);
                 }
             };
             
             listeners.push(vi.newListener([this, setValuesToSynths](vector<int> &vi_){
-                setValuesToSynths();
+                setValuesToSynths(false);
             }));
         }
         else if(unitWithoutAudio.substr(0, 3) == "df:"){ //Is dropdown
@@ -284,7 +337,7 @@ void scSynthdef::setup(){
 //            vector<string> options = ofSplitString(splitString[1], ", ");
             parameterReference = addParameterDropdown(vf, paramName, ofToInt(specMap["default"]), splitString);
             
-            setValuesToSynths = [this, toSendName, vf](){
+            setValuesToSynths = [this, toSendName, vf, sentCache](bool force){
                 for(auto f : vf.get()) {
                     if(std::isnan(f)){
                         ofLog() << "Trying to send a nan value";
@@ -292,13 +345,14 @@ void scSynthdef::setup(){
                     }
                 }
                 for(auto synthServer : synths){
+                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, sentValueKey(vf.get()), force)) continue;
                     if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
                     else synthServer.second->set(toSendName, vf);
                 }
             };
             
             listeners.push(vf.newListener([this, setValuesToSynths](vector<float> &vf_){
-                setValuesToSynths();
+                setValuesToSynths(false);
             }));
         }
         if(hasAudioRate && parameterReference != nullptr){
@@ -344,7 +398,7 @@ void scSynthdef::setup(){
         }
 
         listeners.push(resendParams.newListener([setValuesToSynths]{
-            setValuesToSynths();
+            setValuesToSynths(true);
         }));
     }
     
@@ -377,6 +431,7 @@ void scSynthdef::deactivate(){
 
 void scSynthdef::buildSynth(ofxSCServer* server){
     synths[server] = new ofxSCSynth(getSynthdefFilename(), server);
+    sendCacheEpoch++;
 }
 
 void scSynthdef::createSynth(ofxSCServer* server){
@@ -422,11 +477,13 @@ void scSynthdef::free(ofxSCServer* server){
         delete synths[server];
         synths.erase(server);
     }
+    sendCacheEpoch++;
 }
 
 void scSynthdef::freeAll(){
     for(auto &synth : synths) synth.second->free();
     synths.clear();
+    sendCacheEpoch++;
 }
 
 void scSynthdef::setOutputBus(ofxSCServer* server, int index, int bus){

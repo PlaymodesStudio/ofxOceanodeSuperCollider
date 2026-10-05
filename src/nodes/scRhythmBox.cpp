@@ -480,7 +480,10 @@ void scRhythmBox::update(ofEventArgs& /*args*/) {
                 gv[ti] = (int)std::round(busList[ti]->readValues[0]);
             busList[ti]->requestValues();
         }
-        gateOut.set(gv);
+        // Only on change, as SC BeatTracker does: every set is passed on to
+        // each connected node, which used to re-evaluate (and re-send) it
+        // every frame even while no gate moved.
+        if(gv != gateOut.get()) gateOut.set(gv);
     }
 
 #if OFXOCEANODESC_HAS_TRANSPORT
@@ -584,70 +587,12 @@ void scRhythmBox::moveSynthBefore(ofxSCServer* srv, int nodeID) {
     for(int ti = 0; ti < (int)synths.size(); ti++) {
         auto* s = synths[ti];
         if(!s) continue;
-        // Resend all params before moving — same pattern as scFM7Drone.
-        // If created=true (existing synth being reordered): set() sends /n_setn immediately.
-        // If created=false (brand-new synth not yet /n_go'd): goes to vecArgs and is
-        // delivered via resendStoredArgs when /n_go arrives.
-        if(ti < numTracks) {
-            const TrackData&   tdi = track(ti);
-            const TrackConfig& tci = trackConfig(ti);
-            s->set("bpm",           effectiveBpm());
-            s->set("numBeats",      (float)tci.numBeats);
-            s->set("stepsPerBeat",  (float)tci.stepsPerBeat);
-            s->set("numSteps",      (float)tci.getNumSteps());
-            s->set("shift",         (float)tdi.shift);
-            s->set("swing",         swingP.get());
-            s->set("globalPitch",   tci.trackPitch + globalTransposeP.get());
-            s->set("globalVol",     tci.globalVol * masterVolP.get());
-            s->set("globalProb",    tci.globalProb);
-            s->set("bufnum",        (float)getBufnum(ti, srv));
-            s->set("inPoint",       tci.inPoint);
-            s->set("outPoint",      tci.outPoint);
-            s->set("loopSample",    tci.loopEnabled   ? 1.0f : 0.0f);
-            s->set("fixDuration",   tci.fixDuration   ? 1.0f : 0.0f);
-            s->set("durationBeats", tci.durationBeats);
-            s->set("mono",          tci.monoMode      ? 1.0f : 0.0f);
-            s->set("volLatch",      tci.volLatch       ? 1.0f : 0.0f);
-            s->set("envEnabled",    tci.envEnabled     ? 1.0f : 0.0f);
-            s->set("envAttack",     tci.envAttack);
-            s->set("envHoldSteps",  (float)tci.envHoldSteps);
-            s->set("envDecay",      tci.envDecay);
-            s->set("envSustain",    tci.envSustain);
-            s->set("envRelease",    tci.envRelease);
-            s->set("envCurveA",     tci.envCurveA);
-            s->set("envCurveD",     tci.envCurveD);
-            s->set("lfoEnabled",    tci.lfoEnabled    ? 1.0f : 0.0f);
-            s->set("lfoRate",       tci.lfoRate);
-            s->set("lfoDepth",      tci.lfoDepth);
-            s->set("lfoShape",      (float)tci.lfoShape);
-            s->set("lfoPhase",      tci.lfoPhase);
-            s->set("lfoPulseWidth", tci.lfoPulseWidth);
-            s->set("slicerMode",    tci.type == TrackType::Slice ? 1.0f : 0.0f);
-            s->set("sliceFit",      tci.sliceFit     ? 1.0f : 0.0f);
-            s->set("eqEnabled",     tci.eqEnabled   ? 1.0f : 0.0f);
-            s->set("eqHPFreq",      tci.eqHPFreq);
-            s->set("eqHPRq",        1.0f / std::max(tci.eqHPQ,   0.01f));
-            s->set("eqPeakFreq",    tci.eqPeakFreq);
-            s->set("eqPeakGain",    tci.eqPeakGain);
-            s->set("eqPeakRq",      1.0f / std::max(tci.eqPeakQ, 0.01f));
-            s->set("eqLPFreq",      tci.eqLPFreq);
-            s->set("eqLPRq",        1.0f / std::max(tci.eqLPQ,   0.01f));
-            s->set("arpEnabled",       tdi.arpEnabled       ? 1.0f : 0.0f);
-            s->set("arpInterval",      tdi.arpInterval);
-            s->set("arpModulo",        (float)tdi.arpModulo);
-            s->set("arpGateWidth",     tdi.arpGateWidth);
-            s->set("arpSpeedMode",     (float)tdi.arpSpeedMode);
-            s->set("globalArpEnabled", tdi.globalArpEnabled ? 1.0f : 0.0f);
-            s->set("globalArpSpeed",   tdi.globalArpSpeed);
-            s->set("globalStepProbSub", tci.globalStepProbSub);
-            s->set("globalCut",         tci.globalCut);
-            s->set("globalPanOffset",   tci.globalPanOffset);
-            s->set("globalRes",         tci.globalRes);
-            if(mixBuses.count(srv) && mixBuses.at(srv))
-                s->set("mixOut", (float)mixBuses.at(srv)->index);
-            fireStepParams(ti);  // arrays: created=true → /n_setn; false → vecArgs
-            sendTypedConfigToAll(ti);
-        }
+        // Track parameters, step arrays and buffers reach the synths as they
+        // change (and on slot / preset recall): only the bus wiring is sent
+        // again (see scBusResend.h). This used to resend ~45 controls and
+        // every step array per track for each cable change in the patch.
+        if(ti < numTracks && mixBuses.count(srv) && mixBuses.at(srv))
+            s->set("mixOut", (float)mixBuses.at(srv)->index);
         s->moveBefore(nodeID);
     }
 }

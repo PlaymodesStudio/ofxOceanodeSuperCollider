@@ -625,38 +625,9 @@ void scFM7::moveSynthBefore(ofxSCServer* server, int nodeID) {
 	if(!synthInstances.count(server) || !synthInstances[server]) return;
 
 	ofxSCSynth* synth = synthInstances[server];
-	int n = numChannels.get();
 
-	// Resend all params before moving
-	updateEnvelopeParams();
-
-	synth->set("amp",        masterAmp.get());
-	synth->set("feedback",   feedback.get());
-	synth->set("op_amps",    opAmps.get());
-	synth->set("op_ratios",  opRatios.get());
-	synth->set("op_detunes", opDetunes.get());
-	synth->set("mod_matrix", modMatrix.get());
-	synth->set("eg_levels",  allEgLevels);
-	synth->set("eg_rates",   derivedRates);
-
-	{
-		vector<float> p = pitch.get();
-		vector<int>   g = gate.get();
-		vector<float> l = levels.get();
-		if((int)p.size() != n) p.resize(n, p.empty() ? 60.0f : p[0]);
-		if((int)g.size() != n) g.resize(n, 0);
-		if((int)l.size() != n) l.resize(n, l.empty() ? 1.0f : l[0]);
-		synth->set("pitch",    p);
-		synth->set("gate",     g);
-		synth->set("velocity", l);
-	}
-
-	synth->set("modScale", modScale.get());
-	synth->set("vibFreq",  vibFreq.get());
-	synth->set("vibAmp",   vibAmp.get());
-	synth->set("tremFreq", tremFreq.get());
-	synth->set("tremAmp",  tremAmp.get());
-
+	// Every parameter reaches the synth as it changes (morphs included):
+	// only the bus wiring is sent again (see scBusResend.h).
 	if(outputBuses.count(server) && outputBuses[server].count(0))
 		synth->set("out", outputBuses[server][0]);
 

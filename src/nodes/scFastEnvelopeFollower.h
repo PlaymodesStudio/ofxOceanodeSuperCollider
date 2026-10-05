@@ -4,13 +4,12 @@
 //
 //  High-rate envelope follower using vumeter SynthDef.
 //
-//  Thread-safety design:
-//    - Background thread reads envelopeBus->readValues (safe: OSC handler only writes
-//      individual floats into a pre-sized vector, never reallocates) and processes
-//      the envelope at high rate. It sets requestPending = true instead of calling
-//      sendMsg() directly (sendMsg is NOT thread-safe).
-//    - update() on the main thread calls requestValues() whenever requestPending is set,
-//      keeping all OSC sends on the main thread.
+//  Everything runs in update() on the main thread. It used to run in a 240 Hz
+//  background thread, but a new reading can only arrive once per frame (one
+//  request per frame, its reply read on the main thread) and the result was
+//  only published once per frame, so the thread computed nothing update()
+//  could not -- while reading readValues as the main thread wrote them.
+//  PollRateHz is kept so presets still load; it no longer has an effect.
 //
 
 #ifndef scFastEnvelopeFollower_h
@@ -30,8 +29,6 @@ class scFastEnvelopeFollower : public scNode {
 public:
 	scFastEnvelopeFollower() : scNode("Fast Envelope Follower") {
 		ofLogNotice("scFastEnvelopeFollower") << "Constructor called";
-		threadRunning = false;
-		requestPending = false;
 
 		// Initialize gate state vectors
 		gateActive.resize(2, false);
@@ -40,7 +37,6 @@ public:
 
 	~scFastEnvelopeFollower() {
 		try {
-			stopPollingThread();
 			listeners.unsubscribeAll();
 
 			// Free all synth instances
@@ -78,7 +74,7 @@ public:
 			addParameter(attackTime.set("Attack", 2.0f, 0.1f, 50.0f));
 			addParameter(releaseTime.set("Release", 20.0f, 1.0f, 200.0f));
 
-			// Polling rate: how fast the background thread reads and outputs new values
+			// Kept so presets load; no longer has an effect (see the top of this file)
 			addParameter(pollingRate.set("PollRateHz", 240, 60, 480));
 
 			// Envelope output parameter
@@ -168,23 +164,27 @@ public:
 	}
 
 	void update(ofEventArgs &args) override {
-		// Main-thread responsibilities:
-		// 1. Call requestValues() if the background thread flagged it (keeps sendMsg on main thread)
-		// 2. Publish the latest envelope data processed by the background thread
-		if(requestPending.exchange(false)) {
-			for(auto& pair : envelopeBuses) {
-				if(pair.second != nullptr) pair.second->requestValues();
-			}
-		}
+		if(synthInstances.empty()) return;
 
-		// Publish latest values computed by background thread
+		// The last server's bus wins, as before
 		vector<float> latest;
-		{
-			std::lock_guard<std::mutex> lock(envelopeDataMutex);
-			latest = latestEnvelopeData;
+		for(auto& pair : envelopeBuses) {
+			if(pair.second == nullptr) continue;
+			vector<float> levels = pair.second->readValues;
+			// Sanitize NaN/inf
+			for(auto& v : levels) {
+				if(!std::isfinite(v)) v = 0.0f;
+			}
+			applyGating(levels);
+			latest = std::move(levels);
 		}
 		if(envelopeData != nullptr && !latest.empty()) {
 			envelopeData->getParameter().set(latest);
+		}
+
+		// Next reading, answered before the next frame's update
+		for(auto& pair : envelopeBuses) {
+			if(pair.second != nullptr) pair.second->requestValues();
 		}
 	}
 
@@ -244,9 +244,6 @@ public:
 				synthInstances[server]->set("out", outputBuses[server][0]);
 			}
 
-			// Start background polling thread (reads readValues at high rate)
-		startPollingThread();
-
 		ofLogNotice("scFastEnvelopeFollower") << "Synth creation complete";
 
 		} catch(const std::exception& e) {
@@ -256,9 +253,6 @@ public:
 
 	void free(ofxSCServer* server) {
 		if(server == nullptr) return;
-
-		// Stop thread before freeing buses (thread reads envelopeBuses)
-		stopPollingThread();
 
 		try {
 			if(synthInstances.count(server) > 0 && synthInstances[server] != nullptr) {
@@ -398,63 +392,7 @@ private:
 	vector<bool> gateActive;
 	vector<uint64_t> gateStartTime;
 
-	ofParameter<int> pollingRate;
-
-	// High-rate background thread (reads only, never calls sendMsg)
-	std::thread pollingThread;
-	std::atomic<bool> threadRunning;
-	std::atomic<bool> requestPending; // Set by thread, consumed by update() on main thread
-	std::mutex envelopeDataMutex;
-	vector<float> latestEnvelopeData;
-
-	void startPollingThread() {
-		if(threadRunning.load()) return;
-		latestEnvelopeData.resize(numChannels.get(), 0.0f);
-		threadRunning = true;
-		requestPending = false;
-		pollingThread = std::thread([this]() { pollLoop(); });
-	}
-
-	void stopPollingThread() {
-		if(!threadRunning.load()) return;
-		threadRunning = false;
-		if(pollingThread.joinable()) pollingThread.join();
-	}
-
-	void pollLoop() {
-		while(threadRunning.load()) {
-			auto start = std::chrono::steady_clock::now();
-			int rate = pollingRate.get();
-			auto interval = std::chrono::microseconds(1000000 / std::max(rate, 1));
-
-			// Read readValues (safe: OSC handler only writes individual floats,
-			// never reallocates the vector — no structural race condition)
-			for(auto& pair : envelopeBuses) {
-				if(pair.second == nullptr) continue;
-
-				vector<float> levels = pair.second->readValues;
-
-				// Sanitize NaN/inf
-				for(auto& v : levels) {
-					if(!std::isfinite(v)) v = 0.0f;
-				}
-
-				// Apply binarization (gate) processing
-				applyGating(levels);
-
-				{
-					std::lock_guard<std::mutex> lock(envelopeDataMutex);
-					latestEnvelopeData = std::move(levels);
-				}
-			}
-
-			// Signal main thread to send the next /c_get request
-			requestPending.store(true);
-
-			auto elapsed = std::chrono::steady_clock::now() - start;
-			if(elapsed < interval) std::this_thread::sleep_for(interval - elapsed);
-		}
-	}
+	ofParameter<int> pollingRate;   // kept for presets; no effect (see top)
 
 	void applyGating(vector<float>& levels) {
 		if(!binaryMode.get()) return;

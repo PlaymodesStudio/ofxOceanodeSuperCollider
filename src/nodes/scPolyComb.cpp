@@ -492,7 +492,8 @@ void scPolyComb::moveSynthBefore(ofxSCServer* server, int nodeID) {
     if (!server) return;
     if (!synthInstances.count(server) || !synthInstances[server]) return;
     auto* s = synthInstances[server];
-    sendAllParams(s);
+    // Every parameter reaches the synth as it changes: only the bus wiring
+    // is sent again (see scBusResend.h).
     sendLFOBusIndices(server, s);
     if (outputBuses.count(server) && outputBuses[server].count(0))
         s->set("out", outputBuses[server][0]);

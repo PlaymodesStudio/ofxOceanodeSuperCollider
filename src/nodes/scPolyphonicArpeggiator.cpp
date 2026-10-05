@@ -470,8 +470,20 @@ void scPolyphonicArpeggiator::createSynth(ofxSCServer* server) {
 void scPolyphonicArpeggiator::moveSynthBefore(ofxSCServer* server, int nodeID) {
     if(!server) return;
     if(synthInstances.count(server) == 0 || !synthInstances[server]) return;
-    resendParams.notify();
-    synthInstances[server]->moveBefore(nodeID);
+    // Arrays and scalars reach the synth as they change: only the bus wiring
+    // is sent again (see scBusResend.h).
+    auto* s = synthInstances[server];
+    static const char* busNames[] = {"gateout", "pitchout", "velout", "durout"};
+    for(int i = 0; i < (int)inputs.size(); i++) {
+        auto* nodeRef = inputs[i]->getNodeRef();
+        if(nodeRef && inputBuses.count(server) && inputBuses[server].count(nodeRef))
+            s->set(ofToLower(inputs[i].getName()), inputBuses[server].at(nodeRef));
+    }
+    for(int i = 0; i < 4; i++) {
+        if(outputBuses.count(server) && outputBuses[server].count(i))
+            s->set(busNames[i], outputBuses[server].at(i));
+    }
+    s->moveBefore(nodeID);
 }
 
 void scPolyphonicArpeggiator::free(ofxSCServer* server) {

@@ -4,6 +4,7 @@
 //
 
 #include "scConvolution.h"
+#include "scBusResend.h"
 #include "ofxOceanodeShared.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
@@ -236,7 +237,7 @@ void scConvolution::free(ofxSCServer* server) {
 
 void scConvolution::moveSynthBefore(ofxSCServer* server, int nodeID) {
     if(!server || !synthInstances.count(server) || !synthInstances[server]) return;
-    resendParams.notify();
+    scResendInOutBuses(synthInstances[server], server, inputBuses, outputBuses);  // see scBusResend.h
     synthInstances[server]->moveBefore(nodeID);
 }
 

@@ -89,6 +89,10 @@ private:
     ofEventListeners listeners;
     
     std::map<ofxSCServer*, ofxSCSynth*> synths;
+    // Bumped whenever a synth object is created, replaced or deleted: the
+    // per-parameter "last value sent" caches are only valid for the synths
+    // they were filled for (a new synth can even reuse a freed address).
+    uint64_t sendCacheEpoch = 0;
     
     synthdefDesc synthDescription;
     std::string synthdefName;

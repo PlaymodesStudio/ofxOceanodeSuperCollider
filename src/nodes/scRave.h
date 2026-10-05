@@ -171,7 +171,19 @@ public:
 
     void moveSynthBefore(ofxSCServer* server, int nodeID) override {
         if(!synths.count(server) || pendingCreate.count(server)) return;
-        resendParams.notify();
+        // Only this synth's bus wiring can have changed (see scBusResend.h)
+        if(auto* synth = synths[server]) {
+            for(int i = 0; i < (int)inputs.size(); i++) {
+                auto nodeRef = inputs[i]->getNodeRef();
+                if(inputBuses[server].count(nodeRef))
+                    synth->set(ofToLower(inputs[i].getName()), inputBuses[server][nodeRef]);
+            }
+            for(int i = 0; i < (int)outputs.size(); i++) {
+                int idx = outputs[i]->getIndex();
+                if(outputBuses[server].count(idx))
+                    synth->set(ofToLower(outputs[i].getName()), outputBuses[server][idx]);
+            }
+        }
         synths[server]->moveBefore(nodeID);
     }
 

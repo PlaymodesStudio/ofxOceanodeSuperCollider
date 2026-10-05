@@ -444,41 +444,9 @@ void scFM7Drone::moveSynthBefore(ofxSCServer* server, int nodeID) {
 	if(!synthInstances.count(server) || !synthInstances[server]) return;
 
 	ofxSCSynth* synth = synthInstances[server];
-	int n = numChannels.get();
 
-	// Resend all params before moving (mirrors scSynthdef's resendParams pattern)
-	synth->set("feedback",   feedback.get());
-	synth->set("mod_matrix", modMatrix.get());
-
-	{
-		vector<float> p = pitch.get();
-		if((int)p.size() != n) p.resize(n, p.empty() ? 60.0f : p[0]);
-		synth->set("pitch", p);
-	}
-
-	synth->set("modScale", modScale.get());
-	synth->set("vibFreq",  vibFreq.get());
-	synth->set("vibAmp",   vibAmp.get());
-	synth->set("tremFreq", tremFreq.get());
-	synth->set("tremAmp",  tremAmp.get());
-
-	{
-		auto amp = masterAmp.get();
-		if(amp.size() == 1) synth->setMultiple("amp", amp[0], n);
-		else synth->set("amp", amp);
-	}
-
-	for(int i = 0; i < 6; i++) {
-		auto sendOp = [&](const string& prefix, vector<float> v) {
-			string name = opParamName(prefix, i);
-			if(v.size() == 1) synth->setMultiple(name, v[0], n);
-			else synth->set(name, v);
-		};
-		sendOp("op_amp",    opAmps[i].get());
-		sendOp("op_ratio",  opRatios[i].get());
-		sendOp("op_detune", opDetunes[i].get());
-	}
-
+	// Every parameter reaches the synth as it changes (morphs included):
+	// only the bus wiring is sent again (see scBusResend.h).
 	if(outputBuses.count(server) && outputBuses[server].count(0))
 		synth->set("out", outputBuses[server][0]);
 

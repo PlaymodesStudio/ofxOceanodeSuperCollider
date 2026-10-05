@@ -16,6 +16,7 @@
 //
 
 #include "scDynGenNode.h"
+#include "scBusResend.h"
 #include "../shared/scDynGenSlotPool.h"
 #include "ofxSCSynth.h"
 #include "ofxSCServer.h"
@@ -441,7 +442,7 @@ int scDynGenNode::getOutputBusIndex(ofxSCServer* server, int index) {
 void scDynGenNode::moveSynthBefore(ofxSCServer* server, int nodeID) {
     if(!server || !synthInstances.count(server) || !synthInstances[server]) return;
     try {
-        resendParams.notify();
+        scResendInOutBuses(synthInstances[server], server, inputBuses, outputBuses);  // see scBusResend.h
         synthInstances[server]->moveBefore(nodeID);
     } catch(const std::exception& e) {
         ofLogError("scDynGenNode") << "moveSynthBefore: " << e.what();
