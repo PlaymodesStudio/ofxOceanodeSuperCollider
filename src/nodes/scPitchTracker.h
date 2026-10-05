@@ -4,6 +4,7 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
+#include "scAnalyzerBinding.h"
 
 class scPitchTracker : public ofxOceanodeNodeModel {
 public:
@@ -39,7 +40,7 @@ public:
 			}
 			serverGraphListener.unsubscribe();
 			serverGraphListener = servers[serverIndex]->graphComputed.newListener([this](){
-				recreateSynth();
+				rebindOrRecreateSynth();
 			});
 		}));
 
@@ -80,13 +81,30 @@ private:
 			freqBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
 			confBus = new ofxSCBus(RATE_CONTROL, numChannels, servers[serverIndex]->getServer());
 
-			synth->set("in", input->getBusIndex(servers[serverIndex]->getServer()));
+			const int inBus = input->getBusIndex(servers[serverIndex]->getServer());
+			synth->set("in", inBus);
+			binding.bind(servers[serverIndex], inBus);
 			synth->set("freq", freqBus->index);
 			synth->set("hasFreq", confBus->index);
 		}
 	}
 
+	// After a graph rebuild: the synth keeps running and only follows its
+	// input to the new bus (see scAnalyzerBinding.h).
+	void rebindOrRecreateSynth(){
+		if(synth == nullptr || input->getNodeRef() == nullptr || !binding.canRebind(servers[serverIndex])){
+			recreateSynth();
+			return;
+		}
+		const int inBus = input->getBusIndex(servers[serverIndex]->getServer());
+		if(inBus != binding.inBus()){
+			synth->set("in", inBus);
+			binding.setInBus(inBus);
+		}
+	}
+
 	void clearSynth(){
+		binding.clear();
 		if(synth != nullptr){
 			synth->free();
 			delete synth;
@@ -117,6 +135,7 @@ private:
 	ofxSCBus* freqBus;
 	ofxSCBus* confBus;
 	ofxSCSynth* synth;
+	scAnalyzerBinding binding;
 	vector<serverManager*> servers;
 };
 

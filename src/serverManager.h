@@ -15,6 +15,7 @@
 #include <ofEvent.h>
 #include <set>
 #include <memory>
+#include <cstdint>
 
 class ofxSCServer;
 class ofxSCSynth;
@@ -112,6 +113,11 @@ public:
     void setAudioDeviceNames(const std::string& outputDeviceName, const std::string& inputDeviceName, int inputChannels = 0, int outputChannels = 0);
     
     ofxSCServer* getServer(){return server;}
+    // Bumped whenever every synth in the default group is gone at once: a
+    // teardown (/g_freeAll) or a server (re)initialisation, which also resets
+    // the bus allocators. Nodes that keep synths outside the graph compare it
+    // with the value they built against (see scAnalyzerBinding).
+    uint64_t getGraphGeneration() const { return graphGeneration; }
     static int getSampleRateForServer(ofxSCServer* server);
 //    int getOutputBusForNode(scNode* node);
     
@@ -186,6 +192,7 @@ private:
     int numRecomputeGraphOnce;
     std::map<scNode*, ofEventListener> nodeDestroyedListeners;
     bool nodesListChanged = false;
+    uint64_t graphGeneration = 0;
     std::map<std::string, std::string> synthdefFolders;
     
     std::set<std::string> alreadyLoadedSynthsList;

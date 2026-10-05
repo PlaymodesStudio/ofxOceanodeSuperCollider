@@ -28,6 +28,7 @@
 #include "serverManager.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
+#include "scAnalyzerBinding.h"
 #include "imgui.h"
 #include <array>
 #include <deque>
@@ -81,7 +82,7 @@ public:
             serverGraphListener.unsubscribe();
             if(i >= 0 && i < (int)servers.size()) {
                 serverGraphListener = servers[i]->graphComputed.newListener([this](){
-                    if(input->getNodeRef()) recreateSynth();
+                    if(input->getNodeRef()) rebindOrRecreateSynth();
                 });
             }
         }));
@@ -92,29 +93,18 @@ public:
     }
 
     void update(ofEventArgs&) override {
-        if(!synth || controlBuses.empty()) return;
+        if(!synth || !scopeBus) return;
 
-        // Request all buses
-        for(auto* bus : controlBuses)
-            if(bus) bus->requestValues();
-
-        // Find lowest physical bus index so we can map correctly
-        int lowestIdx = controlBuses[0]->index;
-        for(auto* bus : controlBuses)
-            if(bus && bus->index < lowestIdx) lowestIdx = bus->index;
+        // One request for the whole block (it used to be one per sample)
+        scopeBus->requestValues();
 
         // Read frame: first 64 = X, next 64 = Y (wavescope3 layout)
         std::array<float, SAMPLES_PER_CH> xBuf, yBuf;
-        for(int i = 0; i < TOTAL_BUSES; i++) {
-            if(!controlBuses[i]) continue;
-            int pos = controlBuses[i]->index - lowestIdx;
-            if(pos < 0 || pos >= TOTAL_BUSES) continue;
-            float val = controlBuses[i]->readValues.empty() ? 0.f
-                                                             : controlBuses[i]->readValues[0];
-            if(pos < SAMPLES_PER_CH)
-                xBuf[pos] = val;
-            else
-                yBuf[pos - SAMPLES_PER_CH] = val;
+        const auto& values = scopeBus->readValues;
+        for(int i = 0; i < SAMPLES_PER_CH; i++) {
+            xBuf[i] = i < (int)values.size() ? values[i] : 0.f;
+            const int y = SAMPLES_PER_CH + i;
+            yBuf[i] = y < (int)values.size() ? values[y] : 0.f;
         }
 
         // Push frame into trail deque
@@ -127,7 +117,11 @@ public:
 private:
     // ── SC resources ────────────────────────────────────────────────────────
     ofxSCSynth*             synth = nullptr;
-    vector<ofxSCBus*>       controlBuses;
+    // wavescope3_2 writes TOTAL_BUSES consecutive control buses starting at
+    // "out". One bus of that many channels is that block, allocated contiguous
+    // by construction, and read with a single request per frame.
+    ofxSCBus*               scopeBus = nullptr;
+    scAnalyzerBinding       binding;
 
     // ── Parameters ──────────────────────────────────────────────────────────
     ofParameter<nodePort>   input;
@@ -159,26 +153,33 @@ private:
 
         ofxSCServer* srv = servers[serverIndex]->getServer();
 
-        // Allocate TOTAL_BUSES individual 1-channel KR buses
-        controlBuses.resize(TOTAL_BUSES, nullptr);
-        for(int i = 0; i < TOTAL_BUSES; i++) {
-            controlBuses[i] = new ofxSCBus(RATE_CONTROL, 1, srv);
-            if(!controlBuses[i] || controlBuses[i]->index < 0) {
-                clearSynth(); return;
-            }
-        }
-
-        // Find lowest bus index — wavescope3 expects contiguous bus block
-        int lowestIdx = controlBuses[0]->index;
-        for(auto* bus : controlBuses)
-            if(bus && bus->index < lowestIdx) lowestIdx = bus->index;
+        // The contiguous block wavescope3_2 writes into
+        scopeBus = new ofxSCBus(RATE_CONTROL, TOTAL_BUSES, srv);
+        if(scopeBus->index < 0) { clearSynth(); return; }
 
         // Use wavescope3_2 SynthDef (2 channels = X + Y)
+        const int inBus = input->getBusIndex(srv);
         synth = new ofxSCSynth("wavescope3_2", srv);
-        synth->set("in",         input->getBusIndex(srv));
-        synth->set("out",        lowestIdx);
+        synth->set("in",         inBus);
+        synth->set("out",        scopeBus->index);
         synth->set("timeWindow", timeWindow.get());
         synth->createAndRun(1, 1, getActive()); //addToTail
+        binding.bind(servers[serverIndex], inBus);
+    }
+
+    // After a graph rebuild: the synth keeps running and only follows its
+    // input to the new bus (see scAnalyzerBinding.h).
+    void rebindOrRecreateSynth() {
+        if(!synth || serverIndex < 0 || serverIndex >= (int)servers.size()
+           || !binding.canRebind(servers[serverIndex])) {
+            recreateSynth();
+            return;
+        }
+        const int inBus = input->getBusIndex(servers[serverIndex]->getServer());
+        if(inBus != binding.inBus()) {
+            synth->set("in", inBus);
+            binding.setInBus(inBus);
+        }
     }
 
     void activate() override {
@@ -191,9 +192,8 @@ private:
 
     void clearSynth() {
         if(synth) { synth->free(); delete synth; synth = nullptr; }
-        for(auto* bus : controlBuses)
-            if(bus) { bus->free(); delete bus; }
-        controlBuses.clear();
+        if(scopeBus) { scopeBus->free(); delete scopeBus; scopeBus = nullptr; }
+        binding.clear();
         history.clear();
     }
 

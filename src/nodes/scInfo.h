@@ -11,6 +11,7 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
+#include "scAnalyzerBinding.h"
 
 class scInfo : public ofxOceanodeNodeModel {
 public:
@@ -71,6 +72,7 @@ public:
                     delete valueBus;
                     valueBus = nullptr;
                 }
+                binding.clear();
             }
         }));
     
@@ -80,7 +82,7 @@ public:
             }
             serverGraphListener.unsubscribe();
             serverGraphListener = servers[serverIndex]->graphComputed.newListener([this](){
-                recreateSynth();
+                rebindOrRecreateSynth();
             });
         }));
         
@@ -186,7 +188,9 @@ public:
         if(valueBus != nullptr){
             valueBus->free();
             delete valueBus;
+            valueBus = nullptr;
         }
+        binding.clear();
         if(input->getNodeRef() != nullptr){
             synth = new ofxSCSynth("Info" + ofToString(numChans), servers[serverIndex]->getServer());
             synth->createAndRun(1, 1, getActive()); //addToTail
@@ -200,6 +204,21 @@ public:
             synth->set("amp", ampBus->index);
             synth->set("peak", peakBus->index);
             synth->set("value", valueBus->index);
+            binding.bind(servers[serverIndex], input->getBusIndex(servers[serverIndex]->getServer()));
+        }
+    }
+
+    // After a graph rebuild: the synth keeps running and only follows its
+    // input to the new bus (see scAnalyzerBinding.h).
+    void rebindOrRecreateSynth(){
+        if(synth == nullptr || input->getNodeRef() == nullptr || !binding.canRebind(servers[serverIndex])){
+            recreateSynth();
+            return;
+        }
+        const int inBus = input->getBusIndex(servers[serverIndex]->getServer());
+        if(inBus != binding.inBus()){
+            synth->set("in", inBus);
+            binding.setInBus(inBus);
         }
     }
     
@@ -224,6 +243,7 @@ private:
     ofxSCBus* valueBus;
     
     ofxSCSynth *synth;
+    scAnalyzerBinding binding;
     vector<serverManager*> servers;
 };
 

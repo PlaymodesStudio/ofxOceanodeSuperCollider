@@ -5,6 +5,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "ofxOceanodeShared.h"
 #include "serverManager.h"
+#include "scAnalyzerBinding.h"
 #include "ofxSCBus.h"
 #include "ofxSCSynth.h"
 
@@ -185,6 +186,7 @@ private:
 
 	ofEventListeners listeners;
 	ofEventListener serverGraphListener;
+	scAnalyzerBinding binding;
 
 	ofParameter<nodePort> input;
 	ofParameter<int> serverIndex;
@@ -348,7 +350,7 @@ private:
 		serverGraphListener.unsubscribe();
 		if(!hasValidServer()) return;
 		serverGraphListener = servers[serverIndex.get()]->graphComputed.newListener([this]() {
-			if(input->getNodeRef()) recreateSynths();
+			if(input->getNodeRef()) rebindOrRecreateSynths();
 		});
 	}
 
@@ -369,6 +371,22 @@ private:
 		}
 		sampleBuses.clear();
 		waveformData.clear();
+		binding.clear();
+	}
+
+	// After a graph rebuild: the synths keep running and only follow their
+	// input to the new bus (see scAnalyzerBinding.h).
+	void rebindOrRecreateSynths() {
+		if(synths.empty() || !hasValidServer() || !binding.canRebind(servers[serverIndex.get()])) {
+			recreateSynths();
+			return;
+		}
+		const int inputBusIndex = input->getBusIndex(servers[serverIndex.get()]->getServer());
+		if(inputBusIndex == binding.inBus()) return;
+		for(int channel = 0; channel < (int)synths.size(); ++channel) {
+			if(synths[channel]) synths[channel]->set("in", inputBusIndex + channel);
+		}
+		binding.setInBus(inputBusIndex);
 	}
 
 	void recreateSynths() {
@@ -407,6 +425,7 @@ private:
 			}
 
 			for(auto* bus : sampleBuses) if(bus) bus->requestValues();
+			binding.bind(servers[serverIndex.get()], inputBusIndex);
 		} catch(const std::exception& error) {
 			ofLogError("scWavescope") << "Could not create scope resources: " << error.what();
 			clearSynthsAndBuses();

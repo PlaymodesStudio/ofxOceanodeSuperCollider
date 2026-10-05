@@ -108,6 +108,7 @@ void serverManager::setup(){
     }));
     listeners.push(server->serverInitializedEvent.newListener([this](){
         initialized = true;
+        graphGeneration++;
         nodesList.clear();
         for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
         busses.clear();
@@ -777,6 +778,9 @@ void serverManager::removeOutput(scOutput *output){
 
 void serverManager::teardownGraphForPresetLoad(){
     if(server == nullptr) return;
+
+    // Every synth in group 1, including those outside the graph, goes below.
+    graphGeneration++;
 
     outputBussesRefToNode.clear();
     connections.clear();

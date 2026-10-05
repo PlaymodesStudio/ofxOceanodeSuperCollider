@@ -324,9 +324,26 @@ int scVUMeter::getOutputBusIndex(ofxSCServer* server, int index) {
 }
 
 void scVUMeter::moveSynthBefore(ofxSCServer* server, int nodeID) {
-	// Following scSynthDef canonical pattern
+	// Following scSynthDef: an existing synth keeps its parameters, so only
+	// the bus wiring is sent again (a full resendParams also re-sent every
+	// other server's synth, for each cable change anywhere in the patch).
 	if(synthInstances.count(server) == 0) return;
-	resendParams.notify();
+	ofxSCSynth* synth = synthInstances[server];
+	if(synth != nullptr){
+		if(vuBuses.count(server) > 0 && vuBuses[server] != nullptr){
+			synth->set("vubus", vuBuses[server]->index);
+		}
+		for(int i = 0; i < inputs.size(); i++){
+			if(inputBuses[server].count(inputs[i]->getNodeRef()) == 1){
+				synth->set(ofToLower(inputs[i].getName()), inputBuses[server][inputs[i]->getNodeRef()]);
+			}
+		}
+		for(int i = 0; i < outputs.size(); i++){
+			if(outputBuses[server].count(outputs[i]->getIndex()) == 1){
+				synth->set(ofToLower(outputs[i].getName()), outputBuses[server][outputs[i]->getIndex()]);
+			}
+		}
+	}
 	synthInstances[server]->moveBefore(nodeID);
 }
 

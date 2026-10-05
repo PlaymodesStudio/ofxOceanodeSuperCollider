@@ -14,6 +14,7 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
+#include "scAnalyzerBinding.h"
 #include "serverManager.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -83,7 +84,7 @@ public:
             serverGraphListener.unsubscribe();
             if(i >= 0 && i < (int)servers.size()) {
                 serverGraphListener = servers[i]->graphComputed.newListener([this](){
-                    if(input->getNodeRef() && enabled.get()) recreateSynth();
+                    if(input->getNodeRef() && enabled.get()) rebindOrRecreateSynth();
                 });
             }
         }));
@@ -136,6 +137,7 @@ private:
     // ── SC resources ───────────────────────────────────────────────────────
     ofxSCSynth* synth  = nullptr;
     ofxSCBus*   fftBus = nullptr;
+    scAnalyzerBinding binding;
 
     // ── Parameters ─────────────────────────────────────────────────────────
     ofParameter<bool>     showWindow;
@@ -190,7 +192,9 @@ private:
         string defName = "fftanalyzer" + ofToString(numChannels.get());
         synth = new ofxSCSynth(defName, srv);
         synth->createAndRun(1, 1, getActive()); //addToTail
-        synth->set("in",     input->getBusIndex(srv));
+        const int inBus = input->getBusIndex(srv);
+        synth->set("in",     inBus);
+        binding.bind(servers[serverIndex], inBus);
         synth->set("fftbus", fftBus->index);
 
         fftBus->requestValues();
@@ -204,7 +208,23 @@ private:
         if(synth) synth->run(false);
     }
 
+    // After a graph rebuild: the synth keeps running and only follows its
+    // input to the new bus (see scAnalyzerBinding.h).
+    void rebindOrRecreateSynth() {
+        if(!synth || serverIndex < 0 || serverIndex >= (int)servers.size()
+           || !binding.canRebind(servers[serverIndex])) {
+            recreateSynth();
+            return;
+        }
+        const int inBus = input->getBusIndex(servers[serverIndex]->getServer());
+        if(inBus != binding.inBus()) {
+            synth->set("in", inBus);
+            binding.setInBus(inBus);
+        }
+    }
+
     void clearSynth() {
+        binding.clear();
         if(synth) { synth->free(); delete synth; synth = nullptr; }
         if(fftBus) { fftBus->free(); delete fftBus; fftBus = nullptr; }
         displayMagnitudes.fill(0.0f);

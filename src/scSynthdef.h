@@ -82,6 +82,8 @@ public:
     
 private:
     string getSynthdefFilename();
+    // inChannels and the input / output bus controls of the synth on server
+    void resendBusesToSynth(ofxSCServer* server);
 	string findNextAvailableSynthdef();
     
     ofEventListeners listeners;

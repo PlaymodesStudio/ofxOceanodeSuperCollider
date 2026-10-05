@@ -350,27 +350,7 @@ void scSynthdef::setup(){
     
     listeners.push(resendParams.newListener([this](){
         for(auto synthServer : synths){
-            if(synthServer.second != nullptr){
-                synthServer.second->set("inChannels", numChannels);
-            }
-        }
-        for(auto synthServer : synths){
-            for(int i = 0; i < inputs.size(); i++){
-                if(inputBuses[synthServer.first].count(inputs[i]->getNodeRef()) == 1){
-                    string paramName = ofToLower(inputs[i].getName());
-                    if(synthServer.second != nullptr){
-                        synthServer.second->set(paramName, inputBuses[synthServer.first][inputs[i]->getNodeRef()]);
-                    }
-                }
-            }
-            for(int i = 0; i < outputs.size(); i++){
-                if(outputBuses[synthServer.first].count(outputs[i]->getIndex()) == 1){
-                    string paramName = ofToLower(outputs[i].getName());
-                    if(synthServer.second != nullptr){
-                        synthServer.second->set(paramName, outputBuses[synthServer.first][outputs[i]->getIndex()]);
-                    }
-                }
-            }
+            resendBusesToSynth(synthServer.first);
         }
     }));
     
@@ -407,8 +387,33 @@ void scSynthdef::createSynth(ofxSCServer* server){
 
 void scSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
     if(synths.count(server) == 0) return;
-    resendParams.notify();
+    // The synth already exists and holds every parameter it was sent: only
+    // the bus wiring can have changed with the graph. A full resendParams here
+    // re-sent every parameter of every node (on every server) for each cable
+    // change anywhere in the patch.
+    resendBusesToSynth(server);
     synths[server]->moveBefore(nodeID);
+}
+
+void scSynthdef::resendBusesToSynth(ofxSCServer* server){
+    auto synthIt = synths.find(server);
+    if(synthIt == synths.end() || synthIt->second == nullptr) return;
+    ofxSCSynth* synth = synthIt->second;
+    synth->set("inChannels", numChannels);
+    auto& serverInputBuses = inputBuses[server];
+    for(int i = 0; i < inputs.size(); i++){
+        auto bus = serverInputBuses.find(inputs[i]->getNodeRef());
+        if(bus != serverInputBuses.end()){
+            synth->set(ofToLower(inputs[i].getName()), bus->second);
+        }
+    }
+    auto& serverOutputBuses = outputBuses[server];
+    for(int i = 0; i < outputs.size(); i++){
+        auto bus = serverOutputBuses.find(outputs[i]->getIndex());
+        if(bus != serverOutputBuses.end()){
+            synth->set(ofToLower(outputs[i].getName()), bus->second);
+        }
+    }
 }
 
 void scSynthdef::free(ofxSCServer* server){
