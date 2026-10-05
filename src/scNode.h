@@ -50,7 +50,18 @@ public:
     
     virtual bool appendOrderedNodes(vector<scNode*> &nodesList, map<scNode*, std::pair<int, vector<int>>> &visitedNodeChilds, vector<scNode*> parents = {});
     
-    void getConnections(std::map<nodePort, vector<scNode*>> &connections);
+    virtual void getConnections(std::map<nodePort, vector<scNode*>> &connections);
+
+    // The server whose graph serverManager::recomputeGraph() is building while
+    // it calls appendOrderedNodes() and getConnections(); nullptr otherwise.
+    // Lets a node that spans several servers (SC Mixer Pro) take part in each
+    // server's graph with only the inputs that belong to it.
+    static ofxSCServer* getGraphTraversalServer(){ return graphTraversalServer; }
+    struct ScopedGraphTraversal {
+        explicit ScopedGraphTraversal(ofxSCServer* server) : previous(graphTraversalServer) { graphTraversalServer = server; }
+        ~ScopedGraphTraversal(){ graphTraversalServer = previous; }
+        ofxSCServer* previous;
+    };
     
     int getNumOutputs(){return outputs.size();};
     
@@ -93,6 +104,11 @@ public:
 	void removeInput(int index);
     void removeOutput(int index);
 protected:
+    // While true, an input change does not re-send the outputs (no graph
+    // rebuild per connection while a node rewires many inputs at once)
+    bool suppressInputRefresh = false;
+
+    static ofxSCServer* graphTraversalServer;
     ofEventListeners listeners;
     
     vector<ofParameter<nodePort>> inputs;

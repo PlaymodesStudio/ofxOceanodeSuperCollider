@@ -121,6 +121,13 @@ public:
     static int getSampleRateForServer(ofxSCServer* server);
 //    int getOutputBusForNode(scNode* node);
     
+    // Coalesced rebuild: an Output's input changing (a connection made or
+    // removed) only marks the graph; it is rebuilt once, on the next update.
+    // Rewiring several connections in one go (portalize, a node moving its
+    // inputs) then costs one rebuild, and sources that are disconnected and
+    // reconnected within the same frame are not freed and recreated.
+    void requestRecomputeGraph(){ recomputePending = true; }
+
     void recomputeGraphOnce(){
         numRecomputeGraphOnce++;
         if(numRecomputeGraphOnce == outputs.size()){
@@ -190,6 +197,7 @@ private:
     int configuredNumOutputBusChannels;
     
     int numRecomputeGraphOnce;
+    bool recomputePending = false;
     std::map<scNode*, ofEventListener> nodeDestroyedListeners;
     bool nodesListChanged = false;
     uint64_t graphGeneration = 0;

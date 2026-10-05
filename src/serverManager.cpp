@@ -90,6 +90,12 @@ void serverManager::setup(){
     }
     boot();
     
+    listeners.push(ofEvents().update.newListener([this](ofEventArgs&){
+        if(!recomputePending) return;
+        recomputePending = false;
+        recomputeGraph();
+    }));
+
     listeners.push(ofxOceanodeShared::getPresetWillBeLoadedEvent().newListener([this](){
         if(ofxOceanodeShared::getPresetLoadType() == ofxOceanodePresetLoadType_ClipboardPaste) return;
         teardownGraphForPresetLoad();
@@ -829,6 +835,9 @@ void serverManager::recomputeGraph(){
         
         outputBussesRefToNode.clear();
         
+        // Nodes that span servers ask which graph they are part of
+        scNode::ScopedGraphTraversal traversal(server);
+
         std::vector<scNode*> newNodesList;
         std::map<scNode*, std::pair<int, std::vector<int>>> nodeChilds;
         for(int i = 0; i < outputs.size(); i++){

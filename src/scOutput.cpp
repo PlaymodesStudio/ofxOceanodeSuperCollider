@@ -27,7 +27,7 @@ scOutput::~scOutput(){
 void scOutput::setup(){
     scNode::addInput("In");
     listeners.push(inputs[0].newListener([this](nodePort &port){
-        outputServers[serverIndex]->recomputeGraph();
+        outputServers[serverIndex]->requestRecomputeGraph();
     }));
     
     addParameter(serverIndex.set("Server", 0, 0, outputServers.size()-1));

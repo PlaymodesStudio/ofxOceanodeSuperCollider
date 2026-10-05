@@ -8,6 +8,8 @@
 #include "scNode.h"
 #include "ofxSuperCollider.h"
 
+ofxSCServer* scNode::graphTraversalServer = nullptr;
+
 int nodePort::getBusIndex(ofxSCServer* server) const{
     if(nodeRef == nullptr) return -1;
     return nodeRef->getOutputBusIndex(server, index);
@@ -27,7 +29,8 @@ void scNode::addInput(std::string name){
     auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>(inputs.back().get()));
     listeners.push(inputs.back().newListener([this, availableInput](nodePort &port){
         *availableInput = port;
-        for(auto &output : outputs) output = output;
+        // A node rewiring several inputs at once re-sends its outputs itself, once
+        if(!suppressInputRefresh) for(auto &output : outputs) output = output;
     }));
 }
 
