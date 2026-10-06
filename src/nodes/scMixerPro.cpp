@@ -27,6 +27,27 @@ const ofColor kTrackPalette[] = {
 
 ImU32 toU32(const ofColor& c, int alpha = 255) { return IM_COL32(c.r, c.g, c.b, alpha); }
 
+// Echo note values, in beats (as GrainBox's echo)
+struct NoteValue { float beats; const char* name; };
+const NoteValue kNotes[] = {
+    {1.0f / 16.0f, "64th"},  {1.0f / 12.0f, "32ndT"}, {1.0f / 8.0f, "32nd"},  {1.0f / 6.0f, "16thT"},
+    {3.0f / 16.0f, "32ndD"}, {1.0f / 4.0f,  "16th"},  {1.0f / 3.0f, "8thT"},  {3.0f / 8.0f, "16thD"},
+    {1.0f / 2.0f,  "8th"},   {2.0f / 3.0f,  "4thT"},  {3.0f / 4.0f, "8thD"},  {1.0f,        "4th"},
+    {4.0f / 3.0f,  "halfT"}, {1.5f,         "4thD"},  {2.0f,        "half"},  {8.0f / 3.0f, "1 barT"},
+    {3.0f,         "halfD"}, {4.0f,         "1 bar"}, {6.0f,        "1 barD"}, {8.0f,       "2 bars"},
+    {16.0f,        "4 bars"}
+};
+constexpr int kNoteCount = (int)(sizeof(kNotes) / sizeof(kNotes[0]));
+int nearestNote(float beats) {
+    int best = 0; float bd = 1e9f;
+    const float lb = std::log(std::max(1e-4f, beats));
+    for(int i = 0; i < kNoteCount; i++) {
+        const float d = std::abs(std::log(kNotes[i].beats) - lb);
+        if(d < bd) { bd = d; best = i; }
+    }
+    return best;
+}
+
 // Button colours for a state: hovering / pressing only brightens the state's
 // own colour, so an "on" button doesn't look "off" under the mouse
 void pushButtonColours(const ImVec4& c) {
@@ -59,8 +80,9 @@ scMixerPro::~scMixerPro() {
 
 void scMixerPro::setup() {
     description = "Multichannel, multi-server mixer: each track runs on its own server, one output per server. "
-                  "Dockable mixer window with VU / peak, fader, balance, mute / solo, per-track EQ, DC correction, "
-                  "compressor and reverb (each costs nothing until switched on).";
+                  "Dockable mixer window with VU / peak, fader, balance, mute / solo; per strip HP, EQ, DC, compressor, "
+                  "saturation, echo and reverb; aux sends to return strips; master HP, EQ, maximizer and limiter "
+                  "(every effect costs nothing until switched on).";
 
     addSeparator("Setup", ofColor(150, 180, 210));
     addParameter(showWindow.set("Show", false));
@@ -116,9 +138,51 @@ void scMixerPro::setup() {
             tr->synth->set("vuAttackTime", vuAttack.get());
             tr->synth->set("vuReleaseTime", vuRelease.get());
         }
+        for(auto& [server, state] : serverStates) if(state.master.out) {
+            state.master.out->set("vuAttackTime", vuAttack.get());
+            state.master.out->set("vuReleaseTime", vuRelease.get());
+        }
     };
     nodeListeners.push(vuAttack.newListener(vuTimes));
     nodeListeners.push(vuRelease.newListener(vuTimes));
+
+    // Master section (window controls, publishable like the strips')
+    mHp.set("Master HP", false);
+    mHpFreq.set("Master HP Freq", 30.0f, 10.0f, 1000.0f);
+    mHp24.set("Master HP 24dB", true);
+    mEq.set("Master EQ", false);
+    for(int b = 0; b < scEQEditor::NUM_BANDS; b++) {
+        const std::string prefix = std::string("Master EQ ") + kBandNames[b];
+        const bool shelf = scEQEditor::isShelf(b);
+        mEqFreq[b].set(prefix + " Freq", kBandFreq[b], scEQEditor::FREQ_MIN, scEQEditor::FREQ_MAX);
+        mEqGain[b].set(prefix + " Gain", 0.0f, -24.0f, 24.0f);
+        mEqShape[b].set(prefix + (shelf ? " Slope" : " Q"), 1.0f, 0.1f, shelf ? 4.0f : 20.0f);
+    }
+    mMax.set("Master Max", false);
+    mMaxDrive.set("Master Max Drive", 3.0f, 0.0f, 24.0f);
+    mMaxCeiling.set("Master Max Ceiling", -0.3f, -12.0f, 0.0f);
+    mMaxCharacter.set("Master Max Character", 4.0f, 0.0f, 10.0f);
+    mMaxIsp.set("Master Max ISP", true);
+    mLim.set("Master Lim", false);
+    mLimCeiling.set("Master Lim Ceiling", -0.3f, -24.0f, 0.0f);
+    for(auto* q : {&mHp, &mEq, &mMax, &mLim})
+        nodeListeners.push(q->newListener([this](bool&) { updateMasterAll(); }));
+    auto masterSend = [this](int k) {
+        for(auto& [server, state] : serverStates) if(state.active) sendMasterStage(server, k);
+    };
+    nodeListeners.push(mHp24.newListener([masterSend](bool&) { masterSend(MST_HP); }));
+    nodeListeners.push(mHpFreq.newListener([masterSend](float&) { masterSend(MST_HP); }));
+    nodeListeners.push(mMaxIsp.newListener([masterSend](bool&) { masterSend(MST_MAX); }));
+    for(auto* q : {&mMaxDrive, &mMaxCeiling, &mMaxCharacter})
+        nodeListeners.push(q->newListener([masterSend](float&) { masterSend(MST_MAX); }));
+    nodeListeners.push(mLimCeiling.newListener([masterSend](float&) { masterSend(MST_LIM); }));
+    for(int b = 0; b < scEQEditor::NUM_BANDS; b++)
+        for(auto* q : {&mEqFreq[b], &mEqGain[b], &mEqShape[b]})
+            nodeListeners.push(q->newListener([this, masterSend](float&) { mEqCurveDirty = true; masterSend(MST_EQ); }));
+    for(auto* q : {&mHp, &mHp24, &mEq, &mMax, &mMaxIsp, &mLim}) addAction(q->getEscapedName(), *q);
+    for(auto* q : {&mHpFreq, &mMaxDrive, &mMaxCeiling, &mMaxCharacter, &mLimCeiling}) addAction(q->getEscapedName(), *q);
+    for(int b = 0; b < scEQEditor::NUM_BANDS; b++)
+        for(auto* q : {&mEqFreq[b], &mEqGain[b], &mEqShape[b]}) addAction(q->getEscapedName(), *q);
 
     requireSynthdefs();
 }
@@ -326,6 +390,34 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
     t.rvbModFreq.set(r + " Mod Rate", 0.2f, 0.01f, 10.0f);
     t.rvbSpin.set(r + " Spin", 1.0f, 0.0f, 20.0f);
     t.rvbWander.set(r + " Wander", 0.25f, 0.0f, 20.0f);
+    const std::string h = "HP " + n, sa = "Sat " + n, e = "Echo " + n;
+    t.hp.set(h, false);
+    t.hpFreq.set(h + " Freq", 80.0f, 10.0f, 1000.0f);
+    t.hp24.set(h + " 24dB", false);
+    t.sat.set(sa, false);
+    t.satDrive.set(sa + " Drive", 6.0f, 0.0f, 36.0f);
+    t.satBias.set(sa + " Warmth", 0.0f, 0.0f, 1.0f);
+    t.satTone.set(sa + " Tone", 20000.0f, 500.0f, 20000.0f);
+    t.satOutput.set(sa + " Output", 0.0f, -24.0f, 24.0f);
+    t.satAuto.set(sa + " Auto Gain", true);
+    t.satMix.set(sa + " Mix", 1.0f, 0.0f, 1.0f);
+    t.echo.set(e, false);
+    t.echoTime.set(e + " Delay", 0.375f, 0.005f, 4.0f);
+    t.echoBeats.set(e + " Beats", true);
+    t.echoBeatVal.set(e + " Delay Beats", 0.75f, 1.0f / 16.0f, 16.0f);
+    t.echoFeed.set(e + " Feed", 0.45f, 0.0f, 0.98f);
+    t.echoCutoff.set(e + " Cutoff", 96.0f, 12.0f, 130.0f);
+    t.echoResonance.set(e + " Resonance", 0.1f, 0.0f, 0.9f);
+    t.echoFilter.set(e + " Filter", 0, 0, 3);
+    t.echoPingPong.set(e + " Ping Pong", 0.0f, 0.0f, 1.0f);
+    // A return is a wet effect: its echo and reverb start fully wet
+    t.echoMix.set(e + " Mix", t.isReturn ? 1.0f : 0.35f, 0.0f, 1.0f);
+    if(t.isReturn) t.rvbMix.set(1.0f);
+    for(int k = 0; k < MAX_RETURNS; k++) {
+        const std::string sn = "Send " + n + " Aux" + ofToString(k + 1);
+        t.sendLevel[k].set(sn, 0.0f, 0.0f, 1.0f);
+        t.sendPre[k].set(sn + " Pre", false);
+    }
     t.vu.assign(currentChannels, 0.0f);
     t.peak.assign(currentChannels, 0.0f);
     t.peakAge.assign(currentChannels, 0.0f);
@@ -351,8 +443,24 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
     t.listeners.push(t.adaptMode.newListener(onAdapt));
     t.listeners.push(t.inChannels.newListener(onAdapt));
     t.listeners.push(t.rotate.newListener(onAdapt));
-    t.listeners.push(t.comp.newListener([this, tp](bool&) { updateFx(*tp, 1); }));
-    t.listeners.push(t.rvb.newListener([this, tp](bool&) { updateFx(*tp, 2); }));
+    t.listeners.push(t.hp.newListener([this, tp](bool&) { updateFx(*tp, FX_HP); }));
+    t.listeners.push(t.comp.newListener([this, tp](bool&) { updateFx(*tp, FX_COMP); }));
+    t.listeners.push(t.sat.newListener([this, tp](bool&) { updateFx(*tp, FX_SAT); }));
+    t.listeners.push(t.echo.newListener([this, tp](bool&) { updateFx(*tp, FX_ECHO); }));
+    t.listeners.push(t.rvb.newListener([this, tp](bool&) { updateFx(*tp, FX_RVB); }));
+    t.listeners.push(t.hp24.newListener([this, tp](bool&) { sendHP(*tp); }));
+    t.listeners.push(t.hpFreq.newListener([this, tp](float&) { sendHP(*tp); }));
+    t.listeners.push(t.satAuto.newListener([this, tp](bool&) { sendSat(*tp); }));
+    for(auto* q : {&t.satDrive, &t.satBias, &t.satTone, &t.satOutput, &t.satMix})
+        t.listeners.push(q->newListener([this, tp](float&) { sendSat(*tp); }));
+    t.listeners.push(t.echoBeats.newListener([this, tp](bool&) { sendEcho(*tp); }));
+    t.listeners.push(t.echoFilter.newListener([this, tp](int&) { sendEcho(*tp); }));
+    for(auto* q : {&t.echoTime, &t.echoBeatVal, &t.echoFeed, &t.echoCutoff, &t.echoResonance, &t.echoPingPong, &t.echoMix})
+        t.listeners.push(q->newListener([this, tp](float&) { sendEcho(*tp); }));
+    for(int k = 0; k < MAX_RETURNS; k++) {
+        t.listeners.push(t.sendLevel[k].newListener([this, tp](float&) { updateSends(*tp); }));
+        t.listeners.push(t.sendPre[k].newListener([this, tp](bool&) { updateSends(*tp); }));
+    }
     t.listeners.push(t.compAuto.newListener([this, tp](bool&) { sendComp(*tp); }));
     for(auto* q : {&t.compThreshold, &t.compRatio, &t.compKnee, &t.compAttack, &t.compRelease,
                    &t.compMakeup, &t.compRms, &t.compHpf, &t.compMix})
@@ -532,6 +640,7 @@ void scMixerPro::setStripServer(Track& tr, int server) {
     tr.server = server;
     tr.srcBus = -1;
     if(isServerActive(server)) createRuntime(tr, serverAt(server));
+    if(tr.isReturn) refreshSends();
     refreshTrackOutputs();
     // A track's source chain moves with it: both servers rebuild
     if(!tr.isBus) refreshGraph();
@@ -555,14 +664,20 @@ std::vector<ofAbstractParameter*> scMixerPro::stripParams(Track& t) {
     return p;
 }
 
-// The Comp / Rvb parameters (switches first)
+// The insert and send parameters (a fixed order: reorder "roles")
 std::vector<ofAbstractParameter*> scMixerPro::fxParams(Track& t) {
-    return {
+    std::vector<ofAbstractParameter*> p = {
         &t.comp, &t.compThreshold, &t.compRatio, &t.compKnee, &t.compAttack, &t.compRelease,
         &t.compMakeup, &t.compAuto, &t.compRms, &t.compHpf, &t.compMix,
         &t.rvb, &t.rvbMix, &t.rvbDecay, &t.rvbSize, &t.rvbPredelay, &t.rvbPosition, &t.rvbSpread,
-        &t.rvbLowpass, &t.rvbHighDamp, &t.rvbLowDamp, &t.rvbModFreq, &t.rvbSpin, &t.rvbWander
+        &t.rvbLowpass, &t.rvbHighDamp, &t.rvbLowDamp, &t.rvbModFreq, &t.rvbSpin, &t.rvbWander,
+        &t.hp, &t.hpFreq, &t.hp24,
+        &t.sat, &t.satDrive, &t.satBias, &t.satTone, &t.satOutput, &t.satAuto, &t.satMix,
+        &t.echo, &t.echoTime, &t.echoBeats, &t.echoBeatVal, &t.echoFeed, &t.echoCutoff,
+        &t.echoResonance, &t.echoFilter, &t.echoPingPong, &t.echoMix
     };
+    for(int k = 0; k < MAX_RETURNS; k++) { p.push_back(&t.sendLevel[k]); p.push_back(&t.sendPre[k]); }
+    return p;
 }
 
 // Rebuild the tracks in a new order (order[new position] = old index; an
@@ -745,10 +860,146 @@ void scMixerPro::removeLastBus() {
 
 std::vector<scMixerPro::Track*> scMixerPro::allStrips() {
     std::vector<Track*> all;
-    all.reserve(tracks.size() + buses.size());
+    all.reserve(tracks.size() + buses.size() + returns.size());
     for(auto& t : tracks) all.push_back(t.get());
     for(auto& b : buses) all.push_back(b.get());
+    for(auto& r : returns) all.push_back(r.get());
     return all;
+}
+
+// ── Aux returns ─────────────────────────────────────────────────────────────
+// A return is a submaster (isBus) fed by the strips' sends instead of their
+// outputs (isReturn): same inserts, runs after the submasters, solo-safe.
+
+void scMixerPro::setReturnCount(int count) {
+    count = ofClamp(count, 0, MAX_RETURNS);
+    while((int)returns.size() < count) addReturn();
+    while((int)returns.size() > count) removeLastReturn();
+}
+
+void scMixerPro::addReturn() {
+    auto rp = std::make_unique<Track>();
+    Track& r = *rp;
+    r.isBus = true;
+    r.isReturn = true;
+    r.index = (int)returns.size();
+    r.name = "Aux " + ofToString(r.index + 1);
+    static const ofColor kReturnColours[MAX_RETURNS] = {
+        ofColor(70, 190, 190), ofColor(90, 170, 220), ofColor(120, 200, 150), ofColor(170, 200, 90)
+    };
+    r.color = kReturnColours[r.index % MAX_RETURNS];
+    r.server = 0;
+    initStrip(r, "R" + ofToString(r.index + 1));
+    returns.push_back(std::move(rp));
+    registerTrackActions(r);
+    syncFaderNames();
+    if(showFaders.get()) updateFaders();
+    if(isServerActive(r.server)) createRuntime(r, serverAt(r.server));
+    refreshSends();
+}
+
+void scMixerPro::removeLastReturn() {
+    if(returns.empty()) return;
+    Track& r = *returns.back();
+    r.listeners.unsubscribeAll();
+    destroyRuntime(r, true);
+    unregisterTrackActions(r);
+    if(selectedEqTrack == eqId(r)) selectedEqTrack = -1;
+    returns.pop_back();
+    refreshSends();
+}
+
+// The strips' sends follow the returns (created, removed, moved)
+void scMixerPro::refreshSends() {
+    for(auto& t : tracks) updateSends(*t);
+    for(auto& b : buses) updateSends(*b);
+}
+
+// A send synth only while the strip sends something to a live return on its
+// server; the track synth's taps (\sendBus) are off otherwise
+void scMixerPro::updateSends(Track& tr) {
+    if(tr.isReturn || !tr.synth || !tr.liveServer) return;
+    ofxSCServer* server = tr.liveServer;
+    int target[MAX_RETURNS];
+    bool any = false;
+    for(int k = 0; k < MAX_RETURNS; k++) {
+        target[k] = -1;
+        if(k >= (int)returns.size() || tr.sendLevel[k].get() <= 0.0f) continue;
+        Track& r = *returns[k];
+        if(r.synth && r.mixBus && r.liveServer == server) { target[k] = r.mixBus->index; any = true; }
+    }
+    if(!any) {
+        if(tr.sendSynth && tr.sendRunning) {
+            tr.synth->set("sendBus", -1);
+            tr.sendSynth->run(false);
+            tr.sendRunning = false;
+        }
+        return;
+    }
+    if(!tr.sendBus) tr.sendBus = new ofxSCBus(RATE_AUDIO, 2 * currentChannels, server);
+    auto sendTo = [&](ofxSCSynth* s) {
+        s->set("in", tr.sendBus->index);
+        for(int k = 0; k < MAX_RETURNS; k++) {
+            const std::string i = ofToString(k);
+            s->set("ret" + i, target[k]);
+            s->set("gain" + i, target[k] >= 0 ? ofClamp(tr.sendLevel[k].get(), 0.0f, 1.0f) : 0.0f);
+            s->set("pre" + i, tr.sendPre[k].get() ? 1.0f : 0.0f);
+        }
+    };
+    if(!tr.sendSynth) {
+        tr.sendSynth = new ofxSCSynth("mixerProSend" + ofToString(currentChannels), server);
+        sendTo(tr.sendSynth);
+        tr.sendSynth->createAndRun(3, tr.synth->nodeID, getActive());   // addAfter
+        orderInsertAfter(server, tr.sendSynth, tr.synth);
+    } else {
+        sendTo(tr.sendSynth);
+        if(!tr.sendRunning && getActive()) tr.sendSynth->run(true);
+    }
+    tr.sendRunning = true;
+    tr.synth->set("sendBus", tr.sendBus->index);
+}
+
+void scMixerPro::dropSends(Track& tr, bool sendFree) {
+    if(tr.sendSynth) {
+        if(tr.liveServer) orderRemove(tr.liveServer, tr.sendSynth);
+        if(sendFree) tr.sendSynth->free();
+        delete tr.sendSynth;
+        tr.sendSynth = nullptr;
+    }
+    if(tr.sendBus) {
+        if(sendFree) tr.sendBus->free();
+        delete tr.sendBus;
+        tr.sendBus = nullptr;
+    }
+    tr.sendRunning = false;
+    if(tr.synth) tr.synth->set("sendBus", -1);
+}
+
+// Where a strip synth of a zone goes: before the first synth of a later zone
+// (2: returns and master, 3: master), nullptr = at the end
+ofxSCSynth* scMixerPro::firstSynthOfZone(ofxSCServer* server, int zone) {
+    std::vector<ofxSCSynth*> later;
+    auto addStrip = [&](Track& t) {
+        if(t.liveServer != server) return;
+        if(t.adapt) later.push_back(t.adapt);
+        if(t.insert) later.push_back(t.insert);
+        for(auto& f : t.fx) if(f.synth) later.push_back(f.synth);
+        if(t.synth) later.push_back(t.synth);
+        if(t.sendSynth) later.push_back(t.sendSynth);
+    };
+    if(zone <= 2) for(auto& r : returns) addStrip(*r);
+    MasterRuntime& m = serverStates[server].master;
+    for(auto& f : m.st) if(f.synth) later.push_back(f.synth);
+    if(m.out) later.push_back(m.out);
+    for(ofxSCSynth* s : serverStates[server].order)
+        if(std::find(later.begin(), later.end(), s) != later.end()) return s;
+    return nullptr;
+}
+
+void scMixerPro::orderInsertAfter(ofxSCServer* server, ofxSCSynth* added, ofxSCSynth* after) {
+    auto& order = serverStates[server].order;
+    auto it = std::find(order.begin(), order.end(), after);
+    order.insert(it == order.end() ? it : it + 1, added);
 }
 
 scMixerPro::Track* scMixerPro::busFor(const Track& tr) const {
@@ -766,12 +1017,202 @@ bool scMixerPro::routedToBus(const Track& tr) const {
 
 int scMixerPro::trackOutBus(Track& tr) {
     if(routedToBus(tr)) return busFor(tr)->mixBus->index;
-    return outBusFor(tr.liveServer);
+    return masterInput(tr.liveServer);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Master section: HP -> EQ -> Maximizer -> Limiter -> MasterOut, per server,
+// only while one of the stages is on (otherwise the strips write straight to
+// the output and there is no master synth)
+// ════════════════════════════════════════════════════════════════════════════
+
+std::vector<ofAbstractParameter*> scMixerPro::masterParams() {
+    std::vector<ofAbstractParameter*> p = {
+        &mHp, &mHpFreq, &mHp24, &mEq, &mMax, &mMaxDrive, &mMaxCeiling, &mMaxCharacter, &mMaxIsp, &mLim, &mLimCeiling
+    };
+    for(int b = 0; b < scEQEditor::NUM_BANDS; b++) { p.push_back(&mEqFreq[b]); p.push_back(&mEqGain[b]); p.push_back(&mEqShape[b]); }
+    return p;
+}
+
+bool scMixerPro::masterWanted(int k) const {
+    switch(k) {
+        case MST_HP:  return mHp.get();
+        case MST_EQ:  return mEq.get();
+        case MST_MAX: return mMax.get();
+        default:      return mLim.get();
+    }
+}
+
+// Where the strips that go to the master write on a server
+int scMixerPro::masterInput(ofxSCServer* server) {
+    auto it = serverStates.find(server);
+    if(it != serverStates.end() && it->second.master.active && it->second.master.bus)
+        return it->second.master.bus->index;
+    return outBusFor(server);
+}
+
+void scMixerPro::refreshStripOuts(ofxSCServer* server) {
+    for(Track* tr : allStrips())
+        if(tr->synth && tr->liveServer == server) tr->synth->set("out", trackOutBus(*tr));
+}
+
+void scMixerPro::updateMasterAll() {
+    for(auto& [server, state] : serverStates) if(state.active) updateMaster(server);
+}
+
+void scMixerPro::updateMaster(ofxSCServer* server) {
+    auto it = serverStates.find(server);
+    if(it == serverStates.end() || !it->second.active) return;
+    ServerState& state = it->second;
+    MasterRuntime& m = state.master;
+    static const char* bases[MST_COUNT] = {"mixerProHP", "mixerProEQ", "mixerProMax", "mixerProLim"};
+    const std::string n = ofToString(currentChannels);
+
+    bool wanted = false;
+    for(int k = 0; k < MST_COUNT; k++) wanted = wanted || masterWanted(k);
+    if(wanted) {
+        // MasterOut first: the stages go before it
+        if(!m.bus) m.bus = new ofxSCBus(RATE_AUDIO, currentChannels, server);
+        if(!m.vuBus) m.vuBus = new ofxSCBus(RATE_CONTROL, currentChannels, server);
+        if(!m.out) {
+            m.out = new ofxSCSynth("mixerProMasterOut" + n, server);
+            m.out->set("in", m.bus->index);
+            m.out->set("out", outBusFor(server));
+            m.out->set("vuBus", m.vuBus->index);
+            m.out->set("vuAttackTime", vuAttack.get());
+            m.out->set("vuReleaseTime", vuRelease.get());
+            if(state.order.empty()) m.out->createAndRun(0, 1, getActive());
+            else m.out->createAndRun(3, state.order.back()->nodeID, getActive());   // addAfter: last
+            state.order.push_back(m.out);
+        } else if(!m.outRunning && getActive()) {
+            m.out->run(true);
+        }
+        m.outRunning = true;
+    }
+
+    const float now = ofGetElapsedTimef();
+    for(int k = 0; k < MST_COUNT; k++) {
+        FxStage& f = m.st[k];
+        if(!masterWanted(k)) {
+            if(f.synth && f.running && f.offAt < 0.0f) {
+                f.offAt = now + (k == MST_EQ ? 0.0f : 0.15f);   // the EQ has no fade
+                sendMasterStage(server, k);
+            }
+            continue;
+        }
+        f.offAt = -1.0f;
+        if(!f.bus) f.bus = new ofxSCBus(RATE_AUDIO, currentChannels, server);
+        if(!f.synth) {
+            ofxSCSynth* before = m.out;
+            for(int j = k + 1; j < MST_COUNT; j++) if(m.st[j].synth) { before = m.st[j].synth; break; }
+            f.synth = new ofxSCSynth(bases[k] + n, server);
+            f.synth->set("out", f.bus->index);
+            sendMasterStage(server, k);
+            f.synth->createAndRun(2, before->nodeID, getActive());   // addBefore
+            orderInsertBefore(server, f.synth, before);
+        } else {
+            sendMasterStage(server, k);
+            if(!f.running && getActive()) f.synth->run(true);
+        }
+        f.running = true;
+    }
+
+    bool running = false;
+    for(auto& f : m.st) running = running || f.running;
+    masterRouting(server);
+    if(running && !m.active) {
+        m.active = true;
+        refreshStripOuts(server);
+    } else if(!running && m.active) {
+        m.active = false;
+        refreshStripOuts(server);   // straight to the output again, then pause
+    }
+    if(!running && m.out && m.outRunning) {
+        m.out->run(false);
+        m.outRunning = false;
+    }
+}
+
+// Each running stage reads the previous one (the first the master bus);
+// MasterOut reads the last
+void scMixerPro::masterRouting(ofxSCServer* server) {
+    MasterRuntime& m = serverStates[server].master;
+    if(!m.bus) return;
+    int bus = m.bus->index;
+    for(auto& f : m.st) {
+        if(!(f.synth && f.running && f.bus)) continue;
+        f.synth->set("in", bus);
+        f.synth->set("out", f.bus->index);
+        bus = f.bus->index;
+    }
+    if(m.out) m.out->set("in", bus);
+}
+
+void scMixerPro::sendMasterStage(ofxSCServer* server, int k) {
+    MasterRuntime& m = serverStates[server].master;
+    ofxSCSynth* s = m.st[k].synth;
+    if(!s) return;
+    const float on = (masterWanted(k) && m.st[k].offAt < 0.0f) ? 1.0f : 0.0f;
+    switch(k) {
+        case MST_HP:
+            s->set("freq", ofClamp(mHpFreq.get(), 10.0f, 20000.0f));
+            s->set("slope", mHp24.get() ? 1.0f : 0.0f);
+            s->set("on", on);
+            break;
+        case MST_EQ:
+            for(int b = 0; b < scEQEditor::NUM_BANDS; b++) {
+                const std::string key = "b" + ofToString(b + 1);
+                s->set(key + "gain", mEqGain[b].get());
+                s->set(key + "freq", mEqFreq[b].get());
+                if(scEQEditor::isShelf(b))
+                    s->set(key + "slope", 1.0f / scEQEditor::safeShelfSlope(mEqShape[b].get(), mEqGain[b].get()));
+                else
+                    s->set(key + "rq", 1.0f / std::max(0.01f, mEqShape[b].get()));
+            }
+            break;
+        case MST_MAX:
+            s->set("drive", ofClamp(mMaxDrive.get(), 0.0f, 24.0f));
+            s->set("ceiling", ofClamp(mMaxCeiling.get(), -12.0f, 0.0f));
+            s->set("character", ofClamp(mMaxCharacter.get(), 0.0f, 10.0f));
+            s->set("isp", mMaxIsp.get() ? 1.0f : 0.0f);
+            s->set("on", on);
+            break;
+        default:
+            s->set("ceiling", ofClamp(mLimCeiling.get(), -24.0f, 0.0f));
+            s->set("on", on);
+            break;
+    }
+}
+
+void scMixerPro::destroyMaster(ofxSCServer* server, bool sendFree) {
+    MasterRuntime& m = serverStates[server].master;
+    const bool wasActive = m.active;
+    auto drop = [&](ofxSCSynth*& s) {
+        if(!s) return;
+        orderRemove(server, s);
+        if(sendFree) s->free();
+        delete s;
+        s = nullptr;
+    };
+    auto dropBus = [&](ofxSCBus*& b) {
+        if(!b) return;
+        if(sendFree) b->free();
+        delete b;
+        b = nullptr;
+    };
+    for(auto& f : m.st) { drop(f.synth); dropBus(f.bus); f.running = false; f.offAt = -1.0f; }
+    drop(m.out);
+    dropBus(m.bus);
+    dropBus(m.vuBus);
+    m.outRunning = false;
+    m.active = false;
+    m.vu.clear();
+    if(wasActive && sendFree) refreshStripOuts(server);
 }
 
 // Where every live track writes, and its master level (1 into a bus)
 void scMixerPro::refreshTrackOutputs() {
-    for(auto& tr : tracks) {
+    for(Track* tr : allStrips()) {
         if(!tr->synth) continue;
         tr->synth->set("out", trackOutBus(*tr));
         sendMasterLevel(*tr);
@@ -780,6 +1221,11 @@ void scMixerPro::refreshTrackOutputs() {
 }
 
 scMixerPro::Track* scMixerPro::eqTarget() {
+    if(selectedEqTrack >= MASTER_PANEL) return nullptr;
+    if(selectedEqTrack >= 1500) {
+        const int r = selectedEqTrack - 1500;
+        return r < (int)returns.size() ? returns[r].get() : nullptr;
+    }
     if(selectedEqTrack >= 1000) {
         const int b = selectedEqTrack - 1000;
         return b < (int)buses.size() ? buses[b].get() : nullptr;
@@ -838,12 +1284,20 @@ void scMixerPro::setChannelCount(int channels) {
             delete fx.synth;
             fx.synth = synth;
         };
-        replaceFx(tr.compFx, "mixerProComp");
-        replaceFx(tr.rvbFx, "mixerProRvb");
+        static const char* bases[FX_COUNT] = {"mixerProHP", "mixerProComp", "mixerProSat", "mixerProEcho", "mixerProRvb"};
+        for(int k = 0; k < FX_COUNT; k++) replaceFx(tr.fx[k], bases[k]);
+        dropSends(tr, true);   // its def and bus depend on the width; updateSends below
         tr.sentMute = -1.0f;
         sendAll(tr);
         updateAdapter(tr);
     }
+    // The master chains are rebuilt at the new width
+    for(auto& [server, state] : serverStates) {
+        if(!state.active) continue;
+        destroyMaster(server, true);
+        updateMaster(server);
+    }
+    for(Track* tr : allStrips()) updateSends(*tr);
     refreshTrackOutputs();
     masterVU.assign(channels, 0.0f);
     masterPeak.assign(channels, 0.0f);
@@ -853,7 +1307,7 @@ void scMixerPro::setChannelCount(int channels) {
 bool scMixerPro::anySolo() const {
     for(const auto& tr : tracks) if(tr->solo.get()) return true;
     for(const auto& b : buses) if(b->solo.get()) return true;
-    return false;
+    return false;   // returns are solo-safe and have no solo
 }
 
 // A soloed bus opens all of its tracks until one or more of those tracks are
@@ -861,6 +1315,7 @@ bool scMixerPro::anySolo() const {
 // its parent bus audible.
 bool scMixerPro::isSilenced(const Track& tr) const {
     if(tr.mute.get()) return true;
+    if(tr.isReturn) return false;   // solo-safe: a soloed track keeps its reverb
     if(!anySolo() || tr.solo.get()) return false;
     if(!tr.isBus) {
         Track* b = busFor(tr);
@@ -940,9 +1395,16 @@ void scMixerPro::createRuntime(Track& tr, ofxSCServer* server) {
     tr.synth->set("in", variant != 0 ? tr.insertBus->index : chainInput(tr));
     auto& order = serverStates[server].order;
     if(tr.isBus && !order.empty()) {
-        // Buses run after every track of the node
-        tr.synth->createAndRun(3, order.back()->nodeID, getActive());   // addAfter
-        order.push_back(tr.synth);
+        // Submasters run after every track, returns after the submasters,
+        // the master section last
+        ofxSCSynth* before = firstSynthOfZone(server, tr.isReturn ? 3 : 2);
+        if(before) {
+            tr.synth->createAndRun(2, before->nodeID, getActive());   // addBefore
+            orderInsertBefore(server, tr.synth, before);
+        } else {
+            tr.synth->createAndRun(3, order.back()->nodeID, getActive());   // addAfter
+            order.push_back(tr.synth);
+        }
     } else {
         tr.synth->createAndRun(0, 1, getActive());
         order.insert(order.begin(), tr.synth);
@@ -958,10 +1420,11 @@ void scMixerPro::createRuntime(Track& tr, ofxSCServer* server) {
         orderInsertBefore(server, tr.insert, tr.synth);
         tr.insertRunning = true;
     }
-    if(tr.comp.get()) updateFx(tr, 1);
-    if(tr.rvb.get()) updateFx(tr, 2);
+    for(int k = 0; k < FX_COUNT; k++) if(fxSwitch(tr, k).get()) updateFx(tr, k);
     tr.detectedInputs = sourceChannels(tr);
     updateAdapter(tr);
+    if(tr.isReturn) refreshSends();
+    else updateSends(tr);
     if(tr.isBus) refreshTrackOutputs();
 }
 
@@ -976,8 +1439,8 @@ void scMixerPro::destroyRuntime(Track& tr, bool sendFree) {
     };
     dropAdapter(tr, sendFree);
     drop(tr.insert);
-    drop(tr.compFx.synth);
-    drop(tr.rvbFx.synth);
+    for(auto& f : tr.fx) drop(f.synth);
+    drop(tr.sendSynth);
     drop(tr.synth);
     // After a server reboot the allocators were reset: the addresses are no
     // longer ours to give back
@@ -989,13 +1452,13 @@ void scMixerPro::destroyRuntime(Track& tr, bool sendFree) {
     };
     dropBus(tr.vuBus);
     dropBus(tr.insertBus);
-    dropBus(tr.compFx.bus);
-    dropBus(tr.rvbFx.bus);
+    for(auto& f : tr.fx) dropBus(f.bus);
+    dropBus(tr.sendBus);
     dropBus(tr.mixBus);
     tr.insertVariant = 0;
     tr.insertRunning = false;
-    tr.compFx.running = tr.rvbFx.running = false;
-    tr.compFx.offAt = tr.rvbFx.offAt = -1.0f;
+    for(auto& f : tr.fx) { f.running = false; f.offAt = -1.0f; }
+    tr.sendRunning = false;
     tr.gr = 0.0f;
     tr.liveServer = nullptr;
     tr.sentMute = -1.0f;
@@ -1014,34 +1477,49 @@ void scMixerPro::applyInputRouting(Track& tr) {
         tr.adapt->set("out", tr.adaptBus->index);
     }
     if(tr.insert && tr.insertRunning && tr.insertBus) {
-        tr.insert->set("in", stageInput(tr, 0));
+        tr.insert->set("in", stageInput(tr, 1));
         tr.insert->set("out", tr.insertBus->index);
     }
-    for(int stage = 1; stage <= 2; stage++) {
-        const FxStage& fx = stage == 1 ? tr.compFx : tr.rvbFx;
-        if(!(fx.synth && fx.running && fx.bus)) continue;
-        fx.synth->set("in", stageInput(tr, stage));
-        fx.synth->set("out", fx.bus->index);
+    for(int k = 0; k < FX_COUNT; k++) {
+        const FxStage& f = tr.fx[k];
+        if(!(f.synth && f.running && f.bus)) continue;
+        f.synth->set("in", stageInput(tr, fxPos(k)));
+        f.synth->set("out", f.bus->index);
     }
-    tr.synth->set("in", stageInput(tr, 3));
+    tr.synth->set("in", stageInput(tr, CHAIN_TRACK));
 }
 
-// The bus a chain stage reads: the output of the last running stage before
-// it (0 EQ/DC, 1 Comp, 2 Rvb, 3 the track), else the source / adapter
-int scMixerPro::stageInput(const Track& tr, int stage) const {
+// A chain position's output bus while it runs (-1: not in the chain)
+int scMixerPro::stageOutBus(const Track& tr, int pos) const {
+    if(pos == 1) return (tr.insert && tr.insertRunning && tr.insertBus) ? tr.insertBus->index : -1;
+    const int k = fxAtPos(pos);
+    if(k < 0) return -1;
+    const FxStage& f = tr.fx[k];
+    return (f.synth && f.running && f.bus) ? f.bus->index : -1;
+}
+
+ofxSCSynth* scMixerPro::stageSynth(const Track& tr, int pos) const {
+    if(pos == 1) return tr.insert;
+    const int k = fxAtPos(pos);
+    return k >= 0 ? tr.fx[k].synth : nullptr;
+}
+
+// The bus a chain position reads: the output of the last running stage
+// before it, else the source / adapter
+int scMixerPro::stageInput(const Track& tr, int pos) const {
     int bus = chainInput(tr);
-    if(stage > 0 && tr.insert && tr.insertRunning && tr.insertBus) bus = tr.insertBus->index;
-    if(stage > 1 && tr.compFx.synth && tr.compFx.running && tr.compFx.bus) bus = tr.compFx.bus->index;
-    if(stage > 2 && tr.rvbFx.synth && tr.rvbFx.running && tr.rvbFx.bus) bus = tr.rvbFx.bus->index;
+    for(int p = 0; p < pos && p < CHAIN_TRACK; p++) {
+        const int b = stageOutBus(tr, p);
+        if(b >= 0) bus = b;
+    }
     return bus;
 }
 
-// The first existing synth after a stage (-1: the adapter): where a new
-// stage is added before, so the chain keeps its order
-ofxSCSynth* scMixerPro::chainSynthAfter(const Track& tr, int stage) const {
-    if(stage < 0 && tr.insert) return tr.insert;
-    if(stage < 1 && tr.compFx.synth) return tr.compFx.synth;
-    if(stage < 2 && tr.rvbFx.synth) return tr.rvbFx.synth;
+// The first existing synth after a chain position (-1: the adapter): where a
+// new stage is added before, so the chain keeps its order
+ofxSCSynth* scMixerPro::chainSynthAfter(const Track& tr, int pos) const {
+    for(int p = pos + 1; p < CHAIN_TRACK; p++)
+        if(ofxSCSynth* s = stageSynth(tr, p)) return s;
     return tr.synth;
 }
 
@@ -1221,7 +1699,7 @@ void scMixerPro::updateInsert(Track& tr) {
         tr.insert->set("in", chainInput(tr));
         tr.insert->set("out", tr.insertBus->index);
         sendEQ(tr);
-        ofxSCSynth* before = chainSynthAfter(tr, 0);
+        ofxSCSynth* before = chainSynthAfter(tr, 1);
         tr.insert->createAndRun(2, before->nodeID, getActive());
         orderInsertBefore(server, tr.insert, before);
     } else if(tr.insertVariant != variant) {
@@ -1243,42 +1721,74 @@ void scMixerPro::updateInsert(Track& tr) {
     applyInputRouting(tr);
 }
 
-// ── Comp / Rvb inserts ──────────────────────────────────────────────────────
+// ── Strip inserts (HP, Comp, Sat, Echo, Rvb) ───────────────────────────────
+
+ofParameter<bool>& scMixerPro::fxSwitch(Track& tr, int k) {
+    switch(k) {
+        case FX_HP:   return tr.hp;
+        case FX_COMP: return tr.comp;
+        case FX_SAT:  return tr.sat;
+        case FX_ECHO: return tr.echo;
+        default:      return tr.rvb;
+    }
+}
+
+void scMixerPro::sendFx(Track& tr, int k) {
+    switch(k) {
+        case FX_HP:   sendHP(tr); break;
+        case FX_COMP: sendComp(tr); break;
+        case FX_SAT:  sendSat(tr); break;
+        case FX_ECHO: sendEcho(tr); break;
+        default:      sendRvb(tr); break;
+    }
+}
 
 // Switched on: create (first time) or resume, and route through it.
-// Switched off: \on 0 (the compressor fades to dry, the reverb stops feeding
-// its tank), and update() pauses it and routes around it once faded / rung out.
-void scMixerPro::updateFx(Track& tr, int which) {
+// Switched off: \on 0 (HP / Comp / Sat fade to dry, Echo / Rvb stop feeding
+// their loop), and update() pauses it and routes around it once faded or
+// rung out.
+void scMixerPro::updateFx(Track& tr, int k) {
     if(!tr.synth || !tr.liveServer) return;   // applied when the synth is created
     ofxSCServer* server = tr.liveServer;
-    const bool isComp = which == 1;
-    FxStage& fx = isComp ? tr.compFx : tr.rvbFx;
-    auto send = [&]() { if(isComp) sendComp(tr); else sendRvb(tr); };
+    static const char* bases[FX_COUNT] = {"mixerProHP", "mixerProComp", "mixerProSat", "mixerProEcho", "mixerProRvb"};
+    FxStage& f = tr.fx[k];
 
-    if(!(isComp ? tr.comp.get() : tr.rvb.get())) {
-        if(fx.synth && fx.running && fx.offAt < 0.0f) {
-            fx.offAt = ofGetElapsedTimef() + (isComp ? 0.15f : rvbTail(tr));
-            send();   // on 0
+    if(!fxSwitch(tr, k).get()) {
+        if(f.synth && f.running && f.offAt < 0.0f) {
+            f.offAt = ofGetElapsedTimef() + fxOffDelay(tr, k);
+            sendFx(tr, k);   // on 0
         }
         return;
     }
 
-    fx.offAt = -1.0f;
-    if(!fx.bus) fx.bus = new ofxSCBus(RATE_AUDIO, currentChannels, server);
-    if(!fx.synth) {
-        ofxSCSynth* before = chainSynthAfter(tr, which);
-        fx.synth = new ofxSCSynth((isComp ? "mixerProComp" : "mixerProRvb") + ofToString(currentChannels), server);
-        fx.synth->set("in", stageInput(tr, which));
-        fx.synth->set("out", fx.bus->index);
-        send();   // stored as /s_new arguments
-        fx.synth->createAndRun(2, before->nodeID, getActive());   // addBefore
-        orderInsertBefore(server, fx.synth, before);
+    f.offAt = -1.0f;
+    if(!f.bus) f.bus = new ofxSCBus(RATE_AUDIO, currentChannels, server);
+    if(!f.synth) {
+        ofxSCSynth* before = chainSynthAfter(tr, fxPos(k));
+        f.synth = new ofxSCSynth(bases[k] + ofToString(currentChannels), server);
+        f.synth->set("in", stageInput(tr, fxPos(k)));
+        f.synth->set("out", f.bus->index);
+        sendFx(tr, k);   // stored as /s_new arguments
+        f.synth->createAndRun(2, before->nodeID, getActive());   // addBefore
+        orderInsertBefore(server, f.synth, before);
     } else {
-        send();   // on 1: fades back in from where it was paused
-        if(!fx.running && getActive()) fx.synth->run(true);
+        sendFx(tr, k);   // on 1: fades back in from where it was paused
+        if(!f.running && getActive()) f.synth->run(true);
     }
-    fx.running = true;
+    f.running = true;
     applyInputRouting(tr);
+}
+
+// How long a switched-off insert keeps running before it is paused
+float scMixerPro::fxOffDelay(const Track& tr, int k) const {
+    if(k == FX_RVB) return rvbTail(tr);
+    if(k == FX_ECHO) {
+        // repeats down to -60 dB: 60 / (-20 log10 feed) of them
+        const float fb = ofClamp(tr.echoFeed.get(), 0.0f, 0.98f);
+        const float repeats = fb < 0.01f ? 1.0f : std::min(200.0f, 3.0f / -std::log10(fb));
+        return std::min(30.0f, echoDelaySec(tr) * (repeats + 1.0f) + 0.2f);
+    }
+    return 0.15f;
 }
 
 // How long a switched-off reverb keeps running: its tail down to -60 dB
@@ -1286,22 +1796,57 @@ float scMixerPro::rvbTail(const Track& tr) const {
     return std::min(30.0f, tr.rvbDecay.get() + tr.rvbPredelay.get() * 0.001f + 0.3f);
 }
 
+// Echo delay: seconds, or a note value (beats) at the node's tempo (max 4 s)
+float scMixerPro::echoDelaySec(const Track& tr) const {
+    if(!tr.echoBeats.get()) return ofClamp(tr.echoTime.get(), 0.005f, 4.0f);
+    return ofClamp(tr.echoBeatVal.get() * 60.0f / std::max(1.0f, currentBpm), 0.005f, 4.0f);
+}
+
+void scMixerPro::setBpm(float bpm) {
+    currentBpm = bpm;
+    for(Track* tr : allStrips()) if(tr->echoBeats.get()) sendEcho(*tr);
+}
+
 void scMixerPro::processFxTimers() {
     const float now = ofGetElapsedTimef();
     for(Track* tr : allStrips()) {
-        for(FxStage* fx : {&tr->compFx, &tr->rvbFx}) {
-            if(fx->offAt < 0.0f || now < fx->offAt) continue;
-            fx->offAt = -1.0f;
-            if(!fx->synth || !fx->running || !tr->synth) continue;
-            fx->running = false;
+        for(FxStage& f : tr->fx) {
+            if(f.offAt < 0.0f || now < f.offAt) continue;
+            f.offAt = -1.0f;
+            if(!f.synth || !f.running || !tr->synth) continue;
+            f.running = false;
             applyInputRouting(*tr);   // around it first, then pause: no gap
-            fx->synth->run(false);
+            f.synth->run(false);
         }
+    }
+    // Master stages: the same, then the master itself when nothing is left
+    for(auto& [server, state] : serverStates) {
+        MasterRuntime& m = state.master;
+        bool changed = false;
+        for(FxStage& f : m.st) {
+            if(f.offAt < 0.0f || now < f.offAt) continue;
+            f.offAt = -1.0f;
+            if(!f.synth || !f.running) continue;
+            f.running = false;
+            changed = true;
+        }
+        if(!changed) continue;
+        masterRouting(server);
+        for(FxStage& f : m.st) if(f.synth && !f.running) f.synth->run(false);
+        updateMaster(server);   // deactivates the master once every stage is off
     }
 }
 
+void scMixerPro::sendHP(Track& tr) {
+    ofxSCSynth* s = tr.fx[FX_HP].synth;
+    if(!s) return;
+    s->set("freq", ofClamp(tr.hpFreq.get(), 10.0f, 20000.0f));
+    s->set("slope", tr.hp24.get() ? 1.0f : 0.0f);
+    s->set("on", (tr.hp.get() && tr.fx[FX_HP].offAt < 0.0f) ? 1.0f : 0.0f);
+}
+
 void scMixerPro::sendComp(Track& tr) {
-    ofxSCSynth* s = tr.compFx.synth;
+    ofxSCSynth* s = tr.fx[FX_COMP].synth;
     if(!s) return;
     s->set("threshold", tr.compThreshold.get());
     s->set("ratio", std::max(1.0f, tr.compRatio.get()));
@@ -1314,11 +1859,36 @@ void scMixerPro::sendComp(Track& tr) {
     s->set("schpf", ofClamp(tr.compHpf.get(), 10.0f, 2000.0f));
     s->set("mix", ofClamp(tr.compMix.get(), 0.0f, 1.0f));
     s->set("grBus", tr.vuBus ? tr.vuBus->index + currentChannels + 2 : -1);
-    s->set("on", (tr.comp.get() && tr.compFx.offAt < 0.0f) ? 1.0f : 0.0f);
+    s->set("on", (tr.comp.get() && tr.fx[FX_COMP].offAt < 0.0f) ? 1.0f : 0.0f);
+}
+
+void scMixerPro::sendSat(Track& tr) {
+    ofxSCSynth* s = tr.fx[FX_SAT].synth;
+    if(!s) return;
+    s->set("drive", ofClamp(tr.satDrive.get(), 0.0f, 36.0f));
+    s->set("bias", ofClamp(tr.satBias.get(), 0.0f, 1.0f));
+    s->set("tone", ofClamp(tr.satTone.get(), 500.0f, 20000.0f));
+    s->set("output", ofClamp(tr.satOutput.get(), -24.0f, 24.0f));
+    s->set("autogain", tr.satAuto.get() ? 1.0f : 0.0f);
+    s->set("mix", ofClamp(tr.satMix.get(), 0.0f, 1.0f));
+    s->set("on", (tr.sat.get() && tr.fx[FX_SAT].offAt < 0.0f) ? 1.0f : 0.0f);
+}
+
+void scMixerPro::sendEcho(Track& tr) {
+    ofxSCSynth* s = tr.fx[FX_ECHO].synth;
+    if(!s) return;
+    s->set("delay", echoDelaySec(tr));
+    s->set("feed", ofClamp(tr.echoFeed.get(), 0.0f, 0.98f));
+    s->set("cutoff", ofClamp(tr.echoCutoff.get(), 12.0f, 130.0f));
+    s->set("resonance", ofClamp(tr.echoResonance.get(), 0.0f, 0.9f));
+    s->set("filtertype", (float)ofClamp(tr.echoFilter.get(), 0, 3));
+    s->set("pingpong", ofClamp(tr.echoPingPong.get(), 0.0f, 1.0f));
+    s->set("mix", ofClamp(tr.echoMix.get(), 0.0f, 1.0f));
+    s->set("on", (tr.echo.get() && tr.fx[FX_ECHO].offAt < 0.0f) ? 1.0f : 0.0f);
 }
 
 void scMixerPro::sendRvb(Track& tr) {
-    ofxSCSynth* s = tr.rvbFx.synth;
+    ofxSCSynth* s = tr.fx[FX_RVB].synth;
     if(!s) return;
     s->set("mix", ofClamp(tr.rvbMix.get(), 0.0f, 1.0f));
     s->set("decay", std::max(0.05f, tr.rvbDecay.get()));
@@ -1332,7 +1902,7 @@ void scMixerPro::sendRvb(Track& tr) {
     s->set("modfreq", ofClamp(tr.rvbModFreq.get(), 0.001f, 20.0f));
     s->set("spin", ofClamp(tr.rvbSpin.get(), 0.0f, 20.0f));
     s->set("wander", ofClamp(tr.rvbWander.get(), 0.0f, 20.0f));
-    s->set("on", (tr.rvb.get() && tr.rvbFx.offAt < 0.0f) ? 1.0f : 0.0f);
+    s->set("on", (tr.rvb.get() && tr.fx[FX_RVB].offAt < 0.0f) ? 1.0f : 0.0f);
 }
 
 // Fader times Gain Vec (a missing entry counts as 1)
@@ -1388,8 +1958,7 @@ void scMixerPro::sendAll(Track& tr) {
     tr.synth->set("mute", tr.sentMute);
     applyInputRouting(tr);
     sendEQ(tr);
-    sendComp(tr);
-    sendRvb(tr);
+    for(int k = 0; k < FX_COUNT; k++) sendFx(tr, k);
     sendSidechainShape(tr);
     // The source bus / key are sent by update() (the source may not exist yet)
     tr.synth->set("scBus", -1);
@@ -1451,15 +2020,21 @@ void scMixerPro::sendSidechainKeys() {
 
 void scMixerPro::resendParametersForNRT() {
     for(Track* tr : allStrips()) if(tr->synth) sendAll(*tr);
+    for(auto& [server, state] : serverStates)
+        for(int k = 0; k < MST_COUNT; k++) sendMasterStage(server, k);
 }
 
 void scMixerPro::activate() {
     for(Track* tr : allStrips()) {
         if(tr->synth) tr->synth->run(true);
         if(tr->insert && tr->insertRunning) tr->insert->run(true);
-        if(tr->compFx.synth && tr->compFx.running) tr->compFx.synth->run(true);
-        if(tr->rvbFx.synth && tr->rvbFx.running) tr->rvbFx.synth->run(true);
+        for(auto& f : tr->fx) if(f.synth && f.running) f.synth->run(true);
+        if(tr->sendSynth && tr->sendRunning) tr->sendSynth->run(true);
         if(tr->adapt && tr->adaptRunning) tr->adapt->run(true);
+    }
+    for(auto& [server, state] : serverStates) {
+        for(auto& f : state.master.st) if(f.synth && f.running) f.synth->run(true);
+        if(state.master.out && state.master.outRunning) state.master.out->run(true);
     }
 }
 
@@ -1467,9 +2042,13 @@ void scMixerPro::deactivate() {
     for(Track* tr : allStrips()) {
         if(tr->synth) tr->synth->run(false);
         if(tr->insert) tr->insert->run(false);
-        if(tr->compFx.synth) tr->compFx.synth->run(false);
-        if(tr->rvbFx.synth) tr->rvbFx.synth->run(false);
+        for(auto& f : tr->fx) if(f.synth) f.synth->run(false);
+        if(tr->sendSynth) tr->sendSynth->run(false);
         if(tr->adapt) tr->adapt->run(false);
+    }
+    for(auto& [server, state] : serverStates) {
+        for(auto& f : state.master.st) if(f.synth) f.synth->run(false);
+        if(state.master.out) state.master.out->run(false);
     }
 }
 
@@ -1482,6 +2061,7 @@ void scMixerPro::buildSynth(ofxSCServer* server) {
     // reboot clears the graph without freeing the nodes): forget it without
     // freeing, its node IDs and bus addresses are gone.
     for(Track* tr : allStrips()) if(tr->liveServer == server) destroyRuntime(*tr, false);
+    destroyMaster(server, false);
     serverStates[server].order.clear();
 }
 
@@ -1493,13 +2073,17 @@ void scMixerPro::createSynth(ofxSCServer* server) {
     for(int t = (int)tracks.size() - 1; t >= 0; t--) {
         if(tracks[t]->server == k) createRuntime(*tracks[t], server);
     }
-    // Then the buses, each after everything else (in bus order)
+    // Then the buses, each after everything else (in bus order), the returns
+    // and the master section
     for(auto& b : buses) if(b->server == k) createRuntime(*b, server);
+    for(auto& r : returns) if(r->server == k) createRuntime(*r, server);
+    updateMaster(server);
     refreshTrackOutputs();
 }
 
 void scMixerPro::free(ofxSCServer* server) {
     for(Track* tr : allStrips()) if(tr->liveServer == server) destroyRuntime(*tr, true);
+    destroyMaster(server, true);
     auto& state = serverStates[server];
     state.order.clear();
     state.active = false;
@@ -1527,6 +2111,7 @@ void scMixerPro::setOutputBus(ofxSCServer* server, int index, int bus) {
     serverStates[server].outputBuses[index] = bus;
     if(index != serverIndexOf(server)) return;
     for(Track* tr : allStrips()) if(tr->liveServer == server && tr->synth) tr->synth->set("out", trackOutBus(*tr));
+    if(MasterRuntime& m = serverStates[server].master; m.out) m.out->set("out", bus);
 }
 
 int scMixerPro::getOutputBusIndex(ofxSCServer* server, int index) {
@@ -1589,9 +2174,19 @@ void scMixerPro::registerTrackActions(Track& tr) {
         addAction(tr.eqGain[b].getEscapedName(), tr.eqGain[b]);
         addAction(tr.eqShape[b].getEscapedName(), tr.eqShape[b]);
     }
-    addAction(tr.comp.getEscapedName(), tr.comp);
-    addAction(tr.compAuto.getEscapedName(), tr.compAuto);
-    addAction(tr.rvb.getEscapedName(), tr.rvb);
+    for(auto* q : {&tr.comp, &tr.compAuto, &tr.rvb, &tr.hp, &tr.hp24, &tr.sat, &tr.satAuto, &tr.echo, &tr.echoBeats})
+        addAction(q->getEscapedName(), *q);
+    addAction(tr.echoFilter.getEscapedName(), tr.echoFilter);
+    for(auto* q : {&tr.hpFreq, &tr.satDrive, &tr.satBias, &tr.satTone, &tr.satOutput, &tr.satMix,
+                   &tr.echoTime, &tr.echoBeatVal, &tr.echoFeed, &tr.echoCutoff, &tr.echoResonance,
+                   &tr.echoPingPong, &tr.echoMix})
+        addAction(q->getEscapedName(), *q);
+    if(!tr.isReturn) {
+        for(int k = 0; k < MAX_RETURNS; k++) {
+            addAction(tr.sendLevel[k].getEscapedName(), tr.sendLevel[k]);
+            addAction(tr.sendPre[k].getEscapedName(), tr.sendPre[k]);
+        }
+    }
     for(auto* q : {&tr.compThreshold, &tr.compRatio, &tr.compKnee, &tr.compAttack, &tr.compRelease,
                    &tr.compMakeup, &tr.compRms, &tr.compHpf, &tr.compMix,
                    &tr.rvbMix, &tr.rvbDecay, &tr.rvbSize, &tr.rvbPredelay, &tr.rvbPosition, &tr.rvbSpread,
@@ -1871,6 +2466,11 @@ void scMixerPro::update(ofEventArgs&) {
         pendingBusCount = -1;
         setBusCount(count);
     }
+    if(pendingReturnCount >= 0) {
+        const int count = pendingReturnCount;
+        pendingReturnCount = -1;
+        setReturnCount(count);
+    }
     if(pendingTrackLabelsUpdate) {
         pendingTrackLabelsUpdate = false;
         syncTrackInputNames();
@@ -1911,7 +2511,7 @@ void scMixerPro::update(ofEventArgs&) {
                 const int k = currentChannels + 1;
                 tr->key = k < (int)v.size() && std::isfinite(v[k]) ? ofClamp(v[k], 0.0f, 4.0f) : 0.0f;
                 const int g = currentChannels + 2;
-                tr->gr = (tr->compFx.running && g < (int)v.size() && std::isfinite(v[g])) ? ofClamp(v[g], 0.0f, 60.0f) : 0.0f;
+                tr->gr = (tr->fx[FX_COMP].running && g < (int)v.size() && std::isfinite(v[g])) ? ofClamp(v[g], 0.0f, 60.0f) : 0.0f;
                 tr->vuBus->requestValues();
             }
         } else {
@@ -1924,18 +2524,35 @@ void scMixerPro::update(ofEventArgs&) {
     if(!meters) return;
 
     // Master: the audible tracks summed, times the master level (as the
-    // PolyMixer's master meter)
+    // PolyMixer's master meter); a server with the master section on is
+    // metered after it (MasterOut)
     masterVU.assign(currentChannels, 0.0f);
     const auto& m = masterLevel.get();
+    for(auto& [server, state] : serverStates) {
+        MasterRuntime& mr = state.master;
+        if(!(mr.active && mr.vuBus)) continue;
+        const auto& v = mr.vuBus->readValues;
+        mr.vu.assign(currentChannels, 0.0f);
+        for(int c = 0; c < currentChannels && c < (int)v.size(); c++) mr.vu[c] = std::isfinite(v[c]) ? v[c] : 0.0f;
+        mr.vuBus->requestValues();
+    }
+    auto meteredAfterMaster = [this](const Track& tr) {
+        auto it = serverStates.find(tr.liveServer);
+        return it != serverStates.end() && it->second.master.active;
+    };
     // (tracks into a running bus are counted through the bus)
     for(Track* tr : allStrips()) {
-        if(!tr->synth || isSilenced(*tr) || routedToBus(*tr)) continue;
+        if(!tr->synth || isSilenced(*tr) || routedToBus(*tr) || meteredAfterMaster(*tr)) continue;
         for(int c = 0; c < currentChannels && c < (int)tr->vu.size(); c++) masterVU[c] += tr->vu[c];
     }
     for(int c = 0; c < currentChannels; c++) {
         const float level = m.empty() ? 1.0f : m[std::min(c, (int)m.size() - 1)];
-        masterVU[c] = ofClamp(masterVU[c] * level, 0.0f, 2.0f);
+        masterVU[c] = masterVU[c] * level;
     }
+    for(auto& [server, state] : serverStates)
+        if(state.master.active)
+            for(int c = 0; c < currentChannels && c < (int)state.master.vu.size(); c++) masterVU[c] += state.master.vu[c];
+    for(float& v : masterVU) v = ofClamp(v, 0.0f, 2.0f);
     updatePeaks(masterVU, masterPeak, masterPeakAge, dt);
 
     if(vuPublished) {
@@ -1977,6 +2594,20 @@ ofJson scMixerPro::saveStrip(Track& tr) {
         {"lowpass", tr.rvbLowpass.get()}, {"hidamp", tr.rvbHighDamp.get()}, {"lodamp", tr.rvbLowDamp.get()},
         {"modrate", tr.rvbModFreq.get()}, {"spin", tr.rvbSpin.get()}, {"wander", tr.rvbWander.get()}
     };
+    t["hp"] = {{"on", tr.hp.get()}, {"freq", tr.hpFreq.get()}, {"24dB", tr.hp24.get()}};
+    t["sat"] = {
+        {"on", tr.sat.get()}, {"drive", tr.satDrive.get()}, {"warmth", tr.satBias.get()}, {"tone", tr.satTone.get()},
+        {"output", tr.satOutput.get()}, {"auto", tr.satAuto.get()}, {"mix", tr.satMix.get()}
+    };
+    t["echo"] = {
+        {"on", tr.echo.get()}, {"delay", tr.echoTime.get()}, {"beats", tr.echoBeats.get()}, {"delayBeats", tr.echoBeatVal.get()},
+        {"feed", tr.echoFeed.get()}, {"cutoff", tr.echoCutoff.get()}, {"resonance", tr.echoResonance.get()},
+        {"filter", tr.echoFilter.get()}, {"pingpong", tr.echoPingPong.get()}, {"mix", tr.echoMix.get()}
+    };
+    if(!tr.isReturn) {
+        t["sends"] = ofJson::array();
+        for(int k = 0; k < MAX_RETURNS; k++) t["sends"].push_back({tr.sendLevel[k].get(), tr.sendPre[k].get()});
+    }
     return t;
 }
 
@@ -1993,6 +2624,18 @@ void scMixerPro::presetSave(ofJson& json) {
     state["numBuses"] = (int)buses.size();
     state["buses"] = ofJson::array();
     for(auto& bus : buses) state["buses"].push_back(saveStrip(*bus));
+    state["numReturns"] = (int)returns.size();
+    state["returns"] = ofJson::array();
+    for(auto& r : returns) state["returns"].push_back(saveStrip(*r));
+    ofJson master;
+    master["hp"] = {{"on", mHp.get()}, {"freq", mHpFreq.get()}, {"24dB", mHp24.get()}};
+    master["eq"] = {{"on", mEq.get()}, {"bands", ofJson::array()}};
+    for(int b = 0; b < scEQEditor::NUM_BANDS; b++)
+        master["eq"]["bands"].push_back({mEqFreq[b].get(), mEqGain[b].get(), mEqShape[b].get()});
+    master["max"] = {{"on", mMax.get()}, {"drive", mMaxDrive.get()}, {"ceiling", mMaxCeiling.get()},
+                     {"character", mMaxCharacter.get()}, {"isp", mMaxIsp.get()}};
+    master["lim"] = {{"on", mLim.get()}, {"ceiling", mLimCeiling.get()}};
+    state["master"] = master;
     json["mixerPro"] = state;
 }
 
@@ -2054,7 +2697,35 @@ void scMixerPro::loadStrip(Track& tr, const ofJson& j) {
     num(r, "lowpass", tr.rvbLowpass, 10000.0f); num(r, "hidamp", tr.rvbHighDamp, 6.0f);
     num(r, "lodamp", tr.rvbLowDamp, 0.0f);   num(r, "modrate", tr.rvbModFreq, 0.2f);
     num(r, "spin", tr.rvbSpin, 1.0f);        num(r, "wander", tr.rvbWander, 0.25f);
+    if(!(j.contains("rvb") && j["rvb"].is_object())) tr.rvbMix.set(tr.isReturn ? 1.0f : 0.25f);
+    const ofJson& hj = (j.contains("hp") && j["hp"].is_object()) ? j["hp"] : none;
+    const ofJson& sj = (j.contains("sat") && j["sat"].is_object()) ? j["sat"] : none;
+    const ofJson& ej = (j.contains("echo") && j["echo"].is_object()) ? j["echo"] : none;
+    num(hj, "freq", tr.hpFreq, 80.0f);
+    tr.hp24.set(hj.value("24dB", false));
+    num(sj, "drive", tr.satDrive, 6.0f);   num(sj, "warmth", tr.satBias, 0.0f);
+    num(sj, "tone", tr.satTone, 20000.0f); num(sj, "output", tr.satOutput, 0.0f);
+    num(sj, "mix", tr.satMix, 1.0f);
+    tr.satAuto.set(sj.value("auto", true));
+    num(ej, "delay", tr.echoTime, 0.375f); num(ej, "delayBeats", tr.echoBeatVal, 0.75f);
+    num(ej, "feed", tr.echoFeed, 0.45f);   num(ej, "cutoff", tr.echoCutoff, 96.0f);
+    num(ej, "resonance", tr.echoResonance, 0.1f); num(ej, "pingpong", tr.echoPingPong, 0.0f);
+    num(ej, "mix", tr.echoMix, tr.isReturn ? 1.0f : 0.35f);
+    tr.echoBeats.set(ej.value("beats", true));
+    tr.echoFilter.set(ofClamp(ej.value("filter", 0), 0, 3));
+    for(int k = 0; k < MAX_RETURNS; k++) {
+        float level = 0.0f; bool pre = false;
+        if(j.contains("sends") && j["sends"].is_array() && k < (int)j["sends"].size()) {
+            const ofJson& sk = j["sends"][k];
+            if(sk.is_array() && sk.size() >= 2) { level = sk[0].get<float>(); pre = sk[1].get<bool>(); }
+        }
+        tr.sendLevel[k].set(ofClamp(level, 0.0f, 1.0f));
+        tr.sendPre[k].set(pre);
+    }
+    tr.hp.set(hj.value("on", false));
     tr.comp.set(c.value("on", false));
+    tr.sat.set(sj.value("on", false));
+    tr.echo.set(ej.value("on", false));
     tr.rvb.set(r.value("on", false));
     tr.eqCurveDirty = true;
     if(!tr.isBus) tr.output.set(ofClamp(j.value("output", 0), 0, MAX_BUSES));
@@ -2070,7 +2741,12 @@ void scMixerPro::loadBeforeConnections(ofJson& json) {
         if(numChannels.get() != channels) numChannels.set(channels);
         setTrackCount(state.value("numTracks", (int)tracks.size()));
 
-        // Buses first: the tracks' outputs refer to them
+        // Returns and buses first: the tracks' sends and outputs refer to them
+        setReturnCount(state.value("numReturns", 0));
+        if(state.contains("returns") && state["returns"].is_array()) {
+            const ofJson& list = state["returns"];
+            for(size_t k = 0; k < returns.size() && k < list.size(); k++) loadStrip(*returns[k], list[k]);
+        }
         setBusCount(state.value("numBuses", 0));
         if(state.contains("buses") && state["buses"].is_array()) {
             const ofJson& list = state["buses"];
@@ -2079,6 +2755,34 @@ void scMixerPro::loadBeforeConnections(ofJson& json) {
         if(state.contains("tracks") && state["tracks"].is_array()) {
             const ofJson& list = state["tracks"];
             for(size_t t = 0; t < tracks.size() && t < list.size(); t++) loadStrip(*tracks[t], list[t]);
+        }
+        {
+            const ofJson none = ofJson::object();
+            const ofJson& ms = (state.contains("master") && state["master"].is_object()) ? state["master"] : none;
+            auto obj = [&](const char* k) -> const ofJson& { return (ms.contains(k) && ms[k].is_object()) ? ms[k] : none; };
+            auto num = [](const ofJson& o, const char* k, ofParameter<float>& p, float def) {
+                p.set(ofClamp(o.value(k, def), p.getMin(), p.getMax()));
+            };
+            const ofJson& hp = obj("hp"); const ofJson& eq = obj("eq"); const ofJson& mx = obj("max"); const ofJson& lm = obj("lim");
+            num(hp, "freq", mHpFreq, 30.0f);
+            mHp24.set(hp.value("24dB", true));
+            for(int b = 0; b < scEQEditor::NUM_BANDS; b++) {
+                float f = kBandFreq[b], g = 0.0f, q = 1.0f;
+                if(eq.contains("bands") && eq["bands"].is_array() && b < (int)eq["bands"].size()) {
+                    const ofJson& band = eq["bands"][b];
+                    if(band.is_array() && band.size() >= 3) { f = band[0].get<float>(); g = band[1].get<float>(); q = band[2].get<float>(); }
+                }
+                mEqFreq[b].set(f); mEqGain[b].set(g); mEqShape[b].set(q);
+            }
+            num(mx, "drive", mMaxDrive, 3.0f); num(mx, "ceiling", mMaxCeiling, -0.3f);
+            num(mx, "character", mMaxCharacter, 4.0f);
+            mMaxIsp.set(mx.value("isp", true));
+            num(lm, "ceiling", mLimCeiling, -0.3f);
+            mEqCurveDirty = true;
+            mHp.set(hp.value("on", false));
+            mEq.set(eq.value("on", false));
+            mMax.set(mx.value("on", false));
+            mLim.set(lm.value("on", false));
         }
         if(state.value("inputNamesFollowTracks", false)) syncTrackInputNames();
         else useLegacyInputNames();
@@ -2132,7 +2836,7 @@ void scMixerPro::drawWindow() {
     const float zoom = ofxOceanodeShared::getZoomLevel();
     const std::string title = (canvasID == "Canvas" ? "" : canvasID + "/") + "SC Mixer Pro " + ofToString(getNumIdentifier());
     bool open = true;
-    ImGui::SetNextWindowSize(ImVec2(900.0f * zoom, 560.0f * zoom), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(960.0f * zoom, 660.0f * zoom), ImGuiCond_FirstUseEver);
     if(!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         ImGui::End();
         if(!open) showWindow = false;
@@ -2146,16 +2850,23 @@ void scMixerPro::drawWindow() {
 
     drawToolbar();
 
-    const bool eqOpen = eqTarget() != nullptr;
-    const float eqH = eqOpen ? 190.0f * zoom : 0.0f;
-    const float bodyH = std::max(160.0f * zoom, ImGui::GetContentRegionAvail().y - eqH - (eqOpen ? 6.0f * zoom : 0.0f));
+    const bool eqOpen = eqTarget() != nullptr || selectedEqTrack == MASTER_PANEL;
+    const float remainingH = std::max(1.0f, ImGui::GetContentRegionAvail().y);
+    const float panelGap = eqOpen ? 6.0f * zoom : 0.0f;
+    // Keep the editor inside the window and let the strip viewport become
+    // genuinely short. Its contents are clipped below instead of overlapping
+    // the editor when the mixer window is reduced vertically.
+    const float eqH = eqOpen
+        ? std::min(190.0f * zoom, std::max(80.0f * zoom, remainingH - panelGap - 40.0f * zoom))
+        : 0.0f;
+    const float bodyH = std::max(1.0f, remainingH - eqH - panelGap);
 
     const float masterW = 130.0f * zoom;
     drawMasterStrip(masterW, bodyH);
     ImGui::SameLine(0, 8.0f * zoom);
     ImGui::BeginChild("##mixerProStrips", ImVec2(0, bodyH), false, ImGuiWindowFlags_HorizontalScrollbar);
     const float stripW = 92.0f * zoom;
-    const float stripH = std::max(150.0f * zoom, ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ScrollbarSize);
+    const float stripH = std::max(1.0f, ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ScrollbarSize);
     for(size_t t = 0; t < tracks.size(); t++) {
         ImGui::PushID((int)t);
         // Strips scrolled out of view only take their space
@@ -2172,11 +2883,21 @@ void scMixerPro::drawWindow() {
         else ImGui::Dummy(ImVec2(stripW, stripH));
         ImGui::PopID();
     }
+    // Returns, after another gap
+    for(size_t k = 0; k < returns.size(); k++) {
+        ImGui::SameLine(0, k == 0 ? 16.0f * zoom : 5.0f * zoom);
+        ImGui::PushID(1500 + (int)k);
+        if(ImGui::IsRectVisible(ImVec2(stripW, stripH))) drawTrackStrip(*returns[k], stripW, stripH);
+        else ImGui::Dummy(ImVec2(stripW, stripH));
+        ImGui::PopID();
+    }
     ImGui::EndChild();
 
     // The strips can have closed (or switched) the EQ panel this frame:
     // check the selection again rather than trusting eqOpen
-    if(eqOpen && eqTarget())
+    if(eqOpen && selectedEqTrack == MASTER_PANEL)
+        drawMasterPanel(ImGui::GetContentRegionAvail().x, eqH);
+    else if(eqOpen && eqTarget())
         drawEqPanel(ImGui::GetContentRegionAvail().x, eqH);
     ImGui::End();
 }
@@ -2198,6 +2919,10 @@ void scMixerPro::drawToolbar() {
     ImGui::SameLine(0, 14.0f * zoom);
     countField("Buses", editBuses, (int)buses.size(), 1, 2,
                [this](int v) { pendingBusCount = ofClamp(v, 0, MAX_BUSES); });
+    ImGui::SameLine(0, 14.0f * zoom);
+    countField("Returns", editReturns, (int)returns.size(), 1, 1,
+               [this](int v) { pendingReturnCount = ofClamp(v, 0, MAX_RETURNS); });
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Aux returns (max %d): every strip gets a send knob per return", MAX_RETURNS);
     ImGui::SameLine(0, 14.0f * zoom);
     countField("Channels", editChannels, currentChannels, 1, 2,
                [this](int v) { numChannels.set(ofClamp(v, 1, MAX_CHANNELS)); });
@@ -2367,6 +3092,9 @@ void scMixerPro::drawMasterStrip(float w, float h) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const ImVec2 end(start.x + w, start.y + h);
+    // Master primitives are drawn directly in the parent window, so they need
+    // their own clip rectangle when the bottom editor reduces this area.
+    ImGui::PushClipRect(start, end, true);
     dl->AddRectFilled(start, end, IM_COL32(24, 24, 28, 255), 4.0f * zoom);
     dl->AddRect(start, end, IM_COL32(70, 70, 78, 220), 4.0f * zoom);
     dl->AddRectFilled(start, ImVec2(end.x, start.y + 20.0f * zoom), IM_COL32(180, 180, 188, 255), 4.0f * zoom);
@@ -2376,9 +3104,14 @@ void scMixerPro::drawMasterStrip(float w, float h) {
     float y = start.y + 26.0f * zoom;
     for(int i = 0; i < (int)servers.size(); i++) {
         std::vector<float> sum(currentChannels, 0.0f);
-        for(Track* tr : allStrips()) {
-            if(tr->server != i || !tr->synth || isSilenced(*tr) || routedToBus(*tr)) continue;
-            for(int c = 0; c < currentChannels && c < (int)tr->vu.size(); c++) sum[c] += tr->vu[c];
+        auto st = serverStates.find(serverAt(i));
+        if(st != serverStates.end() && st->second.master.active) {
+            sum = st->second.master.vu;   // after the master section
+        } else {
+            for(Track* tr : allStrips()) {
+                if(tr->server != i || !tr->synth || isSilenced(*tr) || routedToBus(*tr)) continue;
+                for(int c = 0; c < currentChannels && c < (int)tr->vu.size(); c++) sum[c] += tr->vu[c];
+            }
         }
         float mx = 0.0f;
         for(float v : sum) mx = std::max(mx, v);
@@ -2391,6 +3124,51 @@ void scMixerPro::drawMasterStrip(float w, float h) {
         dl->AddRectFilled(bp, ImVec2(bp.x + bs.x * gainToPos(mx), bp.y + bs.y),
                           mx >= 1.0f ? IM_COL32(230, 70, 60, 255) : IM_COL32(70, 200, 90, 255), 2.0f);
         y += 16.0f * zoom;
+    }
+
+    // Master section: HP EQ / MAX LIM (click: on / off, right-click: edit / publish)
+    {
+        const float bw = (w - 16.0f * zoom - 3.0f * zoom) * 0.5f, bh = 18.0f * zoom;
+        bool anyRunning = false;
+        for(auto& [server, state] : serverStates) for(auto& f : state.master.st) anyRunning = anyRunning || f.running;
+        auto masterToggle = [&](const char* label, ofParameter<bool>& p, ImVec4 on, int tab, const char* what) {
+            const bool v = p.get();
+            pushButtonColours(v ? on : ImVec4(0.22f, 0.22f, 0.25f, 1.0f));
+            if(ImGui::Button(label, ImVec2(bw, bh))) p.set(!v);
+            ImGui::PopStyleColor(3);
+            const std::string key = p.getEscapedName();
+            markPublished(key);
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Master %s%s\nClick: on / off, right-click: edit / publish", what, v ? "" : ": off");
+            if(ImGui::BeginPopupContextItem(("##masterMenu_" + key).c_str())) {
+                if(ImGui::MenuItem((std::string("Edit master ") + what + "...").c_str())) {
+                    selectedEqTrack = MASTER_PANEL;
+                    masterTab = tab;
+                }
+                ImGui::Separator();
+                drawPublishItems(key, nullptr, false);
+                ImGui::EndPopup();
+            }
+        };
+        y += 4.0f * zoom;
+        ImGui::SetCursorScreenPos(ImVec2(start.x + 8.0f * zoom, y));
+        masterToggle("HP##mhp", mHp, ImVec4(0.32f, 0.5f, 0.62f, 1.0f), MST_HP, "high-pass");
+        ImGui::SameLine(0, 3.0f * zoom);
+        masterToggle("EQ##meq", mEq, ImVec4(0.2f, 0.5f, 0.75f, 1.0f), MST_EQ, "EQ");
+        y += bh + 3.0f * zoom;
+        ImGui::SetCursorScreenPos(ImVec2(start.x + 8.0f * zoom, y));
+        masterToggle("MAX##mmax", mMax, ImVec4(0.75f, 0.35f, 0.2f, 1.0f), MST_MAX, "maximizer");
+        ImGui::SameLine(0, 3.0f * zoom);
+        masterToggle("LIM##mlim", mLim, ImVec4(0.75f, 0.2f, 0.25f, 1.0f), MST_LIM, "limiter");
+        y += bh + 3.0f * zoom;
+        ImGui::SetCursorScreenPos(ImVec2(start.x + 8.0f * zoom, y));
+        pushButtonColours(selectedEqTrack == MASTER_PANEL ? ImVec4(0.34f, 0.34f, 0.4f, 1.0f) : ImVec4(0.18f, 0.18f, 0.21f, 1.0f));
+        if(ImGui::Button("MASTER FX##mpanel", ImVec2(bw * 2.0f + 3.0f * zoom, bh)))
+            selectedEqTrack = selectedEqTrack == MASTER_PANEL ? -1 : MASTER_PANEL;
+        ImGui::PopStyleColor(3);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip(anyRunning ? "Master section running (metered after it)" : "Master section off: no master synth");
+        y += bh + 2.0f * zoom;
     }
 
     const float top = y + 6.0f * zoom;
@@ -2424,6 +3202,7 @@ void scMixerPro::drawMasterStrip(float w, float h) {
 
     ImGui::SetCursorScreenPos(start);
     ImGui::Dummy(ImVec2(w, h));
+    ImGui::PopClipRect();
 }
 
 void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
@@ -2431,12 +3210,18 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const ImVec2 end(start.x + w, start.y + h);
+    // Several controls (knobs, meters, peak text and curves) use raw draw-list
+    // primitives. Clip those to the strip, intersected with the child viewport,
+    // so they cannot paint over an open bottom editor.
+    ImGui::PushClipRect(start, end, true);
     const float pad = 4.0f * zoom;
     const float innerW = w - 2.0f * pad;
     const bool silenced = isSilenced(tr);
 
-    dl->AddRectFilled(start, end, tr.isBus ? IM_COL32(36, 30, 62, 255) : IM_COL32(24, 24, 28, 255), 4.0f * zoom);
-    dl->AddRect(start, end, selectedEqTrack == eqId(tr) ? IM_COL32(110, 190, 255, 220) : (tr.isBus ? IM_COL32(125, 105, 200, 230) : IM_COL32(70, 70, 78, 220)), 4.0f * zoom);
+    const ImU32 bg = tr.isReturn ? IM_COL32(22, 44, 46, 255) : (tr.isBus ? IM_COL32(36, 30, 62, 255) : IM_COL32(24, 24, 28, 255));
+    const ImU32 edge = tr.isReturn ? IM_COL32(80, 170, 165, 230) : (tr.isBus ? IM_COL32(125, 105, 200, 230) : IM_COL32(70, 70, 78, 220));
+    dl->AddRectFilled(start, end, bg, 4.0f * zoom);
+    dl->AddRect(start, end, selectedEqTrack == eqId(tr) ? IM_COL32(110, 190, 255, 220) : edge, 4.0f * zoom);
 
     // Name on the track colour (right-click: colour / delete). Tracks have a
     // grip on the left: drag it onto another strip to move the track there.
@@ -2538,7 +3323,12 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
     y += 24.0f * zoom;
 
     // Channel adapter: button (M -> N and mode) + popup. Buses: a label
-    if(tr.isBus) {
+    if(tr.isReturn) {
+        int fed = 0;
+        for(Track* t : allStrips()) if(!t->isReturn && tr.index < MAX_RETURNS && t->sendLevel[tr.index].get() > 0.0f) fed++;
+        const std::string text = "AUX RETURN  " + ofToString(fed) + (fed == 1 ? " send" : " sends");
+        dl->AddText(ImVec2(start.x + pad, y + 2.0f * zoom), IM_COL32(150, 210, 205, 255), text.c_str());
+    } else if(tr.isBus) {
         int fed = 0;
         for(auto& t : tracks) if(busFor(*t) == &tr) fed++;
         const std::string text = "SUBMASTER  " + ofToString(fed) + (fed == 1 ? " track" : " tracks");
@@ -2609,28 +3399,24 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
         ImGui::PopStyleColor(3);
         drawPublishPopup(p.getEscapedName());
     };
-    ImGui::SetCursorScreenPos(ImVec2(start.x + pad, y));
-    toggle("EQ", tr.eq, ImVec4(0.2f, 0.5f, 0.75f, 1.0f));
-    ImGui::SameLine(0, 3.0f * zoom);
-    toggle("DC", tr.dc, ImVec4(0.45f, 0.35f, 0.7f, 1.0f));
-    y += btnH + 3.0f * zoom;
-
-    // COMP / RVB: click switches, right-click edits (panel tab) / publishes
-    auto fxToggle = [&](const char* label, ofParameter<bool>& p, ImVec4 on, int tab, const FxStage& fx) {
+    // Inserts, two per row in chain order: HP EQ / DC COMP / SAT ECHO / RVB FX.
+    // EQ / DC: click switches. The others: click switches, right-click edits
+    // (the panel's tab) or publishes; a dim colour: off, still ringing out.
+    auto fxToggle = [&](const char* label, ofParameter<bool>& p, ImVec4 on, int tab, const char* what, bool running) {
         const bool v = p.get();
-        const bool tail = !v && fx.running;   // switched off, still fading / ringing out
+        const bool tail = !v && running;
         pushButtonColours(v ? on : (tail ? ImVec4(on.x * 0.5f, on.y * 0.5f, on.z * 0.5f, 1.0f) : ImVec4(0.22f, 0.22f, 0.25f, 1.0f)));
         if(ImGui::Button(label, ImVec2(halfW, btnH))) p.set(!v);
         ImGui::PopStyleColor(3);
         const std::string key = p.getEscapedName();
         markPublished(key);
         if(ImGui::IsItemHovered()) {
-            if(tab == 1 && v) ImGui::SetTooltip("Compressor: GR %.1f dB\nClick: on / off, right-click: edit / publish", tr.gr);
+            if(tab == 2 && v) ImGui::SetTooltip("Compressor: GR %.1f dB\nClick: on / off, right-click: edit / publish", tr.gr);
             else ImGui::SetTooltip("%s%s\nClick: on / off, right-click: edit / publish",
-                                   tab == 1 ? "Compressor" : "Reverb", tail ? " (ringing out)" : (v ? "" : ": off, costs nothing"));
+                                   what, tail ? " (ringing out)" : (v ? "" : ": off, costs nothing"));
         }
         if(ImGui::BeginPopupContextItem(("##fxMenu_" + key).c_str())) {
-            if(ImGui::MenuItem(tab == 1 ? "Edit compressor..." : "Edit reverb...")) {
+            if(ImGui::MenuItem((std::string("Edit ") + what + "...").c_str())) {
                 selectedEqTrack = eqId(tr);
                 panelTab = tab;
             }
@@ -2640,16 +3426,71 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
         }
     };
     ImGui::SetCursorScreenPos(ImVec2(start.x + pad, y));
-    fxToggle("COMP##comp", tr.comp, ImVec4(0.78f, 0.45f, 0.14f, 1.0f), 1, tr.compFx);
-    if(tr.compFx.running && tr.gr > 0.05f) {
+    fxToggle("HP##hp", tr.hp, ImVec4(0.32f, 0.5f, 0.62f, 1.0f), 1, "High-pass", tr.fx[FX_HP].running);
+    ImGui::SameLine(0, 3.0f * zoom);
+    toggle("EQ", tr.eq, ImVec4(0.2f, 0.5f, 0.75f, 1.0f));
+    y += btnH + 3.0f * zoom;
+    ImGui::SetCursorScreenPos(ImVec2(start.x + pad, y));
+    toggle("DC", tr.dc, ImVec4(0.45f, 0.35f, 0.7f, 1.0f));
+    ImGui::SameLine(0, 3.0f * zoom);
+    fxToggle("COMP##comp", tr.comp, ImVec4(0.78f, 0.45f, 0.14f, 1.0f), 2, "Compressor", tr.fx[FX_COMP].running);
+    if(tr.fx[FX_COMP].running && tr.gr > 0.05f) {
         // gain reduction: a bar growing from the right edge (0..24 dB)
         const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         const float frac = ofClamp(tr.gr / 24.0f, 0.0f, 1.0f);
         dl->AddRectFilled(ImVec2(b.x - (b.x - a.x) * frac, b.y - 3.0f * zoom), b, IM_COL32(255, 200, 80, 255));
     }
-    ImGui::SameLine(0, 3.0f * zoom);
-    fxToggle("RVB##rvb", tr.rvb, ImVec4(0.18f, 0.55f, 0.52f, 1.0f), 2, tr.rvbFx);
     y += btnH + 3.0f * zoom;
+    ImGui::SetCursorScreenPos(ImVec2(start.x + pad, y));
+    fxToggle("SAT##sat", tr.sat, ImVec4(0.72f, 0.3f, 0.26f, 1.0f), 3, "Saturation", tr.fx[FX_SAT].running);
+    ImGui::SameLine(0, 3.0f * zoom);
+    fxToggle("ECHO##echo", tr.echo, ImVec4(0.3f, 0.48f, 0.72f, 1.0f), 4, "Echo", tr.fx[FX_ECHO].running);
+    y += btnH + 3.0f * zoom;
+    ImGui::SetCursorScreenPos(ImVec2(start.x + pad, y));
+    fxToggle("RVB##rvb", tr.rvb, ImVec4(0.18f, 0.55f, 0.52f, 1.0f), 5, "Reverb", tr.fx[FX_RVB].running);
+    ImGui::SameLine(0, 3.0f * zoom);
+    pushButtonColours(selectedEqTrack == eqId(tr) ? ImVec4(0.34f, 0.34f, 0.4f, 1.0f) : ImVec4(0.18f, 0.18f, 0.21f, 1.0f));
+    if(ImGui::Button("FX##fxPanel", ImVec2(halfW, btnH))) {
+        const bool closing = selectedEqTrack == eqId(tr);
+        selectedEqTrack = closing ? -1 : eqId(tr);
+    }
+    ImGui::PopStyleColor(3);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Open / close this strip's panel (EQ, HP, Comp, Sat, Echo, Reverb)");
+    y += btnH + 3.0f * zoom;
+
+    // Aux sends: one knob per return (ring: pre-fader)
+    if(!tr.isReturn && !returns.empty()) {
+        const int R = (int)returns.size();
+        const float cellW = innerW / R;
+        const float knobR = std::min(9.0f * zoom, cellW * 0.5f - 1.0f * zoom);
+        for(int k = 0; k < R; k++) {
+            Track& r = *returns[k];
+            const bool reachable = r.server == tr.server;
+            ImGui::SetCursorScreenPos(ImVec2(start.x + pad + k * cellW + (cellW - 2.0f * knobR) * 0.5f, y));
+            ImGui::PushID(100 + k);
+            float v = tr.sendLevel[k].get();
+            if(drawSendKnob("##send", v, knobR, tr.sendPre[k].get(), toU32(r.color), !reachable)) tr.sendLevel[k].set(v);
+            const std::string key = tr.sendLevel[k].getEscapedName();
+            markPublished(key);
+            if(ImGui::IsItemHovered() && !ImGui::IsItemActive())
+                ImGui::SetTooltip("Send to %s: %s%s%s\nDrag, double-click: off, right-click: pre / post, publish",
+                                  r.name.c_str(), v <= 0.0f ? "off" : (ofToString(ampToDb(v), 1) + " dB").c_str(),
+                                  tr.sendPre[k].get() ? " (pre-fader)" : " (post-fader)",
+                                  reachable ? "" : "\nOn another server: not sent");
+            if(ImGui::BeginPopupContextItem("##sendMenu")) {
+                ImGui::TextDisabled("Send to %s", r.name.c_str());
+                bool pre = tr.sendPre[k].get();
+                if(ImGui::Checkbox("Pre-fader", &pre)) tr.sendPre[k].set(pre);
+                ImGui::Separator();
+                drawPublishItems(key, "Level (0..1)", false);
+                ImGui::Separator();
+                drawPublishItems(tr.sendPre[k].getEscapedName(), "Pre-fader (0 / 1)", false);
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        }
+        y += 2.0f * knobR + 4.0f * zoom;
+    }
 
     // Sidechain: button (shows the source) + popup with the controls
     {
@@ -2713,8 +3554,10 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
     // Mute / Solo
     ImGui::SetCursorScreenPos(ImVec2(start.x + pad, y));
     toggle("M", tr.mute, ImVec4(0.75f, 0.16f, 0.16f, 1.0f));
-    ImGui::SameLine(0, 3.0f * zoom);
-    toggle("S", tr.solo, ImVec4(0.82f, 0.72f, 0.18f, 1.0f));
+    if(!tr.isReturn) {   // returns are solo-safe
+        ImGui::SameLine(0, 3.0f * zoom);
+        toggle("S", tr.solo, ImVec4(0.82f, 0.72f, 0.18f, 1.0f));
+    }
     y += btnH + 6.0f * zoom;
 
     // Fader + meters
@@ -2751,6 +3594,7 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
         }
         ImGui::EndDragDropTarget();
     }
+    ImGui::PopClipRect();
 }
 
 void scMixerPro::drawEqPanel(float w, float h) {
@@ -2761,9 +3605,9 @@ void scMixerPro::drawEqPanel(float w, float h) {
     ImGui::BeginChild("##mixerProEq", ImVec2(w, h), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::TextColored(ImVec4(tr.color.r / 255.0f, tr.color.g / 255.0f, tr.color.b / 255.0f, 1.0f), "%s", tr.name.c_str());
     // Tabs (green text: that insert is on)
-    const char* tabNames[] = {"EQ##tab", "Comp##tab", "Reverb##tab"};
-    const bool tabOn[] = {tr.eq.get() || tr.dc.get(), tr.comp.get(), tr.rvb.get()};
-    for(int i = 0; i < 3; i++) {
+    const char* tabNames[] = {"EQ##tab", "HP##tab", "Comp##tab", "Sat##tab", "Echo##tab", "Reverb##tab"};
+    const bool tabOn[] = {tr.eq.get() || tr.dc.get(), tr.hp.get(), tr.comp.get(), tr.sat.get(), tr.echo.get(), tr.rvb.get()};
+    for(int i = 0; i < 6; i++) {
         ImGui::SameLine(0, i == 0 ? 12.0f * zoom : 2.0f * zoom);
         pushButtonColours(panelTab == i ? ImVec4(0.32f, 0.32f, 0.38f, 1.0f) : ImVec4(0.15f, 0.15f, 0.18f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_Text, tabOn[i] ? ImVec4(0.55f, 0.92f, 0.6f, 1.0f) : ImVec4(0.75f, 0.75f, 0.78f, 1.0f));
@@ -2771,23 +3615,20 @@ void scMixerPro::drawEqPanel(float w, float h) {
         ImGui::PopStyleColor(4);
     }
     ImGui::SameLine(0, 14.0f * zoom);
-    if(panelTab == 1) {
-        bool on = tr.comp.get();
-        if(ImGui::Checkbox("Compressor", &on)) tr.comp.set(on);
-        drawPublishPopup(tr.comp.getEscapedName());
+    if(panelTab >= 1 && panelTab <= 5) {
+        static const int kTabFx[6] = {-1, FX_HP, FX_COMP, FX_SAT, FX_ECHO, FX_RVB};
+        static const char* kTabLabel[6] = {"", "High-pass", "Compressor", "Saturation", "Echo", "Reverb"};
+        const int k = kTabFx[panelTab];
+        ofParameter<bool>& sw = fxSwitch(tr, k);
+        bool on = sw.get();
+        if(ImGui::Checkbox(kTabLabel[panelTab], &on)) sw.set(on);
+        drawPublishPopup(sw.getEscapedName());
         ImGui::SameLine(0, 12.0f * zoom);
-        if(tr.compFx.running) ImGui::Text("GR %4.1f dB", tr.gr);
-        else ImGui::TextDisabled("off: costs nothing");
-        ImGui::SameLine(0, 12.0f * zoom);
-        ImGui::TextDisabled("right-click a control: value / publish");
-    } else if(panelTab == 2) {
-        bool on = tr.rvb.get();
-        if(ImGui::Checkbox("Reverb", &on)) tr.rvb.set(on);
-        drawPublishPopup(tr.rvb.getEscapedName());
-        ImGui::SameLine(0, 12.0f * zoom);
-        if(!on && tr.rvbFx.running) ImGui::TextDisabled("ringing out...");
+        if(!on && tr.fx[k].running) ImGui::TextDisabled(k == FX_ECHO || k == FX_RVB ? "ringing out..." : "fading out...");
         else if(!on) ImGui::TextDisabled("off: costs nothing");
-        else ImGui::TextDisabled("SpaceMaster  -  Decay = RT60");
+        else if(k == FX_COMP) ImGui::Text("GR %4.1f dB", tr.gr);
+        else if(k == FX_RVB) ImGui::TextDisabled("SpaceMaster  -  Decay = RT60");
+        else if(k == FX_ECHO) ImGui::TextDisabled("%.0f ms%s", echoDelaySec(tr) * 1000.0f, tr.echoBeats.get() ? " at the node tempo" : "");
         ImGui::SameLine(0, 12.0f * zoom);
         ImGui::TextDisabled("right-click a control: value / publish");
     } else {
@@ -2808,8 +3649,11 @@ void scMixerPro::drawEqPanel(float w, float h) {
     ImGui::SameLine(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - 22.0f * zoom);
     if(ImGui::SmallButton("x")) selectedEqTrack = -1;
 
-    if(panelTab == 1) { drawCompPanel(tr); ImGui::EndChild(); return; }
-    if(panelTab == 2) { drawRvbPanel(tr); ImGui::EndChild(); return; }
+    if(panelTab == 1) { drawHpPanel(tr); ImGui::EndChild(); return; }
+    if(panelTab == 2) { drawCompPanel(tr); ImGui::EndChild(); return; }
+    if(panelTab == 3) { drawSatPanel(tr); ImGui::EndChild(); return; }
+    if(panelTab == 4) { drawEchoPanel(tr); ImGui::EndChild(); return; }
+    if(panelTab == 5) { drawRvbPanel(tr); ImGui::EndChild(); return; }
 
     recomputeEqCurve(tr);
     tr.eqEditor.gainLimit = 24.0f;
@@ -2881,7 +3725,7 @@ void scMixerPro::drawCompPanel(Track& tr) {
     const ImVec2 m0 = ImGui::GetCursorScreenPos();
     const float mw = 10.0f * zoom;
     dl->AddRectFilled(m0, ImVec2(m0.x + mw, m0.y + side), IM_COL32(20, 20, 24, 255), 2.0f * zoom);
-    if(tr.compFx.running)
+    if(tr.fx[FX_COMP].running)
         dl->AddRectFilled(m0, ImVec2(m0.x + mw, m0.y + side * ofClamp(tr.gr / 24.0f, 0.0f, 1.0f)), IM_COL32(255, 200, 80, 255), 2.0f * zoom);
     for(int g = 6; g < 24; g += 6) {
         const float yy = m0.y + side * g / 24.0f;
@@ -2953,4 +3797,224 @@ void scMixerPro::drawRvbPanel(Track& tr) {
     slider("Spin", tr.rvbSpin, "%.2f", 0, "Sine modulation depth (ms / 5)");
     slider("Wander", tr.rvbWander, "%.2f", 0, "Random modulation depth (ms / 5)");
     ImGui::EndGroup();
+}
+
+
+// Aux send knob (0..1): the arc in the return's colour, a ring when pre-fader
+bool scMixerPro::drawSendKnob(const char* id, float& value, float radius, bool pre, ImU32 colour, bool disabled) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton(id, ImVec2(radius * 2.0f, radius * 2.0f));
+    bool changed = false;
+    if(ImGui::IsItemActive() && ImGui::IsMouseDragging(0, 0.0f)) {
+        const float speed = ImGui::GetIO().KeyShift ? 0.001f : 0.006f;
+        value = ofClamp(value - ImGui::GetIO().MouseDelta.y * speed, 0.0f, 1.0f);
+        changed = true;
+    }
+    if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) { value = 0.0f; changed = true; }
+    const ImVec2 c(p.x + radius, p.y + radius);
+    const float a0 = (float)M_PI * 0.75f, a1 = (float)M_PI * 2.25f;
+    dl->AddCircleFilled(c, radius, IM_COL32(36, 36, 42, 255), 20);
+    dl->PathArcTo(c, radius - 1.5f, a0, a1, 20);
+    dl->PathStroke(IM_COL32(64, 64, 72, 255), 0, 2.0f);
+    if(value > 0.0f) {
+        dl->PathArcTo(c, radius - 1.5f, a0, a0 + (a1 - a0) * value, 20);
+        dl->PathStroke(disabled ? IM_COL32(110, 110, 115, 255) : colour, 0, 2.5f);
+    }
+    if(pre) dl->AddCircle(c, radius * 0.45f, IM_COL32(240, 210, 90, 255), 12, 1.5f);
+    else dl->AddCircleFilled(c, radius * 0.22f, value > 0.0f ? colour : IM_COL32(80, 80, 88, 255), 8);
+    return changed;
+}
+
+namespace {
+// A float slider with the publish menu, for the panels
+template<typename F>
+void panelSlider(const char* name, ofParameter<float>& p, const char* format, ImGuiSliderFlags flags, float width,
+                 const char* tip, F&& publish) {
+    float v = p.get();
+    ImGui::SetNextItemWidth(width);
+    if(ImGui::SliderFloat(name, &v, p.getMin(), p.getMax(), format, flags)) p.set(v);
+    publish(p.getEscapedName());
+    if(tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+}
+}
+
+void scMixerPro::drawHpPanel(Track& tr) {
+    const float zoom = ofxOceanodeShared::getZoomLevel();
+    auto pub = [this](const std::string& k) { drawPublishPopup(k); };
+    ImGui::Dummy(ImVec2(0, 2.0f * zoom));
+    panelSlider("Frequency", tr.hpFreq, "%.0f Hz", ImGuiSliderFlags_Logarithmic, 220.0f * zoom, "Cutoff (-3 dB)", pub);
+    bool steep = tr.hp24.get();
+    if(ImGui::Checkbox("24 dB/oct", &steep)) tr.hp24.set(steep);
+    drawPublishPopup(tr.hp24.getEscapedName());
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Butterworth, 12 or 24 dB per octave");
+}
+
+void scMixerPro::drawSatPanel(Track& tr) {
+    const float zoom = ofxOceanodeShared::getZoomLevel();
+    const float fieldW = 150.0f * zoom;
+    auto pub = [this](const std::string& k) { drawPublishPopup(k); };
+    ImGui::Dummy(ImVec2(0, 2.0f * zoom));
+    ImGui::BeginGroup();
+    panelSlider("Drive", tr.satDrive, "%.1f dB", 0, fieldW, "Gain into the soft clipper (anti-aliased tanh)", pub);
+    panelSlider("Warmth", tr.satBias, "%.2f", 0, fieldW, "Asymmetry: adds even harmonics", pub);
+    panelSlider("Tone", tr.satTone, "%.0f Hz", ImGuiSliderFlags_Logarithmic, fieldW, "Low-pass after the clipper", pub);
+    ImGui::EndGroup();
+    ImGui::SameLine(0, 18.0f * zoom);
+    ImGui::BeginGroup();
+    panelSlider("Output", tr.satOutput, "%.1f dB", 0, fieldW, nullptr, pub);
+    panelSlider("Mix", tr.satMix, "%.2f", 0, fieldW, "Parallel saturation", pub);
+    bool a = tr.satAuto.get();
+    if(ImGui::Checkbox("Auto gain", &a)) tr.satAuto.set(a);
+    drawPublishPopup(tr.satAuto.getEscapedName());
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Quiet signals stay at the same level whatever the drive");
+    ImGui::EndGroup();
+}
+
+void scMixerPro::drawEchoPanel(Track& tr) {
+    const float zoom = ofxOceanodeShared::getZoomLevel();
+    const float fieldW = 150.0f * zoom;
+    auto pub = [this](const std::string& k) { drawPublishPopup(k); };
+    ImGui::Dummy(ImVec2(0, 2.0f * zoom));
+    ImGui::BeginGroup();
+    {   // Delay: a note value at the node tempo (b) or seconds (s)
+        const bool beats = tr.echoBeats.get();
+        if(ImGui::Button(beats ? "b##echoUnit" : "s##echoUnit", ImVec2(18.0f * zoom, 0))) tr.echoBeats.set(!beats);
+        drawPublishPopup(tr.echoBeats.getEscapedName());
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Delay as a note value (b, follows the tempo) or in seconds (s); max 4 s");
+        ImGui::SameLine(0, 2.0f * zoom);
+        ImGui::SetNextItemWidth(fieldW - 20.0f * zoom);
+        if(beats) {
+            int k = nearestNote(tr.echoBeatVal.get());
+            if(ImGui::SliderInt("Delay", &k, 0, kNoteCount - 1, kNotes[k].name, ImGuiSliderFlags_AlwaysClamp))
+                tr.echoBeatVal.set(kNotes[k].beats);
+            drawPublishPopup(tr.echoBeatVal.getEscapedName());
+        } else {
+            float v = tr.echoTime.get();
+            if(ImGui::SliderFloat("Delay", &v, tr.echoTime.getMin(), tr.echoTime.getMax(), "%.3f s", ImGuiSliderFlags_Logarithmic))
+                tr.echoTime.set(v);
+            drawPublishPopup(tr.echoTime.getEscapedName());
+        }
+    }
+    panelSlider("Feed", tr.echoFeed, "%.2f", 0, fieldW, "Feedback: how many repeats", pub);
+    panelSlider("Mix", tr.echoMix, "%.2f", 0, fieldW, "Equal-power dry / echoes (returns: 1)", pub);
+    ImGui::EndGroup();
+    ImGui::SameLine(0, 18.0f * zoom);
+    ImGui::BeginGroup();
+    {
+        static const char* filters[4] = {"LowPass", "HighPass", "BandPass", "PeakEQ"};
+        int f = ofClamp(tr.echoFilter.get(), 0, 3);
+        ImGui::SetNextItemWidth(fieldW);
+        if(ImGui::Combo("Filter", &f, filters, 4)) tr.echoFilter.set(f);
+        drawPublishPopup(tr.echoFilter.getEscapedName());
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("In the feedback loop: every repeat goes through it again");
+    }
+    panelSlider("Cutoff", tr.echoCutoff, "%.0f (note)", 0, fieldW, "Filter frequency as a MIDI note", pub);
+    panelSlider("Resonance", tr.echoResonance, "%.2f", 0, fieldW, nullptr, pub);
+    panelSlider("Ping Pong", tr.echoPingPong, "%.2f", 0, fieldW, "Cross-feeds stereo pairs: repeats alternate left / right", pub);
+    ImGui::EndGroup();
+}
+
+// Master panel: HP / EQ / Maximizer / Limiter, the same on every server
+void scMixerPro::drawMasterPanel(float w, float h) {
+    const float zoom = ofxOceanodeShared::getZoomLevel();
+    const float fieldW = 170.0f * zoom;
+    auto pub = [this](const std::string& k) { drawPublishPopup(k); };
+    ImGui::BeginChild("##mixerProMaster", ImVec2(w, h), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.9f, 1.0f), "MASTER");
+    const char* tabNames[MST_COUNT] = {"HP##mtab", "EQ##mtab", "Maximizer##mtab", "Limiter##mtab"};
+    ofParameter<bool>* sw[MST_COUNT] = {&mHp, &mEq, &mMax, &mLim};
+    for(int i = 0; i < MST_COUNT; i++) {
+        ImGui::SameLine(0, i == 0 ? 12.0f * zoom : 2.0f * zoom);
+        pushButtonColours(masterTab == i ? ImVec4(0.32f, 0.32f, 0.38f, 1.0f) : ImVec4(0.15f, 0.15f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, sw[i]->get() ? ImVec4(0.55f, 0.92f, 0.6f, 1.0f) : ImVec4(0.75f, 0.75f, 0.78f, 1.0f));
+        if(ImGui::SmallButton(tabNames[i])) masterTab = i;
+        ImGui::PopStyleColor(4);
+    }
+    masterTab = ofClamp(masterTab, 0, MST_COUNT - 1);
+    ImGui::SameLine(0, 14.0f * zoom);
+    static const char* labels[MST_COUNT] = {"High-pass", "EQ", "Maximizer", "Limiter"};
+    bool on = sw[masterTab]->get();
+    if(ImGui::Checkbox(labels[masterTab], &on)) sw[masterTab]->set(on);
+    drawPublishPopup(sw[masterTab]->getEscapedName());
+    ImGui::SameLine(0, 12.0f * zoom);
+    static const char* notes[MST_COUNT] = {
+        "after the master level, on every server",
+        "the same curve on every channel",
+        "drive into a lookahead peak limiter (7 ms latency)",
+        "brickwall safety limiter (6 ms latency)"
+    };
+    ImGui::TextDisabled("%s  -  right-click a control: value / publish", notes[masterTab]);
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - 22.0f * zoom);
+    if(ImGui::SmallButton("x##mclose")) selectedEqTrack = -1;
+
+    ImGui::Dummy(ImVec2(0, 2.0f * zoom));
+    switch(masterTab) {
+        case MST_HP: {
+            panelSlider("Frequency", mHpFreq, "%.0f Hz", ImGuiSliderFlags_Logarithmic, fieldW, "Cutoff (-3 dB): rumble / DC protection", pub);
+            bool steep = mHp24.get();
+            if(ImGui::Checkbox("24 dB/oct", &steep)) mHp24.set(steep);
+            drawPublishPopup(mHp24.getEscapedName());
+            break;
+        }
+        case MST_EQ: {
+            if(ImGui::SmallButton("Flat##meq")) for(int b = 0; b < scEQEditor::NUM_BANDS; b++) mEqGain[b].set(0.0f);
+            ImGui::SameLine(0, 12.0f * zoom);
+            ImGui::TextDisabled("drag: freq / gain, wheel: Q / slope, double-click: 0 dB, right-click: values / publish");
+            if(mEqCurveDirty) {
+                for(int b = 0; b < scEQEditor::NUM_BANDS; b++)
+                    mEqEditor.bands[b] = { mEqFreq[b].get(), mEqGain[b].get(), mEqShape[b].get() };
+                float sr = 48000.0f;
+                if(ofxSCServer* server = serverAt(0)) {
+                    const float r = (float)serverManager::getSampleRateForServer(server);
+                    if(r > 0.0f) sr = r;
+                }
+                mEqEditor.dbRange = 24.0f;
+                mEqEditor.recompute(sr);
+                mEqCurveDirty = false;
+            }
+            mEqEditor.gainLimit = 24.0f;
+            mEqEditor.qMin = 0.1f;  mEqEditor.qMax = 20.0f;
+            mEqEditor.slopeMin = 0.1f; mEqEditor.slopeMax = 4.0f;
+            mEqEditor.bandMenu = [this](int b) {
+                ImGui::TextUnformatted(scEQEditor::bandName(b));
+                ImGui::Separator();
+                drawPublishItems(mEqFreq[b].getEscapedName(), "Freq (Hz)", true);
+                ImGui::Separator();
+                drawPublishItems(mEqGain[b].getEscapedName(), "Gain (dB)", false);
+                ImGui::Separator();
+                drawPublishItems(mEqShape[b].getEscapedName(), scEQEditor::isShelf(b) ? "Slope" : "Q", false);
+            };
+            static scEQEditor::Colors colors = scEQEditor::defaultColors();
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            if(mEqEditor.draw(std::max(120.0f * zoom, avail.x - 6.0f * zoom), std::max(60.0f * zoom, avail.y - 10.0f * zoom),
+                              colors, true, nullptr, 0, "##mixerProMasterEqEditor")) {
+                for(int b = 0; b < scEQEditor::NUM_BANDS; b++) {
+                    mEqFreq[b].set(mEqEditor.bands[b].freqHz);
+                    mEqGain[b].set(mEqEditor.bands[b].gainDb);
+                    mEqShape[b].set(mEqEditor.bands[b].shape);
+                }
+            }
+            break;
+        }
+        case MST_MAX: {
+            ImGui::BeginGroup();
+            panelSlider("Drive", mMaxDrive, "%.1f dB", 0, fieldW, "Gain into the limiter: louder, more limiting", pub);
+            panelSlider("Ceiling", mMaxCeiling, "%.1f dB", 0, fieldW, "Output peak level", pub);
+            ImGui::EndGroup();
+            ImGui::SameLine(0, 18.0f * zoom);
+            ImGui::BeginGroup();
+            panelSlider("Character", mMaxCharacter, "%.1f", 0, fieldW, "Knee and release: 0 tight and fast, 10 soft and slow", pub);
+            bool isp = mMaxIsp.get();
+            if(ImGui::Checkbox("True peak (ISP)", &isp)) mMaxIsp.set(isp);
+            drawPublishPopup(mMaxIsp.getEscapedName());
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Detects inter-sample peaks with 4x oversampling");
+            ImGui::EndGroup();
+            break;
+        }
+        default:
+            panelSlider("Ceiling", mLimCeiling, "%.1f dB", 0, fieldW, "No peak above this level", pub);
+            break;
+    }
+    ImGui::EndChild();
 }

@@ -18,13 +18,28 @@
 //  separate insert synth (mixerProEQN / mixerProDCN / mixerProEQDCN) created
 //  the first time either is switched on, placed just before the track synth
 //  and paused while both are off -- a track without them costs nothing.
-//  COMP (mixerProCompN) and RVB (mixerProRvbN, SpaceMaster) are two more
-//  inserts with the same rule: created the first time they are switched on,
-//  paused while off. Switching off first fades: the compressor crossfades to
-//  dry (\on, 30 ms), the reverb stops feeding its tank and lets the tail ring
-//  out (Decay = RT60); then the node routes around the insert and pauses it
+//  HP, COMP, SAT, ECHO and RVB (mixerProHPN / CompN / SatN / EchoN / RvbN)
+//  are more inserts with the same rule: created the first time they are
+//  switched on, paused while off. Switching off first fades: HP / COMP / SAT
+//  crossfade to dry (\on, 30 ms), ECHO and RVB stop feeding their loop and let
+//  the tail ring out; then the node routes around the insert and pauses it
 //  (update(), offAt). The compressor writes its gain reduction (dB) on the
-//  track's vuBus, after the key channels, for the strip's GR meter.
+//  track's vuBus, after the key channels, for the strip's GR meter. ECHO's
+//  delay can follow the tempo (setBpm).
+//
+//  Aux sends / returns. Every track and submaster has MAX_RETURNS send levels
+//  (post- or pre-fader). The track synth writes both taps to \sendBus (-1, no
+//  cost, while nothing is sent); a mixerProSendN synth, created after it for
+//  strips with a send, adds them into the return strips' buses. Returns are
+//  strips like the submasters (same inserts, solo-safe), run after them and
+//  go to the master.
+//
+//  Master section (per server): HP -> EQ -> Maximizer -> Limiter, the same
+//  settings on every server. While one of them is on, the strips write into a
+//  private master bus and mixerProMasterOutN copies the end of the chain to
+//  the output (and meters it); while all are off there is no master synth.
+//
+//  Order on a server: tracks, submasters, returns, master.
 //
 //  Sidechain (hybrid). Each track can be ducked by another one: SC Source
 //  (1-based track, 0 off), SC Strength, SC Attack / SC Release (ms). Every
@@ -37,7 +52,8 @@
 //  than the mixer (N): Adapt Mode (Direct / Wrap / Blocks / Stretch), In Ch
 //  (0 = the source node's "N Chan") and Rotate decide a gain matrix, computed
 //  here and run by mixerProAdaptM_N, created only when the matrix is not the
-//  plain direct one. Chain: source -> adapter -> EQ/DC -> Comp -> Rvb -> track.
+//  plain direct one. Chain: source -> adapter -> HP -> EQ/DC -> Comp -> Sat ->
+//  Echo -> Rvb -> track.
 //
 //  Submasters (buses). A bus is a strip like a track (same synth, inserts,
 //  sidechain) whose input is a private audio bus. A track's Out (0 master,
@@ -76,6 +92,8 @@ public:
     static constexpr int MAX_CHANNELS = 16;
     static constexpr int MAX_TRACKS   = 64;
     static constexpr int MAX_BUSES    = 16;
+    static constexpr int MAX_RETURNS  = 4;
+    void setBpm(float bpm) override;
 
     explicit scMixerPro(std::vector<serverManager*> servers);
     ~scMixerPro() override;
@@ -118,6 +136,16 @@ private:
         float offAt = -1.0f;                 // switched off: pause at this time (s)
     };
 
+    // Strip inserts with an FxStage, and their place in the chain
+    // (positions: 0 HP, 1 EQ/DC insert, 2 Comp, 3 Sat, 4 Echo, 5 Rvb, 6 track)
+    enum FxKind { FX_HP = 0, FX_COMP, FX_SAT, FX_ECHO, FX_RVB, FX_COUNT };
+    static constexpr int CHAIN_TRACK = 6;
+    static int fxPos(int k) { static const int p[FX_COUNT] = {0, 2, 3, 4, 5}; return p[k]; }
+    static int fxAtPos(int pos) { static const int k[7] = {FX_HP, -1, FX_COMP, FX_SAT, FX_ECHO, FX_RVB, -1}; return pos >= 0 && pos < 7 ? k[pos] : -1; }
+
+    // Master section stages
+    enum MasterStage { MST_HP = 0, MST_EQ, MST_MAX, MST_LIM, MST_COUNT };
+
     struct Track {
         int index = 0;
         std::string name;
@@ -126,6 +154,7 @@ private:
         ofParameter<std::function<void()>> faderBadge; // colour key beside the node fader
         int server = 0;                      // index into servers
         bool isBus = false;                  // a submaster
+        bool isReturn = false;               // an aux return
         ofParameter<int> output;             // tracks: 0 master, k = bus k
 
         // Publishable controls
@@ -141,6 +170,19 @@ private:
         ofParameter<int>   inChannels;       // 0 = auto (source's N Chan)
         ofParameter<int>   rotate;           // output rotation, channels
         std::array<ofParameter<float>, scEQEditor::NUM_BANDS> eqFreq, eqGain, eqShape;
+        // High-pass insert
+        ofParameter<bool>  hp, hp24;
+        ofParameter<float> hpFreq;
+        // Saturation insert
+        ofParameter<bool>  sat, satAuto;
+        ofParameter<float> satDrive, satBias, satTone, satOutput, satMix;
+        // Echo insert (GrainBox's Echo)
+        ofParameter<bool>  echo, echoBeats;
+        ofParameter<float> echoTime, echoBeatVal, echoFeed, echoCutoff, echoResonance, echoPingPong, echoMix;
+        ofParameter<int>   echoFilter;       // 0 LowPass 1 HighPass 2 BandPass 3 PeakEQ
+        // Aux sends (tracks and submasters)
+        std::array<ofParameter<float>, MAX_RETURNS> sendLevel;
+        std::array<ofParameter<bool>,  MAX_RETURNS> sendPre;
         // Compressor insert
         ofParameter<bool>  comp, compAuto;
         ofParameter<float> compThreshold, compRatio, compKnee, compAttack, compRelease;
@@ -163,7 +205,10 @@ private:
         int  detectedInputs = 0;             // last effective M, polled in update()
         std::vector<float> sentMatrix;
         bool insertRunning = false;
-        FxStage compFx, rvbFx;
+        FxStage fx[FX_COUNT];
+        ofxSCSynth* sendSynth = nullptr;     // mixerProSendN, after the track synth
+        ofxSCBus* sendBus = nullptr;         // the track's taps: post ++ pre (2N)
+        bool sendRunning = false;
         float gr = 0.0f;                     // compressor gain reduction (dB), read with the VU
         ofxSCBus* vuBus     = nullptr;
         ofxSCBus* insertBus = nullptr;
@@ -182,7 +227,18 @@ private:
         bool eqCurveDirty = true;
     };
 
+    struct MasterRuntime {
+        ofxSCBus* bus = nullptr;             // the strips write here while active
+        ofxSCBus* vuBus = nullptr;           // MasterOut's meter
+        ofxSCSynth* out = nullptr;           // mixerProMasterOutN, last
+        bool outRunning = false;
+        bool active = false;                 // strips routed into bus
+        FxStage st[MST_COUNT];
+        std::vector<float> vu;
+    };
+
     struct ServerState {
+        MasterRuntime master;
         bool active = false;                 // this node is part of the server's graph
         std::vector<ofxSCSynth*> order;      // our synths in execution order
         std::map<int, int> outputBuses;
@@ -225,6 +281,33 @@ private:
     void reorderNodeParameters();
     std::vector<std::unique_ptr<Track>> buses;
     int pendingBusCount = -1;
+    std::vector<std::unique_ptr<Track>> returns;
+    int pendingReturnCount = -1;
+    void setReturnCount(int count);
+    void addReturn();
+    void removeLastReturn();
+    void updateSends(Track& tr);
+    void dropSends(Track& tr, bool sendFree);
+    void refreshSends();
+    float currentBpm = 120.0f;
+
+    // --- master section (node parameters, one runtime per server) ---
+    ofParameter<bool>  mHp, mHp24, mEq, mMax, mMaxIsp, mLim;
+    ofParameter<float> mHpFreq, mMaxDrive, mMaxCeiling, mMaxCharacter, mLimCeiling;
+    std::array<ofParameter<float>, scEQEditor::NUM_BANDS> mEqFreq, mEqGain, mEqShape;
+    scEQEditor mEqEditor;
+    bool mEqCurveDirty = true;
+    std::vector<ofAbstractParameter*> masterParams();
+    bool masterWanted(int k) const;
+    void updateMaster(ofxSCServer* server);
+    void updateMasterAll();
+    void masterRouting(ofxSCServer* server);
+    void sendMasterStage(ofxSCServer* server, int k);
+    void destroyMaster(ofxSCServer* server, bool sendFree);
+    int  masterInput(ofxSCServer* server);
+    void refreshStripOuts(ofxSCServer* server);
+    ofxSCSynth* firstSynthOfZone(ofxSCServer* server, int zone);   // 2 returns+master, 3 master
+    void orderInsertAfter(ofxSCServer* server, ofxSCSynth* added, ofxSCSynth* after);
     // Track reorder / delete from the window, applied in update()
     int pendingMoveFrom = -1, pendingMoveTo = -1, pendingDelete = -1;
     std::vector<ofAbstractParameter*> stripParams(Track& t);
@@ -241,7 +324,8 @@ private:
     int  trackOutBus(Track& tr);
     void refreshTrackOutputs();
     bool isSilenced(const Track& tr) const;
-    int  eqId(const Track& tr) const { return tr.isBus ? 1000 + tr.index : tr.index; }
+    int  eqId(const Track& tr) const { return tr.isReturn ? 1500 + tr.index : (tr.isBus ? 1000 + tr.index : tr.index); }
+    static constexpr int MASTER_PANEL = 2000;
     Track* eqTarget();
     ofJson saveStrip(Track& tr);
     void loadStrip(Track& tr, const ofJson& j);
@@ -256,15 +340,24 @@ private:
     void createRuntime(Track& tr, ofxSCServer* server);
     void destroyRuntime(Track& tr, bool sendFree);
     void updateInsert(Track& tr);
-    // Comp (1) / Rvb (2) inserts. Stages: 0 EQ/DC, 1 Comp, 2 Rvb, 3 the track
+    // Strip inserts (FxKind) and the chain
     std::vector<ofAbstractParameter*> fxParams(Track& t);
-    void updateFx(Track& tr, int which);
+    ofParameter<bool>& fxSwitch(Track& tr, int k);
+    void updateFx(Track& tr, int k);
+    void sendFx(Track& tr, int k);
+    void sendHP(Track& tr);
     void sendComp(Track& tr);
+    void sendSat(Track& tr);
+    void sendEcho(Track& tr);
     void sendRvb(Track& tr);
     void processFxTimers();
+    float fxOffDelay(const Track& tr, int k) const;
     float rvbTail(const Track& tr) const;
-    int  stageInput(const Track& tr, int stage) const;
-    ofxSCSynth* chainSynthAfter(const Track& tr, int stage) const;
+    float echoDelaySec(const Track& tr) const;
+    int  stageOutBus(const Track& tr, int pos) const;
+    ofxSCSynth* stageSynth(const Track& tr, int pos) const;
+    int  stageInput(const Track& tr, int pos) const;
+    ofxSCSynth* chainSynthAfter(const Track& tr, int pos) const;
     void applyInputRouting(Track& tr);
     void sendAll(Track& tr);
     void sendLevel(Track& tr);
@@ -338,9 +431,10 @@ private:
 
     // --- window ---
     bool windowVisible = false;
-    int editTracks = 0, editChannels = 0, editBuses = 0;   // toolbar fields while being typed in
+    int editTracks = 0, editChannels = 0, editBuses = 0, editReturns = 0;   // toolbar fields while being typed in
     int selectedEqTrack = -1;
-    int panelTab = 0;                          // channel panel: 0 EQ, 1 Comp, 2 Reverb
+    int panelTab = 0;                          // channel panel: 0 EQ, 1 HP, 2 Comp, 3 Sat, 4 Echo, 5 Reverb
+    int masterTab = 0;                         // master panel: MasterStage
     std::vector<float> masterVU, masterPeak, masterPeakAge;
     void drawWindow();
     void drawToolbar();
@@ -349,6 +443,11 @@ private:
     void drawEqPanel(float w, float h);
     void drawCompPanel(Track& tr);
     void drawRvbPanel(Track& tr);
+    void drawHpPanel(Track& tr);
+    void drawSatPanel(Track& tr);
+    void drawEchoPanel(Track& tr);
+    void drawMasterPanel(float w, float h);
+    bool drawSendKnob(const char* id, float& value, float radius, bool pre, ImU32 colour, bool disabled);
     void drawMiniCurve(Track& tr, ImVec2 pos, ImVec2 size);
     bool drawFader(const char* id, float& gain, ImVec2 pos, ImVec2 size, float maxGain = 2.0f);
     bool drawKnob(const char* id, float& value, float radius);
