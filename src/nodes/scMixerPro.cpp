@@ -18,6 +18,7 @@
 namespace {
 const char* kBandNames[scEQEditor::NUM_BANDS] = {"Lo", "LoMid", "Mid", "HiMid", "Hi"};
 const float kBandFreq[scEQEditor::NUM_BANDS]  = {80.0f, 250.0f, 1000.0f, 4000.0f, 12000.0f};
+constexpr float kTrackMaxGain = 4.0f; // +12.04 dB
 
 const ofColor kTrackPalette[] = {
     ofColor(214, 92, 92),  ofColor(222, 150, 70), ofColor(214, 196, 84), ofColor(120, 190, 96),
@@ -60,10 +61,12 @@ void scMixerPro::setup() {
     description = "Multichannel, multi-server mixer: each track runs on its own server, one output per server. "
                   "Dockable mixer window with VU / peak, fader, balance, mute / solo, per-track EQ and DC correction.";
 
+    addSeparator("Setup", ofColor(150, 180, 210));
     addParameter(showWindow.set("Show", false));
     addParameter(numChannels.set("N Chan", 2, 1, MAX_CHANNELS));
     addParameter(numTracks.set("Num Inputs", 4, 1, MAX_TRACKS));
     addParameter(showFaders.set("Show Faders", false));
+    addSeparator("Mix Control", ofColor(180, 170, 210));
     addParameter(gainVec.set("Gain Vec", vector<float>(4, 1.0f), vector<float>(1, 0.0f), vector<float>(1, 2.0f)));
     addParameter(balanceVec.set("Balance Vec", vector<float>(4, 0.0f), vector<float>(1, -1.0f), vector<float>(1, 1.0f)));
     addParameter(masterLevel.set("Master Level", vector<float>(1, 1.0f), vector<float>(1, 0.0f), vector<float>(1, 2.0f)));
@@ -74,10 +77,10 @@ void scMixerPro::setup() {
     addInspectorParameter(vuRelease.set("VU Release", 300.0f, 10.0f, 2000.0f));
     currentChannels = numChannels.get();
 
-    // One output per server, ahead of the inputs so that inputs added later
-    // stay together at the end of the node
+    addSeparator("Outputs", ofColor(150, 200, 170));
     for(int i = 0; i < (int)servers.size(); i++) scNode::addOutput("Out S" + ofToString(i + 1));
 
+    addSeparator("Inputs", ofColor(210, 175, 135));
     setTrackCount(numTracks.get());
 
     nodeListeners.push(numTracks.newListener([this](int& n) {
@@ -103,7 +106,10 @@ void scMixerPro::setup() {
     nodeListeners.push(masterLevel.newListener([this](vector<float>&) {
         for(Track* tr : allStrips()) sendMasterLevel(*tr);
     }));
-    nodeListeners.push(showFaders.newListener([this](bool&) { updateFaders(); }));
+    // The checkbox can be changed from inside ofxOceanodeNodeGui::constructGui().
+    // Adding/removing parameters there invalidates the vectors that constructGui
+    // is currently traversing, so apply the structural change on the next update.
+    nodeListeners.push(showFaders.newListener([this](bool&) { pendingFaderUpdate = true; }));
     auto vuTimes = [this](float&) {
         for(Track* tr : allStrips()) if(tr->synth) {
             tr->synth->set("vuAttackTime", vuAttack.get());
@@ -244,8 +250,23 @@ void scMixerPro::addTrack() {
     initStrip(t, n);
 
     tracks.push_back(std::move(tr));
+    Track* tp = tracks.back().get();
+    tp->inputBadge.setName("Input Colour Key " + n);
+    addCustomRegion(tp->inputBadge, [tp]() {
+        const float zoom = ofxOceanodeShared::getZoomLevel();
+        const float rowH = ImGui::GetFrameHeight();
+        const float side = std::max(6.0f * zoom, std::min(10.0f * zoom, rowH - 4.0f * zoom));
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(ImVec2(side, rowH));
+        const float y = p.y + (rowH - side) * 0.5f;
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            ImVec2(p.x, y), ImVec2(p.x + side, y + side), toU32(tp->color), 1.5f * zoom);
+        ImGui::SameLine(0.0f, 3.0f * zoom);
+    });
     scNode::addInput("In " + n);
     registerTrackActions(t);
+    syncTrackInputNames();
+    syncFaderNames();
     if(showFaders.get()) updateFaders();
 
     // A new track starts on server 1; create its synth if that server runs us
@@ -254,7 +275,9 @@ void scMixerPro::addTrack() {
 
 // Parameters and listeners shared by tracks and buses (n: name suffix)
 void scMixerPro::initStrip(Track& t, const std::string& n) {
-    t.level.set("Level " + n, 1.0f, 0.0f, 2.0f);
+    t.level.set("Level " + n, 1.0f, 0.0f, kTrackMaxGain);
+    t.levelKey = t.level.getEscapedName();
+    t.faderBadge.setName("Fader Colour Key " + t.levelKey);
     t.balance.set("Balance " + n, 0.0f, -1.0f, 1.0f);
     t.mute.set("Mute " + n, false);
     t.solo.set("Solo " + n, false);
@@ -316,9 +339,133 @@ void scMixerPro::removeLastTrack() {
     destroyRuntime(t, true);
     unregisterTrackActions(t);
     if(selectedEqTrack == t.index) selectedEqTrack = -1;
+    removeParameter(t.inputBadge.getEscapedName());
     scNode::removeInput((int)tracks.size() - 1);
     tracks.pop_back();
+    reorderNodeParameters();
     updateMutes();
+}
+
+// Input parameter objects are renamed in place. Oceanode connections point to
+// those objects, not to their names, so an already-wired track remains wired.
+// A temporary pass also makes swaps ("Kick" <-> "Snare") collision-free.
+void scMixerPro::syncTrackInputNames() {
+    const int count = std::min((int)tracks.size(), (int)inputs.size());
+    for(int i = 0; i < count; i++)
+        inputs[i].setName("__MixerPro input slot " + ofToString(i + 1));
+
+    auto& group = getParameterGroup();
+    for(int i = 0; i < count; i++) {
+        std::string base = tracks[i]->name.empty() ? "Track " + ofToString(i + 1) : tracks[i]->name;
+        std::string candidate = base;
+        int suffix = 2;
+        while(group.contains(candidate)) candidate = base + " [" + ofToString(suffix++) + "]";
+        if(!inputs[i].setName(candidate))
+            ofLogWarning("scMixerPro") << "Could not rename input " << i + 1 << " to '" << candidate << "'";
+    }
+    reorderNodeParameters();
+}
+
+// Old Mixer Pro projects stored their connection endpoints as "In 1", etc.
+// Keep those aliases until their connections have been restored, then switch
+// to the track labels in presetRecallAfterSettingParameters().
+void scMixerPro::useLegacyInputNames() {
+    const int count = std::min((int)tracks.size(), (int)inputs.size());
+    for(int i = 0; i < count; i++)
+        inputs[i].setName("__MixerPro legacy input slot " + ofToString(i + 1));
+    for(int i = 0; i < count; i++) inputs[i].setName("In " + ofToString(i + 1));
+    reorderNodeParameters();
+}
+
+// Faders share the node parameter group with their corresponding inputs, so
+// their internal names need to differ even though their visible labels should
+// be identical. A zero-width suffix keeps the UI label exact while levelKey
+// remains the stable identity used by publishing and preset state.
+void scMixerPro::syncFaderNames() {
+    auto& group = getParameterGroup();
+    auto strips = allStrips();
+    for(Track* tr : strips) tr->level.setName("__MixerPro fader slot " + tr->levelKey);
+
+    const std::string zeroWidth = "\xE2\x80\x8B";
+    std::vector<std::string> assigned;
+    for(Track* tr : strips) {
+        std::string base = tr->name.empty()
+            ? (tr->isBus ? "Bus" : "Track " + ofToString(tr->index + 1))
+            : tr->name;
+        std::string candidate = base + zeroWidth;
+        while(group.contains(candidate) ||
+              std::find(assigned.begin(), assigned.end(), candidate) != assigned.end())
+            candidate += zeroWidth;
+        tr->level.setName(candidate);
+        assigned.push_back(candidate);
+    }
+    reorderNodeParameters();
+}
+
+// Older projects restore their level connections against "Level N"/"Level BN".
+// Adopt those names until connection restoration has completed.
+void scMixerPro::useLegacyFaderNames() {
+    for(Track* tr : allStrips()) tr->level.setName("__MixerPro legacy fader " + tr->levelKey);
+    for(Track* tr : allStrips()) tr->level.setName(tr->levelKey);
+    reorderNodeParameters();
+}
+
+// Keep the fixed sections and all dynamically-created inputs in their visual
+// position. ofParameterGroup::reorder() retains the parameter objects, which
+// is the important part: moving an inlet never drops its connection.
+void scMixerPro::reorderNodeParameters() {
+    auto& group = getParameterGroup();
+    std::vector<std::string> order;
+    auto append = [&](const std::string& name) {
+        if(group.contains(name) && std::find(order.begin(), order.end(), name) == order.end())
+            order.push_back(name);
+    };
+    auto appendSeparator = [&](const std::string& label) {
+        const std::string prefix = "SEPARATOR:|" + label + "|";
+        for(int i = 0; i < (int)group.size(); i++) {
+            const std::string name = group.get(i).getName();
+            if(name.rfind(prefix, 0) == 0) { append(name); return; }
+        }
+    };
+
+    appendSeparator("Setup");
+    append(showWindow.getName());
+    append(numChannels.getName());
+    append(numTracks.getName());
+    append(showFaders.getName());
+    appendSeparator("Mix Control");
+    append(gainVec.getName());
+    append(balanceVec.getName());
+    append(masterLevel.getName());
+    appendSeparator("Outputs");
+    for(auto& output : outputs) append(output.getName());
+    appendSeparator("Inputs");
+    for(int i = 0; i < (int)tracks.size() && i < (int)inputs.size(); i++) {
+        append(tracks[i]->inputBadge.getName());
+        append(inputs[i].getName());
+    }
+
+    appendSeparator("Published");
+    for(const auto& key : publishedKeys) {
+        auto handle = nodeHandles.find(key);
+        if(handle != nodeHandles.end() && handle->second) {
+            if(Track* tr = stripForLevelKey(key)) append(tr->faderBadge.getName());
+            append(handle->second->getName());
+        }
+    }
+    appendSeparator("Faders");
+    for(const auto& key : faderKeys) {
+        auto handle = nodeHandles.find(key);
+        if(handle != nodeHandles.end() && handle->second) {
+            if(Track* tr = stripForLevelKey(key)) append(tr->faderBadge.getName());
+            append(handle->second->getName());
+        }
+    }
+
+    // Retain any future or connection-held controls in their relative order.
+    for(int i = 0; i < (int)group.size(); i++) append(group.get(i).getName());
+    group.reorder(order);
+    parameterGroupChanged.notify(this);
 }
 
 void scMixerPro::setStripServer(Track& tr, int server) {
@@ -366,6 +513,9 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
         return dynamic_cast<ofxOceanodeAbstractParameter*>(&group.get(escaped));
     };
     auto isOurs = [this](ofxOceanodeAbstractParameter& p) { return p.getNodeModel() == this; };
+    auto roleKey = [](Track& tr, ofAbstractParameter* parameter) {
+        return parameter == &tr.level ? tr.levelKey : parameter->getEscapedName();
+    };
 
     struct Snapshot {
         ofJson json;
@@ -399,7 +549,7 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
         snap.roleIn.assign(params.size(), nullptr);
         snap.roleOut.assign(params.size(), {});
         for(size_t r = 0; r < params.size(); r++) {
-            const std::string key = params[r]->getEscapedName();
+            const std::string key = roleKey(tr, params[r]);
             snap.published[r] = isPublished(key);
             auto handle = nodeHandles.find(key);
             if(handle == nodeHandles.end() || !handle->second) continue;
@@ -414,9 +564,13 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
         }
     }
     // 2. Unpublish every track parameter (republished by position below)
-    for(int j = 0; j < oldCount; j++)
-        for(auto* p : stripParams(*tracks[j]))
-            if(isPublished(p->getEscapedName())) unpublishKey(p->getEscapedName());
+    for(int j = 0; j < oldCount; j++) {
+        Track& tr = *tracks[j];
+        for(auto* p : stripParams(tr)) {
+            const std::string key = roleKey(tr, p);
+            if(isPublished(key)) unpublishKey(key);
+        }
+    }
 
     const vector<float> oldGain = gainVec.get(), oldBalance = balanceVec.get();
     std::vector<int> newPosition(oldCount, -1);
@@ -426,6 +580,8 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
     // 3. New count, then each position takes its track's settings
     setTrackCount((int)order.size());
     for(int i = 0; i < (int)order.size(); i++) loadStrip(*tracks[i], snaps[order[i]].json);
+    syncTrackInputNames();
+    syncFaderNames();
     // Sidechain sources refer to track numbers
     for(Track* tr : allStrips()) {
         const int s = tr->scSource.get() - 1;
@@ -447,7 +603,7 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
         const Snapshot& snap = snaps[order[i]];
         const auto params = stripParams(*tracks[i]);
         for(size_t r = 0; r < params.size(); r++)
-            if(snap.published[r]) publishKey(params[r]->getEscapedName());
+            if(snap.published[r]) publishKey(roleKey(*tracks[i], params[r]));
     }
     if(showFaders.get()) updateFaders();
     for(int i = 0; i < (int)order.size(); i++) {
@@ -457,7 +613,7 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
                 container->createConnection(*snap.inputSource, *in);
         const auto params = stripParams(*tracks[i]);
         for(size_t r = 0; r < params.size(); r++) {
-            auto handle = nodeHandles.find(params[r]->getEscapedName());
+            auto handle = nodeHandles.find(roleKey(*tracks[i], params[r]));
             if(handle == nodeHandles.end() || !handle->second) continue;
             if(snap.roleIn[r]) container->createConnection(*snap.roleIn[r], *handle->second);
             for(auto* sink : snap.roleOut[r]) container->createConnection(*handle->second, *sink);
@@ -502,6 +658,7 @@ void scMixerPro::addBus() {
     initStrip(b, "B" + ofToString(b.index + 1));
     buses.push_back(std::move(bp));
     registerTrackActions(b);
+    syncFaderNames();
     if(showFaders.get()) updateFaders();
     if(isServerActive(b.server)) createRuntime(b, serverAt(b.server));
     refreshTrackOutputs();
@@ -617,13 +774,18 @@ bool scMixerPro::anySolo() const {
     return false;
 }
 
-// A soloed bus keeps its tracks audible; a soloed track keeps its bus audible
+// A soloed bus opens all of its tracks until one or more of those tracks are
+// soloed; then the child solos narrow that bus. A soloed track always keeps
+// its parent bus audible.
 bool scMixerPro::isSilenced(const Track& tr) const {
     if(tr.mute.get()) return true;
     if(!anySolo() || tr.solo.get()) return false;
     if(!tr.isBus) {
         Track* b = busFor(tr);
-        return !(b && b->solo.get());
+        if(!(b && b->solo.get())) return true;
+        for(const auto& sibling : tracks)
+            if(sibling->solo.get() && busFor(*sibling) == b) return true;
+        return false;
     }
     for(const auto& t : tracks) if(t->solo.get() && busFor(*t) == &tr) return false;
     return true;
@@ -971,7 +1133,7 @@ void scMixerPro::sendLevel(Track& tr) {
     if(!tr.synth) return;
     const auto& v = gainVec.get();
     const float g = (!tr.isBus && tr.index < (int)v.size()) ? v[tr.index] : 1.0f;
-    tr.synth->setMultiple("level", ofClamp(tr.level.get(), 0.0f, 2.0f) * ofClamp(g, 0.0f, 2.0f), currentChannels);
+    tr.synth->setMultiple("level", ofClamp(tr.level.get(), 0.0f, kTrackMaxGain) * ofClamp(g, 0.0f, 2.0f), currentChannels);
 }
 
 void scMixerPro::sendMasterLevel(Track& tr) {
@@ -1193,7 +1355,7 @@ void scMixerPro::resetInputBusses(ofxSCServer* server, int targetBus) {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scMixerPro::registerTrackActions(Track& tr) {
-    addAction(tr.level.getEscapedName(), tr.level);
+    addAction(tr.levelKey, tr.level);
     addAction(tr.balance.getEscapedName(), tr.balance);
     addAction(tr.mute.getEscapedName(), tr.mute);
     addAction(tr.solo.getEscapedName(), tr.solo);
@@ -1218,7 +1380,7 @@ void scMixerPro::registerTrackActions(Track& tr) {
 
 void scMixerPro::unregisterTrackActions(Track& tr) {
     std::vector<std::string> keys = {
-        tr.level.getEscapedName(), tr.balance.getEscapedName(), tr.mute.getEscapedName(),
+        tr.levelKey, tr.balance.getEscapedName(), tr.mute.getEscapedName(),
         tr.solo.getEscapedName(), tr.eq.getEscapedName(), tr.dc.getEscapedName(),
         tr.vuOut.getEscapedName(), tr.scSource.getEscapedName(), tr.scStrength.getEscapedName(),
         tr.scAttack.getEscapedName(), tr.scRelease.getEscapedName(), tr.scThreshold.getEscapedName(),
@@ -1235,16 +1397,17 @@ void scMixerPro::unregisterTrackActions(Track& tr) {
         // if connected (as removing a track input does)
         auto it = nodeHandles.find(key);
         if(it != nodeHandles.end()) {
-            removeParameter(key);
+            removeParameter(it->second->getName());
             nodeHandles.erase(it);
         }
         publishedKeys.erase(std::remove(publishedKeys.begin(), publishedKeys.end(), key), publishedKeys.end());
         faderKeys.erase(std::remove(faderKeys.begin(), faderKeys.end(), key), faderKeys.end());
         publishActions.erase(key);
     }
+    removeFaderBadge(tr);
     if(publishedKeys.empty() && publishedSeparatorAdded) { removeSeparator("Published"); publishedSeparatorAdded = false; }
     if(faderKeys.empty() && faderSeparatorAdded) { removeSeparator("Faders"); faderSeparatorAdded = false; }
-    parameterGroupChanged.notify(this);
+    reorderNodeParameters();
 }
 
 bool scMixerPro::isPublished(const std::string& key) const {
@@ -1260,12 +1423,13 @@ bool scMixerPro::hasNodeConnection(const std::string& key) const {
 bool scMixerPro::publishKey(const std::string& key) {
     auto action = publishActions.find(key);
     if(action == publishActions.end() || isPublished(key)) return false;
+    if(!publishedSeparatorAdded) { addSeparator("Published", ofColor(200)); publishedSeparatorAdded = true; }
     if(nodeHandles.count(key) == 0) {      // not already in the node as a fader
-        if(!publishedSeparatorAdded) { addSeparator("Published", ofColor(200)); publishedSeparatorAdded = true; }
         nodeHandles[key] = action->second.add();
     }
+    if(Track* tr = stripForLevelKey(key)) ensureFaderBadge(*tr);
     publishedKeys.push_back(key);
-    parameterGroupChanged.notify(this);
+    reorderNodeParameters();
     return true;
 }
 
@@ -1276,7 +1440,7 @@ bool scMixerPro::unpublishKey(const std::string& key) {
     publishedKeys.erase(std::remove(publishedKeys.begin(), publishedKeys.end(), key), publishedKeys.end());
     if(!fader) removeNodeHandleIfUnused(key);
     if(publishedKeys.empty() && publishedSeparatorAdded) { removeSeparator("Published"); publishedSeparatorAdded = false; }
-    parameterGroupChanged.notify(this);
+    reorderNodeParameters();
     return true;
 }
 
@@ -1286,8 +1450,35 @@ void scMixerPro::removeNodeHandleIfUnused(const std::string& key) {
     if(isPublished(key)) return;
     if(std::find(faderKeys.begin(), faderKeys.end(), key) != faderKeys.end()) return;
     if(hasNodeConnection(key)) return;
-    removeParameter(key);
+    removeParameter(it->second->getName());
     nodeHandles.erase(it);
+    if(Track* tr = stripForLevelKey(key)) removeFaderBadge(*tr);
+}
+
+scMixerPro::Track* scMixerPro::stripForLevelKey(const std::string& key) {
+    for(Track* tr : allStrips()) if(tr->levelKey == key) return tr;
+    return nullptr;
+}
+
+void scMixerPro::ensureFaderBadge(Track& tr) {
+    if(getParameterGroup().contains(tr.faderBadge.getName())) return;
+    Track* tp = &tr;
+    addCustomRegion(tr.faderBadge, [tp]() {
+        const float zoom = ofxOceanodeShared::getZoomLevel();
+        const float rowH = ImGui::GetFrameHeight();
+        const float side = std::max(6.0f * zoom, std::min(10.0f * zoom, rowH - 4.0f * zoom));
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(ImVec2(side, rowH));
+        const float y = p.y + (rowH - side) * 0.5f;
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            ImVec2(p.x, y), ImVec2(p.x + side, y + side), toU32(tp->color), 1.5f * zoom);
+        ImGui::SameLine(0.0f, 3.0f * zoom);
+    });
+}
+
+void scMixerPro::removeFaderBadge(Track& tr) {
+    if(getParameterGroup().contains(tr.faderBadge.getName()))
+        removeParameter(tr.faderBadge.getName());
 }
 
 void scMixerPro::syncPublished(const std::vector<std::string>& keys) {
@@ -1301,13 +1492,14 @@ void scMixerPro::syncPublished(const std::vector<std::string>& keys) {
 // A Level that is also published, or connected, stays when they are hidden.
 void scMixerPro::updateFaders() {
     if(showFaders.get()) {
+        if(!faderSeparatorAdded) { addSeparator("Faders", ofColor(200)); faderSeparatorAdded = true; }
         for(Track* tr : allStrips()) {
-            const std::string key = tr->level.getEscapedName();
+            const std::string& key = tr->levelKey;
             if(std::find(faderKeys.begin(), faderKeys.end(), key) != faderKeys.end()) continue;
             if(nodeHandles.count(key) == 0) {
-                if(!faderSeparatorAdded) { addSeparator("Faders", ofColor(200)); faderSeparatorAdded = true; }
                 nodeHandles[key] = publishActions[key].add();
             }
+            ensureFaderBadge(*tr);
             faderKeys.push_back(key);
         }
     } else {
@@ -1319,7 +1511,7 @@ void scMixerPro::updateFaders() {
             if(nodeHandles.count(key) && !isPublished(key)) faderKeys.push_back(key);
         if(faderKeys.empty() && faderSeparatorAdded) { removeSeparator("Faders"); faderSeparatorAdded = false; }
     }
-    parameterGroupChanged.notify(this);
+    reorderNodeParameters();
 }
 
 void scMixerPro::markPublished(const std::string& key) const {
@@ -1431,6 +1623,15 @@ void scMixerPro::update(ofEventArgs&) {
         pendingBusCount = -1;
         setBusCount(count);
     }
+    if(pendingTrackLabelsUpdate) {
+        pendingTrackLabelsUpdate = false;
+        syncTrackInputNames();
+        syncFaderNames();
+    }
+    if(pendingFaderUpdate) {
+        pendingFaderUpdate = false;
+        updateFaders();
+    }
     const bool visible = windowVisible;
     windowVisible = false;   // set again by draw() while the window is shown
     // Meters are only read while someone looks at them, or while a VU is
@@ -1519,6 +1720,8 @@ ofJson scMixerPro::saveStrip(Track& tr) {
 
 void scMixerPro::presetSave(ofJson& json) {
     ofJson state;
+    state["inputNamesFollowTracks"] = true;
+    state["faderNamesFollowTracks"] = true;
     state["numTracks"] = (int)tracks.size();
     state["numChannels"] = currentChannels;
     state["showFaders"] = showFaders.get();
@@ -1593,8 +1796,16 @@ void scMixerPro::loadBeforeConnections(ofJson& json) {
             const ofJson& list = state["tracks"];
             for(size_t t = 0; t < tracks.size() && t < list.size(); t++) loadStrip(*tracks[t], list[t]);
         }
+        if(state.value("inputNamesFollowTracks", false)) syncTrackInputNames();
+        else useLegacyInputNames();
+        if(state.value("faderNamesFollowTracks", false)) syncFaderNames();
+        else useLegacyFaderNames();
         const bool faders = state.value("showFaders", false);
         if(showFaders.get() != faders) showFaders.set(faders);
+        // Connections are restored immediately after this hook, so fader
+        // parameters must exist now rather than waiting for update().
+        pendingFaderUpdate = false;
+        updateFaders();
         if(state.contains("published") && state["published"].is_array())
             syncPublished(state["published"].get<std::vector<std::string>>());
     } catch(const std::exception& e) {
@@ -1603,6 +1814,10 @@ void scMixerPro::loadBeforeConnections(ofJson& json) {
 }
 
 void scMixerPro::presetRecallAfterSettingParameters(ofJson&) {
+    // Legacy projects restored their connections against "In N" above. Now
+    // that those objects are wired, adopting the track labels is connection-safe.
+    syncTrackInputNames();
+    syncFaderNames();
     // Values that arrived as node parameters are already applied by their
     // listeners; live synths (a paste into a running patch) get everything.
     for(Track* tr : allStrips()) if(tr->synth) sendAll(*tr);
@@ -1758,29 +1973,38 @@ void scMixerPro::drawMeters(const std::vector<float>& vu, const std::vector<floa
     dl->AddLine(ImVec2(pos.x, y0dB), ImVec2(pos.x + size.x, y0dB), IM_COL32(255, 255, 255, 60), 1.0f);
 }
 
-bool scMixerPro::drawFader(const char* id, float& gain, ImVec2 pos, ImVec2 size) {
+bool scMixerPro::drawFader(const char* id, float& gain, ImVec2 pos, ImVec2 size, float maxGain) {
     const float zoom = ofxOceanodeShared::getZoomLevel();
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float topDb = ampToDb(std::max(1.0f, maxGain));
+    auto faderToPos = [topDb](float value) {
+        if(value <= 1e-6f) return 0.0f;
+        return ofClamp((ampToDb(value) + 60.0f) / (60.0f + topDb), 0.0f, 1.0f);
+    };
+    auto posToFader = [topDb, maxGain](float value) {
+        if(value <= 0.002f) return 0.0f;
+        return ofClamp(std::pow(10.0f, (value * (60.0f + topDb) - 60.0f) / 20.0f), 0.0f, maxGain);
+    };
     ImGui::SetCursorScreenPos(pos);
     ImGui::InvisibleButton(id, size);
     bool changed = false;
-    float p = gainToPos(gain);
+    float p = faderToPos(gain);
     if(ImGui::IsItemActive() && ImGui::IsMouseDragging(0, 0.0f)) {
         const float speed = ImGui::GetIO().KeyShift ? 0.1f : 1.0f;
         p = ofClamp(p - ImGui::GetIO().MouseDelta.y * speed / std::max(1.0f, size.y), 0.0f, 1.0f);
-        gain = posToGain(p);
+        gain = posToFader(p);
         changed = true;
     }
     if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) { gain = 1.0f; changed = true; }
     if(ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0.0f) {
         p = ofClamp(p + ImGui::GetIO().MouseWheel * 0.01f, 0.0f, 1.0f);
-        gain = posToGain(p);
+        gain = posToFader(p);
         changed = true;
     }
-    p = gainToPos(gain);
+    p = faderToPos(gain);
     const float cx = pos.x + size.x * 0.5f;
     dl->AddRectFilled(ImVec2(cx - 2.0f * zoom, pos.y), ImVec2(cx + 2.0f * zoom, pos.y + size.y), IM_COL32(8, 8, 10, 255), 2.0f);
-    const float y0 = pos.y + size.y * (1.0f - gainToPos(1.0f));
+    const float y0 = pos.y + size.y * (1.0f - faderToPos(1.0f));
     dl->AddLine(ImVec2(pos.x, y0), ImVec2(pos.x + size.x, y0), IM_COL32(255, 255, 255, 70), 1.0f);
     const float yc = pos.y + size.y * (1.0f - p);
     const float capH = 10.0f * zoom;
@@ -1965,7 +2189,12 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.06f, 0.06f, 0.07f, 1.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2.0f * zoom, 1.0f * zoom));
-    if(ImGui::InputText("##name", nameBuffer, sizeof(nameBuffer))) tr.name = nameBuffer;
+    if(ImGui::InputText("##name", nameBuffer, sizeof(nameBuffer))) {
+        tr.name = nameBuffer;
+        // Both inlet and fader labels are node parameters. Defer renaming them
+        // until update(), outside either GUI's parameter traversal.
+        pendingTrackLabelsUpdate = true;
+    }
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
     if(ImGui::BeginPopupContextItem("##colour")) {
@@ -2169,8 +2398,8 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
     const float areaH = std::max(30.0f * zoom, bottom - y);
     const float faderW = 22.0f * zoom;
     float g = tr.level.get();
-    if(drawFader("##fader", g, ImVec2(start.x + pad, y), ImVec2(faderW, areaH))) tr.level.set(g);
-    drawPublishPopup(tr.level.getEscapedName());
+    if(drawFader("##fader", g, ImVec2(start.x + pad, y), ImVec2(faderW, areaH), kTrackMaxGain)) tr.level.set(g);
+    drawPublishPopup(tr.levelKey);
     const ImVec2 meterPos(start.x + pad + faderW + 5.0f * zoom, y);
     const ImVec2 meterSize(end.x - pad - meterPos.x, areaH);
     ImGui::SetCursorScreenPos(meterPos);
