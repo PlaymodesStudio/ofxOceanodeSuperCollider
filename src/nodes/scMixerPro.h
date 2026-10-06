@@ -106,12 +106,15 @@ private:
         int index = 0;
         std::string name;
         ofColor color;
+        ofParameter<std::function<void()>> inputBadge; // colour key beside the node inlet
+        ofParameter<std::function<void()>> faderBadge; // colour key beside the node fader
         int server = 0;                      // index into servers
         bool isBus = false;                  // a submaster
         ofParameter<int> output;             // tracks: 0 master, k = bus k
 
         // Publishable controls
-        ofParameter<float> level;            // linear gain, 0..2
+        ofParameter<float> level;            // linear gain, 0..4
+        std::string levelKey;                 // stable publish identity while its label changes
         ofParameter<float> balance;          // -1..1
         ofParameter<bool>  mute, solo;
         ofParameter<bool>  eq, dc;
@@ -181,12 +184,19 @@ private:
     bool rebuildingTracks = false;
     int  pendingTrackCount = -1;   // a Num Inputs change, applied in update()
                                    // (inputs can't change while the node GUI draws)
+    bool pendingFaderUpdate = false; // Show Faders also changes the node layout
+    bool pendingTrackLabelsUpdate = false;
 
     // --- tracks ---
     std::vector<std::unique_ptr<Track>> tracks;
     void setTrackCount(int count);
     void addTrack();
     void removeLastTrack();
+    void syncTrackInputNames();
+    void useLegacyInputNames();
+    void syncFaderNames();
+    void useLegacyFaderNames();
+    void reorderNodeParameters();
     std::vector<std::unique_ptr<Track>> buses;
     int pendingBusCount = -1;
     // Track reorder / delete from the window, applied in update()
@@ -261,6 +271,9 @@ private:
     bool unpublishKey(const std::string& key);
     void syncPublished(const std::vector<std::string>& keys);
     void updateFaders();
+    Track* stripForLevelKey(const std::string& key);
+    void ensureFaderBadge(Track& tr);
+    void removeFaderBadge(Track& tr);
     void removeNodeHandleIfUnused(const std::string& key);
     void drawPublishPopup(const std::string& key);
     void drawPublishItems(const std::string& key, const char* title, bool focus);
@@ -297,7 +310,7 @@ private:
     void drawTrackStrip(Track& tr, float w, float h);
     void drawEqPanel(float w, float h);
     void drawMiniCurve(Track& tr, ImVec2 pos, ImVec2 size);
-    bool drawFader(const char* id, float& gain, ImVec2 pos, ImVec2 size);
+    bool drawFader(const char* id, float& gain, ImVec2 pos, ImVec2 size, float maxGain = 2.0f);
     bool drawKnob(const char* id, float& value, float radius);
     void drawMeters(const std::vector<float>& vu, const std::vector<float>& peak, ImVec2 pos, ImVec2 size, bool bus = false);
     void updatePeaks(std::vector<float>& vu, std::vector<float>& peak, std::vector<float>& age, float dt);
