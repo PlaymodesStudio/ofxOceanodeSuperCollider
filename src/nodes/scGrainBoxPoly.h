@@ -221,6 +221,8 @@ private:
         ofParameter<bool>  delayJump;               // Grainless: 0 Glide (tape slide), 1 Jump (crossfade)
         ofParameter<float> delayGlide;              // Grainless: glide / crossfade time (ms)
         ofParameter<bool>  freeze;                  // stop recording
+        ofParameter<float> feedback;                // Live: engine output back into its buffer (0..1.1)
+        ofParameter<float> fbTone;                  // feedback filter: 0 lowpass .. 0.5 open .. 1 highpass
         std::vector<float> liveRing;                // signed max per bin, buffer order
         std::vector<float> liveRingMin;             // signed min per bin
         float              liveHead = 0.0f;         // write position 0..1
@@ -228,6 +230,7 @@ private:
         struct LiveSC {
             ofxSCBuffer*    buf      = nullptr;
             ofxSCBus*       phaseBus = nullptr;     // audio, 1 channel
+            ofxSCBus*       fbBus    = nullptr;     // audio, 1: the engine's sound, back to the recorder
             ofxSCSynth*     rec      = nullptr;
             ofEventListener recListener;
         };
@@ -380,6 +383,8 @@ private:
     ofParameter<float> gPosP, gDurP, gChanceP;
     std::vector<float> withOffset(const vector<float>& v, int n, float off) const;
     void sendOffsetParams(Playhead& ph);   // every time-dependent value (see Time units)
+    int  fbBusFor(Playhead& ph, ofxSCServer* srv);   // the engine's feedback bus (-1: not Live)
+    void setOutFb(Playhead& ph, ofxSCServer* srv);
 
     // ── Time units (global): the time-dependent parameters (Position, Duration,
     //    In/Out, PosJit, DurJit, LFO Pos/Dur strength, global Position/Duration
