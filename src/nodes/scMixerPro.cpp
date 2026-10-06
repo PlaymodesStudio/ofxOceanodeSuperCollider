@@ -457,7 +457,19 @@ void scMixerPro::reorderNodeParameters() {
     for(const auto& key : faderKeys) {
         auto handle = nodeHandles.find(key);
         if(handle != nodeHandles.end() && handle->second) {
-            if(Track* tr = stripForLevelKey(key)) append(tr->faderBadge.getName());
+            Track* tr = stripForLevelKey(key);
+            if(tr && tr->isBus) continue;
+            if(tr) append(tr->faderBadge.getName());
+            append(handle->second->getName());
+        }
+    }
+    appendSeparator("Submasters");
+    for(const auto& key : faderKeys) {
+        auto handle = nodeHandles.find(key);
+        if(handle != nodeHandles.end() && handle->second) {
+            Track* tr = stripForLevelKey(key);
+            if(!tr || !tr->isBus) continue;
+            append(tr->faderBadge.getName());
             append(handle->second->getName());
         }
     }
@@ -1406,7 +1418,7 @@ void scMixerPro::unregisterTrackActions(Track& tr) {
     }
     removeFaderBadge(tr);
     if(publishedKeys.empty() && publishedSeparatorAdded) { removeSeparator("Published"); publishedSeparatorAdded = false; }
-    if(faderKeys.empty() && faderSeparatorAdded) { removeSeparator("Faders"); faderSeparatorAdded = false; }
+    syncFaderSeparators();
     reorderNodeParameters();
 }
 
@@ -1481,6 +1493,32 @@ void scMixerPro::removeFaderBadge(Track& tr) {
         removeParameter(tr.faderBadge.getName());
 }
 
+void scMixerPro::syncFaderSeparators() {
+    bool hasTrackFader = false;
+    bool hasSubmasterFader = false;
+    for(const auto& key : faderKeys) {
+        if(Track* tr = stripForLevelKey(key)) {
+            if(tr->isBus) hasSubmasterFader = true;
+            else hasTrackFader = true;
+        }
+    }
+
+    if(hasTrackFader && !faderSeparatorAdded) {
+        addSeparator("Faders", ofColor(200));
+        faderSeparatorAdded = true;
+    } else if(!hasTrackFader && faderSeparatorAdded) {
+        removeSeparator("Faders");
+        faderSeparatorAdded = false;
+    }
+    if(hasSubmasterFader && !submasterFaderSeparatorAdded) {
+        addSeparator("Submasters", ofColor(175, 190, 215));
+        submasterFaderSeparatorAdded = true;
+    } else if(!hasSubmasterFader && submasterFaderSeparatorAdded) {
+        removeSeparator("Submasters");
+        submasterFaderSeparatorAdded = false;
+    }
+}
+
 void scMixerPro::syncPublished(const std::vector<std::string>& keys) {
     const auto current = publishedKeys;
     for(const auto& key : current)
@@ -1492,7 +1530,6 @@ void scMixerPro::syncPublished(const std::vector<std::string>& keys) {
 // A Level that is also published, or connected, stays when they are hidden.
 void scMixerPro::updateFaders() {
     if(showFaders.get()) {
-        if(!faderSeparatorAdded) { addSeparator("Faders", ofColor(200)); faderSeparatorAdded = true; }
         for(Track* tr : allStrips()) {
             const std::string& key = tr->levelKey;
             if(std::find(faderKeys.begin(), faderKeys.end(), key) != faderKeys.end()) continue;
@@ -1509,8 +1546,8 @@ void scMixerPro::updateFaders() {
         // Connected faders stay, still counted as faders
         for(const auto& key : keys)
             if(nodeHandles.count(key) && !isPublished(key)) faderKeys.push_back(key);
-        if(faderKeys.empty() && faderSeparatorAdded) { removeSeparator("Faders"); faderSeparatorAdded = false; }
     }
+    syncFaderSeparators();
     reorderNodeParameters();
 }
 
