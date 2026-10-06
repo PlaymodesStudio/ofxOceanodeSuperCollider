@@ -317,6 +317,7 @@ scGrainBoxPoly::~scGrainBoxPoly() {
                 if(l.rec) { l.rec->free(); delete l.rec; }
                 if(l.buf) { if(bufferIsLive(srv, l.buf)) l.buf->free(); delete l.buf; }
                 if(l.phaseBus) { if(gbpBusIsLive(srv, l.phaseBus)) l.phaseBus->free(); delete l.phaseBus; }
+                if(l.fbBus) { if(gbpBusIsLive(srv, l.fbBus)) l.fbBus->free(); delete l.fbBus; }
             }
             ph->liveSC.clear();
         }
@@ -593,6 +594,8 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.overlap.set        ("Overlap"      + x, 1.0f, 0.25f, 8.0f);
     ph.delayGlide.set     ("DelayGlide"   + x, 50.0f, 0.0f, 2000.0f);
     ph.freeze.set         ("Freeze"       + x, false);
+    ph.feedback.set       ("Feedback"     + x, 0.0f, 0.0f, 1.1f);
+    ph.fbTone.set         ("FbTone"       + x, 0.5f, 0.0f, 1.0f);
 
     ph.levels.set         ("Levels"       + x, {1.0f},   {0.0f},   {1.0f});
     // 0 = follow N Chan (from the offset to the last channel)
@@ -1149,6 +1152,7 @@ void scGrainBoxPoly::buildEngineObjects(Playhead& ph, ofxSCServer* srv) {
     o->set("in",  b.mix->index);
     o->set("ctl", b.ctl->index);
     o->set("out", outBusFor(ph, srv));
+    o->set("fbbus", fbBusFor(ph, srv));
     ph.outSynths[srv] = o;
 }
 
@@ -1363,6 +1367,12 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     ph.listeners.push(ph.liveLength.newListener([p](float&) { p->liveResizeAt = ofGetElapsedTimef() + 0.3f; }));
     ph.listeners.push(ph.freeze.newListener([p](bool& v) {
         for(auto& [srv, l] : p->liveSC) if(l.rec) l.rec->set("freeze", v ? 1.0f : 0.0f);
+    }));
+    ph.listeners.push(ph.feedback.newListener([p](float& v) {
+        for(auto& [srv, l] : p->liveSC) if(l.rec) l.rec->set("fbamt", std::max(0.0f, v));
+    }));
+    ph.listeners.push(ph.fbTone.newListener([p](float& v) {
+        for(auto& [srv, l] : p->liveSC) if(l.rec) l.rec->set("fbtone", v);
     }));
     ph.listeners.push(ph.autoTrigBeatDiv.newListener([this, p](vector<float>&) { sendDiv(*p); }));
     vfListener("trigphase",        ph.trigPhase);
@@ -1896,6 +1906,7 @@ void scGrainBoxPoly::refreshPlayheadSynth(Playhead& ph, ofxSCServer* srv) {
             n->set("in",  b.mix->index);
             n->set("ctl", b.ctl->index);
             n->set("out", outBusFor(ph, srv));
+            n->set("fbbus", fbBusFor(ph, srv));
             n->createAndRun(4, oldID, run);
             o->second = n;
         } else {
@@ -2076,6 +2087,8 @@ void scGrainBoxPoly::ensureLiveResources(Playhead& ph, ofxSCServer* srv) {
         l.buf->alloc();                     // zeroed: reads silence until recorded
     }
     if(!l.phaseBus) l.phaseBus = new ofxSCBus(RATE_AUDIO, 1, srv);
+    if(l.fbBus && !gbpBusIsLive(srv, l.fbBus)) { delete l.fbBus; l.fbBus = nullptr; }   // server rebooted
+    if(!l.fbBus) l.fbBus = new ofxSCBus(RATE_AUDIO, 1, srv);
     ph.live.bufs[srv] = { l.buf };
     ph.live.numChannels  = 1;
     ph.live.durationSecs = (float)l.buf->frames / sr;
@@ -2091,6 +2104,20 @@ void scGrainBoxPoly::setRecArgs(Playhead& ph, ofxSCSynth* rec, ofxSCServer* srv)
     if(l.phaseBus) rec->set("phasebus", l.phaseBus->index);
     rec->set("freeze",   ph.freeze.get() ? 1.0f : 0.0f);
     rec->set("vis",      visOn ? 1.0f : 0.0f);
+    rec->set("fbbus",    l.fbBus ? l.fbBus->index : -1);
+    rec->set("fbamt",    std::max(0.0f, ph.feedback.get()));
+    rec->set("fbtone",   ph.fbTone.get());
+}
+
+int scGrainBoxPoly::fbBusFor(Playhead& ph, ofxSCServer* srv) {
+    if(!ph.liveInput) return -1;
+    auto it = ph.liveSC.find(srv);
+    return (it != ph.liveSC.end() && it->second.fbBus) ? it->second.fbBus->index : -1;
+}
+
+void scGrainBoxPoly::setOutFb(Playhead& ph, ofxSCServer* srv) {
+    auto o = ph.outSynths.find(srv);
+    if(o != ph.outSynths.end() && o->second) o->second->set("fbbus", fbBusFor(ph, srv));
 }
 
 void scGrainBoxPoly::setLiveArgs(Playhead& ph, ofxSCSynth* s) {
@@ -2158,7 +2185,9 @@ void scGrainBoxPoly::freeLiveResources(Playhead& ph, ofxSCServer* srv) {
     if(it == ph.liveSC.end()) return;
     if(it->second.buf) { if(bufferIsLive(srv, it->second.buf)) it->second.buf->free(); delete it->second.buf; }
     if(it->second.phaseBus) { if(gbpBusIsLive(srv, it->second.phaseBus)) it->second.phaseBus->free(); delete it->second.phaseBus; }
+    if(it->second.fbBus) { if(gbpBusIsLive(srv, it->second.fbBus)) it->second.fbBus->free(); delete it->second.fbBus; }
     ph.liveSC.erase(it);
+    setOutFb(ph, srv);   // the output synth stops writing it
     ph.live.bufs.erase(srv);
 }
 
@@ -2179,6 +2208,7 @@ void scGrainBoxPoly::setLiveInput(Playhead& ph, bool on) {
                 setLiveArgs(ph, ph.synths[srv]);
                 createLiveRecorder(ph, srv);
             }
+            setOutFb(ph, srv);
         } else {
             if(running) {
                 refreshPlayheadSynth(ph, srv);
@@ -3485,6 +3515,8 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
         regS (ph, ph.envShape,         false);
         regS (ph, ph.liveLength,       false);
         regS (ph, ph.freeze,           false);
+        regS (ph, ph.feedback,         false);
+        regS (ph, ph.fbTone,           false);
         // LFO rows (the per-target Unique toggles were node parameters; the
         // LFO settings themselves were inspector parameters)
         for(int t = 0; t < NUM_LFO; t++) {
@@ -3883,6 +3915,7 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
             rs(ph->latchAmp, false); rs(ph->latchCut, false);
             rs(ph->scaleType, 0); rs(ph->scaleRoot, 0); rs(ph->scaleMask, 4095);
             rs(ph->envShape, 0); rs(ph->liveLength, 4.0f); rs(ph->freeze, false);
+            rs(ph->feedback, 0.0f); rs(ph->fbTone, 0.5f);
             rv(ph->reverse, 0.0f);
             rs(ph->channels, 0); rs(ph->chanOffset, 0); rs(ph->numPlayheads, 1);
             rs(ph->intervalUnit, 2); rs(ph->monoTrig, false);
@@ -4690,6 +4723,34 @@ void scGrainBoxPoly::drawPlayheadHeader(Playhead& ph, float /*w*/) {
         if(ImGui::Checkbox("Freeze##gbpFrz", &fz)) ph.freeze.set(fz);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Stop recording: the buffer holds its content");
         drawNodePublishContextMenu(ph.freeze.getEscapedName(), "Freeze##gbpFrz", 0.0f, true);
+        // Feedback: the engine's sound (before the node FX) back into its buffer
+        ImGui::SameLine(0, 6.0f * zoom);
+        ImGui::TextUnformatted("Fb");
+        drawPublishedCurrentItemUnderline(ph.feedback.getEscapedName());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(60.0f * zoom);
+        {
+            float fbv = ph.feedback.get();
+            if(gbpSliderFloat("##gbpFb", &fbv, 0.0f, 1.1f, "%.2f")) ph.feedback.set(fbv);
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
+                ImGui::SetTooltip("Feedback: this engine's sound (before the node FX) is recorded again\n"
+                                  "with the input, so it comes back around: repeats (Grainless), pitch\n"
+                                  "spirals (Pitch), smearing stutters. Soft-saturated: above 1 it builds\n"
+                                  "and thickens instead of exploding. Freeze stops it (nothing recorded).");
+            drawNodePublishContextMenu(ph.feedback.getEscapedName());
+        }
+        ImGui::SameLine(0, 2.0f * zoom);
+        ImGui::SetNextItemWidth(56.0f * zoom);
+        {
+            float tv = ph.fbTone.get();
+            const char* tl = tv < 0.45f ? "dark" : tv > 0.55f ? "thin" : "tone";
+            if(gbpSliderFloat("##gbpFbT", &tv, 0.0f, 1.0f, tl)) ph.fbTone.set(tv);
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
+                ImGui::SetTooltip("Feedback tone: left = darker every pass (lowpass), middle = untouched,\n"
+                                  "right = thinner every pass (highpass)");
+            drawPublishedCurrentItemUnderline(ph.fbTone.getEscapedName());
+            drawNodePublishContextMenu(ph.fbTone.getEscapedName());
+        }
     }
 
     // Playheads (simultaneous grain streams of this engine)
