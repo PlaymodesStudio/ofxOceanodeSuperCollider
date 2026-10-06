@@ -18,6 +18,13 @@
 //  separate insert synth (mixerProEQN / mixerProDCN / mixerProEQDCN) created
 //  the first time either is switched on, placed just before the track synth
 //  and paused while both are off -- a track without them costs nothing.
+//  COMP (mixerProCompN) and RVB (mixerProRvbN, SpaceMaster) are two more
+//  inserts with the same rule: created the first time they are switched on,
+//  paused while off. Switching off first fades: the compressor crossfades to
+//  dry (\on, 30 ms), the reverb stops feeding its tank and lets the tail ring
+//  out (Decay = RT60); then the node routes around the insert and pauses it
+//  (update(), offAt). The compressor writes its gain reduction (dB) on the
+//  track's vuBus, after the key channels, for the strip's GR meter.
 //
 //  Sidechain (hybrid). Each track can be ducked by another one: SC Source
 //  (1-based track, 0 off), SC Strength, SC Attack / SC Release (ms). Every
@@ -30,7 +37,7 @@
 //  than the mixer (N): Adapt Mode (Direct / Wrap / Blocks / Stretch), In Ch
 //  (0 = the source node's "N Chan") and Rotate decide a gain matrix, computed
 //  here and run by mixerProAdaptM_N, created only when the matrix is not the
-//  plain direct one. Chain: source -> adapter -> EQ/DC insert -> track.
+//  plain direct one. Chain: source -> adapter -> EQ/DC -> Comp -> Rvb -> track.
 //
 //  Submasters (buses). A bus is a strip like a track (same synth, inserts,
 //  sidechain) whose input is a private audio bus. A track's Out (0 master,
@@ -102,6 +109,14 @@ public:
     void presetRecallAfterSettingParameters(ofJson& json) override;
 
 private:
+    // An on-demand insert (Comp, Rvb): created when first switched on, paused while off
+    struct FxStage {
+        ofxSCSynth* synth = nullptr;
+        ofxSCBus* bus = nullptr;
+        bool running = false;                // in the chain (fading out still counts)
+        float offAt = -1.0f;                 // switched off: pause at this time (s)
+    };
+
     struct Track {
         int index = 0;
         std::string name;
@@ -125,6 +140,14 @@ private:
         ofParameter<int>   inChannels;       // 0 = auto (source's N Chan)
         ofParameter<int>   rotate;           // output rotation, channels
         std::array<ofParameter<float>, scEQEditor::NUM_BANDS> eqFreq, eqGain, eqShape;
+        // Compressor insert
+        ofParameter<bool>  comp, compAuto;
+        ofParameter<float> compThreshold, compRatio, compKnee, compAttack, compRelease;
+        ofParameter<float> compMakeup, compRms, compHpf, compMix;
+        // Reverb insert (SpaceMaster)
+        ofParameter<bool>  rvb;
+        ofParameter<float> rvbMix, rvbDecay, rvbSize, rvbPredelay, rvbPosition, rvbSpread;
+        ofParameter<float> rvbLowpass, rvbHighDamp, rvbLowDamp, rvbModFreq, rvbSpin, rvbWander;
         ofEventListeners listeners;
 
         // Runtime, on liveServer only
@@ -139,6 +162,8 @@ private:
         int  detectedInputs = 0;             // last effective M, polled in update()
         std::vector<float> sentMatrix;
         bool insertRunning = false;
+        FxStage compFx, rvbFx;
+        float gr = 0.0f;                     // compressor gain reduction (dB), read with the VU
         ofxSCBus* vuBus     = nullptr;
         ofxSCBus* insertBus = nullptr;
         ofxSCBus* mixBus    = nullptr;       // buses: what the tracks write into
@@ -230,6 +255,15 @@ private:
     void createRuntime(Track& tr, ofxSCServer* server);
     void destroyRuntime(Track& tr, bool sendFree);
     void updateInsert(Track& tr);
+    // Comp (1) / Rvb (2) inserts. Stages: 0 EQ/DC, 1 Comp, 2 Rvb, 3 the track
+    std::vector<ofAbstractParameter*> fxParams(Track& t);
+    void updateFx(Track& tr, int which);
+    void sendComp(Track& tr);
+    void sendRvb(Track& tr);
+    void processFxTimers();
+    float rvbTail(const Track& tr) const;
+    int  stageInput(const Track& tr, int stage) const;
+    ofxSCSynth* chainSynthAfter(const Track& tr, int stage) const;
     void applyInputRouting(Track& tr);
     void sendAll(Track& tr);
     void sendLevel(Track& tr);
@@ -248,7 +282,7 @@ private:
     int  chainInput(const Track& tr) const;
     void sendSidechainKeys();
     void sendSidechainShape(Track& tr);
-    int  vuBusChannels() const { return currentChannels + 2; }   // VU + key + held key
+    int  vuBusChannels() const { return currentChannels + 3; }   // VU + key + held key + comp GR
 
     // --- publishing (as GrainBox / BeatRepeat Pro) ---
     struct PublishAction {
@@ -305,12 +339,15 @@ private:
     bool windowVisible = false;
     int editTracks = 0, editChannels = 0, editBuses = 0;   // toolbar fields while being typed in
     int selectedEqTrack = -1;
+    int panelTab = 0;                          // channel panel: 0 EQ, 1 Comp, 2 Reverb
     std::vector<float> masterVU, masterPeak, masterPeakAge;
     void drawWindow();
     void drawToolbar();
     void drawMasterStrip(float w, float h);
     void drawTrackStrip(Track& tr, float w, float h);
     void drawEqPanel(float w, float h);
+    void drawCompPanel(Track& tr);
+    void drawRvbPanel(Track& tr);
     void drawMiniCurve(Track& tr, ImVec2 pos, ImVec2 size);
     bool drawFader(const char* id, float& gain, ImVec2 pos, ImVec2 size, float maxGain = 2.0f);
     bool drawKnob(const char* id, float& value, float radius);
