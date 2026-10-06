@@ -263,6 +263,7 @@ private:
     std::vector<std::string> faderKeys;
     bool publishedSeparatorAdded = false;
     bool faderSeparatorAdded = false;
+    bool submasterFaderSeparatorAdded = false;
     void registerTrackActions(Track& tr);
     void unregisterTrackActions(Track& tr);
     bool isPublished(const std::string& key) const;
@@ -271,6 +272,7 @@ private:
     bool unpublishKey(const std::string& key);
     void syncPublished(const std::vector<std::string>& keys);
     void updateFaders();
+    void syncFaderSeparators();
     Track* stripForLevelKey(const std::string& key);
     void ensureFaderBadge(Track& tr);
     void removeFaderBadge(Track& tr);
