@@ -102,6 +102,7 @@ public:
     int  getOutputBusIndex(ofxSCServer* server, int index) override;
     int  getLastSynthID(ofxSCServer* server) override;
     bool isNRTStemPoint() const override { return true; }
+    bool canEncapsulateSubgraphFrom(ofxOceanodeAbstractParameter& parameter) const override;
     void resendParametersForNRT() override;
 
     void presetSave(ofJson& json) override;

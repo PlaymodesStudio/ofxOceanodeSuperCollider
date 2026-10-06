@@ -402,6 +402,15 @@ void scMixerPro::syncTrackInputNames() {
     reorderNodeParameters();
 }
 
+bool scMixerPro::canEncapsulateSubgraphFrom(ofxOceanodeAbstractParameter& parameter) const {
+    // Only the dynamically-created audio inputs participate.  Comparing the
+    // parameter name is safe here: every candidate belongs to this model and
+    // syncTrackInputNames() keeps the input names unique within the group.
+    return std::any_of(inputs.begin(), inputs.end(), [&](const ofParameter<nodePort>& input) {
+        return input.getName() == parameter.getName();
+    });
+}
+
 // Old Mixer Pro projects stored their connection endpoints as "In 1", etc.
 // Keep those aliases until their connections have been restored, then switch
 // to the track labels in presetRecallAfterSettingParameters().
