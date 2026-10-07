@@ -166,6 +166,7 @@ private:
         int                        intervalUnitCur = 2;   // unit the values are in now
         ofParameter<bool>          monoTrig;    // no overlap: a grain starts once the previous one ended
         ofParameter<vector<float>> trigPhase;   // 0..1 of the interval, per playhead
+        ofParameter<float>         phaseOff;    // 0..1: spread all playheads evenly across the interval
         ofParameter<int>           maxGrains;   // overlap limit of the engine (0 = off)
         float grainLoad = 0.0f, grainThin = 1.0f;   // /grainLoad: grains sounding, thinning
         // /lfoState (30 x / s while the window is open): every LFO's phase and
@@ -410,6 +411,7 @@ private:
     // Trigger interval (current unit) -> seconds / grains per beat (SynthDef)
     float intervalSec(const Playhead& ph, float v) const;
     std::vector<float> divSend(const Playhead& ph, int n) const;
+    std::vector<float> trigPhaseSend(const Playhead& ph, int n) const;
     void  sendDiv(Playhead& ph);
     // LFO speed as SC wants it (cycles per bar): Smp mode -> per region length
     double lfoSpeedBar(const Playhead& ph, int t) const;

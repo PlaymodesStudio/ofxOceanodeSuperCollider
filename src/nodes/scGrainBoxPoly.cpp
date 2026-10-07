@@ -363,6 +363,7 @@ void scGrainBoxPoly::setup() {
     addSeparator("Trigger");
     addParameter(p0.trigger);
     addParameter(p0.autoTrig);
+    addParameter(p0.phaseOff);
 
     addSeparator("Grain");
     addParameter(p0.amp);
@@ -557,6 +558,7 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.autoTrigBeatDiv.set("Interval"     + x, {defaultInterval(2)}, {1.0f / 16.0f}, {16.0f});
     ph.monoTrig.set       ("MonoTrig"     + x, false);
     ph.trigPhase.set      ("TrigPhase"    + x, {0.0f},   {0.0f},   {1.0f});
+    ph.phaseOff.set       ("PhaseOff"     + x, 0.0f,     0.0f,     1.0f);
     ph.maxGrains.set      ("MaxGrains"    + x, 0, 0, 512);
     ph.chance.set         ("Chance"       + x, {1.0f},   {0.0f},   {1.0f});
     ph.uniqueTrig.set     ("UniqueTrig"   + x, false);
@@ -830,6 +832,18 @@ std::vector<float> scGrainBoxPoly::divSend(const Playhead& ph, int n) const {
         // up to 4096 grains per beat: audio-rate triggers (Pitch unit)
         x = (float)std::max(1.0 / 64.0, std::min(4096.0, beat / std::max(1e-5, (double)intervalSec(ph, x))));
     return out;
+}
+
+std::vector<float> scGrainBoxPoly::trigPhaseSend(const Playhead& ph, int n) const {
+    n = std::max(1, n);
+    std::vector<float> phases = expandF(ph.trigPhase.get(), n);
+    if(phases.empty()) phases.assign(n, 0.0f);
+    const float spread = ph.phaseOff.get();
+    if(spread <= 0.0f || n == 1) return phases;
+    for(int i = 0; i < n; ++i){
+        phases[i] = std::fmod(phases[i] + spread * (float)i / (float)n, 1.0f);
+    }
+    return phases;
 }
 
 void scGrainBoxPoly::sendDiv(Playhead& ph) {
@@ -1375,7 +1389,12 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
         for(auto& [srv, l] : p->liveSC) if(l.rec) l.rec->set("fbtone", v);
     }));
     ph.listeners.push(ph.autoTrigBeatDiv.newListener([this, p](vector<float>&) { sendDiv(*p); }));
-    vfListener("trigphase",        ph.trigPhase);
+    auto sendTrigPhase = [this, p]() {
+        const auto phases = trigPhaseSend(*p, phVoices(*p));
+        for(auto& [srv, s] : p->synths) if(s) s->set("trigphase", phases);
+    };
+    ph.listeners.push(ph.trigPhase.newListener([sendTrigPhase](vector<float>&) { sendTrigPhase(); }));
+    ph.listeners.push(ph.phaseOff.newListener([sendTrigPhase](float&) { sendTrigPhase(); }));
     // Interval unit: the values are converted (same time, new unit); a
     // preset's values already arrive in its unit
     ph.listeners.push(ph.intervalUnit.newListener([this, p](int& m) {
@@ -1692,7 +1711,7 @@ void scGrainBoxPoly::configureSynth(Playhead& ph, ofxSCSynth* s, ofxSCServer* sr
     setLiveArgs(ph, s);
     s->set("vis",              visOn ? 1.0f : 0.0f);
     s->set("autotrigbeatdiv",  divSend(ph, nv));
-    s->set("trigphase",        expandF(ph.trigPhase.get(), nv));
+    s->set("trigphase",        trigPhaseSend(ph, nv));
     s->set("maxoverlap",       (float)std::max(0, ph.maxGrains.get()));
     s->set("monotrig",         ph.monoTrig.get() ? 1.0f : 0.0f);
     s->set("delayglide",       ph.delayGlide.get() * 0.001f);
@@ -3153,7 +3172,7 @@ void scGrainBoxPoly::sendAllParams(Playhead& ph) {
         setLiveArgs(ph, s);
         s->set("vis",              visOn ? 1.0f : 0.0f);
         s->set("autotrigbeatdiv",  divSend(ph, nv));
-        s->set("trigphase",        expandF(ph.trigPhase.get(), nv));
+        s->set("trigphase",        trigPhaseSend(ph, nv));
         s->set("maxoverlap",       (float)std::max(0, ph.maxGrains.get()));
         s->set("monotrig",         ph.monoTrig.get() ? 1.0f : 0.0f);
         s->set("delayglide",       ph.delayGlide.get() * 0.001f);
@@ -3463,6 +3482,7 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
         regS (ph, ph.autoTrig,         true);
         regVF(ph, ph.autoTrigBeatDiv,  true);
         regVF(ph, ph.trigPhase,        false);
+        regS (ph, ph.phaseOff,         false);
         regS (ph, ph.maxGrains,        false);
         regS (ph, ph.intervalUnit,     false);
         regS (ph, ph.monoTrig,         false);
@@ -3919,6 +3939,7 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
             rv(ph->reverse, 0.0f);
             rs(ph->channels, 0); rs(ph->chanOffset, 0); rs(ph->numPlayheads, 1);
             rs(ph->intervalUnit, 2); rs(ph->monoTrig, false);
+            if(!j.contains(ph->phaseOff.getEscapedName())) ph->phaseOff.set(0.0f);
             rs(ph->grainless, false); rs(ph->liveLenBeats, false);
             rs(ph->delayJump, false); rs(ph->delayGlide, 50.0f); rs(ph->overlap, 1.0f);
             rv(ph->autoTrigBeatDiv, defaultInterval(ph->intervalUnit.get()));
@@ -6118,6 +6139,10 @@ void scGrainBoxPoly::drawControlsPanel(Playhead& ph, float w, float h) {
         drawNodePublishContextMenu(key);
     }
     sliderF("Phase",  "##tphase",  ph.trigPhase,       0.0f,   1.0f);
+    sliderScalar("Ph Off", "##phaseoff", ph.phaseOff, 0.0f, 1.0f);
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("Spread the playheads evenly across the trigger interval.\n"
+                          "0 = together; 1 = one interval divided equally among all playheads.");
     sliderF("Chance", "##chance",  ph.chance,          0.0f,   1.0f);
     // Max Grains: overlap limit of the engine, with the grains sounding now
     {
