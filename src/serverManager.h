@@ -16,6 +16,7 @@
 #include <set>
 #include <memory>
 #include <cstdint>
+#include <functional>
 
 class ofxSCServer;
 class ofxSCSynth;
@@ -63,7 +64,8 @@ public:
     void initialize();
     void kill();
     void prepareForRestart();
-    void loadDefs();
+    void loadDefs(bool loadAll = false);
+    void setSynthdefReloadCallback(std::function<void()> callback){ synthdefReloadCallback = callback; }
 
     // Capture the same OSC graph used by realtime SC and prepare it for NRT.
     // The graph is restored to realtime operation when endNRTCapture() is
@@ -202,6 +204,7 @@ private:
     bool nodesListChanged = false;
     uint64_t graphGeneration = 0;
     std::map<std::string, std::string> synthdefFolders;
+    std::function<void()> synthdefReloadCallback;
     
     std::set<std::string> alreadyLoadedSynthsList;
     std::set<std::string> requiredSynthdefFolders;   // see requireSynthdefFolder

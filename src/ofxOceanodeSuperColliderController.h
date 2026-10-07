@@ -12,6 +12,7 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 #if OFXOCEANODESC_HAS_TIMELINE
@@ -30,6 +31,7 @@ public:
     ~ofxOceanodeSuperColliderController();
     
     void createServers();
+    void setSynthdefReloadCallback(std::function<void()> callback){ synthdefReloadCallback = callback; }
     
     void setup();
 #if OFXOCEANODESC_HAS_TIMELINE
@@ -199,6 +201,7 @@ private:
     vector<string> sampleRateNames;
     vector<int> sampleRateValues;
     vector<serverManager*> outputServers;
+    std::function<void()> synthdefReloadCallback;
 
 #if OFXOCEANODESC_HAS_TIMELINE
     enum class NRTArmState { Disarmed, Settling, Armed };

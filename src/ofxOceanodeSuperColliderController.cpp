@@ -1014,7 +1014,8 @@ void ofxOceanodeSuperColliderController::draw(){
         for(auto s : outputServers) s->kill();
     }
     if(ImGui::MenuItem("Load Defs")){
-        for(auto s : outputServers) s->loadDefs();
+        if(synthdefReloadCallback) synthdefReloadCallback();
+        for(auto s : outputServers) s->loadDefs(true);
     }
 #if OFXOCEANODESC_HAS_TIMELINE
     if(ImGui::BeginMenu("NRT Rendering")){

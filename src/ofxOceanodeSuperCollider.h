@@ -76,7 +76,7 @@
 
 namespace ofxOceanodeSuperCollider{
 
-static void registerModels(ofxOceanode &o){
+static void refreshSynthdefModels(ofxOceanode &o){
     std::map<std::string, std::string> synthdefFolders;
 	std::function<void(ofDirectory dir)> readSynthdefsInDirectory = [&o, &readSynthdefsInDirectory, &synthdefFolders](ofDirectory dir){
 		for(auto f : dir.getFiles()){
@@ -145,6 +145,11 @@ static void registerModels(ofxOceanode &o){
     for(auto &server : controller->getServers()){
         server->setSynthdefFolders(synthdefFolders);
     }
+}
+
+static void registerModels(ofxOceanode &o){
+    refreshSynthdefModels(o);
+    auto controller = o.getController<ofxOceanodeSuperColliderController>();
 
 	o.registerModel<scInfo>("SuperCollider", controller->getServers());
 	o.registerModel<scBuffer>("SuperCollider", controller->getServers());
@@ -216,6 +221,9 @@ static void registerCollection(ofxOceanode &o){
 	auto controller = o.addController<ofxOceanodeSuperColliderController>();
 	
 	controller->createServers();
+	auto refreshModels = [&o](){ refreshSynthdefModels(o); };
+	controller->setSynthdefReloadCallback(refreshModels);
+	for(auto *server : controller->getServers()) server->setSynthdefReloadCallback(refreshModels);
 	
 	registerModels(o);
 	registerType(o);

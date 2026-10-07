@@ -165,7 +165,8 @@ void serverManager::draw(){
     }
 
     if(ImGui::MenuItem("Load Defs")){
-        loadDefs();
+        if(synthdefReloadCallback) synthdefReloadCallback();
+        loadDefs(true);
     }
 
     ImGui::Separator();
@@ -344,37 +345,35 @@ bool serverManager::areRequiredSynthdefsLoading() const {
     return server != nullptr && server->isNRTSyncPending();
 }
 
-void serverManager::loadDefs(){
-    ofxOscMessage m;
-    m.setAddress("/d_loadDir");
-    if(preferences.loadOnPreset){
-        m.addStringArg(ofToDataPath(std::string(SYNTHDEF_DIRECTORY) + "/Defaults", true));
+void serverManager::loadDefs(bool loadAll){
+    const std::string root = ofToDataPath(SYNTHDEF_DIRECTORY, true);
+    std::set<std::string> folders;
+
+    if(loadAll || !preferences.loadOnPreset){
+        // /d_loadDir reads one directory. Find compiled definitions in nested
+        // folders too, including definitions without a .txarcmeta descriptor.
+        std::function<void(const std::string&)> collect = [&](const std::string& path){
+            ofDirectory dir(path);
+            if(!dir.exists()) return;
+            for(const auto& file : dir.getFiles()){
+                if(file.isDirectory()) collect(file.getAbsolutePath());
+                else if(file.getExtension() == "scsyndef") folders.insert(path);
+            }
+        };
+        collect(root);
     }else{
-        m.addStringArg(ofToDataPath(SYNTHDEF_DIRECTORY, true));
-    }
-    m.addIntArg(0);
-    server->sendMsg(m);
-
-    // Folders registered by nodes (requireSynthdefFolder). Only needed when the
-    // whole Synthdefs folder is not loaded, but harmless otherwise.
-    if(preferences.loadOnPreset){
-        for(const auto& folder : requiredSynthdefFolders){
-            ofxOscMessage mf;
-            mf.setAddress("/d_loadDir");
-            mf.addStringArg(folder);
-            server->sendMsg(mf);
-        }
+        folders.insert(root + "/Defaults");
+        folders.insert(requiredSynthdefFolders.begin(), requiredSynthdefFolders.end());
+        const std::string dyngenDir = root + "/dyngen";
+        if(ofDirectory::doesDirectoryExist(dyngenDir)) folders.insert(dyngenDir);
     }
 
-    // DynGen slot SynthDefs (DynGenWrapper_N_S) live in their own subdir.
-    // Copy/symlink the CompiledSynthdefs/dyngen/ output from dyngen.scd to
-    // [data]/Supercollider/Synthdefs/dyngen/ so they are picked up here.
-    std::string dyngenDir = ofToDataPath(std::string(SYNTHDEF_DIRECTORY) + "/dyngen", true);
-    if(ofDirectory::doesDirectoryExist(dyngenDir)){
-        ofxOscMessage m2;
-        m2.setAddress("/d_loadDir");
-        m2.addStringArg(dyngenDir);
-        server->sendMsg(m2);
+    for(const auto& folder : folders){
+        if(!ofDirectory::doesDirectoryExist(folder)) continue;
+        ofxOscMessage message;
+        message.setAddress("/d_loadDir");
+        message.addStringArg(folder);
+        server->sendMsg(message);
     }
 }
 
