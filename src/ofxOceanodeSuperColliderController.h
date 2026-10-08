@@ -38,6 +38,8 @@ public:
     void update() override;
 #endif // OFXOCEANODESC_HAS_TIMELINE
     void draw() override;
+    // The SynthDef compiler's prompt: it must open whatever window is visible.
+    void drawPopups() override;
     bool isMenuController() const override { return true; }
     
     void killServers();

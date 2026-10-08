@@ -341,6 +341,15 @@ void serverManager::requireSynthdefFolder(const std::string& folder){
     server->requestNRTSync();
 }
 
+void serverManager::loadSynthdefFile(const std::string& path){
+    if(server == nullptr || !initialized) return;
+    ofxOscMessage m;
+    m.setAddress("/d_load");
+    m.addStringArg(path);
+    server->sendMsg(m);
+    server->requestNRTSync();
+}
+
 bool serverManager::areRequiredSynthdefsLoading() const {
     return server != nullptr && server->isNRTSyncPending();
 }

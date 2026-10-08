@@ -9,6 +9,7 @@
 #include "ofxSCServer.h"
 #include "imgui.h"
 #include "serverManager.h"
+#include "scSynthdefCompiler.h"
 #include "ofxOceanodeSuperColliderConfig.h"
 #include <algorithm>
 #include <cmath>
@@ -1003,7 +1004,11 @@ void ofxOceanodeSuperColliderController::setup(){
 		s->setStereoMix(stereomix);
 		s->setStereoMixSize(stereomixSize);
 	}
-	
+    scSynthdefCompiler::get().setServers(outputServers);
+}
+
+void ofxOceanodeSuperColliderController::drawPopups(){
+    scSynthdefCompiler::get().drawPopups();
 }
 
 void ofxOceanodeSuperColliderController::draw(){

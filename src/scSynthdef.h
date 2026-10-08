@@ -11,6 +11,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
 #include "scSchedulingCompat.h"
+#include "scSynthdefCompiler.h"
 
 class ofxSCSynth;
 class ofxSCServer;
@@ -33,6 +34,7 @@ public:
         // Every scheduled-event handler this node registered points at members
         // that are about to go away.
         scScheduling::unregisterOwner(this);
+        scSynthdefCompiler::get().cancel(this);
         freeAll();
     }
     
@@ -82,9 +84,18 @@ public:
     
 private:
     string getSynthdefFilename();
+    // Replace every synth with one of getSynthdefFilename(), parameters and
+    // bus wiring included, in place of the old one.
+    void replaceSynths();
+    // N Chan / a variable asks for a definition with no .scsyndef: keep the
+    // current synths paused and ask scSynthdefCompiler for it.
+    void waitForSynthdef(const std::string& defName);
+    // Declined or failed: go back to what the synths were built with.
+    void revertToBuiltSynthdef();
+    // True when unknown (no metadata path): then the server decides, as before.
+    bool isSynthdefCompiled(const std::string& defName) const;
     // inChannels and the input / output bus controls of the synth on server
     void resendBusesToSynth(ofxSCServer* server);
-	string findNextAvailableSynthdef();
     
     ofEventListeners listeners;
     
@@ -106,7 +117,16 @@ private:
     
     ofParameter<bool> doNotDistributeInputs;
     ofParameter<bool> doNotDistributeOutputs;
-	bool synthdefExists(string filename);
+
+    // What the synths actually run. While waitingForSynthdef the parameters
+    // already ask for another definition, which is being compiled; the synths
+    // stay paused, since they would read parameter vectors of the wrong size.
+    std::string builtSynthdef;
+    int builtNumChannels = 1;
+    std::map<std::string, int> builtVariables;
+    // Last value seen per variable, to tell a real change from a re-notify
+    std::map<std::string, int> lastVariableValues;
+    bool waitingForSynthdef = false;
 };
 
 #endif /* scSynthdef_h */

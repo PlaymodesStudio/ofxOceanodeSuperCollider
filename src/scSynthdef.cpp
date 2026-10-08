@@ -76,25 +76,18 @@ void scSynthdef::setup(){
     listeners.push(numChannels.newListener([this](int &i){
         if(i < 1 || i > MAX_NODE_CHANNELS) return;
         if(oldNumChannels != numChannels || variableChanged){
-            std::vector<std::pair<ofxSCServer*, ofxSCSynth*>> replaced;
-            for(auto &synth : synths){
-                replaced.emplace_back(synth.first, synth.second);
-                synth.second = new ofxSCSynth(getSynthdefFilename(), synth.first);
+            oldNumChannels = numChannels;
+            variableChanged = false;
+            const std::string defName = getSynthdefFilename();
+            if(!isSynthdefCompiled(defName)){
+                waitForSynthdef(defName);
+                return;
             }
-            sendCacheEpoch++;
-            resendParams.notify();
-            for(auto &[server, oldSynth] : replaced){
-                ofxSCSynth *newSynth = synths[server];
-                for(auto &[name, state] : audioRateState[server]){
-                    newSynth->set(name + "_sel", state.first);
-                    newSynth->mapan(name + "_ar", state.second, MAX_NODE_CHANNELS);
-                }
-                const bool wasLatency = server->getBLatency();
-                if(!oldSynth->isCreated()) server->setBLatency(true);
-                newSynth->createAndRun(4, oldSynth->nodeID, getActive()); //replace synth
-                server->setBLatency(wasLatency);
-                delete oldSynth;
+            if(waitingForSynthdef){
+                scSynthdefCompiler::get().cancel(this);
+                waitingForSynthdef = false;
             }
+            replaceSynths();
         }
         oldNumChannels = numChannels;
         variableChanged = false;
@@ -104,16 +97,20 @@ void scSynthdef::setup(){
     for(auto variable : synthDescription.variables){
         ofParameter<int> var;
         addParameter(var.set(variable.first, 1, 1, variable.second));
-        shared_ptr<int> oldVar(new int(var));
+        lastVariableValues[variable.first] = var;
         
-        listeners.push(var.newListener([this, oldVar](int &i){
-            if(*oldVar != i){
+        const std::string name = variable.first;
+        listeners.push(var.newListener([this, name](int &i){
+            if(lastVariableValues[name] != i){
+                lastVariableValues[name] = i;
                 variableChanged = true;
                 numChannels = numChannels; //To trigger recreation of synth
             }
-            *oldVar = i;
         }));
     }
+    builtSynthdef = getSynthdefFilename();
+    builtNumChannels = numChannels;
+    builtVariables = lastVariableValues;
     
     
     for(auto spec : synthDescription.params){
@@ -434,7 +431,75 @@ void scSynthdef::setup(){
     }
 }
 
+void scSynthdef::replaceSynths(){
+    std::vector<std::pair<ofxSCServer*, ofxSCSynth*>> replaced;
+    for(auto &synth : synths){
+        replaced.emplace_back(synth.first, synth.second);
+        synth.second = new ofxSCSynth(getSynthdefFilename(), synth.first);
+    }
+    builtSynthdef = getSynthdefFilename();
+    builtNumChannels = numChannels;
+    builtVariables = lastVariableValues;
+    sendCacheEpoch++;
+    resendParams.notify();
+    for(auto &[server, oldSynth] : replaced){
+        ofxSCSynth *newSynth = synths[server];
+        for(auto &[name, state] : audioRateState[server]){
+            newSynth->set(name + "_sel", state.first);
+            newSynth->mapan(name + "_ar", state.second, MAX_NODE_CHANNELS);
+        }
+        const bool wasLatency = server->getBLatency();
+        if(!oldSynth->isCreated()) server->setBLatency(true);
+        newSynth->createAndRun(4, oldSynth->nodeID, getActive()); //replace synth
+        server->setBLatency(wasLatency);
+        delete oldSynth;
+    }
+}
+
+bool scSynthdef::isSynthdefCompiled(const std::string& defName) const {
+    if(synthDescription.filepath.empty()) return true;
+    const std::string folder = ofFilePath::getEnclosingDirectory(synthDescription.filepath, false);
+    return ofFile::doesFileExist(ofFilePath::join(folder, defName + ".scsyndef"), false);
+}
+
+void scSynthdef::waitForSynthdef(const std::string& defName){
+    waitingForSynthdef = true;
+    for(auto &synth : synths) synth.second->run(false);
+
+    scSynthdefCompiler::Target target;
+    target.synthName = synthdefName;
+    target.defName = defName;
+    target.numChannels = numChannels;
+    for(auto &variable : synthDescription.variables){
+        target.variables.push_back(lastVariableValues[variable.first]);
+    }
+    target.synthFolder = ofFilePath::getEnclosingDirectory(synthDescription.filepath, false);
+    scSynthdefCompiler::get().request(this, target, [this, defName](scSynthdefCompiler::Result result){
+        // Superseded by a later change: that one has its own request.
+        if(!waitingForSynthdef || getSynthdefFilename() != defName) return;
+        waitingForSynthdef = false;
+        if(result == scSynthdefCompiler::Result::Ready){
+            variableChanged = true;
+            numChannels = numChannels; // now compiled: build it
+        }else{
+            revertToBuiltSynthdef();
+        }
+    });
+}
+
+void scSynthdef::revertToBuiltSynthdef(){
+    for(auto &[name, value] : builtVariables){
+        lastVariableValues[name] = value;
+        getParameter<int>(name).setWithoutEventNotifications(value);
+    }
+    // Replaces the paused synths too: they took parameters sized for the
+    // count that was asked for.
+    variableChanged = true;
+    numChannels = builtNumChannels;
+}
+
 void scSynthdef::activate(){
+    if(waitingForSynthdef) return;
     for(auto &synth : synths) synth.second->run(true);
 }
 
@@ -443,14 +508,16 @@ void scSynthdef::deactivate(){
 }
 
 void scSynthdef::buildSynth(ofxSCServer* server){
-    synths[server] = new ofxSCSynth(getSynthdefFilename(), server);
+    // While a definition is being compiled, keep building what exists.
+    if(!waitingForSynthdef) builtSynthdef = getSynthdefFilename();
+    synths[server] = new ofxSCSynth(builtSynthdef, server);
     sendCacheEpoch++;
 }
 
 void scSynthdef::createSynth(ofxSCServer* server){
     if(synths.count(server) == 0) return;
     resendParams.notify();
-    synths[server]->createAndRun(0, 1, getActive());
+    synths[server]->createAndRun(0, 1, getActive() && !waitingForSynthdef);
 }
 
 void scSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
@@ -666,6 +733,7 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     
     //We are interested in pdata[1]?
     synthdefDesc currentDescription;
+    currentDescription.filepath = file;
     currentDescription.name = getStringFromData(pdata[1]["name"]);
     currentDescription.type = getStringFromData(pdata[1]["type"]);
     currentDescription.description = getStringFromData(pdata[1]["description"]);

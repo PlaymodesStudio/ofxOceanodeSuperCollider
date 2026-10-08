@@ -155,6 +155,10 @@ public:
     // until every one of those /d_loadDir has completed.
     void requireSynthdefFolder(const std::string& folder);
     bool areRequiredSynthdefsLoading() const;
+    // Loads one .scsyndef into the running server (nothing if it is not
+    // running: it is in a folder loaded at boot). Followed by a /sync, so
+    // areRequiredSynthdefsLoading() is true until scsynth has read it.
+    void loadSynthdefFile(const std::string& path);
     
     scPreferences preferences;
     ofEvent<void> graphComputed;

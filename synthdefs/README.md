@@ -32,6 +32,12 @@ d = "/path/to/output";
 "Effect/Filter/LPF.scd".load;          // writes LPF/LPF23.scsyndef
 ```
 
+Oceanode does exactly this when a node asks for a channel count with no
+`.scsyndef`: after the user confirms, `scSynthdefCompiler` runs the bundled
+`sclang` (see `../sclang/`) on `Oceanode/compileExact.scd` and installs the
+result next to the synth's other builds. For an app to do it outside this
+checkout, deploy with `tools/deploy_synthdef_compiler.sh <app>/bin/data`.
+
 Every file in these folders must load from a script, not only block by block
 in the IDE: separate top-level `( ... )` blocks with `;`.
 
