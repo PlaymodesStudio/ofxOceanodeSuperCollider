@@ -18,13 +18,11 @@
 
 // Real-time oscilloscope.
 //
-// The matching wavescope_realtime1 SynthDef maintains two 256-sample capture
-// buffers for one audio channel. Stabilized captures start on a rising trigger
-// crossing and are published only after the complete time window is ready, so
-// the UI never sees a rotating or half-written frame. A Wavescope creates one
-// lightweight synth per displayed channel and uses one bus per channel. This
-// keeps every channel snapshot coherent while keeping
-// OSC packets comfortably below UDP limits, even for MAX_NODE_CHANNELS.
+// The matching wavescope_realtime1 SynthDef maintains a scrolling 256-point
+// history for one audio channel. The newest sample is at the right edge while
+// scrolling; Stabilize holds frames at rising threshold crossings. A Wavescope
+// creates one lightweight synth and one control bus block per displayed
+// channel, keeping OSC packets below UDP limits.
 class scWavescope : public ofxOceanodeNodeModel {
 public:
 	static constexpr int SAMPLES_PER_CHANNEL = 256;
@@ -52,7 +50,7 @@ public:
 		addInspectorParameter(numChannels.set("N Chan", 1, 1, MAX_NODE_CHANNELS));
 		addInspectorParameter(timeWindow.set("Time Window", 0.1f, 0.001f, 10.0f));
 		addInspectorParameter(freeze.set("Freeze", false));
-		addInspectorParameter(stabilize.set("Stabilize", true));
+		addInspectorParameter(stabilize.set("Stabilize", false));
 		addInspectorParameter(triggerLevel.set("Trigger Level", 0.0f, -1000000.0f, 1000000.0f));
 
 		// The display range is independent of the captured signal. Gain remains
