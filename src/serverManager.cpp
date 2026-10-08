@@ -359,8 +359,8 @@ void serverManager::loadDefs(bool loadAll){
     std::set<std::string> folders;
 
     if(loadAll || !preferences.loadOnPreset){
-        // /d_loadDir reads one directory. Find compiled definitions in nested
-        // folders too, including definitions without a .txarcmeta descriptor.
+        // Every folder holding compiled definitions, including definitions
+        // without a .txarcmeta descriptor.
         std::function<void(const std::string&)> collect = [&](const std::string& path){
             ofDirectory dir(path);
             if(!dir.exists()) return;
@@ -371,8 +371,11 @@ void serverManager::loadDefs(bool loadAll){
         };
         collect(root);
     }else{
+        // /d_loadDir recurses: Defaults brings its subfolders (Defaults/dyngen
+        // included) along.
         folders.insert(root + "/Defaults");
         folders.insert(requiredSynthdefFolders.begin(), requiredSynthdefFolders.end());
+        // Data folders from before dyngen moved into Defaults
         const std::string dyngenDir = root + "/dyngen";
         if(ofDirectory::doesDirectoryExist(dyngenDir)) folders.insert(dyngenDir);
     }

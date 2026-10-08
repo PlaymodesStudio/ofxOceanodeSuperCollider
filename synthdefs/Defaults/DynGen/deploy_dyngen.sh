@@ -6,8 +6,8 @@
 # This script copies them to the app data folder used by the running app.
 
 SRC="$(dirname "$0")/CompiledSynthdefs/dyngen"
-DST="/Users/santiagovilanova/PM Dropbox/PLAYMODES_STUDIO/2026/SILO/SOFT/SHARED_DATA/data/Supercollider/Synthdefs/dyngen"
-DST_OCEANODE_SCROLLER="/Users/santiagovilanova/Documents/OF/of_playmodes/openFrameworks/apps/Playmodes/OceanodeScroller/bin/data/Supercollider/Synthdefs/dyngen"
+DST="/Users/santiagovilanova/PM Dropbox/PLAYMODES_STUDIO/2026/SILO/SOFT/SHARED_DATA/data/Supercollider/Synthdefs/Defaults/dyngen"
+DST_OCEANODE_SCROLLER="/Users/santiagovilanova/Documents/OF/of_playmodes/openFrameworks/apps/Playmodes/OceanodeScroller/bin/data/Supercollider/Synthdefs/Defaults/dyngen"
 
 if [ ! -d "$SRC" ]; then
     echo "ERROR: Source directory not found: $SRC"
