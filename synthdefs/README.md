@@ -15,6 +15,7 @@ Compiled `.scsyndef` files are not stored here: they live in the app's
 | `Oceanode/` | Shared prelude: `mainDefinitions.scd` (`~synthCreator`, `~useExactSynthCreator`) and the Oceanode pseudo-UGen classes (`oceanodeParameter.sc`, `ugenExtensions.sc`), which must also be in the SuperCollider extensions folder. |
 | `Defaults/` | SynthDefs loaded by the server itself or by nodes with a C++ counterpart. One folder per node, plus `Core/` (output, info, buffer allocation) and `Analysis/` (meters, scopes, trackers). |
 | `Effect/` `InOut/` `Mixing/` `Modulation/` `Routing/` `Source/` `Spatial/` `Utilities/` `Compatibility/` `Optimized/` | Generic `~synthCreator` synths, mirrored by the same folders under the app's `Synthdefs/`. |
+| `WIP/` | Experiments not yet in Oceanode, run from the SuperCollider IDE (see `WIP/README.md`). Not compiled on demand, not deployed. |
 
 ## Generic synths (`~synthCreator`)
 

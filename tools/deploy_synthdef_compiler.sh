@@ -4,7 +4,7 @@
 #
 #   tools/deploy_synthdef_compiler.sh <app>/bin/data
 #
-#   synthdefs/  -> data/Supercollider/SynthdefSources/
+#   synthdefs/  -> data/Supercollider/SynthdefSources/  (without WIP/)
 #   sclang/     -> data/Supercollider/Sclang/
 #
 # Compiled binaries are not touched. Re-run after editing any source.
@@ -16,7 +16,7 @@ SC="$DATA/Supercollider"
 
 [ -d "$SC" ] || { echo "No Supercollider folder in $DATA"; exit 1; }
 
-rsync -a --delete --exclude 'CompiledSynthdefs/' --exclude '.DS_Store' \
+rsync -a --delete --exclude 'CompiledSynthdefs/' --exclude 'WIP/' --exclude '.DS_Store' \
     "$ADDON/synthdefs/" "$SC/SynthdefSources/"
 rsync -a --delete --exclude 'build_sclang.sh' --exclude '.DS_Store' \
     "$ADDON/sclang/" "$SC/Sclang/"
