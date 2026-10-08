@@ -1,0 +1,138 @@
+diff --git a/source/DWGUGens/DWGPlucked.cpp b/source/DWGUGens/DWGPlucked.cpp
+index 9aa2d62..f746a47 100644
+--- a/source/DWGUGens/DWGPlucked.cpp
++++ b/source/DWGUGens/DWGPlucked.cpp
+@@ -26,9 +26,10 @@ struct DWGPlucked : public Unit
+ 	LagrangeT<MAXDELAY> DWGF[2];
+ 	FilterC1C3 Loss;
+ 	DWGPlucked(Unit* unit);
+-	void Release(float trig,float *out,int NumSamples);
++	void Release(float trig, float *out, int NumSamples, float release, float sampleRate);
+ 	float m_trig;
+ 	int relcount;
++	int relcountmax;  // Store the max value for reset
+ 	float rellevel;
+ 	float rellevelstep;
+ };
+@@ -37,35 +38,57 @@ DWGPlucked::DWGPlucked(Unit* unit)
+ {
+ 	m_trig = 0.0;
+ 	float release = ZIN0(7);
+-	relcount = SAMPLERATE * release;
++	relcountmax = SAMPLERATE * release;
++	relcount = relcountmax;
+ 	rellevel = 1.0;
+-	rellevelstep = 1.0/(float)relcount;
+-
++	rellevelstep = 1.0 / (float)relcountmax;
+ }
+-void DWGPlucked::Release(float trig,float *out,int NumSamples){
+-	
+-	if(this->m_trig <=0 && trig > 0){
++
++void DWGPlucked::Release(float trig, float *out, int NumSamples, float release, float sampleRate) {
++	// Detect rising edge (trigger goes from <=0 to >0)
++	if (this->m_trig <= 0 && trig > 0) {
+ 		this->m_trig = trig;
++		// Reset release state for retriggering
++		this->relcountmax = sampleRate * release;
++		this->relcount = this->relcountmax;
++		this->rellevel = 1.0;
++		if (this->relcountmax > 0) {
++			this->rellevelstep = 1.0 / (float)this->relcountmax;
++		} else {
++			this->rellevelstep = 1.0;
++		}
+ 	}
+-	if((this->m_trig >0 && trig <= 0)){
++	
++	// Detect falling edge (trigger goes from >0 to <=0) - start release
++	if (this->m_trig > 0 && trig <= 0) {
++		this->m_trig = trig;  // Update trigger state
++	}
++	
++	// If we're in release phase (m_trig <= 0 after having been triggered)
++	if (this->m_trig <= 0 && this->rellevel > 0) {
+ 		int relcount = this->relcount;
+ 		float rellevel = this->rellevel;
+ 		float rellevelstep = this->rellevelstep;
+ 		
+-		for(int i=0; i<NumSamples; i++){
+-			if(relcount > 0){
++		for (int i = 0; i < NumSamples; i++) {
++			if (relcount > 0) {
+ 				rellevel -= rellevelstep;
+ 				relcount--;
+ 			}
+-			out[i] *=rellevel;
++			// Clamp rellevel to 0 minimum
++			if (rellevel < 0) rellevel = 0;
++			out[i] *= rellevel;
+ 		}
+-		if(relcount <=0)
+-			DoneAction(2,this);
+-			
++		
++		// Don't call DoneAction - keep synth alive for retriggering
++		// if (relcount <= 0)
++		//     DoneAction(2, this);
++		
+ 		this->relcount = relcount;
+ 		this->rellevel = rellevel;
+ 	}
+ }
++
+ void DWGPlucked_next(DWGPlucked *unit, int inNumSamples)
+ {
+ 
+@@ -78,6 +101,7 @@ void DWGPlucked_next(DWGPlucked *unit, int inNumSamples)
+ 	float c1 = ZIN0(4);
+ 	float c3 = std::max(ZIN0(5),(float)1e-9);
+ 	float *in = IN(6);
++	float release = ZIN0(7);
+ 	
+ 	unit->Loss.setcoeffs(freq,c1,c3);
+ 	float lossdelay = unit->Loss.groupdelay(freq,SAMPLERATE);
+@@ -101,7 +125,7 @@ void DWGPlucked_next(DWGPlucked *unit, int inNumSamples)
+ 		out[i] = PMAS + PMAS2;
+ 			
+ 	}
+-	unit->Release(trig,out,inNumSamples);
++	unit->Release(trig,out,inNumSamples,release,SAMPLERATE);
+ }
+ 
+ /////////////////////////////////////////
+@@ -130,6 +154,7 @@ void DWGPluckedStiff_next(DWGPluckedStiff *unit, int inNumSamples)
+ 	float c1 = ZIN0(4);
+ 	float c3 = std::max(ZIN0(5),(float)1e-9);
+ 	float *in = IN(6);
++	float release = ZIN0(7);
+ 	float B = ZIN0(8)/100000;
+ 
+ 	unit->disper.setcoeffs(freq,B);
+@@ -158,7 +183,7 @@ void DWGPluckedStiff_next(DWGPluckedStiff *unit, int inNumSamples)
+ 		out[i] = PMAS + PMAS2;
+ 			
+ 	}
+-	unit->Release(trig,out,inNumSamples);
++	unit->Release(trig,out,inNumSamples,release,SAMPLERATE);
+ }
+ 
+ /////////////////////////////////////////
+@@ -189,6 +214,7 @@ void DWGPlucked2_next(DWGPlucked2 *unit, int inNumSamples)
+ 	float c1 = ZIN0(4);
+ 	float c3 = std::max(ZIN0(5),(float)1e-9);
+ 	float *in = IN(6);
++	float release = ZIN0(7);
+ 	float mistune = ZIN0(8);
+ 	float mp = sc_clip(ZIN0(9),0,1);
+ 	float gc = ZIN0(10);
+@@ -236,7 +262,7 @@ void DWGPlucked2_next(DWGPlucked2 *unit, int inNumSamples)
+ 		out[i] =  OUT1 + OUT2;
+ 		
+ 	}
+-	unit->Release(trig,out,inNumSamples);
++	unit->Release(trig,out,inNumSamples,release,SAMPLERATE);
+ }
+ 
+ /////////////////////////////////////////

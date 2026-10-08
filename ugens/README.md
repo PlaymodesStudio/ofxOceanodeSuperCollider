@@ -6,28 +6,30 @@ be rebuilt from a fresh clone; the binaries themselves stay in the apps' data.
 
 | Patch | Upstream | Base commit | Shipped binary |
 |---|---|---|---|
-| `patches/sc3-plugins.patch` | [supercollider/sc3-plugins](https://github.com/supercollider/sc3-plugins) | `6f76da5` | `SC3plugins/OteyPianoUGens/OteyPianoUGens.scx`, `SC3plugins/DWGUGens/DWGPlucked.scx` |
-| `patches/vstplugin.patch` | [IEM vstplugin](https://git.iem.at/pd/vstplugin), `develop` | `72af654` | `VSTPlugin/plugins/VSTPlugin.scx` |
+| `patches/sc3-plugins-oteypiano.patch` | [supercollider/sc3-plugins](https://github.com/supercollider/sc3-plugins) | `6f76da5` | `SC3plugins/OteyPianoUGens/OteyPianoUGens.scx` |
+| `patches/sc3-plugins-dwgplucked.patch` | sc3-plugins | `6f76da5` | `SC3plugins/DWGUGens/DWGPlucked.scx` |
+| `patches/sc3-plugins-cmake-arm64.patch` | sc3-plugins | `6f76da5` | (build fix for both, on Apple Silicon) |
+| `patches/vstplugin-reaktor-fxp.patch` | [IEM vstplugin](https://git.iem.at/pd/vstplugin), `develop` | `72af654` | `VSTPlugin/plugins/VSTPlugin.scx` |
 | `patches/vstplugin-v0.6-fxp-attempt.patch` | IEM vstplugin, `master` (v0.6.0) | `3f0ed8a` | none: earlier attempt, kept for reference |
 
-Each patch applies cleanly to its base commit (`git apply --check`), and the
+Each patch applies cleanly to its base commit, on its own or together (`git apply --check`), and the
 shipped binaries match these sources: VSTPlugin.scx and DWGPlucked.scx are
 byte-identical to builds of the patched trees; OteyPianoUGens.scx was built
 seconds after the last edit of its patched source.
 
-## sc3-plugins.patch
+## sc3-plugins patches
 
-- **OteyPiano** (`OteyPiano.cpp`, `piano.h`, March 2025): on each rising edge
+- **`sc3-plugins-oteypiano.patch`** (`OteyPiano.cpp`, `piano.h`, March 2025): on each rising edge
   of `gate` the piano re-reads all its parameters and reinitialises the model,
   so every new note picks up the current settings (upstream fixes them when the
   synth starts).
-- **DWGPlucked** (`DWGPlucked.cpp`, January 2026): retriggering resets the
+- **`sc3-plugins-dwgplucked.patch`** (`DWGPlucked.cpp`, January 2026): retriggering resets the
   release envelope (count, level and step) instead of continuing the previous
   one; the release level is clamped at zero.
-- **CMakeLists.txt**: adds the SSE compiler flags only when not building for
+- **`sc3-plugins-cmake-arm64.patch`** (`CMakeLists.txt`): adds the SSE compiler flags only when not building for
   arm64, which rejects them.
 
-## vstplugin.patch
+## vstplugin-reaktor-fxp.patch
 
 Loading Reaktor `.fxp` programs (`VST2Plugin.cpp`, October 2025). Reaktor
 writes program files whose header sizes do not match their data, which the
@@ -51,7 +53,7 @@ version of the same fix: it trusts the file size for every plugin.
 ```bash
 git clone https://github.com/supercollider/sc3-plugins.git && cd sc3-plugins
 git checkout 6f76da5 && git submodule update --init
-git apply <addon>/ugens/patches/sc3-plugins.patch
+git apply <addon>/ugens/patches/sc3-plugins-*.patch
 cmake -B build -DSC_PATH=<supercollider source> -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target OteyPianoUGens DWGPlucked
 ```
@@ -59,7 +61,7 @@ cmake --build build --target OteyPianoUGens DWGPlucked
 ```bash
 git clone https://git.iem.at/pd/vstplugin.git && cd vstplugin
 git checkout 72af654
-git apply <addon>/ugens/patches/vstplugin.patch
+git apply <addon>/ugens/patches/vstplugin-reaktor-fxp.patch
 # then build the SuperCollider target as described in vstplugin's README
 ```
 

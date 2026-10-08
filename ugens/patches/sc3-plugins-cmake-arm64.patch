@@ -1,0 +1,69 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 278750c..9908c97 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -84,34 +84,36 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_COMPILER_IS_CLANG)
+     include (CheckCCompilerFlag)
+     include (CheckCXXCompilerFlag)
+ 
+-    CHECK_C_COMPILER_FLAG(-msse HAS_SSE)
+-    CHECK_CXX_COMPILER_FLAG(-msse HAS_CXX_SSE)
+-
+-    if (HAS_SSE)
+-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse")
+-    endif()
+-    if (HAS_CXX_SSE)
+-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse")
+-    endif()
+-
+-    CHECK_C_COMPILER_FLAG(-msse2 HAS_SSE2)
+-    CHECK_CXX_COMPILER_FLAG(-msse2 HAS_CXX_SSE2)
+-
+-    if (HAS_SSE2)
+-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse2")
+-    endif()
+-    if (HAS_CXX_SSE2)
+-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse2")
+-    endif()
+-
+-    CHECK_C_COMPILER_FLAG(-mfpmath=sse HAS_FPMATH_SSE)
+-    CHECK_CXX_COMPILER_FLAG(-mfpmath=sse HAS_CXX_FPMATH_SSE)
+-
+-    if (HAS_FPMATH_SSE)
+-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfpmath=sse")
+-    endif()
+-    if (HAS_CXX_FPMATH_SSE)
+-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpmath=sse")
++    if(NOT CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
++        CHECK_C_COMPILER_FLAG(-msse HAS_SSE)
++        CHECK_CXX_COMPILER_FLAG(-msse HAS_CXX_SSE)
++
++        if (HAS_SSE)
++            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse")
++        endif()
++        if (HAS_CXX_SSE)
++            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse")
++        endif()
++
++        CHECK_C_COMPILER_FLAG(-msse2 HAS_SSE2)
++        CHECK_CXX_COMPILER_FLAG(-msse2 HAS_CXX_SSE2)
++
++        if (HAS_SSE2)
++            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse2")
++        endif()
++        if (HAS_CXX_SSE2)
++            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse2")
++        endif()
++
++        CHECK_C_COMPILER_FLAG(-mfpmath=sse HAS_FPMATH_SSE)
++        CHECK_CXX_COMPILER_FLAG(-mfpmath=sse HAS_CXX_FPMATH_SSE)
++
++        if (HAS_FPMATH_SSE)
++            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfpmath=sse")
++        endif()
++        if (HAS_CXX_FPMATH_SSE)
++            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpmath=sse")
++        endif()
+     endif()
+ 
+ 	if(NATIVE)
