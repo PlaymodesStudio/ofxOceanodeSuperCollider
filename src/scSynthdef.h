@@ -102,6 +102,7 @@ private:
     bool variableChanged;
     std::map<ofxSCServer*, std::map<int, int>> outputBuses;
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
+    std::map<ofxSCServer*, std::map<std::string, std::pair<int, int>>> audioRateState; // name -> (_sel, bus)
     
     ofParameter<bool> doNotDistributeInputs;
     ofParameter<bool> doNotDistributeOutputs;

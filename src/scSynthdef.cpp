@@ -76,14 +76,25 @@ void scSynthdef::setup(){
     listeners.push(numChannels.newListener([this](int &i){
         if(i < 1 || i > MAX_NODE_CHANNELS) return;
         if(oldNumChannels != numChannels || variableChanged){
+            std::vector<std::pair<ofxSCServer*, ofxSCSynth*>> replaced;
             for(auto &synth : synths){
-                ofxSCSynth *newSynth = new ofxSCSynth(getSynthdefFilename(), synth.first);
-                newSynth->createAndRun(4, synth.second->nodeID, getActive()); //replace synth
-                delete synth.second;
-                synth.second = newSynth;
+                replaced.emplace_back(synth.first, synth.second);
+                synth.second = new ofxSCSynth(getSynthdefFilename(), synth.first);
             }
             sendCacheEpoch++;
             resendParams.notify();
+            for(auto &[server, oldSynth] : replaced){
+                ofxSCSynth *newSynth = synths[server];
+                for(auto &[name, state] : audioRateState[server]){
+                    newSynth->set(name + "_sel", state.first);
+                    newSynth->mapan(name + "_ar", state.second, MAX_NODE_CHANNELS);
+                }
+                const bool wasLatency = server->getBLatency();
+                if(!oldSynth->isCreated()) server->setBLatency(true);
+                newSynth->createAndRun(4, oldSynth->nodeID, getActive()); //replace synth
+                server->setBLatency(wasLatency);
+                delete oldSynth;
+            }
         }
         oldNumChannels = numChannels;
         variableChanged = false;
@@ -371,6 +382,7 @@ void scSynthdef::setup(){
             listeners.push(resetAudioRateBusAssignments.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, int> busAssignmentInfo){
                 synths[busAssignmentInfo.first]->set(toSendName + "_sel", 0);
                 synths[busAssignmentInfo.first]->mapan(toSendName + "_ar", busAssignmentInfo.second, MAX_NODE_CHANNELS);
+                audioRateState[busAssignmentInfo.first][toSendName] = {0, busAssignmentInfo.second};
             }));
             
             listeners.push(setAudioRateBusAssignment.newListener([this, toSendName, availableInput](std::tuple<ofxSCServer*, scNode*, int> busAssignmentInfo){
@@ -378,6 +390,7 @@ void scSynthdef::setup(){
                 if(availableInput->getNodeRef() == node){
                     synths[server]->set(toSendName + "_sel", 1);
                     synths[server]->mapan(toSendName + "_ar", bus, MAX_NODE_CHANNELS);
+                    audioRateState[server][toSendName] = {1, bus};
                 }
             }));
         }
