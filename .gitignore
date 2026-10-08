@@ -15,3 +15,6 @@ tmp/
 output/
 __pycache__/
 *.pyc
+
+# SuperCollider build output (binaries live in the app data folder)
+synthdefs/**/CompiledSynthdefs/

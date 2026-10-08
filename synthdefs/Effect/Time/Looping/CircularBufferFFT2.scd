@@ -1,0 +1,64 @@
+(
+~synthCreator.value("CircularBufferFFT2", {|n|
+	var input, circularBufs, writePos, output;
+	var bufFrames, numActiveReaders, readerAmps;
+	var bufferSize, maxReaders, fftSize, overlaps, fftBufs;
+	var pos, levels;
+	
+	// Parameters
+	numActiveReaders = OceanodeParameter.ar(\numreaders, 4, n, 1, 8, "vf");
+	pos = OceanodeParameter.ar(\pos, 0, n, 0, 1, "vf");
+	levels = OceanodeParameterLag.ar(\levels, 1, n, 0, 1, "vf", 1/30, true);
+	
+	// Setup
+	bufferSize = 20;  // 20 seconds buffer
+	maxReaders = 8;  // Fixed number of maximum readers
+	fftSize = 16384;
+	overlaps = 2;
+	
+	// Create local buffers for each channel
+	bufFrames = bufferSize * SampleRate.ir;
+	circularBufs = n.collect { LocalBuf(bufFrames, 1).clear };
+	
+	// Multichannel input
+	input = In.ar(OceanodeInput.kr(\in), n);
+	
+	// Write position
+	writePos = Phasor.ar(0, 1, 0, bufFrames);
+	
+	// Write to buffers
+	n.do { |i|
+		BufWr.ar(input[i], circularBufs[i], writePos);
+	};
+	
+	// Allocate one FFT buffer set per channel and reader (readers sharing a buffer overwrote each other)
+	fftBufs = n.collect { maxReaders.collect { LocalBuf(fftSize!overlaps) } };
+	
+	// Calculate amplitudes for each reader (per channel)
+	readerAmps = n.collect { |chan|
+		maxReaders.collect { |i| (i < numActiveReaders[chan]).lag(0.1) }
+	};
+	
+	// Read from buffers at multiple positions for each channel and apply FFT processing
+	output = n.collect { |chan|
+		Mix(
+			maxReaders.collect { |i|
+				var chain;
+				var bufPos = pos[chan] * bufFrames;
+				
+				// Creating the chain with BufFFTTrigger
+				chain = BufFFTTrigger(fftBufs[chan][i], 1/overlaps, (0..(overlaps-1)), overlaps);
+				// Processing the FFT chain
+				chain = BufFFT_BufCopy(chain, circularBufs[chan], bufPos, 1);
+				chain = BufFFT(chain);
+				chain = PV_Diffuser(chain, chain > -1);
+				// IFFT and envelope
+				Mix(BufIFFT(chain, 0)) * 0.8 * readerAmps[chan][i]
+			}
+		)
+	};
+	
+	Out.ar(OceanodeOutput.kr(\out), output * levels);
+	
+}, description: "Circular buffer with FFT processing for each channel", category: "Effect/Time/Looping");
+)

@@ -332,7 +332,7 @@ void scBeatRepeatPro::requireSynthdefs() {
         // source as well as packaging them into bin/data through addon_config.
         if(folder.empty()) {
             const std::filesystem::path bundled = std::filesystem::path(__FILE__).parent_path()
-                .parent_path() / "sc/BeatRepeatPro/CompiledSynthdefs/BeatRepeatPro";
+                .parent_path().parent_path() / "synthdefs/Defaults/BeatRepeatPro/CompiledSynthdefs/BeatRepeatPro";
             if(std::filesystem::exists(bundled / expected)) folder = bundled;
         }
     } catch(const std::exception& error) {

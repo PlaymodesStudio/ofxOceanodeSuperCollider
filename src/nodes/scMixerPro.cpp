@@ -205,7 +205,7 @@ void scMixerPro::requireSynthdefs() {
         }
         if(folder.empty()) {
             const std::filesystem::path bundled = std::filesystem::path(__FILE__).parent_path()
-                .parent_path() / "sc/MixerPro/CompiledSynthdefs/mixerpro";
+                .parent_path().parent_path() / "synthdefs/Defaults/MixerPro/CompiledSynthdefs/mixerpro";
             if(std::filesystem::exists(bundled / expected)) folder = bundled;
         }
     } catch(const std::exception& error) {

@@ -1,0 +1,234 @@
+// SteamPipe dry physical-model core reconstructed from SteamPipe_santi.ens.
+// The main acoustic loop is deliberately contained in @sample: no LocalIn,
+// LocalOut, audio bus, or block-delayed feedback is used.
+
+@init
+main_size = 49152;
+main_ofs = 0;
+main_w = 0;
+ap_size = 49152;
+ap_ofs = main_ofs + main_size;
+ap_w = 0;
+
+rng = 22222;
+env = 0;
+env_stage = 0;
+previous_gate = 0;
+vib_phase = 0;
+
+noise_lp = 0;
+noise_x1 = 0;
+noise_x2 = 0;
+noise_y1 = 0;
+noise_y2 = 0;
+mw_hp_lp = 0;
+mw_lp = 0;
+
+function midiCps(p) (
+    440.0 * pow(2.0, (p - 69.0) / 12.0);
+);
+
+function timeSeconds(p) (
+    0.001 * pow(10.0, p / 20.0);
+);
+
+// Reaktor's "Good" delay interpolation is linear.
+function readL(ofs, size, write_pos, delay_samples)
+local(pos, i0, i1, frac, y0, y1) (
+    pos = write_pos - delay_samples;
+    pos < 0 ? pos += size;
+    i0 = floor(pos);
+    frac = pos - i0;
+    i1 = i0 + 1; i1 >= size ? i1 -= size;
+    y0 = buf[ofs + i0];
+    y1 = buf[ofs + i1];
+    y0 + ((y1 - y0) * frac);
+);
+
+// Exact transfer function of Reaktor 6.5's mono::AudioSaturator:
+// unity slope at zero, quadratic soft knee, hard limits at +/-2.
+function reaktorSat(x)
+local(z) (
+    z = clip(x, -4.0, 4.0);
+    z * (1.0 - (0.125 * abs(z)));
+);
+
+function paraSat(x, hardness, limit)
+local(h, lim, threshold, scale, clipped, residual) (
+    h = clip(hardness, 0.00001, 0.99999);
+    lim = max(0.0001, limit);
+    threshold = lim * h;
+    scale = 0.5 * lim * (1.0 - h);
+    clipped = clip(x, -threshold, threshold);
+    residual = (x - clipped) / max(scale, 0.000001);
+    clipped + scale * reaktorSat(residual);
+);
+
+@sample
+// Keep this first-reference order synchronized with SteamPipe.json.
+pitch = _pitch;
+gate_control = _gate;
+velocity = _velocity;
+mod_wheel = _mod_wheel;
+bend = _bend;
+att = _attack;
+dec = _decay;
+sus = _sustain;
+rel = _release;
+vel_amt = _velocity_amount;
+env_scaling = _env_key_scaling;
+dc_noise = _dc_noise;
+noise_cut = _noise_cut;
+noise_key_track = _noise_key_track;
+noise_vel_track = _noise_velocity_track;
+noise_res = _noise_resonance;
+noise_one_pole = _noise_one_pole;
+tune = _tune;
+fine = _fine;
+sample_correction = _sample_correction;
+tune_mw = _tune_mw;
+vib_amount = _vibrato_amount;
+vib_freq = _vibrato_frequency;
+polarity_control = _polarity;
+ap_tune = _allpass_tune;
+ap_fine = _allpass_fine;
+ap_sample_correction = _allpass_sample_correction;
+ap_mw = _allpass_mw;
+ap_on = _allpass_on;
+diffusion = _diffusion;
+offset = _offset;
+push = _push;
+feedback_rt = _feedback_rt;
+feedback_key_track = _feedback_key_track;
+release_damp = _release_damp;
+soft_hard = _soft_hard;
+symmetry = _symmetry;
+hp0 = _hp0;
+hp1 = _hp1;
+hp_key_track = _hp_key_track;
+lp0 = _lp0;
+lp1 = _lp1;
+lp_key_track = _lp_key_track;
+gain_db = _gain;
+
+gate_on = gate_control > 0.5;
+retrigger = gate_on && (previous_gate <= 0);
+retrigger ? env_stage = 1;
+(!gate_on && (previous_gate > 0)) ? env_stage = 4;
+previous_gate = gate_on;
+
+velocity = clip(velocity, 0.0, 1.0);
+peak = (1.0 - clip(vel_amt, 0.0, 1.0)) + (clip(vel_amt, 0.0, 1.0) * velocity);
+scaled_pitch = (pitch - 60.0) * env_scaling;
+attack_seconds = max(0.00001, timeSeconds(att + scaled_pitch));
+decay_seconds = max(0.00001, timeSeconds(dec + scaled_pitch));
+release_seconds = max(0.00001, timeSeconds(rel + scaled_pitch));
+attack_coef = 1.0 - exp(-6.90775528 / (attack_seconds * srate));
+decay_coef = 1.0 - exp(-6.90775528 / (decay_seconds * srate));
+release_coef = 1.0 - exp(-6.90775528 / (release_seconds * srate));
+
+env_stage == 1 ? (
+    env += (peak - env) * attack_coef;
+    env >= (peak * 0.999) ? env_stage = 2;
+);
+env_stage == 2 ? (
+    sustain_level = peak * clip(sus, 0.0, 1.0);
+    env += (sustain_level - env) * decay_coef;
+    abs(env - sustain_level) <= 0.00001 ? env_stage = 3;
+);
+env_stage == 3 ? env = peak * clip(sus, 0.0, 1.0);
+env_stage == 4 ? (
+    env += (0.0 - env) * release_coef;
+    env <= 0.000001 ? (env = 0; env_stage = 0;);
+);
+
+// Exact 32-bit LFSR topology of Reaktor's mono::AudioOscNoise.  Its output
+// is a two-level signal at +/-0.5, rather than uniformly distributed noise.
+noise_bit = mod(floor(rng * 0.5), 2.0);
+feedback_bit = mod(
+    mod(rng, 2.0)
+    + mod(floor(rng / 32.0), 2.0)
+    + mod(floor(rng / 8192.0), 2.0),
+    2.0
+);
+rng = floor(rng * 0.5) + (feedback_bit * 2147483648.0);
+white = noise_bit - 0.5;
+// The Note Pitch modules inside Reaktor's key-track macros are offset by -60.
+noise_pitch = noise_cut + ((pitch - 60.0) * noise_key_track);
+noise_pitch *= (1.0 - clip(noise_vel_track, 0.0, 1.0)) + (clip(noise_vel_track, 0.0, 1.0) * velocity);
+noise_frequency = clip(midiCps(noise_pitch), 2.0, srate * 0.45);
+noise_input = white * env;
+
+noise_a = 1.0 - exp(-6.28318530 * noise_frequency / srate);
+noise_lp += noise_a * (noise_input - noise_lp);
+
+omega = 6.28318530 * noise_frequency / srate;
+cos_omega = cos(omega);
+sin_omega = sin(omega);
+noise_q = 0.5 / max(0.03, 1.0 - (clip(noise_res, 0.0, 0.995) * 0.97));
+alpha = sin_omega / (2.0 * noise_q);
+norm = 1.0 / (1.0 + alpha);
+b0 = ((1.0 - cos_omega) * 0.5) * norm;
+b1 = (1.0 - cos_omega) * norm;
+b2 = b0;
+a1 = (-2.0 * cos_omega) * norm;
+a2 = (1.0 - alpha) * norm;
+noise_lp2 = (b0 * noise_input) + (b1 * noise_x1) + (b2 * noise_x2) - (a1 * noise_y1) - (a2 * noise_y2);
+noise_x2 = noise_x1; noise_x1 = noise_input;
+noise_y2 = noise_y1; noise_y1 = noise_lp2;
+filtered_noise = noise_one_pole >= 0.5 ? noise_lp : noise_lp2;
+steam = env * (1.0 - clip(dc_noise, 0.0, 1.0)) + filtered_noise * clip(dc_noise, 0.0, 1.0);
+
+vib_phase += 6.28318530 * max(0.0, vib_freq) / srate;
+vib_phase >= 6.28318530 ? vib_phase -= 6.28318530;
+main_pitch = pitch + bend + tune + fine + (mod_wheel * tune_mw);
+main_frequency = max(0.1, midiCps(main_pitch));
+// Reaktor adds the LFO to the delay-time signal in milliseconds, not to pitch.
+vib_delay_samples = sin(vib_phase) * vib_amount * srate * 0.001;
+main_delay = clip((srate / main_frequency) + sample_correction + vib_delay_samples, 2.0, main_size - 3.0);
+pipe_delayed = readL(main_ofs, main_size, main_w, main_delay);
+
+ap_pitch = pitch + bend + ap_tune + ap_fine + (mod_wheel * ap_mw);
+ap_frequency = max(0.1, midiCps(ap_pitch));
+ap_delay = clip((srate / ap_frequency) + ap_sample_correction, 2.0, ap_size - 3.0);
+ap_delayed = readL(ap_ofs, ap_size, ap_w, ap_delay);
+ap_g = clip(diffusion, -0.999, 0.999);
+// Exact AudioDelayAllpass recurrence used by Reaktor's Diffuser Delay.
+ap_write = pipe_delayed - (ap_g * ap_delayed);
+ap_output = ap_delayed + (ap_g * ap_write);
+buf[ap_ofs + ap_w] = clip(ap_write, -8.0, 8.0);
+ap_w += 1; ap_w >= ap_size ? ap_w = 0;
+resonator_signal = ap_on >= 0.5 ? ap_output : pipe_delayed;
+
+positive_limit = 1.0 + clip(symmetry, 0.0, 1.0);
+negative_limit = max(0.0001, 1.0 - clip(symmetry, 0.0, 1.0));
+saturated = resonator_signal >= 0.0
+    ? paraSat(resonator_signal, soft_hard, positive_limit)
+    : paraSat(resonator_signal, soft_hard, negative_limit);
+
+hp_pitch = hp0 + ((hp1 - hp0) * clip(mod_wheel, 0.0, 1.0)) + ((pitch - 60.0) * hp_key_track);
+hp_frequency = clip(midiCps(hp_pitch), 2.0, srate * 0.45);
+hp_a = 1.0 - exp(-6.28318530 * hp_frequency / srate);
+mw_hp_lp += hp_a * (saturated - mw_hp_lp);
+highpassed = saturated - mw_hp_lp;
+
+lp_pitch = lp0 + ((lp1 - lp0) * clip(mod_wheel, 0.0, 1.0)) + ((pitch - 60.0) * lp_key_track);
+lp_frequency = clip(midiCps(lp_pitch), 2.0, srate * 0.45);
+lp_a = 1.0 - exp(-6.28318530 * lp_frequency / srate);
+mw_lp += lp_a * (highpassed - mw_lp);
+pipe_output = mw_lp;
+
+// Unlike the noise/filter key-track macros, Feedback's Note Pitch has no -60 offset.
+rt_pitch = feedback_rt + (pitch * feedback_key_track) + (release_damp * (1.0 - gate_on));
+rt_ms = 1000.0 / max(0.1, midiCps(rt_pitch));
+main_delay_ms = main_delay * 1000.0 / srate;
+feedback_db = -60.0 * main_delay_ms / max(0.001, rt_ms);
+feedback_amp = pow(10.0, feedback_db / 20.0);
+polarity = polarity_control >= 0.0 ? 1.0 : -1.0;
+push_pull = steam * ((pipe_output * push) + (offset * polarity));
+loop_input = polarity * (push_pull + (pipe_output * feedback_amp));
+buf[main_ofs + main_w] = clip(loop_input, -8.0, 8.0);
+main_w += 1; main_w >= main_size ? main_w = 0;
+
+output_gain = pow(10.0, gain_db / 20.0);
+out0 = reaktorSat(pipe_output * output_gain);

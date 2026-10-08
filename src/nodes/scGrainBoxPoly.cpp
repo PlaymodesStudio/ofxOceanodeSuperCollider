@@ -2476,7 +2476,7 @@ void scGrainBoxPoly::sendMixParams() {
 // Global FX chain: EQ (graphiceqN) → Echo (EchoN) → Reverb (SpaceMasterN)
 // ════════════════════════════════════════════════════════════════════════════
 //
-// The defs are the user's: graphiceq.scd (SPECIAL_SYNTHDEFS/KR, like
+// The defs are the user's: graphiceq.scd (synthdefs/Defaults/GraphicEQ, like
 // GrainBox's own) and echo.scd / spaceMaster.scd (~synthCreator: def "Echo" ++
 // n / "SpaceMaster" ++ n, controls "in" / "out" and the OceanodeParameterLag
 // vectors). With "Load Synthdefs On Preset" on, serverManager loads only the
