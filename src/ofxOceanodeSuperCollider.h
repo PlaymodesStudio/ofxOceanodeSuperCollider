@@ -59,6 +59,7 @@
 #include "nodes/scVelvetReverb.h"
 #include "nodes/pinkTromboneNode.h"
 #include "nodes/scRhythmBox.h"
+#include "nodes/scDataBox.h"
 #include "nodes/scMultiTrackRecorder.h"
 //#include "nodes/scGrainBox.h" // Legacy node disabled by the preserved stash.
 #include "nodes/scGrainBoxPoly.h"
@@ -193,6 +194,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scVelvetReverb>("SuperCollider");
 	o.registerModel<pinkTromboneNode>("SuperCollider");
 	o.registerModel<scRhythmBox>("SuperCollider", controller->getServers());
+	o.registerModel<scDataBox>("SuperCollider", controller->getServers());
 	o.registerModel<scMultiTrackRecorder>("SuperCollider", controller->getServers());
 //	o.registerModel<scGrainBox>("SuperCollider", controller->getServers());
 	o.registerModel<scGrainBoxPoly>("SuperCollider", controller->getServers());

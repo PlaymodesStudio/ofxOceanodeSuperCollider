@@ -21,3 +21,10 @@ Two speech synthesizers, moved here from `ofxOceanodeTextures/examples`.
 To try one: open it in the SuperCollider IDE, evaluate the first parenthesized
 block (it boots the server and loads the model), then evaluate the examples at
 the bottom of the file one at a time.
+
+## RawData/
+
+`rawDataAudio.scd`: the first experiment playing any file's bytes as audio
+(read in sclang as int8, uint8 or int16 and played with `PlayBuf`). It became
+the **SC DataBox** node (`src/nodes/scDataBox.*`, synth in
+`Defaults/DataBox/databox.scd`); kept here as the original sketch.

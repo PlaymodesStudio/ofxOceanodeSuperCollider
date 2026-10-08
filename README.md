@@ -777,7 +777,7 @@ Compatibility/
 </details>
 
 <details>
-<summary><b>Defaults</b> (38)</summary>
+<summary><b>Defaults</b> (39)</summary>
 
 ```
 Defaults/
@@ -807,6 +807,8 @@ Defaults/
 │   └── output_stereomix.scd
 ├── CustomBuffer/
 │   └── custombufferplayer.scd
+├── DataBox/
+│   └── databox.scd
 ├── DynGen/
 │   └── dyngen.scd
 ├── FM7/
@@ -848,10 +850,12 @@ Defaults/
 </details>
 
 <details>
-<summary><b>WIP</b> (2)</summary>
+<summary><b>WIP</b> (3)</summary>
 
 ```
 WIP/
+├── RawData/
+│   └── rawDataAudio.scd
 └── Voice/
     ├── DECtalkKlatt.scd
     └── VotraxSC01A.scd
