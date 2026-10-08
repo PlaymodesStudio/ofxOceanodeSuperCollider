@@ -1,0 +1,535 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 278750c..9908c97 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -84,34 +84,36 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_COMPILER_IS_CLANG)
+     include (CheckCCompilerFlag)
+     include (CheckCXXCompilerFlag)
+ 
+-    CHECK_C_COMPILER_FLAG(-msse HAS_SSE)
+-    CHECK_CXX_COMPILER_FLAG(-msse HAS_CXX_SSE)
+-
+-    if (HAS_SSE)
+-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse")
+-    endif()
+-    if (HAS_CXX_SSE)
+-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse")
+-    endif()
+-
+-    CHECK_C_COMPILER_FLAG(-msse2 HAS_SSE2)
+-    CHECK_CXX_COMPILER_FLAG(-msse2 HAS_CXX_SSE2)
+-
+-    if (HAS_SSE2)
+-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse2")
+-    endif()
+-    if (HAS_CXX_SSE2)
+-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse2")
+-    endif()
+-
+-    CHECK_C_COMPILER_FLAG(-mfpmath=sse HAS_FPMATH_SSE)
+-    CHECK_CXX_COMPILER_FLAG(-mfpmath=sse HAS_CXX_FPMATH_SSE)
+-
+-    if (HAS_FPMATH_SSE)
+-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfpmath=sse")
+-    endif()
+-    if (HAS_CXX_FPMATH_SSE)
+-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpmath=sse")
++    if(NOT CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
++        CHECK_C_COMPILER_FLAG(-msse HAS_SSE)
++        CHECK_CXX_COMPILER_FLAG(-msse HAS_CXX_SSE)
++
++        if (HAS_SSE)
++            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse")
++        endif()
++        if (HAS_CXX_SSE)
++            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse")
++        endif()
++
++        CHECK_C_COMPILER_FLAG(-msse2 HAS_SSE2)
++        CHECK_CXX_COMPILER_FLAG(-msse2 HAS_CXX_SSE2)
++
++        if (HAS_SSE2)
++            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse2")
++        endif()
++        if (HAS_CXX_SSE2)
++            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse2")
++        endif()
++
++        CHECK_C_COMPILER_FLAG(-mfpmath=sse HAS_FPMATH_SSE)
++        CHECK_CXX_COMPILER_FLAG(-mfpmath=sse HAS_CXX_FPMATH_SSE)
++
++        if (HAS_FPMATH_SSE)
++            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfpmath=sse")
++        endif()
++        if (HAS_CXX_FPMATH_SSE)
++            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpmath=sse")
++        endif()
+     endif()
+ 
+ 	if(NATIVE)
+diff --git a/source/DWGUGens/DWGPlucked.cpp b/source/DWGUGens/DWGPlucked.cpp
+index 9aa2d62..f746a47 100644
+--- a/source/DWGUGens/DWGPlucked.cpp
++++ b/source/DWGUGens/DWGPlucked.cpp
+@@ -26,9 +26,10 @@ struct DWGPlucked : public Unit
+ 	LagrangeT<MAXDELAY> DWGF[2];
+ 	FilterC1C3 Loss;
+ 	DWGPlucked(Unit* unit);
+-	void Release(float trig,float *out,int NumSamples);
++	void Release(float trig, float *out, int NumSamples, float release, float sampleRate);
+ 	float m_trig;
+ 	int relcount;
++	int relcountmax;  // Store the max value for reset
+ 	float rellevel;
+ 	float rellevelstep;
+ };
+@@ -37,35 +38,57 @@ DWGPlucked::DWGPlucked(Unit* unit)
+ {
+ 	m_trig = 0.0;
+ 	float release = ZIN0(7);
+-	relcount = SAMPLERATE * release;
++	relcountmax = SAMPLERATE * release;
++	relcount = relcountmax;
+ 	rellevel = 1.0;
+-	rellevelstep = 1.0/(float)relcount;
+-
++	rellevelstep = 1.0 / (float)relcountmax;
+ }
+-void DWGPlucked::Release(float trig,float *out,int NumSamples){
+-	
+-	if(this->m_trig <=0 && trig > 0){
++
++void DWGPlucked::Release(float trig, float *out, int NumSamples, float release, float sampleRate) {
++	// Detect rising edge (trigger goes from <=0 to >0)
++	if (this->m_trig <= 0 && trig > 0) {
+ 		this->m_trig = trig;
++		// Reset release state for retriggering
++		this->relcountmax = sampleRate * release;
++		this->relcount = this->relcountmax;
++		this->rellevel = 1.0;
++		if (this->relcountmax > 0) {
++			this->rellevelstep = 1.0 / (float)this->relcountmax;
++		} else {
++			this->rellevelstep = 1.0;
++		}
+ 	}
+-	if((this->m_trig >0 && trig <= 0)){
++	
++	// Detect falling edge (trigger goes from >0 to <=0) - start release
++	if (this->m_trig > 0 && trig <= 0) {
++		this->m_trig = trig;  // Update trigger state
++	}
++	
++	// If we're in release phase (m_trig <= 0 after having been triggered)
++	if (this->m_trig <= 0 && this->rellevel > 0) {
+ 		int relcount = this->relcount;
+ 		float rellevel = this->rellevel;
+ 		float rellevelstep = this->rellevelstep;
+ 		
+-		for(int i=0; i<NumSamples; i++){
+-			if(relcount > 0){
++		for (int i = 0; i < NumSamples; i++) {
++			if (relcount > 0) {
+ 				rellevel -= rellevelstep;
+ 				relcount--;
+ 			}
+-			out[i] *=rellevel;
++			// Clamp rellevel to 0 minimum
++			if (rellevel < 0) rellevel = 0;
++			out[i] *= rellevel;
+ 		}
+-		if(relcount <=0)
+-			DoneAction(2,this);
+-			
++		
++		// Don't call DoneAction - keep synth alive for retriggering
++		// if (relcount <= 0)
++		//     DoneAction(2, this);
++		
+ 		this->relcount = relcount;
+ 		this->rellevel = rellevel;
+ 	}
+ }
++
+ void DWGPlucked_next(DWGPlucked *unit, int inNumSamples)
+ {
+ 
+@@ -78,6 +101,7 @@ void DWGPlucked_next(DWGPlucked *unit, int inNumSamples)
+ 	float c1 = ZIN0(4);
+ 	float c3 = std::max(ZIN0(5),(float)1e-9);
+ 	float *in = IN(6);
++	float release = ZIN0(7);
+ 	
+ 	unit->Loss.setcoeffs(freq,c1,c3);
+ 	float lossdelay = unit->Loss.groupdelay(freq,SAMPLERATE);
+@@ -101,7 +125,7 @@ void DWGPlucked_next(DWGPlucked *unit, int inNumSamples)
+ 		out[i] = PMAS + PMAS2;
+ 			
+ 	}
+-	unit->Release(trig,out,inNumSamples);
++	unit->Release(trig,out,inNumSamples,release,SAMPLERATE);
+ }
+ 
+ /////////////////////////////////////////
+@@ -130,6 +154,7 @@ void DWGPluckedStiff_next(DWGPluckedStiff *unit, int inNumSamples)
+ 	float c1 = ZIN0(4);
+ 	float c3 = std::max(ZIN0(5),(float)1e-9);
+ 	float *in = IN(6);
++	float release = ZIN0(7);
+ 	float B = ZIN0(8)/100000;
+ 
+ 	unit->disper.setcoeffs(freq,B);
+@@ -158,7 +183,7 @@ void DWGPluckedStiff_next(DWGPluckedStiff *unit, int inNumSamples)
+ 		out[i] = PMAS + PMAS2;
+ 			
+ 	}
+-	unit->Release(trig,out,inNumSamples);
++	unit->Release(trig,out,inNumSamples,release,SAMPLERATE);
+ }
+ 
+ /////////////////////////////////////////
+@@ -189,6 +214,7 @@ void DWGPlucked2_next(DWGPlucked2 *unit, int inNumSamples)
+ 	float c1 = ZIN0(4);
+ 	float c3 = std::max(ZIN0(5),(float)1e-9);
+ 	float *in = IN(6);
++	float release = ZIN0(7);
+ 	float mistune = ZIN0(8);
+ 	float mp = sc_clip(ZIN0(9),0,1);
+ 	float gc = ZIN0(10);
+@@ -236,7 +262,7 @@ void DWGPlucked2_next(DWGPlucked2 *unit, int inNumSamples)
+ 		out[i] =  OUT1 + OUT2;
+ 		
+ 	}
+-	unit->Release(trig,out,inNumSamples);
++	unit->Release(trig,out,inNumSamples,release,SAMPLERATE);
+ }
+ 
+ /////////////////////////////////////////
+diff --git a/source/OteyPianoUGens/OteyPiano.cpp b/source/OteyPianoUGens/OteyPiano.cpp
+index d81c924..7bf6806 100644
+--- a/source/OteyPianoUGens/OteyPiano.cpp
++++ b/source/OteyPianoUGens/OteyPiano.cpp
+@@ -122,6 +122,31 @@ Piano :: Piano(Unit * unit):unit(unit)
+ 
+ }
+ 
++bool Piano::updateParameters(float f, float velocity, float minr, float maxr, 
++	float amprl, float amprr, float rcore,
++	float minL, float maxL, float ampLl, float ampLr,
++	float mult_density_string, float mult_modulus_string,
++	float mult_impedance_bridge, float mult_impedance_hammer,
++	float mult_mass_hammer, float mult_force_hammer,
++	float mult_hysteresis_hammer, float mult_stiffness_exponent_hammer,
++	float position_hammer, float mult_loss_filter, float detune, int hammer_type) {
++
++    // Always clean up and reinitialize to apply all parameter changes
++    for (int k = 0; k < nstrings; k++) {
++        delete string[k];
++    }
++    delete hammer;
++
++    // Reinitialize with new parameters
++    init(f, this->Fs, velocity, minr, maxr, amprl, amprr, rcore,
++        minL, maxL, ampLl, ampLr, mult_density_string, mult_modulus_string,
++        mult_impedance_bridge, mult_impedance_hammer, mult_mass_hammer,
++        mult_force_hammer, mult_hysteresis_hammer, mult_stiffness_exponent_hammer,
++        position_hammer, mult_loss_filter, detune, hammer_type);
++
++    return true; // Always report that parameters were updated
++}
++
+ float linearmap(float s,float e,float ds,float de,float v){
+ 	return ((de-ds)*(v-s)/(e-s)) + ds;
+ }
+@@ -226,22 +251,35 @@ Piano :: ~Piano() {
+ 
+ struct OteyPianoStrings : public Unit
+ {
+-	Piano piano;
+-	OteyPianoStrings(Unit *unit):piano(unit){};
++    Piano piano;
++    float prev_gate;
++    
++    OteyPianoStrings(Unit *unit) : piano(unit), prev_gate(0.0) {};
+ };
++
+ struct OteyPiano : public Unit
+ {
+-	Piano  piano;
+-
+-	float c1b;
+-	float c3b;
+-	DWGReverb soundboard;
+-	Biquad shaping1;
+-	Biquad shaping2;
+-	Biquad shaping3;
+-	OteyPiano(Unit *unit);
+-	~OteyPiano(){};
++    Piano piano;
++    float prev_gate;
++    
++    float c1b;
++    float c3b;
++    DWGReverb soundboard;
++    Biquad shaping1;
++    Biquad shaping2;
++    Biquad shaping3;
++    
++    OteyPiano(Unit *unit) : piano(unit), prev_gate(0.0) {
++        // Rest of constructor
++        shaping1.setcoeffs(500.0,SAMPLERATE,10,Biquad::notch);
++        shaping2.setcoeffs(200.0,SAMPLERATE,1.0,Biquad::high);
++        shaping3.setcoeffs(800.0,SAMPLERATE,1.0,Biquad::low);
++        soundboard.setcoeffs(20,20,-1.0/4.0,1,SAMPLERATE);
++    }
++    
++    ~OteyPiano(){};
+ };
++
+ struct OteySoundBoard : public Unit
+ {
+ 	float c1b;
+@@ -337,23 +375,124 @@ void OteyPianoStrings_Dtor(OteyPianoStrings* unit) {
+ 
+ }
+ 
+-void OteyPianoStrings_next(OteyPianoStrings *unit, int inNumSamples) {
+-
+-	float * out = OUT(0);
+-    float velocity = ZIN0(1);
+-	float gate = ZIN0(2);
+-    if (gate > 0.0)
+-        unit->piano.trigger(velocity*10.0);
+-	unit->piano.go(out,inNumSamples);
+ 
++void OteyPiano_next(OteyPiano *unit, int inNumSamples) {
++    float * out = OUT(0);
++    
++    // Get parameters
++    int inpos = 0;
++    float freq = ZIN0(inpos++);
++    float velocity = ZIN0(inpos++);
++    float gate = ZIN0(inpos++);
++    float minr = ZIN0(inpos++);
++    float maxr = ZIN0(inpos++);
++    float ampr = ZIN0(inpos++);
++    float centerr = ZIN0(inpos++);
++    float rcore = ZIN0(inpos++);
++    float minl = ZIN0(inpos++);
++    float maxl = ZIN0(inpos++);
++    float ampl = ZIN0(inpos++);
++    float centerl = ZIN0(inpos++);
++    float rho = ZIN0(inpos++);
++    float young = ZIN0(inpos++);
++    float zb = ZIN0(inpos++);
++    float zh = ZIN0(inpos++);
++    float mh = ZIN0(inpos++);
++    float k = ZIN0(inpos++);
++    float alpha = ZIN0(inpos++);
++    float p = ZIN0(inpos++);
++    float ph = ZIN0(inpos++);
++    float loss = ZIN0(inpos++);
++    float detune = ZIN0(inpos++);
++    int hammer_type = ZIN0(inpos++);
++    
++    // Detect rising gate edge
++    bool gateRising = (gate > 0.0 && unit->prev_gate <= 0.0);
++    
++    if (gateRising) {
++        // Update parameters on gate rise
++        bool paramsChanged = unit->piano.updateParameters(
++            freq, velocity*10, minr, maxr, ampr, centerr, rcore,
++            minl, maxl, ampl, centerl, rho, young, zb, zh,
++            mh, k, alpha, p, ph, loss, detune, hammer_type
++        );
++        
++        if (!paramsChanged) {
++            unit->piano.trigger(velocity*10.0);
++        }
++    }
++    
++    // Store gate for next time
++    unit->prev_gate = gate;
++    
++    // Process audio and apply effects
++    unit->piano.go(out, inNumSamples);
++    float signal;
++    for(int i = 0; i < inNumSamples; i++){
++        signal = unit->soundboard.reverb(out[i]);
++        signal += unit->shaping1.filter(signal);
++        signal = unit->shaping2.filter(signal);
++        signal += unit->shaping3.filter(signal);
++        out[i] = signal;
++    }
+ }
+-OteyPiano::OteyPiano(Unit *unit):piano(unit){
+ 
+-	shaping1.setcoeffs(500.0,SAMPLERATE,10,Biquad::notch);
+-	shaping2.setcoeffs(200.0,SAMPLERATE,1.0,Biquad::high);
+-	shaping3.setcoeffs(800.0,SAMPLERATE,1.0,Biquad::low);//Biquad::biquadtype::low);
+-	soundboard.setcoeffs(20,20,-1.0/4.0,1,SAMPLERATE);
++void OteyPianoStrings_next(OteyPianoStrings *unit, int inNumSamples) {
++    float * out = OUT(0);
++    
++    // Get all input parameters
++    int inpos = 0;
++    float freq = ZIN0(inpos++);
++    float velocity = ZIN0(inpos++);
++    float gate = ZIN0(inpos++);
++    float minr = ZIN0(inpos++);
++    float maxr = ZIN0(inpos++);
++    float amprl = ZIN0(inpos++);
++    float amprr = ZIN0(inpos++);
++    float rcore = ZIN0(inpos++);
++    float minl = ZIN0(inpos++);
++    float maxl = ZIN0(inpos++);
++    float ampll = ZIN0(inpos++);
++    float amplr = ZIN0(inpos++);
++    float rho = ZIN0(inpos++);
++    float young = ZIN0(inpos++);
++    float zb = ZIN0(inpos++);
++    float zh = ZIN0(inpos++);
++    float mh = ZIN0(inpos++);
++    float k = ZIN0(inpos++);
++    float alpha = ZIN0(inpos++);
++    float p = ZIN0(inpos++);
++    float ph = ZIN0(inpos++);
++    float loss = ZIN0(inpos++);
++    float detune = ZIN0(inpos++);
++    int hammer_type = ZIN0(inpos++);
++    
++    // Detect rising gate edge
++    bool gateRising = (gate > 0.0 && unit->prev_gate <= 0.0);
++    
++    if (gateRising) {
++        // On rising gate edge, try to update parameters
++        bool paramsChanged = unit->piano.updateParameters(
++            freq, velocity*10, minr, maxr, amprl, amprr, rcore,
++            minl, maxl, ampll, amplr, rho, young, zb, zh,
++            mh, k, alpha, p, ph, loss, detune, hammer_type
++        );
++        
++        // If parameters didn't significantly change (no reinitialization),
++        // just trigger the hammer
++        if (!paramsChanged) {
++            unit->piano.trigger(velocity*10.0);
++        }
++        // No need to trigger if we reinitialized, as init includes velocity
++    }
++    
++    // Store gate for next time
++    unit->prev_gate = gate;
++    
++    // Process audio
++    unit->piano.go(out, inNumSamples);
+ }
++
+ void OteyPiano_Ctor(OteyPiano* unit) {
+ 	int inpos=0;
+ 	float freq = ZIN0(inpos++);
+@@ -394,44 +533,6 @@ void OteyPiano_Dtor(OteyPiano* unit) {
+ 	unit->~OteyPiano();
+ }
+ 
+-void OteyPiano_next(OteyPiano *unit, int inNumSamples) {
+-
+-	float * out = OUT(0);
+-    float velocity = ZIN0(1);
+-	float gate = ZIN0(2);
+-    if (gate > 0.0)
+-        unit->piano.trigger(velocity*10.0);
+-	unit->piano.go(out,inNumSamples);
+-	float signal;
+-	for(int i = 0; i < inNumSamples; i++){
+-		signal = unit->soundboard.reverb(out[i]);
+-		signal += unit->shaping1.filter(signal);
+-		signal = unit->shaping2.filter(signal);
+-		signal += unit->shaping3.filter(signal);
+-		out[i] = signal;
+-	}
+-    /*
+-	if(gate == 0.0){
+-		int relcount = unit->relcount;
+-		float rellevel = unit->rellevel;
+-		float rellevelstep = unit->rellevelstep;
+-		
+-		for(int i=0; i<inNumSamples; i++){
+-			if(relcount > 0){
+-				rellevel -= rellevelstep;
+-				relcount--;
+-			}
+-			out[i] *=rellevel;
+-		}
+-		if(relcount <=0)
+-			DoneAction(2,unit);
+-			
+-		unit->relcount = relcount;
+-		unit->rellevel = rellevel;
+-	}
+-    */
+-}
+-
+ PluginLoad(OteyPianoStrings){
+ 	ft = inTable;
+ 	DefineDtorUnit(OteyPiano);
+diff --git a/source/OteyPianoUGens/piano.h b/source/OteyPianoUGens/piano.h
+index 7c320c5..f0147e4 100644
+--- a/source/OteyPianoUGens/piano.h
++++ b/source/OteyPianoUGens/piano.h
+@@ -9,8 +9,6 @@ float TUNE[3] = { 0, 1, -1 };
+ #include "reverb.h"
+ #include "hammer.h"
+ 
+-
+-
+ #define nlongres 8
+ #include "SC_PlugIn.h"
+ InterfaceTable *ft;
+@@ -22,27 +20,24 @@ class Piano {
+   Piano(Unit * unit=0);
+   ~Piano();
+ 
+- void init(float f, float Fs, float velocity, float minr,float maxr,float ampr,float centerr, float mult_radius_core_string, float minL,float maxL,float ampL,float centerL, float mult_density_string, float mult_modulus_string, float mult_impedance_bridge, float mult_impedance_hammer, float mult_mass_hammer, float mult_force_hammer, float mult_hysteresis_hammer, float mult_stiffness_exponent_hammer, float position_hammer, float mult_loss_filter,float detune,int hammer_type=1);
++  void init(float f, float Fs, float velocity, float minr, float maxr, float ampr, float centerr, float mult_radius_core_string, float minL, float maxL, float ampL, float centerL, float mult_density_string, float mult_modulus_string, float mult_impedance_bridge, float mult_impedance_hammer, float mult_mass_hammer, float mult_force_hammer, float mult_hysteresis_hammer, float mult_stiffness_exponent_hammer, float position_hammer, float mult_loss_filter, float detune, int hammer_type=1);
++
++  // Add the new method here
++  bool updateParameters(float f, float velocity, float minr, float maxr, 
++                        float amprl, float amprr, float rcore,
++                        float minL, float maxL, float ampLl, float ampLr,
++                        float mult_density_string, float mult_modulus_string,
++                        float mult_impedance_bridge, float mult_impedance_hammer,
++                        float mult_mass_hammer, float mult_force_hammer,
++                        float mult_hysteresis_hammer, float mult_stiffness_exponent_hammer,
++                        float position_hammer, float mult_loss_filter, float detune, int hammer_type=1);
+ 
+   long go(float *out, int samples);
+   float getResampleRatio();
+   void trigger(float v);
+ 
+-	Unit * unit;
+-	/*
+-	void* operator new(size_t sz, World* wd){//, InterfaceTable * ft) {
+-		return RTAlloc(wd, sizeof(Piano));
+-	}
+-
+-	//use stored world to sort this
+-	void operator delete(void* pObject) {
+-
+-		Piano * lpc = (Piano*)pObject;
+-		//InterfaceTable * ft= lpc->ft;
+-
+-		RTFree(lpc->world, (Piano*)pObject);
+-	}*/
+-	
++  Unit * unit;
++  
+   void* operator new(size_t sz){
+ 		return RTAlloc(gWorld, sizeof(Piano));
+ 	}
+@@ -70,4 +65,4 @@ class Piano {
+   //Filter shaping3;
+ };
+ 
+-#endif
++#endif
+\ No newline at end of file
