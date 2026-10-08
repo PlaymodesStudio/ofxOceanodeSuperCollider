@@ -433,8 +433,10 @@ NamedControls.
 ### SynthDef regeneration
 
 If you change `kMaxSlots`, `kMaxChans`, or `kMaxParams`, you must re-evaluate
-`dyngen.scd` in SuperCollider, copy the printed hash table into
-`scDynGenNode.cpp`, and re-deploy the compiled SynthDefs.
+`dyngen.scd` (next to this file) in SuperCollider, copy the printed hash table
+into `src/nodes/scDynGenNode.cpp`, and re-deploy the compiled SynthDefs with
+`deploy_dyngen.sh`, which copies them to each app's
+`data/Supercollider/Synthdefs/Defaults/dyngen/`.
 
 ---
 
