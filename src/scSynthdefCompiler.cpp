@@ -42,6 +42,24 @@ std::string describe(const scSynthdefCompiler::Target& target){
     return text;
 }
 
+// A rotating arc, as tall as a line of text, at the cursor.
+void drawSpinner(){
+    const float radius = ImGui::GetTextLineHeight() * 0.5f;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 centre(pos.x + radius, pos.y + radius);
+    const float start = ofGetElapsedTimef() * 6.0f;
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->PathClear();
+    constexpr int segments = 24;
+    for(int i = 0; i <= segments; i++){
+        const float angle = start + (float)i / segments * 1.5f * (float)M_PI;
+        drawList->PathLineTo(ImVec2(centre.x + std::cos(angle) * (radius - 1.5f),
+                                    centre.y + std::sin(angle) * (radius - 1.5f)));
+    }
+    drawList->PathStroke(ImGui::GetColorU32(ImGuiCol_Text), 0, 2.5f);
+    ImGui::Dummy(ImVec2(radius * 2.0f, radius * 2.0f));
+}
+
 // The ERROR line sclang posted and the line after it, else the log's tail.
 std::string summarizeLog(const std::string& logPath){
     std::ifstream log(logPath);
@@ -112,10 +130,13 @@ void scSynthdefCompiler::finish(const std::string& defName, Result result){
     for(auto& waiter : waiters) waiter.callback(result);
 }
 
-bool scSynthdefCompiler::isSettled(const Job& job) const {
-    return ofGetElapsedTimef() - job.lastRequestTime >= settleSeconds
-        && ofGetFrameNum() > job.lastRequestFrame
-        && !ImGui::IsMouseDown(0);
+bool scSynthdefCompiler::isSettled(Job& job) const {
+    if(!job.shown){
+        job.shown = ofGetElapsedTimef() - job.lastRequestTime >= settleSeconds
+            && ofGetFrameNum() > job.lastRequestFrame
+            && !ImGui::IsMouseDown(0);
+    }
+    return job.shown;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -421,6 +442,8 @@ void scSynthdefCompiler::drawPopups(){
             for(auto& defName : declined) finish(defName, Result::Declined);
         }
     }else if(busy){
+        drawSpinner();
+        ImGui::SameLine();
         ImGui::Text("Compiling %s ...", describe(busy->target).c_str());
         if(pending > 1) ImGui::TextDisabled("%d more waiting", pending - 1);
     }else{

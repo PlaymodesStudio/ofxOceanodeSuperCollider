@@ -66,6 +66,9 @@ private:
         uint64_t lastRequestFrame = 0;
         float lastRequestTime = 0;
         float loadStartTime = 0;
+        // Listed in the popup: from then on it stays there, whatever the mouse
+        // does (pressing a button in the popup must not hide it again).
+        bool shown = false;
     };
 
     struct Paths {
@@ -85,8 +88,9 @@ private:
     void startNextBuild();
     void finishBuild(BuildResult result);
     void finish(const std::string& defName, Result result);
-    // Asking jobs whose last request is old enough and not mid-drag
-    bool isSettled(const Job& job) const;
+    // Ready to be listed: already shown, or its last request is old enough
+    // and the mouse is up (not mid-drag on N Chan).
+    bool isSettled(Job& job) const;
 
     const Paths& getPaths();
     void buildSourceIndex();
