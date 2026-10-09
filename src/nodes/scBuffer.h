@@ -52,6 +52,8 @@ public:
 		addOutputParameter(sampleRates.set("Sample Rate", {0}, {0}, {FLT_MAX}));
 		addParameter(select.set("Select", {0}, {0}, {INT_MAX}));
 		addOutputParameter(selectOut.set("Select Out", {0}, {0}, {INT_MAX}));
+		// Older presets used Order to choose one sample from Buffer.
+		addParameter(order.set("Order", 0, 0, INT_MAX));
 		
 		addInspectorParameter(filenamesList.set([this](){
 			int i = 0;
@@ -95,13 +97,16 @@ public:
 			vector<int>   newIndices;
 			vector<float> newDurations;
 			vector<float> newSampleRates;
+			loadedIndices.clear();
 			durations.clear();
 			sampleRates.set(vector<float>());
 			
 			if(s.empty()){
+				files.clear();
 				buffersParam = newIndices;
 				durationsMs  = newDurations;
 				sampleRates  = newSampleRates;
+				updateSelectedBuffers();
 				return;
 			}
 			
@@ -124,6 +129,7 @@ public:
 				buffersParam = newIndices;
 				durationsMs  = newDurations;
 				sampleRates  = newSampleRates;
+				updateSelectedBuffers();
 				return;
 			}
 			
@@ -208,40 +214,24 @@ public:
 			}
 			
 			// ---- publish outputs
-			buffersParam = newIndices;
+			loadedIndices = std::move(newIndices);
+			buffersParam = loadedIndices;
 			durationsMs  = newDurations;
 			sampleRates  = newSampleRates;
+			updateSelectedBuffers();
 		});
 		
-		listener4 = select.newListener([this](vector<int> &selection){
-			vector<int> selectedBuffers;
-			
-			// For each selected sample index
-			for(int sampleIdx : selection){
-				// Find which buffers correspond to this sample
-				int currentSample = 0;
-				int bufferIdx = 0;
-				
-				for(auto &file : files){
-					int numChannels = file.second;
-					
-					if(currentSample == sampleIdx){
-						// Add all channels of this sample
-						for(int ch = 0; ch < numChannels; ch++){
-							if(bufferIdx + ch < buffersParam.get().size()){
-								selectedBuffers.push_back(buffersParam.get()[bufferIdx + ch]);
-							}
-						}
-						break;
-					}
-					
-					currentSample++;
-					bufferIdx += numChannels;
-				}
-			}
-			
-			selectOut = selectedBuffers;
+		listener4 = select.newListener([this](vector<int> &){ updateSelectedBuffers(); });
+		orderListener = order.newListener([this](int &){
+			if(legacyBufferMode) updateSelectedBuffers();
 		});
+	}
+
+	void loadBeforeConnections(ofJson &json) override {
+		// Num_S identifies the former SC Buffer model. Its Buffer output was
+		// selected by Order; the current model publishes all loaded buffers.
+		legacyBufferMode = json.contains("Num_S");
+		updateSelectedBuffers();
 	}
 	
 	void macroSave(ofJson &json, string presetFolderPath) override {
@@ -354,6 +344,28 @@ public:
 	}
 	
 private:
+	void updateSelectedBuffers() {
+		vector<int> selectedBuffers;
+		const vector<int> selection = legacyBufferMode ? vector<int>{order.get()} : select.get();
+		for(int sampleIdx : selection){
+			int currentSample = 0;
+			int bufferIdx = 0;
+			for(const auto &file : files){
+				if(currentSample == sampleIdx){
+					for(int ch = 0; ch < file.second; ch++){
+						if(bufferIdx + ch < loadedIndices.size())
+							selectedBuffers.push_back(loadedIndices[bufferIdx + ch]);
+					}
+					break;
+				}
+				currentSample++;
+				bufferIdx += file.second;
+			}
+		}
+		selectOut = selectedBuffers;
+		if(legacyBufferMode) buffersParam = selectedBuffers;
+	}
+
 
 	// Resolve any path format to absolute path
 	string resolveToAbsolutePath(const string& inputPath) {
@@ -531,10 +543,14 @@ private:
 	ofEventListener listener2;
 	ofEventListener listener3;
 	ofEventListener listener4;
+	ofEventListener orderListener;
 	ofEventListener unembedListener;
 	ofParameter<vector<int>> select;
 	ofParameter<vector<int>> selectOut;
+	ofParameter<int> order;
 	ofParameter<vector<int>> buffersParam;
+	vector<int> loadedIndices;
+	bool legacyBufferMode = false;
 	ofParameter<vector<float>> durationsMs;
 	ofParameter<vector<float>> sampleRates;
 	vector<float> durations;

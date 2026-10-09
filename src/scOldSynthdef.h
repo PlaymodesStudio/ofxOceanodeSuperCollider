@@ -89,6 +89,8 @@ private:
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
 
     vector<ofParameter<vector<int>>> buffers;
+    vector<ofParameter<vector<int>>> legacyBuffers;
+    bool syncingLegacyBuffer = false;
 };
 
 #endif /* scOldSynthdef_h */

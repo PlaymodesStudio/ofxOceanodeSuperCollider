@@ -22,10 +22,16 @@ void scOldSynthdef::setup(){
     numChannels = description.numChannels;
     
     buffers.resize(description.numBuffers);
+    legacyBuffers.resize(description.numBuffers);
     for(int i = 0; i < buffers.size(); i++){
         string paramName = "Bufnum";
         if(i > 0) paramName += ofToString(i+1);
         addParameter(buffers[i].set(paramName, {0}, {0}, {INT_MAX}), ofxOceanodeParameterFlags_DisableOutConnection);
+        // Older presets saved the same input as Buf (Buf2, etc.). Keep the
+        // name as an alias while still sending the actual bufnum control.
+        string legacyName = "Buf";
+        if(i > 0) legacyName += ofToString(i+1);
+        addParameter(legacyBuffers[i].set(legacyName, {0}, {0}, {INT_MAX}), ofxOceanodeParameterFlags_DisableOutConnection);
         listeners.push(buffers[i].newListener([this, i, paramName](vector<int> &buffs){
             for(auto synthServer : synths){
                 if(buffs.size() != 0){
@@ -33,6 +39,17 @@ void scOldSynthdef::setup(){
                     else synthServer.second->set(ofToLower(paramName), buffs);
                 }
             }
+            if(!syncingLegacyBuffer){
+                syncingLegacyBuffer = true;
+                legacyBuffers[i] = buffs;
+                syncingLegacyBuffer = false;
+            }
+        }));
+        listeners.push(legacyBuffers[i].newListener([this, i](vector<int> &buffs){
+            if(syncingLegacyBuffer) return;
+            syncingLegacyBuffer = true;
+            buffers[i] = buffs;
+            syncingLegacyBuffer = false;
         }));
     }
     
