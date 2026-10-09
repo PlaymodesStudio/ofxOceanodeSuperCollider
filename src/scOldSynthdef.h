@@ -67,6 +67,12 @@ public:
 
     void resendParametersForNRT() override { resendParams.notify(); }
     ofEvent<void> resendParams;
+    // Like Mixer Pro, "Encapsulate All" on an old polymixer only takes its audio inputs
+    bool canEncapsulateSubgraphFrom(ofxOceanodeAbstractParameter& parameter) const override {
+        return ofToLower(description.name).rfind("polymixer", 0) != 0 || std::any_of(inputs.begin(), inputs.end(), [&](const ofParameter<nodePort>& input) {
+            return input.getName() == parameter.getName();
+        });
+    }
 
     static oldSynthdefDesc readAndCreateSynthdef(string file);
 

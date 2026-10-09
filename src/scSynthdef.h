@@ -76,6 +76,12 @@ public:
     bool isNRTStemPoint() const override {
         return synthdefName.rfind("PolyMixer", 0) == 0 || synthdefName.rfind("Mixer", 0) == 0;
     }
+    // Like Mixer Pro, "Encapsulate All" on a mixer SynthDef only takes its audio inputs
+    bool canEncapsulateSubgraphFrom(ofxOceanodeAbstractParameter& parameter) const override {
+        return !isNRTStemPoint() || std::any_of(inputs.begin(), inputs.end(), [&](const ofParameter<nodePort>& input) {
+            return input.getName() == parameter.getName();
+        });
+    }
     ofEvent<void> resendParams;
     ofEvent<std::pair<ofxSCServer*, int>> resetAudioRateBusAssignments;
     ofEvent<std::tuple<ofxSCServer*, scNode*, int>> setAudioRateBusAssignment;
