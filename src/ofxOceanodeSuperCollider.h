@@ -21,7 +21,7 @@
 //#include "scOut.h"
 #include "nodes/scTonal.h"
 #include "nodes/scBuffer.h"
-#include "nodes/scWavetableBuffer.h"
+#include "nodes/scWavetable.h"
 #include "nodes/scRecbufHold.h"
 #include "nodes/scBufferScope.h"
 #include "nodes/scFreezer.h"
@@ -42,7 +42,6 @@
 #include "nodes/scFastEnvelopeFollower.h"
 #include "nodes/scFM7.h"
 #include "nodes/scFM7Drone.h"
-#include "nodes/scDoubleBuffer.h"
 #if OFXOCEANODESC_HAS_TIMELINE
 #include "nodes/timelineWaveTrack.h"
 #endif // OFXOCEANODESC_HAS_TIMELINE
@@ -154,7 +153,7 @@ static void registerModels(ofxOceanode &o){
 
 	o.registerModel<scInfo>("SuperCollider", controller->getServers());
 	o.registerModel<scBuffer>("SuperCollider", controller->getServers());
-	o.registerModel<scWavetableBuffer>("SuperCollider", controller->getServers());
+	o.registerModel<scWavetable>("SuperCollider", controller->getServers());
 	o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
 	o.registerModel<scRecbufHold>("SuperCollider", controller->getServers());
 	o.registerModel<scBufferAllocator>("SuperCollider", controller->getServers());
@@ -177,7 +176,6 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scFastEnvelopeFollower>("SuperCollider");
 	o.registerModel<scFM7>("SuperCollider");
 	o.registerModel<scFM7Drone>("SuperCollider");
-	o.registerModel<scDoubleBuffer>("SuperCollider", controller->getServers());
 #if OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<timelineWaveTrack>("SuperCollider", controller->getServers());
 #endif // OFXOCEANODESC_HAS_TIMELINE
