@@ -1,42 +1,51 @@
-// rave.scd — RAVE neural audio timbre transfer SynthDefs
+// rave.scd — SynthDefs for the RAVE node (nn.ar neural audio models)
 //
-// Uses NNUGen.ar directly with fixed scalar params so the SynthDef can be
-// compiled WITHOUT having any model loaded (no sclang model store needed).
+// One SynthDef per model shape: rave_<inputs>_<outputs>, inputs 1..4,
+// outputs 1..8. The C++ node reads the shape of the model's method from the
+// info file nn.ar writes on /nn_load and picks the matching SynthDef.
 //
-// Model slot:  always integer 0  (C++ always loads to slot 0)
-// Method:      index 0           (RAVE "forward" method)
-// Buffer size: -1                (use model's native buffer size)
-// Channels:    1..8              (set N Chan on the C++ node to match model output)
+// Model slot, method and buffer size are scalar (.ir) controls, set as
+// /s_new arguments: NNUGen reads them once, in its constructor, so a SynthDef
+// does not have to be compiled per slot.
 //
-// After evaluating this file in SuperCollider:
-//   Copy CompiledSynthdefs/rave/ to <appdata>/Supercollider/Synthdefs/rave/
-//   The server will load them via /d_loadDir on startup.
+//   model    nn.ar model slot (the id sent with /cmd /nn_load)
+//   method   method index inside the model ("forward" for RAVE)
+//   bufsize  -1 = the model's own buffer size; larger powers of two trade
+//            latency for fewer dropouts
+//   warmup   silent passes run on the compute thread before audio comes out
+//   inputgain  gain into the model; levels: gain after it
+//   limit    1 = peak limiter at -0.45 dBFS after levels (10 ms lookahead)
+//
+// Writes CompiledSynthdefs/Rave/ next to this file. Copy that folder to
+// <app>/bin/data/Supercollider/Synthdefs/Defaults/Rave/ to deploy it.
 
 (
-var d;
+var d, subDir;
 if(thisProcess.nowExecutingPath.notNil) {
     d = thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs";
 } {
     d = Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs";
 };
+subDir = d +/+ "Rave";
 File.mkdir(d);
-File.mkdir(d +/+ "rave");
+File.mkdir(subDir);
 
-(1..8).do({ |n|
-    SynthDef(("rave" ++ n).asSymbol, {
-        arg in = 0, out = 0;
-        // Single scalar levels so channel count doesn't need to match amp size
-        var levels = \levels.kr(1.0, 1/30);
-        var sig = In.ar(in, 1);  // RAVE models take mono input
-        // NNUGen arguments: modelSlot=0, methodIdx=0 (forward),
-        //   bufSize=-1 (model native), numOutputs=n, warmup=0, debug=0, batches=1
-        var processed = NNUGen.ar(0, 0, -1, n, 0, 0, 1, sig);
-        processed = LeakDC.ar(processed);   // remove DC offset
-        processed = processed.tanh;          // safety limiting
-        Out.ar(out, processed * levels);
-    }).writeDefFile(d +/+ "rave");
+(1..4).do({ |numIn|
+    (1..8).do({ |numOut|
+        SynthDef(("rave_" ++ numIn ++ "_" ++ numOut).asSymbol, {
+            var levels = \levels.kr(1.0).lag(1/30);
+            var limit = \limit.kr(1).lag(1/30);
+            var sig = In.ar(\in.kr(0), numIn) * \inputgain.kr(1.0).lag(1/30);
+            sig = NNUGen.ar(\model.ir(0), \method.ir(0), \bufsize.ir(-1), numOut,
+                \warmup.ir(2), 0, 1, sig.asArray);
+            // Models often generate far above full scale whatever the input
+            // level (+17 dBFS measured): limit after the output level
+            sig = Sanitize.ar(LeakDC.ar(sig)) * levels;
+            sig = (sig * (1 - limit)) + (Limiter.ar(sig, 0.95, 0.01) * limit);
+            Out.ar(\out.kr(0), sig);
+        }).writeDefFile(subDir);
+    });
 });
 
-("RAVE SynthDefs (rave1..rave8) compiled to: " + (d +/+ "rave")).postln;
-("Copy that directory to <appdata>/Supercollider/Synthdefs/rave/").postln;
+("RAVE SynthDefs written to: " + subDir).postln;
 )

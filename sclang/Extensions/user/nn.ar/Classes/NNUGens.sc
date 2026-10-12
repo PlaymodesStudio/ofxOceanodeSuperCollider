@@ -24,12 +24,19 @@ NNUGen : MultiOutUGen {
 		inputs = inputs.asArray;
 
 
-		case { inputs.rank == 1 && {inputs.size == this.numInputs} } {
-			nBatches = 1;
+		case
+		// flat list of inputs:
+		{ inputs.rank == 1} {
+			case
+			{ inputs.size == this.numInputs } { nBatches = 1 }
+			{ this.numInputs == 1 } { nBatches = inputs.size }
+			{ inputs.size % this.numInputs == 0 } {
+				// support flat list of inputs (e.g. for \elastic NodeProxies)
+				nBatches = inputs.size.div(this.numInputs);
+				inputs = inputs.clump(this.numInputs).lace;
+			}
 		}
-		{ inputs.rank == 1 && {this.numInputs == 1} } {
-			nBatches = inputs.size;
-		}
+		// nested lists:
 		{ inputs.rank == 2 && {inputs.every{ |b| b.size == this.numInputs }} } {
 			nBatches = inputs.size;
 			// ugen wants interlaced latents:
@@ -40,6 +47,7 @@ NNUGen : MultiOutUGen {
 				.format(this.name, this.numInputs, inputs.shape)).throw
 		};
 
+
 		attrParams = Array(attributes.size);
 		attributes.pairsDo { |attrName, attrValue|
 			attrParams.add(model.attrIdx(attrName));
@@ -47,14 +55,11 @@ NNUGen : MultiOutUGen {
 		};
 
 		outputs = NNUGen.ar(model.idx, idx, bufferSize, this.numOutputs, warmup, debug, nBatches, inputs ++ attrParams);
-		// ugen outputs interlaced batched outputs: unlace
-		// e.g. a0, b0, a1, b1 ... -> unlace to [[a0,a1], [b0,b1]]
-		if (nBatches > 1) {
-			outputs = outputs.unlace(nBatches);
-			if (this.numOutputs == 1) {
-				// flat [[a0], [b0]] to [a0, b0]
-				outputs = outputs.flatten;
-			}
+		// ugen outputs is not interlaced batches: clump
+		// e.g. [a0, a1, b0, b1] -> clump to [[a0,a1], [b0,b1]]
+		// note that if numOutputs is 1 [a0,b0] doesn't need to be clumped
+		if (nBatches > 1 && {this.numOutputs > 1}) {
+			outputs = outputs.clump(this.numOutputs);
 		};
 		^outputs
 	}

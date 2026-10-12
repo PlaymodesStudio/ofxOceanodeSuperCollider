@@ -26,6 +26,10 @@ NNModel {
 	*load { |path, id(-1), server(Server.default), action|
 		var loadMsg, infoFile, model;
 		path = path.standardizePath;
+		if (server.addr.hasBundle) {
+			// in bundles, file reading would executed before async command is done
+			Error("NN.load can't be used in Server.makeBundle functions").throw
+		};
 		if (server.serverRunning.not) {
 			Error("server not running").throw
 		};
@@ -33,20 +37,26 @@ NNModel {
 			Error("model file '%' not found".format(path)).throw
 		};
 
-		infoFile = infoFile ?? {PathName.tmp +/+ "nn-sc-" ++ UniqueID.next ++ ".yaml"};
+		infoFile = NN.tmpPath +/+ "nn-sc-" ++ UniqueID.next ++ ".yaml";
 		loadMsg = NN.loadMsg(id, path, infoFile);
 
 		model = super.newCopyArgs(server);
 
 		forkIfNeeded {
 			server.sync(bundles: [loadMsg]);
+
 			// server writes info file: read it
+			if (File.exists(infoFile).not) {
+				Error("NNModel.load failed for '%'. Please see the above log for errors from scsynth.".format(path)).throw;
+			};
+
 			protect { 
+				NN.debugPrint("NNModel: reading '%'", infoFile);
 				model.initFromFile(infoFile);
 				action.(model)
 			} {
 				File.delete(infoFile);
-			}
+			};
 		};
 
 		^model;
@@ -65,6 +75,7 @@ NNModel {
 
 	initFromFile { |infoFile|
 		var info = NNModelInfo.fromFile(infoFile);
+		NN.debugDo { info.describe };
 		this.initFromInfo(info);
 		NN.prCacheInfo(info);
 	}
@@ -85,7 +96,7 @@ NNModel {
 		var msg = this.dumpInfoMsg(outFile);
 		this.prErrIfNoServer("dumpInfo");
 		if (server.serverRunning.not) { Error("server not running").throw };
-		forkIfNeeded { server.sync(bundles:[msg]) }
+		server.sendMsg(*msg);
 	}
 
 	describe {
@@ -99,19 +110,19 @@ NNModel {
 
 	prErrIfNoServer { |funcName|
 	if (server.isNil) {
-		Error("%: NNModel(%) is not bound to a server, can't dumpInfo. Is it a NRT model?"
+		Error("NNModel(%) is not bound to a server, can't %. Is it a NRT model?"
 			.format(funcName, this.key)).throw
 		};
 	}
 }
 
 NNModelInfo {
-	var <idx, <path, <minBufferSize, <methods, <attributes;
+	var <idx, <path, <minBufferSize, <sampleRate, <methods, <attributes;
 	*new {}
 
 	*fromFile { |infoFile|
 		if (File.exists(infoFile).not) {
-			Error("NNModelInfo: can't load info file '%'".format(infoFile)).throw;
+			Error("NNModelInfo: file '%' does not exist".format(infoFile)).throw;
 		} {
 			var yaml = File.readAllString(infoFile).parseYAML[0];
 			^super.new.initFromDict(yaml)
@@ -124,6 +135,7 @@ NNModelInfo {
 		idx = yaml["idx"].asInteger;
 		path = yaml["modelPath"];
 		minBufferSize = yaml["minBufferSize"].asInteger;
+		sampleRate = yaml["sampleRate"].asInteger;
 		methods = yaml["methods"].collect { |m, n|
 			var name = m["name"].asSymbol;
 			var inDim = m["inDim"].asInteger;
@@ -135,6 +147,7 @@ NNModelInfo {
 
 	describe {
 		"path: %".format(this.path).postln;
+		"sampleRate: %".format(this.sampleRate).postln;
 		"minBufferSize: %".format(this.minBufferSize).postln;
 		this.methods.do { |m|
 			"- method %: % ins, % outs".format(m.name, m.numInputs, m.numOutputs).postln;

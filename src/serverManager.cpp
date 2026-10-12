@@ -328,11 +328,20 @@ void serverManager::setAudioDeviceNames(const std::string& outputDeviceName, con
     }
 }
 
+bool serverManager::isInsideSynthdefRoot(const std::string& folder){
+    const std::string root = ofFilePath::addTrailingSlash(ofToDataPath(SYNTHDEF_DIRECTORY, true));
+    return ofFilePath::addTrailingSlash(folder).rfind(root, 0) == 0;
+}
+
 void serverManager::requireSynthdefFolder(const std::string& folder){
     if(folder.empty() || requiredSynthdefFolders.count(folder)) return;
     requiredSynthdefFolders.insert(folder);
-    // Already loaded with everything else, or loaded by loadDefs() at boot.
-    if(!preferences.loadOnPreset || server == nullptr || !initialized) return;
+    // Loaded by loadDefs() at boot, or already loaded with everything else
+    // when the folder is inside the data folder and nothing is deferred to
+    // preset load. A folder outside it (the addon's own compiled SynthDefs
+    // during development) is never part of that scan.
+    if(server == nullptr || !initialized) return;
+    if(!preferences.loadOnPreset && isInsideSynthdefRoot(folder)) return;
     ofxOscMessage m;
     m.setAddress("/d_loadDir");
     m.addStringArg(folder);
@@ -370,6 +379,8 @@ void serverManager::loadDefs(bool loadAll){
             }
         };
         collect(root);
+        for(const auto& folder : requiredSynthdefFolders)
+            if(!isInsideSynthdefRoot(folder)) folders.insert(folder);
     }else{
         // /d_loadDir recurses: Defaults brings its subfolders (Defaults/dyngen
         // included) along.

@@ -1,6 +1,9 @@
 NN {
-	classvar rtModelStore, rtModelsInfo;
+	classvar <>tmpPath;
+	classvar rtModelStore, rtModelsInfo, isVerbose;
 	*initClass {
+		tmpPath = PathName.tmp;
+		isVerbose = false;
 		rtModelStore = IdentityDictionary[];
 		// store model info by path
 		rtModelsInfo = IdentityDictionary[];
@@ -22,7 +25,7 @@ NN {
 		var cache = if(this.isNRT, this.nrtModelsInfo, rtModelsInfo);
 		var path = info.path.asSymbol;
 		if (cache[path].notNil) {
-			"NN: overriding cached info for '%'".format(path).warn;
+			NN.debugWarn("NN: overriding cached info for '%'", path)
 		};
 		cache[path] = info;
 	}
@@ -55,7 +58,8 @@ NN {
 			this.prPutModel(key, model);
 		} {
 			model = NNModel.load(path, id, server, action: { |m|
-			this.prPutModel(key, m);
+				this.prPutModel(key, m);
+				"% loaded".format(m).postln;
 				// call action after adding to registry: in case action needs key
 				action.value(m);
 			});
@@ -69,9 +73,7 @@ NN {
 	*describeAll { this.models.do(_.describe) }
 
 	*dumpInfo { |outFile, server(Server.default)|
-		forkIfNeeded {
-			server.sync(bundles:[this.dumpInfoMsg(-1, outFile)])		
-		}
+		server.sendMsg(*this.dumpInfoMsg(-1, outFile))
 	}
 
 	*loadMsg { |id, path, infoFile|
@@ -83,4 +85,26 @@ NN {
 		^["/cmd", "/nn_query", modelIdx ? -1, outFile ? ""]
 	}
 
+	*pluginVersion { |server(Server.default)|
+		if (server.serverRunning.not) {
+			Error("server not running").throw
+		};
+		server.sendMsg("/cmd", "/nn_version")
+	}
+
+	*debug { |verbose(true), server(Server.default)|
+		if (server.serverRunning.not) {
+			Error("server not running").throw
+		};
+		isVerbose = verbose;
+		// TODO: make debug persistent across server reboot
+		server.sendMsg("/cmd", "/nn_debug", verbose.asInteger);
+	}
+	*debugPrint { |msg ...args|
+		if (isVerbose) { msg.format(*args).postln }
+	}
+	*debugWarn { |msg ...args|
+		if (isVerbose) { msg.format(*args).warn }
+	}
+	*debugDo { |action| if (isVerbose, action) }
 }

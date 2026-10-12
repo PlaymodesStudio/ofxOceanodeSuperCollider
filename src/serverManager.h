@@ -163,6 +163,9 @@ public:
     scPreferences preferences;
     ofEvent<void> graphComputed;
 private:
+    // True for folders under the data SynthDef directory, which the full
+    // scan in loadDefs() already covers
+    static bool isInsideSynthdefRoot(const std::string& folder);
     void loadNRTSynthdefs();
     void prepareNodesForNRTCapture();
     
