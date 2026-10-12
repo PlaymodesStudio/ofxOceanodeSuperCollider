@@ -11,7 +11,7 @@
 //    3. Dynamic param count: only registered as many sliders as annotations.
 //    4. Open/Save + script dropdown (data/Supercollider/dyngenScripts/).
 //    5. Word-wrap view: toggle button in editor toolbar.
-//    6. AI code generation: "AI" toolbar button → Claude writes EEL2 via API.
+//    6. AI code generation: "AI" toolbar button → an LLM (via Requesty) writes EEL2.
 //       Set ANTHROPIC_API_KEY env var or write key to ~/.claude/api_key.
 //
 
@@ -100,30 +100,9 @@ void scDynGenNode::releaseSlot(int idx) {
 scDynGenNode::scDynGenNode() : scNode("DynGen") {
     description = "Live-coding EEL2 DSP node. Loads DynGen code, exposes dynamic parameters from //@param annotations, and supports fixed-channel multichannel DSP scripts.";
     std::memset(editorBuf, 0, sizeof(editorBuf));
-    std::memset(llmPromptBuf, 0, sizeof(llmPromptBuf));
     eel2StatusMsg = "Ready";
 
-    // ── Feature 6: load Anthropic API key ────────────────────────────────────
-    // Priority:
-    //   1. ANTHROPIC_API_KEY environment variable
-    //   2. <data>/anthropic_api_key.txt   (easiest — just drop the file in data/)
-    //   3. ~/.anthropic_api_key
-    auto tryReadKey = [&](const std::string& path) {
-        std::ifstream f(path);
-        if(f) { std::getline(f, llmApiKey); return !llmApiKey.empty(); }
-        return false;
-    };
-    const char* envKey = std::getenv("ANTHROPIC_API_KEY");
-    if(envKey && *envKey) {
-        llmApiKey = std::string(envKey);
-    } else if(!tryReadKey(ofToDataPath("anthropic_api_key.txt"))) {
-        tryReadKey(ofFilePath::getUserHomeDir() + "/.anthropic_api_key");
-    }
-    // Trim any trailing whitespace / newlines from the key
-    while(!llmApiKey.empty() && (llmApiKey.back() == '\n' ||
-                                  llmApiKey.back() == '\r' ||
-                                  llmApiKey.back() == ' '))
-        llmApiKey.pop_back();
+    setupAIAssistant();
 }
 
 scDynGenNode::~scDynGenNode() {
@@ -301,28 +280,8 @@ void scDynGenNode::update(ofEventArgs&) {
         if(r.bSuccess) saveScriptFile(r.filePath);
     }
 
-    // ── Feature 6: poll LLM future ────────────────────────────────────────────
-    if(llmPending.load() && llmFuture.valid()) {
-        if(llmFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            std::string result = llmFuture.get();
-            bool isError = (result.rfind("// Error:", 0) == 0 ||
-                            result.rfind("// API error", 0) == 0);
-            if(isError) {
-                llmStatusMsg = result;
-                llmHasError  = true;
-            } else {
-                std::strncpy(editorBuf, result.c_str(), kBufSize - 1);
-                editorBuf[kBufSize - 1] = '\0';
-                codeDirty            = true;
-                codeDirtyTimer       = 0.0f;
-                codeRequiresRecreate = true;   // force @init on new script
-                eel2StatusMsg        = "AI generated";
-                llmHasError          = false;
-            }
-            llmPending.store(false);
-            llmDone.store(true);
-        }
-    }
+    // ── Feature 6: apply finished AI requests ────────────────────────────────
+    ai.update();
 
     // ── Debounce code changes ─────────────────────────────────────────────────
     if(!codeDirty) return;
@@ -469,6 +428,7 @@ void scDynGenNode::presetSave(ofJson& json) {
         json["dyngen_p" + std::to_string(i)] = v;
     }
     json["dyngen_param_count"] = activeParamCount;
+    ai.save(json);
 }
 
 void scDynGenNode::presetRecallAfterSettingParameters(ofJson& json) {
@@ -476,6 +436,7 @@ void scDynGenNode::presetRecallAfterSettingParameters(ofJson& json) {
     // This runs after loadBeforeConnections has already set up the right
     // number of params and after Oceanode has set values from named keys,
     // so this is a belt-and-suspenders restore for renamed params.
+    ai.load(json);
     for(int i = 0; i < activeParamCount; i++) {
         std::string key = "dyngen_p" + std::to_string(i);
         if(json.contains(key) && json[key].is_array()) {
@@ -813,7 +774,7 @@ std::string scDynGenNode::buildDynGenSystemPrompt() {
     return
 R"SYSPROMPT(You are an EEL2 code generator for the DynGen node in Oceanode, a modular audio environment built on SuperCollider. DynGen executes EEL2 at audio rate inside a SC UGen.
 
-Output ONLY valid EEL2 code. No markdown, no code fences, no prose before or after. Start directly with //@param declarations, @init, or @sample.
+Output ONLY valid EEL2 code. No markdown, no code fences, no prose before or after, and never a trailing "..." or ellipsis. Start directly with //@param declarations, @init, or @sample.
 
 === CRITICAL CONSTRAINTS — violating any of these produces silence, explosions, or crashes ===
 1. num_ch is NEVER available (always 0). ALWAYS hardcode n (the channel count given in the request).
@@ -963,104 +924,41 @@ out0 = lin(mix, in(0), wet);
 )SYSPROMPT";
 }
 
-std::string scDynGenNode::callAnthropicAPI(const std::string& fullPrompt,
-                                            const std::string& systemPrompt,
-                                            const std::string& apiKey) {
-    try {
-
-        // Build request JSON using ofJson (nlohmann::json, always in OF)
-        ofJson requestBody = {
-            {"model",      "claude-sonnet-4-5"},
-            {"max_tokens", 2048},
-            {"system",     systemPrompt},
-            {"messages",   ofJson::array({{{"role", "user"}, {"content", fullPrompt}}})}
-        };
-        std::string bodyStr = requestBody.dump();
-
-        // Write body to a temp file so we don't have to shell-escape the JSON
-        std::string tmpPath = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp")
-                              + "/dyngen_api_req.json";
-        {
-            std::ofstream tf(tmpPath);
-            if(!tf.is_open()) return "// Error: cannot write temp file " + tmpPath;
-            tf << bodyStr;
+void scDynGenNode::setupAIAssistant() {
+    ofxOceanodeAIAssistant::Spec spec;
+    spec.title = "Write EEL2 code for DynGen with Requesty";
+    spec.subtitle = [this]() {
+        return "Using n=" + std::to_string(numChannels.get()) +
+               " channels (matches Num Channels setting on the node).";
+    };
+    spec.generateHint = "Describe the EEL2 effect, synth, or processor you want.";
+    spec.fixHint = "Describe the issue, or leave empty for a general fix.";
+    spec.pendingHint = "The result will replace the current script when ready.";
+    spec.readyMessage = "AI generated";
+    spec.popupSize = ImVec2(560, 330);
+    spec.systemPrompt = &scDynGenNode::buildDynGenSystemPrompt;
+    spec.buildPrompt = [this](const std::string& userPrompt, bool fixMode) {
+        const std::string n = std::to_string(numChannels.get());
+        if(fixMode) {
+            std::string issue = userPrompt.empty()
+                ? "Fix any bugs and make sure the script runs correctly."
+                : "Issue: " + userPrompt;
+            return "Fix this EEL2 script for n=" + n + " channels.\n\n"
+                   "Current code:\n" + std::string(editorBuf) + "\n\n" + issue;
         }
-
-        // Use curl (always on macOS) — runs in our std::async thread, no audio impact
-        std::string cmd =
-            "curl -s"
-            " -X POST https://api.anthropic.com/v1/messages"
-            " -H 'content-type: application/json'"
-            " -H 'x-api-key: " + apiKey + "'"
-            " -H 'anthropic-version: 2023-06-01'"
-            " -d @" + tmpPath +
-            " 2>&1";
-
-        FILE* pipe = popen(cmd.c_str(), "r");
-        if(!pipe) return "// Error: popen failed";
-
-        std::string respStr;
-        char buf[4096];
-        while(fgets(buf, sizeof(buf), pipe))
-            respStr += buf;
-        pclose(pipe);
-
-        // Clean up temp file
-        std::remove(tmpPath.c_str());
-
-        // Parse JSON response
-        ofJson obj = ofJson::parse(respStr);
-
-        // Surface API-level errors (auth failure, rate limit, etc.)
-        if(obj.contains("error"))
-            return "// API error: " + obj["error"].value("message", "unknown error");
-
-        auto& content = obj["content"];
-        if(!content.is_array() || content.empty())
-            return "// Error: unexpected response format";
-        return content[0].value("text", "");
-
-    } catch(const std::exception& e) {
-        return std::string("// Error: ") + e.what();
-    }
-}
-
-void scDynGenNode::requestLLMCode(const std::string& userPrompt) {
-    if(llmApiKey.empty()) {
-        llmStatusMsg = "// Error: no API key. Place key in data/anthropic_api_key.txt";
-        llmHasError  = true;
-        llmDone.store(true);
-        return;
-    }
-
-    llmPending.store(true);
-    llmDone.store(false);
-    llmHasError  = false;
-    llmStatusMsg = "Generating...";
-
-    // Capture everything needed before launching the thread (no this in thread)
-    int         n    = numChannels.get();
-    std::string sysP = buildDynGenSystemPrompt();
-    std::string key  = llmApiKey;
-
-    std::string fullPrompt;
-    if(llmFixMode) {
-        std::string issue = userPrompt.empty()
-            ? "Fix any bugs and make sure the script runs correctly."
-            : "Issue: " + userPrompt;
-        fullPrompt =
-            "Fix this EEL2 script for n=" + std::to_string(n) + " channels.\n\n"
-            "Current code:\n" + std::string(editorBuf) + "\n\n" + issue;
-    } else {
-        fullPrompt =
-            "Generate an EEL2 script for n=" + std::to_string(n) + " channels.\n\n"
-            + userPrompt;
-    }
-
-    llmFuture = std::async(std::launch::async,
-        [fullPrompt, sysP, key]() -> std::string {
-            return callAnthropicAPI(fullPrompt, sysP, key);
-        });
+        return "Generate an EEL2 script for n=" + n + " channels.\n\n" + userPrompt;
+    };
+    spec.apply = [this](const std::string& code) -> std::string {
+        const std::string text = code + "\n";
+        std::strncpy(editorBuf, text.c_str(), kBufSize - 1);
+        editorBuf[kBufSize - 1] = '\0';
+        codeDirty            = true;
+        codeDirtyTimer       = 0.0f;
+        codeRequiresRecreate = true;   // force @init on new script
+        eel2StatusMsg        = "AI generated";
+        return "";
+    };
+    ai.setup(spec);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1110,17 +1008,7 @@ void scDynGenNode::drawEditor() {
     ImGui::SameLine(0, 4);
 
     // Feature 6: AI generate button
-    {
-        bool busy = llmPending.load();
-        ImGui::PushStyleColor(ImGuiCol_Button,
-            busy ? IM_COL32(40, 20, 65, 255) : IM_COL32(60, 38, 90, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(90, 58, 130, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(115, 78, 165, 255));
-        if(ImGui::Button(busy ? "···" : "AI", ImVec2(34, 0)) && !busy) {
-            ImGui::OpenPopup("##llm_popup");
-        }
-        ImGui::PopStyleColor(3);
-    }
+    ai.drawButton(ImVec2(34, 0));
     ImGui::SameLine(0, 4);
 
     // Script dropdown — list .eel2 files from dyngenScripts/
@@ -1207,97 +1095,7 @@ void scDynGenNode::drawEditor() {
     dl->AddText(ImVec2(cursor.x + pad, statusY), statusCol, eel2StatusMsg.c_str());
 
     // ── Feature 6: AI generate popup ─────────────────────────────────────────
-    ImGui::SetNextWindowSize(ImVec2(520, 230), ImGuiCond_Appearing);
-    if(ImGui::BeginPopup("##llm_popup", ImGuiWindowFlags_None)) {
-
-        // Header
-        ImGui::TextColored(ImVec4(0.72f, 0.60f, 1.0f, 1.0f),
-            "Ask Claude to write EEL2 code");
-        ImGui::SameLine();
-        if(llmApiKey.empty())
-            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "  [No API key]");
-        else
-            ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.55f, 1.0f), "  [Key loaded]");
-
-        ImGui::TextDisabled("Using n=%d channels (matches Num Channels setting on the node).",
-            numChannels.get());
-        ImGui::Spacing();
-
-        // ── Mode toggle ───────────────────────────────────────────────────────
-        auto modeBtn = [&](const char* label, bool active) -> bool {
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                active ? IM_COL32(65, 40, 95, 255) : IM_COL32(28, 28, 38, 255));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(90, 58, 130, 255));
-            bool clicked = ImGui::Button(label, ImVec2(122, 0));
-            ImGui::PopStyleColor(2);
-            return clicked;
-        };
-        if(modeBtn("  Generate  ##m", !llmFixMode)) llmFixMode = false;
-        ImGui::SameLine(0, 2);
-        if(modeBtn(" Fix current ##m", llmFixMode))  llmFixMode = true;
-
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        if(llmPending.load()) {
-            // Spinner while waiting
-            static const char* kSpinChars = "|/-\\";
-            static int sSpin = 0;
-            sSpin = (sSpin + 1) % 4;
-            ImGui::Text("Generating... %c", kSpinChars[sSpin]);
-            ImGui::TextDisabled("Waiting for Claude's response.");
-
-        } else if(llmDone.load()) {
-            if(llmHasError) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,0.4f,0.4f,1));
-                ImGui::TextWrapped("%s", llmStatusMsg.c_str());
-                ImGui::PopStyleColor();
-                ImGui::Spacing();
-                if(ImGui::Button("Close##llmerr", ImVec2(80, 0))) {
-                    llmDone.store(false);
-                    llmHasError = false;
-                    ImGui::CloseCurrentPopup();
-                }
-            } else {
-                // Success: code was injected into editorBuf by update() — auto-close
-                llmDone.store(false);
-                ImGui::CloseCurrentPopup();
-            }
-
-        } else {
-            // Normal prompt-input state
-            ImGui::InputTextMultiline("##llm_input", llmPromptBuf,
-                sizeof(llmPromptBuf), ImVec2(504, 100));
-            if(llmFixMode)
-                ImGui::TextDisabled("Describe the issue, or leave empty for a general fix.");
-            else
-                ImGui::TextDisabled("Describe the EEL2 effect, synth, or processor you want.");
-            ImGui::Spacing();
-
-            // Generate requires a non-empty prompt; Fix can run with empty prompt
-            bool canGenerate = !llmApiKey.empty() && (!llmFixMode || true)
-                               && (llmFixMode || llmPromptBuf[0] != '\0');
-            if(!canGenerate) ImGui::BeginDisabled();
-            const char* btnLabel = llmFixMode ? "Fix code##llm" : "Generate##llm";
-            if(ImGui::Button(btnLabel, ImVec2(100, 0)))
-                requestLLMCode(std::string(llmPromptBuf));
-            if(!canGenerate) ImGui::EndDisabled();
-
-            ImGui::SameLine(0, 10);
-            if(ImGui::Button("Cancel##llm", ImVec2(70, 0)))
-                ImGui::CloseCurrentPopup();
-
-            if(llmApiKey.empty()) {
-                ImGui::Spacing();
-                ImGui::TextColored(ImVec4(1, 0.65f, 0.3f, 1), "No API key found. Add one of:");
-                ImGui::TextDisabled("  data/anthropic_api_key.txt  (just paste the key as plain text)");
-                ImGui::TextDisabled("  ~/.anthropic_api_key");
-                ImGui::TextDisabled("  ANTHROPIC_API_KEY env var");
-            }
-        }
-
-        ImGui::EndPopup();
-    }
+    ai.drawPopup();
 
     // ── Advance cursor ────────────────────────────────────────────────────────
     ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + totalH));

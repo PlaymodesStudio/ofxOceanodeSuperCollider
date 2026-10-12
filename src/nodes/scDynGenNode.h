@@ -28,6 +28,7 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
+#include "ofxOceanodeAIAssistant.h"
 #include "ofxSCSynth.h"
 
 #include <map>
@@ -188,25 +189,15 @@ private:
 
     void drawEditor();
 
-    // ── Feature 6: LLM code generation (Claude via Anthropic API) ─────────────
-    std::string              llmApiKey;
-    std::future<std::string> llmFuture;
-    std::atomic<bool>        llmPending  { false };
-    std::atomic<bool>        llmDone     { false };
-    bool                     llmHasError = false;
-    bool                     llmFixMode  = false;   // false=Generate, true=Fix
-    std::string              llmStatusMsg;
-    char                     llmPromptBuf[2048] = {};
+    // ── Feature 6: AI code generation (Requesty, shared with Formula) ───────
+    ofxOceanodeAIAssistant ai;
 
     // Set true before calling eel2CodeParam.set() to force synth recreation
     // (so @init runs fresh).  Cleared by the listener after recreation.
     bool codeRequiresRecreate = false;
 
     static std::string buildDynGenSystemPrompt();
-    static std::string callAnthropicAPI(const std::string& fullPrompt,
-                                        const std::string& systemPrompt,
-                                        const std::string& apiKey);
-    void requestLLMCode(const std::string& prompt);
+    void setupAIAssistant();
 
     ofEventListeners listeners;
 };

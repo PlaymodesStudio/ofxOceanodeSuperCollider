@@ -13,6 +13,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
 #include "ofxSCSynth.h"
+#include "ofxOceanodeAIAssistant.h"
 
 #include <map>
 #include <array>
@@ -144,23 +145,13 @@ private:
 
     void drawEditor();
 
-    std::string llmApiKey;
-    std::future<std::string> llmFuture;
-    std::atomic<bool> llmPending { false };
-    std::atomic<bool> llmDone { false };
-    bool llmHasError = false;
-    bool llmFixMode = false;
-    std::string llmStatusMsg;
-    char llmPromptBuf[2048] = {};
+    ofxOceanodeAIAssistant ai;
 
     bool codeRequiresRecreate = false;
     bool applyDefaultsOnNextCodeLoad = false;
 
     static std::string buildDynGenPolySystemPrompt();
-    static std::string callAnthropicAPI(const std::string& fullPrompt,
-                                        const std::string& systemPrompt,
-                                        const std::string& apiKey);
-    void requestLLMCode(const std::string& prompt);
+    void setupAIAssistant();
 
     ofEventListeners listeners;
 };

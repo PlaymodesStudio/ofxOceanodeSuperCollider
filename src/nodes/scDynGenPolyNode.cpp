@@ -73,30 +73,8 @@ void scDynGenPolyNode::releaseSlot(int idx) {
 scDynGenPolyNode::scDynGenPolyNode() : scNode("DynGen Poly") {
     description = "Mono-authored DynGen node that runs one independent script instance per channel while keeping vector-addressable parameters in Oceanode.";
     std::memset(editorBuf, 0, sizeof(editorBuf));
-    std::memset(llmPromptBuf, 0, sizeof(llmPromptBuf));
     eel2StatusMsg = "Ready";
-
-    auto tryReadKey = [&](const std::string& path) {
-        std::ifstream f(path);
-        if(f) {
-            std::getline(f, llmApiKey);
-            return !llmApiKey.empty();
-        }
-        return false;
-    };
-
-    const char* envKey = std::getenv("ANTHROPIC_API_KEY");
-    if(envKey && *envKey) {
-        llmApiKey = std::string(envKey);
-    } else if(!tryReadKey(ofToDataPath("anthropic_api_key.txt"))) {
-        tryReadKey(ofFilePath::getUserHomeDir() + "/.anthropic_api_key");
-    }
-
-    while(!llmApiKey.empty() && (llmApiKey.back() == '\n' ||
-                                 llmApiKey.back() == '\r' ||
-                                 llmApiKey.back() == ' ')) {
-        llmApiKey.pop_back();
-    }
+    setupAIAssistant();
 }
 
 scDynGenPolyNode::~scDynGenPolyNode() {
@@ -263,27 +241,7 @@ void scDynGenPolyNode::update(ofEventArgs&) {
         if(r.bSuccess) saveScriptFile(r.filePath);
     }
 
-    if(llmPending.load() && llmFuture.valid()) {
-        if(llmFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            std::string result = llmFuture.get();
-            bool isError = (result.rfind("// Error:", 0) == 0 ||
-                            result.rfind("// API error", 0) == 0);
-            if(isError) {
-                llmStatusMsg = result;
-                llmHasError = true;
-            } else {
-                std::strncpy(editorBuf, result.c_str(), kBufSize - 1);
-                editorBuf[kBufSize - 1] = '\0';
-                codeDirty = true;
-                codeDirtyTimer = 0.0f;
-                codeRequiresRecreate = true;
-                eel2StatusMsg = "AI generated";
-                llmHasError = false;
-            }
-            llmPending.store(false);
-            llmDone.store(true);
-        }
-    }
+    ai.update();
 
     if(!codeDirty) return;
 
@@ -452,9 +410,11 @@ void scDynGenPolyNode::presetSave(ofJson& json) {
         json["dyngen_poly_p" + std::to_string(i)] = paramSlots[i].param.get();
     }
     json["dyngen_poly_param_count"] = activeParamCount;
+    ai.save(json);
 }
 
 void scDynGenPolyNode::presetRecallAfterSettingParameters(ofJson& json) {
+    ai.load(json);
     for(int i = 0; i < activeParamCount; i++) {
         std::string key = "dyngen_poly_p" + std::to_string(i);
         if(json.contains(key) && json[key].is_array()) {
@@ -819,7 +779,7 @@ std::string scDynGenPolyNode::buildDynGenPolySystemPrompt() {
     return
 R"SYSPROMPT(You are an EEL2 code generator for the DynGen Poly node in Oceanode, a modular audio environment built on SuperCollider. DynGen Poly runs ONE mono DynGen script per audio channel. The same mono script is instantiated independently for every channel.
 
-Output ONLY valid EEL2 code. No markdown, no code fences, no prose before or after. Start directly with //@param declarations, @init, or @sample.
+Output ONLY valid EEL2 code. No markdown, no code fences, no prose before or after, and never a trailing "..." or ellipsis. Start directly with //@param declarations, @init, or @sample.
 
 === CORE MODEL ===
 1. ALWAYS write MONO code for a single voice.
@@ -858,7 +818,7 @@ in(0)      = current audio sample for this channel
 in(1)      = p0 for this channel
 in(2)      = p1 for this channel
 in(3)      = p2 for this channel
-...
+(and so on: in(1 + N) = pN)
 
 === OUTPUT LAYOUT FOR THIS NODE ===
 out0 = processed audio sample for this channel
@@ -917,97 +877,43 @@ phase >= 6.28318530 ? phase -= 6.28318530;
 )SYSPROMPT";
 }
 
-std::string scDynGenPolyNode::callAnthropicAPI(const std::string& fullPrompt,
-                                               const std::string& systemPrompt,
-                                               const std::string& apiKey) {
-    try {
-        ofJson requestBody = {
-            {"model", "claude-sonnet-4-5"},
-            {"max_tokens", 2048},
-            {"system", systemPrompt},
-            {"messages", ofJson::array({{{"role", "user"}, {"content", fullPrompt}}})}
-        };
-        std::string bodyStr = requestBody.dump();
-
-        std::string tmpPath = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp")
-                              + "/dyngen_poly_api_req.json";
-        {
-            std::ofstream tf(tmpPath);
-            if(!tf.is_open()) return "// Error: cannot write temp file " + tmpPath;
-            tf << bodyStr;
+void scDynGenPolyNode::setupAIAssistant() {
+    ofxOceanodeAIAssistant::Spec spec;
+    spec.title = "Write mono EEL2 for DynGen Poly with Requesty";
+    spec.subtitle = [this]() {
+        return "One mono script voice will be instantiated across " +
+               std::to_string(numChannels.get()) + " channels.";
+    };
+    spec.generateHint = "Describe the mono effect, synth, or processor you want.";
+    spec.fixHint = "Describe the issue, or leave empty for a general fix.";
+    spec.pendingHint = "The result will replace the current script when ready.";
+    spec.readyMessage = "AI generated";
+    spec.popupSize = ImVec2(560, 330);
+    spec.systemPrompt = &scDynGenPolyNode::buildDynGenPolySystemPrompt;
+    spec.buildPrompt = [this](const std::string& userPrompt, bool fixMode) {
+        const std::string channels = std::to_string(numChannels.get());
+        if(fixMode) {
+            std::string issue = userPrompt.empty()
+                ? "Fix any bugs and make sure the mono script runs correctly when duplicated across channels."
+                : "Issue: " + userPrompt;
+            return "Fix this DynGen Poly mono EEL2 script. The node will instantiate it across "
+                   + channels + " channels outside the script.\n\n"
+                   "Current code:\n" + std::string(editorBuf) + "\n\n" + issue;
         }
-
-        std::string cmd =
-            "curl -s"
-            " -X POST https://api.anthropic.com/v1/messages"
-            " -H 'content-type: application/json'"
-            " -H 'x-api-key: " + apiKey + "'"
-            " -H 'anthropic-version: 2023-06-01'"
-            " -d @" + tmpPath +
-            " 2>&1";
-
-        FILE* pipe = popen(cmd.c_str(), "r");
-        if(!pipe) return "// Error: popen failed";
-
-        std::string respStr;
-        char buf[4096];
-        while(fgets(buf, sizeof(buf), pipe)) respStr += buf;
-        pclose(pipe);
-
-        std::remove(tmpPath.c_str());
-
-        ofJson obj = ofJson::parse(respStr);
-        if(obj.contains("error")) {
-            return "// API error: " + obj["error"].value("message", "unknown error");
-        }
-
-        auto& content = obj["content"];
-        if(!content.is_array() || content.empty()) {
-            return "// Error: unexpected response format";
-        }
-        return content[0].value("text", "");
-    } catch(const std::exception& e) {
-        return std::string("// Error: ") + e.what();
-    }
-}
-
-void scDynGenPolyNode::requestLLMCode(const std::string& userPrompt) {
-    if(llmApiKey.empty()) {
-        llmStatusMsg = "// Error: no API key. Place key in data/anthropic_api_key.txt";
-        llmHasError = true;
-        llmDone.store(true);
-        return;
-    }
-
-    llmPending.store(true);
-    llmDone.store(false);
-    llmHasError = false;
-    llmStatusMsg = "Generating...";
-
-    int channels = numChannels.get();
-    std::string sysP = buildDynGenPolySystemPrompt();
-    std::string key = llmApiKey;
-
-    std::string fullPrompt;
-    if(llmFixMode) {
-        std::string issue = userPrompt.empty()
-            ? "Fix any bugs and make sure the mono script runs correctly when duplicated across channels."
-            : "Issue: " + userPrompt;
-        fullPrompt =
-            "Fix this DynGen Poly mono EEL2 script. The node will instantiate it across "
-            + std::to_string(channels) + " channels outside the script.\n\n"
-            "Current code:\n" + std::string(editorBuf) + "\n\n" + issue;
-    } else {
-        fullPrompt =
-            "Generate a mono DynGen Poly EEL2 script. The node will instantiate it across "
-            + std::to_string(channels) + " channels outside the script.\n\n"
-            + userPrompt;
-    }
-
-    llmFuture = std::async(std::launch::async,
-        [fullPrompt, sysP, key]() -> std::string {
-            return callAnthropicAPI(fullPrompt, sysP, key);
-        });
+        return "Generate a mono DynGen Poly EEL2 script. The node will instantiate it across "
+               + channels + " channels outside the script.\n\n" + userPrompt;
+    };
+    spec.apply = [this](const std::string& code) -> std::string {
+        const std::string text = code + "\n";
+        std::strncpy(editorBuf, text.c_str(), kBufSize - 1);
+        editorBuf[kBufSize - 1] = '\0';
+        codeDirty = true;
+        codeDirtyTimer = 0.0f;
+        codeRequiresRecreate = true;
+        eel2StatusMsg = "AI generated";
+        return "";
+    };
+    ai.setup(spec);
 }
 
 void scDynGenPolyNode::drawEditor() {
@@ -1047,17 +953,7 @@ void scDynGenPolyNode::drawEditor() {
     }
     ImGui::SameLine(0, 4);
 
-    {
-        bool busy = llmPending.load();
-        ImGui::PushStyleColor(ImGuiCol_Button,
-            busy ? IM_COL32(40, 20, 65, 255) : IM_COL32(60, 38, 90, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(90, 58, 130, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(115, 78, 165, 255));
-        if(ImGui::Button(busy ? "···" : "AI", ImVec2(34, 0)) && !busy) {
-            ImGui::OpenPopup("##llm_popup");
-        }
-        ImGui::PopStyleColor(3);
-    }
+    ai.drawButton(ImVec2(34, 0));
     ImGui::SameLine(0, 4);
 
     if(!scriptFiles.empty()) {
@@ -1127,91 +1023,7 @@ void scDynGenPolyNode::drawEditor() {
                     : IM_COL32(110, 200, 110, 255);
     dl->AddText(ImVec2(cursor.x + pad, statusY), statusCol, eel2StatusMsg.c_str());
 
-    ImGui::SetNextWindowSize(ImVec2(520, 230), ImGuiCond_Appearing);
-    if(ImGui::BeginPopup("##llm_popup", ImGuiWindowFlags_None)) {
-        ImGui::TextColored(ImVec4(0.72f, 0.60f, 1.0f, 1.0f),
-                           "Ask Claude to write mono EEL2 for DynGen Poly");
-        ImGui::SameLine();
-        if(llmApiKey.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "  [No API key]");
-        } else {
-            ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.55f, 1.0f), "  [Key loaded]");
-        }
-
-        ImGui::TextDisabled("One mono script voice will be instantiated across %d channels.",
-                            numChannels.get());
-        ImGui::Spacing();
-
-        auto modeBtn = [&](const char* label, bool active) -> bool {
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                active ? IM_COL32(65, 40, 95, 255) : IM_COL32(28, 28, 38, 255));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(90, 58, 130, 255));
-            bool clicked = ImGui::Button(label, ImVec2(122, 0));
-            ImGui::PopStyleColor(2);
-            return clicked;
-        };
-        if(modeBtn("  Generate  ##m", !llmFixMode)) llmFixMode = false;
-        ImGui::SameLine(0, 2);
-        if(modeBtn(" Fix current ##m", llmFixMode)) llmFixMode = true;
-
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        if(llmPending.load()) {
-            static const char* kSpinChars = "|/-\\";
-            static int sSpin = 0;
-            sSpin = (sSpin + 1) % 4;
-            ImGui::Text("Generating... %c", kSpinChars[sSpin]);
-            ImGui::TextDisabled("Waiting for Claude's response.");
-        } else if(llmDone.load()) {
-            if(llmHasError) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.4f, 0.4f, 1));
-                ImGui::TextWrapped("%s", llmStatusMsg.c_str());
-                ImGui::PopStyleColor();
-                ImGui::Spacing();
-                if(ImGui::Button("Close##llmerr", ImVec2(80, 0))) {
-                    llmDone.store(false);
-                    llmHasError = false;
-                    ImGui::CloseCurrentPopup();
-                }
-            } else {
-                llmDone.store(false);
-                ImGui::CloseCurrentPopup();
-            }
-        } else {
-            ImGui::InputTextMultiline("##llm_input", llmPromptBuf,
-                                      sizeof(llmPromptBuf), ImVec2(504, 100));
-            if(llmFixMode) {
-                ImGui::TextDisabled("Describe the issue, or leave empty for a general fix.");
-            } else {
-                ImGui::TextDisabled("Describe the mono effect, synth, or processor you want.");
-            }
-            ImGui::Spacing();
-
-            bool canGenerate = !llmApiKey.empty() && (llmFixMode || llmPromptBuf[0] != '\0');
-            if(!canGenerate) ImGui::BeginDisabled();
-            const char* btnLabel = llmFixMode ? "Fix code##llm" : "Generate##llm";
-            if(ImGui::Button(btnLabel, ImVec2(100, 0))) {
-                requestLLMCode(std::string(llmPromptBuf));
-            }
-            if(!canGenerate) ImGui::EndDisabled();
-
-            ImGui::SameLine(0, 10);
-            if(ImGui::Button("Cancel##llm", ImVec2(70, 0))) {
-                ImGui::CloseCurrentPopup();
-            }
-
-            if(llmApiKey.empty()) {
-                ImGui::Spacing();
-                ImGui::TextColored(ImVec4(1, 0.65f, 0.3f, 1), "No API key found. Add one of:");
-                ImGui::TextDisabled("  data/anthropic_api_key.txt  (just paste the key as plain text)");
-                ImGui::TextDisabled("  ~/.anthropic_api_key");
-                ImGui::TextDisabled("  ANTHROPIC_API_KEY env var");
-            }
-        }
-
-        ImGui::EndPopup();
-    }
+    ai.drawPopup();
 
     ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + totalH));
     ImGui::Dummy(ImVec2(W + pad * 2, 2.0f));
