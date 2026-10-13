@@ -1,0 +1,42 @@
+{
+    "Voices": 2,
+    "Pitch": [
+        36,
+        43
+    ],
+    "Wave_A": [
+        1
+    ],
+    "Tilt": [
+        -1
+    ],
+    "Partials": 128,
+    "Sweep": [
+        0.85
+    ],
+    "Sweep_Waves": [
+        3
+    ],
+    "Sweep_Rate": [
+        0.12
+    ],
+    "Sweep_Sharp": [
+        0.55
+    ],
+    "Sweep_Mode": [
+        1
+    ],
+    "Drift": [
+        0.1
+    ],
+    "Attack": [
+        2.0
+    ],
+    "Release": [
+        4.0
+    ],
+    "Echo_On": true,
+    "Echo_Delay": 0.42,
+    "Echo_Feed": 0.4,
+    "Echo_Mix": 0.25
+}

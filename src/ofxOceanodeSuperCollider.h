@@ -22,6 +22,9 @@
 #include "nodes/scTonal.h"
 #include "nodes/scBuffer.h"
 #include "nodes/scWavetable.h"
+#include "nodes/scAdditiveBox.h"
+#include "nodes/scPulsarBox.h"
+#include "nodes/scSpectralFilterBox.h"
 #include "nodes/scRecbufHold.h"
 #include "nodes/scBufferScope.h"
 #include "nodes/scFreezer.h"
@@ -154,6 +157,9 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scInfo>("SuperCollider", controller->getServers());
 	o.registerModel<scBuffer>("SuperCollider", controller->getServers());
 	o.registerModel<scWavetable>("SuperCollider", controller->getServers());
+	o.registerModel<scAdditiveBox>("SuperCollider", controller->getServers());
+	o.registerModel<scPulsarBox>("SuperCollider", controller->getServers());
+	o.registerModel<scSpectralFilterBox>("SuperCollider");
 	o.registerModel<scCustomBuffer>("SuperCollider", controller->getServers());
 	o.registerModel<scRecbufHold>("SuperCollider", controller->getServers());
 	o.registerModel<scBufferAllocator>("SuperCollider", controller->getServers());

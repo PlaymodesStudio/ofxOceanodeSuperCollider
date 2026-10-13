@@ -1,0 +1,47 @@
+{
+    "Voices": 2,
+    "Pitch": [
+        72,
+        79
+    ],
+    "Wave_A": [
+        0
+    ],
+    "Tilt": [
+        -2
+    ],
+    "Partials": 128,
+    "Density": [
+        0.18
+    ],
+    "Mask_Glide": [
+        0.3
+    ],
+    "Shimmer": [
+        0.6
+    ],
+    "Shimmer_Rate": [
+        9.0
+    ],
+    "Drift": [
+        0.2
+    ],
+    "Drift_Rate": [
+        0.3
+    ],
+    "LFO2_Shape": 4,
+    "LFO2_Rate": 5.0,
+    "LFO2_Pan": 0.6,
+    "Attack": [
+        0.2
+    ],
+    "Release": [
+        3.0
+    ],
+    "Reverb_On": true,
+    "Rev_Mix": 0.45,
+    "Rev_Decay": 6.0,
+    "Echo_On": true,
+    "Echo_Mix": 0.3,
+    "Echo_Delay": 0.33
+}

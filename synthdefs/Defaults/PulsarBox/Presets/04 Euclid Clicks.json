@@ -1,0 +1,29 @@
+{
+    "Voices": 1,
+    "Fundamental": [
+        8
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Formants": 1,
+    "Volume": 1.0,
+    "Sieve": [
+        1,
+        0,
+        1,
+        0,
+        1,
+        1,
+        0,
+        1
+    ],
+    "Formant_Mode_A": 0,
+    "Cycles_A": 6,
+    "Level_A": 1.0,
+    "Delay_A": 0.0,
+    "Pan_A": 0.0,
+    "Pulsaret_A": "Sine",
+    "Envelope_A": "Expodec",
+    "Formant_A": 3200
+}

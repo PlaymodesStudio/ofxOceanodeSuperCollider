@@ -1,0 +1,36 @@
+{
+    "Voices": 1,
+    "Fundamental": [
+        130
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Formants": 3,
+    "Volume": 1.2,
+    "Rate_Jitter": 0.008,
+    "Formant_Mode_A": 0,
+    "Cycles_A": 3,
+    "Level_A": 1.0,
+    "Delay_A": 0.0,
+    "Pan_A": 0.0,
+    "Pulsaret_A": "Sine",
+    "Envelope_A": "Gauss",
+    "Formant_A": 730,
+    "Formant_Mode_B": 0,
+    "Cycles_B": 3,
+    "Level_B": 0.55,
+    "Delay_B": 0.0,
+    "Pan_B": 0.0,
+    "Pulsaret_B": "Sine",
+    "Envelope_B": "Gauss",
+    "Formant_B": 1090,
+    "Formant_Mode_C": 0,
+    "Cycles_C": 4,
+    "Level_C": 0.3,
+    "Delay_C": 0.0,
+    "Pan_C": 0.0,
+    "Pulsaret_C": "Sine",
+    "Envelope_C": "Gauss",
+    "Formant_C": 2440
+}

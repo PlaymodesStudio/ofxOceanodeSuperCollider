@@ -1,0 +1,52 @@
+{
+    "Voices": 3,
+    "Pitch": [
+        50,
+        57,
+        62
+    ],
+    "Wave_A": [
+        2
+    ],
+    "Wave_B": [
+        8
+    ],
+    "Tilt": [
+        -2
+    ],
+    "Partials": 64,
+    "Morph": [
+        0.2
+    ],
+    "Harm_Blur": [
+        0.5
+    ],
+    "Time_Blur": [
+        2.5
+    ],
+    "Density": [
+        0.55
+    ],
+    "Mask_Glide": [
+        1.5
+    ],
+    "Shimmer": [
+        0.3
+    ],
+    "Shimmer_Rate": [
+        2.0
+    ],
+    "LFO2_Shape": 4,
+    "LFO2_Rate": 0.5,
+    "LFO2_Morph": 0.8,
+    "Attack": [
+        1.0
+    ],
+    "Release": [
+        6.0
+    ],
+    "Reverb_On": true,
+    "Rev_Mix": 0.55,
+    "Rev_Decay": 10.0,
+    "Rev_Size": 55
+}

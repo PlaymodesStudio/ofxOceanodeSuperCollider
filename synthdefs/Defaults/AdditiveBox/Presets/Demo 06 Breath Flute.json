@@ -1,0 +1,57 @@
+{
+    "Voices": 1,
+    "Pitch": [
+        74
+    ],
+    "Levels": [
+        0.6
+    ],
+    "Wave_A": [
+        3
+    ],
+    "Tilt": [
+        -2
+    ],
+    "Partials": 16,
+    "Noise": [
+        0.35
+    ],
+    "Noise_Rate": [
+        450
+    ],
+    "Noise_Tilt": [
+        0.7
+    ],
+    "Vibrato": [
+        0.1
+    ],
+    "Vib_Rate": [
+        5.0
+    ],
+    "Filter": [
+        1
+    ],
+    "Cutoff": [
+        84
+    ],
+    "Keytrack": [
+        1
+    ],
+    "Slope": [
+        12
+    ],
+    "Attack": [
+        0.08
+    ],
+    "Decay": [
+        0.3
+    ],
+    "Sustain": [
+        0.85
+    ],
+    "Release": [
+        0.35
+    ],
+    "Reverb_On": true,
+    "Rev_Mix": 0.2
+}

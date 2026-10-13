@@ -1,0 +1,38 @@
+{
+    "Voices": 1,
+    "Fundamental": [
+        5
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Formants": 2,
+    "Volume": 1.0,
+    "Sieve": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0
+    ],
+    "Formant_Jitter": 2,
+    "Formant_Mode_A": 0,
+    "Cycles_A": 8,
+    "Level_A": 1.0,
+    "Delay_A": 0.0,
+    "Pan_A": 0.0,
+    "Pulsaret_A": "Supercollider/PulsarBox/nuPG_TABLES/FMPercussive.wav",
+    "Envelope_A": "Supercollider/PulsarBox/nuPG_TABLES/ExpSharpFast.wav",
+    "Formant_A": 180,
+    "Formant_Mode_B": 0,
+    "Cycles_B": 6,
+    "Level_B": 0.35,
+    "Delay_B": 0.5,
+    "Pan_B": 0.0,
+    "Pulsaret_B": "Supercollider/PulsarBox/nuPG_TABLES/Jx3pSaws.wav",
+    "Envelope_B": "Expodec",
+    "Formant_B": 2600
+}

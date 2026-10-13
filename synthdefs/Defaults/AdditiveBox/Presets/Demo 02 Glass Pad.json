@@ -1,0 +1,59 @@
+{
+    "Voices": 3,
+    "Pitch": [
+        48,
+        55,
+        64
+    ],
+    "Levels": [
+        0.45
+    ],
+    "Wave_A": [
+        6
+    ],
+    "Wave_B": [
+        3
+    ],
+    "Tilt": [
+        0
+    ],
+    "Partials": 32,
+    "Morph": [
+        0.5
+    ],
+    "LFO1_Shape": 0,
+    "LFO1_Rate": 0.07,
+    "LFO1_Morph": 0.5,
+    "Unison": 4,
+    "Unison_Detune": 14,
+    "Unison_Spread": 0.8,
+    "Unison_Blend": 0.8,
+    "Attack": [
+        1.8
+    ],
+    "Decay": [
+        1.0
+    ],
+    "Sustain": [
+        1.0
+    ],
+    "Release": [
+        4.0
+    ],
+    "Partial_Vib": [
+        0.06
+    ],
+    "Partial_Vib_Rate": [
+        0.7
+    ],
+    "Shimmer": [
+        0.12
+    ],
+    "Shimmer_Rate": [
+        3.0
+    ],
+    "Reverb_On": true,
+    "Rev_Mix": 0.4,
+    "Rev_Size": 45,
+    "Rev_Decay": 7.0
+}

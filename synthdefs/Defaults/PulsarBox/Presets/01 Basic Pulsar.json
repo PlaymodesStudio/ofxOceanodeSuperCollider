@@ -1,0 +1,19 @@
+{
+    "Voices": 1,
+    "Fundamental": [
+        110
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Formants": 1,
+    "Volume": 1.4,
+    "Formant_Mode_A": 0,
+    "Cycles_A": 1,
+    "Level_A": 1.0,
+    "Delay_A": 0.0,
+    "Pan_A": 0.0,
+    "Pulsaret_A": "Sine",
+    "Envelope_A": "Hann",
+    "Formant_A": 880
+}

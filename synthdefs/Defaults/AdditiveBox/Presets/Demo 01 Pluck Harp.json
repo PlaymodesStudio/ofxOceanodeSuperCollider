@@ -1,0 +1,62 @@
+{
+    "Voices": 3,
+    "Pitch": [
+        55,
+        62,
+        67
+    ],
+    "Wave_A": [
+        1
+    ],
+    "Tilt": [
+        0
+    ],
+    "Partials": 48,
+    "Filter": [
+        1
+    ],
+    "Cutoff": [
+        55
+    ],
+    "Keytrack": [
+        1
+    ],
+    "Slope": [
+        24
+    ],
+    "Res": [
+        0.25
+    ],
+    "Env2_Attack": 0.001,
+    "Env2_Decay": 0.4,
+    "Env2_Sustain": 0.0,
+    "Env2_Release": 0.3,
+    "Env2_Cutoff": 0.6,
+    "Attack": [
+        0.002
+    ],
+    "Decay": [
+        2.0
+    ],
+    "Sustain": [
+        0
+    ],
+    "Release": [
+        1.5
+    ],
+    "Env_Tilt": [
+        0.7
+    ],
+    "Env_Rand": [
+        0.3
+    ],
+    "Spread": [
+        0.6
+    ],
+    "Pan_Mode": [
+        1
+    ],
+    "Reverb_On": true,
+    "Rev_Mix": 0.25,
+    "Rev_Decay": 3.0
+}

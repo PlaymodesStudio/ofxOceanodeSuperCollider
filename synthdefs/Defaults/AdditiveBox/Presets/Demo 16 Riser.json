@@ -1,0 +1,55 @@
+{
+    "Voices": 1,
+    "Pitch": [
+        36
+    ],
+    "Wave_A": [
+        1
+    ],
+    "Tilt": [
+        -1
+    ],
+    "Partials": 128,
+    "Env2_Attack": 8.0,
+    "Env2_Decay": 0.0,
+    "Env2_Sustain": 1.0,
+    "Env2_Release": 1.0,
+    "Env2_Pitch": 1.0,
+    "Env2_Cutoff": 0.8,
+    "Env2_Noise": 1.0,
+    "Filter": [
+        1
+    ],
+    "Cutoff": [
+        40
+    ],
+    "Slope": [
+        24
+    ],
+    "Res": [
+        0.3
+    ],
+    "Noise": [
+        0.25
+    ],
+    "Noise_Rate": [
+        500
+    ],
+    "Sweep": [
+        0.6
+    ],
+    "Sweep_Waves": [
+        2
+    ],
+    "Sweep_Rate": [
+        0.5
+    ],
+    "Attack": [
+        0.5
+    ],
+    "Release": [
+        2.0
+    ],
+    "Reverb_On": true,
+    "Rev_Mix": 0.35
+}

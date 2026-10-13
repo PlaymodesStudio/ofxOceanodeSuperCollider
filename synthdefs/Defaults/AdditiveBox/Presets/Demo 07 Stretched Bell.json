@@ -1,0 +1,44 @@
+{
+    "Voices": 2,
+    "Pitch": [
+        60,
+        67
+    ],
+    "Wave_A": [
+        0
+    ],
+    "Tilt": [
+        -3
+    ],
+    "Partials": 40,
+    "Stretch": [
+        1.05
+    ],
+    "Inharm": [
+        0.0012
+    ],
+    "Attack": [
+        0.001
+    ],
+    "Decay": [
+        5.0
+    ],
+    "Sustain": [
+        0
+    ],
+    "Release": [
+        5.0
+    ],
+    "Env_Tilt": [
+        0.8
+    ],
+    "Env_Rand": [
+        0.4
+    ],
+    "Partial_Vib": [
+        0.02
+    ],
+    "Reverb_On": true,
+    "Rev_Mix": 0.3,
+    "Rev_Decay": 5.0
+}

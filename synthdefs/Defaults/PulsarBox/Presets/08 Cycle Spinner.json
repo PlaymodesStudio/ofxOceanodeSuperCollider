@@ -1,0 +1,30 @@
+{
+    "Voices": 1,
+    "Fundamental": [
+        16
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Formants": 1,
+    "Volume": 1.0,
+    "Pan_Mode": 1,
+    "Sieve": [
+        1,
+        1,
+        0,
+        1,
+        1,
+        0,
+        1,
+        0
+    ],
+    "Formant_Mode_A": 0,
+    "Cycles_A": 5,
+    "Level_A": 1.0,
+    "Delay_A": 0.0,
+    "Pan_A": 0.0,
+    "Pulsaret_A": "Triangle",
+    "Envelope_A": "Gauss",
+    "Formant_A": 1800
+}

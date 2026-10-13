@@ -1,0 +1,46 @@
+{
+    "Voices": 1,
+    "Pitch": [
+        31
+    ],
+    "Levels": [
+        0.6
+    ],
+    "Wave_A": [
+        1
+    ],
+    "Tilt": [
+        0
+    ],
+    "Partials": 64,
+    "Filter": [
+        1
+    ],
+    "Cutoff": [
+        50
+    ],
+    "Keytrack": [
+        1
+    ],
+    "Slope": [
+        36
+    ],
+    "Res": [
+        0.6
+    ],
+    "Safe_Bass": [
+        1.0
+    ],
+    "LFO1_Shape": 0,
+    "LFO1_Rate": 3.0,
+    "LFO1_Cutoff": 0.45,
+    "Unison": 2,
+    "Unison_Detune": 8,
+    "Unison_Spread": 0.3,
+    "Attack": [
+        0.005
+    ],
+    "Release": [
+        0.2
+    ]
+}

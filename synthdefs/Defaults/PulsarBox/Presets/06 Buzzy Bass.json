@@ -1,0 +1,27 @@
+{
+    "Voices": 1,
+    "Fundamental": [
+        55
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Formants": 2,
+    "Volume": 0.9,
+    "Formant_Mode_A": 1,
+    "Cycles_A": 2,
+    "Level_A": 1.0,
+    "Delay_A": 0.0,
+    "Pan_A": 0.0,
+    "Pulsaret_A": "Saw",
+    "Envelope_A": "Trapezoid",
+    "Ratio_A": 6,
+    "Formant_Mode_B": 1,
+    "Cycles_B": 2,
+    "Level_B": 0.35,
+    "Delay_B": 0.0,
+    "Pan_B": 0.0,
+    "Pulsaret_B": "Square",
+    "Envelope_B": "Expodec",
+    "Ratio_B": 13
+}

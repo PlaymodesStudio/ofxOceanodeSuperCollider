@@ -1,0 +1,60 @@
+{
+    "Voices": 4,
+    "Pitch": [
+        45,
+        52,
+        57,
+        61
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Wave_A": [
+        1
+    ],
+    "Tilt": [
+        -1
+    ],
+    "Partials": 64,
+    "Filter_2": [
+        1
+    ],
+    "Vowel": [
+        0,
+        1,
+        3,
+        4
+    ],
+    "Formant_Width": [
+        2.5
+    ],
+    "Unison": 3,
+    "Unison_Detune": 18,
+    "Unison_Spread": 0.6,
+    "Vibrato": [
+        0.12
+    ],
+    "Vib_Rate": [
+        5.2
+    ],
+    "Partial_Vib": [
+        0.04
+    ],
+    "Noise": [
+        0.12
+    ],
+    "Noise_Rate": [
+        300
+    ],
+    "Noise_Tilt": [
+        0.6
+    ],
+    "Attack": [
+        0.5
+    ],
+    "Release": [
+        2.5
+    ],
+    "Reverb_On": true,
+    "Rev_Mix": 0.3
+}

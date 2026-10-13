@@ -1,0 +1,37 @@
+{
+    "Voices": 2,
+    "Pitch": [
+        36,
+        43
+    ],
+    "Wave_A": [
+        1
+    ],
+    "Tilt": [
+        -1.5
+    ],
+    "Partials": 128,
+    "Filter": [
+        5
+    ],
+    "Cutoff": [
+        70
+    ],
+    "Slope": [
+        32
+    ],
+    "Res": [
+        0.9
+    ],
+    "LFO1_Shape": 1,
+    "LFO1_Rate": 0.06,
+    "LFO1_Cutoff": 0.25,
+    "Attack": [
+        2.0
+    ],
+    "Release": [
+        4.0
+    ],
+    "Reverb_On": true,
+    "Rev_Mix": 0.25
+}

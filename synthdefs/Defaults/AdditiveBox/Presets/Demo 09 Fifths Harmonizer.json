@@ -1,0 +1,40 @@
+{
+    "Voices": 1,
+    "Pitch": [
+        43
+    ],
+    "Wave_A": [
+        5
+    ],
+    "Tilt": [
+        -1
+    ],
+    "Partials": 48,
+    "Unison": 3,
+    "Unison_Interval": 7,
+    "Unison_Blend": 0.7,
+    "Unison_Detune": 4,
+    "Unison_Spread": 0.7,
+    "Filter": [
+        2
+    ],
+    "Cutoff": [
+        74
+    ],
+    "Keytrack": [
+        1
+    ],
+    "Slope": [
+        18
+    ],
+    "Res": [
+        0.45
+    ],
+    "LFO1_Shape": 1,
+    "LFO1_Rate": 0.2,
+    "LFO1_Cutoff": 0.3,
+    "Echo_On": true,
+    "Echo_Delay": 0.375,
+    "Echo_Feed": 0.45,
+    "Echo_Mix": 0.3
+}

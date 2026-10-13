@@ -71,3 +71,23 @@ binaries are arm64 only; VSTPlugin is universal.
 
 The OceanodeRadioIn UGen is not here: its source is maintained with its
 counterpart in `ofxOceanodeOnlineRadio/sc/`.
+
+## Own UGens
+
+### OceanodeSpectral (`OceanodeSpectral/`)
+
+`PV_MaskFilter` (October 2026): a spectral filter drawn by an array of gains,
+for the SC Spectral Filter Box node (`src/nodes/scSpectralFilterBox.*`,
+SynthDefs in `synthdefs/Defaults/SpectralFilterBox/`). Every FFT frame each bin
+is scaled by the mask (its last K inputs) read on a log-frequency axis between
+`lowFreq` and `highFreq`, moved by `transpose` semitones, wrapping round or
+holding its edges; optional per-bin attack / release / hold.
+
+- Source: `PV_MaskFilter.cpp`, class file `PV_MaskFilter.sc`.
+- Build: `OceanodeSpectral/build.sh [SuperCollider source]` (default
+  `~/Documents/SC/supercollider`) makes a universal `OceanodeSpectral.scx`
+  (arm64 + x86_64; the .scx is not in git).
+- Install: `OceanodeSpectral.scx` and `PV_MaskFilter.sc` in a folder of the
+  user's SuperCollider extensions (the server loads it from there; sclang needs
+  the class to compile the SynthDefs) and of the app's
+  `data/Supercollider/Extensions/OceanodeSpectral/`.

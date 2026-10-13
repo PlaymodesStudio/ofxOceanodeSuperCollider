@@ -1,0 +1,39 @@
+{
+    "Voices": 3,
+    "Pitch": [
+        48,
+        55,
+        60
+    ],
+    "Levels": [
+        0.45
+    ],
+    "Wave_A": [
+        1
+    ],
+    "Tilt": [
+        0
+    ],
+    "Partials": 64,
+    "Unison": 7,
+    "Unison_Detune": 35,
+    "Unison_Spread": 1.0,
+    "Unison_Blend": 0.9,
+    "Filter": [
+        1
+    ],
+    "Cutoff": [
+        98
+    ],
+    "Slope": [
+        12
+    ],
+    "Attack": [
+        0.02
+    ],
+    "Release": [
+        0.6
+    ],
+    "Reverb_On": true,
+    "Rev_Mix": 0.25
+}

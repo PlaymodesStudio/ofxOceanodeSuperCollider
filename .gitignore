@@ -18,3 +18,6 @@ __pycache__/
 
 # SuperCollider build output (binaries live in the app data folder)
 synthdefs/**/CompiledSynthdefs/
+
+# Built UGen plugins (rebuilt by their build.sh; shipped in the apps' data)
+ugens/**/*.scx

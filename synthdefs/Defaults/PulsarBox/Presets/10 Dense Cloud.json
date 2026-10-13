@@ -1,0 +1,29 @@
+{
+    "Voices": 1,
+    "Fundamental": [
+        190
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Formants": 2,
+    "Volume": 0.8,
+    "Rate_Jitter": 0.05,
+    "Formant_Jitter": 3,
+    "Formant_Mode_A": 0,
+    "Cycles_A": 24,
+    "Level_A": 1.0,
+    "Delay_A": 0.0,
+    "Pan_A": 0.0,
+    "Pulsaret_A": "Sine",
+    "Envelope_A": "Hann",
+    "Formant_A": 900,
+    "Formant_Mode_B": 0,
+    "Cycles_B": 30,
+    "Level_B": 0.5,
+    "Delay_B": 0.0,
+    "Pan_B": 0.0,
+    "Pulsaret_B": "Sine",
+    "Envelope_B": "Tukey",
+    "Formant_B": 2700
+}

@@ -776,10 +776,13 @@ Compatibility/
 </details>
 
 <details>
-<summary><b>Defaults</b> (40)</summary>
+<summary><b>Defaults</b> (43)</summary>
 
 ```
 Defaults/
+├── AdditiveBox/
+│   ├── Presets/
+│   └── additiveBox.scd
 ├── Analysis/
 │   ├── a2k.scd
 │   ├── beattracker.scd
@@ -827,6 +830,10 @@ Defaults/
 │   └── polyComb
 ├── PolyMixer/
 │   └── polymixer.scd
+├── PulsarBox/
+│   ├── Presets/
+│   ├── README.md
+│   └── pulsarbox.scd
 ├── RadioStation/
 │   └── RadioStation — VLC internet radio — output connects to any effect chain
 ├── Rave/
@@ -837,6 +844,8 @@ Defaults/
 ├── RhythmBox/
 │   ├── scRhythmBoxTracks.scd
 │   └── slicePreview.scd
+├── SpectralFilterBox/
+│   └── spectralFilterBox.scd
 ├── VelvetReverb/
 │   └── scvelvetreverb.scd
 ├── VST/

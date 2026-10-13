@@ -1,0 +1,29 @@
+{
+    "Voices": 1,
+    "Fundamental": [
+        22
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Formants": 2,
+    "Volume": 1.0,
+    "Burst": 3,
+    "Rest": 5,
+    "Formant_Mode_A": 0,
+    "Cycles_A": 4,
+    "Level_A": 1.0,
+    "Delay_A": 0.0,
+    "Pan_A": 0.0,
+    "Pulsaret_A": "Sine",
+    "Envelope_A": "Expodec",
+    "Formant_A": 1200,
+    "Formant_Mode_B": 0,
+    "Cycles_B": 6,
+    "Level_B": 0.4,
+    "Delay_B": 0.0,
+    "Pan_B": 0.0,
+    "Pulsaret_B": "Sine",
+    "Envelope_B": "Expodec",
+    "Formant_B": 4800
+}

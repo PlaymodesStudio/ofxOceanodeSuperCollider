@@ -1,0 +1,133 @@
+{
+    "Voices": 1,
+    "Pitch": [
+        24.0
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Glide": [
+        0.0
+    ],
+    "Volume": 1.0,
+    "Partials": 161,
+    "Tilt": [
+        -6.12
+    ],
+    "Stretch": [
+        1.0
+    ],
+    "Inharm": [
+        0.0
+    ],
+    "Detune": [
+        0.0
+    ],
+    "Shift": [
+        0.0
+    ],
+    "Even_Odd": [
+        -1.0
+    ],
+    "Filter": [
+        2
+    ],
+    "Cutoff": [
+        136.08
+    ],
+    "Keytrack": [
+        1.0
+    ],
+    "Slope": [
+        9.0
+    ],
+    "Res": [
+        0.0
+    ],
+    "Sweep": [
+        0.13429999351501465
+    ],
+    "Sweep_Waves": [
+        1.0
+    ],
+    "Sweep_Rate": [
+        0.237
+    ],
+    "Sweep_Sharp": [
+        0.0
+    ],
+    "Sweep_Mode": [
+        0
+    ],
+    "Sweep_Phase": [
+        0.0
+    ],
+    "Density": [
+        0.761
+    ],
+    "Rand_Amp": [
+        0.0
+    ],
+    "Mask_Glide": [
+        0.05
+    ],
+    "Seed": 0,
+    "Reroll": true,
+    "Attack": [
+        0.005
+    ],
+    "Decay": [
+        0.5
+    ],
+    "Sustain": [
+        1.0
+    ],
+    "Release": [
+        5.907
+    ],
+    "Curve": [
+        -3.0
+    ],
+    "Env_Rand": [
+        0.381
+    ],
+    "Env_Tilt": [
+        0.3
+    ],
+    "Vibrato": [
+        0.056
+    ],
+    "Vib_Rate": [
+        5.336
+    ],
+    "Partial_Vib": [
+        0.2052
+    ],
+    "Partial_Vib_Rate": [
+        1.0
+    ],
+    "Shimmer": [
+        0.0
+    ],
+    "Shimmer_Rate": [
+        4.0
+    ],
+    "Pan": [
+        0.0
+    ],
+    "Spread": [
+        1.0
+    ],
+    "Pan_Mode": [
+        0
+    ],
+    "Drift": [
+        0.0
+    ],
+    "Drift_Rate": [
+        0.1
+    ],
+    "Width": [
+        2.0
+    ]
+}

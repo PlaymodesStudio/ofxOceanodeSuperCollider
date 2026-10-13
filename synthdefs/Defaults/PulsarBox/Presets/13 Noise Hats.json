@@ -1,0 +1,38 @@
+{
+    "Voices": 1,
+    "Fundamental": [
+        9
+    ],
+    "Levels": [
+        0.5
+    ],
+    "Formants": 1,
+    "Volume": 0.9,
+    "Sieve": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0
+    ],
+    "Level_Jitter": 0.4,
+    "Formant_Mode_A": 0,
+    "Cycles_A": 40,
+    "Level_A": 1.0,
+    "Delay_A": 0.0,
+    "Pan_A": 0.0,
+    "Pulsaret_A": "Noise",
+    "Envelope_A": "Expodec",
+    "Formant_A": 7500
+}
