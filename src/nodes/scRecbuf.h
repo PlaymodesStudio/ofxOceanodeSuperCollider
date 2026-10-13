@@ -45,7 +45,7 @@ public:
 		addParameter(saveTrigger.set("Save", false));
 
 		addParameter(saveDir.set("Folder",
-					ofToDataPath("recordings/", true)));
+					ofToDataPath("Supercollider/Recordings/", true)));
 
 		addParameter(chooseFolder.set("Choose Folder", false));   // ← nou botó
 

@@ -497,6 +497,7 @@ private:
     void refreshProjectsList();
     void drawProjectMenu();
     std::string getProjectsDirectory() const;
+    std::string currentProjectLocation(const std::string& path) const;
     
     // ── Track reordering helpers ──────────────────────────────────────────────
     void moveTrackUp(int trackIndex);

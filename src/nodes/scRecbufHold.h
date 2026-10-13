@@ -46,7 +46,7 @@ public:
 		addParameter(record.set("Record", false));
 
 		addParameter(saveDir.set("Folder",
-					ofToDataPath("recordings/", true)));
+					ofToDataPath("Supercollider/Recordings/", true)));
 
 		addParameter(chooseFolder.set("ChooseFolder", false));
 

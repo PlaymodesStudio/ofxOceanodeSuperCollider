@@ -5195,7 +5195,7 @@ void scRhythmBox::presetRecallAfterSettingParameters(ofJson& j) {
     // Restore the last-used RhythmBox project path (display only — data comes from
     // the Oceanode preset, not by re-loading the project file).
     if(j.contains("lastProjectPath")) {
-        currentProjectPath = j["lastProjectPath"].get<std::string>();
+        currentProjectPath = currentProjectLocation(j["lastProjectPath"].get<std::string>());
         if(!currentProjectPath.empty()) {
             std::string stem = std::filesystem::path(currentProjectPath).stem().string();
             strncpy(projectNameBuffer, stem.c_str(), sizeof(projectNameBuffer) - 1);
@@ -5477,14 +5477,36 @@ void scRhythmBox::swapTracks(int trackA, int trackB) {
 // Project Save/Load Implementation
 // ════════════════════════════════════════════════════════════════════════════
 
+// data/Supercollider/RhythmBox/Projects. Builds before 2026-10-13 saved to
+// data/RhythmBoxProjects: its projects are moved here (one that already
+// exists here is kept and the old copy left in place), and the old folder is
+// removed once empty.
 std::string scRhythmBox::getProjectsDirectory() const {
-    std::string dataPath = ofToDataPath("", true);
-    std::string projectsPath = dataPath + "/RhythmBoxProjects";
-    
-    // Create directory if it doesn't exist
-    std::filesystem::create_directories(projectsPath);
-    
+    namespace fs = std::filesystem;
+    const std::string projectsPath = ofToDataPath("Supercollider/RhythmBox/Projects", true);
+    std::error_code ec;
+    fs::create_directories(projectsPath, ec);
+
+    const fs::path oldDir = ofToDataPath("RhythmBoxProjects", true);
+    if(fs::is_directory(oldDir, ec)) {
+        for(const auto& entry : fs::directory_iterator(oldDir, ec)) {
+            const fs::path target = fs::path(projectsPath) / entry.path().filename();
+            if(entry.is_regular_file(ec) && !fs::exists(target, ec)) {
+                fs::rename(entry.path(), target, ec);
+                if(ec) ofLogWarning("scRhythmBox") << "Could not move " << entry.path() << ": " << ec.message();
+            }
+        }
+        fs::remove(oldDir / ".DS_Store", ec);
+        if(fs::is_empty(oldDir, ec)) fs::remove(oldDir, ec);
+    }
     return projectsPath;
+}
+
+// A project path saved by an older build (.../RhythmBoxProjects/<name>.json)
+// points to the same project in the current folder
+std::string scRhythmBox::currentProjectLocation(const std::string& path) const {
+    if(path.find("/RhythmBoxProjects/") == std::string::npos) return path;
+    return projectsDirectory + "/" + std::filesystem::path(path).filename().string();
 }
 
 void scRhythmBox::refreshProjectsList() {
@@ -5556,7 +5578,7 @@ void scRhythmBox::loadProject(const std::string& projectPath) {
         std::string fullPath;
         if (projectPath.find('/') != std::string::npos) {
             // Already a full path
-            fullPath = projectPath;
+            fullPath = currentProjectLocation(projectPath);
         } else {
             // Just a project name, construct full path
             fullPath = projectsDirectory + "/" + projectPath + ".json";

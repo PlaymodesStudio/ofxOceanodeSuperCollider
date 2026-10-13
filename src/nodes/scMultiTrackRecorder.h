@@ -46,7 +46,7 @@ public:
         addParameter(lengthSec.set("Length(sec)", 20.0f, 0.01f, 3600.0f));
         addParameter(serverIndex.set("Server", 0, 0, MAX(0, (int)servers.size()-1)));
         addParameter(record.set("Record", false));
-        addParameter(saveDir.set("Folder", ofToDataPath("recordings/", true)));
+        addParameter(saveDir.set("Folder", ofToDataPath("Supercollider/Recordings/", true)));
         addParameter(chooseFolder.set("ChooseFolder", false));
         addParameter(recLED.set("Rec LED", ofColor(255, 0, 0)),
                      ofxOceanodeParameterFlags_DisableInConnection |
