@@ -84,3 +84,16 @@ OceanodeInternalBuffer{
 		^name.asSymbol.kr(0, spec: ControlSpec(units: "internalbuffer"));
 	}
 }
+
+// Void parameter: a bang button in Oceanode (connects from void outputs).
+// Each bang sets the trigger control to 1 for one control block.
+//     reset = OceanodeParameterVoid.kr(\reset);
+// .ar gives the same pulse at the first sample of that block.
+OceanodeParameterVoid {
+	*kr {arg name;
+		^name.asSymbol.tr(0, spec: ControlSpec(0, 1, default: 0, units: "v"));
+	}
+	*ar {arg name;
+		^T2A.ar(this.kr(name));
+	}
+}

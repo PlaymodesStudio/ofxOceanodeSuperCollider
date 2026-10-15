@@ -39,8 +39,9 @@ public:
     }
     
     void setup() override;
-    
-    
+    void update(ofEventArgs &e) override;
+
+
     void presetWillBeLoaded() override{
         //        isPresetLoading = true;
     }
@@ -133,6 +134,14 @@ private:
     // Last value seen per variable, to tell a real change from a re-notify
     std::map<std::string, int> lastVariableValues;
     bool waitingForSynthdef = false;
+
+    // A void output banging a trigger input sends 1; the parameter's own value
+    // goes back to the synths on a later frame, so SC sees a rising edge.
+    struct PendingTriggerRestore {
+        uint64_t frame;
+        std::function<void(bool force)> resend;
+    };
+    std::vector<PendingTriggerRestore> pendingTriggerRestores;
 };
 
 #endif /* scSynthdef_h */

@@ -10,6 +10,8 @@
 #include "ofxSCSynth.h"
 #include "ofxSCServer.h"
 #include "scSchedulingCompat.h"
+#include "ofxOceanodeShared.h"
+#include "ofxOceanodeConnection.h"
 
 namespace {
 // What each synth was last sent for one parameter. Oceanode connections pass
@@ -139,6 +141,9 @@ void scSynthdef::setup(){
         // it goes out inside an ofxSCServer::ScopedTimetag, so scsynth applies
         // it at that exact instant instead of on arrival.
         std::function<void(const std::string&)> setScheduledValueToSynths;
+        // Set below for trigger-like parameters; true when the change was a
+        // void bang and has been sent as a pulse.
+        auto handleVoidBang = std::make_shared<std::function<bool()>>();
         
         if(unitWithoutAudio == "vi"){
             ofParameter<vector<int>> vi;
@@ -169,8 +174,9 @@ void scSynthdef::setup(){
                 }
             };
 
-            listeners.push(vi.newListener([setValuesToSynths](vector<int> &vi_){
+            listeners.push(vi.newListener([setValuesToSynths, handleVoidBang](vector<int> &vi_){
                 if(scScheduling::isBackendSendSuppressed()) return;
+                if(*handleVoidBang && (*handleVoidBang)()) return;
                 setValuesToSynths(false);
             }));
         }
@@ -236,8 +242,9 @@ void scSynthdef::setup(){
                 for(auto synthServer : synths) synthServer.second->set(toSendName, value);
             };
 
-            listeners.push(i.newListener([setValuesToSynths](int &i_){
+            listeners.push(i.newListener([setValuesToSynths, handleVoidBang](int &i_){
                 if(scScheduling::isBackendSendSuppressed()) return;
+                if(*handleVoidBang && (*handleVoidBang)()) return;
                 setValuesToSynths(false);
             }));
         }
@@ -295,9 +302,22 @@ void scSynthdef::setup(){
                 for(auto synthServer : synths) synthServer.second->set(toSendName, value);
             };
 
-            listeners.push(b.newListener([this, setValuesToSynths](bool &b_){
+            listeners.push(b.newListener([this, setValuesToSynths, handleVoidBang](bool &b_){
                 if(scScheduling::isBackendSendSuppressed()) return;
+                if(*handleVoidBang && (*handleVoidBang)()) return;
                 setValuesToSynths(false);
+            }));
+        }
+        else if(unitWithoutAudio == "v"){ // OceanodeParameterVoid: a trigger control
+            ofParameter<void> v;
+            addParameter(v.set(paramName));
+            listeners.push(v.newListener([this, toSendName](){
+                if(ofxOceanodeShared::isPresetLoading() || scScheduling::isBackendSendSuppressed()) return;
+                for(auto synthServer : synths) synthServer.second->set(toSendName, 1);
+                // A trigger control drops back by itself; a plain one would not.
+                pendingTriggerRestores.push_back({ofGetFrameNum(), [this, toSendName](bool){
+                    for(auto synthServer : synths) synthServer.second->set(toSendName, 0);
+                }});
             }));
         }
         else if(unitWithoutAudio == "buffer"){
@@ -363,6 +383,27 @@ void scSynthdef::setup(){
                 setValuesToSynths(false);
             }));
         }
+        // Void outputs connect to any parameter, but a bang only re-sets the
+        // value it already holds, which never reaches the synth. On a 0..1
+        // integer / bool input (Trigger, Reset, Reseed...) it becomes a pulse.
+        const bool isTriggerLike = (unitWithoutAudio == "vi" || unitWithoutAudio == "i" || unitWithoutAudio == "b")
+            && ofToFloat(specMap["minval"]) == 0 && ofToFloat(specMap["maxval"]) == 1;
+        if(isTriggerLike && parameterReference != nullptr){
+            ofxOceanodeAbstractParameter* parameter = parameterReference.get();
+            const bool isVector = unitWithoutAudio == "vi";
+            *handleVoidBang = [this, parameter, isVector, toSendName, setValuesToSynths, sentCache]() -> bool {
+                if(ofxOceanodeShared::isPresetLoading() || !parameter->hasInConnection()) return false;
+                auto& source = parameter->getInConnection()->getSourceParameter();
+                if(dynamic_cast<ofxOceanodeParameter<void>*>(&source) == nullptr) return false;
+                sentCache->forget();
+                for(auto synthServer : synths){
+                    if(isVector) synthServer.second->setMultiple(toSendName, 1, numChannels);
+                    else synthServer.second->set(toSendName, 1);
+                }
+                pendingTriggerRestores.push_back({ofGetFrameNum(), setValuesToSynths});
+                return true;
+            };
+        }
         if(hasAudioRate && parameterReference != nullptr){
             auto availableInput = availableInputs.emplace_back(std::make_shared<nodePort>());
             parameterReference->addReceiveFunc<nodePort>([this, toSendName, availableInput](nodePort const &port){
@@ -407,9 +448,11 @@ void scSynthdef::setup(){
                 });
         }
 
-        listeners.push(resendParams.newListener([setValuesToSynths]{
-            setValuesToSynths(true);
-        }));
+        if(setValuesToSynths){
+            listeners.push(resendParams.newListener([setValuesToSynths]{
+                setValuesToSynths(true);
+            }));
+        }
     }
     
     listeners.push(resendParams.newListener([this](){
@@ -429,6 +472,17 @@ void scSynthdef::setup(){
             scNode::addOutput(paramName);
         }
     }
+}
+
+void scSynthdef::update(ofEventArgs &e){
+    if(pendingTriggerRestores.empty()) return;
+    const uint64_t frame = ofGetFrameNum();
+    std::vector<PendingTriggerRestore> due;
+    auto notYet = std::stable_partition(pendingTriggerRestores.begin(), pendingTriggerRestores.end(),
+        [frame](const PendingTriggerRestore& restore){ return restore.frame >= frame; });
+    due.assign(std::make_move_iterator(notYet), std::make_move_iterator(pendingTriggerRestores.end()));
+    pendingTriggerRestores.erase(notYet, pendingTriggerRestores.end());
+    for(auto& restore : due) restore.resend(true);
 }
 
 void scSynthdef::replaceSynths(){
