@@ -18,10 +18,11 @@
 //  separate insert synth (mixerProEQN / mixerProDCN / mixerProEQDCN) created
 //  the first time either is switched on, placed just before the track synth
 //  and paused while both are off -- a track without them costs nothing.
-//  HP, COMP, SAT, ECHO and RVB (mixerProHPN / CompN / SatN / EchoN / RvbN)
+//  HP, COMP, SAT, ECHO, RVB and WIDTH (mixerProHPN / CompN / SatN / EchoN /
+//  RvbN / WidthN)
 //  are more inserts with the same rule: created the first time they are
-//  switched on, paused while off. Switching off first fades: HP / COMP / SAT
-//  crossfade to dry (\on, 30 ms), ECHO and RVB stop feeding their loop and let
+//  switched on, paused while off. Switching off first fades: HP / COMP / SAT /
+//  WIDTH crossfade to dry (\on, 30 ms), ECHO and RVB stop feeding their loop and let
 //  the tail ring out; then the node routes around the insert and pauses it
 //  (update(), offAt). The compressor writes its gain reduction (dB) on the
 //  track's vuBus, after the key channels, for the strip's GR meter. ECHO's
@@ -53,7 +54,12 @@
 //  (0 = the source node's "N Chan") and Rotate decide a gain matrix, computed
 //  here and run by mixerProAdaptM_N, created only when the matrix is not the
 //  plain direct one. Chain: source -> adapter -> HP -> EQ/DC -> Comp -> Sat ->
-//  Echo -> Rvb -> track.
+//  Echo -> Rvb -> Width -> track.
+//
+//  Width (strip knob beside Balance, WIDTH tab). Mid / side generalised to N
+//  channels: Width scales each channel's difference from the mean, Diffuse
+//  adds zero-sum decorrelated copies of the mean (mono sources become wide),
+//  Bass Mono keeps the lows mono. The sum of the channels never changes.
 //
 //  Submasters (buses). A bus is a strip like a track (same synth, inserts,
 //  sidechain) whose input is a private audio bus. A track's Out (0 master,
@@ -137,11 +143,15 @@ private:
     };
 
     // Strip inserts with an FxStage, and their place in the chain
-    // (positions: 0 HP, 1 EQ/DC insert, 2 Comp, 3 Sat, 4 Echo, 5 Rvb, 6 track)
-    enum FxKind { FX_HP = 0, FX_COMP, FX_SAT, FX_ECHO, FX_RVB, FX_COUNT };
-    static constexpr int CHAIN_TRACK = 6;
-    static int fxPos(int k) { static const int p[FX_COUNT] = {0, 2, 3, 4, 5}; return p[k]; }
-    static int fxAtPos(int pos) { static const int k[7] = {FX_HP, -1, FX_COMP, FX_SAT, FX_ECHO, FX_RVB, -1}; return pos >= 0 && pos < 7 ? k[pos] : -1; }
+    // (positions: 0 HP, 1 EQ/DC insert, 2 Comp, 3 Sat, 4 Echo, 5 Rvb, 6 Width, 7 track)
+    enum FxKind { FX_HP = 0, FX_COMP, FX_SAT, FX_ECHO, FX_RVB, FX_WIDE, FX_COUNT };
+    static constexpr int CHAIN_TRACK = 7;
+    static int fxPos(int k) { static const int p[FX_COUNT] = {0, 2, 3, 4, 5, 6}; return p[k]; }
+    static int fxAtPos(int pos) { static const int k[8] = {FX_HP, -1, FX_COMP, FX_SAT, FX_ECHO, FX_RVB, FX_WIDE, -1}; return pos >= 0 && pos < 8 ? k[pos] : -1; }
+    static const char* fxDefBase(int k) {
+        static const char* b[FX_COUNT] = {"mixerProHP", "mixerProComp", "mixerProSat", "mixerProEcho", "mixerProRvb", "mixerProWidth"};
+        return b[k];
+    }
 
     // Master section stages
     enum MasterStage { MST_HP = 0, MST_EQ, MST_MAX, MST_LIM, MST_COUNT };
@@ -180,6 +190,9 @@ private:
         ofParameter<bool>  echo, echoBeats;
         ofParameter<float> echoTime, echoBeatVal, echoFeed, echoCutoff, echoResonance, echoPingPong, echoMix;
         ofParameter<int>   echoFilter;       // 0 LowPass 1 HighPass 2 BandPass 3 PeakEQ
+        // Width insert: Width (0 mono .. 1 .. 2), Diffuse, Bass Mono below a frequency
+        ofParameter<bool>  wide, wideBassMono;
+        ofParameter<float> wideWidth, wideDiffuse, wideBassFreq;
         // Aux sends (tracks and submasters)
         std::array<ofParameter<float>, MAX_RETURNS> sendLevel;
         std::array<ofParameter<bool>,  MAX_RETURNS> sendPre;
@@ -350,6 +363,7 @@ private:
     void sendSat(Track& tr);
     void sendEcho(Track& tr);
     void sendRvb(Track& tr);
+    void sendWide(Track& tr);
     void processFxTimers();
     float fxOffDelay(const Track& tr, int k) const;
     float rvbTail(const Track& tr) const;
@@ -433,7 +447,7 @@ private:
     bool windowVisible = false;
     int editTracks = 0, editChannels = 0, editBuses = 0, editReturns = 0;   // toolbar fields while being typed in
     int selectedEqTrack = -1;
-    int panelTab = 0;                          // channel panel: 0 EQ, 1 HP, 2 Comp, 3 Sat, 4 Echo, 5 Reverb
+    int panelTab = 0;                          // channel panel: 0 EQ, 1 HP, 2 Comp, 3 Sat, 4 Echo, 5 Reverb, 6 Width
     int masterTab = 0;                         // master panel: MasterStage
     std::vector<float> masterVU, masterPeak, masterPeakAge;
     void drawWindow();
@@ -446,11 +460,12 @@ private:
     void drawHpPanel(Track& tr);
     void drawSatPanel(Track& tr);
     void drawEchoPanel(Track& tr);
+    void drawWidePanel(Track& tr);
     void drawMasterPanel(float w, float h);
     bool drawSendKnob(const char* id, float& value, float radius, bool pre, ImU32 colour, bool disabled);
     void drawMiniCurve(Track& tr, ImVec2 pos, ImVec2 size);
     bool drawFader(const char* id, float& gain, ImVec2 pos, ImVec2 size, float maxGain = 2.0f);
-    bool drawKnob(const char* id, float& value, float radius);
+    bool drawKnob(const char* id, float& value, float radius, const char* tooltip = nullptr, ImU32 arc = IM_COL32(110, 190, 255, 255));
     void drawMeters(const std::vector<float>& vu, const std::vector<float>& peak, ImVec2 pos, ImVec2 size, bool bus = false);
     void updatePeaks(std::vector<float>& vu, std::vector<float>& peak, std::vector<float>& age, float dt);
     void recomputeEqCurve(Track& tr);

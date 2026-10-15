@@ -413,6 +413,12 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
     // A return is a wet effect: its echo and reverb start fully wet
     t.echoMix.set(e + " Mix", t.isReturn ? 1.0f : 0.35f, 0.0f, 1.0f);
     if(t.isReturn) t.rvbMix.set(1.0f);
+    const std::string wd = "Wide " + n;
+    t.wide.set(wd, false);
+    t.wideWidth.set(wd + " Width", 1.0f, 0.0f, 2.0f);
+    t.wideDiffuse.set(wd + " Diffuse", 0.0f, 0.0f, 1.0f);
+    t.wideBassMono.set(wd + " Bass Mono", true);
+    t.wideBassFreq.set(wd + " Bass Freq", 150.0f, 40.0f, 500.0f);
     for(int k = 0; k < MAX_RETURNS; k++) {
         const std::string sn = "Send " + n + " Aux" + ofToString(k + 1);
         t.sendLevel[k].set(sn, 0.0f, 0.0f, 1.0f);
@@ -448,6 +454,10 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
     t.listeners.push(t.sat.newListener([this, tp](bool&) { updateFx(*tp, FX_SAT); }));
     t.listeners.push(t.echo.newListener([this, tp](bool&) { updateFx(*tp, FX_ECHO); }));
     t.listeners.push(t.rvb.newListener([this, tp](bool&) { updateFx(*tp, FX_RVB); }));
+    t.listeners.push(t.wide.newListener([this, tp](bool&) { updateFx(*tp, FX_WIDE); }));
+    t.listeners.push(t.wideBassMono.newListener([this, tp](bool&) { sendWide(*tp); }));
+    for(auto* q : {&t.wideWidth, &t.wideDiffuse, &t.wideBassFreq})
+        t.listeners.push(q->newListener([this, tp](float&) { sendWide(*tp); }));
     t.listeners.push(t.hp24.newListener([this, tp](bool&) { sendHP(*tp); }));
     t.listeners.push(t.hpFreq.newListener([this, tp](float&) { sendHP(*tp); }));
     t.listeners.push(t.satAuto.newListener([this, tp](bool&) { sendSat(*tp); }));
@@ -674,7 +684,8 @@ std::vector<ofAbstractParameter*> scMixerPro::fxParams(Track& t) {
         &t.hp, &t.hpFreq, &t.hp24,
         &t.sat, &t.satDrive, &t.satBias, &t.satTone, &t.satOutput, &t.satAuto, &t.satMix,
         &t.echo, &t.echoTime, &t.echoBeats, &t.echoBeatVal, &t.echoFeed, &t.echoCutoff,
-        &t.echoResonance, &t.echoFilter, &t.echoPingPong, &t.echoMix
+        &t.echoResonance, &t.echoFilter, &t.echoPingPong, &t.echoMix,
+        &t.wide, &t.wideWidth, &t.wideDiffuse, &t.wideBassMono, &t.wideBassFreq
     };
     for(int k = 0; k < MAX_RETURNS; k++) { p.push_back(&t.sendLevel[k]); p.push_back(&t.sendPre[k]); }
     return p;
@@ -1284,8 +1295,7 @@ void scMixerPro::setChannelCount(int channels) {
             delete fx.synth;
             fx.synth = synth;
         };
-        static const char* bases[FX_COUNT] = {"mixerProHP", "mixerProComp", "mixerProSat", "mixerProEcho", "mixerProRvb"};
-        for(int k = 0; k < FX_COUNT; k++) replaceFx(tr.fx[k], bases[k]);
+        for(int k = 0; k < FX_COUNT; k++) replaceFx(tr.fx[k], fxDefBase(k));
         dropSends(tr, true);   // its def and bus depend on the width; updateSends below
         tr.sentMute = -1.0f;
         sendAll(tr);
@@ -1721,7 +1731,7 @@ void scMixerPro::updateInsert(Track& tr) {
     applyInputRouting(tr);
 }
 
-// ── Strip inserts (HP, Comp, Sat, Echo, Rvb) ───────────────────────────────
+// ── Strip inserts (HP, Comp, Sat, Echo, Rvb, Width) ───────────────────────────────
 
 ofParameter<bool>& scMixerPro::fxSwitch(Track& tr, int k) {
     switch(k) {
@@ -1729,6 +1739,7 @@ ofParameter<bool>& scMixerPro::fxSwitch(Track& tr, int k) {
         case FX_COMP: return tr.comp;
         case FX_SAT:  return tr.sat;
         case FX_ECHO: return tr.echo;
+        case FX_WIDE: return tr.wide;
         default:      return tr.rvb;
     }
 }
@@ -1739,6 +1750,7 @@ void scMixerPro::sendFx(Track& tr, int k) {
         case FX_COMP: sendComp(tr); break;
         case FX_SAT:  sendSat(tr); break;
         case FX_ECHO: sendEcho(tr); break;
+        case FX_WIDE: sendWide(tr); break;
         default:      sendRvb(tr); break;
     }
 }
@@ -1750,7 +1762,6 @@ void scMixerPro::sendFx(Track& tr, int k) {
 void scMixerPro::updateFx(Track& tr, int k) {
     if(!tr.synth || !tr.liveServer) return;   // applied when the synth is created
     ofxSCServer* server = tr.liveServer;
-    static const char* bases[FX_COUNT] = {"mixerProHP", "mixerProComp", "mixerProSat", "mixerProEcho", "mixerProRvb"};
     FxStage& f = tr.fx[k];
 
     if(!fxSwitch(tr, k).get()) {
@@ -1765,7 +1776,7 @@ void scMixerPro::updateFx(Track& tr, int k) {
     if(!f.bus) f.bus = new ofxSCBus(RATE_AUDIO, currentChannels, server);
     if(!f.synth) {
         ofxSCSynth* before = chainSynthAfter(tr, fxPos(k));
-        f.synth = new ofxSCSynth(bases[k] + ofToString(currentChannels), server);
+        f.synth = new ofxSCSynth(fxDefBase(k) + ofToString(currentChannels), server);
         f.synth->set("in", stageInput(tr, fxPos(k)));
         f.synth->set("out", f.bus->index);
         sendFx(tr, k);   // stored as /s_new arguments
@@ -1872,6 +1883,16 @@ void scMixerPro::sendSat(Track& tr) {
     s->set("autogain", tr.satAuto.get() ? 1.0f : 0.0f);
     s->set("mix", ofClamp(tr.satMix.get(), 0.0f, 1.0f));
     s->set("on", (tr.sat.get() && tr.fx[FX_SAT].offAt < 0.0f) ? 1.0f : 0.0f);
+}
+
+void scMixerPro::sendWide(Track& tr) {
+    ofxSCSynth* s = tr.fx[FX_WIDE].synth;
+    if(!s) return;
+    s->set("width", ofClamp(tr.wideWidth.get(), 0.0f, 2.0f));
+    s->set("diffuse", ofClamp(tr.wideDiffuse.get(), 0.0f, 1.0f));
+    s->set("bassMono", tr.wideBassMono.get() ? 1.0f : 0.0f);
+    s->set("bassFreq", ofClamp(tr.wideBassFreq.get(), 20.0f, 1000.0f));
+    s->set("on", (tr.wide.get() && tr.fx[FX_WIDE].offAt < 0.0f) ? 1.0f : 0.0f);
 }
 
 void scMixerPro::sendEcho(Track& tr) {
@@ -2174,12 +2195,13 @@ void scMixerPro::registerTrackActions(Track& tr) {
         addAction(tr.eqGain[b].getEscapedName(), tr.eqGain[b]);
         addAction(tr.eqShape[b].getEscapedName(), tr.eqShape[b]);
     }
-    for(auto* q : {&tr.comp, &tr.compAuto, &tr.rvb, &tr.hp, &tr.hp24, &tr.sat, &tr.satAuto, &tr.echo, &tr.echoBeats})
+    for(auto* q : {&tr.comp, &tr.compAuto, &tr.rvb, &tr.hp, &tr.hp24, &tr.sat, &tr.satAuto, &tr.echo, &tr.echoBeats,
+                   &tr.wide, &tr.wideBassMono})
         addAction(q->getEscapedName(), *q);
     addAction(tr.echoFilter.getEscapedName(), tr.echoFilter);
     for(auto* q : {&tr.hpFreq, &tr.satDrive, &tr.satBias, &tr.satTone, &tr.satOutput, &tr.satMix,
                    &tr.echoTime, &tr.echoBeatVal, &tr.echoFeed, &tr.echoCutoff, &tr.echoResonance,
-                   &tr.echoPingPong, &tr.echoMix})
+                   &tr.echoPingPong, &tr.echoMix, &tr.wideWidth, &tr.wideDiffuse, &tr.wideBassFreq})
         addAction(q->getEscapedName(), *q);
     if(!tr.isReturn) {
         for(int k = 0; k < MAX_RETURNS; k++) {
@@ -2604,6 +2626,10 @@ ofJson scMixerPro::saveStrip(Track& tr) {
         {"feed", tr.echoFeed.get()}, {"cutoff", tr.echoCutoff.get()}, {"resonance", tr.echoResonance.get()},
         {"filter", tr.echoFilter.get()}, {"pingpong", tr.echoPingPong.get()}, {"mix", tr.echoMix.get()}
     };
+    t["wide"] = {
+        {"on", tr.wide.get()}, {"width", tr.wideWidth.get()}, {"diffuse", tr.wideDiffuse.get()},
+        {"bassMono", tr.wideBassMono.get()}, {"bassFreq", tr.wideBassFreq.get()}
+    };
     if(!tr.isReturn) {
         t["sends"] = ofJson::array();
         for(int k = 0; k < MAX_RETURNS; k++) t["sends"].push_back({tr.sendLevel[k].get(), tr.sendPre[k].get()});
@@ -2701,6 +2727,7 @@ void scMixerPro::loadStrip(Track& tr, const ofJson& j) {
     const ofJson& hj = (j.contains("hp") && j["hp"].is_object()) ? j["hp"] : none;
     const ofJson& sj = (j.contains("sat") && j["sat"].is_object()) ? j["sat"] : none;
     const ofJson& ej = (j.contains("echo") && j["echo"].is_object()) ? j["echo"] : none;
+    const ofJson& wj = (j.contains("wide") && j["wide"].is_object()) ? j["wide"] : none;
     num(hj, "freq", tr.hpFreq, 80.0f);
     tr.hp24.set(hj.value("24dB", false));
     num(sj, "drive", tr.satDrive, 6.0f);   num(sj, "warmth", tr.satBias, 0.0f);
@@ -2713,6 +2740,9 @@ void scMixerPro::loadStrip(Track& tr, const ofJson& j) {
     num(ej, "mix", tr.echoMix, tr.isReturn ? 1.0f : 0.35f);
     tr.echoBeats.set(ej.value("beats", true));
     tr.echoFilter.set(ofClamp(ej.value("filter", 0), 0, 3));
+    num(wj, "width", tr.wideWidth, 1.0f);  num(wj, "diffuse", tr.wideDiffuse, 0.0f);
+    num(wj, "bassFreq", tr.wideBassFreq, 150.0f);
+    tr.wideBassMono.set(wj.value("bassMono", true));
     for(int k = 0; k < MAX_RETURNS; k++) {
         float level = 0.0f; bool pre = false;
         if(j.contains("sends") && j["sends"].is_array() && k < (int)j["sends"].size()) {
@@ -2727,6 +2757,7 @@ void scMixerPro::loadStrip(Track& tr, const ofJson& j) {
     tr.sat.set(sj.value("on", false));
     tr.echo.set(ej.value("on", false));
     tr.rvb.set(r.value("on", false));
+    tr.wide.set(wj.value("on", false));
     tr.eqCurveDirty = true;
     if(!tr.isBus) tr.output.set(ofClamp(j.value("output", 0), 0, MAX_BUSES));
 }
@@ -3027,7 +3058,8 @@ bool scMixerPro::drawFader(const char* id, float& gain, ImVec2 pos, ImVec2 size,
     return changed;
 }
 
-bool scMixerPro::drawKnob(const char* id, float& value, float radius) {
+// A bipolar knob, -1..1 (centre 0). tooltip: shown instead of the balance one
+bool scMixerPro::drawKnob(const char* id, float& value, float radius, const char* tooltip, ImU32 arc) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton(id, ImVec2(radius * 2.0f, radius * 2.0f));
@@ -3046,11 +3078,13 @@ bool scMixerPro::drawKnob(const char* id, float& value, float radius) {
     dl->PathArcTo(c, radius - 2.0f, a0, a1, 24);
     dl->PathStroke(IM_COL32(70, 70, 80, 255), 0, 2.5f);
     dl->PathArcTo(c, radius - 2.0f, std::min(aMid, a), std::max(aMid, a), 16);
-    dl->PathStroke(IM_COL32(110, 190, 255, 255), 0, 2.5f);
+    dl->PathStroke(arc, 0, 2.5f);
     dl->AddLine(c, ImVec2(c.x + std::cos(a) * (radius - 3.0f), c.y + std::sin(a) * (radius - 3.0f)),
                 IM_COL32(230, 230, 235, 255), 2.0f);
-    if(ImGui::IsItemActive() || ImGui::IsItemHovered())
-        ImGui::SetTooltip("Balance %.2f  (drag, Shift: fine, double-click: centre)", value);
+    if(ImGui::IsItemActive() || ImGui::IsItemHovered()) {
+        if(tooltip) ImGui::SetTooltip("%s", tooltip);
+        else ImGui::SetTooltip("Balance %.2f  (drag, Shift: fine, double-click: centre)", value);
+    }
     return changed;
 }
 
@@ -3455,7 +3489,7 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
         selectedEqTrack = closing ? -1 : eqId(tr);
     }
     ImGui::PopStyleColor(3);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Open / close this strip's panel (EQ, HP, Comp, Sat, Echo, Reverb)");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Open / close this strip's panel (EQ, HP, Comp, Sat, Echo, Reverb, Width)");
     y += btnH + 3.0f * zoom;
 
     // Aux sends: one knob per return (ring: pre-fader)
@@ -3543,12 +3577,49 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
     }
     y += btnH + 6.0f * zoom;
 
-    // Balance
+    // Balance and Width
     const float radius = 13.0f * zoom;
-    ImGui::SetCursorScreenPos(ImVec2(start.x + w * 0.5f - radius, y));
+    ImGui::SetCursorScreenPos(ImVec2(start.x + w * 0.3f - radius, y));
     float bal = tr.balance.get();
     if(drawKnob("##balance", bal, radius)) tr.balance.set(bal);
     drawPublishPopup(tr.balance.getEscapedName());
+    {
+        // Width 0..2 on the bipolar knob (centre 1). Turning it switches the
+        // Width insert on; grey arc: off (bypassed)
+        ImGui::SetCursorScreenPos(ImVec2(start.x + w * 0.7f - radius, y));
+        const bool on = tr.wide.get();
+        float v = tr.wideWidth.get() - 1.0f;
+        std::string tip = "Width " + ofToString(tr.wideWidth.get(), 2) +
+            (tr.wideWidth.get() <= 0.005f ? " (mono)" : "") +
+            (on ? "" : "  -  off") +
+            (on && tr.wideDiffuse.get() > 0.0f ? "\nDiffuse " + ofToString(tr.wideDiffuse.get(), 2) : "") +
+            (currentChannels < 2 ? "\nOne channel: no effect" : "") +
+            "\nDrag (switches it on), Shift: fine, double-click: 1\nRight-click: on / off, edit, publish";
+        if(drawKnob("##width", v, radius, tip.c_str(), on ? IM_COL32(150, 220, 140, 255) : IM_COL32(110, 110, 118, 255))) {
+            tr.wideWidth.set(ofClamp(v + 1.0f, 0.0f, 2.0f));
+            if(!on && ImGui::IsItemActive()) tr.wide.set(true);
+        }
+        // the letter W under the pointer's hub: tells the two knobs apart
+        const ImVec2 c(start.x + w * 0.7f, y + radius);
+        const char* letter = "W";
+        const ImVec2 ts = ImGui::CalcTextSize(letter);
+        dl->AddText(ImVec2(c.x - ts.x * 0.5f, c.y + radius * 0.25f), on ? IM_COL32(150, 220, 140, 200) : IM_COL32(120, 120, 128, 200), letter);
+        const std::string key = tr.wideWidth.getEscapedName();
+        markPublished(key);
+        if(ImGui::BeginPopupContextItem("##widthMenu")) {
+            bool o = on;
+            if(ImGui::Checkbox("Width on", &o)) tr.wide.set(o);
+            if(ImGui::MenuItem("Edit Width...")) {
+                selectedEqTrack = eqId(tr);
+                panelTab = 6;
+            }
+            ImGui::Separator();
+            drawPublishItems(key, "Width (0..2)", false);
+            ImGui::Separator();
+            drawPublishItems(tr.wide.getEscapedName(), "On (0 / 1)", false);
+            ImGui::EndPopup();
+        }
+    }
     y += radius * 2.0f + 4.0f * zoom;
 
     // Mute / Solo
@@ -3605,9 +3676,9 @@ void scMixerPro::drawEqPanel(float w, float h) {
     ImGui::BeginChild("##mixerProEq", ImVec2(w, h), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::TextColored(ImVec4(tr.color.r / 255.0f, tr.color.g / 255.0f, tr.color.b / 255.0f, 1.0f), "%s", tr.name.c_str());
     // Tabs (green text: that insert is on)
-    const char* tabNames[] = {"EQ##tab", "HP##tab", "Comp##tab", "Sat##tab", "Echo##tab", "Reverb##tab"};
-    const bool tabOn[] = {tr.eq.get() || tr.dc.get(), tr.hp.get(), tr.comp.get(), tr.sat.get(), tr.echo.get(), tr.rvb.get()};
-    for(int i = 0; i < 6; i++) {
+    const char* tabNames[] = {"EQ##tab", "HP##tab", "Comp##tab", "Sat##tab", "Echo##tab", "Reverb##tab", "Width##tab"};
+    const bool tabOn[] = {tr.eq.get() || tr.dc.get(), tr.hp.get(), tr.comp.get(), tr.sat.get(), tr.echo.get(), tr.rvb.get(), tr.wide.get()};
+    for(int i = 0; i < 7; i++) {
         ImGui::SameLine(0, i == 0 ? 12.0f * zoom : 2.0f * zoom);
         pushButtonColours(panelTab == i ? ImVec4(0.32f, 0.32f, 0.38f, 1.0f) : ImVec4(0.15f, 0.15f, 0.18f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_Text, tabOn[i] ? ImVec4(0.55f, 0.92f, 0.6f, 1.0f) : ImVec4(0.75f, 0.75f, 0.78f, 1.0f));
@@ -3615,9 +3686,9 @@ void scMixerPro::drawEqPanel(float w, float h) {
         ImGui::PopStyleColor(4);
     }
     ImGui::SameLine(0, 14.0f * zoom);
-    if(panelTab >= 1 && panelTab <= 5) {
-        static const int kTabFx[6] = {-1, FX_HP, FX_COMP, FX_SAT, FX_ECHO, FX_RVB};
-        static const char* kTabLabel[6] = {"", "High-pass", "Compressor", "Saturation", "Echo", "Reverb"};
+    if(panelTab >= 1 && panelTab <= 6) {
+        static const int kTabFx[7] = {-1, FX_HP, FX_COMP, FX_SAT, FX_ECHO, FX_RVB, FX_WIDE};
+        static const char* kTabLabel[7] = {"", "High-pass", "Compressor", "Saturation", "Echo", "Reverb", "Width"};
         const int k = kTabFx[panelTab];
         ofParameter<bool>& sw = fxSwitch(tr, k);
         bool on = sw.get();
@@ -3629,6 +3700,7 @@ void scMixerPro::drawEqPanel(float w, float h) {
         else if(k == FX_COMP) ImGui::Text("GR %4.1f dB", tr.gr);
         else if(k == FX_RVB) ImGui::TextDisabled("SpaceMaster  -  Decay = RT60");
         else if(k == FX_ECHO) ImGui::TextDisabled("%.0f ms%s", echoDelaySec(tr) * 1000.0f, tr.echoBeats.get() ? " at the node tempo" : "");
+        else if(k == FX_WIDE) ImGui::TextDisabled(currentChannels < 2 ? "one channel: no effect" : "the mono sum never changes");
         ImGui::SameLine(0, 12.0f * zoom);
         ImGui::TextDisabled("right-click a control: value / publish");
     } else {
@@ -3654,6 +3726,7 @@ void scMixerPro::drawEqPanel(float w, float h) {
     if(panelTab == 3) { drawSatPanel(tr); ImGui::EndChild(); return; }
     if(panelTab == 4) { drawEchoPanel(tr); ImGui::EndChild(); return; }
     if(panelTab == 5) { drawRvbPanel(tr); ImGui::EndChild(); return; }
+    if(panelTab == 6) { drawWidePanel(tr); ImGui::EndChild(); return; }
 
     recomputeEqCurve(tr);
     tr.eqEditor.gainLimit = 24.0f;
@@ -3785,7 +3858,7 @@ void scMixerPro::drawRvbPanel(Track& tr) {
     ImGui::EndGroup();
     ImGui::SameLine(0, 18.0f * zoom);
     ImGui::BeginGroup();
-    slider("Late", tr.rvbPosition, "%.2f", 0, "Early reflections (0) to late tail (1)");
+    slider("Position", tr.rvbPosition, "%.2f", 0, "SpaceMaster Position: early reflections (0) to late tail (1)");
     slider("Spread", tr.rvbSpread, "%.2f", 0, "Left / right predelay offset");
     slider("Lowpass", tr.rvbLowpass, "%.0f Hz", ImGuiSliderFlags_Logarithmic, "Tone of the reverb input");
     slider("Hi Damp", tr.rvbHighDamp, "%.1f dB", 0, "High-shelf loss per pass in the tank: darker tail");
@@ -3848,6 +3921,30 @@ void scMixerPro::drawHpPanel(Track& tr) {
     if(ImGui::Checkbox("24 dB/oct", &steep)) tr.hp24.set(steep);
     drawPublishPopup(tr.hp24.getEscapedName());
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Butterworth, 12 or 24 dB per octave");
+}
+
+void scMixerPro::drawWidePanel(Track& tr) {
+    const float zoom = ofxOceanodeShared::getZoomLevel();
+    const float fieldW = 170.0f * zoom;
+    auto pub = [this](const std::string& k) { drawPublishPopup(k); };
+    ImGui::Dummy(ImVec2(0, 2.0f * zoom));
+    ImGui::BeginGroup();
+    panelSlider("Width", tr.wideWidth, "%.2f", 0, fieldW,
+                "Each channel's difference from the mean of all channels:\n0 mono, 1 as it is, 2 twice as wide", pub);
+    panelSlider("Diffuse", tr.wideDiffuse, "%.2f", 0, fieldW,
+                "Adds a different decorrelated copy of the mono part to every channel:\nwidens mono sources, spreads them over all the outputs", pub);
+    ImGui::EndGroup();
+    ImGui::SameLine(0, 18.0f * zoom);
+    ImGui::BeginGroup();
+    bool bm = tr.wideBassMono.get();
+    if(ImGui::Checkbox("Bass Mono", &bm)) tr.wideBassMono.set(bm);
+    drawPublishPopup(tr.wideBassMono.getEscapedName());
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Below the frequency: mono, whatever Width and Diffuse do");
+    ImGui::BeginDisabled(!bm);
+    panelSlider("Below", tr.wideBassFreq, "%.0f Hz", ImGuiSliderFlags_Logarithmic, fieldW, "Crossover (Linkwitz-Riley, 24 dB/oct)", pub);
+    ImGui::EndDisabled();
+    if(ImGui::SmallButton("Reset##wide")) { tr.wideWidth.set(1.0f); tr.wideDiffuse.set(0.0f); }
+    ImGui::EndGroup();
 }
 
 void scMixerPro::drawSatPanel(Track& tr) {

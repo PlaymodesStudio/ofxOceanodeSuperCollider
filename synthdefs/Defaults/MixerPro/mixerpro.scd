@@ -38,7 +38,10 @@
 //   mixerProSatN    -- per-channel insert: soft saturation (anti-aliased tanh)
 //   mixerProEchoN   -- per-channel insert: GrainBox's Echo, tempo-synced by the
 //                      node (Delay in seconds)
-// Chain: adapter -> HP -> EQ/DC -> Comp -> Sat -> Echo -> Rvb -> track. Every
+//   mixerProWidthN  -- per-channel insert: Width (mid / side, any channel
+//                      count), Diffuse (zero-sum allpass decorrelation) and
+//                      Bass Mono. The mono sum never changes.
+// Chain: adapter -> HP -> EQ/DC -> Comp -> Sat -> Echo -> Rvb -> Width -> track. Every
 // insert is created the first time it is switched on and paused while off.
 //
 // Aux sends: the track synth writes post- and pre-fader taps (2N) to \sendBus
@@ -367,6 +370,49 @@ channelCounts.do({|numChannels|
         Out.ar(out, (dry * (1 - (mix * gate)).sqrt) + (fbIn * mix.sqrt));
     }).writeDefFile(dir);
 
+    // ---- Width insert: Width (mid / side), Diffuse, Bass Mono ----
+    // Mid m = the mean of the channels, side_i = x_i - m (sums to zero).
+    //   Width:     y_i = m + width * side_i   (0 mono, 1 as is, 2 wider)
+    //   Bass Mono: the side below bassFreq (Linkwitz-Riley 24 dB low-pass) is
+    //              taken out, so the lows stay mono whatever Width does
+    //   Diffuse:   adds per-channel decorrelated copies of the mid (a Schroeder
+    //              allpass chain per channel), minus their mean so they also
+    //              sum to zero; with Bass Mono, from the mid above bassFreq.
+    // Every added part sums to zero across the channels: the mono / downmix
+    // sum is the input's, whatever the settings. Width 1, Diffuse 0, Bass
+    // Mono off: y = x exactly. One channel: a plain copy.
+    SynthDef(("mixerProWidth" ++ numChannels).asSymbol, {
+        arg in=0, out=0;
+        var n = numChannels, sig, mid, side, width, diffuse, bassMono, bassFreq, lp4, src, dcor, y;
+        sig = In.ar(in, n).asArray;
+        if(n == 1) {
+            Out.ar(out, sig);
+        } {
+            width    = \width.kr(1, 0.05).clip(0, 2);
+            diffuse  = \diffuse.kr(0, 0.05).clip(0, 1);
+            bassMono = \bassMono.kr(0, 0.05).clip(0, 1);
+            bassFreq = \bassFreq.kr(150, 0.05).clip(20, 1000);
+            lp4  = { |x| LPF.ar(LPF.ar(x, bassFreq), bassFreq) };   // LR4
+            mid  = sig.sum / n;
+            side = sig.collect { |x| x - mid };
+            side = side.collect { |s| s - (lp4.(s) * bassMono) };
+            src  = mid - (lp4.(mid) * bassMono);
+            dcor = Array.fill(n, { |i|
+                var x = src;
+                thisThread.randSeed = 4801 + i;   // a fixed network per channel
+                4.do { |k|
+                    var d = rrand(0.6, 2.4) * (k + 1) * 0.001;   // 0.6 .. 9.6 ms
+                    x = AllpassN.ar(x, d, d, d * (0.001.log / 0.6.log));   // g = 0.6
+                };
+                x
+            });
+            dcor = dcor - (dcor.sum / n);
+            dcor = dcor * (n / (n - 1)).sqrt;   // unit power per channel after the zero-sum
+            y = Array.fill(n, { |i| mid + (side[i] * width) + (dcor[i] * diffuse) });
+            Out.ar(out, LinXFade2.ar(sig, y, \on.kr(1, 0.03) * 2 - 1));
+        };
+    }).writeDefFile(dir);
+
     // ---- Aux sends: one per strip with sends, after its track synth ----
     // Reads the track's taps (post ++ pre, 2N) and adds them, times gainK, into
     // up to 4 return buses (retK, -1 unused); preK picks the pre-fader tap.
@@ -438,7 +484,7 @@ channelCounts.do({|numChannels|
             var identity = Array.fill(numInputs * numChannels, {|k|
                 if((k div: numChannels) == (k mod: numChannels), 1, 0)
             });
-            var matrix = NamedControl.kr(\matrix, identity, 0.05);
+            var matrix = NamedControl.kr(\matrix, identity, 0.05).asArray;
             Out.ar(out, Array.fill(numChannels, {|j|
                 Array.fill(numInputs, {|i| sig[i] * matrix[i * numChannels + j] }).sum
             }));
