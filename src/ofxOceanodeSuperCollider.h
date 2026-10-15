@@ -68,6 +68,7 @@
 #include "nodes/scBeatRepeatPro.h"
 #include "nodes/scPolyComb.h"
 #include "nodes/scFeedbackNode.h"
+#include "nodes/scCodeNode.h"
 #if OFXOCEANODESC_HAS_TIMELINE
 #include "nodes/scNRTRecorder.h"
 #endif // OFXOCEANODESC_HAS_TIMELINE
@@ -195,6 +196,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scMorphOscScope>("SuperCollider");
 	o.registerModel<scDynGenNode>("SuperCollider");
 	o.registerModel<scDynGenPolyNode>("SuperCollider");
+	o.registerModel<scCodeNode>("SuperCollider", controller->getServers());
 	o.registerModel<scVelvetReverb>("SuperCollider");
 	o.registerModel<pinkTromboneNode>("SuperCollider");
 	o.registerModel<scRhythmBox>("SuperCollider", controller->getServers());

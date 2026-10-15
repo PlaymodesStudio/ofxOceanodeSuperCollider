@@ -210,9 +210,7 @@ void scSynthdefCompiler::finishBuild(BuildResult result){
 
 scSynthdefCompiler::BuildResult scSynthdefCompiler::runBuild(Paths paths, Target target, std::string source){
     BuildResult result;
-#ifdef __APPLE__
     const fs::path outDir = fs::path(paths.work) / "build" / target.defName;
-    const std::string logPath = (fs::path(paths.work) / (target.defName + ".log")).string();
     try {
         fs::remove_all(outDir);
         fs::create_directories(outDir);
@@ -221,28 +219,54 @@ scSynthdefCompiler::BuildResult scSynthdefCompiler::runBuild(Paths paths, Target
         return result;
     }
 
-    std::vector<std::string> args = {paths.sclang};
+    ScriptJob job;
+    job.sclang = paths.sclang;
     if(!paths.sclangBundle.empty()){
-        args.push_back("-l");
-        args.push_back((fs::path(paths.work) / "sclang_conf.yaml").string());
+        // The bundled compiler gets a private HOME, so the user's startup.scd
+        // and SuperCollider settings never run inside it.
+        job.confPath = (fs::path(paths.work) / "sclang_conf.yaml").string();
+        job.home = (fs::path(paths.work) / "home").string();
     }
-    args.push_back((fs::path(paths.sources) / "Oceanode" / "compileExact.scd").string());
-    args.push_back(outDir.string());
-    args.push_back(source);
-    args.push_back(ofToString(target.numChannels));
-    for(int value : target.variables) args.push_back(ofToString(value));
+    job.args.push_back((fs::path(paths.sources) / "Oceanode" / "compileExact.scd").string());
+    job.args.push_back(outDir.string());
+    job.args.push_back(source);
+    job.args.push_back(ofToString(target.numChannels));
+    for(int value : target.variables) job.args.push_back(ofToString(value));
+    job.logPath = (fs::path(paths.work) / (target.defName + ".log")).string();
+    job.timeoutSeconds = buildTimeoutSeconds;
+
+    const std::string error = runScript(job);
+    const fs::path file = outDir / target.synthName / (target.defName + ".scsyndef");
+    if(error.empty() && fs::exists(file)){
+        result.ok = true;
+        result.file = file.string();
+    }else{
+        // A source that fails to parse still exits with 0: the log says why
+        result.error = error.empty() ? summarizeLog(job.logPath) : error;
+        if(result.error.empty()) result.error = "sclang wrote no " + file.filename().string();
+    }
+    return result;
+}
+
+std::string scSynthdefCompiler::runScript(const ScriptJob& job){
+#ifdef __APPLE__
+    if(job.sclang.empty()) return "no SuperCollider compiler (sclang) was found";
+    std::vector<std::string> args = {job.sclang};
+    if(!job.confPath.empty()){
+        args.push_back("-l");
+        args.push_back(job.confPath);
+    }
+    args.insert(args.end(), job.args.begin(), job.args.end());
     std::vector<char*> argv;
     for(auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
     argv.push_back(nullptr);
 
-    // The bundled compiler gets a private HOME, so the user's startup.scd and
-    // SuperCollider settings never run inside it.
     std::vector<std::string> envStrings;
     for(char** e = environ; *e; e++){
-        if(!paths.sclangBundle.empty() && std::strncmp(*e, "HOME=", 5) == 0) continue;
+        if(!job.home.empty() && std::strncmp(*e, "HOME=", 5) == 0) continue;
         envStrings.push_back(*e);
     }
-    if(!paths.sclangBundle.empty()) envStrings.push_back("HOME=" + (fs::path(paths.work) / "home").string());
+    if(!job.home.empty()) envStrings.push_back("HOME=" + job.home);
     std::vector<char*> envp;
     for(auto& entry : envStrings) envp.push_back(const_cast<char*>(entry.c_str()));
     envp.push_back(nullptr);
@@ -250,7 +274,7 @@ scSynthdefCompiler::BuildResult scSynthdefCompiler::runBuild(Paths paths, Target
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
     posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
-    posix_spawn_file_actions_addopen(&actions, 1, logPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    posix_spawn_file_actions_addopen(&actions, 1, job.logPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     posix_spawn_file_actions_adddup2(&actions, 1, 2);
     posix_spawnattr_t attributes;
     posix_spawnattr_init(&attributes);
@@ -258,38 +282,52 @@ scSynthdefCompiler::BuildResult scSynthdefCompiler::runBuild(Paths paths, Target
     posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT);
 
     pid_t pid = 0;
-    const int spawnError = posix_spawn(&pid, paths.sclang.c_str(), &actions, &attributes, argv.data(), envp.data());
+    const int spawnError = posix_spawn(&pid, job.sclang.c_str(), &actions, &attributes, argv.data(), envp.data());
     posix_spawn_file_actions_destroy(&actions);
     posix_spawnattr_destroy(&attributes);
-    if(spawnError != 0){
-        result.error = std::string("could not start sclang: ") + std::strerror(spawnError);
-        return result;
-    }
+    if(spawnError != 0) return std::string("could not start sclang: ") + std::strerror(spawnError);
 
     int status = 0;
     const auto start = std::chrono::steady_clock::now();
     while(waitpid(pid, &status, WNOHANG) == 0){
-        if(std::chrono::steady_clock::now() - start > std::chrono::seconds(buildTimeoutSeconds)){
+        if(std::chrono::steady_clock::now() - start > std::chrono::seconds(job.timeoutSeconds)){
             kill(pid, SIGKILL);
             waitpid(pid, &status, 0);
-            result.error = "sclang did not finish within " + ofToString(buildTimeoutSeconds) + " s";
-            return result;
+            return "sclang did not finish within " + ofToString(job.timeoutSeconds) + " s";
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-
-    const fs::path file = outDir / target.synthName / (target.defName + ".scsyndef");
-    if(WIFEXITED(status) && WEXITSTATUS(status) == 0 && fs::exists(file)){
-        result.ok = true;
-        result.file = file.string();
-    }else{
-        result.error = summarizeLog(logPath);
-        if(result.error.empty()) result.error = "sclang wrote no " + file.filename().string();
-    }
+    if(WIFEXITED(status) && WEXITSTATUS(status) == 0) return "";
+    const std::string summary = summarizeLog(job.logPath);
+    return summary.empty() ? "sclang failed" : summary;
 #else
-    result.error = "compiling SynthDefs is only supported on macOS";
+    return "running sclang is only supported on macOS";
 #endif
-    return result;
+}
+
+scSynthdefCompiler::ScriptJob scSynthdefCompiler::prepareScript(const std::string& name, const std::vector<std::string>& extraClassFolders){
+    const Paths& p = getPaths();
+    ScriptJob job;
+    job.sclang = p.sclang;
+    if(p.sclang.empty()) return job;
+    const fs::path conf = fs::path(p.work) / ("sclang_conf_" + name + ".yaml");
+    std::ofstream out(conf);
+    out << "includePaths:\n";
+    if(!p.sclangBundle.empty()){
+        out << "    -   \"" << (fs::path(p.sclangBundle) / "SCClassLibrary").string() << "\"\n"
+            << "    -   \"" << (fs::path(p.sclangBundle) / "Extensions").string() << "\"\n";
+        if(!p.sources.empty()) out << "    -   \"" << (fs::path(p.sources) / "Oceanode").string() << "\"\n";
+    }
+    // A system sclang keeps its default paths (the user's Extensions, where
+    // the Oceanode classes already are) and only gets the extra folders.
+    for(auto& folder : extraClassFolders) out << "    -   \"" << folder << "\"\n";
+    out << "excludePaths:\n    []\n"
+        << "postInlineWarnings: false\n"
+        << "excludeDefaultPaths: " << (p.sclangBundle.empty() ? "false" : "true") << "\n";
+    out.close();
+    job.confPath = conf.string();
+    if(!p.sclangBundle.empty()) job.home = (fs::path(p.work) / "home").string();
+    return job;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

@@ -116,6 +116,21 @@ void serverManager::setup(){
     listeners.push(server->serverInitializedEvent.newListener([this](){
         initialized = true;
         graphGeneration++;
+        // Folders required while the server was booting / loading the
+        // SynthDef tree came after loadDefs() and were never sent. Loaded
+        // before the graph is rebuilt; the /sync keeps
+        // areRequiredSynthdefsLoading() true until they are in.
+        if(!foldersRequiredDuringInit.empty()){
+            for(const auto& folder : foldersRequiredDuringInit){
+                if(!ofDirectory::doesDirectoryExist(folder)) continue;
+                ofxOscMessage m;
+                m.setAddress("/d_loadDir");
+                m.addStringArg(folder);
+                server->sendMsg(m);
+            }
+            foldersRequiredDuringInit.clear();
+            server->requestNRTSync();
+        }
         nodesList.clear();
         for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
         busses.clear();
@@ -340,8 +355,12 @@ void serverManager::requireSynthdefFolder(const std::string& folder){
     // when the folder is inside the data folder and nothing is deferred to
     // preset load. A folder outside it (the addon's own compiled SynthDefs
     // during development) is never part of that scan.
-    if(server == nullptr || !initialized) return;
     if(!preferences.loadOnPreset && isInsideSynthdefRoot(folder)) return;
+    if(server == nullptr || !initialized){
+        // Booting: loadDefs() may already have run; loaded on initialization
+        foldersRequiredDuringInit.insert(folder);
+        return;
+    }
     ofxOscMessage m;
     m.setAddress("/d_loadDir");
     m.addStringArg(folder);
@@ -359,6 +378,15 @@ void serverManager::loadSynthdefFile(const std::string& path){
     server->requestNRTSync();
 }
 
+void serverManager::loadSynthdefFolder(const std::string& folder){
+    if(server == nullptr || !initialized) return;
+    ofxOscMessage m;
+    m.setAddress("/d_loadDir");
+    m.addStringArg(folder);
+    server->sendMsg(m);
+    server->requestNRTSync();
+}
+
 bool serverManager::areRequiredSynthdefsLoading() const {
     return server != nullptr && server->isNRTSyncPending();
 }
@@ -366,6 +394,8 @@ bool serverManager::areRequiredSynthdefsLoading() const {
 void serverManager::loadDefs(bool loadAll){
     const std::string root = ofToDataPath(SYNTHDEF_DIRECTORY, true);
     std::set<std::string> folders;
+    // Everything required so far is loaded below
+    foldersRequiredDuringInit.clear();
 
     if(loadAll || !preferences.loadOnPreset){
         // Every folder holding compiled definitions, including definitions

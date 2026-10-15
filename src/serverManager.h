@@ -159,6 +159,11 @@ public:
     // running: it is in a folder loaded at boot). Followed by a /sync, so
     // areRequiredSynthdefsLoading() is true until scsynth has read it.
     void loadSynthdefFile(const std::string& path);
+    // The same for every .scsyndef in a folder (and its subfolders)
+    void loadSynthdefFolder(const std::string& folder);
+    // Re-reads the SynthDef metadata and registers new node types, as the
+    // "Load Defs" menu does
+    void reloadSynthdefModels(){ if(synthdefReloadCallback) synthdefReloadCallback(); }
     
     scPreferences preferences;
     ofEvent<void> graphComputed;
@@ -215,6 +220,8 @@ private:
     
     std::set<std::string> alreadyLoadedSynthsList;
     std::set<std::string> requiredSynthdefFolders;   // see requireSynthdefFolder
+    // Required after loadDefs() ran but before the server was initialized
+    std::set<std::string> foldersRequiredDuringInit;
 };
 
 #endif /* serverManager_h */

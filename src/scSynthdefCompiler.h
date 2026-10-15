@@ -48,6 +48,27 @@ public:
     // Every frame, at the top level of the ImGui frame.
     void drawPopups();
 
+    // A headless sclang run of some other script (the SC Code node's capture
+    // runner), with the same sclang, class library and private HOME as the
+    // channel-count builds.
+    struct ScriptJob {
+        std::string sclang;                 // "" when there is no sclang
+        std::string confPath;               // -l class library config, "" for none
+        std::string home;                   // private HOME, "" keeps the user's
+        std::vector<std::string> args;      // the script and its arguments
+        std::string logPath;                // stdout and stderr
+        int timeoutSeconds = 60;
+    };
+    // Main thread. `name` keeps its class library config apart from the
+    // builds'; extraClassFolders are compiled into the class library too.
+    ScriptJob prepareScript(const std::string& name, const std::vector<std::string>& extraClassFolders);
+    // Root of the .scd tree in use, "" if none was found.
+    std::string getSourcesFolder(){ return getPaths().sources; }
+    // A source was added or changed: read the source tree again on the next request
+    void invalidateSourceIndex(){ indexBuilt = false; sourceBySynth.clear(); noAutocompile.clear(); }
+    // Any thread, blocking. "" when sclang exited with status 0, else why not.
+    static std::string runScript(const ScriptJob& job);
+
 private:
     scSynthdefCompiler();
 
