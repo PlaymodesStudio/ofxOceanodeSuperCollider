@@ -55,6 +55,7 @@
 #include "nodes/scLissajous.h"
 #include "nodes/scMorphOscScope.h"
 #include "nodes/scPolyphonicArpeggiator.h"
+#include "nodes/scMetroBox.h"
 #include "nodes/scBufferBrowser.h"
 #include "nodes/scDynGenNode.h"
 #include "nodes/scDynGenPolyNode.h"
@@ -188,6 +189,9 @@ static void registerModels(ofxOceanode &o){
 #endif // OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<scGraphicEQ>("SuperCollider");
 	o.registerModel<scPolyphonicArpeggiator>("SuperCollider");
+#if OFXOCEANODESC_HAS_TRANSPORT
+	o.registerModel<scMetroBox>("SuperCollider");
+#endif
 	o.registerModel<scBufferBrowser>("SuperCollider", controller->getServers());
 	o.registerModel<scFFT>("SuperCollider", controller->getServers());
 	o.registerModel<scFFTHD>("SuperCollider", controller->getServers());
