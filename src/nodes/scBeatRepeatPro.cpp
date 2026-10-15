@@ -5,7 +5,9 @@
 
 #include "scBeatRepeatPro.h"
 #include "ofxOceanodeSuperColliderConfig.h"
+#include "ofxOceanodeDeterministicRandom.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -52,6 +54,18 @@ const std::array<BrTimeChoice, 21>& brTimeChoices() {
     return choices;
 }
 
+struct BrAutoGrid {
+    double stepsPerBeat;
+    const char* label;
+};
+
+const std::array<BrAutoGrid, 6>& brAutoGrids() {
+    static const std::array<BrAutoGrid, 6> grids {{
+        {1.0, "1/4"}, {2.0, "1/8"}, {3.0, "1/8 T"}, {4.0, "1/16"}, {6.0, "1/16 T"}, {8.0, "1/32"}
+    }};
+    return grids;
+}
+
 int brNearestTimeChoice(float division) {
     int best = 0;
     float distance = std::numeric_limits<float>::max();
@@ -94,6 +108,9 @@ void scBeatRepeatPro::setup() {
     addParameter(mix.set("Mix", 1.0f, 0.0f, 1.0f));
     addParameter(level.set("Level", 1.0f, 0.0f, 2.0f));
     addParameter(reset.set("Reset", 0, 0, 1));
+    addParameter(autoEnabled.set("Auto", false));
+    addOutputParameter(autoTrigOut.set("Auto Trig"));
+    addOutputParameter(autoSlotOut.set("Auto Slot", -1, -1, SNAPSHOT_COUNT - 1));
 
     adaptLength.set("Adapt Length", false);
     pitchMode.set("Pitch Mode", false);
@@ -121,6 +138,20 @@ void scBeatRepeatPro::setup() {
     snapshotActivates.set("Recall Activates", false);
     momentary.set("Momentary", false);
 
+    autoClock.set("Auto Clock", OFXOCEANODESC_HAS_TRANSPORT ? 2 : 1, 0, 2);
+    autoMode.set("Auto Mode", 1, 0, 1);
+    autoGrid.set("Auto Grid", 3, 0, (int)brAutoGrids().size() - 1);
+    autoInterval.set("Auto Interval", 8, 1, 64);
+    autoOffset.set("Auto Offset", 0, 0, 63);
+    autoLaneSteps.set("Auto Steps", 16, 1, AUTO_MAX_LANE_STEPS);
+    autoChance.set("Auto Chance", 1.0f, 0.0f, 1.0f);
+    autoLength.set("Auto Length", 1.0f, 0.0625f, 16.0f);
+    autoSeed.set("Auto Seed", 0, 0, 9999);
+    autoEvolve.set("Auto Evolve", false);
+    autoWeights.fill(1.0f);
+    for(int step = 0; step < AUTO_MAX_LANE_STEPS; ++step)
+        autoLane[step] = step % 8 == 4 ? 0.5f : (step % 16 == 14 ? 0.25f : 0.0f);
+
     scNode::addInput("In");
     scNode::addOutput("Out");
     requireSynthdefs();
@@ -144,7 +175,19 @@ void scBeatRepeatPro::setup() {
         nodeListeners.push(parameter.newListener([this](int&) { sendAllParams(); }));
     };
 
-    resendBool(go);
+    nodeListeners.push(go.newListener([this](bool& value) {
+        if(suppressParamSend) return;
+        // A Go change that did not come from the Auto scheduler hands the
+        // repeat back to the performer: Auto no longer releases it.
+        autoOwnsGo = false;
+        autoReleasePending = false;
+        for(auto& entry : synths)
+            if(entry.second) entry.second->set(
+                "go", std::vector<float>(numChannels.get(), value ? 1.0f : 0.0f));
+    }));
+    nodeListeners.push(autoEnabled.newListener([this](bool& value) {
+        if(!value) stopAutoTrigger();
+    }));
     for(auto* parameter : {&repeatDivision, &mix, &level, &repeatPitch, &offsetMs, &gate, &declickMs,
                            &rate, &pitchStep, &loopAmp, &inputGain, &cutoffPitch, &cutoffStep,
                            &resonance, &ceiling, &autoResetLoops, &autoResetBeats}) resendFloat(*parameter);
@@ -198,6 +241,8 @@ void scBeatRepeatPro::initializePublishActions() {
     add(resonance); add(limiter); add(ceiling);
     add(autoReset); add(autoResetMode); add(autoResetLoops); add(autoResetBeats);
     add(snapshotActivates); add(momentary);
+    add(autoClock); add(autoMode); add(autoGrid); add(autoInterval); add(autoOffset); add(autoLaneSteps);
+    add(autoChance); add(autoLength); add(autoSeed); add(autoEvolve);
 }
 
 const scBeatRepeatPro::PublishAction* scBeatRepeatPro::findPublishAction(const std::string& key) const {
@@ -346,13 +391,16 @@ void scBeatRepeatPro::requireSynthdefs() {
     for(auto* manager : allServers) if(manager) manager->requireSynthdefFolder(folder.string());
 }
 
-void scBeatRepeatPro::sendAllParams(ofxSCSynth* synth) {
+void scBeatRepeatPro::sendAllParams(ofxSCSynth* synth, bool includeTransport) {
     if(!synth) return;
     const int channels = numChannels.get();
     auto set = [synth, channels](const char* name, float value) {
         synth->set(name, std::vector<float>(channels, value));
     };
-    set("go", go.get() ? 1.0f : 0.0f);
+    if(includeTransport) {
+        set("go", go.get() ? 1.0f : 0.0f);
+        set("reset", (float)resetCounter);
+    }
     set("division", repeatDivision.get());
     set("bpm", currentBpm);
     set("adaptlength", adaptLength.get() ? 1.0f : 0.0f);
@@ -366,7 +414,6 @@ void scBeatRepeatPro::sendAllParams(ofxSCSynth* synth) {
     set("pitchstep", pitchStep.get());
     set("numpitchsteps", (float)numPitchSteps.get());
     set("grainamp", loopAmp.get());
-    set("reset", (float)resetCounter);
     set("mix", mix.get());
     set("levels", level.get());
     set("inputgain", inputGain.get());
@@ -385,7 +432,12 @@ void scBeatRepeatPro::sendAllParams(ofxSCSynth* synth) {
 }
 
 void scBeatRepeatPro::sendAllParams() {
-    for(auto& entry : synths) sendAllParams(entry.second);
+    if(suppressParamSend) return;
+    // While Auto has decided repeats that have not played yet, Go and the
+    // reset counter already hold their future values. An untimed resend
+    // (a slider move) must not deliver them early.
+    const bool includeTransport = autoDisplayQueue.empty();
+    for(auto& entry : synths) sendAllParams(entry.second, includeTransport);
 }
 
 void scBeatRepeatPro::configureSynth(ofxSCServer* server, ofxSCSynth* synth) {
@@ -539,6 +591,7 @@ void scBeatRepeatPro::update(ofEventArgs&) {
     // case ImGui no longer draws the originating button to report deactivation.
     if(momentaryHoldActive && !ofGetMousePressed(OF_MOUSE_BUTTON_LEFT))
         endMomentaryHold(momentarySource);
+    updateAutoTrigger();
     // drawWindow refreshes this small lease directly. This is independent of
     // whether the host dispatches its custom GUI draw before or after update,
     // which is especially important while a preset is constructing the node.
@@ -636,6 +689,7 @@ ofJson scBeatRepeatPro::captureSnapshot() const {
     for(const auto& action : publishActions)
         if(action.key != snapshotActivates.getEscapedName()
            && action.key != momentary.getEscapedName()
+           && !isAutoKey(action.key)
            && action.key != pitchMode.getEscapedName()
            && action.key != repeatPitch.getEscapedName()
            && action.save) action.save(snapshot);
@@ -677,6 +731,8 @@ void scBeatRepeatPro::recallSnapshot(int slot, bool forceActivate, bool suppress
 void scBeatRepeatPro::beginMomentaryHold(int source) {
     momentaryHoldActive = true;
     momentarySource = source;
+    autoOwnsGo = false;
+    autoReleasePending = false;
     if(go.get()) reset.set(1);
     else go.set(true);
 }
@@ -686,6 +742,290 @@ void scBeatRepeatPro::endMomentaryHold(int source) {
     momentaryHoldActive = false;
     momentarySource = -1;
     if(go.get()) go.set(false);
+}
+
+bool scBeatRepeatPro::isAutoKey(const std::string& key) const {
+    for(const auto* parameter : std::initializer_list<const ofAbstractParameter*>{
+            &autoClock, &autoMode, &autoGrid, &autoInterval, &autoOffset, &autoLaneSteps,
+            &autoChance, &autoLength, &autoSeed, &autoEvolve})
+        if(parameter->getEscapedName() == key) return true;
+    return false;
+}
+
+float scBeatRepeatPro::autoStepProbability(int64_t step) const {
+    if(autoMode.get() == 0) {
+        const int64_t interval = std::max(1, autoInterval.get());
+        int64_t phase = (step - autoOffset.get()) % interval;
+        if(phase < 0) phase += interval;
+        return phase == 0 ? 1.0f : 0.0f;
+    }
+    const int64_t steps = std::max(1, std::min(AUTO_MAX_LANE_STEPS, autoLaneSteps.get()));
+    int64_t index = step % steps;
+    if(index < 0) index += steps;
+    return brClamp01(autoLane[(size_t)index]);
+}
+
+int scBeatRepeatPro::autoPickSlot(int64_t step, uint64_t pass) const {
+    float total = 0.0f;
+    for(int slot = 0; slot < SNAPSHOT_COUNT; ++slot)
+        if(snapshotUsed[slot]) total += std::max(0.0f, autoWeights[slot]);
+    if(total <= 0.0f) return -1;
+    const uint64_t key = ofxOceanodeDeterministicRandom::hash(
+        (uint64_t)autoSeed.get(), autoEvolve.get() ? (int64_t)pass : 0, 0xB3A7);
+    float target = ofxOceanodeDeterministicRandom::uniform(key, step, 1) * total;
+    int last = -1;
+    for(int slot = 0; slot < SNAPSHOT_COUNT; ++slot) {
+        if(!snapshotUsed[slot] || autoWeights[slot] <= 0.0f) continue;
+        last = slot;
+        target -= autoWeights[slot];
+        if(target < 0.0f) return slot;
+    }
+    return last;
+}
+
+void scBeatRepeatPro::scheduleAutoFire(uint64_t steadyTimeUs, int slot, int64_t step) {
+    // Everything sent inside the scope carries the step's instant: the
+    // snapshot's sound and the capture trigger land on the same sample.
+    ofxSCServer::ScopedTimetag tag(ofxSCServer::timetagForSteadyTimeUs(steadyTimeUs));
+    suppressParamSend = true;
+    applySnapshot(snapshotSlots[slot]);
+    if(go.get()) ++resetCounter; // retrigger: cut in with a fresh capture
+    else go.set(true);
+    suppressParamSend = false;
+    for(auto& entry : synths) sendAllParams(entry.second, true);
+    autoOwnsGo = true;
+    autoDisplayQueue.push_back({steadyTimeUs, slot, step});
+}
+
+void scBeatRepeatPro::scheduleAutoRelease(uint64_t steadyTimeUs) {
+    autoReleasePending = false;
+    if(!autoOwnsGo) return;
+    autoOwnsGo = false;
+    ofxSCServer::ScopedTimetag tag(ofxSCServer::timetagForSteadyTimeUs(steadyTimeUs));
+    suppressParamSend = true;
+    go.set(false);
+    suppressParamSend = false;
+    for(auto& entry : synths)
+        if(entry.second) entry.second->set("go", std::vector<float>(numChannels.get(), 0.0f));
+    autoDisplayQueue.push_back({steadyTimeUs, -1, 0});
+}
+
+void scBeatRepeatPro::stopAutoTrigger() {
+    autoScheduling = false;
+    autoFreeRunning = false;
+    autoReleasePending = false;
+    autoDisplayQueue.clear();
+    autoPlayheadStep = -1;
+    if(autoOwnsGo) {
+        autoOwnsGo = false;
+        // Repeats already decided ahead may still be on their way to the
+        // server: release no earlier than the last of them, or a late fire
+        // would leave the repeater stuck on.
+        const uint64_t nowUs = (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        ofxSCServer::ScopedTimetag tag(ofxSCServer::timetagForSteadyTimeUs(std::max(nowUs, autoFrontierUs)));
+        suppressParamSend = true;
+        go.set(false);
+        suppressParamSend = false;
+        for(auto& entry : synths)
+            if(entry.second) entry.second->set("go", std::vector<float>(numChannels.get(), 0.0f));
+    }
+    autoSlotOut = -1;
+}
+
+void scBeatRepeatPro::updateAutoTrigger() {
+    // One clock view for the scheduler, from the timeline transport or from
+    // the node's own free-running clock.
+    struct ClockState {
+        bool isPlaying = false;
+        float bpm = 120.0f;
+        double beatPosition = 0.0;
+        uint64_t steadyTimeUs = 0;
+        uint64_t generation = 0;
+        bool loopActive = false;
+        double loopStartBeat = 0.0;
+        double loopEndBeat = 0.0;
+        uint64_t loopCount = 0;
+        bool realTime = true;
+    };
+    ClockState cur, prev;
+    const uint64_t nowUs = (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
+    bool useTransport = false;
+#if OFXOCEANODESC_HAS_TRANSPORT
+    const auto frame = getFrameTransportState();
+    const int clock = autoClock.get();
+    useTransport = clock == 0 || (clock == 2 && frame.current.isPlaying);
+    if(useTransport) {
+        auto fill = [](ClockState& out, const ofxOceanodeTransportState& in) {
+            out.isPlaying = in.isPlaying;
+            out.bpm = in.bpm;
+            out.beatPosition = in.beatPosition;
+            out.steadyTimeUs = in.steadyTimeUs;
+            out.generation = in.generation;
+            out.loopActive = in.loopActive();
+            out.loopStartBeat = in.loopStartBeat;
+            out.loopEndBeat = in.loopEndBeat;
+            out.loopCount = in.loopCount;
+            out.realTime = in.driverMode == TransportDriverMode::RealTime;
+        };
+        fill(cur, frame.current);
+        fill(prev, frame.previous);
+    }
+#endif
+    if(useTransport) {
+        autoFreeRunning = false;
+    } else {
+        // Free clock: beat 0 is the moment it starts (Auto on, or the
+        // transport stopping in Follow mode), at the node's BPM.
+        const bool wanted = autoEnabled.get();
+        if(wanted && !autoFreeRunning) {
+            autoFreeRunning = true;
+            autoFreeBeat = 0.0;
+            autoFreeLastUs = nowUs;
+            ++autoFreeGeneration;
+            prev.isPlaying = false;
+        } else {
+            prev.isPlaying = autoFreeRunning;
+        }
+        if(!wanted) autoFreeRunning = false;
+        prev.bpm = currentBpm;
+        prev.beatPosition = autoFreeBeat;
+        prev.steadyTimeUs = autoFreeLastUs;
+        prev.generation = autoFreeGeneration;
+        if(autoFreeRunning && nowUs > autoFreeLastUs) {
+            autoFreeBeat += (double)(nowUs - autoFreeLastUs) / 1e6 * currentBpm / 60.0;
+            autoFreeLastUs = nowUs;
+        }
+        cur.isPlaying = autoFreeRunning;
+        cur.bpm = currentBpm;
+        cur.beatPosition = autoFreeBeat;
+        cur.steadyTimeUs = autoFreeLastUs;
+        cur.generation = autoFreeGeneration;
+    }
+    // Switching between the two clocks is a jump, like a seek.
+    if(useTransport != autoUsingTransport) {
+        autoUsingTransport = useTransport;
+        autoGeneration = ~cur.generation;
+    }
+
+    // The GUI and the outputs follow the events when they play, not when
+    // they were decided (a little earlier).
+    size_t played = 0;
+    while(played < autoDisplayQueue.size() && autoDisplayQueue[played].steadyTimeUs <= cur.steadyTimeUs) {
+        const AutoEvent& event = autoDisplayQueue[played++];
+        if(event.slot < 0) {
+            autoSlotOut = -1; // back to dry
+            continue;
+        }
+        activeSnapshot = event.slot;
+        autoLastFiredSlot = event.slot;
+        autoLastFiredStep = event.step;
+        autoHistory.push_back(event.slot);
+        if(autoHistory.size() > 12) autoHistory.erase(autoHistory.begin());
+        autoSlotOut = event.slot;
+        autoTrigOut.trigger();
+    }
+    if(played > 0) autoDisplayQueue.erase(autoDisplayQueue.begin(), autoDisplayQueue.begin() + played);
+
+    if(!autoEnabled.get() || !cur.isPlaying || cur.bpm <= 0.0f) {
+        if(autoScheduling || autoOwnsGo) stopAutoTrigger();
+        autoPlayheadStep = -1;
+        return;
+    }
+
+    const double bps = cur.bpm / 60.0;
+    const double stepsPerBeat = brAutoGrids()[(size_t)ofClamp(autoGrid.get(), 0,
+        (int)brAutoGrids().size() - 1)].stepsPerBeat;
+    autoPlayheadStep = (int64_t)std::floor(std::max(0.0, cur.beatPosition) * stepsPerBeat + 1e-6);
+
+    // A small tolerance keeps a step exactly on the start/seek point.
+    constexpr uint64_t toleranceUs = 1000;
+    if(!autoScheduling) {
+        uint64_t startUs = cur.steadyTimeUs;
+        if(!prev.isPlaying && cur.generation == prev.generation && cur.beatPosition > prev.beatPosition) {
+            // The transport began moving between the two frames: start from
+            // that instant so the step it started on still fires.
+            const double moved = std::max(0.0, cur.beatPosition - prev.beatPosition);
+            startUs -= (uint64_t)(std::min(1.0, moved / bps) * 1e6);
+        }
+        autoFrontierUs = startUs > toleranceUs ? startUs - toleranceUs : 0;
+    } else if(cur.generation != autoGeneration) {
+        // Seek: decide again from the new position.
+        autoFrontierUs = cur.steadyTimeUs > toleranceUs ? cur.steadyTimeUs - toleranceUs : 0;
+    }
+    autoScheduling = true;
+    autoGeneration = cur.generation;
+
+    // Look ahead a few frames so timetags are still in the future when
+    // scsynth receives them. Offline rendering steps the clock frame by frame
+    // and captures at the frame's time, so it decides only up to now.
+    double lookSeconds = 0.0;
+    if(cur.realTime) {
+        const double frameSeconds = cur.steadyTimeUs > prev.steadyTimeUs
+            ? std::min(0.1, (double)(cur.steadyTimeUs - prev.steadyTimeUs) / 1e6) : 1.0 / 60.0;
+        lookSeconds = std::max(3.0 * frameSeconds, 0.05);
+    }
+    const uint64_t endUs = cur.steadyTimeUs + (uint64_t)(lookSeconds * 1e6);
+    if(endUs <= autoFrontierUs) return;
+
+    struct Candidate { uint64_t us; int64_t step; uint64_t pass; };
+    std::vector<Candidate> candidates;
+    auto collect = [&](double fromBeat, double toBeat, double extraBeats, uint64_t pass, double limitBeat) {
+        fromBeat = std::max(0.0, fromBeat);
+        const int64_t first = (int64_t)std::ceil(fromBeat * stepsPerBeat - 1e-6);
+        const int64_t last = (int64_t)std::floor(toBeat * stepsPerBeat + 1e-6);
+        for(int64_t step = first; step <= last; ++step) {
+            const double beat = (double)step / stepsPerBeat;
+            if(beat >= limitBeat - 1e-9) break;
+            const double us = (double)cur.steadyTimeUs + (beat - cur.beatPosition + extraBeats) / bps * 1e6;
+            if(us <= (double)autoFrontierUs || us > (double)endUs) continue;
+            candidates.push_back({(uint64_t)std::llround(us), step, pass});
+        }
+    };
+    const double backBeats = ((double)cur.steadyTimeUs - (double)autoFrontierUs) / 1e6 * bps;
+    double fromBeat = cur.beatPosition - backBeats;
+    const double toBeat = cur.beatPosition + lookSeconds * bps;
+    const bool looping = cur.loopActive && cur.beatPosition < cur.loopEndBeat;
+    if(looping && cur.beatPosition >= cur.loopStartBeat)
+        fromBeat = std::max(fromBeat, cur.loopStartBeat);
+    collect(fromBeat, toBeat, 0.0, cur.loopCount,
+            looping ? cur.loopEndBeat : std::numeric_limits<double>::infinity());
+    // A transport loop restart inside the window: the steps after it are
+    // the start of the loop again, one pass later.
+    if(looping && toBeat > cur.loopEndBeat)
+        collect(cur.loopStartBeat, cur.loopStartBeat + (toBeat - cur.loopEndBeat),
+                cur.loopEndBeat - cur.loopStartBeat, cur.loopCount + 1, cur.loopEndBeat);
+
+    // A release this close before a new fire is dropped, so Go never goes
+    // 1 -> 0 -> 1 inside one control block (the synth would miss the edge).
+    constexpr uint64_t releaseGuardUs = 3000;
+    const uint64_t lengthUs = (uint64_t)(std::max(0.0625f, autoLength.get()) / bps * 1e6);
+    for(const auto& candidate : candidates) {
+        bool fire = false;
+        int slot = -1;
+        if(!momentaryHoldActive) {
+            const float probability = autoStepProbability(candidate.step) * brClamp01(autoChance.get());
+            const uint64_t key = ofxOceanodeDeterministicRandom::hash(
+                (uint64_t)autoSeed.get(), autoEvolve.get() ? (int64_t)candidate.pass : 0, 0xB3A7);
+            if(probability > 0.0f
+               && ofxOceanodeDeterministicRandom::uniform(key, candidate.step, 0) < probability) {
+                slot = autoPickSlot(candidate.step, candidate.pass);
+                fire = slot >= 0;
+            }
+        }
+        if(autoReleasePending && (fire ? autoReleaseUs + releaseGuardUs < candidate.us
+                                       : autoReleaseUs <= candidate.us))
+            scheduleAutoRelease(autoReleaseUs);
+        if(fire) {
+            scheduleAutoFire(candidate.us, slot, candidate.step);
+            autoReleasePending = true;
+            autoReleaseUs = candidate.us + lengthUs;
+        }
+    }
+    if(autoReleasePending && autoReleaseUs <= endUs) scheduleAutoRelease(autoReleaseUs);
+    autoFrontierUs = endUs;
 }
 
 std::string scBeatRepeatPro::sharedSnapshotBankPath() const {
@@ -924,7 +1264,7 @@ void scBeatRepeatPro::drawControls(float height) {
         ImGuiWindowFlags_HorizontalScrollbar);
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
     const float visibleWidth = ImGui::GetContentRegionAvail().x;
-    const float cardWidth = std::max(230.0f, (visibleWidth - spacing * 3.0f) * 0.25f);
+    const float cardWidth = std::max(230.0f, (visibleWidth - spacing * 4.0f) * 0.2f);
     const float cardHeight = std::max(80.0f, height - ImGui::GetStyle().ScrollbarSize - 3.0f);
 
     ImGui::BeginChild("##BeatRepeatSnapshotsCard", ImVec2(cardWidth, cardHeight), true);
@@ -936,6 +1276,11 @@ void scBeatRepeatPro::drawControls(float height) {
     if(!snapshotBankMessage.empty() && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", snapshotBankMessage.c_str());
     drawSnapshotMatrix();
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+    ImGui::BeginChild("##BeatRepeatAutoCard", ImVec2(cardWidth, cardHeight), true);
+    drawAutoCard();
     ImGui::EndChild();
 
     ImGui::SameLine();
@@ -1003,6 +1348,131 @@ void scBeatRepeatPro::drawControls(float height) {
     sliderFloat("Ceiling", ceiling, "%.3f");
     ImGui::EndChild();
     ImGui::EndChild();
+}
+
+bool scBeatRepeatPro::drawMultiSlider(const char* id, float* values, int count, float height,
+                                      int highlight, const std::function<bool(int)>& enabled,
+                                      const std::function<std::string(int)>& label) {
+    const float width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    ImGui::InvisibleButton(id, ImVec2(width, std::max(1.0f, height)));
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float barWidth = (max.x - min.x) / std::max(1, count);
+    auto indexAt = [&](float x) {
+        return std::max(0, std::min(count - 1, (int)((x - min.x) / barWidth)));
+    };
+
+    bool changed = false;
+    if(ImGui::IsItemActive()) {
+        // Dragging paints every bar the mouse passed over this frame.
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        const ImVec2 delta = ImGui::GetIO().MouseDelta;
+        const int to = indexAt(mouse.x);
+        const int from = ImGui::IsItemActivated() ? to : indexAt(mouse.x - delta.x);
+        const float value = brClamp01(1.0f - (mouse.y - min.y) / (max.y - min.y));
+        for(int index = std::min(from, to); index <= std::max(from, to); ++index) {
+            if(!enabled(index) || values[index] == value) continue;
+            values[index] = value;
+            changed = true;
+        }
+    }
+
+    dl->AddRectFilled(min, max, IM_COL32(17, 20, 27, 255), 3.0f);
+    for(int index = 0; index < count; ++index) {
+        const float x0 = min.x + index * barWidth;
+        const float x1 = x0 + barWidth - 1.0f;
+        const bool on = enabled(index);
+        if(index == highlight)
+            dl->AddRectFilled(ImVec2(x0, min.y), ImVec2(x1, max.y), IM_COL32(255, 196, 76, 55));
+        if(index % 4 == 0 && index > 0)
+            dl->AddLine(ImVec2(x0, min.y), ImVec2(x0, max.y), IM_COL32(70, 78, 92, 120));
+        const float top = max.y - brClamp01(values[index]) * (max.y - min.y);
+        const ImU32 color = !on ? IM_COL32(70, 76, 86, 120)
+            : (index == highlight ? IM_COL32(255, 196, 76, 235) : IM_COL32(48, 171, 196, 210));
+        if(values[index] > 0.0f) dl->AddRectFilled(ImVec2(x0 + 1.0f, top), ImVec2(x1, max.y), color);
+    }
+    dl->AddRect(min, max, IM_COL32(78, 87, 102, 220), 3.0f);
+    if(ImGui::IsItemHovered()) {
+        const int index = indexAt(ImGui::GetIO().MousePos.x);
+        ImGui::SetTooltip("%s: %.2f", label(index).c_str(), values[index]);
+    }
+    return changed;
+}
+
+void scBeatRepeatPro::drawAutoCard() {
+    drawSectionHeader("AUTO TRIGGER");
+    bool enabled = autoEnabled.get();
+    if(ImGui::Checkbox("Auto", &enabled)) autoEnabled.set(enabled);
+    ImGui::SameLine();
+    if(!autoEnabled.get()) ImGui::TextDisabled("off");
+    else if(autoScheduling) ImGui::TextColored(ImVec4(0.47f, 0.82f, 0.88f, 1.0f),
+                                               autoUsingTransport ? "on transport" : "free running");
+    else ImGui::TextDisabled("waiting for transport");
+
+    int clock = autoClock.get();
+    const char* clocks[] = {"Transport", "Free", "Follow"};
+    ImGui::SetNextItemWidth(brEditorControlWidth("Clock"));
+#if OFXOCEANODESC_HAS_TRANSPORT
+    if(ImGui::Combo("Clock", &clock, clocks, 3)) autoClock.set(clock);
+#else
+    ImGui::BeginDisabled();
+    clock = 1;
+    ImGui::Combo("Clock", &clock, clocks, 3);
+    ImGui::EndDisabled();
+#endif
+    drawPublishMenu(autoClock.getEscapedName());
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Transport: steps follow the timeline; nothing fires while it is stopped.\n"
+                          "Free: own clock at the node's BPM, starting when Auto is switched on.\n"
+                          "Follow: the transport while it plays, the free clock while it is stopped.");
+
+    int mode = autoMode.get();
+    const char* modes[] = {"Interval", "Lane"};
+    ImGui::SetNextItemWidth(brEditorControlWidth("Mode"));
+    if(ImGui::Combo("Mode", &mode, modes, 2)) autoMode.set(mode);
+    drawPublishMenu(autoMode.getEscapedName());
+
+    int grid = autoGrid.get();
+    std::array<const char*, 6> gridLabels{};
+    for(size_t index = 0; index < gridLabels.size(); ++index) gridLabels[index] = brAutoGrids()[index].label;
+    ImGui::SetNextItemWidth(brEditorControlWidth("Grid"));
+    if(ImGui::Combo("Grid", &grid, gridLabels.data(), (int)gridLabels.size())) autoGrid.set(grid);
+    drawPublishMenu(autoGrid.getEscapedName());
+
+    if(autoMode.get() == 0) {
+        sliderInt("Every (steps)", autoInterval);
+        sliderInt("Offset (steps)", autoOffset);
+    } else {
+        sliderInt("Steps", autoLaneSteps);
+        const int steps = std::max(1, std::min(AUTO_MAX_LANE_STEPS, autoLaneSteps.get()));
+        const int playhead = autoPlayheadStep >= 0 ? (int)(autoPlayheadStep % steps) : -1;
+        drawMultiSlider("##BeatRepeatAutoLane", autoLane.data(), steps, 46.0f, playhead,
+            [](int) { return true; },
+            [](int index) { return "Step " + ofToString(index + 1); });
+    }
+    sliderFloat("Chance", autoChance, "%.2f");
+    sliderFloat("Length", autoLength, "%.3f beats");
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Quarter-note beats each fired repeat lasts.\nA new trigger cuts in before it ends.");
+    sliderInt("Seed", autoSeed);
+    checkbox("Evolve", autoEvolve);
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Off: every transport loop pass makes the same choices.\nOn: each pass rolls new dice.");
+
+    ImGui::TextDisabled("Snapshot weights");
+    const int highlight = autoLastFiredSlot;
+    drawMultiSlider("##BeatRepeatAutoWeights", autoWeights.data(), SNAPSHOT_COUNT, 46.0f, highlight,
+        [this](int slot) { return snapshotUsed[slot]; },
+        [this](int slot) {
+            return snapshotNames[slot].empty() ? "Snapshot " + ofToString(slot + 1)
+                                               : ofToString(slot + 1) + " " + snapshotNames[slot];
+        });
+    if(!autoHistory.empty()) {
+        std::string history;
+        for(int slot : autoHistory) history += ofToString(slot + 1) + " ";
+        ImGui::TextDisabled("Last: %s", history.c_str());
+    }
 }
 
 void scBeatRepeatPro::drawWindow() {
@@ -1111,6 +1581,8 @@ void scBeatRepeatPro::presetSave(ofJson& json) {
     json["editorWaveformHeight"] = waveformHeight;
     for(const auto& action : publishActions) if(action.save) action.save(json);
     json["activeSnapshot"] = activeSnapshot;
+    json["autoWeights"] = autoWeights;
+    json["autoLane"] = autoLane;
     json["beatRepeatSnapshots"] = ofJson::array();
     json["beatRepeatSnapshotNames"] = ofJson::array();
     for(int slot = 0; slot < (int)snapshotSlots.size(); ++slot) {
@@ -1135,6 +1607,14 @@ void scBeatRepeatPro::presetRecallAfterSettingParameters(ofJson& json) {
         if(isPublished(action.key) || !json.contains(action.key) || !action.load) continue;
         action.load(json[action.key]);
     }
+    auto loadArray = [&json](const char* key, float* values, int count) {
+        if(!json.contains(key) || !json[key].is_array()) return;
+        const auto& array = json[key];
+        for(int index = 0; index < std::min(count, (int)array.size()); ++index)
+            if(array[index].is_number()) values[index] = brClamp01(array[index].get<float>());
+    };
+    loadArray("autoWeights", autoWeights.data(), SNAPSHOT_COUNT);
+    loadArray("autoLane", autoLane.data(), AUTO_MAX_LANE_STEPS);
     // Once a shared bank exists it is deliberately independent of the loaded
     // project/preset. An older embedded bank is imported only as a migration
     // fallback, then becomes the shared bank for future projects.

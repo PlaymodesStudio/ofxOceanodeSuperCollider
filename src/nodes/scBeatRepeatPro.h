@@ -17,7 +17,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -27,6 +29,7 @@ class scBeatRepeatPro : public scNode {
 public:
     static constexpr int MAX_CHANNELS = 16;
     static constexpr int WAVEFORM_BINS = 1536;
+    static constexpr int SNAPSHOT_COUNT = 24;
 
     explicit scBeatRepeatPro(std::vector<serverManager*> servers);
     ~scBeatRepeatPro() override;
@@ -101,6 +104,63 @@ private:
     ofParameter<bool>  snapshotActivates;
     ofParameter<bool>  momentary;
 
+    // Auto Trigger: a transport-locked machine that, on each grid step,
+    // decides whether to fire a repeat and which snapshot it uses.
+    static constexpr int AUTO_MAX_LANE_STEPS = 32;
+    ofParameter<bool>  autoEnabled;
+    ofParameter<int>   autoClock;     // 0 = transport, 1 = free (node BPM), 2 = follow transport when playing
+    ofParameter<int>   autoMode;      // 0 = every Interval steps, 1 = probability lane
+    ofParameter<int>   autoGrid;      // index into brAutoGrids() (steps per beat)
+    ofParameter<int>   autoInterval;
+    ofParameter<int>   autoOffset;
+    ofParameter<int>   autoLaneSteps;
+    ofParameter<float> autoChance;
+    ofParameter<float> autoLength;    // quarter-note beats a fired repeat lasts
+    ofParameter<int>   autoSeed;
+    ofParameter<bool>  autoEvolve;    // transport loop passes roll different dice
+    ofParameter<void>  autoTrigOut;
+    ofParameter<int>   autoSlotOut;
+    // Saved with the preset (not the shared snapshot bank).
+    std::array<float, SNAPSHOT_COUNT> autoWeights;
+    std::array<float, AUTO_MAX_LANE_STEPS> autoLane;
+
+    // Scheduler state. Decisions are made a little ahead of the transport and
+    // sent timetagged, so each repeat starts exactly on its grid step.
+    struct AutoEvent {
+        uint64_t steadyTimeUs = 0;
+        int slot = -1;          // -1 = release (back to dry)
+        int64_t step = 0;
+    };
+    bool autoScheduling = false;
+    uint64_t autoGeneration = 0;
+    uint64_t autoFrontierUs = 0;     // steps up to this instant are decided
+    bool autoReleasePending = false;
+    uint64_t autoReleaseUs = 0;
+    bool autoOwnsGo = false;
+    bool autoUsingTransport = false;
+    bool autoFreeRunning = false;
+    double autoFreeBeat = 0.0;
+    uint64_t autoFreeLastUs = 0;
+    uint64_t autoFreeGeneration = 0;
+    bool suppressParamSend = false;
+    std::vector<AutoEvent> autoDisplayQueue; // shown in the GUI when they play
+    int64_t autoLastFiredStep = std::numeric_limits<int64_t>::min();
+    int64_t autoPlayheadStep = -1;
+    int autoLastFiredSlot = -1;
+    std::vector<int> autoHistory;
+
+    void updateAutoTrigger();
+    void stopAutoTrigger();
+    void scheduleAutoFire(uint64_t steadyTimeUs, int slot, int64_t step);
+    void scheduleAutoRelease(uint64_t steadyTimeUs);
+    int autoPickSlot(int64_t step, uint64_t pass) const;
+    float autoStepProbability(int64_t step) const;
+    bool isAutoKey(const std::string& key) const;
+    void drawAutoCard();
+    bool drawMultiSlider(const char* id, float* values, int count, float height,
+                         int highlight, const std::function<bool(int)>& enabled,
+                         const std::function<std::string(int)>& label);
+
     float currentBpm = 120.0f;
 
     int oldNumChannels = 2;
@@ -121,7 +181,6 @@ private:
     bool wetActive = false;
     bool captureActive = false;
 
-    static constexpr int SNAPSHOT_COUNT = 24;
     std::array<ofJson, SNAPSHOT_COUNT> snapshotSlots;
     std::array<bool, SNAPSHOT_COUNT> snapshotUsed{};
     std::array<std::string, SNAPSHOT_COUNT> snapshotNames{};
@@ -177,7 +236,7 @@ private:
 
     void configureSynth(ofxSCServer* server, ofxSCSynth* synth);
     void attachFeedback(ofxSCServer* server, ofxSCSynth* synth);
-    void sendAllParams(ofxSCSynth* synth);
+    void sendAllParams(ofxSCSynth* synth, bool includeTransport = true);
     void sendAllParams();
     void requireSynthdefs();
     void recreateSynths();
