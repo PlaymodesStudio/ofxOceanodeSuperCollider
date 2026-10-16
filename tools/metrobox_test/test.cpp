@@ -222,6 +222,44 @@ int main() {
         CHECK(!sameCycle(e.realizeCycle(0, 8), e.realizeCycle(0, 4)), "keep off: still frozen");
     }
 
+    // ── Repeat: Loop freezes the phrase playing now; Evolve mutates the loop ──
+    {
+        Engine e;
+        Layer L = grid(12, 0.5f); L.phraseLen = 2;
+        e.layers[0] = L;
+        std::vector<std::vector<Onset>> phrase4 = {e.realizeCycle(0, 8), e.realizeCycle(0, 9)};
+        e.setRepeat(0, REPEAT_LOOP, 9);
+        for(int c = 10; c < 40; c++) CHECK(sameCycle(e.realizeCycle(0, c), phrase4[c % 2]), "loop: cycle %d is not the 2-cycle loop", c);
+        CHECK(!sameCycle(e.realizeCycle(0, 10), e.realizeCycle(0, 11)), "loop: the two cycles of the loop are the same");
+
+        // Mutate is allowed on a loop, and the loop still repeats afterwards
+        e.layers[0].mutations = 2;
+        e.mutate(0, 11, 77);
+        CHECK(!e.layers[0].ops.empty(), "loop: mutate refused");
+        for(int c = 14; c < 30; c++) CHECK(sameCycle(e.realizeCycle(0, c), e.realizeCycle(0, 12 + c % 2)), "loop after mutate: cycle %d", c);
+
+        // Keep while looping keeps the same loop, and locks it
+        const auto before = e.realizeCycle(0, 20);
+        e.setKeep(0, true, 20);
+        CHECK(sameCycle(before, e.realizeCycle(0, 20)), "keep on a loop changed it");
+        const size_t ops = e.layers[0].ops.size();
+        e.mutate(0, 20, 5);
+        CHECK(e.layers[0].ops.size() == ops, "keep: mutation not blocked");
+        e.setKeep(0, false, 20);
+        CHECK(sameCycle(before, e.realizeCycle(0, 20)), "keep off on a loop changed it");
+
+        // Off: new material again
+        e.setRepeat(0, REPEAT_OFF, 20);
+        CHECK(!sameCycle(e.realizeCycle(0, 22), e.realizeCycle(0, 24)), "repeat off: still looping");
+
+        // Evolve: many mutations stay capped
+        e.setRepeat(0, REPEAT_EVOLVE, 20);
+        CHECK(e.layers[0].autoEvery >= 1, "evolve without a period");
+        for(int i = 0; i < 40; i++) e.mutate(0, 20 + i, 1000 + i);
+        CHECK((int)e.layers[0].ops.size() <= MAX_OPS, "evolve: %zu operators kept", e.layers[0].ops.size());
+        checkInvariants(e, 0, 0, 80, "evolve");
+    }
+
     // ── Fill ──
     {
         Engine e;

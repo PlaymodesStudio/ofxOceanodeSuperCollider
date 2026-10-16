@@ -49,6 +49,7 @@ const std::vector<std::string> dynamicsNames = {"None", "Duck", "Reinforce"};
 const std::vector<std::string> ghostSideNames = {"Before", "After", "Either"};
 const std::vector<std::string> ratchetShapeNames = {"Flat", "Crescendo", "Decrescendo"};
 const std::vector<std::string> grooveNames = {"Straight", "Swing 16ths", "Swing 8ths", "Laid back", "Pushed"};
+const std::vector<std::string> repeatNames = {"Off", "Loop", "Evolve"};
 
 ImU32 layerColor(int i, float alpha = 1.0f) {
     static const float hues[] = {0.58f, 0.02f, 0.13f, 0.33f, 0.78f, 0.48f, 0.90f, 0.20f};
@@ -155,8 +156,12 @@ const std::vector<scMetroBox::Field>& scMetroBox::fields() {
         F("Push", &Layer::push, 0, 1, "Chance a hit on a beat moves one unit earlier (anticipation).");
         F("Drag", &Layer::drag, 0, 1, "Chance a hit on a beat moves one unit later.");
         F("Cross barline", &Layer::crossBarline, 0, 1, "Chance a push, drag or gate may cross the cycle start.");
-        I("Phrase length", &Layer::phraseLen, 1, 16, "Cycles per phrase.");
-        F("Renew", &Layer::renew, 0, 1, "Chance a phrase brings new material. 0 = the first phrase repeats forever.");
+        I("Phrase length", &Layer::phraseLen, 1, 16, "Cycles per phrase: the loop length when Repeat is on (2 = a 2-bar loop with 1-bar cycles).");
+        E("Repeat", &Layer::repeat, repeatNames,
+          "Off: new material every phrase (with the Renew chance).\n"
+          "Loop: the phrase playing now repeats forever (Mutate / Re-roll still change it).\n"
+          "Evolve: that loop, with a small mutation every few loops.");
+        F("Renew", &Layer::renew, 0, 1, "Chance a phrase brings new material (Repeat off).");
         F("B strength", &Layer::bStrength, 0, 1, "How far the form's other letters (B, C...) mutate A.");
         T("Fill length", &Layer::fillTicks, 0, 4, "Fill at the end of each phrase, in beats (0 = none).");
         F("Fill intensity", &Layer::fillIntensity, 0, 1, "Denser, with ratchets and a crescendo.");
@@ -200,10 +205,10 @@ const std::vector<scMetroBox::Field>& scMetroBox::fields() {
         I("Accent hits", &Layer::accentHits, 0, 16, "Euclidean accents: this many of the cycle's hits, evenly spread, are accented.");
         F("Accent amount", &Layer::accentAmount, 0, 1);
         B("Accents are long", &Layer::accentsLong, "The long notes are the accented hits.");
-        B("Keep", &Layer::keep, "Freezes the phrase playing now: no renewal, no mutation.");
+        B("Keep", &Layer::keep, "Locks the lane: no mutation, manual or automatic (and the phrase playing now is frozen).");
         I("Mutations", &Layer::mutations, 1, 6, "Operators one Mutate adds.");
-        I("Auto every", &Layer::autoEvery, 0, 16, "Mutate on its own every N phrases (0 = off).");
-        F("Auto chance", &Layer::autoChance, 0, 1);
+        I("Evolve every", &Layer::autoEvery, 1, 16, "Repeat Evolve: a mutation is considered every N loops.");
+        F("Evolve chance", &Layer::autoChance, 0, 1, "Repeat Evolve: chance the mutation happens.");
         A("Mutate", ACT_MUTATE, "Small changes from the next cycle on: split, merge, nudge, tie, accents...");
         A("Re-roll", ACT_REROLL, "A new rhythm with the same rules.");
         A("Undo", ACT_UNDO);
@@ -239,6 +244,11 @@ void scMetroBox::setFieldValue(int li, const Field& f, float value) {
     if(f.kind == F_ACTION) { doAction(li, f.action); return; }
     if(f.b == &Layer::keep) {
         engine.setKeep(li, value >= 0.5f, nowCycle(li));
+        refreshPublished(li);
+        return;
+    }
+    if(f.i == &Layer::repeat) {
+        engine.setRepeat(li, (int)std::lround(value), nowCycle(li));
         refreshPublished(li);
         return;
     }
@@ -300,7 +310,7 @@ bool scMetroBox::drawField(int li, const std::string& name, const char* label) {
             int iv = (int)v;
             if(f.i == &Layer::seed) changed = ImGui::InputInt(text.c_str(), &iv);
             else if(f.i == &Layer::tiers) changed = ImGui::SliderInt(text.c_str(), &iv, 0, 5, iv < 2 ? "off" : "%d");
-            else if(f.i == &Layer::autoEvery) changed = ImGui::SliderInt(text.c_str(), &iv, 0, 16, iv == 0 ? "off" : "%d phrases");
+            else if(f.i == &Layer::autoEvery) changed = ImGui::SliderInt(text.c_str(), &iv, 1, 16, iv == 1 ? "every loop" : "every %d loops");
             else changed = ImGui::SliderInt(text.c_str(), &iv, (int)f.min, (int)f.max);
             v = (float)iv;
             break;
@@ -571,6 +581,7 @@ void scMetroBox::applyRole(int li, const Layer& role) {
     next.liked = L.liked;
     next.keep = L.keep;
     next.keepPhrase = L.keepPhrase;
+    next.repeat = L.repeat;
     L = next;
     engine.changed(li);
     refreshPublished(li);
@@ -614,6 +625,7 @@ ofJson scMetroBox::layerToJson(const Layer& L, bool withState) {
         {"variation", L.variation}, {"curve", L.curve}, {"tiers", L.tiers},
         {"accentHits", L.accentHits}, {"accentAmount", L.accentAmount}, {"accentsLong", L.accentsLong},
         {"mutations", L.mutations}, {"autoEvery", L.autoEvery}, {"autoChance", L.autoChance},
+        {"repeat", L.repeat},
     };
     if(withState) {
         j["mute"] = L.mute;
@@ -659,6 +671,7 @@ scMetroBox::Layer scMetroBox::layerFromJson(const ofJson& j) {
     get("variation", L.variation); get("curve", L.curve); get("tiers", L.tiers);
     get("accentHits", L.accentHits); get("accentAmount", L.accentAmount); get("accentsLong", L.accentsLong);
     get("mutations", L.mutations); get("autoEvery", L.autoEvery); get("autoChance", L.autoChance);
+    get("repeat", L.repeat);
     get("keep", L.keep); get("keepPhrase", L.keepPhrase);
     if(j.contains("ops")) L.ops = opsFromJson(j["ops"]);
     if(j.contains("liked") && j["liked"].is_array())
@@ -695,6 +708,8 @@ scMetroBox::Layer scMetroBox::layerFromJson(const ofJson& j) {
     L.longTicks    = std::max(1, L.longTicks);
     L.tiers        = std::clamp(L.tiers, 0, 5);
     L.mutations    = std::clamp(L.mutations, 1, 6);
+    L.repeat       = std::clamp(L.repeat, 0, (int)repeatNames.size() - 1);
+    L.autoEvery    = std::clamp(L.autoEvery, 1, 16);
     if(L.values.empty()) L.values = {1.0f};
     if(L.values.size() > MAX_VALUES) L.values.resize(MAX_VALUES);
     L.weights.resize(L.values.size(), 1.0f);
@@ -807,7 +822,7 @@ void scMetroBox::syncOutputPorts() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Auto-evolve: every N phrases, a mutation with some chance
+// Repeat Evolve: every N loops, a mutation with some chance
 // ════════════════════════════════════════════════════════════════════════════
 
 void scMetroBox::autoEvolve() {
@@ -816,7 +831,7 @@ void scMetroBox::autoEvolve() {
         const Layer& L = layers[li];
         const int64_t now = engine.cycleAt(li, t.beatPosition);
         const int64_t phrase = engine.phraseOf(li, now);
-        if(!t.isPlaying || L.autoEvery <= 0 || L.keep) { lastPhrase[li] = phrase; continue; }
+        if(!t.isPlaying || L.repeat != REPEAT_EVOLVE || L.keep) { lastPhrase[li] = phrase; continue; }
         if(lastPhrase[li] != NO_CYCLE && phrase == lastPhrase[li] + 1 && ++phrasesSinceAuto[li] >= L.autoEvery) {
             phrasesSinceAuto[li] = 0;
             const uint32_t r = (uint32_t)hashOf((uint64_t)ofGetElapsedTimeMicros(), ++autoCounter, (uint64_t)li);
@@ -1193,6 +1208,8 @@ void scMetroBox::drawTimeline(float width) {
     const ImU32 text = ImGui::GetColorU32(ImGuiCol_Text);
     const ImU32 textDim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
     const ImU32 fillShade = ImGui::GetColorU32(ImGuiCol_Text, 0.06f);
+    const ImU32 cycleLine = ImGui::GetColorU32(ImGuiCol_Text, 0.12f);
+    const ImU32 cycleLineStrong = ImGui::GetColorU32(ImGuiCol_Text, 0.35f);
 
     dl->AddRectFilled(ImVec2(x0, yRows), ImVec2(x0 + w, yEnd), bg);
     dl->PushClipRect(ImVec2(x0, origin.y), ImVec2(x0 + w, yEnd), true);
@@ -1216,10 +1233,16 @@ void scMetroBox::drawTimeline(float width) {
         const int64_t last = floorDiv(tickAt(viewEnd) - 1, cT);
         for(int64_t c = std::max<int64_t>(first, 0); c <= last && c - first < 256; c++) {
             const double cycleBeat = (double)c * cT / TPB;
-            // Cycle start marks; phrase starts taller, fills shaded
+            // Cycle starts: thin neutral lines across the row (lane colours
+            // are only for pulses); phrase starts stronger, with a notch on top.
+            // Fills shaded.
             const bool phraseStart = positiveMod64(c, n) == 0;
-            if(cycleBeat >= viewStart)
-                dl->AddLine(ImVec2(X(cycleBeat), y0 + 1), ImVec2(X(cycleBeat), y0 + (phraseStart ? 14 : 7)), layerColor(li, 0.9f * dim), phraseStart ? 4.0f : 2.0f);
+            if(cycleBeat >= viewStart) {
+                const float cx = X(cycleBeat);
+                dl->AddLine(ImVec2(cx, y0 + 1), ImVec2(cx, y0 + rowH - 1), phraseStart ? cycleLineStrong : cycleLine, 1.0f);
+                if(phraseStart)
+                    dl->AddTriangleFilled(ImVec2(cx - 4, y0 + 1), ImVec2(cx + 4, y0 + 1), ImVec2(cx, y0 + 6), cycleLineStrong);
+            }
             if(L.fillTicks > 0 && positiveMod64(c, n) == n - 1) {
                 const double fs = cycleBeat + (double)(cT - L.fillTicks) / TPB;
                 dl->AddRectFilled(ImVec2(X(fs), y0 + 1), ImVec2(X(cycleBeat + (double)cT / TPB), y0 + rowH - 1), fillShade);
@@ -1258,7 +1281,7 @@ void scMetroBox::drawTimeline(float width) {
         if(li == selectedLayer) dl->AddRectFilled(ImVec2(origin.x, y0), ImVec2(x0 - 4, y0 + rowH - 2), ImGui::GetColorU32(ImGuiCol_Header));
         if(ImGui::InvisibleButton("##sel", ImVec2(labelW - 34, rowH - 2))) selectedLayer = li;
         dl->AddRectFilled(ImVec2(origin.x + 4, y0 + 6), ImVec2(origin.x + 8, y0 + rowH - 8), layerColor(li, L.mute ? 0.3f : 1.0f));
-        dl->AddText(ImVec2(origin.x + 14, y0 + 6), L.mute ? textDim : text, (ofToString(li + 1) + " " + L.name + (L.keep ? " (kept)" : "")).c_str());
+        dl->AddText(ImVec2(origin.x + 14, y0 + 6), L.mute ? textDim : text, (ofToString(li + 1) + " " + L.name + (L.keep ? " (kept)" : L.repeat == REPEAT_LOOP ? " (loop)" : L.repeat == REPEAT_EVOLVE ? " (evolving)" : "")).c_str());
         const std::string sub = generatorNames[L.generator].substr(0, 11) + ", " + ofToString(L.cycleBeats) + " beats";
         dl->AddText(ImVec2(origin.x + 14, y0 + 22), textDim, sub.c_str());
         ImGui::SetCursorScreenPos(ImVec2(x0 - 32, y0 + 10));
@@ -1345,8 +1368,6 @@ void scMetroBox::drawLayerEditor(int li) {
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("First liked version, with the second half of each cycle from the other.");
     }
     ImGui::SetNextItemWidth(100); drawField(li, "Mutations");
-    ImGui::SameLine(); ImGui::SetNextItemWidth(130); drawField(li, "Auto every");
-    if(L.autoEvery > 0) { ImGui::SameLine(); ImGui::SetNextItemWidth(100); drawField(li, "Auto chance"); }
 
     constexpr float colW = 330.0f, itemW = 170.0f;
     if(ImGui::BeginTable("##editor", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
@@ -1482,8 +1503,11 @@ void scMetroBox::drawLayerEditor(int li) {
         // ── Column 3: Phrase, Duration, Amplitude ──
         ImGui::TableSetColumnIndex(2);
         ImGui::PushItemWidth(itemW);
-        heading("Phrase");
-        drawField(li, "Phrase length");
+        heading("Phrase and repeat");
+        drawField(li, "Phrase length", "Length (cycles)");
+        drawField(li, "Repeat");
+        if(L.repeat == REPEAT_OFF) drawField(li, "Renew");
+        if(L.repeat == REPEAT_EVOLVE) { drawField(li, "Evolve every"); drawField(li, "Evolve chance"); }
         char formBuf[32];
         std::snprintf(formBuf, sizeof(formBuf), "%s", L.form.c_str());
         if(ImGui::InputTextWithHint("Form", "none, e.g. AAAB", formBuf, sizeof(formBuf), ImGuiInputTextFlags_CharsUppercase)) {
@@ -1492,7 +1516,6 @@ void scMetroBox::drawLayerEditor(int li) {
         }
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("One letter per cycle of the phrase. Every A plays the same; B, C... are mutations of A.\nEmpty: every cycle its own.");
         if(!L.form.empty()) drawField(li, "B strength");
-        drawField(li, "Renew");
         drawField(li, "Fill length");
         if(L.fillTicks > 0) drawField(li, "Fill intensity");
         drawField(li, "Build-up");
