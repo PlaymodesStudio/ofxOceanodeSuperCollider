@@ -12,6 +12,7 @@
 #include "scNode.h"
 #include "scSchedulingCompat.h"
 #include "scSynthdefCompiler.h"
+#include <set>
 
 class ofxSCSynth;
 class ofxSCServer;
@@ -31,6 +32,7 @@ class scSynthdef : public scNode {
 public:
     scSynthdef(synthdefDesc description);
     ~scSynthdef(){
+        instances().erase(this);
         // Every scheduled-event handler this node registered points at members
         // that are about to go away.
         scScheduling::unregisterOwner(this);
@@ -88,8 +90,16 @@ public:
     ofEvent<std::tuple<ofxSCServer*, scNode*, int>> setAudioRateBusAssignment;
     
     static synthdefDesc readAndCreateSynthdef(string file);
+
+    // The .scsyndef files of `name` were rebuilt and loaded (SC Code's
+    // Promote): every node made from it replaces its synths with the new
+    // definition. A channel count that no longer has a build is offered for
+    // compiling first, as when N Chan asks for one.
+    static int reloadAll(const std::string& name);
     
 private:
+    static std::set<scSynthdef*>& instances();
+    void reloadDefinition();
     string getSynthdefFilename();
     // Replace every synth with one of getSynthdefFilename(), parameters and
     // bus wiring included, in place of the old one.

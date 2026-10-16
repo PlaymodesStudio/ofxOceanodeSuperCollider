@@ -53,6 +53,34 @@ std::vector<double> sentValueKey(const std::vector<T>& values){
 scSynthdef::scSynthdef(synthdefDesc _synthDescription) : synthDescription(_synthDescription), synthdefName(_synthDescription.name), scNode(_synthDescription.name + "*"){
     description = synthDescription.description;
     variableChanged = false;
+    instances().insert(this);
+}
+
+std::set<scSynthdef*>& scSynthdef::instances(){
+    static std::set<scSynthdef*> all;
+    return all;
+}
+
+int scSynthdef::reloadAll(const std::string& name){
+    int count = 0;
+    // Copied: a reload can create or delete nothing, but stay safe if it did
+    const std::set<scSynthdef*> all = instances();
+    for(auto* node : all){
+        if(node->synthdefName != name) continue;
+        node->reloadDefinition();
+        count++;
+    }
+    return count;
+}
+
+void scSynthdef::reloadDefinition(){
+    if(synths.empty() || waitingForSynthdef) return;
+    const std::string defName = getSynthdefFilename();
+    if(!isSynthdefCompiled(defName)){
+        waitForSynthdef(defName);   // rebuilds once compiled
+        return;
+    }
+    replaceSynths();
 }
 
 void scSynthdef::setup(){
@@ -335,6 +363,7 @@ void scSynthdef::setup(){
             };
             
             listeners.push(vi.newListener([setValuesToSynths](vector<int> &vi_){
+                if(scScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths(false);
             }));
         }
@@ -355,6 +384,7 @@ void scSynthdef::setup(){
             };
             
             listeners.push(vi.newListener([this, setValuesToSynths](vector<int> &vi_){
+                if(scScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths(false);
             }));
         }
@@ -380,6 +410,7 @@ void scSynthdef::setup(){
             };
             
             listeners.push(vf.newListener([this, setValuesToSynths](vector<float> &vf_){
+                if(scScheduling::isBackendSendSuppressed()) return;
                 setValuesToSynths(false);
             }));
         }
@@ -418,16 +449,20 @@ void scSynthdef::setup(){
             
             
             listeners.push(resetAudioRateBusAssignments.newListener([this, toSendName, availableInput](std::pair<ofxSCServer*, int> busAssignmentInfo){
-                synths[busAssignmentInfo.first]->set(toSendName + "_sel", 0);
-                synths[busAssignmentInfo.first]->mapan(toSendName + "_ar", busAssignmentInfo.second, MAX_NODE_CHANNELS);
+                // find(), not []: [] inserted a null synth and dereferenced it
+                auto synth = synths.find(busAssignmentInfo.first);
+                if(synth == synths.end() || synth->second == nullptr) return;
+                synth->second->set(toSendName + "_sel", 0);
+                synth->second->mapan(toSendName + "_ar", busAssignmentInfo.second, MAX_NODE_CHANNELS);
                 audioRateState[busAssignmentInfo.first][toSendName] = {0, busAssignmentInfo.second};
             }));
             
             listeners.push(setAudioRateBusAssignment.newListener([this, toSendName, availableInput](std::tuple<ofxSCServer*, scNode*, int> busAssignmentInfo){
                 const auto [server, node, bus] = busAssignmentInfo;
-                if(availableInput->getNodeRef() == node){
-                    synths[server]->set(toSendName + "_sel", 1);
-                    synths[server]->mapan(toSendName + "_ar", bus, MAX_NODE_CHANNELS);
+                auto synth = synths.find(server);
+                if(availableInput->getNodeRef() == node && synth != synths.end() && synth->second != nullptr){
+                    synth->second->set(toSendName + "_sel", 1);
+                    synth->second->mapan(toSendName + "_ar", bus, MAX_NODE_CHANNELS);
                     audioRateState[server][toSendName] = {1, bus};
                 }
             }));

@@ -209,15 +209,17 @@ void serverManager::draw(){
 
         int intaddress[4] = {0, 0, 0, 0};
         vector<string> splitAddress = ofSplitString(preferences.bindAddress, ".");
-        for(int i = 0; i < 4; i++){
+        // An address with fewer than four parts used to index past the end
+        for(int i = 0; i < 4 && i < (int)splitAddress.size(); i++){
             intaddress[i] = ofToInt(splitAddress[i]);
         }
         if(ImGui::InputInt4("Bind Address", &intaddress[0])){
-            string newAddress = ofToString(intaddress[0]) + "."
+            for(int& part : intaddress) part = ofClamp(part, 0, 255);
+            // No trailing dot ("127.0.0.1.", which scsynth's -B rejects)
+            preferences.bindAddress = ofToString(intaddress[0]) + "."
                                 + ofToString(intaddress[1]) + "."
                                 + ofToString(intaddress[2]) + "."
-                                + ofToString(intaddress[3]) + ".";
-            preferences.bindAddress = newAddress;
+                                + ofToString(intaddress[3]);
         }
 
         ImGui::PopItemWidth();
@@ -869,6 +871,9 @@ void serverManager::teardownGraphForPresetLoad(){
             node->resetInputBusses(server, silentBusIndex);
             node->free(server);
         }
+        // They are out of the graph now: stop listening for their destruction
+        // (the entries outlived every teardown)
+        nodeDestroyedListeners.erase(node);
     }
     nodesList.clear();
 
@@ -1010,20 +1015,23 @@ void serverManager::recomputeGraph(){
                 }
             }
         
-        scNode* lastNode = nullptr;
+        // The id to place the next (upstream) node before: the last one that
+        // actually has a synth. A node without one (its SynthDef missing)
+        // reports -1, and "/n_before x -1" only failed on the server.
+        // (moveSynthBefore is still called: nodes re-send their bus wiring
+        // there; ofxSCNode::moveBefore ignores a target of -1.)
+        int beforeID = -1;
+        bool first = true;
         for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
             if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end()){
                 (*it)->createSynth(server);
             }
-            else{
-                if(lastNode == nullptr){
-//                    (*it)->moveSynthAfter(server, -1);
-                }
-                else{
-                    (*it)->moveSynthBefore(server, lastNode->getLastSynthID(server));
-                }
+            else if(!first){
+                (*it)->moveSynthBefore(server, beforeID);
             }
-            lastNode = (*it);
+            first = false;
+            const int id = (*it)->getLastSynthID(server);
+            if(id >= 0) beforeID = id;
         }
         
         nodesList = newNodesList;

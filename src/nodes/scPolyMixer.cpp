@@ -519,9 +519,10 @@ void scPolyMixer::update(ofEventArgs &args) {
 				}
 			}
 			
-			// CRITICAL: Always request next values to keep bus active
-			// Doing this even for disconnected tracks keeps the bus "warm" on the SC side
-			buses[trackIndex]->requestValues();
+			// Only tracks with an input: a disconnected one shows 0 anyway, and
+			// a control bus needs no "warming" (its last value is still there
+			// when a source is connected and polling resumes)
+			if(hasInput) buses[trackIndex]->requestValues();
 		}
 	}
 	
@@ -1075,17 +1076,17 @@ void scPolyMixer::recreateVUBuses(ofxSCServer* server) {
 			
 			ofxSCBus* newBus = new ofxSCBus(RATE_CONTROL, channelCount, server);
 			
-			if(newBus != nullptr && newBus->index >= 0 && newBus->index < 4096) {
+			if(newBus != nullptr && newBus->index >= 0) {
 				if(server->controlBusses[newBus->index] != nullptr) {
 					trackVUBuses[server][i] = newBus;
 					newBus->requestValues();
 					ofLogNotice("scPolyMixer") << "Created VU bus " << i << " with index " << newBus->index;
 				} else {
-					delete newBus;
+					newBus->free(); delete newBus;
 					trackVUBuses[server][i] = nullptr;
 				}
 			} else {
-				if(newBus != nullptr) delete newBus;
+				if(newBus != nullptr){ newBus->free(); delete newBus; }
 				trackVUBuses[server][i] = nullptr;
 			}
 		} catch(...) {
@@ -2007,7 +2008,7 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 				if(newBus->index < 0) {
 					ofLogError("scPolyMixer") << "VU meter bus " << i
 					<< " has invalid index: " << newBus->index;
-					delete newBus;
+					newBus->free(); delete newBus;
 					continue;
 				}
 				

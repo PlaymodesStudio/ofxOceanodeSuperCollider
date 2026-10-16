@@ -265,7 +265,9 @@ int scOldSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
 }
 
 int scOldSynthdef::getLastSynthID(ofxSCServer* server){
-    return synths[server]->nodeID;
+    // find(), not []: [] inserted a null synth for a server without one
+    auto it = synths.find(server);
+    return (it != synths.end() && it->second != nullptr) ? it->second->nodeID : -1;
 }
 
 oldSynthdefDesc scOldSynthdef::readAndCreateSynthdef(string file){

@@ -2763,7 +2763,10 @@ void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
         }
     }
     // A per-playhead vector whose connection was removed: back to one value
-    // (its first), so no hidden per-playhead values remain
+    // (its first), so no hidden per-playhead values remain. Checked every few
+    // frames: 14 parameter lookups by name per playhead per frame for an
+    // event that only matters within a fraction of a second.
+    if(ofGetFrameNum() % 6 == 0)
     for(auto& phPtr : playheads)
         for(auto* vp : perPlayheadVectors(*phPtr)) {
             const std::string nm = vp->getName();

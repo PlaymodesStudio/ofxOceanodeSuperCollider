@@ -819,7 +819,7 @@ void scPolyComb::allocateLFOBuses(ofxSCServer* server) {
     int n = nVoices.get();
     for (int li = 0; li < NUM_LFOS; li++) {
         buses[li] = new ofxSCBus(RATE_CONTROL, n, server);
-        if (buses[li]->index < 0 || buses[li]->index >= 4096 ||
+        if (buses[li]->index < 0 ||
             !server->controlBusses[buses[li]->index]) {
             buses[li]->free();
             delete buses[li];

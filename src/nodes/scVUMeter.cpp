@@ -371,19 +371,19 @@ void scVUMeter::recreateVUBus(ofxSCServer* server) {
 		int channelCount = numChannels.get();
 		ofxSCBus* newBus = new ofxSCBus(RATE_CONTROL, channelCount, server);
 		
-		if(newBus != nullptr && newBus->index >= 0 && newBus->index < 4096) {
+		if(newBus != nullptr && newBus->index >= 0) {
 			if(server->controlBusses[newBus->index] != nullptr) {
 				vuBuses[server] = newBus;
 				newBus->requestValues();
 				ofLogNotice("scVUMeter") << "Created VU bus with index " << newBus->index
 					<< " for " << channelCount << " channels";
 			} else {
-				delete newBus;
+				newBus->free(); delete newBus;
 				vuBuses[server] = nullptr;
 				ofLogError("scVUMeter") << "Server controlBusses array invalid";
 			}
 		} else {
-			if(newBus != nullptr) delete newBus;
+			if(newBus != nullptr){ newBus->free(); delete newBus; }
 			vuBuses[server] = nullptr;
 		}
 	} catch(...) {

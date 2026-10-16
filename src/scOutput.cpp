@@ -144,14 +144,16 @@ void scOutput::setInputBus(ofxSCServer* server, scNode* node, int bus){
 }
 
 void scOutput::resetInputBusses(ofxSCServer* server, int targetBus){
-    inputBus[server] = 0;
+    // The bus it is reset to, not 0: 0 is the first hardware output, and a
+    // later move/re-send of "in" would have read the speakers back in
+    inputBus[server] = targetBus;
     if(synth != nullptr){
         synth->set("in", targetBus);
     }
 }
 
 int scOutput::getLastSynthID(ofxSCServer* server){
-    if(server == outputServers[serverIndex]->getServer()){
+    if(synth != nullptr && server == outputServers[serverIndex]->getServer()){
         return synth->nodeID;
     }
     return -1;

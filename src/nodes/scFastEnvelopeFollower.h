@@ -448,18 +448,18 @@ private:
 			int channelCount = numChannels.get();
 			ofxSCBus* newBus = new ofxSCBus(RATE_CONTROL, channelCount, server);
 
-			if(newBus != nullptr && newBus->index >= 0 && newBus->index < 4096) {
+			if(newBus != nullptr && newBus->index >= 0) {
 				if(server->controlBusses[newBus->index] != nullptr) {
 					envelopeBuses[server] = newBus;
 					newBus->requestValues();
 					ofLogNotice("scFastEnvelopeFollower") << "Created envelope bus with index "
 						<< newBus->index << " for " << channelCount << " channels";
 				} else {
-					delete newBus;
+					newBus->free(); delete newBus;
 					envelopeBuses[server] = nullptr;
 				}
 			} else {
-				if(newBus != nullptr) delete newBus;
+				if(newBus != nullptr){ newBus->free(); delete newBus; }
 				envelopeBuses[server] = nullptr;
 			}
 		} catch(...) {

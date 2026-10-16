@@ -415,12 +415,12 @@ void scGraphicEQ::createFFTSynth(ofxSCServer* server) {
 
     try {
         ofxSCBus* bus = new ofxSCBus(RATE_CONTROL, NUM_BINS, server);
-        if(!bus || bus->index < 0 || bus->index >= 4096) {
-            if(bus) delete bus;
+        if(!bus || bus->index < 0) {
+            if(bus){ bus->free(); delete bus; }
             return;
         }
         if(!server->controlBusses[bus->index]) {
-            delete bus;
+            bus->free(); delete bus;
             return;
         }
         fftBuses[server] = bus;

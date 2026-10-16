@@ -188,8 +188,8 @@ private:
         ofxSCServer* srv = servers[serverIndex]->getServer();
 
         fftBus = new ofxSCBus(RATE_CONTROL, NUM_BANDS, srv);
-        if(!fftBus || fftBus->index < 0 || fftBus->index >= 4096) {
-            if(fftBus) { delete fftBus; fftBus = nullptr; }
+        if(!fftBus || fftBus->index < 0) {
+            if(fftBus) { fftBus->free(); delete fftBus; fftBus = nullptr; }
             return;
         }
         if(!srv->controlBusses[fftBus->index]) {

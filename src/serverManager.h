@@ -32,7 +32,9 @@ struct scPreferences{
     int udpPort = 57110; //u (0-65535)
     std::string bindAddress = "127.0.0.1"; //-B (set to 0.0.0.0 to listen to all)
     int numControlBusChannels = 16384; //c
-    int numAudioBusChannels = 4096; //a
+    // Every output port in the graph takes MAX_NODE_CHANNELS (128) of these:
+    // 4096 left room for only ~30 ports. ~8 MB of server memory at -z 64.
+    int numAudioBusChannels = 32768; //a
     int numInputBusChannels = 2; //i
     int numOutputBusChannels = 16; //o
     int blockSize = 64; //z

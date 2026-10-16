@@ -96,12 +96,17 @@ static void refreshSynthdefModels(ofxOceanode &o){
 					}else if(desc.type == "events"){
 
 					}else{
+						// Refreshed, not just registered: registerModel keeps the
+						// first description of a name, so a SynthDef rebuilt with
+						// other parameters (SC Code's Promote, Load Defs) went on
+						// creating nodes with the old ones until a restart. The
+						// name is the scNode's "SC <name>*".
+						const std::string category = desc.category.empty() ? "SuperCollider" : "SuperCollider/" + desc.category;
+						const std::string nodeName = "SC " + desc.name + "*";
 						if(desc.name == "FeedbackNode"){
-							o.registerModel<scFeedbackNode>(desc.category.empty() ? "SuperCollider" : "SuperCollider/" + desc.category, desc);
-						}else if(desc.category != ""){
-							o.registerModel<scSynthdef>("SuperCollider/" + desc.category, desc);
+							o.refreshModelNamed<scFeedbackNode>(nodeName, category, desc);
 						}else{
-							o.registerModel<scSynthdef>("SuperCollider", desc);
+							o.refreshModelNamed<scSynthdef>(nodeName, category, desc);
 						}
 					}
                     synthdefFolders[desc.name] = dir.getAbsolutePath();
