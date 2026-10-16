@@ -20,6 +20,8 @@
 #include <unistd.h>
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
+#include <poll.h>
 extern char **environ;
 #endif
 
@@ -155,38 +157,79 @@ private:
     // of this server's own scsynth to stop it with
     void runProcess(const std::vector<std::string>& args){
         int fds[2];
-        if(pipe(fds) != 0){
-            ofLogError("scStart") << "Could not create a pipe for scsynth";
-            return;
-        }
-        std::vector<char*> argv;
-        for(auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
-        argv.push_back(nullptr);
-        posix_spawn_file_actions_t actions;
-        posix_spawn_file_actions_init(&actions);
-        posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
-        posix_spawn_file_actions_adddup2(&actions, fds[1], STDERR_FILENO);
-        posix_spawn_file_actions_addclose(&actions, fds[0]);
         pid_t pid = -1;
-        const int error = posix_spawn(&pid, scPath.c_str(), &actions, nullptr, argv.data(), environ);
-        posix_spawn_file_actions_destroy(&actions);
-        close(fds[1]);
+        int error = 0;
+        {
+            // One launch at a time, and a child that inherits nothing but its
+            // stdio: the servers start together, and a scsynth that inherited
+            // another server's pipe kept it open after that server was stopped,
+            // so its reader never saw the end and quitting the app hung
+            static std::mutex launchMutex;
+            std::lock_guard<std::mutex> lock(launchMutex);
+            if(pipe(fds) != 0){
+                ofLogError("scStart") << "Could not create a pipe for scsynth";
+                return;
+            }
+            std::vector<char*> argv;
+            for(auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
+            argv.push_back(nullptr);
+            posix_spawn_file_actions_t actions;
+            posix_spawn_file_actions_init(&actions);
+            posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+            posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
+            posix_spawn_file_actions_adddup2(&actions, fds[1], STDERR_FILENO);
+            posix_spawnattr_t attributes;
+            posix_spawnattr_init(&attributes);
+#ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
+            posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT);
+#endif
+            error = posix_spawn(&pid, scPath.c_str(), &actions, &attributes, argv.data(), environ);
+            posix_spawn_file_actions_destroy(&actions);
+            posix_spawnattr_destroy(&attributes);
+            close(fds[1]);
+        }
         if(error != 0){
             close(fds[0]);
             ofLogError("scStart") << "Could not start " << scPath << ": " << strerror(error);
             return;
         }
         processId = pid;
-        FILE* output = fdopen(fds[0], "r");
-        if(output != nullptr){
-            readOutput(output);
-            fclose(output);
-        }else{
-            close(fds[0]);
-        }
+        readOutput(fds[0], pid);
+        close(fds[0]);
         int status = 0;
         while(waitpid(pid, &status, 0) < 0 && errno == EINTR){}
         processId = -1;
+    }
+
+    // scsynth's console, line by line, until it exits. Polled rather than
+    // blocking: if anything else still holds the pipe open, the end of the
+    // process ends the reading anyway.
+    void readOutput(int fd, pid_t pid){
+        std::string line;
+        char buffer[512];
+        while(true){
+            pollfd p{fd, POLLIN, 0};
+            const int ready = poll(&p, 1, 250);
+            if(ready > 0){
+                const ssize_t n = read(fd, buffer, sizeof(buffer));
+                if(n <= 0) break;   // end of output
+                for(ssize_t i = 0; i < n; i++){
+                    if(buffer[i] == '\n'){
+                        ofLog() << line;
+                        line.clear();
+                    }else{
+                        line += buffer[i];
+                    }
+                }
+            }else if(ready < 0 && errno != EINTR){
+                break;
+            }else if(waitpid(pid, nullptr, WNOHANG) == pid){
+                // Exited (and reaped here); nothing more will come
+                processId = -1;
+                break;
+            }
+        }
+        if(!line.empty()) ofLog() << line;
     }
     void stopProcess(){
         const pid_t pid = processId.load();
@@ -214,7 +257,7 @@ private:
     }
 #endif
 
-    // scsynth's console, line by line, until it exits
+    // scsynth's console, line by line, until it exits (Windows: a popen stream)
     void readOutput(FILE* stream){
         std::string line;
         int c;
