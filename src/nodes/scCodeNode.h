@@ -25,6 +25,10 @@
 //    them, stealing the oldest.
 //  • Each server gets a group in the graph's order; the synth or the voices
 //    live inside it, so the graph never needs to know which.
+//  • Oceanode's own ~synthCreator sources work too: the node gets N Chan and
+//    the source's variables, and recompiles (cached) when they change.
+//    Library... opens any source of the addon; Promote writes a refined one
+//    back over its original file and rebuilds it.
 //  • Promote: once it sounds right, the AI rewrites the code as an Oceanode
 //    ~synthCreator source (OceanodeParameter controls, n channels, the
 //    current values as defaults). It is saved into the SynthDef sources,
@@ -100,6 +104,13 @@ public:
         bool canFreeSynth = false;
         bool hasGate = false;
         bool functionPlay = false;      // built by {}.play
+        // Built by ~synthCreator (an Oceanode source): for creatorChannels
+        // channels and these variable values
+        bool creator = false;
+        int creatorChannels = 1;
+        struct Variable { std::string name; int dim = 1; int value = 1; };
+        std::vector<Variable> variables;
+        std::string description, category;
         std::vector<ControlDesc> controls;
         std::vector<BusDesc> inputs, outputs;
     };
@@ -129,11 +140,13 @@ private:
         bool groupCreated = false;
         float groupReadyTime = 0;       // its /g_new is timetagged until then
         ofxSCSynth* synth = nullptr;    // persistent mode
+        float synthSentAt = 0;          // its /s_new, to notice one that never started
         std::vector<Voice> voices;
         std::map<std::string, int> outputBus;   // bus control -> bus
         std::map<int, int> outputBusByIndex;    // port index -> bus
         std::map<scNode*, int> inputBusByNode;  // source node -> bus
         int silentBus = -1;             // for inputs with nothing connected
+        std::map<std::string, int> controlBus;  // control -> audio bus plugged into it
         ofxSCBus* scratch = nullptr;    // for an output port with no bus yet
         std::string builtDef;           // what the synth / voices run
         bool builtVoices = false;
@@ -141,6 +154,12 @@ private:
     struct ControlParam {
         ControlDesc desc;
         int index = 0;
+        // An audio cable plugged into the parameter's inlet (as on the regular
+        // SynthDef node). Through <name>_sel / <name>_ar when the SynthDef has
+        // them (OceanodeParameter.ar, sample accurate), else the control
+        // itself is mapped to the bus.
+        std::shared_ptr<nodePort> audioInput = std::make_shared<nodePort>();
+        bool audioRate = false;
         bool array = false;
         bool trigger = false;
         ofParameter<std::vector<float>> param;
@@ -158,16 +177,26 @@ private:
 
     // ── Code, compile and cache ─────────────────────────────────────────────
     static std::string hashCode(const std::string& code);
+    // The cache key: the code and the channel count / variables it is built for
+    static std::string compileKey(const std::string& code, int channels, const std::vector<int>& variables);
     static std::string cacheRoot();
+    static void pruneCache();
     void compile(const std::string& source);
     static BuildOutcome runCapture(scSynthdefCompiler::ScriptJob job, std::string runner,
                                    std::string hash, std::string folder, std::string prefix,
+                                   int channels, std::vector<int> variables, std::string sourcePath,
                                    std::vector<std::pair<int, std::string>> blocks);
+    // ~synthCreator parameters: N Chan and the source's variables
+    void setCreatorParameters(const DefDesc* def);
+    std::vector<int> currentVariableValues() const;
     void finishCompile(BuildOutcome outcome);
     // A compiled code: its description, the folder of its SynthDefs
     void applyMeta(const std::string& source, const std::string& hash, const std::string& metaText, bool fromPreset);
     void requireFolder();
-    bool defsLoading() const;
+    // SynthDefs still loading on `server` (any server when null)
+    bool defsLoading(ofxSCServer* server = nullptr) const;
+    // A persistent synth the server never confirmed: made again
+    void retryUnconfirmedSynths();
     std::string findRunnerFolder();
 
     // ── Shape of the node ───────────────────────────────────────────────────
@@ -191,6 +220,11 @@ private:
     void sendBuses(ofxSCServer* server, ServerState& st, ofxSCSynth* synth);
     void setGroupControl(ofxSCServer* server, ServerState& st, const std::string& name, float value);
     int inputBusFor(ServerState& st, const std::string& control) const;
+    // Audio into a parameter: bus >= 0 maps it, -1 goes back to its value
+    void routeControl(ofxSCServer* server, ServerState& st, ControlParam& c, int bus);
+    // The audio mappings of `st` onto a synth about to be created
+    void applyRoutes(ServerState& st, ofxSCSynth* synth);
+    void sendGroupMessage(ofxSCServer* server, ServerState& st, ofxOscMessage m);
     int outputBusFor(ofxSCServer* server, ServerState& st, const std::string& control);
     const ControlDesc* findControl(const std::string& name) const;
     void sendControl(ControlParam& c, bool force);
@@ -239,9 +273,12 @@ private:
     static std::string promoteSystemPrompt();
     static std::string addonSynthdefsFolder();
     static PromoteOutcome runInstall(scSynthdefCompiler::ScriptJob job, std::string runner,
-                                     std::vector<std::string> sourceFolders, std::string synthdefRoot,
-                                     std::string work, std::string name, std::string category,
-                                     std::string source, int maxChannels);
+                                     std::vector<std::string> sourceFolders, std::string sourceRelative,
+                                     std::string synthdefRoot, std::string work, std::string name,
+                                     std::string category, std::string source, int maxChannels);
+    // The ~synthCreator sources of the addon: name -> path relative to synthdefs/
+    static std::map<std::string, std::string> scanLibrary();
+    void drawLibraryPopup();
 
     std::vector<serverManager*> servers;
     std::map<ofxSCServer*, ServerState> states;
@@ -253,6 +290,15 @@ private:
     ofParameter<int> maxVoices;
     ofParameter<float> trigLength;
     bool voiceParamsRegistered = false;
+    ofParameter<int> numChannels;
+    std::vector<std::unique_ptr<ofParameter<int>>> variableParams;
+    bool creatorParamsRegistered = false;
+    int compiledChannels = 1;           // what the running SynthDef was built for
+    std::vector<int> compiledVariables;
+    int buildingChannels = 1;
+    std::vector<int> buildingVariables;
+    bool creatorSettingsDirty = false;
+    float creatorSettingsTime = 0;
     customGuiRegion statusRegion;
     std::vector<std::unique_ptr<ControlParam>> controls;
     std::vector<std::string> inputControls;     // bus control of each scNode input
@@ -271,6 +317,7 @@ private:
     bool builtVoiceMode = false;        // the mode the synths were built for
     std::string builtDefName;           // what they run
     bool rebuildPending = false;
+    bool defsBuilt = false;             // the SynthDefs meta describes exist on disk
     bool firstUpdate = true;
 
     std::future<BuildOutcome> buildTask;
@@ -300,11 +347,16 @@ private:
     bool pendingSaveDialog = false;
     std::string pendingScriptPath;
     std::string saveName;               // collection name of the current script
+    std::string sourceFile;             // file the code was opened from, "" if none
     bool editorFocusCompile = false;    // Cmd+Return / Shift+Return in the editor
 
     ofxOceanodeAIAssistant ai;
 
+    bool libraryOpenRequest = false;
+    std::map<std::string, std::string> library;
+    std::string libraryFilter;
     bool promoteOpenRequest = false;
+    std::string pendingReload;          // promoted synth whose nodes rebuild once loaded
     std::string promoteName, promoteCategory, promoteNotes, promoteSource;
     int promoteChannels = 2;
     bool promoteOverwrite = false;

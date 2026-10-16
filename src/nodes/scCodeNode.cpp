@@ -9,12 +9,14 @@
 #include "ofxSCServer.h"
 #include "ofxOceanodeShared.h"
 #include "imgui.h"
+#include "scSynthdef.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <regex>
 #include <sstream>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -135,6 +137,20 @@ bool scCodeNode::parseMeta(const std::string& text, Meta& meta, std::string& err
             def.canFreeSynth = d.value("canFreeSynth", false);
             def.hasGate = d.value("hasGate", false);
             def.functionPlay = d.value("functionPlay", false);
+            if(d.contains("creator") && d["creator"].is_object()){
+                const auto& cr = d["creator"];
+                def.creator = true;
+                def.creatorChannels = cr.value("channels", 1);
+                def.description = cr.value("description", "");
+                def.category = cr.value("category", "");
+                for(auto& v : cr.value("variables", ofJson::array())){
+                    DefDesc::Variable var;
+                    var.name = v.value("name", "");
+                    var.dim = std::max(1, v.value("dim", 1));
+                    var.value = ofClamp(v.value("value", 1), 1, var.dim);
+                    if(!var.name.empty()) def.variables.push_back(var);
+                }
+            }
             for(auto& c : d.value("controls", ofJson::array())){
                 ControlDesc control;
                 control.name = c.value("name", "");
@@ -263,13 +279,22 @@ scCodeNode::scCodeNode(std::vector<serverManager*> outputServers)
                   "Promote turns the tested code into a regular Oceanode SynthDef node.";
     editorText = kDefaultCode;
     setupAIAssistant();
+    pruneCache();
 }
 
 scCodeNode::~scCodeNode(){
     for(auto& [server, st] : states) freeState(st);
     states.clear();
-    if(buildTask.valid()) buildTask.wait();
-    if(installTask.valid()) installTask.wait();
+    // A compile / install still running finishes on its own (it only touches
+    // its own files): kept aside instead of waited for, so deleting the node
+    // does not freeze the app for up to 30 s
+    static std::vector<std::future<BuildOutcome>> orphanBuilds;
+    static std::vector<std::future<PromoteOutcome>> orphanInstalls;
+    auto ready = [](auto& f){ return f.wait_for(std::chrono::seconds(0)) == std::future_status::ready; };
+    orphanBuilds.erase(std::remove_if(orphanBuilds.begin(), orphanBuilds.end(), ready), orphanBuilds.end());
+    orphanInstalls.erase(std::remove_if(orphanInstalls.begin(), orphanInstalls.end(), ready), orphanInstalls.end());
+    if(buildTask.valid()) orphanBuilds.push_back(std::move(buildTask));
+    if(installTask.valid()) orphanInstalls.push_back(std::move(installTask));
 }
 
 void scCodeNode::setup(){
@@ -278,6 +303,11 @@ void scCodeNode::setup(){
     trig.set("Trig");
     maxVoices.set("Voices", 16, 1, MAX_VOICES);
     addInspectorParameter(trigLength.set("Trig Length", 0.2f, 0.005f, 10.0f));
+    numChannels.set("N Chan", 1, 1, MAX_NODE_CHANNELS);
+    listeners.push(numChannels.newListener([this](int&){
+        creatorSettingsDirty = true;
+        creatorSettingsTime = ofGetElapsedTimef();
+    }));
 
     listeners.push(gate.newListener([this](std::vector<float>& v){ if(voiceMode()) onGate(v); }));
     listeners.push(trig.newListener([this](){
@@ -309,8 +339,34 @@ std::string scCodeNode::hashCode(const std::string& code){
     return out;
 }
 
+std::string scCodeNode::compileKey(const std::string& code, int channels, const std::vector<int>& variables){
+    std::string key = code + "\n#oceanode-channels=" + ofToString(channels) + ";variables=";
+    for(int v : variables) key += ofToString(v) + ",";
+    return hashCode(key);
+}
+
 std::string scCodeNode::cacheRoot(){
     return ofToDataPath("Supercollider/CodeCache", true);
+}
+
+// Every code / channel count / variables combination ever compiled leaves a
+// folder: those not used for 30 days go (a use touches the folder). Once per
+// run, in the background.
+void scCodeNode::pruneCache(){
+    static bool done = false;
+    if(done) return;
+    done = true;
+    std::thread([root = cacheRoot()](){
+        try {
+            if(!fs::exists(root)) return;
+            const auto limit = fs::file_time_type::clock::now() - std::chrono::hours(24 * 30);
+            for(auto& entry : fs::directory_iterator(root)){
+                std::error_code ec;
+                if(fs::last_write_time(entry.path(), ec) >= limit || ec) continue;
+                fs::remove_all(entry.path(), ec);
+            }
+        } catch(...) {}
+    }).detach();
 }
 
 std::string scCodeNode::findRunnerFolder(){
@@ -335,10 +391,16 @@ void scCodeNode::compile(const std::string& source){
         hasQueuedSource = true;
         return;
     }
-    const std::string hash = hashCode(source);
+    // The channel count and variables only matter to ~synthCreator sources;
+    // anything else ignores them
+    buildingChannels = creatorParamsRegistered ? numChannels.get() : compiledChannels;
+    buildingVariables = currentVariableValues();
+    const std::string hash = compileKey(source, buildingChannels, buildingVariables);
     const std::string folder = (fs::path(cacheRoot()) / hash).string();
     const std::string cachedMeta = (fs::path(folder) / "meta.json").string();
     if(fs::exists(cachedMeta)){
+        std::error_code touched;
+        fs::last_write_time(folder, fs::file_time_type::clock::now(), touched);   // in use: kept by pruneCache
         const std::string cachedLog = (fs::path(cacheRoot()) / (hash + ".log")).string();
         logPath = cachedLog;
         logText = fs::exists(cachedLog) ? readFile(cachedLog) : "";
@@ -373,13 +435,15 @@ void scCodeNode::compile(const std::string& source){
     buildingSource = source;
     buildTask = std::async(std::launch::async, &scCodeNode::runCapture, job,
                            (fs::path(runner) / "captureCode.scd").string(), hash, folder,
-                           "oc" + hash.substr(0, 8), blocks);
+                           "oc" + hash.substr(0, 8), buildingChannels, buildingVariables,
+                           fs::exists(sourceFile) ? sourceFile : std::string(), blocks);
     status = "Compiling...";
     statusError = false;
 }
 
 scCodeNode::BuildOutcome scCodeNode::runCapture(scSynthdefCompiler::ScriptJob job, std::string runner,
                                                 std::string hash, std::string folder, std::string prefix,
+                                                int channels, std::vector<int> variables, std::string sourcePath,
                                                 std::vector<std::pair<int, std::string>> blocks){
     BuildOutcome out;
     out.hash = hash;
@@ -398,7 +462,9 @@ scCodeNode::BuildOutcome scCodeNode::runCapture(scSynthdefCompiler::ScriptJob jo
         out.error = e.what();
         return out;
     }
-    job.args = {runner, tmp.string(), prefix};
+    std::string variableList;
+    for(size_t i = 0; i < variables.size(); i++) variableList += (i ? "," : "") + ofToString(variables[i]);
+    job.args = {runner, tmp.string(), prefix, ofToString(channels), variableList, sourcePath};
     job.args.insert(job.args.end(), files.begin(), files.end());
     out.logPath = (fs::path(folder).parent_path() / (hash + ".log")).string();
     job.logPath = out.logPath;
@@ -447,6 +513,15 @@ void scCodeNode::applyMeta(const std::string& source, const std::string& hash, c
     meta = parsed;
     metaText = text;
     compiledCode = source;
+    compiledChannels = buildingChannels;
+    compiledVariables = buildingVariables;
+    for(auto& d : meta.defs){
+        if(!d.creator) continue;
+        compiledChannels = d.creatorChannels;
+        compiledVariables.clear();
+        for(auto& v : d.variables) compiledVariables.push_back(v.value);
+        break;
+    }
     compiledHash = hash;
     compiledFolder = (fs::path(cacheRoot()) / hash).string();
 
@@ -487,6 +562,9 @@ void scCodeNode::applyMeta(const std::string& source, const std::string& hash, c
     }
 
     const bool cached = fs::exists(fs::path(compiledFolder) / "meta.json");
+    // Synths only from SynthDefs that exist: from a preset's description
+    // alone, the compile below has to finish first
+    defsBuilt = cached;
     if(cached) requireFolder();
     applyStructure();
     rebuildPending = true;
@@ -499,8 +577,13 @@ void scCodeNode::requireFolder(){
     for(auto* sm : servers) if(sm) sm->requireSynthdefFolder(compiledFolder);
 }
 
-bool scCodeNode::defsLoading() const {
-    for(auto* sm : servers) if(sm && sm->areRequiredSynthdefsLoading()) return true;
+bool scCodeNode::defsLoading(ofxSCServer* server) const {
+    // Only the server the synth goes to: a load pending on another one
+    // used to hold this node back as well
+    for(auto* sm : servers){
+        if(!sm || (server && sm->getServer() != server)) continue;
+        if(sm->areRequiredSynthdefsLoading()) return true;
+    }
     return false;
 }
 
@@ -543,6 +626,14 @@ bool scCodeNode::isHiddenControl(const std::string& name) const {
     if(!def) return true;
     if(contains(busControls(def->inputs), name) || contains(busControls(def->outputs), name)) return true;
     if(name == "gate" && voiceMode()) return true;
+    // OceanodeParameter.ar adds <name>_sel and <name>_ar (an audio-rate
+    // modulation input of the regular SynthDef node): the slider is <name>
+    for(const std::string suffix : {"_sel", "_ar"}){
+        if(name.size() > suffix.size() && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0){
+            const std::string base = name.substr(0, name.size() - suffix.size());
+            for(auto& c : def->controls) if(c.name == base) return true;
+        }
+    }
     return false;
 }
 
@@ -567,6 +658,13 @@ void scCodeNode::applyStructure(){
     std::vector<std::string> wantOut;
     if(def) for(auto& c : busControls(def->outputs)) if(!contains(wantIn, c)) wantOut.push_back(c);
     const bool voices = voiceMode();
+
+    // Parameter inlets sit after the audio inputs in availableInputs; scNode
+    // removes an input by its index there, so they go first and come back
+    // at the end
+    for(auto& c : controls){
+        availableInputs.erase(std::remove(availableInputs.begin(), availableInputs.end(), c->audioInput), availableInputs.end());
+    }
 
     // ── Audio ports, kept (with their connections) while their control stays
     suppressInputRefresh = true;
@@ -616,18 +714,25 @@ void scCodeNode::applyStructure(){
                                      [&](const std::unique_ptr<ControlParam>& p){ return p->desc.name == c.name; });
         float min = c.min, max = c.max;
         if(!c.hasSpec) guessRange(c, min, max);
+        {
+            std::string units = c.units;
+            if(!units.empty() && units[0] == 'a') units = units.substr(1);
+            if(units.rfind("d:", 0) == 0 || units.rfind("df:", 0) == 0){
+                const auto options = ofSplitString(units.substr(units.find(':') + 1), ":", true);
+                min = 0;
+                max = std::max(1, (int)options.size() - 1);
+            }
+        }
         if(min > max) std::swap(min, max);
         if(min == max) max = min + 1;
         if(existing != controls.end()){
             auto cp = std::move(*existing);
             controls.erase(existing);
-            const bool sizeChanged = cp->desc.defaults.size() != c.defaults.size();
             cp->desc = c;
             cp->array = c.defaults.size() > 1;
             cp->trigger = c.rate == "trigger" || c.name.rfind("t_", 0) == 0;
             cp->param.setMin({min});
             cp->param.setMax({max});
-            if(sizeChanged) cp->param = c.defaults;
             std::string name = cp->param.getName();
             parameterChangedMinMax.notify(name);
             cp->lastSent.clear();
@@ -638,17 +743,87 @@ void scCodeNode::applyStructure(){
         cp->desc = c;
         cp->array = c.defaults.size() > 1;
         cp->trigger = c.rate == "trigger" || c.name.rfind("t_", 0) == 0;
-        cp->param.set(uniqueName(displayName(c.name)), c.defaults, {min}, {max});
-        addParameter(cp->param);
+        // One value (a slider) when every element starts the same, as the
+        // regular SynthDef node does with OceanodeParameter's default!n: it
+        // is sent to every channel, and a connected vector sets them one by
+        // one. Only defaults that differ per element start as a vector.
+        const bool uniform = std::all_of(c.defaults.begin(), c.defaults.end(),
+                                         [&](float v){ return v == c.defaults.front(); });
+        const std::vector<float> start = uniform ? std::vector<float>{c.defaults.front()} : c.defaults;
+        cp->param.set(uniqueName(displayName(c.name)), start, {min}, {max});
+        auto registered = addParameter(cp->param);
         ControlParam* raw = cp.get();
+        // An audio output plugged into the inlet: the graph re-routes
+        // (the shared input, not `raw`: a parameter can outlive its record
+        // while its connections are being taken down)
+        registered->addReceiveFunc<nodePort>([this, input = cp->audioInput](const nodePort& port){
+            *input = port;
+            for(auto& output : outputs) output = output;
+        });
+        registered->addDisconnectFunc([this, input = cp->audioInput](){
+            *input = nodePort();
+            for(auto& output : outputs) output = output;
+        });
         cp->listener = cp->param.newListener([this, raw](std::vector<float>&){ sendControl(*raw, false); });
         ordered.push_back(std::move(cp));
     }
     controls = std::move(ordered);
     for(int i = 0; i < (int)controls.size(); i++) controls[i]->index = i;
+    for(auto& c : controls){
+        c->audioRate = false;
+        if(def) for(auto& other : def->controls) if(other.name == c->desc.name + "_ar") c->audioRate = true;
+        availableInputs.push_back(c->audioInput);
+    }
 
+    setCreatorParameters(def && def->creator ? def : nullptr);
     setVoiceParameters(voices);
     reorderParameters();
+}
+
+void scCodeNode::setCreatorParameters(const DefDesc* def){
+    if(!def){
+        if(creatorParamsRegistered){
+            removeParameter(numChannels.getName());
+            for(auto& v : variableParams) removeParameter(v->getName());
+            variableParams.clear();
+            creatorParamsRegistered = false;
+        }
+        return;
+    }
+    // Shown with what the SynthDef was built for, without asking for a rebuild
+    if(!creatorParamsRegistered){
+        addParameter(numChannels);
+        creatorParamsRegistered = true;
+    }
+    numChannels.setWithoutEventNotifications(def->creatorChannels);
+    // Variables: kept (with their connections) while the names match
+    bool same = variableParams.size() == def->variables.size();
+    for(size_t i = 0; same && i < def->variables.size(); i++)
+        same = variableParams[i]->getName() == def->variables[i].name;
+    if(!same){
+        for(auto& v : variableParams) removeParameter(v->getName());
+        variableParams.clear();
+        for(auto& var : def->variables){
+            auto p = std::make_unique<ofParameter<int>>();
+            p->set(uniqueName(var.name), var.value, 1, var.dim);
+            addParameter(*p);
+            listeners.push(p->newListener([this](int&){
+                creatorSettingsDirty = true;
+                creatorSettingsTime = ofGetElapsedTimef();
+            }));
+            variableParams.push_back(std::move(p));
+        }
+    }
+    for(size_t i = 0; i < variableParams.size() && i < def->variables.size(); i++){
+        variableParams[i]->setMax(def->variables[i].dim);
+        variableParams[i]->setWithoutEventNotifications(def->variables[i].value);
+    }
+}
+
+std::vector<int> scCodeNode::currentVariableValues() const {
+    std::vector<int> values;
+    for(auto& v : variableParams) values.push_back(v->get());
+    return values;
 }
 
 void scCodeNode::setVoiceParameters(bool on){
@@ -673,6 +848,10 @@ void scCodeNode::reorderParameters(){
         if(group.contains(name) && !contains(order, name)) order.push_back(name);
     };
     append(showWindow.getName());
+    if(creatorParamsRegistered){
+        append(numChannels.getName());
+        for(auto& v : variableParams) append(v->getName());
+    }
     if(voiceParamsRegistered){
         append(maxVoices.getName());
         append(gate.getName());
@@ -773,22 +952,100 @@ void scCodeNode::setGroupControl(ofxSCServer* server, ServerState& st, const std
     server->sendMsg(m);
 }
 
+void scCodeNode::sendGroupMessage(ofxSCServer* server, ServerState& st, ofxOscMessage m){
+    if(!st.groupCreated || !st.group) return;
+    server->sendMsg(m);
+}
+
+void scCodeNode::routeControl(ofxSCServer* server, ServerState& st, ControlParam& c, int bus){
+    const std::string& name = c.desc.name;
+    const int n = std::max(1, (int)c.desc.defaults.size());
+    const bool wasRouted = st.controlBus.count(name) > 0;
+    if(bus >= 0) st.controlBus[name] = bus;
+    else if(!wasRouted) return;
+    else st.controlBus.erase(name);
+
+    // The persistent synth and, through the group, every voice
+    auto mapan = [&](ofxSCSynth* synth, int groupID, const std::string& control, int target){
+        if(synth) synth->mapan(control, target, n);
+        if(groupID >= 0){
+            ofxOscMessage m;
+            m.setAddress("/n_mapan");
+            m.addIntArg(groupID);
+            m.addStringArg(control);
+            m.addIntArg(target);
+            m.addIntArg(n);
+            sendGroupMessage(server, st, m);
+        }
+    };
+    const int groupID = (st.groupCreated && st.group && !st.voices.empty()) ? st.group->nodeID : -1;
+    if(c.audioRate){
+        // OceanodeParameter.ar: <name>_sel picks the audio input <name>_ar
+        const int sel = bus >= 0 ? 1 : 0;
+        if(st.synth) st.synth->set(name + "_sel", sel);
+        if(groupID >= 0) setGroupControl(server, st, name + "_sel", sel);
+        mapan(st.synth, groupID, name + "_ar", bus >= 0 ? bus : std::max(0, st.silentBus));
+    }else{
+        // Any other control: mapped to the bus itself; -1 unmaps it, and its
+        // own value goes back
+        mapan(st.synth, groupID, name, bus);
+        if(bus < 0){
+            if(st.synth) setOnSynth(st.synth, c, c.param.get());
+            for(auto& v : st.voices) if(!v.stolen && v.synth && !v.synth->hasEnded()) setOnSynth(v.synth, c, c.param.get());
+        }
+    }
+}
+
+void scCodeNode::applyRoutes(ServerState& st, ofxSCSynth* synth){
+    if(!synth) return;
+    for(auto& c : controls){
+        auto bus = st.controlBus.find(c->desc.name);
+        if(bus == st.controlBus.end()) continue;
+        const int n = std::max(1, (int)c->desc.defaults.size());
+        if(c->audioRate){
+            synth->set(c->desc.name + "_sel", 1);
+            synth->mapan(c->desc.name + "_ar", bus->second, n);
+        }else{
+            synth->mapan(c->desc.name, bus->second, n);
+        }
+    }
+}
+
 void scCodeNode::createPersistent(ofxSCServer* server, ServerState& st){
     const DefDesc* def = currentDef();
     if(!def || !st.groupCreated) return;
     auto* fresh = new ofxSCSynth(def->defName, server);
     sendBuses(server, st, fresh);
     for(auto& c : controls) setOnSynth(fresh, *c, c->param.get());
+    applyRoutes(st, fresh);
     const bool wasLatency = server->getBLatency();
     // Behind anything still timetagged for this group (its /g_new, the synth
     // being replaced)
     if(!sendsNow(st) || (st.synth && !st.synth->isCreated())) server->setBLatency(true);
-    if(st.synth) fresh->createAndRun(4, st.synth->nodeID, true);   // replace in place
-    else fresh->createAndRun(0, st.group->nodeID, true);
+    // Replace in place only a synth the server confirmed. One whose /s_new
+    // failed (its SynthDef not loaded yet) does not exist there: replacing it
+    // failed too, every time, and the group stayed empty for good.
+    if(st.synth && st.synth->isCreated()){
+        fresh->createAndRun(4, st.synth->nodeID, true);
+    }else{
+        if(st.synth) st.synth->free();   // in case it is only late
+        fresh->createAndRun(0, st.group->nodeID, true);
+    }
     server->setBLatency(wasLatency);
     delete st.synth;
     st.synth = fresh;
+    st.synthSentAt = ofGetElapsedTimef();
     for(auto& c : controls) c->lastSent = c->param.get();
+}
+
+void scCodeNode::retryUnconfirmedSynths(){
+    const float now = ofGetElapsedTimef();
+    for(auto& [server, st] : states){
+        if(!st.synth || st.builtVoices || st.synth->isCreated() || st.synth->hasEnded()) continue;
+        if(now - st.synthSentAt < 2.0f || defsLoading(server)) continue;
+        ofLogWarning("scCodeNode") << "The server never started " << st.synth->getName() << "; sending it again";
+        createPersistent(server, st);
+    }
 }
 
 void scCodeNode::freeVoices(ServerState& st, bool sendFree){
@@ -829,7 +1086,7 @@ void scCodeNode::rebuildSynths(ofxSCServer* server, bool force){
         st.builtDef.clear();
         return;
     }
-    if(defsLoading()){
+    if(defsLoading(server) || !defsBuilt){
         rebuildPending = true;
         return;
     }
@@ -923,6 +1180,9 @@ void scCodeNode::setOutputBus(ofxSCServer* server, int index, int bus){
 void scCodeNode::setInputBus(ofxSCServer* server, scNode* node, int bus){
     auto& st = states[server];
     st.inputBusByNode[node] = bus;
+    for(auto& c : controls){
+        if(c->audioInput->getNodeRef() == node) routeControl(server, st, *c, bus);
+    }
     for(size_t i = 0; i < inputs.size() && i < inputControls.size(); i++){
         if(inputs[i]->getNodeRef() != node) continue;
         if(st.synth) st.synth->set(inputControls[i], bus);
@@ -934,6 +1194,9 @@ void scCodeNode::resetInputBusses(ofxSCServer* server, int targetBus){
     auto& st = states[server];
     st.inputBusByNode.clear();
     st.silentBus = targetBus;
+    for(auto& c : controls){
+        if(st.controlBus.count(c->desc.name)) routeControl(server, st, *c, -1);
+    }
     for(auto& c : inputControls){
         if(st.synth) st.synth->set(c, targetBus);
         setGroupControl(server, st, c, targetBus);
@@ -992,7 +1255,7 @@ void scCodeNode::onGate(std::vector<float>& values){
 
 void scCodeNode::spawn(int lane, float gateValue, float autoRelease){
     const DefDesc* def = currentDef();
-    if(!def || !getActive() || defsLoading()) return;
+    if(!def || !getActive() || !defsBuilt || defsLoading()) return;
     const int cap = ofClamp(maxVoices.get(), 1, MAX_VOICES);
     const float now = ofGetElapsedTimef();
     const uint64_t id = nextVoiceId++;
@@ -1028,6 +1291,7 @@ void scCodeNode::spawn(int lane, float gateValue, float autoRelease){
             v.synth->set(c->desc.name, (double)x);
             v.sent[c->index] = x;
         }
+        applyRoutes(st, v.synth);
         if(def->hasGate) v.synth->set("gate", (double)gateValue);
         const bool wasLatency = server->getBLatency();
         if(!sendsNow(st)) server->setBLatency(true);
@@ -1136,9 +1400,27 @@ void scCodeNode::update(ofEventArgs&){
         finishInstall(installTask.get());
     }
 
-    if(rebuildPending && !defsLoading()){
+    // N Chan / a variable changed: rebuild once it has settled (not on every
+    // step of a drag)
+    if(creatorSettingsDirty && ofGetElapsedTimef() - creatorSettingsTime > 0.4f && !ImGui::IsMouseDown(0)){
+        creatorSettingsDirty = false;
+        if(creatorParamsRegistered && !compiledCode.empty() &&
+           (numChannels.get() != compiledChannels || currentVariableValues() != compiledVariables)){
+            compile(compiledCode);
+        }
+    }
+
+    if(rebuildPending){
         rebuildPending = false;
-        rebuildSynths();
+        rebuildSynths();   // each server goes ahead once its own loads are done
+    }
+    retryUnconfirmedSynths();
+    // A promoted synth: nodes made from it switch to the new build once
+    // the server has loaded it
+    if(!pendingReload.empty() && !defsLoading()){
+        const int count = scSynthdef::reloadAll(pendingReload);
+        if(count > 0) promoteStatus += "\nReloaded " + ofToString(count) + (count == 1 ? " node" : " nodes") + " already using it.";
+        pendingReload.clear();
     }
     reapVoices();
 }
@@ -1157,7 +1439,10 @@ void scCodeNode::presetSave(ofJson& json){
         {"code", compiledCode},
         {"meta", metaText},
         {"def", selectedDef},
-        {"mode", mode}
+        {"mode", mode},
+        {"channels", compiledChannels},
+        {"file", sourceFile},
+        {"variables", compiledVariables}
     };
     ai.save(json);
 }
@@ -1176,12 +1461,32 @@ void scCodeNode::loadBeforeConnections(ofJson& json){
     if(code.empty()) return;
     blockLines.clear();
     for(auto& block : splitBlocks(code)) blockLines.push_back(block.first);
-    if(!savedMeta.empty()) applyMeta(code, hashCode(code), savedMeta, true);
+    sourceFile = s.value("file", "");
+    buildingChannels = std::max(1, s.value("channels", 1));
+    buildingVariables = s.value("variables", std::vector<int>());
+    compiledChannels = buildingChannels;
+    // The cache's own description wins over the preset's: it names the
+    // SynthDefs that are actually on disk. A preset saved under another cache
+    // key (an older version of this node, say) carries other names, and the
+    // node asked the server for a SynthDef that was never loaded.
+    const std::string key = compileKey(code, buildingChannels, buildingVariables);
+    const fs::path cachedMeta = fs::path(cacheRoot()) / key / "meta.json";
+    if(fs::exists(cachedMeta)) applyMeta(code, key, readFile(cachedMeta.string()), true);
+    else if(!savedMeta.empty()) applyMeta(code, key, savedMeta, true);   // shape now, SynthDefs once compiled
     else compile(code);
 }
 
 void scCodeNode::presetRecallAfterSettingParameters(ofJson& json){
     ai.load(json);
+    // Presets from before parameters started as one value hold n equal
+    // values: back to a single slider unless a vector is plugged in
+    for(auto& c : controls){
+        const auto& v = c->param.get();
+        if(v.size() < 2 || !std::all_of(v.begin(), v.end(), [&](float x){ return x == v.front(); })) continue;
+        if(!std::all_of(c->desc.defaults.begin(), c->desc.defaults.end(), [&](float x){ return x == c->desc.defaults.front(); })) continue;
+        if(getOceanodeParameter(c->param).hasInConnection()) continue;
+        c->param = std::vector<float>{v.front()};
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1225,7 +1530,8 @@ void scCodeNode::refreshScriptList(){
 std::string scCodeNode::scriptLabel(const std::string& path){
     std::error_code ec;
     fs::path relative = fs::relative(path, scriptsFolder(), ec);
-    if(ec || relative.empty()) relative = fs::path(path).filename();
+    // Outside the collection (a library source, an opened file): its name only
+    if(ec || relative.empty() || relative.begin()->string() == "..") relative = fs::path(path).filename();
     relative.replace_extension();
     return relative.generic_string();
 }
@@ -1254,6 +1560,7 @@ void scCodeNode::loadScriptFile(const std::string& path){
     }
     editorText = readFile(path);
     saveName = scriptLabel(path);
+    sourceFile = fs::absolute(path).string();
     compile(editorText);
 }
 
@@ -1303,6 +1610,9 @@ void scCodeNode::drawStatusRegion(){
     const DefDesc* def = currentDef();
     std::string line;
     if(buildTask.valid()) line = "compiling...";
+    else if(def && rebuildPending){
+        line = def->name + "  waiting for the server";
+    }
     else if(def){
         line = def->name + (voiceMode() ? "  voices" : "");
         if(voiceMode()) line += " " + ofToString(liveVoiceCount());
@@ -1372,6 +1682,13 @@ void scCodeNode::drawToolbar(){
         if(ImGui::IsItemClicked()) scriptListDirty = true;   // files added from outside appear
         ImGui::SameLine();
     }
+    if(ImGui::Button("Library...")){
+        library = scanLibrary();
+        libraryFilter.clear();
+        libraryOpenRequest = true;
+    }
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Open one of Oceanode's own SynthDef sources (~synthCreator) to refine it");
+    ImGui::SameLine();
     ai.drawButton(ImVec2(34, 0));
     ImGui::SameLine();
     const bool canPromote = currentDef() != nullptr;
@@ -1446,6 +1763,9 @@ void scCodeNode::drawWindow(){
             if(outChannels) info += "  ·  " + ofToString(outChannels) + " ch out";
             if(voiceMode()) info += "  ·  " + ofToString(liveVoiceCount()) + " playing";
             ImGui::TextDisabled("%s", info.c_str());
+            if(def->creator){
+                ImGui::TextDisabled("Oceanode source  ·  %s  ·  %s", def->category.c_str(), def->description.c_str());
+            }
 
             // Writes to a fixed bus: it would sound outside the graph
             std::vector<int> fixed;
@@ -1497,6 +1817,7 @@ void scCodeNode::drawWindow(){
 
         ai.drawPopup();
         drawPromotePopup();
+        drawLibraryPopup();
         ImGui::PopID();
     }
     ImGui::End();
@@ -1644,6 +1965,23 @@ std::string scCodeNode::promotePrompt() const {
 void scCodeNode::openPromote(){
     const DefDesc* def = currentDef();
     if(!def) return;
+    if(def->creator){
+        // Already an Oceanode source: it goes back as it is (no AI), over
+        // its original file when the library has one
+        promoteSource = compiledCode;
+        promoteName = def->name;
+        promoteCategory = def->category;
+        const auto found = scanLibrary();
+        auto it = found.find(def->name);
+        promoteStatus = it != found.end()
+            ? "Already an Oceanode source. Save, compile & install writes it over synthdefs/" + it->second +
+              " and rebuilds it (tick Overwrite)."
+            : "Already an Oceanode source: Save, compile & install adds it to the library.";
+        promoteStatusError = false;
+        promoteChannels = std::max(promoteChannels, compiledChannels);
+        promoteOpenRequest = true;
+        return;
+    }
     if(promoteName.empty()){
         std::string name;
         bool upper = true;
@@ -1686,9 +2024,14 @@ void scCodeNode::startInstall(){
         return;
     }
     const std::string synthdefRoot = ofToDataPath(SYNTHDEF_DIRECTORY, true);
+    // A source that already defines this synth is replaced where it is
+    // (library files are not always named after their synth)
+    const auto found = scanLibrary();
+    auto original = found.find(name);
+    const std::string relative = original != found.end() ? original->second : (fs::path(category) / (name + ".scd")).string();
     if(!promoteOverwrite){
         // Any existing build or source with this name
-        bool exists = fs::exists(fs::path(addonSynthdefsFolder()) / category / (name + ".scd"));
+        bool exists = original != found.end() || fs::exists(fs::path(addonSynthdefsFolder()) / relative);
         try {
             for(auto it = fs::recursive_directory_iterator(synthdefRoot); !exists && it != fs::recursive_directory_iterator(); ++it)
                 if(it->path().filename() == name + ".txarcmeta") exists = true;
@@ -1714,16 +2057,16 @@ void scCodeNode::startInstall(){
         sourceFolders.push_back(deployed);
     const std::string work = ofToDataPath("Supercollider/tmp/promote", true);
     installTask = std::async(std::launch::async, &scCodeNode::runInstall, job,
-                             (fs::path(runner) / "promote.scd").string(), sourceFolders, synthdefRoot,
+                             (fs::path(runner) / "promote.scd").string(), sourceFolders, relative, synthdefRoot,
                              work, name, category, promoteSource, ofClamp(promoteChannels, 1, 16));
     promoteStatus = "Compiling " + name + " (1.." + ofToString(promoteChannels) + " ch)...";
     promoteStatusError = false;
 }
 
 scCodeNode::PromoteOutcome scCodeNode::runInstall(scSynthdefCompiler::ScriptJob job, std::string runner,
-                                                  std::vector<std::string> sourceFolders, std::string synthdefRoot,
-                                                  std::string work, std::string name, std::string category,
-                                                  std::string source, int maxChannels){
+                                                  std::vector<std::string> sourceFolders, std::string sourceRelative,
+                                                  std::string synthdefRoot, std::string work, std::string name,
+                                                  std::string category, std::string source, int maxChannels){
     PromoteOutcome out;
     out.name = name;
     out.category = category;
@@ -1751,6 +2094,11 @@ scCodeNode::PromoteOutcome scCodeNode::runInstall(scSynthdefCompiler::ScriptJob 
         // Compiled builds next to the others of their category
         const fs::path installed = fs::path(synthdefRoot) / category / name;
         fs::create_directories(installed);
+        // Builds of the previous version (any channel count / variables) are
+        // stale now: removed, the missing ones are compiled on demand
+        const std::regex staleBuild(name + "\\d+(_\\d+)*\\.scsyndef");
+        for(auto& f : fs::directory_iterator(installed))
+            if(std::regex_match(f.path().filename().string(), staleBuild)) fs::remove(f.path());
         for(auto& f : fs::directory_iterator(built)){
             // Only <Name>.txarcmeta describes the node: one per channel count
             // would register each build as a node type of its own
@@ -1760,9 +2108,9 @@ scCodeNode::PromoteOutcome scCodeNode::runInstall(scSynthdefCompiler::ScriptJob 
         out.installedFolder = installed.string();
         // The source, in every source tree
         for(auto& root : sourceFolders){
-            const fs::path folder = fs::path(root) / category;
-            fs::create_directories(folder);
-            fs::copy_file(sourceFile, folder / (name + ".scd"), fs::copy_options::overwrite_existing);
+            const fs::path target = fs::path(root) / sourceRelative;
+            fs::create_directories(target.parent_path());
+            fs::copy_file(sourceFile, target, fs::copy_options::overwrite_existing);
         }
         fs::remove_all(build);
     } catch(const std::exception& e) {
@@ -1785,8 +2133,9 @@ void scCodeNode::finishInstall(PromoteOutcome outcome){
     scSynthdefCompiler::get().invalidateSourceIndex();
     // Registers the new node type (the "Load Defs" menu does the same)
     for(auto* sm : servers) if(sm){ sm->reloadSynthdefModels(); break; }
-    promoteStatus = "Installed: add it from SuperCollider/" + outcome.category + " > " + outcome.name + "*. "
-                    "Source saved in synthdefs/" + outcome.category + "/" + outcome.name + ".scd";
+    promoteStatus = "Installed: SuperCollider/" + outcome.category + " > " + outcome.name + "*. Builds 1.." +
+                    ofToString(promoteChannels) + " ch are fresh; other counts compile on demand.";
+    pendingReload = outcome.name;
     promoteStatusError = false;
 }
 
@@ -1847,6 +2196,65 @@ void scCodeNode::drawPromotePopup(){
         ImGui::PushStyleColor(ImGuiCol_Text, promoteStatusError ? IM_COL32(255, 110, 100, 255) : IM_COL32(140, 200, 140, 255));
         ImGui::TextWrapped("%s", promoteStatus.c_str());
         ImGui::PopStyleColor();
+    }
+    ImGui::EndPopup();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Library
+// ════════════════════════════════════════════════════════════════════════════
+
+std::map<std::string, std::string> scCodeNode::scanLibrary(){
+    std::map<std::string, std::string> found;
+    const fs::path root = addonSynthdefsFolder();
+    const std::regex creator("~synthCreator\\s*\\.\\s*(?:value\\s*)?\\(\\s*\"([^\"]+)\"");
+    try {
+        for(auto it = fs::recursive_directory_iterator(root); it != fs::recursive_directory_iterator(); ++it){
+            const std::string top = fs::relative(it->path(), root).begin()->string();
+            // The prelude, this node's own files and the hand-built defaults hold no sources
+            if(it->is_directory() && (top == "Oceanode" || top == "OceanodeCode" || top == "Defaults" || top == "WIP")){
+                it.disable_recursion_pending();
+                continue;
+            }
+            if(!it->is_regular_file() || it->path().extension() != ".scd") continue;
+            const std::string text = readFile(it->path().string());
+            for(std::sregex_iterator m(text.begin(), text.end(), creator), end; m != end; ++m)
+                found.emplace((*m)[1].str(), fs::relative(it->path(), root).string());
+        }
+    } catch(const std::exception& e) {
+        ofLogError("scCodeNode") << "Reading " << root << ": " << e.what();
+    }
+    return found;
+}
+
+void scCodeNode::drawLibraryPopup(){
+    constexpr const char* id = "Oceanode SynthDef library";
+    if(libraryOpenRequest){
+        libraryOpenRequest = false;
+        ImGui::OpenPopup(id);
+    }
+    ImGui::SetNextWindowSize(ImVec2(520, 520), ImGuiCond_Appearing);
+    if(!ImGui::BeginPopupModal(id, nullptr)) return;
+    ImGui::TextDisabled("%d sources in synthdefs/  ·  opens the file in the editor", (int)library.size());
+    ImGui::SetNextItemWidth(-1);
+    if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::InputTextWithHint("##libfilter", "search name or folder", libraryFilter.data(), libraryFilter.capacity() + 1,
+                             ImGuiInputTextFlags_CallbackResize, &scCodeNode::resizeCallback, &libraryFilter);
+    const std::string filter = lower(ofTrim(libraryFilter));
+    std::string chosen;
+    if(ImGui::BeginChild("##liblist", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), true)){
+        for(auto& [name, relative] : library){
+            if(!filter.empty() && lower(name).find(filter) == std::string::npos && lower(relative).find(filter) == std::string::npos) continue;
+            if(ImGui::Selectable((name + "##" + relative).c_str())) chosen = relative;
+            ImGui::SameLine(220);
+            ImGui::TextDisabled("%s", relative.c_str());
+        }
+    }
+    ImGui::EndChild();
+    if(ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+    if(!chosen.empty()){
+        pendingScriptPath = (fs::path(addonSynthdefsFolder()) / chosen).string();
+        ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
 }
