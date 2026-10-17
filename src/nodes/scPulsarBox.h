@@ -22,6 +22,10 @@
 //    masking pattern, the pulse train and one pulse drawn from the very tables
 //    and values sent, and the pulsar's spectrum (formant peaks over the
 //    harmonics). Right-click a control there to publish it to the node.
+//  • Modulation: the shared LFOs / envelopes / routing (scModulation), in a
+//    group before the synth; targets per voice: Pitch, Formant, Cycles, Level,
+//    Probability, Pan (any other control: right-click it, Modulate with). An
+//    envelope routed to Level replaces the ASR (a VCA, on the Gate).
 //  • Preset bank: data/Supercollider/PulsarBox/Presets.
 //
 
@@ -30,7 +34,11 @@
 #include "scNode.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
+#include "ofxSCBus.h"
+#include "ofxSCGroup.h"
 #include "ofxSCServer.h"
+#include "scModulation.h"
+#include "scAudioParam.h"
 #include "ofxOceanodeShared.h"
 #include "imgui.h"
 #include <algorithm>
@@ -223,6 +231,11 @@ inline bool bufferIsLive(ofxSCServer* server, ofxSCBuffer* buffer){
     return server->buffers[buffer->index] == buffer;
 }
 
+inline bool audioBusIsLive(ofxSCServer* server, ofxSCBus* bus){
+    if(!server || !bus || bus->index < 0 || bus->index >= (int)server->audioBusses.size()) return false;
+    return server->audioBusses[bus->index] == bus;
+}
+
 inline ImU32 layerColor(int g, float alpha = 1.0f){
     static const float c[4][3] = {{0.33f, 0.86f, 0.82f}, {0.95f, 0.64f, 0.34f}, {0.70f, 0.55f, 0.96f}, {0.55f, 0.88f, 0.42f}};
     return ImGui::GetColorU32(ImVec4(c[g][0], c[g][1], c[g][2], alpha));
@@ -249,6 +262,12 @@ public:
     ~scPulsarBox() override {
         for(auto& [server, st] : states){
             if(st.synth){ st.synth->free(); delete st.synth; }
+            freeMod(server, st, true);
+            if(st.gateBus){
+                if(pulsarbox::audioBusIsLive(server, st.gateBus)) st.gateBus->free();
+                delete st.gateBus;
+                st.gateBus = nullptr;
+            }
             for(auto*& b : st.bufs) if(b){ if(pulsarbox::bufferIsLive(server, b)) b->free(); delete b; b = nullptr; }
         }
     }
@@ -262,13 +281,17 @@ public:
         addParameter(numVoices.set("Voices", 1, 1, MAX_VOICES));
         addParameter(numOutputs.set("Outputs", 2, 1, MAX_OUTPUTS));
         scNode::addOutput("Out");
+        // Gate (levels: a gate rising to 0.2 plays at 0.2) and Pitch (MIDI notes:
+        // once used, they set the voices' fundamentals): Oceanode values or audio cables
+        gateIn.attach(addParameter(gate.set("Gate", {1.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
+        pitchIn.attach(addParameter(pitchP.set("Pitch", {57.0f}, {0.0f}, {127.0f})), availableInputs, [this](){ refreshOutputs(); });
+        listeners.push(pitchP.newListener([this](std::vector<float>&){ pitchTouched = true; controlsDirty = true; viewDirty = true; }));
 
         // Window (any of these can be published to the node)
         fundamental.set("Fundamental", {110.0f}, {0.1f}, {2000.0f});
         transpose.set("Transpose", 0.0f, -48.0f, 48.0f);
         glide.set("Glide", 0.0f, 0.0f, 5.0f);
         levels.set("Levels", {0.5f}, {0.0f}, {1.0f});
-        gate.set("Gate", {1.0f}, {0.0f}, {1.0f});
         attack.set("Attack", 0.005f, 0.0f, 10.0f);
         release.set("Release", 0.3f, 0.0f, 10.0f);
         volume.set("Volume", 1.0f, 0.0f, 2.0f);
@@ -303,6 +326,7 @@ public:
         panJitter.set("Pan Jitter", 0.0f, 0.0f, 8.0f);
 
         initializePublishActions();
+        setupModulation();
         publishByKey(fundamental.getEscapedName());
         publishByKey(levels.getEscapedName());
 
@@ -359,8 +383,14 @@ public:
         }
         if(controlsDirty){
             controlsDirty = false;
-            for(auto& [server, st] : states) sendAll(server, false);
+            for(auto& [server, st] : states){ sendAll(server, false); sendGate(server, st); }
         }
+        if(modDirty){
+            modDirty = false;
+            for(auto& [server, st] : states) sendModArgs(server, st);
+        }
+        mod.showing = showWindow.get();
+        mod.update();
         if(showWindow && viewDirty && now - lastViewTime > 0.04f){
             viewDirty = false;
             lastViewTime = now;
@@ -378,6 +408,7 @@ public:
         if(!server) return;
         auto& st = states[server];
         if(st.synth){ st.synth->free(); delete st.synth; st.synth = nullptr; }
+        freeMod(server, st, true);
         ensureBuffers(server);
         st.synth = new ofxSCSynth(defName(), server);
         st.builtVoices = voices(); st.builtOutputs = outputs();
@@ -388,11 +419,13 @@ public:
         auto it = states.find(server);
         if(it == states.end() || !it->second.synth) return;
         if(!it->second.synth->isCreated()) it->second.synth->createAndRun(0, 1, getActive());
+        createMod(server, it->second);   // the head: before the synth
     }
     void free(ofxSCServer* server) override {
         auto it = states.find(server);
         if(it == states.end()) return;
         if(it->second.synth){ it->second.synth->free(); delete it->second.synth; it->second.synth = nullptr; }
+        freeMod(server, it->second, true);
         it->second.outBus = -1;
     }
     void setOutputBus(ofxSCServer* server, int index, int bus) override {
@@ -407,19 +440,43 @@ public:
     }
     void moveSynthBefore(ofxSCServer* server, int nodeID) override {
         auto it = states.find(server);
-        if(it != states.end() && it->second.synth) it->second.synth->moveBefore(nodeID);
+        if(it == states.end() || !it->second.synth) return;
+        auto& st = it->second;
+        // The modulation group writes the gate bus read by the main synth.
+        // Move both parts as one ordered unit when another graph source is
+        // added; moving only the synth can put it ahead of its gate writer.
+        st.synth->moveBefore(nodeID);
+        if(st.modGroup) st.modGroup->moveBefore(st.synth->nodeID);
     }
     int getLastSynthID(ofxSCServer* server) override {
         auto it = states.find(server);
-        return it != states.end() && it->second.synth ? it->second.synth->nodeID : -1;
+        if(it == states.end() || !it->second.synth) return -1;
+        // Upstream gate and pitch sources must run before ModGate as well.
+        return it->second.modGroup ? it->second.modGroup->nodeID : it->second.synth->nodeID;
     }
-    void setInputBus(ofxSCServer*, scNode*, int) override {}
-    void resetInputBusses(ofxSCServer*, int) override {}
-    void activate() override { for(auto& [s, st] : states) if(st.synth && st.synth->isCreated()) st.synth->run(true); }
-    void deactivate() override { for(auto& [s, st] : states) if(st.synth && st.synth->isCreated()) st.synth->run(false); }
+    void setInputBus(ofxSCServer* server, scNode* node, int bus) override {
+        auto& st = states[server];
+        const bool g = gateIn.take(server, node, bus), p = pitchIn.take(server, node, bus);
+        if(g) sendGate(server, st);
+        if(p || g) sendModArgs(server, st);
+    }
+    void resetInputBusses(ofxSCServer* server, int) override {
+        auto& st = states[server];
+        gateIn.reset(server); pitchIn.reset(server);
+        sendGate(server, st);
+        sendModArgs(server, st);
+    }
+    void activate() override {
+        for(auto& [s, st] : states){ if(st.synth) st.synth->run(true); if(st.modGroup) st.modGroup->run(true); }
+    }
+    void deactivate() override {
+        for(auto& [s, st] : states){ if(st.synth) st.synth->run(false); if(st.modGroup) st.modGroup->run(false); }
+    }
     void resendParametersForNRT() override {
-        for(auto& [server, st] : states){ uploadTables(server, true); sendAll(server, true); }
+        for(auto& [server, st] : states){ uploadTables(server, true); sendAll(server, true); sendGate(server, st); sendModArgs(server, st); }
+        mod.resend();
     }
+    void setBpm(float bpm) override { mod.setBpm(bpm); }
 
     // ════════════════════════════════════════════════════════════════════════
     // Presets
@@ -430,6 +487,8 @@ public:
         json["viewHeight"] = viewHeight;
         json["bankPreset"] = currentPreset;
         for(const auto& a : publishActions) if(a.save && !isPublished(a.key)) a.save(json);
+        mod.patchBases(json);   // a modulated control: its own value
+        mod.save(json, "pulsarBoxMod");
     }
     void loadBeforeConnections(ofJson& json) override {
         if(!json.contains("publishedEditorParameters") || !json["publishedEditorParameters"].is_array()) return;
@@ -444,6 +503,7 @@ public:
             if(isPublished(a.key) || !json.contains(a.key) || !a.load) continue;
             a.load(json[a.key]);
         }
+        loadModulation(json);
     }
 
 private:
@@ -460,6 +520,13 @@ private:
         float allocTime = 0;
         std::array<std::vector<float>, 2 * LAYERS> sentTables;
         std::map<std::string, std::vector<float>> sent;
+        // modulation: a group at the head (gates, LFOs and envelopes, then routes)
+        ofxSCGroup* modGroup = nullptr;
+        ofxSCGroup* modSources = nullptr;
+        ofxSCGroup* modRoutes = nullptr;
+        ofxSCSynth* gateS = nullptr;   // ModGate<voices>: the gates the envelopes follow
+        ofxSCBus* gateBus = nullptr;   // audio, 16
+        bool modCreated = false;
     };
 
     int voices() const { return std::clamp(numVoices.get(), 1, MAX_VOICES); }
@@ -468,6 +535,8 @@ private:
     std::string defName() const { return "PulsarBox_" + ofToString(voices()) + "_" + ofToString(outputs()); }
 
     float voiceFund(int v) const {
+        if(pitchMode(nullptr) == 1)   // from Pitch (Oceanode values)
+            return std::clamp(440.0f * std::pow(2.0f, (pulsarbox::valueFor(pitchP.get(), v, 57.0f) + transpose.get() - 69.0f) / 12.0f), 0.05f, 4000.0f);
         return std::clamp(pulsarbox::valueFor(fundamental.get(), v, 110.0f) * std::pow(2.0f, transpose.get() / 12.0f), 0.05f, 4000.0f);
     }
     float shiftFactor() const { return std::pow(2.0f, formantShift.get() / 12.0f); }
@@ -497,6 +566,9 @@ private:
             gt[v] = pulsarbox::valueFor(gate.get(), v, 1.0f);
         }
         c["fund"] = fund; c["lev"] = lev; c["gate"] = gt;
+        // the gates' levels from ModGate (Gate values / cable), the pitch cable
+        c["gatebus"] = {st.modCreated && st.gateBus ? (float)st.gateBus->index : -1.0f};
+        c["tr"] = {transpose.get()};
         c["glide"] = {glide.get()}; c["atk"] = {attack.get()}; c["rel"] = {release.get()};
         std::vector<float> lon(LAYERS), lmode(LAYERS), lhz(LAYERS), lrat(LAYERS), lcyc(LAYERS), lamp(LAYERS),
                            loff(LAYERS), lpan(LAYERS), pbuf(LAYERS), ebuf(LAYERS);
@@ -550,7 +622,135 @@ private:
             sendAll(server, true);
             if(old->isCreated()) st.synth->createAndRun(4, old->nodeID, getActive());
             delete old;   // no /n_free: action 4 replaced the node
+            if(st.modCreated){   // the modulation's synths at the new voice count
+                if(st.gateS){ st.gateS->free(); delete st.gateS; st.gateS = nullptr; }
+                createGate(server, st);
+                mod.rebuild(server);
+                sendModArgs(server, st);
+            }
         }
+        mod.voicesChanged();
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Modulation (the shared LFOs, envelopes and routing)
+    // ════════════════════════════════════════════════════════════════════════
+
+    enum { TGT_PITCH, TGT_FORMANT, TGT_CYCLES, TGT_LEVEL, TGT_PROB, TGT_PAN, NUM_TARGETS };
+
+    template<typename T>
+    void regMod(ofParameter<T>& p, std::function<void()> send){
+        addPublishAction(p);
+        listeners.push(p.newListener([send](T&){ send(); }));
+    }
+    void setupModulation(){
+        scModulation::Host h;
+        h.regF = [this](ofParameter<float>& p, std::function<void()> f){ regMod(p, f); };
+        h.regI = [this](ofParameter<int>& p, std::function<void()> f){ regMod(p, f); };
+        h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ regMod(p, f); };
+        h.regV = [this](ofParameter<std::vector<float>>& p, std::function<void()> f){ regMod(p, f); };
+        h.control = [this](const std::string& k) -> ofAbstractParameter* {
+            if(k == gate.getEscapedName()) return nullptr;   // events, not values
+            const auto* a = findPublishAction(k);
+            return a ? a->param : nullptr;
+        };
+        h.publishMenu = [this](const std::string& k){ controlMenu(k); };
+        h.publishedUnderline = [](const std::string&){};      // controlMenu underlines the control
+        h.unpublish = [this](const std::string& k){ unpublishByKey(k); };
+        h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
+        h.voices = [this](){ return voices(); };
+        mod.maxVoices = MAX_VOICES;
+        mod.changed = [this](){ modDirty = true; };
+        mod.setup(h, {
+            {"Pitch", 24.0f, "st"}, {"Formant", 24.0f, "st"}, {"Cycles", 2.0f, "oct"},
+            {"Level", 1.0f, ""}, {"Probability", 1.0f, ""}, {"Pan", 4.0f, "ch"},
+        }, true, true, true);   // velocity: the gates' levels (envelopes can track them)
+        mod.targetOfKey[fundamental.getEscapedName()] = TGT_PITCH;
+        mod.targetOfKey[transpose.getEscapedName()] = TGT_PITCH;
+        mod.targetOfKey[formantShift.getEscapedName()] = TGT_FORMANT;
+        mod.targetOfKey[cyclesScale.getEscapedName()] = TGT_CYCLES;
+        mod.targetOfKey[levels.getEscapedName()] = TGT_LEVEL;
+        mod.targetOfKey[probability.getEscapedName()] = TGT_PROB;
+        mod.targetOfKey[rotate.getEscapedName()] = TGT_PAN;
+    }
+    // An envelope routed to Level: it replaces the ASR (the voices' VCA)
+    bool vcaOn() const {
+        for(int e = 0; e < mod.envCount; e++)
+            if(std::abs(mod.matrix[(scModulation::SRC_ENV + e) * NUM_TARGETS + TGT_LEVEL]) > 1e-4f) return true;
+        return false;
+    }
+    void createGate(ofxSCServer* server, ServerState& st){
+        if(!st.modSources) return;
+        st.gateS = new ofxSCSynth("ModGate" + ofToString(voices()), server);
+        sendGate(server, st);
+        st.gateS->createAndRun(0, st.modSources->nodeID, true);   // the head of the sources
+    }
+    void sendGate(ofxSCServer* server, ServerState& st){
+        if(!st.gateS) return;
+        const int gb = gateIn.bus(server);
+        std::vector<float> g(voices(), 0.0f);   // a cable: only the cable (Gate's own 1 would hold every gate)
+        if(gb < 0) for(int v = 0; v < voices(); v++) g[v] = pulsarbox::valueFor(gate.get(), v, 1.0f);
+        st.gateS->set("gate", g);
+        if(gb >= 0){ st.gateS->set("gate_sel", 1.0f); st.gateS->mapan("gate_ar", gb, voices()); }
+        else st.gateS->set("gate_sel", 0.0f);
+        st.gateS->set("out", st.gateBus ? st.gateBus->index : 0);
+        st.gateS->set("rnd", mod.sourceBus(server, scModulation::SRC_RND));
+        st.gateS->set("vel", mod.sourceBus(server, scModulation::SRC_VEL));
+    }
+    void createMod(ofxSCServer* server, ServerState& st){
+        if(st.modCreated) return;
+        if(!(st.gateBus && st.gateBus->index >= 0 && st.gateBus->index < (int)server->audioBusses.size()
+             && server->audioBusses[st.gateBus->index] == st.gateBus)){
+            delete st.gateBus;
+            st.gateBus = new ofxSCBus(RATE_AUDIO, scModulation::W, server);
+            if(!(st.gateBus->index >= 0 && st.gateBus->index < (int)server->audioBusses.size()
+                 && server->audioBusses[st.gateBus->index] == st.gateBus)){ st.gateBus->free(); delete st.gateBus; st.gateBus = nullptr; }
+        }
+        st.modGroup = new ofxSCGroup(server);
+        st.modGroup->create(0, 1);
+        st.modSources = new ofxSCGroup(server);
+        st.modSources->create(1, st.modGroup->nodeID);
+        st.modRoutes = new ofxSCGroup(server);
+        st.modRoutes->create(1, st.modGroup->nodeID);
+        st.modCreated = true;
+        mod.create(server, st.modSources->nodeID, st.modRoutes->nodeID, st.gateBus ? st.gateBus->index : 0);
+        createGate(server, st);
+        if(!getActive()) st.modGroup->run(false);
+        sendModArgs(server, st);
+    }
+    void freeMod(ofxSCServer* server, ServerState& st, bool sendFree){
+        if(st.modCreated) mod.free(server, false);   // the group's /n_free takes its synths
+        if(sendFree && st.modCreated && st.modGroup) st.modGroup->free();
+        delete st.gateS; st.gateS = nullptr;
+        delete st.modSources; delete st.modRoutes; delete st.modGroup;
+        st.modSources = st.modRoutes = st.modGroup = nullptr;
+        st.modCreated = false;
+    }
+    // 0: Fundamental, 1: Pitch (values), 2: Pitch (a cable)
+    int pitchMode(ofxSCServer* server) const {
+        if(server && pitchIn.bus(server) >= 0) return 2;
+        if(!server) for(const auto& [sv, st] : states) if(pitchIn.bus(sv) >= 0) return 2;
+        return (pitchTouched || pitchIn.connected()) ? 1 : 0;
+    }
+    void sendModArgs(ofxSCServer* server, ServerState& st){
+        if(!st.synth) return;
+        const int pb = pitchIn.bus(server);
+        st.synth->set("pitch_sel", pb >= 0 ? 1.0f : 0.0f);
+        if(pb >= 0) st.synth->mapan("pitch_ar", pb, voices());
+        st.synth->set("gatebus", st.modCreated && st.gateBus ? (float)st.gateBus->index : -1.0f);
+        st.synth->set("mod", st.modCreated ? (float)mod.targetBus(server, 0) : -1.0f);
+        st.synth->set("vca", vcaOn() ? 1.0f : 0.0f);
+    }
+    void loadModulation(const ofJson& json){
+        if(json.contains("pulsarBoxModMatrix")) mod.load(json, "pulsarBoxMod");
+        else {   // presets from before it: nothing routed
+            std::fill(mod.matrix.begin(), mod.matrix.end(), 0.0f);
+            mod.lfoCount = mod.envCount = mod.extCount = 0;
+            mod.loadParamsJson(ofJson::array());
+        }
+        mod.afterLoad();
+        mod.refresh();
+        modDirty = true;
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -777,6 +977,7 @@ private:
 
     struct PublishAction {
         std::string key;
+        ofAbstractParameter* param = nullptr;
         bool isVector = false;
         std::function<std::shared_ptr<ofxOceanodeAbstractParameter>()> publish;
         std::function<void(ofJson&)> save;
@@ -792,6 +993,7 @@ private:
         const std::string key = parameter.getEscapedName();
         PublishAction a;
         a.key = key;
+        a.param = p;
         a.isVector = std::is_same<T, std::vector<float>>::value || std::is_same<T, std::vector<int>>::value;
         a.publish = [this, p, dropdown]() -> std::shared_ptr<ofxOceanodeAbstractParameter> {
             auto handle = addParameter(*p);
@@ -813,7 +1015,6 @@ private:
         addPublishAction(transpose);
         addPublishAction(glide);
         addPublishAction(levels);
-        addPublishAction(gate);
         addPublishAction(attack);
         addPublishAction(release);
         addPublishAction(volume);
@@ -908,6 +1109,7 @@ private:
             if(hasPublishedConnection(key)) ImGui::TextDisabled("Connected: disconnect to unpublish");
             else if(ImGui::MenuItem("Unpublish from Node")) unpublishByKey(key);
         } else if(ImGui::MenuItem("Publish to Node")) publishByKey(key);
+        mod.modulateMenu(key);   // route sources to it
         ImGui::PopID();
         ImGui::EndPopup();
     }
@@ -941,6 +1143,7 @@ private:
         numVoices = json.contains("Voices") && json["Voices"].is_number_integer() ? json["Voices"].get<int>() : 1;
         for(const auto& a : publishActions)
             if(a.load && !notInPresets(a.key) && json.contains(a.key)) a.load(json[a.key]);
+        loadModulation(json);
         loadingBankPreset = false;
         structureDirty = true;
         currentPreset = name;
@@ -953,6 +1156,8 @@ private:
         ofJson json;
         json["Voices"] = numVoices.get();
         for(const auto& a : publishActions) if(a.save && !notInPresets(a.key)) a.save(json);
+        mod.patchBases(json);
+        mod.save(json, "pulsarBoxMod");
         std::error_code ec;
         std::filesystem::create_directories(presetDir(), ec);
         std::ofstream file(presetDir() + "/" + name + ".json");
@@ -1029,6 +1234,10 @@ private:
                 if(ImGui::BeginTabItem("Pulse")){ drawPulseTab(); ImGui::EndTabItem(); }
                 if(ImGui::BeginTabItem("Masking")){ drawMaskingTab(); ImGui::EndTabItem(); }
                 if(ImGui::BeginTabItem("Space")){ drawSpaceTab(); ImGui::EndTabItem(); }
+                const float tw = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+                if(ImGui::BeginTabItem("Envelopes")){ mod.drawEnvelopes(tw); ImGui::EndTabItem(); }
+                if(ImGui::BeginTabItem("LFOs")){ mod.drawLfos(tw); ImGui::EndTabItem(); }
+                if(ImGui::BeginTabItem("Routing")){ mod.drawRouting(tw); ImGui::EndTabItem(); }
                 ImGui::EndTabBar();
             }
             drawTableBrowser();
@@ -1591,7 +1800,10 @@ private:
     ofParameter<bool> showWindow;
     ofParameter<int> numVoices, numOutputs;
     // Pulse / voice
-    ofParameter<std::vector<float>> fundamental, levels, gate;
+    ofParameter<std::vector<float>> fundamental, levels, gate, pitchP;
+    scAudioParam gateIn, pitchIn;
+    bool pitchTouched = false;
+    void refreshOutputs() { for(auto& output : scNode::outputs) output = output; }
     ofParameter<float> transpose, glide, attack, release, volume, rateJitter;
     // Formants
     ofParameter<int> numLayers;
@@ -1612,7 +1824,8 @@ private:
     std::array<std::array<std::vector<float>, 2>, LAYERS> tables;   // [layer][pulsaret, envelope]
     std::map<std::string, std::vector<float>> tableCache;
     std::set<std::string> failedTables;
-    bool controlsDirty = true, tablesDirty = false, structureDirty = false, viewDirty = true;
+    bool controlsDirty = true, tablesDirty = false, structureDirty = false, viewDirty = true, modDirty = false;
+    scModulation mod;
     float lastViewTime = -1;
     int viewVoice = 0;
     float viewHeight = 330.0f;

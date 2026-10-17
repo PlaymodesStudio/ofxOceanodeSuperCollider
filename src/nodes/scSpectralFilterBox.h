@@ -16,6 +16,12 @@
 //    Transpose (semitones) plus Scroll (semitones per second, wrapping round
 //    the mask) plus Spread (an offset per channel) give each channel's
 //    transpose, sent at the frame rate and smoothed on the server.
+//  • Mode Bandpass (SpectralFilterBoxBP_<bands>_<n>): no FFT, so no latency.
+//    64 or 128 fixed 4th-order bandpasses, 10 Hz .. 20 kHz, summing flat;
+//    the node reads the same shaped mask at each band's frequency (with the
+//    channel's transpose) and sends the gains. Attack / release smooth the
+//    gains here, Hold freezes them. Coarser than the FFT (2 or 1 semitones
+//    per band), otherwise the same filter.
 //  • Node: the main controls and a preview of the shaped mask where it sits
 //    now; the rest is in the inspector.
 //
@@ -56,6 +62,11 @@ public:
 
 private:
     std::string synthDefName() const;
+    bool bandpass() const { return modeP.get() == 1; }
+    int bandCount() const { return bandsP.get() == 1 ? 128 : 64; }
+    float maskAt(float x) const;                      // the shaped mask at x (0..1 = Low..High Hz), as PV_MaskFilter
+    std::vector<float> bandTargets() const;           // Bandpass: each channel's band gains
+    void updateBandGains(float dt, bool force);
     int channels() const;
     void rebuild();                                   // N Chan / FFT changed: replace the synths in place
     void sendAll(ofxSCSynth* synth);
@@ -69,6 +80,7 @@ private:
 
     // ── Node ─────────────────────────────────────────────────────────────────
     ofParameter<int> numChannels, fftSize;            // fftSize: 0 = 2048, 1 = 4096
+    ofParameter<int> modeP, bandsP;                   // 0 FFT, 1 Bandpass; bands: 0 = 64, 1 = 128
     ofParameter<std::vector<float>> mask;
     ofParameter<float> circularXFade, transpose, scroll, spread, depth, gainDb, mix;
     // ── Inspector ────────────────────────────────────────────────────────────
@@ -87,6 +99,7 @@ private:
     float scrollOffset = 0;                           // semitones the Scroll has moved the mask
     float lastTime = -1;
     bool maskDirty = true;
-    int builtChannels = 0, builtFft = -1;
+    int builtChannels = 0, builtFft = -1, builtMode = -1, builtBands = -1;
+    std::vector<float> bandGains, sentGains;          // Bandpass: smoothed, last sent
     ofEventListeners listeners;
 };

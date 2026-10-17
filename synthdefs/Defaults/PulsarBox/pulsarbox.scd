@@ -21,6 +21,11 @@
 //   prob burst rest sieve[32] slen      masking (pulses)
 //   pmode rot              outputs: 0 voice, 1 cycle, 2 random, 3 layer;
 //                          rotation (channels)
+//   mod                    the shared modulation's target buses (16 channels
+//                          each, one per voice; -1: none): 0 pitch (st),
+//                          1 formant (st), 2 cycles (oct), 3 level, 4 probability,
+//                          5 pan (channels)
+//   vca                    1: an envelope is routed to Level, it replaces the ASR
 //   out
 //
 // A pulse whose envelope outlasts the period overlaps the next ones: the level
@@ -40,7 +45,12 @@ File.mkdir(d);
         SynthDef(("PulsarBox_" ++ nv ++ "_" ++ no).asSymbol, {
             var fund = \fund.kr(100 ! nv).clip(0.05, 4000).lag(\glide.kr(0));
             var lev = \lev.kr(0.5 ! nv, 1/30, fixedLag: true);
-            var gate = \gate.kr(1 ! nv);
+            // the gates: their levels from ModGate (\gatebus, audio, nv), else the values
+            var gbus = \gatebus.kr(-1);
+            var gate = Select.kr(gbus >= 0, [\gate.kr(1 ! nv), A2K.kr(In.ar(gbus.max(0), nv)).asArray]);
+            // the pitch from a cable (MIDI notes + \tr semitones), else \fund (Hz)
+            var pcable = (A2K.kr(\pitch_ar.ar(57 ! nv)).asArray + \tr.kr(0)).midicps;
+            var psel = \pitch_sel.kr(0) > 0.5;
             var atk = \atk.kr(0.005), rel = \rel.kr(0.3);
             var lon = \lon.kr([1, 0, 0, 0]);
             var lmode = \lmode.kr(0 ! layers);
@@ -58,30 +68,38 @@ File.mkdir(d);
             var sieve = \sieve.kr(1 ! sieveSize);
             var slen = \slen.kr(1).round.clip(1, sieveSize);
             var pmode = \pmode.kr(0), rot = \rot.kr(0);
+            var modbus = \mod.kr(-1), vca = \vca.kr(0);
+            var mod = { |t| (In.kr(modbus.max(0) + (t * 16), nv) * (modbus >= 0)).asArray };
+            var mPitch = mod.(0), mForm = mod.(1), mCyc = mod.(2), mLev = mod.(3), mProb = mod.(4), mPan = mod.(5);
             var sig = 0;
 
             nv.do { |v|
-                var f = fund[v] * (2 ** (LFNoise0.kr(fund[v].min(500)) * rjit));
+                var f0 = (Select.kr(psel, [fund[v], pcable[v]]) * (2 ** (mPitch[v] / 12))).clip(0.05, 4000);
+                var f = f0 * (2 ** (LFNoise0.kr(f0.min(500)) * rjit));
                 var pulse = Impulse.ar(f);
                 var count = PulseCount.ar(pulse) - 1;
                 var burstGate = (count % (burst + rest)) < burst;
                 var sieveGate = Select.ar(count % slen, K2A.ar(sieve)) > 0.5;
-                var trig = CoinGate.ar(prob, pulse) * burstGate * sieveGate;
-                var env = EnvGen.kr(Env.asr(atk, 1, rel), gate[v]);
+                var trig = CoinGate.ar((prob + mProb[v]).clip(0, 1), pulse) * burstGate * sieveGate;
+                // the ASR, or (vca) the envelope routed to Level
+                // a gate rising to 0.2 plays at 0.2 (its level, held until the next)
+                var glev = Gate.kr(gate[v], gate[v] > 0);
+                var env = Select.kr(vca > 0.5, [EnvGen.kr(Env.asr(atk, 1, rel), gate[v] > 0), mLev[v].clip(0, 1)]) * glev;
+                var levMod = Select.kr(vca > 0.5, [(1 + mLev[v]).max(0), 1]);
                 var voice = layers.collect { |g|
                     var t = DelayN.ar(trig * lon[g], 2, (loff[g] / f).clip(0, 2));
                     var hz = Select.kr(lmode[g], [lhz[g], f * lrat[g]])
-                        * (2 ** (TRand.ar(-1, 1, t) * fjit / 12));
+                        * (2 ** ((TRand.ar(-1, 1, t) * fjit + mForm[v]) / 12));
                     var dur, amp, base, pos, pan;
                     hz = hz.clip(1, SampleRate.ir * 0.45);
-                    dur = (lcyc[g] / hz).clip(2 * SampleDur.ir, 2).min(200 / f);   // GrainBuf holds 256 grains
+                    dur = (lcyc[g] * (2 ** mCyc[v]) / hz).clip(2 * SampleDur.ir, 2).min(200 / f);   // GrainBuf holds 256 grains
                     amp = lamp[g] * (dur * f).max(1).sqrt.reciprocal
                         * Latch.ar(1 - (TRand.ar(0, 1, t) * ajit), t);
                     // The output of this pulse, in channels (fractions crossfade)
                     base = Select.ar(pmode, [
                         DC.ar(v), count + v, TIRand.ar(0, no - 1, t), DC.ar(v + g)
                     ]);
-                    pos = base + lpan[g] + rot + (TRand.ar(-1, 1, t) * pjit);
+                    pos = base + lpan[g] + rot + mPan[v] + (TRand.ar(-1, 1, t) * pjit);
                     pan = case
                         { no == 1 } { 0 }
                         { no == 2 } { pos.fold(0, 1) * 2 - 1 }
@@ -89,7 +107,7 @@ File.mkdir(d);
                     GrainBuf.ar(no, t, dur, pbuf[g], hz * BufFrames.kr(pbuf[g]) * SampleDur.ir,
                         0, 2, pan, ebuf[g], 256) * amp
                 };
-                sig = sig + (voice.sum * env * lev[v]);
+                sig = sig + (voice.sum * env * lev[v] * levMod);
             };
             Out.ar(\out.kr(0), Limiter.ar(LeakDC.ar(sig), 0.98));
         }).writeDefFile(d);

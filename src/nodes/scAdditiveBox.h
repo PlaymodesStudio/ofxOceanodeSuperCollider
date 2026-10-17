@@ -12,14 +12,20 @@
 //  • Source: two spectra A and B (Saw, Square, Triangle, Pulse, Organ...,
 //    Random, or 64 harmonics drawn by hand) morphed by Morph, with tilt,
 //    stretch / inharmonicity, even / odd and harmonic blur.
-//  • Per partial: its own ADSR (times shortened at random and / or for high
-//    partials), filter 1 gain (LP / BP / HP / Notch / Comb / drawn curve
+//  • Envelopes: the shared ones (Envelopes tab); one routed to Level is the
+//    voices' VCA, else they drone.
+//  • Per partial: filter 1 gain (LP / BP / HP / Notch / Comb / drawn curve
 //    around a keytracked, modulated cutoff, the fundamental optionally kept),
 //    filter 2 (vowel formants or a drawn EQ), moving sweep lobes, random mask
 //    and level (new draws on every gate), vibrato, noise, shimmer, time blur
 //    and drift.
-//  • Modulation: an envelope and two LFOs (sine, triangle, saw, square, S&H)
-//    to cutoff, morph, pitch, level, sweep, pan and noise.
+//  • Modulation: the shared system (scModulation: LFOs, envelopes, external
+//    sources added one by one, a routing matrix). Per voice targets (Cutoff,
+//    Morph, Pitch, Level, Sweep, Pan, Noise): the modulation synths write a
+//    bus per target, each voice reads its channel. Per partial targets
+//    (P.Level, P.Pan, P.Pitch): an LFO routed there runs inside the voices,
+//    one phase per partial (a "lane", AdditiveBoxVL, at most 2 LFOs);
+//    envelopes and the other sources move every partial alike.
 //  • FX: EQ -> Echo -> Reverb, the same synths and controls as GrainBox.
 //  • Synths: one AdditiveBoxV<P>_<O> per voice and unison copy (P = the
 //    smallest cap >= Partials: 8 .. 256), summing into a private bus, then the
@@ -45,10 +51,14 @@
 #include "ofxSCBus.h"
 #include "ofxSCBuffer.h"
 #include "scEQEditor.h"
+#include "scModulation.h"
+#include "scAudioParam.h"
+#include "ofxSCGroup.h"
 #include "imgui.h"
 #include <array>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -66,16 +76,18 @@ public:
     static constexpr int CURVE_SIZE = 512;       // filter 1 curve: -128..+128 semitones
     static constexpr int TABLE_SIZE = 64;        // drawn harmonics
     static constexpr int SHAPE_POINTS = 33;      // drawn filter curves
-    static constexpr int MOD_SOURCES = 3, MOD_DESTS = 7;
+    static constexpr int NUM_TARGETS = 10, FIRST_PARTIAL_TARGET = 7, MAX_LANES = 2, LANE_SIZE = 257;
     static constexpr int SWEEP_SIZE = 257;       // sweep shape: one cycle, last point = first
     static constexpr int SWEEP_POINTS = 16;      // drawn sweep shape
 
     enum FilterMode { FilterOff, FilterLP, FilterBP, FilterHP, FilterNotch, FilterComb, FilterDrawn, NumFilterModes };
     enum Filter2Mode { Filter2Off, Filter2Vowel, Filter2Drawn, NumFilter2Modes };
     enum Wave { WaveFlat, WaveSaw, WaveSquare, WaveTriangle, WaveSine, WavePulse, WaveOrgan, WaveHollow, WaveRandom, WaveDrawn, NumWaves };
-    enum PanMode { PanRandom, PanSpectrum, PanAlternate, NumPanModes };
+    enum PanMode { PanRandom, PanSpectrum, PanAlternate, PanChannels, NumPanModes };
     enum SweepShape { SweepLobes, SweepTriangle, SweepSawUp, SweepSawDown, SweepPulse, SweepGauss, SweepSteps, SweepDrawn, NumSweepShapes };
     enum FxStage { FX_EQ, FX_ECHO, FX_REVERB, FX_COUNT };
+    // a voice's switchable parts, in their order in the voice (additiveBox.scd)
+    enum Part { PartMotion, PartLane, PartFilt, PartSweep, PartShim, PartBlur, PartDrift, NumParts };
 
     explicit scAdditiveBox(std::vector<serverManager*> servers);
     ~scAdditiveBox();
@@ -85,6 +97,7 @@ public:
     void draw(ofEventArgs&) override;
     void activate() override;
     void deactivate() override;
+    void setBpm(float bpm) override { mod.setBpm(bpm); }
 
     // scNode interface
     void buildSynth(ofxSCServer* server) override;
@@ -94,8 +107,8 @@ public:
     int  getOutputBusIndex(ofxSCServer* server, int index) override;
     void moveSynthBefore(ofxSCServer* server, int nodeID) override;
     int  getLastSynthID(ofxSCServer* server) override;
-    void setInputBus(ofxSCServer*, scNode*, int) override {}
-    void resetInputBusses(ofxSCServer*, int) override {}
+    void setInputBus(ofxSCServer* server, scNode* node, int bus) override;
+    void resetInputBusses(ofxSCServer* server, int) override;
     void resendParametersForNRT() override;
 
     // Presets: published controls and window-only controls
@@ -126,9 +139,29 @@ private:
     float sweepRangeWeight(int voice, float x) const;        // share of the depth at x = 0..1 along the sweep
     float sampleRate() const;
 
-    // ── Synths ───────────────────────────────────────────────────────────────
+    // ── Synths: the node is a group [modulation, voices, FX..., output]; each
+    //    voice a group [source, parts in order, one core per unison copy] ──
+    // Gate and Pitch (published by default) also take audio cables: then the
+    // voices' synths read them (mapped), gates as levels
+    scAudioParam gateIn, pitchIn;
+    std::set<std::string> skipScalars;            // mapped controls: never set (a set unmaps)
+    void refreshOutputs() { for(auto& output : outputs) output = output; }
+    void resendAllVoices();
+    struct VoiceSC {
+        ofxSCGroup* grp = nullptr;
+        ofxSCBus* bus = nullptr;                          // the streams: levels, ratios, positions (3 x cap)
+        ofxSCSynth* src = nullptr;                        // AdditiveBoxSrc<P>
+        std::array<ofxSCSynth*, NumParts> parts{};        // the ones in use
+        std::vector<ofxSCSynth*> cores;                   // AdditiveBoxV<P>_<O>, one per unison copy
+        // last values sent to each synth (a re-notified parameter does not resend)
+        std::map<ofxSCSynth*, std::map<std::string, std::vector<float>>> sentA;
+        std::map<ofxSCSynth*, std::map<std::string, float>> sentS;
+    };
     struct ServerState {
-        std::vector<ofxSCSynth*> slots;   // voice v, copy u at v * Unison + u
+        ofxSCGroup* root = nullptr;
+        ofxSCGroup* voicesGroup = nullptr;
+        bool created = false;
+        std::vector<VoiceSC> voices;
         ofxSCSynth* out = nullptr;
         ofxSCBus* mix = nullptr;          // audio, MAX_OUTPUTS channels, the voices sum here
         ofxSCBus* vis = nullptr;          // control, voices * 2 * DISPLAY_MAX
@@ -149,35 +182,70 @@ private:
         ofxSCSynth* fx[FX_COUNT] = {nullptr, nullptr, nullptr};
         std::vector<ofxSCBus*> fxBuses;
         int outIn = -1;
-        // Last values sent to each slot (a re-notified parameter does not resend)
-        std::vector<std::map<std::string, std::vector<float>>> sentArrays;
-        std::vector<std::map<std::string, float>> sentScalars;
+        // Modulation: a group at the head (sources, then routes); each voice's
+        // source writes its gate (audio, 16)
+        ofxSCGroup* modGroup = nullptr;
+        ofxSCGroup* modSources = nullptr;
+        ofxSCGroup* modRoutes = nullptr;
+        bool modCreated = false;
+        ofxSCBus* gateBus = nullptr;
+        // LFO lanes: each lane's LFO cycle (allocated with the curves)
+        ofxSCBuffer* laneBufs[2 * MAX_LANES] = {};        // the lanes' cycles, then their noise curves
+        std::vector<float> sentLanes[2 * MAX_LANES];
     };
     int numVoicesClamped() const;
     int numOutputsClamped() const;
     int unisonClamped() const;
     int partialCap() const;
-    std::string voiceDefName() const;
+    std::string coreDefName() const;
     std::string outDefName() const;
     void ensureBuses(ofxSCServer* server);
     void releaseBuses(ofxSCServer* server);
     void uploadCurves(ofxSCServer* server, bool force);
-    ofxSCSynth* newSlotSynth(ofxSCServer* server);
-    ofxSCSynth* chainHead(ServerState& st) const;            // first FX synth, else the output synth
-    void sendSlot(ofxSCServer* server, int slot, const VoiceData& data, bool force);
     void computeAll();
     void sendAll(ofxSCServer* server, bool force);
-    void syncSlots(ofxSCServer* server);
+    // a voice's synths and what each gets
+    float unisonSide(int u) const;                                  // -1..1: where copy u sits
+    std::map<std::string, float> coreScalars(int v, int u) const;   // pitch, amp, pan offset of a copy
+    bool partWanted(int part, int v) const;
+    void sendVoice(ofxSCServer* server, int v, const VoiceData& data, bool force);
+    void sendTo(VoiceSC& vs, ofxSCSynth* s, unsigned role, const VoiceData& data,
+                const std::map<std::string, float>& extra, bool force);
+    void syncVoice(ofxSCServer* server, int v, bool force);         // groups, bus, synths (parts on / off)
+    void syncVoices(ofxSCServer* server);                           // voice / unison count, parts
+    void freeVoice(ofxSCServer* server, VoiceSC& vs, bool sendFree);
     void rebuildDefs();
     void applyStructure();
-    void freeSynths(ofxSCServer* server);
+    void freeSynths(ofxSCServer* server, bool sendFree = true);
     void onGate(const std::vector<float>& values);
     void onTrig(const std::vector<int>& values);
     void markDirty() { dirty = true; }
+    void laneData(int v, VoiceData& d) const;      // the modulation's share of a voice's data
+    void computeLaneTables();
+    bool lanesHaveNoise() const;                    // the lane part runs the noise variant
+    bool modDirty = false;                          // only the modulation's data changed
+    int dataGen = 0;                                // voiceData's generation (the views' caches)
+    bool windowDrawn = false;                       // drawn last frame: read the server's data
+    float liveReadAt = 0.0f;
+    struct SpecCache { int gen = -1; float w = 0, h = 0; std::vector<std::vector<ImVec2>> stat; std::vector<ImVec2> f1, f2; };
+    SpecCache specCache;
+
+    // ── Modulation (scModulation) ────────────────────────────────────────────
+    scModulation mod;
+    template<typename T> void regMod(ofParameter<T>& p, std::function<void()> send);
+    struct Lane { int lfo = -1; float amt[3] = {0, 0, 0}; };   // level, pan, pitch (scaled)
+    std::vector<Lane> activeLanes() const;                    // LFOs routed to per-partial targets (2 at most)
+    std::vector<std::vector<float>> laneTables;
+    void createMod(ofxSCServer* server);
+    void freeMod(ofxSCServer* server, bool sendFree);
+    void migrateOldModulation(const ofJson& json);
+    void migrateOldEnvelope(const ofJson& json);
+    bool levelEnvelope() const;   // an envelope routed to Level: the voices' VCA
 
     // ── Publishing window controls into the node ─────────────────────────────
     struct PublishAction {
         std::string key;
+        ofAbstractParameter* param = nullptr;
         bool isVector = false;
         std::vector<std::string> dropdown;
         std::function<std::shared_ptr<ofxOceanodeAbstractParameter>()> publish;
@@ -232,12 +300,11 @@ private:
     void drawWindow();
     void drawHeader();
     void drawSpectrum(ImVec2 size);
-    void drawEnvelopes(ImVec2 size);
     void drawMatrix(ImVec2 size);
     void drawSoundTab();
     void drawSourceTab();
     void drawFiltersTab();
-    void drawModTab();
+    void drawSpeakers(ImVec2 size);
     void drawSweepTab();
     void drawSweepShape(ImVec2 size);
     void drawSweepMap(ImVec2 size);
@@ -289,19 +356,13 @@ private:
     ofParameter<int> seed;
     ofParameter<bool> reroll;
     // Envelope
-    ofParameter<std::vector<float>> attack, decay, sustain, release, curve, envRand, envTilt;
     // Motion
     ofParameter<std::vector<float>> vibrato, vibRate, partialVib, partialVibRate, shimmer, shimmerRate;
     ofParameter<std::vector<float>> noise, noiseRate, noiseTilt, timeBlur;
     // Space
     ofParameter<std::vector<float>> pan, spread, drift, driftRate, width;
     ofParameter<std::vector<int>> panMode;
-    // Modulation
-    ofParameter<float> modAttack, modDecay, modSustain, modRelease, modCurve;
-    ofParameter<int> lfoShape[2];
-    ofParameter<float> lfoRate[2];
-    ofParameter<bool> lfoRetrig[2];
-    ofParameter<float> modAmount[MOD_SOURCES][MOD_DESTS];
+    ofParameter<int> speakerLayout;   // 3 outputs or more: 0 a ring, 1 a line
     // FX
     ofParameter<bool> fxOn[FX_COUNT];
     ofParameter<float> eqGain[5], eqFreq[5], eqShape[5], eqMix;

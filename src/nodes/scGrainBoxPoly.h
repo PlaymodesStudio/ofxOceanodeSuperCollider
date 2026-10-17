@@ -44,6 +44,8 @@
 #include "scTransportSync.h"
 #include "scSampleBrowser.h"
 #include "scEQEditor.h"
+#include "scModulation.h"
+#include "scAudioParam.h"
 #include <vector>
 #include <string>
 #include <map>
@@ -61,11 +63,16 @@ public:
     static constexpr int   WAVEFORM_BINS       = 4096;
     static constexpr int   MAX_PLAYHEADS       = 8;    // engines
     static constexpr int   MAX_VOICES          = 500;  // playheads per engine (largest GrainBoxPolyCtl_<cap>)
-    static constexpr int   NUM_LFO             = 7;   // Pos Dur Pitch Amp Pan TrRt Cut
-    static constexpr int   LFO_AMP             = 3;
-    static constexpr int   LFO_TRRT            = 5;
-    static constexpr int   LFO_CUT             = 6;   // output filter cutoff
-    static const char* LFO_TARGET_NAMES[NUM_LFO];   // defined in .cpp
+    // Modulation (the shared system, per engine): what the X voice variants
+    // run (scGrainBoxPoly.scd: modApply)
+    static constexpr int   MOD_LFOS            = 4;
+    static constexpr int   MOD_ENVS            = 2;
+    static constexpr int   MOD_EXTS            = 4;
+    static constexpr int   MOD_TARGETS         = 7;   // Pos Dur Pitch Amp Pan Rate Cut
+    static constexpr int   MOD_SOURCES         = 12;  // LFO 1-4, Env 1-2, Ext 1-4, Random, Voice
+    static constexpr int   MOD_HDR             = 132;
+    static constexpr int   MOD_VIS             = 17 * 6;
+    static constexpr int   MOD_TABLE           = 257;
 
     // ── Constructor / Destructor ──────────────────────────────────────────────
     scGrainBoxPoly(vector<serverManager*> servers);
@@ -132,15 +139,6 @@ private:
     // independent set (names suffixed " 2", " 3"...) and its own synth per
     // server (same GrainBox_K_N def and sample buffers, own envelope buffer),
     // all writing (Out.ar adds) to the node's output bus.
-    struct LfoGroup {
-        ofParameter<vector<float>> shape;    // 0=sin 1=tri 2=saw 3=invSaw 4=randStep 5=randCurve
-        ofParameter<vector<float>> speed;    // cycles per bar (1/128..128), or per region length (speedRel)
-        ofParameter<bool>          speedRel; // Speed relative to the region's length (Smp) instead of the bar
-        ofParameter<vector<float>> phase;    // initial phase / reset target (0..1)
-        ofParameter<vector<float>> quant;    // quantization steps (0=off, 2..32)
-        ofParameter<vector<float>> strength; // 0..1 (0..48 semitones for pitch, 0..2 for pan)
-        ofParameter<vector<float>> pow;      // curve exponent 0.1..10 on the 0..1 shape (1 = off)
-    };
     struct GrainHighlight {
         float position;   // absolute buffer position (0..1)
         float duration;   // seconds (used for lifetime and width)
@@ -153,6 +151,42 @@ private:
     struct Playhead {
         int         index = 0;
         std::string sfx;              // "" for playhead 1, " 2", " 3"...
+
+        // ── Modulation (the shared system): LFOs with one oscillator per
+        //    playhead, envelopes following Gate, external sources, routed to
+        //    Pos / Dur / Pitch / Amp / Pan / Rate / Cut. The voices run the X
+        //    variants only while something is routed. (Declared before the
+        //    listeners: they listen to its parameters.) ──
+        std::unique_ptr<scModulation> mod;
+        ofParameter<vector<float>> gate;          // per playhead: the envelopes' gate
+        // Gate and Pitch (when published) also take audio cables: the gate copied
+        // onto the playheads' gates (GrainBoxGateIn<k>, after the control synth),
+        // the pitch mapped onto the control synth (MIDI notes, 60: as recorded)
+        scAudioParam gateIn, pitchIn;
+        struct GateCopy { ofxSCSynth* synth = nullptr; int ctlID = -1, bus = -1, out = -1, k = 0; };
+        std::map<ofxSCServer*, GateCopy> gateCopy;
+        ofParameter<int>           placement;     // 0 Manual (PanAz), 1 Spread, 2 Channels
+        ofParameter<float>         spreadWidth;   // Spread: how far round the speakers
+        std::vector<ofParameter<float>*> modF;    // its parameters, for the publish registry
+        std::vector<ofParameter<int>*> modI;
+        std::vector<ofParameter<bool>*> modB;
+        std::vector<ofParameter<vector<float>>*> modV;
+        struct ModSC {
+            ofxSCBus* hdr = nullptr;              // control, MOD_HDR
+            ofxSCBus* vox = nullptr;              // control, 9 x capacity (while on)
+            ofxSCBus* vis = nullptr;              // control, MOD_VIS
+            int voxCap = 0;
+            std::array<ofxSCBuffer*, 2 * MOD_LFOS> tables{};          // the shapes, then the noise curves
+            std::array<std::vector<float>, 2 * MOD_LFOS> sentTables;
+        };
+        std::map<ofxSCServer*, ModSC> modSC;
+        bool modDirty = true;                     // the buses to write
+        bool modOn = false;                       // the voices are the X variants
+        int  modVoices = -1;                      // the playheads its indexers were set for
+        std::vector<float> modLive;               // the vis bus (window)
+        float nextModVisRead = 0.0f;
+        std::array<std::vector<float>, MOD_LFOS> lfoTab;   // the LFOs' cycles (window)
+        std::array<std::vector<float>, MOD_LFOS> lfoCurve; // their noise curves (window)
 
         // Trigger
         ofParameter<vector<int>>   trigger;
@@ -169,12 +203,6 @@ private:
         ofParameter<float>         phaseOff;    // 0..1: spread all playheads evenly across the interval
         ofParameter<int>           maxGrains;   // overlap limit of the engine (0 = off)
         float grainLoad = 0.0f, grainThin = 1.0f;   // /grainLoad: grains sounding, thinning
-        // /lfoState (30 x / s while the window is open): every LFO's phase and
-        // 0..1 value as SC computes them, and a short history (random shapes)
-        float lfoPhaseNow[NUM_LFO] = {0};
-        float lfoValNow[NUM_LFO]   = {0};
-        std::deque<std::pair<float, float>> lfoHist[NUM_LFO];   // (time, value)
-        float lfoStateAt = -1.0f;
         ofParameter<vector<float>> chance;
         ofParameter<bool>          uniqueTrig;
         ofParameter<int>           syncGate;
@@ -201,11 +229,8 @@ private:
         // latchCut is kept only so older presets load; it no longer does anything)
         ofParameter<int>           filterType;
         ofParameter<float>         cutoff, filterQ;
-        // Latch: Amp / Cut LFO (+ base + jitter) sampled at each grain's trigger
+        // Latch: Amp (+ modulation + jitter) sampled at each grain's trigger
         ofParameter<bool>          latchAmp, latchCut;
-        // LFOs ("Unique" = Link voices: every voice uses voice 1's value)
-        ofParameter<bool>          uniqueLfo[NUM_LFO];
-        LfoGroup                   lfo[NUM_LFO];
 
         // Sample: playhead 1 always uses mainSample; others share it unless
         // ownSample (then `own`, loaded from the browser while its tab is active)
@@ -413,16 +438,26 @@ private:
     std::vector<float> divSend(const Playhead& ph, int n) const;
     std::vector<float> trigPhaseSend(const Playhead& ph, int n) const;
     void  sendDiv(Playhead& ph);
-    // LFO speed as SC wants it (cycles per bar): Smp mode -> per region length
-    double lfoSpeedBar(const Playhead& ph, int t) const;
-    void   sendLfoSpeeds(Playhead& ph);
+    // ── Modulation (per engine) ───────────────────────────────────────────
+    void setupModulation(Playhead& ph);              // its scModulation, its parameters
+    bool modWanted(const Playhead& ph) const;        // something routed (a used source, a GrainBox target)
+    float regionSecOf(const Playhead& ph) const;     // the region's length (s): LFOs in Smp
+    std::vector<float> panSend(const Playhead& ph, int n) const;   // PanAz after Placement
+    void ensureModResources(Playhead& ph, ofxSCServer* srv);       // buses (+ tables while on)
+    void freeModResources(Playhead& ph, ofxSCServer* srv);
+    void writeMod(Playhead& ph, ofxSCServer* srv);
+    std::vector<float> modTableData(const Playhead& ph, int k) const;   // header, per-playhead data, tables, the ctl's LFO controls
+    void setModArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv);   // a voice's buses
+    void setCtlModArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv);
+    void updateModulation(Playhead& ph);             // per frame: on / off, dirty -> write, live values
+    void drawModTabs(Playhead& ph, float w, float h);
+    void migrateOldLfos(Playhead& ph, const ofJson& j);
     float defaultInterval(int unit) const;   // 1/4 region, 500 ms or 1 beat
     double intervalUnitToSec(const Playhead& ph, int unit, double v) const;
     double intervalSecToUnit(const Playhead& ph, int unit, double sec) const;
     void  setIntervalRange(Playhead& ph);
     std::vector<float> posAmtSend(const Playhead& ph, const vector<float>& v, int n) const;
     std::vector<float> durAmtSend(const Playhead& ph, const vector<float>& v, int n) const;
-    std::vector<float> lfoStrSend(const Playhead& ph, int t, int n) const;
     void convertTimeUnits(int from, int to);
     void updateTimeRanges();
     const char* timeFmt() const;   // slider format of the current unit
@@ -523,7 +558,7 @@ private:
     void applySnapshot(const ofJson& snap);
     void storeSnapshot(int slot);
     void recallSnapshot(int slot);
-    void drawSnapshotMatrix(float w);
+    void drawSnapshotBar(float w);     // the presets dropdown above the waveform
     // Snapshot library: the 16 slots live in shared files
     // (data/nodeSnapshots/GrainBoxPoly/snapshot_<n>.json), saved on every
     // change and read at start, so every project / preset / node sees them
@@ -551,14 +586,7 @@ private:
     void drawEnvelopePanel(Playhead& ph, float w, float h);   // curve + sliders in one cell
     void drawControlsPanel(Playhead& ph, float w, float h);
     void drawModRow(Playhead& ph, float w, float h);
-    // Live LFO state over the preview: a cursor + dot (periodic shapes), or
-    // the real recent output (random shapes). False: no live data (preview only).
-    bool drawLFOLive(ImDrawList* dl, ImVec2 pos, float w, float h, Playhead& ph, int t,
-                     int shape, float phaseOff, float speed, bool overlayOnly);
-    float lfoCtrlBottom = 0.0f;   // LFO cell: controls' bottom (last frame), for the row height
-    void drawLFOPreview(ImDrawList* dl, ImVec2 pos, float w, float h,
-                        int shape, float phase, float quant, float strength, float barDiv,
-                        int playhead, float powExp = 1.0f);
+    int  modTab = 0;              // Envelopes / LFOs / Routing / Panning
 
     // In/out point drag state
     enum class WavDrag { None, InPoint, OutPoint };
@@ -588,6 +616,7 @@ private:
     // also the names old presets stored their values and connections under.
     struct EditorPublishAction {
         std::string key;
+        ofAbstractParameter* param = nullptr;            // ("Modulate": any control a source can move)
         std::function<bool()> publish;
         std::function<bool()> unpublish;
         std::function<bool()> isPublished;
@@ -652,8 +681,13 @@ private:
         if(std::find(publishedEditorParameterKeys.begin(), publishedEditorParameterKeys.end(), key) == publishedEditorParameterKeys.end()) {
             publishedEditorParameterKeys.push_back(key);
         }
+        onEditorParameterPublished(key);
         return true;
     }
+    void onEditorParameterPublished(const std::string& key);     // Gate / Pitch: their cables
+    void onEditorParameterUnpublished(const std::string& key);
+    void sendPitchTo(Playhead& ph, ofxSCServer* srv, ofxSCSynth* s);   // values, or the cable mapped
+    void syncGateCopy(Playhead& ph, ofxSCServer* srv);
 
 #if OFXOCEANODESC_HAS_TRANSPORT
     // ── Sync To Transport ─────────────────────────────────────────────────────

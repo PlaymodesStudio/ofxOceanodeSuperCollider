@@ -56,6 +56,7 @@
 #include "nodes/scMorphOscScope.h"
 #include "nodes/scPolyphonicArpeggiator.h"
 #include "nodes/scMetroBox.h"
+#include "nodes/scEuclideanBox.h"
 #include "nodes/scBufferBrowser.h"
 #include "nodes/scDynGenNode.h"
 #include "nodes/scDynGenPolyNode.h"
@@ -66,10 +67,14 @@
 #include "nodes/scMultiTrackRecorder.h"
 //#include "nodes/scGrainBox.h" // Legacy node disabled by the preserved stash.
 #include "nodes/scGrainBoxPoly.h"
+#include "nodes/scSampleBox.h"
 #include "nodes/scBeatRepeatPro.h"
 #include "nodes/scPolyComb.h"
+#include "nodes/scAnalogBox.h"
+#include "nodes/scEchoBox.h"
 #include "nodes/scFeedbackNode.h"
 #include "nodes/scCodeNode.h"
+#include "nodes/scSlicerBox.h"
 #if OFXOCEANODESC_HAS_TIMELINE
 #include "nodes/scNRTRecorder.h"
 #endif // OFXOCEANODESC_HAS_TIMELINE
@@ -196,6 +201,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scPolyphonicArpeggiator>("SuperCollider");
 #if OFXOCEANODESC_HAS_TRANSPORT
 	o.registerModel<scMetroBox>("SuperCollider");
+	o.registerModel<scEuclideanBox>("SuperCollider");
 #endif
 	o.registerModel<scBufferBrowser>("SuperCollider", controller->getServers());
 	o.registerModel<scFFT>("SuperCollider", controller->getServers());
@@ -206,6 +212,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scDynGenNode>("SuperCollider");
 	o.registerModel<scDynGenPolyNode>("SuperCollider");
 	o.registerModel<scCodeNode>("SuperCollider", controller->getServers());
+	o.registerModel<scSlicerBox>("SuperCollider", controller->getServers());
 	o.registerModel<scVelvetReverb>("SuperCollider");
 	o.registerModel<pinkTromboneNode>("SuperCollider");
 	o.registerModel<scRhythmBox>("SuperCollider", controller->getServers());
@@ -213,8 +220,11 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scMultiTrackRecorder>("SuperCollider", controller->getServers());
 //	o.registerModel<scGrainBox>("SuperCollider", controller->getServers());
 	o.registerModel<scGrainBoxPoly>("SuperCollider", controller->getServers());
+	o.registerModel<scSampleBox>("SuperCollider", controller->getServers());
 	o.registerModel<scBeatRepeatPro>("SuperCollider/Effect/Time/Looping", controller->getServers());
-	o.registerModel<scPolyComb>("SuperCollider");
+	o.registerModel<scPolyComb>("SuperCollider", controller->getServers());
+	o.registerModel<scAnalogBox>("SuperCollider", controller->getServers());
+	o.registerModel<scEchoBox>("SuperCollider", controller->getServers());
 #if OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<scNRTRecorder>("SuperCollider", controller.get());
 #endif // OFXOCEANODESC_HAS_TIMELINE
