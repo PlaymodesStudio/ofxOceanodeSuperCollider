@@ -10,4 +10,6 @@ clang++ -std=c++17 -O3 -bundle -undefined dynamic_lookup \
     -arch arm64 -arch x86_64 -mmacosx-version-min=10.15 \
     -I"$SC/include/plugin_interface" -I"$SC/include/common" -I"$SC/common" \
     OceanodeAnalog.cpp -o OceanodeAnalog.scx
+# ad-hoc signature: macOS kills scsynth loading an unsigned / stale plugin (exit 137)
+codesign -f -s - OceanodeAnalog.scx
 echo "built $(pwd)/OceanodeAnalog.scx"

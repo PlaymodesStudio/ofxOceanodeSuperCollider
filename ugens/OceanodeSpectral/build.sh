@@ -10,4 +10,6 @@ clang++ -std=c++17 -O3 -ffast-math -bundle -undefined dynamic_lookup \
     -arch arm64 -arch x86_64 -mmacosx-version-min=10.15 \
     -I"$SC/include/plugin_interface" -I"$SC/include/common" -I"$SC/common" \
     PV_MaskFilter.cpp -o OceanodeSpectral.scx
+# ad-hoc signature: macOS kills scsynth loading an unsigned / stale plugin (exit 137)
+codesign -f -s - OceanodeSpectral.scx
 echo "built $(pwd)/OceanodeSpectral.scx"
