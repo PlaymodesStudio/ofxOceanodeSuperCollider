@@ -347,7 +347,7 @@ private:
     void applyState(Voice& voice, const DesiredState& state) {
         if(voice.synth == nullptr) return;
         const double now = ofGetElapsedTimeMillis() / 1000.0;
-        const double dt = voice.lastUpdateTime < 0.0 ? 0.0 : std::max(0.0, now - voice.lastUpdateTime);
+        const double dt = voice.lastUpdateTime < 0.0 ? 1.0 / 60.0 : std::max(0.0, now - voice.lastUpdateTime);
         voice.lastUpdateTime = now;
         const double sourceBeatsPerSecond =
             std::max(1e-6, static_cast<double>(state.clipPlaybackRate)) * state.bpm / 60.0;
@@ -403,6 +403,15 @@ private:
         voice.tailing = false;
         if(jumped) voice.jumpCounter = (voice.jumpCounter + 1) % (1 << 20);
 
+        // The first GUI frame after a clip entry or loop wrap can arrive
+        // partway into its attack. Start at source zero if that position is
+        // within a frame of the boundary; an established seek uses its exact
+        // reported position. Cap long GUI stalls to avoid replaying old audio.
+        const double entryWindowBeats =
+            (std::min(dt, 1.0 / 30.0) + 1.0 / 240.0) * sourceBeatsPerSecond;
+        const bool enteredAtStart = jumped && state.sourceBeat <= entryWindowBeats;
+        const double resetSourceBeat = enteredAtStart ? 0.0 : state.sourceBeat;
+
         // beatTransport is sent in the same message as the reset request;
         // otherwise it only feeds the legacy in-range gate.
         sendParams(voice, {
@@ -414,7 +423,7 @@ private:
             {"playbackRate", state.playbackRate},
             {"reverse", state.reverse ? 1.0f : 0.0f},
             {"gain", state.gain},
-            {"beatTransport", static_cast<float>(state.sourceBeat)},
+            {"beatTransport", static_cast<float>(resetSourceBeat)},
             {"jump", static_cast<float>(voice.jumpCounter)},
             {"play", 1.0f}
         });

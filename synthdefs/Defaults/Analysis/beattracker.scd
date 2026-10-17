@@ -1,6 +1,13 @@
-File.mkdir(d ++ "/" ++ "beatTracker");
+(
+if(thisProcess.nowExecutingPath.notNil) {
+    d = thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs";
+} {
+    d = Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs";
+};
+File.mkdir(d);
+File.mkdir(d +/+ "beatTracker");
 
-(1..~maxVoices).do({ arg n;
+(1..16).do({ arg n;
     var numChan = n;
     SynthDef.new(\beatTracker ++ numChan.asSymbol, {
         arg in, quarter, eighth, sixteenth, tempo;
@@ -10,7 +17,7 @@ File.mkdir(d ++ "/" ++ "beatTracker");
         var sPulse = Array.newClear(numChan);
         var tempoBPM = Array.newClear(numChan);
 
-        input = In.ar(in, numChan);
+        input = In.ar(in, numChan).asArray;
 
         numChan.do { |i|
             var ffti = FFT(LocalBuf(1024), input[i]);
@@ -25,5 +32,6 @@ File.mkdir(d ++ "/" ++ "beatTracker");
         Out.kr(eighth, ePulse);
         Out.kr(sixteenth, sPulse);
         Out.kr(tempo, tempoBPM);
-    }).writeDefFile(d ++ "/beatTracker");
+    }).writeDefFile(d +/+ "beatTracker");
 });
+)

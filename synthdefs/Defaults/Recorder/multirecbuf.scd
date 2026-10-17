@@ -17,16 +17,8 @@ File.mkdir(d ++ "/" ++ "multirecbuf");
     SynthDef(name, {
         arg in, buf, record = 0;
         var sig = InFeedback.ar(in, nCh);
-        var bufFrames = BufFrames.kr(buf);
-        var phase = Phasor.ar(
-            trig: record,
-            rate: 1,
-            start: 0,
-            end: bufFrames,
-            resetPos: 0
-        );
-        var recordGate = record * (phase < (bufFrames - 1));
-        BufWr.ar(sig * recordGate, buf, phase, loop: 0);
+        RecordBuf.ar(sig, buf, recLevel: 1, preLevel: 0,
+            run: record, loop: 0, trigger: record);
     }).writeDefFile(d ++ "/multirecbuf");
     name.postln;
 };

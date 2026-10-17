@@ -2,8 +2,8 @@
 //  scSampleBrowser.h
 //  ofxOceanodeSuperCollider
 //
-//  Sample file browser with audio preview, shared by scRhythmBox and
-//  GrainBoxPoly (header-only, so no build-project change is needed).
+//  Sample file browser with audio preview, shared by RhythmBox, GrainBoxPoly,
+//  and SampleBox (header-only, so no build-project change is needed).
 //
 //  Extracted from scRhythmBox's browser, whose behaviour and look it keeps:
 //    • "..." picks a folder, "^ .." goes to the parent folder.
@@ -136,6 +136,14 @@ public:
 
     // The browser panel (call inside a child window of the wanted size).
     void draw(float /*w*/, float /*h*/) {
+        // This is the browser's containing child window. A click on any other
+        // ImGui surface (including another node) ends the audition immediately.
+        if(previewSynth &&
+           (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+            ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+            ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) &&
+           !ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))
+            stopPreview();
         // Navigation bar
         if(ImGui::Button("...")) {
             auto res = ofSystemLoadDialog("Select Samples Folder", true, browseDir);

@@ -1,25 +1,26 @@
+// Merge mono input buffers into an N-channel output buffer.
+// Choose mergeBufN to match the output buffer's channel count. Input buffer
+// controls are inBufs0 .. inBufs(N-1); each input buffer must be mono.
 (
-~maxChans = 24;
+if(thisProcess.nowExecutingPath.notNil) {
+    d = thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs";
+} {
+    d = Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs";
+};
+File.mkdir(d);
+File.mkdir(d +/+ "mergeBuf");
 
-SynthDef(\mergeBufDynamic, {
-	arg outBuf = 0, nChans = 2;
+(1..24).do { |nChans|
+    SynthDef(("mergeBuf" ++ nChans).asSymbol, {
+        arg outBuf = 0;
+        var phase, inputs, sig;
 
-	var bufnums, sigs, sig, phase;
-
-	// Create full-size arrays and slice later
-	bufnums = Array.fill(~maxChans, { |i|
-		OceanodeBuffer.kr(("inBufs" ++ i).asSymbol, 0)
-	});
-
-	phase = Phasor.ar(1, 1, 0, BufFrames.kr(outBuf));
-
-	sigs = Array.fill(~maxChans, { |i|
-		BufRd.ar(1, bufnums[i], phase)
-	});
-
-	// Now slice at runtime — this works correctly
-	sig = sigs.copyRange(0, nChans - 1);
-
-	BufWr.ar(sig, outBuf, phase);
-}).writeDefFile("/your/defs/path");
+        phase = Phasor.ar(0, 1, 0, BufFrames.kr(outBuf));
+        inputs = Array.fill(nChans, { |i|
+            ("inBufs" ++ i).asSymbol.kr(0)
+        });
+        sig = inputs.collect { |buf| BufRd.ar(1, buf, phase, loop: 1) };
+        BufWr.ar(sig, outBuf, phase, loop: 1);
+    }).writeDefFile(d +/+ "mergeBuf");
+};
 )

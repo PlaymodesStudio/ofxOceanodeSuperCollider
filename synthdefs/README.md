@@ -47,8 +47,19 @@ A file whose first line is `// @oceanode-no-autocompile` must not be rebuilt
 for new channel counts (currently only `Source/PhysicalModelling/oteypiano.scd`,
 whose shipped binaries came from a lost source).
 
+## Rebuilding default SynthDefs
+
+Default SynthDefs are built by running their `.scd` files in SuperCollider.
+Each script writes `.scsyndef` files under a nearby `CompiledSynthdefs/` folder.
+Copy the resulting SynthDef folders into the app's
+`bin/data/Supercollider/Synthdefs/Defaults/` and reload the server. In particular,
+changes to `Recorder/recbuffhold.scd`, `Recorder/multirecbuf.scd`,
+`Core/bufalloc.scd`, and `Analysis/beattracker.scd` require new binaries; C++
+changes alone do not update the server's loaded definitions. `Core/mergebuf.scd`
+now produces `mergeBuf1` through `mergeBuf24`, matched to the output buffer's
+channel count.
+
 ## Known issues in Defaults (pre-existing)
 
 - `Core/output_stereomix.scd`, `VST/vst.scd`: multi-block, IDE-only.
-- `Core/mergebuf.scd`, `RadioStation/radioStation.scd`: runtime errors when run
-  headlessly.
+- `RadioStation/radioStation.scd`: runtime errors when run headlessly.

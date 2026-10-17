@@ -1,7 +1,9 @@
 // fftanalyzer.scd - 128-band log-frequency FFT spectrum analyzer
 //
 // Uses a 4096-point FFT (2048 usable bins, bin width ≈ 10.8 Hz).
-// Computes 128 log-spaced display bands at SynthDef BUILD TIME.
+// Computes 128 log-spaced FFT-bin bands at SynthDef BUILD TIME, using 44.1 kHz
+// as a reference. The C++ display scales their frequency labels by the
+// running server sample rate; the bin groups themselves remain unchanged.
 // Each display band takes the max magnitude across all FFT bins in its range,
 // so a pure sine always shows as a single clean spike.
 // Output is normalized: 0 dBFS ≈ 1.0.
@@ -21,7 +23,7 @@ File.mkdir(fftDir);
 // All build-time constants at top level (no wrapping parens needed)
 ~fftSize    = 4096;
 ~numBands   = 128;
-~sr         = 44100.0;
+~sr         = 44100.0;  // reference rate for fixed FFT-bin groups
 ~nyquist    = ~sr / 2.0;
 ~freqMin    = 20.0;
 ~freqMax    = ~nyquist;

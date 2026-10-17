@@ -789,7 +789,6 @@ Defaults/
 │   ├── bufferscope.scd
 │   ├── fftanalyzer.scd
 │   ├── fftanalyzerHD_synthdefs.scd
-│   ├── pitchtracker.scd
 │   ├── vumeter.scd
 │   ├── wavescope2.scd
 │   └── wavescope3.scd

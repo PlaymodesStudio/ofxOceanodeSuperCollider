@@ -5,11 +5,10 @@
 //                      per channel, mute, NaN protection and VU.
 //
 // Sidechain. Every track writes, after its numChannels VU channels on vuBus:
-//   vuBus+N     key: the instant envelope of its signal (max of the channels,
-//               after balance, before fader and mute -- a muted track still
-//               keys, the "ghost kick" trick)
-//   vuBus+N+1   the same with a 50 ms hold, read by the node at frame rate
-// A ducked track reads its key either from scBus (source on the same server:
+//   vuBus+N     pre key: after balance, before fader and mute (ghost trigger)
+//   vuBus+N+1   post key: follows fader, mute and solo, before its own ducking
+//   vuBus+N+2/3  those keys with a 50 ms hold for cross-server relay
+// Each ducked strip selects Pre or Post. It reads from scBus (same server:
 // one block of latency at most) or from scKey (source on another server: the
 // node relays the held key every frame). The key is scaled so that it reaches
 // 1 at scThresh (linear; a key at or above the threshold ducks fully), then
@@ -29,7 +28,7 @@
 //                      parallel mix, no lookahead so tracks stay aligned).
 //                      \on (lagged) crossfades to dry before the node pauses
 //                      it. Gain reduction (dB) is written to grBus
-//                      (= vuBus + N + 2).
+//                      (= vuBus + N + 4).
 //   mixerProRvbN    -- per-channel insert: SpaceMaster reverb (pairwise
 //                      cross-feedback tank). \on gates the tank input only:
 //                      switching it off lets the tail ring out, then the node
@@ -79,11 +78,11 @@ channelCounts.do({|numChannels|
     // ---- Channel (verbatim polyMixerTrack, renamed) ----
     SynthDef(("mixerProTrack" ++ numChannels).asSymbol, {
         arg in=0, out=0, mute=0, balance=0, vuBus=(-1);
-        var sig, level, masterLevel, vuSig, processedSig, inputSig, cleaned;
+        var sig, level, masterLevel, vuSig, processedSig, inputSig, cleaned, faderSig, faderGain;
         var vuAttackTime, vuReleaseTime;
         var normPositions, rightFavor, leftFavor, balanceGains;
         var balanceSq, panPos, leftGain, rightGain;
-        var key, scBus, scEnv, duck, sendBus;
+        var keyLevels, preKey, postKey, scBus, scEnv, duck, sendBus;
 
         // --- INPUT ---
         inputSig = In.ar(in, numChannels);
@@ -111,10 +110,17 @@ channelCounts.do({|numChannels|
 
         sig = sig * balanceGains;
 
-        // --- SIDECHAIN KEY (this track as a source) ---
-        key = Amplitude.kr(sig).asArray.reduce(\max);
-        key = Select.kr(CheckBadValues.kr(key, 0, 0) > 0, [key, 0]);
-        Out.kr(Select.kr(vuBus >= 0, [-1, vuBus + numChannels]), [key, LagUD.kr(key, 0, 0.05)]);
+        // --- SIDECHAIN KEYS (this track as a source) ---
+        // Both taps precede this track's own ducking to avoid key feedback.
+        faderGain = level.lag(0.05) * (1 - mute);
+        faderSig = sig * faderGain;
+        keyLevels = Amplitude.kr(sig).asArray;
+        preKey = keyLevels.reduce(\max);
+        postKey = (keyLevels * faderGain).reduce(\max);
+        preKey = Select.kr(CheckBadValues.kr(preKey, 0, 0) > 0, [preKey, 0]);
+        postKey = Select.kr(CheckBadValues.kr(postKey, 0, 0) > 0, [postKey, 0]);
+        Out.kr(Select.kr(vuBus >= 0, [-1, vuBus + numChannels]),
+            [preKey, postKey, LagUD.kr(preKey, 0, 0.05), LagUD.kr(postKey, 0, 0.05)]);
 
         // --- SIDECHAIN DUCKING (this track as a target) ---
         scBus = \scBus.kr(-1);
@@ -124,8 +130,7 @@ channelCounts.do({|numChannels|
         duck = 1 - (\scStrength.kr(0).clip(0, 1) * scEnv);
 
         // --- LEVELS & OUTPUT ---
-        processedSig = sig * level.lag(0.05) * duck;
-        processedSig = processedSig * (1 - mute);
+        processedSig = faderSig * duck;
 
         // --- NaN/inf PROTECTION --- (Select: NaN * 0 is still NaN)
         cleaned = numChannels.collect({ |i|

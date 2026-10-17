@@ -493,6 +493,7 @@ void scRhythmBox::update(ofEventArgs& /*args*/) {
 
 void scRhythmBox::draw(ofEventArgs& /*args*/) {
     if(showWindow) drawSequencerWindow();
+    else browser.stopPreview();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1613,10 +1614,11 @@ void scRhythmBox::drawSequencerWindow() {
     bool open = showWindow.get();
     if(ImGui::Begin(title.c_str(), &open,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-        if(!open) showWindow = false;
+        if(!open) { showWindow = false; browser.stopPreview(); ImGui::End(); return; }
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
         if(avail.x < 320.0f * zoom || avail.y < 80.0f * zoom) {
+            browser.stopPreview();
             ImGui::End();
             return;
         }
@@ -1722,6 +1724,9 @@ void scRhythmBox::drawSequencerWindow() {
 
         ImGui::EndChild();
 
+    } else {
+        browser.stopPreview();
+        if(!open) showWindow = false;
     }
     ImGui::End();
 }

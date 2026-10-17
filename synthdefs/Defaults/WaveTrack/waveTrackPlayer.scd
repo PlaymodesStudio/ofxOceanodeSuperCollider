@@ -67,7 +67,9 @@ File.mkdir(waveTrackDir);
         // Legacy standalone-node gate. The timeline node always sends a
         // clip-relative transport inside [0, clipLenBeats).
         inRange = (beatTransport >= clipStartBeat) * (beatTransport < (clipStartBeat + clipLenBeats));
-        playEnv = EnvGen.kr(Env.asr(0.002, 1, 0.003), gate: play * inRange);
+        // Keep the first sample intact: even a 2 ms attack removes much of a
+        // kick transient. Retain a short release for stops and seeks.
+        playEnv = EnvGen.ar(Env.asr(0, 1, 0.003), gate: play * inRange);
 
         // The slice ends when the AUDIO read head reaches its end, not when a
         // GUI frame notices the playhead left the clip. The fade is computed

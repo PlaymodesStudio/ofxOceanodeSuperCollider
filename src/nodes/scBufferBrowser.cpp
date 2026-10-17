@@ -55,7 +55,7 @@ void scBufferBrowser::setup() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scBufferBrowser::draw(ofEventArgs&) {
-    if(!showWindow) return;
+    if(!showWindow) { stopPreview(); return; }
 
     string title = "Buffer Browser " + ofToString(getNumIdentifier());
     ImGui::SetNextWindowSize(ImVec2(320, 500), ImGuiCond_FirstUseEver);
@@ -67,6 +67,18 @@ void scBufferBrowser::draw(ofEventArgs&) {
 }
 
 void scBufferBrowser::drawBrowserContents() {
+    // A custom browser region can share its ImGui window with other node
+    // controls, so use the panel bounds rather than the containing window.
+    const ImVec2 panelMin = ImGui::GetCursorScreenPos();
+    const ImVec2 panelSize = ImGui::GetContentRegionAvail();
+    const ImVec2 panelMax(panelMin.x + panelSize.x, panelMin.y + panelSize.y);
+    if(previewSynth &&
+       (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+        ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+        ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) &&
+       (!ImGui::IsMouseHoveringRect(panelMin, panelMax, false) ||
+        !ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)))
+        stopPreview();
     // ── Top bar ──────────────────────────────────────────────────────
     if(ImGui::Button("...")) {
         auto res = ofSystemLoadDialog("Select Samples Folder", true, currentBrowseDir);
