@@ -54,9 +54,9 @@
 #include "nodes/scSpectrogram.h"
 #include "nodes/scLissajous.h"
 #include "nodes/scMorphOscScope.h"
-#include "nodes/scPolyphonicArpeggiator.h"
 #include "nodes/scMetroBox.h"
 #include "nodes/scEuclideanBox.h"
+#include "nodes/scArpeggiatorBox.h"
 #include "nodes/scBufferBrowser.h"
 #include "nodes/scDynGenNode.h"
 #include "nodes/scDynGenPolyNode.h"
@@ -198,10 +198,10 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<timelineWaveTrack>("SuperCollider", controller->getServers());
 #endif // OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<scGraphicEQ>("SuperCollider");
-	o.registerModel<scPolyphonicArpeggiator>("SuperCollider");
 #if OFXOCEANODESC_HAS_TRANSPORT
 	o.registerModel<scMetroBox>("SuperCollider");
 	o.registerModel<scEuclideanBox>("SuperCollider");
+	o.registerModel<scArpeggiatorBox>("SuperCollider");
 #endif
 	o.registerModel<scBufferBrowser>("SuperCollider", controller->getServers());
 	o.registerModel<scFFT>("SuperCollider", controller->getServers());
