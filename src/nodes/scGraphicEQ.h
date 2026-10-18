@@ -32,6 +32,11 @@ class ofxSCBus;
 
 class scGraphicEQ : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return "Graphic EQ " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     scGraphicEQ();
     ~scGraphicEQ();
 

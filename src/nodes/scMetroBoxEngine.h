@@ -9,20 +9,22 @@
 //  genome, cycle index): same inputs, same onsets. The node (scMetroBox) owns
 //  one engine, draws its cycles and writes them into the player's buffer.
 //
-//  Per cycle, in order:
-//    material   which random stream the cycle uses: its phrase (renewed or
-//               repeated, or frozen by Keep) and its letter in the form
-//    raw        the generator's onsets, shifted, kept by density, metric
-//               weighting, build-up and fills, plus anchors
+//  A lane has a few main settings (the easy row in the window: Every, Offset,
+//  Chance, Length, Accent, Change, Smart) and some advanced ones. Per cycle,
+//  in order:
+//    material   which random stream the cycle uses: its phrase, new or
+//               repeated depending on Change
+//    raw        the pattern's onsets (Steps / Euclidean / Free), offset, kept
+//               by Chance (Smart drops the weak positions first), build-up
+//               and fills
 //    displace   push / drag across the barline
-//    relation   follow / avoid / complement / unison / response to a lane above
+//    relation   follow / avoid / answer another lane
 //    genome     the mutation operators (placement ones)
 //    ornaments  ratchets, flams, ghosts
-//    amplitude  metric, variation, dynamics stage, phrase shape, Euclidean
-//               accents, genome (amplitude ones), duck / reinforce
-//    groove     swing / laid back / pushed and humanize (timing)
-//    durations  fixed / legato / metric, Euclidean long notes, genome
-//               (duration ones), barline, choke
+//    amplitude  accents (strong beats / every Nth hit / random) in the soft ..
+//               loud range, fills, genome (amplitude ones), duck / boost
+//    groove     swing and humanize (timing)
+//    durations  Length, longer on strong positions, genome, choke
 //
 
 #pragma once
@@ -41,20 +43,29 @@ constexpr int MAX_LAYERS      = 8;
 constexpr int TICKS_PER_BEAT  = 48;
 constexpr int MAX_CYCLE_BEATS = 16;
 constexpr int MAX_CYCLE_TICKS = MAX_CYCLE_BEATS * TICKS_PER_BEAT;
-constexpr int MAX_VALUES      = 8;    // Weighted generator entries
 constexpr int64_t NO_CYCLE    = std::numeric_limits<int64_t>::min();
 
-enum Generator : int { GEN_GRID = 0, GEN_EUCLIDEAN, GEN_WEIGHTED, GEN_SUBDIVISION, GEN_MARKOV };
-enum DurationMode : int { DUR_FIXED = 0, DUR_LEGATO, DUR_METRIC };
-enum AnchorMode : int { ANCHOR_NONE = 0, ANCHOR_DOWNBEAT, ANCHOR_GROUPS, ANCHOR_BEATS, ANCHOR_BACKBEATS };
-enum RelationMode : int { REL_NONE = 0, REL_FOLLOW, REL_AVOID, REL_COMPLEMENT, REL_UNISON, REL_RESPONSE };
-enum DynamicsMode : int { DYN_NONE = 0, DYN_DUCK, DYN_REINFORCE };
+enum Pattern : int { PAT_STEPS = 0, PAT_EUCLIDEAN, PAT_FREE };
+enum AccentSource : int { ACC_STRONG = 0, ACC_EUCLID, ACC_RANDOM };
+enum RelationMode : int { REL_NONE = 0, REL_FOLLOW, REL_AVOID, REL_ANSWER };
+enum DynamicsMode : int { DYN_NONE = 0, DYN_DUCK, DYN_BOOST };
+enum SwingUnit : int { SWING_16THS = 0, SWING_8THS };
 enum OnsetKind : int { KIND_MAIN = 0, KIND_GHOST, KIND_FLAM, KIND_RATCHET };
-enum GrooveMode : int { GROOVE_STRAIGHT = 0, GROOVE_SWING16, GROOVE_SWING8, GROOVE_LAID_BACK, GROOVE_PUSHED };
-// Repeat: Off = new material every phrase (Renew); Loop = the phrase playing
-// when it was switched on repeats forever; Evolve = that loop, mutated every
-// few loops.
-enum RepeatMode : int { REPEAT_OFF = 0, REPEAT_LOOP, REPEAT_EVOLVE };
+// A lane's links to other lanes: relation, choke, dynamics
+enum LinkKind : int { LINK_REL = 0, LINK_CHOKE, LINK_DYN, LINK_COUNT };
+
+// Change, one knob from frozen to always new, read as five zones:
+//   Fixed     the phrase playing when it got here repeats; no mutation
+//   Loop      the same, but Mutate / Re-roll work
+//   Evolving  the loop mutates itself every few phrases (more often to the right)
+//   Varying   now and then a new phrase, otherwise the last one again
+//   New       a new phrase every time
+enum ChangeZone : int { CHANGE_FIXED = 0, CHANGE_LOOP, CHANGE_EVOLVING, CHANGE_VARYING, CHANGE_NEW };
+int   changeZone(float change);
+bool  changeFrozen(float change);     // Fixed, Loop, Evolving: the phrase repeats
+int   evolveEvery(float change);      // Evolving: phrases between mutations
+float renewChance(float change);      // chance a phrase brings new material
+
 constexpr int MAX_OPS = 24;     // a genome keeps its latest mutations only
 
 // Mutation operators. Each picks its target (which hit, which half) with a
@@ -73,15 +84,12 @@ enum OpType : int {
     OP_ACCENT_SWAP,    // two hits swap amplitudes
     OP_INVERT_ACCENTS, // loud hits become soft and the other way round
     OP_PROMOTE,        // the softest hit becomes a normal one
-    OP_SPLICE,         // the second half comes from another genome (crossover)
     OP_COUNT
 };
-constexpr int OP_RANDOM_COUNT = OP_SPLICE;  // the ones Mutate picks from
 
 struct Op {
     int type = OP_SPLIT;
     uint32_t seed = 0;
-    uint32_t aux = 0;   // OP_SPLICE: the other genome's seed
 };
 
 struct Genome {
@@ -99,99 +107,69 @@ struct Onset {
 };
 
 struct Layer {
-    std::string name = "Layer";
+    std::string name = "Lane";
+    int   id         = 0;      // the lane's own random stream, wherever it moves (0: its position + 1)
     bool  mute       = false;
-    int   generator  = GEN_GRID;
+    bool  advanced   = false;  // the window shows the advanced panel (no effect on the rhythm)
+
+    // ── Main (the easy row) ──
+    int   division   = 24;     // Every: ticks per step
+    int   shift      = 0;      // Offset: ticks added to every onset (wraps in the cycle)
+    float density    = 1.0f;   // Chance to keep each onset
+    int   durTicks   = 6;      // Length
+    float accent     = 0.3f;   // how much the accented hits stand out
+    float change     = 0.25f;  // see ChangeZone
+    float smart      = 0.5f;   // weak positions dropped first, strong ones kept
+
+    // ── Pattern ──
+    int   pattern    = PAT_STEPS;
     int   cycleBeats = 4;
     int   seed       = 0;      // the genome's seed (Re-roll changes it)
     std::vector<Op> ops;       // the genome's mutations
-    float density    = 1.0f;   // chance to keep each onset
-    int   shift      = 0;      // ticks, applied to every generated onset (wraps in the cycle)
-    // Grid / Euclidean / Subdivision (finest step) / Markov (step)
-    int   division   = 12;     // ticks per step
     int   eucSteps   = 16;
     int   eucHits    = 5;
     int   eucRotation = 0;
-    // Weighted durations (beats) and their weights
-    std::vector<float> values  = {1.0f, 0.5f, 0.25f};
-    std::vector<float> weights = {1.0f, 1.0f, 1.0f};
-    // Subdivision
-    float complexity   = 0.5f;
-    float longOnStrong = 0.5f;
-    float triplets     = 0.0f;
-    // Markov: example rhythms, one per word ("x..x..x.x...x..."), x = hit
-    std::string examples = "x...x...x...x... x..x..x...x.x...";
-    // Metric
-    std::string grouping = "";
-    bool  feelBar      = true;
-    float weighting    = 0.0f;
-    int   anchorMode   = ANCHOR_NONE;
-    float anchorAmount = 1.0f;
-    float push         = 0.0f;
-    float drag         = 0.0f;
-    int   dispUnit     = 12;
-    float crossBarline = 1.0f;
-    // Phrase
-    int   phraseLen    = 4;      // cycles
-    std::string form   = "";     // e.g. "AAAB"; empty = every cycle its own
-    float renew        = 1.0f;   // chance a phrase brings new material (0 = it repeats)
-    float bStrength    = 0.3f;   // how far the other letters mutate A
-    int   fillTicks    = 0;      // fill at the end of the phrase (0 = none)
-    float fillIntensity = 0.6f;
-    float buildUp      = 0.0f;   // density grows over the phrase
-    float phraseAccent = 0.0f;   // the phrase downbeat louder
-    float swell        = 0.0f;   // amplitude grows over the phrase
-    // Ornaments
-    float ghost        = 0.0f;
-    int   ghostSide    = 0;      // 0 before, 1 after, 2 either
-    float ghostLevel   = 0.3f;
-    float flam         = 0.0f;
-    int   flamTicks    = 2;
-    float ratchet      = 0.0f;
-    int   ratchetCount = 3;
-    int   ratchetUnit  = 6;
-    int   ratchetShape = 0;      // 0 flat, 1 crescendo, 2 decrescendo
-    // Relations, to lanes above (1-based lane number, 0 = none)
-    int   relMode      = REL_NONE;
-    int   relLane      = 0;
-    float relAmount    = 1.0f;
-    int   respDelay    = 96;     // REL_RESPONSE: ticks the other lane is answered after
-    int   chokeLane    = 0;
-    int   dynMode      = DYN_NONE;
-    int   dynLane      = 0;
-    float dynAmount    = 0.5f;
-    // Groove (timing)
-    int   groove       = GROOVE_STRAIGHT;
-    float swing        = 0.6f;   // 0.5 straight .. 0.75 hard
-    int   humanize     = 0;      // ticks of seeded timing spread
-    // Duration
-    int   durMode    = DUR_FIXED;
-    int   durTicks   = 6;
-    float legato     = 0.5f;
-    int   durShort   = 6;
-    int   durLong    = 48;
-    int   longHits   = 0;        // Euclidean long notes over the cycle's hits
-    int   longTicks  = 48;
-    // Amplitude
-    float level      = 1.0f;
-    float ampMin     = 0.0f;
-    float ampMetric  = 0.0f;
-    float variation  = 0.0f;
-    float curve      = 1.0f;
-    int   tiers      = 0;
-    int   accentHits = 0;        // Euclidean accents over the cycle's hits
-    float accentAmount = 0.5f;
-    bool  accentsLong = false;   // long notes are the accented ones
-    // Repeat and evolution
-    int     repeat     = REPEAT_OFF;
-    bool    keep       = false;  // locked: no mutation (and the phrase frozen)
-    int64_t keepPhrase = 0;      // the frozen phrase (Loop, Evolve, Keep)
-    int   mutations    = 1;      // operators added by one Mutate
-    int   autoEvery    = 2;      // Evolve: loops between mutations
-    float autoChance   = 0.5f;   // Evolve: chance of a mutation each time
-    std::vector<Genome> liked;
+    float complexity = 0.5f;   // Free: chance a segment splits
+    float triplets   = 0.0f;   // Free: chance a split is in three
+    std::string grouping = ""; // beats per group, e.g. "3+3+2"; empty = auto
+
+    // ── Feel ──
+    float swing      = 0.0f;   // 0 straight .. 1 hard (offbeat at 3/4)
+    int   swingUnit  = SWING_16THS;
+    float humanize   = 0.0f;   // seeded timing spread, 0..1 = up to a 32nd early or late
+    float push       = 0.0f;   // chance a hit on a beat comes a 16th early
+    float drag       = 0.0f;   // chance it comes a 16th late
+    float ghost      = 0.0f;   // chance of a quiet hit a 16th before a hit
+    float flam       = 0.0f;   // chance of a grace hit just before a hit
+    float ratchet    = 0.0f;   // chance a hit becomes a quick burst
+    int   ratchetUnit = 6;     // ticks between the burst's hits
+
+    // ── Shape ──
+    float longOnStrong = 0.0f; // gates longer on strong positions (up to 4x)
+    int   accentSource = ACC_STRONG;
+    int   accentHits   = 3;    // ACC_EUCLID: accented hits per cycle, evenly spread
+    float ampMin       = 0.0f; // Soft
+    float level        = 1.0f; // Loud
+
+    // ── Over time ──
+    int   phraseLen  = 4;      // cycles
+    float fill       = 0.0f;   // fill at the end of each phrase (0 = none)
+    float buildUp    = 0.0f;   // density grows over the phrase
+    int64_t keepPhrase = 0;    // the phrase that repeats while Change is frozen
+
+    // ── Lanes (1-based lane number, 0 = none): any other lane, as long as
+    //    the links don't loop (see Engine::link) ──
+    int   relMode    = REL_NONE;
+    int   relLane    = 0;
+    float relAmount  = 1.0f;
+    int   respDelay  = 96;     // REL_ANSWER: ticks the other lane is answered after
+    int   chokeLane  = 0;
+    int   dynMode    = DYN_NONE;
+    int   dynLane    = 0;
+    float dynAmount  = 0.5f;
 
     int cycleTicks() const { return cycleBeats * TICKS_PER_BEAT; }
+    int fillTicks() const;      // 0, one beat or two (from Fill), within the cycle
     Genome genome() const { return {seed, ops}; }
 };
 
@@ -201,7 +179,7 @@ public:
 
     std::array<Layer, MAX_LAYERS> layers;
     int numLayers = 4;
-    int globalSeed = 1;
+    int globalSeed = 1;          // 0: no seed (see leavePhrase)
     std::vector<float> densityScale = {1.0f};   // one for all lanes, or one per lane
     double mainBarBeats = 4.0;
 
@@ -215,29 +193,45 @@ public:
     void changed(int lane);
     void changedAll();
 
+    // Moves a lane to another position, with everything it has (settings,
+    // genome, undo history); the other lanes' links follow the lanes they
+    // pointed to
+    void moveLane(int from, int to);
+
+    // The lane a link really uses (-1: none). Links are taken lane by lane,
+    // top to bottom (relation, choke, dynamics): one that would close a loop
+    // (1 follows 2 while 2 follows 1) is ignored.
+    int link(int lane, int kind) const;
+    int linkSetting(int lane, int kind) const;           // the lane number set (1-based, 0 = none)
+    bool wouldLoop(int lane, int otherLane) const;       // a link from lane to otherLane (0-based)
+
     int64_t cycleAt(int lane, double beat) const;
     int64_t phraseOf(int lane, int64_t cycle) const;     // phrase index of a cycle
     bool inFill(int lane, int64_t cycle, int tick) const;
 
+    // Seed 0: no seed. The random streams come from this session, and a
+    // phrase that has played (the node calls this when the playhead leaves
+    // it) draws new material the next time it comes round (a loop or a seek
+    // plays something else). A frozen phrase (Fixed / Loop / Evolving)
+    // still repeats.
+    bool unseeded() const { return globalSeed == 0; }
+    void leavePhrase(int lane, int64_t phrase);
+
+    // Change: entering a frozen zone keeps the phrase playing now
+    void setChange(int lane, float change, int64_t nowCycle);
+
     // ── Evolution (a change lands at nowCycle + 1) ──
+    bool canMutate(int lane) const { return changeZone(layers[lane].change) != CHANGE_FIXED; }
     void mutate(int lane, int64_t nowCycle, uint32_t randomSeed);
     void reroll(int lane, int64_t nowCycle, int newSeed);
     bool undo(int lane, int64_t nowCycle);
     bool redo(int lane, int64_t nowCycle);
-    void like(int lane);
-    void crossover(int lane, int a, int b, int64_t nowCycle);
-    void setKeep(int lane, bool on, int64_t nowCycle);
-    void setRepeat(int lane, int mode, int64_t nowCycle);
-    bool frozen(int lane) const { return layers[lane].keep || layers[lane].repeat != REPEAT_OFF; }
     bool canUndo(int lane) const { return !state[lane].undo.empty(); }
     bool canRedo(int lane) const { return !state[lane].redo.empty(); }
     // Hits of a cycle that were not there before the last change (for the
     // window's highlight); empty when the cycle is not one it changed.
     std::vector<int> changedTicks(int lane, int64_t cycle) const;
     void forgetHighlightsBefore(int lane, int64_t cycle);
-
-    // Markov: example words from another lane's cycles, on a 16th grid
-    std::string captureExamples(int sourceLane, int64_t fromCycle, int cycles) const;
 
     // Strength of a tick (exposed for tests and the window)
     float strengthAt(int lane, int64_t cycle, int tick) const;
@@ -247,8 +241,6 @@ private:
         uint64_t key = 0;      // lane key from the global seed and the genome seed
         uint64_t mat = 0;      // the cycle's random material
         Genome genome;
-        int extraOps = 0;      // letters other than A: mutations of A
-        uint64_t extraSeed = 0;
     };
     struct LaneState {
         std::vector<Genome> undo, redo;
@@ -258,11 +250,15 @@ private:
         std::map<int64_t, std::vector<int>> oldTicks;   // for the highlight
     };
     std::array<LaneState, MAX_LAYERS> state;
+    // Unseeded: times each phrase was left, per lane
+    std::array<std::map<int64_t, int>, MAX_LAYERS> passes;
+    uint64_t sessionSalt = 0;
+    int passOf(int lane, int64_t phrase) const;
     mutable std::array<std::map<int64_t, std::vector<Onset>>, MAX_LAYERS> cache;
 
     struct Item {
         int tick; float strength; int kind; float factor;
-        bool tied = false; float durScale = 1.0f; bool longNote = false; float amp = 0.0f;
+        bool tied = false; float durScale = 1.0f; float amp = 0.0f;
     };
     struct AbsOnset { int64_t tick; int dur; };
 
@@ -272,16 +268,18 @@ private:
     float effectiveDensity(int lane) const;
     std::vector<int> groupStarts(int lane) const;
     std::vector<int> rawCycle(int lane, int64_t cycle, const Material& m) const;
-    std::vector<int> markovCycle(int lane, int64_t cycle, const Material& m) const;
-    int displaced(int lane, int64_t cycle, int tick, const Material& m) const;
+    int displaced(int lane, int tick, const Material& m) const;
     std::vector<Item> placeItems(int lane, int64_t cycle) const;
     std::vector<AbsOnset> laneOnsets(int lane, int64_t fromTick, int64_t toTick) const;
-    int validLane(int lane, int laneNumber) const;
-    float amplitudeOf(int lane, const Material& m, int tick, float strength) const;
+    mutable bool linksDirty = true;
+    mutable std::array<std::array<int, LINK_COUNT>, MAX_LAYERS> links;
+    void computeLinks() const;
+    bool reaches(int from, int to) const;                // along the links taken
+    std::vector<int> dependents(int lane) const;         // lanes that hear this one (through links)
     float phraseProgress(int lane, int64_t cycle, int tick) const;
     void applyPlacementOps(int lane, int64_t cycle, const Material& m, std::vector<Item>& items) const;
     void applyAmplitudeOps(int lane, const Material& m, std::vector<Item>& items) const;
-    std::vector<Op> opsOf(const Material& m) const;
+    void pushUndo(int lane, int64_t nowCycle);
     void beginChange(int lane, int64_t nowCycle);
     void setGenome(int lane, const Genome& g);
 };

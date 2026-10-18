@@ -826,7 +826,11 @@ int scAnalogBox::getOutputBusIndex(ofxSCServer* server, int) {
 void scAnalogBox::setInputBus(ofxSCServer* server, scNode* node, int bus) {
     auto& st = states[server];
     if(gateIn.take(server, node, bus) | velIn.take(server, node, bus)) sendGate(st);
-    if(pitchIn.take(server, node, bus)) sendPitch(st);
+    if(pitchIn.take(server, node, bus)){
+        sendPitch(st);
+        // with Extra Voices the pitch cable goes into the allocator (ABGateAlloc)
+        if(allocating()) sendGate(st);
+    }
 }
 void scAnalogBox::resetInputBusses(ofxSCServer* server, int) {
     auto& st = states[server];
@@ -1959,7 +1963,7 @@ void scAnalogBox::drawWindow() {
     const float z = zoom();
     ImGui::SetNextWindowSize(ImVec2(1200 * z, 800 * z), ImGuiCond_FirstUseEver);
     bool open = showWindow.get();
-    const std::string title = "AnalogBox " + ofToString(getNumIdentifier());
+    const std::string title = getWindowTitle();
     if(!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)){
         ImGui::End();
         if(!open) showWindow = false;
@@ -2178,8 +2182,41 @@ void scAnalogBox::drawFilterCard(int k, float cw) {
     std::string fmt;
     if(comb && f.keyTrack->get() > 0.99f) fmt = (note >= 60.0f ? "+" : "") + ofToString(note - 60.0f, 1) + " st from the note";
     else fmt = ofToString(note, 1) + "  (" + (fc >= 1000 ? ofToString(fc / 1000.0f, 2) + " kHz)" : ofToString(fc, 0) + " Hz)");
-    sliderVec(*f.cutoff, comb ? "Pitch" : "Cutoff", cw, fmt.c_str());
-    if(comb && ImGui::IsItemHovered()) ImGui::SetTooltip("With Key Track 1: 60 is the note played (72 an octave up)");
+    if(comb && f.cutoff->get().size() <= 1){
+        // a comb rings at its pitch: whole semitones from the note (else it beats against it)
+        static const char* intervals[] = {"unison", "minor 2nd", "2nd", "minor 3rd", "3rd", "4th", "tritone", "5th",
+                                          "minor 6th", "6th", "minor 7th", "7th"};
+        const bool tracked = f.keyTrack->get() > 0.99f;
+        int st = (int)std::lround(note - 60.0f);
+        const int pc = ((st % 12) + 12) % 12;
+        const std::string label = tracked ? ofToString(st >= 0 ? "+" : "") + "%d st  " + intervals[pc] +
+                                            (std::abs(st) >= 12 ? " + " + ofToString(std::abs(st) / 12) + " oct" : std::string())
+                                          : std::string("note %d");
+        const float x0 = ImGui::GetCursorPosX();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Pitch");
+        publishedUnderline(f.cutoff->getEscapedName());
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(x0 + labelW * zoom());
+        ImGui::SetNextItemWidth(cw - labelW * zoom());
+        int v = tracked ? st : (int)std::lround(note);
+        if(ImGui::SliderInt(("##combPitch" + ofToString(k)).c_str(), &v, tracked ? -36 : 0, tracked ? 60 : 140, label.c_str()))
+            *f.cutoff = std::vector<float>{(float)(tracked ? 60 + v : v)};
+        publishMenu(f.cutoff->getEscapedName());
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Whole semitones (right-click: type any value). With Key Track 1, from the note played.%s",
+                                                     std::abs(note - std::round(note)) > 0.01f ? "\nNow between semitones: it will beat against the notes" : "");
+        if(tracked){
+            for(const auto& [name, semis] : std::vector<std::pair<const char*, int>>{{"1", 0}, {"5", 7}, {"8", 12}, {"12", 19}, {"15", 24}}){
+                if(ImGui::SmallButton((std::string(name) + "##cp" + ofToString(k) + name).c_str())) *f.cutoff = std::vector<float>{(float)(60 + semis)};
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", semis == 0 ? "The note" : semis == 7 ? "A 5th up" : semis == 12 ? "An octave up" : semis == 19 ? "An octave and a 5th up" : "Two octaves up");
+                ImGui::SameLine(0, 3);
+            }
+            ImGui::NewLine();
+        }
+    }else{
+        sliderVec(*f.cutoff, comb ? "Pitch" : "Cutoff", cw, fmt.c_str());
+        if(comb && ImGui::IsItemHovered()) ImGui::SetTooltip("With Key Track 1: 60 is the note played (72 an octave up)");
+    }
     sliderVec(*f.res, comb ? "Feedback" : "Resonance", cw, "%.2f");
     slider(*f.keyTrack, "Key Track", cw, "%.2f");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("1: follows the note (one octave per octave)");

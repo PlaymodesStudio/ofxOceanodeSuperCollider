@@ -765,13 +765,18 @@ float scBeatRepeatPro::autoStepProbability(int64_t step) const {
     return brClamp01(autoLane[(size_t)index]);
 }
 
+// The dice of a loop pass. Auto Seed 0: no seed (new dice every pass, start and seek)
+uint64_t scBeatRepeatPro::autoKey(uint64_t pass) const {
+    if(autoSeed.get() == 0) return ofxOceanodeDeterministicRandom::hash(autoFresh, (int64_t)pass, 0xF4E5);
+    return ofxOceanodeDeterministicRandom::hash((uint64_t)autoSeed.get(), autoEvolve.get() ? (int64_t)pass : 0, 0xB3A7);
+}
+
 int scBeatRepeatPro::autoPickSlot(int64_t step, uint64_t pass) const {
     float total = 0.0f;
     for(int slot = 0; slot < SNAPSHOT_COUNT; ++slot)
         if(snapshotUsed[slot]) total += std::max(0.0f, autoWeights[slot]);
     if(total <= 0.0f) return -1;
-    const uint64_t key = ofxOceanodeDeterministicRandom::hash(
-        (uint64_t)autoSeed.get(), autoEvolve.get() ? (int64_t)pass : 0, 0xB3A7);
+    const uint64_t key = autoKey(pass);
     float target = ofxOceanodeDeterministicRandom::uniform(key, step, 1) * total;
     int last = -1;
     for(int slot = 0; slot < SNAPSHOT_COUNT; ++slot) {
@@ -951,9 +956,11 @@ void scBeatRepeatPro::updateAutoTrigger() {
             startUs -= (uint64_t)(std::min(1.0, moved / bps) * 1e6);
         }
         autoFrontierUs = startUs > toleranceUs ? startUs - toleranceUs : 0;
+        autoFresh = ofxOceanodeDeterministicRandom::hash(autoFresh, (int64_t)cur.steadyTimeUs, 0x5EED);
     } else if(cur.generation != autoGeneration) {
         // Seek: decide again from the new position.
         autoFrontierUs = cur.steadyTimeUs > toleranceUs ? cur.steadyTimeUs - toleranceUs : 0;
+        autoFresh = ofxOceanodeDeterministicRandom::hash(autoFresh, (int64_t)cur.steadyTimeUs, 0x5EED);
     }
     autoScheduling = true;
     autoGeneration = cur.generation;
@@ -1007,8 +1014,7 @@ void scBeatRepeatPro::updateAutoTrigger() {
         int slot = -1;
         if(!momentaryHoldActive) {
             const float probability = autoStepProbability(candidate.step) * brClamp01(autoChance.get());
-            const uint64_t key = ofxOceanodeDeterministicRandom::hash(
-                (uint64_t)autoSeed.get(), autoEvolve.get() ? (int64_t)candidate.pass : 0, 0xB3A7);
+            const uint64_t key = autoKey(candidate.pass);
             if(probability > 0.0f
                && ofxOceanodeDeterministicRandom::uniform(key, candidate.step, 0) < probability) {
                 slot = autoPickSlot(candidate.step, candidate.pass);
@@ -1456,6 +1462,8 @@ void scBeatRepeatPro::drawAutoCard() {
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("Quarter-note beats each fired repeat lasts.\nA new trigger cuts in before it ends.");
     sliderInt("Seed", autoSeed);
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("0: no seed (new dice every loop pass, start and seek)\nElse: the same dice (or new each pass: Evolve)");
     checkbox("Evolve", autoEvolve);
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("Off: every transport loop pass makes the same choices.\nOn: each pass rolls new dice.");
@@ -1481,8 +1489,7 @@ void scBeatRepeatPro::drawWindow() {
     // Waiting for a later update used to leave freshly recalled presets at
     // vis=0 until Go (or another parameter) happened to resend every control.
     if(!visOn) setVisualizationEnabled(true);
-    std::string title = (canvasID == "Canvas" ? "" : canvasID + "/")
-        + "BeatRepeat Pro " + ofToString(getNumIdentifier());
+    std::string title = getWindowTitle();
     bool open = showWindow.get();
     ImGui::SetNextWindowSize(ImVec2(1040.0f, 650.0f), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {

@@ -2,28 +2,37 @@
 //  scSampleBox.h
 //  ofxOceanodeSuperCollider
 //
-//  SampleBox: a sampler instrument for one audio file.
+//  SampleBox: a kit of sampler pads (1 to 16), each with its own sample, its
+//  own sound settings and modulation, and its own mixer channel.
 //
-//  • The node shows the performance controls (Show, Trigger/Gate, Pitch,
-//    Velocity, Gain, N Chan, the audio Trig/Gate input) and whatever is
-//    published. The dockable window holds the rest: the browser, the
-//    waveform with the In / Out region and a playhead per sounding voice, a
-//    transport strip, and tabs (Playback, Envelopes, Filter & EQ, Dynamics,
-//    Space) laid out in columns as GrainBox's. Right-click any control there
-//    to publish it to the node.
-//  • Playing: a rising edge of Trigger/Gate (or of the audio input) starts a
-//    note. One-shot plays the region once (fading out over its last 4 ms, so
-//    the end never clicks), Loop repeats it until Stop (optionally
-//    crossfading the seam), Gate Mode holds the note while the gate is high.
-//    Polyphonic rotates over up to 8 voices; mono chokes the previous note
-//    (5 ms fade) instead of jumping it back to the start.
-//  • Pitch 60 = the file's own pitch. Resample couples speed and pitch;
-//    Stretch (Warp1) keeps them apart. Reverse plays the region backwards.
-//  • Modulation: the shared envelopes, LFOs and routing matrix (scModulation),
-//    per voice for the voice targets, the latest note's for the effects.
-//  • Sound: SampleBox_<K>_<N>_<R|T> (synthdefs/Defaults/SampleBox).
-//  • Files: anything macOS can decode (WAV, AIFF, FLAC, MP3, M4A, CAF...),
-//    decoded on a worker thread; from the browser, Load..., or a Finder drop.
+//  • Playing: the Trig/Gate Audio input and the Trigger/Gate values are
+//    multichannel, one channel per pad: a pad plays the channel set in its
+//    "Channel" (Auto: its row, so row 3 plays channel 3, as a MetroBox lane 3
+//    or an EuclideanBox track 3 on their Gates output). Pitch and Velocity
+//    are per channel too (one value: every channel). A rising edge starts a
+//    note; a gate is a level (0.2 plays at 0.2). One-shot plays the region
+//    once (fading out over its last 4 ms), Loop repeats it until Stop, Gate
+//    Mode holds the note while the gate is high. Polyphonic rotates over up
+//    to 8 voices; mono chokes the previous note (5 ms) instead of jumping it
+//    back to the start. Pads in the same Choke group cut each other.
+//  • A pad's sound (the window's Sound, Envelopes, LFOs and Routing tabs):
+//    region, Resample / Stretch, Reverse, envelopes, filter, its own shared
+//    modulation (scModulation) per voice.
+//  • The Mixer tab: a channel per pad with Level, Pan, Mute, Solo, a meter,
+//    and its effects (EQ, Compressor, Saturator, Echo, Reverb, Stereo image),
+//    each a synth of its own that exists only while switched on.
+//  • Outputs: Out (every pad, mixed, x Gain) and Pad <n> (each pad alone,
+//    after its effects and Level).
+//  • The pad list (left): click to edit, drag to reorder, drop a sample on a
+//    row, right-click for more. A row shows what plays it (the lane's name
+//    when a MetroBox or EuclideanBox is wired in).
+//  • Synths: synthdefs/Defaults/SampleBox (SampleBoxPad_K_N_R|T, the
+//    effects, SampleBoxStrip_N). Files: anything macOS can decode, decoded on
+//    a worker thread; from the browser, Load..., or a Finder drop.
+//  • Parameters: pad 1's have the plain names ("Cutoff"), pad n's end in
+//    " n" ("Cutoff 3"). Right-click any control in the window to type a
+//    value, publish it to the node, or modulate it. Moving a pad moves its
+//    settings and sample; published controls stay with their position.
 //
 
 #pragma once
@@ -50,14 +59,21 @@
 
 class scSampleBox : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return "SampleBox " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MaxChannels = 16;
     static constexpr int MaxVoices = 8;
+    static constexpr int MaxPads = 16;
+    static constexpr int ChokeGroups = 8;
     explicit scSampleBox(std::vector<serverManager*> servers);
     ~scSampleBox() override;
 
     void setup() override;
     void update(ofEventArgs&) override;
-    void setBpm(float bpm) override { mod.setBpm(bpm); }   // tempo-synced LFOs
+    void setBpm(float bpm) override;
     void draw(ofEventArgs&) override;
     void buildSynth(ofxSCServer*) override;
     void createSynth(ofxSCServer*) override;
@@ -71,11 +87,19 @@ public:
     void resendParametersForNRT() override;
     void presetSave(ofJson&) override;
     void loadBeforeConnections(ofJson&) override;
+    void presetRecallBeforeSettingParameters(ofJson&) override;
     void presetRecallAfterSettingParameters(ofJson&) override;
 
 private:
+    // Which synth a pad control goes to
+    enum Fx : int { FX_EQ = 0, FX_COMP, FX_SAT, FX_ECHO, FX_REVERB, FX_IMAGE, FX_COUNT };
+    enum Dest : int { DEST_ENGINE = 0, DEST_FX, DEST_STRIP = DEST_FX + FX_COUNT, DEST_NONE };
+
     struct Control {
-        std::string key;
+        std::string key;         // escaped parameter name ("Cutoff_3")
+        std::string base;        // the same, without the pad's suffix ("Cutoff")
+        int pad = -1;            // -1: the node's
+        int dest = DEST_NONE;
         std::string scName;
         ofParameter<float>* f = nullptr;
         ofParameter<int>* i = nullptr;
@@ -84,161 +108,187 @@ private:
         std::function<std::string()> save;
         std::function<void(const std::string&)> load;
     };
-    // per server: the node is a group: the voices, then the modulation's
-    // sources and routes (they read the voices' gates)
-    struct Groups {
-        ofxSCGroup* root = nullptr;
+
+    // What a pad plays: moves with the pad
+    struct Sample {
+        std::string path, playPath;      // as chosen (kept in presets) / what scsynth reads
+        int channels = 1;
+        float seconds = 0.0f, rate = 0.0f;
+        std::vector<float> peaks;
+        std::future<scSlicerBox::Audio> task;
+        std::string decodingPath, pendingFile, error;
+        std::map<ofxSCServer*, std::vector<ofxSCBuffer*>> buffers;
+    };
+    // A pad's objects on one server, in its group: the voices, the
+    // modulation's sources and routes, the effects, the strip
+    struct PadSC {
+        ofxSCGroup* group = nullptr;
         ofxSCGroup* voices = nullptr;
         ofxSCGroup* sources = nullptr;
         ofxSCGroup* routes = nullptr;
-        ofxSCBus* gateBus = nullptr;      // the 8 voices' gates (audio)
+        ofxSCGroup* fx = nullptr;
+        ofxSCSynth* engine = nullptr;
+        std::array<ofxSCSynth*, FX_COUNT> fxSynth{};
+        ofxSCSynth* strip = nullptr;
+        ofxSCBus* bus = nullptr;         // audio, MaxChannels: the pad's sound
+        ofxSCBus* gateBus = nullptr;     // audio, 8: the voices' gates (for the envelopes)
+        ofxSCBus* vis = nullptr;         // control, 8: playheads
+        ofxSCBus* latest = nullptr;      // control, 1: the latest voice (the effects' modulation)
+        ofxSCBus* meter = nullptr;       // control, 1: the strip's peak
+        std::string engineDef;
         bool created = false;
     };
-    std::map<ofxSCServer*, Groups> groups;
-    // the shared modulation: envelopes, LFOs, routing (Envelopes / LFOs / Routing tabs)
-    scModulation mod;
-    void freeGroups(ofxSCServer* srv);
+    struct Pad {
+        int index = 0;
+        std::string name;
+        std::unique_ptr<Sample> sample = std::make_unique<Sample>();
+        // Sound
+        ofParameter<int> channel, choke;
+        ofParameter<float> inPoint, outPoint, loopCrossfade, rate, stretch, warpWindow, transpose;
+        ofParameter<bool> loop, poly, gateMode, reverse;
+        ofParameter<int> voices, stretchMode;
+        ofParameter<float> attack, release, pan;
+        ofParameter<bool> filterOn;
+        ofParameter<int> filterType;
+        ofParameter<float> cutoff, resonance;
+        // Mixer
+        ofParameter<float> level;
+        ofParameter<bool> mute, solo;
+        std::array<ofParameter<bool>, FX_COUNT> fxOn;
+        std::array<ofParameter<float>, 5> eqGain, eqFreq, eqShape;
+        ofParameter<float> eqMix;
+        ofParameter<float> compThreshold, compRatio, compAttack, compRelease, compMakeup;
+        ofParameter<float> satDrive, satMix;
+        ofParameter<float> echoTime, echoFeedback, echoTone, echoSpread, echoAmount;
+        ofParameter<float> revSize, revDecay, revPredelay, revLowpass, revPosition, revSpread, revMix;
+        ofParameter<float> width, diffuse, bassMono, bassFreq;
+        scModulation mod;
+        scEQEditor eqEditor;
+        std::map<ofxSCServer*, PadSC> sc;
+        ofEventListeners listeners;
+        // play state
+        int fireCount = 0, stopCount = 0;
+        bool gateHigh = false;           // Trigger/Gate (Oceanode) on its channel
+        bool auditionHeld = false;
+        std::vector<float> playheads;
+        float meter = 0.0f;
+        std::string suffix() const { return index == 0 ? std::string() : " " + ofToString(index + 1); }
+    };
+    std::vector<std::unique_ptr<Pad>> pads;
+    int selected = 0;
 
+    std::vector<Control> controls;
     std::vector<serverManager*> servers;
     scSampleBrowser browser{"scSampleBox", {".wav", ".aif", ".aiff", ".flac"}};
 
-    // ── The sample ───────────────────────────────────────────────────────────
-    std::string samplePath;              // as chosen (kept in presets)
-    std::string playPath;                // what scsynth reads
-    int sampleChannels = 1;
-    float sampleSeconds = 0.0f, sampleRate = 0.0f;
-    static constexpr int WaveformBins = 4096;
-    std::vector<float> waveformPeaks;
-    std::future<scSlicerBox::Audio> decodeTask;
-    std::string decodingPath, pendingFile, loadError;
-    bool pendingLoadDialog = false;
-
-    // ── Synths ───────────────────────────────────────────────────────────────
-    std::map<ofxSCServer*, std::vector<ofxSCBuffer*>> buffers;
-    std::map<ofxSCServer*, ofxSCSynth*> synths;
-    std::map<ofxSCServer*, ofxSCBus*> visBuses;      // playheads (control, MaxVoices)
-    std::map<ofxSCServer*, int> outputBuses, inputBuses;
-    std::vector<float> playheads;                    // position 0..1 per voice, -1 silent
-    float nextPlayheadRead = 0.0f;
+    // ── The node's server objects ───────────────────────────────────────────
+    struct NodeSC {
+        ofxSCGroup* root = nullptr;      // every pad's group, in order
+        ofxSCBus* choke = nullptr;       // control, 16: each pad's triggers (choke groups)
+        bool created = false;
+    };
+    std::map<ofxSCServer*, NodeSC> nodeSC;
+    std::map<ofxSCServer*, std::map<int, int>> outputBuses;   // 0 Out, n Pad n
+    std::map<ofxSCServer*, int> inputBuses;                   // Trig/Gate Audio
+    float bpm = 120.0f;
+    float nextMeterRead = 0.0f;
     ofEventListeners nodeListeners;
     ofEventListener dragListener;
 
-    // ── Parameters ───────────────────────────────────────────────────────────
+    // ── The node's parameters ───────────────────────────────────────────────
     ofParameter<bool> showWindow;
-    ofParameter<float> trigger, pitch, velocity, gain;
-    ofParameter<int> channels;
-    ofParameter<float> inPoint, outPoint, loopCrossfade, rate, stretch, warpWindow, transpose;
-    ofParameter<bool> loop, poly, gateMode, reverse;
-    ofParameter<int> voices, stretchMode;
-    ofParameter<float> attack, release, pan;
-    ofParameter<bool> filterOn, eqOn, compOn, satOn, reverbOn;
-    ofParameter<int> filterType;
-    ofParameter<float> cutoff, resonance;
-    std::array<ofParameter<float>, 5> eqGain, eqFreq, eqShape;
-    ofParameter<float> eqMix;
-    scEQEditor eqEditor;
-    ofParameter<float> compThreshold, compRatio, compAttack, compRelease, compMakeup;
-    ofParameter<float> satDrive, satMix;
-    ofParameter<float> revSize, revDecay, revPredelay, revLowpass, revPosition, revSpread, revMix;
-    ofParameter<float> width, diffuse, bassMono, bassFreq;
+    ofParameter<std::vector<float>> trigger, pitch, velocity;   // per channel
+    ofParameter<float> gain;                                    // the mix's (and every Pad output's) level
+    ofParameter<int> channels;                                  // N Chan
+    scAudioParam pitchIn, velIn;   // Pitch / Velocity audio cables: channel c for a pad on channel c
 
-    // ── Window state ─────────────────────────────────────────────────────────
-    float browserWidth = 220.0f;
-    float waveformHeight = 0.0f;         // screen pixels; set when the window first opens
-    int regionDrag = -1;                 // 0 In, 1 Out, 2 the whole region
-    float regionDragOffset = 0.0f;
-    bool windowHovered = false;          // for Finder drops
-    bool auditionHeld = false;           // Play held in Gate Mode
-    int fireCount = 0, stopCount = 0;
+    // ── Pads ────────────────────────────────────────────────────────────────
+    Pad* addPad();                           // at the end; nullptr when full
+    void removePad(int k);
+    void duplicatePad(int k);
+    void movePad(int from, int to);
+    void setupPad(Pad& p);                   // its parameters, listeners, modulation
+    int padChannel(const Pad& p) const;      // 0-based
+    std::string channelSource(int channel);  // what plays a channel ("Kick"), "" unknown
+    std::string padLabel(const Pad& p) const;
+    // a pad's settings as pad-relative keys (base -> value) and its modulation
+    ofJson padState(int k) const;
+    void applyPadState(int k, const ofJson& state);
+    std::string relKey(const std::string& key) const;          // a pad control: "#base"
+    std::string absKey(const std::string& rel, int pad) const;
+    void rewriteModKeys(ofJson& modJson, bool toRelative, int pad) const;
 
-    std::vector<Control> controls;
+    // ── Sample and synths ───────────────────────────────────────────────────
+    void loadSample(Pad& p, const std::string& path);
+    void applyDecoded(Pad& p, scSlicerBox::Audio&& audio);
+    void ensureBuffers(Pad& p, ofxSCServer*);
+    void releaseBuffers(Sample& s, ofxSCServer*);
+    std::string engineDef(const Pad& p) const;
+    void createPad(ofxSCServer*, Pad& p);
+    void destroyPad(ofxSCServer*, Pad& p, bool sendFree = true);
+    void syncPad(Pad& p);                    // every server: synths that should exist, all values
+    void syncPadServer(ofxSCServer*, Pad& p);
+    void replaceEngine(ofxSCServer*, Pad& p);
+    void syncFx(ofxSCServer*, Pad& p);       // create / free the effects after their On
+    void sendEngine(ofxSCServer*, Pad& p);
+    void sendFx(ofxSCServer*, Pad& p, int fx);
+    void sendStrip(ofxSCServer*, Pad& p);
+    void sendChannelInputs(Pad& p);          // trig bus, pitch, velocity, gate (after Channel or the inputs changed)
+    void sendChokeMasks();
+    void sendMutes();
+    void rebuildAll();                       // N Chan: every pad's synths again
+    void fire(Pad& p);
+    void stop(Pad& p);
+    void requireSynthdefs();
+    bool anySolo() const;
+    float valueFor(const std::vector<float>& v, int channel, float fallback) const;
+
+    // ── Controls, publishing ────────────────────────────────────────────────
+    template<typename T> Control& registerPadControl(Pad& p, ofParameter<T>& param, const std::string& label,
+                                                     T def, T lo, T hi, int dest, const char* scName);
+    void registerModControl(Pad& p, ofAbstractParameter& param, std::function<std::shared_ptr<ofxOceanodeAbstractParameter>()> add,
+                            std::function<std::string()> save, std::function<void(const std::string&)> load);
+    Control* findControl(const std::string& key);
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
     std::vector<std::string> publishedKeys;
     bool publishedSeparator = false;
     bool restoring = false;
-
-    // Pitch and Velocity also take audio cables (mapped onto the synth's controls)
-    scAudioParam pitchIn, velIn;
-    void applyCables(ofxSCServer* srv, ofxSCSynth* s);
-    bool cabled(ofxSCServer* srv, const std::string& scName) const {
-        return (scName == "pitch" && pitchIn.bus(srv) >= 0) || (scName == "velocity" && velIn.bus(srv) >= 0);
-    }
-    template<typename T> void registerControl(ofParameter<T>& p, const char* scName) {
-        Control c;
-        c.key = p.getEscapedName();
-        c.scName = scName;
-        if constexpr(std::is_same<T, float>::value) c.f = &p;
-        else if constexpr(std::is_same<T, int>::value) c.i = &p;
-        else c.b = &p;
-        c.add = [this, &p]() { return addParameter(p); };
-        c.save = [&p]() { return p.toString(); };
-        c.load = [&p](const std::string& s) { p.fromString(s); };
-        const std::string name = c.scName;
-        controls.push_back(std::move(c));
-        nodeListeners.push(p.newListener([this, name](T& value) {
-            if(restoring) return;
-            for(auto& [srv, synth] : synths) if(synth && !cabled(srv, name)) {   // (a set would unmap a cable)
-                if constexpr(std::is_same<T, bool>::value) synth->set(name, int(value));
-                else synth->set(name, value);
-            }
-        }));
-    }
-
-    // a control of the shared modulation: publishable, saved; send on change
-    template<typename T> void regMod(ofParameter<T>& p, std::function<void()> send) {
-        Control c;
-        c.key = p.getEscapedName();
-        c.add = [this, &p]() { return addParameter(p); };
-        if constexpr(std::is_same<T, std::vector<float>>::value){
-            c.save = [&p]() { std::string out; for(size_t i = 0; i < p.get().size(); i++) out += (i ? "," : "") + ofToString(p.get()[i]); return out; };
-            c.load = [&p](const std::string& s) { std::vector<float> v; for(auto& t : ofSplitString(s, ",", true, true)) v.push_back(ofToFloat(t)); if(!v.empty()) p.set(v); };
-        }else{
-            c.save = [&p]() { return p.toString(); };
-            c.load = [&p](const std::string& s) { p.fromString(s); };
-        }
-        controls.push_back(std::move(c));
-        nodeListeners.push(p.newListener([this, send](T&) { if(!restoring) send(); }));
-    }
-
-    // ── Publishing ───────────────────────────────────────────────────────────
     void publish(const std::string&);
-    void unpublish(const std::string&);
+    void unpublish(const std::string&, bool force = false);
     bool isConnected(const std::string&) const;
     void drawPublishMenu(const std::string&);
     void drawPublishedUnderline(const std::string&) const;
 
-    // ── Window ───────────────────────────────────────────────────────────────
+    // ── Window ──────────────────────────────────────────────────────────────
+    float browserWidth = 240.0f;
+    float waveformHeight = 0.0f;
+    float padListHeight = 0.0f;
+    int regionDrag = -1;
+    float regionDragOffset = 0.0f;
+    bool windowHovered = false;
+    bool pendingLoadDialog = false;
+    std::string pendingDropFile;             // from the Finder, for the selected pad
+    int pendingMoveFrom = -1, pendingMoveTo = -1;
+    int pendingRemove = -1, pendingDuplicate = -1;
+    int renaming = -1;
+    int hoveredPad = -1;                     // the pad row (or waveform) under the mouse: a Finder drop goes there
+    char renameBuf[64] = "";
+    float labelW = 74.0f;
     void drawWindow();
-    void drawHeader(float w);
-    void drawWaveform(float w);
-    void drawTransport(float w);
-    void drawPlaybackTab(float w);
-    void drawFilterEqTab(float w);
-    void drawDynamicsTab(float w);
-    void drawSpaceTab(float w);
-    void drawEqEditor(float w, float h);
+    void drawPadList(float w, float h);
+    void drawHeader(Pad& p, float w);
+    void drawWaveform(Pad& p, float w);
+    void drawTransport(Pad& p, float w);
+    void drawSoundTab(Pad& p, float w);
+    void drawMixerTab(float w);
+    void drawStrip(Pad& p, float w, float h);
+    void drawEffects(Pad& p, float w);
+    void drawEqEditor(Pad& p, float w, float h);
     void sectionHeader(const char* title, float w, ofParameter<bool>* on = nullptr);
-    void slider(ofParameter<float>& p, const char* label, float w, const char* fmt = "%.2f",
-                bool logarithmic = false);
-    void sliderInt(ofParameter<int>& p, const char* label, float w);
-    void combo(ofParameter<int>& p, const char* label, float w, const std::vector<const char*>& items);
+    void slider(ofParameter<float>& p, const char* label, float w, const char* fmt = "%.2f", bool logarithmic = false);
+    void sliderInt(ofParameter<int>& p, const char* label, float w, const char* fmt = "%d");
+    void combo(ofParameter<int>& p, const char* label, float w, const std::vector<std::string>& items);
     void toggle(ofParameter<bool>& p, const char* label);
     void beginColumn(const char* id);
     void endColumn(bool last = false);
-    float labelW = 74.0f;                // label column of the sliders (unzoomed)
-
-    // ── Sample and synths ────────────────────────────────────────────────────
-    void loadSample(const std::string&);
-    void applyDecoded(scSlicerBox::Audio&& audio);
-    void ensureBuffers(ofxSCServer*);
-    void releaseBuffers(ofxSCServer*);
-    void ensureVisBus(ofxSCServer*);
-    void replaceSynth(ofxSCServer*);
-    void replaceAllSynths();
-    void sendAll();
-    void sendAll(ofxSCServer*, ofxSCSynth*);
-    void fire();
-    void stop();
-    void requireSynthdefs();
-    std::string synthName() const;
 };

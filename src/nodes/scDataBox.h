@@ -29,6 +29,11 @@ class serverManager;
 
 class scDataBox : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return "DataBox " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_HEADS = 64;
     // Upper bound of decoded samples, all data channels together (64 MB of floats)
     static constexpr int64_t MAX_SAMPLES = 16 * 1024 * 1024;

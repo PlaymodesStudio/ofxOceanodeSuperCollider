@@ -54,6 +54,11 @@ class serverManager;
 
 class scCodeNode : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "SC Code " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_VOICES = 256;
     static constexpr int MAX_LANES = 256;
 

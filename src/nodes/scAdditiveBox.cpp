@@ -366,6 +366,10 @@ void scAdditiveBox::setup(){
     publishByKey(levels.getEscapedName());
 
     rolls.assign(MAX_VOICES, 0);
+    {
+        static std::mt19937 rng((unsigned)ofGetElapsedTimeMicros() ^ 0xADD17u);
+        freshSeed = (uint32_t)rng() | 0x10000u;
+    }
     lastTrig.assign(MAX_VOICES, 0);
     gateOpen.assign(MAX_VOICES, false);
     for(int v = 0; v < MAX_VOICES; v++) gateOpen[v] = valueFor(gate.get(), v, 0.0f) > 0;
@@ -528,10 +532,12 @@ float scAdditiveBox::sampleRate() const {
 }
 
 // Uniform 0..1, the same for the same seed, voice, draw generation, salt and
-// partial (so a preset always sounds the same until a gate rerolls it)
+// partial (so a preset always sounds the same until a gate rerolls it).
+// Seed 0: no seed, draws of this node's own (new ones each time it is made)
 float scAdditiveBox::random01(int voice, int salt, int partial) const {
     const int roll = voice < (int)rolls.size() ? rolls[voice] : 0;
-    uint32_t h = hash32(uint32_t(seed.get()) * 0x9E3779B1U ^ hash32(uint32_t(voice) * 0x85EBCA77U + uint32_t(roll) * 0xC2B2AE3DU));
+    const uint32_t s = seed.get() != 0 ? uint32_t(seed.get()) : freshSeed;
+    uint32_t h = hash32(s * 0x9E3779B1U ^ hash32(uint32_t(voice) * 0x85EBCA77U + uint32_t(roll) * 0xC2B2AE3DU));
     h = hash32(h ^ (uint32_t(salt) * 0x27D4EB2FU) ^ hash32(uint32_t(partial) + 0x165667B1U));
     return float(h >> 8) * (1.0f / 16777216.0f);
 }
@@ -2176,7 +2182,7 @@ float scAdditiveBox::liveLevel(int voice, int slot) const {
 }
 
 void scAdditiveBox::drawWindow(){
-    const std::string title = (canvasID == "Canvas" ? "" : canvasID + "/") + "AdditiveBox " + ofToString(getNumIdentifier());
+    const std::string title = getWindowTitle();
     bool open = showWindow.get();
     ImGui::SetNextWindowSize(ImVec2(1180.0f, 900.0f), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)){
@@ -2652,6 +2658,7 @@ void scAdditiveBox::drawSoundTab(){
     sliderVector(maskGlide, "%.2f s", true);
     ImGui::SetNextItemWidth(-FLT_MIN);
     sliderInt(seed);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("0: no seed (draws of this node's own, new each time it is made)\nElse: the same draws every time");
     checkbox(reroll);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("New random draws (mask, levels, times, pans...) on every gate");
     ImGui::SameLine();

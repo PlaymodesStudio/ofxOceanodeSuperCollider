@@ -646,7 +646,7 @@ void scGraphicEQ::drawEditorWindow() {
     const float zoom = ofxOceanodeShared::getZoomLevel();
 
     ImGui::SetNextWindowSize(ImVec2(640 * zoom, 360 * zoom), ImGuiCond_FirstUseEver);
-    std::string title = "Graphic EQ " + ofToString(getNumIdentifier());
+    std::string title = getWindowTitle();
     bool open = true;
     const bool visible = ImGui::Begin(title.c_str(), &open,
                                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);

@@ -116,18 +116,25 @@ struct Anchor {
 	bool playing = false;
 	bool discontinuity = false;   // a jump (seek/stop/start): not a correction
 	bool loopWrap = false;        // pre-sent loop restart
+	// Transport seconds from the frame that sends it to the anchor's instant
+	// (a loop restart ahead: > 0; a start between two frames: < 0). An NRT
+	// capture stamps the anchor there (ofxSCServer::ScopedNRTOffset).
+	double offsetSeconds = 0.0;
 	// Beats elapsed at `beat` since the transport position `referenceBeat`.
 	double beatsSince(double referenceBeat) const { return beat - referenceBeat; }
 };
 
 // Timetag scope for sending an anchor: every set() on any server inside it
-// carries the anchor's instant.
+// carries the anchor's instant (and, captured for an NRT render, is stamped
+// at that instant of the score).
 class AnchorScope {
 public:
 	explicit AnchorScope(const Anchor& anchor)
-	: tag(anchor.steadyTimeUs != 0 ? ofxSCServer::timetagForSteadyTimeUs(anchor.steadyTimeUs) : 0) {}
+	: tag(anchor.steadyTimeUs != 0 ? ofxSCServer::timetagForSteadyTimeUs(anchor.steadyTimeUs) : 0),
+	  nrt(anchor.offsetSeconds) {}
 private:
 	ofxSCServer::ScopedTimetag tag;
+	ofxSCServer::ScopedNRTOffset nrt;
 };
 
 class Follower {
@@ -148,6 +155,19 @@ public:
 		std::vector<Anchor> out;
 		const auto& cur = frame.current;
 		const double bps = std::max(0.0f, cur.bpm) / 60.0;
+		// One frame, in transport seconds. A frame-stepped render (NRT) moves
+		// the transport a fixed step per frame whatever the wall clock does:
+		// that step; realtime: the wall clock between the two frames.
+		double frameSeconds = 1.0 / 60.0;
+		if(cur.driverMode == TransportDriverMode::FrameStep) {
+			const auto& prev = frame.previous;
+			if(bps > 0.0 && cur.isPlaying && prev.isPlaying && cur.generation == prev.generation &&
+			   cur.loopCount == prev.loopCount && cur.beatPosition > prev.beatPosition)
+				frameStepSeconds = std::min(0.5, (cur.beatPosition - prev.beatPosition) / bps);
+			frameSeconds = frameStepSeconds;
+		} else if(cur.steadyTimeUs > frame.previous.steadyTimeUs) {
+			frameSeconds = std::min(0.1, static_cast<double>(cur.steadyTimeUs - frame.previous.steadyTimeUs) / 1e6);
+		}
 		auto anchorNow = [&](bool discontinuity) {
 			Anchor a;
 			a.beat = cur.beatPosition;
@@ -163,7 +183,26 @@ public:
 		if(!initialized) {
 			anchorNow(true);
 		} else if(cur.generation != lastGeneration) {
-			anchorNow(true);
+			// A jump. One back to the start (of the transport, or of the loop)
+			// while playing happened between two frames: anchor at the start,
+			// back-dated, so its first step still fires (an NRT render starts
+			// this way: from beat 0, already a frame in).
+			const double start = cur.loopActive() && cur.beatPosition >= cur.loopStartBeat ? cur.loopStartBeat : 0.0;
+			const double since = cur.beatPosition - start;
+			if(cur.isPlaying && bps > 0.0 && since > 0.0 && since <= 2.5 * frameSeconds * bps) {
+				Anchor a;
+				a.beat = start;
+				a.offsetSeconds = -since / bps;
+				a.steadyTimeUs = cur.steadyTimeUs - static_cast<uint64_t>(since / bps * 1e6);
+				a.bpm = cur.bpm;
+				a.playing = true;
+				a.discontinuity = true;
+				out.push_back(a);
+				lastAnchorBeat = a.beat;
+				lastAnchorUs = a.steadyTimeUs;
+			} else {
+				anchorNow(true);
+			}
 		} else if(cur.isPlaying && !lastPlaying) {
 			// Started. The transport began moving somewhere between the two
 			// frames; anchor at that instant, from where it stood, so the
@@ -171,6 +210,7 @@ public:
 			Anchor a;
 			const double moved = std::max(0.0, cur.beatPosition - frame.previous.beatPosition);
 			a.beat = frame.previous.beatPosition;
+			a.offsetSeconds = bps > 0.0 ? -std::min(1.0, moved / bps) : 0.0;
 			a.steadyTimeUs = cur.steadyTimeUs - static_cast<uint64_t>(bps > 0.0 ? std::min(1.0, moved / bps) * 1e6 : 0.0);
 			a.bpm = cur.bpm;
 			a.playing = true;
@@ -201,14 +241,13 @@ public:
 			const double remaining = cur.loopEndBeat - cur.beatPosition;
 			// Keep the window short: an anchor already sent cannot be taken
 			// back if the user seeks before it plays.
-			const double frameSeconds = cur.steadyTimeUs > frame.previous.steadyTimeUs
-				? std::min(0.1, static_cast<double>(cur.steadyTimeUs - frame.previous.steadyTimeUs) / 1e6) : 1.0 / 60.0;
 			const double lookahead = std::max(3.0 * frameSeconds, 0.05) * bps;
 			const uint64_t nextLoop = cur.loopCount + 1;
 			if(remaining > 0.0 && remaining <= lookahead && wrapScheduledFor != nextLoop) {
 				Anchor a;
 				a.beat = cur.loopStartBeat;
 				a.steadyTimeUs = cur.steadyTimeUs + static_cast<uint64_t>(remaining / bps * 1e6);
+				a.offsetSeconds = remaining / bps;
 				a.bpm = cur.bpm;
 				a.playing = true;
 				a.loopWrap = true;
@@ -240,6 +279,7 @@ private:
 	float lastBpm = 0.0f;
 	uint64_t lastLoopCount = 0;
 	uint64_t wrapScheduledFor = 0;
+	double frameStepSeconds = 1.0 / 60.0;
 	double lastAnchorBeat = 0.0;
 	uint64_t lastAnchorUs = 0;
 };

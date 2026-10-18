@@ -34,6 +34,11 @@ void scNode::addInput(std::string name){
     }));
 }
 
+scNode* scNode::getInputNode(const std::string& name) const {
+    for(const auto& in : inputs) if(in.getName() == name) return in.get().getNodeRef();
+    return nullptr;
+}
+
 void scNode::removeOutput(int index) {
 	if(index < 0 || index >= (int)outputs.size()) {
 		return;

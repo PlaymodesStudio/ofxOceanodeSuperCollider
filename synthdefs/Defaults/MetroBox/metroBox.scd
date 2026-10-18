@@ -14,10 +14,11 @@
 // floor(anchorPos) modulo (cycleTicks * SLOTS) per layer, computed in 64-bit;
 // here we only add the small number of ticks elapsed since the anchor.
 //
-// Outputs, mono, one bus per layer and kind (\trigout1 .. \trigout8, \gateout1 ..,
-// \ampout1 ..): trig = 1-sample impulse, value 1 or the amplitude with \trigAmp;
-// gate = high for the onset's duration, measured in ticks so it follows tempo
-// changes; amp = amplitude held until the next onset. Layers at or above
+// Outputs: \gatesout, every layer's gate (8 channels: layer n = channel n),
+// and one mono bus per layer (\gateout1 .. \gateout8). A gate is the onset's
+// amplitude for its duration (measured in ticks, so it follows tempo
+// changes; a synth plays at that level), 0 for 3 ms when a layer is
+// retriggered while still high (so the new edge is seen). Layers at or above
 // \layers output silence: their ports are gone, and their bus controls may
 // still point at a bus the graph now gives to another node.
 
@@ -34,13 +35,12 @@ File.mkdir(d);
 File.mkdir(defDir);
 
 SynthDef(\MetroBoxPlayer, {
-    var buf, trigAmp, mute, cycleTicks, base, numLayers;
+    var buf, mute, cycleTicks, base, numLayers;
     var anchorId, anchorHard, anchorPos, anchorFire, run, bpm;
     var ticksPerSec, anchorTrig, hardTrig, reset, pos, idx, top, fire, elapsed;
-    var trigs, gates, amps;
+    var gates;
 
     buf     = \buf.kr(-1);
-    trigAmp = \trigAmp.kr(0);
     mute    = \mute.kr(0 ! maxLayers);
     numLayers = \layers.kr(0);
 
@@ -68,9 +68,7 @@ SynthDef(\MetroBoxPlayer, {
     fire        = ((idx > Delay1.ar(top)) * (1 - reset)) + (hardTrig * anchorFire);
     elapsed     = idx - anchorPos.floor;        // ticks since the anchor (>= 0)
 
-    trigs = Array.newClear(maxLayers);
     gates = Array.newClear(maxLayers);
-    amps  = Array.newClear(maxLayers);
 
     maxLayers.do { |i|
         var period = cycleTicks[i].max(1) * slots;
@@ -81,16 +79,16 @@ SynthDef(\MetroBoxPlayer, {
         var on     = i < numLayers;
         var onset  = fire * (amp > 0) * (1 - mute[i]) * on;
         var dur    = Latch.ar(data[1], onset);
+        var raw    = (Sweep.ar(onset, ticksPerSec * run) < dur) * (run > 0);
+        // retriggered while high: low for 3 ms, so the edge is seen
+        var dip    = Latch.ar(Delay1.ar(raw), onset) * (Sweep.ar(onset, 1) < 0.003);
 
-        trigs[i] = onset * (1 + (trigAmp * (amp - 1)));
-        amps[i]  = Latch.ar(amp, onset) * on;
-        gates[i] = (Sweep.ar(onset, ticksPerSec * run) < dur) * (run > 0) * on;
+        gates[i] = raw * (1 - dip) * Latch.ar(amp, onset) * on;
     };
 
+    Out.ar(OceanodeOutput.kr(\gatesout), gates);
     maxLayers.do { |i|
-        Out.ar(OceanodeOutput.kr(("trigout" ++ (i + 1)).asSymbol), trigs[i]);
         Out.ar(OceanodeOutput.kr(("gateout" ++ (i + 1)).asSymbol), gates[i]);
-        Out.ar(OceanodeOutput.kr(("ampout" ++ (i + 1)).asSymbol), amps[i]);
     };
 }).writeDefFile(defDir);
 

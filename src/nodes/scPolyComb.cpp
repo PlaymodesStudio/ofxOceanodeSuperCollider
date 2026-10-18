@@ -1316,7 +1316,7 @@ void scPolyComb::drawWindow() {
     const float z = zoom();
     ImGui::SetNextWindowSize(ImVec2(1150 * z, 760 * z), ImGuiCond_FirstUseEver);
     bool open = showWindow.get();
-    const std::string title = "PolyComb " + ofToString(getNumIdentifier());
+    const std::string title = getWindowTitle();
     if(!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)){
         ImGui::End();
         if(!open) showWindow = false;

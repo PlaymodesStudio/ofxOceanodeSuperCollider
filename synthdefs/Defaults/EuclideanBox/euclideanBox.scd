@@ -6,6 +6,8 @@
 // tick: amplitude (0: no onset), duration (ticks), pitch (MIDI), voice (0..V-1,
 // -1: every voice). Up to 8 tracks, each a region of SLOTS chunks.
 //
+// \gatesout: every track's gate, one channel each (8: track n = channel n; a
+// track's level is its loudest voice's), for a SampleBox kit.
 // Outputs per track, V channels each (\trigout1.., \gateout1.., \pitchout1..):
 // trig = a one-sample pulse on the voice the onset goes to (1, or its
 // amplitude with \trigAmp); gate = the onset's level for its duration (in
@@ -29,7 +31,7 @@ File.mkdir(defDir);
     SynthDef(("EuclideanBoxPlayer" ++ nv).asSymbol, {
         var buf, trigAmp, mute, cycleTicks, base, numLayers;
         var anchorId, anchorHard, anchorPos, anchorFire, run, bpm;
-        var ticksPerSec, anchorTrig, hardTrig, reset, pos, idx, top, fire, elapsed;
+        var ticksPerSec, anchorTrig, hardTrig, reset, pos, idx, top, fire, elapsed, gates;
 
         buf     = \buf.kr(-1);
         trigAmp = \trigAmp.kr(0);
@@ -53,6 +55,7 @@ File.mkdir(defDir);
         top         = RunningMax.ar(idx, reset);
         fire        = ((idx > Delay1.ar(top)) * (1 - reset)) + (hardTrig * anchorFire);
         elapsed     = idx - anchorPos.floor;
+        gates       = Array.newClear(maxLayers);
 
         maxLayers.do { |i|
             var period = cycleTicks[i].max(1) * slots;
@@ -75,7 +78,9 @@ File.mkdir(defDir);
             Out.ar(OceanodeOutput.kr(("trigout" ++ (i + 1)).asSymbol), voices.collect(_[0]));
             Out.ar(OceanodeOutput.kr(("gateout" ++ (i + 1)).asSymbol), voices.collect(_[1]));
             Out.ar(OceanodeOutput.kr(("pitchout" ++ (i + 1)).asSymbol), voices.collect(_[2]));
+            gates[i] = voices.collect(_[1]).reduce(\max);
         };
+        Out.ar(OceanodeOutput.kr(\gatesout), gates);
     }).writeDefFile(defDir);
 };
 "EuclideanBoxPlayer compiled".postln;

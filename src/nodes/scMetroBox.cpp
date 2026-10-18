@@ -34,40 +34,33 @@ constexpr int TPB = TICKS_PER_BEAT;
 // The playhead sits this far into the view; the rhythm scrolls past it
 constexpr double playheadAt = 0.25;
 
-struct DivisionOption { int ticks; const char* label; };
-const DivisionOption divisionOptions[] = {
-    {192, "1 bar (4 beats)"}, {96, "2 beats"}, {48, "1 beat"}, {24, "1/8"},
-    {16, "1/8 triplet"}, {12, "1/16"}, {8, "1/16 triplet"}, {6, "1/32"},
+// Note values, in ticks (48 per beat). T = triplet, . = dotted.
+const scMetroBox::NoteList everyNotes = {
+    {6, "1/32"}, {8, "1/16T"}, {12, "1/16"}, {16, "1/8T"}, {18, "1/16."}, {24, "1/8"}, {32, "1/4T"},
+    {36, "1/8."}, {48, "1/4"}, {72, "1/4."}, {96, "1/2"}, {144, "1/2."}, {192, "1/1"},
 };
-const DivisionOption unitOptions[] = {{24, "1/8"}, {12, "1/16"}, {16, "1/8 triplet"}};
-const DivisionOption ratchetUnitOptions[] = {{12, "1/16"}, {8, "1/16 triplet"}, {6, "1/32"}, {4, "1/32 triplet"}, {3, "1/64"}};
-const std::vector<std::string> generatorNames = {"Grid", "Euclidean", "Weighted durations", "Subdivision", "Markov"};
-const std::vector<std::string> durationNames = {"Fixed", "Legato", "Metric"};
-const std::vector<std::string> anchorNames = {"None", "Downbeat", "Group starts", "Beats", "Backbeats"};
-const std::vector<std::string> relationNames = {"None", "Follow", "Avoid", "Complement", "Unison", "Response"};
-const std::vector<std::string> dynamicsNames = {"None", "Duck", "Reinforce"};
-const std::vector<std::string> ghostSideNames = {"Before", "After", "Either"};
-const std::vector<std::string> ratchetShapeNames = {"Flat", "Crescendo", "Decrescendo"};
-const std::vector<std::string> grooveNames = {"Straight", "Swing 16ths", "Swing 8ths", "Laid back", "Pushed"};
-const std::vector<std::string> repeatNames = {"Off", "Loop", "Evolve"};
+const scMetroBox::NoteList lengthNotes = {
+    {3, "1/64"}, {6, "1/32"}, {8, "1/16T"}, {12, "1/16"}, {16, "1/8T"}, {18, "1/16."}, {24, "1/8"},
+    {36, "1/8."}, {48, "1/4"}, {72, "1/4."}, {96, "1/2"}, {144, "1/2."}, {192, "1/1"},
+};
+const scMetroBox::NoteList offsetNotes = {
+    {0, "none"}, {6, "1/32"}, {8, "1/16T"}, {12, "1/16"}, {16, "1/8T"}, {24, "1/8"}, {36, "1/8."},
+    {48, "1/4"}, {72, "1/4."}, {96, "1/2"}, {144, "3/4"},
+};
+const scMetroBox::NoteList ratchetNotes = {{12, "1/16"}, {8, "1/16T"}, {6, "1/32"}, {4, "1/32T"}, {3, "1/64"}};
+const scMetroBox::NoteList delayNotes = {{12, "1/16"}, {24, "1/8"}, {48, "1/4"}, {72, "1/4."}, {96, "1/2"}, {192, "1/1"}};
+
+const std::vector<std::string> patternNames = {"Steps", "Euclidean", "Free"};
+const std::vector<std::string> accentNames = {"Strong beats", "Every Nth hit", "Random"};
+const std::vector<std::string> relationNames = {"None", "Follow", "Avoid", "Answer"};
+const std::vector<std::string> dynamicsNames = {"None", "Duck", "Boost"};
+const std::vector<std::string> swingNames = {"16ths", "8ths"};
 
 ImU32 layerColor(int i, float alpha = 1.0f) {
     static const float hues[] = {0.58f, 0.02f, 0.13f, 0.33f, 0.78f, 0.48f, 0.90f, 0.20f};
     float r, g, b;
     ImGui::ColorConvertHSVtoRGB(hues[i % 8], 0.55f, 0.95f, r, g, b);
     return ImGui::GetColorU32(ImVec4(r, g, b, alpha));
-}
-
-bool divisionCombo(const char* label, int& ticks, const DivisionOption* options, int count) {
-    int current = 0;
-    for(int i = 0; i < count; i++) if(options[i].ticks == ticks) current = i;
-    bool changed = false;
-    if(ImGui::BeginCombo(label, options[current].label)) {
-        for(int i = 0; i < count; i++)
-            if(ImGui::Selectable(options[i].label, i == current)) { ticks = options[i].ticks; changed = true; }
-        ImGui::EndCombo();
-    }
-    return changed;
 }
 
 bool stringCombo(const char* label, int& value, const std::vector<std::string>& options) {
@@ -86,9 +79,22 @@ void heading(const char* text) {
     ImGui::SeparatorText(text);
 }
 
+std::string percent(float v) { return ofToString((int)std::lround(v * 100.0f)) + "%%"; }
+
+// What the Change knob does right now, in words
+std::string changeWord(float c) {
+    switch(changeZone(c)) {
+        case CHANGE_FIXED:    return "Fixed";
+        case CHANGE_LOOP:     return "Loop";
+        case CHANGE_EVOLVING: { const int n = evolveEvery(c); return n == 1 ? "Evolving (every phrase)" : "Evolving (every " + ofToString(n) + ")"; }
+        case CHANGE_VARYING:  return "Varying (" + percent(renewChance(c)) + " new)";
+        default:              return "New";
+    }
+}
+
 ofJson opsToJson(const std::vector<Op>& ops) {
     ofJson arr = ofJson::array();
-    for(const auto& op : ops) arr.push_back({op.type, op.seed, op.aux});
+    for(const auto& op : ops) arr.push_back({op.type, op.seed});
     return arr;
 }
 
@@ -96,11 +102,12 @@ std::vector<Op> opsFromJson(const ofJson& arr) {
     std::vector<Op> ops;
     if(!arr.is_array()) return ops;
     for(const auto& j : arr) {
-        if(!j.is_array() || j.size() < 3) continue;
+        if(!j.is_array() || j.size() < 2) continue;
         Op op;
-        op.type = std::clamp(j[0].get<int>(), 0, (int)OP_COUNT - 1);
-        op.seed = j[1].get<uint32_t>();
-        op.aux = j[2].get<uint32_t>();
+        try {
+            op.type = std::clamp(j[0].get<int>(), 0, (int)OP_COUNT - 1);
+            op.seed = j[1].get<uint32_t>();
+        } catch(...) { continue; }
         ops.push_back(op);
     }
     return ops;
@@ -115,105 +122,103 @@ std::vector<Op> opsFromJson(const ofJson& arr) {
 const std::vector<scMetroBox::Field>& scMetroBox::fields() {
     static const std::vector<Field> list = [] {
         std::vector<Field> v;
-        auto F = [&](const char* n, float Layer::* m, float lo, float hi, const char* tip = "") {
+        auto F = [&](const char* n, float Layer::* m, float lo, float hi, const char* tip) {
             Field f; f.name = n; f.kind = F_FLOAT; f.f = m; f.min = lo; f.max = hi; f.tooltip = tip; v.push_back(f);
         };
-        auto I = [&](const char* n, int Layer::* m, float lo, float hi, const char* tip = "") {
+        auto I = [&](const char* n, int Layer::* m, float lo, float hi, const char* tip) {
             Field f; f.name = n; f.kind = F_INT; f.i = m; f.min = lo; f.max = hi; f.tooltip = tip; v.push_back(f);
         };
-        auto B = [&](const char* n, bool Layer::* m, const char* tip = "") {
+        auto B = [&](const char* n, bool Layer::* m, const char* tip) {
             Field f; f.name = n; f.kind = F_BOOL; f.b = m; f.min = 0; f.max = 1; f.tooltip = tip; v.push_back(f);
         };
-        auto E = [&](const char* n, int Layer::* m, const std::vector<std::string>& opts, const char* tip = "") {
+        auto E = [&](const char* n, int Layer::* m, const std::vector<std::string>& opts, const char* tip) {
             Field f; f.name = n; f.kind = F_ENUM; f.i = m; f.min = 0; f.max = (float)opts.size() - 1; f.options = opts; f.tooltip = tip; v.push_back(f);
         };
-        auto T = [&](const char* n, int Layer::* m, float loBeats, float hiBeats, const char* tip = "") {
-            Field f; f.name = n; f.kind = F_TICKS; f.i = m; f.min = loBeats; f.max = hiBeats; f.tooltip = tip; v.push_back(f);
+        auto N = [&](const char* n, int Layer::* m, const NoteList& notes, const char* tip) {
+            Field f; f.name = n; f.kind = F_NOTE; f.i = m; f.notes = &notes;
+            f.min = (float)notes.front().first / TPB; f.max = (float)MAX_CYCLE_BEATS; f.tooltip = tip; v.push_back(f);
         };
-        auto L = [&](const char* n, int Layer::* m, const char* tip = "") {
+        auto L = [&](const char* n, int Layer::* m, const char* tip) {
             Field f; f.name = n; f.kind = F_LANE; f.i = m; f.min = 0; f.max = MAX_LAYERS; f.tooltip = tip; v.push_back(f);
         };
-        auto A = [&](const char* n, int action, const char* tip = "") {
+        auto A = [&](const char* n, int action, const char* tip) {
             Field f; f.name = n; f.kind = F_ACTION; f.action = action; f.tooltip = tip; v.push_back(f);
         };
-        const float tick = 1.0f / TPB;
-        E("Generator", &Layer::generator, generatorNames);
-        I("Cycle", &Layer::cycleBeats, 1, MAX_CYCLE_BEATS, "Cycle length in beats (polymeter when it differs from the bar).");
-        I("Layer seed", &Layer::seed, 0, 99999);
-        B("Mute", &Layer::mute, "Silences the outputs only: lanes that relate to this one still hear it.");
-        F("Density", &Layer::density, 0, 1, "Chance to keep each onset. Raising it only adds hits.");
-        T("Shift", &Layer::shift, 0, MAX_CYCLE_BEATS, "Moves every generated onset later, in beats (wraps in the cycle).");
-        I("Steps", &Layer::eucSteps, 1, 64);
-        I("Hits", &Layer::eucHits, 0, 64);
-        I("Rotation", &Layer::eucRotation, 0, 63);
-        F("Complexity", &Layer::complexity, 0, 1, "Chance to split a segment into halves or thirds.");
-        F("Long on strong", &Layer::longOnStrong, 0, 1, "Strong positions resist splitting: long notes on strong beats.");
-        F("Triplets", &Layer::triplets, 0, 1, "Chance a split is in three.");
-        B("Feel main bar", &Layer::feelBar, "The timeline bar's strong beats count too (matters when the cycle is not one bar).");
-        F("Weighting", &Layer::weighting, 0, 1, "Weak positions are dropped more: 1 = 16ths kept a quarter as often as downbeats.");
-        E("Anchor", &Layer::anchorMode, anchorNames, "Positions always played (with the amount as chance).");
-        F("Anchor amount", &Layer::anchorAmount, 0, 1);
-        F("Push", &Layer::push, 0, 1, "Chance a hit on a beat moves one unit earlier (anticipation).");
-        F("Drag", &Layer::drag, 0, 1, "Chance a hit on a beat moves one unit later.");
-        F("Cross barline", &Layer::crossBarline, 0, 1, "Chance a push, drag or gate may cross the cycle start.");
-        I("Phrase length", &Layer::phraseLen, 1, 16, "Cycles per phrase: the loop length when Repeat is on (2 = a 2-bar loop with 1-bar cycles).");
-        E("Repeat", &Layer::repeat, repeatNames,
-          "Off: new material every phrase (with the Renew chance).\n"
-          "Loop: the phrase playing now repeats forever (Mutate / Re-roll still change it).\n"
-          "Evolve: that loop, with a small mutation every few loops.");
-        F("Renew", &Layer::renew, 0, 1, "Chance a phrase brings new material (Repeat off).");
-        F("B strength", &Layer::bStrength, 0, 1, "How far the form's other letters (B, C...) mutate A.");
-        T("Fill length", &Layer::fillTicks, 0, 4, "Fill at the end of each phrase, in beats (0 = none).");
-        F("Fill intensity", &Layer::fillIntensity, 0, 1, "Denser, with ratchets and a crescendo.");
-        F("Build-up", &Layer::buildUp, 0, 1, "Density grows over the phrase.");
-        F("Phrase accent", &Layer::phraseAccent, 0, 1, "The phrase's first downbeat louder.");
-        F("Swell", &Layer::swell, 0, 1, "Amplitude grows over the phrase.");
-        F("Ghost", &Layer::ghost, 0, 1, "Chance of a quiet hit a 16th before / after a hit.");
-        E("Ghost side", &Layer::ghostSide, ghostSideNames);
-        F("Ghost level", &Layer::ghostLevel, 0, 1);
-        F("Flam", &Layer::flam, 0, 1, "Chance of a grace hit just before a hit.");
-        T("Flam offset", &Layer::flamTicks, tick, 8 * tick, "How far before the hit the grace note falls, in beats.");
-        F("Ratchet", &Layer::ratchet, 0, 1, "Chance a hit becomes a quick burst.");
-        I("Ratchet hits", &Layer::ratchetCount, 2, 6);
-        E("Ratchet shape", &Layer::ratchetShape, ratchetShapeNames);
-        E("Groove", &Layer::groove, grooveNames, "Timing feel: swing, or every hit slightly late / early.");
-        F("Swing", &Layer::swing, 0.5f, 0.75f, "Where the offbeat falls: 0.5 straight, 0.66 triplet, 0.75 dotted.");
-        T("Humanize", &Layer::humanize, 0, 4 * tick, "Seeded timing spread, in beats.");
+
+        // ── Main ──
+        N("Every", &Layer::division, everyNotes, "How often the lane can play: one hit per this note value.");
+        N("Offset", &Layer::shift, offsetNotes, "Moves the whole lane later by this much (an 1/8 offset on 1/4s = offbeats).");
+        F("Chance", &Layer::density, 0, 1, "Chance that each hit plays. 100% = every step; lower = sparser and different each time.");
+        N("Length", &Layer::durTicks, lengthNotes, "How long each gate stays open.");
+        F("Accent", &Layer::accent, 0, 1, "How much louder the accented hits are than the rest. 0 = all the same.\nWhich hits are accented: \"Accent on\" (More), strong beats by default.");
+        F("Change", &Layer::change, 0, 1,
+          "How the lane changes over time, from left to right:\n"
+          "  Fixed: the same phrase forever, locked.\n"
+          "  Loop: the same phrase forever; Mutate still changes it.\n"
+          "  Evolving: the loop mutates itself every few phrases (more often to the right).\n"
+          "  Varying: sometimes a new phrase, otherwise the last one again.\n"
+          "  New: a new phrase every time.");
+        F("Smart", &Layer::smart, 0, 1,
+          "When Chance drops hits, drop the weak ones (offbeat 16ths) first and keep the downbeats.\n"
+          "0 = every hit has the same chance. Only matters when Chance is below 100% (or the pattern is Free).");
+        B("Mute", &Layer::mute, "Silences the outputs only: lanes that follow, avoid or answer this one still hear it.");
+
+        // ── Pattern ──
+        E("Pattern", &Layer::pattern, patternNames,
+          "Steps: a hit every step (Every).\n"
+          "Euclidean: some of the steps, spread as evenly as possible.\n"
+          "Free: the cycle splits into long and short notes, down to Every; strong beats get the long ones.");
+        I("Cycle", &Layer::cycleBeats, 1, MAX_CYCLE_BEATS, "Beats before the lane's pattern starts again. Different from the bar = polymeter.");
+        I("Steps", &Layer::eucSteps, 1, 64, "Euclidean: steps in the pattern (each one Every long).");
+        I("Hits", &Layer::eucHits, 0, 64, "Euclidean: how many of the steps play.");
+        I("Rotation", &Layer::eucRotation, 0, 63, "Euclidean: turns the pattern by this many steps.");
+        F("Complexity", &Layer::complexity, 0, 1, "Free: how much the cycle splits into shorter notes.");
+        F("Triplets", &Layer::triplets, 0, 1, "Free: chance a split is in three instead of two.");
+
+        // ── Feel ──
+        F("Swing", &Layer::swing, 0, 1, "Delays every other 16th (or 8th). Half way is a triplet feel.");
+        E("Swing on", &Layer::swingUnit, swingNames, "Which notes swing.");
+        F("Humanize", &Layer::humanize, 0, 1, "Every hit slightly early or late, up to a 32nd.");
+        F("Push", &Layer::push, 0, 1, "Chance a hit on a beat comes a 16th early (anticipation).");
+        F("Drag", &Layer::drag, 0, 1, "Chance a hit on a beat comes a 16th late.");
+        F("Ghosts", &Layer::ghost, 0, 1, "Chance of a quiet extra hit a 16th before a hit.");
+        F("Flams", &Layer::flam, 0, 1, "Chance of a grace hit just before a hit.");
+        F("Ratchets", &Layer::ratchet, 0, 1, "Chance a hit becomes a quick burst of three.");
+        N("Ratchet speed", &Layer::ratchetUnit, ratchetNotes, "Time between the burst's hits.");
+
+        // ── Shape ──
+        F("Longer on strong", &Layer::longOnStrong, 0, 1, "Gates on strong beats last longer (up to 4x Length on the downbeat).");
+        E("Accent on", &Layer::accentSource, accentNames,
+          "Strong beats: the downbeat loudest, then the beats, then the offbeats.\n"
+          "Every Nth hit: a number of the cycle's hits, evenly spread.\n"
+          "Random: each hit its own level.");
+        I("Accented hits", &Layer::accentHits, 1, 16, "Every Nth hit: how many hits per cycle are accented.");
+        F("Soft", &Layer::ampMin, 0, 1, "The level of the softest hits.");
+        F("Loud", &Layer::level, 0, 1, "The level of the loudest hits.");
+
+        // ── Over time ──
+        I("Phrase", &Layer::phraseLen, 1, 16, "Cycles per phrase: the length of the loop (Change Fixed / Loop / Evolving), and where fills go.");
+        F("Fill", &Layer::fill, 0, 1, "A busier last beat (two beats above half) at the end of each phrase, with bursts and a crescendo.");
+        F("Build-up", &Layer::buildUp, 0, 1, "Starts each phrase sparse and fills up towards its end.");
+
+        // ── Lanes ──
         E("Relation", &Layer::relMode, relationNames,
-          "Follow: only where the lane plays. Avoid: not where it plays. Complement: fills its silences. "
-          "Unison: adds its hits. Response: answers what it played, after the delay.");
-        L("Relation lane", &Layer::relLane);
-        F("Relation amount", &Layer::relAmount, 0, 1);
-        T("Response delay", &Layer::respDelay, 0, MAX_CYCLE_BEATS, "How long after the other lane the response comes, in beats.");
-        L("Choke by", &Layer::chokeLane, "That lane's hits cut this lane's gates (closed hat chokes open hat).");
-        E("Dynamics", &Layer::dynMode, dynamicsNames, "Duck: quieter when the lane hits too. Reinforce: louder.");
-        L("Dynamics lane", &Layer::dynLane);
-        F("Dynamics amount", &Layer::dynAmount, 0, 1);
-        E("Duration", &Layer::durMode, durationNames, "Fixed length, a fraction of the gap to the next hit, or by metric strength.");
-        T("Length", &Layer::durTicks, tick, 4);
-        F("Legato", &Layer::legato, 0.05f, 1);
-        T("Weak length", &Layer::durShort, tick, 4, "Gate on the weakest positions, in beats.");
-        T("Strong length", &Layer::durLong, tick, 4, "Gate on the downbeat, in beats.");
-        I("Long hits", &Layer::longHits, 0, 16, "Euclidean long notes: this many of the cycle's hits, evenly spread, get the long length.");
-        T("Long length", &Layer::longTicks, tick, 4);
-        F("Max", &Layer::level, 0, 1);
-        F("Min", &Layer::ampMin, 0, 1);
-        F("Metric", &Layer::ampMetric, 0, 1, "Strong positions louder.");
-        F("Variation", &Layer::variation, 0, 1);
-        F("Curve", &Layer::curve, 0.25f, 4, "1 = linear, above 1 favours soft hits, below 1 loud ones.");
-        I("Tiers", &Layer::tiers, 0, 5, "Snap amplitudes to N levels (3 = ghost / normal / accent). 0 = off.");
-        I("Accent hits", &Layer::accentHits, 0, 16, "Euclidean accents: this many of the cycle's hits, evenly spread, are accented.");
-        F("Accent amount", &Layer::accentAmount, 0, 1);
-        B("Accents are long", &Layer::accentsLong, "The long notes are the accented hits.");
-        B("Keep", &Layer::keep, "Locks the lane: no mutation, manual or automatic (and the phrase playing now is frozen).");
-        I("Mutations", &Layer::mutations, 1, 6, "Operators one Mutate adds.");
-        I("Evolve every", &Layer::autoEvery, 1, 16, "Repeat Evolve: a mutation is considered every N loops.");
-        F("Evolve chance", &Layer::autoChance, 0, 1, "Repeat Evolve: chance the mutation happens.");
-        A("Mutate", ACT_MUTATE, "Small changes from the next cycle on: split, merge, nudge, tie, accents...");
-        A("Re-roll", ACT_REROLL, "A new rhythm with the same rules.");
-        A("Undo", ACT_UNDO);
-        A("Redo", ACT_REDO);
-        A("Like", ACT_LIKE, "Keeps this version in the lane's pool, for crossover.");
+          "Follow: plays only where the other lane plays.\n"
+          "Avoid: never plays where the other lane plays.\n"
+          "Answer: plays what the other lane played, a bit later (call and response).");
+        L("Relation lane", &Layer::relLane, "The lane to follow, avoid or answer (any other lane, as long as it does not loop back).");
+        F("Relation amount", &Layer::relAmount, 0, 1, "How strictly: 100% always, lower now and then.");
+        N("Answer delay", &Layer::respDelay, delayNotes, "How long after the other lane the answer comes.");
+        L("Choked by", &Layer::chokeLane, "That lane's hits cut this lane's gates (closed hat chokes open hat).");
+        E("Dynamics", &Layer::dynMode, dynamicsNames, "Duck: quieter when the other lane hits at the same time. Boost: louder.");
+        L("Dynamics lane", &Layer::dynLane, "The lane to duck under or be boosted by.");
+        F("Dynamics amount", &Layer::dynAmount, 0, 1, "How much quieter or louder.");
+
+        // ── Evolution ──
+        A("Mutate", ACT_MUTATE, "A small change from the next cycle on: a hit added, removed, moved, tied or accented.");
+        A("Re-roll", ACT_REROLL, "A completely new rhythm with the same settings.");
+        A("Undo", ACT_UNDO, "Back to the rhythm before the last Mutate / Re-roll.");
+        A("Redo", ACT_REDO, "");
         return v;
     }();
     return list;
@@ -228,12 +233,21 @@ std::string scMetroBox::publishKey(int layer, const std::string& field) {
     return "L" + ofToString(layer + 1) + " " + field;
 }
 
+namespace {
+int noteIndex(const scMetroBox::NoteList& notes, int ticks) {
+    int best = 0;
+    for(int i = 0; i < (int)notes.size(); i++)
+        if(std::abs(notes[i].first - ticks) < std::abs(notes[best].first - ticks)) best = i;
+    return best;
+}
+}
+
 float scMetroBox::fieldValue(int li, const Field& f) const {
     const Layer& L = layers[li];
     switch(f.kind) {
         case F_FLOAT:  return L.*(f.f);
         case F_BOOL:   return L.*(f.b) ? 1.0f : 0.0f;
-        case F_TICKS:  return (float)(L.*(f.i)) / TPB;
+        case F_NOTE:   return (float)(L.*(f.i)) / TPB;
         case F_ACTION: return 0.0f;
         default:       return (float)(L.*(f.i));
     }
@@ -242,20 +256,19 @@ float scMetroBox::fieldValue(int li, const Field& f) const {
 void scMetroBox::setFieldValue(int li, const Field& f, float value) {
     Layer& L = layers[li];
     if(f.kind == F_ACTION) { doAction(li, f.action); return; }
-    if(f.b == &Layer::keep) {
-        engine.setKeep(li, value >= 0.5f, nowCycle(li));
-        refreshPublished(li);
-        return;
-    }
-    if(f.i == &Layer::repeat) {
-        engine.setRepeat(li, (int)std::lround(value), nowCycle(li));
+    if(f.f == &Layer::change) {
+        engine.setChange(li, value, nowCycle(li));
         refreshPublished(li);
         return;
     }
     switch(f.kind) {
         case F_FLOAT: L.*(f.f) = ofClamp(value, f.min, f.max); break;
         case F_BOOL:  L.*(f.b) = value >= 0.5f; break;
-        case F_TICKS: L.*(f.i) = std::max(f.min > 0 ? 1 : 0, (int)std::lround(ofClamp(value, f.min, f.max) * TPB)); break;
+        case F_NOTE: {
+            const int minTicks = f.notes->front().first;
+            L.*(f.i) = std::max(minTicks, (int)std::lround(ofClamp(value, 0.0f, f.max) * TPB));
+            break;
+        }
         case F_LANE:  L.*(f.i) = std::clamp((int)std::lround(value), 0, MAX_LAYERS); break;
         default:      L.*(f.i) = std::clamp((int)std::lround(value), (int)f.min, (int)f.max); break;
     }
@@ -263,7 +276,7 @@ void scMetroBox::setFieldValue(int li, const Field& f, float value) {
     L.eucHits = std::clamp(L.eucHits, 0, L.eucSteps);
     L.eucRotation = std::clamp(L.eucRotation, 0, std::max(0, L.eucSteps - 1));
     L.shift = std::clamp(L.shift, 0, std::max(0, L.cycleTicks() - 1));
-    if(L.tiers == 1) L.tiers = 0;
+    L.ampMin = std::min(L.ampMin, L.level);
 
     if(f.b == &Layer::mute) {
         for(auto& [server, st] : servers) sendStaticControls(st);
@@ -285,10 +298,17 @@ void scMetroBox::doAction(int li, int action) {
         case ACT_REROLL: engine.reroll(li, now, (L.seed + 1) % 100000); break;
         case ACT_UNDO:   engine.undo(li, now); break;
         case ACT_REDO:   engine.redo(li, now); break;
-        case ACT_LIKE:   engine.like(li); break;
         default: break;
     }
     refreshPublished(li);
+}
+
+// The note values a field offers on a lane: offsets stay inside the cycle
+std::vector<const std::pair<int, std::string>*> scMetroBox::notesFor(int li, const Field& f) const {
+    std::vector<const std::pair<int, std::string>*> out;
+    for(const auto& n : *f.notes)
+        if(f.i != &Layer::shift || n.first < layers[li].cycleTicks()) out.push_back(&n);
+    return out;
 }
 
 // A control drawn from its field, with the right-click menu (typed value,
@@ -303,14 +323,21 @@ bool scMetroBox::drawField(int li, const std::string& name, const char* label) {
 
     switch(f.kind) {
         case F_FLOAT: {
-            changed = ImGui::SliderFloat(text.c_str(), &v, f.min, f.max);
+            std::string format = "%.2f";
+            if(f.f == &Layer::change) format = changeWord(v);
+            else if(f.max == 1.0f && f.min == 0.0f) {
+                // Amounts read "off" at 0; levels and chances stay a percentage
+                const bool level = f.f == &Layer::density || f.f == &Layer::level || f.f == &Layer::ampMin
+                                || f.f == &Layer::relAmount || f.f == &Layer::dynAmount;
+                format = v <= 0.0f && !level ? "off" : percent(v);
+            }
+            changed = ImGui::SliderFloat(text.c_str(), &v, f.min, f.max, format.c_str());
             break;
         }
         case F_INT: {
             int iv = (int)v;
-            if(f.i == &Layer::seed) changed = ImGui::InputInt(text.c_str(), &iv);
-            else if(f.i == &Layer::tiers) changed = ImGui::SliderInt(text.c_str(), &iv, 0, 5, iv < 2 ? "off" : "%d");
-            else if(f.i == &Layer::autoEvery) changed = ImGui::SliderInt(text.c_str(), &iv, 1, 16, iv == 1 ? "every loop" : "every %d loops");
+            if(f.i == &Layer::cycleBeats) changed = ImGui::SliderInt(text.c_str(), &iv, (int)f.min, (int)f.max, iv == 1 ? "1 beat" : "%d beats");
+            else if(f.i == &Layer::phraseLen) changed = ImGui::SliderInt(text.c_str(), &iv, (int)f.min, (int)f.max, iv == 1 ? "1 cycle" : "%d cycles");
             else changed = ImGui::SliderInt(text.c_str(), &iv, (int)f.min, (int)f.max);
             v = (float)iv;
             break;
@@ -327,30 +354,55 @@ bool scMetroBox::drawField(int li, const std::string& name, const char* label) {
             v = (float)iv;
             break;
         }
-        case F_TICKS: {
-            changed = ImGui::DragFloat(text.c_str(), &v, 0.25f / TPB, f.min, f.max, v == 0.0f && f.min == 0.0f ? "off" : "%.3f beats");
-            v = std::round(v * TPB) / TPB;
+        case F_NOTE: {
+            const int ticks = layers[li].*(f.i);
+            const auto notes = notesFor(li, f);
+            std::string preview = ofToString(v, 3) + " beats";
+            for(const auto* n : notes) if(n->first == ticks) preview = n->second;
+            if(ImGui::BeginCombo(text.c_str(), preview.c_str())) {
+                for(const auto* n : notes)
+                    if(ImGui::Selectable(n->second.c_str(), n->first == ticks)) { v = (float)n->first / TPB; changed = true; }
+                ImGui::EndCombo();
+            }
             break;
         }
         case F_LANE: {
-            int iv = (int)v;
-            std::vector<std::string> opts = {"None"};
-            for(int j = 0; j < li && j < numLayers; j++) opts.push_back(ofToString(j + 1) + " " + layers[j].name);
-            if(iv >= (int)opts.size()) iv = 0;
-            changed = stringCombo(text.c_str(), iv, opts);
-            v = (float)iv;
+            // any other lane; one that would loop back to this one is greyed
+            const int iv = (int)v;
+            const bool ignored = iv > 0 && engine.link(li, f.i == &Layer::chokeLane ? LINK_CHOKE
+                                                          : f.i == &Layer::dynLane ? LINK_DYN : LINK_REL) < 0;
+            std::string preview = iv <= 0 || iv > numLayers ? "None" : ofToString(iv) + " " + layers[iv - 1].name;
+            if(ignored && iv > 0 && iv <= numLayers) preview += " (loop: ignored)";
+            if(ImGui::BeginCombo(text.c_str(), preview.c_str())) {
+                if(ImGui::Selectable("None", iv <= 0)) { v = 0.0f; changed = true; }
+                for(int j = 0; j < numLayers; j++) {
+                    if(j == li) continue;
+                    const bool loop = engine.wouldLoop(li, j);
+                    const std::string label = ofToString(j + 1) + " " + layers[j].name + (loop ? "  (would loop)" : "");
+                    if(ImGui::Selectable(label.c_str(), iv == j + 1, loop ? ImGuiSelectableFlags_Disabled : 0)) { v = (float)(j + 1); changed = true; }
+                    if(loop && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip("That lane already depends on this one (directly or through others).");
+                }
+                ImGui::EndCombo();
+            }
             break;
         }
         case F_ACTION: {
             const bool disabled = (f.action == ACT_UNDO && !engine.canUndo(li)) || (f.action == ACT_REDO && !engine.canRedo(li))
-                || ((f.action == ACT_MUTATE || f.action == ACT_REROLL) && layers[li].keep);
+                || ((f.action == ACT_MUTATE || f.action == ACT_REROLL) && !engine.canMutate(li));
             ImGui::BeginDisabled(disabled);
             changed = ImGui::Button(text.c_str());
             ImGui::EndDisabled();
+            if(disabled && (f.action == ACT_MUTATE || f.action == ACT_REROLL) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Change is Fixed: the lane is locked. Turn Change up to Loop to edit it.");
+                fieldMenu(li, f);
+                return false;
+            }
             break;
         }
     }
-    if(!f.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", f.tooltip.c_str());
+    if(!f.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("%s", f.tooltip.c_str());
     fieldMenu(li, f);
     if(changed) setFieldValue(li, f, v);
     return changed;
@@ -368,13 +420,14 @@ void scMetroBox::fieldMenu(int li, const Field& f) {
         const bool appearing = ImGui::IsWindowAppearing();
         if(appearing) {
             const float v = fieldValue(li, f);
-            if(f.kind == F_FLOAT || f.kind == F_TICKS) std::snprintf(buffer, sizeof(buffer), "%g", v);
+            if(f.kind == F_FLOAT || f.kind == F_NOTE) std::snprintf(buffer, sizeof(buffer), "%g", v);
             else std::snprintf(buffer, sizeof(buffer), "%d", (int)v);
         }
-        const char* unitText = f.kind == F_TICKS ? "Value (beats)"
+        const char* unitText = f.kind == F_NOTE ? "Value (beats: 0.25 = a 16th)"
                              : f.kind == F_ENUM ? "Value (index from 0)"
                              : f.kind == F_LANE ? "Value (lane number, 0 = none)"
-                             : f.kind == F_BOOL ? "Value (0 / 1)" : "Value";
+                             : f.kind == F_BOOL ? "Value (0 / 1)"
+                             : f.kind == F_FLOAT && f.max == 1.0f ? "Value (0 .. 1)" : "Value";
         ImGui::TextDisabled("%s", unitText);
         ImGui::SetNextItemWidth(160.0f * ofxOceanodeShared::getZoomLevel());
         if(appearing) ImGui::SetKeyboardFocusHere();
@@ -421,12 +474,21 @@ bool scMetroBox::publish(int li, const std::string& fieldName) {
     if(f.kind == F_ACTION) {
         p->handle = addParameter(p->pv.set(key));
         p->listener = p->pv.newListener([apply]() { apply(1.0f); });
-    } else if(f.kind == F_FLOAT || f.kind == F_TICKS) {
+    } else if(f.kind == F_FLOAT) {
         p->handle = addParameter(p->pf.set(key, v, f.min, f.max));
         p->listener = p->pf.newListener([apply](float& x) { apply(x); });
     } else if(f.kind == F_BOOL) {
         p->handle = addParameter(p->pb.set(key, v >= 0.5f));
         p->listener = p->pb.newListener([apply](bool& x) { apply(x ? 1.0f : 0.0f); });
+    } else if(f.kind == F_NOTE) {
+        // A dropdown of the note values
+        std::vector<std::string> labels;
+        for(const auto& n : *f.notes) labels.push_back(n.second);
+        const NoteList* notes = f.notes;
+        p->handle = addParameterDropdown(p->pi, key, noteIndex(*notes, layers[li].*(f.i)), labels);
+        p->listener = p->pi.newListener([apply, notes](int& x) {
+            apply((float)(*notes)[std::clamp(x, 0, (int)notes->size() - 1)].first / TPB);
+        });
     } else {
         if(f.kind == F_ENUM) p->handle = addParameterDropdown(p->pi, key, (int)v, f.options);
         else p->handle = addParameter(p->pi.set(key, (int)v, (int)f.min, (int)f.max));
@@ -476,8 +538,12 @@ void scMetroBox::refreshPublished(int li) {
         const Field* f = findField(p->field);
         if(!f || f->kind == F_ACTION) continue;
         const float v = fieldValue(li, *f);
-        if(f->kind == F_FLOAT || f->kind == F_TICKS) { if(p->pf.get() != v) p->pf.setWithoutEventNotifications(v); }
+        if(f->kind == F_FLOAT) { if(p->pf.get() != v) p->pf.setWithoutEventNotifications(v); }
         else if(f->kind == F_BOOL) { if(p->pb.get() != (v >= 0.5f)) p->pb.setWithoutEventNotifications(v >= 0.5f); }
+        else if(f->kind == F_NOTE) {
+            const int idx = noteIndex(*f->notes, layers[li].*(f->i));
+            if(p->pi.get() != idx) p->pi.setWithoutEventNotifications(idx);
+        }
         else if(p->pi.get() != (int)v) p->pi.setWithoutEventNotifications((int)v);
     }
 }
@@ -487,72 +553,67 @@ void scMetroBox::refreshPublished(int li) {
 // ════════════════════════════════════════════════════════════════════════════
 
 const std::vector<std::string>& scMetroBox::builtInRoleNames() {
-    static const std::vector<std::string> names = {"Kick", "Snare", "Hat", "Perc / Fill", "Free"};
+    static const std::vector<std::string> names = {"Kick", "Snare", "Hat", "Perc", "Plain"};
     return names;
 }
 
 scMetroBox::Layer scMetroBox::builtInRole(int index) {
     Layer L;
     switch(index) {
-        case 0: // Kick: subdivision, always on 1, long notes on the strong beats
+        case 0: // Kick: free long / short notes, always on 1, evolving slowly
             L.name = "Kick";
-            L.generator = GEN_SUBDIVISION;
+            L.pattern = PAT_FREE;
             L.division = 24;
             L.complexity = 0.45f;
-            L.longOnStrong = 0.6f;
-            L.anchorMode = ANCHOR_DOWNBEAT;
-            L.durMode = DUR_METRIC;
-            L.durShort = 6;
-            L.durLong = 24;
-            L.ampMetric = 0.4f;
-            L.form = "AAAB";
-            L.bStrength = 0.3f;
-            L.renew = 0.25f;
+            L.smart = 0.7f;
+            L.durTicks = 12;
+            L.longOnStrong = 0.5f;
+            L.accent = 0.4f;
+            L.phraseLen = 2;
+            L.change = 0.45f;
             break;
-        case 1: // Snare: backbeats, ghost notes before them, a few flams, a fill
+        case 1: // Snare: backbeats with ghosts before them, a few flams, a fill
             L.name = "Snare";
             L.division = 96;
             L.shift = 48;
-            L.durTicks = 8;
+            L.durTicks = 12;
+            L.accent = 0.0f;
             L.ghost = 0.3f;
-            L.ghostSide = 0;
-            L.ghostLevel = 0.3f;
             L.flam = 0.1f;
-            L.fillTicks = 48;
-            L.fillIntensity = 0.6f;
-            L.phraseAccent = 0.3f;
+            L.fill = 0.4f;
+            L.change = 0.25f;
             break;
-        case 2: // Hat: metric-weighted 16ths in three tiers, rare ratchets
+        case 2: // Hat: 16ths thinned on the weak positions, accented, swung
             L.name = "Hat";
             L.division = 12;
-            L.density = 0.9f;
-            L.weighting = 0.5f;
-            L.durTicks = 3;
-            L.ampMetric = 0.6f;
-            L.ampMin = 0.2f;
-            L.variation = 0.2f;
-            L.tiers = 3;
+            L.density = 0.85f;
+            L.smart = 0.5f;
+            L.durTicks = 6;
+            L.accent = 0.6f;
+            L.ampMin = 0.15f;
+            L.swing = 0.25f;
             L.ratchet = 0.05f;
-            L.ratchetCount = 2;
-            L.groove = GROOVE_SWING16;
-            L.swing = 0.56f;
+            L.change = 0.75f;
             break;
-        case 3: // Perc / Fill: weighted durations that push, filling the kick's gaps
+        case 3: // Perc: free 16ths with every-Nth accents, pushed, avoiding lane 1
             L.name = "Perc";
-            L.generator = GEN_WEIGHTED;
-            L.values = {0.75f, 0.5f, 0.25f};
-            L.weights = {1.0f, 1.0f, 0.5f};
-            L.durMode = DUR_LEGATO;
-            L.push = 0.2f;
-            L.crossBarline = 0.5f;
-            L.relMode = REL_COMPLEMENT;
-            L.relLane = 1;
-            L.relAmount = 0.25f;
+            L.pattern = PAT_FREE;
+            L.division = 12;
+            L.complexity = 0.6f;
+            L.density = 0.6f;
+            L.smart = 0.3f;
+            L.durTicks = 12;
+            L.accent = 0.5f;
+            L.accentSource = ACC_EUCLID;
             L.accentHits = 3;
-            L.accentAmount = 0.5f;
+            L.push = 0.2f;
+            L.relMode = REL_AVOID;
+            L.relLane = 1;
+            L.relAmount = 0.6f;
+            L.change = 0.55f;
             break;
-        default:
-            L.name = "Free";
+        default: // Plain: a steady 8th metro
+            L.name = "Plain";
             break;
     }
     return L;
@@ -570,20 +631,22 @@ void scMetroBox::scanRoles() {
     std::sort(userRoles.begin(), userRoles.end());
 }
 
-// A role brings rules, not a lane's state: its mute, genome (seed and
-// mutations), liked pool and Keep stay.
+// A role brings settings, not a lane's state: its mute, genome (seed and
+// mutations) and open panel stay. Its Change goes through setChange, so a
+// frozen role keeps the phrase playing now.
 void scMetroBox::applyRole(int li, const Layer& role) {
     Layer& L = layers[li];
+    const float change = role.change;
     Layer next = role;
     next.mute = L.mute;
+    next.id = L.id;
+    next.advanced = L.advanced;
     next.seed = L.seed;
     next.ops = L.ops;
-    next.liked = L.liked;
-    next.keep = L.keep;
+    next.change = L.change;
     next.keepPhrase = L.keepPhrase;
-    next.repeat = L.repeat;
     L = next;
-    engine.changed(li);
+    engine.setChange(li, change, nowCycle(li));
     refreshPublished(li);
 }
 
@@ -600,119 +663,74 @@ void scMetroBox::saveRole(int li, const std::string& name) {
 
 ofJson scMetroBox::layerToJson(const Layer& L, bool withState) {
     ofJson j = {
-        {"name", L.name}, {"generator", L.generator},
-        {"cycleBeats", L.cycleBeats}, {"density", L.density},
-        {"shift", L.shift}, {"division", L.division}, {"eucSteps", L.eucSteps},
-        {"eucHits", L.eucHits}, {"eucRotation", L.eucRotation},
-        {"values", L.values}, {"weights", L.weights},
-        {"complexity", L.complexity}, {"longOnStrong", L.longOnStrong}, {"triplets", L.triplets},
-        {"examples", L.examples},
-        {"grouping", L.grouping}, {"feelBar", L.feelBar}, {"weighting", L.weighting},
-        {"anchorMode", L.anchorMode}, {"anchorAmount", L.anchorAmount},
-        {"push", L.push}, {"drag", L.drag}, {"dispUnit", L.dispUnit}, {"crossBarline", L.crossBarline},
-        {"phraseLen", L.phraseLen}, {"form", L.form}, {"renew", L.renew}, {"bStrength", L.bStrength},
-        {"fillTicks", L.fillTicks}, {"fillIntensity", L.fillIntensity}, {"buildUp", L.buildUp},
-        {"phraseAccent", L.phraseAccent}, {"swell", L.swell},
-        {"ghost", L.ghost}, {"ghostSide", L.ghostSide}, {"ghostLevel", L.ghostLevel},
-        {"flam", L.flam}, {"flamTicks", L.flamTicks},
-        {"ratchet", L.ratchet}, {"ratchetCount", L.ratchetCount}, {"ratchetUnit", L.ratchetUnit}, {"ratchetShape", L.ratchetShape},
+        {"name", L.name},
+        {"division", L.division}, {"shift", L.shift}, {"density", L.density}, {"durTicks", L.durTicks},
+        {"accent", L.accent}, {"change", L.change}, {"smart", L.smart},
+        {"pattern", L.pattern}, {"cycleBeats", L.cycleBeats},
+        {"eucSteps", L.eucSteps}, {"eucHits", L.eucHits}, {"eucRotation", L.eucRotation},
+        {"complexity", L.complexity}, {"triplets", L.triplets}, {"grouping", L.grouping},
+        {"swing", L.swing}, {"swingUnit", L.swingUnit}, {"humanize", L.humanize},
+        {"push", L.push}, {"drag", L.drag},
+        {"ghost", L.ghost}, {"flam", L.flam}, {"ratchet", L.ratchet}, {"ratchetUnit", L.ratchetUnit},
+        {"longOnStrong", L.longOnStrong}, {"accentSource", L.accentSource}, {"accentHits", L.accentHits},
+        {"ampMin", L.ampMin}, {"level", L.level},
+        {"phraseLen", L.phraseLen}, {"fill", L.fill}, {"buildUp", L.buildUp},
         {"relMode", L.relMode}, {"relLane", L.relLane}, {"relAmount", L.relAmount}, {"respDelay", L.respDelay},
         {"chokeLane", L.chokeLane}, {"dynMode", L.dynMode}, {"dynLane", L.dynLane}, {"dynAmount", L.dynAmount},
-        {"groove", L.groove}, {"swing", L.swing}, {"humanize", L.humanize},
-        {"durMode", L.durMode}, {"durTicks", L.durTicks}, {"legato", L.legato},
-        {"durShort", L.durShort}, {"durLong", L.durLong}, {"longHits", L.longHits}, {"longTicks", L.longTicks},
-        {"level", L.level}, {"ampMin", L.ampMin}, {"ampMetric", L.ampMetric},
-        {"variation", L.variation}, {"curve", L.curve}, {"tiers", L.tiers},
-        {"accentHits", L.accentHits}, {"accentAmount", L.accentAmount}, {"accentsLong", L.accentsLong},
-        {"mutations", L.mutations}, {"autoEvery", L.autoEvery}, {"autoChance", L.autoChance},
-        {"repeat", L.repeat},
     };
     if(withState) {
         j["mute"] = L.mute;
+        j["id"] = L.id;
+        j["advanced"] = L.advanced;
         j["seed"] = L.seed;
         j["ops"] = opsToJson(L.ops);
-        j["keep"] = L.keep;
         j["keepPhrase"] = L.keepPhrase;
-        ofJson liked = ofJson::array();
-        for(const auto& g : L.liked) liked.push_back({{"seed", g.seed}, {"ops", opsToJson(g.ops)}});
-        j["liked"] = liked;
     }
     return j;
 }
 
-// Settings missing from the JSON take the plain defaults, so an older preset
-// sounds as it was saved.
+// Settings missing from the JSON take the defaults
 scMetroBox::Layer scMetroBox::layerFromJson(const ofJson& j) {
     Layer L;
     auto get = [&](const char* key, auto& field) {
         try { if(j.contains(key)) field = j[key].get<std::decay_t<decltype(field)>>(); } catch(...) {}
     };
-    get("name", L.name); get("mute", L.mute); get("generator", L.generator); get("cycleBeats", L.cycleBeats);
-    get("seed", L.seed); get("density", L.density); get("shift", L.shift); get("division", L.division);
+    get("name", L.name); get("id", L.id); get("mute", L.mute); get("advanced", L.advanced);
+    get("division", L.division); get("shift", L.shift); get("density", L.density); get("durTicks", L.durTicks);
+    get("accent", L.accent); get("change", L.change); get("smart", L.smart);
+    get("pattern", L.pattern); get("cycleBeats", L.cycleBeats); get("seed", L.seed);
     get("eucSteps", L.eucSteps); get("eucHits", L.eucHits); get("eucRotation", L.eucRotation);
-    get("values", L.values); get("weights", L.weights);
-    get("complexity", L.complexity); get("longOnStrong", L.longOnStrong); get("triplets", L.triplets);
-    get("examples", L.examples);
-    get("grouping", L.grouping); get("feelBar", L.feelBar); get("weighting", L.weighting);
-    get("anchorMode", L.anchorMode); get("anchorAmount", L.anchorAmount);
-    get("push", L.push); get("drag", L.drag); get("dispUnit", L.dispUnit); get("crossBarline", L.crossBarline);
-    get("phraseLen", L.phraseLen); get("form", L.form); get("renew", L.renew); get("bStrength", L.bStrength);
-    get("fillTicks", L.fillTicks); get("fillIntensity", L.fillIntensity); get("buildUp", L.buildUp);
-    get("phraseAccent", L.phraseAccent); get("swell", L.swell);
-    get("ghost", L.ghost); get("ghostSide", L.ghostSide); get("ghostLevel", L.ghostLevel);
-    get("flam", L.flam); get("flamTicks", L.flamTicks);
-    get("ratchet", L.ratchet); get("ratchetCount", L.ratchetCount); get("ratchetUnit", L.ratchetUnit); get("ratchetShape", L.ratchetShape);
+    get("complexity", L.complexity); get("triplets", L.triplets); get("grouping", L.grouping);
+    get("swing", L.swing); get("swingUnit", L.swingUnit); get("humanize", L.humanize);
+    get("push", L.push); get("drag", L.drag);
+    get("ghost", L.ghost); get("flam", L.flam); get("ratchet", L.ratchet); get("ratchetUnit", L.ratchetUnit);
+    get("longOnStrong", L.longOnStrong); get("accentSource", L.accentSource); get("accentHits", L.accentHits);
+    get("ampMin", L.ampMin); get("level", L.level);
+    get("phraseLen", L.phraseLen); get("fill", L.fill); get("buildUp", L.buildUp);
     get("relMode", L.relMode); get("relLane", L.relLane); get("relAmount", L.relAmount); get("respDelay", L.respDelay);
     get("chokeLane", L.chokeLane); get("dynMode", L.dynMode); get("dynLane", L.dynLane); get("dynAmount", L.dynAmount);
-    get("groove", L.groove); get("swing", L.swing); get("humanize", L.humanize);
-    get("durMode", L.durMode); get("durTicks", L.durTicks); get("legato", L.legato);
-    get("durShort", L.durShort); get("durLong", L.durLong); get("longHits", L.longHits); get("longTicks", L.longTicks);
-    get("level", L.level); get("ampMin", L.ampMin); get("ampMetric", L.ampMetric);
-    get("variation", L.variation); get("curve", L.curve); get("tiers", L.tiers);
-    get("accentHits", L.accentHits); get("accentAmount", L.accentAmount); get("accentsLong", L.accentsLong);
-    get("mutations", L.mutations); get("autoEvery", L.autoEvery); get("autoChance", L.autoChance);
-    get("repeat", L.repeat);
-    get("keep", L.keep); get("keepPhrase", L.keepPhrase);
+    get("keepPhrase", L.keepPhrase);
     if(j.contains("ops")) L.ops = opsFromJson(j["ops"]);
-    if(j.contains("liked") && j["liked"].is_array())
-        for(const auto& g : j["liked"]) {
-            Genome genome;
-            try { genome.seed = g.value("seed", 0); } catch(...) {}
-            if(g.contains("ops")) genome.ops = opsFromJson(g["ops"]);
-            L.liked.push_back(genome);
-        }
 
     // Ranges
-    L.generator    = std::clamp(L.generator, 0, (int)generatorNames.size() - 1);
+    L.pattern      = std::clamp(L.pattern, 0, (int)patternNames.size() - 1);
     L.cycleBeats   = std::clamp(L.cycleBeats, 1, MAX_CYCLE_BEATS);
     L.division     = std::max(1, L.division);
+    L.shift        = std::clamp(L.shift, 0, L.cycleTicks() - 1);
+    L.durTicks     = std::max(1, L.durTicks);
     L.eucSteps     = std::clamp(L.eucSteps, 1, 64);
-    L.anchorMode   = std::clamp(L.anchorMode, 0, (int)anchorNames.size() - 1);
-    L.dispUnit     = std::max(1, L.dispUnit);
-    L.phraseLen    = std::clamp(L.phraseLen, 1, 16);
-    L.ghostSide    = std::clamp(L.ghostSide, 0, 2);
-    L.flamTicks    = std::max(1, L.flamTicks);
-    L.ratchetCount = std::clamp(L.ratchetCount, 2, 6);
+    L.eucHits      = std::clamp(L.eucHits, 0, L.eucSteps);
+    L.swingUnit    = std::clamp(L.swingUnit, 0, 1);
     L.ratchetUnit  = std::max(1, L.ratchetUnit);
-    L.ratchetShape = std::clamp(L.ratchetShape, 0, 2);
+    L.accentSource = std::clamp(L.accentSource, 0, (int)accentNames.size() - 1);
+    L.accentHits   = std::clamp(L.accentHits, 1, 16);
+    L.phraseLen    = std::clamp(L.phraseLen, 1, 16);
     L.relMode      = std::clamp(L.relMode, 0, (int)relationNames.size() - 1);
     L.relLane      = std::clamp(L.relLane, 0, MAX_LAYERS);
+    L.respDelay    = std::max(1, L.respDelay);
     L.chokeLane    = std::clamp(L.chokeLane, 0, MAX_LAYERS);
-    L.dynMode      = std::clamp(L.dynMode, 0, 2);
+    L.dynMode      = std::clamp(L.dynMode, 0, (int)dynamicsNames.size() - 1);
     L.dynLane      = std::clamp(L.dynLane, 0, MAX_LAYERS);
-    L.groove       = std::clamp(L.groove, 0, (int)grooveNames.size() - 1);
-    L.durMode      = std::clamp(L.durMode, 0, 2);
-    L.durTicks     = std::max(1, L.durTicks);
-    L.durShort     = std::max(1, L.durShort);
-    L.durLong      = std::max(1, L.durLong);
-    L.longTicks    = std::max(1, L.longTicks);
-    L.tiers        = std::clamp(L.tiers, 0, 5);
-    L.mutations    = std::clamp(L.mutations, 1, 6);
-    L.repeat       = std::clamp(L.repeat, 0, (int)repeatNames.size() - 1);
-    L.autoEvery    = std::clamp(L.autoEvery, 1, 16);
-    if(L.values.empty()) L.values = {1.0f};
-    if(L.values.size() > MAX_VALUES) L.values.resize(MAX_VALUES);
-    L.weights.resize(L.values.size(), 1.0f);
     return L;
 }
 
@@ -723,14 +741,15 @@ scMetroBox::Layer scMetroBox::layerFromJson(const ofJson& j) {
 scMetroBox::scMetroBox() : scNode("MetroBox"), layers(engine.layers) {
     anchoredCycleTicks.fill(-1);
     lastPhrase.fill(NO_CYCLE);
+    lastPassPhrase.fill(NO_CYCLE);
     phrasesSinceAuto.fill(0);
     // A starting groove from the roles: kick, snare with ghosts and fills,
-    // swung hats that duck under the kick, perc filling the kick's gaps.
+    // swung hats that duck under the kick, perc avoiding the kick.
     for(int i = 0; i < 4; i++) layers[i] = builtInRole(i);
     layers[2].dynMode = DYN_DUCK;
     layers[2].dynLane = 1;
     layers[2].dynAmount = 0.4f;
-    for(int i = 4; i < MAX_LAYERS; i++) layers[i].name = "Layer " + ofToString(i + 1);
+    for(int i = 4; i < MAX_LAYERS; i++) layers[i].name = "Lane " + ofToString(i + 1);
     engine.onChanged = [this](int lane) {
         invalidateSlots(lane);
         if(lane >= 0 && lane < MAX_LAYERS && anchoredCycleTicks[lane] != layers[lane].cycleTicks()) follower.requestAnchor();
@@ -752,20 +771,20 @@ scMetroBox::~scMetroBox() {
 }
 
 void scMetroBox::setup() {
-    description = "Generative rhythm locked to the transport: up to 8 lanes, each "
-                  "with its own cycle (polymeter), generator (Grid, Euclidean, Weighted "
-                  "durations, Subdivision, Markov), metric rules, phrases (form, fills, "
-                  "build-ups), ornaments, groove and relations to the lanes above. "
-                  "Evolve them with Mutate / Re-roll / Keep / Undo / Like / crossover. "
-                  "Each lane has mono Trig, Gate and Amp outputs. Seeded per cycle, so "
-                  "the window previews exactly what will play. Open it with Show; "
-                  "right-click a control there to type a value or publish it here.";
+    description = "Generative rhythm locked to the transport: up to 8 lanes, each a "
+                  "metro you shape with a few controls (Every, Offset, Chance, Length, "
+                  "Accent, Change, Smart) and a role (Kick, Snare, Hat, Perc). More "
+                  "opens a lane's advanced settings: patterns, swing, ornaments, accents, "
+                  "fills and relations to other lanes. Gates carries every lane (lane n = "
+                  "channel n: wire it to a SampleBox kit), and each lane has its own Gate; "
+                  "a gate's level is the hit's. Drag a lane by its name to reorder. Seeded "
+                  "per cycle, so the window previews exactly what will play. Open it with "
+                  "Show; right-click a control there to type a value or publish it here.";
 
     addParameter(showWindow.set("Show", false));
     addParameter(numLayers.set("Layers", 4, 1, MAX_LAYERS));
     addParameter(globalSeed.set("Seed", 1, 0, 99999));
     addParameter(densityIn.set("Density", {1.0f}, {0.0f}, {1.0f}));
-    addParameter(trigAmp.set("Trig Amp", false));
 
     engine.numLayers = numLayers;
     engine.globalSeed = globalSeed;
@@ -783,9 +802,6 @@ void scMetroBox::setup() {
     }));
     listeners.push(globalSeed.newListener([this](int& s) { engine.globalSeed = s; engine.changedAll(); }));
     listeners.push(densityIn.newListener([this](vector<float>& d) { engine.densityScale = d; engine.changedAll(); }));
-    listeners.push(trigAmp.newListener([this](bool&) {
-        for(auto& [server, st] : servers) if(st.synth) st.synth->set("trigAmp", trigAmp ? 1.0f : 0.0f);
-    }));
     listeners.push(resendParams.newListener([this]() {
         for(auto& [server, st] : servers) sendStaticControls(st);
         follower.requestAnchor();
@@ -797,32 +813,27 @@ void scMetroBox::setup() {
 // ════════════════════════════════════════════════════════════════════════════
 
 std::string scMetroBox::busName(int index) {
-    static const char* kinds[] = {"trigout", "gateout", "ampout"};
-    return std::string(kinds[index % OUTPUTS_PER_LAYER]) + ofToString(index / OUTPUTS_PER_LAYER + 1);
+    return index == 0 ? std::string("gatesout") : "gateout" + ofToString(index);
 }
 
 void scMetroBox::syncOutputPorts() {
     const int n = std::clamp(numLayers.get(), 1, MAX_LAYERS);
+    if(getNumOutputs() == 0) scNode::addOutput("Gates");
     while(portLayers < n) {
-        const std::string lane = ofToString(portLayers + 1);
-        scNode::addOutput("Trig " + lane);
-        scNode::addOutput("Gate " + lane);
-        scNode::addOutput("Amp " + lane);
+        scNode::addOutput("Gate " + ofToString(portLayers + 1));
         portLayers++;
     }
     while(portLayers > n) {
-        const int first = (portLayers - 1) * OUTPUTS_PER_LAYER;
-        for(int k = OUTPUTS_PER_LAYER - 1; k >= 0; k--) scNode::removeOutput(first + k);
+        scNode::removeOutput(portLayers);
         // A removed port's bus may be handed to another node: forget it, so it
         // is not reused if the lane comes back (the synth silences the lane).
-        for(auto& [server, st] : servers)
-            for(int k = 0; k < OUTPUTS_PER_LAYER; k++) st.outputBuses.erase(first + k);
+        for(auto& [server, st] : servers) st.outputBuses.erase(portLayers);
         portLayers--;
     }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Repeat Evolve: every N loops, a mutation with some chance
+// Change Evolving: a mutation every few phrases
 // ════════════════════════════════════════════════════════════════════════════
 
 void scMetroBox::autoEvolve() {
@@ -831,13 +842,18 @@ void scMetroBox::autoEvolve() {
         const Layer& L = layers[li];
         const int64_t now = engine.cycleAt(li, t.beatPosition);
         const int64_t phrase = engine.phraseOf(li, now);
-        if(!t.isPlaying || L.repeat != REPEAT_EVOLVE || L.keep) { lastPhrase[li] = phrase; continue; }
-        if(lastPhrase[li] != NO_CYCLE && phrase == lastPhrase[li] + 1 && ++phrasesSinceAuto[li] >= L.autoEvery) {
+        if(!t.isPlaying || changeZone(L.change) != CHANGE_EVOLVING) { lastPhrase[li] = phrase; phrasesSinceAuto[li] = 0; continue; }
+        if(lastPhrase[li] != NO_CYCLE && phrase == lastPhrase[li] + 1 && ++phrasesSinceAuto[li] >= evolveEvery(L.change)) {
             phrasesSinceAuto[li] = 0;
-            const uint32_t r = (uint32_t)hashOf((uint64_t)ofGetElapsedTimeMicros(), ++autoCounter, (uint64_t)li);
-            if(unit(r) < L.autoChance) engine.mutate(li, now, r);
+            engine.mutate(li, now, (uint32_t)hashOf((uint64_t)ofGetElapsedTimeMicros(), ++autoCounter, (uint64_t)li));
         }
         lastPhrase[li] = phrase;
+    }
+    // Seed 0: a phrase the playhead left plays something new next time round
+    for(int li = 0; li < numLayers; li++) {
+        const int64_t phrase = engine.phraseOf(li, engine.cycleAt(li, t.beatPosition));
+        if(engine.unseeded() && lastPassPhrase[li] != NO_CYCLE && phrase != lastPassPhrase[li]) engine.leavePhrase(li, lastPassPhrase[li]);
+        lastPassPhrase[li] = phrase;
     }
 }
 
@@ -929,13 +945,12 @@ void scMetroBox::fillBuffers() {
 void scMetroBox::sendStaticControls(ServerState& st) {
     if(!st.synth) return;
     if(st.buffer) st.synth->set("buf", st.buffer->index);
-    st.synth->set("trigAmp", trigAmp ? 1.0f : 0.0f);
     st.synth->set("layers", (float)numLayers.get());
     std::vector<float> mutes(MAX_LAYERS);
     for(int i = 0; i < MAX_LAYERS; i++) mutes[i] = layers[i].mute ? 1.0f : 0.0f;
     st.synth->set("mute", mutes);
     for(auto& [index, bus] : st.outputBuses)
-        if(index >= 0 && index < MAX_LAYERS * OUTPUTS_PER_LAYER) st.synth->set(busName(index), bus);
+        if(index >= 0 && index < NUM_OUTPUTS) st.synth->set(busName(index), bus);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1078,7 +1093,7 @@ void scMetroBox::free(ofxSCServer* server) {
 }
 
 void scMetroBox::setOutputBus(ofxSCServer* server, int index, int bus) {
-    if(!server || index < 0 || index >= MAX_LAYERS * OUTPUTS_PER_LAYER) return;
+    if(!server || index < 0 || index >= NUM_OUTPUTS) return;
     ServerState& st = servers[server];
     st.outputBuses[index] = bus;
     if(st.synth) st.synth->set(busName(index), bus);
@@ -1151,42 +1166,88 @@ double scMetroBox::beatsPerBar() const {
 }
 
 void scMetroBox::drawWindow() {
-    const std::string title = (canvasID == "Canvas" ? "" : canvasID + "/") + "MetroBox " + ofToString(getNumIdentifier());
+    const std::string title = getWindowTitle();
     bool open = showWindow.get();
-    ImGui::SetNextWindowSize(ImVec2(1180.0f, 820.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1220.0f, 760.0f), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), &open)) {
         ImGui::PushID(this);
 
         int n = numLayers.get();
         ImGui::SetNextItemWidth(120);
-        if(ImGui::SliderInt("Layers", &n, 1, MAX_LAYERS)) numLayers = n;
+        if(ImGui::SliderInt("Lanes", &n, 1, MAX_LAYERS)) numLayers = n;
         ImGui::SameLine();
         int seed = globalSeed.get();
         ImGui::SetNextItemWidth(120);
         if(ImGui::InputInt("Seed", &seed)) globalSeed = std::clamp(seed, 0, 99999);
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+            ImGui::SetTooltip("Changes the random choices of every lane at once (the same seed always plays the same).\n"
+                              "0 = no seed: new choices every time a phrase comes round (loops still repeat).");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(120);
         ImGui::SliderInt("Bars shown", &viewBars, 1, 16);
-        ImGui::SameLine();
-        bool ta = trigAmp.get();
-        if(ImGui::Checkbox("Trig Amp", &ta)) trigAmp = ta;
 
         drawTimeline(std::max(200.0f, ImGui::GetContentRegionAvail().x));
 
         ImGui::Separator();
-        selectedLayer = std::clamp(selectedLayer, 0, numLayers - 1);
-        if(ImGui::BeginChild("##editor", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar))
-            drawLayerEditor(selectedLayer);
+        if(ImGui::BeginChild("##lanesChild", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar)) drawLanes();
         ImGui::EndChild();
 
         ImGui::PopID();
     }
     ImGui::End();
     if(open != showWindow.get()) showWindow = open;
+    // a drop, applied once the frame is drawn
+    if(pendingMoveFrom >= 0) {
+        moveLane(pendingMoveFrom, pendingMoveTo);
+        pendingMoveFrom = pendingMoveTo = -1;
+    }
+}
+
+// ── Moving lanes ────────────────────────────────────────────────────────────
+
+namespace {
+struct LaneDrag { const void* node; int lane; };
+}
+
+void scMetroBox::laneDragSource(int li) {
+    if(!ImGui::BeginDragDropSource()) return;
+    const LaneDrag d{this, li};
+    ImGui::SetDragDropPayload("MetroBoxLane", &d, sizeof(d));
+    ImGui::Text("Move %d %s", li + 1, layers[li].name.c_str());
+    ImGui::EndDragDropSource();
+}
+
+void scMetroBox::laneDropTarget(int li) {
+    if(!ImGui::BeginDragDropTarget()) return;
+    if(const ImGuiPayload* p = ImGui::AcceptDragDropPayload("MetroBoxLane")) {
+        const LaneDrag d = *(const LaneDrag*)p->Data;
+        if(d.node == this && d.lane != li) { pendingMoveFrom = d.lane; pendingMoveTo = li; }
+    }
+    ImGui::EndDragDropTarget();
+}
+
+// The lane moves with everything (settings, rhythm, history); its Gate port
+// and Gates channel are its new position's. Published controls stay with
+// their position ("L2 Chance" is lane 2's, whichever lane that is now).
+void scMetroBox::moveLane(int from, int to) {
+    if(from < 0 || to < 0 || from >= numLayers || to >= numLayers || from == to) return;
+    auto move = [&](auto& a) {
+        auto v = a[from];
+        if(from < to) for(int i = from; i < to; i++) a[i] = a[i + 1];
+        else for(int i = from; i > to; i--) a[i] = a[i - 1];
+        a[to] = v;
+    };
+    move(lastPhrase);
+    move(lastPassPhrase);
+    move(phrasesSinceAuto);
+    engine.moveLane(from, to);
+    for(auto& [server, st] : servers) sendStaticControls(st);
+    for(int i = 0; i < MAX_LAYERS; i++) refreshPublished(i);
+    follower.requestAnchor();
 }
 
 void scMetroBox::drawTimeline(float width) {
-    constexpr float labelW = 150.0f, rowH = 44.0f, rulerH = 18.0f;
+    constexpr float labelW = 150.0f, rowH = 40.0f, rulerH = 18.0f;
     const auto t = getFrameTransportState().current;
     const double bpb = beatsPerBar();
     const double viewBeats = viewBars * bpb;
@@ -1229,6 +1290,7 @@ void scMetroBox::drawTimeline(float width) {
         const float dim = L.mute ? 0.3f : 1.0f;
         const int cT = L.cycleTicks();
         const int n = std::max(1, L.phraseLen);
+        const int fillLen = L.fillTicks();
         const int64_t first = floorDiv(tickAt(viewStart), cT);
         const int64_t last = floorDiv(tickAt(viewEnd) - 1, cT);
         for(int64_t c = std::max<int64_t>(first, 0); c <= last && c - first < 256; c++) {
@@ -1243,8 +1305,8 @@ void scMetroBox::drawTimeline(float width) {
                 if(phraseStart)
                     dl->AddTriangleFilled(ImVec2(cx - 4, y0 + 1), ImVec2(cx + 4, y0 + 1), ImVec2(cx, y0 + 6), cycleLineStrong);
             }
-            if(L.fillTicks > 0 && positiveMod64(c, n) == n - 1) {
-                const double fs = cycleBeat + (double)(cT - L.fillTicks) / TPB;
+            if(fillLen > 0 && positiveMod64(c, n) == n - 1) {
+                const double fs = cycleBeat + (double)(cT - fillLen) / TPB;
                 dl->AddRectFilled(ImVec2(X(fs), y0 + 1), ImVec2(X(cycleBeat + (double)cT / TPB), y0 + rowH - 1), fillShade);
             }
             const auto changed = engine.changedTicks(li, c);
@@ -1272,19 +1334,27 @@ void scMetroBox::drawTimeline(float width) {
     dl->AddLine(ImVec2(px, origin.y), ImVec2(px, yEnd), ImGui::GetColorU32(ImGuiCol_PlotLinesHovered), 1.5f);
     dl->PopClipRect();
 
-    // Lane labels: select the lane, M toggles mute
+    // Lane labels: a click opens / closes the lane's advanced settings, M mutes
     for(int li = 0; li < rows; li++) {
-        const Layer& L = layers[li];
+        Layer& L = layers[li];
         const float y0 = yRows + li * rowH;
         ImGui::SetCursorScreenPos(ImVec2(origin.x, y0));
         ImGui::PushID(li);
-        if(li == selectedLayer) dl->AddRectFilled(ImVec2(origin.x, y0), ImVec2(x0 - 4, y0 + rowH - 2), ImGui::GetColorU32(ImGuiCol_Header));
-        if(ImGui::InvisibleButton("##sel", ImVec2(labelW - 34, rowH - 2))) selectedLayer = li;
+        if(L.advanced) dl->AddRectFilled(ImVec2(origin.x, y0), ImVec2(x0 - 4, y0 + rowH - 2), ImGui::GetColorU32(ImGuiCol_Header));
+        // a click (not a drag) opens / closes the advanced settings
+        if(ImGui::InvisibleButton("##sel", ImVec2(labelW - 34, rowH - 2)) && ImGui::GetIO().MouseDragMaxDistanceSqr[0] < 36.0f)
+            L.advanced = !L.advanced;
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::GetDragDropPayload())
+            ImGui::SetTooltip(L.advanced ? "Click: close the advanced settings\nDrag onto another lane: move it there"
+                                         : "Click: open the advanced settings\nDrag onto another lane: move it there");
+        laneDragSource(li);
+        laneDropTarget(li);
         dl->AddRectFilled(ImVec2(origin.x + 4, y0 + 6), ImVec2(origin.x + 8, y0 + rowH - 8), layerColor(li, L.mute ? 0.3f : 1.0f));
-        dl->AddText(ImVec2(origin.x + 14, y0 + 6), L.mute ? textDim : text, (ofToString(li + 1) + " " + L.name + (L.keep ? " (kept)" : L.repeat == REPEAT_LOOP ? " (loop)" : L.repeat == REPEAT_EVOLVE ? " (evolving)" : "")).c_str());
-        const std::string sub = generatorNames[L.generator].substr(0, 11) + ", " + ofToString(L.cycleBeats) + " beats";
-        dl->AddText(ImVec2(origin.x + 14, y0 + 22), textDim, sub.c_str());
-        ImGui::SetCursorScreenPos(ImVec2(x0 - 32, y0 + 10));
+        dl->AddText(ImVec2(origin.x + 14, y0 + 4), L.mute ? textDim : text, (ofToString(li + 1) + " " + L.name).c_str());
+        std::string sub = changeWord(L.change);
+        ofStringReplace(sub, "%%", "%");
+        dl->AddText(ImVec2(origin.x + 14, y0 + 20), textDim, sub.c_str());
+        ImGui::SetCursorScreenPos(ImVec2(x0 - 32, y0 + 8));
         if(L.mute) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetColorU32(ImGuiCol_ButtonActive));
         if(ImGui::SmallButton("M")) setFieldValue(li, *findField("Mute"), L.mute ? 0.0f : 1.0f);
         if(L.mute) ImGui::PopStyleColor();
@@ -1295,18 +1365,51 @@ void scMetroBox::drawTimeline(float width) {
     ImGui::Dummy(ImVec2(width, 1));
 }
 
-void scMetroBox::drawLayerEditor(int li) {
-    Layer& L = layers[li];
-    ImGui::PushID(1000 + li);
+// ── Lane rows ───────────────────────────────────────────────────────────────
 
-    // ── Header: name, role, generator, cycle, seed ──
-    char nameBuf[64];
-    std::snprintf(nameBuf, sizeof(nameBuf), "%s", L.name.c_str());
-    ImGui::SetNextItemWidth(150);
-    if(ImGui::InputText("Name", nameBuf, sizeof(nameBuf))) L.name = nameBuf;
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(150);
-    if(ImGui::BeginCombo("Role", "Apply a role...")) {
+namespace {
+struct LaneColumn { const char* name; float width; const char* field; };
+const LaneColumn laneColumns[] = {
+    {"Lane", 130, nullptr}, {"Role", 84, nullptr}, {"Every", 74, "Every"}, {"Offset", 74, "Offset"},
+    {"Chance", 84, "Chance"}, {"Length", 74, "Length"}, {"Accent", 84, "Accent"}, {"Change", 170, "Change"},
+    {"Smart", 84, "Smart"}, {"Evolve", 112, nullptr}, {"", 0, nullptr},
+};
+constexpr int laneColumnCount = IM_ARRAYSIZE(laneColumns);
+}
+
+void scMetroBox::drawLanes() {
+    // One table per run of rows: an open advanced panel sits between two
+    auto begin = [&](int segment, bool headers) {
+        if(!ImGui::BeginTable(("##lanes" + ofToString(segment)).c_str(), laneColumnCount, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg))
+            return false;
+        for(int c = 0; c < laneColumnCount; c++)
+            ImGui::TableSetupColumn(laneColumns[c].name, c == laneColumnCount - 1 ? ImGuiTableColumnFlags_WidthStretch : ImGuiTableColumnFlags_WidthFixed, laneColumns[c].width);
+        if(headers) {
+            ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+            for(int c = 0; c < laneColumnCount; c++) {
+                ImGui::TableSetColumnIndex(c);
+                ImGui::TableHeader(laneColumns[c].name);
+                if(laneColumns[c].field && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+                    if(const Field* f = findField(laneColumns[c].field)) ImGui::SetTooltip("%s", f->tooltip.c_str());
+            }
+        }
+        return true;
+    };
+    int segment = 0;
+    bool open = begin(segment++, true);
+    for(int li = 0; li < numLayers; li++) {
+        if(open) { ImGui::TableNextRow(); drawLaneRow(li); }
+        if(layers[li].advanced) {
+            if(open) ImGui::EndTable();
+            drawAdvanced(li);
+            open = li + 1 < numLayers && begin(segment++, false);
+        }
+    }
+    if(open) ImGui::EndTable();
+}
+
+void scMetroBox::roleCombo(int li, const char* label) {
+    if(ImGui::BeginCombo(label, "Role...")) {
         const auto& names = builtInRoleNames();
         for(int r = 0; r < (int)names.size(); r++)
             if(ImGui::Selectable(names[r].c_str())) applyRole(li, builtInRole(r));
@@ -1320,14 +1423,140 @@ void scMetroBox::drawLayerEditor(int li) {
         }
         ImGui::EndCombo();
     }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Loads a set of rules into this lane (its mute, genome, liked pool and Keep stay).");
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("Sets this lane up as a kick, snare, hat... (its rhythm's seed and mutations stay).");
+}
+
+void scMetroBox::drawLaneRow(int li) {
+    Layer& L = layers[li];
+    ImGui::PushID(li);
+
+    ImGui::TableSetColumnIndex(0);
+    {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float h = ImGui::GetFrameHeight();
+        ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y + 3), ImVec2(p.x + 4, p.y + h - 3), layerColor(li, L.mute ? 0.3f : 1.0f));
+        ImGui::Dummy(ImVec2(6, h));
+        ImGui::SameLine();
+        // the name: drag it onto another lane to move this one there
+        const std::string label = ofToString(li + 1) + " " + L.name + "##drag";
+        if(L.mute) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
+        ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.0f, 0.5f));
+        ImGui::Selectable(label.c_str(), false, 0, ImVec2(laneColumns[0].width - 40, h));
+        ImGui::PopStyleVar();
+        if(L.mute) ImGui::PopStyleColor();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::GetDragDropPayload())
+            ImGui::SetTooltip("Drag onto another lane to move it there (its Gate and its channel in Gates move with it)");
+        laneDragSource(li);
+        laneDropTarget(li);
+        ImGui::SameLine(laneColumns[0].width - 22);
+        if(L.mute) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetColorU32(ImGuiCol_ButtonActive));
+        if(ImGui::SmallButton("M")) setFieldValue(li, *findField("Mute"), L.mute ? 0.0f : 1.0f);
+        if(L.mute) ImGui::PopStyleColor();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("Mute");
+    }
+
+    ImGui::TableSetColumnIndex(1);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    roleCombo(li, "##role");
+
+    for(int c = 2; c <= 8; c++) {
+        ImGui::TableSetColumnIndex(c);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        // Smart has nothing to drop at full Chance (Free patterns aside): dimmed
+        const bool idle = c == 8 && L.density >= 1.0f && L.pattern != PAT_FREE;
+        if(idle) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.45f);
+        drawField(li, laneColumns[c].field, (std::string("##") + laneColumns[c].field).c_str());
+        if(idle) ImGui::PopStyleVar();
+    }
+
+    ImGui::TableSetColumnIndex(9);
+    drawField(li, "Mutate");
     ImGui::SameLine();
-    if(ImGui::Button("Save role")) {
+    drawField(li, "Undo");
+
+    ImGui::TableSetColumnIndex(10);
+    if(ImGui::SmallButton(L.advanced ? "Less" : "More")) L.advanced = !L.advanced;
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip(L.advanced ? "Close the advanced settings (they keep acting)" : "Pattern, feel, accents, phrase and relations to other lanes");
+    if(!L.advanced) {
+        const auto summary = advancedSummary(li);
+        if(!summary.empty()) {
+            std::string all;
+            for(const auto& s : summary) all += (all.empty() ? "" : ", ") + s;
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            const float room = ImGui::GetContentRegionAvail().x;
+            std::string shown = "+ " + all;
+            if(ImGui::CalcTextSize(shown.c_str()).x > room) {
+                while(shown.size() > 4 && ImGui::CalcTextSize((shown + "...").c_str()).x > room) shown.pop_back();
+                shown += "...";
+            }
+            ImGui::TextDisabled("%s", shown.c_str());
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Advanced settings in use:\n%s", all.c_str());
+        }
+    }
+    ImGui::PopID();
+}
+
+// The advanced settings a lane uses, in a few words each (the row lists them
+// while the panel is closed)
+std::vector<std::string> scMetroBox::advancedSummary(int li) const {
+    const Layer& L = layers[li];
+    std::vector<std::string> out;
+    // a link's lane as a number, or why it does nothing
+    auto lane = [&](int kind) {
+        const int set = engine.linkSetting(li, kind), used = engine.link(li, kind);
+        return used >= 0 ? ofToString(used + 1) : set > 0 && set <= numLayers && set != li + 1 ? ofToString(set) + " (loop: ignored)" : std::string();
+    };
+    if(L.pattern == PAT_EUCLIDEAN) out.push_back("Euclidean " + ofToString(L.eucHits) + "/" + ofToString(L.eucSteps));
+    if(L.pattern == PAT_FREE) out.push_back("Free pattern");
+    if(L.cycleBeats != (int)std::lround(mainBarBeats)) out.push_back(ofToString(L.cycleBeats) + "-beat cycle");
+    if(!L.grouping.empty()) out.push_back("groups " + L.grouping);
+    if(L.swing > 0.0f) out.push_back("swing");
+    if(L.humanize > 0.0f) out.push_back("humanize");
+    if(L.push > 0.0f) out.push_back("push");
+    if(L.drag > 0.0f) out.push_back("drag");
+    if(L.ghost > 0.0f) out.push_back("ghosts");
+    if(L.flam > 0.0f) out.push_back("flams");
+    if(L.ratchet > 0.0f) out.push_back("ratchets");
+    if(L.longOnStrong > 0.0f) out.push_back("longer on strong");
+    if(L.accentSource == ACC_EUCLID) out.push_back(ofToString(L.accentHits) + " accents per cycle");
+    if(L.accentSource == ACC_RANDOM) out.push_back("random accents");
+    if(L.ampMin > 0.0f || L.level < 1.0f) out.push_back("level " + ofToString((int)std::lround(L.ampMin * 100)) + "-" + ofToString((int)std::lround(L.level * 100)) + "%");
+    if(L.phraseLen != 4) out.push_back(ofToString(L.phraseLen) + "-cycle phrase");
+    if(L.fill > 0.0f) out.push_back("fill");
+    if(L.buildUp > 0.0f) out.push_back("build-up");
+    if(!lane(LINK_REL).empty())
+        out.push_back(std::string(L.relMode == REL_FOLLOW ? "follows " : L.relMode == REL_AVOID ? "avoids " : "answers ") + lane(LINK_REL));
+    if(!lane(LINK_CHOKE).empty()) out.push_back("choked by " + lane(LINK_CHOKE));
+    if(!lane(LINK_DYN).empty())
+        out.push_back(std::string(L.dynMode == DYN_DUCK ? "ducks under " : "boosted by ") + lane(LINK_DYN));
+    return out;
+}
+
+void scMetroBox::drawAdvanced(int li) {
+    Layer& L = layers[li];
+    ImGui::PushID(1000 + li);
+    ImGui::Indent(12.0f);
+
+    // ── Header: name, save role, the other evolution actions ──
+    ImGui::Spacing();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(layerColor(li)), "Lane %d", li + 1);
+    ImGui::SameLine();
+    char nameBuf[64];
+    std::snprintf(nameBuf, sizeof(nameBuf), "%s", L.name.c_str());
+    ImGui::SetNextItemWidth(140);
+    if(ImGui::InputText("Name", nameBuf, sizeof(nameBuf))) L.name = nameBuf;
+    ImGui::SameLine();
+    if(ImGui::Button("Save as role")) {
         std::snprintf(roleNameBuf, sizeof(roleNameBuf), "%s", L.name.c_str());
         ImGui::OpenPopup("##saveRole");
     }
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("Keeps this lane's settings in the Role menu.");
     if(ImGui::BeginPopup("##saveRole")) {
-        ImGui::TextDisabled("Save this lane's rules as a role");
+        ImGui::TextDisabled("Save this lane's settings as a role");
         ImGui::SetNextItemWidth(200);
         if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         const bool enter = ImGui::InputText("##rolename", roleNameBuf, sizeof(roleNameBuf), ImGuiInputTextFlags_EnterReturnsTrue);
@@ -1335,214 +1564,98 @@ void scMetroBox::drawLayerEditor(int li) {
         ImGui::EndPopup();
     }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(170);
-    drawField(li, "Generator");
+    drawField(li, "Re-roll");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(110);
-    drawField(li, "Cycle", "Cycle (beats)");
+    drawField(li, "Redo");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(100);
-    drawField(li, "Layer seed");
+    ImGui::TextDisabled("%d mutations", (int)L.ops.size());
 
-    // ── Evolution ──
-    drawField(li, "Mutate");
-    ImGui::SameLine(); drawField(li, "Re-roll");
-    ImGui::SameLine(); drawField(li, "Undo");
-    ImGui::SameLine(); drawField(li, "Redo");
-    ImGui::SameLine(); drawField(li, "Keep");
-    ImGui::SameLine(); drawField(li, "Like");
-    ImGui::SameLine();
-    ImGui::TextDisabled("%d liked, %d mutations", (int)L.liked.size(), (int)L.ops.size());
-    if(L.liked.size() >= 2) {
-        ImGui::SameLine();
-        std::vector<std::string> names;
-        for(int i = 0; i < (int)L.liked.size(); i++) names.push_back("Liked " + ofToString(i + 1));
-        crossA = std::clamp(crossA, 0, (int)names.size() - 1);
-        crossB = std::clamp(crossB, 0, (int)names.size() - 1);
-        ImGui::SetNextItemWidth(90); stringCombo("##ca", crossA, names);
-        ImGui::SameLine(); ImGui::SetNextItemWidth(90); stringCombo("##cb", crossB, names);
-        ImGui::SameLine();
-        ImGui::BeginDisabled(L.keep);
-        if(ImGui::Button("Crossover")) { engine.crossover(li, crossA, crossB, nowCycle(li)); refreshPublished(li); }
-        ImGui::EndDisabled();
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("First liked version, with the second half of each cycle from the other.");
-    }
-    ImGui::SetNextItemWidth(100); drawField(li, "Mutations");
-
-    constexpr float colW = 330.0f, itemW = 170.0f;
-    if(ImGui::BeginTable("##editor", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
-        ImGui::TableSetupColumn("##c1", ImGuiTableColumnFlags_WidthFixed, colW);
-        ImGui::TableSetupColumn("##c2", ImGuiTableColumnFlags_WidthFixed, colW);
-        ImGui::TableSetupColumn("##c3", ImGuiTableColumnFlags_WidthFixed, colW);
+    constexpr float colW = 232.0f, itemW = 120.0f;
+    if(ImGui::BeginTable("##advanced", 5, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
+        for(int c = 0; c < 5; c++) ImGui::TableSetupColumn(nullptr, ImGuiTableColumnFlags_WidthFixed, colW);
         ImGui::TableNextRow();
 
-        // ── Column 1: Placement, Ornaments, Groove ──
+        // ── Pattern ──
         ImGui::TableSetColumnIndex(0);
         ImGui::PushItemWidth(itemW);
-        heading("Placement");
-        drawField(li, "Density");
-        drawField(li, "Shift");
-        if(L.generator == GEN_GRID || L.generator == GEN_EUCLIDEAN)
-            if(divisionCombo("Step", L.division, divisionOptions, IM_ARRAYSIZE(divisionOptions))) engine.changed(li);
-        if(L.generator == GEN_EUCLIDEAN) {
+        heading("Pattern");
+        drawField(li, "Pattern");
+        drawField(li, "Cycle");
+        if(L.pattern == PAT_EUCLIDEAN) {
             drawField(li, "Steps");
             drawField(li, "Hits");
             drawField(li, "Rotation");
         }
-        if(L.generator == GEN_SUBDIVISION) {
-            if(divisionCombo("Finest", L.division, divisionOptions, IM_ARRAYSIZE(divisionOptions))) engine.changed(li);
+        if(L.pattern == PAT_FREE) {
             drawField(li, "Complexity");
-            drawField(li, "Long on strong");
             drawField(li, "Triplets");
         }
-        if(L.generator == GEN_MARKOV) {
-            if(divisionCombo("Step", L.division, divisionOptions, IM_ARRAYSIZE(divisionOptions))) engine.changed(li);
-            ImGui::TextDisabled("Examples (x = hit, one per word, 16ths)");
-            static char examples[2048];
-            std::snprintf(examples, sizeof(examples), "%s", L.examples.c_str());
-            if(ImGui::InputTextMultiline("##examples", examples, sizeof(examples), ImVec2(colW - 20, 70))) {
-                L.examples = examples;
-                engine.changed(li);
-            }
-            if(ImGui::BeginCombo("Capture from", "a lane...")) {
-                for(int j = 0; j < numLayers; j++) {
-                    if(j == li) continue;
-                    if(ImGui::Selectable((ofToString(j + 1) + " " + layers[j].name).c_str())) {
-                        L.examples = engine.captureExamples(j, nowCycle(j), 4);
-                        engine.changed(li);
-                    }
-                }
-                ImGui::EndCombo();
-            }
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Learn from what that lane plays in its next four cycles.");
-        }
-        if(L.generator == GEN_WEIGHTED) {
-            ImGui::TextDisabled("Interval (beats) / weight");
-            bool changed = false;
-            for(int j = 0; j < (int)L.values.size(); j++) {
-                ImGui::PushID(j);
-                ImGui::SetNextItemWidth(80);
-                if(ImGui::DragFloat("##v", &L.values[j], 0.25f / TPB, 1.0f / TPB, (float)MAX_CYCLE_BEATS, "%.3f")) {
-                    L.values[j] = std::max(1.0f / TPB, std::round(L.values[j] * TPB) / TPB);
-                    changed = true;
-                }
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(80);
-                changed |= ImGui::SliderFloat("##w", &L.weights[j], 0.0f, 1.0f);
-                ImGui::SameLine();
-                if(ImGui::SmallButton("x") && L.values.size() > 1) {
-                    L.values.erase(L.values.begin() + j);
-                    L.weights.erase(L.weights.begin() + j);
-                    changed = true;
-                    ImGui::PopID();
-                    break;
-                }
-                ImGui::PopID();
-            }
-            if((int)L.values.size() < MAX_VALUES && ImGui::SmallButton("+ interval")) {
-                L.values.push_back(0.5f);
-                L.weights.push_back(1.0f);
-                changed = true;
-            }
-            if(changed) engine.changed(li);
-        }
-        heading("Ornaments");
-        drawField(li, "Ghost");
-        if(L.ghost > 0.0f) { drawField(li, "Ghost side"); drawField(li, "Ghost level"); }
-        drawField(li, "Flam");
-        if(L.flam > 0.0f) drawField(li, "Flam offset");
-        drawField(li, "Ratchet");
-        if(L.ratchet > 0.0f) {
-            drawField(li, "Ratchet hits");
-            if(divisionCombo("Ratchet speed", L.ratchetUnit, ratchetUnitOptions, IM_ARRAYSIZE(ratchetUnitOptions))) engine.changed(li);
-            drawField(li, "Ratchet shape");
-        }
-        heading("Groove");
-        drawField(li, "Groove");
-        if(L.groove == GROOVE_SWING16 || L.groove == GROOVE_SWING8) drawField(li, "Swing");
-        drawField(li, "Humanize");
-        ImGui::PopItemWidth();
-
-        // ── Column 2: Metric, Relations ──
-        ImGui::TableSetColumnIndex(1);
-        ImGui::PushItemWidth(itemW);
-        heading("Metric");
         char groupBuf[64];
         std::snprintf(groupBuf, sizeof(groupBuf), "%s", L.grouping.c_str());
-        if(ImGui::InputTextWithHint("Grouping", "auto, e.g. 3+3+2", groupBuf, sizeof(groupBuf))) {
+        if(ImGui::InputTextWithHint("Groups", "auto, e.g. 3+3+2", groupBuf, sizeof(groupBuf))) {
             L.grouping = groupBuf;
             engine.changed(li);
         }
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Beats per group, adding up to the cycle. Group starts are the secondary strong beats.");
-        drawField(li, "Feel main bar");
-        drawField(li, "Weighting");
-        drawField(li, "Anchor");
-        if(L.anchorMode != ANCHOR_NONE) drawField(li, "Anchor amount");
-        drawField(li, "Push");
-        drawField(li, "Drag");
-        if(L.push > 0.0f || L.drag > 0.0f)
-            if(divisionCombo("Push / drag by", L.dispUnit, unitOptions, IM_ARRAYSIZE(unitOptions))) engine.changed(li);
-        drawField(li, "Cross barline");
-
-        heading("Relations (to lanes above)");
-        if(li == 0) {
-            ImGui::TextDisabled("Lane 1 has no lanes above it.");
-        } else {
-            drawField(li, "Relation");
-            if(L.relMode != REL_NONE) {
-                drawField(li, "Relation lane", "Lane");
-                drawField(li, "Relation amount", "Amount");
-                if(L.relMode == REL_RESPONSE) drawField(li, "Response delay", "Delay");
-            }
-            drawField(li, "Choke by");
-            drawField(li, "Dynamics");
-            if(L.dynMode != DYN_NONE) { drawField(li, "Dynamics lane", "Lane##dyn"); drawField(li, "Dynamics amount", "Amount##dyn"); }
-        }
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+            ImGui::SetTooltip("How the cycle's beats group, adding up to the cycle (3+3+2 for 8 beats).\n"
+                              "Group starts count as strong beats for Smart, accents and Free patterns.");
         ImGui::PopItemWidth();
 
-        // ── Column 3: Phrase, Duration, Amplitude ──
+        // ── Feel ──
+        ImGui::TableSetColumnIndex(1);
+        ImGui::PushItemWidth(itemW);
+        heading("Feel");
+        drawField(li, "Swing");
+        if(L.swing > 0.0f) drawField(li, "Swing on");
+        drawField(li, "Humanize");
+        drawField(li, "Push");
+        drawField(li, "Drag");
+        drawField(li, "Ghosts");
+        drawField(li, "Flams");
+        drawField(li, "Ratchets");
+        if(L.ratchet > 0.0f) drawField(li, "Ratchet speed");
+        ImGui::PopItemWidth();
+
+        // ── Shape ──
         ImGui::TableSetColumnIndex(2);
         ImGui::PushItemWidth(itemW);
-        heading("Phrase and repeat");
-        drawField(li, "Phrase length", "Length (cycles)");
-        drawField(li, "Repeat");
-        if(L.repeat == REPEAT_OFF) drawField(li, "Renew");
-        if(L.repeat == REPEAT_EVOLVE) { drawField(li, "Evolve every"); drawField(li, "Evolve chance"); }
-        char formBuf[32];
-        std::snprintf(formBuf, sizeof(formBuf), "%s", L.form.c_str());
-        if(ImGui::InputTextWithHint("Form", "none, e.g. AAAB", formBuf, sizeof(formBuf), ImGuiInputTextFlags_CharsUppercase)) {
-            L.form = formBuf;
-            engine.changed(li);
-        }
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("One letter per cycle of the phrase. Every A plays the same; B, C... are mutations of A.\nEmpty: every cycle its own.");
-        if(!L.form.empty()) drawField(li, "B strength");
-        drawField(li, "Fill length");
-        if(L.fillTicks > 0) drawField(li, "Fill intensity");
+        heading("Shape");
+        drawField(li, "Accent on");
+        if(L.accentSource == ACC_EUCLID) drawField(li, "Accented hits");
+        drawField(li, "Soft");
+        drawField(li, "Loud");
+        drawField(li, "Longer on strong");
+        ImGui::PopItemWidth();
+
+        // ── Over time ──
+        ImGui::TableSetColumnIndex(3);
+        ImGui::PushItemWidth(itemW);
+        heading("Over time");
+        drawField(li, "Phrase");
+        drawField(li, "Fill");
         drawField(li, "Build-up");
-        drawField(li, "Phrase accent");
-        drawField(li, "Swell");
+        ImGui::PopItemWidth();
 
-        heading("Duration");
-        drawField(li, "Duration", "Mode");
-        if(L.durMode == DUR_FIXED) drawField(li, "Length");
-        else if(L.durMode == DUR_LEGATO) drawField(li, "Legato");
-        else { drawField(li, "Weak length"); drawField(li, "Strong length"); }
-        drawField(li, "Long hits");
-        if(L.longHits > 0 || L.accentsLong) drawField(li, "Long length");
-
-        heading("Amplitude");
-        drawField(li, "Max");
-        drawField(li, "Min");
-        drawField(li, "Metric");
-        drawField(li, "Variation");
-        drawField(li, "Curve");
-        drawField(li, "Tiers");
-        drawField(li, "Accent hits");
-        if(L.accentHits > 0) { drawField(li, "Accent amount"); drawField(li, "Accents are long"); }
+        // ── Lanes ──
+        ImGui::TableSetColumnIndex(4);
+        ImGui::PushItemWidth(itemW);
+        heading("Other lanes");
+        drawField(li, "Relation");
+        if(L.relMode != REL_NONE) {
+            drawField(li, "Relation lane", "Lane");
+            drawField(li, "Relation amount", "Amount");
+            if(L.relMode == REL_ANSWER) drawField(li, "Answer delay", "Delay");
+        }
+        drawField(li, "Choked by");
+        drawField(li, "Dynamics");
+        if(L.dynMode != DYN_NONE) { drawField(li, "Dynamics lane", "Lane##dyn"); drawField(li, "Dynamics amount", "Amount##dyn"); }
         ImGui::PopItemWidth();
 
         ImGui::EndTable();
     }
+    ImGui::Unindent(12.0f);
+    ImGui::Spacing();
+    ImGui::Separator();
     ImGui::PopID();
 }
 

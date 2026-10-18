@@ -27,6 +27,11 @@
 
 class scBeatRepeatPro : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "BeatRepeat Pro " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_CHANNELS = 16;
     static constexpr int WAVEFORM_BINS = 1536;
     static constexpr int SNAPSHOT_COUNT = 24;
@@ -133,6 +138,8 @@ private:
     };
     bool autoScheduling = false;
     uint64_t autoGeneration = 0;
+    uint64_t autoFresh = 1;          // Auto Seed 0 (no seed): renewed on every start and seek
+    uint64_t autoKey(uint64_t pass) const;
     uint64_t autoFrontierUs = 0;     // steps up to this instant are decided
     bool autoReleasePending = false;
     uint64_t autoReleaseUs = 0;

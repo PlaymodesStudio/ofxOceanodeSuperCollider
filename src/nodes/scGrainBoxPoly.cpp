@@ -4129,7 +4129,7 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
     float m    = 6.0f * zoom;   // general margin / gap
 
     ImGui::SetNextWindowSize(ImVec2(900 * zoom, 506 * zoom), ImGuiCond_FirstUseEver);
-    std::string winTitle = "GrainBox " + ofToString(getNumIdentifier());
+    std::string winTitle = getWindowTitle();
     bool open = showWindow.get();
     if(!ImGui::Begin(winTitle.c_str(), &open,
                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {

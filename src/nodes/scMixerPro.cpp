@@ -7,6 +7,9 @@
 
 #include "scMixerPro.h"
 #include "ofxOceanodeContainer.h"
+#include "ofxOceanodeNode.h"
+#include "ofxOceanodeNodeMacro.h"
+#include "imgui_internal.h"
 #include "ofxOceanodeConnection.h"
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxSuperCollider.h"
@@ -821,6 +824,11 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
     suppressInputRefresh = false;
     holdGraphRefresh = false;
     refreshGraph();
+    // The same nodes and connections: serverManager will not rebuild, so it
+    // will not re-place us either. Put our synths back where the last graph
+    // build placed them (tracks recreated on another server included).
+    for(auto& [server, state] : serverStates)
+        if(state.active && state.placedBefore >= 0) moveSynthBefore(server, state.placedBefore);
     for(auto& trp : tracks) {
         Track& tr = *trp;
         if(!tr.liveServer) continue;
@@ -1417,7 +1425,14 @@ void scMixerPro::createRuntime(Track& tr, ofxSCServer* server) {
             order.push_back(tr.synth);
         }
     } else {
-        tr.synth->createAndRun(0, 1, getActive());
+        // While the mixer already runs (a track moved to another server by a
+        // reorder, a server change, a new track): with its other synths,
+        // after the sources. At the server's head it would run before its
+        // source and read silence until the next full graph rebuild.
+        ofxSCSynth* first = nullptr;
+        for(auto* s : order) if(s) { first = s; break; }
+        if(first) tr.synth->createAndRun(2, first->nodeID, getActive());   // addBefore
+        else tr.synth->createAndRun(0, 1, getActive());   // the first one (the graph build places us)
         order.insert(order.begin(), tr.synth);
     }
 
@@ -2103,6 +2118,7 @@ void scMixerPro::buildSynth(ofxSCServer* server) {
 void scMixerPro::createSynth(ofxSCServer* server) {
     auto& state = serverStates[server];
     state.active = true;
+    state.placedBefore = -1;   // created in place by the graph build (not moved before a node)
     const int k = serverIndexOf(server);
     // Each at the head: created last-to-first, they end up in track order
     for(int t = (int)tracks.size() - 1; t >= 0; t--) {
@@ -2121,12 +2137,14 @@ void scMixerPro::free(ofxSCServer* server) {
     destroyMaster(server, true);
     auto& state = serverStates[server];
     state.order.clear();
+    state.placedBefore = -1;
     state.active = false;
 }
 
 void scMixerPro::moveSynthBefore(ofxSCServer* server, int nodeID) {
     // Every parameter is sent as it changes; the bus wiring was just sent by
     // setOutputBus / setInputBus. Only the execution order is left.
+    serverStates[server].placedBefore = nodeID;
     auto& order = serverStates[server].order;
     int target = nodeID;
     for(auto it = order.rbegin(); it != order.rend(); ++it) {
@@ -2890,12 +2908,64 @@ float scMixerPro::posToGain(float pos) {
 }
 
 void scMixerPro::draw(ofEventArgs&) {
+    // "Go to origin synth window": its Show is on; focus the window (a docked
+    // one: its tab comes to the front) as soon as it has been drawn
+    if(pendingWindowFocusFrames > 0) {
+        if(ImGui::FindWindowByName(pendingWindowFocus.c_str())) {
+            ImGui::SetWindowFocus(pendingWindowFocus.c_str());
+            pendingWindowFocusFrames = 0;
+        } else if(--pendingWindowFocusFrames == 0) pendingWindowFocus.clear();
+    }
     if(showWindow.get()) drawWindow();
+}
+
+// ── A track's origin synth ──────────────────────────────────────────────────
+
+scNode* scMixerPro::originOf(Track& tr) {
+    if(tr.isBus || tr.isReturn || tr.index < 0 || tr.index >= (int)availableInputs.size()) return nullptr;
+    scNode* node = availableInputs[tr.index]->getNodeRef();
+    // up the effects: each one's "In" (a mixer, or a synth, has none: stop)
+    std::vector<scNode*> seen;
+    while(node && seen.size() < 64) {
+        seen.push_back(node);
+        scNode* up = node->getInputNode("In");
+        if(!up || std::find(seen.begin(), seen.end(), up) != seen.end()) break;
+        node = up;
+    }
+    return node;
+}
+
+namespace {
+ofxOceanodeNode* findOceanodeNode(ofxOceanodeContainer* container, ofxOceanodeNodeModel* model) {
+    if(!container || !model) return nullptr;
+    for(auto* n : container->getAllModules()) {
+        if(!n) continue;
+        if(&n->getNodeModel() == model) return n;
+        if(auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&n->getNodeModel()))
+            if(auto* found = findOceanodeNode(macro->getContainer().get(), model)) return found;
+    }
+    return nullptr;
+}
+}
+
+// Select it and centre its canvas on it (a macro's canvas comes to the front)
+void scMixerPro::viewInCanvas(scNode* node) {
+    auto* root = ofxOceanodeShared::getRootContainer();
+    if(auto* n = findOceanodeNode(root, node)) root->showNodeInCanvas(*n);
+}
+
+void scMixerPro::goToWindow(scNode* node) {
+    ofParameter<bool>* show = node ? node->getWindowToggle() : nullptr;
+    const std::string title = node ? node->getWindowTitle() : "";
+    if(!show || title.empty()) return;
+    if(!show->get()) show->set(true);
+    pendingWindowFocus = title;
+    pendingWindowFocusFrames = 30;   // its first draw may be a frame or two away
 }
 
 void scMixerPro::drawWindow() {
     const float zoom = ofxOceanodeShared::getZoomLevel();
-    const std::string title = (canvasID == "Canvas" ? "" : canvasID + "/") + "SC Mixer Pro " + ofToString(getNumIdentifier());
+    const std::string title = getWindowTitle();
     bool open = true;
     ImGui::SetNextWindowSize(ImVec2(960.0f * zoom, 660.0f * zoom), ImGuiCond_FirstUseEver);
     if(!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
@@ -2922,12 +2992,23 @@ void scMixerPro::drawWindow() {
         : 0.0f;
     const float bodyH = std::max(1.0f, remainingH - eqH - panelGap);
 
+    // Too little height for every control: the strips drop their EQ curve
+    // preview first, then keep their least height and scroll (never overlap)
     const float masterW = 130.0f * zoom;
-    drawMasterStrip(masterW, bodyH);
+    {
+        const float masterNeed = masterStripMinHeight();
+        const bool masterScroll = bodyH < masterNeed;
+        ImGui::BeginChild("##mixerProMaster", ImVec2(masterW + (masterScroll ? ImGui::GetStyle().ScrollbarSize : 0.0f), bodyH), false,
+                          masterScroll ? 0 : (ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse));
+        drawMasterStrip(masterW, std::max(bodyH, masterNeed));
+        ImGui::EndChild();
+    }
     ImGui::SameLine(0, 8.0f * zoom);
     ImGui::BeginChild("##mixerProStrips", ImVec2(0, bodyH), false, ImGuiWindowFlags_HorizontalScrollbar);
     const float stripW = 92.0f * zoom;
-    const float stripH = std::max(1.0f, ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ScrollbarSize);
+    const float stripAvail = std::max(1.0f, ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ScrollbarSize);
+    stripCompact = stripAvail < trackStripMinHeight(stripW, false);
+    const float stripH = std::max(stripAvail, trackStripMinHeight(stripW, stripCompact));
     for(size_t t = 0; t < tracks.size(); t++) {
         ImGui::PushID((int)t);
         // Strips scrolled out of view only take their space
@@ -3269,6 +3350,35 @@ void scMixerPro::drawMasterStrip(float w, float h) {
     ImGui::PopClipRect();
 }
 
+// Mirrors drawTrackStrip's layout, top to bottom
+float scMixerPro::trackStripMinHeight(float w, bool compact) const {
+    const float zoom = ofxOceanodeShared::getZoomLevel();
+    const float btnH = 18.0f * zoom, innerW = w - 8.0f * zoom;
+    float h = 24.0f * zoom                       // name
+            + 24.0f * zoom                       // server / out
+            + 22.0f * zoom                       // channel adapter
+            + (compact ? 0.0f : 29.0f * zoom)    // EQ curve
+            + 4.0f * (btnH + 3.0f * zoom);       // inserts
+    if(!returns.empty()) {                       // aux sends (the tallest strip: one that has them)
+        const float cellW = innerW / (float)returns.size();
+        h += 2.0f * std::min(9.0f * zoom, cellW * 0.5f - 1.0f * zoom) + 4.0f * zoom;
+    }
+    h += btnH + 6.0f * zoom                      // sidechain
+       + 2.0f * 13.0f * zoom + 4.0f * zoom       // balance / width
+       + btnH + 6.0f * zoom                      // mute / solo
+       + 40.0f * zoom                            // the fader, at its smallest
+       + 20.0f * zoom;                           // level | peak
+    return h;
+}
+
+float scMixerPro::masterStripMinHeight() const {
+    const float zoom = ofxOceanodeShared::getZoomLevel();
+    return 26.0f * zoom + servers.size() * 16.0f * zoom   // servers' meters
+         + 4.0f * zoom + 3.0f * 21.0f * zoom - 1.0f * zoom  // HP EQ / MAX LIM / MASTER FX
+         + 6.0f * zoom + 40.0f * zoom                       // the fader, at its smallest
+         + 24.0f * zoom;                                    // level | peak
+}
+
 void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
     const float zoom = ofxOceanodeShared::getZoomLevel();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -3331,6 +3441,17 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
     if(ImGui::BeginPopupContextItem("##colour")) {
+        if(scNode* origin = originOf(tr)) {
+            ImGui::TextDisabled("Origin: %s %d", origin->nodeName().c_str(), origin->getNumIdentifier());
+            if(ImGui::MenuItem("View origin synth in canvas")) viewInCanvas(origin);
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Select it and centre the canvas on it (through the effects that feed this track)");
+            if(origin->getWindowToggle() && !origin->getWindowTitle().empty()) {
+                if(ImGui::MenuItem("Go to origin synth window")) goToWindow(origin);
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Open its window, or bring it to the front of its docked tabs");
+            }
+            ImGui::Separator();
+        }
         if(!tr.isBus) { deleteItem(); ImGui::Separator(); }
         float col[3] = { tr.color.r / 255.0f, tr.color.g / 255.0f, tr.color.b / 255.0f };
         if(ImGui::ColorPicker3("##trackColour", col, ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoSmallPreview))
@@ -3440,19 +3561,22 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
     }
     y += 18.0f * zoom + 4.0f * zoom;
 
-    // EQ curve (click: open the editor) + EQ / DC switches
-    const ImVec2 curvePos(start.x + pad, y);
-    const ImVec2 curveSize(innerW, 26.0f * zoom);
-    ImGui::SetCursorScreenPos(curvePos);
-    ImGui::InvisibleButton("##eqCurve", curveSize);
-    if(ImGui::IsItemClicked()) {
-        const bool closing = selectedEqTrack == eqId(tr) && panelTab == 0;
-        selectedEqTrack = closing ? -1 : eqId(tr);
-        panelTab = 0;
+    // EQ curve (click: open the editor) + EQ / DC switches. Left out when the
+    // strips are short (stripCompact): the FX button opens the same editor
+    if(!stripCompact) {
+        const ImVec2 curvePos(start.x + pad, y);
+        const ImVec2 curveSize(innerW, 26.0f * zoom);
+        ImGui::SetCursorScreenPos(curvePos);
+        ImGui::InvisibleButton("##eqCurve", curveSize);
+        if(ImGui::IsItemClicked()) {
+            const bool closing = selectedEqTrack == eqId(tr) && panelTab == 0;
+            selectedEqTrack = closing ? -1 : eqId(tr);
+            panelTab = 0;
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Click: edit this track's EQ (Comp / Reverb: tabs in the panel)");
+        drawMiniCurve(tr, curvePos, curveSize);
+        y += curveSize.y + 3.0f * zoom;
     }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Click: edit this track's EQ (Comp / Reverb: tabs in the panel)");
-    drawMiniCurve(tr, curvePos, curveSize);
-    y += curveSize.y + 3.0f * zoom;
 
     const float halfW = (innerW - 3.0f * zoom) * 0.5f;
     const float btnH = 18.0f * zoom;

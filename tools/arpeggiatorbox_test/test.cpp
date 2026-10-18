@@ -127,6 +127,92 @@ int main() {
         auto ns = window(e, 0, 2);
         CHECK(ns.size() == 6 && ns[1].offset == 0.25 && ns[2].offset == 0.5 && ns[3].offset == 0.25, "strum/swing offsets");
     }
+    {   // a linked ChordBox: C major until beat 4, then D minor; the chord's root for the bass
+        Engine e = make();
+        e.p.seqSize = 3; e.p.octave = 0; e.p.velRndm = 0; e.p.beatDiv = 2;
+        e.linkedSource = [](double b){ return b < 4.0 ? std::vector<float>{60, 64, 67} : std::vector<float>{62, 65, 69}; };
+        e.linkedChordStart = [](double b){ return b < 4.0 ? 0.0 : 4.0; };
+        e.invalidate();
+        auto ns = window(e, 0, 6);
+        // keep phase: beat 4 is pulse 8 -> step 8 % 3 = 2 -> the third note of Dm
+        CHECK(ns.size() == 12 && ns[7].pitch == 64 && ns[8].pitch == 69, "linked keep phase: %.0f %.0f", ns.size() > 8 ? ns[7].pitch : 0.f, ns.size() > 8 ? ns[8].pitch : 0.f);
+        e.linkedChange = 1; e.invalidate();
+        ns = window(e, 0, 6);
+        CHECK(ns.size() == 12 && ns[8].pitch == 62 && ns[9].pitch == 65, "linked reset pattern: %.0f %.0f", ns.size() > 9 ? ns[8].pitch : 0.f, ns.size() > 9 ? ns[9].pitch : 0.f);
+        e.linkedChange = 2; e.invalidate();
+        ns = window(e, 0, 6);
+        // next cycle: the cycle running at beat 4 (pulses 6-8) keeps C; pulse 9 starts a cycle in Dm
+        CHECK(ns.size() == 12 && ns[8].pitch == 67 && ns[9].pitch == 62, "linked next cycle: %.0f %.0f", ns.size() > 9 ? ns[8].pitch : 0.f, ns.size() > 9 ? ns[9].pitch : 0.f);
+    }
+    {   // through other nodes (ChordBox -> +12 -> the arpeggiator), a frame late: the map learns
+        // what they make of each chord, so the chord change plays on its beat
+        auto chordAt = [](double b){ return std::fmod(b, 8.0) < 4.0 ? std::vector<float>{60, 64, 67} : std::vector<float>{62, 65, 69}; };
+        auto startAt = [](double b){ return std::floor(b / 4.0) * 4.0; };
+        ChainMap chain;
+        std::vector<float> input = {72, 76, 79}, last;      // what the vector operation gives
+        double inputBeat = -1e300;
+        const double frame = 1.0 / 30.0;                    // 120 bpm, 60 fps
+        for(double now = 0.0; now < 2.0; now += frame){
+            // the input shows the chord of one frame before
+            auto c = chordAt(std::max(0.0, now - frame)); for(float& x : c) x += 12.0f; input = c;
+            if(!ChainMap::same(input, last)){ last = input; inputBeat = now; }
+            const double start = startAt(now);
+            if(inputBeat < start - 1e-9 && now - start < 0.3) continue;
+            chain.learn(chordAt(now), input);
+        }
+        std::vector<float> v;
+        CHECK(chain.offset && chain.delta == 12.0f && chain.predict({62, 65, 69}, v) && v[0] == 74.0f, "chain: offset learned, an unseen chord predicted");
+        // just after the change the input is still the old chord: nothing learned wrong
+        const size_t before = chain.seen.size();
+        { const double now = 4.0 + frame * 0.5; if(!(inputBeat < startAt(now) - 1e-9 && now - startAt(now) < 0.3)) chain.learn(chordAt(now), {72, 76, 79}); }
+        CHECK(chain.seen.size() == before, "chain: a stale input right after the change is not learned");
+        Engine e = make();
+        e.p.seqSize = 3; e.p.octave = 0; e.p.velRndm = 0; e.p.beatDiv = 2;
+        e.linkedSource = [&](double b){ std::vector<float> out; return chain.predict(chordAt(b), out) ? out : input; };
+        e.linkedChordStart = startAt;
+        e.invalidate();
+        auto ns = window(e, 0, 6);
+        CHECK(ns.size() == 12 && ns[7].pitch == 76 && ns[8].pitch == 81, "chain: the chord changes on its beat: %.0f %.0f", ns.size() > 8 ? ns[7].pitch : 0.f, ns.size() > 8 ? ns[8].pitch : 0.f);
+        // not an offset (a different voicing per chord): the values seen per chord
+        ChainMap m;
+        m.learn({60, 64, 67}, {48, 64, 79});
+        CHECK(!m.offset && m.predict({60, 64, 67}, v) && v[0] == 48.0f && !m.predict({62, 65, 69}, v), "chain: a learned voicing, nothing guessed");
+        // the nodes in between changed: forget and learn again
+        chain.learn({60, 64, 67}, {67, 71, 74});
+        CHECK(chain.seen.size() == 1 && chain.delta == 7.0f, "chain: relearn after a change");
+    }
+    {   // Octave Fold without Fold Poly: the added notes sit their interval above the folded main note
+        Engine e = make();
+        e.resetSource(buildSource(SRC_SCALE, {72, 76, 79}, {}, true, true));
+        e.p.octave = 4; e.p.octaveFold = 2; e.p.foldPoly = false; e.p.pitchExpand = true;
+        e.p.polyphony = 3; e.p.polyInterval = 1; e.p.velRndm = 0; e.invalidate();
+        bool ok = true;
+        for(const auto& pl : e.pulsesIn(0, 8)){
+            const auto ns = e.notesFor(pl);
+            if(ns.size() != 3) { ok = false; break; }
+            const float d1 = ns[1].pitch - ns[0].pitch, d2 = ns[2].pitch - ns[1].pitch;
+            if(ns[0].pitch < 48 || ns[0].pitch >= 72 || d1 < 3 || d1 > 5 || d2 < 3 || d2 > 5) { ok = false; std::printf("  %.0f %.0f %.0f\n", ns[0].pitch, ns[1].pitch, ns[2].pitch); break; }
+        }
+        CHECK(ok, "poly voices relative to the folded main note");
+    }
+    {   // deviation seeds: a seed repeats per cycle; 0 (no seed) draws anew each cycle and each pass
+        auto cyclePitches = [](Engine& e, int cyc){
+            std::vector<float> v;
+            const int s = e.p.seqSize;
+            for(const auto& pl : e.pulsesIn((double)cyc * s / e.bd(), (double)(cyc + 1) * s / e.bd())) for(const auto& n : e.notesFor(pl)) v.push_back(n.pitch);
+            return v;
+        };
+        Engine e = make();
+        e.p.seqSize = 8; e.p.octaveDev = 0.5f; e.p.pitchDev = 0.5f; e.p.pitchDevRng = 5; e.p.devSeed = 42; e.invalidate();
+        CHECK(cyclePitches(e, 0) == cyclePitches(e, 1), "dev seed: the same deviations every cycle");
+        e.p.devCycle = true; e.invalidate();
+        CHECK(cyclePitches(e, 0) != cyclePitches(e, 1), "dev seed each cycle: a new set per cycle");
+        e.p.devSeed = 0; e.p.devCycle = false; e.invalidate();
+        const auto a = cyclePitches(e, 0);
+        CHECK(a != cyclePitches(e, 1), "dev seed 0: new draws per cycle");
+        e.fresh ^= 0x1234567; e.invalidate();
+        CHECK(a != cyclePitches(e, 0), "dev seed 0: new draws on a new pass");
+    }
     std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
     return failures ? 1 : 0;
 }

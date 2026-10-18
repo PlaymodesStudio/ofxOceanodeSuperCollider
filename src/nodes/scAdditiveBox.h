@@ -66,6 +66,11 @@ class serverManager;
 
 class scAdditiveBox : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "AdditiveBox " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_VOICES = 16;
     static constexpr int MAX_UNISON = 8;
     static constexpr int MAX_OUTPUTS = 16;       // AdditiveBoxV<P>_<O> exists for O = 1..16
@@ -377,6 +382,7 @@ private:
     std::vector<std::vector<float>> curveData; // filter 1 curve of each voice
     std::vector<std::vector<float>> sweepData; // sweep shape of each voice
     std::vector<int> rolls;                    // random draw generation of each voice
+    uint32_t freshSeed = 1;                    // Seed 0 (no seed): this node's own, drawn at creation
     std::vector<int> lastTrig;
     std::vector<bool> gateOpen;
     std::vector<float> liveData;               // display bus of the first server

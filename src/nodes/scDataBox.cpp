@@ -551,7 +551,7 @@ void scDataBox::resetRegionToFile(){
 
 void scDataBox::drawWindow(){
     const float zoom = ofxOceanodeShared::getZoomLevel();
-    const std::string title = "DataBox " + ofToString(getNumIdentifier());
+    const std::string title = getWindowTitle();
     ImGui::SetNextWindowSize(ImVec2(900 * zoom, 540 * zoom), ImGuiCond_FirstUseEver);
     bool open = showWindow.get();
     if(ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)){

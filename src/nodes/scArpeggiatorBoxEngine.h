@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <vector>
@@ -98,7 +99,7 @@ enum Tag : uint64_t {
     T_PATTERN = 101, T_ACC_STEP, T_ACC_NOTE, T_DUR_STEP, T_DUR_NOTE, T_VEL, T_VELSTEP, T_STRUM, T_STRUMDIR,
     T_POS, T_BASSOCT1, T_BASSOCT2,
     // the streams' "each cycle" seeds
-    S_PATTERN = 201, S_ACC, S_DUR, S_VEL, S_VELSTEP, S_STRUM, S_STRUMDIR, S_POS, S_BASSOCT
+    S_PATTERN = 201, S_ACC, S_DUR, S_VEL, S_VELSTEP, S_STRUM, S_STRUMDIR, S_POS, S_BASSOCT, S_DEV
 };
 
 // ── Parameters (the GUI node's, with its defaults) ──────────────────────────
@@ -130,6 +131,7 @@ struct Params {
     bool pitchExpand = true;
     int expandStep = 12, transpose = 0;
     float octaveDev = 0.0f; int octaveDevRng = 1;
+    int devSeed = 0; bool devCycle = false;     // the deviations' draws
     float idxDev = 0.0f;    int idxDevRng = 2;
     float pitchDev = 0.0f;  int pitchDevRng = 2;
     bool byGate = true;                  // accents / durations step with played pulses (else every pulse)
@@ -221,12 +223,66 @@ inline std::vector<float> buildSource(int mode, const std::vector<float>& scale,
     return s;
 }
 
+// What the nodes between a ChordBox and the arpeggiator (vector operations,
+// a transposition...) make of its chords, learned as they play: the values
+// seen for each chord, else the chord plus the constant offset last seen.
+// The arpeggiator then plays the next chord's values from the chord change
+// on, instead of a frame or two after it, when they reach its input.
+struct ChainMap {
+    std::vector<std::pair<std::vector<float>, std::vector<float>>> seen;
+    bool offset = false;
+    float delta = 0.0f;
+    uint64_t revision = 0;
+
+    static bool same(const std::vector<float>& a, const std::vector<float>& b) {
+        if(a.size() != b.size()) return false;
+        for(size_t i = 0; i < a.size(); i++) if(std::abs(a[i] - b[i]) > 0.001f) return false;
+        return true;
+    }
+    const std::vector<float>* find(const std::vector<float>& chord) const {
+        for(const auto& [c, v] : seen) if(same(c, chord)) return &v;
+        return nullptr;
+    }
+    bool predict(const std::vector<float>& chord, std::vector<float>& out) const {
+        if(const auto* v = find(chord)) { out = *v; return true; }
+        if(!offset || chord.empty()) return false;
+        out = chord;
+        for(float& x : out) x += delta;
+        return true;
+    }
+    // The input showed `values` while `chord` played. True when that taught something.
+    bool learn(const std::vector<float>& chord, const std::vector<float>& values) {
+        if(const auto* v = find(chord)) {
+            if(same(*v, values)) return false;
+            seen.clear();       // the nodes in between changed: learn again
+        }
+        seen.emplace_back(chord, values);
+        if(seen.size() > 64) seen.erase(seen.begin());
+        offset = !chord.empty() && chord.size() == values.size();
+        delta = offset ? values[0] - chord[0] : 0.0f;
+        for(size_t i = 1; offset && i < chord.size(); i++)
+            if(std::abs(values[i] - chord[i] - delta) > 0.001f) offset = false;
+        revision++;
+        return true;
+    }
+    void clear() { seen.clear(); offset = false; delta = 0.0f; revision++; }
+};
+
 class Engine {
 public:
     Params p;
     uint64_t seed = 1;          // the node Seed in effect
+    uint64_t fresh = 0x9E3779B9; // a section seed of 0: new draws every cycle (renewed every pass)
     int64_t origin = 0;         // the ordinal of step 0 (Reset)
     bool armed = false;         // One Shot: a Reset happened
+
+    // ── A linked chord source (a ChordBox, scChordLink.h; clocked modes) ────
+    // the source values at a beat, the chord's start (Reset pattern), its root
+    std::function<std::vector<float>(double)> linkedSource;
+    std::function<double(double)> linkedChordStart;
+    std::function<float(double)> linkedRoot;
+    int linkedChange = 0;       // Source Change: 0 keep phase, 1 reset pattern, 2 next cycle
+    bool linked() const { return (bool)linkedSource && !p.triggerMode; }
 
     // ── Source history: position (beat, or ordinal in trigger mode) -> values
     void setSource(double from, const std::vector<float>& values) {
@@ -284,6 +340,12 @@ public:
         return (voices - 1) * (p.strum + p.strumRndm) + 0.5 * p.swing + p.positionRndm + 0.01;
     }
     double maxDurSteps() const { return 16.0; }
+    // How many pulses' notes can sound at once (the longest note, with its
+    // offset, over steps of one): Round robin's voices per chord tone
+    int overlap() const {
+        const double longest = std::clamp((double)p.durBase + std::max(0.0f, p.durStrength) + std::max(0.0f, p.durRndm), 0.01, 16.0);
+        return std::clamp((int)std::ceil(longest + maxOffsetSteps() - 0.011), 1, 16);
+    }
 
     // ── Pulses ──────────────────────────────────────────────────────────────
     // Every pulse with its beat in [from, to) (clocked modes)
@@ -386,7 +448,7 @@ public:
         std::vector<double> beats;
     };
     const Cycle& cycle(int64_t c) {
-        auto it = cycles.find(c);
+        auto it = cycles.find({origin, c});
         if(it != cycles.end()) return it->second;
         if(cycles.size() > 512) cycles.clear();
         Cycle cy;
@@ -403,7 +465,7 @@ public:
             cy.beats.push_back(beat);
             if(on) g++;
         }
-        return cycles.emplace(c, std::move(cy)).first->second;
+        return cycles.emplace(std::make_pair(origin, c), std::move(cy)).first->second;
     }
     int randomShift(int64_t c) const {
         const float chance = std::clamp(p.rndShiftChance, 0.0f, 1.0f);
@@ -465,6 +527,17 @@ public:
 
     // ── Notes ───────────────────────────────────────────────────────────────
     std::vector<Note> notesFor(const Pulse& pl) {
+        // Reset pattern with a linked ChordBox: each chord starts the pattern again
+        struct OriginScope {
+            Engine& e; int64_t saved;
+            OriginScope(Engine& en, const Pulse& pl) : e(en), saved(en.origin) {
+                if(e.linked() && e.linkedChange == 1 && e.linkedChordStart){
+                    const double start = e.linkedChordStart(pl.beat);
+                    e.origin = e.firstPulseFrom(start - 1e-9).n;
+                }
+            }
+            ~OriginScope(){ e.origin = saved; }
+        } originScope(*this, pl);
         std::vector<Note> out;
         const int64_t r = pl.n - origin;
         const int64_t c = cycleOf(r);
@@ -476,7 +549,9 @@ public:
         const int s = S();
         const int step = stepOf(r);
         const double beat = p.triggerMode ? (double)pl.n / bd() : pl.beat;
-        const auto& src = sourceAt(p.triggerMode ? (double)pl.n : pl.beat);
+        std::vector<float> linkedValues;
+        if(linked()) linkedValues = linkedSource(linkedChange == 2 && !cy.beats.empty() ? cy.beats.front() : pl.beat);
+        const auto& src = linked() ? linkedValues : sourceAt(p.triggerMode ? (double)pl.n : pl.beat);
 
         const int64_t accentIndex = p.byGate ? g : r;
         const int64_t shiftedAcc = accentIndex - shift;
@@ -494,6 +569,11 @@ public:
         const float lfo = lfoOffset(beat);
         const float curve = curveAt(step);
 
+        // Octave Fold without Fold Poly: the chord notes keep their intervals
+        // above the folded main note (not their unfolded octaves)
+        const bool relative = p.octaveFold > 0 && !p.foldPoly;
+        const float mainSource = sourceValue(src, baseSrc);
+        const float mainFolded = mapPitch(mainSource, true);
         double prevPitch = std::numeric_limits<double>::quiet_NaN();
         for(int v = 0; v < poly; v++) {
             if(p.noteChance < 1.0f && unit(H(seed, U64(r), U64(v), T_NOTECH)) > p.noteChance) continue;
@@ -503,8 +583,9 @@ public:
             float pitch = 60.0f;
             for(int a = 0; a < attempts; a++) {
                 const int ci = si + a;
-                const float dev = deviation(src, ci, r, v * 64 + a);
-                pitch = std::clamp(mapPitch(sourceValue(src, ci), fold) + dev, 0.0f, 127.0f);
+                const float dev = deviation(src, ci, c, step, v * 64 + a);
+                const float mapped = v > 0 && relative ? mainFolded + (sourceValue(src, ci) - mainSource) : mapPitch(sourceValue(src, ci), fold);
+                pitch = std::clamp(mapped + dev, 0.0f, 127.0f);
                 if(std::isnan(prevPitch) || std::abs(pitch - prevPitch) > 0.001) break;
             }
             prevPitch = pitch;
@@ -564,7 +645,7 @@ public:
                     float vel = p.bassVel;
                     if(p.bassVelRndm > 0.0f) vel += p.bassVelRndm * (float)unit(H(seed, U64(r), U64(bv), T_BASS_VEL));
                     nt.vel = std::clamp(vel, 0.0f, 1.0f);
-                    float bp = p.root + (float)p.transpose;
+                    float bp = (linkedRoot && !p.triggerMode ? linkedRoot(pl.beat) : p.root) + (float)p.transpose;
                     if(p.bassPitchMod) bp += (float)(p.octave * 12);
                     bp += (float)((p.bassOctave + octOff + bv) * 12);
                     nt.pitch = std::clamp(bp, 0.0f, 127.0f);
@@ -633,7 +714,7 @@ public:
             case LFO_SAW: return (float)x;
             case LFO_INVSAW: return (float)(1.0 - x);
             case LFO_PULSE: return x < (double)p.lfoWidth ? 1.0f : 0.0f;
-            default: return valueNoise(phase, H((uint64_t)(uint32_t)p.lfoSeed, 0x51f));
+            default: return valueNoise(phase, H(p.lfoSeed == 0 ? fresh : (uint64_t)(uint32_t)p.lfoSeed, 0x51f));
         }
     }
     float lfoOffset(double beat) const {
@@ -698,7 +779,7 @@ public:
     }
     int64_t bounceIndex(double beat) const { return (int64_t)std::floor(bounceCount(beat) + 1e-9); }
 
-    std::map<int64_t, Cycle> cycles;
+    std::map<std::pair<int64_t, int64_t>, Cycle> cycles;   // by (origin, cycle)
 
 private:
     std::map<double, std::vector<float>> sources;
@@ -751,7 +832,11 @@ private:
     }
 
     // A stream's seed for cycle c ("each cycle": drawn from the node Seed)
+    // A section's seed: 0, no seed (new draws every cycle, and every pass:
+    // `fresh` is renewed on jumps and loop passes); else repeating per step,
+    // or a new set each cycle (eachCycle)
     uint64_t streamSeed(int base, bool eachCycle, uint64_t stream, int64_t c) const {
+        if(base == 0) return H(fresh, stream, U64(c), 0xF4E5);
         if(eachCycle) return H(seed, stream, U64(c), 0xC1C1E);
         return H((uint64_t)(uint32_t)base, stream, 0x5EED);
     }
@@ -839,9 +924,10 @@ private:
         const double u = patternUnit(p.bassOctRndSeed, p.bassOctRndCycle, S_BASSOCT, c, idx, 0, T_BASSOCT2, shift);
         return std::clamp((int)std::floor(u * count), 0, count - 1) - range;
     }
-    float deviation(const std::vector<float>& src, int64_t si, int64_t r, int k) const {
+    float deviation(const std::vector<float>& src, int64_t si, int64_t c, int step, int k) const {
         float dev = 0.0f;
-        auto u = [&](uint64_t tag){ return unit(H(seed, U64(r), U64(k), tag)); };
+        const uint64_t ds = streamSeed(p.devSeed, p.devCycle, S_DEV, c);
+        auto u = [&](uint64_t tag){ return unit(H(ds, U64(wrapI(step, S())), U64(k), tag)); };
         if(p.octaveDev > 0.0f && u(T_DEV1) < p.octaveDev)
             dev += 12.0f * (float)(1 + std::min(std::max(1, p.octaveDevRng) - 1, (int)(u(T_DEV2) * std::max(1, p.octaveDevRng))));
         if(p.idxDev > 0.0f && u(T_DEV3) < p.idxDev) {

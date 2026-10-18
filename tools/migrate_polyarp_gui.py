@@ -10,7 +10,7 @@ node's own keys, so a preset is converted by renaming:
   Polyphonic_Arpeggiator_GUI_<n>.json -> SC_ArpeggiatorBox_<n>.json (settings converted:
                       its editorState becomes the node's "ArpeggiatorBox" settings, the
                       clock toggles become Clock, old millisecond lengths become steps)
-Outputs: Round robin over Voices = 2 x the largest chord (4..16).
+Outputs: Round robin (its voices follow the chord size: 2 x the largest chord).
 Each affected folder is copied first to <data>/Presets_backup_ArpeggiatorBox/<its path>.
 Running it twice is harmless.
 
@@ -71,10 +71,7 @@ def convert_node(old, keys):
     for k, v in list(s.items()):
         if isinstance(v, (int, float)) and not isinstance(v, bool) and v != v:
             del s[k]
-    poly = int(num(s.get("polyphony", 1), 1)) + int(num(s.get("polyAccent", 0), 0))
-    voices = max(4, min(16, 2 * poly))
     s["voiceMode"] = 1
-    s["bassVoices"] = max(1, min(4, int(num(s.get("bassPolyphony", 1), 1))))
     transport = str(old.get("Transport_Clock", "0")) == "1" or bool(state.get("internalClockMode", False))
     free = str(old.get("Internal_Clock", "0")) == "1" or bool(state.get("freeRunClock", False))
     clock = (2 if free else 1) if transport else 0
@@ -87,7 +84,6 @@ def convert_node(old, keys):
         "Scale": old.get("Scale", state.get("scale", [0, 2, 4, 5, 7, 9, 11])),
         "Root": str(old.get("Root", state.get("root", "0"))),
         "Seed": "1",
-        "Voices": str(voices),
         "Snapshot": "0",
         "ArpeggiatorBox": s,
         "ArpeggiatorBoxPublished": published,

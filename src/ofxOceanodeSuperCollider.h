@@ -58,6 +58,7 @@
 #include "nodes/scMetroBox.h"
 #include "nodes/scEuclideanBox.h"
 #include "nodes/scArpeggiatorBox.h"
+#include "nodes/scChordBox.h"
 #include "nodes/scBufferBrowser.h"
 #include "nodes/scDynGenNode.h"
 #include "nodes/scDynGenPolyNode.h"
@@ -203,6 +204,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scMetroBox>("SuperCollider");
 	o.registerModel<scEuclideanBox>("SuperCollider");
 	o.registerModel<scArpeggiatorBox>("SuperCollider");
+	o.registerModel<scChordBox>("SuperCollider");
 #endif
 	o.registerModel<scBufferBrowser>("SuperCollider", controller->getServers());
 	o.registerModel<scFFT>("SuperCollider", controller->getServers());

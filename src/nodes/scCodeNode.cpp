@@ -1732,7 +1732,7 @@ void scCodeNode::drawEditor(ImVec2 size){
 }
 
 void scCodeNode::drawWindow(){
-    const std::string title = (canvasID == "Canvas" ? "" : canvasID + "/") + "SC Code " + ofToString(getNumIdentifier());
+    const std::string title = getWindowTitle();
     bool open = showWindow.get();
     ImGui::SetNextWindowSize(ImVec2(760, 640), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), &open)){

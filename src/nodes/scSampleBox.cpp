@@ -25,6 +25,22 @@ bool liveAudioBus(ofxSCServer* s, ofxSCBus* b) {
 bool liveControlBus(ofxSCServer* s, ofxSCBus* b) {
     return s && b && b->index >= 0 && b->index < (int)s->controlBusses.size() && s->controlBusses[b->index] == b;
 }
+// a bus that is ours on this server (a new one after a reboot), or nullptr
+void ensureBus(ofxSCServer* s, ofxSCBus*& b, int rate, int channels) {
+    const bool live = rate == RATE_AUDIO ? liveAudioBus(s, b) : liveControlBus(s, b);
+    if(live) return;
+    delete b;     // after a reboot its index belongs to nobody
+    b = new ofxSCBus(rate, channels, s);
+    const bool ok = rate == RATE_AUDIO ? liveAudioBus(s, b) : liveControlBus(s, b);
+    if(!ok) { b->free(); delete b; b = nullptr; }
+}
+void dropBus(ofxSCServer* s, ofxSCBus*& b, int rate) {
+    if(!b) return;
+    const bool live = rate == RATE_AUDIO ? liveAudioBus(s, b) : liveControlBus(s, b);
+    if(live) b->free();
+    delete b;
+    b = nullptr;
+}
 
 // GrainBox's palette (scGrainBoxPoly.cpp, gbpPal)
 namespace pal {
@@ -52,8 +68,9 @@ ImU32 voiceCol(int v, int alpha) {
     const auto* c = voiceRGB[((v % 8) + 8) % 8];
     return IM_COL32(c[0], c[1], c[2], alpha);
 }
+// a pad's colour (the list, the strips)
+ImU32 padCol(int k, int alpha) { return voiceCol(k, alpha); }
 }
-
 
 std::string formatTime(float seconds) {
     char s[32];
@@ -61,6 +78,9 @@ std::string formatTime(float seconds) {
     else std::snprintf(s, sizeof(s), "%d:%06.3f", (int)(seconds / 60.0f), std::fmod(seconds, 60.0f));
     return s;
 }
+
+const char* fxNames[] = {"EQ", "Comp", "Sat", "Echo", "Reverb", "Stereo"};
+const char* fxDefs[] = {"SampleBoxEQ_", "SampleBoxComp_", "SampleBoxSat_", "SampleBoxEcho_", "SampleBoxReverb_", "SampleBoxImage_"};
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -70,153 +90,79 @@ std::string formatTime(float seconds) {
 scSampleBox::scSampleBox(std::vector<serverManager*> s)
     : scNode("SampleBox"), servers(std::move(s)) {
     color = ofColor(103, 178, 217);
-    description = "Sampler for one audio file: trigger or gate it (Oceanode values or an audio "
-                  "signal), one-shot / loop / gated, resample or time stretch, reverse, up to 8 "
-                  "voices, envelopes and LFOs routed to its parameters, filter, EQ, compressor, saturator "
-                  "and reverb. Show opens the editor; right-click a control there to publish it.";
+    description = "Sampler kit: 1 to 16 pads, each with its own sample, sound (one-shot / loop / gated, resample "
+                  "or time stretch, reverse, filter, envelopes and LFOs routed to its parameters) and mixer "
+                  "channel (level, pan, mute / solo, EQ, compressor, saturator, echo, reverb, stereo image; an "
+                  "effect costs nothing while off). Pads play the channels of Trig/Gate Audio (or the Trigger/Gate "
+                  "values): wire a MetroBox's or EuclideanBox's Gates in and lane n plays pad n. Out: every pad "
+                  "mixed; Pad <n>: each alone. Show opens the editor; right-click a control there to publish it.";
     for(auto* sm : servers) if(sm && sm->getServer()) { browser.setPreviewServer(sm->getServer()); break; }
     std::string dir = ofToDataPath("Supercollider/Samples", true);
     if(!std::filesystem::exists(dir)) dir = ofToDataPath("", true);
     browser.refresh(dir);
-    browser.onActivate = [this](const std::string& path) { loadSample(path); browser.stopPreview(); };
+    browser.onActivate = [this](const std::string& path) {
+        if(!pads.empty()) loadSample(*pads[std::clamp(selected, 0, (int)pads.size() - 1)], path);
+        browser.stopPreview();
+    };
 }
 
 scSampleBox::~scSampleBox() {
     nodeListeners.unsubscribeAll();
     browser.stopPreview();
-    if(decodeTask.valid()) decodeTask.wait();
-    for(auto& [s, synth] : synths) if(synth) { synth->free(); delete synth; }
-    synths.clear();
-    std::vector<ofxSCServer*> grouped;
-    for(auto& [srv, g] : groups) grouped.push_back(srv);
-    for(auto* srv : grouped) freeGroups(srv);
-    while(!buffers.empty()) releaseBuffers(buffers.begin()->first);
-    for(auto& [srv, bus] : visBuses) if(bus) { if(liveControlBus(srv, bus)) bus->free(); delete bus; }
-    visBuses.clear();
+    for(auto& p : pads) if(p->sample->task.valid()) p->sample->task.wait();
+    std::vector<ofxSCServer*> active;
+    for(auto& [srv, n] : nodeSC) active.push_back(srv);
+    for(auto* srv : active) free(srv);
+    for(auto& p : pads) {
+        p->listeners.unsubscribeAll();
+        while(!p->sample->buffers.empty()) releaseBuffers(*p->sample, p->sample->buffers.begin()->first);
+    }
 }
 
 void scSampleBox::setup() {
-#define F(p, label, def, lo, hi, sc) p.set(label, def, lo, hi); registerControl(p, sc)
-#define I(p, label, def, lo, hi, sc) p.set(label, def, lo, hi); registerControl(p, sc)
-#define B(p, label, def, sc) p.set(label, def); registerControl(p, sc)
     addSeparator("SampleBox");
     addParameter(showWindow.set("Show", false));
-    F(trigger, "Trigger/Gate", 0.0f, 0.0f, 1.0f, "gate"); addParameter(trigger);
-    F(pitch, "Pitch", 60.0f, 0.0f, 127.0f, "pitch");
-    pitchIn.attach(addParameter(pitch), availableInputs, [this](){ for(auto& o : outputs) o = o; });
-    F(velocity, "Velocity", 1.0f, 0.0f, 1.0f, "velocity");
-    velIn.attach(addParameter(velocity), availableInputs, [this](){ for(auto& o : outputs) o = o; });
-    F(gain, "Gain", 0.7f, 0.0f, 2.0f, "gain"); addParameter(gain);
-    I(channels, "N Chan", 2, 1, MaxChannels, "nchan"); addParameter(channels);
+    addParameter(trigger.set("Trigger/Gate", {0.0f}, {0.0f}, {1.0f}));
+    pitchIn.attach(addParameter(pitch.set("Pitch", {60.0f}, {0.0f}, {127.0f})), availableInputs,
+                   [this](){ for(auto& o : outputs) o = o; });
+    velIn.attach(addParameter(velocity.set("Velocity", {1.0f}, {0.0f}, {1.0f})), availableInputs,
+                 [this](){ for(auto& o : outputs) o = o; });
+    addParameter(gain.set("Gain", 0.7f, 0.0f, 2.0f));
+    addParameter(channels.set("N Chan", 2, 1, MaxChannels));
     addInput("Trig/Gate Audio");
     addOutput("Out");
 
-    F(inPoint, "In Point", 0.0f, 0.0f, 1.0f, "inpoint");
-    F(outPoint, "Out Point", 1.0f, 0.0f, 1.0f, "outpoint");
-    F(loopCrossfade, "Loop Crossfade %", 0.0f, 0.0f, 50.0f, "loopcrossfade");
-    F(rate, "Rate", 1.0f, 0.125f, 8.0f, "rate");
-    F(transpose, "Transpose", 0.0f, -24.0f, 24.0f, "transpose");
-    F(stretch, "Stretch", 1.0f, 0.125f, 8.0f, "stretch");
-    F(warpWindow, "Warp Window", 0.15f, 0.01f, 1.0f, "warpwindow");
-    B(loop, "Loop", false, "loop");
-    B(poly, "Polyphonic", true, "poly");
-    B(gateMode, "Gate Mode", false, "gatemode");
-    B(reverse, "Reverse", false, "reverse");
-    I(voices, "Max Voices", 8, 1, MaxVoices, "voices");
-    I(stretchMode, "Stretch Mode", 0, 0, 1, "stretchmode");
-    F(attack, "Amp Attack", 0.005f, 0.0f, 5.0f, "attack");
-    F(release, "Amp Release", 0.05f, 0.001f, 5.0f, "release");
-    F(pan, "Pan", 0.0f, -1.0f, 1.0f, "pan");
-    B(filterOn, "Filter On", false, "filteron");
-    I(filterType, "Filter Type", 0, 0, 2, "filtertype");
-    F(cutoff, "Cutoff", 16000.0f, 20.0f, 20000.0f, "cutoff");
-    F(resonance, "Resonance", 0.7f, 0.1f, 2.0f, "resonance");
-    B(eqOn, "EQ On", false, "eqon");
-    const char* eqNames[5] = {"Low", "Lo Mid", "Mid", "Hi Mid", "High"};
-    const char* eqSC[5] = {"eq1", "eq2", "eq3", "eq4", "eq5"};
-    const float eqDefaults[5] = {80, 250, 1000, 4000, 12000};
-    for(int n = 0; n < 5; ++n) {
-        const std::string prefix = std::string("EQ ") + eqNames[n];
-        eqGain[n].set(prefix, 0.0f, -24.0f, 24.0f); registerControl(eqGain[n], eqSC[n]);
-        eqFreq[n].set(prefix + " Freq", eqDefaults[n], 20.0f, 20000.0f);
-        registerControl(eqFreq[n], (std::string(eqSC[n]) + "freq").c_str());
-        eqShape[n].set(prefix + (scEQEditor::isShelf(n) ? " Slope" : " Q"), 1.0f,
-                       0.1f, scEQEditor::isShelf(n) ? 4.0f : 20.0f);
-        registerControl(eqShape[n], (std::string(eqSC[n]) + "shape").c_str());
-    }
-    F(eqMix, "EQ Mix", 1.0f, 0.0f, 1.0f, "eqmix");
-    B(compOn, "Compressor On", false, "compon");
-    F(compThreshold, "Comp Threshold", -18.0f, -60.0f, 0.0f, "compthreshold");
-    F(compRatio, "Comp Ratio", 3.0f, 1.0f, 20.0f, "compratio");
-    F(compAttack, "Comp Attack", 10.0f, 0.1f, 200.0f, "compattack");
-    F(compRelease, "Comp Release", 150.0f, 1.0f, 2000.0f, "comprelease");
-    F(compMakeup, "Comp Makeup", 0.0f, -12.0f, 24.0f, "compmakeup");
-    B(satOn, "Saturator On", false, "saton");
-    F(satDrive, "Sat Drive", 6.0f, 0.0f, 36.0f, "satdrive");
-    F(satMix, "Sat Mix", 1.0f, 0.0f, 1.0f, "satmix");
-    B(reverbOn, "Reverb On", false, "reverbon");
-    F(revSize, "Rev Size", 30.0f, 0.0f, 60.0f, "revsize");
-    F(revDecay, "Rev Decay", 4.0f, 0.05f, 60.0f, "revdecay");
-    F(revPredelay, "Rev Predelay", 20.0f, 0.0f, 1000.0f, "revpredelay");
-    F(revLowpass, "Rev Lowpass", 10000.0f, 20.0f, 20000.0f, "revlowpass");
-    F(revPosition, "Rev Position", 0.8f, 0.0f, 1.0f, "revposition");
-    F(revSpread, "Rev Spread", 0.15f, -1.0f, 1.0f, "revspread");
-    F(revMix, "Rev Mix", 0.33f, 0.0f, 1.0f, "revmix");
-    F(width, "Width", 1.0f, 0.0f, 2.0f, "width");
-    F(diffuse, "Diffuse", 0.0f, 0.0f, 1.0f, "diffuse");
-    F(bassMono, "Bass Mono", 0.0f, 0.0f, 1.0f, "bassmono");
-    F(bassFreq, "Bass Freq", 150.0f, 20.0f, 1000.0f, "bassfreq");
-
-    // ── The shared modulation: envelopes, LFOs, routing to these targets ─────
-    {
-        scModulation::Host h;
-        h.regF = [this](ofParameter<float>& p, std::function<void()> f){ regMod(p, f); };
-        h.control = [this](const std::string& k) -> ofAbstractParameter* {
-            for(auto& c : controls) if(c.key == k) return c.f ? (ofAbstractParameter*)c.f : (ofAbstractParameter*)c.i;
-            return nullptr;
-        };
-        h.regI = [this](ofParameter<int>& p, std::function<void()> f){ regMod(p, f); };
-        h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ regMod(p, f); };
-        h.regV = [this](ofParameter<std::vector<float>>& p, std::function<void()> f){ regMod(p, f); };
-        h.publishMenu = [this](const std::string& k){ drawPublishMenu(k); };
-        h.publishedUnderline = [this](const std::string& k){ drawPublishedUnderline(k); };
-        h.unpublish = [this](const std::string& k){ unpublish(k); };
-        h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
-        h.voices = [](){ return 8; };               // the synth's 8 voices
-        // the synth reads these, in this order (samplebox.scd)
-        mod.setup(h, {{"Pitch", 24, "st"}, {"Rate", 4, "x"}, {"In", 1, "", true}, {"Out", 1, "", true}, {"Gain", 1, ""},
-                      {"Pan", 1, ""}, {"Stretch", 4, "x"}, {"Grain", 0.5f, "s"}, {"Loop XF", 50, "%"},
-                      {"Cutoff", 8, "oct"}, {"Reso", 1, ""}, {"Drive", 24, "dB"}, {"Comp Thr", 24, "dB"},
-                      {"Rev Mix", 1, ""}, {"Width", 1, ""}}, true, true, true);
-        mod.targetOfKey = {{pitch.getEscapedName(), 0}, {rate.getEscapedName(), 1}, {inPoint.getEscapedName(), 2},
-                           {outPoint.getEscapedName(), 3}, {gain.getEscapedName(), 4}, {pan.getEscapedName(), 5},
-                           {stretch.getEscapedName(), 6}, {warpWindow.getEscapedName(), 7}, {loopCrossfade.getEscapedName(), 8},
-                           {cutoff.getEscapedName(), 9}, {resonance.getEscapedName(), 10}, {satDrive.getEscapedName(), 11},
-                           {compThreshold.getEscapedName(), 12}, {revMix.getEscapedName(), 13}, {width.getEscapedName(), 14}};
-    }
-#undef F
-#undef I
-#undef B
-    // Oceanode trigger pulses can be shorter than one SC control block. Send
-    // an incrementing counter on each rising edge so those pulses survive.
-    nodeListeners.push(trigger.newListener([this, last = false](float& v) mutable {
-        const bool high = v > 0.0f;   // a gate's level (0.2 plays at 0.2)
-        if(high && !last) fire();
-        last = high;
+    // Trigger/Gate: element n is channel n; a rising edge plays the pads on
+    // it (pulses shorter than a control block survive: SC sees a counter)
+    nodeListeners.push(trigger.newListener([this](std::vector<float>& v) {
+        for(auto& up : pads) {
+            Pad& p = *up;
+            const int ch = padChannel(p);
+            const float lvl = ch < (int)v.size() ? v[ch] : 0.0f;
+            const bool high = lvl > 0.0f;
+            if(high && !p.gateHigh) fire(p);
+            p.gateHigh = high;
+            if(!p.auditionHeld) for(auto& [srv, s] : p.sc) if(s.engine) s.engine->set("gate", lvl);
+        }
     }));
-    nodeListeners.push(channels.newListener([this](int&) { if(!restoring) replaceAllSynths(); }));
-    nodeListeners.push(stretchMode.newListener([this](int&) { if(!restoring) replaceAllSynths(); }));
-    // Files dropped from the Finder on the window
+    nodeListeners.push(pitch.newListener([this](std::vector<float>&) { for(auto& p : pads) sendChannelInputs(*p); }));
+    nodeListeners.push(velocity.newListener([this](std::vector<float>&) { for(auto& p : pads) sendChannelInputs(*p); }));
+    nodeListeners.push(gain.newListener([this](float&) {
+        for(auto& p : pads) for(auto& [srv, s] : p->sc) if(s.strip) s.strip->set("master", gain.get());
+    }));
+    nodeListeners.push(channels.newListener([this](int&) { if(!restoring) rebuildAll(); }));
+    // Files dropped from the Finder on the window: the pad under the mouse, or the selected one
     dragListener = ofEvents().fileDragEvent.newListener([this](ofDragInfo& info) {
         if(!showWindow.get() || !windowHovered || info.files.empty()) return;
-        pendingFile = info.files.front().string();
+        pendingDropFile = info.files.front().string();
     });
+    addPad();
     requireSynthdefs();
 }
 
 void scSampleBox::requireSynthdefs() {
     std::filesystem::path folder;
-    const std::string expected = "SampleBox_1_2_R.scsyndef";
+    const std::string expected = "SampleBoxPad_1_2_R.scsyndef";
     try {
         const std::filesystem::path root = ofToDataPath(SYNTHDEF_DIRECTORY, true);
         if(std::filesystem::exists(root))
@@ -233,271 +179,824 @@ void scSampleBox::requireSynthdefs() {
     for(auto* sm : servers) if(sm) sm->requireSynthdefFolder(folder.string());
 }
 
-std::string scSampleBox::synthName() const {
-    return "SampleBox_" + ofToString(sampleChannels) + "_" + ofToString(channels.get())
-        + (stretchMode.get() ? "_T" : "_R");
+std::string scSampleBox::engineDef(const Pad& p) const {
+    return "SampleBoxPad_" + ofToString(std::clamp(p.sample->channels, 1, 2)) + "_" + ofToString(channels.get())
+        + (p.stretchMode.get() ? "_T" : "_R");
+}
+
+void scSampleBox::setBpm(float b) {
+    bpm = b;
+    for(auto& p : pads) {
+        p->mod.setBpm(b);
+        for(auto& [srv, s] : p->sc) if(s.fxSynth[FX_ECHO]) s.fxSynth[FX_ECHO]->set("bpm", b);
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// The sample
+// Pad controls
 // ════════════════════════════════════════════════════════════════════════════
 
-void scSampleBox::loadSample(const std::string& path) {
+template<typename T>
+scSampleBox::Control& scSampleBox::registerPadControl(Pad& p, ofParameter<T>& param, const std::string& label,
+                                                      T def, T lo, T hi, int dest, const char* scName) {
+    if constexpr(std::is_same<T, bool>::value) param.set(label + p.suffix(), def);
+    else param.set(label + p.suffix(), def, lo, hi);
+    Control c;
+    c.key = param.getEscapedName();
+    {
+        ofParameter<T> plain;
+        if constexpr(std::is_same<T, bool>::value) plain.set(label, def); else plain.set(label, def, lo, hi);
+        c.base = plain.getEscapedName();
+    }
+    c.pad = p.index;
+    c.dest = dest;
+    c.scName = scName ? scName : "";
+    if constexpr(std::is_same<T, float>::value) c.f = &param;
+    else if constexpr(std::is_same<T, int>::value) c.i = &param;
+    else c.b = &param;
+    c.add = [this, &param]() { return addParameter(param); };
+    c.save = [&param]() { return param.toString(); };
+    c.load = [&param](const std::string& s) { param.fromString(s); };
+    controls.push_back(std::move(c));
+    Pad* pp = &p;
+    const std::string name = scName ? scName : "";
+    p.listeners.push(param.newListener([this, pp, dest, name](T& value) {
+        if(restoring) return;
+        Pad& pad = *pp;
+        if(name == "stretchmode") { for(auto& [srv, s] : pad.sc) replaceEngine(srv, pad); return; }
+        if(name == "channel") { sendChannelInputs(pad); return; }
+        if(name == "choke") { sendChokeMasks(); return; }
+        if(name == "mute" || name == "solo") { sendMutes(); return; }
+        if(name.empty()) return;
+        auto send = [&](ofxSCSynth* s) {
+            if(!s) return;
+            if constexpr(std::is_same<T, bool>::value) s->set(name, int(value)); else s->set(name, value);
+        };
+        if(dest == DEST_ENGINE) { for(auto& [srv, s] : pad.sc) send(s.engine); }
+        else if(dest == DEST_STRIP) { for(auto& [srv, s] : pad.sc) send(s.strip); }
+        else if(dest >= DEST_FX && dest < DEST_FX + FX_COUNT) {
+            if(name == "on") { for(auto& [srv, s] : pad.sc) syncFx(srv, pad); }
+            else for(auto& [srv, s] : pad.sc) send(s.fxSynth[dest - DEST_FX]);
+        }
+    }));
+    return controls.back();
+}
+
+// a control of the pad's modulation: publishable, saved, moved with the pad
+void scSampleBox::registerModControl(Pad& p, ofAbstractParameter& param,
+                                     std::function<std::shared_ptr<ofxOceanodeAbstractParameter>()> add,
+                                     std::function<std::string()> save, std::function<void(const std::string&)> load) {
+    Control c;
+    c.key = param.getEscapedName();
+    c.base = c.key;
+    const std::string sfx = p.index == 0 ? std::string() : "_" + ofToString(p.index + 1);
+    if(!sfx.empty() && c.base.size() > sfx.size() && c.base.compare(c.base.size() - sfx.size(), sfx.size(), sfx) == 0)
+        c.base = c.base.substr(0, c.base.size() - sfx.size());
+    c.pad = p.index;
+    c.add = std::move(add);
+    c.save = std::move(save);
+    c.load = std::move(load);
+    controls.push_back(std::move(c));
+}
+
+scSampleBox::Control* scSampleBox::findControl(const std::string& key) {
+    for(auto& c : controls) if(c.key == key) return &c;
+    return nullptr;
+}
+
+void scSampleBox::setupPad(Pad& p) {
+    Pad* pp = &p;
+#define PAD_F(param, label, def, lo, hi, dest, sc) registerPadControl<float>(p, param, label, def, lo, hi, dest, sc)
+#define PAD_I(param, label, def, lo, hi, dest, sc) registerPadControl<int>(p, param, label, def, lo, hi, dest, sc)
+#define PAD_B(param, label, def, dest, sc) registerPadControl<bool>(p, param, label, def, false, true, dest, sc)
+    // Sound
+    PAD_I(p.channel, "Channel", 0, 0, MaxChannels, DEST_NONE, "channel");
+    PAD_I(p.choke, "Choke", 0, 0, ChokeGroups, DEST_NONE, "choke");
+    PAD_F(p.inPoint, "In Point", 0.0f, 0.0f, 1.0f, DEST_ENGINE, "inpoint");
+    PAD_F(p.outPoint, "Out Point", 1.0f, 0.0f, 1.0f, DEST_ENGINE, "outpoint");
+    PAD_F(p.loopCrossfade, "Loop Crossfade %", 0.0f, 0.0f, 50.0f, DEST_ENGINE, "loopcrossfade");
+    PAD_F(p.rate, "Rate", 1.0f, 0.125f, 8.0f, DEST_ENGINE, "rate");
+    PAD_F(p.transpose, "Transpose", 0.0f, -24.0f, 24.0f, DEST_ENGINE, "transpose");
+    PAD_F(p.stretch, "Stretch", 1.0f, 0.125f, 8.0f, DEST_ENGINE, "stretch");
+    PAD_F(p.warpWindow, "Warp Window", 0.15f, 0.01f, 1.0f, DEST_ENGINE, "warpwindow");
+    PAD_B(p.loop, "Loop", false, DEST_ENGINE, "loop");
+    PAD_B(p.poly, "Polyphonic", true, DEST_ENGINE, "poly");
+    PAD_B(p.gateMode, "Gate Mode", false, DEST_ENGINE, "gatemode");
+    PAD_B(p.reverse, "Reverse", false, DEST_ENGINE, "reverse");
+    PAD_I(p.voices, "Max Voices", 8, 1, MaxVoices, DEST_ENGINE, "voices");
+    PAD_I(p.stretchMode, "Stretch Mode", 0, 0, 1, DEST_ENGINE, "stretchmode");
+    PAD_F(p.attack, "Amp Attack", 0.005f, 0.0f, 5.0f, DEST_ENGINE, "attack");
+    PAD_F(p.release, "Amp Release", 0.05f, 0.001f, 5.0f, DEST_ENGINE, "release");
+    PAD_F(p.pan, "Pan", 0.0f, -1.0f, 1.0f, DEST_ENGINE, "pan");
+    PAD_B(p.filterOn, "Filter On", false, DEST_ENGINE, "filteron");
+    PAD_I(p.filterType, "Filter Type", 0, 0, 2, DEST_ENGINE, "filtertype");
+    PAD_F(p.cutoff, "Cutoff", 16000.0f, 20.0f, 20000.0f, DEST_ENGINE, "cutoff");
+    PAD_F(p.resonance, "Resonance", 0.7f, 0.1f, 2.0f, DEST_ENGINE, "resonance");
+    // Mixer
+    PAD_F(p.level, "Level", 1.0f, 0.0f, 2.0f, DEST_STRIP, "level");
+    PAD_B(p.mute, "Mute", false, DEST_STRIP, "mute");
+    PAD_B(p.solo, "Solo", false, DEST_STRIP, "solo");
+    PAD_B(p.fxOn[FX_EQ], "EQ On", false, DEST_FX + FX_EQ, "on");
+    const char* eqNames[5] = {"Low", "Lo Mid", "Mid", "Hi Mid", "High"};
+    const char* eqSC[5] = {"eq1", "eq2", "eq3", "eq4", "eq5"};
+    const float eqDefaults[5] = {80, 250, 1000, 4000, 12000};
+    for(int n = 0; n < 5; ++n) {
+        const std::string prefix = std::string("EQ ") + eqNames[n];
+        PAD_F(p.eqGain[n], prefix, 0.0f, -24.0f, 24.0f, DEST_FX + FX_EQ, eqSC[n]);
+        PAD_F(p.eqFreq[n], prefix + " Freq", eqDefaults[n], 20.0f, 20000.0f, DEST_FX + FX_EQ, (std::string(eqSC[n]) + "freq").c_str());
+        PAD_F(p.eqShape[n], prefix + (scEQEditor::isShelf(n) ? " Slope" : " Q"), 1.0f, 0.1f,
+           scEQEditor::isShelf(n) ? 4.0f : 20.0f, DEST_FX + FX_EQ, (std::string(eqSC[n]) + "shape").c_str());
+    }
+    PAD_F(p.eqMix, "EQ Mix", 1.0f, 0.0f, 1.0f, DEST_FX + FX_EQ, "eqmix");
+    PAD_B(p.fxOn[FX_COMP], "Compressor On", false, DEST_FX + FX_COMP, "on");
+    PAD_F(p.compThreshold, "Comp Threshold", -18.0f, -60.0f, 0.0f, DEST_FX + FX_COMP, "compthreshold");
+    PAD_F(p.compRatio, "Comp Ratio", 3.0f, 1.0f, 20.0f, DEST_FX + FX_COMP, "compratio");
+    PAD_F(p.compAttack, "Comp Attack", 10.0f, 0.1f, 200.0f, DEST_FX + FX_COMP, "compattack");
+    PAD_F(p.compRelease, "Comp Release", 150.0f, 1.0f, 2000.0f, DEST_FX + FX_COMP, "comprelease");
+    PAD_F(p.compMakeup, "Comp Makeup", 0.0f, -12.0f, 24.0f, DEST_FX + FX_COMP, "compmakeup");
+    PAD_B(p.fxOn[FX_SAT], "Saturator On", false, DEST_FX + FX_SAT, "on");
+    PAD_F(p.satDrive, "Sat Drive", 6.0f, 0.0f, 36.0f, DEST_FX + FX_SAT, "satdrive");
+    PAD_F(p.satMix, "Sat Mix", 1.0f, 0.0f, 1.0f, DEST_FX + FX_SAT, "satmix");
+    PAD_B(p.fxOn[FX_ECHO], "Echo On", false, DEST_FX + FX_ECHO, "on");
+    PAD_F(p.echoTime, "Echo Time", 0.75f, 0.0625f, 4.0f, DEST_FX + FX_ECHO, "echotime");
+    PAD_F(p.echoFeedback, "Echo Feedback", 0.4f, 0.0f, 0.95f, DEST_FX + FX_ECHO, "echofeedback");
+    PAD_F(p.echoTone, "Echo Tone", 6000.0f, 200.0f, 20000.0f, DEST_FX + FX_ECHO, "echotone");
+    PAD_F(p.echoSpread, "Echo Spread", 0.0f, 0.0f, 1.0f, DEST_FX + FX_ECHO, "echospread");
+    PAD_F(p.echoAmount, "Echo Amount", 0.35f, 0.0f, 1.0f, DEST_FX + FX_ECHO, "echoamount");
+    PAD_B(p.fxOn[FX_REVERB], "Reverb On", false, DEST_FX + FX_REVERB, "on");
+    PAD_F(p.revSize, "Rev Size", 30.0f, 0.0f, 60.0f, DEST_FX + FX_REVERB, "revsize");
+    PAD_F(p.revDecay, "Rev Decay", 4.0f, 0.05f, 60.0f, DEST_FX + FX_REVERB, "revdecay");
+    PAD_F(p.revPredelay, "Rev Predelay", 20.0f, 0.0f, 1000.0f, DEST_FX + FX_REVERB, "revpredelay");
+    PAD_F(p.revLowpass, "Rev Lowpass", 10000.0f, 20.0f, 20000.0f, DEST_FX + FX_REVERB, "revlowpass");
+    PAD_F(p.revPosition, "Rev Position", 0.8f, 0.0f, 1.0f, DEST_FX + FX_REVERB, "revposition");
+    PAD_F(p.revSpread, "Rev Spread", 0.15f, -1.0f, 1.0f, DEST_FX + FX_REVERB, "revspread");
+    PAD_F(p.revMix, "Rev Mix", 0.33f, 0.0f, 1.0f, DEST_FX + FX_REVERB, "revmix");
+    PAD_B(p.fxOn[FX_IMAGE], "Stereo On", false, DEST_FX + FX_IMAGE, "on");
+    PAD_F(p.width, "Width", 1.0f, 0.0f, 2.0f, DEST_FX + FX_IMAGE, "width");
+    PAD_F(p.diffuse, "Diffuse", 0.0f, 0.0f, 1.0f, DEST_FX + FX_IMAGE, "diffuse");
+    PAD_F(p.bassMono, "Bass Mono", 0.0f, 0.0f, 1.0f, DEST_FX + FX_IMAGE, "bassmono");
+    PAD_F(p.bassFreq, "Bass Freq", 150.0f, 20.0f, 1000.0f, DEST_FX + FX_IMAGE, "bassfreq");
+#undef PAD_F
+#undef PAD_I
+#undef PAD_B
+
+    // ── The pad's modulation: envelopes, LFOs, routing to its targets ───────
+    scModulation::Host h;
+    auto reg = [this, pp](auto& param, std::function<void()> send) {
+        using P = std::decay_t<decltype(param)>;
+        registerModControl(*pp, param, [this, &param]() { return addParameter(param); },
+            [&param]() {
+                if constexpr(std::is_same<P, ofParameter<std::vector<float>>>::value) {
+                    std::string out;
+                    for(size_t i = 0; i < param.get().size(); i++) out += (i ? "," : "") + ofToString(param.get()[i]);
+                    return out;
+                } else return param.toString();
+            },
+            [&param](const std::string& s) {
+                if constexpr(std::is_same<P, ofParameter<std::vector<float>>>::value) {
+                    std::vector<float> v;
+                    for(auto& t : ofSplitString(s, ",", true, true)) v.push_back(ofToFloat(t));
+                    if(!v.empty()) param.set(v);
+                } else param.fromString(s);
+            });
+        using V = std::decay_t<decltype(param.get())>;
+        pp->listeners.push(param.newListener([this, send](V&) { if(!restoring) send(); }));
+    };
+    h.regF = [reg](ofParameter<float>& q, std::function<void()> f) { reg(q, f); };
+    h.regI = [reg](ofParameter<int>& q, std::function<void()> f) { reg(q, f); };
+    h.regB = [reg](ofParameter<bool>& q, std::function<void()> f) { reg(q, f); };
+    h.regV = [reg](ofParameter<std::vector<float>>& q, std::function<void()> f) { reg(q, f); };
+    h.control = [this](const std::string& k) -> ofAbstractParameter* {
+        for(auto& c : controls) if(c.key == k) return c.f ? (ofAbstractParameter*)c.f : c.i ? (ofAbstractParameter*)c.i : nullptr;
+        if(k == gain.getEscapedName()) return &gain;
+        return nullptr;
+    };
+    h.publishMenu = [this](const std::string& k) { drawPublishMenu(k); };
+    h.publishedUnderline = [this](const std::string& k) { drawPublishedUnderline(k); };
+    h.unpublish = [this](const std::string& k) { unpublish(k); };
+    h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
+    h.voices = []() { return MaxVoices; };      // the synth's 8 voices
+    p.mod.nameSuffix = p.suffix();
+    // the synth reads these, in this order (samplebox.scd)
+    p.mod.setup(h, {{"Pitch", 24, "st"}, {"Rate", 4, "x"}, {"In", 1, "", true}, {"Out", 1, "", true}, {"Gain", 1, ""},
+                    {"Pan", 1, ""}, {"Stretch", 4, "x"}, {"Grain", 0.5f, "s"}, {"Loop XF", 50, "%"},
+                    {"Cutoff", 8, "oct"}, {"Reso", 1, ""}, {"Drive", 24, "dB"}, {"Comp Thr", 24, "dB"},
+                    {"Rev Mix", 1, ""}, {"Width", 1, ""}}, true, true, true);
+    p.mod.targetOfKey = {{p.transpose.getEscapedName(), 0}, {p.rate.getEscapedName(), 1}, {p.inPoint.getEscapedName(), 2},
+                         {p.outPoint.getEscapedName(), 3}, {p.level.getEscapedName(), 4}, {p.pan.getEscapedName(), 5},
+                         {p.stretch.getEscapedName(), 6}, {p.warpWindow.getEscapedName(), 7}, {p.loopCrossfade.getEscapedName(), 8},
+                         {p.cutoff.getEscapedName(), 9}, {p.resonance.getEscapedName(), 10}, {p.satDrive.getEscapedName(), 11},
+                         {p.compThreshold.getEscapedName(), 12}, {p.revMix.getEscapedName(), 13}, {p.width.getEscapedName(), 14}};
+    p.mod.setBpm(bpm);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Pads: add, remove, move, duplicate
+// ════════════════════════════════════════════════════════════════════════════
+
+scSampleBox::Pad* scSampleBox::addPad() {
+    if((int)pads.size() >= MaxPads) return nullptr;
+    auto up = std::make_unique<Pad>();
+    Pad& p = *up;
+    p.index = (int)pads.size();
+    p.name = "Pad " + ofToString(p.index + 1);
+    pads.push_back(std::move(up));
+    restoring = true;
+    setupPad(p);
+    restoring = false;
+    addOutput("Pad " + ofToString(p.index + 1));
+    for(auto& [srv, n] : nodeSC) if(n.created) { ensureBuffers(p, srv); createPad(srv, p); }
+    sendChokeMasks();
+    sendMutes();
+    return &p;
+}
+
+// The last pad goes (pads after k move up one first)
+void scSampleBox::removePad(int k) {
+    if(pads.size() <= 1 || k < 0 || k >= (int)pads.size()) return;
+    movePad(k, (int)pads.size() - 1);
+    Pad& p = *pads.back();
+    const int idx = p.index;
+    std::vector<ofxSCServer*> active;
+    for(auto& [srv, s] : p.sc) active.push_back(srv);
+    for(auto* srv : active) destroyPad(srv, p);
+    // its published controls go, connected or not
+    std::vector<std::string> keys;
+    for(const auto& c : controls) if(c.pad == idx) keys.push_back(c.key);
+    for(const auto& key : keys) if(published.count(key)) unpublish(key, true);
+    controls.erase(std::remove_if(controls.begin(), controls.end(), [idx](const Control& c) { return c.pad == idx; }), controls.end());
+    p.listeners.unsubscribeAll();
+    if(p.sample->task.valid()) p.sample->task.wait();
+    while(!p.sample->buffers.empty()) releaseBuffers(*p.sample, p.sample->buffers.begin()->first);
+    for(auto& [srv, m] : outputBuses) m.erase(idx + 1);
+    removeOutput(idx + 1);
+    pads.pop_back();
+    selected = std::clamp(selected, 0, (int)pads.size() - 1);
+    sendChokeMasks();
+    sendMutes();
+}
+
+void scSampleBox::duplicatePad(int k) {
+    if(k < 0 || k >= (int)pads.size()) return;
+    const ofJson state = padState(k);
+    const std::string path = pads[k]->sample->path;
+    Pad* p = addPad();
+    if(!p) return;
+    applyPadState(p->index, state);
+    p->name = pads[k]->name + " copy";
+    if(!path.empty()) loadSample(*p, path);
+    syncPad(*p);
+    movePad(p->index, k + 1);
+    selected = k + 1;
+}
+
+// Every pad's settings, sample and name go with it; the pads keep their
+// places (their parameters' names, outputs and synths)
+void scSampleBox::movePad(int from, int to) {
+    const int n = (int)pads.size();
+    if(from < 0 || to < 0 || from >= n || to >= n || from == to) return;
+    std::vector<ofJson> states(n);
+    std::vector<std::unique_ptr<Sample>> samples(n);
+    std::vector<std::string> names(n);
+    for(int i = 0; i < n; i++) {
+        states[i] = padState(i);
+        samples[i] = std::move(pads[i]->sample);
+        names[i] = pads[i]->name;
+    }
+    auto move = [&](auto& v) {
+        auto x = std::move(v[from]);
+        if(from < to) for(int i = from; i < to; i++) v[i] = std::move(v[i + 1]);
+        else for(int i = from; i > to; i--) v[i] = std::move(v[i - 1]);
+        v[to] = std::move(x);
+    };
+    move(states);
+    move(samples);
+    move(names);
+    for(int i = 0; i < n; i++) {
+        pads[i]->sample = std::move(samples[i]);
+        pads[i]->name = names[i];
+        applyPadState(i, states[i]);
+        pads[i]->playheads.clear();
+    }
+    for(auto& p : pads) syncPad(*p);
+    sendChokeMasks();
+    sendMutes();
+    if(selected == from) selected = to;
+    else if(from < selected && to >= selected) selected--;
+    else if(from > selected && to <= selected) selected++;
+}
+
+// ── A pad's settings, keyed by base name; its modulation with relative keys ──
+
+std::string scSampleBox::relKey(const std::string& key) const {
+    for(const auto& c : controls) if(c.key == key && c.pad >= 0) return "#" + c.base;
+    return key;
+}
+std::string scSampleBox::absKey(const std::string& rel, int pad) const {
+    if(rel.empty() || rel[0] != '#') return rel;
+    const std::string base = rel.substr(1);
+    for(const auto& c : controls) if(c.pad == pad && c.base == base) return c.key;
+    return rel;
+}
+void scSampleBox::rewriteModKeys(ofJson& m, bool toRelative, int pad) const {
+    if(!m.contains("Params") || !m["Params"].is_array()) return;
+    for(auto& e : m["Params"])
+        if(e.is_object() && e.contains("key") && e["key"].is_string())
+            e["key"] = toRelative ? relKey(e["key"].get<std::string>()) : absKey(e["key"].get<std::string>(), pad);
+}
+
+ofJson scSampleBox::padState(int k) const {
+    const Pad& p = *pads[k];
+    ofJson j;
+    j["name"] = p.name;
+    j["path"] = p.sample->path;
+    // a modulated control: its own value (the base)
+    ofJson values = ofJson::object();
+    for(const auto& c : controls) if(c.pad == k) values[c.key] = c.save();
+    ofJson bases = ofJson::object();
+    for(const auto& c : controls) if(c.pad == k && p.mod.isParamTarget(c.key)) bases[c.key] = 0.0f;
+    p.mod.patchBases(bases);
+    for(auto it = bases.begin(); it != bases.end(); ++it)
+        if(it.value().is_number_integer()) values[it.key()] = ofToString(it.value().get<int>());
+        else if(it.value().is_number()) values[it.key()] = ofToString(it.value().get<float>());
+    ofJson rel = ofJson::object();
+    for(const auto& c : controls) if(c.pad == k && values.contains(c.key)) rel[c.base] = values[c.key];
+    j["controls"] = rel;
+    ofJson m;
+    p.mod.save(m, "");
+    rewriteModKeys(m, true, k);
+    j["mod"] = m;
+    return j;
+}
+
+void scSampleBox::applyPadState(int k, const ofJson& j) {
+    Pad& p = *pads[k];
+    restoring = true;
+    if(j.contains("name") && j["name"].is_string()) p.name = j["name"].get<std::string>();
+    if(j.contains("controls") && j["controls"].is_object()) {
+        const auto& v = j["controls"];
+        for(auto& c : controls)
+            if(c.pad == k && v.contains(c.base) && v[c.base].is_string())
+                try { c.load(v[c.base].get<std::string>()); } catch(...) {}
+    }
+    restoring = false;
+    if(j.contains("mod") && j["mod"].is_object()) {
+        ofJson m = j["mod"];
+        rewriteModKeys(m, false, k);
+        p.mod.load(m, "");
+        p.mod.refresh();
+        p.mod.afterLoad();
+    }
+}
+
+int scSampleBox::padChannel(const Pad& p) const {
+    const int c = p.channel.get();
+    return std::clamp(c <= 0 ? p.index : c - 1, 0, MaxChannels - 1);
+}
+
+float scSampleBox::valueFor(const std::vector<float>& v, int channel, float fallback) const {
+    if(v.empty()) return fallback;
+    if(v.size() == 1) return v[0];
+    return channel < (int)v.size() ? v[channel] : fallback;
+}
+
+// What plays a channel of Trig/Gate Audio: the source's own words ("Kick")
+std::string scSampleBox::channelSource(int channel) {
+    if(inputs.empty()) return "";
+    const nodePort port = inputs[0].get();
+    if(!port.getNodeRef()) return "";
+    return port.getNodeRef()->getOutputChannelName(port.getIndex(), channel);
+}
+
+std::string scSampleBox::padLabel(const Pad& p) const {
+    return ofToString(p.index + 1) + " " + p.name;
+}
+
+bool scSampleBox::anySolo() const {
+    for(const auto& p : pads) if(p->solo.get()) return true;
+    return false;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Samples
+// ════════════════════════════════════════════════════════════════════════════
+
+void scSampleBox::loadSample(Pad& p, const std::string& path) {
     if(path.empty()) return;
-    pendingFile = path;     // decoded in update()
+    p.sample->pendingFile = path;     // decoded in update()
 }
 
-void scSampleBox::applyDecoded(scSlicerBox::Audio&& a) {
+void scSampleBox::applyDecoded(Pad& p, scSlicerBox::Audio&& a) {
+    Sample& s = *p.sample;
     if(!a.error.empty()) {
-        loadError = std::filesystem::path(a.path).filename().string() + ": " + a.error;
-        ofLogWarning("scSampleBox") << loadError;
+        s.error = std::filesystem::path(a.path).filename().string() + ": " + a.error;
+        ofLogWarning("scSampleBox") << s.error;
         return;
     }
-    loadError.clear();
-    const int oldChannels = sampleChannels;
-    samplePath = a.path;
-    playPath = a.playPath;
-    sampleChannels = std::max(1, std::min(2, a.channels));
-    sampleRate = a.sampleRate;
-    sampleSeconds = a.frames / std::max(1.0f, a.sampleRate);
-    waveformPeaks.assign(WaveformBins, 0.0f);
+    s.error.clear();
+    const int oldChannels = s.channels;
+    s.path = a.path;
+    s.playPath = a.playPath;
+    s.channels = std::max(1, std::min(2, a.channels));
+    s.rate = a.sampleRate;
+    s.seconds = a.frames / std::max(1.0f, a.sampleRate);
+    s.peaks.assign(4096, 0.0f);
     for(int f = 0; f < a.frames; ++f) {
-        const int bin = (int)((int64_t)f * WaveformBins / a.frames);
-        waveformPeaks[bin] = std::max(waveformPeaks[bin], std::min(1.0f, std::abs(a.mono[f])));
+        const int bin = (int)((int64_t)f * 4096 / a.frames);
+        s.peaks[bin] = std::max(s.peaks[bin], std::min(1.0f, std::abs(a.mono[f])));
     }
-    for(auto& [srv, synth] : synths) {
-        if(!synth) continue;
+    // a pad still named after its position: the file's name
+    if(p.name == "Pad " + ofToString(p.index + 1))
+        p.name = std::filesystem::path(a.path).stem().string().substr(0, 24);
+    for(auto& [srv, sc] : p.sc) {
+        if(!sc.engine) continue;
         // the new buffers first, the old ones freed once the synth reads the new
-        auto old = std::move(buffers[srv]);
-        buffers.erase(srv);
-        ensureBuffers(srv);
-        if(oldChannels != sampleChannels) replaceSynth(srv);
-        else sendAll(srv, synth);
+        auto old = std::move(s.buffers[srv]);
+        s.buffers.erase(srv);
+        ensureBuffers(p, srv);
+        if(oldChannels != s.channels) replaceEngine(srv, p);
+        else sendEngine(srv, p);
         for(auto* b : old) if(b) { if(liveBuffer(srv, b)) b->free(); delete b; }
     }
 }
 
-void scSampleBox::releaseBuffers(ofxSCServer* srv) {
-    auto it = buffers.find(srv);
-    if(it == buffers.end()) return;
+void scSampleBox::releaseBuffers(Sample& s, ofxSCServer* srv) {
+    auto it = s.buffers.find(srv);
+    if(it == s.buffers.end()) return;
     for(auto* b : it->second) if(b) { if(liveBuffer(srv, b)) b->free(); delete b; }
-    buffers.erase(it);
+    s.buffers.erase(it);
 }
 
-void scSampleBox::ensureBuffers(ofxSCServer* srv) {
-    if(!srv || playPath.empty()) return;
-    auto it = buffers.find(srv);
-    if(it != buffers.end() && (int)it->second.size() == sampleChannels &&
+void scSampleBox::ensureBuffers(Pad& p, ofxSCServer* srv) {
+    Sample& s = *p.sample;
+    if(!srv || s.playPath.empty()) return;
+    auto it = s.buffers.find(srv);
+    if(it != s.buffers.end() && (int)it->second.size() == s.channels &&
        std::all_of(it->second.begin(), it->second.end(), [srv](ofxSCBuffer* b){ return liveBuffer(srv, b); })) return;
-    releaseBuffers(srv);
-    for(int ch = 0; ch < sampleChannels; ++ch) {
+    releaseBuffers(s, srv);
+    for(int ch = 0; ch < s.channels; ++ch) {
         auto* b = new ofxSCBuffer(0, 0, srv);
-        if(b->index < 0) { delete b; releaseBuffers(srv); return; }   // no free buffer
-        b->readChannel(playPath, {ch});
-        buffers[srv].push_back(b);
+        if(b->index < 0) { delete b; releaseBuffers(s, srv); return; }   // no free buffer
+        b->readChannel(s.playPath, {ch});
+        s.buffers[srv].push_back(b);
     }
 }
 
-void scSampleBox::ensureVisBus(ofxSCServer* srv) {
-    auto& bus = visBuses[srv];
-    if(liveControlBus(srv, bus)) return;
-    delete bus;     // after a reboot its index belongs to nobody
-    bus = new ofxSCBus(RATE_CONTROL, MaxVoices, srv);
-    if(!liveControlBus(srv, bus)) { bus->free(); delete bus; bus = nullptr; }
-}
-
 // ════════════════════════════════════════════════════════════════════════════
-// Synths
+// Synths: the node's group, each pad's group
 // ════════════════════════════════════════════════════════════════════════════
 
-void scSampleBox::sendAll(ofxSCServer* srv, ofxSCSynth* s) {
-    if(!s) return;
+void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p) {
+    auto it = p.sc.find(srv);
+    if(it == p.sc.end() || !it->second.engine) return;
+    PadSC& sc = it->second;
+    ofxSCSynth* s = sc.engine;
     for(const auto& c : controls) {
+        if(c.pad != p.index || c.dest != DEST_ENGINE || c.scName.empty() || c.scName == "stretchmode") continue;
         if(c.f) s->set(c.scName, c.f->get());
         else if(c.i) s->set(c.scName, c.i->get());
         else if(c.b) s->set(c.scName, int(c.b->get()));
     }
-    const auto bs = buffers.find(srv);
-    const bool loaded = bs != buffers.end() && (int)bs->second.size() >= sampleChannels;
+    const auto bs = p.sample->buffers.find(srv);
+    const bool loaded = bs != p.sample->buffers.end() && (int)bs->second.size() >= p.sample->channels;
     s->set("loaded", int(loaded));
     s->set("buf0", loaded ? bs->second[0]->index : 0);
-    s->set("buf1", loaded && sampleChannels > 1 ? bs->second[1]->index : 0);
-    s->set("out", outputBuses.count(srv) ? outputBuses[srv] : 0);
-    s->set("trigbus", inputBuses.count(srv) ? inputBuses[srv] : -1);
-    applyCables(srv, s);
-    const auto vb = visBuses.find(srv);
-    if(vb != visBuses.end() && vb->second) s->set("vis", vb->second->index);
-    s->set("fire", fireCount);
-    s->set("stop", stopCount);
-    // the shared modulation: the targets it writes, the gates / velocities / randoms it reads
-    s->set("modbus", mod.targetBus(srv, 0));
-    s->set("velbus", mod.sourceBus(srv, scModulation::SRC_VEL));
-    s->set("rndbus", mod.sourceBus(srv, scModulation::SRC_RND));
-    auto g = groups.find(srv);
-    if(g != groups.end() && g->second.gateBus) s->set("gatebus", g->second.gateBus->index);
+    s->set("buf1", loaded && p.sample->channels > 1 ? bs->second[1]->index : 0);
+    s->set("gain", 1.0f);
+    if(sc.bus) s->set("out", sc.bus->index);
+    if(sc.vis) s->set("vis", sc.vis->index);
+    if(sc.latest) s->set("latestbus", sc.latest->index);
+    if(sc.gateBus) s->set("gatebus", sc.gateBus->index);
+    s->set("fire", p.fireCount);
+    s->set("stop", p.stopCount);
+    // the pad's modulation: the targets it writes, the gates / velocities / randoms it reads
+    s->set("modbus", p.mod.targetBus(srv, 0));
+    s->set("velbus", p.mod.sourceBus(srv, scModulation::SRC_VEL));
+    s->set("rndbus", p.mod.sourceBus(srv, scModulation::SRC_RND));
+    auto n = nodeSC.find(srv);
+    if(n != nodeSC.end() && n->second.choke) s->set("chokeblock", n->second.choke->index);
+    s->set("chokeslot", p.index);
+    std::vector<float> mask(16, 0.0f);
+    if(p.choke.get() > 0)
+        for(const auto& q : pads) if(q.get() != &p && q->choke.get() == p.choke.get() && q->index < 16) mask[q->index] = 1.0f;
+    s->set("chokemask", mask);
+    // the channel's trigger, pitch, velocity
+    const int ch = padChannel(p);
+    s->set("trigbus", inputBuses.count(srv) && inputBuses[srv] >= 0 ? inputBuses[srv] + ch : -1);
+    const int pb = pitchIn.bus(srv), vb = velIn.bus(srv);
+    if(pb >= 0) s->mapan("pitch", pb + ch, 1); else s->set("pitch", valueFor(pitch.get(), ch, 60.0f));
+    if(vb >= 0) s->mapan("velocity", vb + ch, 1); else s->set("velocity", valueFor(velocity.get(), ch, 1.0f));
+    if(!p.auditionHeld) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
 }
-void scSampleBox::sendAll() { for(auto& [srv, s] : synths) sendAll(srv, s); }
-void scSampleBox::resendParametersForNRT() { sendAll(); mod.resend(); }
 
-void scSampleBox::fire() {
-    ++fireCount;
-    for(auto& [srv, s] : synths) if(s) s->set("fire", fireCount);
+void scSampleBox::sendFx(ofxSCServer* srv, Pad& p, int fx) {
+    auto it = p.sc.find(srv);
+    if(it == p.sc.end() || !it->second.fxSynth[fx]) return;
+    PadSC& sc = it->second;
+    ofxSCSynth* s = sc.fxSynth[fx];
+    if(sc.bus) s->set("bus", sc.bus->index);
+    s->set("modbus", p.mod.targetBus(srv, 0));
+    if(sc.latest) s->set("latestbus", sc.latest->index);
+    if(fx == FX_ECHO) s->set("bpm", bpm);
+    for(const auto& c : controls) {
+        if(c.pad != p.index || c.dest != DEST_FX + fx || c.scName.empty() || c.scName == "on") continue;
+        if(c.f) s->set(c.scName, c.f->get());
+        else if(c.i) s->set(c.scName, c.i->get());
+        else if(c.b) s->set(c.scName, int(c.b->get()));
+    }
 }
-void scSampleBox::stop() {
-    ++stopCount;
-    for(auto& [srv, s] : synths) if(s) s->set("stop", stopCount);
+
+void scSampleBox::sendStrip(ofxSCServer* srv, Pad& p) {
+    auto it = p.sc.find(srv);
+    if(it == p.sc.end() || !it->second.strip) return;
+    PadSC& sc = it->second;
+    ofxSCSynth* s = sc.strip;
+    if(sc.bus) s->set("bus", sc.bus->index);
+    s->set("level", p.level.get());
+    s->set("master", gain.get());
+    s->set("mute", int(p.mute.get() || (anySolo() && !p.solo.get())));
+    const auto& ob = outputBuses[srv];
+    const auto mix = ob.find(0), own = ob.find(p.index + 1);
+    s->set("mix", mix != ob.end() ? mix->second : -1);
+    s->set("padout", own != ob.end() ? own->second : -1);
+    if(sc.meter) s->set("meterbus", sc.meter->index);
+}
+
+void scSampleBox::sendChannelInputs(Pad& p) {
+    for(auto& [srv, sc] : p.sc) {
+        if(!sc.engine) continue;
+        const int ch = padChannel(p);
+        ofxSCSynth* s = sc.engine;
+        s->set("trigbus", inputBuses.count(srv) && inputBuses[srv] >= 0 ? inputBuses[srv] + ch : -1);
+        const int pb = pitchIn.bus(srv), vb = velIn.bus(srv);
+        if(pb >= 0) s->mapan("pitch", pb + ch, 1); else s->set("pitch", valueFor(pitch.get(), ch, 60.0f));
+        if(vb >= 0) s->mapan("velocity", vb + ch, 1); else s->set("velocity", valueFor(velocity.get(), ch, 1.0f));
+        if(!p.auditionHeld) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
+    }
+}
+
+void scSampleBox::sendChokeMasks() {
+    for(auto& up : pads) {
+        Pad& p = *up;
+        std::vector<float> mask(16, 0.0f);
+        if(p.choke.get() > 0)
+            for(const auto& q : pads) if(q.get() != &p && q->choke.get() == p.choke.get() && q->index < 16) mask[q->index] = 1.0f;
+        for(auto& [srv, sc] : p.sc) if(sc.engine) { sc.engine->set("chokemask", mask); sc.engine->set("chokeslot", p.index); }
+    }
+}
+
+void scSampleBox::sendMutes() {
+    const bool solo = anySolo();
+    for(auto& p : pads)
+        for(auto& [srv, sc] : p->sc) if(sc.strip) sc.strip->set("mute", int(p->mute.get() || (solo && !p->solo.get())));
+}
+
+// The effects that are on, in the chain's order (an effect switched on later
+// goes before the next one that exists)
+void scSampleBox::syncFx(ofxSCServer* srv, Pad& p) {
+    auto it = p.sc.find(srv);
+    if(it == p.sc.end() || !it->second.created) return;
+    PadSC& sc = it->second;
+    for(int fx = 0; fx < FX_COUNT; fx++) {
+        const bool want = p.fxOn[fx].get() && (fx != FX_IMAGE || channels.get() > 1);
+        ofxSCSynth*& s = sc.fxSynth[fx];
+        if(want && !s) {
+            s = new ofxSCSynth(fxDefs[fx] + ofToString(channels.get()), srv);
+            sendFx(srv, p, fx);
+            ofxSCSynth* next = nullptr;
+            for(int j = fx + 1; j < FX_COUNT && !next; j++) next = sc.fxSynth[j];
+            if(next) s->createAndRun(2, next->nodeID, true);           // before the next effect
+            else s->createAndRun(1, sc.fx->nodeID, true);              // the chain's tail
+        } else if(!want && s) {
+            s->free();
+            delete s;
+            s = nullptr;
+        }
+    }
+}
+
+void scSampleBox::createPad(ofxSCServer* srv, Pad& p) {
+    auto n = nodeSC.find(srv);
+    if(n == nodeSC.end() || !n->second.created || !n->second.root) return;
+    if(p.sc.count(srv)) destroyPad(srv, p);   // (it erases the entry)
+    PadSC& sc = p.sc[srv];
+    ensureBus(srv, sc.bus, RATE_AUDIO, MaxChannels);
+    ensureBus(srv, sc.gateBus, RATE_AUDIO, MaxVoices);
+    ensureBus(srv, sc.vis, RATE_CONTROL, MaxVoices);
+    ensureBus(srv, sc.latest, RATE_CONTROL, 1);
+    ensureBus(srv, sc.meter, RATE_CONTROL, 1);
+    ensureBuffers(p, srv);
+    auto group = [&](ofxSCGroup*& g, int target) { g = new ofxSCGroup(srv); g->create(1, target); };   // tail
+    group(sc.group, n->second.root->nodeID);
+    group(sc.voices, sc.group->nodeID);
+    group(sc.sources, sc.group->nodeID);
+    group(sc.routes, sc.group->nodeID);
+    group(sc.fx, sc.group->nodeID);
+    sc.created = true;
+    p.mod.create(srv, sc.sources->nodeID, sc.routes->nodeID, sc.gateBus ? sc.gateBus->index : 0);
+    sc.engineDef = engineDef(p);
+    sc.engine = new ofxSCSynth(sc.engineDef, srv);
+    sendEngine(srv, p);
+    sc.engine->createAndRun(0, sc.voices->nodeID, true);
+    syncFx(srv, p);
+    sc.strip = new ofxSCSynth("SampleBoxStrip_" + ofToString(channels.get()), srv);
+    sendStrip(srv, p);
+    sc.strip->createAndRun(1, sc.group->nodeID, true);                 // after the effects
+}
+
+void scSampleBox::destroyPad(ofxSCServer* srv, Pad& p, bool sendFree) {
+    auto it = p.sc.find(srv);
+    if(it == p.sc.end()) return;
+    PadSC& sc = it->second;
+    p.mod.free(srv, false);                       // the group's /n_free takes its synths
+    if(sendFree && sc.group && sc.created) sc.group->free();
+    delete sc.engine; sc.engine = nullptr;
+    for(auto*& s : sc.fxSynth) { delete s; s = nullptr; }
+    delete sc.strip; sc.strip = nullptr;
+    for(auto** g : {&sc.voices, &sc.sources, &sc.routes, &sc.fx, &sc.group}) { delete *g; *g = nullptr; }
+    dropBus(srv, sc.bus, RATE_AUDIO);
+    dropBus(srv, sc.gateBus, RATE_AUDIO);
+    dropBus(srv, sc.vis, RATE_CONTROL);
+    dropBus(srv, sc.latest, RATE_CONTROL);
+    dropBus(srv, sc.meter, RATE_CONTROL);
+    sc.created = false;
+    p.sc.erase(it);
 }
 
 // A new definition (sample channels, N Chan, Resample / Stretch) takes the old
-// synth's place in the graph
-void scSampleBox::replaceSynth(ofxSCServer* srv) {
-    auto it = synths.find(srv);
-    if(it == synths.end() || !it->second) return;
-    ofxSCSynth* old = it->second;
-    auto* fresh = new ofxSCSynth(synthName(), srv);
-    sendAll(srv, fresh);
-    fresh->createAndRun(4, old->nodeID, getActive());   // replace
+// engine's place in the pad's group
+void scSampleBox::replaceEngine(ofxSCServer* srv, Pad& p) {
+    auto it = p.sc.find(srv);
+    if(it == p.sc.end() || !it->second.engine) return;
+    PadSC& sc = it->second;
+    ofxSCSynth* old = sc.engine;
+    sc.engineDef = engineDef(p);
+    sc.engine = new ofxSCSynth(sc.engineDef, srv);
+    sendEngine(srv, p);
+    sc.engine->createAndRun(4, old->nodeID, true);   // replace
     delete old;
-    it->second = fresh;
-}
-void scSampleBox::replaceAllSynths() {
-    std::vector<ofxSCServer*> active;
-    for(auto& [srv, s] : synths) if(s) active.push_back(srv);
-    for(auto* srv : active) replaceSynth(srv);
 }
 
-void scSampleBox::freeGroups(ofxSCServer* srv) {
-    auto it = groups.find(srv);
-    if(it == groups.end()) return;
-    auto& g = it->second;
-    mod.free(srv, false);                       // the group's /n_free takes its synths
-    if(g.root && g.created) g.root->free();
-    delete g.voices; delete g.sources; delete g.routes; delete g.root;
-    if(g.gateBus && liveAudioBus(srv, g.gateBus)) g.gateBus->free();
-    delete g.gateBus;
-    groups.erase(it);
+void scSampleBox::syncPadServer(ofxSCServer* srv, Pad& p) {
+    auto it = p.sc.find(srv);
+    if(it == p.sc.end() || !it->second.created) return;
+    ensureBuffers(p, srv);
+    if(it->second.engineDef != engineDef(p)) replaceEngine(srv, p);
+    else sendEngine(srv, p);
+    syncFx(srv, p);
+    for(int fx = 0; fx < FX_COUNT; fx++) sendFx(srv, p, fx);
+    sendStrip(srv, p);
+}
+
+void scSampleBox::syncPad(Pad& p) {
+    std::vector<ofxSCServer*> active;
+    for(auto& [srv, sc] : p.sc) active.push_back(srv);
+    for(auto* srv : active) syncPadServer(srv, p);
+}
+
+// N Chan: every synth is another definition
+void scSampleBox::rebuildAll() {
+    for(auto& [srv, n] : nodeSC) {
+        if(!n.created) continue;
+        for(auto& p : pads) createPad(srv, *p);   // destroys the old first
+    }
 }
 
 void scSampleBox::buildSynth(ofxSCServer* srv) {
     if(!srv) return;
-    ensureBuffers(srv);
-    ensureVisBus(srv);
-    if(synths.count(srv) && synths[srv]) { synths[srv]->free(); delete synths[srv]; }
-    synths[srv] = new ofxSCSynth(synthName(), srv);
-    freeGroups(srv);
-    auto& g = groups[srv];
-    g.root = new ofxSCGroup(srv);
+    if(nodeSC.count(srv)) free(srv);
+    for(auto& p : pads) ensureBuffers(*p, srv);
+    nodeSC[srv].root = new ofxSCGroup(srv);
 }
+
 void scSampleBox::createSynth(ofxSCServer* srv) {
-    auto it = synths.find(srv);
-    if(it == synths.end() || !it->second) return;
-    auto& g = groups[srv];
-    if(!g.root) g.root = new ofxSCGroup(srv);
-    g.root->create(0, 1);
-    g.voices = new ofxSCGroup(srv);  g.voices->create(1, g.root->nodeID);
-    g.sources = new ofxSCGroup(srv); g.sources->create(1, g.root->nodeID);
-    g.routes = new ofxSCGroup(srv);  g.routes->create(1, g.root->nodeID);
-    g.created = true;
-    if(!g.gateBus || !liveAudioBus(srv, g.gateBus)){
-        delete g.gateBus;
-        g.gateBus = new ofxSCBus(RATE_AUDIO, 8, srv);
-        if(!liveAudioBus(srv, g.gateBus)){ g.gateBus->free(); delete g.gateBus; g.gateBus = nullptr; }
-    }
-    mod.create(srv, g.sources->nodeID, g.routes->nodeID, g.gateBus ? g.gateBus->index : 0);
-    sendAll(srv, it->second);
-    it->second->createAndRun(0, g.voices->nodeID, true);
-    if(!getActive()) g.root->run(false);
+    auto& n = nodeSC[srv];
+    if(!n.root) n.root = new ofxSCGroup(srv);
+    n.root->create(0, 1);
+    n.created = true;
+    ensureBus(srv, n.choke, RATE_CONTROL, 16);
+    for(auto& p : pads) createPad(srv, *p);
+    if(!getActive()) n.root->run(false);
 }
+
 void scSampleBox::free(ofxSCServer* srv) {
-    auto it = synths.find(srv);
-    if(it != synths.end()) { delete it->second; synths.erase(it); }   // freed with the group
-    freeGroups(srv);
+    for(auto& p : pads) destroyPad(srv, *p, false);
+    auto it = nodeSC.find(srv);
+    if(it == nodeSC.end()) return;
+    if(it->second.root && it->second.created) it->second.root->free();   // and everything in it
+    delete it->second.root;
+    dropBus(srv, it->second.choke, RATE_CONTROL);
+    nodeSC.erase(it);
 }
-void scSampleBox::setOutputBus(ofxSCServer* srv, int, int bus) {
-    outputBuses[srv] = bus;
-    if(synths.count(srv) && synths[srv]) synths[srv]->set("out", bus);
+
+void scSampleBox::setOutputBus(ofxSCServer* srv, int index, int bus) {
+    outputBuses[srv][index] = bus;
+    for(auto& p : pads) {
+        if(index != 0 && index != p->index + 1) continue;
+        auto it = p->sc.find(srv);
+        if(it != p->sc.end() && it->second.strip) it->second.strip->set(index == 0 ? "mix" : "padout", bus);
+    }
 }
-int scSampleBox::getOutputBusIndex(ofxSCServer* srv, int) {
-    return outputBuses.count(srv) ? outputBuses[srv] : -1;
+int scSampleBox::getOutputBusIndex(ofxSCServer* srv, int index) {
+    auto it = outputBuses.find(srv);
+    if(it == outputBuses.end()) return -1;
+    auto b = it->second.find(index);
+    return b != it->second.end() ? b->second : -1;
 }
 void scSampleBox::moveSynthBefore(ofxSCServer* srv, int nodeID) {
-    auto it = groups.find(srv);
-    if(it != groups.end() && it->second.created) it->second.root->moveBefore(nodeID);
+    auto it = nodeSC.find(srv);
+    if(it != nodeSC.end() && it->second.created) it->second.root->moveBefore(nodeID);
 }
 int scSampleBox::getLastSynthID(ofxSCServer* srv) {
-    auto it = groups.find(srv);
-    return (it != groups.end() && it->second.created) ? it->second.root->nodeID : -1;
+    auto it = nodeSC.find(srv);
+    return (it != nodeSC.end() && it->second.created) ? it->second.root->nodeID : -1;
 }
 void scSampleBox::setInputBus(ofxSCServer* srv, scNode* node, int bus) {
     // a Pitch / Velocity cable (told apart by its source's bus), else the trigger / gate input
-    if(pitchIn.take(srv, node, bus) | velIn.take(srv, node, bus)){
-        if(synths.count(srv) && synths[srv]) applyCables(srv, synths[srv]);
-        return;
-    }
-    inputBuses[srv] = bus;
-    if(synths.count(srv) && synths[srv]) synths[srv]->set("trigbus", bus);
+    if(!(pitchIn.take(srv, node, bus) | velIn.take(srv, node, bus))) inputBuses[srv] = bus;
+    for(auto& p : pads) sendChannelInputs(*p);
 }
 void scSampleBox::resetInputBusses(ofxSCServer* srv, int) {
     inputBuses.erase(srv);
-    pitchIn.reset(srv); velIn.reset(srv);
-    if(synths.count(srv) && synths[srv]){
-        synths[srv]->set("trigbus", -1);
-        applyCables(srv, synths[srv]);
-    }
-}
-void scSampleBox::applyCables(ofxSCServer* srv, ofxSCSynth* s) {
-    if(!s) return;
-    const int pb = pitchIn.bus(srv), vb = velIn.bus(srv);
-    if(pb >= 0) s->mapan("pitch", pb, 1); else s->set("pitch", pitch.get());
-    if(vb >= 0) s->mapan("velocity", vb, 1); else s->set("velocity", velocity.get());
+    pitchIn.reset(srv);
+    velIn.reset(srv);
+    for(auto& p : pads) sendChannelInputs(*p);
 }
 
+void scSampleBox::fire(Pad& p) {
+    ++p.fireCount;
+    for(auto& [srv, sc] : p.sc) if(sc.engine) sc.engine->set("fire", p.fireCount);
+}
+void scSampleBox::stop(Pad& p) {
+    ++p.stopCount;
+    for(auto& [srv, sc] : p.sc) if(sc.engine) sc.engine->set("stop", p.stopCount);
+}
+
+void scSampleBox::resendParametersForNRT() {
+    for(auto& p : pads) {
+        syncPad(*p);
+        p->mod.resend();
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Frame
+// ════════════════════════════════════════════════════════════════════════════
+
 void scSampleBox::update(ofEventArgs&) {
-    mod.showing = showWindow.get();
-    mod.update();
-    if(pendingLoadDialog) {
-        pendingLoadDialog = false;
-        auto r = ofSystemLoadDialog("Load a sample", false,
-            samplePath.empty() ? browser.getDir() : std::filesystem::path(samplePath).parent_path().string());
-        if(r.bSuccess) pendingFile = r.getPath();
-    }
-    if(!pendingFile.empty() && !decodeTask.valid()) {
-        decodingPath = pendingFile;
-        pendingFile.clear();
-        decodeTask = std::async(std::launch::async, &scSlicerBox::decodeFile, decodingPath,
+    for(auto& up : pads) {
+        Pad& p = *up;
+        p.mod.showing = showWindow.get() && p.index == selected;
+        p.mod.update();
+        Sample& s = *p.sample;
+        if(!s.pendingFile.empty() && !s.task.valid()) {
+            s.decodingPath = s.pendingFile;
+            s.pendingFile.clear();
+            s.task = std::async(std::launch::async, &scSlicerBox::decodeFile, s.decodingPath,
                                 ofToDataPath("Supercollider/tmp/SampleBox", true), false);
-    }
-    if(decodeTask.valid() && decodeTask.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        applyDecoded(decodeTask.get());
-        decodingPath.clear();
-    }
-    // After a server reboot: new buffers and playhead bus (the graph rebuilds the synth)
-    for(auto& [srv, synth] : synths) {
-        if(!synth || playPath.empty()) continue;
-        auto it = buffers.find(srv);
-        const bool live = it != buffers.end() && !it->second.empty() &&
-            std::all_of(it->second.begin(), it->second.end(), [srv = srv](ofxSCBuffer* b){ return liveBuffer(srv, b); });
-        if(!live) {
-            for(auto* b : it != buffers.end() ? it->second : std::vector<ofxSCBuffer*>{}) delete b;
-            buffers.erase(srv);
-            ensureBuffers(srv);
-            ensureVisBus(srv);
-            sendAll(srv, synth);
+        }
+        if(s.task.valid() && s.task.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            applyDecoded(p, s.task.get());
+            s.decodingPath.clear();
+        }
+        // After a server reboot: new buffers (the graph rebuilds the synths)
+        for(auto& [srv, sc] : p.sc) {
+            if(!sc.engine || s.playPath.empty()) continue;
+            auto it = s.buffers.find(srv);
+            const bool live = it != s.buffers.end() && !it->second.empty() &&
+                std::all_of(it->second.begin(), it->second.end(), [srv = srv](ofxSCBuffer* b){ return liveBuffer(srv, b); });
+            if(!live) {
+                if(it != s.buffers.end()) { for(auto* b : it->second) delete b; s.buffers.erase(it); }
+                ensureBuffers(p, srv);
+                sendEngine(srv, p);
+            }
         }
     }
-    // Playheads, only while the window is shown
-    playheads.clear();
+    if(pendingLoadDialog) {
+        pendingLoadDialog = false;
+        Pad& p = *pads[std::clamp(selected, 0, (int)pads.size() - 1)];
+        auto r = ofSystemLoadDialog("Load a sample into " + p.name, false,
+            p.sample->path.empty() ? browser.getDir() : std::filesystem::path(p.sample->path).parent_path().string());
+        if(r.bSuccess) loadSample(p, r.getPath());
+    }
+    // Playheads (the selected pad) and meters, while the window is shown
+    for(auto& p : pads) { p->playheads.clear(); }
     if(showWindow.get()) {
-        for(auto& [srv, synth] : synths) {
-            auto vb = visBuses.find(srv);
-            if(!synth || vb == visBuses.end() || !liveControlBus(srv, vb->second)) continue;
-            playheads = vb->second->readValues;
-            const float now = ofGetElapsedTimef();
-            if(now >= nextPlayheadRead){
-                nextPlayheadRead = now + 1.0f / 30.0f;
-                srv->requestControlValues(vb->second->index, std::min(voices.get(), MaxVoices));
+        const float now = ofGetElapsedTimef();
+        const bool read = now >= nextMeterRead;
+        if(read) nextMeterRead = now + 1.0f / 30.0f;
+        for(auto& up : pads) {
+            Pad& p = *up;
+            if(p.sc.empty()) continue;
+            auto& [srv, sc] = *p.sc.begin();   // the first server is enough for the window
+            if(p.index == selected && liveControlBus(srv, sc.vis)) {
+                p.playheads = sc.vis->readValues;
+                if(read) srv->requestControlValues(sc.vis->index, std::min(p.voices.get(), MaxVoices));
             }
-            break;
+            if(liveControlBus(srv, sc.meter)) {
+                if(!sc.meter->readValues.empty()) p.meter = sc.meter->readValues[0];
+                if(read) srv->requestControlValues(sc.meter->index, 1);
+            }
         }
     }
 }
@@ -507,24 +1006,24 @@ void scSampleBox::update(ofEventArgs&) {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scSampleBox::presetSave(ofJson& j) {
-    j["sampleBoxPath"] = samplePath;
+    ofJson arr = ofJson::array();
+    for(int k = 0; k < (int)pads.size(); k++) arr.push_back(padState(k));
+    j["sampleBoxPads"] = arr;
+    j["sampleBoxSelected"] = selected;
     j["sampleBoxBrowseDir"] = browser.getDir();
-    mod.save(j, "sampleBoxMod");
     j["sampleBoxPublished"] = publishedKeys;
     j["sampleBoxBrowserWidth"] = browserWidth;
     j["sampleBoxWaveformHeight"] = waveformHeight / std::max(0.01f, ofxOceanodeShared::getZoomLevel());
-    auto& state = j["sampleBoxControls"] = ofJson::object();
-    for(const auto& c : controls) state[c.key] = c.save();
-    // a modulated control: its own value (stored as text here)
-    ofJson bases = ofJson::object();
-    for(const auto& c : controls) if(mod.isParamTarget(c.key)) bases[c.key] = 0.0f;
-    mod.patchBases(bases);
-    for(auto it = bases.begin(); it != bases.end(); ++it)
-        if(it.value().is_number_integer()) state[it.key()] = ofToString(it.value().get<int>());
-        else if(it.value().is_number()) state[it.key()] = ofToString(it.value().get<float>());
-    mod.patchBases(j);
 }
+
+// The pads (and so their parameters) must exist before Oceanode sets the
+// published ones and restores their connections
 void scSampleBox::loadBeforeConnections(ofJson& j) {
+    if(j.contains("sampleBoxPads") && j["sampleBoxPads"].is_array()) {
+        const int n = std::clamp((int)j["sampleBoxPads"].size(), 1, MaxPads);
+        while((int)pads.size() < n) if(!addPad()) break;
+        while((int)pads.size() > n) removePad((int)pads.size() - 1);
+    }
     if(!j.contains("sampleBoxPublished") || !j["sampleBoxPublished"].is_array()) return;
     std::vector<std::string> wanted;
     for(const auto& key : j["sampleBoxPublished"])
@@ -534,27 +1033,28 @@ void scSampleBox::loadBeforeConnections(ofJson& j) {
         if(std::find(wanted.begin(), wanted.end(), key) == wanted.end()) unpublish(key);
     for(const auto& key : wanted) publish(key);
 }
+void scSampleBox::presetRecallBeforeSettingParameters(ofJson& j) { loadBeforeConnections(j); }
+
 void scSampleBox::presetRecallAfterSettingParameters(ofJson& j) {
-    const std::string previousDef = synthName();
-    restoring = true;
-    if(j.contains("sampleBoxControls") && j["sampleBoxControls"].is_object())
-        for(const auto& c : controls) if(j["sampleBoxControls"].contains(c.key))
-            try { c.load(j["sampleBoxControls"][c.key].get<std::string>()); } catch(...) {}
-    restoring = false;
-    if(previousDef != synthName()) replaceAllSynths();
-    mod.load(j, "sampleBoxMod");
-    mod.afterLoad();
+    if(j.contains("sampleBoxPads") && j["sampleBoxPads"].is_array()) {
+        const auto& arr = j["sampleBoxPads"];
+        for(int k = 0; k < (int)pads.size() && k < (int)arr.size(); k++) {
+            applyPadState(k, arr[k]);
+            const std::string path = arr[k].value("path", std::string());
+            if(!path.empty() && path != pads[k]->sample->path) loadSample(*pads[k], path);
+        }
+    }
+    for(auto& p : pads) syncPad(*p);
+    sendChokeMasks();
+    sendMutes();
+    if(j.contains("sampleBoxSelected") && j["sampleBoxSelected"].is_number_integer())
+        selected = std::clamp(j["sampleBoxSelected"].get<int>(), 0, (int)pads.size() - 1);
     if(j.contains("sampleBoxBrowserWidth") && j["sampleBoxBrowserWidth"].is_number())
         browserWidth = j["sampleBoxBrowserWidth"].get<float>();
     if(j.contains("sampleBoxWaveformHeight") && j["sampleBoxWaveformHeight"].is_number())
         waveformHeight = std::max(0.0f, j["sampleBoxWaveformHeight"].get<float>()) * ofxOceanodeShared::getZoomLevel();
     if(j.contains("sampleBoxBrowseDir") && j["sampleBoxBrowseDir"].is_string())
         browser.refresh(j["sampleBoxBrowseDir"].get<std::string>());
-    if(j.contains("sampleBoxPath") && j["sampleBoxPath"].is_string()) {
-        const std::string path = j["sampleBoxPath"].get<std::string>();
-        if(!path.empty() && path != samplePath) loadSample(path);
-    }
-    sendAll();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -563,17 +1063,17 @@ void scSampleBox::presetRecallAfterSettingParameters(ofJson& j) {
 
 void scSampleBox::publish(const std::string& key) {
     if(published.count(key)) return;
-    auto it = std::find_if(controls.begin(), controls.end(), [&](const Control& c){ return c.key == key; });
-    if(it == controls.end() || getParameterGroup().contains(key)) return;
+    Control* c = findControl(key);
+    if(!c || getParameterGroup().contains(key)) return;
     if(!publishedSeparator) { addSeparator("Published", ofColor(200)); publishedSeparator = true; }
-    published[key] = it->add();
+    published[key] = c->add();
     publishedKeys.push_back(key);
     parameterGroupChanged.notify(this);
 }
-void scSampleBox::unpublish(const std::string& key) {
+void scSampleBox::unpublish(const std::string& key, bool force) {
     auto it = published.find(key);
     if(it == published.end()) return;
-    if(isConnected(key)) return;
+    if(isConnected(key) && !force) return;
     removeParameter(it->second->getName());
     published.erase(it);
     publishedKeys.erase(std::remove(publishedKeys.begin(), publishedKeys.end(), key), publishedKeys.end());
@@ -590,15 +1090,17 @@ void scSampleBox::drawPublishMenu(const std::string& key) {
     ImGui::TextDisabled("%s", key.c_str());
     ImGui::Separator();
     // the value, typed (vectors: a, b, c)
-    auto it = std::find_if(controls.begin(), controls.end(), [&](const Control& c){ return c.key == key; });
-    if(it != controls.end() && it->save && it->load)
-        scTyped::field(key, it->save, [&](const std::string& t){ it->load(ofTrim(t)); }, false);
+    if(Control* c = findControl(key); c && c->save && c->load)
+        scTyped::field(key, c->save, [&](const std::string& t){ c->load(ofTrim(t)); }, false);
     if(getParameterGroup().contains(key) && !published.count(key)) ImGui::TextDisabled("Always on the node");
     else if(published.count(key)) {
         if(isConnected(key)) ImGui::TextDisabled("Disconnect it to unpublish");
         else if(ImGui::MenuItem("Unpublish from Node")) unpublish(key);
     } else if(ImGui::MenuItem("Publish to Node")) publish(key);
-    mod.modulateMenu(key);
+    // Modulate with: the modulation of the pad the control belongs to (the
+    // selected pad's for the node's own)
+    if(Control* c = findControl(key); c && c->pad >= 0 && c->pad < (int)pads.size()) pads[c->pad]->mod.modulateMenu(key);
+    else if(!pads.empty()) pads[std::clamp(selected, 0, (int)pads.size() - 1)]->mod.modulateMenu(key);
     ImGui::EndPopup();
 }
 void scSampleBox::drawPublishedUnderline(const std::string& key) const {
@@ -630,7 +1132,7 @@ void scSampleBox::slider(ofParameter<float>& p, const char* label, float w, cons
     ImGui::PopID();
 }
 
-void scSampleBox::sliderInt(ofParameter<int>& p, const char* label, float w) {
+void scSampleBox::sliderInt(ofParameter<int>& p, const char* label, float w, const char* fmt) {
     const float z = ofxOceanodeShared::getZoomLevel();
     const std::string key = p.getEscapedName();
     ImGui::PushID(key.c_str());
@@ -642,12 +1144,12 @@ void scSampleBox::sliderInt(ofParameter<int>& p, const char* label, float w) {
     ImGui::SetCursorPosX(x0 + labelW * z);
     ImGui::SetNextItemWidth(std::max(40.0f * z, w - labelW * z));
     int v = p.get();
-    if(ImGui::SliderInt("##v", &v, p.getMin(), p.getMax())) p.set(v);
+    if(ImGui::SliderInt("##v", &v, p.getMin(), p.getMax(), fmt)) p.set(v);
     drawPublishMenu(key);
     ImGui::PopID();
 }
 
-void scSampleBox::combo(ofParameter<int>& p, const char* label, float w, const std::vector<const char*>& items) {
+void scSampleBox::combo(ofParameter<int>& p, const char* label, float w, const std::vector<std::string>& items) {
     const float z = ofxOceanodeShared::getZoomLevel();
     const std::string key = p.getEscapedName();
     ImGui::PushID(key.c_str());
@@ -658,17 +1160,22 @@ void scSampleBox::combo(ofParameter<int>& p, const char* label, float w, const s
     ImGui::SameLine();
     ImGui::SetCursorPosX(x0 + labelW * z);
     ImGui::SetNextItemWidth(std::max(40.0f * z, w - labelW * z));
-    int v = std::max(0, std::min((int)items.size() - 1, p.get()));
-    if(ImGui::Combo("##v", &v, items.data(), (int)items.size())) p.set(v);
+    const int v = std::max(0, std::min((int)items.size() - 1, p.get()));
+    if(ImGui::BeginCombo("##v", items[v].c_str())) {
+        for(int i = 0; i < (int)items.size(); i++) if(ImGui::Selectable(items[i].c_str(), i == v)) p.set(i);
+        ImGui::EndCombo();
+    }
     drawPublishMenu(key);
     ImGui::PopID();
 }
 
 void scSampleBox::toggle(ofParameter<bool>& p, const char* label) {
     bool v = p.get();
+    ImGui::PushID(p.getEscapedName().c_str());
     if(ImGui::Checkbox(label, &v)) p.set(v);
     drawPublishedUnderline(p.getEscapedName());
     drawPublishMenu(p.getEscapedName());
+    ImGui::PopID();
 }
 
 void scSampleBox::sectionHeader(const char* title, float w, ofParameter<bool>* on) {
@@ -684,7 +1191,7 @@ void scSampleBox::sectionHeader(const char* title, float w, ofParameter<bool>* o
         bool v = on->get();
         ImGui::PushID(title);
         if(ImGui::Checkbox("##on", &v)) on->set(v);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s on / off", title);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s on / off (off: no CPU)", title);
         drawPublishMenu(on->getEscapedName());
         ImGui::PopID();
         ImGui::SameLine(0, 4.0f * z);
@@ -714,13 +1221,22 @@ void scSampleBox::endColumn(bool last) {
 void scSampleBox::draw(ofEventArgs&) {
     if(showWindow.get()) drawWindow();
     else { browser.stopPreview(); windowHovered = false; }
+    // structural changes once the frame is drawn
+    if(pendingMoveFrom >= 0) { movePad(pendingMoveFrom, pendingMoveTo); pendingMoveFrom = pendingMoveTo = -1; }
+    if(pendingDuplicate >= 0) { duplicatePad(pendingDuplicate); pendingDuplicate = -1; }
+    if(pendingRemove >= 0) { removePad(pendingRemove); pendingRemove = -1; }
+    if(!pendingDropFile.empty() && !pads.empty()) {
+        const int k = hoveredPad >= 0 && hoveredPad < (int)pads.size() ? hoveredPad : selected;
+        loadSample(*pads[std::clamp(k, 0, (int)pads.size() - 1)], pendingDropFile);
+        pendingDropFile.clear();
+    }
 }
 
 void scSampleBox::drawWindow() {
     const float z = ofxOceanodeShared::getZoomLevel();
-    ImGui::SetNextWindowSize(ImVec2(1040 * z, 700 * z), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1120 * z, 760 * z), ImGuiCond_FirstUseEver);
     bool open = showWindow.get();
-    const std::string title = "SampleBox " + ofToString(getNumIdentifier());
+    const std::string title = getWindowTitle();
     if(!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         windowHovered = false;
         browser.stopPreview();
@@ -731,39 +1247,47 @@ void scSampleBox::drawWindow() {
     if(!open) { showWindow = false; windowHovered = false; browser.stopPreview(); ImGui::End(); return; }
     windowHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows |
                                            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    hoveredPad = -1;
     const float totalW = ImGui::GetContentRegionAvail().x;
     const float totalH = ImGui::GetContentRegionAvail().y;
-    if(totalW < 200.0f * z || totalH < 80.0f * z) { browser.stopPreview(); ImGui::End(); return; }
+    if(totalW < 200.0f * z || totalH < 80.0f * z || pads.empty()) { browser.stopPreview(); ImGui::End(); return; }
+    selected = std::clamp(selected, 0, (int)pads.size() - 1);
+    Pad& p = *pads[selected];
 
-    // ── Left: the browser, and its splitter ─────────────────────────────────
+    // ── Left: the pads, the browser below; the splitter ─────────────────────
     const float dragW = 5.0f * z;
-    float bw = std::min(browserWidth * z, totalW * 0.45f);
-    ImGui::BeginChild("##sbBrowser", ImVec2(bw, totalH), false);
-    browser.draw(bw, totalH);
+    const float bw = std::min(browserWidth * z, totalW * 0.45f);
+    ImGui::BeginChild("##sbLeft", ImVec2(bw, totalH), false);
+    const float rowH = ImGui::GetFrameHeight() + 6.0f * z;
+    const float listH = std::clamp(pads.size() * rowH + ImGui::GetFrameHeightWithSpacing() * 2.0f + 12.0f * z,
+                                   120.0f * z, totalH * 0.6f);
+    drawPadList(bw, listH);
+    const float browserH = std::max(60.0f * z, ImGui::GetContentRegionAvail().y);
+    ImGui::BeginChild("##sbBrowser", ImVec2(bw, browserH), false);
+    browser.draw(bw, browserH);
+    ImGui::EndChild();
     ImGui::EndChild();
     ImGui::SameLine(0, 0);
     scSampleBrowser::drawSplitter("##sbSplit", browserWidth, dragW, totalH,
-        100.0f, std::max(100.0f, totalW * 0.45f / z), 1.0f / z);
+        140.0f, std::max(140.0f, totalW * 0.45f / z), 1.0f / z);
     ImGui::SameLine(0, 0);
 
-    // ── Right: header, waveform, transport, then the tabs ───────────────────
+    // ── Right: the selected pad (header, waveform, transport), then the tabs ─
     ImGui::BeginChild("##sbRight", ImVec2(0, totalH), false);
     const float rightW = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize - 4.0f * z;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6.0f * z);
     ImGui::BeginGroup();
     const float w = rightW - 6.0f * z;
-    drawHeader(w);
-    drawWaveform(w);
-    drawTransport(w);
+    drawHeader(p, w);
+    drawWaveform(p, w);
+    drawTransport(p, w);
     ImGui::Spacing();
     if(ImGui::BeginTabBar("##sbTabs")) {
-        if(ImGui::BeginTabItem("Playback")) { ImGui::Spacing(); drawPlaybackTab(w); ImGui::EndTabItem(); }
-        if(ImGui::BeginTabItem("Envelopes")) { ImGui::Spacing(); mod.drawEnvelopes(w); ImGui::EndTabItem(); }
-        if(ImGui::BeginTabItem("LFOs")) { ImGui::Spacing(); mod.drawLfos(w); ImGui::EndTabItem(); }
-        if(ImGui::BeginTabItem("Routing")) { ImGui::Spacing(); mod.drawRouting(w); ImGui::EndTabItem(); }
-        if(ImGui::BeginTabItem("Filter & EQ")) { ImGui::Spacing(); drawFilterEqTab(w); ImGui::EndTabItem(); }
-        if(ImGui::BeginTabItem("Dynamics")) { ImGui::Spacing(); drawDynamicsTab(w); ImGui::EndTabItem(); }
-        if(ImGui::BeginTabItem("Space")) { ImGui::Spacing(); drawSpaceTab(w); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem("Sound")) { ImGui::Spacing(); drawSoundTab(p, w); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem("Envelopes")) { ImGui::Spacing(); p.mod.drawEnvelopes(w); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem("LFOs")) { ImGui::Spacing(); p.mod.drawLfos(w); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem("Routing")) { ImGui::Spacing(); p.mod.drawRouting(w); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem("Mixer")) { ImGui::Spacing(); drawMixerTab(w); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
     ImGui::EndGroup();
@@ -771,26 +1295,168 @@ void scSampleBox::drawWindow() {
     ImGui::End();
 }
 
-// File name and format, Load..., the node's Gain on the right
-void scSampleBox::drawHeader(float w) {
+// ── The pad list ────────────────────────────────────────────────────────────
+
+namespace {
+struct PadDrag { const void* node; int pad; };
+}
+
+void scSampleBox::drawPadList(float w, float h) {
+    const float z = ofxOceanodeShared::getZoomLevel();
+    ImGui::BeginChild("##sbPads", ImVec2(w, h), true);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float rowH = ImGui::GetFrameHeight() + 6.0f * z;
+    const float innerW = ImGui::GetContentRegionAvail().x;
+    for(int k = 0; k < (int)pads.size(); k++) {
+        Pad& p = *pads[k];
+        ImGui::PushID(k);
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        const bool isSel = k == selected;
+        if(ImGui::Selectable("##row", isSel, ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick,
+                             ImVec2(innerW, rowH))) {
+            selected = k;
+            if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                renaming = k;
+                std::snprintf(renameBuf, sizeof(renameBuf), "%s", p.name.c_str());
+            }
+        }
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) hoveredPad = k;
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::GetDragDropPayload())
+            ImGui::SetTooltip("Click: edit   Double-click: rename   Drag: move it   Right-click: more\n"
+                              "Drop a sample here (browser or Finder) to load it into this pad");
+        if(ImGui::BeginDragDropSource()) {
+            const PadDrag d{this, k};
+            ImGui::SetDragDropPayload("SampleBoxPad", &d, sizeof(d));
+            ImGui::Text("Move %s", padLabel(p).c_str());
+            ImGui::EndDragDropSource();
+        }
+        if(ImGui::BeginDragDropTarget()) {
+            if(const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("SampleBoxPad")) {
+                const PadDrag d = *(const PadDrag*)pl->Data;
+                if(d.node == this && d.pad != k) { pendingMoveFrom = d.pad; pendingMoveTo = k; }
+            }
+            ImGui::EndDragDropTarget();
+        }
+        std::string dropped;
+        if(browser.acceptDropOnLastItem(dropped)) { loadSample(p, dropped); selected = k; }
+        if(ImGui::BeginPopupContextItem("##padMenu")) {
+            ImGui::TextDisabled("%s", padLabel(p).c_str());
+            ImGui::Separator();
+            if(ImGui::MenuItem("Rename")) { renaming = k; std::snprintf(renameBuf, sizeof(renameBuf), "%s", p.name.c_str()); }
+            const std::string source = channelSource(padChannel(p));
+            if(!source.empty() && ImGui::MenuItem(("Name it \"" + source + "\"").c_str())) p.name = source;
+            if(ImGui::MenuItem("Duplicate", nullptr, false, (int)pads.size() < MaxPads)) pendingDuplicate = k;
+            if(ImGui::MenuItem("Delete", nullptr, false, pads.size() > 1)) pendingRemove = k;
+            ImGui::EndPopup();
+        }
+
+        // the row: colour, number and name, what plays it; Play, M, S on the right
+        const float cy = a.y + rowH * 0.5f;
+        dl->AddRectFilled(ImVec2(a.x + 2 * z, a.y + 4 * z), ImVec2(a.x + 6 * z, a.y + rowH - 4 * z),
+                          pal::padCol(k, p.mute.get() ? 80 : 255));
+        const float btn = ImGui::GetFrameHeight();
+        const float buttonsW = 3 * btn + 6 * z;
+        const float textX = a.x + 12 * z, textR = a.x + innerW - buttonsW - 6 * z;
+        const int ch = padChannel(p);
+        const std::string source = channelSource(ch);
+        std::string chText = "ch " + ofToString(ch + 1) + (source.empty() ? "" : " " + source);
+        if(renaming == k) {
+            ImGui::SetCursorScreenPos(ImVec2(textX, cy - ImGui::GetFrameHeight() * 0.5f));
+            ImGui::SetNextItemWidth(std::max(40.0f * z, textR - textX));
+            if(ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive()) ImGui::SetKeyboardFocusHere();
+            const bool enter = ImGui::InputText("##rename", renameBuf, sizeof(renameBuf),
+                                                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            if(enter || ImGui::IsItemDeactivated()) { if(renameBuf[0]) p.name = renameBuf; renaming = -1; }
+        } else {
+            dl->PushClipRect(ImVec2(textX, a.y), ImVec2(textR, a.y + rowH), true);
+            const std::string label = padLabel(p);
+            const float ty = cy - ImGui::GetTextLineHeight() * 0.5f;
+            dl->AddText(ImVec2(textX, ty), p.mute.get() ? pal::textDim : pal::headerText, label.c_str());
+            const float lw = ImGui::CalcTextSize(label.c_str()).x;
+            const float cw = ImGui::CalcTextSize(chText.c_str()).x;
+            dl->AddText(ImVec2(std::max(textX + lw + 8 * z, textR - cw), ty), pal::textDim, chText.c_str());
+            dl->PopClipRect();
+        }
+        ImGui::SetCursorScreenPos(ImVec2(a.x + innerW - buttonsW, cy - btn * 0.5f));
+        ImGui::Button("##play", ImVec2(btn, btn));
+        {
+            const ImVec2 b0 = ImGui::GetItemRectMin(), b1 = ImGui::GetItemRectMax();
+            const float s = (b1.y - b0.y) * 0.28f;
+            const ImVec2 c((b0.x + b1.x) * 0.5f, (b0.y + b1.y) * 0.5f);
+            dl->AddTriangleFilled(ImVec2(c.x - s * 0.7f, c.y - s), ImVec2(c.x - s * 0.7f, c.y + s), ImVec2(c.x + s, c.y),
+                                  pal::headerText);
+        }
+        if(ImGui::IsItemActivated()) {
+            fire(p);
+            if(p.gateMode.get()) { p.auditionHeld = true; for(auto& [srv, sc] : p.sc) if(sc.engine) sc.engine->set("gate", 1.0f); }
+        }
+        if(ImGui::IsItemDeactivated() && p.auditionHeld) { p.auditionHeld = false; sendChannelInputs(p); }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Play this pad");
+        ImGui::SameLine(0, 3 * z);
+        auto flag = [&](ofParameter<bool>& f, const char* text, ImU32 on) {
+            if(f.get()) ImGui::PushStyleColor(ImGuiCol_Button, on);
+            if(ImGui::Button(text, ImVec2(btn, btn))) f = !f.get();
+            if(f.get()) ImGui::PopStyleColor();
+            drawPublishMenu(f.getEscapedName());
+        };
+        flag(p.mute, "M", IM_COL32(190, 90, 70, 255));
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Mute");
+        ImGui::SameLine(0, 3 * z);
+        flag(p.solo, "S", IM_COL32(200, 170, 60, 255));
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Solo");
+        ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + rowH));
+        ImGui::Dummy(ImVec2(innerW, 0));
+        ImGui::PopID();
+    }
+    ImGui::Spacing();
+    ImGui::BeginDisabled((int)pads.size() >= MaxPads);
+    if(ImGui::Button("+ Add pad")) { if(Pad* np = addPad()) selected = np->index; }
+    ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("A new pad: its own sample, sound and mixer channel; it plays the next channel");
+    // the input knows what plays each channel: name the pads after it
+    bool anySource = false;
+    for(auto& q : pads) if(!channelSource(padChannel(*q)).empty()) anySource = true;
+    if(anySource) {
+        ImGui::SameLine();
+        if(ImGui::Button("Name from input"))
+            for(auto& q : pads) { const std::string s = channelSource(padChannel(*q)); if(!s.empty()) q->name = s; }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Each pad takes the name of what plays its channel (a MetroBox lane...)");
+    }
+    ImGui::EndChild();
+}
+
+// Name, file and format, Load...; the node's Gain on the right
+void scSampleBox::drawHeader(Pad& p, float w) {
     const float z = ofxOceanodeShared::getZoomLevel();
     const float x0 = ImGui::GetCursorPosX();
+    ImGui::PushStyleColor(ImGuiCol_Text, pal::padCol(p.index, 255));
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%d", p.index + 1);
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    char nameBuf[64];
+    std::snprintf(nameBuf, sizeof(nameBuf), "%s", p.name.c_str());
+    ImGui::SetNextItemWidth(130.0f * z);
+    if(ImGui::InputText("##padName", nameBuf, sizeof(nameBuf))) p.name = nameBuf;
+    ImGui::SameLine();
     if(ImGui::Button("Load...")) pendingLoadDialog = true;
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Open an audio file (WAV, AIFF, FLAC, MP3, M4A, CAF...).\n"
-                                                 "Or drop one from the browser or the Finder on the waveform.");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Open an audio file (WAV, AIFF, FLAC, MP3, M4A, CAF...) for this pad.\n"
+                                                 "Or drop one from the browser or the Finder on the waveform or a pad.");
     ImGui::SameLine(0, 10.0f * z);
     ImGui::AlignTextToFramePadding();
-    if(!decodingPath.empty() || !pendingFile.empty()) {
-        const std::string& p = decodingPath.empty() ? pendingFile : decodingPath;
-        ImGui::TextColored(ImColor(pal::textDim), "Loading %s...", std::filesystem::path(p).filename().string().c_str());
-    } else if(samplePath.empty()) {
+    const Sample& s = *p.sample;
+    if(!s.decodingPath.empty() || !s.pendingFile.empty()) {
+        const std::string& f = s.decodingPath.empty() ? s.pendingFile : s.decodingPath;
+        ImGui::TextColored(ImColor(pal::textDim), "Loading %s...", std::filesystem::path(f).filename().string().c_str());
+    } else if(s.path.empty()) {
         ImGui::TextColored(ImColor(pal::textDim), "No sample loaded");
     } else {
-        ImGui::TextUnformatted(std::filesystem::path(samplePath).filename().string().c_str());
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", samplePath.c_str());
+        ImGui::TextUnformatted(std::filesystem::path(s.path).filename().string().c_str());
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", s.path.c_str());
         ImGui::SameLine(0, 10.0f * z);
-        ImGui::TextColored(ImColor(pal::textDim), "%s  |  %s  |  %.1f kHz", formatTime(sampleSeconds).c_str(),
-                           sampleChannels == 1 ? "mono" : "stereo", sampleRate / 1000.0f);
+        ImGui::TextColored(ImColor(pal::textDim), "%s  |  %s  |  %.1f kHz", formatTime(s.seconds).c_str(),
+                           s.channels == 1 ? "mono" : "stereo", s.rate / 1000.0f);
     }
     const float gainW = 210.0f * z;
     ImGui::SameLine();
@@ -798,14 +1464,17 @@ void scSampleBox::drawHeader(float w) {
     const float keep = labelW;
     labelW = 38.0f;
     slider(gain, "Gain", gainW, "%.2f");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Every pad's level (the Out mix and the Pad outputs)");
     labelW = keep;
-    if(!loadError.empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", loadError.c_str());
+    if(!s.error.empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", s.error.c_str());
 }
 
-void scSampleBox::drawWaveform(float w) {
+void scSampleBox::drawWaveform(Pad& p, float w) {
     const float z = ofxOceanodeShared::getZoomLevel();
-    if(waveformHeight <= 0.0f) waveformHeight = 190.0f * z;
+    if(waveformHeight <= 0.0f) waveformHeight = 170.0f * z;
     const float h = waveformHeight;
+    const Sample& smp = *p.sample;
+    const int bins = (int)smp.peaks.size();
     const ImVec2 a = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##sbWave", ImVec2(std::max(1.0f, w), std::max(1.0f, h)));
     const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
@@ -814,10 +1483,11 @@ void scSampleBox::drawWaveform(float w) {
     dl->PushClipRect(a, b, true);
     dl->AddRectFilled(a, b, pal::canvas);
     const float midY = a.y + h * 0.5f;
-    const float in = inPoint.get(), out = outPoint.get();
+    const float in = p.inPoint.get(), out = p.outPoint.get();
     const float xi = a.x + w * in, xo = a.x + w * out;
+    const float seconds = smp.seconds;
 
-    if(waveformPeaks.empty()) {
+    if(smp.peaks.empty()) {
         const char* msg = "Drop a sample here (browser or Finder), double-click one in the browser, or Load...";
         const ImVec2 ts = ImGui::CalcTextSize(msg);
         dl->AddText(ImVec2(a.x + (w - ts.x) * 0.5f, midY - ts.y * 0.5f), pal::textDim, msg);
@@ -825,9 +1495,9 @@ void scSampleBox::drawWaveform(float w) {
         // time grid, a line at every step that leaves room for its label
         static const float steps[] = {0.01f, 0.02f, 0.05f, 0.1f, 0.2f, 0.5f, 1, 2, 5, 10, 15, 30, 60, 120, 300};
         float step = steps[0];
-        for(float s : steps) { step = s; if(sampleSeconds > 0 && w * s / sampleSeconds >= 70.0f * z) break; }
-        for(float t = step; sampleSeconds > 0 && t < sampleSeconds; t += step) {
-            const float x = a.x + w * t / sampleSeconds;
+        for(float s : steps) { step = s; if(seconds > 0 && w * s / seconds >= 70.0f * z) break; }
+        for(float t = step; seconds > 0 && t < seconds; t += step) {
+            const float x = a.x + w * t / seconds;
             dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), pal::grid);
             char label[24];
             if(step < 1.0f) std::snprintf(label, sizeof(label), "%.2f", t);
@@ -839,25 +1509,24 @@ void scSampleBox::drawWaveform(float w) {
         // the peaks, bright inside the region
         const int pixels = std::max(1, (int)w);
         for(int i = 0; i < pixels; ++i) {
-            const int b0 = (int)((int64_t)i * WaveformBins / pixels);
-            const int b1 = std::max(b0 + 1, (int)((int64_t)(i + 1) * WaveformBins / pixels));
+            const int b0 = (int)((int64_t)i * bins / pixels);
+            const int b1 = std::max(b0 + 1, (int)((int64_t)(i + 1) * bins / pixels));
             float peak = 0;
-            for(int k = b0; k < b1 && k < WaveformBins; ++k) peak = std::max(peak, waveformPeaks[k]);
+            for(int k = b0; k < b1 && k < bins; ++k) peak = std::max(peak, smp.peaks[k]);
             if(peak <= 0.0f) continue;
             const float x = a.x + i + 0.5f, dy = std::max(0.5f, peak * h * 0.46f);
             const bool inside = x >= xi && x <= xo;
-            dl->AddLine(ImVec2(x, midY - dy), ImVec2(x, midY + dy), pal::accentCol(inside ? 170 : 45));
+            dl->AddLine(ImVec2(x, midY - dy), ImVec2(x, midY + dy), pal::padCol(p.index, inside ? 190 : 50));
         }
-        // outside the region: dimmed
         dl->AddRectFilled(a, ImVec2(xi, b.y), pal::outside);
         dl->AddRectFilled(ImVec2(xo, a.y), b, pal::outside);
         // the loop's crossfade (the seam's end of the region)
-        if(loop.get() && loopCrossfade.get() > 0.0f) {
-            const float xf = (xo - xi) * loopCrossfade.get() * 0.01f;
-            const float x0 = reverse.get() ? xi : xo - xf, x1 = reverse.get() ? xi + xf : xo;
-            dl->AddRectFilledMultiColor(ImVec2(x0, a.y), ImVec2(x1, b.y),
-                reverse.get() ? pal::accentCol(60) : pal::accentCol(0), reverse.get() ? pal::accentCol(0) : pal::accentCol(60),
-                reverse.get() ? pal::accentCol(0) : pal::accentCol(60), reverse.get() ? pal::accentCol(60) : pal::accentCol(0));
+        if(p.loop.get() && p.loopCrossfade.get() > 0.0f) {
+            const bool rev = p.reverse.get();
+            const float xf = (xo - xi) * p.loopCrossfade.get() * 0.01f;
+            const float x0 = rev ? xi : xo - xf, x1 = rev ? xi + xf : xo;
+            const ImU32 c0 = rev ? pal::accentCol(60) : pal::accentCol(0), c1 = rev ? pal::accentCol(0) : pal::accentCol(60);
+            dl->AddRectFilledMultiColor(ImVec2(x0, a.y), ImVec2(x1, b.y), c0, c1, c1, c0);
         }
         // In / Out: lines, flags and times
         const float flag = 7.0f * z;
@@ -865,17 +1534,17 @@ void scSampleBox::drawWaveform(float w) {
         dl->AddLine(ImVec2(xo, a.y), ImVec2(xo, b.y), pal::handle, 2.0f * z);
         dl->AddTriangleFilled(ImVec2(xi, a.y), ImVec2(xi + flag, a.y), ImVec2(xi, a.y + flag), pal::handle);
         dl->AddTriangleFilled(ImVec2(xo, a.y), ImVec2(xo - flag, a.y), ImVec2(xo, a.y + flag), pal::handle);
-        const std::string ti = "In " + formatTime(in * sampleSeconds);
-        const std::string to = "Out " + formatTime(out * sampleSeconds);
+        const std::string ti = "In " + formatTime(in * seconds);
+        const std::string to = "Out " + formatTime(out * seconds);
         const float tow = ImGui::CalcTextSize(to.c_str()).x;
         dl->AddText(ImVec2(xi + flag + 3.0f * z, a.y + 2.0f * z), pal::headerText, ti.c_str());
         dl->AddText(ImVec2(std::max(xi + flag + 3.0f * z, xo - flag - 3.0f * z - tow),
                            a.y + 2.0f * z + (xo - xi < tow + 120.0f * z ? ImGui::GetTextLineHeight() : 0.0f)),
                     pal::headerText, to.c_str());
         // a playhead per sounding voice
-        for(int v = 0; v < (int)playheads.size() && v < std::min(voices.get(), MaxVoices); ++v) {
-            if(playheads[v] < 0.0f) continue;
-            const float x = a.x + w * ofClamp(playheads[v], 0.0f, 1.0f);
+        for(int v = 0; v < (int)p.playheads.size() && v < std::min(p.voices.get(), MaxVoices); ++v) {
+            if(p.playheads[v] < 0.0f) continue;
+            const float x = a.x + w * ofClamp(p.playheads[v], 0.0f, 1.0f);
             dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), pal::voiceCol(v, 235), 1.5f * z);
             dl->AddCircleFilled(ImVec2(x, b.y - 4.0f * z), 3.0f * z, pal::voiceCol(v, 235));
         }
@@ -883,10 +1552,11 @@ void scSampleBox::drawWaveform(float w) {
     const bool dragging = browser.isDraggingFile() && hovered;
     dl->AddRect(a, b, dragging ? pal::accentCol(255) : pal::border, 0, 0, dragging ? 2.0f * z : 1.0f);
     dl->PopClipRect();
+    if(hovered) hoveredPad = p.index;
 
     // ── Mouse: drag In / Out (near a line) or the whole region (inside it);
     //    a click outside moves the nearest edge there; double-click = all ──
-    if(!waveformPeaks.empty()) {
+    if(!smp.peaks.empty()) {
         const float mx = ofClamp((ImGui::GetMousePos().x - a.x) / w, 0.0f, 1.0f);
         const float grab = 7.0f * z, mouseX = ImGui::GetMousePos().x;
         const bool nearIn = std::abs(mouseX - xi) <= grab, nearOut = std::abs(mouseX - xo) <= grab;
@@ -894,30 +1564,29 @@ void scSampleBox::drawWaveform(float w) {
             if(nearIn || nearOut) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             else if(mx > in && mx < out) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
             ImGui::SetTooltip("%s\nDrag In / Out, or the region to move it\nDouble-click: the whole file",
-                              formatTime(mx * sampleSeconds).c_str());
+                              formatTime(mx * seconds).c_str());
         }
         if(ImGui::IsItemActivated()) {
-            if(nearIn || nearOut) regionDrag = (nearIn && nearOut) ? (mx < in ? 0 : 1)
-                                             : nearIn ? 0 : 1;
+            if(nearIn || nearOut) regionDrag = (nearIn && nearOut) ? (mx < in ? 0 : 1) : nearIn ? 0 : 1;
             else if(mx > in && mx < out) { regionDrag = 2; regionDragOffset = mx - in; }
             else regionDrag = std::abs(mx - in) < std::abs(mx - out) ? 0 : 1;
         }
         if(active && regionDrag >= 0) {
             const float eps = 0.0005f;
-            if(regionDrag == 0) inPoint = std::min(mx, outPoint.get() - eps);
-            else if(regionDrag == 1) outPoint = std::max(mx, inPoint.get() + eps);
+            if(regionDrag == 0) p.inPoint = std::min(mx, p.outPoint.get() - eps);
+            else if(regionDrag == 1) p.outPoint = std::max(mx, p.inPoint.get() + eps);
             else {
-                const float len = outPoint.get() - inPoint.get();
+                const float len = p.outPoint.get() - p.inPoint.get();
                 const float start = ofClamp(mx - regionDragOffset, 0.0f, 1.0f - len);
-                inPoint = start;
-                outPoint = start + len;
+                p.inPoint = start;
+                p.outPoint = start + len;
             }
         }
         if(ImGui::IsItemDeactivated()) regionDrag = -1;
-        if(hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { inPoint = 0.0f; outPoint = 1.0f; }
+        if(hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { p.inPoint = 0.0f; p.outPoint = 1.0f; }
     }
     std::string dropped;
-    if(browser.acceptDropOnLastItem(dropped)) loadSample(dropped);
+    if(browser.acceptDropOnLastItem(dropped)) loadSample(p, dropped);
 
     // ── Resize grip (GrainBox's) ─────────────────────────────────────────────
     const float gripH = 8.0f * z;
@@ -936,62 +1605,58 @@ void scSampleBox::drawWaveform(float w) {
 }
 
 // Play / Stop, how notes play, the engine; the voices' lights on the right
-void scSampleBox::drawTransport(float w) {
+void scSampleBox::drawTransport(Pad& p, float w) {
     const float z = ofxOceanodeShared::getZoomLevel();
     const float x0 = ImGui::GetCursorPosX();
     ImGui::Button("Play", ImVec2(64.0f * z, 0));
     if(ImGui::IsItemActivated()) {
-        fire();
-        if(gateMode.get()) { auditionHeld = true; for(auto& [srv, s] : synths) if(s) s->set("gate", 1.0f); }
+        fire(p);
+        if(p.gateMode.get()) { p.auditionHeld = true; for(auto& [srv, sc] : p.sc) if(sc.engine) sc.engine->set("gate", 1.0f); }
     }
-    if(ImGui::IsItemDeactivated() && auditionHeld) {
-        auditionHeld = false;
-        for(auto& [srv, s] : synths) if(s) s->set("gate", trigger.get());
-    }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip(gateMode.get() ? "Hold to play (Gate Mode)" : "Play a note");
+    if(ImGui::IsItemDeactivated() && p.auditionHeld) { p.auditionHeld = false; sendChannelInputs(p); }
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip(p.gateMode.get() ? "Hold to play (Gate Mode)" : "Play a note");
     ImGui::SameLine();
-    if(ImGui::Button("Stop", ImVec2(64.0f * z, 0))) stop();
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Release every note (and end loops)");
+    if(ImGui::Button("Stop", ImVec2(64.0f * z, 0))) stop(p);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Release this pad's notes (and end loops)");
 
     ImGui::SameLine(0, 18.0f * z);
-    toggle(loop, "Loop");
+    toggle(p.loop, "Loop");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Repeat the region until Stop (or the gate falls in Gate Mode)");
     ImGui::SameLine(0, 10.0f * z);
-    toggle(reverse, "Reverse");
+    toggle(p.reverse, "Reverse");
     ImGui::SameLine(0, 10.0f * z);
-    toggle(gateMode, "Gate Mode");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Notes last while Trigger/Gate is high\n(off: a trigger plays the whole region)");
+    toggle(p.gateMode, "Gate Mode");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Notes last while the gate is high\n(off: a trigger plays the whole region)");
     ImGui::SameLine(0, 10.0f * z);
-    toggle(poly, "Polyphonic");
+    toggle(p.poly, "Polyphonic");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("On: notes overlap (up to Voices)\nOff: a new note fades the previous one out");
-    if(poly.get()) {
+    if(p.poly.get()) {
         ImGui::SameLine(0, 6.0f * z);
         const float keep = labelW;
         labelW = 44.0f;
-        sliderInt(voices, "Voices", 130.0f * z);
+        sliderInt(p.voices, "Voices", 130.0f * z);
         labelW = keep;
     }
     ImGui::SameLine(0, 18.0f * z);
     {
         const float keep = labelW;
         labelW = 40.0f;
-        combo(stretchMode, "Mode", 170.0f * z, {"Resample", "Stretch"});
+        combo(p.stretchMode, "Mode", 170.0f * z, {"Resample", "Stretch"});
         labelW = keep;
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Resample: speed and pitch together (like tape)\n"
                                                      "Stretch: Warp1 granular, speed and pitch apart");
     }
     // voice lights
-    const int n = poly.get() ? voices.get() : 2;
+    const int n = p.poly.get() ? p.voices.get() : 2;
     const float r = 4.0f * z, gap = 4.0f * z;
     const float lightsW = n * (2 * r + gap);
     ImGui::SameLine();
-    const float x = std::max(ImGui::GetCursorPosX(), x0 + w - lightsW);
-    ImGui::SetCursorPosX(x);
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float cy = p.y + ImGui::GetFrameHeight() * 0.5f;
+    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), x0 + w - lightsW));
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float cy = pos.y + ImGui::GetFrameHeight() * 0.5f;
     for(int v = 0; v < n; ++v) {
-        const bool on = v < (int)playheads.size() && playheads[v] >= 0.0f;
-        const ImVec2 c(p.x + r + v * (2 * r + gap), cy);
+        const bool on = v < (int)p.playheads.size() && p.playheads[v] >= 0.0f;
+        const ImVec2 c(pos.x + r + v * (2 * r + gap), cy);
         if(on) ImGui::GetWindowDrawList()->AddCircleFilled(c, r, pal::voiceCol(v, 255));
         else ImGui::GetWindowDrawList()->AddCircle(c, r, pal::border, 0, 1.5f * z);
     }
@@ -999,27 +1664,28 @@ void scSampleBox::drawTransport(float w) {
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Voices sounding");
 }
 
-void scSampleBox::drawPlaybackTab(float w) {
+void scSampleBox::drawSoundTab(Pad& p, float w) {
     const float z = ofxOceanodeShared::getZoomLevel();
-    const float colW = (w - 2 * 12.0f * z) / 3.0f;
+    const float colW = (w - 3 * 12.0f * z) / 4.0f;
     labelW = 74.0f;
+    const float seconds = p.sample->seconds;
 
     beginColumn("region");
     sectionHeader("Region", colW);
     {
-        std::string fi = sampleSeconds > 0 ? formatTime(inPoint.get() * sampleSeconds) : "%.3f";
-        std::string fo = sampleSeconds > 0 ? formatTime(outPoint.get() * sampleSeconds) : "%.3f";
-        slider(inPoint, "In", colW, fi.c_str());
-        slider(outPoint, "Out", colW, fo.c_str());
+        std::string fi = seconds > 0 ? formatTime(p.inPoint.get() * seconds) : "%.3f";
+        std::string fo = seconds > 0 ? formatTime(p.outPoint.get() * seconds) : "%.3f";
+        slider(p.inPoint, "In", colW, fi.c_str());
+        slider(p.outPoint, "Out", colW, fo.c_str());
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(ImColor(pal::textDim), "Length");
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + labelW * z - ImGui::CalcTextSize("Length").x - ImGui::GetStyle().ItemSpacing.x);
-        const float len = (outPoint.get() - inPoint.get()) * sampleSeconds;
-        ImGui::TextColored(ImColor(pal::textDim), "%s", sampleSeconds > 0 ? formatTime(len).c_str() : "-");
-        if(!loop.get()) ImGui::BeginDisabled();
-        slider(loopCrossfade, "Loop XFade", colW, "%.0f %%");
-        if(!loop.get()) ImGui::EndDisabled();
+        const float len = (p.outPoint.get() - p.inPoint.get()) * seconds;
+        ImGui::TextColored(ImColor(pal::textDim), "%s", seconds > 0 ? formatTime(len).c_str() : "-");
+        if(!p.loop.get()) ImGui::BeginDisabled();
+        slider(p.loopCrossfade, "Loop XFade", colW, "%.0f %%");
+        if(!p.loop.get()) ImGui::EndDisabled();
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Loop: fade the end of the region into its start\n(0 %% keeps rhythmic loops tight)");
     }
@@ -1027,41 +1693,249 @@ void scSampleBox::drawPlaybackTab(float w) {
 
     beginColumn("speed");
     sectionHeader("Speed & Pitch", colW);
-    slider(pitch, "Pitch", colW, "%.2f");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("MIDI note, taken when a note starts: 60 plays the file at its own pitch");
-    slider(transpose, "Transpose", colW, "%+.2f st");
+    slider(p.transpose, "Transpose", colW, "%+.2f st");
     if(ImGui::IsItemHovered())
-        ImGui::SetTooltip(stretchMode.get() == 1 ? "Live, on sounding notes too: the grains' pitch only (Stretch keeps the timing)"
-                                                 : "Live, on sounding notes too: speed and pitch together (Resample)");
-    slider(rate, "Rate", colW, "%.3fx", true);
-    const bool stretchOn = stretchMode.get() == 1;
+        ImGui::SetTooltip(p.stretchMode.get() == 1 ? "Live, on sounding notes too: the grains' pitch only (Stretch keeps the timing)"
+                                                   : "Live, on sounding notes too: speed and pitch together (Resample)");
+    slider(p.rate, "Rate", colW, "%.3fx", true);
+    const bool stretchOn = p.stretchMode.get() == 1;
     if(!stretchOn) ImGui::BeginDisabled();
-    slider(stretch, "Stretch", colW, "%.2fx", true);
-    slider(warpWindow, "Grain", colW, "%.3f s", true);
+    slider(p.stretch, "Stretch", colW, "%.2fx", true);
+    slider(p.warpWindow, "Grain", colW, "%.3f s", true);
     if(!stretchOn) ImGui::EndDisabled();
     if(!stretchOn && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Stretch and Grain act in Stretch mode");
+    ImGui::TextColored(ImColor(pal::textDim), "Pitch: the node's (60 = as recorded)");
     endColumn();
 
     beginColumn("amp");
     sectionHeader("Amplitude", colW);
-    slider(velocity, "Velocity", colW, "%.2f");
-    slider(attack, "Attack", colW, "%.3f s", true);
-    slider(release, "Release", colW, "%.3f s", true);
-    slider(pan, "Pan", colW, "%+.2f");
+    slider(p.attack, "Attack", colW, "%.3f s", true);
+    slider(p.release, "Release", colW, "%.3f s", true);
+    sectionHeader("Filter", colW, &p.filterOn);
+    if(!p.filterOn.get()) ImGui::BeginDisabled();
+    combo(p.filterType, "Type", colW, {"Low pass", "High pass", "Band pass"});
+    slider(p.cutoff, "Cutoff", colW, "%.0f Hz", true);
+    slider(p.resonance, "Resonance", colW, "%.2f");
+    if(!p.filterOn.get()) ImGui::EndDisabled();
+    endColumn();
+
+    beginColumn("play");
+    sectionHeader("Played by", colW);
+    {
+        std::vector<std::string> chans = {"Auto: row " + ofToString(p.index + 1)};
+        for(int c = 1; c <= MaxChannels; c++) {
+            const std::string s = channelSource(c - 1);
+            chans.push_back(ofToString(c) + (s.empty() ? "" : "  " + s));
+        }
+        combo(p.channel, "Channel", colW, chans);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("The channel of Trig/Gate Audio (and Trigger/Gate, Pitch, Velocity) this pad plays.\n"
+                              "Auto: its row, so a sequencer's lane n plays pad n.\n"
+                              "Two pads on one channel play together (layers).");
+        const std::string source = channelSource(padChannel(p));
+        ImGui::TextColored(ImColor(pal::textDim), "%s", source.empty() ? "Nothing named on this channel" : ("Played by: " + source).c_str());
+        std::vector<std::string> groups = {"None"};
+        for(int g = 1; g <= ChokeGroups; g++) groups.push_back("Group " + ofToString(g));
+        combo(p.choke, "Choke", colW, groups);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Pads in the same group cut each other (a closed hat stops the open hat).");
+    }
     endColumn(true);
 }
 
-void scSampleBox::drawEqEditor(float w, float h) {
+// ── The mixer ───────────────────────────────────────────────────────────────
+
+void scSampleBox::drawMixerTab(float w) {
+    const float z = ofxOceanodeShared::getZoomLevel();
+    const float stripW = 104.0f * z, stripH = 300.0f * z;
+    ImGui::BeginChild("##sbStrips", ImVec2(w, stripH + ImGui::GetStyle().ScrollbarSize + 8.0f * z), false,
+                      ImGuiWindowFlags_HorizontalScrollbar);
+    for(auto& p : pads) { drawStrip(*p, stripW, stripH); ImGui::SameLine(0, 6.0f * z); }
+    ImGui::EndChild();
+    ImGui::Spacing();
+    drawEffects(*pads[std::clamp(selected, 0, (int)pads.size() - 1)], w);
+}
+
+void scSampleBox::drawStrip(Pad& p, float w, float h) {
+    const float z = ofxOceanodeShared::getZoomLevel();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGui::PushID(p.index);
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    const bool isSel = p.index == selected;
+    dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), isSel ? IM_COL32(40, 44, 54, 255) : pal::header, 4.0f * z);
+    dl->AddRectFilled(a, ImVec2(a.x + w, a.y + 3.0f * z), pal::padCol(p.index, 255), 4.0f * z);
+    ImGui::BeginGroup();
+    ImGui::SetCursorScreenPos(ImVec2(a.x + 4 * z, a.y + 6 * z));
+    const float iw = w - 8 * z;
+    if(ImGui::Selectable(padLabel(p).c_str(), isSel, 0, ImVec2(iw, 0))) selected = p.index;
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s: its effects below", padLabel(p).c_str());
+    // inserts: click switches one on / off (an effect that is off costs nothing)
+    for(int fx = 0; fx < FX_COUNT; fx++) {
+        ImGui::SetCursorScreenPos(ImVec2(a.x + 4 * z, ImGui::GetCursorScreenPos().y));
+        const bool on = p.fxOn[fx].get();
+        const bool usable = fx != FX_IMAGE || channels.get() > 1;
+        if(!usable) ImGui::BeginDisabled();
+        if(on) ImGui::PushStyleColor(ImGuiCol_Button, pal::padCol(p.index, 150));
+        if(ImGui::Button(fxNames[fx], ImVec2(iw, 0))) { p.fxOn[fx] = !on; selected = p.index; }
+        if(on) ImGui::PopStyleColor();
+        if(!usable) ImGui::EndDisabled();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(usable ? "%s: click to switch it %s (its settings below)" : "%s needs N Chan > 1", fxNames[fx], on ? "off" : "on");
+        drawPublishMenu(p.fxOn[fx].getEscapedName());
+    }
+    // pan
+    ImGui::SetCursorScreenPos(ImVec2(a.x + 4 * z, ImGui::GetCursorScreenPos().y + 4 * z));
+    ImGui::SetNextItemWidth(iw);
+    float pan = p.pan.get();
+    if(ImGui::SliderFloat("##pan", &pan, -1.0f, 1.0f, pan == 0.0f ? "C" : pan < 0 ? "L %.2f" : "R %.2f")) p.pan = pan;
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Pan (double-click to type; right-click: publish / modulate)");
+    drawPublishMenu(p.pan.getEscapedName());
+    // fader and meter
+    const float btnH = ImGui::GetFrameHeight();
+    const float faderTop = ImGui::GetCursorScreenPos().y + 4 * z;
+    const float faderH = std::max(40.0f * z, a.y + h - faderTop - 2 * btnH - 14 * z);
+    ImGui::SetCursorScreenPos(ImVec2(a.x + 4 * z, faderTop));
+    float lv = p.level.get();
+    const float db = lv > 0.0001f ? 20.0f * std::log10(lv) : -INFINITY;
+    char fmt[16];
+    if(std::isinf(db)) std::snprintf(fmt, sizeof(fmt), "-inf");
+    else std::snprintf(fmt, sizeof(fmt), "%+.1f", db);
+    if(ImGui::VSliderFloat("##level", ImVec2(iw * 0.55f, faderH), &lv, 0.0f, 2.0f, fmt)) p.level = lv;
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Level %.2f (%s dB)", p.level.get(), fmt);
+    drawPublishMenu(p.level.getEscapedName());
+    {
+        const float mx = a.x + 4 * z + iw * 0.62f, mw = iw * 0.3f;
+        dl->AddRectFilled(ImVec2(mx, faderTop), ImVec2(mx + mw, faderTop + faderH), pal::canvas, 2.0f * z);
+        const float mdb = p.meter > 0.00001f ? 20.0f * std::log10(p.meter) : -80.0f;
+        const float k = ofClamp((mdb + 60.0f) / 66.0f, 0.0f, 1.0f);   // -60 .. +6 dB
+        const ImU32 mc = mdb > 0.0f ? IM_COL32(230, 80, 60, 255) : mdb > -6.0f ? IM_COL32(230, 200, 80, 255) : pal::padCol(p.index, 230);
+        if(k > 0.0f) dl->AddRectFilled(ImVec2(mx, faderTop + faderH * (1 - k)), ImVec2(mx + mw, faderTop + faderH), mc, 2.0f * z);
+        const float zero = faderTop + faderH * (1 - 60.0f / 66.0f);
+        dl->AddLine(ImVec2(mx - 2 * z, zero), ImVec2(mx + mw + 2 * z, zero), pal::gridStrong);
+    }
+    // mute, solo
+    ImGui::SetCursorScreenPos(ImVec2(a.x + 4 * z, faderTop + faderH + 6 * z));
+    auto flag = [&](ofParameter<bool>& f, const char* text, ImU32 col, float bw) {
+        if(f.get()) ImGui::PushStyleColor(ImGuiCol_Button, col);
+        if(ImGui::Button(text, ImVec2(bw, 0))) f = !f.get();
+        if(f.get()) ImGui::PopStyleColor();
+        drawPublishMenu(f.getEscapedName());
+    };
+    const float half = (iw - 4 * z) * 0.5f;
+    flag(p.mute, "M", IM_COL32(190, 90, 70, 255), half);
+    ImGui::SameLine(0, 4 * z);
+    flag(p.solo, "S", IM_COL32(200, 170, 60, 255), half);
+    ImGui::SetCursorScreenPos(ImVec2(a.x + 4 * z, ImGui::GetCursorScreenPos().y));
+    ImGui::TextColored(ImColor(pal::textDim), "Pad %d out", p.index + 1);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("This pad also goes out alone on the node's \"Pad %d\" output", p.index + 1);
+    ImGui::EndGroup();
+    ImGui::SetCursorScreenPos(ImVec2(a.x + w, a.y));
+    ImGui::Dummy(ImVec2(0, h));
+    ImGui::PopID();
+}
+
+void scSampleBox::drawEffects(Pad& p, float w) {
+    const float z = ofxOceanodeShared::getZoomLevel();
+    const float gap = 12.0f * z;
+    labelW = 74.0f;
+    ImGui::PushStyleColor(ImGuiCol_Text, pal::padCol(p.index, 255));
+    ImGui::TextUnformatted(("Effects of " + padLabel(p)).c_str());
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::TextColored(ImColor(pal::textDim), "  sound -> EQ -> Comp -> Sat -> Echo -> Reverb -> Stereo -> Level");
+    const float colW = (w - 3 * gap) / 4.0f;
+    auto off = [&](int fx) { return !p.fxOn[fx].get(); };
+
+    // ── EQ (two columns wide), Compressor, Saturator ──
+    const float eqW = colW * 2 + gap;
+    beginColumn("eq");
+    sectionHeader("EQ", eqW, &p.fxOn[FX_EQ]);
+    if(off(FX_EQ)) ImGui::BeginDisabled();
+    slider(p.eqMix, "Mix", std::min(eqW, 260.0f * z), "%.2f");
+    if(off(FX_EQ)) ImGui::EndDisabled();
+    ImGui::TextColored(ImColor(pal::textDim), "Drag the bands; wheel = Q / slope; right-click a band for values");
+    drawEqEditor(p, eqW, 180.0f * z);
+    endColumn();
+
+    beginColumn("comp");
+    sectionHeader("Compressor", colW, &p.fxOn[FX_COMP]);
+    if(off(FX_COMP)) ImGui::BeginDisabled();
+    slider(p.compThreshold, "Threshold", colW, "%.1f dB");
+    slider(p.compRatio, "Ratio", colW, "%.1f : 1", true);
+    slider(p.compAttack, "Attack", colW, "%.1f ms", true);
+    slider(p.compRelease, "Release", colW, "%.0f ms", true);
+    slider(p.compMakeup, "Makeup", colW, "%+.1f dB");
+    if(off(FX_COMP)) ImGui::EndDisabled();
+    endColumn();
+
+    beginColumn("sat");
+    sectionHeader("Saturator", colW, &p.fxOn[FX_SAT]);
+    if(off(FX_SAT)) ImGui::BeginDisabled();
+    slider(p.satDrive, "Drive", colW, "%.1f dB");
+    slider(p.satMix, "Mix", colW, "%.2f");
+    if(off(FX_SAT)) ImGui::EndDisabled();
+    endColumn(true);
+
+    ImGui::Spacing();
+    // ── Echo, Reverb (two columns), Stereo ──
+    beginColumn("echo");
+    sectionHeader("Echo", colW, &p.fxOn[FX_ECHO]);
+    if(off(FX_ECHO)) ImGui::BeginDisabled();
+    slider(p.echoTime, "Time", colW, "%.3f beats", true);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("In beats: 0.75 = a dotted 8th, 0.5 = an 8th, 0.333 = an 8th triplet");
+    slider(p.echoFeedback, "Feedback", colW, "%.2f");
+    slider(p.echoTone, "Tone", colW, "%.0f Hz", true);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Each repeat darker (a lowpass in the loop)");
+    slider(p.echoSpread, "Spread", colW, "%.2f");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Repeats move across the channels (ping-pong)");
+    slider(p.echoAmount, "Amount", colW, "%.2f");
+    if(off(FX_ECHO)) ImGui::EndDisabled();
+    endColumn();
+
+    beginColumn("reverb");
+    sectionHeader("Reverb", colW, &p.fxOn[FX_REVERB]);
+    if(off(FX_REVERB)) ImGui::BeginDisabled();
+    slider(p.revSize, "Size", colW, "%.1f");
+    slider(p.revDecay, "Decay", colW, "%.2f s", true);
+    slider(p.revPredelay, "Predelay", colW, "%.0f ms");
+    slider(p.revLowpass, "Lowpass", colW, "%.0f Hz", true);
+    if(off(FX_REVERB)) ImGui::EndDisabled();
+    endColumn();
+
+    beginColumn("reverb2");
+    sectionHeader("Reverb Mix", colW);
+    if(off(FX_REVERB)) ImGui::BeginDisabled();
+    slider(p.revPosition, "Position", colW, "%.2f");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("0 = early reflections, 1 = the late tail");
+    slider(p.revSpread, "Spread", colW, "%+.2f");
+    slider(p.revMix, "Mix", colW, "%.2f");
+    if(off(FX_REVERB)) ImGui::EndDisabled();
+    endColumn();
+
+    beginColumn("stereo");
+    sectionHeader("Stereo Image", colW, &p.fxOn[FX_IMAGE]);
+    const bool multi = channels.get() > 1;
+    if(off(FX_IMAGE) || !multi) ImGui::BeginDisabled();
+    slider(p.width, "Width", colW, "%.2f");
+    slider(p.diffuse, "Diffuse", colW, "%.2f");
+    slider(p.bassMono, "Bass Mono", colW, "%.2f");
+    slider(p.bassFreq, "Bass Freq", colW, "%.0f Hz", true);
+    if(off(FX_IMAGE) || !multi) ImGui::EndDisabled();
+    if(!multi) ImGui::TextColored(ImColor(pal::textDim), "Needs N Chan > 1");
+    endColumn(true);
+}
+
+void scSampleBox::drawEqEditor(Pad& p, float w, float h) {
     for(int b = 0; b < 5; ++b)
-        eqEditor.bands[b] = {eqFreq[b].get(), eqGain[b].get(), eqShape[b].get()};
-    eqEditor.dbRange = 24.0f;
-    eqEditor.gainLimit = 24.0f;
-    eqEditor.qMin = 0.1f; eqEditor.qMax = 20.0f;
-    eqEditor.slopeMin = 0.1f; eqEditor.slopeMax = 4.0f;
+        p.eqEditor.bands[b] = {p.eqFreq[b].get(), p.eqGain[b].get(), p.eqShape[b].get()};
+    p.eqEditor.dbRange = 24.0f;
+    p.eqEditor.gainLimit = 24.0f;
+    p.eqEditor.qMin = 0.1f; p.eqEditor.qMax = 20.0f;
+    p.eqEditor.slopeMin = 0.1f; p.eqEditor.slopeMax = 4.0f;
     float sr = 48000.0f;
     for(auto* sm : servers) if(sm && sm->getServer()) { sr = (float)serverManager::getSampleRateForServer(sm->getServer()); break; }
-    eqEditor.recompute(sr > 0 ? sr : 48000.0f);
+    p.eqEditor.recompute(sr > 0 ? sr : 48000.0f);
     static scEQEditor::Colors col = [] {
         auto c = scEQEditor::defaultColors();
         c.bg = pal::canvas;
@@ -1074,131 +1948,33 @@ void scSampleBox::drawEqEditor(float w, float h) {
         for(auto& marker : c.bandMarker) marker = pal::grid;
         return c;
     }();
-    eqEditor.bandMenu = [this](int b) {
+    Pad* pp = &p;
+    p.eqEditor.bandMenu = [this, pp](int b) {
         ImGui::TextUnformatted(scEQEditor::bandName(b));
         ImGui::Separator();
-        auto value = [this](ofParameter<float>& p, const char* label) {
-            float v = p.get();
+        auto value = [this](ofParameter<float>& q, const char* label) {
+            float v = q.get();
             ImGui::SetNextItemWidth(180.0f * ofxOceanodeShared::getZoomLevel());
-            if(ImGui::InputFloat(label, &v, 0, 0, "%.3f")) p.set(ofClamp(v, p.getMin(), p.getMax()));
-            const auto key = p.getEscapedName();
+            if(ImGui::InputFloat(label, &v, 0, 0, "%.3f")) q.set(ofClamp(v, q.getMin(), q.getMax()));
+            const auto key = q.getEscapedName();
             const bool isPublished = published.count(key) != 0;
             const std::string action = std::string(isPublished ? "Unpublish " : "Publish ") + label;
             if(ImGui::MenuItem(action.c_str(), nullptr, false, !isConnected(key))) {
                 if(isPublished) unpublish(key); else publish(key);
             }
         };
-        value(eqFreq[b], "Freq (Hz)");
-        value(eqGain[b], "Gain (dB)");
-        value(eqShape[b], scEQEditor::isShelf(b) ? "Slope" : "Q");
+        value(pp->eqFreq[b], "Freq (Hz)");
+        value(pp->eqGain[b], "Gain (dB)");
+        value(pp->eqShape[b], scEQEditor::isShelf(b) ? "Slope" : "Q");
     };
-    const bool off = !eqOn.get();
+    const bool off = !p.fxOn[FX_EQ].get();
     if(off) ImGui::BeginDisabled();
-    if(eqEditor.draw(std::max(120.0f, w), h, col, !off, nullptr, 0, "##sampleBoxEqCurve")) {
+    if(p.eqEditor.draw(std::max(120.0f, w), h, col, !off, nullptr, 0, ("##sampleBoxEqCurve" + ofToString(p.index)).c_str())) {
         for(int b = 0; b < 5; ++b) {
-            eqFreq[b] = eqEditor.bands[b].freqHz;
-            eqGain[b] = eqEditor.bands[b].gainDb;
-            eqShape[b] = eqEditor.bands[b].shape;
+            p.eqFreq[b] = p.eqEditor.bands[b].freqHz;
+            p.eqGain[b] = p.eqEditor.bands[b].gainDb;
+            p.eqShape[b] = p.eqEditor.bands[b].shape;
         }
     }
     if(off) ImGui::EndDisabled();
-}
-
-void scSampleBox::drawFilterEqTab(float w) {
-    const float z = ofxOceanodeShared::getZoomLevel();
-    const float gap = 12.0f * z;
-    const float filterW = std::max(230.0f * z, (w - 2 * gap) / 3.0f);
-    const float eqW = w - filterW - gap;
-    labelW = 74.0f;
-
-    beginColumn("filter");
-    sectionHeader("Filter", filterW, &filterOn);
-    if(!filterOn.get()) ImGui::BeginDisabled();
-    combo(filterType, "Type", filterW, {"Low pass", "High pass", "Band pass"});
-    slider(cutoff, "Cutoff", filterW, "%.0f Hz", true);
-    slider(resonance, "Resonance", filterW, "%.2f");
-    if(!filterOn.get()) ImGui::EndDisabled();
-    endColumn();
-
-    beginColumn("eq");
-    sectionHeader("EQ", eqW, &eqOn);
-    if(!eqOn.get()) ImGui::BeginDisabled();
-    slider(eqMix, "Mix", std::min(eqW, 260.0f * z), "%.2f");
-    if(!eqOn.get()) ImGui::EndDisabled();
-    ImGui::TextColored(ImColor(pal::textDim), "Drag the bands; wheel = Q / slope; right-click a band for values");
-    drawEqEditor(eqW, 220.0f * z);
-    endColumn(true);
-}
-
-void scSampleBox::drawDynamicsTab(float w) {
-    const float z = ofxOceanodeShared::getZoomLevel();
-    const float colW = (w - 2 * 12.0f * z) / 3.0f;
-    labelW = 74.0f;
-
-    beginColumn("comp");
-    sectionHeader("Compressor", colW, &compOn);
-    if(!compOn.get()) ImGui::BeginDisabled();
-    slider(compThreshold, "Threshold", colW, "%.1f dB");
-    slider(compRatio, "Ratio", colW, "%.1f : 1", true);
-    slider(compAttack, "Attack", colW, "%.1f ms", true);
-    slider(compRelease, "Release", colW, "%.0f ms", true);
-    slider(compMakeup, "Makeup", colW, "%+.1f dB");
-    if(!compOn.get()) ImGui::EndDisabled();
-    endColumn();
-
-    beginColumn("sat");
-    sectionHeader("Saturator", colW, &satOn);
-    if(!satOn.get()) ImGui::BeginDisabled();
-    slider(satDrive, "Drive", colW, "%.1f dB");
-    slider(satMix, "Mix", colW, "%.2f");
-    if(!satOn.get()) ImGui::EndDisabled();
-    endColumn();
-
-    beginColumn("flow");
-    sectionHeader("Signal flow", colW);
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + colW);
-    ImGui::TextColored(ImColor(pal::textDim),
-        "Voices -> Filter -> EQ -> Compressor -> Saturator -> Reverb -> Stereo image -> Out.\n\n"
-        "Each stage can be switched on in its own header; envelopes can move any of their controls.");
-    ImGui::PopTextWrapPos();
-    endColumn(true);
-}
-
-void scSampleBox::drawSpaceTab(float w) {
-    const float z = ofxOceanodeShared::getZoomLevel();
-    const float gap = 12.0f * z;
-    const float colW = (w - 2 * gap) / 3.0f;
-    labelW = 74.0f;
-
-    beginColumn("reverb");
-    sectionHeader("Reverb", colW, &reverbOn);
-    if(!reverbOn.get()) ImGui::BeginDisabled();
-    slider(revSize, "Size", colW, "%.1f");
-    slider(revDecay, "Decay", colW, "%.2f s", true);
-    slider(revPredelay, "Predelay", colW, "%.0f ms");
-    slider(revLowpass, "Lowpass", colW, "%.0f Hz", true);
-    if(!reverbOn.get()) ImGui::EndDisabled();
-    endColumn();
-
-    beginColumn("reverb2");
-    sectionHeader("Reverb Mix", colW);
-    if(!reverbOn.get()) ImGui::BeginDisabled();
-    slider(revPosition, "Position", colW, "%.2f");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("0 = early reflections, 1 = the late tail");
-    slider(revSpread, "Spread", colW, "%+.2f");
-    slider(revMix, "Mix", colW, "%.2f");
-    if(!reverbOn.get()) ImGui::EndDisabled();
-    endColumn();
-
-    beginColumn("stereo");
-    sectionHeader("Stereo Image", colW);
-    const bool multi = channels.get() > 1;
-    if(!multi) ImGui::BeginDisabled();
-    slider(width, "Width", colW, "%.2f");
-    slider(diffuse, "Diffuse", colW, "%.2f");
-    slider(bassMono, "Bass Mono", colW, "%.2f");
-    slider(bassFreq, "Bass Freq", colW, "%.0f Hz", true);
-    if(!multi) ImGui::EndDisabled();
-    if(!multi) ImGui::TextColored(ImColor(pal::textDim), "Needs N Chan > 1");
-    endColumn(true);
 }

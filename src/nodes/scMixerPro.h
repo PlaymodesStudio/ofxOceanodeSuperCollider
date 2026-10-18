@@ -94,6 +94,11 @@
 
 class scMixerPro : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "SC Mixer Pro " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_CHANNELS = 16;
     static constexpr int MAX_TRACKS   = 64;
     static constexpr int MAX_BUSES    = 16;
@@ -255,6 +260,7 @@ private:
         MasterRuntime master;
         bool active = false;                 // this node is part of the server's graph
         std::vector<ofxSCSynth*> order;      // our synths in execution order
+        int placedBefore = -1;               // the node the last graph build put us before (-1: none)
         std::map<int, int> outputBuses;
         int silentBus = 0;
     };
@@ -456,6 +462,19 @@ private:
     void drawToolbar();
     void drawMasterStrip(float w, float h);
     void drawTrackStrip(Track& tr, float w, float h);
+    // The least height a strip needs without overlapping (a fader of 40 px);
+    // compact: without the EQ curve preview, the first thing dropped when the
+    // window (or an open editor) leaves too little room
+    float trackStripMinHeight(float w, bool compact) const;
+    // A track's origin synth: from the node wired into it, up its "In"
+    // cables (through the effects) to the node that makes the sound
+    scNode* originOf(Track& tr);
+    void viewInCanvas(scNode* node);
+    void goToWindow(scNode* node);
+    std::string pendingWindowFocus;          // a window to focus once it exists
+    int pendingWindowFocusFrames = 0;
+    float masterStripMinHeight() const;
+    bool stripCompact = false;
     void drawEqPanel(float w, float h);
     void drawCompPanel(Track& tr);
     void drawRvbPanel(Track& tr);

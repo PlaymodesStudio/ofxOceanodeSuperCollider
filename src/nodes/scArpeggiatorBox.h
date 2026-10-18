@@ -17,12 +17,15 @@
 //    Trigger (each Trigger bang, rising Trig In value or rising edge of an
 //    audio cable into Trig In steps it; lengths and strums scale with the
 //    time between triggers).
-//  • Outputs: Trig, Gate (x the note's velocity), Pitch: Voices channels
-//    (16 written); Bass Trig / Gate / Pitch: Bass Voices channels (4 written).
-//    Voice Mode Fixed: chord tone n on channel n; Round robin: each chord on
-//    the next voices (releases are not cut). The GUI node's vectors
+//  • Outputs: Trig, Gate (x the note's velocity), Pitch (16 channels written:
+//    the voices, then the bass, as in the vectors); Bass Trig / Gate / Pitch
+//    (4 written: the bass alone). The voices follow the music: Voice
+//    Mode Fixed, chord tone n on channel n (Polyphony + Extra on accents
+//    channels) and one per stacked bass octave; Round robin, as many more as
+//    notes overlap (longer than a step: each chord on the next voices). The GUI node's vectors
 //    (PitchOut, GateOut, VelOut, DurOut, GateVelOut: voices then bass;
-//    EucGateOut / EucAccOut / EucDurOut: the cycle's lanes) at frame rate.
+//    Total Voices: their size; EucGateOut / EucAccOut / EucDurOut: the
+//    cycle's lanes) at frame rate.
 //  • Seed: every free random draw of the GUI node (chances, deviations, run
 //    gate, Geiger...) is seeded by it: the same position always plays the
 //    same, a seek or a loop replays it; 0: fresh draws on each pass.
@@ -42,6 +45,7 @@
 #include "scAudioParam.h"
 #include "scTransportSync.h"
 #include "scArpeggiatorBoxEngine.h"
+#include "scChordLink.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "ofxSCBus.h"
@@ -63,6 +67,11 @@
 #include <vector>
 
 class scArpeggiatorBox : public scNode {
+public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "ArpeggiatorBox " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
 public:
     static constexpr int TPB = 48;                    // ticks per beat (the player's)
     static constexpr int CHUNK = 8 * TPB;             // ticks per written chunk
@@ -109,7 +118,6 @@ public:
         addParameter(scale.set("Scale", {0, 2, 4, 5, 7, 9, 11}, {-24.0f}, {127.0f}));
         addParameter(root.set("Root", 0.0f, -24.0f, 127.0f));
         addParameter(seed.set("Seed", 1, 0, 99999));
-        addParameter(voicesP.set("Voices", 4, 1, NV));
         addParameter(snapshotRecall.set("Snapshot", 0, 0, NUM_SNAPS));
         for(const char* n : {"Trig", "Gate", "Pitch", "Bass Trig", "Bass Gate", "Bass Pitch"}) scNode::addOutput(n);
         addOutputParameter(pitchOut.set("PitchOut", std::vector<float>(4, 60.0f), {0.0f}, {127.0f}));
@@ -117,11 +125,14 @@ public:
         addOutputParameter(velOut.set("VelOut", std::vector<float>(4, 0.0f), {0.0f}, {1.0f}));
         addOutputParameter(durOut.set("DurOut", std::vector<float>(4, 0.0f), {0.0f}, {60000.0f}));
         addOutputParameter(gateVelOut.set("GateVelOut", std::vector<float>(4, 0.0f), {0.0f}, {1.0f}));
+        // the vectors' size (voices then bass): a synth's voice count follows it
+        addOutputParameter(totalVoicesOut.set("Total Voices", 3, 1, NV + NB));
         addOutputParameter(eucGateOut.set("EucGateOut", std::vector<int>(16, 0), {0}, {1}));
         addOutputParameter(eucAccOut.set("EucAccOut", std::vector<int>(16, 0), {0}, {1}));
         addOutputParameter(eucDurOut.set("EucDurOut", std::vector<int>(16, 0), {0}, {1}));
 
         defineControls();
+        newFresh();
         syncPatternSizes();
 
         listeners.push(trigger.newListener([this](){
@@ -138,9 +149,13 @@ public:
         listeners.push(resetNextP.newListener([this](){ doReset(false); }));
         listeners.push(notePool.newListener([this](std::vector<float>&){ sourceDirty = true; }));
         listeners.push(scale.newListener([this](std::vector<float>&){ sourceDirty = true; }));
-        watch(root, false);
+        // Root: unless a ChordBox's Root is linked (read per beat instead)
+        listeners.push(root.newListener([this](float& v){
+            if(v == lastRootValue) return;
+            lastRootValue = v;
+            if(!engine.linkedRoot || clockMode.get() == CLOCK_TRIGGER) paramsDirty = true;
+        }));
         watch(seed, false);
-        watch(voicesP, false);
         listeners.push(clockMode.newListener([this](int& m){
             if(m == lastClockMode) return;
             lastClockMode = m;
@@ -183,6 +198,8 @@ public:
         if(snapshotRevision() != loadedSnapshotRevision) loadSnapshotFile();
         updateMorph();
         watchTransport();
+        learnChain();
+        updateLinks();
         if(paramsDirty){ paramsDirty = false; syncEngine(); }
         if(sourceDirty){ sourceDirty = false; applySourceChange(); }
         readStatus();
@@ -274,7 +291,13 @@ public:
         follower.requestAnchor();
     }
     void deactivate() override { for(auto& [server, st] : servers) if(st.synth) st.synth->run(false); }
-    void resendParametersForNRT() override { resendParams.notify(); }
+    // The recorder writes the patch's state at score time zero: the note
+    // buffer too (written while it was arming, it never reached the score)
+    void resendParametersForNRT() override {
+        resendParams.notify();
+        for(auto& [server, st] : servers) invalidateServer(st);
+        fillBuffers();
+    }
 
     // ════════════════════════════════════════════════════════════════════════
     // Presets
@@ -496,7 +519,6 @@ private:
             controls.push_back(std::move(c));
         };
         fixedI("clockMode", clockMode);
-        fixedI("voices", voicesP);
         {
             Control c;
             c.key = "root"; c.fixed = true;
@@ -576,12 +598,13 @@ private:
         ctlI("idxDevRng", idxDevRng.set("Index Dev Range", 2, 1, 12));
         ctlF("pitchDev", pitchDev.set("Pitch Dev", 0.0f, 0.0f, 1.0f));
         ctlI("pitchDevRng", pitchDevRng.set("Pitch Dev Range", 2, 1, 12));
+        ctlI("devSeed", devSeed.set("Dev Seed", 0, 0, 999999));
+        ctlB("devRandomizeSeedEachCycle", devCycle.set("Dev Seed Each Cycle", false));
         // polyphony and outputs
         ctlI("polyphony", polyphony.set("Polyphony", 1, 1, MAX_POLY));
         ctlI("polyInterval", polyInterval.set("Poly Interval", 2, 1, 24));
         ctlI("polyAccent", polyAccent.set("Poly Accent", 0, 0, MAX_POLY - 1));
-        ctlI("voiceMode", voiceMode.set("Voice Mode", 1, 0, 1), voiceModeNames());
-        ctlI("bassVoices", bassVoices.set("Bass Voices", 1, 1, NB));
+        ctlI("voiceMode", voiceMode.set("Voice Mode", 0, 0, 1), voiceModeNames());
         ctlB("trigAmp", trigAmp.set("Trig Amp", false));
         // bass
         ctlB("addBass", addBass.set("Add Bass", false));
@@ -691,6 +714,11 @@ private:
         return arpbox::buildSource(sourceMode.get(), scale.get(), notePool.get(), sortPool.get(), dedupPool.get());
     }
     uint64_t effectiveSeed() const { return seed.get() != 0 ? (uint64_t)seed.get() : salt; }
+    // Section seeds of 0 draw anew on every jump and loop pass
+    void newFresh(){
+        static std::mt19937_64 rng((uint64_t)ofGetElapsedTimeMicros() ^ 0x5F3759DFull);
+        engine.fresh = rng() | 1;
+    }
     void newSalt(){
         static std::mt19937_64 rng((uint64_t)ofGetElapsedTimeMicros() ^ 0xA4B2C3D4ull);
         salt = rng() | (1ull << 40);
@@ -710,6 +738,7 @@ private:
         p.rndShiftQuant = rndShiftQuant; p.octave = octave; p.octaveFold = octaveFold; p.foldPoly = foldPoly; p.root = root;
         p.pitchExpand = pitchExpand; p.expandStep = expandStep; p.transpose = transpose;
         p.octaveDev = octaveDev; p.octaveDevRng = octaveDevRng; p.idxDev = idxDev; p.idxDevRng = idxDevRng;
+        p.devSeed = devSeed; p.devCycle = devCycle;
         p.pitchDev = pitchDev; p.pitchDevRng = pitchDevRng; p.byGate = byGate;
         p.polyphony = polyphony; p.polyInterval = polyInterval; p.polyAccent = polyAccent;
         p.addBass = addBass; p.bassMode = bassMode; p.bassInvert = bassInvert; p.bassEvery = bassEvery; p.bassShift = bassShift;
@@ -746,16 +775,45 @@ private:
         return noteCache.emplace(pl.n, engine.notesFor(pl)).first->second;
     }
 
+    std::string voicesText() const {
+        const int bv = bassVoiceCount();
+        return "Voices " + ofToString(chordVoices()) + (bv > 0 ? " + bass " + ofToString(bv) : "");
+    }
+    static const char* voicesTip(){
+        return "Set by the music: one per chord tone (Polyphony + Extra on accents),\n"
+               "then one per bass octave stacked (Add bass), last in the vectors.\n"
+               "Round robin: more only when notes outlast a step (to overlap, not cut).\n"
+               "Audio: Pitch / Gate carry both (as the vectors),\n"
+               "Bass Pitch / Gate the bass alone.";
+    }
+    // The voices follow the music: Fixed, one per chord tone (Polyphony + the
+    // accents' extra tones) and one per stacked bass octave; Round robin, as
+    // many more as notes can overlap (notes longer than a step: each chord on
+    // the next voices, not cut by the next one; up to a step: the same)
+    int chordTones() const { return std::clamp(polyphony.get() + std::max(0, polyAccent.get()), 1, NV); }
+    int voiceOverlap() const { return voiceMode.get() == 0 ? 1 : engine.overlap(); }
+    int chordVoices() const { return std::min(NV, chordTones() * voiceOverlap()); }
+    int bassVoiceCount() const {
+        if(!addBass) return 0;
+        return std::min(NB, std::clamp(bassPoly.get(), 1, NB) * voiceOverlap());
+    }
+    // A bass slot's channel in Trig / Gate / Pitch too, after the chord voices
+    // (as in the vectors), when it fits in their 16; else (and for a chord slot) -1
+    int mainSlotOfBass(int slot) const {
+        if(slot < NV) return -1;
+        const int m = chordVoices() + (slot - NV);
+        return m < NV ? m : -1;
+    }
     // The output slot of a note: 0..15 voices, 16..19 bass
     int slotOf(const arpbox::Note& n) const {
         if(n.bass){
-            const int bv = std::clamp(bassVoices.get(), 1, NB);
+            const int bv = std::max(1, bassVoiceCount());
             if(voiceMode.get() == 0) return NV + n.tone % bv;
-            return NV + (int)arpbox::wrap64(n.n * std::max(1, bassPoly.get()) + n.tone, bv);
+            return NV + (int)arpbox::wrap64(n.n * std::clamp(bassPoly.get(), 1, NB) + n.tone, bv);
         }
-        const int v = std::clamp(voicesP.get(), 1, NV);
+        const int v = chordVoices();
         if(voiceMode.get() == 0) return n.tone % v;
-        return (int)arpbox::wrap64(n.n * std::max(1, polyphony.get()) + n.tone, v);
+        return (int)arpbox::wrap64(n.n * chordTones() + n.tone, v);
     }
 
     // Clocked: every note starting in [from, to) beats, its start / end beats
@@ -774,7 +832,112 @@ private:
     }
 
     // Source material changed (Scale, NotePool, Source, Sort, Dedup): Source Change
+    // ════════════════════════════════════════════════════════════════════════
+    // A ChordBox on NotePool / Scale / Root (scChordLink.h): its chords read
+    // at each pulse's beat, exactly on the chord changes (and ahead)
+    // ════════════════════════════════════════════════════════════════════════
+
+    const ofAbstractParameter* linkSource = nullptr;
+    const ofAbstractParameter* linkRoot = nullptr;
+    bool linkTimed = false, linkChained = false, poolWasLinked = false;
+    uint64_t linkSignature = 0;
+    // A ChordBox through other nodes: what they make of its chords
+    arpbox::ChainMap chain;
+    const ofAbstractParameter* chainKey = nullptr;
+    std::vector<float> chainLastInput;
+    double chainInputBeat = -1e300;     // the beat the input last changed at
+    float lastRootValue = 0.0f;
+    ofParameter<int> devSeed;
+    ofParameter<bool> devCycle;
+
+    static const ofAbstractParameter* linkedKey(ofxOceanodeAbstractParameter& in){ return chordlink::directKey(in); }
+    const std::vector<float>& sourceInput() const { return sourceMode.get() == arpbox::SRC_POOL ? notePool.get() : scale.get(); }
+    // A ChordBox through other nodes: the input's values for a chord (learned), else the input's own
+    std::vector<float> chainValues(const std::vector<float>& chord) const {
+        std::vector<float> v;
+        return chain.predict(chord, v) ? v : sourceInput();
+    }
+    // Learn what the nodes in between make of the chord playing: the input's
+    // values once they changed after the chord began, or a moment after it
+    void learnChain(){
+        const auto& input = sourceInput();
+        const double now = positionBeat();
+        if(!arpbox::ChainMap::same(input, chainLastInput)){ chainLastInput = input; chainInputBeat = now; }
+        const auto* pr = linkChained ? providerOf(linkSource) : nullptr;
+        if(!pr || !getFrameTransportState().current.isPlaying) return;
+        const double start = pr->chordStartAt(now);
+        const double settle = 0.15 * std::max(1.0f, getFrameTransportState().current.bpm) / 60.0;
+        if(chainInputBeat < start - 1e-9 && now - start < settle) return;
+        chain.learn(pr->notesAt(now), input);
+    }
+    static const chordlink::Provider* providerOf(const ofAbstractParameter* k){
+        if(!k) return nullptr;
+        auto it = chordlink::registry().find(k);
+        return it == chordlink::registry().end() ? nullptr : &it->second;
+    }
+    void updateLinks(){
+        const auto* pool = linkedKey(getOceanodeParameter(notePool));
+        const auto* scl = linkedKey(getOceanodeParameter(scale));
+        const auto* rt = linkedKey(getOceanodeParameter(root));
+        // a ChordBox newly connected to NotePool while the source is the scale: play its chords
+        if(pool && !poolWasLinked && !scl && sourceMode.get() == arpbox::SRC_SCALE) sourceMode = arpbox::SRC_POOL;
+        poolWasLinked = pool != nullptr;
+        const int mode = sourceMode.get();
+        const auto* direct = mode == arpbox::SRC_POOL ? pool : scl;
+        // none directly: one through other nodes (on the transport, the ChordBox's beats)
+        const auto* up = direct || clockMode.get() != CLOCK_TRANSPORT ? nullptr
+                       : chordlink::upstreamKey(mode == arpbox::SRC_POOL ? getOceanodeParameter(notePool) : getOceanodeParameter(scale));
+        if(up != chainKey){ chainKey = up; chain.clear(); }
+        const auto* src = direct ? direct : up;
+        const auto* sp = providerOf(src);
+        const auto* rp = providerOf(rt);
+        const bool timedSrc = sp && sp->timed && sp->timed();
+        const bool timedRoot = rp && rp->timed && rp->timed();
+        const bool chained = timedSrc && !direct;
+        uint64_t sig = arpbox::H((uint64_t)(uintptr_t)(timedSrc ? src : nullptr), (uint64_t)(uintptr_t)(timedRoot ? rt : nullptr),
+                                 (timedSrc ? sp->revision() : 0) * 3 + (timedRoot ? rp->revision() : 0) + (chained ? chain.revision << 20 : 0),
+                                 (uint64_t)(mode * 64 + sourceChange.get() * 8 + sortPool.get() * 2 + dedupPool.get()));
+        if(sig == linkSignature) return;
+        linkSignature = sig;
+        const bool wasLinked = (bool)engine.linkedSource;
+        linkSource = timedSrc ? src : nullptr;
+        linkRoot = timedRoot ? rt : nullptr;
+        linkTimed = timedSrc;
+        linkChained = chained;
+        if(timedSrc){
+            const bool sortP = sortPool.get(), dedupP = dedupPool.get();
+            const auto* key = src;
+            engine.linkedSource = [this, key, mode, sortP, dedupP, chained](double b){
+                const auto* pr = providerOf(key);
+                std::vector<float> v = pr ? pr->notesAt(b) : std::vector<float>{60.0f};
+                if(chained) v = chainValues(v);
+                return mode == arpbox::SRC_POOL ? arpbox::buildSource(arpbox::SRC_POOL, {}, v, sortP, dedupP)
+                                                : arpbox::buildSource(arpbox::SRC_SCALE, v, {}, sortP, dedupP);
+            };
+            engine.linkedChordStart = [key](double b){ const auto* pr = providerOf(key); return pr ? pr->chordStartAt(b) : 0.0; };
+        }else{
+            engine.linkedSource = nullptr;
+            engine.linkedChordStart = nullptr;
+            if(wasLinked) engine.resetSource(currentSource());
+        }
+        if(timedRoot){
+            const auto* key = rt;
+            engine.linkedRoot = [key](double b){ const auto* pr = providerOf(key); return pr ? pr->rootAt(b) : 0.0f; };
+        }else engine.linkedRoot = nullptr;
+        engine.linkedChange = sourceChange.get();
+        paramsDirty = true;
+    }
+
     void applySourceChange(){
+        if(engine.linked()){
+            // a ChordBox: read per beat. Through other nodes, a chord not learned yet plays the input as it comes
+            if(linkChained){
+                engine.invalidate();
+                noteCache.clear();
+                for(auto& [server, st] : servers) invalidateServer(st);
+            }
+            return;
+        }
         const auto values = currentSource();
         const auto& latest = engine.latestSource();
         bool same = values.size() == latest.size();
@@ -836,7 +999,9 @@ private:
         if(!jumped || clockMode.get() != CLOCK_TRANSPORT) return;
         // a jump: the latest source plays everywhere (no history behind a seek)
         if(engine.sourceCount() > 1){ const auto latest = engine.latestSource(); engine.resetSource(latest); paramsDirty = true; }
-        if(seed.get() == 0){ newSalt(); paramsDirty = true; }
+        if(seed.get() == 0) newSalt();
+        newFresh();
+        paramsDirty = true;
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -985,14 +1150,17 @@ private:
             int64_t tick = (int64_t)std::floor(at + 1e-7);
             const int local = (int)std::clamp<int64_t>(tick - chunk * CHUNK, 0, CHUNK - 1);
             auto& f = frames[local];
-            auto sp = spans.find(local);
-            if(sp == spans.end()){ f.fill(0.0f); spans[local] = {pn.slot, pn.slot}; }
-            else { sp->second.first = std::min(sp->second.first, pn.slot); sp->second.second = std::max(sp->second.second, pn.slot); }
-            float* d = f.data() + pn.slot * CH;
-            d[0] = std::max(0.001f, pn.note.vel);
-            d[1] = (float)std::max(0.05, pn.note.dur * ticksPerStep);
-            d[2] = pn.note.pitch;
-            d[3] = (float)std::clamp(at - (double)tick, 0.0, 0.9999);
+            for(const int slot : {pn.slot, mainSlotOfBass(pn.slot)}){
+                if(slot < 0) continue;
+                auto sp = spans.find(local);
+                if(sp == spans.end()){ f.fill(0.0f); spans[local] = {slot, slot}; }
+                else { sp->second.first = std::min(sp->second.first, slot); sp->second.second = std::max(sp->second.second, slot); }
+                float* d = f.data() + slot * CH;
+                d[0] = std::max(0.001f, pn.note.vel);
+                d[1] = (float)std::max(0.05, pn.note.dur * ticksPerStep);
+                d[2] = pn.note.pitch;
+                d[3] = (float)std::clamp(at - (double)tick, 0.0, 0.9999);
+            }
         }
         Writer w(st.buffer);
         for(const auto& [local, f] : frames){
@@ -1012,11 +1180,15 @@ private:
             std::array<float, BUF_CH> f;
             f.fill(0.0f);
             for(const auto& note : notesOf({n, (double)n / engine.bd()})){
-                float* d = f.data() + slotOf(note) * CH;
-                d[0] = std::max(0.001f, note.vel);
-                d[1] = (float)std::max(0.01, note.dur);
-                d[2] = note.pitch;
-                d[3] = (float)note.offset;
+                const int slot = slotOf(note);
+                for(const int sl : {slot, mainSlotOfBass(slot)}){
+                    if(sl < 0) continue;
+                    float* d = f.data() + sl * CH;
+                    d[0] = std::max(0.001f, note.vel);
+                    d[1] = (float)std::max(0.01, note.dur);
+                    d[2] = note.pitch;
+                    d[3] = (float)note.offset;
+                }
             }
             w.run((CLOCKED + row) * BUF_CH, f.data(), BUF_CH);
             st.rowOrdinal[row] = n;
@@ -1120,8 +1292,8 @@ private:
     // ════════════════════════════════════════════════════════════════════════
 
     void updateVectors(){
-        const int v = std::clamp(voicesP.get(), 1, NV);
-        const int bv = addBass ? std::clamp(bassVoices.get(), 1, NB) : 0;
+        const int v = chordVoices();
+        const int bv = bassVoiceCount();
         const int n = v + bv;
         std::vector<float> pitch(n, 0.0f), vel(n, 0.0f), dur(n, 0.0f), gv(n, 0.0f);
         std::vector<int> gate(n, 0);
@@ -1170,6 +1342,7 @@ private:
                 std::fill(gv.begin(), gv.end(), 0.0f);
             }
         }
+        if(totalVoicesOut.get() != n) totalVoicesOut = n;
         if(pitch != pitchOut.get()) pitchOut = pitch;
         if(gate != gateOut.get()) gateOut = gate;
         if(vel != velOut.get()) velOut = vel;
@@ -1383,7 +1556,7 @@ private:
     }
 
     void drawWindow(){
-        const std::string title = (canvasID == "Canvas" ? "" : canvasID + "/") + "ArpeggiatorBox " + ofToString(getNumIdentifier());
+        const std::string title = getWindowTitle();
         bool open = showWindow.get();
         ImGui::SetNextWindowSize(ImVec2(1180.0f, 860.0f), ImGuiCond_FirstUseEver);
         if(ImGui::Begin(title.c_str(), &open)){
@@ -1396,17 +1569,14 @@ private:
             drawRing(h);
             ImGui::Spacing();
             if(ImGui::BeginTabBar("##abTabs")){
-                const char* tabs[] = {"Rhythm", "Notes", "Pattern", "Voices & Bass", "Dynamics", "Timing", "Snapshots"};
-                for(int i = 0; i < 7; i++){
+                const char* tabs[] = {"Rhythm", "Notes", "Dynamics & Bass", "Snapshots"};
+                for(int i = 0; i < 4; i++){
                     if(ImGui::BeginTabItem(tabs[i])){
                         selectedTab = i;
                         switch(i){
                             case 0: drawRhythmTab(); break;
                             case 1: drawNotesTab(); break;
-                            case 2: drawPatternTab(); break;
-                            case 3: drawVoicesTab(); break;
-                            case 4: drawDynamicsTab(); break;
-                            case 5: drawTimingTab(); break;
+                            case 2: drawDynamicsTab(); break;
                             default: drawSnapshotsTab(); break;
                         }
                         ImGui::EndTabItem();
@@ -1462,6 +1632,7 @@ private:
         int v = s.get();
         ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - 120.0f));
         if(ImGui::InputInt(("##" + key).c_str(), &v, 1, 100)) s = std::clamp(v, s.getMin(), s.getMax());
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("0: no seed (new draws every cycle and every pass)\nElse: the same draws per step, every cycle (or a new set each cycle: Cycle)");
         controlMenu(key);
         ImGui::SameLine(0, 4);
         if(ImGui::SmallButton(("Dice##" + key).c_str())){
@@ -1539,16 +1710,15 @@ private:
         ImGui::SameLine(0, 4);
         if(ImGui::SmallButton("Dice")){ static std::mt19937 rng((unsigned)ofGetElapsedTimeMicros()); seed = 1 + (int)(rng() % 99999); }
         ImGui::SameLine(0, 16);
-        int v = voicesP.get();
-        ImGui::SetNextItemWidth(110);
-        if(ImGui::SliderInt("##abVoices", &v, 1, NV, "Voices %d")) voicesP = v;
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Output channels (the synth's voices)");
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", voicesText().c_str());
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", voicesTip());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(160);
         int vm = voiceMode.get();
         if(ImGui::Combo("##abVM", &vm, "Voices: fixed\0Voices: round robin\0")) voiceMode = vm;
         controlMenu("voiceMode");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Fixed: chord tone n on channel n\nRound robin: each chord on the next voices (no release cut)");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Fixed: chord tone n on channel n (a long note is cut by the next)\nRound robin: notes longer than a step take the next voices (no cut)");
         ImGui::SameLine(0, 16);
         if(ImGui::Button("Reset")) doReset(true);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Step 0 on the next pulse (re-arms One Shot)");
@@ -1682,6 +1852,7 @@ private:
             if(!cy.played[k]) continue;
             const int64_t pn = engine.origin + cy.r0 + (int64_t)k;
             for(const auto& note : notesOf({pn, clockMode.get() == CLOCK_TRIGGER ? (double)pn / engine.bd() : cy.beats[k]})){
+                if(note.step < 0 || note.step >= (int)chord.size()) continue;   // the previous Seq Size's, until the engine syncs
                 chord[note.step].push_back({note.pitch, slotOf(note)});
                 lo = std::min(lo, note.pitch); hi = std::max(hi, note.pitch);
             }
@@ -1790,8 +1961,8 @@ private:
     }
 
     // ── Rhythm ──────────────────────────────────────────────────────────────
-    void drawRhythmTab(){
-        columns(3, [&](int k){
+    void rhythmCol(int k){
+        {
             if(k == 0){
                 heading("Clock");
                 combo("clockMode", clockMode, "Clock", clockNames());
@@ -1897,7 +2068,7 @@ private:
                 ImGui::Spacing();
                 ImGui::TextWrapped("Each window plays or not (Chance), drawn from the Seed: the same window always decides the same.");
             }
-        });
+        }
     }
 
     // ── Notes: the source and its pitch mapping ─────────────────────────────
@@ -1932,7 +2103,7 @@ private:
             scale = s;
         }
     }
-    void drawNotesTab(){
+    void notesCol(int k){
         static const std::vector<std::pair<const char*, std::vector<float>>> scales = {
             {"Major", {0, 2, 4, 5, 7, 9, 11}}, {"Minor", {0, 2, 3, 5, 7, 8, 10}}, {"Dorian", {0, 2, 3, 5, 7, 9, 10}},
             {"Phrygian", {0, 1, 3, 5, 7, 8, 10}}, {"Lydian", {0, 2, 4, 6, 7, 9, 11}}, {"Mixolydian", {0, 2, 4, 5, 7, 9, 10}},
@@ -1940,10 +2111,17 @@ private:
             {"Minor pentatonic", {0, 3, 5, 7, 10}}, {"Blues", {0, 3, 5, 6, 7, 10}}, {"Whole tone", {0, 2, 4, 6, 8, 10}},
             {"Chromatic", {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}}, {"Major triad", {0, 4, 7}}, {"Minor triad", {0, 3, 7}},
             {"Maj7", {0, 4, 7, 11}}, {"Min7", {0, 3, 7, 10}}, {"Dom7", {0, 4, 7, 10}}};
-        columns(3, [&](int k){
+        {
             if(k == 0){
                 heading("Source");
                 combo("sourceMode", sourceMode, "Source", {"Scale", "Chord pool"});
+                if(linkTimed && linkChained)
+                    ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "Linked to a ChordBox through other nodes: what they make of each chord, learned, on the beat%s",
+                                       linkRoot ? " (and its Root)" : "");
+                else if(linkTimed) ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "Linked to a ChordBox: its chords, exactly on the beat%s",
+                                                 linkRoot ? " (and its Root)" : "");
+                else if(linkedKey(getOceanodeParameter(notePool)) || linkedKey(getOceanodeParameter(scale)))
+                    ImGui::TextDisabled("A ChordBox in Index order: its values as they come");
                 if(sourceMode.get() == arpbox::SRC_SCALE){
                     std::string cur = "Custom";
                     for(const auto& sc : scales) if(sc.second == scale.get()) cur = sc.first;
@@ -1958,7 +2136,7 @@ private:
                     ImGui::TextDisabled("Scale values are semitones (the Scale input takes any)");
                 }else{
                     ImGui::TextDisabled("NotePool (the input), as played");
-                    keyboard("##abPoolKeys", engine.latestSource(), 54.0f, false);
+                    keyboard("##abPoolKeys", linkTimed ? engine.linkedSource(positionBeat()) : engine.latestSource(), 54.0f, false);
                     check("sortPool", sortPool, "Sort");
                     ImGui::SameLine();
                     check("removeDuplicates", dedupPool, "Remove duplicates");
@@ -1993,14 +2171,15 @@ private:
                 if(ImGui::IsItemHovered()) ImGui::SetTooltip("The note moves up to this many source notes");
                 sliderF("pitchDev", pitchDev, "Semitone chance");
                 sliderI("pitchDevRng", pitchDevRng, "Semitones");
-                ImGui::TextDisabled("Drawn from the Seed");
+                ImGui::TextDisabled("Deviation seed");
+                seedRow("devSeed", devSeed, "devRandomizeSeedEachCycle", &devCycle);
             }
-        });
+        }
     }
 
     // ── Pattern ─────────────────────────────────────────────────────────────
-    void drawPatternTab(){
-        columns(3, [&](int k){
+    void patternCol(int k){
+        {
             if(k == 0){
                 heading("Sequence");
                 sliderI("seqSize", seqSize, "Seq size");
@@ -2049,7 +2228,8 @@ private:
                         if(!cy.played[i]) continue;
                         const int64_t pn = engine.origin + cy.r0 + (int64_t)i;
                         for(const auto& note : notesOf({pn, clockMode.get() == CLOCK_TRIGGER ? (double)pn / engine.bd() : cy.beats[i]})){
-                            if(note.bass || note.tone != 0) continue;
+                            // (a cached note can still have the previous Seq Size's step)
+                            if(note.bass || note.tone != 0 || note.step < 0 || note.step >= s) continue;
                             top[note.step] = note.pitch;
                             lo = std::min(lo, (int)note.pitch); hi = std::max(hi, (int)note.pitch);
                         }
@@ -2059,12 +2239,12 @@ private:
                     ImGui::TextDisabled("(the first chord tone; edit with Pattern: User)");
                 }
             }
-        });
+        }
     }
 
     // ── Voices & bass ───────────────────────────────────────────────────────
-    void drawVoicesTab(){
-        columns(3, [&](int k){
+    void voicesCol(int k){
+        {
             if(k == 0){
                 heading("Chord");
                 sliderI("polyphony", polyphony, "Polyphony");
@@ -2073,11 +2253,9 @@ private:
                 sliderI("polyAccent", polyAccent, "Extra on accents");
                 ImGui::Spacing();
                 heading("Outputs");
-                int v = voicesP.get();
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                if(ImGui::SliderInt("##abVoices2", &v, 1, NV, "Voices  %d")) voicesP = v;
-                controlMenu("voices");
                 combo("voiceMode", voiceMode, "Voice mode", voiceModeNames());
+                ImGui::TextDisabled("%s", voicesText().c_str());
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", voicesTip());
                 check("trigAmp", trigAmp, "Trig carries velocity");
             }else if(k == 1){
                 heading("Bass");
@@ -2096,7 +2274,6 @@ private:
                 sliderI("bassOctave", bassOctave, "Octave");
                 check("bassPitchModified", bassPitchMod, "Follows Octave");
                 sliderI("bassPolyphony", bassPoly, "Octaves stacked");
-                sliderI("bassVoices", bassVoices, "Bass voices (outputs)");
                 sliderF("bassVelBase", bassVel, "Velocity");
                 sliderF("bassVelRndm", bassVelRndm, "Vel random");
                 ImGui::TextDisabled("Pitch: Root + Transpose + octaves");
@@ -2107,7 +2284,7 @@ private:
                 ImGui::TextDisabled("Seed");
                 seedRow("bassOctRndSeed", bassOctRndSeed, "bassOctRndRandomizeSeedEachCycle", &bassOctRndCycle);
             }
-        });
+        }
     }
 
     // ── Dynamics: velocity, accents, durations ──────────────────────────────
@@ -2148,8 +2325,8 @@ private:
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("This cycle (by gate: counted on played pulses)");
         (void)p;
     }
-    void drawDynamicsTab(){
-        columns(4, [&](int k){
+    void dynamicsCol(int k){
+        {
             if(k == 0){
                 heading("Velocity");
                 sliderF("velBase", velBase, "Base");
@@ -2206,12 +2383,12 @@ private:
                 eventControls(false);
                 sliderF("durEucStrength", durStrength, "Long: steps added");
             }
-        });
+        }
     }
 
     // ── Timing: strum, swing, position ──────────────────────────────────────
-    void drawTimingTab(){
-        columns(3, [&](int k){
+    void timingCol(int k){
+        {
             if(k == 0){
                 heading("Strum");
                 sliderF("strum", strum, "Strum (steps per note)", "%.3f");
@@ -2249,6 +2426,40 @@ private:
                     dl->AddCircleFilled(ImVec2(xa, y), 3.5f, voiceColor(slotOf(nt)));
                 }
                 ImGui::TextDisabled("Two steps wide: each line a note, from its delay");
+            }
+        }
+    }
+
+    // ── The tabs: five columns each, short sections stacked ─────────────────
+    // Rhythm: clock, chances and pulses, run gate, strum and swing, one step
+    void drawRhythmTab(){
+        columns(5, [&](int k){
+            if(k < 3) rhythmCol(k);
+            else if(k == 3){ timingCol(0); ImGui::Spacing(); timingCol(1); }
+            else timingCol(2);
+        });
+    }
+    // Notes: source, pitch and deviations, chord and outputs, sequence and shift, the pattern
+    void drawNotesTab(){
+        columns(5, [&](int k){
+            switch(k){
+                case 0: notesCol(0); break;
+                case 1: notesCol(1); ImGui::Spacing(); notesCol(2); break;
+                case 2: voicesCol(0); break;
+                case 3: patternCol(0); ImGui::Spacing(); patternCol(1); break;
+                default: patternCol(2); break;
+            }
+        });
+    }
+    // Dynamics & Bass: velocity, its LFO and accents, durations, bass, bass octave jumps
+    void drawDynamicsTab(){
+        columns(5, [&](int k){
+            switch(k){
+                case 0: dynamicsCol(0); break;
+                case 1: dynamicsCol(1); ImGui::Spacing(); dynamicsCol(2); break;
+                case 2: dynamicsCol(3); break;
+                case 3: voicesCol(1); break;
+                default: voicesCol(2); break;
             }
         });
     }
@@ -2318,7 +2529,7 @@ private:
     scAudioParam trigIn;
     ofParameter<std::vector<float>> notePool, scale;
     ofParameter<float> root;
-    ofParameter<int> seed, voicesP, snapshotRecall;
+    ofParameter<int> seed, snapshotRecall, totalVoicesOut;
     ofParameter<std::vector<float>> pitchOut, velOut, durOut, gateVelOut;
     ofParameter<std::vector<int>> gateOut, eucGateOut, eucAccOut, eucDurOut;
     // controls
@@ -2339,7 +2550,7 @@ private:
     ofParameter<int> octave, octaveFold, expandStep, transpose, octaveDevRng, idxDevRng, pitchDevRng;
     ofParameter<bool> foldPoly, pitchExpand;
     ofParameter<float> octaveDev, idxDev, pitchDev;
-    ofParameter<int> polyphony, polyInterval, polyAccent, voiceMode, bassVoices;
+    ofParameter<int> polyphony, polyInterval, polyAccent, voiceMode;
     ofParameter<bool> trigAmp;
     ofParameter<bool> addBass, bassInvert, bassOctRndCycle, bassPitchMod;
     ofParameter<int> bassMode, bassEvery, bassShift, bassEucLen, bassEucHits, bassEucOff, bassOctave, bassOctRnd, bassOctRndSeed, bassPoly;

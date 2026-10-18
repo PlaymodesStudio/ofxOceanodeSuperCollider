@@ -102,6 +102,19 @@ public:
     virtual void resetInputBusses(ofxSCServer* server, int targetBus = 0){};
     
     virtual int getOutputBusIndex(ofxSCServer* server, int index){return -1;};
+
+    // What a channel of an output carries, in a few words ("Kick" for a
+    // sequencer's lane): shown by the node it is wired into. "" = nothing to say.
+    virtual std::string getOutputChannelName(int outputIndex, int channel){return "";};
+
+    // The node wired into this node's input called `name` (nullptr: none)
+    scNode* getInputNode(const std::string& name) const;
+
+    // A node with its own (dockable) window: the title it gives ImGui::Begin,
+    // exactly, and its Show switch. "" / nullptr: no window. Lets another node
+    // open and focus it (SC Mixer Pro: "Go to origin synth window").
+    virtual std::string getWindowTitle(){return "";};
+    virtual ofParameter<bool>* getWindowToggle(){return nullptr;};
     
     virtual int getLastSynthID(ofxSCServer* server){return -1;};
     

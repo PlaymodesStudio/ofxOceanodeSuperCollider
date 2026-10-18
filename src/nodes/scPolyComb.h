@@ -44,6 +44,11 @@
 
 class scPolyComb : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return "PolyComb " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_VOICES = 16;
     static constexpr int NUM_LFOS = scModulation::MAX_LFOS;
     static constexpr int NUM_ENVS = scModulation::MAX_ENVS;

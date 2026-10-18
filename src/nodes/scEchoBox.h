@@ -42,6 +42,11 @@
 
 class scEchoBox : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return "EchoBox " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_TAPS = 8;
     static constexpr int MAX_CHANNELS = 16;
 

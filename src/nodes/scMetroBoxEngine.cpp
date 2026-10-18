@@ -6,23 +6,25 @@
 #include "scMetroBoxEngine.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <functional>
-#include <sstream>
+#include <random>
 
 namespace metrobox {
 
 namespace {
 
 constexpr int TPB = TICKS_PER_BEAT;
+constexpr int SIXTEENTH = TPB / 4;
+constexpr int RATCHET_HITS = 3;
+constexpr float GHOST_LEVEL = 0.3f;
+constexpr int FLAM_TICKS = 2;
 
 // Salts: each kind of decision draws from its own hash, so changing one
-// setting (density, say) does not reshuffle the others.
+// setting (chance, say) does not reshuffle the others.
 enum Salt : uint64_t {
-    SALT_KEEP = 1, SALT_AMP, SALT_CHOICE, SALT_SUBDIV, SALT_ANCHOR, SALT_DISP, SALT_CROSS, SALT_CROSSDUR,
-    SALT_REL, SALT_FILL, SALT_GHOST, SALT_GHOSTSIDE, SALT_FLAM, SALT_RATCHET, SALT_PHRASE, SALT_MATERIAL,
-    SALT_LETTER, SALT_FILLX, SALT_HUMAN, SALT_REROLL, SALT_MARKOV, SALT_OPS
+    SALT_KEEP = 1, SALT_AMP, SALT_SUBDIV, SALT_DISP, SALT_REL, SALT_GHOST, SALT_FLAM, SALT_RATCHET,
+    SALT_PHRASE, SALT_MATERIAL, SALT_FILLX, SALT_HUMAN, SALT_REROLL, SALT_OPS
 };
 
 uint64_t mix64(uint64_t z) {
@@ -57,13 +59,6 @@ std::vector<int> groupTicksOf(const std::vector<int>& beatsPerGroup) {
     int t = 0;
     for(int b : beatsPerGroup) { ticks.push_back(t); t += b * TPB; }
     return ticks;
-}
-
-// Index of a strength level, for the Markov tables
-int strengthClass(float s) {
-    static const float levels[] = {1.0f, 0.8f, 0.6f, 0.4f, 0.35f, 0.25f, 0.2f, 0.12f, 0.05f};
-    for(int i = 0; i < 9; i++) if(std::abs(s - levels[i]) < 1e-4f) return i;
-    return 8;
 }
 
 bool isAmplitudeOp(int type) {
@@ -129,8 +124,38 @@ std::vector<int> autoGroups(int beats) {
 bool Genome::operator==(const Genome& o) const {
     if(seed != o.seed || ops.size() != o.ops.size()) return false;
     for(size_t i = 0; i < ops.size(); i++)
-        if(ops[i].type != o.ops[i].type || ops[i].seed != o.ops[i].seed || ops[i].aux != o.ops[i].aux) return false;
+        if(ops[i].type != o.ops[i].type || ops[i].seed != o.ops[i].seed) return false;
     return true;
+}
+
+// ── Change ──────────────────────────────────────────────────────────────────
+
+int changeZone(float c) {
+    if(c < 0.15f) return CHANGE_FIXED;
+    if(c < 0.40f) return CHANGE_LOOP;
+    if(c < 0.65f) return CHANGE_EVOLVING;
+    if(c < 0.90f) return CHANGE_VARYING;
+    return CHANGE_NEW;
+}
+
+bool changeFrozen(float c) { return changeZone(c) <= CHANGE_EVOLVING; }
+
+int evolveEvery(float c) {
+    const float t = clampf((c - 0.40f) / 0.25f, 0.0f, 1.0f);
+    return std::clamp((int)std::lround(4.0f - 3.0f * t), 1, 4);
+}
+
+float renewChance(float c) {
+    switch(changeZone(c)) {
+        case CHANGE_VARYING: return 0.15f + 0.6f * clampf((c - 0.65f) / 0.25f, 0.0f, 1.0f);
+        case CHANGE_NEW:     return 1.0f;
+        default:             return 0.0f;
+    }
+}
+
+int Layer::fillTicks() const {
+    if(fill <= 0.0f) return 0;
+    return std::min(fill < 0.5f ? TPB : 2 * TPB, cycleTicks());
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -138,29 +163,124 @@ bool Genome::operator==(const Genome& o) const {
 // ════════════════════════════════════════════════════════════════════════════
 
 Engine::Engine() {
-    for(int i = 0; i < MAX_LAYERS; i++) layers[i].name = "Layer " + std::to_string(i + 1);
+    for(int i = 0; i < MAX_LAYERS; i++) layers[i].name = "Lane " + std::to_string(i + 1);
+    for(auto& l : links) l.fill(-1);
+    sessionSalt = ((uint64_t)std::random_device{}() << 32) ^ std::random_device{}();
 }
 
+// The lane and every lane that hears it (if the links themselves changed:
+// every lane)
 void Engine::changed(int lane) {
     if(lane < 0 || lane >= MAX_LAYERS) return;
-    for(int j = lane; j < MAX_LAYERS; j++) {
+    const auto before = links;
+    const bool wasDirty = linksDirty;
+    linksDirty = true;
+    computeLinks();
+    std::vector<int> lanes;
+    if(wasDirty || before != links) for(int j = 0; j < MAX_LAYERS; j++) lanes.push_back(j);
+    else { lanes = dependents(lane); lanes.push_back(lane); }
+    for(int j : lanes) {
         cache[j].clear();
         if(onChanged) onChanged(j);
     }
 }
 
-void Engine::changedAll() { changed(0); }
+void Engine::changedAll() {
+    linksDirty = true;
+    computeLinks();
+    for(int j = 0; j < MAX_LAYERS; j++) {
+        cache[j].clear();
+        if(onChanged) onChanged(j);
+    }
+}
+
+// ── Links between lanes ─────────────────────────────────────────────────────
+
+int Engine::linkSetting(int lane, int kind) const {
+    const Layer& L = layers[lane];
+    switch(kind) {
+        case LINK_REL:   return L.relMode != REL_NONE ? L.relLane : 0;
+        case LINK_CHOKE: return L.chokeLane;
+        default:         return L.dynMode != DYN_NONE ? L.dynLane : 0;
+    }
+}
+
+bool Engine::reaches(int from, int to) const {
+    std::vector<int> stack = {from};
+    std::array<bool, MAX_LAYERS> seen{};
+    while(!stack.empty()) {
+        const int l = stack.back();
+        stack.pop_back();
+        if(l == to) return true;
+        if(l < 0 || l >= MAX_LAYERS || seen[l]) continue;
+        seen[l] = true;
+        for(int k = 0; k < LINK_COUNT; k++) if(links[l][k] >= 0) stack.push_back(links[l][k]);
+    }
+    return false;
+}
+
+void Engine::computeLinks() const {
+    if(!linksDirty) return;
+    for(auto& l : links) l.fill(-1);
+    for(int lane = 0; lane < numLayers && lane < MAX_LAYERS; lane++)
+        for(int k = 0; k < LINK_COUNT; k++) {
+            const int other = linkSetting(lane, k) - 1;
+            if(other < 0 || other == lane || other >= numLayers) continue;
+            if(reaches(other, lane)) continue;   // it would loop
+            links[lane][k] = other;
+        }
+    linksDirty = false;
+}
+
+int Engine::link(int lane, int kind) const {
+    computeLinks();
+    return lane >= 0 && lane < MAX_LAYERS ? links[lane][kind] : -1;
+}
+
+bool Engine::wouldLoop(int lane, int otherLane) const {
+    computeLinks();
+    if(otherLane == lane) return true;
+    // the lane's own links don't count: they are what would be replaced
+    auto saved = links[lane];
+    links[lane].fill(-1);
+    const bool loop = reaches(otherLane, lane);
+    links[lane] = saved;
+    return loop;
+}
+
+std::vector<int> Engine::dependents(int lane) const {
+    computeLinks();
+    std::vector<int> out;
+    for(int j = 0; j < MAX_LAYERS; j++) if(j != lane && reaches(j, lane)) out.push_back(j);
+    return out;
+}
+
+void Engine::moveLane(int from, int to) {
+    if(from < 0 || from >= MAX_LAYERS || to < 0 || to >= MAX_LAYERS || from == to) return;
+    // order[new position] = old position
+    std::array<int, MAX_LAYERS> order, newOf;
+    for(int i = 0; i < MAX_LAYERS; i++) order[i] = i;
+    const int moved = order[from];
+    if(from < to) std::rotate(order.begin() + from, order.begin() + from + 1, order.begin() + to + 1);
+    else std::rotate(order.begin() + to, order.begin() + from, order.begin() + from + 1);
+    order[to] = moved;
+    for(int i = 0; i < MAX_LAYERS; i++) newOf[order[i]] = i;
+    // Every lane keeps the random stream it had at its old position
+    for(int i = 0; i < MAX_LAYERS; i++) if(layers[i].id <= 0) layers[i].id = i + 1;
+    auto oldLayers = layers;
+    auto oldState = state;
+    auto oldPasses = passes;
+    for(int i = 0; i < MAX_LAYERS; i++) { layers[i] = oldLayers[order[i]]; state[i] = oldState[order[i]]; passes[i] = oldPasses[order[i]]; }
+    auto remap = [&](int& n) { if(n >= 1 && n <= MAX_LAYERS) n = newOf[n - 1] + 1; };
+    for(auto& L : layers) { remap(L.relLane); remap(L.chokeLane); remap(L.dynLane); }
+    changedAll();
+}
 
 float Engine::effectiveDensity(int lane) const {
     float scale = 1.0f;
     if(densityScale.size() == 1) scale = densityScale[0];
     else if(lane < (int)densityScale.size()) scale = densityScale[lane];
     return clampf(layers[lane].density * scale, 0.0f, 1.0f);
-}
-
-int Engine::validLane(int lane, int laneNumber) const {
-    const int idx = laneNumber - 1;
-    return idx >= 0 && idx < lane && idx < numLayers ? idx : -1;
 }
 
 int64_t Engine::cycleAt(int lane, double beat) const {
@@ -174,7 +294,8 @@ int64_t Engine::phraseOf(int lane, int64_t cycle) const {
 bool Engine::inFill(int lane, int64_t cycle, int tick) const {
     const Layer& L = layers[lane];
     const int n = std::max(1, L.phraseLen);
-    return L.fillTicks > 0 && positiveMod64(cycle, n) == n - 1 && tick >= L.cycleTicks() - L.fillTicks;
+    const int f = L.fillTicks();
+    return f > 0 && positiveMod64(cycle, n) == n - 1 && tick >= L.cycleTicks() - f;
 }
 
 float Engine::phraseProgress(int lane, int64_t cycle, int tick) const {
@@ -198,19 +319,16 @@ std::vector<int> Engine::groupStarts(int lane) const {
     return groupTicksOf(beats);
 }
 
+// The cycle's own hierarchy, and the main bar's at the same absolute
+// position: a 5-beat lane still leans on the bar's downbeat when it lands there.
 float Engine::strengthAt(int lane, int64_t cycle, int tick) const {
     const Layer& L = layers[lane];
     float s = levelStrength(tick, groupStarts(lane));
-    if(L.feelBar) {
-        // The main bar's hierarchy at the same absolute position: a 5-beat
-        // lane still leans on the bar's downbeat whenever it lands there.
-        const int barTicks = std::max(1, (int)std::lround(mainBarBeats * TPB));
-        const int barBeats = (int)std::lround(mainBarBeats);
-        const std::vector<int> barGroups = barBeats * TPB == barTicks ? groupTicksOf(autoGroups(barBeats)) : std::vector<int>{0};
-        const int64_t absTick = cycle * L.cycleTicks() + tick;
-        s = std::max(s, levelStrength((int)positiveMod64(absTick, barTicks), barGroups));
-    }
-    return s;
+    const int barTicks = std::max(1, (int)std::lround(mainBarBeats * TPB));
+    const int barBeats = (int)std::lround(mainBarBeats);
+    const std::vector<int> barGroups = barBeats * TPB == barTicks ? groupTicksOf(autoGroups(barBeats)) : std::vector<int>{0};
+    const int64_t absTick = cycle * L.cycleTicks() + tick;
+    return std::max(s, levelStrength((int)positiveMod64(absTick, barTicks), barGroups));
 }
 
 // ── Material ────────────────────────────────────────────────────────────────
@@ -221,156 +339,83 @@ Genome Engine::genomeAt(int lane, int64_t cycle) const {
     return layers[lane].genome();
 }
 
-// Which random stream a cycle uses. Its phrase either brings new material
-// (chance Renew) or repeats the last one that did; Keep freezes it. In a
-// form, every letter takes the A material, the other letters mutated by it.
+// Which random stream a cycle uses: its phrase's (see materialPhrase), and
+// its place in the phrase.
 Engine::Material Engine::material(int lane, int64_t cycle) const {
     const Layer& L = layers[lane];
     Material m;
     m.genome = genomeAt(lane, cycle);
-    m.key = hashOf((uint64_t)(uint32_t)globalSeed, (uint64_t)(uint32_t)m.genome.seed, (uint64_t)lane + 1);
-    const int n = std::max(1, L.phraseLen);
-    const int64_t q = positiveMod64(cycle, n);
+    const uint64_t id = L.id > 0 ? (uint64_t)L.id : (uint64_t)lane + 1;
+    m.key = hashOf(unseeded() ? sessionSalt : (uint64_t)(uint32_t)globalSeed, (uint64_t)(uint32_t)m.genome.seed, id);
+    const int64_t q = positiveMod64(cycle, std::max(1, L.phraseLen));
     const int64_t pm = materialPhrase(lane, cycle, m.key);
-
-    uint64_t letter = (uint64_t)q;
-    if(!L.form.empty()) {
-        const char ch = (char)std::toupper((unsigned char)L.form[(size_t)(q % (int64_t)L.form.size())]);
-        letter = 0;
-        if(ch != 'A') {
-            m.extraOps = (int)std::lround(L.bStrength * 6.0f);
-            m.extraSeed = hashOf(m.key, (uint64_t)pm, (uint64_t)(unsigned char)ch, SALT_LETTER);
-        }
-    }
-    m.mat = hashOf(m.key, (uint64_t)pm, letter, SALT_MATERIAL);
+    const uint64_t pass = changeFrozen(L.change) ? 0 : (uint64_t)passOf(lane, pm);
+    m.mat = hashOf(m.key ^ (pass * 0x9E3779B97F4A7C15ull), (uint64_t)pm, (uint64_t)q, SALT_MATERIAL);
     return m;
 }
 
-// The phrase whose material a cycle plays: a frozen one (Loop, Evolve,
-// Keep), or the last phrase that renewed (chance Renew each phrase).
+// The phrase whose material a cycle plays: the kept one while Change is
+// frozen, otherwise the last phrase that renewed.
 int64_t Engine::materialPhrase(int lane, int64_t cycle, uint64_t key) const {
     const Layer& L = layers[lane];
-    if(frozen(lane)) return L.keepPhrase;
+    if(changeFrozen(L.change)) return L.keepPhrase;
     const int64_t p = floorDiv(cycle, std::max(1, L.phraseLen));
-    if(L.renew >= 1.0f || p <= 0) return p;
+    const float renew = renewChance(L.change);
+    if(renew >= 1.0f || p <= 0) return p;
     for(int64_t k = p; k >= 1 && k > p - 256; k--)
-        if(unit(hashOf(key, (uint64_t)k, SALT_PHRASE)) < L.renew) return k;
+        if(unit(hashOf(key ^ ((uint64_t)passOf(lane, k) * 0x9E3779B97F4A7C15ull), (uint64_t)k, SALT_PHRASE)) < renew) return k;
     return 0;
 }
 
-std::vector<Op> Engine::opsOf(const Material& m) const {
-    std::vector<Op> ops = m.genome.ops;
-    Stream s{m.extraSeed};
-    for(int i = 0; i < m.extraOps; i++) {
-        Op op;
-        op.type = s.pick(OP_RANDOM_COUNT);
-        op.seed = (uint32_t)(s.next() * 4294967295.0f);
-        ops.push_back(op);
-    }
-    return ops;
+int Engine::passOf(int lane, int64_t phrase) const {
+    if(!unseeded()) return 0;
+    const auto it = passes[lane].find(phrase);
+    return it == passes[lane].end() ? 0 : it->second;
 }
 
-// ── Generators ──────────────────────────────────────────────────────────────
-
-// Markov: hit / rest transitions learned from the example words, keyed by
-// the metric strength of the position and the two previous steps.
-std::vector<int> Engine::markovCycle(int lane, int64_t cycle, const Material& m) const {
-    const Layer& L = layers[lane];
-    const int cT = L.cycleTicks();
-    constexpr int CLASSES = 9;
-    float hits[CLASSES][4] = {}, total[CLASSES][4] = {};
-    float classHits[CLASSES] = {}, classTotal[CLASSES] = {};
-    float allHits = 0, allTotal = 0;
-    for(const auto& word : splitWords(L.examples, " ,;\n\t")) {
-        const int len = (int)word.size();
-        const int ticks = len * 12;
-        const std::vector<int> groups = ticks % TPB == 0 ? groupTicksOf(autoGroups(ticks / TPB)) : std::vector<int>{0};
-        int prev = 0;
-        for(int i = 0; i < len; i++) {
-            const bool hit = word[i] == 'x' || word[i] == 'X' || word[i] == '1';
-            const int cls = strengthClass(levelStrength(i * 12, groups));
-            total[cls][prev] += 1; classTotal[cls] += 1; allTotal += 1;
-            if(hit) { hits[cls][prev] += 1; classHits[cls] += 1; allHits += 1; }
-            prev = ((prev << 1) | (hit ? 1 : 0)) & 3;
-        }
-    }
-    std::vector<int> out;
-    if(allTotal <= 0) return out;
-    const std::vector<int> groups = groupStarts(lane);
-    const int step = std::max(1, L.division);
-    Stream stream{hashOf(m.mat, SALT_MARKOV)};
-    int prev = 0;
-    for(int t = 0; t < cT; t += step) {
-        const int cls = strengthClass(levelStrength(t, groups));
-        float p = allHits / allTotal;
-        if(total[cls][prev] > 0) p = hits[cls][prev] / total[cls][prev];
-        else if(classTotal[cls] > 0) p = classHits[cls] / classTotal[cls];
-        const bool hit = stream.next() < p;
-        if(hit) out.push_back(t);
-        prev = ((prev << 1) | (hit ? 1 : 0)) & 3;
-    }
-    return out;
+void Engine::leavePhrase(int lane, int64_t phrase) {
+    if(!unseeded() || lane < 0 || lane >= MAX_LAYERS || changeFrozen(layers[lane].change)) return;
+    passes[lane][phrase]++;
+    if(passes[lane].size() > 4096) passes[lane].clear();
+    changed(lane);
 }
 
-// The generator's onsets (shifted), kept by density, metric weighting,
-// build-up and fills, plus the anchors. A tick is kept with a hash of
-// (material, tick) against its chance, so raising the density only ever adds
-// hits and lowering it only removes them.
+void Engine::setChange(int lane, float change, int64_t nowCycle) {
+    Layer& L = layers[lane];
+    change = clampf(change, 0.0f, 1.0f);
+    // Freeze the phrase playing now (unless it is frozen already)
+    if(changeFrozen(change) && !changeFrozen(L.change))
+        L.keepPhrase = materialPhrase(lane, nowCycle, material(lane, nowCycle).key);
+    L.change = change;
+    changed(lane);
+}
+
+// ── Pattern ─────────────────────────────────────────────────────────────────
+
+// The pattern's onsets (offset), kept by Chance, Smart, build-up and fills.
+// A tick is kept with a hash of (material, tick) against its chance, so
+// raising Chance only ever adds hits and lowering it only removes them.
 std::vector<int> Engine::rawCycle(int lane, int64_t cycle, const Material& m) const {
     const Layer& L = layers[lane];
     const int cT = L.cycleTicks();
     const float density = effectiveDensity(lane);
-    const std::vector<int> groups = groupStarts(lane);
+    const float fillAmount = L.fill;
     std::vector<int> gen;
 
-    if(L.generator == GEN_GRID || L.generator == GEN_EUCLIDEAN) {
-        const int step = std::max(1, L.division);
-        const int n = std::max(1, L.eucSteps);
-        const int k = std::clamp(L.eucHits, 0, n);
-        int i = 0;
-        for(int t = 0; t < cT; t += step, i++) {
-            bool hit = true;
-            if(L.generator == GEN_EUCLIDEAN) {
-                const int64_t s = positiveMod64((int64_t)i + L.eucRotation, n);
-                hit = (s * k) % n < k;
-            }
-            if(hit) gen.push_back(t);
-        }
-    } else if(L.generator == GEN_WEIGHTED) {
-        // From the cycle start, draw the next interval from the list until the
-        // cycle is full. Every cycle starts on its downbeat; the last interval
-        // is cut at the cycle end.
-        const int count = std::clamp((int)L.values.size(), 0, MAX_VALUES);
-        float total = 0.0f;
-        for(int j = 0; j < count; j++) total += j < (int)L.weights.size() ? std::max(0.0f, L.weights[j]) : 0.0f;
-        Stream stream{hashOf(m.mat, SALT_CHOICE)};
-        for(int t = 0; t < cT && count > 0;) {
-            int pick = count - 1;
-            if(total > 0.0f) {
-                float r = stream.next() * total;
-                for(int j = 0; j < count; j++) {
-                    r -= j < (int)L.weights.size() ? std::max(0.0f, L.weights[j]) : 0.0f;
-                    if(r < 0.0f) { pick = j; break; }
-                }
-            } else {
-                pick = stream.pick(count);
-            }
-            gen.push_back(t);
-            t += std::max(1, (int)std::lround(L.values[pick] * TPB));
-        }
-    } else if(L.generator == GEN_SUBDIVISION) {
+    if(L.pattern == PAT_FREE) {
         // Each group is a segment; a segment splits in two (or three) with a
-        // chance that falls on strong positions (and rises in a fill), down
-        // to the finest step. Every segment that stays whole is an onset.
+        // chance that falls on strong positions (Smart) and rises in a fill,
+        // down to the Every step. Every segment that stays whole is an onset.
         const int finest = std::max(1, L.division);
+        const std::vector<int> groups = groupStarts(lane);
         Stream stream{hashOf(m.mat, SALT_SUBDIV)};
         std::function<void(int, int)> split = [&](int start, int len) {
             const bool two = len % 2 == 0 && len / 2 >= finest;
             const bool three = len % 3 == 0 && len / 3 >= finest;
             const int at = (int)positiveMod64((int64_t)start + L.shift, cT);
             const float s = strengthAt(lane, cycle, at);
-            float chance = L.complexity * (1.0f - L.longOnStrong * s);
-            if(inFill(lane, cycle, at)) chance += L.fillIntensity * (1.0f - chance);
+            float chance = L.complexity * (1.0f - L.smart * s);
+            if(inFill(lane, cycle, at)) chance += fillAmount * (1.0f - chance);
             if((two || three) && stream.next() < chance) {
                 const int parts = three && (!two || stream.next() < L.triplets) ? 3 : 2;
                 for(int p = 0; p < parts; p++) split(start + p * len / parts, len / parts);
@@ -383,39 +428,46 @@ std::vector<int> Engine::rawCycle(int lane, int64_t cycle, const Material& m) co
             split(groups[g], end - groups[g]);
         }
     } else {
-        gen = markovCycle(lane, cycle, m);
+        const int step = std::max(1, L.division);
+        const int n = std::max(1, L.eucSteps);
+        const int k = std::clamp(L.eucHits, 0, n);
+        int i = 0;
+        for(int t = 0; t < cT; t += step, i++) {
+            bool hit = true;
+            if(L.pattern == PAT_EUCLIDEAN) {
+                const int64_t s = positiveMod64((int64_t)i + L.eucRotation, n);
+                hit = (s * k) % n < k;
+            }
+            if(hit) gen.push_back(t);
+        }
     }
 
+    // Smart: the chance is bent per position, density ^ w, w below 1 on
+    // strong positions and above 1 on weak ones. 100% still plays every hit
+    // and 0% none; in between the weak ones go first. The cycle and group
+    // starts are protected too.
+    const float protect = L.smart * std::min(1.0f, density * 4.0f);
     std::vector<int> out;
     out.reserve(gen.size() + 16);
     for(int t : gen) {
         const int st = (int)positiveMod64((int64_t)t + L.shift, cT);
         const float s = strengthAt(lane, cycle, st);
         const float build = 1.0f - L.buildUp * (1.0f - phraseProgress(lane, cycle, st));
-        float chance = density * build * (1.0f - L.weighting + L.weighting * s);
-        if(inFill(lane, cycle, st)) chance += L.fillIntensity * (1.0f - chance);
+        float chance = std::pow(density, std::exp(L.smart * 2.5f * (0.5f - s))) * build;
+        if(s >= 0.8f) chance = std::max(chance, protect);
+        if(inFill(lane, cycle, st)) chance += fillAmount * (1.0f - chance);
         if(unit(hashOf(m.mat, (uint64_t)st, SALT_KEEP)) < chance) out.push_back(st);
     }
 
-    // A fill also brings its own 16ths, whatever the generator
-    if(L.fillTicks > 0 && L.fillIntensity > 0.0f) {
+    // A fill also brings its own 16ths, whatever the pattern
+    const int fillLen = L.fillTicks();
+    if(fillLen > 0) {
         const int n = std::max(1, L.phraseLen);
         if(positiveMod64(cycle, n) == n - 1) {
-            const int start = ((cT - L.fillTicks + 11) / 12) * 12;
-            for(int t = std::max(0, start); t < cT; t += 12)
-                if(unit(hashOf(m.mat, (uint64_t)t, SALT_FILLX)) < L.fillIntensity * 0.7f) out.push_back(t);
+            const int start = ((cT - fillLen + SIXTEENTH - 1) / SIXTEENTH) * SIXTEENTH;
+            for(int t = std::max(0, start); t < cT; t += SIXTEENTH)
+                if(unit(hashOf(m.mat, (uint64_t)t, SALT_FILLX)) < fillAmount * 0.7f) out.push_back(t);
         }
-    }
-
-    if(L.anchorMode != ANCHOR_NONE) {
-        std::vector<int> anchors;
-        if(L.anchorMode == ANCHOR_DOWNBEAT) anchors = {0};
-        else if(L.anchorMode == ANCHOR_GROUPS) anchors = groups;
-        else
-            for(int b = 0; b < L.cycleBeats; b++)
-                if(L.anchorMode == ANCHOR_BEATS || b % 2 == 1) anchors.push_back(b * TPB);
-        for(int a : anchors)
-            if(unit(hashOf(m.mat, (uint64_t)a, SALT_ANCHOR)) < L.anchorAmount) out.push_back(a);
     }
 
     std::sort(out.begin(), out.end());
@@ -423,29 +475,15 @@ std::vector<int> Engine::rawCycle(int lane, int64_t cycle, const Material& m) co
     return out;
 }
 
-// Push (anticipation) or drag of an onset on a beat by one unit. A move across
-// the cycle start lands in the neighbouring cycle, if the barline lets it.
-int Engine::displaced(int lane, int64_t cycle, int tick, const Material& m) const {
+// Push (anticipation) or drag of an onset on a beat by a 16th. A move across
+// the cycle start lands in the neighbouring cycle.
+int Engine::displaced(int lane, int tick, const Material& m) const {
     const Layer& L = layers[lane];
     if(tick % TPB != 0 || (L.push <= 0.0f && L.drag <= 0.0f)) return tick;
-    const int cT = L.cycleTicks();
     const float r = unit(hashOf(m.mat, (uint64_t)tick, SALT_DISP));
-    int moved = tick;
-    if(r < L.push) moved = tick - L.dispUnit;
-    else if(r < L.push + L.drag) moved = tick + L.dispUnit;
-    if((moved < 0 || moved >= cT) && unit(hashOf(m.mat, (uint64_t)tick, SALT_CROSS)) >= L.crossBarline)
-        moved = tick;
-    return moved;
-}
-
-float Engine::amplitudeOf(int lane, const Material& m, int tick, float strength) const {
-    const Layer& L = layers[lane];
-    const float u = unit(hashOf(m.mat, (uint64_t)tick, SALT_AMP));
-    const float metric = 1.0f - L.ampMetric + L.ampMetric * strength;
-    float a = clampf(metric * (1.0f - L.variation * u), 0.0f, 1.0f);
-    a = std::pow(a, std::max(0.1f, L.curve));
-    if(L.tiers >= 2) a = std::round(a * (L.tiers - 1)) / (float)(L.tiers - 1);
-    return clampf(L.ampMin + (L.level - L.ampMin) * a, 0.001f, 1.0f);
+    if(r < L.push) return tick - SIXTEENTH;
+    if(r < L.push + L.drag) return tick + SIXTEENTH;
+    return tick;
 }
 
 // Onsets (with durations) of another lane between two absolute ticks, gates
@@ -473,13 +511,8 @@ void Engine::applyPlacementOps(int lane, int64_t cycle, const Material& m, std::
         items.erase(std::unique(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.tick == b.tick; }), items.end());
     };
     auto occupied = [&](int t) { for(const auto& it : items) if(it.tick == t) return true; return false; };
-    auto regenerateHalf = [&](int lo, int hi, const Material& alt) {
-        items.erase(std::remove_if(items.begin(), items.end(), [&](const Item& it) { return it.tick >= lo && it.tick < hi; }), items.end());
-        for(int t : rawCycle(lane, cycle, alt))
-            if(t >= lo && t < hi) items.push_back({t, strengthAt(lane, cycle, t), KIND_MAIN, 1.0f});
-    };
 
-    for(const Op& op : opsOf(m)) {
+    for(const Op& op : m.genome.ops) {
         if(isAmplitudeOp(op.type)) continue;
         Stream s{hashOf((uint64_t)op.seed, m.mat, SALT_OPS)};
         sortItems();
@@ -490,8 +523,8 @@ void Engine::applyPlacementOps(int lane, int64_t cycle, const Material& m, std::
                 const int j = s.pick(n);
                 const int next = j + 1 < n ? items[j + 1].tick : cT;
                 const int gap = next - items[j].tick;
-                if(gap < 24) break;
-                const int t = items[j].tick + std::max(12, (gap / 2) / 12 * 12);
+                if(gap < 2 * SIXTEENTH) break;
+                const int t = items[j].tick + std::max(SIXTEENTH, (gap / 2) / SIXTEENTH * SIXTEENTH);
                 if(t < next && t < cT && !occupied(t)) items.push_back({t, strengthAt(lane, cycle, t), KIND_MAIN, 1.0f});
                 break;
             }
@@ -501,27 +534,23 @@ void Engine::applyPlacementOps(int lane, int64_t cycle, const Material& m, std::
             case OP_NUDGE: {
                 if(n == 0) break;
                 Item& it = items[s.pick(n)];
-                const int t = it.tick + (s.next() < 0.5f ? -12 : 12);
+                const int t = it.tick + (s.next() < 0.5f ? -SIXTEENTH : SIXTEENTH);
                 if(t >= 0 && t < cT && !occupied(t)) it.tick = t;
                 break;
             }
             case OP_ROTATE: {
-                const int d = s.next() < 0.5f ? -12 : 12;
+                const int d = s.next() < 0.5f ? -SIXTEENTH : SIXTEENTH;
                 for(auto& it : items) it.tick = (int)positiveMod64((int64_t)it.tick + d, cT);
                 break;
             }
             case OP_REROLL_HALF: {
                 const int h = s.pick(2);
+                const int lo = h * cT / 2, hi = (h + 1) * cT / 2;
                 Material alt = m;
                 alt.mat = hashOf(m.mat, (uint64_t)op.seed, SALT_REROLL);
-                regenerateHalf(h * cT / 2, (h + 1) * cT / 2, alt);
-                break;
-            }
-            case OP_SPLICE: {
-                Material alt = m;
-                alt.key = hashOf((uint64_t)(uint32_t)globalSeed, (uint64_t)op.aux, (uint64_t)lane + 1);
-                alt.mat = hashOf(alt.key, m.mat, SALT_MATERIAL);
-                regenerateHalf(cT / 2, cT, alt);
+                items.erase(std::remove_if(items.begin(), items.end(), [&](const Item& it) { return it.tick >= lo && it.tick < hi; }), items.end());
+                for(int t : rawCycle(lane, cycle, alt))
+                    if(t >= lo && t < hi) items.push_back({t, strengthAt(lane, cycle, t), KIND_MAIN, 1.0f});
                 break;
             }
             case OP_TIE: {
@@ -545,7 +574,7 @@ void Engine::applyPlacementOps(int lane, int64_t cycle, const Material& m, std::
 
 void Engine::applyAmplitudeOps(int lane, const Material& m, std::vector<Item>& items) const {
     const Layer& L = layers[lane];
-    for(const Op& op : opsOf(m)) {
+    for(const Op& op : m.genome.ops) {
         if(!isAmplitudeOp(op.type)) continue;
         Stream s{hashOf((uint64_t)op.seed, m.mat, SALT_OPS)};
         std::vector<Item*> mains;
@@ -588,25 +617,25 @@ std::vector<Engine::Item> Engine::placeItems(int lane, int64_t cycle) const {
     auto sameTick = [](const Item& a, const Item& b) { return a.tick == b.tick; };
 
     // 1. Own onsets, displaced, plus the ones pushed in from the next cycle or
-    //    dragged in from the previous one. Strength (and so amplitude) is the
-    //    one of the position the onset was generated on: an anticipated
+    //    dragged in from the previous one. Strength (and so the accent) is
+    //    the one of the position the onset was generated on: an anticipated
     //    downbeat keeps its accent.
     std::vector<Item> mains;
     for(int t : rawCycle(lane, cycle, m)) {
-        const int d = displaced(lane, cycle, t, m);
+        const int d = displaced(lane, t, m);
         if(d >= 0 && d < cT) mains.push_back({d, strengthAt(lane, cycle, t), KIND_MAIN, 1.0f});
     }
-    if(L.push > 0.0f && L.crossBarline > 0.0f) {
+    if(L.push > 0.0f) {
         const Material mn = material(lane, cycle + 1);
         for(int t : rawCycle(lane, cycle + 1, mn)) {
-            const int d = displaced(lane, cycle + 1, t, mn);
+            const int d = displaced(lane, t, mn);
             if(d < 0) mains.push_back({cT + d, strengthAt(lane, cycle + 1, t), KIND_MAIN, 1.0f});
         }
     }
-    if(L.drag > 0.0f && L.crossBarline > 0.0f) {
+    if(L.drag > 0.0f) {
         const Material mp = material(lane, cycle - 1);
         for(int t : rawCycle(lane, cycle - 1, mp)) {
-            const int d = displaced(lane, cycle - 1, t, mp);
+            const int d = displaced(lane, t, mp);
             if(d >= cT) mains.push_back({d - cT, strengthAt(lane, cycle - 1, t), KIND_MAIN, 1.0f});
         }
     }
@@ -614,48 +643,26 @@ std::vector<Engine::Item> Engine::placeItems(int lane, int64_t cycle) const {
     mains.erase(std::unique(mains.begin(), mains.end(), sameTick), mains.end());
 
     // 2. Relation to a lane above
-    const int rel = L.relMode != REL_NONE ? validLane(lane, L.relLane) : -1;
+    const int rel = link(lane, LINK_REL);
     if(rel >= 0) {
-        auto roll = [&](int t, uint64_t salt) { return unit(hashOf(m.mat, (uint64_t)t, salt)) < L.relAmount; };
+        auto roll = [&](int t) { return unit(hashOf(m.mat, (uint64_t)t, SALT_REL)) < L.relAmount; };
         std::vector<Item> kept;
-        if(L.relMode == REL_RESPONSE) {
-            // Answer what the other lane played respDelay earlier
+        if(L.relMode == REL_ANSWER) {
+            // Play what the other lane played respDelay earlier
             for(const auto& o : laneOnsets(rel, from - L.respDelay, from + cT - L.respDelay)) {
                 const int64_t t = o.tick + L.respDelay - from;
-                if(t >= 0 && t < cT && roll((int)t, SALT_REL)) kept.push_back({(int)t, strengthAt(lane, cycle, (int)t), KIND_MAIN, 1.0f});
+                if(t >= 0 && t < cT && roll((int)t)) kept.push_back({(int)t, strengthAt(lane, cycle, (int)t), KIND_MAIN, 1.0f});
             }
-            mains = kept;
         } else {
-            const auto other = laneOnsets(rel, from, from + cT);
             std::vector<int> ticks;
-            for(const auto& o : other) if(o.tick >= from) ticks.push_back((int)(o.tick - from));
-            auto has = [&](int t) { return std::binary_search(ticks.begin(), ticks.end(), t); };
-            if(L.relMode == REL_FOLLOW || L.relMode == REL_AVOID) {
-                for(const auto& it : mains) {
-                    const bool coincide = has(it.tick);
-                    const bool drop = (L.relMode == REL_FOLLOW ? !coincide : coincide) && roll(it.tick, SALT_REL);
-                    if(!drop) kept.push_back(it);
-                }
-                mains = kept;
-            } else if(L.relMode == REL_UNISON) {
-                for(int t : ticks)
-                    if(roll(t, SALT_REL)) mains.push_back({t, strengthAt(lane, cycle, t), KIND_MAIN, 1.0f});
-            } else if(L.relMode == REL_COMPLEMENT) {
-                // Out of the other lane's hits, and into its silences (no
-                // gate sounding) on this lane's step
-                for(const auto& it : mains) if(!has(it.tick)) kept.push_back(it);
-                mains = kept;
-                const int step = L.generator == GEN_WEIGHTED ? 12 : std::max(1, L.division);
-                for(int p = 0; p < cT; p += step) {
-                    bool busy = false;
-                    for(const auto& o : other) {
-                        const int64_t at = o.tick - from;
-                        if(at <= p && p < at + o.dur) { busy = true; break; }
-                    }
-                    if(!busy && roll(p, SALT_FILL)) mains.push_back({p, strengthAt(lane, cycle, p), KIND_MAIN, 1.0f});
-                }
+            for(const auto& o : laneOnsets(rel, from, from + cT)) if(o.tick >= from) ticks.push_back((int)(o.tick - from));
+            for(const auto& it : mains) {
+                const bool coincide = std::binary_search(ticks.begin(), ticks.end(), it.tick);
+                const bool drop = (L.relMode == REL_FOLLOW ? !coincide : coincide) && roll(it.tick);
+                if(!drop) kept.push_back(it);
             }
         }
+        mains = kept;
         std::sort(mains.begin(), mains.end(), byTick);
         mains.erase(std::unique(mains.begin(), mains.end(), sameTick), mains.end());
     }
@@ -666,71 +673,64 @@ std::vector<Engine::Item> Engine::placeItems(int lane, int64_t cycle) const {
     // 4. Ornaments
     std::vector<Item> all = mains;
     for(size_t j = 0; j < mains.size(); j++) {
-        Item& it = all[j];
-        const int t = it.tick;
+        const int t = all[j].tick;
         const int prev = j > 0 ? mains[j - 1].tick : -1;
         const int next = j + 1 < mains.size() ? mains[j + 1].tick : cT;
         float ratchet = L.ratchet;
-        if(inFill(lane, cycle, t)) ratchet += L.fillIntensity * 0.5f * (1.0f - ratchet);
+        if(inFill(lane, cycle, t)) ratchet += L.fill * 0.5f * (1.0f - ratchet);
         if(ratchet > 0.0f && unit(hashOf(m.mat, (uint64_t)t, SALT_RATCHET)) < ratchet) {
-            const int n = std::max(2, L.ratchetCount);
-            auto factor = [&](int r) {
-                const float x = (float)r / (n - 1);
-                return L.ratchetShape == 1 ? 0.4f + 0.6f * x : L.ratchetShape == 2 ? 1.0f - 0.6f * x : 1.0f;
-            };
-            it.factor = factor(0);
-            for(int r = 1; r < n; r++) {
+            for(int r = 1; r < RATCHET_HITS; r++) {
                 const int rt = t + r * std::max(1, L.ratchetUnit);
                 if(rt >= next || rt >= cT) break;
-                all.push_back({rt, it.strength, KIND_RATCHET, factor(r)});
+                all.push_back({rt, all[j].strength, KIND_RATCHET, 1.0f});
             }
         }
         if(L.flam > 0.0f && unit(hashOf(m.mat, (uint64_t)t, SALT_FLAM)) < L.flam) {
-            const int ft = t - std::max(1, L.flamTicks);
-            if(ft > prev && ft >= 0) all.push_back({ft, it.strength, KIND_FLAM, 0.5f});
+            const int ft = t - FLAM_TICKS;
+            if(ft > prev && ft >= 0) all.push_back({ft, all[j].strength, KIND_FLAM, 0.5f});
         }
         if(L.ghost > 0.0f && unit(hashOf(m.mat, (uint64_t)t, SALT_GHOST)) < L.ghost) {
-            int side = L.ghostSide;
-            if(side == 2) side = unit(hashOf(m.mat, (uint64_t)t, SALT_GHOSTSIDE)) < 0.5f ? 0 : 1;
-            const int gt = side == 0 ? t - 12 : t + 12;
-            if(gt > prev && gt < next && gt >= 0 && gt < cT) all.push_back({gt, strengthAt(lane, cycle, gt), KIND_GHOST, 1.0f});
+            const int gt = t - SIXTEENTH;
+            if(gt > prev && gt >= 0) all.push_back({gt, strengthAt(lane, cycle, gt), KIND_GHOST, 1.0f});
         }
     }
     std::sort(all.begin(), all.end(), [](const Item& a, const Item& b) { return a.tick != b.tick ? a.tick < b.tick : a.kind < b.kind; });
     all.erase(std::unique(all.begin(), all.end(), sameTick), all.end());
 
-    // 5. Amplitudes
-    const int n = std::max(1, L.phraseLen);
-    const bool phraseStart = positiveMod64(cycle, n) == 0;
+    // 5. Amplitudes: the accent makes the unaccented hits up to 75% softer,
+    //    in the Soft .. Loud range
+    std::vector<int> accented;   // ACC_EUCLID: indices of the main hits
+    if(L.accentSource == ACC_EUCLID) {
+        int count = 0;
+        for(const auto& it : all) if(it.kind == KIND_MAIN) count++;
+        const int k = std::min(std::max(0, L.accentHits), count);
+        for(int i = 0; i < count; i++) if(k > 0 && ((int64_t)i * k) % count < k) accented.push_back(i);
+    }
+    const int fillLen = L.fillTicks();
+    int mainIndex = 0;
     for(auto& it : all) {
-        float amp = it.kind == KIND_GHOST ? L.ghostLevel * L.level : amplitudeOf(lane, m, it.tick, it.strength) * it.factor;
-        const float progress = phraseProgress(lane, cycle, it.tick);
-        amp *= 1.0f - L.swell * (1.0f - progress);
-        if(phraseStart && it.tick == 0 && it.kind == KIND_MAIN) amp += (L.level - amp) * L.phraseAccent;
+        if(it.kind == KIND_GHOST) { it.amp = GHOST_LEVEL * L.level; continue; }
+        float a = 1.0f;
+        switch(L.accentSource) {
+            case ACC_STRONG: a = 1.0f - L.accent * (1.0f - it.strength); break;
+            case ACC_RANDOM: a = 1.0f - 0.75f * L.accent * unit(hashOf(m.mat, (uint64_t)it.tick, SALT_AMP)); break;
+            case ACC_EUCLID: {
+                const bool on = it.kind == KIND_MAIN && std::find(accented.begin(), accented.end(), mainIndex) != accented.end();
+                a = on ? 1.0f : 1.0f - 0.75f * L.accent;
+                break;
+            }
+        }
+        if(it.kind == KIND_MAIN) mainIndex++;
+        float amp = (L.ampMin + (L.level - L.ampMin) * clampf(a, 0.0f, 1.0f)) * it.factor;
         if(inFill(lane, cycle, it.tick)) {
-            const float fp = (float)(it.tick - (cT - L.fillTicks)) / (float)std::max(1, L.fillTicks);
-            amp *= 1.0f - 0.4f * L.fillIntensity * (1.0f - fp);
+            const float fp = (float)(it.tick - (cT - fillLen)) / (float)std::max(1, fillLen);
+            amp *= 1.0f - 0.4f * L.fill * (1.0f - fp);
         }
         it.amp = amp;
     }
-    // Euclidean accents and long notes, spread over the cycle's hits
-    {
-        std::vector<Item*> hits;
-        for(auto& it : all) if(it.kind == KIND_MAIN) hits.push_back(&it);
-        const int count = (int)hits.size();
-        auto euclid = [&](int k, int i) { return k > 0 && count > 0 && ((int64_t)i * std::min(k, count)) % count < std::min(k, count); };
-        for(int i = 0; i < count; i++) {
-            const bool accent = euclid(L.accentHits, i);
-            if(L.accentHits > 0) {
-                if(accent) hits[i]->amp += (L.level - hits[i]->amp) * L.accentAmount;
-                else hits[i]->amp *= 1.0f - 0.5f * L.accentAmount;
-            }
-            hits[i]->longNote = L.accentsLong && L.accentHits > 0 ? accent : euclid(L.longHits, i);
-        }
-    }
     applyAmplitudeOps(lane, m, all);
-    // Duck / reinforce against a lane above
-    const int dyn = L.dynMode != DYN_NONE ? validLane(lane, L.dynLane) : -1;
+    // Duck / boost against a lane above
+    const int dyn = link(lane, LINK_DYN);
     if(dyn >= 0) {
         std::vector<int> ticks;
         for(const auto& o : laneOnsets(dyn, from, from + cT)) if(o.tick >= from) ticks.push_back((int)(o.tick - from));
@@ -740,21 +740,17 @@ std::vector<Engine::Item> Engine::placeItems(int lane, int64_t cycle) const {
     }
     for(auto& it : all) it.amp = clampf(it.amp, 0.001f, 1.0f);
 
-    // 6. Groove: swing / laid back / pushed, and humanize
-    if(L.groove != GROOVE_STRAIGHT || L.humanize > 0) {
+    // 6. Groove: swing and humanize
+    const float humanTicks = clampf(L.humanize, 0.0f, 1.0f) * (TPB / 8);
+    if(L.swing > 0.0f || humanTicks > 0.0f) {
+        const int pair = L.swingUnit == SWING_8THS ? TPB : TPB / 2;
+        const int off = (int)std::lround(pair * (0.5f + 0.25f * clampf(L.swing, 0.0f, 1.0f))) - pair / 2;
         for(auto& it : all) {
-            int off = 0;
             const int t = it.tick;
-            switch(L.groove) {
-                case GROOVE_SWING16: if(t % 24 == 12) off = (int)std::lround(24.0f * L.swing) - 12; break;
-                case GROOVE_SWING8:  if(t % 48 == 24) off = (int)std::lround(48.0f * L.swing) - 24; break;
-                case GROOVE_LAID_BACK: off = t % TPB == 0 ? 1 : 2; break;
-                case GROOVE_PUSHED: if(t % TPB != 0) off = -2; break;
-                default: break;
-            }
-            if(L.humanize > 0)
-                off += (int)std::lround((unit(hashOf(m.mat, (uint64_t)t, SALT_HUMAN)) * 2.0f - 1.0f) * L.humanize);
-            it.tick = std::clamp(t + off, 0, cT - 1);
+            int shift = t % pair == pair / 2 ? off : 0;
+            if(humanTicks > 0.0f)
+                shift += (int)std::lround((unit(hashOf(m.mat, (uint64_t)t, SALT_HUMAN)) * 2.0f - 1.0f) * humanTicks);
+            it.tick = std::clamp(t + shift, 0, cT - 1);
         }
         std::stable_sort(all.begin(), all.end(), [](const Item& a, const Item& b) { return a.tick != b.tick ? a.tick < b.tick : a.kind < b.kind; });
         all.erase(std::unique(all.begin(), all.end(), sameTick), all.end());
@@ -779,28 +775,21 @@ std::vector<Onset> Engine::realizeCycle(int lane, int64_t cycle) const {
     }
     // Choke: the next hit of the choking lane ends the gate
     std::vector<AbsOnset> choke;
-    const int chokeLane = validLane(lane, L.chokeLane);
+    const int chokeLane = link(lane, LINK_CHOKE);
     if(chokeLane >= 0 && !items.empty()) choke = laneOnsets(chokeLane, cycle * cT, cycle * cT + cT + 4 * TPB);
 
-    const Material m = material(lane, cycle);
     std::vector<Onset> out;
     out.reserve(items.size());
     for(size_t j = 0; j < items.size(); j++) {
         const Item& it = items[j];
         const int nextTick = j + 1 < items.size() ? items[j + 1].tick : cT + nextFirst;
         const int gap = std::max(1, nextTick - it.tick);
-        int dur = L.durTicks;
-        if(L.durMode == DUR_LEGATO) dur = (int)std::lround(L.legato * gap);
-        else if(L.durMode == DUR_METRIC) dur = (int)std::lround(L.durShort + (L.durLong - L.durShort) * it.strength);
-        if(it.longNote) dur = L.longTicks;
+        int dur = (int)std::lround(L.durTicks * (1.0f + 3.0f * L.longOnStrong * it.strength));
         if(it.tied) dur = gap;
         dur = (int)std::lround(dur * it.durScale);
         // The gate falls at least a tick before the next onset of its lane,
         // so a receiver always sees a fresh rising edge.
         dur = std::clamp(dur, 1, std::max(1, gap - 1));
-        // Barline: a gate crosses the cycle end only with that chance
-        if(it.tick + dur > cT && unit(hashOf(m.mat, (uint64_t)it.tick, SALT_CROSSDUR)) >= L.crossBarline)
-            dur = std::max(1, cT - it.tick);
         if(!choke.empty()) {
             const int64_t at = cycle * cT + it.tick;
             for(const auto& ch : choke)
@@ -823,11 +812,14 @@ std::vector<Onset> Engine::realizeCycle(int lane, int64_t cycle) const {
 // Evolution
 // ════════════════════════════════════════════════════════════════════════════
 
-// Before a genome change: remember the current genome for undo and for the
-// cycles until nowCycle (so the change lands on the next cycle, never in the
-// middle of one), and the current hits of the next cycles for the highlight.
+// Before a genome change: remember the current genome for the cycles until
+// nowCycle (so the change lands on the next cycle, never in the middle of
+// one), and the current hits of the next cycles for the highlight.
 void Engine::beginChange(int lane, int64_t nowCycle) {
     LaneState& st = state[lane];
+    // A change still waiting for its cycle: the cycles until then keep the
+    // genome they had before the first one
+    if(st.hasBefore && st.changeFrom == nowCycle + 1) return;
     st.before = layers[lane].genome();
     st.hasBefore = true;
     st.changeFrom = nowCycle + 1;
@@ -840,6 +832,14 @@ void Engine::beginChange(int lane, int64_t nowCycle) {
     }
 }
 
+void Engine::pushUndo(int lane, int64_t nowCycle) {
+    LaneState& st = state[lane];
+    st.undo.push_back(layers[lane].genome());
+    if(st.undo.size() > 64) st.undo.erase(st.undo.begin());
+    st.redo.clear();
+    beginChange(lane, nowCycle);
+}
+
 void Engine::setGenome(int lane, const Genome& g) {
     layers[lane].seed = g.seed;
     layers[lane].ops = g.ops;
@@ -847,21 +847,14 @@ void Engine::setGenome(int lane, const Genome& g) {
 }
 
 void Engine::mutate(int lane, int64_t nowCycle, uint32_t randomSeed) {
-    Layer& L = layers[lane];
-    if(L.keep) return;
-    LaneState& st = state[lane];
-    st.undo.push_back(L.genome());
-    if(st.undo.size() > 64) st.undo.erase(st.undo.begin());
-    st.redo.clear();
-    beginChange(lane, nowCycle);
-    Genome g = L.genome();
+    if(!canMutate(lane)) return;
+    pushUndo(lane, nowCycle);
+    Genome g = layers[lane].genome();
     Stream s{hashOf(randomSeed, (uint64_t)g.ops.size(), (uint64_t)lane, SALT_OPS)};
-    for(int i = 0; i < std::max(1, L.mutations); i++) {
-        Op op;
-        op.type = s.pick(OP_RANDOM_COUNT);
-        op.seed = (uint32_t)(s.next() * 4294967295.0f) ^ (uint32_t)i;
-        g.ops.push_back(op);
-    }
+    Op op;
+    op.type = s.pick(OP_COUNT);
+    op.seed = (uint32_t)(s.next() * 4294967295.0f);
+    g.ops.push_back(op);
     // Only the latest mutations stay: an evolving loop slowly forgets its
     // oldest changes instead of piling them up
     if((int)g.ops.size() > MAX_OPS) g.ops.erase(g.ops.begin(), g.ops.end() - MAX_OPS);
@@ -869,13 +862,8 @@ void Engine::mutate(int lane, int64_t nowCycle, uint32_t randomSeed) {
 }
 
 void Engine::reroll(int lane, int64_t nowCycle, int newSeed) {
-    Layer& L = layers[lane];
-    if(L.keep) return;
-    LaneState& st = state[lane];
-    st.undo.push_back(L.genome());
-    if(st.undo.size() > 64) st.undo.erase(st.undo.begin());
-    st.redo.clear();
-    beginChange(lane, nowCycle);
+    if(!canMutate(lane)) return;
+    pushUndo(lane, nowCycle);
     setGenome(lane, {newSeed, {}});
 }
 
@@ -901,51 +889,6 @@ bool Engine::redo(int lane, int64_t nowCycle) {
     return true;
 }
 
-void Engine::like(int lane) {
-    Layer& L = layers[lane];
-    const Genome g = L.genome();
-    for(const auto& l : L.liked) if(l == g) return;
-    L.liked.push_back(g);
-    if(L.liked.size() > 16) L.liked.erase(L.liked.begin());
-}
-
-// A new genome from two liked ones: A's seed and operators, then B's second
-// half (a splice from B's seed) and B's operators.
-void Engine::crossover(int lane, int a, int b, int64_t nowCycle) {
-    Layer& L = layers[lane];
-    if(L.keep || a < 0 || b < 0 || a >= (int)L.liked.size() || b >= (int)L.liked.size()) return;
-    const Genome A = L.liked[a], B = L.liked[b];
-    Genome child = A;
-    Op splice;
-    splice.type = OP_SPLICE;
-    splice.seed = (uint32_t)hashOf((uint64_t)A.seed, (uint64_t)B.seed, A.ops.size(), B.ops.size());
-    splice.aux = (uint32_t)B.seed;
-    child.ops.push_back(splice);
-    child.ops.insert(child.ops.end(), B.ops.begin(), B.ops.end());
-    LaneState& st = state[lane];
-    st.undo.push_back(L.genome());
-    st.redo.clear();
-    beginChange(lane, nowCycle);
-    setGenome(lane, child);
-}
-
-void Engine::setKeep(int lane, bool on, int64_t nowCycle) {
-    Layer& L = layers[lane];
-    // Freeze the material of the phrase playing now (unless a loop already did)
-    if(on && !frozen(lane)) L.keepPhrase = materialPhrase(lane, nowCycle, material(lane, nowCycle).key);
-    L.keep = on;
-    changed(lane);
-}
-
-void Engine::setRepeat(int lane, int mode, int64_t nowCycle) {
-    Layer& L = layers[lane];
-    mode = std::clamp(mode, (int)REPEAT_OFF, (int)REPEAT_EVOLVE);
-    if(mode != REPEAT_OFF && !frozen(lane)) L.keepPhrase = materialPhrase(lane, nowCycle, material(lane, nowCycle).key);
-    L.repeat = mode;
-    if(mode == REPEAT_EVOLVE) L.autoEvery = std::max(1, L.autoEvery);
-    changed(lane);
-}
-
 std::vector<int> Engine::changedTicks(int lane, int64_t cycle) const {
     const LaneState& st = state[lane];
     auto it = st.oldTicks.find(cycle);
@@ -959,23 +902,6 @@ std::vector<int> Engine::changedTicks(int lane, int64_t cycle) const {
 void Engine::forgetHighlightsBefore(int lane, int64_t cycle) {
     auto& old = state[lane].oldTicks;
     for(auto it = old.begin(); it != old.end();) it = it->first < cycle ? old.erase(it) : std::next(it);
-}
-
-std::string Engine::captureExamples(int sourceLane, int64_t fromCycle, int cycles) const {
-    std::string out;
-    const int cT = layers[sourceLane].cycleTicks();
-    const int steps = cT / 12;
-    for(int64_t c = fromCycle; c < fromCycle + cycles; c++) {
-        std::string word(steps, '.');
-        for(const auto& o : realizeCycle(sourceLane, c)) {
-            if(o.kind != KIND_MAIN) continue;
-            const int i = (int)std::lround(o.tick / 12.0);
-            if(i >= 0 && i < steps) word[i] = 'x';
-        }
-        if(!out.empty()) out += ' ';
-        out += word;
-    }
-    return out;
 }
 
 } // namespace metrobox

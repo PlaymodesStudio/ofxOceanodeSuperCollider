@@ -26,6 +26,11 @@ class ofxSCBus;
 
 class scPolyMixer: public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return "SC PolyMixer " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showMixerWindow; }
+private:
+public:
 	scPolyMixer();
 	~scPolyMixer();
 	

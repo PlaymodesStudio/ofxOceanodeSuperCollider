@@ -3,7 +3,10 @@
 //  ofxOceanodeSuperCollider
 //
 //  EuclideanBox: up to 8 euclidean tracks locked to the global transport,
-//  each with Trig, Gate (x the hit's level) and Pitch outputs, Voices channels wide.
+//  each with Trig, Gate (x the hit's level) and Pitch outputs, Voices channels
+//  wide, plus Gates: every track's gate, one channel each (track n = channel
+//  n, for a SampleBox kit's pads). Drag a track (its tab or its timeline
+//  label) onto another to move it there.
 //
 //  • A track spreads Hits over Steps as evenly as possible (E(k, n)), turned
 //    by Rotate, one step = Step (1 bar .. 1/32). Swing delays every second
@@ -26,8 +29,11 @@
 //    and Steps from the ranges set, with a Chance per period (else the base
 //    values play). Seeded (node Seed + track Seed + the period's index): the
 //    same position always plays the same, a seek or a loop replays it, the
-//    window shows exactly what will play. Restart: the pattern starts again at
-//    every period (else it runs on, polymetric against the bars).
+//    window shows exactly what will play. Seed 0 (the node's or the track's):
+//    no seed, every pass through a period draws again (a loop plays something
+//    new each time; the window still shows what is coming). Restart: the
+//    pattern starts again at every period (else it runs on, polymetric
+//    against the bars).
 //  • Synth: EuclideanBoxPlayer<Voices> (synthdefs/Defaults/EuclideanBox), the
 //    MetroBox clock: the node writes the onsets (amplitude, duration, pitch,
 //    voice per tick, 48 ticks per beat) of the chunks around the playhead into
@@ -68,6 +74,11 @@
 
 class scEuclideanBox : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "EuclideanBox " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_TRACKS = 8;          // the player's tracks
     static constexpr int MAX_VOICES = 16;
     static constexpr int MAX_STEPS = 64;
@@ -76,6 +87,7 @@ public:
     static constexpr int MAX_CHUNK_TICKS = metrobox::MAX_CYCLE_TICKS;   // the player's buffer layout
     static constexpr int CHUNK = 8 * TPB;          // ticks per written chunk (any rhythm length)
     static constexpr int OUTPUTS_PER_TRACK = 3;    // Trig, Gate (x the hit's level), Pitch
+    static constexpr int NUM_OUTPUTS = 1 + MAX_TRACKS * OUTPUTS_PER_TRACK;   // port 0: Gates
     static constexpr int64_t NO_CHUNK = INT64_MIN;
     static constexpr int BUF_CH = 4;               // per tick: amplitude, duration, pitch, voice
 
@@ -97,9 +109,11 @@ public:
     void setup() override {
         description = "Euclidean sequencer locked to the transport: up to 8 tracks of hits spread over steps, "
                       "with euclidean accents and long notes, swing, chance and a pitch progression over a scale. "
-                      "Seeded randomization every N cycles / bars / beats. Each track has Trig, Gate and Pitch "
-                      "outputs (Gate carries the hit's level), Voices channels wide (round robin or all voices). Show opens the rings, the "
-                      "timeline and every control; right-click a control there to type a value or publish it here.";
+                      "Seeded randomization every N cycles / bars / beats (Seed 0: unseeded, new every pass). Each track has "
+                      "Trig, Gate and Pitch outputs (Gate carries the hit's level), Voices channels wide (round robin or all "
+                      "voices); Gates carries every track (track n = channel n: wire it to a SampleBox kit). Show opens the "
+                      "rings, the timeline and every control; drag a track's tab to reorder; right-click a control there to "
+                      "type a value or publish it here.";
         addParameter(showWindow.set("Show", false));
         addParameter(numTracks.set("Tracks", 2, 1, MAX_TRACKS));
         addParameter(globalSeed.set("Seed", 1, 0, 99999));
@@ -217,6 +231,7 @@ public:
         const double b = beatsPerBar();
         if(std::abs(b - bpb) > 1e-9){ bpb = b; invalidate(-1); }
         if(voicesDirty){ voicesDirty = false; replaceSynths(); }
+        advancePasses();
         fillBuffers();
         sendTransportAnchors();
         updateNotes();
@@ -267,7 +282,7 @@ public:
         it->second.outputBuses.clear();
     }
     void setOutputBus(ofxSCServer* server, int index, int bus) override {
-        if(!server || index < 0 || index >= MAX_TRACKS * OUTPUTS_PER_TRACK) return;
+        if(!server || index < 0 || index >= NUM_OUTPUTS) return;
         ServerState& st = servers[server];
         st.outputBuses[index] = bus;
         if(st.synth) st.synth->set(busName(index), bus);
@@ -282,6 +297,11 @@ public:
         auto it = servers.find(server);
         return it != servers.end() && it->second.synth ? it->second.synth->nodeID : -1;
     }
+    // Gates: channel n is track n
+    std::string getOutputChannelName(int outputIndex, int channel) override {
+        if(outputIndex != 0 || channel < 0 || channel >= numTracks.get()) return "";
+        return "Track " + ofToString(channel + 1);
+    }
     void setInputBus(ofxSCServer*, scNode*, int) override {}
     void resetInputBusses(ofxSCServer*, int) override {}
     void activate() override {
@@ -290,7 +310,9 @@ public:
         follower.requestAnchor();
     }
     void deactivate() override { for(auto& [server, st] : servers) if(st.synth) st.synth->run(false); }
-    void resendParametersForNRT() override { resendParams.notify(); }
+    // The recorder writes the patch's state at score time zero: the onset
+    // buffer too (written while it was arming, it never reached the score)
+    void resendParametersForNRT() override { resendParams.notify(); invalidate(-1); fillBuffers(); }
 
     // ════════════════════════════════════════════════════════════════════════
     // Presets
@@ -398,7 +420,7 @@ private:
         p.longHits = T.longHits.get();
         p.longRotate = T.longRotate.get();
         if(T.anyRandom()){
-            const uint64_t key = metrobox::hashOf((uint64_t)(uint32_t)globalSeed.get(), (uint64_t)(uint32_t)T.seed.get(), (uint64_t)ti + 1);
+            const uint64_t key = periodKey(ti, period);
             auto h = [&](uint64_t salt){ return metrobox::hashOf(key, (uint64_t)period, salt, 0xE0C11Du); };
             if(metrobox::unit(h(1)) < T.rndChance.get()){
                 p.randomized = true;
@@ -416,6 +438,31 @@ private:
         p.longHits = std::clamp(p.longHits, 0, std::max(1, T.longLen.get()));
         return p;
     }
+    // The random key of a track's period. Seeded: node Seed x track Seed (not
+    // the track's position, so a moved track plays the same). Seed 0 (either):
+    // a key per pass, so the period draws again each time it comes back.
+    bool unseeded(int ti) const { return globalSeed.get() == 0 || tracks[ti].seed.get() == 0; }
+    uint64_t periodKey(int ti, int64_t period) const {
+        if(!unseeded(ti)) return metrobox::hashOf((uint64_t)(uint32_t)globalSeed.get(), (uint64_t)(uint32_t)tracks[ti].seed.get(), 0xEB0Bu);
+        const auto it = passes[ti].find(period);
+        return metrobox::hashOf(sessionSalt, (uint64_t)period, it == passes[ti].end() ? 0 : (uint64_t)it->second, 0xF5EEu);
+    }
+    // Unseeded: a period the playhead left gets a new pass (its next draw is
+    // new); the chunks are rewritten so the next time round plays it
+    void advancePasses(){
+        const int64_t now = metrobox::tickAt(getFrameTransportState().current.beatPosition);
+        for(int ti = 0; ti < numTracks.get(); ti++){
+            const int64_t period = metrobox::floorDiv(now, periodTicks(ti));
+            if(!unseeded(ti)){ lastPeriod[ti] = period; continue; }
+            if(lastPeriod[ti] != NO_CHUNK && period != lastPeriod[ti]){
+                passes[ti][lastPeriod[ti]]++;
+                if(passes[ti].size() > 4096) passes[ti].clear();
+                invalidate(ti);
+            }
+            lastPeriod[ti] = period;
+        }
+    }
+
     // E(k, n): hit at i when (i * k) mod n < k (the first on step 0)
     static bool euclid(int64_t i, int k, int n){ return n > 0 && k > 0 && (metrobox::positiveMod64(i, n) * k) % n < k; }
     // a step of the pattern (after Rotate) is a hit?
@@ -501,8 +548,7 @@ private:
             const bool acc = euclid(accIdx - p.accRotate, p.accents, T.accLen.get());
             const bool lng = euclid(longIdx - p.longRotate, p.longHits, T.longLen.get());
             if(T.chance.get() < 1.0f){
-                const uint64_t h = metrobox::hashOf((uint64_t)(uint32_t)globalSeed.get(), (uint64_t)(uint32_t)T.seed.get(),
-                                                    (uint64_t)s, 0xC4A2CEu + ti);
+                const uint64_t h = metrobox::hashOf(periodKey(ti, info.period), (uint64_t)s, 0xC4A2CEu);
                 if(metrobox::unit(h) >= T.chance.get()) continue;
             }
             Onset o;
@@ -661,10 +707,12 @@ private:
 
     static std::string busName(int index){
         static const char* kinds[] = {"trigout", "gateout", "pitchout"};
-        return std::string(kinds[index % OUTPUTS_PER_TRACK]) + ofToString(index / OUTPUTS_PER_TRACK + 1);
+        if(index == 0) return "gatesout";
+        return std::string(kinds[(index - 1) % OUTPUTS_PER_TRACK]) + ofToString((index - 1) / OUTPUTS_PER_TRACK + 1);
     }
     void syncOutputPorts(){
         const int n = std::clamp(numTracks.get(), 1, MAX_TRACKS);
+        if(getNumOutputs() == 0) scNode::addOutput("Gates");
         while(portTracks < n){
             const std::string t = ofToString(portTracks + 1);
             scNode::addOutput("Trig " + t);
@@ -674,7 +722,7 @@ private:
             portTracks++;
         }
         while(portTracks > n){
-            const int first = (portTracks - 1) * OUTPUTS_PER_TRACK;
+            const int first = 1 + (portTracks - 1) * OUTPUTS_PER_TRACK;
             removeParameter(notes[portTracks - 1].getEscapedName());
             for(int k = OUTPUTS_PER_TRACK - 1; k >= 0; k--) scNode::removeOutput(first + k);
             // the removed ports' buses may go to another node: forgotten (the synth silences the track)
@@ -776,7 +824,7 @@ private:
         for(int i = 0; i < MAX_TRACKS; i++) mutes[i] = tracks[i].mute ? 1.0f : 0.0f;
         st.synth->set("mute", mutes);
         for(auto& [index, bus] : st.outputBuses)
-            if(index >= 0 && index < MAX_TRACKS * OUTPUTS_PER_TRACK) st.synth->set(busName(index), bus);
+            if(index >= 0 && index < NUM_OUTPUTS) st.synth->set(busName(index), bus);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -858,7 +906,7 @@ private:
     }
 
     void drawWindow(){
-        const std::string title = (canvasID == "Canvas" ? "" : canvasID + "/") + "EuclideanBox " + ofToString(getNumIdentifier());
+        const std::string title = getWindowTitle();
         bool open = showWindow.get();
         ImGui::SetNextWindowSize(ImVec2(1160.0f, 820.0f), ImGuiCond_FirstUseEver);
         if(ImGui::Begin(title.c_str(), &open)){
@@ -873,6 +921,7 @@ private:
             int seed = globalSeed.get();
             ImGui::SetNextItemWidth(130);
             if(ImGui::InputInt("Seed##ebSeed", &seed)) globalSeed = std::clamp(seed, 0, 99999);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Every track's random choices (Randomize, Chance).\n0 = no seed: new choices every pass (a loop never repeats exactly)");
             ImGui::SameLine();
             bool ta = trigAmp.get();
             if(ImGui::Checkbox("Trig Amp", &ta)) trigAmp = ta;
@@ -912,16 +961,71 @@ private:
             if(ImGui::BeginTabBar("##ebTabs")){
                 for(int ti = 0; ti < numTracks.get(); ti++){
                     ImGui::PushStyleColor(ImGuiCol_Text, trackColor(ti));
-                    const bool openTab = ImGui::BeginTabItem(("Track " + ofToString(ti + 1)).c_str());
+                    const bool openTab = ImGui::BeginTabItem(("Track " + ofToString(ti + 1) + "###ebTab" + ofToString(ti)).c_str(), nullptr,
+                                                             pendingSelect == ti ? ImGuiTabItemFlags_SetSelected : 0);
                     ImGui::PopStyleColor();
+                    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::GetDragDropPayload())
+                        ImGui::SetTooltip("Drag onto another track's tab to move it there (its outputs and its Gates channel move with it)");
+                    trackDragSource(ti);
+                    trackDropTarget(ti);
                     if(openTab){ selectedTrack = ti; drawTrackEditor(ti); ImGui::EndTabItem(); }
                 }
                 ImGui::EndTabBar();
             }
+            pendingSelect = -1;
             ImGui::PopID();
         }
         ImGui::End();
         if(open != showWindow.get()) showWindow = open;
+        if(pendingMoveFrom >= 0){
+            moveTrack(pendingMoveFrom, pendingMoveTo);
+            pendingMoveFrom = pendingMoveTo = -1;
+        }
+    }
+
+    // ── Moving tracks: every setting of the track goes to the new position
+    //    (published controls stay with their position: "T2 Hits" is track 2's) ──
+    struct TrackDrag { const void* node; int track; };
+    void trackDragSource(int ti){
+        if(!ImGui::BeginDragDropSource()) return;
+        const TrackDrag d{this, ti};
+        ImGui::SetDragDropPayload("EuclideanBoxTrack", &d, sizeof(d));
+        ImGui::Text("Move track %d", ti + 1);
+        ImGui::EndDragDropSource();
+    }
+    void trackDropTarget(int ti){
+        if(!ImGui::BeginDragDropTarget()) return;
+        if(const ImGuiPayload* p = ImGui::AcceptDragDropPayload("EuclideanBoxTrack")){
+            const TrackDrag d = *(const TrackDrag*)p->Data;
+            if(d.node == this && d.track != ti){ pendingMoveFrom = d.track; pendingMoveTo = ti; }
+        }
+        ImGui::EndDragDropTarget();
+    }
+    void moveTrack(int from, int to){
+        const int n = numTracks.get();
+        if(from < 0 || to < 0 || from >= n || to >= n || from == to) return;
+        // each track's values, in registration order (the same for every track)
+        std::array<std::vector<ofJson>, MAX_TRACKS> values;
+        for(const auto& c : controls) if(c.track >= 0 && c.track < MAX_TRACKS) values[c.track].push_back(c.save());
+        auto move = [&](auto& a){
+            auto v = a[from];
+            if(from < to) for(int i = from; i < to; i++) a[i] = a[i + 1];
+            else for(int i = from; i > to; i--) a[i] = a[i - 1];
+            a[to] = v;
+        };
+        move(values);
+        move(passes);
+        move(lastPeriod);
+        std::array<std::vector<float>, MAX_TRACKS> noteValues;
+        for(int i = 0; i < MAX_TRACKS; i++) noteValues[i] = notes[i].get();
+        move(noteValues);
+        std::array<size_t, MAX_TRACKS> next{};
+        for(const auto& c : controls)
+            if(c.track >= 0 && c.track < MAX_TRACKS && next[c.track] < values[c.track].size()) c.load(values[c.track][next[c.track]++]);
+        for(int i = 0; i < MAX_TRACKS; i++) if(notes[i].get() != noteValues[i]) notes[i] = noteValues[i];
+        invalidate(-1);
+        for(auto& [server, st] : servers) sendStaticControls(st);
+        if(selectedTrack == from) { selectedTrack = to; pendingSelect = to; }
     }
 
     // Concentric rings, track 1 outside: each track's pattern at the playhead
@@ -988,7 +1092,7 @@ private:
             ImGui::SetTooltip("Track %d: %d hits / %d steps, rotate %d; accents E(%d, %d) rotate %d; long E(%d, %d)%s\nClick: edit it",
                               hovered + 1, p.hits, p.steps, p.rotate, p.accents, tracks[hovered].accLen.get(), p.accRotate,
                               p.longHits, tracks[hovered].longLen.get(), p.randomized ? "  (randomized)" : "");
-            if(ImGui::IsItemClicked()) selectedTrack = hovered;
+            if(ImGui::IsItemClicked()){ selectedTrack = hovered; pendingSelect = hovered; }
         }
     }
 
@@ -1002,7 +1106,9 @@ private:
         const float rowH = std::max(24.0f, (height - rulerH) / std::max(1, n));
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##ebTimeline", ImVec2(std::max(50.0f, width), height));
+        // the rhythm area (the labels are their own buttons, below)
+        ImGui::SetCursorScreenPos(ImVec2(origin.x + labelW, origin.y));
+        ImGui::InvisibleButton("##ebTimeline", ImVec2(std::max(50.0f, width - labelW), height));
         const float x0 = origin.x + labelW, w = std::max(50.0f, width - labelW);
         const float yRows = origin.y + rulerH, yEnd = yRows + n * rowH;
         auto X = [&](double beat){ return x0 + (float)((beat - viewStart) / viewBeats) * w; };
@@ -1061,9 +1167,24 @@ private:
             if(rowH >= 34)
                 dl->AddText(ImVec2(origin.x + 14, y0 + 19), textDim,
                             (std::string(divisions()[std::clamp(T.division.get(), 0, 7)].label) + (T.mute ? "  muted" : "")).c_str());
-            const ImVec2 m = ImGui::GetIO().MousePos;
-            if(ImGui::IsItemClicked() && m.x < x0 && m.y >= y0 && m.y < y0 + rowH) selectedTrack = ti;
         }
+        // the labels: a click selects the track, a drag moves it
+        const ImVec2 back = ImGui::GetCursorScreenPos();
+        for(int ti = 0; ti < n; ti++){
+            const float y0 = yRows + ti * rowH;
+            ImGui::SetCursorScreenPos(ImVec2(origin.x, y0));
+            ImGui::PushID(ti);
+            if(ImGui::InvisibleButton("##ebLabel", ImVec2(labelW - 4, rowH - 2)) && ImGui::GetIO().MouseDragMaxDistanceSqr[0] < 36.0f){
+                selectedTrack = ti;
+                pendingSelect = ti;
+            }
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::GetDragDropPayload())
+                ImGui::SetTooltip("Click: edit this track\nDrag onto another track: move it there");
+            trackDragSource(ti);
+            trackDropTarget(ti);
+            ImGui::PopID();
+        }
+        ImGui::SetCursorScreenPos(back);
     }
 
     // ── A track's controls: columns ─────────────────────────────────────────
@@ -1201,6 +1322,7 @@ private:
             int sd = T.seed.get();
             ImGui::SetNextItemWidth(cw - 60);
             if(ImGui::InputInt(("Seed##" + T.seed.getEscapedName()).c_str(), &sd, 1, 10)) T.seed = std::clamp(sd, 0, 9999);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("This track's random choices (Randomize, Chance): the same seed always plays the same.\n0 = no seed: new choices every pass");
             controlMenu(T.seed.getEscapedName());
             ImGui::SameLine();
             if(ImGui::SmallButton("Dice")){
@@ -1208,6 +1330,7 @@ private:
                 T.seed = (int)(rng() % 10000);
             }
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("A new seed: other random draws (the same seed always plays the same)");
+            if(unseeded(ti)) ImGui::TextDisabled("Unseeded: new draws every pass");
             // when the next draw lands
             const auto t = getFrameTransportState().current;
             if(T.anyRandom()){
@@ -1238,6 +1361,12 @@ private:
     double bpb = 4.0;
     int portTracks = 0;
     int selectedTrack = 0;
+    int pendingSelect = -1;                      // a tab to bring to the front (after a click or a move)
+    int pendingMoveFrom = -1, pendingMoveTo = -1;
+    // Unseeded tracks: how many times the playhead has left each period
+    std::array<std::map<int64_t, int>, MAX_TRACKS> passes;
+    std::array<int64_t, MAX_TRACKS> lastPeriod = [](){ std::array<int64_t, MAX_TRACKS> a; a.fill(NO_CHUNK); return a; }();
+    const uint64_t sessionSalt = ((uint64_t)std::random_device{}() << 32) ^ std::random_device{}();
     int viewBars = 2;
 
     scTransportSync::Follower follower;

@@ -245,6 +245,11 @@ inline ImU32 layerColor(int g, float alpha = 1.0f){
 
 class scPulsarBox : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "PulsarBox " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_VOICES = 8;     // PulsarBox_<v>_<o>: v = 1..8
     static constexpr int MAX_OUTPUTS = 16;   //                    o = 1..16
     static constexpr int LAYERS = 4;
@@ -1211,7 +1216,7 @@ private:
     // ════════════════════════════════════════════════════════════════════════
 
     void drawWindow(){
-        const std::string title = (canvasID == "Canvas" ? "" : canvasID + "/") + "PulsarBox " + ofToString(getNumIdentifier());
+        const std::string title = getWindowTitle();
         bool open = showWindow.get();
         ImGui::SetNextWindowSize(ImVec2(1180.0f, 860.0f), ImGuiCond_FirstUseEver);
         if(ImGui::Begin(title.c_str(), &open)){

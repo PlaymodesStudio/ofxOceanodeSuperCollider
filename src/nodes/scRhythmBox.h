@@ -37,6 +37,11 @@
 
 class scRhythmBox : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return "Step Sequencer " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     enum class TrackType : int { Sample, Slice, Kick, Noise, Snare, Click };
     // ── Constants ─────────────────────────────────────────────────────────────
     static constexpr int   MAX_TRACKS  = 8;

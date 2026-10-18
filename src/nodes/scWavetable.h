@@ -50,6 +50,11 @@ class serverManager;
 
 class scWavetable : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "Wavetable " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_CHANNELS = 16;      // WavetableOsc<n> exists for n = 1..16
     static constexpr int CYCLE = 2048;           // samples per cycle in the buffer
     static constexpr int MAX_FRAMES = 512;

@@ -47,6 +47,11 @@
 
 class scAnalogBox : public scNode {
 public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return "AnalogBox " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
     static constexpr int MAX_VOICES = 16;
     static constexpr int MAX_OSCS = 6;
     static constexpr int MAX_FILTERS = 4;
