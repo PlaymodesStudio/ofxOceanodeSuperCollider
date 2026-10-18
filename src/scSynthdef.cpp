@@ -615,8 +615,7 @@ void scSynthdef::free(ofxSCServer* server){
 }
 
 void scSynthdef::freeAll(){
-    for(auto &synth : synths) synth.second->free();
-    synths.clear();
+    while(!synths.empty()) free(synths.begin()->first);
     sendCacheEpoch++;
 }
 

@@ -59,6 +59,7 @@ public:
     void deactivate() override;
     
     void buildSynth(ofxSCServer* server) override;
+    std::string requiredSynthdefFolder() const override { return ofFilePath::getEnclosingDirectory(synthDescription.filepath,false); }
     void createSynth(ofxSCServer* server) override;
     void moveSynthBefore(ofxSCServer* server, int nodeID) override;
     void free(ofxSCServer* server) override;

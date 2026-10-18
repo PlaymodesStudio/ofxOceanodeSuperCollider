@@ -22,6 +22,9 @@ scOutput::scOutput(vector<serverManager*> _outputServers) : scNode("Output"){
 scOutput::~scOutput(){
     if(serverIndex != -1)
     outputServers[serverIndex]->removeOutput(this);
+    // A container clear deliberately suppresses graph traversal. In that path
+    // recomputeGraph cannot free this Output before its pointer disappears.
+    if(synth) { synth->free(); delete synth; synth=nullptr; }
 }
 
 void scOutput::setup(){
