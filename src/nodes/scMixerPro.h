@@ -230,6 +230,7 @@ private:
         float sentMute = -1.0f;
         int   sentScBus = -2;                // -2: nothing sent yet
         float sentScKey = -1.0f;
+        float sentScGain = -1.0f;
         int   scMode = 0;                    // 0 off, 1 same server, 2 via Oceanode
         std::array<float, 2> key{0.0f, 0.0f}; // held pre/post keys for other servers
         int   keyNeededMask = 0;             // cross-server taps: bit 0 pre, bit 1 post

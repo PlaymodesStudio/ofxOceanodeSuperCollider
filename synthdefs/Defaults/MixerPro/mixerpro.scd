@@ -7,6 +7,7 @@
 // Sidechain. Every track writes, after its numChannels VU channels on vuBus:
 //   vuBus+N     pre key: after balance, before fader and mute (ghost trigger)
 //   vuBus+N+1   post key: follows fader, mute and solo, before its own ducking
+//               (the ducked strip scales it by \scGain: the source's submaster)
 //   vuBus+N+2/3  those keys with a 50 ms hold for cross-server relay
 // Each ducked strip selects Pre or Post. It reads from scBus (same server:
 // one block of latency at most) or from scKey (source on another server: the
@@ -124,7 +125,9 @@ channelCounts.do({|numChannels|
 
         // --- SIDECHAIN DUCKING (this track as a target) ---
         scBus = \scBus.kr(-1);
-        scEnv = Select.kr(scBus >= 0, [\scKey.kr(0), In.kr(scBus.max(0), 1)]);
+        // \scGain: what the source goes through after its strip (Post: its
+        // submaster's mute / solo and fader; Pre: 1)
+        scEnv = Select.kr(scBus >= 0, [\scKey.kr(0), In.kr(scBus.max(0), 1)]) * \scGain.kr(1);
         scEnv = Select.kr(CheckBadValues.kr(scEnv, 0, 0) > 0, [scEnv, 0]);
         scEnv = LagUD.kr((scEnv / \scThresh.kr(0.125).max(0.0001)).clip(0, 1), \scAttack.kr(10) * 0.001, \scRelease.kr(200) * 0.001);
         duck = 1 - (\scStrength.kr(0).clip(0, 1) * scEnv);

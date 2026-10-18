@@ -1987,6 +1987,7 @@ void scMixerPro::sendAll(Track& tr) {
     tr.synth->set("scKey", 0.0f);
     tr.sentScBus = -1;
     tr.sentScKey = 0.0f;
+    tr.sentScGain = -1.0f;   // update() sends it
 }
 
 void scMixerPro::sendSidechainShape(Track& tr) {
@@ -2020,6 +2021,17 @@ void scMixerPro::routeSidechains() {
         if(tr.synth && bus != tr.sentScBus) {
             tr.synth->set("scBus", bus);
             tr.sentScBus = bus;
+        }
+        // Post: the source as heard -- through its submaster too (muted or
+        // silenced by solo: no ducking; its fader scales the key)
+        float gain = 1.0f;
+        if(src && tr.scKeyTap.get() == 1 && routedToBus(*src)){
+            const Track* b = busFor(*src);
+            gain = isSilenced(*b) ? 0.0f : ofClamp(b->level.get(), 0.0f, kTrackMaxGain);
+        }
+        if(tr.synth && std::abs(gain - tr.sentScGain) > 1e-4f){
+            tr.synth->set("scGain", gain);
+            tr.sentScGain = gain;
         }
     }
 }
