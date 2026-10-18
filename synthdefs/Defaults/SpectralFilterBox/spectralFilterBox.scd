@@ -8,6 +8,8 @@
 // compile these and in the server's plugins to run them.
 //
 //   SpectralFilterBox_<fft>_<n>   fft = 2048 or 4096, n = channels (1..16)
+//   SpectralFilterBoxBP_<k>_<n>   the Bandpass mode: no latency. k = 64 or
+//                                 128 bands, n = channels (1..16)
 //
 // Controls:
 //   in out                 buses
@@ -56,5 +58,42 @@ fftSizes.do { |fft|
         }).writeDefFile(d +/+ "SpectralFilterBox");
     };
 };
-"SpectralFilterBox: % SynthDefs written to %".format(fftSizes.size * maxChannels, d +/+ "SpectralFilterBox").postln;
+
+// ── Bandpass mode: k fixed bands, 10 Hz .. 20 kHz on a log axis, each two
+// 2-pole bandpasses in series (4th order: -18 dB two bands away), alternate
+// bands inverted so neighbours sum flat. The Q comes from the bands' spacing
+// on the bilinear (warped) axis, so the top octave stays as flat as the rest:
+// all 1s give unity within about 1.5 dB from 25 Hz to 19 kHz, at 44.1, 48
+// or 96 kHz. The node reads its mask at each band's frequency (as the FFT
+// mode at each bin) and sends the gains, channel after channel:
+//   gains[n * k]   (smoothed over 1/30 s; attack / release / hold by the node)
+// The dry signal is not delayed (nothing to line up with).
+[64, 128].do { |k|
+    (1..maxChannels).do { |n|
+        SynthDef(("SpectralFilterBoxBP_" ++ k ++ "_" ++ n).asSymbol, {
+            var lag = { |name, default| NamedControl.kr(name, default, 1/30, fixedLag: true) };
+            var gains = lag.(\gains, 1 ! (n * k));
+            var gain = lag.(\gain, 1), mix = lag.(\mix, 1);
+            var sig = In.ar(\in.kr(0), n);
+            var sr = SampleRate.ir, ratio = 2000 ** (1 / k);
+            var coefs = k.collect { |b|
+                var f = (10 * (2000 ** ((b + 0.5) / k))).min(sr * 0.49);
+                var lr = tan(pi * (f * ratio.sqrt).min(sr * 0.499) / sr) / tan(pi * f / ratio.sqrt / sr);
+                var w0 = 2pi * f / sr;
+                var al = sin(w0) * 1.5 * (lr.sqrt - lr.sqrt.reciprocal) / 2;
+                var a0 = al / (1 + al);
+                [a0, 0, a0.neg, 2 * cos(w0) / (1 + al), (1 - al).neg / (1 + al)]
+            };
+            var wet = n.collect { |c|
+                k.collect { |b|
+                    var cf = coefs[b];
+                    var x = SOS.ar(SOS.ar(sig[c], *cf), *cf);
+                    x * gains[(c * k) + b] * (if(b.odd, -1, 1))
+                }.sum * (1 / 1.056)
+            };
+            Out.ar(\out.kr(0), Sanitize.ar(sig + (((wet * gain) - sig) * mix)));
+        }).writeDefFile(d +/+ "SpectralFilterBox");
+    };
+};
+"SpectralFilterBox: % SynthDefs written to %".format(fftSizes.size * maxChannels + (2 * maxChannels), d +/+ "SpectralFilterBox").postln;
 )

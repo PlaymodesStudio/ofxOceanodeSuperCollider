@@ -42,12 +42,11 @@
 //
 //  Order on a server: tracks, submasters, returns, master.
 //
-//  Sidechain (hybrid). Each track can be ducked by another one: SC Source
-//  (1-based track, 0 off), SC Strength, SC Attack / SC Release (ms). Every
-//  track synth writes its key envelope after its VU channels; when source and
-//  target run on the same server the target reads that bus directly (one
-//  block of latency at most). Otherwise the node reads the source's held key
-//  every frame and sends it to the target as scKey (~20-40 ms).
+//  Sidechain (hybrid). Each affected strip chooses a source track and a key
+//  tap: Pre (before its fader/mute) or Post (after them, before its own ducking).
+//  Every track writes both envelopes after its VU channels. On one server the
+//  target reads the selected control bus directly; across servers the node
+//  relays the selected held key every frame as scKey (~20-40 ms).
 //
 //  Channel adapter. A track's source can have a different channel count (M)
 //  than the mixer (N): Adapt Mode (Direct / Wrap / Blocks / Stretch), In Ch
@@ -175,6 +174,7 @@ private:
         ofParameter<bool>  eq, dc;
         ofParameter<vector<float>> vuOut;    // node output, when published
         ofParameter<int>   scSource;         // 1-based track, 0 = off
+        ofParameter<int>   scKeyTap;         // 0 pre-fader/mute, 1 post-fader/mute
         ofParameter<float> scStrength, scAttack, scRelease, scThreshold;
         ofParameter<int>   adaptMode;        // 0 Direct, 1 Wrap, 2 Blocks, 3 Stretch
         ofParameter<int>   inChannels;       // 0 = auto (source's N Chan)
@@ -230,9 +230,10 @@ private:
         float sentMute = -1.0f;
         int   sentScBus = -2;                // -2: nothing sent yet
         float sentScKey = -1.0f;
+        float sentScGain = -1.0f;
         int   scMode = 0;                    // 0 off, 1 same server, 2 via Oceanode
-        float key = 0.0f;                    // held key, read when another server needs it
-        bool  keyNeeded = false;
+        std::array<float, 2> key{0.0f, 0.0f}; // held pre/post keys for other servers
+        int   keyNeededMask = 0;             // cross-server taps: bit 0 pre, bit 1 post
 
         // Meters and display
         std::vector<float> vu, peak, peakAge;
@@ -276,6 +277,7 @@ private:
     ofParameter<float> vuAttack, vuRelease;
     ofEventListeners nodeListeners;
     int currentChannels = 2;
+    float nextMeterRead = 0.0f;
     bool rebuildingTracks = false;
     int  pendingTrackCount = -1;   // a Num Inputs change, applied in update()
                                    // (inputs can't change while the node GUI draws)
@@ -390,7 +392,7 @@ private:
     int  chainInput(const Track& tr) const;
     void sendSidechainKeys();
     void sendSidechainShape(Track& tr);
-    int  vuBusChannels() const { return currentChannels + 3; }   // VU + key + held key + comp GR
+    int  vuBusChannels() const { return currentChannels + 5; }   // VU + pre/post keys + held keys + comp GR
 
     // --- publishing (as GrainBox / BeatRepeat Pro) ---
     struct PublishAction {

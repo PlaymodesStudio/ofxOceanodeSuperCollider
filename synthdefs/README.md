@@ -15,7 +15,7 @@ Compiled `.scsyndef` files are not stored here: they live in the app's
 | `Oceanode/` | Shared prelude: `mainDefinitions.scd` (`~synthCreator`, `~useExactSynthCreator`) and the Oceanode pseudo-UGen classes (`oceanodeParameter.sc`, `ugenExtensions.sc`), which must also be in the SuperCollider extensions folder. |
 | `Defaults/` | SynthDefs loaded by the server itself or by nodes with a C++ counterpart. One folder per node, plus `Core/` (output, info, buffer allocation) and `Analysis/` (meters, scopes, trackers). |
 | `Effect/` `InOut/` `Mixing/` `Modulation/` `Routing/` `Source/` `Spatial/` `Utilities/` `Compatibility/` `Optimized/` | Generic `~synthCreator` synths, mirrored by the same folders under the app's `Synthdefs/`. |
-| `OceanodeCode/` | Used by the SC Code node: `captureCode.scd` runs pasted code without a server and describes every SynthDef it builds (`classes/OceanodeCodeSandbox.sc` keeps it away from any real server; compiled only into those runs), `promote.scd` builds a promoted `~synthCreator` source, `examples/` are the node's bundled snippets. |
+| `OceanodeCode/` | Used by the SC Code node: `captureCode.scd` runs pasted code without a server and describes every SynthDef it builds (`classes/OceanodeCodeSandbox.sc` keeps it away from any real server; compiled only into those runs), `promote.scd` builds a promoted `~synthCreator` source, `examples/` are the node's bundled snippets. The node also runs any `~synthCreator` source here (its own `~synthCreator` builds one SynthDef for the node's N Chan and variables), and Promote writes a refined source back over its original file. |
 | `WIP/` | Experiments not yet in Oceanode, run from the SuperCollider IDE (see `WIP/README.md`). Not compiled on demand, not deployed. |
 
 ## Generic synths (`~synthCreator`)
@@ -47,8 +47,19 @@ A file whose first line is `// @oceanode-no-autocompile` must not be rebuilt
 for new channel counts (currently only `Source/PhysicalModelling/oteypiano.scd`,
 whose shipped binaries came from a lost source).
 
+## Rebuilding default SynthDefs
+
+Default SynthDefs are built by running their `.scd` files in SuperCollider.
+Each script writes `.scsyndef` files under a nearby `CompiledSynthdefs/` folder.
+Copy the resulting SynthDef folders into the app's
+`bin/data/Supercollider/Synthdefs/Defaults/` and reload the server. In particular,
+changes to `Recorder/recbuffhold.scd`, `Recorder/multirecbuf.scd`,
+`Core/bufalloc.scd`, and `Analysis/beattracker.scd` require new binaries; C++
+changes alone do not update the server's loaded definitions. `Core/mergebuf.scd`
+now produces `mergeBuf1` through `mergeBuf24`, matched to the output buffer's
+channel count.
+
 ## Known issues in Defaults (pre-existing)
 
 - `Core/output_stereomix.scd`, `VST/vst.scd`: multi-block, IDE-only.
-- `Core/mergebuf.scd`, `RadioStation/radioStation.scd`: runtime errors when run
-  headlessly.
+- `RadioStation/radioStation.scd`: runtime errors when run headlessly.

@@ -12,6 +12,8 @@
 
 namespace {
 const std::vector<std::string> fftNames = {"2048 (45 ms)", "4096 (91 ms)"};
+const std::vector<std::string> modeNames = {"FFT", "Bandpass"};
+const std::vector<std::string> bandNames = {"64 (2 st)", "128 (1 st)"};
 const std::vector<std::string> interpNames = {"Linear", "Smooth", "Steps"};
 
 // v (any size) read at x = 0..1
@@ -56,7 +58,8 @@ scSpectralFilterBox::scSpectralFilterBox() : scNode("SpectralFilterBox") {
                   "into each other so it scrolls round without a step. Transpose, Scroll and Spread move "
                   "it in semitones (per channel with Spread). Shaping (interpolation, "
                   "contrast, blur, steps, invert, dB range) and the per-bin attack / release / hold are in the "
-                  "inspector. Custom UGen PV_MaskFilter, about 0.5% CPU per channel.";
+                  "inspector. Custom UGen PV_MaskFilter, about 0.5% CPU per channel. Mode Bandpass: the same "
+                  "filter from a bank of bandpasses, without the FFT's latency (64 or 128 bands).";
 }
 
 scSpectralFilterBox::~scSpectralFilterBox(){
@@ -66,6 +69,7 @@ scSpectralFilterBox::~scSpectralFilterBox(){
 
 void scSpectralFilterBox::setup(){
     addParameter(numChannels.set("N Chan", 2, 1, MAX_CHANNELS));
+    addParameterDropdown(modeP, "Mode", 0, modeNames);
     addParameterDropdown(fftSize, "FFT", 1, fftNames);
     scNode::addInput("In");
     addParameter(mask.set("Mask", {1.0f}, {0.0f}, {1.0f}));
@@ -93,6 +97,8 @@ void scSpectralFilterBox::setup(){
     addInspectorParameter(attack.set("Attack", 0.0f, 0.0f, 10.0f));
     addInspectorParameter(release.set("Release", 0.0f, 0.0f, 30.0f));
     addInspectorParameter(hold.set("Hold", false));
+    bandsP.set("Bands", 0, 0, 1);
+    addInspectorParameter(bandsP);
 
     auto dirtyMask = [this](){ maskDirty = true; };
     listeners.push(mask.newListener([dirtyMask](std::vector<float>&){ dirtyMask(); }));
@@ -102,7 +108,9 @@ void scSpectralFilterBox::setup(){
     listeners.push(quantize.newListener([dirtyMask](int&){ dirtyMask(); }));
     listeners.push(invert.newListener([dirtyMask](bool&){ dirtyMask(); }));
     listeners.push(numChannels.newListener([this](int& n){ if(n != builtChannels) rebuild(); }));
-    listeners.push(fftSize.newListener([this](int& f){ if(f != builtFft) rebuild(); }));
+    listeners.push(fftSize.newListener([this](int& f){ if(f != builtFft && !bandpass()) rebuild(); }));
+    listeners.push(modeP.newListener([this](int& m){ if(m != builtMode) rebuild(); }));
+    listeners.push(bandsP.newListener([this](int& b){ if(b != builtBands && bandpass()) rebuild(); }));
     listeners.push(gainDb.newListener([this](float& g){ sendScalar("gain", std::pow(10.0f, g / 20.0f)); }));
     listeners.push(mix.newListener([this](float& m){ sendScalar("mix", m); }));
     listeners.push(lowFreq.newListener([this](float& f){ sendScalar("lowfreq", f); }));
@@ -114,6 +122,8 @@ void scSpectralFilterBox::setup(){
 
     builtChannels = channels();
     builtFft = fftSize;
+    builtMode = modeP;
+    builtBands = bandsP;
     shaped = shapeMask();
 }
 
@@ -136,7 +146,61 @@ void scSpectralFilterBox::update(ofEventArgs&){
         maskDirty = false;
         sendMask(false);
     }
-    sendTransposes(false);
+    if(bandpass()) updateBandGains(dt, false);
+    else sendTransposes(false);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Bandpass mode: the mask read at each band (as PV_MaskFilter reads it at each
+// bin), smoothed by Attack / Release, frozen by Hold
+// ════════════════════════════════════════════════════════════════════════════
+
+float scSpectralFilterBox::maskAt(float x) const {
+    if(shaped.size() != MASK_SIZE) return 1.0f;
+    float p;
+    int i0, i1;
+    if(wrap){
+        x -= std::floor(x);
+        p = x * MASK_SIZE;
+        i0 = std::min(int(p), MASK_SIZE - 1);
+        i1 = (i0 + 1) % MASK_SIZE;
+    } else {
+        x = std::clamp(x, 0.0f, 1.0f);
+        p = x * (MASK_SIZE - 1);
+        i0 = std::min(int(p), MASK_SIZE - 2);
+        i1 = i0 + 1;
+    }
+    return std::max(0.0f, shaped[i0] + (shaped[i1] - shaped[i0]) * (p - i0));
+}
+
+std::vector<float> scSpectralFilterBox::bandTargets() const {
+    const int k = bandCount(), n = channels();
+    const float logLo = std::log2(std::max(1.0f, lowFreq.get()));
+    const float span = spanSemitones() / 12.0f;
+    const auto t = channelTransposes();
+    std::vector<float> g(n * k);
+    for(int b = 0; b < k; b++){
+        // the band's centre, as in the SynthDef: 10 Hz * 2000^((b + 0.5) / k)
+        const float octs = std::log2(10.0f) + std::log2(2000.0f) * (b + 0.5f) / k;
+        for(int c = 0; c < n; c++) g[c * k + b] = maskAt((octs - logLo - t[c] / 12.0f) / span);
+    }
+    return g;
+}
+
+void scSpectralFilterBox::updateBandGains(float dt, bool force){
+    const auto target = bandTargets();
+    if(bandGains.size() != target.size() || force) bandGains = target;
+    else if(!hold){
+        const float ca = attack.get() > 0.0f ? std::exp(-dt / attack.get()) : 0.0f;
+        const float cr = release.get() > 0.0f ? std::exp(-dt / release.get()) : 0.0f;
+        for(size_t i = 0; i < target.size(); i++)
+            bandGains[i] = target[i] + (bandGains[i] - target[i]) * (target[i] > bandGains[i] ? ca : cr);
+    }
+    bool changed = force || sentGains.size() != bandGains.size();
+    for(size_t i = 0; !changed && i < bandGains.size(); i++) changed = std::abs(bandGains[i] - sentGains[i]) > 1e-4f;
+    if(!changed) return;
+    sentGains = bandGains;
+    for(auto& [server, synth] : synths) if(synth) synth->set("gains", sentGains);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -204,6 +268,7 @@ std::vector<float> scSpectralFilterBox::channelTransposes() const {
 int scSpectralFilterBox::channels() const { return std::clamp(numChannels.get(), 1, MAX_CHANNELS); }
 
 std::string scSpectralFilterBox::synthDefName() const {
+    if(bandpass()) return "SpectralFilterBoxBP_" + ofToString(bandCount()) + "_" + ofToString(channels());
     return "SpectralFilterBox_" + std::string(fftSize.get() == 0 ? "2048" : "4096") + "_" + ofToString(channels());
 }
 
@@ -211,6 +276,7 @@ void scSpectralFilterBox::sendMask(bool force){
     auto v = shapeMask();
     if(!force && v == shaped && !synths.empty()) return;
     shaped = v;
+    if(bandpass()) return;   // the gains follow at this frame
     for(auto& [server, synth] : synths) if(synth) synth->set("mask", shaped);
 }
 
@@ -229,6 +295,13 @@ void scSpectralFilterBox::sendScalar(const std::string& name, float value){
 void scSpectralFilterBox::sendAll(ofxSCSynth* synth){
     if(!synth) return;
     shaped = shapeMask();
+    if(bandpass()){
+        updateBandGains(0.0f, sentGains.size() != size_t(bandCount() * channels()));
+        synth->set("gains", sentGains);
+        synth->set("gain", std::pow(10.0f, gainDb.get() / 20.0f));
+        synth->set("mix", mix.get());
+        return;
+    }
     synth->set("mask", shaped);
     sentTransposes = channelTransposes();
     synth->set("transpose", sentTransposes);
@@ -247,6 +320,10 @@ void scSpectralFilterBox::sendAll(ofxSCSynth* synth){
 void scSpectralFilterBox::rebuild(){
     builtChannels = channels();
     builtFft = fftSize;
+    builtMode = modeP;
+    builtBands = bandsP;
+    bandGains.clear();
+    sentGains.clear();
     for(auto& [server, synth] : synths){
         if(!synth) continue;
         auto* fresh = new ofxSCSynth(synthDefName(), server);
@@ -263,6 +340,8 @@ void scSpectralFilterBox::buildSynth(ofxSCServer* server){
     if(synths.count(server) && synths[server]){ synths[server]->free(); delete synths[server]; }
     builtChannels = channels();
     builtFft = fftSize;
+    builtMode = modeP;
+    builtBands = bandsP;
     synths[server] = new ofxSCSynth(synthDefName(), server);
     sendAll(synths[server]);
 }

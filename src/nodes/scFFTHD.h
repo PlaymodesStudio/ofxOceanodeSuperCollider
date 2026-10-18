@@ -37,7 +37,8 @@
 class scFFTHD : public ofxOceanodeNodeModel {
 public:
     static constexpr int   NUM_BANDS    = 1080;   // matches SynthDef output (log-aggregated)
-    static constexpr float FREQ_MIN     = 20.0f;
+    static constexpr float FREQ_MIN     = 20.0f;   // at the SynthDef's 44.1 kHz reference rate
+    static constexpr float REFERENCE_SR = 44100.0f;
 
     scFFTHD(vector<serverManager*> outputServers)
         : ofxOceanodeNodeModel("SC FFT HD")
@@ -181,8 +182,8 @@ private:
         ofxSCServer* srv = servers[serverIndex]->getServer();
 
         fftBus = new ofxSCBus(RATE_CONTROL, NUM_BANDS, srv);
-        if(!fftBus || fftBus->index < 0 || fftBus->index >= 4096) {
-            if(fftBus) { delete fftBus; fftBus = nullptr; }
+        if(!fftBus || fftBus->index < 0) {
+            if(fftBus) { fftBus->free(); delete fftBus; fftBus = nullptr; }
             return;
         }
         if(!srv->controlBusses[fftBus->index]) {
@@ -242,8 +243,10 @@ private:
         const float yLabelTop = yE + 1.0f;
         const float floorVal  = dbFloor.get();
         const bool  useDb     = dbScale.get();
-        const float freqMax   = std::max(FREQ_MIN * 1.01f, getCurrentSampleRate() / 2.0f);
-        const float logRatio  = std::log(freqMax / FREQ_MIN);
+        const float sampleRate = getCurrentSampleRate();
+        const float freqMin   = FREQ_MIN * sampleRate / REFERENCE_SR;
+        const float freqMax   = std::max(freqMin * 1.01f, sampleRate / 2.0f);
+        const float logRatio  = std::log(freqMax / freqMin);
 
         dl->PushClipRect(ImVec2(xS, yS), ImVec2(xE, yLabelTop + LABEL_H), true);
 
@@ -255,8 +258,9 @@ private:
         static const char* gridLabels[] = { "50","100","200","500","1k","2k","5k","10k","20k" };
 
         for(int g = 0; g < 9; g++) {
+            if(gridFreqs[g] < freqMin) continue;
             if(gridFreqs[g] > freqMax) break;
-            float gx = xS + W * (std::log(gridFreqs[g] / FREQ_MIN) / logRatio);
+            float gx = xS + W * (std::log(gridFreqs[g] / freqMin) / logRatio);
             dl->AddLine(ImVec2(gx, yS),      ImVec2(gx, yE),    IM_COL32(35, 35,  50, 200));
             dl->AddText(ImVec2(gx + 2.0f, yLabelTop),           IM_COL32(90, 90, 110, 210), gridLabels[g]);
         }

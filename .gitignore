@@ -19,5 +19,8 @@ __pycache__/
 # SuperCollider build output (binaries live in the app data folder)
 synthdefs/**/CompiledSynthdefs/
 
-# Built UGen plugins (rebuilt by their build.sh; shipped in the apps' data)
+# Built UGen plugins: our own are committed (a clone needs them and building
+# them takes a SuperCollider source checkout); anything else built here is not
 ugens/**/*.scx
+!ugens/OceanodeAnalog/OceanodeAnalog.scx
+!ugens/OceanodeSpectral/OceanodeSpectral.scx

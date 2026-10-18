@@ -91,3 +91,24 @@ holding its edges; optional per-bin attack / release / hold.
   user's SuperCollider extensions (the server loads it from there; sclang needs
   the class to compile the SynthDefs) and of the app's
   `data/Supercollider/Extensions/OceanodeSpectral/`.
+
+## Our own plugins
+
+| Plugin | UGens | Used by |
+|---|---|---|
+| `OceanodeAnalog/OceanodeAnalog.scx` | MorphOsc, AnalogFilter | AnalogBox |
+| `OceanodeSpectral/OceanodeSpectral.scx` | PV_MaskFilter | SpectralFilterBox |
+
+Their binaries are committed (universal arm64 + x86_64, ad-hoc signed), so a
+fresh clone works without a SuperCollider source checkout. Install: copy each
+plugin folder's `.scx` and `.sc` into the app's
+`data/Supercollider/Extensions/<plugin>/` (and, to use them from sclang, into
+`~/Library/Application Support/SuperCollider/Extensions/<plugin>/`), then
+restart the server.
+
+After changing a plugin's source, rebuild it with its `build.sh [path to the
+SuperCollider source]` and commit the new `.scx` with the source. Replace an
+installed copy by deleting it first, then copying (`rm` then `cp`): writing over
+a loaded binary in place makes macOS kill scsynth when it loads it (exit 137).
+`build.sh` signs the result.
+

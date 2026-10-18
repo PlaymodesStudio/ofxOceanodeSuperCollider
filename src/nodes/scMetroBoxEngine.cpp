@@ -230,16 +230,8 @@ Engine::Material Engine::material(int lane, int64_t cycle) const {
     m.genome = genomeAt(lane, cycle);
     m.key = hashOf((uint64_t)(uint32_t)globalSeed, (uint64_t)(uint32_t)m.genome.seed, (uint64_t)lane + 1);
     const int n = std::max(1, L.phraseLen);
-    const int64_t p = floorDiv(cycle, n);
     const int64_t q = positiveMod64(cycle, n);
-
-    int64_t pm = p;
-    if(L.keep) pm = L.keepPhrase;
-    else if(L.renew < 1.0f && p > 0) {
-        pm = 0;
-        for(int64_t k = p; k >= 1 && k > p - 256; k--)
-            if(unit(hashOf(m.key, (uint64_t)k, SALT_PHRASE)) < L.renew) { pm = k; break; }
-    }
+    const int64_t pm = materialPhrase(lane, cycle, m.key);
 
     uint64_t letter = (uint64_t)q;
     if(!L.form.empty()) {
@@ -252,6 +244,18 @@ Engine::Material Engine::material(int lane, int64_t cycle) const {
     }
     m.mat = hashOf(m.key, (uint64_t)pm, letter, SALT_MATERIAL);
     return m;
+}
+
+// The phrase whose material a cycle plays: a frozen one (Loop, Evolve,
+// Keep), or the last phrase that renewed (chance Renew each phrase).
+int64_t Engine::materialPhrase(int lane, int64_t cycle, uint64_t key) const {
+    const Layer& L = layers[lane];
+    if(frozen(lane)) return L.keepPhrase;
+    const int64_t p = floorDiv(cycle, std::max(1, L.phraseLen));
+    if(L.renew >= 1.0f || p <= 0) return p;
+    for(int64_t k = p; k >= 1 && k > p - 256; k--)
+        if(unit(hashOf(key, (uint64_t)k, SALT_PHRASE)) < L.renew) return k;
+    return 0;
 }
 
 std::vector<Op> Engine::opsOf(const Material& m) const {
@@ -858,6 +862,9 @@ void Engine::mutate(int lane, int64_t nowCycle, uint32_t randomSeed) {
         op.seed = (uint32_t)(s.next() * 4294967295.0f) ^ (uint32_t)i;
         g.ops.push_back(op);
     }
+    // Only the latest mutations stay: an evolving loop slowly forgets its
+    // oldest changes instead of piling them up
+    if((int)g.ops.size() > MAX_OPS) g.ops.erase(g.ops.begin(), g.ops.end() - MAX_OPS);
     setGenome(lane, g);
 }
 
@@ -924,20 +931,18 @@ void Engine::crossover(int lane, int a, int b, int64_t nowCycle) {
 
 void Engine::setKeep(int lane, bool on, int64_t nowCycle) {
     Layer& L = layers[lane];
-    if(on && !L.keep) {
-        // Freeze the material of the phrase playing now
-        const Material m = material(lane, nowCycle);
-        const int n = std::max(1, L.phraseLen);
-        const int64_t p = floorDiv(nowCycle, n);
-        int64_t pm = p;
-        if(L.renew < 1.0f && p > 0) {
-            pm = 0;
-            for(int64_t k = p; k >= 1 && k > p - 256; k--)
-                if(unit(hashOf(m.key, (uint64_t)k, SALT_PHRASE)) < L.renew) { pm = k; break; }
-        }
-        L.keepPhrase = pm;
-    }
+    // Freeze the material of the phrase playing now (unless a loop already did)
+    if(on && !frozen(lane)) L.keepPhrase = materialPhrase(lane, nowCycle, material(lane, nowCycle).key);
     L.keep = on;
+    changed(lane);
+}
+
+void Engine::setRepeat(int lane, int mode, int64_t nowCycle) {
+    Layer& L = layers[lane];
+    mode = std::clamp(mode, (int)REPEAT_OFF, (int)REPEAT_EVOLVE);
+    if(mode != REPEAT_OFF && !frozen(lane)) L.keepPhrase = materialPhrase(lane, nowCycle, material(lane, nowCycle).key);
+    L.repeat = mode;
+    if(mode == REPEAT_EVOLVE) L.autoEvery = std::max(1, L.autoEvery);
     changed(lane);
 }
 

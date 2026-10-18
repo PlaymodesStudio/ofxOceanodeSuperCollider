@@ -31,7 +31,8 @@
 class scFFT : public ofxOceanodeNodeModel {
 public:
     static constexpr int   NUM_BINS     = 128;
-    static constexpr float FREQ_MIN     = 20.0f;
+    static constexpr float FREQ_MIN     = 20.0f;     // at the SynthDef's 44.1 kHz reference rate
+    static constexpr float REFERENCE_SR = 44100.0f;
 
     scFFT(vector<serverManager*> outputServers)
         : ofxOceanodeNodeModel("SC FFT")
@@ -180,8 +181,8 @@ private:
         ofxSCServer* srv = servers[serverIndex]->getServer();
 
         fftBus = new ofxSCBus(RATE_CONTROL, NUM_BINS, srv);
-        if(!fftBus || fftBus->index < 0 || fftBus->index >= 4096) {
-            if(fftBus) { delete fftBus; fftBus = nullptr; }
+        if(!fftBus || fftBus->index < 0) {
+            if(fftBus) { fftBus->free(); delete fftBus; fftBus = nullptr; }
             return;
         }
         if(!srv->controlBusses[fftBus->index]) {
@@ -248,8 +249,12 @@ private:
         const float xE        = xS + W;
         const float yE        = yS + specH;          // bottom of bars area
         const float yLabelTop = yE + 1.0f;
-        const float nyquist   = getCurrentSampleRate() / 2.0f;
-        const float freqMax   = std::max(FREQ_MIN * 1.01f, nyquist);
+        const float sampleRate = getCurrentSampleRate();
+        const float nyquist   = sampleRate / 2.0f;
+        // SynthDef bands contain fixed FFT bins. Their frequencies scale with
+        // the server sample rate, including the first band's lower boundary.
+        const float freqMin   = FREQ_MIN * sampleRate / REFERENCE_SR;
+        const float freqMax   = std::max(freqMin * 1.01f, nyquist);
         const float floorVal  = dbFloor.get();
         const bool  useLog    = logScale.get();
         const bool  useDb     = dbScale.get();
@@ -266,12 +271,13 @@ private:
         // ── Frequency grid + labels ─────────────────────────────────────────
         static const float gridFreqs[]  = { 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000 };
         static const char* gridLabels[] = { "50","100","200","500","1k","2k","5k","10k","20k" };
-        const float logRatio = std::log(freqMax / FREQ_MIN);
+        const float logRatio = std::log(freqMax / freqMin);
 
         for(int g = 0; g < 9; g++) {
+            if(gridFreqs[g] < freqMin) continue;
             if(gridFreqs[g] > freqMax) break;
             float gx = useLog
-                ? xS + W * (std::log(gridFreqs[g] / FREQ_MIN) / logRatio)
+                ? xS + W * (std::log(gridFreqs[g] / freqMin) / logRatio)
                 : xS + W * (gridFreqs[g] / nyquist);
 
             dl->AddLine(ImVec2(gx, yS),       ImVec2(gx, yE),   IM_COL32(35, 35,  50, 200));
@@ -282,7 +288,7 @@ private:
         auto bandToX = [&](float b) -> float {
             float t = b / (float)NUM_BINS;
             if(useLog) return xS + W * t;
-            float fc = FREQ_MIN * std::pow(freqMax / FREQ_MIN, t);
+            float fc = freqMin * std::pow(freqMax / freqMin, t);
             return xS + W * (fc / nyquist);
         };
 
@@ -326,8 +332,8 @@ private:
                     x1 = xS + W * t1;
                     x2 = xS + W * t2;
                 } else {
-                    float fc1 = FREQ_MIN * std::pow(freqMax / FREQ_MIN, t1);
-                    float fc2 = FREQ_MIN * std::pow(freqMax / FREQ_MIN, t2);
+                    float fc1 = freqMin * std::pow(freqMax / freqMin, t1);
+                    float fc2 = freqMin * std::pow(freqMax / freqMin, t2);
                     x1 = xS + W * (fc1 / nyquist);
                     x2 = xS + W * (fc2 / nyquist);
                 }

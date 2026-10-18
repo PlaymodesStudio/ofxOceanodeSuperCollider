@@ -4,6 +4,8 @@
 // FFT size  : 4096 → 2048 real bins (~10.8 Hz/bin at 44100 Hz)
 // Bands out : 1080 log-spaced, max-aggregated, normalized to ~1.0 at 0 dBFS
 // All 1080 bands map to ≥1 real FFT bin — no interpolation needed.
+// The fixed bin groups use 44.1 kHz as a reference; the C++ display scales
+// frequency labels to the running server sample rate.
 //
 // Follows the same proven pattern as fftanalyzer.scd (128 bands) but scaled up.
 // Delete old fftanalyzerHD/*.scsyndef files before running.
@@ -24,7 +26,7 @@ File.mkdir(fftDir);
 
 ~fftSizeHD  = 4096;
 ~numBandsHD = 1080;
-~sr         = 44100.0;
+~sr         = 44100.0;  // reference rate for fixed FFT-bin groups
 ~nyquist    = ~sr / 2.0;
 ~freqMinHD  = 20.0;
 ~freqMaxHD  = ~nyquist;

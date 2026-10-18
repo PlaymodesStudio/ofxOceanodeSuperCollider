@@ -350,6 +350,7 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
     t.dc.set("DC " + n, false);
     t.vuOut.set("VU " + n, vector<float>(currentChannels, 0.0f), vector<float>(1, 0.0f), vector<float>(1, 2.0f));
     t.scSource.set("SC Source " + n, 0, 0, MAX_TRACKS);
+    t.scKeyTap.set("SC Key Tap " + n, 0, 0, 1);
     t.scStrength.set("SC Strength " + n, 1.0f, 0.0f, 1.0f);
     t.scAttack.set("SC Attack " + n, 10.0f, 0.1f, 500.0f);
     t.scRelease.set("SC Release " + n, 200.0f, 1.0f, 3000.0f);
@@ -662,7 +663,7 @@ void scMixerPro::setStripServer(Track& tr, int server) {
 std::vector<ofAbstractParameter*> scMixerPro::stripParams(Track& t) {
     std::vector<ofAbstractParameter*> p = {
         &t.level, &t.balance, &t.mute, &t.solo, &t.eq, &t.dc, &t.vuOut,
-        &t.scSource, &t.scStrength, &t.scAttack, &t.scRelease, &t.scThreshold,
+        &t.scSource, &t.scKeyTap, &t.scStrength, &t.scAttack, &t.scRelease, &t.scThreshold,
         &t.adaptMode, &t.inChannels, &t.rotate, &t.output
     };
     for(int b = 0; b < scEQEditor::NUM_BANDS; b++) {
@@ -1869,7 +1870,7 @@ void scMixerPro::sendComp(Track& tr) {
     s->set("rms", ofClamp(tr.compRms.get(), 0.0f, 1.0f));
     s->set("schpf", ofClamp(tr.compHpf.get(), 10.0f, 2000.0f));
     s->set("mix", ofClamp(tr.compMix.get(), 0.0f, 1.0f));
-    s->set("grBus", tr.vuBus ? tr.vuBus->index + currentChannels + 2 : -1);
+    s->set("grBus", tr.vuBus ? tr.vuBus->index + currentChannels + 4 : -1);
     s->set("on", (tr.comp.get() && tr.fx[FX_COMP].offAt < 0.0f) ? 1.0f : 0.0f);
 }
 
@@ -1986,6 +1987,7 @@ void scMixerPro::sendAll(Track& tr) {
     tr.synth->set("scKey", 0.0f);
     tr.sentScBus = -1;
     tr.sentScKey = 0.0f;
+    tr.sentScGain = -1.0f;   // update() sends it
 }
 
 void scMixerPro::sendSidechainShape(Track& tr) {
@@ -1996,10 +1998,10 @@ void scMixerPro::sendSidechainShape(Track& tr) {
     tr.synth->set("scThresh", ofClamp(std::pow(10.0f, tr.scThreshold.get() / 20.0f), 0.0001f, 1.0f));
 }
 
-// Which key each ducked track reads: the source's key bus when both run on
-// the same server, else the key relayed by the node (scKey).
+// Each target chooses which source tap to read. On the same server both taps
+// remain SC control-rate; across servers the chosen held key is relayed.
 void scMixerPro::routeSidechains() {
-    for(auto& tr : tracks) tr->keyNeeded = false;
+    for(auto& tr : tracks) tr->keyNeededMask = 0;
     for(Track* trp : allStrips()) {
         Track& tr = *trp;
         const int s = tr.scSource.get() - 1;
@@ -2009,16 +2011,27 @@ void scMixerPro::routeSidechains() {
         tr.scMode = 0;
         if(src) {
             if(tr.synth && src->synth && src->vuBus && src->liveServer == tr.liveServer) {
-                bus = src->vuBus->index + currentChannels;
+                bus = src->vuBus->index + currentChannels + (tr.scKeyTap.get() == 1 ? 1 : 0);
                 tr.scMode = 1;
             } else {
                 tr.scMode = 2;
-                if(tr.synth) src->keyNeeded = true;
+                if(tr.synth) src->keyNeededMask |= 1 << (tr.scKeyTap.get() == 1 ? 1 : 0);
             }
         }
         if(tr.synth && bus != tr.sentScBus) {
             tr.synth->set("scBus", bus);
             tr.sentScBus = bus;
+        }
+        // Post: the source as heard -- through its submaster too (muted or
+        // silenced by solo: no ducking; its fader scales the key)
+        float gain = 1.0f;
+        if(src && tr.scKeyTap.get() == 1 && routedToBus(*src)){
+            const Track* b = busFor(*src);
+            gain = isSilenced(*b) ? 0.0f : ofClamp(b->level.get(), 0.0f, kTrackMaxGain);
+        }
+        if(tr.synth && std::abs(gain - tr.sentScGain) > 1e-4f){
+            tr.synth->set("scGain", gain);
+            tr.sentScGain = gain;
         }
     }
 }
@@ -2030,7 +2043,8 @@ void scMixerPro::sendSidechainKeys() {
         float key = 0.0f;
         if(tr.scMode == 2) {
             const int s = tr.scSource.get() - 1;
-            if(s >= 0 && s < (int)tracks.size() && tracks[s]->synth) key = tracks[s]->key;
+            if(s >= 0 && s < (int)tracks.size() && tracks[s]->synth)
+                key = tracks[s]->key[tr.scKeyTap.get() == 1 ? 1 : 0];
         }
         if(std::abs(key - tr.sentScKey) > 1e-4f) {
             tr.synth->set("scKey", key);
@@ -2182,6 +2196,7 @@ void scMixerPro::registerTrackActions(Track& tr) {
     addAction(tr.dc.getEscapedName(), tr.dc);
     addOutputAction(tr.vuOut.getEscapedName(), tr.vuOut);
     addAction(tr.scSource.getEscapedName(), tr.scSource);
+    addAction(tr.scKeyTap.getEscapedName(), tr.scKeyTap);
     addAction(tr.scStrength.getEscapedName(), tr.scStrength);
     addAction(tr.scAttack.getEscapedName(), tr.scAttack);
     addAction(tr.scRelease.getEscapedName(), tr.scRelease);
@@ -2220,7 +2235,7 @@ void scMixerPro::unregisterTrackActions(Track& tr) {
     std::vector<std::string> keys = {
         tr.levelKey, tr.balance.getEscapedName(), tr.mute.getEscapedName(),
         tr.solo.getEscapedName(), tr.eq.getEscapedName(), tr.dc.getEscapedName(),
-        tr.vuOut.getEscapedName(), tr.scSource.getEscapedName(), tr.scStrength.getEscapedName(),
+        tr.vuOut.getEscapedName(), tr.scSource.getEscapedName(), tr.scKeyTap.getEscapedName(), tr.scStrength.getEscapedName(),
         tr.scAttack.getEscapedName(), tr.scRelease.getEscapedName(), tr.scThreshold.getEscapedName(),
         tr.adaptMode.getEscapedName(), tr.inChannels.getEscapedName(), tr.rotate.getEscapedName(),
         tr.output.getEscapedName()
@@ -2519,26 +2534,39 @@ void scMixerPro::update(ofEventArgs&) {
 
     routeSidechains();
     bool keysNeeded = false;
-    for(auto& tr : tracks) if(tr->keyNeeded) { keysNeeded = true; break; }
+    for(auto& tr : tracks) if(tr->keyNeededMask) { keysNeeded = true; break; }
     const bool meters = visible || vuPublished;
     if(!meters && !keysNeeded) { sendSidechainKeys(); return; }
+    // Display meters need 30 Hz; published values and cross-server
+    // sidechain keys keep their existing per-frame cadence.
+    const float now = ofGetElapsedTimef();
+    const bool readMeters = vuPublished || (visible && now >= nextMeterRead);
+    if(readMeters) nextMeterRead = now + 1.0f / 30.0f;
 
     const float dt = std::min(0.1f, (float)ofGetLastFrameTime());
     for(Track* tr : allStrips()) {
         if(tr->vuBus && tr->synth) {
-            if(meters || tr->keyNeeded) {
+            if(meters || tr->keyNeededMask) {
                 const auto& v = tr->vuBus->readValues;
                 for(int c = 0; c < currentChannels && c < (int)tr->vu.size(); c++)
                     tr->vu[c] = c < (int)v.size() && std::isfinite(v[c]) ? v[c] : 0.0f;
-                const int k = currentChannels + 1;
-                tr->key = k < (int)v.size() && std::isfinite(v[k]) ? ofClamp(v[k], 0.0f, 4.0f) : 0.0f;
-                const int g = currentChannels + 2;
+                for(int tap = 0; tap < 2; ++tap) {
+                    const int k = currentChannels + 2 + tap;
+                    tr->key[tap] = k < (int)v.size() && std::isfinite(v[k]) ? ofClamp(v[k], 0.0f, 4.0f) : 0.0f;
+                }
+                const int g = currentChannels + 4;
                 tr->gr = (tr->fx[FX_COMP].running && g < (int)v.size() && std::isfinite(v[g])) ? ofClamp(v[g], 0.0f, 60.0f) : 0.0f;
-                tr->vuBus->requestValues();
+                if(readMeters) tr->vuBus->requestValues();
+                else if(tr->keyNeededMask && tr->liveServer) {
+                    const int firstTap = (tr->keyNeededMask & 1) ? 0 : 1;
+                    const int count = tr->keyNeededMask == 3 ? 2 : 1;
+                    tr->liveServer->requestControlValues(
+                        tr->vuBus->index + currentChannels + 2 + firstTap, count);
+                }
             }
         } else {
             std::fill(tr->vu.begin(), tr->vu.end(), 0.0f);
-            tr->key = 0.0f;
+            tr->key = {0.0f, 0.0f};
         }
         if(meters) updatePeaks(tr->vu, tr->peak, tr->peakAge, dt);
     }
@@ -2556,7 +2584,7 @@ void scMixerPro::update(ofEventArgs&) {
         const auto& v = mr.vuBus->readValues;
         mr.vu.assign(currentChannels, 0.0f);
         for(int c = 0; c < currentChannels && c < (int)v.size(); c++) mr.vu[c] = std::isfinite(v[c]) ? v[c] : 0.0f;
-        mr.vuBus->requestValues();
+        if(readMeters) mr.vuBus->requestValues();
     }
     auto meteredAfterMaster = [this](const Track& tr) {
         auto it = serverStates.find(tr.liveServer);
@@ -2598,7 +2626,7 @@ ofJson scMixerPro::saveStrip(Track& tr) {
     t["solo"] = tr.solo.get();
     t["eq"] = tr.eq.get();
     t["dc"] = tr.dc.get();
-    t["sidechain"] = {tr.scSource.get(), tr.scStrength.get(), tr.scAttack.get(), tr.scRelease.get(), tr.scThreshold.get()};
+    t["sidechain"] = {tr.scSource.get(), tr.scStrength.get(), tr.scAttack.get(), tr.scRelease.get(), tr.scThreshold.get(), tr.scKeyTap.get()};
     t["adapt"] = {tr.adaptMode.get(), tr.inChannels.get(), tr.rotate.get()};
     t["bands"] = ofJson::array();
     for(int b = 0; b < scEQEditor::NUM_BANDS; b++)
@@ -2700,8 +2728,10 @@ void scMixerPro::loadStrip(Track& tr, const ofJson& j) {
         tr.scAttack.set(sc[2].get<float>());
         tr.scRelease.set(sc[3].get<float>());
         if(sc.size() >= 5) tr.scThreshold.set(sc[4].get<float>());
+        tr.scKeyTap.set(sc.size() >= 6 ? ofClamp(sc[5].get<int>(), 0, 1) : 0);
     } else {
         tr.scSource.set(0);
+        tr.scKeyTap.set(0);
     }
     // Comp / Rvb: values first, then the switches (a missing block: off,
     // defaults -- a preset from before the inserts existed)
@@ -3556,6 +3586,12 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
                 ImGui::EndCombo();
             }
             drawPublishPopup(tr.scSource.getEscapedName());
+            int keyTap = tr.scKeyTap.get();
+            ImGui::SetNextItemWidth(fieldW);
+            if(ImGui::Combo("Key tap", &keyTap, "Pre\0Post\0")) tr.scKeyTap.set(keyTap);
+            drawPublishPopup(tr.scKeyTap.getEscapedName());
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Pre: source fader and mute do not affect ducking\nPost: follows the source fader, mute and solo");
             auto slider = [&](const char* name, ofParameter<float>& p, const char* format, ImGuiSliderFlags flags) {
                 float v = p.get();
                 ImGui::SetNextItemWidth(fieldW);

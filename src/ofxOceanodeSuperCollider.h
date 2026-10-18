@@ -55,8 +55,9 @@
 #include "nodes/scSpectrogram.h"
 #include "nodes/scLissajous.h"
 #include "nodes/scMorphOscScope.h"
-#include "nodes/scPolyphonicArpeggiator.h"
 #include "nodes/scMetroBox.h"
+#include "nodes/scEuclideanBox.h"
+#include "nodes/scArpeggiatorBox.h"
 #include "nodes/scBufferBrowser.h"
 #include "nodes/scDynGenNode.h"
 #include "nodes/scDynGenPolyNode.h"
@@ -67,10 +68,14 @@
 #include "nodes/scMultiTrackRecorder.h"
 //#include "nodes/scGrainBox.h" // Legacy node disabled by the preserved stash.
 #include "nodes/scGrainBoxPoly.h"
+#include "nodes/scSampleBox.h"
 #include "nodes/scBeatRepeatPro.h"
 #include "nodes/scPolyComb.h"
+#include "nodes/scAnalogBox.h"
+#include "nodes/scEchoBox.h"
 #include "nodes/scFeedbackNode.h"
 #include "nodes/scCodeNode.h"
+#include "nodes/scSlicerBox.h"
 #if OFXOCEANODESC_HAS_TIMELINE
 #include "nodes/scNRTRecorder.h"
 #endif // OFXOCEANODESC_HAS_TIMELINE
@@ -97,12 +102,17 @@ static void refreshSynthdefModels(ofxOceanode &o){
 					}else if(desc.type == "events"){
 
 					}else{
+						// Refreshed, not just registered: registerModel keeps the
+						// first description of a name, so a SynthDef rebuilt with
+						// other parameters (SC Code's Promote, Load Defs) went on
+						// creating nodes with the old ones until a restart. The
+						// name is the scNode's "SC <name>*".
+						const std::string category = desc.category.empty() ? "SuperCollider" : "SuperCollider/" + desc.category;
+						const std::string nodeName = "SC " + desc.name + "*";
 						if(desc.name == "FeedbackNode"){
-							o.registerModel<scFeedbackNode>(desc.category.empty() ? "SuperCollider" : "SuperCollider/" + desc.category, desc);
-						}else if(desc.category != ""){
-							o.registerModel<scSynthdef>("SuperCollider/" + desc.category, desc);
+							o.refreshModelNamed<scFeedbackNode>(nodeName, category, desc);
 						}else{
-							o.registerModel<scSynthdef>("SuperCollider", desc);
+							o.refreshModelNamed<scSynthdef>(nodeName, category, desc);
 						}
 					}
                     synthdefFolders[desc.name] = dir.getAbsolutePath();
@@ -189,9 +199,10 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<timelineWaveTrack>("SuperCollider", controller->getServers());
 #endif // OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<scGraphicEQ>("SuperCollider");
-	o.registerModel<scPolyphonicArpeggiator>("SuperCollider");
 #if OFXOCEANODESC_HAS_TRANSPORT
 	o.registerModel<scMetroBox>("SuperCollider");
+	o.registerModel<scEuclideanBox>("SuperCollider");
+	o.registerModel<scArpeggiatorBox>("SuperCollider");
 #endif
 	o.registerModel<scBufferBrowser>("SuperCollider", controller->getServers());
 	o.registerModel<scFFT>("SuperCollider", controller->getServers());
@@ -202,6 +213,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scDynGenNode>("SuperCollider");
 	o.registerModel<scDynGenPolyNode>("SuperCollider");
 	o.registerModel<scCodeNode>("SuperCollider", controller->getServers());
+	o.registerModel<scSlicerBox>("SuperCollider", controller->getServers());
 	o.registerModel<scVelvetReverb>("SuperCollider");
 	o.registerModel<pinkTromboneNode>("SuperCollider");
 	o.registerModel<scRhythmBox>("SuperCollider", controller->getServers());
@@ -209,8 +221,11 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scMultiTrackRecorder>("SuperCollider", controller->getServers());
 //	o.registerModel<scGrainBox>("SuperCollider", controller->getServers());
 	o.registerModel<scGrainBoxPoly>("SuperCollider", controller->getServers());
+	o.registerModel<scSampleBox>("SuperCollider", controller->getServers());
 	o.registerModel<scBeatRepeatPro>("SuperCollider/Effect/Time/Looping", controller->getServers());
-	o.registerModel<scPolyComb>("SuperCollider");
+	o.registerModel<scPolyComb>("SuperCollider", controller->getServers());
+	o.registerModel<scAnalogBox>("SuperCollider", controller->getServers());
+	o.registerModel<scEchoBox>("SuperCollider", controller->getServers());
 #if OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<scNRTRecorder>("SuperCollider", controller.get());
 #endif // OFXOCEANODESC_HAS_TIMELINE

@@ -1,17 +1,25 @@
 // Headless runner used by the SC Code node (scCodeNode):
 //
-//     sclang -l <conf with OceanodeCode/classes> captureCode.scd <outDir> <prefix> <block.scd>...
+//     sclang -l <conf with OceanodeCode/classes> captureCode.scd <outDir> <prefix> <channels> <variables> <sourcePath> <block.scd>...
 //
 // Runs the pasted code block by block, with no server (OceanodeCodeSandbox.sc),
-// and keeps every SynthDef it builds. Each one is renamed <prefix>_<name>,
+// and keeps every SynthDef it builds. Oceanode's own sources work too:
+// ~synthCreator builds its SynthDef for <channels> (n) and the comma-separated
+// <variables> values ("" for none), and says so in the description.
+// <sourcePath> is the file the code was opened from ("" if none): the blocks
+// run as if they were that file, so thisProcess.nowExecutingPath finds the
+// files next to it. Each one is renamed <prefix>_<name>,
 // written to <outDir>/<prefix>_<name>.scsyndef and described in
 // <outDir>/meta.json, with the errors of any block that failed. Exits with 0
 // once meta.json is written.
 
 var args = thisProcess.argv;
-var outDir = args[0], prefix = args[1], blocks = args.copyRange(2, args.size - 1);
+var outDir = args[0], prefix = args[1], channels = args[2].asInteger.max(1);
+var varValues = args[3].split($,).reject(_.isEmpty).collect(_.asInteger);
+var sourcePath = args[4];
+var blocks = args.copyRange(5, args.size - 1);
 var errors = List.new;
-var quote, num, describe, finish;
+var quote, num, describe, finish, creator;
 
 quote = { |value|
 	"\"" ++ value.asString
@@ -69,8 +77,17 @@ describe = { |def, name|
 				++ "}"
 		}.join(", ")
 	};
+	creator = def.metadata[\oceanodeCreator];
 	"{\"name\": " ++ quote.(name)
 		++ ", \"defName\": " ++ quote.(def.name)
+		++ (creator !? { |cr|
+			", \"creator\": {\"channels\": " ++ cr[\channels]
+			++ ", \"description\": " ++ quote.(cr[\description])
+			++ ", \"category\": " ++ quote.(cr[\category])
+			++ ", \"variables\": [" ++ cr[\variables].collect { |v, i|
+				"{\"name\": " ++ quote.(v) ++ ", \"dim\": " ++ cr[\dims][i] ++ ", \"value\": " ++ cr[\values][i] ++ "}"
+			}.join(", ") ++ "]}"
+		} ? "")
 		++ ", \"canFreeSynth\": " ++ desc.canFreeSynth
 		++ ", \"hasGate\": " ++ desc.hasGate
 		++ ", \"functionPlay\": " ++ (def.metadata[\oceanodeFunctionPlay] == true)
@@ -103,12 +120,30 @@ finish = {
 	0.exit;
 };
 
+// Oceanode's SynthDef sources: one SynthDef for n channels and the given
+// variable values, instead of files for every channel count
+~maxVoices = channels;
+~synthCreator = { |name, func, description = "", category = "", variables, variableDimensions|
+	var names = (variables ? []).asArray, dims = (variableDimensions ? []).asArray;
+	var values = names.collect { |v, i| (varValues[i] ? 1).clip(1, (dims[i] ? 1).max(1)) };
+	var def = SynthDef(name.asSymbol, {
+		SynthDef.wrap(func, prependArgs: [channels, values]);
+	});
+	def.metadata[\oceanodeCreator] = (channels: channels, variables: names, dims: dims, values: values,
+		description: description.asString, category: category.asString);
+	def.add;
+};
+~synthCreatorWithMetadata = ~synthCreator;
+~synthCreatorExact = ~synthCreator;
+~useExactSynthCreator = {};
+
 // Nothing reaches a real server: port 9 is discard
 Server.all.do { |server| server.addr = NetAddr("127.0.0.1", 9) };
 OceanodeCodeCapture.start;
 
 blocks.do { |path, i|
 	var function = thisProcess.interpreter.compileFile(path);
+	if(sourcePath.size > 0) { thisProcess.nowExecutingPath = sourcePath };
 	if(function.isNil) {
 		errors.add("block % does not parse".format(i + 1));
 	} {

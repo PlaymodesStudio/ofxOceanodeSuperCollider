@@ -51,6 +51,11 @@ enum RelationMode : int { REL_NONE = 0, REL_FOLLOW, REL_AVOID, REL_COMPLEMENT, R
 enum DynamicsMode : int { DYN_NONE = 0, DYN_DUCK, DYN_REINFORCE };
 enum OnsetKind : int { KIND_MAIN = 0, KIND_GHOST, KIND_FLAM, KIND_RATCHET };
 enum GrooveMode : int { GROOVE_STRAIGHT = 0, GROOVE_SWING16, GROOVE_SWING8, GROOVE_LAID_BACK, GROOVE_PUSHED };
+// Repeat: Off = new material every phrase (Renew); Loop = the phrase playing
+// when it was switched on repeats forever; Evolve = that loop, mutated every
+// few loops.
+enum RepeatMode : int { REPEAT_OFF = 0, REPEAT_LOOP, REPEAT_EVOLVE };
+constexpr int MAX_OPS = 24;     // a genome keeps its latest mutations only
 
 // Mutation operators. Each picks its target (which hit, which half) with a
 // hash of its own seed and the cycle's material, so a repeated phrase is
@@ -177,12 +182,13 @@ struct Layer {
     int   accentHits = 0;        // Euclidean accents over the cycle's hits
     float accentAmount = 0.5f;
     bool  accentsLong = false;   // long notes are the accented ones
-    // Evolution
-    bool    keep       = false;  // phrase material frozen, no mutation
-    int64_t keepPhrase = 0;
+    // Repeat and evolution
+    int     repeat     = REPEAT_OFF;
+    bool    keep       = false;  // locked: no mutation (and the phrase frozen)
+    int64_t keepPhrase = 0;      // the frozen phrase (Loop, Evolve, Keep)
     int   mutations    = 1;      // operators added by one Mutate
-    int   autoEvery    = 0;      // phrases between automatic mutations (0 = off)
-    float autoChance   = 0.5f;
+    int   autoEvery    = 2;      // Evolve: loops between mutations
+    float autoChance   = 0.5f;   // Evolve: chance of a mutation each time
     std::vector<Genome> liked;
 
     int cycleTicks() const { return cycleBeats * TICKS_PER_BEAT; }
@@ -221,6 +227,8 @@ public:
     void like(int lane);
     void crossover(int lane, int a, int b, int64_t nowCycle);
     void setKeep(int lane, bool on, int64_t nowCycle);
+    void setRepeat(int lane, int mode, int64_t nowCycle);
+    bool frozen(int lane) const { return layers[lane].keep || layers[lane].repeat != REPEAT_OFF; }
     bool canUndo(int lane) const { return !state[lane].undo.empty(); }
     bool canRedo(int lane) const { return !state[lane].redo.empty(); }
     // Hits of a cycle that were not there before the last change (for the
@@ -260,6 +268,7 @@ private:
 
     Genome genomeAt(int lane, int64_t cycle) const;
     Material material(int lane, int64_t cycle) const;
+    int64_t materialPhrase(int lane, int64_t cycle, uint64_t key) const;
     float effectiveDensity(int lane) const;
     std::vector<int> groupStarts(int lane) const;
     std::vector<int> rawCycle(int lane, int64_t cycle, const Material& m) const;

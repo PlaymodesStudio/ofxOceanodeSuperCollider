@@ -23,7 +23,7 @@ public:
 	void setup(){
 		addParameter(input.set("In", nodePort()), ofxOceanodeParameterFlags_DisableOutConnection);
 		addParameter(serverIndex.set("Server", 0, 0, servers.size() - 1));
-		addParameter(numChannels.set("N Chan", 1, 1, 100));
+		addParameter(numChannels.set("N Chan", 1, 1, 16));
 
 		addOutputParameter(quarter.set("Quarter", {0}, {0}, {1}));
 		addOutputParameter(eighth.set("Eighth", {0}, {0}, {1}));
@@ -49,7 +49,7 @@ public:
 		}));
 
 		listeners.push(numChannels.newListener([this](int &i){
-            if(i < 1 || i > MAX_NODE_CHANNELS) return;
+			if(i < 1 || i > 16) return;
 			if(input->getNodeRef() != nullptr){
 				recreateSynth();
 			}
