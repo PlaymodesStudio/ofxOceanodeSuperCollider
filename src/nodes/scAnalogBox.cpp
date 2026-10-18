@@ -49,12 +49,16 @@ const ImU32 osc[6]     = {IM_COL32(150, 165, 255, 255), IM_COL32(236, 178, 96, 2
 
 // ── Routing ──────────────────────────────────────────────────────────────────
 const char* kTargets[scAnalogBox::NUM_TARGETS] = {"Pitch", "Slave Pitch", "Width", "Skew", "Round", "FM", "Noise",
-                                                  "Cutoff", "Reso", "Drive", "Filter Fb", "Amp", "Pan"};
-const float kTargetRange[scAnalogBox::NUM_TARGETS] = {24, 24, 0.5f, 1, 0.5f, 2, 1, 48, 1, 24, 1, 1, 1};
-const char* kTargetUnit[scAnalogBox::NUM_TARGETS] = {"st", "st", "", "", "", "cycles", "", "st", "", "dB", "", "", "of the width"};
+                                                  "Cutoff", "Reso", "Drive", "Filter Fb", "Amp", "Pan",
+                                                  "F2 Cutoff", "F2 Reso", "F3 Cutoff", "F3 Reso", "F4 Cutoff", "F4 Reso"};
+const float kTargetRange[scAnalogBox::NUM_TARGETS] = {24, 24, 0.5f, 1, 0.5f, 2, 1, 48, 1, 24, 1, 1, 1, 48, 1, 48, 1, 48, 1};
+const char* kTargetUnit[scAnalogBox::NUM_TARGETS] = {"st", "st", "", "", "", "cycles", "", "st", "", "dB", "", "", "of the width",
+                                                     "st", "", "st", "", "st", ""};
 
-const std::vector<const char*> kFilterModes = {"SVF 12 dB", "SVF 24 dB", "Ladder 12 dB", "Ladder 24 dB"};
+const std::vector<const char*> kFilterModes = {"SVF 12 dB", "SVF 24 dB", "Ladder 12 dB", "Ladder 24 dB", "Comb"};
 const std::vector<const char*> kFilterTypes = {"Low pass", "Band pass", "High pass", "Notch"};
+const std::vector<const char*> kCombTypes = {"Feedback +", "Feedback -", "Feedforward +", "Feedforward -"};
+constexpr int kComb = 4;
 
 // ── MorphOsc's shape (OceanodeAnalog.cpp / ModLfo), for the window ──────────
 double clampd(double x, double lo, double hi) { return x < lo ? lo : (x > hi ? hi : x); }
@@ -91,8 +95,15 @@ float morphShape(double ph, double skew, double round, double pw, bool centered)
     return (float)(s * 2.0 - 1.0);
 }
 
-// ── AnalogFilter's response (its analog prototypes), dB at f ───────────────
-float filterDb(int mode, int type, float f, float fc, float res) {
+// ── AnalogFilter's response (its analog prototypes; the comb's delay), at f ─
+std::complex<float> filterH(int mode, int type, float f, float fc, float res) {
+    if(mode == kComb){
+        // one period of fc; feedback: peaks on the harmonics (-: odd ones of fc / 2)
+        const float g = (type == 1 || type == 3 ? -1.0f : 1.0f) * res * 0.995f;
+        const std::complex<float> e = std::polar(1.0f, -2.0f * (float)M_PI * f / std::max(1.0f, fc));
+        if(type <= 1) return (1.0f - 0.75f * res) / (1.0f - g * e);
+        return (1.0f + g * e) / (1.0f + 0.5f * res);
+    }
     const std::complex<float> s(0.0f, f / std::max(1.0f, fc));
     std::complex<float> h;
     auto svf = [&](float k, int t){
@@ -129,7 +140,10 @@ float filterDb(int mode, int type, float f, float fc, float res) {
             default: h = y4 - hp; break;
         }
     }
-    return 20.0f * std::log10(std::max(1e-6f, std::abs(h)));
+    return h;
+}
+float filterDb(int mode, int type, float f, float fc, float res) {
+    return 20.0f * std::log10(std::max(1e-6f, std::abs(filterH(mode, type, f, fc, res))));
 }
 }
 
@@ -221,7 +235,7 @@ void scAnalogBox::setup() {
 
     // ── Filter ───────────────────────────────────────────────────────────────
     filterOn.set("Filter On", true);                        reg(filterOn, toFilter);
-    fMode.set("Filter Mode", 3, 0, 3);                      reg(fMode, toFilter);
+    fMode.set("Filter Mode", 3, 0, kComb);                      reg(fMode, toFilter);
     fType.set("Filter Type", 0, 0, 3);                      reg(fType, toFilter);
     vec(cutoff, "Cutoff", 84, 0, 140);                      reg(cutoff, toFilter);
     vec(res, "Resonance", 0.25f, 0, 1);                     reg(res, toFilter);
@@ -230,6 +244,24 @@ void scAnalogBox::setup() {
     fSat.set("Filter Saturation", 0.3f, 0.0f, 1.0f);        reg(fSat, toFilter);
     fFeedback.set("Filter Feedback", 0.0f, 0.0f, 1.0f);     reg(fFeedback, toFilter);
     hpf.set("HPF", 10.0f, 10.0f, 2000.0f);                  reg(hpf, toFilter);
+    fLevel.set("Filter Level", 1.0f, 0.0f, 2.0f);           reg(fLevel, toFilter);
+    // more filters, added at will: in series (each into the next) or in parallel (summed)
+    filterCount.set("Filters", 1, 1, MAX_FILTERS);          reg(filterCount, toParts);
+    filterRouting.set("Filter Routing", 0, 0, 1);          reg(filterRouting, toFilter);
+    for(int k = 0; k < MAX_FILTERS - 1; k++){
+        auto& f = moreF[k];
+        const std::string p = "F" + ofToString(k + 2) + " ";
+        f.on.set(p + "On", true);                            reg(f.on, toFilter);
+        f.mode.set(p + "Mode", 0, 0, kComb);                 reg(f.mode, toFilter);
+        f.type.set(p + "Type", 1, 0, 3);                     reg(f.type, toFilter);
+        vec(f.cutoff, p + "Cutoff", 96, 0, 140);             reg(f.cutoff, toFilter);
+        vec(f.res, p + "Resonance", 0.3f, 0, 1);             reg(f.res, toFilter);
+        f.keyTrack.set(p + "Key Track", 0.5f, 0.0f, 1.0f);   reg(f.keyTrack, toFilter);
+        f.drive.set(p + "Drive", 0.0f, 0.0f, 36.0f);         reg(f.drive, toFilter);
+        f.sat.set(p + "Saturation", 0.0f, 0.0f, 1.0f);       reg(f.sat, toFilter);
+        f.feedback.set(p + "Feedback", 0.0f, 0.0f, 1.0f);    reg(f.feedback, toFilter);
+        f.level.set(p + "Level", 1.0f, 0.0f, 2.0f);          reg(f.level, toFilter);
+    }
 
     // ── Effects ──────────────────────────────────────────────────────────────
     auto toStages = [this]() { forStates([this](ofxSCServer* sv, ServerState& st){ if(st.created) updateStages(sv, st); }); };
@@ -248,6 +280,14 @@ void scAnalogBox::setup() {
     ringSpread.set("Ring Mod Spread", 0.0f, 0.0f, 12.0f);   reg(ringSpread, toStage(StRing));
     ringMix.set("Ring Mod Mix", 0.5f, 0.0f, 1.0f);          reg(ringMix, toStage(StRing));
     chorusOn.set("Chorus On", false);                       reg(chorusOn, toStages);
+    shiftOn.set("Freq Shift On", false);                    reg(shiftOn, toStages);
+    shiftHz.set("Freq Shift", 50.0f, -2000.0f, 2000.0f);   reg(shiftHz, toStage(StShift));
+    shiftSpread.set("Freq Shift Spread", 0.0f, 0.0f, 50.0f); reg(shiftSpread, toStage(StShift));
+    shiftBoth.set("Freq Shift Both", false);               reg(shiftBoth, toStage(StShift));
+    shiftFeed.set("Freq Shift Feedback", 0.0f, 0.0f, 0.95f); reg(shiftFeed, toStage(StShift));
+    shiftDelay.set("Freq Shift Delay", 0.0f, 0.0f, 2.0f);  reg(shiftDelay, toStage(StShift));
+    shiftTone.set("Freq Shift Tone", 12000.0f, 200.0f, 20000.0f); reg(shiftTone, toStage(StShift));
+    shiftMix.set("Freq Shift Mix", 1.0f, 0.0f, 1.0f);      reg(shiftMix, toStage(StShift));
     chorusRate.set("Chorus Rate", 0.6f, 0.01f, 10.0f);      reg(chorusRate, toStage(StChorus));
     chorusDepth.set("Chorus Depth", 3.0f, 0.0f, 20.0f);     reg(chorusDepth, toStage(StChorus));
     chorusDelay.set("Chorus Delay", 8.0f, 1.0f, 40.0f);     reg(chorusDelay, toStage(StChorus));
@@ -344,6 +384,9 @@ void scAnalogBox::setup() {
         modulation.targetOfKey = {{pitch.getEscapedName(), TPitch}, {transpose.getEscapedName(), TPitch},
                                   {cutoff.getEscapedName(), TCut}, {res.getEscapedName(), TRes},
                                   {fDrive.getEscapedName(), TDrive}, {fFeedback.getEscapedName(), TFb},
+                                  {moreF[0].cutoff.getEscapedName(), TCut2}, {moreF[0].res.getEscapedName(), TRes2},
+                                  {moreF[1].cutoff.getEscapedName(), TCut3}, {moreF[1].res.getEscapedName(), TRes3},
+                                  {moreF[2].cutoff.getEscapedName(), TCut4}, {moreF[2].res.getEscapedName(), TRes4},
                                   {noiseLevel.getEscapedName(), TNoise}, {panP.getEscapedName(), TPan}};
     }
 
@@ -493,25 +536,45 @@ bool scAnalogBox::vcaOn() const {
     return false;
 }
 
-void scAnalogBox::sendFilter(ServerState& st) {
-    auto* s = st.filter;
+scAnalogBox::FilterRef scAnalogBox::filterRef(int k) {
+    if(k <= 0) return {&filterOn, &fMode, &fType, &cutoff, &res, &keyTrack, &fDrive, &fSat, &fFeedback, &fLevel};
+    auto& f = moreF[std::min(k, MAX_FILTERS - 1) - 1];
+    return {&f.on, &f.mode, &f.type, &f.cutoff, &f.res, &f.keyTrack, &f.drive, &f.sat, &f.feedback, &f.level};
+}
+
+// Filter k: in series from the one before (the first from the mix) into the
+// next (the last into the amp); in parallel all from the mix, summed
+void scAnalogBox::sendFilterK(ServerState& st, int k) {
+    auto* s = k == 0 ? st.filter : st.moreFilters[k - 1];
     if(!s) return;
-    s->set("in", st.mixBus ? st.mixBus->index : 0);
-    s->set("out", st.filtBus ? st.filtBus->index : 0);
-    s->set("note", st.noteBus ? st.noteBus->index : 0);
-    s->set("on", filterOn.get() ? 1.0f : 0.0f);
-    s->set("mode", (float)fMode.get());
-    s->set("type", (float)fType.get());
-    sendVec(s, "cutoff", cutoff.get());
-    sendVec(s, "res", res.get());
-    s->set("keytrack", keyTrack.get());
-    s->set("drive", fDrive.get());
-    s->set("sat", fSat.get());
-    s->set("fb", fFeedback.get());
-    s->set("hpf", hpf.get());
+    const int nf = filters();
+    auto bus = [](ofxSCBus* b){ return b ? b->index : 0; };
+    const bool series = filterRouting.get() == 0;
+    s->set("in", series && k > 0 ? bus(st.chainBus[k - 1]) : bus(st.mixBus));
+    s->set("out", series && k < nf - 1 ? bus(st.chainBus[k]) : bus(st.filtBus));
+    s->set("note", bus(st.noteBus));
+    const FilterRef f = filterRef(k);
+    s->set("on", f.on->get() ? 1.0f : 0.0f);
+    s->set("mode", (float)f.mode->get());
+    s->set("type", (float)f.type->get());
+    sendVec(s, "cutoff", f.cutoff->get());
+    sendVec(s, "res", f.res->get());
+    s->set("keytrack", f.keyTrack->get());
+    s->set("drive", f.drive->get());
+    s->set("sat", f.sat->get());
+    s->set("fb", f.feedback->get());
+    s->set("level", f.level->get());
+    s->set("hpf", k == 0 ? hpf.get() : 10.0f);
     s->set("vis", st.visBlock ? st.visBlock->index + VIS_CUT : 0);
-    s->set("mcut", mod(st, TCut)); s->set("mres", mod(st, TRes));
+    s->set("vison", k == 0 ? 1.0f : 0.0f);
+    static const Target cuts[MAX_FILTERS] = {TCut, TCut2, TCut3, TCut4}, ress[MAX_FILTERS] = {TRes, TRes2, TRes3, TRes4};
+    s->set("mcut", mod(st, cuts[k])); s->set("mres", mod(st, ress[k]));
+    // Drive and Filter Fb modulation: every filter
     s->set("mdrive", mod(st, TDrive)); s->set("mfb", mod(st, TFb));
+}
+
+void scAnalogBox::sendFilter(ServerState& st) {
+    for(int k = 0; k < filters(); k++) sendFilterK(st, k);
 }
 
 void scAnalogBox::sendAmp(ServerState& st) {
@@ -571,6 +634,16 @@ void scAnalogBox::updateParts(ofxSCServer* server, ServerState& st) {
     };
     part(st.noise, noiseWanted(), def("ABNoise"), [&](){ sendNoise(st); });
     part(st.ring, ringWanted(), def("ABRing"), [&](){ sendRing(st); });
+    // filters 2..: after the first, in order (series: each reads the one before)
+    for(int k = 1; k < MAX_FILTERS; k++){
+        auto*& s = st.moreFilters[k - 1];
+        if(k < filters() && !s){
+            s = new ofxSCSynth(def("ABFilter"), server);
+            sendFilterK(st, k);
+            s->createAndRun(1, st.groups[SlFilter]->nodeID, true);
+        }else if(k >= filters() && s){ s->free(); delete s; s = nullptr; }
+    }
+    sendFilter(st);   // the buses follow the count
 }
 
 void scAnalogBox::ensureBuses(ofxSCServer* server, ServerState& st) {
@@ -590,6 +663,7 @@ void scAnalogBox::ensureBuses(ofxSCServer* server, ServerState& st) {
     ofxSCBus* oldGate = st.gateBus;
     audio(st.gateBus, W); audio(st.poolPitch, W); audio(st.mixBus, W); audio(st.filtBus, W); audio(st.voiceBus, W);
     for(auto*& b : st.raw) audio(b, W);
+    for(auto*& b : st.chainBus) audio(b, W);
     for(auto*& b : st.freq) control(b, W);
     control(st.noteBus, 2 * W);
     control(st.visBlock, 4 * W);
@@ -623,6 +697,7 @@ void scAnalogBox::freeSynths(ServerState& st) {
     drop(st.gateS); drop(st.pitchS); drop(st.filter); drop(st.amp); drop(st.spread);
     drop(st.noise); drop(st.ring);
     for(auto*& s : st.osc) drop(s);
+    for(auto*& s : st.moreFilters) drop(s);
     for(auto& f : st.fx){ drop(f.synth); f.running = false; f.offAt = -1.0f; }
 }
 
@@ -632,6 +707,7 @@ void scAnalogBox::freeAll(ofxSCServer* server, ServerState& st) {
     forget(st.gateS); forget(st.pitchS); forget(st.filter); forget(st.amp); forget(st.spread);
     forget(st.noise); forget(st.ring);
     for(auto*& s : st.osc) forget(s);
+    for(auto*& s : st.moreFilters) forget(s);
     if(st.modCreated) modulation.free(server, false);
     st.modCreated = false;
     for(auto& f : st.fx){ forget(f.synth); f.running = false; }
@@ -643,6 +719,7 @@ void scAnalogBox::freeAll(ofxSCServer* server, ServerState& st) {
     auto control = [&](ofxSCBus*& b){ if(b && liveControlBus(server, b)) b->free(); delete b; b = nullptr; };
     audio(st.gateBus); audio(st.poolPitch); audio(st.mixBus); audio(st.filtBus); audio(st.voiceBus);
     for(auto*& b : st.raw) audio(b);
+    for(auto*& b : st.chainBus) audio(b);
     for(auto*& b : st.freq) control(b);
     for(auto& f : st.fx) audio(f.in);
     control(st.noteBus); control(st.visBlock);
@@ -890,6 +967,7 @@ bool scAnalogBox::stageOn(int s) const {
         case StShaper: return shaperOn.get();
         case StSat: return satOn.get();
         case StRing: return ringFxOn.get();
+        case StShift: return shiftOn.get();
         case StChorus: return chorusOn.get();
         case StEq: return eqOn.get();
         case StEcho: return echoOn.get();
@@ -898,7 +976,7 @@ bool scAnalogBox::stageOn(int s) const {
 }
 
 std::string scAnalogBox::stageDef(int s) const {
-    static const char* names[NumStages] = {"ABFxShaper", "mixerProSat", "ABFxRing", "ABFxChorus", "mixerProEQ", "mixerProEcho", "mixerProRvb"};
+    static const char* names[NumStages] = {"ABFxShaper", "mixerProSat", "ABFxRing", "ABFxShift", "ABFxChorus", "mixerProEQ", "mixerProEcho", "mixerProRvb"};
     return names[s] + ofToString(outChannels.get());
 }
 
@@ -916,6 +994,11 @@ float scAnalogBox::stageTail(int s) const {
     }
     if(s == StRvb) return std::min(30.0f, rvbDecay.get() + rvbPredelay.get() * 0.001f + 0.3f);
     if(s == StChorus) return 0.1f;
+    if(s == StShift){
+        const float feed = ofClamp(shiftFeed.get(), 0.0f, 0.95f);
+        const float repeats = feed > 0.001f ? std::log(0.001f) / std::log(feed) : 0.0f;
+        return std::min(30.0f, (shiftDelay.get() + 0.002f) * (repeats + 1.0f) + 0.1f);
+    }
     return 0.05f;
 }
 
@@ -941,6 +1024,16 @@ void scAnalogBox::sendStage(int s, ofxSCSynth* x) {
             x->set("freq", ringFreq.get());
             x->set("spread", ringSpread.get());
             x->set("mix", ringMix.get());
+            x->set("on", on);
+            break;
+        case StShift:
+            x->set("shift", shiftHz.get());
+            x->set("spread", shiftSpread.get());
+            x->set("both", shiftBoth.get() ? 1.0f : 0.0f);
+            x->set("fb", shiftFeed.get());
+            x->set("delay", shiftDelay.get());
+            x->set("tone", shiftTone.get());
+            x->set("mix", shiftMix.get());
             x->set("on", on);
             break;
         case StChorus:
@@ -1509,8 +1602,21 @@ void scAnalogBox::applyState(const ofJson& a, const ofJson& b, float t) {
 
     // the controls: only what changes is set (each sends what it needs)
     static const ofJson none = ofJson::object();
-    const ofJson& ca = a.contains("controls") ? a["controls"] : none;
-    const ofJson& cb = b.contains("controls") ? b["controls"] : none;
+    ofJson ca = a.contains("controls") ? a["controls"] : none;
+    ofJson cb = b.contains("controls") ? b["controls"] : none;
+    // snapshots from before the extra filters and the frequency shifter: those at their defaults
+    if(defaultSnap.contains("controls")){
+        auto isNew = [](std::string k){
+            std::replace(k.begin(), k.end(), '_', ' ');
+            for(const char* p : {"F2 ", "F3 ", "F4 ", "Freq Shift"}) if(k.rfind(p, 0) == 0) return true;
+            return k == "Filters" || k == "Filter Routing" || k == "Filter Level";
+        };
+        for(auto it = defaultSnap["controls"].begin(); it != defaultSnap["controls"].end(); ++it){
+            if(!isNew(it.key())) continue;
+            if(!ca.contains(it.key())) ca[it.key()] = it.value();
+            if(!cb.contains(it.key())) cb[it.key()] = it.value();
+        }
+    }
     for(const auto& control : controls){
         const std::string& k = control.key;
         if(snapExcluded(k) || drivenByConnection(k)) continue;
@@ -1525,8 +1631,8 @@ void scAnalogBox::applyState(const ofJson& a, const ofJson& b, float t) {
 
     // the matrix
     std::vector<float> ma(NUM_SOURCES * NUM_TARGETS, 0.0f), mb = ma;
-    try { if(a.contains("matrix")) ma = a["matrix"].get<std::vector<float>>(); } catch(...) {}
-    try { if(b.contains("matrix")) mb = b["matrix"].get<std::vector<float>>(); } catch(...) {}
+    try { if(a.contains("matrix")) ma = scModulation::fitMatrix(a["matrix"].get<std::vector<float>>(), NUM_SOURCES, NUM_TARGETS); } catch(...) {}
+    try { if(b.contains("matrix")) mb = scModulation::fitMatrix(b["matrix"].get<std::vector<float>>(), NUM_SOURCES, NUM_TARGETS); } catch(...) {}
     ma.resize(NUM_SOURCES * NUM_TARGETS, 0.0f);
     mb.resize(NUM_SOURCES * NUM_TARGETS, 0.0f);
     bool changed = countsChanged;
@@ -2048,103 +2154,166 @@ void scAnalogBox::drawOscTab(float w) {
     ImGui::EndGroup();
 }
 
-// ── Filter: settings, character, its response ───────────────────────────────
+// ── Filters: a card each (added at will), their routing, the response ──────
+void scAnalogBox::drawFilterCard(int k, float cw) {
+    const FilterRef f = filterRef(k);
+    const bool comb = f.mode->get() == kComb;
+    ImGui::BeginGroup();
+    ImGui::PushID(k);
+    sectionHeader(("Filter " + ofToString(k + 1)).c_str(), cw, f.on, pal::osc[k % 6]);
+    const int modeWas = f.mode->get();
+    combo(*f.mode, "Mode", cw, kFilterModes);
+    if(f.mode->get() == kComb && modeWas != kComb){
+        // a comb plays the note: tracked, at the note itself
+        *f.keyTrack = 1.0f;
+        *f.cutoff = std::vector<float>{60.0f};
+        if(first(f.res->get(), 0.0f) < 0.6f) *f.res = std::vector<float>{0.9f};
+    }
+    combo(*f.type, "Type", cw, comb ? kCombTypes : kFilterTypes);
+    if(comb && ImGui::IsItemHovered())
+        ImGui::SetTooltip("Feedback +: rings at the pitch (its harmonics)\nFeedback -: an octave down, odd harmonics (hollow)\n"
+                          "Feedforward: notches between / on the harmonics (phasey)");
+    const float note = first(f.cutoff->get(), 84.0f);
+    const float fc = 440.0f * std::pow(2.0f, (note - 69.0f) / 12.0f);
+    std::string fmt;
+    if(comb && f.keyTrack->get() > 0.99f) fmt = (note >= 60.0f ? "+" : "") + ofToString(note - 60.0f, 1) + " st from the note";
+    else fmt = ofToString(note, 1) + "  (" + (fc >= 1000 ? ofToString(fc / 1000.0f, 2) + " kHz)" : ofToString(fc, 0) + " Hz)");
+    sliderVec(*f.cutoff, comb ? "Pitch" : "Cutoff", cw, fmt.c_str());
+    if(comb && ImGui::IsItemHovered()) ImGui::SetTooltip("With Key Track 1: 60 is the note played (72 an octave up)");
+    sliderVec(*f.res, comb ? "Feedback" : "Resonance", cw, "%.2f");
+    slider(*f.keyTrack, "Key Track", cw, "%.2f");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("1: follows the note (one octave per octave)");
+    slider(*f.drive, "Drive", cw, "%.1f dB");
+    slider(*f.sat, "Saturation", cw, "%.2f");
+    slider(*f.feedback, comb ? "Damping" : "Feedback", cw, "%.2f");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip(comb ? "Darkens each repeat (a low-pass in the comb's loop)"
+                                                      : "The output back into the input, through a saturator");
+    slider(*f.level, "Level", cw, "%.2f");
+    if(k == 0){
+        slider(hpf, "HPF", cw, "%.0f Hz", true);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("A high-pass before the filters (10 Hz: off)");
+    }
+    if(k > 0 && k == filters() - 1 && ImGui::Button(("Remove Filter " + ofToString(k + 1)).c_str(), ImVec2(cw, 0))) filterCount = filters() - 1;
+    ImGui::PopID();
+    ImGui::EndGroup();
+}
+
 void scAnalogBox::drawFilterTab(float w) {
     const float z = zoom();
-    const float cw = colW(w, 3);
+    const float cw = colW(w, 4);
+    for(int k = 0; k < filters(); k++){
+        if(k) ImGui::SameLine(0, gapW());
+        drawFilterCard(k, cw);
+    }
+    ImGui::Spacing();
+    ImGui::Spacing();
     ImGui::BeginGroup();
-    sectionHeader("Filter", cw, &filterOn);
-    combo(fMode, "Mode", cw, kFilterModes);
-    combo(fType, "Type", cw, kFilterTypes);
-    const float note = first(cutoff.get(), 84.0f);
-    const float fc = 440.0f * std::pow(2.0f, (note - 69.0f) / 12.0f);
-    const std::string fmt = ofToString(note, 1) + "  (" + (fc >= 1000 ? ofToString(fc / 1000.0f, 2) + " kHz)" : ofToString(fc, 0) + " Hz)");
-    sliderVec(cutoff, "Cutoff", cw, fmt.c_str());
-    sliderVec(res, "Resonance", cw, "%.2f");
-    slider(keyTrack, "Key Track", cw, "%.2f");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("1: the cutoff follows the note (one octave per octave)");
-    slider(hpf, "HPF", cw, "%.0f Hz", true);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("A high-pass before the filter (10 Hz: off)");
-    nextCol();
-    sectionHeader("Character", cw);
-    slider(fDrive, "Drive", cw, "%.1f dB");
-    slider(fSat, "Saturation", cw, "%.2f");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("tanh inside the filter's loop: the resonance warms up and squashes");
-    slider(fFeedback, "Feedback", cw, "%.2f");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("The output back into the input, through a saturator");
-    {   // Env 1 -> Cutoff, straight from the matrix
+    sectionHeader("Filters", cw);
+    {
+        int r = filterRouting.get();
         const float x0 = ImGui::GetCursorPosX();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Env 2");
+        ImGui::TextUnformatted("Routing");
+        publishedUnderline(filterRouting.getEscapedName());
         ImGui::SameLine();
         ImGui::SetCursorPosX(x0 + labelW * z);
         ImGui::SetNextItemWidth(cw - labelW * z);
-        float v = matrixCell(SRC_ENV + 1, TCut);
-        if(modulation.envCount < 2) ImGui::TextColored(ImColor(pal::textDim), "add a second envelope");
-        else if(ImGui::SliderFloat("##envCut", &v, -1.0f, 1.0f, "%+.2f -> Cutoff")) setMatrixCell(SRC_ENV + 1, TCut, v);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Envelope 2 -> Cutoff (the Routing matrix's cell): %+.0f semitones at its peak", v * 48);
+        if(ImGui::Combo("##fRouting", &r, "Series\0Parallel\0")) filterRouting = r;
+        publishMenu(filterRouting.getEscapedName());
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Series: each filter into the next (1 -> 2 -> ...)\nParallel: all from the oscillators, summed (Level: each one's share)");
     }
-    {   // LFO 1 -> Cutoff
+    ImGui::TextColored(ImColor(pal::textDim), "%d in use (up to %d)", filters(), MAX_FILTERS);
+    if(filters() < MAX_FILTERS && ImGui::Button("+  Add filter", ImVec2(cw, 0))){
+        auto& f = moreF[filters() - 1];
+        // a new one: on, a gentle band pass up high (or a comb, from its Mode)
+        f.on = true;
+        filterCount = filters() + 1;
+    }
+    publishMenu(filterCount.getEscapedName());
+    for(int pass = 0; pass < 2; pass++){   // Env 2 / LFO 1 -> Cutoff 1, straight from the matrix
+        const int source = pass == 0 ? SRC_ENV + 1 : 0;
+        const bool has = pass == 0 ? modulation.envCount >= 2 : modulation.lfoCount >= 1;
         const float x0 = ImGui::GetCursorPosX();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("LFO 1");
+        ImGui::TextUnformatted(pass == 0 ? "Env 2" : "LFO 1");
         ImGui::SameLine();
         ImGui::SetCursorPosX(x0 + labelW * z);
         ImGui::SetNextItemWidth(cw - labelW * z);
-        float v = matrixCell(0, TCut);
-        if(modulation.lfoCount < 1) ImGui::TextColored(ImColor(pal::textDim), "add an LFO");
-        else if(ImGui::SliderFloat("##lfoCut", &v, -1.0f, 1.0f, "%+.2f -> Cutoff")) setMatrixCell(0, TCut, v);
+        float v = matrixCell(source, TCut);
+        if(!has) ImGui::TextColored(ImColor(pal::textDim), pass == 0 ? "add a second envelope" : "add an LFO");
+        else if(ImGui::SliderFloat(pass == 0 ? "##envCut" : "##lfoCut", &v, -1.0f, 1.0f, "%+.2f -> Cutoff 1")) setMatrixCell(source, TCut, v);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("The Routing matrix's cell: %+.0f semitones at its peak (F2.. Cutoff: their own columns)", v * 48);
     }
     nextCol();
-    sectionHeader("Response", cw);
+    const float rw = cw * 3 + gapW() * 2;
+    sectionHeader("Response", rw);
     {
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        const float h = 160.0f * z;
-        const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + cw, a.y + h);
+        const float h = 170.0f * z;
+        const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + rw, a.y + h);
         canvas(dl, a, b);
         for(float f : {100.0f, 1000.0f, 10000.0f}){
-            const float x = a.x + cw * std::log(f / 20.0f) / std::log(1000.0f);
+            const float x = a.x + rw * std::log(f / 20.0f) / std::log(1000.0f);
             dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), pal::grid);
         }
         const float zeroY = a.y + h * 0.3f;
         dl->AddLine(ImVec2(a.x, zeroY), ImVec2(b.x, zeroY), pal::gridStrong);
-        auto curve = [&](float cutHz, float r, ImU32 col, float thick){
+        constexpr int N = 240;
+        auto freqAt = [](int i){ return 20.0f * std::pow(1000.0f, i / (float)N); };
+        auto plot = [&](const std::function<float(float)>& db, ImU32 col, float thick){
             std::vector<ImVec2> pts;
-            for(int i = 0; i <= 120; i++){
-                const float f = 20.0f * std::pow(1000.0f, i / 120.0f);
-                const float db = filterOn.get() ? filterDb(fMode.get(), fType.get(), f, ofClamp(cutHz, 10.0f, 20000.0f), r) : 0.0f;
-                pts.push_back(ImVec2(a.x + cw * i / 120.0f, ofClamp(zeroY - db * h / 72.0f, a.y + 1, b.y - 1)));
-            }
+            for(int i = 0; i <= N; i++) pts.push_back(ImVec2(a.x + rw * i / N, ofClamp(zeroY - db(freqAt(i)) * h / 72.0f, a.y + 1, b.y - 1)));
             dl->AddPolyline(pts.data(), (int)pts.size(), col, 0, thick);
         };
-        // each voice as it is now (key tracking, envelopes, LFOs...), thin, under the set curve
+        // a filter as set (combs at a C3 note when tracked)
+        auto H = [&](int k, float f, float cutNote, float r){
+            const FilterRef fr = filterRef(k);
+            if(!fr.on->get()) return std::complex<float>(1.0f, 0.0f) * fr.level->get();
+            const float hz = 440.0f * std::pow(2.0f, (cutNote - 69.0f) / 12.0f);
+            return filterH(fr.mode->get(), fr.type->get(), f, ofClamp(hz, 10.0f, 20000.0f), r) * fr.level->get();
+        };
+        auto setNote = [&](int k){ return first(filterRef(k).cutoff->get(), 84.0f); };
+        auto setRes = [&](int k){ return first(filterRef(k).res->get(), 0.25f); };
+        // each voice's first filter as it is now (key tracking, envelopes, LFOs...)
         const int nv = n();
-        if(filterOn.get() && (int)visValues.size() >= VIS_CUT + 2 * W){
+        if(filterOn.get() && fMode.get() != kComb && (int)visValues.size() >= VIS_CUT + 2 * W){
             for(int v = 0; v < nv; v++){
-                const float note = visValues[VIS_CUT + v], vr = ofClamp(visValues[VIS_CUT + W + v], 0.0f, 1.0f);
-                const float hz = 440.0f * std::pow(2.0f, (note - 69.0f) / 12.0f);
+                const float vn = visValues[VIS_CUT + v], vr = ofClamp(visValues[VIS_CUT + W + v], 0.0f, 1.0f);
                 ImColor col = ImColor::HSV(std::fmod(v * 0.61803f, 1.0f), 0.5f, 0.98f);
-                col.Value.w = 0.55f;
-                curve(hz, vr, (ImU32)col, 1.2f * z);
-                const float x = a.x + cw * std::log(ofClamp(hz, 20.0f, 20000.0f) / 20.0f) / std::log(1000.0f);
-                dl->AddLine(ImVec2(x, b.y - 6 * z), ImVec2(x, b.y), (ImU32)col, 2.0f * z);   // its cutoff, on the floor
+                col.Value.w = 0.4f;
+                plot([&](float f){ return 20.0f * std::log10(std::max(1e-6f, std::abs(H(0, f, vn, vr)))); }, (ImU32)col, 1.0f * z);
+                const float hz = 440.0f * std::pow(2.0f, (vn - 69.0f) / 12.0f);
+                const float x = a.x + rw * std::log(ofClamp(hz, 20.0f, 20000.0f) / 20.0f) / std::log(1000.0f);
+                dl->AddLine(ImVec2(x, b.y - 6 * z), ImVec2(x, b.y), (ImU32)col, 2.0f * z);
             }
         }
-        curve(fc, first(res.get(), 0.25f), (pal::accent & 0x00FFFFFF) | 0xB0000000, 2.0f * z);
-        char t[48];
-        std::snprintf(t, sizeof(t), "%s  %s", kFilterModes[std::clamp(fMode.get(), 0, 3)], kFilterTypes[std::clamp(fType.get(), 0, 3)]);
-        dl->AddText(ImVec2(a.x + 4 * z, b.y - ImGui::GetTextLineHeight() - 2 * z), pal::textDim, t);
-        ImGui::Dummy(ImVec2(cw, h));
+        // each filter alone (faint), then all of them together
+        const int nf = filters();
+        if(nf > 1) for(int k = 0; k < nf; k++){
+            const ImU32 c = (pal::osc[k % 6] & 0x00FFFFFF) | 0x60000000;
+            plot([&](float f){ return 20.0f * std::log10(std::max(1e-6f, std::abs(H(k, f, setNote(k), setRes(k))))); }, c, 1.2f * z);
+        }
+        const bool series = filterRouting.get() == 0;
+        plot([&](float f){
+            std::complex<float> t = series ? std::complex<float>(1.0f, 0.0f) : std::complex<float>(0.0f, 0.0f);
+            for(int k = 0; k < nf; k++){ const auto h = H(k, f, setNote(k), setRes(k)); t = series ? t * h : t + h; }
+            return 20.0f * std::log10(std::max(1e-6f, std::abs(t)));
+        }, (pal::accent & 0x00FFFFFF) | 0xC0000000, 2.2f * z);
+        std::string t = nf == 1 ? std::string(kFilterModes[std::clamp(fMode.get(), 0, kComb)]) + "  " +
+                                  (fMode.get() == kComb ? kCombTypes : kFilterTypes)[std::clamp(fType.get(), 0, 3)]
+                                : ofToString(nf) + " filters in " + (series ? "series" : "parallel");
+        dl->AddText(ImVec2(a.x + 4 * z, b.y - ImGui::GetTextLineHeight() - 2 * z), pal::textDim, t.c_str());
+        ImGui::Dummy(ImVec2(rw, h));
     }
     ImGui::EndGroup();
     ImGui::Spacing();
-    ImGui::TextColored(ImColor(pal::textDim), "More movement from Routing (or right-click a control: Modulate with).");
+    ImGui::TextColored(ImColor(pal::textDim), "More movement from Routing (F2..F4 Cutoff / Reso columns), or right-click a control: Modulate with.");
 }
 
 // ── Effects: two rows of columns ─────────────────────────────────────────────
 void scAnalogBox::drawFxTab(float w) {
     const float z = zoom();
-    const float cw = colW(w, 4);
+    const float cw = colW(w, 5);
     auto disabledIf = [](bool off){ if(off) ImGui::BeginDisabled(); };
     auto endDisabled = [](bool off){ if(off) ImGui::EndDisabled(); };
     ImGui::BeginGroup();
@@ -2187,6 +2356,21 @@ void scAnalogBox::drawFxTab(float w) {
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Each channel's carrier a little apart (semitones across the speakers)");
     slider(ringMix, "Mix", cw, "%.2f");
     endDisabled(!ringFxOn.get());
+    nextCol();
+    sectionHeader("Freq Shifter", cw, &shiftOn);
+    disabledIf(!shiftOn.get());
+    slider(shiftHz, "Shift", cw, "%+.1f Hz");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Every partial moves by this many Hz (not a ratio: inharmonic, metallic)");
+    slider(shiftSpread, "Spread", cw, "%.1f Hz");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Each channel's shift a little apart (Hz across the speakers): width, beating");
+    toggle(shiftBoth, "Both sidebands");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Up and down at once (a ring modulator without its carrier)");
+    slider(shiftFeed, "Feedback", cw, "%.2f");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("The shifted sound shifted again, each repeat further: barber-pole spirals");
+    slider(shiftDelay, "Delay", cw, "%.3f s");
+    slider(shiftTone, "Tone", cw, "%.0f Hz", true);
+    slider(shiftMix, "Mix", cw, "%.2f");
+    endDisabled(!shiftOn.get());
     nextCol();
     sectionHeader("Chorus", cw, &chorusOn);
     disabledIf(!chorusOn.get());
@@ -2285,7 +2469,7 @@ void scAnalogBox::drawFxTab(float w) {
     slider(rvbWander, "Wander", cw, "%.2f");
     endDisabled(!rvbOn.get());
     ImGui::EndGroup();
-    ImGui::TextColored(ImColor(pal::textDim), "Voices -> Shaper -> Saturation -> Ring -> Chorus -> EQ -> Echo -> Reverb, at the speaker count. "
+    ImGui::TextColored(ImColor(pal::textDim), "Voices -> Shaper -> Saturation -> Ring -> Freq Shifter -> Chorus -> EQ -> Echo -> Reverb, at the speaker count. "
                        "A stage switched off lets its tail ring out, then stops using CPU.");
 }
 
@@ -2293,7 +2477,8 @@ void scAnalogBox::drawFxTab(float w) {
 //    (control names as in the window), its routes [source, target, amount]
 //    (Env 1 -> Amp is each one's VCA; sources: LFO 0-7, Env 8-11, Velocity 12, Random 13; targets: Pitch 0,
 //    Slave Pitch 1, Width 2, Skew 3, Round 4, FM 5, Noise 6, Cutoff 7, Reso 8,
-//    Drive 9, Filter Fb 10, Amp 11, Pan 12) and counts ──
+//    Drive 9, Filter Fb 10, Amp 11, Pan 12, F2 Cutoff 13, F2 Reso 14, F3 Cutoff 15,
+//    F3 Reso 16, F4 Cutoff 17, F4 Reso 18) and counts ──
 std::vector<ofJson> scAnalogBox::factorySnapshots() const {
     static const char* src = R"JSON([
  {"name": "Init Saw", "lfos": 1, "envs": 2, "routes": [[9, 7, 0.4], [8, 11, 1.0]], "set": {}},
@@ -2308,6 +2493,10 @@ std::vector<ofJson> scAnalogBox::factorySnapshots() const {
  {"name": "Pluck", "lfos": 1, "envs": 2, "routes": [[9, 7, 0.55], [12, 7, 0.25], [8, 11, 1.0]], "set": {"Oscillators": 2, "Osc1 Skew": 0.6, "Osc1 Round": 0.2, "Osc2 Round": 1, "Osc2 Skew": 0, "Osc2 Width": 0.2, "Osc2 Semi": 12, "Osc2 Fine": 3, "Osc2 Level": 0.3, "Cutoff": 46, "Resonance": 0.3, "Filter Mode": 2, "Key Track": 0.7, "Env2 Attack": 0.001, "Env2 Decay": 0.22, "Env2 Sustain": 0.0, "Env2 Release": 0.2, "Env1 Attack": 0.001, "Env1 Decay": 0.6, "Env1 Sustain": 0.0, "Env1 Release": 0.4, "Echo On": true, "Echo Beats": 0.375, "Echo Mix": 0.3, "Echo Ping-pong": 0.8, "Reverb On": true, "Reverb Mix": 0.25}},
  {"name": "Ring Drone", "lfos": 2, "envs": 1, "routes": [[0, 1, 0.08], [1, 7, 0.25], [8, 11, 1.0]], "set": {"Oscillators": 2, "Osc1 Round": 0.5, "Osc1 Skew": 0, "Osc2 Round": 0.3, "Osc2 Skew": 0.4, "Osc2 Semi": 7, "Osc2 Fine": 0, "Ring": 0.6, "Osc1 Level": 0.2, "Osc2 Level": 0.2, "LFO1 Sync": false, "LFO1 Hz": 0.05, "LFO1 Noise": true, "LFO1 Noise Scale": 3, "LFO2 Sync": false, "LFO2 Hz": 0.11, "LFO2 Spread": 1, "Cutoff": 80, "Resonance": 0.4, "Filter Mode": 1, "Filter Feedback": 0.3, "Env1 Attack": 2, "Env1 Sustain": 1, "Env1 Release": 4, "Drift": 0.6, "Chorus On": true, "Reverb On": true, "Reverb Mix": 0.45, "Reverb Decay": 10}},
  {"name": "Screaming Feedback", "lfos": 1, "envs": 2, "routes": [[9, 7, 0.3], [0, 10, 0.3], [8, 11, 1.0]], "set": {"Oscillators": 2, "Osc1 Skew": 1, "Osc1 Round": 0, "Osc2 Round": 1, "Osc2 Skew": 0, "Osc2 Width": 0.15, "Osc2 Semi": 0, "Osc2 Fine": 12, "Cutoff": 70, "Resonance": 0.9, "Filter Mode": 2, "Filter Drive": 18, "Filter Saturation": 0.8, "Filter Feedback": 0.55, "LFO1 Sync": true, "LFO1 Beats": 2, "Shaper On": true, "Shaper Drive": 1.5, "Shaper Mix": 0.4, "Echo On": true, "Echo Mix": 0.2}},
+ {"name": "Comb Pluck", "lfos": 1, "envs": 2, "routes": [[9, 6, 1.0], [8, 11, 1.0]], "set": {"Oscillators": 1, "Osc1 Level": 0.0, "Noise": 0.001, "Noise Color": 0.2, "Filter Mode": 4, "Filter Type": 0, "Cutoff": 60, "Key Track": 1, "Resonance": 0.97, "Filter Feedback": 0.3, "Filters": 2, "F2 Mode": 1, "F2 Type": 0, "F2 Cutoff": 100, "F2 Resonance": 0.1, "F2 Key Track": 0.5, "Env2 Attack": 0.001, "Env2 Decay": 0.03, "Env2 Sustain": 0.0, "Env2 Release": 0.03, "Env1 Attack": 0.001, "Env1 Decay": 2.0, "Env1 Sustain": 0.0, "Env1 Release": 1.5, "Reverb On": true, "Reverb Mix": 0.25}},
+ {"name": "Hollow Comb Drone", "lfos": 2, "envs": 1, "routes": [[0, 7, 0.08], [1, 13, 0.1], [8, 11, 1.0]], "set": {"Oscillators": 2, "Osc1 Skew": 1, "Osc1 Round": 0, "Osc2 Skew": 1, "Osc2 Round": 0, "Osc2 Semi": 0, "Osc2 Fine": 7, "Filter Mode": 4, "Filter Type": 1, "Cutoff": 72, "Key Track": 1, "Resonance": 0.85, "Filter Feedback": 0.5, "Filters": 2, "F2 Mode": 3, "F2 Type": 0, "F2 Cutoff": 90, "F2 Resonance": 0.3, "Filter Routing": 0, "LFO1 Sync": false, "LFO1 Hz": 0.07, "LFO2 Sync": false, "LFO2 Hz": 0.11, "Env1 Attack": 1.5, "Env1 Sustain": 1, "Env1 Release": 3, "Drift": 0.4, "Freq Shift On": true, "Freq Shift": 0.3, "Freq Shift Spread": 0.6, "Freq Shift Mix": 0.5, "Reverb On": true, "Reverb Mix": 0.4, "Reverb Decay": 8}},
+ {"name": "Parallel Formants", "lfos": 1, "envs": 1, "routes": [[0, 7, 0.06], [0, 13, -0.06], [8, 11, 1.0]], "set": {"Oscillators": 2, "Osc1 Skew": 1, "Osc1 Round": 0, "Osc2 Skew": 1, "Osc2 Round": 0, "Osc2 Semi": 0, "Osc2 Fine": -6, "Filters": 3, "Filter Routing": 1, "Filter Mode": 0, "Filter Type": 1, "Cutoff": 74, "Resonance": 0.75, "Key Track": 0, "F2 Mode": 0, "F2 Type": 1, "F2 Cutoff": 86, "F2 Resonance": 0.75, "F2 Key Track": 0, "F2 Level": 0.8, "F3 Mode": 0, "F3 Type": 1, "F3 Cutoff": 98, "F3 Resonance": 0.7, "F3 Key Track": 0, "F3 Level": 0.5, "LFO1 Sync": false, "LFO1 Hz": 0.2, "Env1 Attack": 0.15, "Env1 Sustain": 1, "Env1 Release": 0.6, "Vib Amount": 0.12, "Chorus On": true, "Reverb On": true, "Reverb Mix": 0.3}},
+ {"name": "Shifted Bells", "lfos": 1, "envs": 1, "routes": [[8, 11, 1.0]], "set": {"Oscillators": 2, "Osc1 Skew": 0, "Osc1 Round": 0.5, "Osc2 Skew": 0, "Osc2 Round": 0.5, "Osc2 Semi": 19, "Osc2 Fine": 0, "Osc2 Level": 0.3, "Filter On": false, "Env1 Attack": 0.001, "Env1 Decay": 2.2, "Env1 Sustain": 0.0, "Env1 Release": 1.8, "Freq Shift On": true, "Freq Shift": 137, "Freq Shift Spread": 4, "Freq Shift Feedback": 0.5, "Freq Shift Delay": 0.18, "Freq Shift Tone": 7000, "Freq Shift Mix": 0.6, "Reverb On": true, "Reverb Mix": 0.3, "Reverb Decay": 5}},
  {"name": "Sub Pad", "lfos": 2, "envs": 2, "routes": [[0, 4, 0.4], [1, 3, 0.3], [9, 7, 0.2], [8, 11, 1.0]], "set": {"Oscillators": 3, "Osc1 Round": 0.2, "Osc1 Skew": 0.3, "Osc2 Round": 0.6, "Osc2 Skew": -0.3, "Osc2 Semi": 0, "Osc2 Fine": -8, "Osc3 Octave": -1, "Osc3 Round": 0.5, "Osc3 Skew": 0, "Osc3 Level": 0.45, "LFO1 Sync": false, "LFO1 Hz": 0.13, "LFO1 Spread": 1, "LFO2 Sync": false, "LFO2 Hz": 0.07, "LFO2 Spread": 1, "Cutoff": 74, "Resonance": 0.2, "Filter Mode": 3, "Env1 Attack": 1.2, "Env1 Decay": 1.5, "Env1 Sustain": 0.9, "Env1 Release": 2.5, "Detune": 0.1, "Drift": 0.4, "Chorus On": true, "Chorus Mix": 0.5, "Reverb On": true, "Reverb Mix": 0.4, "Reverb Decay": 6}}
 ])JSON";
     std::vector<ofJson> out;

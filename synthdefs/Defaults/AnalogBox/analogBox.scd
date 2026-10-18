@@ -6,8 +6,9 @@
 //
 //   ModGate -> ModLfo / ModEnv (sources) -> ModRoute (one per matrix cell)
 //   ABPitch -> ABOsc (one per oscillator, in order: an oscillator's FM comes
-//   from an earlier one) + ABNoise + ABRing -> ABFilter -> ABAmp
-//   -> PolyCombSpread<C> -> [ABFxShaper, mixerProSat, ABFxRing, ABFxChorus,
+//   from an earlier one) + ABNoise + ABRing -> ABFilter (1..4: in series,
+//   each into the next, or in parallel, summed) -> ABAmp
+//   -> PolyCombSpread<C> -> [ABFxShaper, mixerProSat, ABFxRing, ABFxShift, ABFxChorus,
 //   mixerProEQ, mixerProEcho, mixerProRvb <C>]
 //
 // Modulation arrives on control buses, one per target, each 16 channels (N
@@ -76,8 +77,9 @@ File.mkdir(root); File.mkdir(dir);
         Out.ar(\out.kr(0), a * b * kv.(\level, 0).clip(0, 1));
     }).writeDefFile(dir);
 
-    // The filter: a high-pass (Juno's), then AnalogFilter (SVF / ladder, 2 or 4
-    // poles) with drive, saturation and feedback; \on crossfades to dry
+    // A filter: a high-pass (Juno's), then AnalogFilter (SVF / ladder, 2 or 4
+    // poles, or a comb) with drive, saturation and feedback; \on crossfades to
+    // dry, \level after. Only the first writes \vis (\vison)
     SynthDef(("ABFilter" ++ n).asSymbol, {
         var sig = HPF.ar(In.ar(\in.kr(0), n), \hpf.kr(10).clip(10, 4000));
         var cut = kv.(\cutoff, 100) + (\keytrack.kr(0) * (base.() - 60)) + modIn.(\mcut);
@@ -87,8 +89,8 @@ File.mkdir(root); File.mkdir(dir);
         var fb = (\fb.kr(0) + modIn.(\mfb)).clip(0, 1);
         var y = AnalogFilter.ar(sig, fc, res, \mode.kr(3), \type.kr(0), driveDb.dbamp, \sat.kr(0), fb);
         // the window: each voice's cutoff (note) and resonance now (\vis: control, 2 x 16)
-        Out.kr(\vis.kr(0), cut.clip(0, 140).asArray ++ (0 ! (16 - n)) ++ res.asArray);
-        Out.ar(\out.kr(0), LinXFade2.ar(sig, y, \on.kr(1, 0.03) * 2 - 1));
+        Out.kr(\vis.kr(0), (cut.clip(0, 140).asArray ++ (0 ! (16 - n)) ++ res.asArray) * \vison.kr(1));
+        Out.ar(\out.kr(0), LinXFade2.ar(sig, y, \on.kr(1, 0.03) * 2 - 1) * \level.kr(1, 0.05));
     }).writeDefFile(dir);
 
     // The VCA: \vca 1 (an envelope routed to Amp): the Amp modulation is the
@@ -170,6 +172,30 @@ File.mkdir(root); File.mkdir(dir);
             x * SinOsc.ar(f * (2 ** (off / 12)))
         };
         Out.ar(\out.kr(0), insert.(sig, XFade2.ar(sig, ring, \mix.kr(0.5, 0.05).clip(0, 1) * 2 - 1)));
+    }).writeDefFile(dir);
+
+    // Frequency shifter (FreqShifter.scd, extended): every partial moves by
+    // \shift Hz (inharmonic: bells, barber-pole sweeps); \spread moves each
+    // channel's shift apart (Hz across the speakers); \both adds the mirror
+    // sideband (-shift: a ring modulator without its carrier); \fb feeds the
+    // shifted sound back after \delay (s), \tone low-passing the loop: each
+    // repeat shifts again (rising / falling spirals)
+    SynthDef(("ABFxShift" ++ c).asSymbol, {
+        var sig = In.ar(\in.kr(0), c).asArray;
+        var shift = \shift.kr(50, 0.05).clip(-5000, 5000);
+        var fb = \fb.kr(0, 0.05).clip(0, 0.95);
+        var back = LocalIn.ar(c).asArray;
+        var wet = sig.collect { |x, i|
+            var off = if(c > 1) { (i / (c - 1) * 2 - 1) * \spread.kr(0, 0.05) } { 0 };
+            var f = shift + off;
+            var inp = x + (back[i] * fb);
+            var up = FreqShift.ar(inp, f);
+            var both = \both.kr(0).clip(0, 1);
+            (up * (1 - (both * 0.5))) + (FreqShift.ar(inp, f.neg) * both * 0.5)
+        };
+        var loop = DelayC.ar(wet, 2, (\delay.kr(0.0, 0.05).clip(0, 2) - ControlDur.ir).max(0)).max(-4).min(4);
+        LocalOut.ar(LeakDC.ar(LPF.ar(loop, \tone.kr(12000, 0.05).clip(200, 20000)).tanh));
+        Out.ar(\out.kr(0), insert.(sig, XFade2.ar(sig, wet, \mix.kr(1, 0.05).clip(0, 1) * 2 - 1)));
     }).writeDefFile(dir);
 
     // Chorus: three modulated delays per channel (a BBD ensemble), their LFOs

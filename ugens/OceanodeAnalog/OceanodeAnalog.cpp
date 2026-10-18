@@ -25,6 +25,10 @@
 //    level made up after; sat 0..1: an asymmetric saturator after the filter;
 //    feedback 0..1: the output back into the input through a clipper and a DC
 //    block (screams with resonance). Cutoff at audio rate is fine.
+//    mode 4 Comb: a delay of one period of freq (fractional, cubic), res
+//    0..1 its gain; type 0 feedback +, 1 feedback - (odd harmonics, an
+//    octave down), 2 feedforward +, 3 feedforward -; feedback 0..1 damps
+//    the loop (a one-pole low-pass in it); drive pushes the loop's tanh.
 //
 
 #include "SC_PlugIn.h"
@@ -395,11 +399,21 @@ struct AnalogFilter : public Unit {
     double s1, s2, s3, s4;      // ladder stage states / SVF integrators (stage 1: s1 s2, stage 2: s3 s4)
     double lastOut, fbLow;       // the output (feedback) and its DC block
     double lastFc, g;
+    float* line;                 // the comb's delay line (a power of two, >= 0.11 s)
+    int lineMask, writePos;
+    double damp, dcIn, dcOut;    // the comb's loop low-pass and DC block
 };
 
 static void AnalogFilter_next(AnalogFilter* unit, int inNumSamples);
 
 static void AnalogFilter_Ctor(AnalogFilter* unit) {
+    int len = 1;
+    while (len < (int)(SAMPLERATE * 0.11) + 8) len <<= 1;
+    unit->line = (float*)RTAlloc(unit->mWorld, len * sizeof(float));
+    unit->lineMask = unit->line ? len - 1 : 0;
+    if (unit->line) std::fill(unit->line, unit->line + len, 0.0f);
+    unit->writePos = 0;
+    unit->damp = unit->dcIn = unit->dcOut = 0;
     unit->s1 = unit->s2 = unit->s3 = unit->s4 = 0;
     unit->lastOut = 0;
     unit->fbLow = 0;
@@ -411,6 +425,22 @@ static void AnalogFilter_Ctor(AnalogFilter* unit) {
     unit->lastOut = 0;
 }
 
+static void AnalogFilter_Dtor(AnalogFilter* unit) {
+    if (unit->line) RTFree(unit->mWorld, unit->line);
+}
+
+// Comb: fractional delay (cubic) of one period, gain res, damped loop
+static inline double combRead(const AnalogFilter* unit, double delay) {
+    const float* b = unit->line;
+    const int m = unit->lineMask;
+    const double pos = unit->writePos - delay;
+    const int i = (int)std::floor(pos);
+    const double t = pos - i;
+    const double y0 = b[(i - 1) & m], y1 = b[i & m], y2 = b[(i + 1) & m], y3 = b[(i + 2) & m];
+    const double c1 = 0.5 * (y2 - y0), c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3, c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
+    return ((c3 * t + c2) * t + c1) * t + y1;
+}
+
 static inline double softSat(double x, double amount) {
     return amount <= 0 ? x : x + (std::tanh(x) - x) * amount;
 }
@@ -418,7 +448,7 @@ static inline double softSat(double x, double amount) {
 void AnalogFilter_next(AnalogFilter* unit, int inNumSamples) {
     float* out = OUT(0);
     const double sr = SAMPLERATE;
-    const int mode = std::clamp((int)IN0(fMode), 0, 3);
+    const int mode = std::clamp((int)IN0(fMode), 0, unit->line ? 4 : 3);
     const int type = std::clamp((int)IN0(fType), 0, 3);
     // drive: the input gain into the filter's own nonlinearity (tanh on its
     // input / in its loop), the level made up after; sat: a saturator after the
@@ -430,7 +460,12 @@ void AnalogFilter_next(AnalogFilter* unit, int inNumSamples) {
     const double makeup = std::pow(driveIn, -0.6), postNorm = drive > 1.0001 ? 1.0 / (std::tanh(drivePost) * std::sqrt(drivePost)) : 1.0;
     const double sat = clampd(IN0(fSat), 0, 1);
     const double satK = 1.0 + 9.0 * sat, satBias = 0.2 * sat, satOff = std::tanh(satBias), satNorm = 1.0 / std::sqrt(satK);
-    const double fbAmt = clampd(IN0(fFeedback), 0, 1);
+    const double fbAmt = mode == 4 ? 0.0 : clampd(IN0(fFeedback), 0, 1);
+    // comb: Feedback is the loop's damping (a one-pole low-pass, 18 kHz .. 400 Hz)
+    const double dampAmt = clampd(IN0(fFeedback), 0, 1);
+    const double dampHz = 18000.0 * std::pow(400.0 / 18000.0, dampAmt);
+    const double dampCoef = 1.0 - std::exp(-2.0 * M_PI * std::min(dampHz, sr * 0.45) / sr);
+    const double dcCoef = 1.0 - 2.0 * M_PI * 10.0 / sr;
     const double fbCoef = 1.0 - std::exp(-2.0 * M_PI * 120.0 / sr);   // the loop's DC block / low cut
     const double fbMakeup = 1.0 / (1.0 + 2.5 * fbAmt);
     double s1 = unit->s1, s2 = unit->s2, s3 = unit->s3, s4 = unit->s4, lastOut = unit->lastOut, fbLow = unit->fbLow;
@@ -449,7 +484,30 @@ void AnalogFilter_next(AnalogFilter* unit, int inNumSamples) {
         }
         double y = 0;
 
-        if (mode <= 1) {
+        if (mode == 4) {
+            // comb: one period of fc (feedback -: half the pitch, odd harmonics)
+            const double delay = clampd(sr / fc, 2.0, (double)unit->lineMask - 4.0);
+            const double gain = (type == 1 || type == 3 ? -1.0 : 1.0) * res * 0.995;
+            double d = combRead(unit, delay);
+            unit->damp += dampCoef * (d - unit->damp);
+            d = unit->damp;
+            double w;
+            if (type <= 1) {
+                // feedback: the loop through tanh (drive pushes it), a DC block
+                y = x + gain * d;
+                w = drive > 1.0001 ? std::tanh(y) : clampd(y, -4.0, 4.0);
+                const double dc = w - unit->dcIn + dcCoef * unit->dcOut;
+                unit->dcIn = w; unit->dcOut = dc;
+                w = dc;
+                y *= 1.0 - 0.75 * res;          // the peaks' level, about as the dry
+            } else {
+                // feedforward: notches between the harmonics (or on them)
+                w = x;
+                y = (x + gain * d) / (1.0 + 0.5 * res);
+            }
+            unit->line[unit->writePos & unit->lineMask] = (float)w;
+            unit->writePos = (unit->writePos + 1) & unit->lineMask;
+        } else if (mode <= 1) {
             // Cytomic / Simper SVF
             auto svf = [&](double v0, double k, double& ic1, double& ic2, double& lp, double& bp, double& hp) {
                 const double a1 = 1.0 / (1.0 + g * (g + k)), a2 = g * a1, a3 = g * a2;
@@ -525,7 +583,11 @@ void AnalogFilter_next(AnalogFilter* unit, int inNumSamples) {
                 }
             }
         }
-        if (!std::isfinite(y)) { y = 0; s1 = s2 = s3 = s4 = 0; fbLow = 0; }
+        if (!std::isfinite(y)) {
+            y = 0; s1 = s2 = s3 = s4 = 0; fbLow = 0;
+            if (unit->line) std::fill(unit->line, unit->line + unit->lineMask + 1, 0.0f);
+            unit->damp = unit->dcIn = unit->dcOut = 0;
+        }
         lastOut = y;
         y *= makeup * fbMakeup;
         if (drive > 1.0001) y = std::tanh(y * drivePost) * postNorm;
@@ -537,10 +599,11 @@ void AnalogFilter_next(AnalogFilter* unit, int inNumSamples) {
     unit->s3 = flush(s3); unit->s4 = flush(s4);
     unit->lastOut = lastOut;
     unit->fbLow = flush(fbLow);
+    unit->damp = flush(unit->damp); unit->dcOut = flush(unit->dcOut);
 }
 
 PluginLoad(OceanodeAnalog) {
     ft = inTable;
     DefineSimpleUnit(MorphOsc);
-    DefineSimpleUnit(AnalogFilter);
+    DefineDtorUnit(AnalogFilter);
 }

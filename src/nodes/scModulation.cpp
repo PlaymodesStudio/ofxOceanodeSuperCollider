@@ -616,6 +616,15 @@ void scModulation::save(ofJson& j, const std::string& prefix) const {
     j[prefix + "Params"] = paramsJson();
 }
 
+std::vector<float> scModulation::fitMatrix(const std::vector<float>& m, int sources, int targets) {
+    if(sources <= 0 || (int)m.size() == sources * targets || m.empty() || m.size() % sources != 0) return m;
+    const int old = (int)m.size() / sources;
+    if(old > targets) return m;
+    std::vector<float> out(sources * targets, 0.0f);
+    for(int s = 0; s < sources; s++) for(int t = 0; t < old; t++) out[s * targets + t] = m[s * old + t];
+    return out;
+}
+
 void scModulation::load(const ofJson& j, const std::string& prefix) {
     auto count = [&](const std::string& k, int& v, int lo, int hi){
         if(j.contains(prefix + k) && j[prefix + k].is_number()) v = std::clamp(j[prefix + k].get<int>(), lo, hi);
@@ -626,6 +635,7 @@ void scModulation::load(const ofJson& j, const std::string& prefix) {
     if(j.contains(prefix + "Matrix") && j[prefix + "Matrix"].is_array()){
         try {
             auto m = j[prefix + "Matrix"].get<std::vector<float>>();
+            m = fitMatrix(m, NUM_SOURCES, T());
             if((int)m.size() == NUM_SOURCES * T()) matrix = m;
         } catch(...) {}
     }

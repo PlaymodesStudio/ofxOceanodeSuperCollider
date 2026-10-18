@@ -13,14 +13,15 @@
 //    will, each a MorphOsc (ugens/OceanodeAnalog: the LFOs' Width / Skew /
 //    Round shape as a band-limited audio oscillator) with octave, semitones,
 //    cents, ratio, hard sync to oscillator 1 and FM from any oscillator; noise
-//    (with a color), ring 1 x 2 -> AnalogFilter (SVF or ladder, 2 or 4 poles,
-//    LP / BP / HP / notch, drive, saturation, feedback; a high-pass before) ->
-//    the amp envelope (VCA).
+//    (with a color), ring 1 x 2 -> up to 4 filters, added at will, in series or
+//    in parallel: AnalogFilter (SVF or ladder, 2 or 4 poles, LP / BP / HP /
+//    notch, or a comb; drive, saturation, feedback; a high-pass before the
+//    first) -> the amp envelope (VCA).
 //  • Modulation: the shared system (scModulation): LFOs, envelopes, velocity,
 //    a random value per note, external inputs and the voice index, routed to
 //    13 targets by a matrix (and any other control: right-click, Modulate).
 //  • Effects after the voices, at the speaker count: sine shaper, saturation,
-//    ring modulator, chorus, EQ, echo, SpaceMaster reverb (each created the
+//    ring modulator, frequency shifter, chorus, EQ, echo, SpaceMaster reverb (each created the
 //    first time it is switched on, paused once its tail is over).
 //  • Snapshots and a factory collection, as PolyComb's.
 //
@@ -48,14 +49,17 @@ class scAnalogBox : public scNode {
 public:
     static constexpr int MAX_VOICES = 16;
     static constexpr int MAX_OSCS = 6;
+    static constexpr int MAX_FILTERS = 4;
     static constexpr int NUM_LFOS = scModulation::MAX_LFOS;
     static constexpr int NUM_ENVS = scModulation::MAX_ENVS;
     static constexpr int NUM_EXT = scModulation::MAX_EXT;
     static constexpr int NUM_SOURCES = scModulation::NUM_SOURCES;
     static constexpr int SRC_ENV = scModulation::SRC_ENV, SRC_VEL = scModulation::SRC_VEL, SRC_RND = scModulation::SRC_RND,
                          SRC_EXT = scModulation::SRC_EXT, SRC_VOICE = scModulation::SRC_VOICE;
-    enum Target { TPitch, TSlave, TWidth, TSkew, TRound, TFm, TNoise, TCut, TRes, TDrive, TFb, TAmp, TPan, NUM_TARGETS };
-    enum Stage { StShaper, StSat, StRing, StChorus, StEq, StEcho, StRvb, NumStages };
+    // (new targets go at the end: presets keep the matrix by index)
+    enum Target { TPitch, TSlave, TWidth, TSkew, TRound, TFm, TNoise, TCut, TRes, TDrive, TFb, TAmp, TPan,
+                  TCut2, TRes2, TCut3, TRes3, TCut4, TRes4, NUM_TARGETS };
+    enum Stage { StShaper, StSat, StRing, StShift, StChorus, StEq, StEcho, StRvb, NumStages };
 
     explicit scAnalogBox(std::vector<serverManager*> servers);
     ~scAnalogBox();
@@ -101,7 +105,9 @@ private:
         std::array<ofxSCSynth*, MAX_OSCS> osc{};        // ABOsc, one per oscillator in use
         ofxSCSynth* noise = nullptr;                    // ABNoise (while its level is up)
         ofxSCSynth* ring = nullptr;                     // ABRing (two oscillators, its level up)
-        ofxSCSynth* filter = nullptr;                   // ABFilter
+        ofxSCSynth* filter = nullptr;                   // ABFilter (filter 1)
+        std::array<ofxSCSynth*, MAX_FILTERS - 1> moreFilters{};   // filters 2.. (in use)
+        std::array<ofxSCBus*, MAX_FILTERS - 1> chainBus{};        // audio: in series, filter k's output
         ofxSCSynth* amp = nullptr;                      // ABAmp
         ofxSCSynth* spread = nullptr;                   // PolyCombSpread<C>
         std::array<Fx, NumStages> fx;
@@ -160,7 +166,9 @@ private:
     void sendOsc(ServerState& st, int k);
     void sendNoise(ServerState& st);
     void sendRing(ServerState& st);
-    void sendFilter(ServerState& st);
+    void sendFilter(ServerState& st);           // every filter (and its buses: series / parallel)
+    void sendFilterK(ServerState& st, int k);
+    int filters() const { return std::clamp(filterCount.get(), 1, MAX_FILTERS); }
     void sendAmp(ServerState& st);
     void sendSpread(ServerState& st);
     bool noiseWanted() const;
@@ -222,11 +230,29 @@ private:
     ofParameter<bool> filterOn;
     ofParameter<int> fMode, fType;
     ofParameter<std::vector<float>> cutoff, res;
-    ofParameter<float> keyTrack, fDrive, fSat, fFeedback, hpf;
+    ofParameter<float> keyTrack, fDrive, fSat, fFeedback, hpf, fLevel;
+    ofParameter<int> filterCount, filterRouting;          // 1..4; 0 series, 1 parallel
+    struct MoreFilter {
+        ofParameter<bool> on;
+        ofParameter<int> mode, type;
+        ofParameter<std::vector<float>> cutoff, res;
+        ofParameter<float> keyTrack, drive, sat, feedback, level;
+    };
+    std::array<MoreFilter, MAX_FILTERS - 1> moreF;
+    // filter k's settings (0: the first's own parameters)
+    struct FilterRef {
+        ofParameter<bool>* on; ofParameter<int>* mode; ofParameter<int>* type;
+        ofParameter<std::vector<float>>* cutoff; ofParameter<std::vector<float>>* res;
+        ofParameter<float>* keyTrack; ofParameter<float>* drive; ofParameter<float>* sat;
+        ofParameter<float>* feedback; ofParameter<float>* level;
+    };
+    FilterRef filterRef(int k);
+    void drawFilterCard(int k, float w);
     // ── Modulation ───────────────────────────────────────────────────────────
     scModulation modulation;
     // ── Effects ──────────────────────────────────────────────────────────────
-    ofParameter<bool> shaperOn, satOn, ringFxOn, chorusOn;
+    ofParameter<bool> shaperOn, satOn, ringFxOn, chorusOn, shiftOn, shiftBoth;
+    ofParameter<float> shiftHz, shiftSpread, shiftFeed, shiftDelay, shiftTone, shiftMix;
     ofParameter<float> shaperDrive, shaperMix;
     ofParameter<float> satDrive, satBias, satTone, satOutput, satMix;
     ofParameter<float> ringFreq, ringSpread, ringMix;

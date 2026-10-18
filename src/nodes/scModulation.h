@@ -141,6 +141,8 @@ public:
     bool sourceUsed(int s) const;
     ImU32 sourceColor(int s) const;
     const std::vector<Target>& targets() const { return targetList; }
+    // A matrix saved with fewer targets (rows of sources x targets): the new columns at 0
+    static std::vector<float> fitMatrix(const std::vector<float>& m, int sources, int targets);
     void sendMatrix();
     void modulateMenu(const std::string& key);                // inside a control's right-click menu
     // the mod envelopes (cards, 4 per row); lead: a card of the node's own first (PolyComb's amp envelope)

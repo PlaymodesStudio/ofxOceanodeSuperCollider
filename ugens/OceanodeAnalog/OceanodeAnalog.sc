@@ -8,6 +8,8 @@ MorphOsc : UGen {
 }
 // AnalogFilter: ZDF SVF / ladder, 2 or 4 poles (mode 0 SVF2, 1 SVF4, 2 Ladder2, 3 Ladder4),
 // type 0 LP, 1 BP, 2 HP, 3 notch; drive (input gain into tanh), sat (tanh in the loop), feedback.
+// mode 4 Comb: one period of freq, res its gain; type 0 feedback +, 1 feedback -, 2 feedforward +,
+// 3 feedforward -; feedback damps the loop.
 AnalogFilter : UGen {
     *ar { arg in = 0.0, freq = 1000.0, res = 0.0, mode = 3, type = 0, drive = 1.0, sat = 0.0, feedback = 0.0, mul = 1.0, add = 0.0;
         ^this.multiNew('audio', in, freq, res, mode, type, drive, sat, feedback).madd(mul, add)
