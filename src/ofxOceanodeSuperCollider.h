@@ -14,6 +14,7 @@
 #include "scSynthdef.h"
 #include "scOldSynthdef.h"
 #include "scNode.h"
+#include "MacroMixerSCBus.h"
 #include "ofxOceanodeSuperColliderController.h"
 #include "ofxSCServer.h"
 #include "scOutput.h"
@@ -218,6 +219,7 @@ static void registerModels(ofxOceanode &o){
 
 static void registerType(ofxOceanode &o){
 	o.registerType<nodePort>("ScBus");
+    registerMacroMixerSCBus(o.getController<ofxOceanodeSuperColliderController>()->getServers());
 }
 
 static void registerScope(ofxOceanode &o){

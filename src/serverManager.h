@@ -188,7 +188,13 @@ private:
 
     static std::map<ofxSCServer*, int> serverSampleRates;
     
-    std::vector<ofxSCBus> busses;
+    // Stable allocation per node/output: adding a MacroMixer destination must
+    // not renumber the origin's or an unrelated graph's audio buses.
+    std::map<scNode*,std::map<int,std::unique_ptr<ofxSCBus>>> busses;
+    void releaseGraphBusses();
+    void watchMixerGraphSync();
+    ofEventListener mixerGraphSyncListener;
+    int mixerGraphSyncID=-1;
     std::map<scNode*, std::map<int, int>> outputBussesRefToNode;
     // source -> destination, with the bus between them, recorded as the graph
     // is built. Gives both the stem list and the chain to walk for its name.

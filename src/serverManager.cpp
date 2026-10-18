@@ -76,8 +76,8 @@ serverManager::~serverManager(){
     serverSampleRates.erase(server);
     for(auto node : nodesList) node->free(server);
     nodesList.clear();
-    for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-    busses.clear();
+    connections.clear(); nodeLinks.clear(); nodeDestroyedListeners.clear();
+    releaseGraphBusses();
 }
 
 void serverManager::setup(){
@@ -85,6 +85,7 @@ void serverManager::setup(){
     if(configuredNumOutputBusChannels < 0) configuredNumOutputBusChannels = preferences.numOutputBusChannels;
 
     server = new ofxSCServer(preferences.bindAddress, preferences.udpPort, preferences.udpPort+20, preferences.numInputBusChannels, preferences.numOutputBusChannels, preferences.numAudioBusChannels, preferences.numControlBusChannels, preferences.numBuffers);
+    watchMixerGraphSync();
     serverSampleRates[server] = preferences.hardwareSampleRate;
     if(preferences.local){
         sc = new scStart(preferences);
@@ -115,6 +116,7 @@ void serverManager::setup(){
     }));
     listeners.push(server->serverInitializedEvent.newListener([this](){
         initialized = true;
+        mixerGraphSyncID=-1;
         graphGeneration++;
         // Folders required while the server was booting / loading the
         // SynthDef tree came after loadDefs() and were never sent. Loaded
@@ -132,8 +134,7 @@ void serverManager::setup(){
             server->requestNRTSync();
         }
         nodesList.clear();
-        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-        busses.clear();
+        releaseGraphBusses();
 
         // Server initialization resets the audio bus allocator, so the old
         // reserved silent bus address may now point to a live allocation.
@@ -848,8 +849,24 @@ void serverManager::removeOutput(scOutput *output){
     recomputeGraph();
 }
 
+void serverManager::releaseGraphBusses(){
+    for(auto& node:busses) for(auto& port:node.second) port.second->free();
+    busses.clear(); outputBussesRefToNode.clear();
+}
+
+void serverManager::watchMixerGraphSync(){
+    mixerGraphSyncListener=server->newFeedbackMessage.newListener([this](ofxOscMessage& message){
+        if(message.getAddress()!="/synced" || message.getNumArgs()!=1
+           || message.getArgAsInt(0)!=mixerGraphSyncID) return;
+        mixerGraphSyncID=-1;
+        for(auto* node:nodesList) node->graphDidRebuild(server,true);
+        graphComputed.notify();
+    });
+}
+
 void serverManager::teardownGraphForPresetLoad(){
     if(server == nullptr) return;
+    mixerGraphSyncID=-1;
 
     // Every synth in group 1, including those outside the graph, goes below.
     graphGeneration++;
@@ -872,8 +889,7 @@ void serverManager::teardownGraphForPresetLoad(){
     }
     nodesList.clear();
 
-    for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-    busses.clear();
+    releaseGraphBusses();
 
     if(initialized){
         ofxOscMessage m;
@@ -892,10 +908,11 @@ void serverManager::recomputeGraph(){
     if(!initialized) return;
 //    ofLog() << "Recompute Graph";
     if(outputs.size() == 0){
+        mixerGraphSyncID=-1;
         for(auto node : nodesList) node->free(server);
         nodesList.clear();
-        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-        busses.clear();
+        connections.clear(); nodeLinks.clear(); nodeDestroyedListeners.clear();
+        releaseGraphBusses();
     }else{
         
 //        server->setWaitToSend(true);
@@ -903,7 +920,6 @@ void serverManager::recomputeGraph(){
         
 //        for(auto &b : busses) b.free();
         
-        outputBussesRefToNode.clear();
         
         // Nodes that span servers ask which graph they are part of
         scNode::ScopedGraphTraversal traversal(server);
@@ -920,6 +936,15 @@ void serverManager::recomputeGraph(){
                 newNodesList.push_back(outputs[i]);
             }
         }
+        const bool audioMixer=std::any_of(newNodesList.begin(),newNodesList.end(),[](const auto* node){return node->isMacroMixerBridge();});
+        if(audioMixer) {
+            for(auto* node:newNodesList) requireSynthdefFolder(node->requiredSynthdefFolder());
+            if(areRequiredSynthdefsLoading()) {
+                for(auto* node:newNodesList) node->graphWillRebuild(server);
+                recomputePending=true;
+                return; // Existing routing/audio stays untouched while /sync is pending.
+            }
+        }
         
         std::map<nodePort, std::vector<scNode*>> newConnections;
         
@@ -929,10 +954,16 @@ void serverManager::recomputeGraph(){
         
         //Skip all proceses if the list is the same and if the nodeList has not changed (due to destroyed nodes)
         if(nodesList == newNodesList && !nodesListChanged && newConnections == connections){
+            // A SynthDef /sync can defer a rebuild even when its topology did
+            // not change. Release that readiness fence on the unchanged graph.
+            if(audioMixer && mixerGraphSyncID<0) {
+                for(auto* node:newNodesList) node->graphDidRebuild(server,true);
+                graphComputed.notify();
+            }
             return;
         }
         
-        nodesListChanged = false;
+        const auto previousNodes=nodesList;
         
         std::vector<scNode*> toCreateNodes;
         std::vector<scNode*> toUpdateNodes;
@@ -946,10 +977,44 @@ void serverManager::recomputeGraph(){
                 toCreateNodes.push_back(node);
             }
         }
+        // Reserve all additional buses before touching running synths/routing.
+        std::vector<std::pair<scNode*,int>> reserved;
+        bool busesAvailable=true;
+        for(auto* node:newNodesList) {
+            for(int output=0;output<node->getNumOutputs();++output) {
+                if(busses[node].count(output)) continue;
+                // ofxSCBus writes its allocated index into a vector without
+                // checking for -1. Probe capacity before calling its constructor.
+                // Graph allocation is serialized here on the host update thread;
+                // the allocator's free list returns this exact slot next.
+                const int reservation=server->allocatorBusAudio->alloc(MAX_NODE_CHANNELS);
+                if(reservation<0) { busesAvailable=false; break; }
+                server->allocatorBusAudio->free(reservation);
+                auto bus=std::make_unique<ofxSCBus>(RATE_AUDIO,MAX_NODE_CHANNELS,server);
+                busses[node][output]=std::move(bus); reserved.emplace_back(node,output);
+            }
+            if(!busesAvailable) break;
+        }
+        if(!busesAvailable) {
+            for(const auto& item:reserved) { busses[item.first][item.second]->free(); busses[item.first].erase(item.second); }
+            for(auto* node:newNodesList) node->graphDidRebuild(server,false);
+            nodesList=previousNodes; nodesListChanged=true;
+            ofLogError("serverManager") << "Not enough audio buses; existing graph retained";
+            return;
+        }
+        nodesListChanged = false;
+        mixerGraphSyncID=-1;
+        if(audioMixer) for(auto* node:newNodesList) node->graphWillRebuild(server);
+        outputBussesRefToNode.clear();
         server->setBLatency(true);
-        for(auto b = busses.rbegin(); b != busses.rend(); ++b) b->free();
-        busses.clear();
-        
+        for(auto b=busses.begin();b!=busses.end();) {
+            const bool retained=std::find(newNodesList.begin(),newNodesList.end(),b->first)!=newNodesList.end();
+            for(auto port=b->second.begin();port!=b->second.end();) {
+                if(!retained || port->first>=b->first->getNumOutputs()) { port->second->free(); port=b->second.erase(port); }
+                else ++port;
+            }
+            if(b->second.empty()) b=busses.erase(b); else ++b;
+        }
         for(auto node : nodesList){
             if(node != nullptr)
                 node->free(server);
@@ -990,8 +1055,7 @@ void serverManager::recomputeGraph(){
         //Create outputBusses for all nodes except scOutput
         for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
             for(int i = 0; i < (*it)->getNumOutputs() ; i++){
-                busses.emplace_back(RATE_AUDIO, MAX_NODE_CHANNELS, server);
-                int busindex = busses.back().index;
+                int busindex = busses.at(*it).at(i)->index;
                 (*it)->setOutputBus(server, i, busindex);
                 outputBussesRefToNode[(*it)][i] = busindex;
             }
@@ -1032,7 +1096,14 @@ void serverManager::recomputeGraph(){
 //        }
 //        server->sendStoredBundle();
 //        server->setWaitToSend(false);
+        if(audioMixer && !(server->isNRTCapturing() && server->isNRTCaptureOnly())) {
+            // Keep the same latency ordering as the preceding graph commands.
+            // /synced proves that the server has executed their scheduled
+            // rebuild before the runtime can send gains or retire graph leases.
+            mixerGraphSyncID=server->requestSync();
+        } else for(auto* node:nodesList) node->graphDidRebuild(server,true);
         server->setBLatency(false);
+        if(mixerGraphSyncID>=0) return;
     }
     graphComputed.notify();
 }

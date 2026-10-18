@@ -17,7 +17,7 @@ class scNode;
 class nodePort{
 public:
     nodePort() = default;
-    nodePort(int _index, scNode* _nodeRef) : index(_index), nodeRef(_nodeRef){};
+    nodePort(int _index, scNode* _nodeRef, std::shared_ptr<void> _owner = {}) : index(_index), nodeRef(_nodeRef), owner(std::move(_owner)){};
     
     int getIndex() const {return index;};
     scNode* getNodeRef() const {return nodeRef;};
@@ -38,6 +38,9 @@ public:
 private:
     int index = -1;
     scNode* nodeRef = nullptr;
+    // Resource ports from MacroMixer keep their private bridge alive across
+    // ordinary Router/Macro copies. Ordinary SC ports remain non-owning.
+    std::shared_ptr<void> owner;
 };
 
 class scNode : public ofxOceanodeNodeModel {
@@ -66,6 +69,10 @@ public:
     int getNumOutputs(){return outputs.size();};
     
     virtual void buildSynth(ofxSCServer* server){};
+    virtual std::string requiredSynthdefFolder() const { return {}; }
+    virtual bool isMacroMixerBridge() const { return false; }
+    virtual void graphWillRebuild(ofxSCServer* server) {};
+    virtual void graphDidRebuild(ofxSCServer* server,bool success) {};
 
     // A node whose inputs are each worth rendering on their own: a mixer
     // point. Every connected input of one becomes a stem in an NRT render.

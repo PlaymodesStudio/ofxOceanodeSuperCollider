@@ -16,6 +16,7 @@ class ofxSCSynth;
 
 class scOutput : public scNode {
 public:
+    std::string macroMixerBlocker() const override { return "Keep SC Output outside MacroMixer; its server assignment places the mixed graph."; }
     scOutput(vector<serverManager*> outputServers);
     ~scOutput();
     
