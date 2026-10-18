@@ -14,6 +14,17 @@
 //   SampleBoxStrip_N        level, mute: into the node's Out (\mix, summed
 //                           with the other pads) and the pad's own output
 //                           (\padout); its peak on \meterbus.
+//
+// Tempo (the pad's Fit and Sync):
+//   \fitrate   speed factor that makes the region last Fit beats at the
+//              current tempo (C++ keeps it up to date): Resample changes the
+//              pitch with the tempo, Stretch keeps it
+//   \sync      1: while the transport plays, the read position is the
+//              transport's: (beat / \fitbeats x Rate) wrapped over the region.
+//              A looping note plays it as is; a one-shot starts where the
+//              transport is and runs at the fitted speed. The transport
+//              clock follows scTransportSync's anchors (\anchorId, \anchorPos
+//              in beats, kept small by C++, \run, \tbpm).
 (
 var root, dir, targetRanges, spaceMaster, modOf;
 root = if(thisProcess.nowExecutingPath.notNil,
@@ -105,6 +116,7 @@ spaceMaster = { |input, n, size, decay, predelay, lowpass, position, spread, mix
                 var buf, rateBase, inBase, outBase, polyMode, voiceLimit, voiceIndex;
                 var source, voices, finished, sig, modArr, fxMod, f, q, filter;
                 var chokeBlock, chokeIn, cut;
+                var tpos, tphase, syncOn, fitRate;
 
                 trigBus = \trigbus.kr(-1);
                 audioGate = In.ar(trigBus.max(0), 1) * (trigBus >= 0);
@@ -129,6 +141,12 @@ spaceMaster = { |input, n, size, decay, predelay, lowpass, position, spread, mix
                     [In.kr(chokeBlock.max(0) + \chokeslot.kr(0).clip(0, 15)), trig]));
                 buf = \buf0.kr(0);
                 rateBase = \rate.kr(1).clip(0.125, 8);
+                fitRate = \fitrate.kr(1).clip(0.01, 100);
+                // the transport's position (beats) and the region's phase there
+                tpos = \anchorPos.ar(0) + Sweep.ar(T2A.ar(Changed.kr(\anchorId.kr(0))), \tbpm.kr(120) / 60 * \run.ar(0));
+                tphase = (tpos / \fitbeats.kr(4).max(0.001)).frac;
+                // stopped transport: the pad plays freely (auditioning still works)
+                syncOn = (\sync.kr(0) > 0.5) * (A2K.kr(\run.ar(0)) > 0.5);
                 inBase = \inpoint.kr(0).clip(0, 1);
                 outBase = \outpoint.kr(1).clip(0, 1);
                 polyMode = \poly.kr(1) > 0.5;
@@ -151,6 +169,7 @@ spaceMaster = { |input, n, size, decay, predelay, lowpass, position, spread, mix
                     var voiceTrig, choke, held, vm, pitch, speed, step, start, finish;
                     var frames, startFrame, finishFrame, len, loopOn, fade, loopLen, pos, offset;
                     var fadeMix, xoff, rev, frame, xframe, edge, amp, voicePan, read;
+                    var syncPhase, syncLoop, syncShot, endPos;
                     var left, right, left2, right2, raw;
                     voiceTrig = trig * ((voiceIndex - v).abs < 0.5) * (Select.kr(polyMode, [2, voiceLimit]) > v);
                     // another note took over in mono mode, or the choke group cut it: fade out fast
@@ -175,18 +194,26 @@ spaceMaster = { |input, n, size, decay, predelay, lowpass, position, spread, mix
                     len = (finishFrame - startFrame).max(2);
                     step = if(stretchVariant == 0,
                         { speed * (2 ** ((pitch - 60) / 12)) },
-                        { speed / vm.(28, \stretch.kr(1)).clip(0.125, 8) }) * BufRateScale.kr(buf);
+                        { speed / vm.(28, \stretch.kr(1)).clip(0.125, 8) }) * BufRateScale.kr(buf) * fitRate;
                     pos = Sweep.ar(T2A.ar(voiceTrig), step * SampleRate.ir);  // frames since the note started
                     loopOn = \loop.kr(0) > 0.5;
+                    // Sync: the transport's phase over the region (x Rate); a
+                    // one-shot starts there and runs on at the fitted speed
+                    syncPhase = (tphase * speed).frac;
+                    syncLoop = syncPhase * len;
+                    syncShot = ((Latch.ar(syncPhase, T2A.ar(voiceTrig)) * len) + pos).min(len - 1);
                     // Loop: the first pass plays the whole region, then it
                     // loops from start + fade, the tail fading into the head.
                     // One-shot: the position stops at the end (it never wraps
                     // back to the start while the release fades).
-                    fade = len * (vm.(33, \loopcrossfade.kr(0)).clip(0, 50) * 0.01) * loopOn;
+                    fade = len * (vm.(33, \loopcrossfade.kr(0)).clip(0, 50) * 0.01) * loopOn * (1 - syncOn);
                     loopLen = (len - fade).max(1);
                     offset = Select.ar(loopOn, [
                         pos.min(len - 1),
                         Select.ar(pos < fade, [fade + (pos - fade).mod(loopLen), pos])]);
+                    offset = Select.ar(syncOn, [offset, Select.ar(loopOn, [syncShot, syncLoop])]);
+                    // how far a one-shot has gone (its end fade, its end)
+                    endPos = Select.ar(syncOn, [pos, syncShot]);
                     fadeMix = ((offset - loopLen) / fade.max(1)).clip(0, 1) * (fade > 0);
                     xoff = (offset - loopLen).max(0);
                     rev = \reverse.kr(0) > 0.5;
@@ -208,7 +235,7 @@ spaceMaster = { |input, n, size, decay, predelay, lowpass, position, spread, mix
                     };
                     // A one-shot fades out over its last 4 ms, reaching
                     // silence exactly at the region's end.
-                    edge = Select.ar(loopOn, [((len - pos) / (step * SampleRate.ir * 0.004).max(1)).clip(0, 1), DC.ar(1)]);
+                    edge = Select.ar(loopOn, [((len - endPos) / (step * SampleRate.ir * 0.004).max(1)).clip(0, 1), DC.ar(1)]);
                     amp = LagUD.ar(K2A.ar(held), vm.(30, \attack.kr(0.005)).max(0.001),
                         Select.kr(choke > 0, [vm.(31, \release.kr(0.05)).max(0.001), 0.005])) * edge;
                     voicePan = vm.(6, \pan.kr(0)).clip(-1, 1);
@@ -223,7 +250,7 @@ spaceMaster = { |input, n, size, decay, predelay, lowpass, position, spread, mix
                     raw = raw * amp * vm.(5, \gain.kr(1)).max(0) * Latch.kr(level, voiceTrig) *
                         vm.(29, Latch.kr(\velocity.kr(1), voiceTrig)).clip(0, 1) * \loaded.kr(0);
                     // the window's playhead: position 0..1, -1 when silent
-                    [raw, Select.kr(A2K.kr(amp) > 0.001, [-1, A2K.kr(frame / frames)]), held, A2K.kr(pos >= (len - 1)),
+                    [raw, Select.kr(A2K.kr(amp) > 0.001, [-1, A2K.kr(frame / frames)]), held, A2K.kr(endPos >= (len - 1)),
                      Latch.kr(\velocity.kr(1) * level, voiceTrig), TRand.kr(-1, 1, voiceTrig)]
                 };
                 source = voices.collect(_[0]).sum;

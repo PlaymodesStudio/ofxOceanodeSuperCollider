@@ -9,6 +9,10 @@
 #include "ofxOceanodeShared.h"
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxSuperCollider.h"
+#if OFXOCEANODESC_HAS_TIMELINE
+#include "ofxOceanodeContainer.h"
+#include "ofxOceanodeTimeline.h"
+#endif
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -142,7 +146,7 @@ void scSampleBox::setup() {
             const bool high = lvl > 0.0f;
             if(high && !p.gateHigh) fire(p);
             p.gateHigh = high;
-            if(!p.auditionHeld) for(auto& [srv, s] : p.sc) if(s.engine) s.engine->set("gate", lvl);
+            if(!p.auditionHeld && !p.autoPlaying) for(auto& [srv, s] : p.sc) if(s.engine) s.engine->set("gate", lvl);
         }
     }));
     nodeListeners.push(pitch.newListener([this](std::vector<float>&) { for(auto& p : pads) sendChannelInputs(*p); }));
@@ -176,7 +180,8 @@ void scSampleBox::requireSynthdefs() {
         }
     } catch(const std::exception& e) { ofLogWarning("scSampleBox") << e.what(); }
     if(folder.empty()) { ofLogError("scSampleBox") << "Compile synthdefs/Defaults/SampleBox/samplebox.scd"; return; }
-    for(auto* sm : servers) if(sm) sm->requireSynthdefFolder(folder.string());
+    synthdefFolder = folder.string();
+    for(auto* sm : servers) if(sm) sm->requireSynthdefFolder(synthdefFolder);
 }
 
 std::string scSampleBox::engineDef(const Pad& p) const {
@@ -227,6 +232,12 @@ scSampleBox::Control& scSampleBox::registerPadControl(Pad& p, ofParameter<T>& pa
         if(name == "channel") { sendChannelInputs(pad); return; }
         if(name == "choke") { sendChokeMasks(); return; }
         if(name == "mute" || name == "solo") { sendMutes(); return; }
+        if(name == "fitbeats" || name == "sync") { sendTempo(pad); requestAnchor(); return; }
+        if(name == "autoplay") {
+            // playing with the transport means looping with it
+            if constexpr(std::is_same<T, bool>::value) if(value && !pad.loop.get()) pad.loop = true;
+            return;
+        }
         if(name.empty()) return;
         auto send = [&](ofxSCSynth* s) {
             if(!s) return;
@@ -292,6 +303,10 @@ void scSampleBox::setupPad(Pad& p) {
     PAD_I(p.filterType, "Filter Type", 0, 0, 2, DEST_ENGINE, "filtertype");
     PAD_F(p.cutoff, "Cutoff", 16000.0f, 20.0f, 20000.0f, DEST_ENGINE, "cutoff");
     PAD_F(p.resonance, "Resonance", 0.7f, 0.1f, 2.0f, DEST_ENGINE, "resonance");
+    // Tempo
+    PAD_F(p.fitBeats, "Fit Beats", 0.0f, 0.0f, 128.0f, DEST_NONE, "fitbeats");
+    PAD_B(p.sync, "Sync To Transport", false, DEST_NONE, "sync");
+    PAD_B(p.autoplay, "Play With Transport", false, DEST_NONE, "autoplay");
     // Mixer
     PAD_F(p.level, "Level", 1.0f, 0.0f, 2.0f, DEST_STRIP, "level");
     PAD_B(p.mute, "Mute", false, DEST_STRIP, "mute");
@@ -663,6 +678,10 @@ void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p) {
     s->set("buf0", loaded ? bs->second[0]->index : 0);
     s->set("buf1", loaded && p.sample->channels > 1 ? bs->second[1]->index : 0);
     s->set("gain", 1.0f);
+    p.sentFitRate = fitRateOf(p);
+    s->set("fitrate", p.sentFitRate);
+    s->set("fitbeats", p.fitBeats.get() > 0.0f ? p.fitBeats.get() : 4.0f);
+    s->set("sync", int(p.synced()));
     if(sc.bus) s->set("out", sc.bus->index);
     if(sc.vis) s->set("vis", sc.vis->index);
     if(sc.latest) s->set("latestbus", sc.latest->index);
@@ -686,7 +705,7 @@ void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p) {
     const int pb = pitchIn.bus(srv), vb = velIn.bus(srv);
     if(pb >= 0) s->mapan("pitch", pb + ch, 1); else s->set("pitch", valueFor(pitch.get(), ch, 60.0f));
     if(vb >= 0) s->mapan("velocity", vb + ch, 1); else s->set("velocity", valueFor(velocity.get(), ch, 1.0f));
-    if(!p.auditionHeld) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
+    if(!p.auditionHeld && !p.autoPlaying) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
 }
 
 void scSampleBox::sendFx(ofxSCServer* srv, Pad& p, int fx) {
@@ -731,7 +750,7 @@ void scSampleBox::sendChannelInputs(Pad& p) {
         const int pb = pitchIn.bus(srv), vb = velIn.bus(srv);
         if(pb >= 0) s->mapan("pitch", pb + ch, 1); else s->set("pitch", valueFor(pitch.get(), ch, 60.0f));
         if(vb >= 0) s->mapan("velocity", vb + ch, 1); else s->set("velocity", valueFor(velocity.get(), ch, 1.0f));
-        if(!p.auditionHeld) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
+        if(!p.auditionHeld && !p.autoPlaying) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
     }
 }
 
@@ -778,6 +797,7 @@ void scSampleBox::syncFx(ofxSCServer* srv, Pad& p) {
 void scSampleBox::createPad(ofxSCServer* srv, Pad& p) {
     auto n = nodeSC.find(srv);
     if(n == nodeSC.end() || !n->second.created || !n->second.root) return;
+    if(n->second.padsPending) return;            // update() creates every pad once the definitions are in
     if(p.sc.count(srv)) destroyPad(srv, p);   // (it erases the entry)
     PadSC& sc = p.sc[srv];
     ensureBus(srv, sc.bus, RATE_AUDIO, MaxChannels);
@@ -798,6 +818,8 @@ void scSampleBox::createPad(ofxSCServer* srv, Pad& p) {
     sc.engine = new ofxSCSynth(sc.engineDef, srv);
     sendEngine(srv, p);
     sc.engine->createAndRun(0, sc.voices->nodeID, true);
+    requestAnchor();
+    resumeNotes(srv, p);
     syncFx(srv, p);
     sc.strip = new ofxSCSynth("SampleBoxStrip_" + ofToString(channels.get()), srv);
     sendStrip(srv, p);
@@ -835,6 +857,8 @@ void scSampleBox::replaceEngine(ofxSCServer* srv, Pad& p) {
     sendEngine(srv, p);
     sc.engine->createAndRun(4, old->nodeID, true);   // replace
     delete old;
+    requestAnchor();
+    resumeNotes(srv, p);
 }
 
 void scSampleBox::syncPadServer(ofxSCServer* srv, Pad& p) {
@@ -875,6 +899,13 @@ void scSampleBox::createSynth(ofxSCServer* srv) {
     n.root->create(0, 1);
     n.created = true;
     ensureBus(srv, n.choke, RATE_CONTROL, 16);
+    // Our definitions still loading (a preset opened right after the node was
+    // made): an /s_new now would fail, silent until the next graph rebuild.
+    // The group holds our place in the graph; the pads come once synced.
+    if(srv->isNRTSyncPending()) {
+        n.padsPending = true;
+        n.pendingSince = ofGetElapsedTimef();
+    }
     for(auto& p : pads) createPad(srv, *p);
     if(!getActive()) n.root->run(false);
 }
@@ -925,9 +956,20 @@ void scSampleBox::resetInputBusses(ofxSCServer* srv, int) {
 
 void scSampleBox::fire(Pad& p) {
     ++p.fireCount;
+    if(p.loop.get()) p.loopRunning = true;
     for(auto& [srv, sc] : p.sc) if(sc.engine) sc.engine->set("fire", p.fireCount);
 }
+void scSampleBox::resumeNotes(ofxSCServer* srv, Pad& p) {
+    if(!p.loop.get() || !(p.autoPlaying || p.loopRunning)) return;
+    auto it = p.sc.find(srv);
+    if(it == p.sc.end() || !it->second.engine) return;
+    if(p.autoPlaying && p.gateMode.get()) it->second.engine->set("gate", 1.0f);
+    // only this server's engine: the others still play theirs
+    // (their Changed.kr sees the next fire as one change, whatever the jump)
+    it->second.engine->set("fire", ++p.fireCount);
+}
 void scSampleBox::stop(Pad& p) {
+    p.loopRunning = false;
     ++p.stopCount;
     for(auto& [srv, sc] : p.sc) if(sc.engine) sc.engine->set("stop", p.stopCount);
 }
@@ -940,10 +982,139 @@ void scSampleBox::resendParametersForNRT() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Tempo: Fit and Sync To Transport
+// ════════════════════════════════════════════════════════════════════════════
+
+float scSampleBox::currentBpm() const {
+#if OFXOCEANODESC_HAS_TRANSPORT
+    const float b = getFrameTransportState().current.bpm;
+    if(b > 0.0f) return b;
+#endif
+    return bpm > 0.0f ? bpm : 120.0f;
+}
+
+double scSampleBox::beatsPerBar() const {
+#if OFXOCEANODESC_HAS_TIMELINE
+    if(auto* container = getHostContainer())
+        return std::max(0.25, container->getTimelineManager().getBeatsPerBar());
+#endif
+    return 4.0;
+}
+
+// The speed that makes the In..Out region last Fit beats now
+float scSampleBox::fitRateOf(const Pad& p) const {
+    const float region = (p.outPoint.get() - p.inPoint.get()) * p.sample->seconds;
+    if(p.fitBeats.get() <= 0.0f || region <= 0.0f) return 1.0f;
+    return region / (p.fitBeats.get() * 60.0f / currentBpm());
+}
+
+// Beats a region of `seconds` most likely is: a power of two of bars (or of
+// beats) that puts its own tempo nearest 120 BPM, between 70 and 180
+float scSampleBox::guessBeats(float seconds, double bpb) {
+    if(seconds <= 0.0f) return 0.0f;
+    float best = 0.0f, bestScore = 1e9f;
+    std::vector<float> candidates;
+    for(int k = -2; k <= 6; k++) candidates.push_back((float)(bpb * std::pow(2.0, k)));
+    for(int k = 0; k <= 3; k++) candidates.push_back((float)std::pow(2.0, k));   // 1, 2, 4, 8 beats
+    for(float beats : candidates) {
+        const float tempo = beats * 60.0f / seconds;
+        float score = std::abs(std::log2(tempo / 120.0f));
+        if(tempo < 70.0f || tempo > 180.0f) score += 10.0f;
+        if(score < bestScore) { bestScore = score; best = beats; }
+    }
+    return best;
+}
+
+void scSampleBox::sendTempo(Pad& p) {
+    p.sentFitRate = fitRateOf(p);
+    for(auto& [srv, sc] : p.sc) {
+        if(!sc.engine) continue;
+        sc.engine->set("fitrate", p.sentFitRate);
+        sc.engine->set("fitbeats", p.fitBeats.get() > 0.0f ? p.fitBeats.get() : 4.0f);
+        sc.engine->set("sync", int(p.synced()));
+    }
+}
+
+void scSampleBox::requestAnchor() {
+#if OFXOCEANODESC_HAS_TRANSPORT
+    follower.requestAnchor();
+#endif
+}
+
+#if OFXOCEANODESC_HAS_TRANSPORT
+// The transport's position for the synced pads: each gets the beat modulo a
+// multiple of its Fit (below 2048 beats, so float32 stays precise; the phase
+// over the region is the same), timetagged at the anchor's instant
+void scSampleBox::sendTransportAnchors() {
+    bool any = false;
+    for(auto& p : pads) if(p->synced()) any = true;
+    if(!any) return;
+    bool pending = false;
+    for(const auto& a : follower.poll(getFrameTransportState())) {
+        anchorIdCounter = anchorIdCounter % (1 << 20) + 1;
+        scTransportSync::AnchorScope scope(a);
+        for(auto& up : pads) {
+            Pad& p = *up;
+            if(!p.synced()) continue;
+            const double fit = p.fitBeats.get();
+            const double period = fit * std::ceil(2048.0 / fit);
+            const float pos = (float)scTransportSync::positiveMod(a.beat, period);
+            for(auto& [srv, sc] : p.sc) {
+                if(!sc.engine) continue;
+                // sets on a synth not confirmed yet would go out without the timetag
+                if(!sc.engine->isCreated()) { pending = true; continue; }
+                sc.engine->set("tbpm", a.bpm);
+                sc.engine->set("run", a.playing ? 1.0f : 0.0f);
+                sc.engine->set("anchorPos", pos);
+                sc.engine->set("anchorId", (float)anchorIdCounter);   // last: starts the anchor
+            }
+        }
+    }
+    if(pending) follower.requestAnchor();
+}
+#endif
+
+void scSampleBox::updateTempo() {
+    // the fitted speeds follow the tempo, the region and the sample
+    for(auto& p : pads) {
+        const float r = fitRateOf(*p);
+        if(std::abs(r - p->sentFitRate) > 1e-6f * std::max(1.0f, r)) sendTempo(*p);
+    }
+#if OFXOCEANODESC_HAS_TRANSPORT
+    sendTransportAnchors();
+    // Play With Transport: a note held while the transport plays
+    const bool playing = getFrameTransportState().current.isPlaying;
+    for(auto& up : pads) {
+        Pad& p = *up;
+        const bool want = p.autoplay.get() && p.synced() && playing && !p.sample->path.empty();
+        if(want == p.autoPlaying) continue;
+        p.autoPlaying = want;
+        if(want) {
+            fire(p);
+            if(p.gateMode.get()) for(auto& [srv, sc] : p.sc) if(sc.engine) sc.engine->set("gate", 1.0f);
+        } else {
+            stop(p);
+            sendChannelInputs(p);
+        }
+    }
+#endif
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Frame
 // ════════════════════════════════════════════════════════════════════════════
 
 void scSampleBox::update(ofEventArgs&) {
+    // Pads waiting for the definitions (createSynth): created once the server
+    // has synced (or after 3 s without a reply)
+    for(auto& [srv, n] : nodeSC) {
+        if(!n.padsPending) continue;
+        if(srv->isNRTSyncPending() && ofGetElapsedTimef() - n.pendingSince < 3.0f) continue;
+        n.padsPending = false;
+        for(auto& p : pads) createPad(srv, *p);
+        sendChokeMasks();
+        sendMutes();
+    }
     for(auto& up : pads) {
         Pad& p = *up;
         p.mod.showing = showWindow.get() && p.index == selected;
@@ -972,6 +1143,7 @@ void scSampleBox::update(ofEventArgs&) {
             }
         }
     }
+    updateTempo();
     if(pendingLoadDialog) {
         pendingLoadDialog = false;
         Pad& p = *pads[std::clamp(selected, 0, (int)pads.size() - 1)];
@@ -1520,6 +1692,15 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
         }
         dl->AddRectFilled(a, ImVec2(xi, b.y), pal::outside);
         dl->AddRectFilled(ImVec2(xo, a.y), b, pal::outside);
+        // Fit: the beats over the region (bars stronger)
+        if(p.fitBeats.get() >= 1.0f && p.fitBeats.get() <= 128.0f) {
+            const int beats = (int)std::lround(p.fitBeats.get());
+            const int bpb = std::max(1, (int)std::lround(beatsPerBar()));
+            for(int k = 1; k < beats; k++) {
+                const float x = xi + (xo - xi) * k / p.fitBeats.get();
+                dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), k % bpb == 0 ? pal::padCol(p.index, 150) : pal::padCol(p.index, 60), 1.0f * z);
+            }
+        }
         // the loop's crossfade (the seam's end of the region)
         if(p.loop.get() && p.loopCrossfade.get() > 0.0f) {
             const bool rev = p.reverse.get();
@@ -1688,6 +1869,61 @@ void scSampleBox::drawSoundTab(Pad& p, float w) {
         if(!p.loop.get()) ImGui::EndDisabled();
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Loop: fade the end of the region into its start\n(0 %% keeps rhythmic loops tight)");
+    }
+    // ── Tempo: fit the region to beats, follow the transport ──
+    sectionHeader("Tempo", colW);
+    {
+        const double bpb = beatsPerBar();
+        const float region = (p.outPoint.get() - p.inPoint.get()) * seconds;
+        std::vector<std::pair<float, std::string>> fits = {{0.0f, "Off"}, {0.5f, "1/2 beat"}, {1.0f, "1 beat"}, {2.0f, "2 beats"}};
+        for(int bars : {1, 2, 4, 8, 16})
+            fits.push_back({(float)(bars * bpb), ofToString(bars) + (bars == 1 ? " bar" : " bars") + " (" + ofToString(bars * bpb) + ")"});
+        const float fit = p.fitBeats.get();
+        std::string preview = ofToString(fit, 2) + " beats";
+        for(const auto& f : fits) if(std::abs(f.first - fit) < 1e-4f) preview = f.second;
+        const std::string key = p.fitBeats.getEscapedName();
+        ImGui::PushID(key.c_str());
+        const float x0 = ImGui::GetCursorPosX();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Fit");
+        drawPublishedUnderline(key);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(x0 + labelW * z);
+        const float guessW = 52.0f * z;
+        ImGui::SetNextItemWidth(std::max(40.0f * z, colW - labelW * z - guessW - 4.0f * z));
+        if(ImGui::BeginCombo("##fit", preview.c_str())) {
+            for(const auto& f : fits) if(ImGui::Selectable(f.second.c_str(), std::abs(f.first - fit) < 1e-4f)) p.fitBeats = f.first;
+            ImGui::EndCombo();
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("The region lasts exactly this many beats at the current tempo, and keeps doing so when the tempo\n"
+                              "changes. Resample: the pitch follows the tempo (tape). Stretch: the pitch stays.\n"
+                              "Right-click: type any number of beats, publish.");
+        drawPublishMenu(key);
+        ImGui::SameLine(0, 4.0f * z);
+        ImGui::BeginDisabled(region <= 0.0f);
+        if(ImGui::Button("Guess", ImVec2(guessW, 0))) p.fitBeats = guessBeats(region, bpb);
+        ImGui::EndDisabled();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("How many beats the region is (a power of two of bars or beats, its own tempo nearest 120 BPM)");
+        ImGui::PopID();
+        if(fit > 0.0f && region > 0.0f)
+            ImGui::TextColored(ImColor(pal::textDim), "Its tempo %.1f BPM  ->  x%.3f", fit * 60.0f / region, fitRateOf(p));
+#if OFXOCEANODESC_HAS_TRANSPORT
+        ImGui::BeginDisabled(fit <= 0.0f);
+        toggle(p.sync, "Sync to transport");
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(fit <= 0.0f ? "Needs Fit" :
+                              "While the transport plays, the region is read at the transport's position: it stays in\n"
+                              "phase with the bars through seeks, loops and tempo changes. Triggers still start and\n"
+                              "stop notes (gate a break: it always comes back in phase). Stopped: it plays freely.");
+        ImGui::BeginDisabled(!p.sync.get());
+        toggle(p.autoplay, "Play with transport");
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Plays (looping) whenever the transport plays: no trigger needed");
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
+#endif
     }
     endColumn();
 

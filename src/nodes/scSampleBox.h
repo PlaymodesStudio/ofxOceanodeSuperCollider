@@ -15,6 +15,12 @@
 //    Mode holds the note while the gate is high. Polyphonic rotates over up
 //    to 8 voices; mono chokes the previous note (5 ms) instead of jumping it
 //    back to the start. Pads in the same Choke group cut each other.
+//  • Tempo (a pad's Sound tab): Fit makes the region last a number of beats
+//    at the current tempo, kept as the tempo changes (Resample: the pitch
+//    follows, like tape; Stretch: it does not). Sync To Transport reads the
+//    region at the transport's position while it plays (sample accurate,
+//    scTransportSync anchors): a break stays in phase with the bars through
+//    seeks, loops and tempo changes. Play With Transport: no trigger needed.
 //  • A pad's sound (the window's Sound, Envelopes, LFOs and Routing tabs):
 //    region, Resample / Stretch, Reverse, envelopes, filter, its own shared
 //    modulation (scModulation) per voice.
@@ -37,8 +43,12 @@
 
 #pragma once
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "scNode.h"
 #include "serverManager.h"
+#if OFXOCEANODESC_HAS_TRANSPORT
+#include "scTransportSync.h"
+#endif
 #include "scSampleBrowser.h"
 #include "scSlicerBox.h"
 #include "scEQEditor.h"
@@ -84,6 +94,7 @@ public:
     int getLastSynthID(ofxSCServer*) override;
     void setInputBus(ofxSCServer*, scNode*, int) override;
     void resetInputBusses(ofxSCServer*, int) override;
+    std::string requiredSynthdefFolder() const override { return synthdefFolder; }
     void resendParametersForNRT() override;
     void presetSave(ofJson&) override;
     void loadBeforeConnections(ofJson&) override;
@@ -151,6 +162,13 @@ private:
         ofParameter<bool> filterOn;
         ofParameter<int> filterType;
         ofParameter<float> cutoff, resonance;
+        // Tempo
+        ofParameter<float> fitBeats;     // 0: off
+        ofParameter<bool> sync, autoplay;
+        float sentFitRate = -1.0f;
+        bool autoPlaying = false;        // Play With Transport holds a note now
+        bool loopRunning = false;        // a looping note was started (Play, Trigger/Gate) and not stopped
+        bool synced() const { return sync.get() && fitBeats.get() > 0.0f; }
         // Mixer
         ofParameter<float> level;
         ofParameter<bool> mute, solo;
@@ -179,6 +197,7 @@ private:
 
     std::vector<Control> controls;
     std::vector<serverManager*> servers;
+    std::string synthdefFolder;          // where our SynthDefs are (requireSynthdefs)
     scSampleBrowser browser{"scSampleBox", {".wav", ".aif", ".aiff", ".flac"}};
 
     // ── The node's server objects ───────────────────────────────────────────
@@ -186,6 +205,11 @@ private:
         ofxSCGroup* root = nullptr;      // every pad's group, in order
         ofxSCBus* choke = nullptr;       // control, 16: each pad's triggers (choke groups)
         bool created = false;
+        // The pads wait while the server is still loading definitions (our
+        // folder, asked for when the node was made: a preset load builds the
+        // graph right after); update() creates them once it has synced
+        bool padsPending = false;
+        float pendingSince = 0.0f;
     };
     std::map<ofxSCServer*, NodeSC> nodeSC;
     std::map<ofxSCServer*, std::map<int, int>> outputBuses;   // 0 Out, n Pad n
@@ -236,9 +260,25 @@ private:
     void sendChannelInputs(Pad& p);          // trig bus, pitch, velocity, gate (after Channel or the inputs changed)
     void sendChokeMasks();
     void sendMutes();
+    // Tempo: Fit and Sync
+    float currentBpm() const;                // the transport's (else the node's setBpm)
+    double beatsPerBar() const;
+    float fitRateOf(const Pad& p) const;     // the speed that makes the region last Fit beats
+    void sendTempo(Pad& p);                  // fitrate, fitbeats, sync
+    void updateTempo();                      // per frame: fit rates, anchors, Play With Transport
+    static float guessBeats(float seconds, double beatsPerBar);
+#if OFXOCEANODESC_HAS_TRANSPORT
+    scTransportSync::Follower follower;
+    int anchorIdCounter = 0;
+    void sendTransportAnchors();
+#endif
+    void requestAnchor();
     void rebuildAll();                       // N Chan: every pad's synths again
     void fire(Pad& p);
     void stop(Pad& p);
+    // A new engine (the graph rebuilt, a new definition) has no voices: the
+    // loop that should be sounding starts again there (in phase when synced)
+    void resumeNotes(ofxSCServer*, Pad& p);
     void requireSynthdefs();
     bool anySolo() const;
     float valueFor(const std::vector<float>& v, int channel, float fallback) const;

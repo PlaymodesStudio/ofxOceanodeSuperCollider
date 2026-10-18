@@ -44,6 +44,20 @@ a gate is a level (0.2 plays at 0.2). Pitch 60 plays the file at its own pitch.
   (a control bus of 16); `\chokemask` (16 values, from the node) says which
   pads' triggers cut this one's notes (5 ms).
 
+## Tempo (Fit, Sync To Transport)
+
+- **Fit**: C++ sends `\fitrate` = region seconds ÷ (Fit beats × 60 / BPM), kept up
+  to date as the tempo, the region or the sample change. It scales the read speed:
+  Resample changes the pitch with the tempo (tape), Stretch keeps it.
+- **Sync To Transport**: while `\run` is 1, the read position is the transport's,
+  `(beat / \fitbeats × Rate).frac` over the region (a one-shot starts there and runs
+  on at the fitted speed). The beat comes from scTransportSync anchors
+  (`\anchorId`, `\anchorPos` in beats modulo a multiple of Fit below 2048, `\tbpm`,
+  `\run`), timetagged, so it is sample accurate through seeks, loops and tempo
+  changes. Transport stopped: the pad plays freely.
+- **Play With Transport** (C++ only): fires the pad when the transport starts,
+  stops it when it stops.
+
 ## Modulation
 
 Each pad has its own shared modulation (scModulation): `\modbus + k * 16`, 8
