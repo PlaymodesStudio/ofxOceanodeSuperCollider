@@ -45,7 +45,7 @@ perlin2 = { |x, y, salt = 0|
     ((a + ((b - a) * v)) * 1.4 + 0.5).clip(0, 1)
 };
 
-(1..16).do { |n|
+(1..32).do { |n|
     var kv = { |name, def| NamedControl.kr(name, def ! n) };
 
     // the gates are levels: a gate rising to 0.2 plays a note at 0.2. \out

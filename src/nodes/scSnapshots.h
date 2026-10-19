@@ -25,7 +25,7 @@
 //      snaps.setupParameters();              // where the node creates its parameters
 //      reg(snaps.snapshotP, []{}); ...       // the node's publishing
 //      snaps.setup(host);                    // after: loads the library
-//      update(): snaps.update();   window: snaps.drawBar(w);
+//      update(): snaps.update();   window: snaps.drawBar(w);  (a line under it)
 //      captured keys: skip snaps.isOwnKey(key) (the snapshot controls themselves)
 //
 //  Header-only (as PulsarBox), so the projects need no new file.
@@ -60,6 +60,7 @@ public:
         std::function<float()> bpm;                           // Morph Time in beats
         std::function<void(const std::string& key)> paramMenu;   // after a parameter's widget: its menu
         std::string presetFolder;                             // data-relative; "": nodeSnapshots/<folder>/Presets
+        std::vector<std::pair<std::string,std::string>> bundledBanks; // optional label / read-only JSON path
     };
 
     ofParameter<int> snapshotP, morphAP, morphBP, morphCurveP, morphSwitchP;
@@ -205,6 +206,18 @@ public:
         return false;
     }
     bool empty() const { for(bool u : used) if(u) return false; return true; }
+    // Snapshot / Morph A / Morph B published to the node are dropdowns:
+    // their names by value ("-", then "k  name", "k" when empty)
+    std::vector<std::string> slotNames() const {
+        std::vector<std::string> out;
+        out.reserve(SLOTS + 1);
+        out.push_back("-");
+        for(int k = 0; k < SLOTS; k++) out.push_back(used[k] ? ofToString(k + 1) + "  " + name(k) : ofToString(k + 1));
+        return out;
+    }
+    std::vector<std::string> slotKeys() const {
+        return {snapshotP.getEscapedName(), morphAP.getEscapedName(), morphBP.getEscapedName()};
+    }
     // The recall / morph settings, for a node that saves them itself (one
     // whose publish registry does not hold these parameters)
     ofJson settingsJson() const {
@@ -270,6 +283,49 @@ public:
             act.save(cur);
             if(!cur.contains(act.key) || cur[act.key] != v) act.load(v);
         }
+    }
+
+    // The same for nodes whose controls are {key, save() -> ofJson, load(json)}
+    // (EchoBox, EuclideanBox...): a sound is every control but the skipped
+    template<typename Controls, typename Skip>
+    static ofJson captureControls(const Controls& controls, Skip skip) {
+        ofJson j = ofJson::object();
+        for(const auto& c : controls) if(c.save && !isOwnKey(c.key) && !skip(c.key)) j[c.key] = c.save();
+        return j;
+    }
+    template<typename Controls, typename Skip>
+    static void blendControls(const Controls& controls, const ofJson& a, const ofJson& b, float t, bool sw, Skip skip) {
+        for(const auto& c : controls) {
+            if(!c.load || !c.save || isOwnKey(c.key) || skip(c.key)) continue;
+            const bool ha = a.contains(c.key), hb = b.contains(c.key);
+            ofJson v;
+            if(ha && hb) v = blendValue(a[c.key], b[c.key], t, sw, logKey(c.key));
+            else if(hb && sw) v = b[c.key];
+            else if(ha && !sw) v = a[c.key];
+            else continue;
+            if(c.save() != v) c.load(v);
+        }
+    }
+    // A parameter's name as its key (ofAbstractParameter::escape)
+    static std::string escapeKey(std::string s) {
+        for(const char* ch : {" ", "<", ">", "{", "}", "[", "]", ",", "(", ")", "/", "\\", ".", "#"}) ofStringReplace(s, ch, "_");
+        return s;
+    }
+    // Factory snapshots from the node's defaults: each {"name", "set": {"Parameter
+    // Name": value}} over a copy of base (under `sub` when the sound keeps its
+    // controls there)
+    static std::vector<ofJson> presetsFrom(const ofJson& base, const char* json, const std::string& sub = "") {
+        std::vector<ofJson> out;
+        try {
+            for(const auto& p : ofJson::parse(json)) {
+                ofJson j = base;
+                ofJson& target = sub.empty() ? j : j[sub];
+                if(p.contains("set")) for(auto it = p["set"].begin(); it != p["set"].end(); ++it) target[escapeKey(it.key())] = it.value();
+                j["name"] = p.value("name", std::string("Init"));
+                out.push_back(j);
+            }
+        } catch(const std::exception& e) { ofLogError("scSnapshots") << "factory: " << e.what(); }
+        return out;
     }
 
     // ── Per frame ──────────────────────────────────────────────────────────
@@ -356,7 +412,7 @@ public:
         message = "Loaded the factory snapshots";
         saveLibrary();
     }
-    void saveBank(const std::string& path) {
+    bool saveBank(const std::string& path) {
         ofJson j;
         j["snapshotBank"] = 1;
         j["active"] = active;
@@ -366,7 +422,9 @@ public:
         for(int k = 0; k <= last; k++) j["slots"].push_back(used[k] ? slots[k] : ofJson(nullptr));
         std::string p = path;
         if(std::filesystem::path(p).extension().string() != ".json") p += ".json";
-        message = ofSavePrettyJson(p, j) ? "Saved " + std::filesystem::path(p).stem().string() : "Could not save " + p;
+        const bool saved=ofSavePrettyJson(p,j);
+        message = saved ? "Saved " + std::filesystem::path(p).stem().string() : "Could not save " + p;
+        return saved;
     }
     // A bank (any json with a "slots" array) replaces the set
     bool loadBank(const std::string& path) {
@@ -385,6 +443,23 @@ public:
         active = a >= 0 && a < SLOTS && used[a] ? a : -1;
         message = "Loaded " + std::filesystem::path(path).stem().string();
         saveLibrary();   // becomes the shared set
+        return true;
+    }
+    // Bundled collections must not erase a user's only copy of their current
+    // slots. Keep a named bank first; a failed backup leaves the library alone.
+    bool loadBundledBank(const std::string& path) {
+        const auto folder=dir()/"banks";
+        const auto stem="Before collection - "+ofGetTimestampString();
+        auto backup=folder/(stem+".json");
+        for(int suffix=1;std::filesystem::exists(backup);suffix++) backup=folder/(stem+"-"+ofToString(suffix)+".json");
+        if(!saveBank(backup.string())){
+            std::error_code error;
+            std::filesystem::remove(backup,error); // only this new, failed backup
+            return false;
+        }
+        running=false;
+        if(!loadBank(path)) return false;
+        message+="; previous slots saved as "+backup.stem().string();
         return true;
     }
 
@@ -463,24 +538,34 @@ public:
     // ── GUI ────────────────────────────────────────────────────────────────
     // Snapshot, Store..., Manage..., the Snapshots menu; withMorph: Glide,
     // Time and the A / B Morph on the same row
-    void drawBar(float w, bool withMorph = true) {
+    // separator: a line under it, between the snapshots and the node's controls
+    void drawBar(float w, bool withMorph = true, bool separator = true) {
         ImGui::PushID(this);
         const float z = std::max(0.5f, ImGui::GetFontSize() / 13.0f);
         auto label = [this](int k) { return ofToString(k + 1) + "  " + (used[k] ? name(k) : std::string("(empty)")); };
+        // label + combo are one item for the node's menu: right-click either
+        // to publish Snapshot (the slot number, an int) to the node
+        ImGui::BeginGroup();
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Snapshot");
-        menuFor(snapshotP);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(200 * z);
         if(ImGui::BeginCombo("##snapCombo", active >= 0 && used[active] ? label(active).c_str() : "-", ImGuiComboFlags_HeightLarge)) {
             for(int k = 0; k < SLOTS; k++) {
                 if(!used[k]) continue;
                 if(ImGui::Selectable(label(k).c_str(), k == active)) recallFromGui(k);
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && slots[k].contains("importNote") && slots[k]["importNote"].is_string())
+                    ImGui::SetTooltip("%s",slots[k].value("importNote",std::string()).c_str());
             }
             ImGui::EndCombo();
         }
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-            ImGui::SetTooltip("Recall a snapshot (Glide on: it glides over Time; Alt: the other way).\nManage...: rename, delete or reorder them.");
+        ImGui::EndGroup();
+        menuFor(snapshotP);
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)){
+            std::string tip="Recall a snapshot (Glide on: it glides over Time; Alt: the other way).\nManage...: rename, delete or reorder them.\nRight-click: publish Snapshot (its number) to the node.";
+            if(active>=0 && used[active] && slots[active].contains("importNote") && slots[active]["importNote"].is_string()) tip+="\n"+slots[active].value("importNote",std::string());
+            ImGui::SetTooltip("%s",tip.c_str());
+        }
         // the previous / next one
         auto step = [this](int dir) {
             std::vector<int> v;
@@ -540,6 +625,11 @@ public:
         if(ImGui::Button("Banks")) ImGui::OpenPopup("##snapBanks");
         if(ImGui::BeginPopup("##snapBanks")) {
             if(host.factory && ImGui::MenuItem("Factory collection")) loadFactory();
+            if(!host.bundledBanks.empty() && ImGui::BeginMenu("Bundled collections")) {
+                for(const auto& bank : host.bundledBanks)
+                    if(ImGui::MenuItem(bank.first.c_str())) loadBundledBank(bank.second);
+                ImGui::EndMenu();
+            }
             if(ImGui::BeginMenu("Load bank")) {
                 bool any = false;
                 try {
@@ -578,6 +668,11 @@ public:
             drawMorph(w);
         }
         ImGui::PopID();
+        if(separator) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+        }
     }
     // Preset: the named presets, arrows, Save as... and its menu
     void drawPresets() {

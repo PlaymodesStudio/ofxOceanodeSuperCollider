@@ -41,6 +41,7 @@
 #include "scChordBoxEngine.h"
 #include "scChordLink.h"
 #include "scSnapshots.h"
+#include "scDropdowns.h"
 #include "ofxSCSynth.h"
 #include "ofxSCGroup.h"
 #include "ofxSCBuffer.h"
@@ -144,7 +145,7 @@ public:
             for(auto& [server, st] : servers) sendStatic(server, st);
             follower.requestAnchor();
         }));
-        addParameter(snaps.snapshotP);   // recalls by number (1..)
+        snapshotHandle = addParameter(snaps.snapshotP);   // recalls by number (1..): a dropdown of their names
         {
             scSnapshots::Host h;
             h.folder = "ChordBox";
@@ -184,6 +185,7 @@ public:
 
     void update(ofEventArgs&) override {
         timeline.update();
+        scDropdowns::setNames(snapshotHandle, snaps.slotNames());
         const float now = ofGetElapsedTimef();
         for(auto& [server, st] : servers){
             if(st.allocPending && (!server->isNRTSyncPending() || now - st.allocTime > 2.0f)){
@@ -1099,6 +1101,7 @@ private:
 
     // Snapshots: scSnapshots (shared by the synths), a snapshot = {"name", "state"}
     scSnapshots snaps;
+    std::shared_ptr<ofxOceanodeAbstractParameter> snapshotHandle;   // Snapshot on the node (names: update)
     ofJson appliedSnapshotState;      // the last state a recall / morph loaded
     int importOldSnapshots(){
         const std::string dirPath = ofToDataPath("nodeSnapshots/ChordSequence/", true);
@@ -1705,7 +1708,7 @@ private:
         columns(2, [&](int k){
             if(k == 0){
                 heading("Snapshots (shared by every ChordBox)");
-                snaps.drawBar(ImGui::GetContentRegionAvail().x, false);
+                snaps.drawBar(ImGui::GetContentRegionAvail().x, false, false);   // in its own tab: no line
                 ImGui::TextDisabled("Click a number to recall it, drag it to move it; type to rename.");
                 snaps.drawList();
             }else{

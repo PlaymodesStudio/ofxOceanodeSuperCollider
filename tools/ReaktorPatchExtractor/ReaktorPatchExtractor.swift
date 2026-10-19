@@ -636,6 +636,28 @@ final class NRKTParser {
             Int64($0.objectID) - 1
         }
         var result: [[String: Any]] = []
+        // Newer ensembles wrap the stored instrument state in a named Unicode
+        // preset container. Its inner state can retain the same name in every
+        // preset (e.g. TEST-CHANS). Preserve both names and the bank boundary.
+        var bankNames: [(offset: Int, name: String)] = []
+        var containerNames: [(offset: Int, name: String)] = []
+        var metadataCursor = 0
+        let marker = Data("DSIN".utf8)
+        while metadataCursor < data.count,
+              let range = data.range(of: marker, in: metadataCursor..<data.count) {
+            let base = range.lowerBound
+            for delta in [20, 32] {
+                guard base + delta + 4 <= data.count,
+                      let length = try? u32(base + delta), length >= 2, length <= 512 else { continue }
+                let start = base + delta + 4, end = start + Int(length) * 2
+                guard end <= data.count,
+                      let name = String(data: data[start..<end], encoding: .utf16LittleEndian),
+                      name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else { continue }
+                if delta == 20 { bankNames.append((base, name)) }
+                else { containerNames.append((base, name)) }
+            }
+            metadataCursor = base + marker.count
+        }
         func numericValue(_ value: Any?) -> Double? {
             if let value = value as? Double { return value }
             if let value = value as? Float { return Double(value) }
@@ -778,6 +800,20 @@ final class NRKTParser {
                 "metadata_extension_bytes": metadataExtensionBytes,
                 "parameters": parameters
             ]
+            if let bank = bankNames.last(where: { $0.offset < offset }) {
+                snapshot["bank_name"] = bank.name
+                snapshot["bank_name_offset"] = "0x" + String(bank.offset, radix: 16)
+            }
+            if let container = containerNames.last(where: { $0.offset < offset }), offset - container.offset < 4096 {
+                snapshot["container_name"] = container.name
+                snapshot["container_name_offset"] = "0x" + String(container.offset, radix: 16)
+            }
+            if offset >= 84, (try? u32(offset - 76)) == 9,
+               (try? u32(offset - 72)) == 2, (try? u32(offset - 68)) == 7,
+               let bank = try? u32(offset - 84), let slot = try? u32(offset - 80), bank < 128, slot < 128 {
+                snapshot["bank_index"] = bank
+                snapshot["bank_slot"] = slot
+            }
             if mappingConfident {
                 if !useStable { snapshot["object_id_offset"] = bestOffset }
 

@@ -37,6 +37,7 @@
 #include "scModulation.h"
 #include "scTimelineMenu.h"
 #include "scSnapshots.h"
+#include "scDropdowns.h"
 #include "scAudioParam.h"
 #include "scScheduledInputs.h"
 #include "imgui.h"
@@ -300,7 +301,8 @@ private:
     void slider(ofParameter<float>& p, const char* label, float w, const char* fmt = "%.2f", bool log = false);
     void sliderVec(ofParameter<std::vector<float>>& p, const char* label, float w, const char* fmt = "%.2f", bool log = false);
     void sliderInt(ofParameter<int>& p, const char* label, float w);
-    void combo(ofParameter<int>& p, const char* label, float w, const std::vector<const char*>& items);
+    void combo(ofParameter<int>& p, const char* label, float w);   // its names: dropdowns
+    void syncDropdowns();
     void toggle(ofParameter<bool>& p, const char* label);
     float labelW = 70.0f;
     float matrixCell(int source, int target) const;
@@ -308,6 +310,7 @@ private:
 
     // ── Snapshots (scSnapshots, shared by the synths) ──
     scSnapshots snaps;
+    scDropdowns dropdowns;   // the combos' names (a published combo is a dropdown)
     ofJson defaultSnap;                   // the factory snapshots start from it
     bool snapExcluded(const std::string& key) const;
     bool drivenByConnection(const std::string& key) const;

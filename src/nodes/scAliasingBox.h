@@ -12,6 +12,7 @@
 #include "scSnapshots.h"
 #include "scAliasingTableView.h"
 #include "scEQEditor.h"
+#include "scDropdowns.h"
 #include <array>
 #include <map>
 #include <memory>
@@ -103,7 +104,7 @@ private:
     void drawHeader();
     bool droning() const;
     void sliderInt(ofParameter<int>&,const char*,float);
-    void combo(ofParameter<int>&,const char*,float,const std::vector<const char*>&);
+    void combo(ofParameter<int>&,const char*,float);   // its names: dropdowns
     void drawCompactControl(SoundControl&,float,const std::string&);
     ofParameter<float>& soundParam(const std::string&);
     void drawFxTab(float);
@@ -130,12 +131,14 @@ private:
     scScheduledInputs scheduled;
     scModulation mod;
     scSnapshots snaps;
+    scDropdowns dropdowns;     // the combos' names (a published combo is a dropdown)
     scTimelineMenu timeline;
     std::vector<std::unique_ptr<SoundControl>> sound;
     std::vector<Control> controls;
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
     std::vector<std::string> publishedKeys;
     bool separator = false, restoring = false, structureDirty = false;
+    int placeBefore = -1;      // rebuild: the old root the new one goes before
     float bpm = 120, nextRead = 0;
     int tableMode = 0;
     ofParameter<float>* tableRange = nullptr;

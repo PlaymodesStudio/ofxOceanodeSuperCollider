@@ -1,0 +1,68 @@
+// Optional PolyComb inserts. The original PCFilter/PCComb definitions in
+// polyCombParts.scd are deliberately untouched: existing presets use them.
+// Needs the existing AnalogFilter UGen from ugens/OceanodeAnalog.
+(
+var root, dir;
+root = thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs";
+dir = root +/+ "PolyComb";
+File.mkdir(root); File.mkdir(dir);
+(1..32).do { |n|
+    var kv = { |name, def| NamedControl.kr(name, def ! n) };
+    var modIn = { |name| In.kr(NamedControl.kr(name,0),n) };
+    var base = { In.kr(\note.kr(0)+n,n) };
+    // Adds to the voice bus after PCAmp, before spatialization and shared FX.
+    // Its own gate envelope replaces NI's audio-following sub dynamics.
+    SynthDef(("PCSub" ++ n).asSymbol, {
+        var gate = In.ar(\gate.kr(0), n);
+        var on = \on.kr(1,0.03);
+        var cable=A2K.kr(NamedControl.ar(\pitch_ar,60!n));
+        var count=\pitch_channels.kr(n).clip(1,n);
+        var pitch = Select.kr(\pitch_sel.kr(0), [kv.(\pitch,60), n.collect{|i|Select.kr(i.min(count-1),cable)}]);
+        var env = EnvGen.ar(Env.adsr(\atk.kr(0.01), \dec.kr(0.5), \sus.kr(1), \rel.kr(0.5),
+            curve:[\cA.kr(-4),\cD.kr(-4),\cR.kr(-4)]), gate);
+        var velocity = (1-\velsens.kr(1)) + (In.kr(\vel.kr(0),n).clip(0,1)*\velsens.kr(1));
+        var sig = SinOsc.ar((pitch+\transpose.kr(-12)).clip(0,135).midicps.min(SampleRate.ir*0.45));
+        Out.kr(\vis.kr(0), A2K.kr(env)*on);
+        Out.ar(\out.kr(0),sig*env*velocity*\level.kr(0.25,0.03)*\master.kr(0.8)*on);
+    }).writeDefFile(dir);
+    SynthDef(("PCFilterSlopes" ++ n).asSymbol, {
+        var sig = In.ar(\in.kr(0),n);
+        var cut = kv.(\cutoff,100)+(\keytrack.kr(0)*(base.()-60))+modIn.(\mcut);
+        var fc = cut.clip(0,135).midicps.clip(20,(SampleRate.ir*0.45).min(20000));
+        var rq = (1-(kv.(\res,0.3)+modIn.(\mres))).clip(0.02,1);
+        var slope = \slope.kr(1).clip(1,3)-1;
+        var lp2 = BLowPass.ar(sig,fc,rq), hp2 = BHiPass.ar(sig,fc,rq);
+        var lp4 = BLowPass4.ar(sig,fc,rq), hp4 = BHiPass4.ar(sig,fc,rq);
+        var bp2 = BPF.ar(sig,fc,rq), br2 = BRF.ar(sig,fc,rq);
+        var bp4 = BPF.ar(bp2,fc,rq), br4 = BRF.ar(br2,fc,rq);
+        // Four one-pole sections: 6 dB high-pass + 18 dB low-pass. Unlike
+        // NI's proprietary multimode cell, this branch has no resonance loop.
+        var pole = (-2pi*fc*SampleDur.ir).exp;
+        var asym = sig-OnePole.ar(sig,pole);
+        var lp, hp, bp, br, wet;
+        3.do { asym = OnePole.ar(asym,pole) };
+        lp=Select.ar(slope,[lp2,lp4,lp4]);hp=Select.ar(slope,[hp2,hp4,hp4]);
+        bp=Select.ar(slope,[bp2,bp4,asym]);br=Select.ar(slope,[br2,br4,br4]);
+        wet=Select.ar(\type.kr(0).clip(0,3),[lp,hp,bp,br]);
+        Out.ar(\out.kr(0),LinXFade2.ar(sig,wet,\on.kr(1,0.03)*2-1));
+    }).writeDefFile(dir);
+    SynthDef(("PCCombSat" ++ n).asSymbol, {
+        var sig=In.ar(\in.kr(0),n);
+        var note=kv.(\combpitch,0)+kv.(\combtranspose,0)+(base.()*(1-(\combmode.kr(0)>0.5)))
+            +(({Rand(-1,1)}!n)*kv.(\combdetune,0))+modIn.(\mcpitch);
+        var fc=note.clip(0,127).midicps.clip(20,10000);
+        var fb=(kv.(\combfeed,0.7)+modIn.(\mcfb)).clip(-0.995,0.995);
+        var threshold=\satlevel.kr(12,0.03).clip(0,48).dbamp;
+        var tone=LPF.ar(sig,\combtone.kr(1).linexp(0,1,300,20000));
+        // AnalogFilter's existing cubic, sample-by-sample comb has tanh in
+        // the feedback path. No LocalIn block delay is added to its pitch.
+        // The small drive enables that loop; threshold scales its saturation
+        // level. Its DC block, normalization and loop damping differ from NI.
+        var wet=AnalogFilter.ar(tone/threshold,fc,fb.abs/0.995,4,fb<0,1.001,0,0)*threshold;
+        wet=Sanitize.ar(wet);
+        wet=XFade2.ar(sig,wet,(kv.(\combmix,1)+modIn.(\mcmix)).clip(0,1)*2-1);
+        Out.ar(\out.kr(0),LinXFade2.ar(sig,wet,\on.kr(1,0.03)*2-1));
+    }).writeDefFile(dir);
+};
+"PolyComb optional inserts written to ".post;dir.postln;
+)

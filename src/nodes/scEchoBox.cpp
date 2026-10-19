@@ -129,6 +129,7 @@ void scEchoBox::setup() {
         const std::string T = "Tap" + ofToString(t + 1) + " ";
         auto send = [this, t]() { if(t < tapCount) sendTap(t); };
         tp.unit.set(T + "Unit", 1, 0, 1);                       reg(tp.unit, send);
+        dropdowns.set(tp.unit.getEscapedName(), {"Milliseconds", "Beats"});
         tp.ms.set(T + "Time", 375.0f, 1.0f, 4000.0f);           reg(tp.ms, send);
         tp.beats.set(T + "Beats", 0.75f, 0.0625f, 16.0f);       reg(tp.beats, send);
         tp.level.set(T + "Level", 1.0f, 0.0f, 2.0f);            reg(tp.level, send);
@@ -139,9 +140,11 @@ void scEchoBox::setup() {
         tp.spread.set(T + "Spread", 0.5f, 0.0f, 1.0f);          reg(tp.spread, send);
         tp.rotate.set(T + "Rotate", 0, 0, MAX_CHANNELS - 1);    reg(tp.rotate, send);
         tp.bounce.set(T + "Direction", 0, 0, 1);                reg(tp.bounce, send);
+        dropdowns.set(tp.bounce.getEscapedName(), {"Forwards", "Backwards"});
         tp.wowRate.set(T + "Wow Rate", 0.6f, 0.01f, 20.0f);     reg(tp.wowRate, send);
         tp.wowDepth.set(T + "Wow Depth", 0.0f, 0.0f, 20.0f);    reg(tp.wowDepth, send);
         tp.ftype.set(T + "Filter", 1, 0, 4);                    reg(tp.ftype, send);
+        dropdowns.set(tp.ftype.getEscapedName(), {"Off", "Low pass", "High pass", "Band pass", "Peak"});
         tp.cutoff.set(T + "Cutoff", 110.0f, 12.0f, 135.0f);     reg(tp.cutoff, send);
         tp.res.set(T + "Resonance", 0.1f, 0.0f, 0.95f);         reg(tp.res, send);
         tp.lowcut.set(T + "Low Cut", 40.0f, 10.0f, 5000.0f);    reg(tp.lowcut, send);
@@ -212,7 +215,76 @@ void scEchoBox::setup() {
         }
         modulation.targetOfKey[mix.getEscapedName()] = 9;
     }
+    // ── Snapshots (the shared system): every control, Mix, the taps, the modulation ──
+    snaps.setupParameters();
+    for(auto* p : {&snaps.snapshotP, &snaps.morphAP, &snaps.morphBP, &snaps.morphCurveP, &snaps.morphSwitchP}) reg(*p, [](){});
+    for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) reg(*p, [](){});
+    for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) reg(*p, [](){});
+    initial = captureSnapshot();
+    {
+        scSnapshots::Host h;
+        h.folder = "EchoBox"; h.title = "EchoBox";
+        h.capture = [this](){ return captureSnapshot(); };
+        h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySnapshot(a, b, t, sw); };
+        h.factory = [this](){ return factorySnapshots(); };
+        h.bpm = [this](){ return currentBpm; };
+        h.paramMenu = [this](const std::string& k){ publishedUnderline(k); publishMenu(k); };
+        snaps.setup(h);
+    }
     requireSynthdefs();
+}
+
+// ── Snapshots ────────────────────────────────────────────────────────────────
+ofJson scEchoBox::captureSnapshot() const {
+    ofJson j = scSnapshots::captureControls(controls, [](const std::string&){ return false; });
+    j[mix.getEscapedName()] = mix.get();
+    modulation.patchBases(j);          // a modulated control: its own value
+    modulation.save(j, "echoBoxMod");
+    j["taps"] = tapCount;
+    return j;
+}
+
+void scEchoBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw) {
+    if(!a.is_object() || !b.is_object()) return;
+    // the taps first (their controls follow): while blending, the larger count
+    const int ta = a.value("taps", tapCount), tb = b.value("taps", tapCount);
+    const int taps = std::clamp(t <= 0.0f ? ta : t >= 1.0f ? tb : std::max(ta, tb), 1, MAX_TAPS);
+    if(taps != tapCount) setTapCount(taps);
+    scSnapshots::blendControls(controls, a, b, t, sw, [this](const std::string& k){
+        auto it = published.find(k);
+        return it != published.end() && it->second->hasInConnection();   // a connection drives it
+    });
+    const std::string mk = mix.getEscapedName();
+    if(a.contains(mk) && b.contains(mk)) {
+        const float v = scSnapshots::blendValue(a[mk], b[mk], t, sw).get<float>();
+        if(v != mix.get()) mix = v;
+    }
+    // the modulation: the arrival's at the switch point
+    const ofJson& src = sw ? b : a;
+    ofJson m = ofJson::object();
+    for(auto it = src.begin(); it != src.end(); ++it) if(it.key().rfind("echoBoxMod", 0) == 0) m[it.key()] = it.value();
+    if(!m.empty() && m != appliedMod) {
+        appliedMod = m;
+        modulation.load(src, "echoBoxMod");
+        modulation.afterLoad();
+    }
+}
+
+// Five starting points (the rest: the defaults)
+std::vector<ofJson> scEchoBox::factorySnapshots() const {
+    return scSnapshots::presetsFrom(initial, R"JSON([
+ {"name": "Init"},
+ {"name": "Dotted Eighth", "set": {"Mix": 0.3, "Tap1 Unit": 1, "Tap1 Beats": 0.75, "Tap1 Feedback": 0.5}},
+ {"name": "Ping-pong Pair", "set": {"taps": 2, "Mix": 0.35,
+   "Tap1 Unit": 1, "Tap1 Beats": 0.5, "Tap1 Feedback": 0.35, "Tap1 Ping-pong": 1.0,
+   "Tap2 Unit": 1, "Tap2 Beats": 0.75, "Tap2 Feedback": 0.35, "Tap2 Ping-pong": 1.0, "Tap2 Level": 0.8}},
+ {"name": "Dub Tape", "set": {"Mix": 0.4, "Tap1 Unit": 1, "Tap1 Beats": 0.75, "Tap1 Feedback": 0.78,
+   "Tap1 Filter": 1, "Tap1 Cutoff": 86.0, "Tap1 Resonance": 0.25, "Tap1 Low Cut": 150.0, "Tap1 Drive": 9.0,
+   "Tap1 Wow Rate": 0.5, "Tap1 Wow Depth": 3.0, "Tap1 Diffusion": 0.25}},
+ {"name": "Shimmer Wash", "set": {"Mix": 0.45, "Tap1 Unit": 1, "Tap1 Beats": 1.5, "Tap1 Feedback": 0.7,
+   "Tap1 Shimmer": 0.5, "Tap1 Shimmer Pitch": 12.0, "Tap1 Diffusion": 0.7, "Tap1 Diffusion Time": 30.0,
+   "Reverb On": true, "Reverb Mix": 0.45, "Reverb Decay": 6.0, "Reverb Size": 45.0}}
+])JSON");
 }
 
 void scEchoBox::requireSynthdefs() {
@@ -566,6 +638,11 @@ void scEchoBox::setBpm(float bpm) {
 
 void scEchoBox::update(ofEventArgs&) {
     timeline.update();
+    snaps.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names = snaps.slotNames();
+        for(const auto& key : snaps.slotKeys()) { auto it = published.find(key); if(it != published.end()) scDropdowns::setNames(it->second, names); }
+    }
     const float now = ofGetElapsedTimef();
     modulation.showing = showWindow.get();
     modulation.update();
@@ -617,16 +694,9 @@ void scEchoBox::loadBeforeConnections(ofJson& j) {
     timeline.load(j, "echoBoxTimeline");
 }
 
-void scEchoBox::presetRecallAfterSettingParameters(ofJson& j) {
-    if(j.contains("echoBox") && j["echoBox"].is_object()){
-        restoring = true;
-        for(const auto& control : controls) if(j["echoBox"].contains(control.key)) control.load(j["echoBox"][control.key]);
-        restoring = false;
-    }
-    if(j.contains("echoBoxMapHeight") && j["echoBoxMapHeight"].is_number())
-        mapHeight = std::max(0.0f, j["echoBoxMapHeight"].get<float>()) * zoom();
-    int wanted = tapCount;
-    if(j.contains("echoBoxTaps") && j["echoBoxTaps"].is_number()) wanted = std::clamp(j["echoBoxTaps"].get<int>(), 1, MAX_TAPS);
+// As many taps as asked: the ones beyond freed, the missing created, all sent
+void scEchoBox::setTapCount(int wanted) {
+    wanted = std::clamp(wanted, 1, MAX_TAPS);
     for(auto& [server, st] : states){
         for(int t = wanted; t < MAX_TAPS; t++) if(st.taps[t]){ st.taps[t]->free(); delete st.taps[t]; st.taps[t] = nullptr; }
     }
@@ -637,6 +707,19 @@ void scEchoBox::presetRecallAfterSettingParameters(ofJson& j) {
         if(st.mix) updateReverb(server, st);
     }
     selectedTap = std::min(selectedTap, tapCount - 1);
+}
+
+void scEchoBox::presetRecallAfterSettingParameters(ofJson& j) {
+    if(j.contains("echoBox") && j["echoBox"].is_object()){
+        restoring = true;
+        for(const auto& control : controls) if(j["echoBox"].contains(control.key)) control.load(j["echoBox"][control.key]);
+        restoring = false;
+    }
+    if(j.contains("echoBoxMapHeight") && j["echoBoxMapHeight"].is_number())
+        mapHeight = std::max(0.0f, j["echoBoxMapHeight"].get<float>()) * zoom();
+    int wanted = tapCount;
+    if(j.contains("echoBoxTaps") && j["echoBoxTaps"].is_number()) wanted = std::clamp(j["echoBoxTaps"].get<int>(), 1, MAX_TAPS);
+    setTapCount(wanted);
     // modulation (presets from before it: nothing routed)
     if(j.contains("echoBoxModMatrix")) modulation.load(j, "echoBoxMod");
     else {
@@ -653,6 +736,7 @@ void scEchoBox::publish(const std::string& key) {
     if(it == controls.end() || getParameterGroup().contains(key)) return;
     if(!publishedSeparator){ addSeparator("Published", ofColor(200)); publishedSeparator = true; }
     published[key] = it->add();
+    dropdowns.apply(key, published[key]);
     publishedKeys.push_back(key);
     parameterGroupChanged.notify(this);
 }
@@ -756,9 +840,11 @@ void scEchoBox::sliderInt(ofParameter<int>& p, const char* label, float w) {
     ImGui::PopID();
 }
 
-void scEchoBox::combo(ofParameter<int>& p, const char* label, float w, const std::vector<const char*>& items) {
+void scEchoBox::combo(ofParameter<int>& p, const char* label, float w) {
     const float z = zoom();
     const std::string key = p.getEscapedName();
+    const auto items = dropdowns.names(key);
+    if(items.empty()) return;
     ImGui::PushID(key.c_str());
     const float x0 = ImGui::GetCursorPosX();
     ImGui::AlignTextToFramePadding();
@@ -820,6 +906,7 @@ void scEchoBox::drawWindow() {
     if(!ImGui::Begin(title.c_str(), &open)){ ImGui::End(); if(!open) showWindow = false; return; }
     if(!open){ showWindow = false; ImGui::End(); return; }
     const float w = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize;
+    snaps.drawBar(w);
 
     // ── Header: channels, mix, output, meters ────────────────────────────────
     {
@@ -1041,7 +1128,7 @@ void scEchoBox::drawTapControls(int t, float w) {
     ImGui::PushID(t);
     ImGui::BeginGroup();
     sectionHeader("Time & Feedback", cw, nullptr, ac);
-    combo(tp.unit, "Unit", cw, {"Milliseconds", "Beats"});
+    combo(tp.unit, "Unit", cw);
     if(tp.unit.get() == 1) beatsSlider(tp, cw);
     else slider(tp.ms, "Time", cw, "%.1f ms", true);
     if(tapSeconds(t) >= 3.999f) ImGui::TextColored(ImVec4(1, 0.6f, 0.4f, 1), "4 s at most");
@@ -1054,7 +1141,7 @@ void scEchoBox::drawTapControls(int t, float w) {
     sectionHeader("Space", cw, nullptr, ac);
     slider(tp.pingpong, "Ping-pong", cw, "%.2f");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("How much each repeat moves to the next channel");
-    combo(tp.bounce, "Direction", cw, {"Forwards", "Backwards"});
+    combo(tp.bounce, "Direction", cw);
     if(n() > 1) sliderInt(tp.rotate, "Start Ch", cw);
     else ImGui::TextColored(ImColor(pal::textDim), "(one channel: no bouncing)");
     slider(tp.spread, "Spread", cw, "%.2f");
@@ -1063,7 +1150,7 @@ void scEchoBox::drawTapControls(int t, float w) {
     slider(tp.wowDepth, "Wow Depth", cw, "%.2f ms");
     nextCol();
     sectionHeader("Tone", cw, nullptr, ac);
-    combo(tp.ftype, "Filter", cw, {"Off", "Low pass", "High pass", "Band pass", "Peak"});
+    combo(tp.ftype, "Filter", cw);
     const float hz = 440.0f * std::pow(2.0f, (tp.cutoff.get() - 69.0f) / 12.0f);
     const std::string cf = ofToString(tp.cutoff.get(), 0) + "  (" + (hz >= 1000 ? ofToString(hz / 1000, 1) + " kHz)" : ofToString(hz, 0) + " Hz)");
     if(tp.ftype.get() == 0) ImGui::BeginDisabled();

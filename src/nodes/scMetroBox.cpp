@@ -495,6 +495,10 @@ bool scMetroBox::publish(int li, const std::string& fieldName) {
         });
     } else {
         if(f.kind == F_ENUM) p->handle = addParameterDropdown(p->pi, key, (int)v, f.options);
+        else if(f.kind == F_LANE) {   // a dropdown: None, then the lanes by name (syncLaneNames)
+            p->handle = addParameter(p->pi.set(key, (int)v, (int)f.min, (int)f.max));
+            p->handle->cast<int>().setDropdownOptions(laneNames());
+        }
         else p->handle = addParameter(p->pi.set(key, (int)v, (int)f.min, (int)f.max));
         p->listener = p->pi.newListener([apply](int& x) { apply((float)x); });
     }
@@ -516,7 +520,7 @@ bool scMetroBox::unpublish(const std::string& key) {
     if(it->second->handle) removeParameter(it->second->handle->getEscapedName());
     published.erase(it);
     publishedOrder.erase(std::remove(publishedOrder.begin(), publishedOrder.end(), key), publishedOrder.end());
-    if(published.empty() && publishedSeparatorAdded) {
+    if(published.empty() && snapPublished.empty() && publishedSeparatorAdded) {
         removeSeparator("Published");
         publishedSeparatorAdded = false;
     }
@@ -540,6 +544,25 @@ void scMetroBox::syncPublished(const std::vector<std::string>& keys) {
         const size_t space = key.find(' ');
         if(space == std::string::npos) continue;
         publish(ofToInt(key.substr(1, space - 1)) - 1, key.substr(space + 1));
+    }
+}
+
+// A published lane link's names: None, then "n name" (lanes beyond the count: "n")
+std::vector<std::string> scMetroBox::laneNames() const {
+    std::vector<std::string> out = {"None"};
+    for(int j = 0; j < MAX_LAYERS; j++)
+        out.push_back(ofToString(j + 1) + (j < numLayers.get() ? " " + layers[j].name : std::string()));
+    return out;
+}
+
+void scMetroBox::syncLaneNames() {
+    std::vector<std::string> names;
+    for(auto& [key, p] : published) {
+        const Field* f = findField(p->field);
+        if(!f || f->kind != F_LANE || !p->handle) continue;
+        if(names.empty()) names = laneNames();
+        auto& param = p->handle->cast<int>();
+        if(param.getDropdownOptions() != names) param.setDropdownOptions(names);
     }
 }
 
@@ -819,6 +842,130 @@ void scMetroBox::setup() {
         for(auto& [server, st] : servers) sendStaticControls(st);
         follower.requestAnchor();
     }));
+
+    // Snapshots (the shared system): every lane, Lanes and Seed
+    snaps.setupParameters();
+    auto snapParam = [this](auto& p) { snapParams[p.getEscapedName()] = [this, &p]() { return addParameter(p); }; };
+    snapParam(snaps.snapshotP); snapParam(snaps.morphP); snapParam(snaps.morphAP); snapParam(snaps.morphBP);
+    snapParam(snaps.morphTimeP); snapParam(snaps.morphBeatsP); snapParam(snaps.morphGlideP);
+    snapParam(snaps.morphCurveP); snapParam(snaps.morphSwitchP);
+    initial = captureSnapshot();
+    scSnapshots::Host h;
+    h.folder = "MetroBox"; h.title = "MetroBox";
+    h.capture = [this]() { return captureSnapshot(); };
+    h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw) { applySnapshot(a, b, t, sw); };
+    h.factory = [this]() { return factorySnapshots(); };
+    h.bpm = [this]() { return currentBpm; };
+    h.paramMenu = [this](const std::string& k) { snapMenu(k); };
+    snaps.setup(h);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Snapshots
+// ════════════════════════════════════════════════════════════════════════════
+
+ofJson scMetroBox::captureSnapshot() const {
+    ofJson lanes = ofJson::array();
+    for(const auto& L : layers) lanes.push_back(layerToJson(L));
+    return {{"lanes", lanes}, {numLayers.getEscapedName(), numLayers.get()}, {globalSeed.getEscapedName(), globalSeed.get()}};
+}
+
+// The arrival's lanes, Lanes and Seed at the switch point (whole: patterns,
+// roles, relations); before and after it the float settings glide
+void scMetroBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw) {
+    if(!a.is_object() || !b.is_object()) return;
+    auto lanesOf = [](const ofJson& s) {
+        std::vector<Layer> v(MAX_LAYERS);
+        if(s.contains("lanes") && s["lanes"].is_array())
+            for(int i = 0; i < MAX_LAYERS && i < (int)s["lanes"].size(); i++) v[i] = layerFromJson(s["lanes"][i]);
+        return v;
+    };
+    const ofJson& side = sw ? b : a;
+    if(side.contains("lanes") && side["lanes"] != appliedLanes) {
+        appliedLanes = side["lanes"];
+        const auto whole = lanesOf(side);
+        for(int i = 0; i < MAX_LAYERS && i < (int)appliedLanes.size(); i++) layers[i] = whole[i];
+        engine.changedAll();
+        for(int i = 0; i < MAX_LAYERS; i++) refreshPublished(i);
+        for(auto& [server, st] : servers) sendStaticControls(st);
+    }
+    for(auto* p : {&numLayers, &globalSeed}) {
+        const std::string k = p->getEscapedName();
+        if(side.contains(k) && side[k].is_number_integer() && side[k].get<int>() != p->get()) *p = side[k].get<int>();
+    }
+    if(t <= 0.0f || t >= 1.0f) return;
+    const auto la = lanesOf(a), lb = lanesOf(b);
+    for(int i = 0; i < MAX_LAYERS; i++)
+        for(const auto& f : fields()) {
+            if(f.kind != F_FLOAT) continue;
+            const float v = ofLerp(la[i].*(f.f), lb[i].*(f.f), t);
+            if(std::abs(v - layers[i].*(f.f)) > 1e-6f) setFieldValue(i, f, v);
+        }
+}
+
+// Five starting grooves from the built-in roles (Kick, Snare, Hat, Perc)
+std::vector<ofJson> scMetroBox::factorySnapshots() const {
+    static const char* src = R"JSON([
+ {"name": "Init"},
+ {"name": "Basic Kit", "lanes": [{"role": 0}, {"role": 1}, {"role": 2}]},
+ {"name": "Swung Groove", "lanes": [{"role": 0}, {"role": 1}, {"role": 2, "swing": 0.45, "density": 0.95}, {"role": 3}]},
+ {"name": "Euclid Mix", "lanes": [
+   {"role": 0, "pattern": 1, "eucSteps": 16, "eucHits": 5},
+   {"role": 2, "pattern": 1, "eucSteps": 16, "eucHits": 11},
+   {"role": 3, "pattern": 1, "eucSteps": 12, "eucHits": 5}]},
+ {"name": "Sparse Pulse", "lanes": [{"role": 0, "complexity": 0.2, "change": 0.2}, {"role": 3, "density": 0.3, "change": 0.6}]}
+])JSON";
+    std::vector<ofJson> out;
+    for(const auto& p : ofJson::parse(src)) {
+        ofJson j = initial;
+        j["name"] = p["name"];
+        if(p.contains("lanes")) {
+            const auto& lanes = p["lanes"];
+            j[numLayers.getEscapedName()] = (int)lanes.size();
+            for(int i = 0; i < (int)lanes.size() && i < MAX_LAYERS; i++) {
+                ofJson lj = layerToJson(builtInRole(lanes[i].value("role", 4)));
+                lj["id"] = initial["lanes"][i].value("id", i + 1);   // the lane's identity stays
+                for(auto it = lanes[i].begin(); it != lanes[i].end(); ++it) if(it.key() != "role") lj[it.key()] = it.value();
+                j["lanes"][i] = lj;
+            }
+        }
+        out.push_back(j);
+    }
+    return out;
+}
+
+// Snapshot / Morph...: published to the node from their right-click menu
+void scMetroBox::publishSnap(const std::string& key) {
+    auto it = snapParams.find(key);
+    if(it == snapParams.end() || snapPublished.count(key)) return;
+    if(!publishedSeparatorAdded) { addSeparator("Published", ofColor(200)); publishedSeparatorAdded = true; }
+    snapPublished[key] = it->second();
+    parameterGroupChanged.notify(this);
+}
+
+void scMetroBox::unpublishSnap(const std::string& key) {
+    auto it = snapPublished.find(key);
+    if(it == snapPublished.end() || it->second->hasInConnection() || it->second->hasOutConnections()) return;
+    removeParameter(it->second->getEscapedName());
+    snapPublished.erase(it);
+    if(published.empty() && snapPublished.empty() && publishedSeparatorAdded) {
+        removeSeparator("Published");
+        publishedSeparatorAdded = false;
+    }
+    parameterGroupChanged.notify(this);
+}
+
+void scMetroBox::snapMenu(const std::string& key) {
+    if(snapPublished.count(key)) {
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f), ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
+    }
+    if(!ImGui::BeginPopupContextItem(("##mbSnap" + key).c_str())) return;
+    auto it = snapPublished.find(key);
+    if(it == snapPublished.end()) { if(ImGui::MenuItem("Publish to Node GUI")) publishSnap(key); }
+    else if(it->second->hasInConnection() || it->second->hasOutConnections()) ImGui::TextDisabled("Disconnect it to unpublish");
+    else if(ImGui::MenuItem("Unpublish from Node")) unpublishSnap(key);
+    ImGui::EndPopup();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1032,6 +1179,12 @@ void scMetroBox::sendTransportAnchors() {
 
 void scMetroBox::update(ofEventArgs&) {
     timeline.update();
+    snaps.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names = snaps.slotNames();
+        for(const auto& key : snaps.slotKeys()) { auto it = snapPublished.find(key); if(it != snapPublished.end()) scDropdowns::setNames(it->second, names); }
+    }
+    syncLaneNames();
     const float now = ofGetElapsedTimef();
     for(auto& [server, st] : servers) {
         if(st.allocPending && (!server->isNRTSyncPending() || now - st.allocTime > allocTimeout)) {
@@ -1146,11 +1299,17 @@ void scMetroBox::presetSave(ofJson &json) {
     json["MetroBoxLayers"] = arr;
     json["MetroBoxPublished"] = publishedOrder;
     timeline.save(json, "MetroBoxTimeline");
+    json["MetroBoxSnapshots"] = snaps.settingsJson();
+    std::vector<std::string> snapKeys;
+    for(const auto& [k, h] : snapPublished) snapKeys.push_back(k);
+    json["MetroBoxSnapPublished"] = snapKeys;
 }
 
 // The published parameters must exist before Oceanode sets their values and
 // restores their connections.
 void scMetroBox::loadBeforeConnections(ofJson &json) {
+    if(json.contains("MetroBoxSnapPublished") && json["MetroBoxSnapPublished"].is_array())
+        for(const auto& k : json["MetroBoxSnapPublished"]) if(k.is_string()) publishSnap(k.get<std::string>());
     if(!json.contains("MetroBoxPublished") || !json["MetroBoxPublished"].is_array()) return;
     try { syncPublished(json["MetroBoxPublished"].get<std::vector<std::string>>()); } catch(...) {}
     timeline.load(json, "MetroBoxTimeline");
@@ -1161,6 +1320,7 @@ void scMetroBox::presetRecallBeforeSettingParameters(ofJson &json) {
 }
 
 void scMetroBox::presetRecallAfterSettingParameters(ofJson &json) {
+    if(json.contains("MetroBoxSnapshots")) snaps.loadSettings(json["MetroBoxSnapshots"]);
     if(!json.contains("MetroBoxLayers") || !json["MetroBoxLayers"].is_array()) return;
     const auto& arr = json["MetroBoxLayers"];
     for(int i = 0; i < MAX_LAYERS && i < (int)arr.size(); i++) layers[i] = layerFromJson(arr[i]);
@@ -1201,6 +1361,8 @@ void scMetroBox::drawWindow() {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(120);
         ImGui::SliderInt("Bars shown", &viewBars, 1, 16);
+        // snapshots, named presets, morph (scSnapshots), then the lanes
+        snaps.drawBar(std::max(1.0f, ImGui::GetContentRegionAvail().x));
 
         drawTimeline(std::max(200.0f, ImGui::GetContentRegionAvail().x));
 

@@ -324,6 +324,14 @@ void scAnalogBox::setup() {
     for(auto* p : {&echoDelay, &echoBeatVal, &echoFeed, &echoCutoff, &echoResonance, &echoPingPong, &echoMix}) reg(*p, toStage(StEcho));
     reg(echoBeats, toStage(StEcho));
     reg(echoFilter, toStage(StEcho));
+    // the combos' names (published: dropdowns); FM From and the filter types follow the sound (syncDropdowns)
+    dropdowns.set(spreadMode.getEscapedName(), {"Spread", "Channels", "Manual"});
+    dropdowns.set(spreadLayout.getEscapedName(), {"Ring", "Line"});
+    dropdowns.set(envMode.getEscapedName(), {"Auto", "Gated", "Drone"});
+    dropdowns.set(filterRouting.getEscapedName(), {"Series", "Parallel"});
+    dropdowns.set(echoFilter.getEscapedName(), {"LowPass", "HighPass", "BandPass", "PeakEQ"});
+    for(int k = 0; k < MAX_FILTERS; k++) dropdowns.set(filterRef(k).mode->getEscapedName(), kFilterModes);
+    syncDropdowns();
     rvbOn.set("Reverb On", false);            reg(rvbOn, toStages);
     rvbMix.set("Reverb Mix", 0.3f, 0.0f, 1.0f);
     rvbDecay.set("Reverb Decay", 3.0f, 0.05f, 30.0f);
@@ -935,6 +943,7 @@ void scAnalogBox::routeChain(ServerState& st) {
 
 void scAnalogBox::update(ofEventArgs&) {
     timeline.update();
+    syncDropdowns();
     sendEnvMode();
     // the pool's size follows Voices, Extra Voices and gated / droning: rebuilt at the new one
     {
@@ -1201,8 +1210,25 @@ void scAnalogBox::publish(const std::string& key) {
     if(it == controls.end() || getParameterGroup().contains(key)) return;
     if(!publishedSeparator){ addSeparator("Published", ofColor(200)); publishedSeparator = true; }
     published[key] = it->add();
+    dropdowns.apply(key, published[key]);
     publishedKeys.push_back(key);
     parameterGroupChanged.notify(this);
+}
+
+// The combos whose names follow the sound, and the snapshot names
+void scAnalogBox::syncDropdowns() {
+    auto handle = [this](const std::string& key) { auto it = published.find(key); return it == published.end() ? nullptr : it->second; };
+    auto sync = [&](const std::string& key, const std::vector<std::string>& items) { dropdowns.set(key, items, handle(key)); };
+    std::vector<std::string> from = {"FM off"};
+    for(int j = 0; j < oscs(); j++) from.push_back("from Osc " + ofToString(j + 1));
+    for(int k = 0; k < MAX_OSCS; k++) sync(osc[k].fmFrom.getEscapedName(), from);
+    const std::vector<std::string> combTypes(kCombTypes.begin(), kCombTypes.end()), filterTypes(kFilterTypes.begin(), kFilterTypes.end());
+    for(int k = 0; k < MAX_FILTERS; k++) {
+        const FilterRef f = filterRef(k);
+        sync(f.type->getEscapedName(), f.mode->get() == kComb ? combTypes : filterTypes);
+    }
+    const auto names = snaps.slotNames();
+    for(const auto& key : snaps.slotKeys()) sync(key, names);
 }
 
 void scAnalogBox::unpublish(const std::string& key) {
@@ -1395,9 +1421,11 @@ void scAnalogBox::sliderInt(ofParameter<int>& p, const char* label, float w) {
     ImGui::PopID();
 }
 
-void scAnalogBox::combo(ofParameter<int>& p, const char* label, float w, const std::vector<const char*>& items) {
+void scAnalogBox::combo(ofParameter<int>& p, const char* label, float w) {
     const float z = zoom();
     const std::string key = p.getEscapedName();
+    const auto items = dropdowns.names(key);
+    if(items.empty()) return;
     ImGui::PushID(key.c_str());
     const float x0 = ImGui::GetCursorPosX();
     ImGui::AlignTextToFramePadding();
@@ -1439,7 +1467,7 @@ void scAnalogBox::drawPanTab(float w) {
     };
     ImGui::BeginGroup();
     sectionHeader("Placement", cw);
-    combo(spreadMode, "Mode", cw, {"Spread", "Channels", "Manual"});
+    combo(spreadMode, "Mode", cw);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Spread: evenly across the speakers\nChannels: voice 1 on speaker 1, voice 2 on speaker 2...\n"
                                                  "Manual: each voice where you put it (drag it, or the Pan vector)");
     if(spreadMode.get() == 0){
@@ -1447,7 +1475,7 @@ void scAnalogBox::drawPanTab(float w) {
         slider(spreadCenter, "Center", cw, "%+.2f");
     }
     if(spreadMode.get() == 2) sliderVec(panP, "Pan", cw, "%.2f");
-    if(c > 2) combo(spreadLayout, "Speakers", cw, {"Ring", "Line"});
+    if(c > 2) combo(spreadLayout, "Speakers", cw);
     ImGui::Spacing();
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
     ImGui::TextColored(ImColor(pal::textDim), "%d voices on %d speaker%s. Drag a voice to place it (Shift: onto a speaker). "
@@ -1706,7 +1734,7 @@ void scAnalogBox::drawWindow() {
         ImGui::BeginGroup(); slider(master, "Master", 170 * z, "%.2f"); ImGui::EndGroup();
         ImGui::SameLine(0, 12 * z);
         labelW = 64.0f;
-        ImGui::BeginGroup(); combo(envMode, "Gate Mode", 190 * z, {"Auto", "Gated", "Drone"}); ImGui::EndGroup();
+        ImGui::BeginGroup(); combo(envMode, "Gate Mode", 190 * z); ImGui::EndGroup();
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("Auto: a drone while nothing is connected to Gate, gated once something is\n"
                               "Gated: a voice plays while its gate is high\nDrone: every voice always plays");
@@ -1716,7 +1744,6 @@ void scAnalogBox::drawWindow() {
         if(ImGui::Button("Reset LFOs")) resetLFOs.trigger();
     }
     snaps.drawBar(w);
-    ImGui::Spacing();
 
     if(ImGui::BeginTabBar("##abTabs")){
         auto tab = [&](const char* name, std::function<void(float)> body){
@@ -1807,11 +1834,8 @@ void scAnalogBox::drawOscCard(int k, float w) {
     toggle(O.centered, "Centered");
     if(k > 0){ ImGui::SameLine(); toggle(O.sync, "Sync to Osc 1"); }
     {   // FM: from which oscillator, how much
-        std::vector<const char*> from = {"FM off"};
-        static const char* names[MAX_OSCS] = {"from Osc 1", "from Osc 2", "from Osc 3", "from Osc 4", "from Osc 5", "from Osc 6"};
-        for(int j = 0; j < oscs(); j++) from.push_back(names[j]);
         if(O.fmFrom.get() > oscs()) O.fmFrom = 0;
-        combo(O.fmFrom, "FM", w, from);
+        combo(O.fmFrom, "FM", w);   // FM off, from Osc 1.. (syncDropdowns)
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Phase modulation by another oscillator (itself: feedback FM)");
         if(O.fmFrom.get() > 0) sliderVec(O.fm, "FM Index", w, "%.2f");
     }
@@ -1884,14 +1908,15 @@ void scAnalogBox::drawFilterCard(int k, float cw) {
     ImGui::PushID(k);
     sectionHeader(("Filter " + ofToString(k + 1)).c_str(), cw, f.on, pal::osc[k % 6]);
     const int modeWas = f.mode->get();
-    combo(*f.mode, "Mode", cw, kFilterModes);
+    combo(*f.mode, "Mode", cw);
     if(f.mode->get() == kComb && modeWas != kComb){
         // a comb plays the note: tracked, at the note itself
         *f.keyTrack = 1.0f;
         *f.cutoff = std::vector<float>{60.0f};
         if(first(f.res->get(), 0.0f) < 0.6f) *f.res = std::vector<float>{0.9f};
     }
-    combo(*f.type, "Type", cw, comb ? kCombTypes : kFilterTypes);
+    if(f.mode->get() != modeWas) syncDropdowns();   // the type names, this frame
+    combo(*f.type, "Type", cw);
     if(comb && ImGui::IsItemHovered())
         ImGui::SetTooltip("Feedback +: rings at the pitch (its harmonics)\nFeedback -: an octave down, odd harmonics (hollow)\n"
                           "Feedforward: notches between / on the harmonics (phasey)");
@@ -1973,7 +1998,8 @@ void scAnalogBox::drawFilterTab(float w) {
         ImGui::SameLine();
         ImGui::SetCursorPosX(x0 + labelW * z);
         ImGui::SetNextItemWidth(cw - labelW * z);
-        if(ImGui::Combo("##fRouting", &r, "Series\0Parallel\0")) filterRouting = r;
+        const auto routings = dropdowns.names(filterRouting.getEscapedName());
+        if(ImGui::Combo("##fRouting", &r, routings.data(), (int)routings.size())) filterRouting = r;
         publishMenu(filterRouting.getEscapedName());
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Series: each filter into the next (1 -> 2 -> ...)\nParallel: all from the oscillators, summed (Level: each one's share)");
     }
@@ -2199,7 +2225,7 @@ void scAnalogBox::drawFxTab(float w) {
     slider(echoFeed, "Feedback", cw, "%.2f");
     slider(echoCutoff, "Cutoff", cw, "%.0f (note)");
     slider(echoResonance, "Resonance", cw, "%.2f");
-    combo(echoFilter, "Filter", cw, {"LowPass", "HighPass", "BandPass", "PeakEQ"});
+    combo(echoFilter, "Filter", cw);
     slider(echoPingPong, "Ping-pong", cw, "%.2f");
     slider(echoMix, "Mix", cw, "%.2f");
     endDisabled(!echoOn.get());

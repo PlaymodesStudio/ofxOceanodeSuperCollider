@@ -71,6 +71,10 @@ public:
     bool partialLfos = false;
     // Set before setup: the most voices the node can have (the indexer ranges; GrainBox: 500)
     int maxVoices = 16;
+    // Optional per-host additions; defaults preserve every existing node layout.
+    int busWidth = W;
+    std::vector<std::string> extraSources;
+    int sourceCount() const { return NUM_SOURCES + (int)extraSources.size(); }
     // Set before setup: appended to every parameter's name (GrainBox's engines: " 2"...)
     std::string nameSuffix;
     // How many LFOs / envelopes / external sources the node runs (the "+ Add" buttons stop there)
@@ -187,7 +191,7 @@ private:
         int kind = 0;                                          // 0 float, 1 int, 2 vector<float>, 3 vector<int>
         float lo = 0.0f, hi = 1.0f;
         std::vector<float> base, written;
-        std::array<float, NUM_SOURCES> amount{};
+        std::vector<float> amount = std::vector<float>(NUM_SOURCES, 0.0f);
         bool applied = false;                                  // the control holds base + modulation now
         bool pending = false;                                  // a loaded base, not set yet
         bool routed() const { for(float a : amount) if(std::abs(a) > 1e-4f) return true; return false; }

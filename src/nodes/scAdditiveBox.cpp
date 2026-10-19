@@ -471,6 +471,10 @@ void scAdditiveBox::setup(){
 void scAdditiveBox::update(ofEventArgs&){
     timeline.update();
     snaps.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names = snaps.slotNames();
+        for(const auto& key : snaps.slotKeys()) { auto it = publishedHandles.find(key); if(it != publishedHandles.end()) scDropdowns::setNames(it->second, names); }
+    }
     const float now = ofGetElapsedTimef();
     mod.update();   // (showing: set below, from the last frame's drawing)
 

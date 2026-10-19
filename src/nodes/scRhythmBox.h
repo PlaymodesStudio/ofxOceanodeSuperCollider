@@ -28,6 +28,8 @@
 #include "ofxSCBus.h"
 #include "imgui.h"
 #include "scSampleBrowser.h"
+#include "scSnapshots.h"
+#include "scDropdowns.h"
 #include <vector>
 #include <string>
 #include <map>
@@ -499,6 +501,18 @@ private:
     
     void saveProject(const std::string& projectName);
     void loadProject(const std::string& projectPath);
+    void applyBoxState(const ofJson& j, bool keepLoaded);   // a project or a snapshot, at runtime
+    // ── Snapshots (the shared system): the whole box ────────────────────────
+    scSnapshots snaps;
+    ofJson appliedBox;                    // the box a snapshot last loaded
+    std::map<std::string, std::function<std::shared_ptr<ofxOceanodeAbstractParameter>()>> snapParams;
+    std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> snapPublished;
+    ofJson captureSnapshot() const;
+    void applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw);
+    std::vector<ofJson> factorySnapshots() const;
+    void publishSnap(const std::string& key);
+    void unpublishSnap(const std::string& key);
+    void snapMenu(const std::string& key);
     void refreshProjectsList();
     void drawProjectMenu();
     std::string getProjectsDirectory() const;

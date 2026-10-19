@@ -48,6 +48,7 @@
 #include "scArpeggiatorBoxEngine.h"
 #include "scChordLink.h"
 #include "scSnapshots.h"
+#include "scDropdowns.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "ofxSCBus.h"
@@ -123,7 +124,7 @@ public:
         addParameter(root.set("Root", 0.0f, -24.0f, 127.0f));
         addParameter(seed.set("Seed", 1, 0, 99999));
         snaps.setupParameters();
-        addParameter(snaps.snapshotP);   // recalls by number (1..)
+        snapshotHandle = addParameter(snaps.snapshotP);   // recalls by number (1..): a dropdown of their names
         for(const char* n : {"Trig", "Gate", "Pitch", "Bass Trig", "Bass Gate", "Bass Pitch"}) scNode::addOutput(n);
         addOutputParameter(pitchOut.set("PitchOut", std::vector<float>(4, 60.0f), {0.0f}, {127.0f}));
         addOutputParameter(gateOut.set("GateOut", std::vector<int>(4, 0), {0}, {1}));
@@ -209,6 +210,7 @@ public:
 
     void update(ofEventArgs&) override {
         timeline.update();
+        scDropdowns::setNames(snapshotHandle, snaps.slotNames());
         const float now = ofGetElapsedTimef();
         for(auto& [server, st] : servers){
             if(st.allocPending && (!server->isNRTSyncPending() || now - st.allocTime > 2.0f)){
@@ -1394,6 +1396,7 @@ private:
 
     // Snapshots: scSnapshots (shared by the synths), a snapshot = {"name", "values"}
     scSnapshots snaps;
+    std::shared_ptr<ofxOceanodeAbstractParameter> snapshotHandle;   // Snapshot on the node (names: update)
     // ── Demo snapshots: the defaults with a few settings changed ────────────
     ofJson defaultValues;
     static std::vector<std::pair<std::string, ofJson>> demoOverrides(){
@@ -2460,7 +2463,7 @@ private:
         columns(2, [&](int k){
             if(k == 0){
                 heading("Snapshots (shared by every ArpeggiatorBox)");
-                snaps.drawBar(ImGui::GetContentRegionAvail().x, false);
+                snaps.drawBar(ImGui::GetContentRegionAvail().x, false, false);   // in its own tab: no line
                 ImGui::TextDisabled("Click a number to recall it, drag it to move it; type to rename.");
                 snaps.drawList();
             }else{

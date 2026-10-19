@@ -31,7 +31,7 @@ filter = { |sig, type, note, res|
     (BPF.ar(sig, fr, rq) * ((t >= 1.5) * (t < 2.5))) + (BRF.ar(sig, fr, rq) * (t >= 2.5))
 };
 
-(1..16).do { |n|
+(1..32).do { |n|
     var kv = { |name, def| NamedControl.kr(name, def ! n) };
     var modIn = { |name| In.kr(NamedControl.kr(name, 0), n) };
     var insert = { |dry, wet| LinXFade2.ar(dry, wet, \on.kr(1, 0.03) * 2 - 1) };

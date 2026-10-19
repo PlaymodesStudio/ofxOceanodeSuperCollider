@@ -156,3 +156,15 @@ python3 test_aliasing.py /path/to/aliasing_synth_midi.ens
 
 The separate `../polycomb/import_ensemble.py` creates candidate preset files
 and an audit without changing the Oceanode synth or installed libraries.
+
+### PolyComb preset containers (0.5.2)
+
+Newer ensembles can wrap an instrument state in a named UTF-16 preset container.
+The JSON retains `name` for the inner state and adds `container_name`,
+`bank_name`, their byte offsets, and validated `bank_index` / `bank_slot` fields.
+For example, the 2025 file has 35 distinct outer names around inner states all
+named `TEST-CHANS`. Bank names follow the serialized DSIN metadata boundaries;
+snapshot IDs remain local to their instrument and can be ambiguous across
+instruments. Do not treat the flattened panel lookup as a universal ID scope.
+
+Regression: `python3 test_polycomb_later.py /path/to/2018.ens /path/to/2025.ens`.

@@ -38,6 +38,8 @@
 
 #include "scNode.h"
 #include "scTimelineMenu.h"
+#include "scSnapshots.h"
+#include "scDropdowns.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "imgui.h"
@@ -259,6 +261,12 @@ private:
     int builtOversample = -1;
 
     std::vector<PublishAction> publishActions;
+    scSnapshots snaps;                    // the shared snapshots: library, morph, presets
+    ofJson initial;                       // the sound at setup (the factory's base)
+    bool notInSound(const std::string& key) const;
+    ofJson captureSound() const;
+    void applySound(const ofJson& a, const ofJson& b, float t, bool sw);
+    std::vector<ofJson> factorySounds() const;
     std::vector<std::string> publishedKeys;
     scTimelineMenu timeline;              // "Add to Timeline" from the window
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> publishedHandles;

@@ -430,7 +430,19 @@ void scSlicerBox::setup(){
     seqDivision.set("Seq Division", 3, 0, (int)seqDivisionNames.size() - 1);
     seqGate.set("Seq Gate", 1.0f, 0.1f, 2.0f);
     seqRandom.set("Seq Random", 0.0f, 0.0f, 1.0f);
+    snaps.setupParameters();   // Snapshot, Morph... (scSnapshots, shared by the synths)
     initializePublishActions();
+    initial = captureSound();
+    {
+        scSnapshots::Host h;
+        h.folder = "SlicerBox"; h.title = "SlicerBox";
+        h.capture = [this](){ return captureSound(); };
+        h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySound(a, b, t, sw); };
+        h.factory = [this](){ return factorySounds(); };
+        h.bpm = [this](){ return currentBpm; };
+        h.paramMenu = [this](const std::string& k){ controlMenu(k); };
+        snaps.setup(h);
+    }
 
     listeners.push(gate.newListener([this](std::vector<float>& v){
         lastGate = v;
@@ -1051,6 +1063,11 @@ void scSlicerBox::deactivate(){
 
 void scSlicerBox::update(ofEventArgs&){
     timeline.update();
+    snaps.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names = snaps.slotNames();
+        for(const auto& key : snaps.slotKeys()) { auto it = publishedHandles.find(key); if(it != publishedHandles.end()) scDropdowns::setNames(it->second, names); }
+    }
     // A file chosen in the window or dropped on it
     if(pendingLoadDialog){
         pendingLoadDialog = false;
@@ -1273,6 +1290,40 @@ void scSlicerBox::initializePublishActions(){
     for(auto* p : {&rvbMix, &rvbDecay, &rvbSize, &rvbPredelay, &rvbLate, &rvbSpread, &rvbLowpass,
                    &rvbHiDamp, &rvbLoDamp, &rvbModRate, &rvbSpin, &rvbWander})
         addPublishAction(*p);
+    for(auto* p : {&snaps.snapshotP, &snaps.morphAP, &snaps.morphBP, &snaps.morphCurveP, &snaps.morphSwitchP}) addPublishAction(*p);
+    for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) addPublishAction(*p);
+    for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) addPublishAction(*p);
+}
+
+// ── Snapshots: how the file is sliced and played, and the effects (not the file) ──
+ofJson scSlicerBox::captureSound() const {
+    ofJson json = ofJson::object();
+    for(const auto& action : publishActions) if(action.save && !scSnapshots::isOwnKey(action.key)) action.save(json);
+    return json;
+}
+
+void scSlicerBox::applySound(const ofJson& a, const ofJson& b, float t, bool sw){
+    scSnapshots::blendActions(publishActions, a, b, t, sw, [this](const std::string& k){
+        return scSnapshots::isOwnKey(k) || hasPublishedConnection(k);   // a connection drives it
+    });
+}
+
+// Five starting points (they leave the file's region alone)
+std::vector<ofJson> scSlicerBox::factorySounds() const {
+    ofJson base = initial;
+    base.erase(regionStart.getEscapedName());
+    base.erase(regionEnd.getEscapedName());
+    return scSnapshots::presetsFrom(base, R"JSON([
+ {"name": "Init"},
+ {"name": "Grid Sequence", "set": {"Slice Mode": 0, "Grid Slices": 16, "Sequence": true, "Seq Steps": 16,
+   "Seq Division": 3, "Seq Random": 0.25}},
+ {"name": "Reverse Chops", "set": {"Slice Reverse": [0.0, 1.0], "Amp Release": 0.05,
+   "Echo On": true, "Echo Sync": true, "Echo Beats": 0.75, "Echo Feed": 0.4, "Echo Mix": 0.25}},
+ {"name": "Lo-fi Crush", "set": {"Sat On": true, "Sat Drive": 18.0, "Sat Warmth": 0.6, "Filter On": true,
+   "Filter Type": 0, "Filter Cutoff": 3500.0, "Filter Resonance": 0.3, "Comp On": true}},
+ {"name": "Dreamy Gated", "set": {"Play Mode": 1, "Amp Attack": 0.05, "Amp Release": 0.6, "Pitch": -12.0,
+   "Reverb On": true, "Reverb Mix": 0.45, "Reverb Decay": 5.0, "Reverb Size": 45.0}}
+])JSON");
 }
 
 const scSlicerBox::PublishAction* scSlicerBox::findPublishAction(const std::string& key) const {
@@ -1455,6 +1506,8 @@ void scSlicerBox::drawWindow(){
                                       100.0f, std::max(100.0f, totalW * 0.45f / z), 1.0f / z);
         ImGui::SameLine(0, 0);
         ImGui::BeginChild("##sbMain", ImVec2(0, std::max(1.0f, totalH)), false);
+        // snapshots, named presets, morph (scSnapshots), then the synth
+        snaps.drawBar(std::max(1.0f, ImGui::GetContentRegionAvail().x));
         drawHeader();
         const float w = ImGui::GetContentRegionAvail().x;
         if(waveHeight <= 0.0f) waveHeight = 220.0f * z;

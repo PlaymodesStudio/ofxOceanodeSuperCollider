@@ -179,7 +179,118 @@ void scSampleBox::setup() {
     addPad();
     timeline.setup(this, [this](const std::string& k) { publish(k); }, [this](const std::string& k) { unpublish(k); },
                    [this]() { return publishedKeys; });
+
+    // Snapshots (the shared system): the kit (pads, their samples and settings)
+    snaps.setupParameters();
+    for(auto* p : {&snaps.snapshotP, &snaps.morphAP, &snaps.morphBP, &snaps.morphCurveP, &snaps.morphSwitchP}) registerNodeControl(*p);
+    for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) registerNodeControl(*p);
+    for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) registerNodeControl(*p);
+    initialPad = padState(0);
+    {
+        scSnapshots::Host h;
+        h.folder = "SampleBox"; h.title = "SampleBox";
+        h.capture = [this]() { return captureSnapshot(); };
+        h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw) { applySnapshot(a, b, t, sw); };
+        h.factory = [this]() { return factorySnapshots(); };
+        h.bpm = [this]() { return currentBpm(); };
+        h.paramMenu = [this](const std::string& k) { drawPublishedUnderline(k); drawPublishMenu(k); };
+        snaps.setup(h);
+    }
     requireSynthdefs();
+}
+
+// A node control (no pad): the snapshot settings
+template<typename T>
+void scSampleBox::registerNodeControl(ofParameter<T>& param) {
+    Control c;
+    c.key = c.base = param.getEscapedName();
+    c.pad = -1;
+    if constexpr(std::is_same<T, float>::value) c.f = &param;
+    else if constexpr(std::is_same<T, int>::value) c.i = &param;
+    else c.b = &param;
+    c.add = [this, &param]() { return addParameter(param); };
+    c.save = [&param]() { return param.toString(); };
+    c.load = [&param](const std::string& v) { param.fromString(v); };
+    controls.push_back(std::move(c));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Snapshots
+// ════════════════════════════════════════════════════════════════════════════
+
+ofJson scSampleBox::captureSnapshot() const {
+    ofJson arr = ofJson::array();
+    for(int k = 0; k < (int)pads.size(); k++) arr.push_back(padState(k));
+    return {{"pads", arr}};
+}
+
+// The arrival's kit at the switch point (pads, samples, every setting);
+// before and after it the pads' numbers glide
+void scSampleBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw) {
+    if(!a.is_object() || !b.is_object()) return;
+    const ofJson& side = sw ? b : a;
+    if(side.contains("pads") && side["pads"].is_array() && side["pads"] != appliedKit) {
+        appliedKit = side["pads"];
+        const ofJson& arr = side["pads"];
+        if(!side.value("allPads", false)) {   // a kit: as many pads as it has
+            const int n = std::clamp((int)arr.size(), 1, MaxPads);
+            while((int)pads.size() < n) if(!addPad()) break;
+            while((int)pads.size() > n) removePad((int)pads.size() - 1);
+        }
+        for(int k = 0; k < (int)pads.size(); k++) {
+            const ofJson& ps = arr[std::min<size_t>(k, arr.size() - 1)];   // allPads: the one for all
+            applyPadState(k, ps);
+            const std::string path = ps.value("path", std::string());
+            if(!path.empty() && path != pads[k]->sample->path) loadSample(*pads[k], path);
+        }
+        for(auto& p : pads) syncPad(*p);
+        sendChokeMasks();
+        sendMutes();
+        selected = std::clamp(selected, 0, (int)pads.size() - 1);
+    }
+    if(t <= 0.0f || t >= 1.0f) return;
+    auto controlsOf = [](const ofJson& s, int k) -> const ofJson* {
+        if(!s.contains("pads") || !s["pads"].is_array() || s["pads"].empty()) return nullptr;
+        const ofJson& ps = s["pads"][std::min<size_t>(k, s["pads"].size() - 1)];
+        return ps.contains("controls") ? &ps["controls"] : nullptr;
+    };
+    for(auto& c : controls) {
+        if(!c.f || c.pad < 0) continue;
+        const ofJson* ca = controlsOf(a, c.pad);
+        const ofJson* cb = controlsOf(b, c.pad);
+        if(!ca || !cb || !ca->contains(c.base) || !cb->contains(c.base)) continue;
+        const float va = ofToFloat((*ca)[c.base].get<std::string>()), vb = ofToFloat((*cb)[c.base].get<std::string>());
+        const float v = scSnapshots::blendValue(va, vb, t, sw, scSnapshots::logKey(c.base)).get<float>();
+        if(std::abs(v - c.f->get()) > 1e-6f) c.f->set(v);
+    }
+}
+
+// Five pad settings for the whole kit (the samples, channels and pad count stay)
+std::vector<ofJson> scSampleBox::factorySnapshots() const {
+    static const char* src = R"JSON([
+ {"name": "Init"},
+ {"name": "Tight Drums", "set": {"Polyphonic": false, "Amp Attack": 0.001, "Amp Release": 0.04, "Loop": false}},
+ {"name": "Synced Loops", "set": {"Loop": true, "Sync To Transport": true, "Play With Transport": true,
+                                  "Stretch Mode": 1, "Loop Crossfade %": 5.0}},
+ {"name": "Reverse Swells", "set": {"Reverse": true, "Amp Attack": 0.4, "Amp Release": 1.2, "Polyphonic": true}},
+ {"name": "Lo-fi Filtered", "set": {"Filter On": true, "Filter Type": 0, "Cutoff": 2500.0, "Resonance": 1.2,
+                                    "Rate": 0.94, "Transpose": -1.0}}
+])JSON";
+    ofJson pad = initialPad;
+    pad.erase("name");
+    pad.erase("path");
+    if(pad.contains("controls")) pad["controls"].erase("Channel");   // the routing stays
+    std::vector<ofJson> out;
+    for(const auto& p : ofJson::parse(src)) {
+        ofJson ps = pad;
+        if(p.contains("set"))
+            for(auto it = p["set"].begin(); it != p["set"].end(); ++it) {
+                const ofJson& v = it.value();
+                ps["controls"][scSnapshots::escapeKey(it.key())] = v.is_boolean() ? std::string(v.get<bool>() ? "1" : "0") : ofToString(v.get<float>());
+            }
+        out.push_back({{"name", p["name"]}, {"allPads", true}, {"pads", ofJson::array({ps})}});
+    }
+    return out;
 }
 
 void scSampleBox::requireSynthdefs() {
@@ -321,6 +432,16 @@ void scSampleBox::setupPad(Pad& p) {
     PAD_I(p.filterType, "Filter Type", 0, 0, 2, DEST_ENGINE, "filtertype");
     PAD_F(p.cutoff, "Cutoff", 16000.0f, 20.0f, 20000.0f, DEST_ENGINE, "cutoff");
     PAD_F(p.resonance, "Resonance", 0.7f, 0.1f, 2.0f, DEST_ENGINE, "resonance");
+    {   // the combos' names (published: dropdowns); the window refreshes Channel's sources
+        std::vector<std::string> chans = {"Auto: row " + ofToString(p.index + 1)};
+        for(int c = 1; c <= MaxChannels; c++) chans.push_back(ofToString(c));
+        std::vector<std::string> groups = {"None"};
+        for(int g = 1; g <= ChokeGroups; g++) groups.push_back("Group " + ofToString(g));
+        dropdowns.set(p.channel.getEscapedName(), chans);
+        dropdowns.set(p.choke.getEscapedName(), groups);
+        dropdowns.set(p.stretchMode.getEscapedName(), std::vector<std::string>{"Resample", "Stretch"});
+        dropdowns.set(p.filterType.getEscapedName(), std::vector<std::string>{"Low pass", "High pass", "Band pass"});
+    }
     // Tempo
     PAD_F(p.fitBeats, "Fit Beats", 0.0f, 0.0f, 128.0f, DEST_NONE, "fitbeats");
     PAD_B(p.sync, "Sync To Transport", false, DEST_NONE, "sync");
@@ -1137,6 +1258,11 @@ void scSampleBox::updateTempo() {
 
 void scSampleBox::update(ofEventArgs&) {
     timeline.update();
+    snaps.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names = snaps.slotNames();
+        for(const auto& key : snaps.slotKeys()) { auto it = published.find(key); if(it != published.end()) scDropdowns::setNames(it->second, names); }
+    }
     // Pads waiting for the definitions (createSynth): created once the server
     // has synced (or after 3 s without a reply)
     for(auto& [srv, n] : nodeSC) {
@@ -1217,6 +1343,8 @@ void scSampleBox::presetSave(ofJson& j) {
     j["sampleBoxBrowseDir"] = browser.getDir();
     j["sampleBoxPublished"] = publishedKeys;
     timeline.save(j, "sampleBoxTimeline");
+    // the snapshot settings (not pad controls: saved here unless published)
+    j["sampleBoxSnapshots"] = snaps.settingsJson();
     j["sampleBoxBrowserWidth"] = browserWidth;
     j["sampleBoxWaveformHeight"] = waveformHeight / std::max(0.01f, ofxOceanodeShared::getZoomLevel());
 }
@@ -1261,6 +1389,7 @@ void scSampleBox::presetRecallAfterSettingParameters(ofJson& j) {
         waveformHeight = std::max(0.0f, j["sampleBoxWaveformHeight"].get<float>()) * ofxOceanodeShared::getZoomLevel();
     if(j.contains("sampleBoxBrowseDir") && j["sampleBoxBrowseDir"].is_string())
         browser.refresh(j["sampleBoxBrowseDir"].get<std::string>());
+    if(j.contains("sampleBoxSnapshots")) snaps.loadSettings(j["sampleBoxSnapshots"]);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1273,6 +1402,7 @@ void scSampleBox::publish(const std::string& key) {
     if(!c || getParameterGroup().contains(key)) return;
     if(!publishedSeparator) { addSeparator("Published", ofColor(200)); publishedSeparator = true; }
     published[key] = c->add();
+    dropdowns.apply(key, published[key]);
     publishedKeys.push_back(key);
     parameterGroupChanged.notify(this);
 }
@@ -1369,6 +1499,11 @@ void scSampleBox::combo(ofParameter<int>& p, const char* label, float w, const s
     ImGui::SameLine();
     ImGui::SetCursorPosX(x0 + labelW * z);
     ImGui::SetNextItemWidth(std::max(40.0f * z, w - labelW * z));
+    {   // the names as drawn (Channel: with its sources) to a published dropdown
+        const auto it = published.find(key);
+        dropdowns.set(key, items, it == published.end() ? nullptr : it->second);
+    }
+    if(items.empty()) { ImGui::PopID(); return; }
     const int v = std::max(0, std::min((int)items.size() - 1, p.get()));
     if(ImGui::BeginCombo("##v", items[v].c_str())) {
         for(int i = 0; i < (int)items.size(); i++) if(ImGui::Selectable(items[i].c_str(), i == v)) p.set(i);
@@ -1487,6 +1622,8 @@ void scSampleBox::drawWindow() {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6.0f * z);
     ImGui::BeginGroup();
     const float w = rightW - 6.0f * z;
+    // snapshots, named presets, morph (scSnapshots), then the pad
+    snaps.drawBar(w);
     drawHeader(p, w);
     drawWaveform(p, w);
     drawTransport(p, w);

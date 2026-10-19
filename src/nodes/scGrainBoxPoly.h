@@ -50,6 +50,7 @@
 #include "scAudioParam.h"
 #include "scScheduledInputs.h"
 #include "scSnapshots.h"
+#include "scDropdowns.h"
 #include <vector>
 #include <string>
 #include <map>
@@ -565,6 +566,7 @@ private:
     //    frequencies / speeds / intervals in log), switches / shapes / units
     //    jump at the switch point. ──
     scSnapshots snaps;
+    scDropdowns dropdowns;   // the window combos' names (a published combo is a dropdown)
     void applyMorph(const ofJson& a, const ofJson& b, float t, bool sw);
     void drawMorphPanel(float w);
     bool snapshotExcluded(const std::string& key) const;
@@ -676,6 +678,7 @@ private:
             publishedEditorSeparatorAdded = true;
         }
         publishedEditorParameterHandles[key] = addParameter(parameter, flags);
+        dropdowns.apply(parameter.getEscapedName(), publishedEditorParameterHandles[key]);   // a combo: its names
         if(std::find(publishedEditorParameterKeys.begin(), publishedEditorParameterKeys.end(), key) == publishedEditorParameterKeys.end()) {
             publishedEditorParameterKeys.push_back(key);
         }

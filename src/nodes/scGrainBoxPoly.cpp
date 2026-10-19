@@ -361,6 +361,7 @@ void scGrainBoxPoly::setup() {
     gDurP.set      ("Global Duration", 0.0f, -1.0f, 1.0f);
     gChanceP.set   ("Global Chance",   0.0f, -1.0f, 1.0f);
     timeUnitsP.set ("Time Units", 0, 0, 2);   // 0 Relative, 1 ms, 2 Beats
+    dropdowns.set(timeUnitsP.getEscapedName(), {"Relative (0..1)", "ms", "Beats"});
     snaps.setupParameters();   // Snapshot, Morph... (scSnapshots, shared by the synths)
     fxOnP[FX_EQ].set     ("EQ On",     false);
     fxOnP[FX_ECHO].set   ("Echo On",   false);
@@ -383,6 +384,7 @@ void scGrainBoxPoly::setup() {
     echoCutoffP.set ("Echo Cutoff", 60.0f,  12.0f,   120.0f);   // MIDI note, as the Echo SynthDef
     echoMixP.set    ("Echo Mix",     0.35f,  0.0f,     1.0f);
     echoFilterP.set ("Echo Filter",  0, 0, 3);
+    dropdowns.set(echoFilterP.getEscapedName(), {"LowPass", "HighPass", "BandPass", "PeakEQ"});
     echoResonanceP.set("Echo Resonance", 0.2f, 0.0f,   1.0f);
     revSizeP.set    ("Rev Size",    30.0f,   0.0f,    60.0f);
     revDecayP.set   ("Rev Decay",    4.0f,   0.05f,   60.0f);
@@ -636,6 +638,15 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.ampCD.set          ("Amp Decay Curve"   + x, -4.0f, -12.0f, 12.0f);
     ph.ampCR.set          ("Amp Release Curve" + x, -4.0f, -12.0f, 12.0f);
     ph.placement.set      ("Placement"    + x, 0, 0, 2);
+    // the window combos' names (published: dropdowns), as drawn there
+    dropdowns.set(ph.intervalUnit.getEscapedName(), {"Rel", "ms", "Beats", "Pitch"});
+    dropdowns.set(ph.scaleType.getEscapedName(), {"Off", "Chromatic", "Major", "Minor", "Harm. minor", "Dorian",
+                                                  "Pent. major", "Pent. minor", "Whole tone", "Octaves", "Fifths+oct", "Custom"});
+    dropdowns.set(ph.scaleRoot.getEscapedName(), {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"});
+    dropdowns.set(ph.envShape.getEscapedName(), {"Custom", "Hann", "Gaussian", "Percussive", "Reverse Perc", "Trapezoid", "Rectangular"});
+    dropdowns.set(ph.filterType.getEscapedName(), std::vector<const char*>(kFilterNames, kFilterNames + 6));
+    dropdowns.set(ph.gateMode.getEscapedName(), {"Auto", "Gated", "Drone"});
+    dropdowns.set(ph.placement.getEscapedName(), {"Manual (PanAz)", "Spread", "Channels"});
     ph.spreadWidth.set    ("Spread Width" + x, 1.0f, 0.0f, 1.0f);
     ph.envData.assign(ENV_BUFFER_SIZE, 0.0f);
     setupModulation(ph);
@@ -2744,6 +2755,13 @@ void scGrainBoxPoly::rebuildFxAll() {
 
 void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
     timeline.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names = snaps.slotNames();
+        for(const auto& key : snaps.slotKeys()) {
+            const auto it = publishedEditorParameterHandles.find(key);
+            dropdowns.set(key, names, it == publishedEditorParameterHandles.end() ? nullptr : it->second);
+        }
+    }
     float dt = (float)ofGetLastFrameTime();
     const Playhead* visibleModPlayhead = windowDrawn && !playheads.empty()
         ? playheads[std::clamp(activePlayhead, 0, (int)playheads.size() - 1)].get() : nullptr;

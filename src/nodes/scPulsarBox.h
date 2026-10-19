@@ -43,6 +43,7 @@
 #include "scScheduledInputs.h"
 #include "scEnvelopeCurve.h"
 #include "scSnapshots.h"
+#include "scDropdowns.h"
 #include "ofxOceanodeShared.h"
 #include "imgui.h"
 #include <algorithm>
@@ -407,6 +408,10 @@ public:
     void update(ofEventArgs&) override {
         timeline.update();
         snaps.update();
+        {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+            const auto names = snaps.slotNames();
+            for(const auto& key : snaps.slotKeys()) { auto it = publishedHandles.find(key); if(it != publishedHandles.end()) scDropdowns::setNames(it->second, names); }
+        }
         const float now = ofGetElapsedTimef();
         if(pendingDialog){
             const int g = (pendingDialog - 1) / 2, kind = (pendingDialog - 1) % 2;

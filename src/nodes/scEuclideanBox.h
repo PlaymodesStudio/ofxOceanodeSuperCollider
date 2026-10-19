@@ -51,6 +51,8 @@
 
 #include "scNode.h"
 #include "scTimelineMenu.h"
+#include "scSnapshots.h"
+#include "scDropdowns.h"
 #include "scTransportSync.h"
 #include "scMetroBoxEngine.h"     // hashOf, unit, floorDiv, positiveMod64, tickAt
 #include "ofxSCSynth.h"
@@ -216,6 +218,23 @@ public:
             for(auto& [server, st] : servers) sendStaticControls(st);
             follower.requestAnchor();
         }));
+
+        // Snapshots (the shared system): every track control, and the node's
+        // Tracks, Seed, Scale and Trig Amp (not Voices: the outputs' width)
+        snaps.setupParameters();
+        for(auto* p : {&snaps.snapshotP, &snaps.morphAP, &snaps.morphBP, &snaps.morphCurveP, &snaps.morphSwitchP}) controls.push_back(plainControl(*p));
+        for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) controls.push_back(plainControl(*p));
+        for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) controls.push_back(plainControl(*p));
+        snapExtras = {plainControl(numTracks), plainControl(globalSeed), plainControl(scale), plainControl(trigAmp)};
+        initial = captureSnapshot();
+        scSnapshots::Host h;
+        h.folder = "EuclideanBox"; h.title = "EuclideanBox";
+        h.capture = [this](){ return captureSnapshot(); };
+        h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySnapshot(a, b, t, sw); };
+        h.factory = [this](){ return factorySnapshots(); };
+        h.bpm = [this](){ return currentBpm; };
+        h.paramMenu = [this](const std::string& k){ controlMenu(k); };
+        snaps.setup(h);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -224,6 +243,11 @@ public:
 
     void update(ofEventArgs&) override {
         timeline.update();
+        snaps.update();
+        {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+            const auto names = snaps.slotNames();
+            for(const auto& key : snaps.slotKeys()) { auto it = published.find(key); if(it != published.end()) scDropdowns::setNames(it->second, names); }
+        }
         const float now = ofGetElapsedTimef();
         for(auto& [server, st] : servers){
             if(st.allocPending && (!server->isNRTSyncPending() || now - st.allocTime > 2.0f)){
@@ -242,6 +266,7 @@ public:
     }
 
     void draw(ofEventArgs&) override { if(showWindow) drawWindow(); }
+    void setBpm(float bpm) override { currentBpm = std::max(1.0f, bpm); }   // Morph Time in beats
 
     // ════════════════════════════════════════════════════════════════════════
     // scNode
@@ -628,6 +653,10 @@ private:
         std::function<void(const std::string&)> apply;
     };
     std::vector<Control> controls;
+    std::vector<Control> snapExtras;      // the node's parameters a snapshot holds (Tracks, Seed...)
+    scSnapshots snaps;                    // the shared snapshots: library, morph, presets
+    ofJson initial;                       // the groove at setup (the factory's base)
+    float currentBpm = 120.0f;
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
     std::vector<std::string> publishedKeys;
     scTimelineMenu timeline;              // "Add to Timeline" from the window
@@ -668,6 +697,52 @@ private:
         c.apply = [&p](const std::string& t){ const std::string l = ofToLower(ofTrim(t)); p.set(l == "1" || l == "on" || l == "true" || l == "yes"); };
         controls.push_back(std::move(c));
         listeners.push(p.newListener([this, ti](bool&){ invalidate(ti); }));
+    }
+    // A control with no track and nothing to invalidate (snapshot settings,
+    // the node's own parameters as snapshot values)
+    template<typename T>
+    Control plainControl(ofParameter<T>& p){
+        Control c;
+        c.key = p.getEscapedName();
+        c.track = -1;
+        c.add = [this, &p](){ return addParameter(p); };
+        c.save = [&p](){ return ofJson(p.get()); };
+        c.load = [&p](const ofJson& j){ try { p.set(j.get<T>()); } catch(...) {} };
+        c.text = [&p](){ return ofToString(p.get()); };
+        c.apply = [&p](const std::string& t){ if constexpr(!std::is_same_v<T, std::vector<float>>) p.set(ofFromString<T>(t)); };
+        return c;
+    }
+    ofJson captureSnapshot() const {
+        auto none = [](const std::string&){ return false; };
+        ofJson j = scSnapshots::captureControls(controls, none);
+        j.update(scSnapshots::captureControls(snapExtras, none));
+        return j;
+    }
+    void applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw){
+        auto driven = [this](const std::string& k){ auto it = published.find(k); return it != published.end() && it->second->hasInConnection(); };
+        scSnapshots::blendControls(snapExtras, a, b, t, sw, [](const std::string&){ return false; });   // Tracks first
+        scSnapshots::blendControls(controls, a, b, t, sw, driven);
+    }
+    // Five starting grooves (the rest: the defaults)
+    std::vector<ofJson> factorySnapshots() const {
+        return scSnapshots::presetsFrom(initial, R"JSON([
+ {"name": "Init"},
+ {"name": "Four on the Floor", "set": {"Tracks": 3,
+   "T1 Steps": 16, "T1 Hits": 4, "T1 Rotate": 0,
+   "T2 Steps": 16, "T2 Hits": 2, "T2 Rotate": 4,
+   "T3 Steps": 16, "T3 Hits": 8, "T3 Rotate": 1, "T3 Level": 0.4}},
+ {"name": "Tresillo and Clave", "set": {"Tracks": 3,
+   "T1 Steps": 8, "T1 Hits": 3, "T2 Steps": 16, "T2 Hits": 5, "T2 Rotate": 2,
+   "T3 Steps": 16, "T3 Hits": 7, "T3 Level": 0.45}},
+ {"name": "Afro 12-8", "set": {"Tracks": 3,
+   "T1 Step": 4, "T1 Steps": 12, "T1 Hits": 4,
+   "T2 Step": 4, "T2 Steps": 12, "T2 Hits": 7, "T2 Rotate": 2,
+   "T3 Step": 4, "T3 Steps": 12, "T3 Hits": 5, "T3 Rotate": 4, "T3 Level": 0.5}},
+ {"name": "Random Drift", "set": {"Tracks": 4,
+   "T1 Random Hits": true, "T1 Hits Min": 2, "T1 Hits Max": 6,
+   "T2 Chance": 0.7, "T3 Random Rotate": true,
+   "T4 Steps": 7, "T4 Hits": 3, "T4 Swing": 0.2, "T4 Level": 0.5}}
+])JSON");
     }
     const Control* findControl(const std::string& key) const {
         for(const auto& c : controls) if(c.key == key) return &c;
@@ -977,6 +1052,8 @@ private:
             ImGui::SameLine(0, 20);
             ImGui::SetNextItemWidth(110);
             ImGui::SliderInt("##ebBars", &viewBars, 1, 16, "Bars shown %d");
+            // snapshots, named presets, morph (scSnapshots), then the tracks
+            snaps.drawBar(std::max(1.0f, ImGui::GetContentRegionAvail().x));
 
             const float w = std::max(300.0f, ImGui::GetContentRegionAvail().x);
             const float viewH = std::max(240.0f, std::min(380.0f, 60.0f + numTracks.get() * 44.0f));

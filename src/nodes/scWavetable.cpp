@@ -293,7 +293,18 @@ void scWavetable::setup(){
     trig.set("Trig", {0}, {0}, {1});
     oversample.set("Oversample", 0, 0, int(oversampleNames.size()) - 1);
 
+    snaps.setupParameters();   // Snapshot, Morph... (scSnapshots, shared by the synths)
     initializePublishActions();
+    initial = captureSound();
+    {
+        scSnapshots::Host h;
+        h.folder = "Wavetable"; h.title = "Wavetable";
+        h.capture = [this](){ return captureSound(); };
+        h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySound(a, b, t, sw); };
+        h.factory = [this](){ return factorySounds(); };
+        h.paramMenu = [this](const std::string& k){ controlMenu(k); };
+        snaps.setup(h);
+    }
     publishByKey(pitch.getEscapedName());
     publishByKey(levels.getEscapedName());
     publishByKey(position.getEscapedName());
@@ -364,6 +375,11 @@ void scWavetable::setup(){
 
 void scWavetable::update(ofEventArgs&){
     timeline.update();
+    snaps.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names = snaps.slotNames();
+        for(const auto& key : snaps.slotKeys()) { auto it = publishedHandles.find(key); if(it != publishedHandles.end()) scDropdowns::setNames(it->second, names); }
+    }
     const float now = ofGetElapsedTimef();
 
     if(pendingDialog){
@@ -1055,6 +1071,45 @@ void scWavetable::initializePublishActions(){
     addPublishAction(phase);
     addPublishAction(trig);
     addPublishAction(oversample, oversampleNames);
+    for(auto* p : {&snaps.snapshotP, &snaps.morphAP, &snaps.morphBP, &snaps.morphCurveP, &snaps.morphSwitchP}) addPublishAction(*p);
+    for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) addPublishAction(*p);
+    for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) addPublishAction(*p);
+}
+
+// ── Snapshots: the oscillator and its table (not the notes, nor Live In) ─────
+bool scWavetable::notInSound(const std::string& key) const {
+    if(scSnapshots::isOwnKey(key)) return true;
+    for(const auto* p : std::initializer_list<const ofAbstractParameter*>{&pitch, &levels, &liveIn, &trig, &embedTable})
+        if(p->getEscapedName() == key) return true;
+    return false;
+}
+
+ofJson scWavetable::captureSound() const {
+    ofJson json = ofJson::object();
+    for(const auto& action : publishActions) if(action.save && !notInSound(action.key)) action.save(json);
+    return json;
+}
+
+void scWavetable::applySound(const ofJson& a, const ofJson& b, float t, bool sw){
+    scSnapshots::blendActions(publishActions, a, b, t, sw, [this](const std::string& k){
+        return notInSound(k) || hasPublishedConnection(k);   // a connection drives it
+    });
+}
+
+// Five starting points over the loaded table (they leave the file alone)
+std::vector<ofJson> scWavetable::factorySounds() const {
+    ofJson base = initial;
+    for(const auto* p : std::initializer_list<const ofAbstractParameter*>{&source, &path, &cycleMode, &maxFrames,
+                                                                        &normalize, &removeDC, &liveFrames, &rescale, &liveXFade})
+        base.erase(p->getEscapedName());
+    return scSnapshots::presetsFrom(base, R"JSON([
+ {"name": "Init"},
+ {"name": "Sync Sweep", "set": {"Warp 1": [1], "Warp 1 Amt": [0.5], "Position": [0.25]}},
+ {"name": "Bent Mirror", "set": {"Warp 1": [2], "Warp 1 Amt": [0.4], "Warp 2": [6], "Warp 2 Amt": [0.5]}},
+ {"name": "Sine FM", "set": {"B Source": 0, "FM": [1.5], "FM Ratio": [2.0], "FM Damp": [0.8]}},
+ {"name": "Table Feedback", "set": {"B Source": 1, "FM": [0.8], "FM Ratio": [1.0], "B Feedback": [1.2],
+   "B Pos": [0.5], "Position": [0.3], "Oversample": 1}}
+])JSON");
 }
 
 const scWavetable::PublishAction* scWavetable::findPublishAction(const std::string& key) const {
@@ -1289,6 +1344,8 @@ void scWavetable::drawWindow(){
     ImGui::SetNextWindowSize(ImVec2(920.0f, 680.0f), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)){
         ImGui::PushID(this);
+        // snapshots, named presets, morph (scSnapshots), then the synth
+        snaps.drawBar(std::max(1.0f, ImGui::GetContentRegionAvail().x));
         drawFileBar();
 
         const ImVec2 avail = ImGui::GetContentRegionAvail();

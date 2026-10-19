@@ -56,6 +56,7 @@
 #include "scAudioParam.h"
 #include "scScheduledInputs.h"
 #include "scSnapshots.h"
+#include "scDropdowns.h"
 #include "ofxSCGroup.h"
 #include "imgui.h"
 #include <array>

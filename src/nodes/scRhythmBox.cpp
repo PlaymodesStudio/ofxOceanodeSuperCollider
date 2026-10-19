@@ -453,6 +453,20 @@ void scRhythmBox::setup() {
                 if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepCombDecay", v);
         }));
     }
+    // Snapshots (the shared system): the whole box (tracks, samples, the 8 slots)
+    snaps.setupParameters();
+    auto snapParam = [this](auto& p) { snapParams[p.getEscapedName()] = [this, &p]() { return addParameter(p); }; };
+    snapParam(snaps.snapshotP); snapParam(snaps.morphP); snapParam(snaps.morphAP); snapParam(snaps.morphBP);
+    snapParam(snaps.morphTimeP); snapParam(snaps.morphBeatsP); snapParam(snaps.morphGlideP);
+    snapParam(snaps.morphCurveP); snapParam(snaps.morphSwitchP);
+    scSnapshots::Host h;
+    h.folder = "RhythmBox"; h.title = "Step Sequencer";
+    h.capture = [this]() { return captureSnapshot(); };
+    h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw) { applySnapshot(a, b, t, sw); };
+    h.factory = [this]() { return factorySnapshots(); };
+    h.bpm = [this]() { return currentBpm; };
+    h.paramMenu = [this](const std::string& k) { snapMenu(k); };
+    snaps.setup(h);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -460,6 +474,11 @@ void scRhythmBox::setup() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scRhythmBox::update(ofEventArgs& /*args*/) {
+    snaps.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names = snaps.slotNames();
+        for(const auto& key : snaps.slotKeys()) { auto it = snapPublished.find(key); if(it != snapPublished.end()) scDropdowns::setNames(it->second, names); }
+    }
     // Poll KR buses on the primary server for playhead and gate readback.
     if(!stepBuses.empty()) {
         auto& busList = stepBuses.begin()->second;
@@ -1653,6 +1672,9 @@ void scRhythmBox::drawSequencerWindow() {
         // ── Right: scrollable tracks area ─────────────────────────────────────
         ImGui::BeginChild("##tracks", ImVec2(tracksW, avail.y), false,
                           ImGuiWindowFlags_HorizontalScrollbar);
+
+        // ── Snapshots, named presets, morph (scSnapshots), then the box ────────
+        snaps.drawBar(std::max(1.0f, ImGui::GetContentRegionAvail().x));
 
         // ── Project Menu ──────────────────────────────────────────────────────
         drawProjectMenu();
@@ -5160,6 +5182,10 @@ void scRhythmBox::deserializeSlots(const ofJson& j) {
 
 void scRhythmBox::presetSave(ofJson& j) {
     serializeSlots(j);
+    j["rhythmBoxSnapshots"] = snaps.settingsJson();
+    std::vector<std::string> snapKeys;
+    for(const auto& [k, h] : snapPublished) snapKeys.push_back(k);
+    j["rhythmBoxSnapPublished"] = snapKeys;
     j["embedInProject"] = embedInProject.get();
     // Persist the last-loaded RhythmBox project path so the field is restored
     // when this Oceanode preset is recalled (data comes from the preset, not re-loaded
@@ -5176,6 +5202,8 @@ void scRhythmBox::presetSave(ofJson& j) {
 }
 
 void scRhythmBox::loadBeforeConnections(ofJson& j) {
+    if(j.contains("rhythmBoxSnapPublished") && j["rhythmBoxSnapPublished"].is_array())
+        for(const auto& k : j["rhythmBoxSnapPublished"]) if(k.is_string()) publishSnap(k.get<std::string>());
     if(j.contains("browseDir")) {
         std::string d = j["browseDir"].get<std::string>();
         if(std::filesystem::exists(d)) refreshBrowse(d);
@@ -5194,6 +5222,8 @@ void scRhythmBox::loadBeforeConnections(ofJson& j) {
 }
 
 void scRhythmBox::presetRecallAfterSettingParameters(ofJson& j) {
+    if(j.contains("rhythmBoxSnapshots")) snaps.loadSettings(j["rhythmBoxSnapshots"]);
+    appliedBox = ofJson();
     if(j.contains("embedInProject"))
         embedInProject = j["embedInProject"].get<bool>();
 
@@ -5615,58 +5645,7 @@ void scRhythmBox::loadProject(const std::string& projectPath) {
         ofLogNotice("scRhythmBox::loadProject") << "  current numTracks=" << numTracks
             << "  project numTracks=" << (projectJson.contains("numTracks") ? projectJson["numTracks"].get<int>() : -1);
 
-        // 1. Update output port count. Legacy projects without numTracks are
-        // inferred from Tracks, trackConfigs, or the first slot.
-        const int projectTrackCount = inferRhythmBoxTrackCount(projectJson, numTracks);
-        if(projectTrackCount != numTracks) {
-            ofLogNotice("scRhythmBox::loadProject") << "  setNumTracks(" << projectTrackCount << ")";
-            setNumTracks(projectTrackCount);
-            numTracksP.set(projectTrackCount);
-        }
-
-        // 2. Load all data into memory (trackConfigs, slots, samplePaths, swing)
-        ofLogNotice("scRhythmBox::loadProject") << "  deserializeSlots...";
-        deserializeSlots(projectJson);
-        ofLogNotice("scRhythmBox::loadProject") << "  after deserialize: numTracks=" << numTracks
-            << "  slots[0].tracks.size()=" << slots[0].tracks.size();
-
-        // 3. Load samples so getBufnum() is valid when synths are created
-        ofLogNotice("scRhythmBox::loadProject") << "  loading samples...";
-        {
-            std::vector<std::string> pathsToLoad = samplePaths;
-            freeAllSamples();
-            int loaded = 0;
-            for(int ti = 0; ti < MAX_TRACKS; ti++) {
-                if(pathsToLoad[ti].empty()) continue;
-                std::string absPath = resolveToAbsolutePath(pathsToLoad[ti]);
-                ofLogNotice("scRhythmBox::loadProject") << "  track " << ti << " sample: " << absPath
-                    << (std::filesystem::exists(absPath) ? " [EXISTS]" : " [MISSING]");
-                if(!std::filesystem::exists(absPath)) {
-                    samplePaths[ti] = pathsToLoad[ti];
-                    continue;
-                }
-                loadSampleForTrack(ti, absPath);
-                loaded++;
-            }
-            ofLogNotice("scRhythmBox::loadProject") << "  loaded " << loaded << " samples";
-        }
-
-        // 4. Recreate all SC synths from scratch with the loaded data.
-        ofLogNotice("scRhythmBox::loadProject") << "  recreating synths for " << allServers.size() << " server(s)...";
-        for(auto* sm : allServers) {
-            if(sm && sm->getServer()) {
-                ofLogNotice("scRhythmBox::loadProject") << "  createSynth on server";
-                createSynth(sm->getServer());
-            }
-        }
-
-        // 5. Apply saved slot index
-        if(projectJson.contains("currentSlot")) {
-            int slot = ofClamp(projectJson["currentSlot"].get<int>(), 0, MAX_SLOTS - 1);
-            ofLogNotice("scRhythmBox::loadProject") << "  setting currentSlot=" << slot;
-            currentSlotP.set(slot);
-        }
-        reloadCurrentSlot();
+        applyBoxState(projectJson, false);
 
         currentProjectPath = fullPath;
 
@@ -5681,6 +5660,161 @@ void scRhythmBox::loadProject(const std::string& projectPath) {
     } catch (const std::exception& e) {
         ofLogError("scRhythmBox") << "Error loading project: " << e.what();
     }
+}
+
+// A whole box (a project, or a snapshot) at runtime: the tracks, their data and
+// samples, the synths again, the slot. keepLoaded: samples that stay are kept.
+void scRhythmBox::applyBoxState(const ofJson& j, bool keepLoaded) {
+    const std::vector<std::string> loadedBefore = samplePaths;
+    // 1. Update output port count. Legacy projects without numTracks are
+    // inferred from Tracks, trackConfigs, or the first slot.
+    const int projectTrackCount = inferRhythmBoxTrackCount(j, numTracks);
+    if(projectTrackCount != numTracks) {
+        ofLogVerbose("scRhythmBox::applyBoxState") << "  setNumTracks(" << projectTrackCount << ")";
+        setNumTracks(projectTrackCount);
+        numTracksP.set(projectTrackCount);
+    }
+
+    // 2. Load all data into memory (trackConfigs, slots, samplePaths, swing)
+    ofLogVerbose("scRhythmBox::applyBoxState") << "  deserializeSlots...";
+    deserializeSlots(j);
+    ofLogVerbose("scRhythmBox::applyBoxState") << "  after deserialize: numTracks=" << numTracks
+        << "  slots[0].tracks.size()=" << slots[0].tracks.size();
+
+    // 3. Load samples so getBufnum() is valid when synths are created
+    ofLogVerbose("scRhythmBox::applyBoxState") << "  loading samples...";
+    {
+        // a snapshot keeps the samples that stay (no gap): only the changed ones load
+        std::vector<std::string> pathsToLoad = samplePaths;
+        if(!keepLoaded) freeAllSamples();
+        int loaded = 0;
+        for(int ti = 0; ti < MAX_TRACKS; ti++) {
+            if(keepLoaded) {
+                const bool same = pathsToLoad[ti].empty() ? loadedBefore[ti].empty()
+                                : resolveToAbsolutePath(pathsToLoad[ti]) == loadedBefore[ti];
+                if(same) { samplePaths[ti] = loadedBefore[ti]; continue; }
+                if(!loadedBefore[ti].empty()) freeSampleForTrack(ti);
+            }
+            if(pathsToLoad[ti].empty()) continue;
+            std::string absPath = resolveToAbsolutePath(pathsToLoad[ti]);
+            if(!std::filesystem::exists(absPath)) {
+                samplePaths[ti] = pathsToLoad[ti];
+                continue;
+            }
+            loadSampleForTrack(ti, absPath);
+            loaded++;
+        }
+        ofLogVerbose("scRhythmBox::applyBoxState") << "  loaded " << loaded << " samples";
+    }
+
+    // 4. Recreate all SC synths from scratch with the loaded data.
+    ofLogVerbose("scRhythmBox::applyBoxState") << "  recreating synths for " << allServers.size() << " server(s)...";
+    for(auto* sm : allServers) {
+        if(sm && sm->getServer()) {
+            ofLogVerbose("scRhythmBox::applyBoxState") << "  createSynth on server";
+            createSynth(sm->getServer());
+        }
+    }
+
+    // 5. Apply saved slot index
+    if(j.contains("currentSlot")) {
+        int slot = ofClamp(j["currentSlot"].get<int>(), 0, MAX_SLOTS - 1);
+        ofLogVerbose("scRhythmBox::applyBoxState") << "  setting currentSlot=" << slot;
+        currentSlotP.set(slot);
+    }
+    reloadCurrentSlot();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Snapshots
+// ════════════════════════════════════════════════════════════════════════════
+
+ofJson scRhythmBox::captureSnapshot() const {
+    ofJson j;
+    serializeSlots(j);
+    j.erase("browseDir");   // the browser's folder is not the sound
+    return j;
+}
+
+// The arrival's box at the switch point (whole: tracks, samples, slots);
+// Swing glides
+void scRhythmBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw) {
+    if(!a.is_object() || !b.is_object()) return;
+    const ofJson& side = sw ? b : a;
+    if(side != appliedBox) {
+        appliedBox = side;
+        if(side != captureSnapshot()) applyBoxState(side, true);   // (a glide starts from here)
+    }
+    if(t > 0.0f && t < 1.0f && a.contains("swingAmount") && b.contains("swingAmount")) {
+        const float v = ofLerp(a["swingAmount"].get<float>(), b["swingAmount"].get<float>(), t);
+        if(std::abs(v - swingP.get()) > 1e-5f) swingP.set(v);
+    }
+}
+
+// Five grooves on the built-in drums (no samples needed)
+std::vector<ofJson> scRhythmBox::factorySnapshots() const {
+    static const char* src = R"JSON([
+ {"name": "Init", "swing": 0.0, "tracks": [["Kick", 2, ""], ["Snare", 4, ""], ["Hat", 5, ""], ["Noise", 3, ""]]},
+ {"name": "Four on the Floor", "swing": 0.0, "tracks": [
+   ["Kick", 2, "x...x...x...x..."], ["Snare", 4, "....x.......x..."], ["Hat", 5, "..x...x...x...x."], ["Noise", 3, ""]]},
+ {"name": "Breakbeat", "swing": 0.08, "tracks": [
+   ["Kick", 2, "x.....x...x....."], ["Snare", 4, "....x.......x..x"], ["Hat", 5, "x.x.x.x.x.x.x.x."], ["Noise", 3, "..............x."]]},
+ {"name": "Half-time", "swing": 0.2, "tracks": [
+   ["Kick", 2, "x.........x....."], ["Snare", 4, "........x......."], ["Hat", 5, "x.x.x.x.x.x.x.x."], ["Noise", 3, ""]]},
+ {"name": "Shuffle", "swing": 0.35, "tracks": [
+   ["Kick", 2, "x.....x.x......."], ["Snare", 4, "....x.......x..."], ["Hat", 5, "xxxxxxxxxxxxxxxx"], ["Noise", 3, "......x.......x."]]}
+])JSON";
+    std::vector<ofJson> out;
+    for(const auto& p : ofJson::parse(src)) {
+        const auto& tracks = p["tracks"];
+        ofJson j;
+        j["name"] = p["name"];
+        j["numTracks"] = (int)tracks.size();
+        j["currentSlot"] = 0;
+        j["swingAmount"] = p["swing"];
+        j["samplePaths"] = std::vector<std::string>(MAX_TRACKS, "");
+        ofJson cfg = ofJson::array(), slot = ofJson::array();
+        for(const auto& tr : tracks) {
+            cfg.push_back({{"name", tr[0]}, {"type", tr[1]}, {"numBeats", 4}, {"stepsPerBeat", 4}});
+            std::vector<bool> on;
+            for(char c : tr[2].get<std::string>()) on.push_back(c == 'x');
+            on.resize(16, false);
+            slot.push_back({{"stepOn", on}});
+        }
+        j["trackConfigs"] = cfg;
+        j["slots"] = ofJson::array({slot});
+        out.push_back(j);
+    }
+    return out;
+}
+
+// Snapshot / Morph...: published to the node from their right-click menu
+void scRhythmBox::publishSnap(const std::string& key) {
+    auto it = snapParams.find(key);
+    if(it == snapParams.end() || snapPublished.count(key)) return;
+    snapPublished[key] = it->second();
+    parameterGroupChanged.notify(this);
+}
+
+void scRhythmBox::unpublishSnap(const std::string& key) {
+    auto it = snapPublished.find(key);
+    if(it == snapPublished.end() || it->second->hasInConnection() || it->second->hasOutConnections()) return;
+    removeParameter(it->second->getEscapedName());
+    snapPublished.erase(it);
+    parameterGroupChanged.notify(this);
+}
+
+void scRhythmBox::snapMenu(const std::string& key) {
+    if(snapPublished.count(key)) {
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f), ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
+    }
+    if(!ImGui::BeginPopupContextItem(("##rbSnap" + key).c_str())) return;
+    auto it = snapPublished.find(key);
+    if(it == snapPublished.end()) { if(ImGui::MenuItem("Publish to Node GUI")) publishSnap(key); }
+    else if(it->second->hasInConnection() || it->second->hasOutConnections()) ImGui::TextDisabled("Disconnect it to unpublish");
+    else if(ImGui::MenuItem("Unpublish from Node")) unpublishSnap(key);
+    ImGui::EndPopup();
 }
 
 void scRhythmBox::drawProjectMenu() {

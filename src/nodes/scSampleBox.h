@@ -56,6 +56,8 @@
 #include "scAudioParam.h"
 #include "scScheduledInputs.h"
 #include "scTimelineMenu.h"
+#include "scDropdowns.h"
+#include "scSnapshots.h"
 #include "ofxSCGroup.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
@@ -298,6 +300,14 @@ private:
                             std::function<std::string()> save, std::function<void(const std::string&)> load);
     Control* findControl(const std::string& key);
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
+    scDropdowns dropdowns;   // the combos' names (a published combo is a dropdown)
+    scSnapshots snaps;                    // the shared snapshots: the kit, library, morph, presets
+    ofJson initialPad;                    // a fresh pad (the factory's base)
+    ofJson appliedKit;                    // the pads a snapshot last loaded whole
+    template<typename T> void registerNodeControl(ofParameter<T>& param);
+    ofJson captureSnapshot() const;
+    void applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw);
+    std::vector<ofJson> factorySnapshots() const;
     std::vector<std::string> publishedKeys;
     bool publishedSeparator = false;
     bool restoring = false;

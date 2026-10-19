@@ -143,7 +143,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
     perVoice = perVoiceLfo;
     velocity = hasVelocity;
     random = hasRandom;
-    matrix.assign(NUM_SOURCES * T(), 0.0f);
+    matrix.assign(sourceCount() * T(), 0.0f);
     auto vec = [](ofParameter<std::vector<float>>& p, const std::string& name, float def, float lo, float hi) {
         p.set(name, {def}, {lo}, {hi});
     };
@@ -234,11 +234,11 @@ void scModulation::forStates(const std::function<void(ofxSCServer*, ServerState&
 }
 int scModulation::targetBus(ofxSCServer* server, int t) const {
     auto it = states.find(server);
-    return (it != states.end() && it->second.modBlock) ? it->second.modBlock->index + t * W : 0;
+    return (it != states.end() && it->second.modBlock) ? it->second.modBlock->index + t * busWidth : 0;
 }
 int scModulation::sourceBus(ofxSCServer* server, int s) const {
     auto it = states.find(server);
-    return (it != states.end() && it->second.srcBlock) ? it->second.srcBlock->index + s * W : 0;
+    return (it != states.end() && it->second.srcBlock) ? it->second.srcBlock->index + s * busWidth : 0;
 }
 
 void scModulation::sendVec(ofxSCSynth* s, const std::string& name, const std::vector<float>& v) {
@@ -270,7 +270,7 @@ std::vector<float> scModulation::lfoShFor(int li) const {
 void scModulation::sendLfo(ServerState& st, int li) {
     auto* s = st.lfo[li];
     if(!s) return;
-    s->set("out", st.srcBlock ? st.srcBlock->index + li * W : 0);
+    s->set("out", st.srcBlock ? st.srcBlock->index + li * busWidth : 0);
     s->set("freq", lfoHzFor(li));
     s->set("sh", lfoShFor(li));
     sendVec(s, "freqdetune", perVoice ? lfoDetune[li].get() : std::vector<float>{0.0f});
@@ -295,11 +295,11 @@ void scModulation::sendEnv(ServerState& st, int e) {
     if(!s) return;
     auto& E = envs[e];
     s->set("gate", st.gateBus);
-    s->set("out", st.srcBlock ? st.srcBlock->index + (SRC_ENV + e) * W : 0);
+    s->set("out", st.srcBlock ? st.srcBlock->index + (SRC_ENV + e) * busWidth : 0);
     s->set("atk", E.a.get()); s->set("dec", E.d.get()); s->set("sus", E.s.get()); s->set("rel", E.r.get());
     s->set("cA", E.ca.get()); s->set("cD", E.cd.get()); s->set("cR", E.cr.get());
     // velocity tracking: the note's velocity (the velocity source, written by the node's gates)
-    s->set("velbus", st.srcBlock ? st.srcBlock->index + SRC_VEL * W : 0);
+    s->set("velbus", st.srcBlock ? st.srcBlock->index + SRC_VEL * busWidth : 0);
     s->set("veltrack", velocity ? E.vt.get() : 0.0f);
 }
 
@@ -314,13 +314,13 @@ void scModulation::writeSources(ofxSCServer* server, ServerState& st) {
         server->sendMsg(m);
     };
     for(int k = 0; k < MAX_EXT; k++){
-        std::vector<float> v = expand(exts[k].get(), W, 0.0f);
+        std::vector<float> v = expand(exts[k].get(), busWidth, 0.0f);
         for(auto& x : v) x = ofClamp(x, -1.0f, 1.0f);
-        setn(st.srcBlock->index + (SRC_EXT + k) * W, v);
+        setn(st.srcBlock->index + (SRC_EXT + k) * busWidth, v);
     }
-    std::vector<float> voice(W, 0.0f);
+    std::vector<float> voice(busWidth, 0.0f);
     for(int i = 0; i < n(); i++) voice[i] = n() > 1 ? (float)i / (n() - 1) * 2.0f - 1.0f : 0.0f;
-    setn(st.srcBlock->index + SRC_VOICE * W, voice);
+    setn(st.srcBlock->index + SRC_VOICE * busWidth, voice);
 }
 
 void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
@@ -346,7 +346,7 @@ void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
 void scModulation::syncRoutes(ofxSCServer* server, ServerState& st) {
     if(!st.created || !st.modBlock || !st.srcBlock) return;
     std::vector<bool> routed(T(), false);
-    for(int s = 0; s < NUM_SOURCES; s++){
+    for(int s = 0; s < sourceCount(); s++){
         for(int t = 0; t < T(); t++){
             const int idx = s * T() + t;
             const float amount = matrix[idx];
@@ -356,8 +356,8 @@ void scModulation::syncRoutes(ofxSCServer* server, ServerState& st) {
                 routed[t] = true;
                 if(it == st.routes.end()){
                     auto* r = new ofxSCSynth(def("ModRoute"), server);
-                    r->set("src", st.srcBlock->index + s * W);
-                    r->set("out", st.modBlock->index + t * W);
+                    r->set("src", st.srcBlock->index + s * busWidth);
+                    r->set("out", st.modBlock->index + t * busWidth);
                     r->set("bipolar", s < MAX_LFOS && !targetList[t].unipolar ? 1.0f : 0.0f);
                     r->set("scale", targetList[t].range);
                     r->set("amount", amount);
@@ -376,8 +376,8 @@ void scModulation::syncRoutes(ofxSCServer* server, ServerState& st) {
         if(t < T() && routed[t]) continue;
         ofxOscMessage m;
         m.setAddress("/c_fill");
-        m.addIntArg(st.modBlock->index + t * W);
-        m.addIntArg(W);
+        m.addIntArg(st.modBlock->index + t * busWidth);
+        m.addIntArg(busWidth);
         m.addFloatArg(0.0f);
         server->sendMsg(m);
     }
@@ -394,8 +394,8 @@ void scModulation::create(ofxSCServer* server, int sourceGroup, int routeGroup, 
         b = new ofxSCBus(RATE_CONTROL, channels, server);
         if(!liveControlBus(server, b)){ b->free(); delete b; b = nullptr; }
     };
-    control(st.srcBlock, NUM_SOURCES * W);
-    control(st.modBlock, (T() + 1) * W);
+    control(st.srcBlock, sourceCount() * busWidth);
+    control(st.modBlock, (T() + 1) * busWidth);
     st.created = true;
     updatePhases();          // as many offsets as voices now
     writeSources(server, st);
@@ -584,15 +584,15 @@ void scModulation::update() {
         // The source block reserves 16 channels for every possible source,
         // but the editor and parameter targets only use active sources and
         // the current voice count. Avoid a large /c_setn reply each refresh.
-        for(int s = 0; s < NUM_SOURCES; s++)
-            if(sourceUsed(s)) server->requestControlValues(st.srcBlock->index + s * W, n());
+        for(int s = 0; s < sourceCount(); s++)
+            if(sourceUsed(s)) server->requestControlValues(st.srcBlock->index + s * busWidth, n());
         break;
     }
 }
 
 float scModulation::liveValue(int source, int voice) const {
     if(liveHook) return liveHook(source, voice);
-    const int i = source * W + voice;
+    const int i = source * busWidth + voice;
     return i < (int)live.size() ? live[i] : 0.0f;
 }
 
@@ -601,6 +601,7 @@ float scModulation::liveValue(int source, int voice) const {
 // ════════════════════════════════════════════════════════════════════════════
 
 std::string scModulation::sourceName(int s) const {
+    if(s >= NUM_SOURCES && s < sourceCount()) return extraSources[s-NUM_SOURCES];
     if(s < MAX_LFOS) return "LFO " + ofToString(s + 1);
     if(s < SRC_VEL) return "Env " + ofToString(s - SRC_ENV + 1);
     if(s == SRC_VEL) return "Velocity";
@@ -609,6 +610,7 @@ std::string scModulation::sourceName(int s) const {
     return "Voice";
 }
 bool scModulation::sourceUsed(int s) const {
+    if(s >= NUM_SOURCES) return s < sourceCount();
     if(s < MAX_LFOS) return s < lfoCount;
     if(s < SRC_VEL) return s - SRC_ENV < envCount;
     if(s == SRC_VEL) return velocity;
@@ -649,8 +651,9 @@ void scModulation::load(const ofJson& j, const std::string& prefix) {
     if(j.contains(prefix + "Matrix") && j[prefix + "Matrix"].is_array()){
         try {
             auto m = j[prefix + "Matrix"].get<std::vector<float>>();
-            m = fitMatrix(m, NUM_SOURCES, T());
-            if((int)m.size() == NUM_SOURCES * T()) matrix = m;
+            if((int)m.size()==NUM_SOURCES*T()) m.resize(sourceCount()*T(),0.0f);
+            m = fitMatrix(m, sourceCount(), T());
+            if((int)m.size() == sourceCount() * T()) matrix = m;
         } catch(...) {}
     }
     loadParamsJson(j.contains(prefix + "Params") ? j[prefix + "Params"] : ofJson::array());
@@ -669,6 +672,7 @@ void scModulation::afterLoad() {
 // ════════════════════════════════════════════════════════════════════════════
 
 bool scModulation::resolveParam(const std::string& key, ParamTarget& pt) const {
+    pt.amount.resize(sourceCount(), 0.0f);
     if(ownKeys.count(key) || targetOfKey.count(key) || !host.control) return false;
     ofAbstractParameter* q = host.control(key);
     if(!q) return false;
@@ -736,6 +740,7 @@ bool scModulation::isParamTarget(const std::string& key) const {
 // A source as it moves a control: LFOs, Random, Ext and Voice around the
 // value (-0.5..0.5: amount 1 sweeps the whole range), envelopes and velocity up from it
 float scModulation::paramSource(int s, int voice) const {
+    if(s >= NUM_SOURCES) return liveValue(s, voice);
     if(s < MAX_LFOS) return liveValue(s, perVoice ? voice : 0) - 0.5f;
     if(s < SRC_RND) return liveValue(s, voice);
     if(s == SRC_RND) return liveValue(s, voice) * 0.5f;
@@ -748,7 +753,7 @@ float scModulation::paramSource(int s, int voice) const {
 
 bool scModulation::paramsActive() const {
     for(auto& pt : params)
-        for(int s = 0; s < NUM_SOURCES; s++) if(std::abs(pt.amount[s]) > 1e-4f && sourceUsed(s)) return true;
+        for(int s = 0; s < sourceCount(); s++) if(std::abs(pt.amount[s]) > 1e-4f && sourceUsed(s)) return true;
     return false;
 }
 
@@ -762,7 +767,7 @@ void scModulation::applyParams() {
         if(pt.applied && cur != pt.written) pt.applied = false;
         if(!pt.applied) pt.base = cur;
         bool on = false;
-        for(int s = 0; s < NUM_SOURCES && !on; s++) on = std::abs(pt.amount[s]) > 1e-4f && sourceUsed(s);
+        for(int s = 0; s < sourceCount() && !on; s++) on = std::abs(pt.amount[s]) > 1e-4f && sourceUsed(s);
         if(!on || pt.base.empty()){
             if(pt.applied){ writeParam(pt, pt.base); pt.applied = false; }
             continue;
@@ -773,7 +778,7 @@ void scModulation::applyParams() {
         for(size_t i = 0; i < size; i++){
             const int voice = (int)(i % nv);
             float m = 0.0f;
-            for(int s = 0; s < NUM_SOURCES; s++)
+            for(int s = 0; s < sourceCount(); s++)
                 if(std::abs(pt.amount[s]) > 1e-4f && sourceUsed(s)) m += pt.amount[s] * paramSource(s, voice);
             float v = ofClamp(pt.base[std::min(i, pt.base.size() - 1)] + m * span, pt.lo, pt.hi);
             if(pt.kind == 1 || pt.kind == 3) v = std::round(v);
@@ -813,7 +818,7 @@ ofJson scModulation::paramsJson() const {
         e["key"] = pt.key;
         e["base"] = pt.base;
         ofJson am = ofJson::object();
-        for(int s = 0; s < NUM_SOURCES; s++) if(std::abs(pt.amount[s]) > 1e-4f) am[ofToString(s)] = pt.amount[s];
+        for(int s = 0; s < sourceCount(); s++) if(std::abs(pt.amount[s]) > 1e-4f) am[ofToString(s)] = pt.amount[s];
         e["amounts"] = am;
         a.push_back(e);
     }
@@ -832,7 +837,7 @@ void scModulation::loadParamsJson(const ofJson& j) {
         if(e.contains("amounts") && e["amounts"].is_object())
             for(auto it = e["amounts"].begin(); it != e["amounts"].end(); ++it){
                 const int s = ofToInt(it.key());
-                if(s >= 0 && s < NUM_SOURCES && it.value().is_number()) pt.amount[s] = ofClamp(it.value().get<float>(), -1.0f, 1.0f);
+                if(s >= 0 && s < sourceCount() && it.value().is_number()) pt.amount[s] = ofClamp(it.value().get<float>(), -1.0f, 1.0f);
             }
         pt.pending = !pt.base.empty();
         params.push_back(std::move(pt));
@@ -954,7 +959,7 @@ void scModulation::modulateMenu(const std::string& key) {
         ImGui::Separator();
         ImGui::TextDisabled("Modulate %s with", targetList[t].name.c_str());
         bool any = false;
-        for(int s = 0; s < NUM_SOURCES; s++){
+        for(int s = 0; s < sourceCount(); s++){
             if(!sourceUsed(s)) continue;
             any = true;
             float& v = matrix[s * T() + t];
@@ -976,7 +981,7 @@ void scModulation::modulateMenu(const std::string& key) {
     ImGui::Separator();
     ImGui::TextDisabled("Modulate %s with", name.c_str());
     bool any = false;
-    for(int s = 0; s < NUM_SOURCES; s++){
+    for(int s = 0; s < sourceCount(); s++){
         if(!sourceUsed(s)) continue;
         any = true;
         const float v = pt ? pt->amount[s] : 0.0f;
@@ -1319,7 +1324,7 @@ void scModulation::drawRouting(float w) {
     }
     ImGui::Dummy(ImVec2(w, ImGui::GetTextLineHeightWithSpacing()));
     bool anySource = false;
-    for(int s = 0; s < NUM_SOURCES; s++){
+    for(int s = 0; s < sourceCount(); s++){
         if(!sourceUsed(s)) continue;
         anySource = true;
         const ImVec2 r = ImGui::GetCursorScreenPos();
@@ -1401,7 +1406,7 @@ void scModulation::drawRouting(float w) {
                     for(int k = 0; k < TT; k++) amountRef(s, k) = 0;
                     sendMatrix();
                 }
-                if(ImGui::MenuItem("Clear this target's column")){ for(int k = 0; k < NUM_SOURCES; k++) amountRef(k, t) = 0; amountChanged(t); }
+                if(ImGui::MenuItem("Clear this target's column")){ for(int k = 0; k < sourceCount(); k++) amountRef(k, t) = 0; amountChanged(t); }
                 if(t >= T() && ImGui::MenuItem(("Remove " + colName(t) + " from the matrix").c_str())) removeParamCol = t - T();
                 ImGui::EndPopup();
             }

@@ -36,6 +36,8 @@
 #include "scTransportSync.h"
 #include "scMetroBoxEngine.h"
 #include "scTimelineMenu.h"
+#include "scSnapshots.h"
+#include "scDropdowns.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "imgui.h"
@@ -86,6 +88,7 @@ public:
     void setup() override;
     void update(ofEventArgs &e) override;
     void draw(ofEventArgs &e) override;
+    void setBpm(float bpm) override { currentBpm = std::max(1.0f, bpm); }   // Morph Time in beats
 
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;
@@ -151,6 +154,19 @@ private:
         bool updating = false;
     };
     std::map<std::string, std::unique_ptr<Published>> published;
+    // Snapshots (the shared system); their controls are published on their own
+    scSnapshots snaps;
+    ofJson initial;                       // the groove at setup (the factory's base)
+    ofJson appliedLanes;                  // the lanes a snapshot last loaded whole
+    float currentBpm = 120.0f;
+    std::map<std::string, std::function<std::shared_ptr<ofxOceanodeAbstractParameter>()>> snapParams;
+    std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> snapPublished;
+    ofJson captureSnapshot() const;
+    void applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw);
+    std::vector<ofJson> factorySnapshots() const;
+    void publishSnap(const std::string& key);
+    void unpublishSnap(const std::string& key);
+    void snapMenu(const std::string& key);
     std::vector<std::string> publishedOrder;
     scTimelineMenu timeline;                  // "Add to Timeline" from the window
     void publishKey(const std::string& key);  // "L<n> <Setting>"
@@ -160,6 +176,8 @@ private:
     bool hasConnection(const std::string& key) const;
     void syncPublished(const std::vector<std::string>& keys);
     void refreshPublished(int layer);   // push lane values into its published parameters
+    std::vector<std::string> laneNames() const;   // a published lane link's dropdown
+    void syncLaneNames();                      // ... as lanes are renamed / added
 
     // ── Change: Evolving mutates the loop every few phrases ───────────────────
     std::array<int64_t, MAX_LAYERS> lastPhrase;

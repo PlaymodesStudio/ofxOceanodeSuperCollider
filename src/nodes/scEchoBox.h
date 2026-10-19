@@ -33,6 +33,8 @@
 #include "ofxSCGroup.h"
 #include "scModulation.h"
 #include "scTimelineMenu.h"
+#include "scDropdowns.h"
+#include "scSnapshots.h"
 #include "imgui.h"
 #include <array>
 #include <functional>
@@ -115,6 +117,7 @@ private:
     };
     std::vector<Control> controls;
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
+    scDropdowns dropdowns;   // the combos' names (a published combo is a dropdown)
     std::vector<std::string> publishedKeys;
     scTimelineMenu timeline;              // "Add to Timeline" from the window
     bool publishedSeparator = false;
@@ -154,6 +157,13 @@ private:
                        rvbHiDamp, rvbLoDamp, rvbModRate, rvbSpin, rvbWander;
     float currentBpm = 120.0f;
     scModulation modulation;
+    scSnapshots snaps;                    // the shared snapshots: library, morph, presets
+    ofJson initial;                       // the sound at setup (the factory's base)
+    ofJson appliedMod;                    // the modulation a snapshot last loaded
+    ofJson captureSnapshot() const;
+    void applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw);
+    std::vector<ofJson> factorySnapshots() const;
+    void setTapCount(int taps);
     void createMod(ofxSCServer* server, ServerState& st);
     void freeMod(ofxSCServer* server, ServerState& st, bool sendFree);
     void setModArgs(ofxSCServer* server, ServerState& st, ofxSCSynth* s, int tap);
@@ -169,7 +179,7 @@ private:
     void sectionHeader(const char* title, float w, ofParameter<bool>* on = nullptr, ImU32 accent = 0);
     void slider(ofParameter<float>& p, const char* label, float w, const char* fmt = "%.2f", bool log = false);
     void sliderInt(ofParameter<int>& p, const char* label, float w);
-    void combo(ofParameter<int>& p, const char* label, float w, const std::vector<const char*>& items);
+    void combo(ofParameter<int>& p, const char* label, float w);   // its names: dropdowns
     void toggle(ofParameter<bool>& p, const char* label);
     void beatsSlider(Tap& tap, float w);
     float labelW = 70.0f;

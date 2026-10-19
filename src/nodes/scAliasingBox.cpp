@@ -85,6 +85,7 @@ void scAliasingBox::setup() {
     // Auto: a drone until Gate is connected, timelined or gets a note
     gateMode.set("Gate Mode",0,0,2);
     reg(gateMode,[this](){sendAll();});
+    dropdowns.set(gateMode.getEscapedName(),{"Auto","Gated","Drone"});
     scheduled.add(gateIn.handle, gate); scheduled.add(pitchIn.handle, pitch); scheduled.add(velIn.handle, velocity);
     scheduled.enable(this, [this](){ for(auto& [s, st] : states) if(st.created) return true; return false; });
     for(auto* p : {&gate, &pitch, &velocity}) {
@@ -109,6 +110,10 @@ void scAliasingBox::setup() {
         reg(c->p, [this](){ sendAll(); });
         controls.back().discrete = c->discrete;
         if(c->sc=="table_range") tableRange=&c->p;
+        // the named switches: their combo's names (published: a dropdown)
+        if(c->sc=="filter_lfo_wave") dropdowns.set(c->p.getEscapedName(),{"Saw up","Saw down","Pulse","Triangle","Sine","Random","Smoothed random","Cubic random"});
+        else if(c->sc=="write_quality") dropdowns.set(c->p.getEscapedName(),{"Ramp (raw)","Triangle / symmetry","Read oscillator"});
+        else if(c->sc=="read_quality") dropdowns.set(c->p.getEscapedName(),{"Triangle / direction","Ramp (raw)"});
         sound.push_back(std::move(c));
     }
     // ── Effects (MixerPro's inserts) ─────────────────────────────────────────
@@ -139,6 +144,7 @@ void scAliasingBox::setup() {
         reg(*p, [this]() { sendStageAll(StEcho); });
     reg(echoBeats, [this]() { sendStageAll(StEcho); });
     reg(echoFilter, [this]() { sendStageAll(StEcho); });
+    dropdowns.set(echoFilter.getEscapedName(), {"LowPass", "HighPass", "BandPass", "PeakEQ"});
     rvbOn.set("Reverb On", false);            reg(rvbOn, toStages);
     rvbMix.set("Reverb Mix", 0.3f, 0.0f, 1.0f);
     rvbDecay.set("Reverb Decay", 3.0f, 0.05f, 30.0f);
@@ -279,7 +285,7 @@ void scAliasingBox::buildSynth(ofxSCServer* server) {
 void scAliasingBox::createSynth(ofxSCServer* server) {
     auto it=states.find(server); if(it==states.end() || !it->second.root) return;
     auto& st=it->second;
-    st.root->create(0,1);
+    if(placeBefore>=0) st.root->create(2,placeBefore); else st.root->create(0,1);
     for(auto*& g:st.groups) { g=new ofxSCGroup(server); g->create(1,st.root->nodeID); }
     st.gates=new ofxSCBus(RATE_AUDIO,16,server); st.audio=new ofxSCBus(RATE_AUDIO,16,server);
     st.vis=new ofxSCBus(RATE_CONTROL,scAliasingTableView::channels(voices.get()),server);
@@ -308,9 +314,21 @@ void scAliasingBox::release(ofxSCServer* server, State& st) {
     dropBus(server,st.gates,true); dropBus(server,st.audio,true); dropBus(server,st.vis,false);
 }
 void scAliasingBox::free(ofxSCServer* s) { auto it=states.find(s); if(it!=states.end()) { release(s,it->second); it->second.out=-1; } }
+// A new voice / speaker count: everything again, but in the old root's place.
+// The graph is not recomputed (same topology), so a root at the head of the
+// default group would run before the nodes feeding Gate/Pitch/Velocity by
+// cable, read silent buses and stay quiet until a reconnection.
 void scAliasingBox::rebuild() {
     structureDirty=false; mod.voicesChanged();
-    for(auto& [s,st]:states) if(st.created) { buildSynth(s); createSynth(s); }
+    for(auto& [s,st]:states) if(st.created) {
+        const bool wasLatency=s->getBLatency(); s->setBLatency(true);
+        ofxSCGroup* old=st.root; st.root=nullptr;
+        release(s,st);                  // the old synths go with their root below
+        st.root=new ofxSCGroup(s);
+        placeBefore=old->nodeID; createSynth(s); placeBefore=-1;
+        old->free(); delete old;
+        s->setBLatency(wasLatency);
+    }
     refreshOutputs();
 }
 void scAliasingBox::moveSynthBefore(ofxSCServer* s,int id) { auto it=states.find(s); if(it!=states.end()&&it->second.created) it->second.root->moveBefore(id); }
@@ -338,7 +356,7 @@ void scAliasingBox::publish(const std::string& k) {
     if(published.count(k)||getParameterGroup().contains(k)) return;
     auto it=std::find_if(controls.begin(),controls.end(),[&](const Control& c){return c.key==k;});if(it==controls.end()) return;
     if(!separator){addSeparator("Published",ofColor(200));separator=true;}
-    published[k]=it->add();publishedKeys.push_back(k);parameterGroupChanged.notify(this);
+    published[k]=it->add();dropdowns.apply(k,published[k]);publishedKeys.push_back(k);parameterGroupChanged.notify(this);
 }
 void scAliasingBox::unpublish(const std::string& k) {
     auto it=published.find(k);if(it==published.end()||connected(k)) return;
@@ -455,6 +473,10 @@ void scAliasingBox::requireSynthdefs() {
 }
 void scAliasingBox::update(ofEventArgs&) {
     timeline.update();snaps.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names=snaps.slotNames();
+        for(const auto& k:snaps.slotKeys()) dropdowns.set(k,names,published.count(k)?published[k]:nullptr);
+    }
     if(structureDirty) rebuild();
     for(auto& [server,st]:states) if(st.created && st.droneSent!=(droning()?1:0)) sendNotes(server,st);
     mod.showing=show.get();mod.update();
@@ -518,7 +540,6 @@ void scAliasingBox::drawWindow() {
     const float w=ImGui::GetContentRegionAvail().x;
     drawHeader();
     snaps.drawBar(w);
-    ImGui::Spacing();
     drawDisplay(w);
     ImGui::Spacing();
     if(ImGui::BeginTabBar("##aliasTabs")) {
@@ -791,9 +812,9 @@ void scAliasingBox::drawFxTab(float w) {
         ImGui::SameLine();
         ImGui::SetCursorPosX(x0 + labelW * z);
         ImGui::SetNextItemWidth(cw - labelW * z);
-        const char* types[4] = {"LowPass", "HighPass", "BandPass", "PeakEQ"};
-        int ft = std::clamp(echoFilter.get(), 0, 3);
-        if(ImGui::Combo("##echoFilter", &ft, types, 4)) echoFilter = ft;
+        const auto types = dropdowns.names(echoFilter.getEscapedName());
+        int ft = std::clamp(echoFilter.get(), 0, (int)types.size() - 1);
+        if(ImGui::Combo("##echoFilter", &ft, types.data(), (int)types.size())) echoFilter = ft;
         menu(echoFilter.getEscapedName());
     }
     slider(echoPingPong, "Ping-pong", cw, "%.2f");
@@ -961,12 +982,10 @@ void scAliasingBox::drawCompactControl(SoundControl& c,float w,const std::string
     mark(c.p.getEscapedName());ImGui::SameLine();ImGui::SetCursorPosX(x+labelW*zoom());
     ImGui::SetNextItemWidth(std::max(30*zoom(),w-labelW*zoom()));
     int k=std::lround(c.p.get());
-    if(c.sc=="filter_lfo_wave") {
-        const char* items[]={"Saw up","Saw down","Pulse","Triangle","Sine","Random","Smoothed random","Cubic random"};if(ImGui::Combo("##value",&k,items,8)) c.p=float(k);
-    }else if(c.sc=="write_quality") {
-        const char* items[]={"Ramp (raw)","Triangle / symmetry","Read oscillator"};if(ImGui::Combo("##value",&k,items,3)) c.p=float(k);
-    }else if(c.sc=="read_quality") {
-        const char* items[]={"Triangle / direction","Ramp (raw)"};if(ImGui::Combo("##value",&k,items,2)) c.p=float(k);
+    if(dropdowns.has(c.p.getEscapedName())) {
+        const auto items=dropdowns.names(c.p.getEscapedName());
+        k=std::clamp(k,0,(int)items.size()-1);
+        if(ImGui::Combo("##value",&k,items.data(),(int)items.size())) c.p=float(k);
     }else {bool on=c.p.get()>.5f;if(ImGui::Checkbox("##value",&on)) c.p=on?1:0;}
     menu(c.p.getEscapedName());ImGui::PopID();
 }
@@ -987,9 +1006,11 @@ void scAliasingBox::sliderInt(ofParameter<int>& p, const char* label, float w) {
     ImGui::PopID();
 }
 
-void scAliasingBox::combo(ofParameter<int>& p, const char* label, float w, const std::vector<const char*>& items) {
+void scAliasingBox::combo(ofParameter<int>& p, const char* label, float w) {
     const float z = zoom();
     const std::string key = p.getEscapedName();
+    const auto items = dropdowns.names(key);
+    if(items.empty()) return;
     ImGui::PushID(key.c_str());
     const float x0 = ImGui::GetCursorPosX();
     ImGui::AlignTextToFramePadding();
@@ -1025,7 +1046,7 @@ void scAliasingBox::drawHeader() {
     next(170*z);
     ImGui::BeginGroup();slider(master,"Master",170*z,"%.2f");ImGui::EndGroup();
     next(190*z);labelW=64;
-    ImGui::BeginGroup();combo(gateMode,"Gate Mode",190*z,{"Auto","Gated","Drone"});ImGui::EndGroup();
+    ImGui::BeginGroup();combo(gateMode,"Gate Mode",190*z);ImGui::EndGroup();
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: drone until Gate is connected, timelined or receives a note.\nGated: follow Gate. Drone: every voice always plays.");
     next(ImGui::CalcTextSize("droning").x,6);
     ImGui::AlignTextToFramePadding();

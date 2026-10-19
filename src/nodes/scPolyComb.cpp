@@ -24,6 +24,10 @@ bool liveControlBus(ofxSCServer* s, ofxSCBus* b) {
 bool liveAudioBus(ofxSCServer* s, ofxSCBus* b) {
     return s && b && b->index >= 0 && b->index < (int)s->audioBusses.size() && s->audioBusses[b->index] == b;
 }
+int inputWidth(ofxSCServer* server,int bus,int wanted){
+    if(!server || bus<0 || bus>=(int)server->audioBusses.size() || !server->audioBusses[bus])return wanted;
+    return std::clamp(server->audioBusses[bus]->channels,1,wanted);
+}
 std::vector<float> expand(const std::vector<float>& v, int n, float fallback = 0.0f) {
     if(v.empty()) return std::vector<float>(n, fallback);
     std::vector<float> out(v);
@@ -52,7 +56,14 @@ const char* kTargets[scPolyComb::NUM_TARGETS] = {"Pitch", "FM Amt", "FM Ratio", 
 const float kTargetRange[scPolyComb::NUM_TARGETS] = {24, 1, 4, 48, 1, 24, 1, 1, 1, 48, 10, 0.5f, 1, 1};
 const char* kTargetUnit[scPolyComb::NUM_TARGETS] = {"st", "", "", "st", "", "st", "", "", "", "st", "", "", "", "of the width"};
 
-const std::vector<const char*> kFilterTypes = {"Low pass", "High pass", "Band pass", "Notch"};
+// Preserve the four original indices and their DSP; append fixed pole types.
+const std::vector<const char*> kFilterTypes = {"Low pass", "High pass", "Band pass", "Notch",
+    "Low pass 12 dB", "Low pass 24 dB", "High pass 12 dB", "High pass 24 dB",
+    "Band pass 2-pole", "Band pass 4-pole", "BL4: 6 HP / 18 LP", "Notch 4-pole"};
+std::pair<int,int> filterChoice(int type) {
+    static const std::pair<int,int> modes[]={{0,1},{0,2},{1,1},{1,2},{2,1},{2,2},{2,3},{3,2}};
+    return type<4 ? std::make_pair(type,0) : modes[std::clamp(type-4,0,7)];
+}
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -105,15 +116,13 @@ void scPolyComb::setup() {
     // ── The node ─────────────────────────────────────────────────────────────
     addParameter(showWindow.set("Show", false));
     addParameter(voices.set("Voices", 4, 1, MAX_VOICES));
-    addParameter(outChannels.set("Channels", 2, 1, MAX_VOICES));
+    addParameter(outChannels.set("Channels", 2, 1, 16));
     gate.set("Gate", {0.0f}, {0.0f}, {1.0f});
     // Gate (levels: a gate rising to 0.2 plays at 0.2), Pitch, Velocity: Oceanode values or audio cables
     gateIn.attach(addParameter(gate), availableInputs, [this](){ refreshOutputs(); });
     pitchIn.attach(addParameter(pitch.set("Pitch", {60.0f}, {0.0f}, {127.0f})), availableInputs, [this](){ refreshOutputs(); });
-    velIn.attach(addParameter(velocity.set("Velocity", {1.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
     noteInputs.add(gateIn.handle, gate);
     noteInputs.add(pitchIn.handle, pitch);
-    noteInputs.add(velIn.handle, velocity);
     noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.created && st.gateS) return true; return false; });
     combPitch.set("Comb Pitch", {0}, {-48}, {127});
     combPitchHandle = addParameter(combPitch);
@@ -168,14 +177,18 @@ void scPolyComb::setup() {
 
     // ── Filters ──────────────────────────────────────────────────────────────
     filterOn.set("Filter On", true);          reg(filterOn, toParts);
-    fType.set("Filter Type", 0, 0, 3);        reg(fType, toIns(IFilter));
+    fType.set("Filter Type", 0, 0, 11);        reg(fType, toParts);
     vec(cutoff, "Cutoff", 100, 0, 135);       reg(cutoff, toIns(IFilter));
     vec(res, "Resonance", 0.3f, 0, 1);        reg(res, toIns(IFilter));
     keyTrack.set("Key Track", 0.0f, 0.0f, 1.0f); reg(keyTrack, toIns(IFilter));
     postOn.set("Post Filter On", false);      reg(postOn, toParts);
-    postType.set("Post Type", 0, 0, 3);       reg(postType, toIns(IPost));
+    postType.set("Post Type", 0, 0, 11);       reg(postType, toParts);
     vec(postCut, "Post Cutoff", 130, 0, 135); reg(postCut, toIns(IPost));
     vec(postRes, "Post Resonance", 0, 0, 1);  reg(postRes, toIns(IPost));
+
+    // The new feedback path is opt-in; old snapshots restore this toggle off.
+    combSaturation.set("Comb Saturation", false); reg(combSaturation, toParts);
+    combSatLevel.set("Comb Sat Level", 12.0f, 0.0f, 48.0f); reg(combSatLevel, toIns(IComb));
 
     // ── Resonator, ring, shaper ──────────────────────────────────────────────
     combOn.set("Comb On", false);             reg(combOn, toParts);
@@ -195,8 +208,90 @@ void scPolyComb::setup() {
     vec(drive, "Drive", 1, 0, 30);            reg(drive, toIns(IShaper));
     vec(shaperMix, "Shaper Mix", 1, 0, 1);    reg(shaperMix, toIns(IShaper));
 
+    // Independent sine layer: no synth runs until enabled. Older snapshots
+    // reset every Sub control, so an imported patch cannot change their sound.
+    auto toSub = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendSub(st); }); };
+    subOn.set("Sub On", false); reg(subOn, toParts);
+    subLevel.set("Sub Level", 0.25f, 0.0f, 16.0f); reg(subLevel, toSub);
+    subTranspose.set("Sub Transpose", -12.0f, -96.0f, 96.0f); reg(subTranspose, toSub);
+    subA.set("Sub Attack", 0.01f, 0.001f, 10.0f); reg(subA, toSub);
+    subD.set("Sub Decay", 0.5f, 0.001f, 10.0f); reg(subD, toSub);
+    subS.set("Sub Sustain", 1.0f, 0.0f, 1.0f); reg(subS, toSub);
+    subR.set("Sub Release", 0.5f, 0.001f, 20.0f); reg(subR, toSub);
+    subCA.set("Sub Attack Curve", -4.0f, -12.0f, 12.0f); reg(subCA, toSub);
+    subCD.set("Sub Decay Curve", -4.0f, -12.0f, 12.0f); reg(subCD, toSub);
+    subCR.set("Sub Release Curve", -4.0f, -12.0f, 12.0f); reg(subCR, toSub);
+    for(const auto& c : controls) if(c.key.rfind("Sub_", 0)==0) subDefaults[c.key]=c.save();
+
+    pitchLibrary.loadLibraries(ofToDataPath("Supercollider/Pitchclass/", true));
+    pitchExternal.set("Pitch External", true); reg(pitchExternal, toPitch);
+    pitchRoot.set("Pitch Root", 60.0f, 0.0f, 127.0f); reg(pitchRoot, toPitch);
+    pitchScale.set("Pitch Scale", pitchLibrary.defaultScaleIndex, 0, (int)pitchLibrary.scaleLibrary.size()-1); reg(pitchScale, toPitch);
+    pitchChord.set("Pitch Chord", pitchLibrary.defaultChordIndex, 0, (int)pitchLibrary.chordLibrary.size()-1); reg(pitchChord, toPitch);
+    pitchUseCustom.set("Pitch Custom", false); reg(pitchUseCustom, toPitch);
+    vec(pitchCustomChord, "Pitch Custom Chord", 0, -127, 127); reg(pitchCustomChord, toPitch);
+    harmonyOn.set("Harmony On", false); reg(harmonyOn, toPitch);
+    harmonyBeats.set("Harmony Beats", 4.0f, 0.0625f, 128.0f); reg(harmonyBeats, toPitch);
+    vec(harmonySteps, "Harmony Degrees", 0, -32, 32); reg(harmonySteps, toPitch);
+    mapShape[0].set("Osc Map Shape", 0, 0, 4); reg(mapShape[0], toPitch);
+    mapQuant[0].set("Osc Map Quantize", 0, 0, 4); reg(mapQuant[0], toPitch);
+    mapFirst[0].set("Osc Map First", 1, 0, 1); reg(mapFirst[0], toPitch);
+    mapInversion[0].set("Osc Map Inversion", 0, -32, 32); reg(mapInversion[0], toPitch);
+    mapInterval[0].set("Osc Map Interval", 3.0f, -48.0f, 48.0f); reg(mapInterval[0], toPitch);
+    mapTranspose[0].set("Osc Map Transpose", 0.0f, -96.0f, 96.0f); reg(mapTranspose[0], toPitch);
+    mapBend[0].set("Osc Map Bend", 1.0f, 0.01f, 6.0f); reg(mapBend[0], toPitch);
+    mapLength[0].set("Osc Map Length", 1.0f, 0.0f, 16.0f); reg(mapLength[0], toPitch);
+    mapOffset[0].set("Osc Map Offset", 0.0f, -8.0f, 8.0f); reg(mapOffset[0], toPitch);
+    mapHarmonic[0].set("Osc Map Harmonic", 60.0f, 0.0f, 127.0f); reg(mapHarmonic[0], toPitch);
+    mapFine[0].set("Osc Map Fine", 0.0f, -127.0f, 127.0f); reg(mapFine[0], toPitch);
+    vec(mapScaleTones[0], "Osc Map Scale Tones", 0, -127, 127); reg(mapScaleTones[0], toPitch);
+    vec(mapTable[0], "Osc Map Table", 0, -127, 127); reg(mapTable[0], toPitch);
+    mapShape[1].set("Comb Map Shape", 0, 0, 4); reg(mapShape[1], toPitch);
+    mapQuant[1].set("Comb Map Quantize", 0, 0, 4); reg(mapQuant[1], toPitch);
+    mapFirst[1].set("Comb Map First", 1, 0, 1); reg(mapFirst[1], toPitch);
+    mapInversion[1].set("Comb Map Inversion", 0, -32, 32); reg(mapInversion[1], toPitch);
+    mapInterval[1].set("Comb Map Interval", 3.0f, -48.0f, 48.0f); reg(mapInterval[1], toPitch);
+    mapTranspose[1].set("Comb Map Transpose", 0.0f, -96.0f, 96.0f); reg(mapTranspose[1], toPitch);
+    mapBend[1].set("Comb Map Bend", 1.0f, 0.01f, 6.0f); reg(mapBend[1], toPitch);
+    mapLength[1].set("Comb Map Length", 1.0f, 0.0f, 16.0f); reg(mapLength[1], toPitch);
+    mapOffset[1].set("Comb Map Offset", 0.0f, -8.0f, 8.0f); reg(mapOffset[1], toPitch);
+    mapHarmonic[1].set("Comb Map Harmonic", 60.0f, 0.0f, 127.0f); reg(mapHarmonic[1], toPitch);
+    mapFine[1].set("Comb Map Fine", 0.0f, -127.0f, 127.0f); reg(mapFine[1], toPitch);
+    vec(mapScaleTones[1], "Comb Map Scale Tones", 0, -127, 127); reg(mapScaleTones[1], toPitch);
+    vec(mapTable[1], "Comb Map Table", 0, -127, 127); reg(mapTable[1], toPitch);
+    for(const auto& c : controls) if(c.key.rfind("Pitch_",0)==0 || c.key.rfind("Harmony_",0)==0 || c.key.rfind("Osc_Map_",0)==0 || c.key.rfind("Comb_Map_",0)==0) pitchDefaults[c.key]=c.save();
+    auto toDelta=[this](){forStates([this](ofxSCServer*,ServerState& st){sendDelta(st);});};
+    deltaWindow.set("Delta Window", 1000.0f, 1.0f, 1000.0f); reg(deltaWindow,toDelta);
+    deltaGain.set("Delta Gain", 1.0f, 0.0f, 10.0f); reg(deltaGain,toDelta);
+    deltaMix1.set("Delta LFO 1", 1.0f, 0.0f, 1.0f); reg(deltaMix1,toDelta);
+    deltaMix2.set("Delta LFO 2", 0.0f, 0.0f, 1.0f); reg(deltaMix2,toDelta);
+    {
+        std::vector<std::string> scaleNames,chordNames;
+        for(const auto& item:pitchLibrary.scaleLibrary)scaleNames.push_back(item.name);
+        for(const auto& item:pitchLibrary.chordLibrary)chordNames.push_back(item.name);
+        dropdowns.set(pitchScale.getEscapedName(),scaleNames);dropdowns.set(pitchChord.getEscapedName(),chordNames);
+        for(int b=0;b<2;b++){
+            dropdowns.set(mapShape[b].getEscapedName(),{"Linear","Circular","Wrapped index","Chord voices","Scale voices"});
+            dropdowns.set(mapQuant[b].getEscapedName(),{"Off","Imported table","Nearest scale","Harmonic series","Nearest chord"});
+        }
+    }
     // ── Effects (MixerPro's inserts) ─────────────────────────────────────────
     auto toStages = [this]() { forStates([this](ofxSCServer* sv, ServerState& st){ if(st.created) updateStages(sv, st); }); };
+    compOn.set("Comp On", false); reg(compOn, toStages);
+    compThreshold.set("Comp Threshold", -18.0f, -60.0f, 0.0f);
+    compRatio.set("Comp Ratio", 3.0f, 1.0f, 20.0f);
+    compKnee.set("Comp Knee", 6.0f, 0.0f, 48.0f);
+    compAttack.set("Comp Attack", 10.0f, 0.1f, 200.0f);
+    compRelease.set("Comp Release", 150.0f, 5.0f, 2000.0f);
+    compMakeup.set("Comp Makeup", 0.0f, -24.0f, 24.0f);
+    compAuto.set("Comp Auto Makeup", false);
+    compRms.set("Comp RMS", 0.0f, 0.0f, 1.0f);
+    compHpf.set("Comp SC HPF", 20.0f, 20.0f, 1000.0f);
+    compMix.set("Comp Mix", 1.0f, 0.0f, 1.0f);
+    for(auto* p : {&compThreshold, &compRatio, &compKnee, &compAttack, &compRelease,
+                   &compMakeup, &compRms, &compHpf, &compMix}) reg(*p, [this](){ sendStageAll(StComp); });
+    reg(compAuto, [this](){ sendStageAll(StComp); });
+    for(const auto& c : controls) if(c.key.rfind("Comp_", 0)==0) compDefaults[c.key]=c.save();
     eqOn.set("EQ On", false);                 reg(eqOn, toStages);
     {
         const char* names[5] = {"Low", "Lo Mid", "Mid", "Hi Mid", "High"};
@@ -223,6 +318,14 @@ void scPolyComb::setup() {
         reg(*p, [this]() { sendStageAll(StEcho); });
     reg(echoBeats, [this]() { sendStageAll(StEcho); });
     reg(echoFilter, [this]() { sendStageAll(StEcho); });
+    // the combos' names (published: dropdowns)
+    dropdowns.set(spreadMode.getEscapedName(), {"Spread", "Channels", "Manual"});
+    dropdowns.set(spreadLayout.getEscapedName(), {"Ring", "Line"});
+    dropdowns.set(envMode.getEscapedName(), {"Auto", "Gated", "Drone"});
+    dropdowns.set(fType.getEscapedName(), kFilterTypes);
+    dropdowns.set(postType.getEscapedName(), kFilterTypes);
+    dropdowns.set(combMode.getEscapedName(), {"Follows the note", "Fixed note"});
+    dropdowns.set(echoFilter.getEscapedName(), {"LowPass", "HighPass", "BandPass", "PeakEQ"});
     rvbOn.set("Reverb On", false);            reg(rvbOn, toStages);
     rvbMix.set("Reverb Mix", 0.3f, 0.0f, 1.0f);
     rvbDecay.set("Reverb Decay", 3.0f, 0.05f, 30.0f);
@@ -241,17 +344,11 @@ void scPolyComb::setup() {
         reg(*p, [this]() { sendStageAll(StRvb); });
 
     // ── Snapshots (publishable: Snapshot recalls, Morph blends A into B) ────
-    snapshotP.set("Snapshot", 0, 0, NUM_SNAPS);
-    reg(snapshotP, [this]() {
-        if(snapRecalling || snapshotP.get() <= 0) return;
-        if(morphGlideP.get()) startGlide(snapshotP.get() - 1); else recallSnapshot(snapshotP.get() - 1);
-    });
-    morphP.set("Morph", 0.0f, 0.0f, 1.0f);              reg(morphP, [this]() { applyAB(); });
-    morphAP.set("Morph A", 0, 0, NUM_SNAPS);            reg(morphAP, [this]() { applyAB(); });
-    morphBP.set("Morph B", 0, 0, NUM_SNAPS);            reg(morphBP, [this]() { applyAB(); });
-    morphTimeP.set("Morph Time", 4.0f, 0.0f, 64.0f);    reg(morphTimeP, [](){});
-    morphBeatsP.set("Morph Beats", true);               reg(morphBeatsP, [](){});
-    morphGlideP.set("Morph Glide", false);              reg(morphGlideP, [](){});
+    // (scSnapshots: the parameters act through their own listeners)
+    snaps.setupParameters();
+    for(auto* p : {&snaps.snapshotP, &snaps.morphAP, &snaps.morphBP, &snaps.morphCurveP, &snaps.morphSwitchP}) reg(*p, [](){});
+    for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) reg(*p, [](){});
+    for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) reg(*p, [](){});
 
     // ── The shared modulation: LFOs, envelopes, external sources, routing ───
     {
@@ -271,6 +368,8 @@ void scPolyComb::setup() {
         h.voices = [this](){ return n(); };
         std::vector<scModulation::Target> targets;
         for(int t = 0; t < NUM_TARGETS; t++) targets.push_back({kTargets[t], kTargetRange[t], kTargetUnit[t]});
+        modulation.busWidth=W; modulation.maxVoices=MAX_VOICES;
+        modulation.extraSources={"Delta"};
         modulation.setup(h, targets, true, true, true);
         modulation.lfoCount = 2;
         modulation.envCount = 1;
@@ -297,10 +396,6 @@ void scPolyComb::setup() {
         for(float x : v) if(x > 0.0f) gateTouched = true;
         toGate();
     }));
-    listeners.push(velocity.newListener([toGate](std::vector<float>&) {
-        if(scScheduling::isBackendSendSuppressed()) return;
-        toGate();
-    }));
     listeners.push(pitch.newListener([toPitch](std::vector<float>&) {
         if(scScheduling::isBackendSendSuppressed()) return;
         toPitch();
@@ -311,7 +406,33 @@ void scPolyComb::setup() {
     updateScramble();
     requireSynthdefs();
     defaultSnap = captureSnapshot();     // what the factory snapshots start from
-    loadSnapshotLibrary();
+    {
+        scSnapshots::Host h;
+        h.folder = "PolyComb";
+        h.title = "PolyComb";
+        h.capture = [this](){ return captureSnapshot(); };
+        h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applyState(a, b, t, sw); };
+        h.factory = [this](){ return factorySnapshots(); };
+        // Read-only source banks: selecting one uses the existing bank loader;
+        // setup never replaces the user's active library or MOVING_SAWS.
+        try {
+            auto bankRoot=std::filesystem::path(ofToDataPath("Supercollider/Synthdefs/Defaults/polyComb/ReaktorSnapshots",true));
+            if(!std::filesystem::exists(bankRoot))
+                bankRoot=std::filesystem::path(ofToDataPath("Supercollider/SynthdefSources/Defaults/PolyComb/ReaktorSnapshots",true));
+            if(!std::filesystem::exists(bankRoot))
+                bankRoot=std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"synthdefs/Defaults/PolyComb/ReaktorSnapshots";
+            if(std::filesystem::exists(bankRoot)){
+                for(const auto& entry : std::filesystem::recursive_directory_iterator(bankRoot)){
+                    if(!entry.is_regular_file() || entry.path().extension()!=".json" || entry.path().filename().string().rfind("Reaktor PolyComb",0)!=0) continue;
+                    h.bundledBanks.emplace_back(entry.path().stem().string()+" (approx.)",entry.path().string());
+                }
+                std::sort(h.bundledBanks.begin(),h.bundledBanks.end());
+            }
+        } catch(const std::exception& e) { ofLogWarning("scPolyComb") << "Reaktor banks: " << e.what(); }
+        h.bpm = [this](){ return currentBpm; };
+        h.paramMenu = [this](const std::string& k){ publishedUnderline(k); publishMenu(k); };
+        snaps.setup(h);
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -332,10 +453,9 @@ void scPolyComb::sendVec(ofxSCSynth* s, const std::string& name, const std::vect
 
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
 bool scPolyComb::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
-    if(!gateIn.handle || !pitchIn.handle || !velIn.handle) return false;
+    if(!gateIn.handle || !pitchIn.handle) return false;
     out.gate = gateIn.handle.get();
     out.pitch = pitchIn.handle.get();
-    out.velocity = velIn.handle.get();
     out.voices = n();
     return true;
 }
@@ -346,16 +466,15 @@ void scPolyComb::sendGate(ServerState& st) {
     if(!s) return;
     auto inEffect = noteInputs.inEffectNow();   // not a scheduled send: the notes as they stand now
     sendVec(s, "gate", gate.get());
-    sendVec(s, "velocity", velocity.get());
+    s->setMultiple("velocity", 1.0f, n());   // no Velocity input: the gate's level is the velocity
     s->set("drone", droning() ? 1.0f : 0.0f);
     s->set("out", st.gateBus ? st.gateBus->index : 0);
     s->set("vel", src(st, SRC_VEL));
     s->set("rnd", src(st, SRC_RND));
-    const int gb = gateIn.bus(st.server), vb = velIn.bus(st.server);
-    if(gb >= 0){ s->set("gate_sel", 1.0f); s->mapan("gate_ar", gb, n()); }
+    const int gb = gateIn.bus(st.server);
+    if(gb >= 0){ s->set("gate_sel", 1.0f); s->mapan("gate_ar", gb, inputWidth(st.server,gb,n())); }
     else s->set("gate_sel", 0.0f);
-    if(vb >= 0){ s->set("vel_sel", 1.0f); s->mapan("vel_ar", vb, n()); }
-    else s->set("vel_sel", 0.0f);
+    s->set("vel_sel", 0.0f);
 }
 
 void scPolyComb::sendAmpEnv(ServerState& st) {
@@ -372,14 +491,17 @@ void scPolyComb::sendAmpEnv(ServerState& st) {
 
 
 void scPolyComb::sendPitch(ServerState& st) {
+    sendSub(st);
     auto* s = st.pitchS;
     if(!s) return;
     auto inEffect = noteInputs.inEffectNow();
     s->set("out", st.noteBus ? st.noteBus->index : 0);
     s->set("mpitch", mod(st, 0));
     sendVec(s, "pitch", processedPitch());
+    s->set("internal", pitchExternal.get() ? 0.0f : 1.0f);
+    sendVec(s,"map",internalMap(0));
     const int pb = pitchIn.bus(st.server);
-    if(pb >= 0){ s->set("pitch_sel", 1.0f); s->mapan("pitch_ar", pb, n()); }
+    if(pb >= 0){ s->set("pitch_sel", 1.0f); s->mapan("pitch_ar", pb, inputWidth(st.server,pb,n())); s->set("pitch_channels",(float)inputWidth(st.server,pb,n())); }
     else s->set("pitch_sel", 0.0f);
     sendVec(s, "transpose", transpose.get());
     sendVec(s, "detune", detune.get());
@@ -387,6 +509,7 @@ void scPolyComb::sendPitch(ServerState& st) {
     s->set("vibrate", vibRate.get());
     s->set("vibrand", vibRand.get());
     s->set("vibamt", vibAmt.get());
+    sendIns(st,IComb);
 }
 
 void scPolyComb::sendFm(ServerState& st) {
@@ -438,26 +561,38 @@ bool scPolyComb::insWanted(int i) const {
 void scPolyComb::sendIns(ServerState& st, int i) {
     auto* s = st.ins[i].synth;
     if(!s) return;
+    int input=st.oscBus ? st.oscBus->index : 0;
+    for(int k=0;k<i;k++) if(st.ins[k].running && st.insBus[k]) input=st.insBus[k]->index;
+    s->set("in",input); s->set("out",st.insBus[i] ? st.insBus[i]->index : 0);
+
     s->set("on", insWanted(i) ? 1.0f : 0.0f);
     s->set("note", st.noteBus ? st.noteBus->index : 0);
     switch(i){
         case IFilter:
-            s->set("type", (float)fType.get());
+            s->set("type",float(filterChoice(fType.get()).first));
+            if(fType.get()>=4) s->set("slope",float(filterChoice(fType.get()).second));
             sendVec(s, "cutoff", cutoff.get());
             sendVec(s, "res", res.get());
             s->set("keytrack", keyTrack.get());
             s->set("mcut", mod(st, 3)); s->set("mres", mod(st, 4));
             break;
         case IPost:
-            s->set("type", (float)postType.get());
+            s->set("type",float(filterChoice(postType.get()).first));
+            if(postType.get()>=4) s->set("slope",float(filterChoice(postType.get()).second));
             sendVec(s, "cutoff", postCut.get());
             sendVec(s, "res", postRes.get());
             s->set("keytrack", 0.0f);
             s->set("mcut", mod(st, 9)); s->set("mres", mod(st, ZERO_TARGET));
             break;
         case IComb:
+            if(combSaturation.get()>0) s->set("satlevel",combSatLevel.get());
             s->set("combmode", (float)combMode.get());
-            sendVec(s, "combpitch", combPitch.get());
+            if(pitchExternal.get()) sendVec(s,"combpitch",combPitch.get());
+            else {
+                auto a=internalMap(0), b=internalMap(1); auto p=expand(combPitch.get(),n());
+                for(int k=0;k<n();k++) p[k]+=b[k]-a[k];
+                sendVec(s,"combpitch",p);
+            }
             sendVec(s, "combtranspose", combTranspose.get());
             sendVec(s, "combdetune", combDetune.get());
             sendVec(s, "combfeed", combFeed.get());
@@ -481,8 +616,13 @@ void scPolyComb::sendIns(ServerState& st, int i) {
 }
 
 void scPolyComb::sendAmp(ServerState& st) {
+    sendSub(st);
     auto* s = st.amp;
     if(!s) return;
+    int input=st.oscBus ? st.oscBus->index : 0;
+    for(int k=0;k<NumIns;k++) if(st.ins[k].running && st.insBus[k]) input=st.insBus[k]->index;
+    s->set("in",input); s->set("out",st.voiceBus ? st.voiceBus->index : 0);
+
     s->set("env", st.envBus ? st.envBus->index : 0);
     s->set("gate", st.gateBus ? st.gateBus->index : 0);
     s->set("vel", src(st, SRC_VEL));
@@ -491,10 +631,32 @@ void scPolyComb::sendAmp(ServerState& st) {
     s->set("mamp", mod(st, 12));
 }
 
+void scPolyComb::sendSub(ServerState& st) {
+    auto* s = st.sub.synth;
+    if(!s) return;
+    auto inEffect = noteInputs.inEffectNow();
+    s->set("out", st.voiceBus ? st.voiceBus->index : 0);
+    s->set("gate", st.gateBus ? st.gateBus->index : 0);
+    // Follow the instrument's input note, independently of the main pitch map.
+    sendVec(s, "pitch", pitch.get());
+    const int pb = pitchIn.bus(st.server);
+    if(pb >= 0){ s->set("pitch_sel", 1.0f); s->mapan("pitch_ar", pb, inputWidth(st.server,pb,n())); s->set("pitch_channels",(float)inputWidth(st.server,pb,n())); }
+    else s->set("pitch_sel", 0.0f);
+    s->set("vis", st.visBlock ? st.visBlock->index + VIS_SUB : 0);
+    s->set("transpose", subTranspose.get());
+    s->set("level", subLevel.get()); s->set("master", master.get());
+    s->set("vel", src(st, SRC_VEL)); s->set("velsens", velSens.get());
+    s->set("on", subOn.get() ? 1.0f : 0.0f);
+    s->set("atk", subA.get()); s->set("dec", subD.get());
+    s->set("sus", subS.get()); s->set("rel", subR.get());
+    s->set("cA", subCA.get()); s->set("cD", subCD.get()); s->set("cR", subCR.get());
+}
+
 void scPolyComb::sendSpread(ServerState& st) {
     auto* s = st.spread;
     if(!s) return;
     s->set("in", st.voiceBus ? st.voiceBus->index : 0);
+    s->set("out", st.outBus >= 0 ? st.outBus : 0);
     s->set("voices", (float)n());
     s->set("line", spreadLayout.get() == 1 ? 1.0f : 0.0f);
     s->set("pan", expand(panPositions(), W, 0.5f));
@@ -515,9 +677,14 @@ void scPolyComb::updateParts(ofxSCServer* server, ServerState& st) {
     if(!st.created) return;
     const float now = ofGetElapsedTimef();
     auto bring = [&](Part& p, bool wanted, const std::string& defName, int slot, float tail, std::function<void()> send){
+        if(p.synth && p.definition != defName){
+            p.synth->free(); delete p.synth; p.synth=nullptr;
+            p.running=false; p.offAt=-1.0f;
+        }
         if(wanted){
             if(!p.synth){
                 p.synth = make(server, st, defName, slot);
+                p.definition = defName;
                 send();
                 p.synth->createAndRun(1, st.groups[slot]->nodeID, true);   // tail of its slot
             }else{
@@ -531,12 +698,17 @@ void scPolyComb::updateParts(ofxSCServer* server, ServerState& st) {
             p.offAt = now + tail;
         }
     };
+    bring(st.sub, subOn.get(), def("PCSub"), SlSub, 0.05f, [&](){ sendSub(st); });
     bring(st.fm, fmOn.get(), def("PCFm"), SlFm, 0.0f, [&](){ sendFm(st); });
     for(int o = 0; o < NumOsc; o++) bring(st.osc[o], oscWanted(o), def(kOscDefs[o]), SlOsc, 0.0f, [&, o](){ sendOsc(st, o); });
     static const char* insDefs[NumIns] = {"PCFilter", "PCComb", "PCRing", "PCFilter", "PCShaper"};
     static const int insSlots[NumIns] = {SlFilter, SlComb, SlRing, SlPost, SlShaper};
-    for(int i = 0; i < NumIns; i++) bring(st.ins[i], insWanted(i), def(insDefs[i]), insSlots[i], i == IComb ? 2.0f : 0.1f,
-                                          [&, i](){ sendIns(st, i); });
+    for(int i = 0; i < NumIns; i++) {
+        const char* name=insDefs[i];
+        if((i==IFilter && fType.get()>=4) || (i==IPost && postType.get()>=4)) name="PCFilterSlopes";
+        if(i==IComb && combSaturation.get()>0) name="PCCombSat";
+        bring(st.ins[i],insWanted(i),def(name),insSlots[i],i==IComb ? 2.0f : 0.1f,[&,i](){sendIns(st,i);});
+    }
     for(int o = 0; o < NumOsc; o++) sendOsc(st, o);   // FM on / off
     routeVoice(st);
 }
@@ -579,7 +751,7 @@ void scPolyComb::ensureBuses(ofxSCServer* server, ServerState& st) {
     audio(st.gateBus, W); audio(st.envBus, W); audio(st.fmBus, W); audio(st.oscBus, W); audio(st.voiceBus, W);
     for(auto*& b : st.insBus) audio(b, W);
     control(st.noteBus, 2 * W);
-    control(st.visBlock, 2 * W);
+    control(st.visBlock, 3 * W + 1);
     if(st.modCreated && st.gateBus != oldGate) modulation.setGateBus(server, st.gateBus ? st.gateBus->index : 0);
 }
 
@@ -599,11 +771,13 @@ void scPolyComb::createAll(ofxSCServer* server, ServerState& st) {
         modulation.create(server, st.groups[SlSrc]->nodeID, st.groups[SlRoute]->nodeID, st.gateBus ? st.gateBus->index : 0);
         st.modCreated = true;
     }
+    fixed(st.deltaS, def("PCDelta"), SlDelta, [&](){ sendDelta(st); });
     fixed(st.gateS, def("ModGate"), SlGate, [&](){ sendGate(st); });
     fixed(st.ampEnv, def("ModEnvAr"), SlSrc, [&](){ sendAmpEnv(st); });
-    fixed(st.pitchS, def("PCPitch"), SlPitch, [&](){ sendPitch(st); });
+    fixed(st.pitchS, def("PCPitchMap"), SlPitch, [&](){ sendPitch(st); });
     fixed(st.amp, def("PCAmp"), SlAmp, [&](){ sendAmp(st); });
-    fixed(st.spread, "PolyCombSpread" + ofToString(outChannels.get()), SlSpread, [&](){ sendSpread(st); });
+    fixed(st.fadeS, def("PCVoiceFade"), SlFade, [&](){ st.fadeS->set("bus",st.voiceBus->index); });
+    fixed(st.spread, "PCSpreadWide" + ofToString(outChannels.get()), SlSpread, [&](){ sendSpread(st); });
     updateParts(server, st);
     updateStages(server, st);
 }
@@ -611,9 +785,9 @@ void scPolyComb::createAll(ofxSCServer* server, ServerState& st) {
 // Free every synth (the groups and buses stay)
 void scPolyComb::freeSynths(ServerState& st) {
     auto drop = [](ofxSCSynth*& s){ if(s){ s->free(); delete s; s = nullptr; } };
-    drop(st.gateS); drop(st.ampEnv); drop(st.pitchS); drop(st.amp); drop(st.spread);
+    drop(st.deltaS); drop(st.fadeS); drop(st.gateS); drop(st.ampEnv); drop(st.pitchS); drop(st.amp); drop(st.spread);
     auto dropPart = [&](Part& p){ drop(p.synth); p.running = false; p.offAt = -1.0f; };
-    dropPart(st.fm);
+    dropPart(st.fm); dropPart(st.sub);
     for(auto& p : st.osc) dropPart(p);
     for(auto& p : st.ins) dropPart(p);
     for(auto& f : st.fx){ drop(f.synth); f.running = false; f.offAt = -1.0f; }
@@ -623,10 +797,10 @@ void scPolyComb::freeSynths(ServerState& st) {
 void scPolyComb::freeAll(ofxSCServer* server, ServerState& st) {
     if(st.root && st.created) st.root->free();          // frees every synth in it
     auto forget = [](ofxSCSynth*& s){ delete s; s = nullptr; };
-    forget(st.gateS); forget(st.ampEnv); forget(st.pitchS); forget(st.amp); forget(st.spread);
+    forget(st.deltaS); forget(st.fadeS); forget(st.gateS); forget(st.ampEnv); forget(st.pitchS); forget(st.amp); forget(st.spread);
     if(st.modCreated) modulation.free(server, false);   // the root's /n_free took its synths
     st.modCreated = false;
-    forget(st.fm.synth);
+    forget(st.fm.synth); forget(st.sub.synth); st.sub.running=false; st.sub.offAt=-1.0f;
     for(auto& p : st.osc){ forget(p.synth); p.running = false; }
     for(auto& p : st.ins){ forget(p.synth); p.running = false; }
     for(auto& f : st.fx){ forget(f.synth); f.running = false; }
@@ -668,7 +842,7 @@ void scPolyComb::rebuildOutput() {
             f.in = nullptr;
             f.running = false; f.offAt = -1.0f;
         }
-        st.spread = make(server, st, "PolyCombSpread" + ofToString(outChannels.get()), SlSpread);
+        st.spread = make(server, st, "PCSpreadWide" + ofToString(outChannels.get()), SlSpread);
         sendSpread(st);
         st.spread->createAndRun(1, st.groups[SlSpread]->nodeID, true);
         st.builtChannels = outChannels.get();
@@ -740,20 +914,20 @@ int scPolyComb::getOutputBusIndex(ofxSCServer* server, int) {
 void scPolyComb::setInputBus(ofxSCServer* server, scNode* node, int bus) {
     auto& st = states[server];
     st.server = server;
-    if(gateIn.take(server, node, bus) | velIn.take(server, node, bus)) sendGate(st);
+    if(gateIn.take(server, node, bus)) sendGate(st);
     if(pitchIn.take(server, node, bus)) sendPitch(st);
 }
 void scPolyComb::resetInputBusses(ofxSCServer* server, int) {
     auto& st = states[server];
     st.server = server;
-    gateIn.reset(server); pitchIn.reset(server); velIn.reset(server);
+    gateIn.reset(server); pitchIn.reset(server);
     sendGate(st);
     sendPitch(st);
 }
 
 void scPolyComb::resendParametersForNRT() {
     forStates([this](ofxSCServer* server, ServerState& st){
-        sendGate(st); sendAmpEnv(st); sendPitch(st); sendFm(st); sendAmp(st); sendSpread(st);
+        sendDelta(st); sendGate(st); sendAmpEnv(st); sendPitch(st); sendFm(st); sendAmp(st); sendSpread(st);
         for(int o = 0; o < NumOsc; o++) sendOsc(st, o);
         for(int i = 0; i < NumIns; i++) sendIns(st, i);
         for(int s = 0; s < NumStages; s++) if(st.fx[s].synth) sendStage(s, st.fx[s].synth, server);
@@ -790,7 +964,7 @@ void scPolyComb::updateStages(ofxSCServer* server, ServerState& st) {
                 f.synth->set("in", f.in->index);
                 f.synth->set("out", st.outBus);
                 sendStage(s, f.synth, server);
-                f.synth->createAndRun(1, st.groups[SlEq + s]->nodeID, true);
+                f.synth->createAndRun(1, st.groups[SlComp + s]->nodeID, true);
             }else{
                 sendStage(s, f.synth, server);
                 if(!f.running) f.synth->run(true);
@@ -823,32 +997,15 @@ void scPolyComb::routeChain(ServerState& st) {
 
 void scPolyComb::update(ofEventArgs&) {
     timeline.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names = snaps.slotNames();
+        for(const auto& key : snaps.slotKeys()) { auto it = published.find(key); dropdowns.set(key, names, it == published.end() ? nullptr : it->second); }
+    }
     sendEnvMode();      // Auto follows Gate's connections
     modulation.showing = showWindow.get();
     modulation.update();   // the LFO / envelope live values (window)
     // snapshots: a file dialog (outside ImGui), another node's library change, a glide
-    if(snapLoadDialog){
-        snapLoadDialog = false;
-        ofFileDialogResult r = ofSystemLoadDialog("Snapshots from a bank or an Oceanode preset file", false, snapDir());
-        if(r.bSuccess) loadSnapshotBank(r.filePath);
-    }
-    if(ofGetElapsedTimef() >= snapLibCheckAt){
-        snapLibCheckAt = ofGetElapsedTimef() + 1.0f;
-        if(snapSetTime() != snapLibTime) loadSnapshotLibrary();
-    }
-    if(morphRun){
-        const float u = (ofGetElapsedTimef() - morphT0) / std::max(0.001f, morphDur);
-        morphProgress = ofClamp(u, 0.0f, 1.0f);
-        const float e = morphProgress * morphProgress * (3.0f - 2.0f * morphProgress);
-        applyState(morphFrom, morphTo, morphProgress >= 1.0f ? 1.0f : e);
-        if(morphProgress >= 1.0f){
-            morphRun = false;
-            activeSnap = morphTarget;
-            snapRecalling = true;
-            snapshotP.set(morphTarget + 1);
-            snapRecalling = false;
-        }
-    }
+    snaps.update();
     const float now = ofGetElapsedTimef();
     for(auto& [server, st] : states){
         if(!st.created) continue;
@@ -860,7 +1017,7 @@ void scPolyComb::update(ofEventArgs&) {
             if(p.synth) p.synth->run(false);
             reroute = true;
         };
-        settle(st.fm);
+        settle(st.fm); settle(st.sub);
         for(auto& p : st.osc) settle(p);
         for(auto& p : st.ins) settle(p);
         if(reroute){ routeVoice(st); for(int o = 0; o < NumOsc; o++) sendOsc(st, o); }
@@ -881,6 +1038,8 @@ void scPolyComb::update(ofEventArgs&) {
                 nextVisRead = now + 1.0f / 30.0f;
                 server->requestControlValues(st.visBlock->index, n());
                 server->requestControlValues(st.visBlock->index + VIS_PAN, n());
+                if(st.fx[StComp].running) server->requestControlValues(st.visBlock->index + VIS_GR, 1);
+                if(st.sub.running) server->requestControlValues(st.visBlock->index + VIS_SUB, n());
             }
             break;
         }
@@ -888,11 +1047,11 @@ void scPolyComb::update(ofEventArgs&) {
 }
 
 bool scPolyComb::stageOn(int s) const {
-    return s == StEq ? eqOn.get() : s == StEcho ? echoOn.get() : rvbOn.get();
+    return s == StComp ? compOn.get() : s == StEq ? eqOn.get() : s == StEcho ? echoOn.get() : rvbOn.get();
 }
 
 std::string scPolyComb::stageDef(int s) const {
-    static const char* names[NumStages] = {"mixerProEQ", "mixerProEcho", "mixerProRvb"};
+    static const char* names[NumStages] = {"mixerProComp", "mixerProEQ", "mixerProEcho", "mixerProRvb"};
     return names[s] + ofToString(outChannels.get());
 }
 
@@ -903,6 +1062,7 @@ float scPolyComb::echoDelaySec() const {
 
 float scPolyComb::stageTail(int s) const {
     if(s == StEq) return 0.0f;
+    if(s == StComp) return 0.04f;
     if(s == StEcho){
         const float feed = ofClamp(echoFeed.get(), 0.0f, 0.98f);
         const float repeats = feed > 0.001f ? std::log(0.001f) / std::log(feed) : 0.0f;
@@ -915,7 +1075,15 @@ void scPolyComb::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     if(!x) return;
     scSynthControlBatch controls(x, server);
     const float on = stageOn(s) ? 1.0f : 0.0f;
-    if(s == StEq){
+    if(s == StComp){
+        controls.set("threshold", compThreshold.get()); controls.set("ratio", compRatio.get());
+        controls.set("knee", compKnee.get()); controls.set("attack", compAttack.get());
+        controls.set("release", compRelease.get()); controls.set("makeup", compMakeup.get());
+        controls.set("automakeup", compAuto.get() ? 1.0f : 0.0f); controls.set("rms", compRms.get());
+        controls.set("schpf", compHpf.get()); controls.set("mix", compMix.get()); controls.set("on", on);
+        auto it=states.find(server);
+        controls.set("grBus", it!=states.end() && it->second.visBlock ? (float)(it->second.visBlock->index+VIS_GR) : -1.0f);
+    }else if(s == StEq){
         // mixerProEQ: gains dB, freqs Hz, shelves bNslope (= 1/S), peaks bNrq (= 1/Q)
         for(int b = 0; b < 5; b++){
             const std::string k = "b" + ofToString(b + 1);
@@ -985,6 +1153,13 @@ void scPolyComb::loadBeforeConnections(ofJson& j) {
 }
 
 void scPolyComb::presetRecallAfterSettingParameters(ofJson& j) {
+    combSaturation.setWithoutEventNotifications(false);
+    combSatLevel.setWithoutEventNotifications(12.0f);
+    restoring=true;
+    for(const auto& c : controls) if(compDefaults.contains(c.key)) c.load(compDefaults[c.key]);
+    for(const auto& c : controls) if(subDefaults.contains(c.key)) c.load(subDefaults[c.key]);
+    for(const auto& c : controls) if(pitchDefaults.contains(c.key)) c.load(pitchDefaults[c.key]);
+    restoring=false;
     if(j.contains("polyComb") && j["polyComb"].is_object()){
         restoring = true;
         for(const auto& control : controls)
@@ -1040,6 +1215,7 @@ void scPolyComb::publish(const std::string& key) {
     if(it == controls.end() || getParameterGroup().contains(key)) return;
     if(!publishedSeparator){ addSeparator("Published", ofColor(200)); publishedSeparator = true; }
     published[key] = it->add();
+    dropdowns.apply(key, published[key]);
     publishedKeys.push_back(key);
     parameterGroupChanged.notify(this);
 }
@@ -1141,8 +1317,13 @@ void scPolyComb::requireSynthdefs() {
         return folder;
     };
     for(const auto& [expected, dir] : std::vector<std::pair<std::string, std::string>>{
+            {"PCPitchMap2.scsyndef", "synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb"},
+            {"PCSub2.scsyndef", "synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb"},
             {"PCAmp2.scsyndef", "synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb"},
-            {"ModLfo2.scsyndef", "synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation"}}){
+            {"ModLfo2.scsyndef", "synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation"},
+            {"ModLfo32.scsyndef", "synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation"},
+            {"PCFilterSlopes1.scsyndef", "synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb"},
+            {"mixerProComp2.scsyndef", "synthdefs/Defaults/MixerPro/CompiledSynthdefs/mixerpro"}}){
         const auto folder = find(expected, dir);
         if(folder.empty()){ ofLogError("scPolyComb") << "Compile the SynthDefs of " << dir; continue; }
         for(auto* sm : servers) if(sm) sm->requireSynthdefFolder(folder.string());
@@ -1152,7 +1333,8 @@ void scPolyComb::requireSynthdefs() {
 bool scPolyComb::droning() const {
     if(envMode.get() == 2) return true;
     if(envMode.get() == 1) return false;
-    if(gateTouched || gateIn.connected()) return false;
+    // a cable, or a timeline track playing the Gate: notes, not a drone
+    if(gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined())) return false;
     return true;
 }
 
@@ -1298,9 +1480,11 @@ void scPolyComb::sliderInt(ofParameter<int>& p, const char* label, float w) {
     ImGui::PopID();
 }
 
-void scPolyComb::combo(ofParameter<int>& p, const char* label, float w, const std::vector<const char*>& items) {
+void scPolyComb::combo(ofParameter<int>& p, const char* label, float w) {
     const float z = zoom();
     const std::string key = p.getEscapedName();
+    const auto items = dropdowns.names(key);
+    if(items.empty()) return;
     ImGui::PushID(key.c_str());
     const float x0 = ImGui::GetCursorPosX();
     ImGui::AlignTextToFramePadding();
@@ -1344,7 +1528,7 @@ void scPolyComb::envelopeEditor(const char* id, ofParameter<float>& a, ofParamet
     const int nv = n();
     for(int v = 0; v < nv; v++){
         const int i = visOffset + v;
-        const float level = i < (int)visValues.size() ? ofClamp(visValues[i], 0.0f, 1.0f) : 0.0f;
+        const float level = (visOffset != VIS_SUB || subOn.get()) && i >= 0 && i < (int)visValues.size() ? ofClamp(visValues[i], 0.0f, 1.0f) : 0.0f;
         const float y = mb.y - 4.0f * z - level * (h - 8.0f * z);
         const float x = ma.x + meterW * (0.25f + 0.5f * (nv > 1 ? (float)v / (nv - 1) : 0.5f));
         dl->AddCircleFilled(ImVec2(x, y), 2.2f * z, level > 0.001f ? color : pal::gridStrong);
@@ -1385,7 +1569,7 @@ void scPolyComb::drawWindow() {
         ImGui::BeginGroup(); slider(master, "Master", 170 * z, "%.2f"); ImGui::EndGroup();
         ImGui::SameLine(0, 12 * z);
         labelW = 64.0f;
-        ImGui::BeginGroup(); combo(envMode, "Gate Mode", 190 * z, {"Auto", "Gated", "Drone"}); ImGui::EndGroup();
+        ImGui::BeginGroup(); combo(envMode, "Gate Mode", 190 * z); ImGui::EndGroup();
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("Auto: a drone while nothing is connected to Gate, gated once something is\n"
                               "Gated: a voice plays while its gate is high\nDrone: every voice always plays");
@@ -1403,7 +1587,7 @@ void scPolyComb::drawWindow() {
         const float bw = mw / nv;
         for(int v = 0; v < nv; v++){
             const int i = VIS_AMP + v;
-            const float level = i < (int)visValues.size() ? ofClamp(visValues[i], 0.0f, 1.0f) : 0.0f;
+            const float level = i >= 0 && i < (int)visValues.size() ? ofClamp(visValues[i], 0.0f, 1.0f) : 0.0f;
             const ImVec2 b0(a.x + v * bw + 1, a.y), b1(a.x + (v + 1) * bw - 1, a.y + mh);
             dl->AddRectFilled(b0, b1, pal::canvas, 2.0f * z);
             dl->AddRectFilled(ImVec2(b0.x, b1.y - level * mh), b1, pal::envAmp, 2.0f * z);
@@ -1411,8 +1595,7 @@ void scPolyComb::drawWindow() {
         ImGui::Dummy(ImVec2(mw, mh));
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Each voice's amp envelope");
     }
-    drawSnapshotBar(w);
-    ImGui::Spacing();
+    snaps.drawBar(w);
 
     if(ImGui::BeginTabBar("##pcTabs")){
         auto tab = [&](const char* name, std::function<void(float)> body){
@@ -1425,11 +1608,15 @@ void scPolyComb::drawWindow() {
             ImGui::EndChild();
             ImGui::EndTabItem();
         };
+        tab("Pitch & Harmony", [this](float tw){ drawPitchTab(tw); });
         tab("Oscillators", [this](float tw){ drawOscTab(tw); });
         tab("Envelopes", [this](float tw){ drawEnvTab(tw); });
         tab("Filters", [this](float tw){ drawFilterTab(tw); });
         tab("Resonator", [this](float tw){ drawResonatorTab(tw); });
-        tab("LFOs", [this](float tw){ modulation.drawLfos(tw); });
+        tab("LFOs", [this](float tw){ modulation.drawLfos(tw);
+            sectionHeader("Delta: change in the LFO banks",tw);
+            slider(deltaMix1,"LFO 1",tw);slider(deltaMix2,"LFO 2",tw);
+            slider(deltaWindow,"Window",tw,"%.0f ms",true);slider(deltaGain,"Gain",tw); });
         tab("Routing", [this](float tw){ modulation.drawRouting(tw); });
         tab("Panning", [this](float tw){ drawPanTab(tw); });
         tab("Effects", [this](float tw){ drawFxTab(tw); });
@@ -1598,6 +1785,24 @@ void scPolyComb::drawOscTab(float w) {
     }
     labelW = 70.0f;
     ImGui::EndGroup();
+    ImGui::Separator();
+    const float sw = colW(w, 2);
+    ImGui::BeginGroup();
+    sectionHeader("Independent Sub", sw, &subOn);
+    slider(subLevel, "Level", sw, "%.3f");
+    slider(subTranspose, "Transpose", sw, "%+.2f st");
+    slider(subA, "Attack", sw, "%.3f s", true);
+    slider(subD, "Decay", sw, "%.3f s", true);
+    slider(subS, "Sustain", sw, "%.2f");
+    slider(subR, "Release", sw, "%.3f s", true);
+    ImGui::EndGroup(); ImGui::SameLine(0, gapW()); ImGui::BeginGroup();
+    sectionHeader("Sub Envelope", sw, nullptr, pal::envAmp);
+    envelopeEditor("##subEnv", subA, subD, subS, subR, subCA, subCD, subCR, sw, 90*z, pal::envAmp, VIS_SUB);
+    slider(subCA, "Attack curve", sw, "%.1f");
+    slider(subCD, "Decay curve", sw, "%.1f");
+    slider(subCR, "Release curve", sw, "%.1f");
+    ImGui::EndGroup();
+
 }
 
 void scPolyComb::drawFilterTab(float w) {
@@ -1619,8 +1824,24 @@ void scPolyComb::drawFilterTab(float w) {
         std::vector<ImVec2> pts;
         for(int i = 0; i <= 96; i++){
             const float f = 20.0f * std::pow(1000.0f, i / 96.0f);
-            float db = biquadDb(type, f, fc, q);
-            if(type <= 1) db *= 2.0f;
+            float db;
+            if(type<4){
+                db=biquadDb(type,f,fc,q);
+                if(type<=1) db*=2.0f;
+            }else{
+                const auto choice=filterChoice(type);
+                const float rq=ofClamp(1-resonance,0.02f,1.0f);
+                const bool four=choice.second>=2;
+                const float rq2=(choice.first<=1 && four) ? std::sqrt(rq) : rq;
+                db=biquadDb(choice.first,f,fc,1.0f/rq2);
+                if(four) db*=2.0f;
+                if(choice.second==3){
+                    const double pole=std::exp(-TWO_PI*fc/48000.0);
+                    const auto zz=std::polar(1.0,-TWO_PI*f/48000.0);
+                    const auto lp=(1-pole)/(1.0-pole*zz);
+                    db=20*std::log10(std::max(1e-8,std::abs((1.0-lp)*lp*lp*lp)));
+                }
+            }
             pts.push_back(ImVec2(a.x + cw * i / 96.0f, ofClamp(zeroY - db * h / 60.0f, a.y + 1, b.y - 1)));
         }
         dl->AddPolyline(pts.data(), (int)pts.size(), color, 0, 2.0f * z);
@@ -1635,7 +1856,7 @@ void scPolyComb::drawFilterTab(float w) {
     };
     ImGui::BeginGroup();
     sectionHeader("Filter", cw, &filterOn);
-    combo(fType, "Type", cw, kFilterTypes);
+    combo(fType, "Type", cw);
     std::string f1 = hzFormat(cutoff.get());
     sliderVec(cutoff, "Cutoff", cw, f1.c_str());
     sliderVec(res, "Resonance", cw, "%.2f");
@@ -1644,7 +1865,7 @@ void scPolyComb::drawFilterTab(float w) {
     response(fType.get(), first(cutoff.get(), 100.0f), first(res.get(), 0.3f), pal::accent);
     nextCol();
     sectionHeader("Post Filter", cw, &postOn);
-    combo(postType, "Type", cw, kFilterTypes);
+    combo(postType, "Type", cw);
     std::string f2 = hzFormat(postCut.get());
     sliderVec(postCut, "Cutoff", cw, f2.c_str());
     sliderVec(postRes, "Resonance", cw, "%.2f");
@@ -1659,11 +1880,16 @@ void scPolyComb::drawResonatorTab(float w) {
     const float cw = colW(w, 3);
     ImGui::BeginGroup();
     sectionHeader("Comb", cw, &combOn);
-    combo(combMode, "Pitch", cw, {"Follows the note", "Fixed note"});
+    combo(combMode, "Pitch", cw);
     const bool follow = combMode.get() == 0;
     sliderVec(combPitch, follow ? "Interval" : "Note", cw, follow ? "%+.2f st" : "%.2f");
     sliderVec(combTranspose, "Transpose", cw, "%+.2f st");
     sliderVec(combDetune, "Detune", cw, "%.2f st");
+    toggle(combSaturation,"Saturate feedback");
+    if(combSaturation.get()>0) {
+        slider(combSatLevel,"Sat Level",cw,"%.1f dB");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Level at which the feedback loop saturates. Lower: stronger saturation.\nHigher levels allow louder resonant peaks.");
+    }
     sliderVec(combFeed, "Feedback", cw, "%+.3f");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Negative: odd harmonics only (hollow, an octave lower)");
     slider(combTone, "Tone", cw, "%.2f");
@@ -1686,7 +1912,7 @@ void scPolyComb::drawResonatorTab(float w) {
         }
         dl->AddPolyline(pts.data(), (int)pts.size(), pal::accent, 0, 1.5f * z);
         char t[32];
-        std::snprintf(t, sizeof(t), "%.1f Hz%s", f0, follow ? " at C4" : "");
+        std::snprintf(t, sizeof(t), "%.1f Hz%s%s", f0, follow ? " at C4" : "",combSaturation.get() ? " / saturated" : "");
         dl->AddText(ImVec2(a.x + 4 * z, a.y + 2 * z), pal::textDim, t);
         ImGui::Dummy(ImVec2(cw, h));
     }
@@ -1798,9 +2024,9 @@ void scPolyComb::drawFxTab(float w) {
         ImGui::SameLine();
         ImGui::SetCursorPosX(x0 + labelW * z);
         ImGui::SetNextItemWidth(cw - labelW * z);
-        const char* types[4] = {"LowPass", "HighPass", "BandPass", "PeakEQ"};
-        int ft = std::clamp(echoFilter.get(), 0, 3);
-        if(ImGui::Combo("##echoFilter", &ft, types, 4)) echoFilter = ft;
+        const auto types = dropdowns.names(echoFilter.getEscapedName());
+        int ft = std::clamp(echoFilter.get(), 0, (int)types.size() - 1);
+        if(ImGui::Combo("##echoFilter", &ft, types.data(), (int)types.size())) echoFilter = ft;
         publishMenu(echoFilter.getEscapedName());
     }
     slider(echoPingPong, "Ping-pong", cw, "%.2f");
@@ -1827,8 +2053,70 @@ void scPolyComb::drawFxTab(float w) {
     slider(rvbWander, "Wander", cw, "%.2f");
     if(!rvbOn.get()) ImGui::EndDisabled();
     ImGui::EndGroup();
-    ImGui::TextColored(ImColor(pal::textDim), "Voices -> EQ -> Echo -> Reverb (MixerPro's), at the speaker count. "
-                       "A stage switched off lets its tail ring out, then stops using CPU.");
+    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+    drawCompPanel(w);
+    ImGui::TextColored(ImColor(pal::textDim), "Voices -> Compressor -> EQ -> Echo -> Reverb");
+}
+
+// MixerPro's transfer curve, reduction meter and compressor controls.
+void scPolyComb::drawCompPanel(float w) {
+    const float z=zoom(), cw=colW(w,3);
+    sectionHeader("Compressor", w, &compOn, IM_COL32(255,190,90,255));
+    ImGui::BeginGroup();
+    const bool enabled=compOn.get();
+    const float side=std::min(cw-20*z,180*z);
+    const ImVec2 p0=ImGui::GetCursorScreenPos(), p1(p0.x+side,p0.y+side);
+    auto* dl=ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p0,p1,IM_COL32(20,20,24,255),3*z);
+    auto px=[&](float db){return p0.x+(db+60)/60*side;};
+    auto py=[&](float db){return p1.y-(ofClamp(db,-60.0f,0.0f)+60)/60*side;};
+    for(int g=-48;g<0;g+=12){
+        dl->AddLine(ImVec2(px(g),p0.y),ImVec2(px(g),p1.y),IM_COL32(45,45,52,255));
+        dl->AddLine(ImVec2(p0.x,py(g)),ImVec2(p1.x,py(g)),IM_COL32(45,45,52,255));
+    }
+    dl->AddLine(ImVec2(p0.x,p1.y),ImVec2(p1.x,p0.y),IM_COL32(70,70,80,255));
+    const float thr=compThreshold.get(), knee=std::max(.01f,compKnee.get());
+    const float slope=1-1/std::max(1.0f,compRatio.get());
+    auto grAt=[&](float x){
+        const float over=x-thr, xk=ofClamp(over+knee*.5f,0.0f,knee);
+        return std::min(40.0f,slope*(xk*xk/(2*knee)+std::max(0.0f,over-knee*.5f)));
+    };
+    const float makeup=compMakeup.get()+(compAuto.get() ? .5f*grAt(0) : 0);
+    ImVec2 prev;
+    for(int i=0;i<=120;i++){
+        const float x=-60+i*.5f;
+        const ImVec2 pt(px(x),py(enabled ? x-grAt(x)+makeup : x));
+        if(i) dl->AddLine(prev,pt,IM_COL32(255,190,90,255),2*z);
+        prev=pt;
+    }
+    dl->AddLine(ImVec2(px(thr),p0.y),ImVec2(px(thr),p1.y),IM_COL32(255,190,90,70));
+    dl->AddText(ImVec2(p0.x+4*z,p0.y+2*z),pal::textDim,"out");
+    dl->AddText(ImVec2(p1.x-18*z,p1.y-16*z),pal::textDim,"in");
+    ImGui::Dummy(ImVec2(side,side)); ImGui::SameLine(0,6*z);
+    const ImVec2 m=ImGui::GetCursorScreenPos();
+    const float gr=enabled && visValues.size()>VIS_GR ? std::max(0.0f,visValues[VIS_GR]) : 0;
+    dl->AddRectFilled(m,ImVec2(m.x+10*z,m.y+side),IM_COL32(20,20,24,255),2*z);
+    dl->AddRectFilled(m,ImVec2(m.x+10*z,m.y+side*ofClamp(gr/24,0.0f,1.0f)),IM_COL32(255,200,80,255),2*z);
+    for(int g=6;g<24;g+=6) dl->AddLine(ImVec2(m.x,m.y+side*g/24),ImVec2(m.x+10*z,m.y+side*g/24),IM_COL32(60,60,68,255));
+    ImGui::Dummy(ImVec2(10*z,side));
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Gain reduction %.1f dB (scale 0..24 dB)",gr);
+    nextCol();
+    if(!enabled) ImGui::BeginDisabled();
+    slider(compThreshold,"Threshold",cw,"%.1f dB");
+    slider(compRatio,"Ratio",cw,"%.1f : 1",true);
+    slider(compKnee,"Knee",cw,"%.1f dB");
+    slider(compMakeup,"Makeup",cw,"%.1f dB");
+    toggle(compAuto,"Auto makeup");
+    if(!enabled) ImGui::EndDisabled();
+    nextCol();
+    if(!enabled) ImGui::BeginDisabled();
+    slider(compAttack,"Attack",cw,"%.1f ms",true);
+    slider(compRelease,"Release",cw,"%.0f ms",true);
+    slider(compRms,"Peak/RMS",cw,"%.2f");
+    slider(compHpf,"SC HPF",cw,"%.0f Hz",true);
+    slider(compMix,"Mix",cw,"%.2f");
+    if(!enabled) ImGui::EndDisabled();
+    ImGui::EndGroup();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1847,7 +2135,7 @@ void scPolyComb::drawPanTab(float w) {
     };
     ImGui::BeginGroup();
     sectionHeader("Placement", cw);
-    combo(spreadMode, "Mode", cw, {"Spread", "Channels", "Manual"});
+    combo(spreadMode, "Mode", cw);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Spread: evenly across the speakers\nChannels: voice 1 on speaker 1, voice 2 on speaker 2...\n"
                                                  "Manual: each voice where you put it (drag it, or the Pan vector)");
     if(spreadMode.get() == 0){
@@ -1855,7 +2143,7 @@ void scPolyComb::drawPanTab(float w) {
         slider(spreadCenter, "Center", cw, "%+.2f");
     }
     if(spreadMode.get() == 2) sliderVec(panP, "Pan", cw, "%.2f");
-    if(c > 2) combo(spreadLayout, "Speakers", cw, {"Ring", "Line"});
+    if(c > 2) combo(spreadLayout, "Speakers", cw);
     ImGui::Spacing();
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
     ImGui::TextColored(ImColor(pal::textDim), "%d voices on %d speaker%s. Drag a voice to place it (Shift: onto a speaker). "
@@ -1959,6 +2247,79 @@ void scPolyComb::drawPanTab(float w) {
 // {"name", "controls": {key: value}, "matrix": [...], "lfos", "envs", "exts"}
 // ════════════════════════════════════════════════════════════════════════════
 
+double scPolyComb::harmonyBeat() const {
+    return getFrameTransportState().current.beatPosition;
+}
+polycombPitch::Map scPolyComb::pitchMap(int b) const {
+    polycombPitch::Map m;
+    m.root=pitchRoot.get();m.shape=mapShape[b].get();m.quantize=mapQuant[b].get();
+    m.first=mapFirst[b].get();m.inversion=mapInversion[b].get();
+    m.interval=mapInterval[b].get();m.transpose=mapTranspose[b].get();m.fine=mapFine[b].get();
+    m.bend=mapBend[b].get();m.length=mapLength[b].get();m.offset=mapOffset[b].get();
+    m.harmonicRoot=mapHarmonic[b].get();m.table=mapTable[b].get();
+    m.scale=pitchUseCustom.get() ? mapScaleTones[b].get() : pitchLibrary.scaleLibrary[std::clamp(pitchScale.get(),0,(int)pitchLibrary.scaleLibrary.size()-1)].values;
+    m.chord=pitchUseCustom.get() ? pitchCustomChord.get() : pitchLibrary.chordLibrary[std::clamp(pitchChord.get(),0,(int)pitchLibrary.chordLibrary.size()-1)].values;
+    return m;
+}
+std::vector<float> scPolyComb::internalMap(int bank) const {
+    auto m=pitchMap(bank);
+    const float step=harmonyOn.get() ? polycombPitch::progression(harmonyBeat(),harmonyBeats.get(),harmonySteps.get(),m.scale) : 0;
+    return polycombPitch::generate(m,n(),step);
+}
+void scPolyComb::sendDelta(ServerState& st) {
+    if(!st.deltaS)return;
+    st.deltaS->set("a",src(st,0));st.deltaS->set("b",src(st,1));
+    st.deltaS->set("out",src(st,scModulation::NUM_SOURCES));
+    st.deltaS->set("window",deltaWindow.get()*.001f);
+    st.deltaS->set("gain",deltaGain.get());
+    st.deltaS->set("mix1",deltaMix1.get());st.deltaS->set("mix2",deltaMix2.get());
+}
+void scPolyComb::drawPitchTab(float w) {
+    sectionHeader("Pitch & Harmony",w);
+    toggle(pitchExternal,"External");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("On: Pitch directly drives the voices. Off: Pitch transposes these maps; 60 = unchanged, 61 = +1 semitone.");
+    const float cw=colW(w,2);
+    ImGui::BeginGroup();
+    slider(pitchRoot,"Root",cw,"%.2f");
+    std::vector<const char*> scales,chords;
+    for(const auto& x:pitchLibrary.scaleLibrary)scales.push_back(x.name.c_str());
+    for(const auto& x:pitchLibrary.chordLibrary)chords.push_back(x.name.c_str());
+    combo(pitchScale,"Scale",cw);combo(pitchChord,"Chord",cw);
+    toggle(pitchUseCustom,"Use imported/custom pitch sets");
+    if(pitchUseCustom.get()){
+        sliderVec(pitchCustomChord,"Chord tones",cw);
+    }
+    ImGui::EndGroup();ImGui::SameLine(0,gapW());ImGui::BeginGroup();
+    sectionHeader("Harmony progression",cw,&harmonyOn);
+    slider(harmonyBeats,"Step length",cw,"%.3f beats",true);
+    sliderVec(harmonySteps,"Degrees",cw,"%.0f");
+    ImGui::TextDisabled("Zero-based scale degrees; follows transport beats");
+    ImGui::EndGroup();ImGui::Separator();
+    for(int b=0;b<2;b++){
+        if(b)ImGui::SameLine(0,gapW());
+        ImGui::PushID(b);ImGui::BeginGroup();
+        sectionHeader(b==0?"Oscillator pitch map":"Resonator pitch map",cw);
+        combo(mapShape[b],"Shape",cw);
+        combo(mapQuant[b],"Quantize",cw);
+        slider(mapInterval[b],"Interval",cw,"%+.3f st");slider(mapTranspose[b],"Transpose",cw,"%+.2f st");
+        slider(mapBend[b],"Bend",cw,"%.3f");sliderInt(mapFirst[b],"First index",cw);
+        slider(mapLength[b],"Length",cw);slider(mapOffset[b],"Offset",cw);sliderInt(mapInversion[b],"Inversion",cw);
+        if(pitchUseCustom.get())sliderVec(mapScaleTones[b],"Scale tones",cw);
+        slider(mapFine[b],"Fine/global",cw,"%+.3f st");
+        if(mapQuant[b].get()==1)sliderVec(mapTable[b],"Table",cw);
+        if(mapQuant[b].get()==3)slider(mapHarmonic[b],"Fundamental",cw,"%.2f");
+        const auto notes=internalMap(b);
+        ImDrawList* dl=ImGui::GetWindowDrawList();const ImVec2 a=ImGui::GetCursorScreenPos(),z(a.x+cw,a.y+80*zoom());
+        canvas(dl,a,z);const float bw=cw/std::max(1,n());
+        for(int v=0;v<n();v++){
+            const float y=z.y-4-(z.y-a.y-8)*ofClamp(notes[v]/135.f,0.f,1.f);
+            dl->AddLine(ImVec2(a.x+(v+.5f)*bw,z.y-4),ImVec2(a.x+(v+.5f)*bw,y),pal::accent,std::max(1.f,bw-2));
+        }
+        ImGui::Dummy(ImVec2(cw,80*zoom()));
+        ImGui::EndGroup();ImGui::PopID();
+    }
+}
+
 bool scPolyComb::snapExcluded(const std::string& key) const {
     return key.rfind("Snapshot", 0) == 0 || key.rfind("Morph", 0) == 0 || key.rfind("Ext_", 0) == 0
         || key == spreadLayout.getEscapedName();
@@ -1976,6 +2337,7 @@ ofJson scPolyComb::captureSnapshot() const {
     auto& c = s["controls"] = ofJson::object();
     for(const auto& control : controls) if(!snapExcluded(control.key)) c[control.key] = control.save();
     modulation.patchBases(c);
+    s["voices"] = n();
     s["params"] = modulation.paramsJson();
     s["matrix"] = modulation.matrix;
     s["lfos"] = modulation.lfoCount;
@@ -1997,7 +2359,7 @@ float blendNum(float x, float y, float t, bool lg) {
     if(lg && x > 0.0f && y > 0.0f) return std::exp(ofLerp(std::log(x), std::log(y), t));
     return ofLerp(x, y, t);
 }
-ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float t) {
+ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float t, bool sw) {
     if(t <= 0.0f) return x;
     if(t >= 1.0f) return y;
     const bool lg = logKey(key);
@@ -2010,11 +2372,11 @@ ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float
             r.push_back(blendNum(x[std::min(i, x.size() - 1)].get<float>(), y[std::min(i, y.size() - 1)].get<float>(), t, lg));
         return r;
     }
-    return t < 0.5f ? x : y;
+    return sw ? y : x;   // switches and modes: at the switch point
 }
 }
 
-void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t) {
+void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t, bool sw) {
     if(!a.is_object() || !b.is_object()) return;
     t = ofClamp(t, 0.0f, 1.0f);
     // the counts first (the routes need their sources): while blending, the larger
@@ -2036,10 +2398,17 @@ void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t) {
         const std::string& k = control.key;
         if(snapExcluded(k) || drivenByConnection(k)) continue;
         const bool ha = ca.contains(k), hb = cb.contains(k);
+        const bool option = k==combSaturation.getEscapedName() || k==combSatLevel.getEscapedName() || compDefaults.contains(k) || subDefaults.contains(k) || pitchDefaults.contains(k);
+        if(option){
+            const ofJson fallback=pitchDefaults.contains(k) ? pitchDefaults[k] : subDefaults.contains(k) ? subDefaults[k] : compDefaults.contains(k) ? compDefaults[k] : k==combSatLevel.getEscapedName() ? ofJson(12.0f) : ofJson(false);
+            auto v=blendJson(k,ha?ca[k]:fallback,hb?cb[k]:fallback,t,sw);
+            if(v!=control.save()) control.load(v);
+            continue;
+        }
         ofJson v;
-        if(ha && hb) v = blendJson(k, ca[k], cb[k], t);
-        else if(hb && t >= 0.5f) v = cb[k];
-        else if(ha && t < 0.5f) v = ca[k];
+        if(ha && hb) v = blendJson(k, ca[k], cb[k], t, sw);
+        else if(hb && sw) v = cb[k];
+        else if(ha && !sw) v = ca[k];
         else continue;
         if(v != control.save()) control.load(v);
     }
@@ -2059,144 +2428,12 @@ void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t) {
     else if(changed) M.sendMatrix();
     // the controls any source moves ("Modulate"): the arrival's
     if(t >= 1.0f) M.loadParamsJson(b.contains("params") ? b["params"] : ofJson::array());
-}
+    const int nv=std::clamp((sw ? b : a).value("voices",n()),1,MAX_VOICES);
+    if(nv!=n()) voices.set(nv);
 
-void scPolyComb::storeSnapshot(int slot, const std::string& name) {
-    if(slot < 0 || slot >= NUM_SNAPS) return;
-    const std::string keep = name.empty() ? snapName(slot) : name;
-    snapSlots[slot] = captureSnapshot();
-    snapSlots[slot]["name"] = keep.empty() ? "Snapshot " + ofToString(slot + 1) : keep;
-    snapUsed[slot] = true;
-    activeSnap = slot;
-    saveSnapshotLibrary();
-}
-
-void scPolyComb::recallSnapshot(int slot) {
-    if(slot < 0 || slot >= NUM_SNAPS || !snapUsed[slot]) return;
-    morphRun = false;
-    applyState(snapSlots[slot], snapSlots[slot], 1.0f);
-    activeSnap = slot;
-    snapRecalling = true;
-    snapshotP.set(slot + 1);      // shows / outputs it, without a second recall
-    snapRecalling = false;
-}
-
-void scPolyComb::startGlide(int slot) {
-    if(slot < 0 || slot >= NUM_SNAPS || !snapUsed[slot]) return;
-    morphDur = morphBeatsP.get() ? morphTimeP.get() * 60.0f / std::max(1.0f, currentBpm) : morphTimeP.get();
-    if(morphDur <= 0.001f){ recallSnapshot(slot); return; }
-    morphFrom = captureSnapshot();
-    morphTo = snapSlots[slot];
-    morphTarget = slot;
-    morphT0 = ofGetElapsedTimef();
-    morphProgress = 0.0f;
-    morphRun = true;
-}
-
-void scPolyComb::applyAB() {
-    const int a = morphAP.get() - 1, b = morphBP.get() - 1;
-    if(a < 0 || b < 0 || a >= NUM_SNAPS || b >= NUM_SNAPS || !snapUsed[a] || !snapUsed[b]) return;
-    morphRun = false;              // the slider takes over from a glide
-    applyState(snapSlots[a], snapSlots[b], morphP.get());
-}
-
-std::string scPolyComb::snapName(int k) const {
-    if(k < 0 || k >= NUM_SNAPS || !snapUsed[k] || !snapSlots[k].contains("name")) return "";
-    try { return snapSlots[k]["name"].get<std::string>(); } catch(...) { return ""; }
 }
 
 // ── Library (shared files) and banks ─────────────────────────────────────────
-std::string scPolyComb::snapDir() const {
-    const std::string dir = ofToDataPath("nodeSnapshots/PolyComb", true);
-    try { std::filesystem::create_directories(std::filesystem::path(dir) / "banks"); } catch(...) {}
-    return dir;
-}
-
-std::filesystem::file_time_type scPolyComb::snapSetTime() const {
-    std::filesystem::file_time_type t{};
-    try {
-        for(auto& e : std::filesystem::directory_iterator(snapDir()))
-            if(e.is_regular_file() && e.path().filename().string().rfind("snapshot_", 0) == 0)
-                t = std::max(t, std::filesystem::last_write_time(e.path()));
-    } catch(...) {}
-    return t;
-}
-
-void scPolyComb::saveSnapshotLibrary() {
-    const std::filesystem::path dir = snapDir();
-    for(int k = 0; k < NUM_SNAPS; k++){
-        const auto f = dir / ("snapshot_" + ofToString(k) + ".json");
-        try {
-            if(snapUsed[k]) ofSavePrettyJson(f.string(), snapSlots[k]);
-            else if(std::filesystem::exists(f)) std::filesystem::remove(f);
-        } catch(...) {}
-    }
-    // a marker: the library exists (empty slots stay empty, no factory refill)
-    try { ofSaveJson((dir / "library.json").string(), ofJson{{"polyCombSnapshots", 1}}); } catch(...) {}
-    snapLibTime = snapSetTime();
-}
-
-void scPolyComb::loadSnapshotLibrary() {
-    const std::filesystem::path dir = snapDir();
-    const auto bank = dir / "banks" / "Factory.json";
-    {
-        // the factory collection, as a bank anyone can reload (rewritten every
-        // start, so it always holds this build's sounds)
-        ofJson j;
-        j["polyCombSnapshotBank"] = 1;
-        j["slots"] = ofJson::array();
-        for(auto& s : factorySnapshots()) j["slots"].push_back(s);
-        ofSavePrettyJson(bank.string(), j);
-    }
-    if(!std::filesystem::exists(dir / "library.json")){ loadFactory(); return; }   // first run
-    snapUsed.fill(false);
-    for(int k = 0; k < NUM_SNAPS; k++){
-        const auto f = dir / ("snapshot_" + ofToString(k) + ".json");
-        if(!std::filesystem::exists(f)) continue;
-        try {
-            ofJson j = ofLoadJson(f.string());
-            if(j.is_object() && j.contains("controls")){ snapSlots[k] = j; snapUsed[k] = true; }
-        } catch(...) {}
-    }
-    if(activeSnap >= 0 && !snapUsed[activeSnap]) activeSnap = -1;
-    snapLibTime = snapSetTime();
-}
-
-void scPolyComb::saveSnapshotBank(const std::string& path) {
-    ofJson j;
-    j["polyCombSnapshotBank"] = 1;
-    j["slots"] = ofJson::array();
-    for(int k = 0; k < NUM_SNAPS; k++) j["slots"].push_back(snapUsed[k] ? snapSlots[k] : ofJson(nullptr));
-    std::string p = path;
-    if(std::filesystem::path(p).extension().string() != ".json") p += ".json";
-    snapMsg = ofSavePrettyJson(p, j) ? "Saved " + std::filesystem::path(p).stem().string() : "Could not save " + p;
-}
-
-bool scPolyComb::loadSnapshotBank(const std::string& path) {
-    ofJson j;
-    try { j = ofLoadJson(path); } catch(...) {}
-    if(!j.contains("slots") || !j["slots"].is_array()){
-        snapMsg = "No snapshots in " + std::filesystem::path(path).filename().string();
-        return false;
-    }
-    snapUsed.fill(false);
-    for(int k = 0; k < std::min(NUM_SNAPS, (int)j["slots"].size()); k++)
-        if(j["slots"][k].is_object() && j["slots"][k].contains("controls")){ snapSlots[k] = j["slots"][k]; snapUsed[k] = true; }
-    activeSnap = -1;
-    snapMsg = "Loaded " + std::filesystem::path(path).stem().string();
-    saveSnapshotLibrary();          // becomes the shared current set
-    return true;
-}
-
-void scPolyComb::loadFactory() {
-    snapUsed.fill(false);
-    auto f = factorySnapshots();
-    for(int k = 0; k < std::min(NUM_SNAPS, (int)f.size()); k++){ snapSlots[k] = f[k]; snapUsed[k] = true; }
-    activeSnap = -1;
-    snapMsg = "Loaded the factory snapshots";
-    saveSnapshotLibrary();
-}
-
 // ── The factory collection: each one the defaults plus its own settings
 //    (control names as in the window), its routes [source, target, amount]
 //    (sources: LFO 0-7, Env 8-11, Velocity 12, Random 13; targets: Pitch 0,
@@ -2455,163 +2692,3 @@ std::vector<ofJson> scPolyComb::factorySnapshots() const {
 
 // ── The bar under the header: a slot menu (recall), store, glide, A/B morph,
 //    banks. Every one of them publishable. ─────────────────────────────────────
-void scPolyComb::drawSnapshotBar(float w) {
-    const float z = zoom();
-    const float m = 10.0f * z;
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(ImColor(pal::accent), "Snapshot");
-    publishedUnderline(snapshotP.getEscapedName());
-    publishMenu(snapshotP.getEscapedName());
-    ImGui::SameLine();
-    auto label = [this](int k) {
-        return ofToString(k + 1) + "  " + (snapUsed[k] ? snapName(k) : std::string("(empty)"));
-    };
-    ImGui::SetNextItemWidth(220 * z);
-    const std::string prev = activeSnap >= 0 ? label(activeSnap) : std::string("-");
-    if(ImGui::BeginCombo("##pcSnap", prev.c_str(), ImGuiComboFlags_HeightLarge)){
-        for(int k = 0; k < NUM_SNAPS; k++){
-            if(!snapUsed[k]) continue;
-            if(ImGui::Selectable(label(k).c_str(), k == activeSnap)){
-                if(morphGlideP.get() || ImGui::GetIO().KeyAlt) startGlide(k); else recallSnapshot(k);
-            }
-            // right-click: replace with the current sound, or delete
-            if(ImGui::BeginPopupContextItem(("##pcSnapItem" + ofToString(k)).c_str())){
-                ImGui::TextDisabled("%s", label(k).c_str());
-                if(ImGui::MenuItem("Replace with the current sound")) storeSnapshot(k, snapName(k));
-                if(ImGui::MenuItem("Delete")){
-                    snapUsed[k] = false;
-                    if(activeSnap == k) activeSnap = -1;
-                    saveSnapshotLibrary();
-                }
-                ImGui::EndPopup();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("Recall a snapshot (Alt: glide to it over Time).\nRight-click a snapshot in the list: replace or delete it.");
-    if(morphRun){
-        ImGui::SameLine();
-        ImGui::ProgressBar(morphProgress, ImVec2(60 * z, ImGui::GetFrameHeight()), "");
-    }
-    ImGui::SameLine();
-    if(ImGui::Button("Store...")){
-        const std::string n = activeSnap >= 0 ? snapName(activeSnap) : std::string();
-        std::snprintf(snapNameBuf, sizeof(snapNameBuf), "%s", n.c_str());
-        ImGui::OpenPopup("##pcSnapStore");
-    }
-    if(ImGui::BeginPopup("##pcSnapStore")){
-        ImGui::TextDisabled("Store the current sound");
-        ImGui::SetNextItemWidth(200 * z);
-        if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-        if(ImGui::InputTextWithHint("##pcSnapName", "name", snapNameBuf, sizeof(snapNameBuf),
-                                    ImGuiInputTextFlags_EnterReturnsTrue)){
-            // Enter: over the snapshot with this name, else the first empty slot
-            const std::string nm = ofTrim(std::string(snapNameBuf));
-            int slot = -1;
-            for(int k = 0; k < NUM_SNAPS && slot < 0 && !nm.empty(); k++)
-                if(snapUsed[k] && snapName(k) == nm) slot = k;
-            for(int k = 0; k < NUM_SNAPS && slot < 0; k++) if(!snapUsed[k]) slot = k;
-            if(slot < 0) slot = activeSnap >= 0 ? activeSnap : 0;
-            storeSnapshot(slot, nm);
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::TextDisabled("Enter: a new snapshot (or over the one with this name)");
-        ImGui::Separator();
-        int firstFree = -1;
-        for(int k = 0; k < NUM_SNAPS && firstFree < 0; k++) if(!snapUsed[k]) firstFree = k;
-        if(firstFree >= 0 && ImGui::Selectable("+ New snapshot")){ storeSnapshot(firstFree, snapNameBuf); ImGui::CloseCurrentPopup(); }
-        ImGui::TextDisabled("Replace");
-        for(int k = 0; k < NUM_SNAPS; k++){
-            if(!snapUsed[k]) continue;
-            if(ImGui::Selectable(label(k).c_str(), k == activeSnap)){ storeSnapshot(k, snapNameBuf); ImGui::CloseCurrentPopup(); }
-        }
-        ImGui::EndPopup();
-    }
-    ImGui::SameLine();
-    if(ImGui::Button("Snapshots")) ImGui::OpenPopup("##pcSnapMenu");
-    if(ImGui::BeginPopup("##pcSnapMenu")){
-        if(activeSnap >= 0 && snapUsed[activeSnap]){
-            ImGui::TextDisabled("%s", label(activeSnap).c_str());
-            if(ImGui::MenuItem("Recall again")) recallSnapshot(activeSnap);
-            if(ImGui::MenuItem("Delete this snapshot")){ snapUsed[activeSnap] = false; activeSnap = -1; saveSnapshotLibrary(); }
-            ImGui::Separator();
-        }
-        if(ImGui::MenuItem("Factory collection")) loadFactory();
-        if(ImGui::BeginMenu("Load bank")){
-            bool any = false;
-            try {
-                for(auto& e : std::filesystem::directory_iterator(std::filesystem::path(snapDir()) / "banks")){
-                    if(e.path().extension() != ".json") continue;
-                    any = true;
-                    if(ImGui::MenuItem(e.path().stem().string().c_str())) loadSnapshotBank(e.path().string());
-                }
-            } catch(...) {}
-            if(!any) ImGui::TextDisabled("No banks yet");
-            ImGui::EndMenu();
-        }
-        if(ImGui::BeginMenu("Save bank as")){
-            ImGui::SetNextItemWidth(180 * z);
-            const bool enter = ImGui::InputText("##pcBankName", snapBankName, sizeof(snapBankName),
-                                                ImGuiInputTextFlags_EnterReturnsTrue);
-            if((ImGui::Button("Save") || enter) && snapBankName[0]){
-                saveSnapshotBank((std::filesystem::path(snapDir()) / "banks" / snapBankName).string());
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndMenu();
-        }
-        if(ImGui::MenuItem("From file...")) snapLoadDialog = true;
-        if(ImGui::MenuItem("Clear all")){ snapUsed.fill(false); activeSnap = -1; saveSnapshotLibrary(); }
-        if(!snapMsg.empty()){ ImGui::Separator(); ImGui::TextDisabled("%s", snapMsg.c_str()); }
-        ImGui::EndPopup();
-    }
-
-    // glide
-    ImGui::SameLine(0, m);
-    {
-        bool g = morphGlideP.get();
-        if(ImGui::Checkbox("Glide", &g)) morphGlideP.set(g);
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-            ImGui::SetTooltip("On: every recall glides from the current sound over Time.\nOff: recalls jump (Alt to glide).");
-        publishedUnderline(morphGlideP.getEscapedName());
-        publishMenu(morphGlideP.getEscapedName());
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(90 * z);
-        float v = morphTimeP.get();
-        const bool beats = morphBeatsP.get();
-        if(ImGui::SliderFloat("##pcMorphT", &v, 0.0f, 64.0f, beats ? "%.2f beats" : "%.2f s", ImGuiSliderFlags_Logarithmic))
-            morphTimeP.set(v);
-        publishedUnderline(morphTimeP.getEscapedName());
-        publishMenu(morphTimeP.getEscapedName());
-        ImGui::SameLine(0, 2 * z);
-        if(ImGui::SmallButton(beats ? "b##pcMTU" : "s##pcMTU")) morphBeatsP.set(!beats);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Time in beats (b) or seconds (s)");
-    }
-
-    // A / B morph
-    ImGui::SameLine(0, m);
-    auto slotCombo = [&](const char* id, ofParameter<int>& p) {
-        ImGui::SetNextItemWidth(44 * z);
-        const std::string cur = p.get() > 0 ? ofToString(p.get()) : std::string("-");
-        if(ImGui::BeginCombo(id, cur.c_str(), ImGuiComboFlags_HeightLarge)){
-            if(ImGui::Selectable("-", p.get() == 0)) p.set(0);
-            for(int k = 0; k < NUM_SNAPS; k++)
-                if(snapUsed[k] && ImGui::Selectable(label(k).c_str(), p.get() == k + 1)) p.set(k + 1);
-            ImGui::EndCombo();
-        }
-        publishedUnderline(p.getEscapedName());
-        publishMenu(p.getEscapedName());
-    };
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("A"); ImGui::SameLine(); slotCombo("##pcMorphA", morphAP);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("B"); ImGui::SameLine(); slotCombo("##pcMorphB", morphBP);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(std::max(80.0f * z, w - ImGui::GetCursorPosX()));
-    float mv = morphP.get();
-    if(ImGui::SliderFloat("##pcMorph", &mv, 0.0f, 1.0f, "Morph %.3f")) morphP.set(mv);
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
-        ImGui::SetTooltip("Blends snapshot A (0) into B (1). Publish it (right-click) to drive it from a connection.");
-    publishedUnderline(morphP.getEscapedName());
-    publishMenu(morphP.getEscapedName());
-}
