@@ -3198,13 +3198,14 @@ void scMixerPro::drawWindow() {
     {
         const float masterNeed = masterStripMinHeight();
         const bool masterScroll = bodyH < masterNeed;
-        ImGui::BeginChild("##mixerProMaster", ImVec2(masterW + (masterScroll ? ImGui::GetStyle().ScrollbarSize : 0.0f), bodyH), false,
-                          masterScroll ? 0 : (ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse));
+        if(ImGui::BeginChild("##mixerProMaster", ImVec2(masterW + (masterScroll ? ImGui::GetStyle().ScrollbarSize : 0.0f), bodyH), false,
+                          masterScroll ? 0 : (ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))) {
         drawMasterStrip(masterW, std::max(bodyH, masterNeed));
+        }
         ImGui::EndChild();
     }
     ImGui::SameLine(0, 8.0f * zoom);
-    ImGui::BeginChild("##mixerProStrips", ImVec2(0, bodyH), false, ImGuiWindowFlags_HorizontalScrollbar);
+    if(ImGui::BeginChild("##mixerProStrips", ImVec2(0, bodyH), false, ImGuiWindowFlags_HorizontalScrollbar)) {
     const float stripW = 92.0f * zoom;
     const float stripAvail = std::max(1.0f, ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ScrollbarSize);
     stripCompact = stripAvail < trackStripMinHeight(stripW, false);
@@ -3232,6 +3233,7 @@ void scMixerPro::drawWindow() {
         if(ImGui::IsRectVisible(ImVec2(stripW, stripH))) drawTrackStrip(*returns[k], stripW, stripH);
         else ImGui::Dummy(ImVec2(stripW, stripH));
         ImGui::PopID();
+    }
     }
     ImGui::EndChild();
 
@@ -4037,7 +4039,10 @@ void scMixerPro::drawEqPanel(float w, float h) {
     if(!target) return;
     const float zoom = ofxOceanodeShared::getZoomLevel();
     Track& tr = *target;
-    ImGui::BeginChild("##mixerProEq", ImVec2(w, h), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if(!ImGui::BeginChild("##mixerProEq", ImVec2(w, h), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        ImGui::EndChild();
+        return;
+    }
     ImGui::TextColored(ImVec4(tr.color.r / 255.0f, tr.color.g / 255.0f, tr.color.b / 255.0f, 1.0f), "%s", tr.name.c_str());
     // Tabs (green text: that insert is on)
     const char* tabNames[] = {"EQ##tab", "HP##tab", "Comp##tab", "Sat##tab", "Echo##tab", "Reverb##tab", "Width##tab"};
@@ -4381,7 +4386,10 @@ void scMixerPro::drawMasterPanel(float w, float h) {
     const float zoom = ofxOceanodeShared::getZoomLevel();
     const float fieldW = 170.0f * zoom;
     auto pub = [this](const std::string& k) { drawPublishPopup(k); };
-    ImGui::BeginChild("##mixerProMaster", ImVec2(w, h), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if(!ImGui::BeginChild("##mixerProMaster", ImVec2(w, h), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        ImGui::EndChild();
+        return;
+    }
     ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.9f, 1.0f), "MASTER");
     const char* tabNames[MST_COUNT] = {"HP##mtab", "EQ##mtab", "Maximizer##mtab", "Limiter##mtab"};
     ofParameter<bool>* sw[MST_COUNT] = {&mHp, &mEq, &mMax, &mLim};

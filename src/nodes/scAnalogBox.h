@@ -36,6 +36,7 @@
 #include "scEQEditor.h"
 #include "scModulation.h"
 #include "scTimelineMenu.h"
+#include "scSnapshots.h"
 #include "scAudioParam.h"
 #include "scScheduledInputs.h"
 #include "imgui.h"
@@ -305,42 +306,12 @@ private:
     float matrixCell(int source, int target) const;
     void setMatrixCell(int source, int target, float v);
 
-    // ── Snapshots (as PolyComb's): a shared library in data/nodeSnapshots/
-    //    AnalogBox, banks, a factory collection; recall, glide, A/B morph ──
-    static constexpr int NUM_SNAPS = 128;
-    std::array<ofJson, NUM_SNAPS> snapSlots;
-    std::array<bool, NUM_SNAPS> snapUsed{};
-    int activeSnap = -1;
-    bool snapRecalling = false;
-    ofParameter<int> snapshotP, morphAP, morphBP;
-    ofParameter<float> morphP, morphTimeP;
-    ofParameter<bool> morphBeatsP, morphGlideP;
-    bool morphRun = false;
-    float morphT0 = 0.0f, morphDur = 1.0f, morphProgress = 0.0f;
-    int morphTarget = -1;
-    ofJson morphFrom, morphTo, defaultSnap;
-    bool snapLoadDialog = false;
-    std::string snapMsg;
-    char snapNameBuf[48] = "";
-    char snapBankName[64] = "my bank";
-    std::filesystem::file_time_type snapLibTime{};
-    float snapLibCheckAt = 0.0f;
+    // ── Snapshots (scSnapshots, shared by the synths) ──
+    scSnapshots snaps;
+    ofJson defaultSnap;                   // the factory snapshots start from it
     bool snapExcluded(const std::string& key) const;
     bool drivenByConnection(const std::string& key) const;
     ofJson captureSnapshot() const;
-    void applyState(const ofJson& a, const ofJson& b, float t);
-    void storeSnapshot(int slot, const std::string& name = "");
-    void recallSnapshot(int slot);
-    void startGlide(int slot);
-    void applyAB();
-    std::string snapName(int k) const;
-    std::string snapDir() const;
-    std::filesystem::file_time_type snapSetTime() const;
-    void saveSnapshotLibrary();
-    void loadSnapshotLibrary();
-    void saveSnapshotBank(const std::string& path);
-    bool loadSnapshotBank(const std::string& path);
+    void applyState(const ofJson& a, const ofJson& b, float t, bool sw);   // sw: switches take b's
     std::vector<ofJson> factorySnapshots() const;
-    void loadFactory();
-    void drawSnapshotBar(float w);
 };

@@ -1,4 +1,4 @@
-# Reaktor Patch Extractor 0.4.0
+# Reaktor Patch Extractor 0.5.1
 
 Aplicació macOS universal (`arm64` i `x86_64`) i executable de terminal per
 inspeccionar qualsevol fitxer binari `NRKT` de Reaktor (`.ism` i `.ens`).
@@ -106,3 +106,53 @@ python3 verify_parsers.py patch.ism patch.ens
 
 La gramàtica binària coneguda està documentada a
 `docs/steampipe_extraction/FORMAT.md`.
+
+## Aliasing Synth regression / report v5
+
+The native parser now recognizes legacy Stacked Macro (kind 7) scopes. In
+`aliasing_synth_midi.ens` this keeps all instrument modules in their proper
+scope and resolves 533/533 Primary wires (previously 521/533). Legacy constants
+export their stored float at +0x44 as `constant_numeric_value` and the
+backwards-compatible numeric `constant_value`; incidental printable strings
+are not a reliable source for these values.
+
+Legacy panel records can carry extra link words. Their stable panel reference
+is exported as `snapshot_control_id` (stored as 10000 + ID). Snapshot IDs
+precede the state record; they are not traversal indices. V5 resolves unique
+stable references before attempting a validated traversal offset. Ambiguous
+references are left without a module assignment, and scalar fallback matches
+must land on panel controls. Switch selections are exported as integer
+`selection_index`, not clamped to a fake normalized 0/1.
+
+Run the regression against an external copy of the ensemble:
+
+```sh
+python3 test_aliasing.py /path/to/aliasing_synth_midi.ens
+```
+
+It checks all 38 x 61 state identities, numeric constants, linked panels,
+stacked scopes and a deliberately duplicated panel ID. The original ensemble
+and the user reference recordings are not included in the repository. Other
+ensembles should be rechecked before treating v5 output as a conversion
+reference; the old Python comparison parser has not been updated in this
+change.
+
+
+### PolyComb 1.7: complete compound states (0.5.1)
+
+Snapshot records are not restricted to lengths 32/40/60: PolyComb contains
+548-byte scale-table states and 76-byte UI states. They are now retained as
+bounded, aligned compound payloads instead of silently ending the snapshot.
+This recovers 210 x 237 states, including 193 uniquely mapped panel references
+per preset. MIDI assignments and other non-panel state remain unassigned;
+they do not veto the panel identities. Aliasing Synth exports also become
+complete: 61 states per snapshot, including its compound UI state and isolated
+ADSR records, rather than the previous truncated 47-state prefix.
+
+```sh
+python3 test_polycomb.py /path/to/PolyComb_1.7.ens
+python3 test_aliasing.py /path/to/aliasing_synth_midi.ens
+```
+
+The separate `../polycomb/import_ensemble.py` creates candidate preset files
+and an audit without changing the Oceanode synth or installed libraries.

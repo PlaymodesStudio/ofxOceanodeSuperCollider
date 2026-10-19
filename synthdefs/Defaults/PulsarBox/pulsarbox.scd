@@ -7,11 +7,13 @@
 // of up to 32 steps) removes pulses, and every pulse can land on another
 // output. Inspired by nuPG (Marcin Pietruszewski); stock GrainBuf only.
 //
-//   PulsarBox_<v>_<o>   v = voices (1..8), o = outputs (1..16)
+//   PulsarBox_<v>_<o>_<l>   v = voices (1..8), o = outputs (1..16), l = formant
+//                           layers (1..4): only the layers in use are built
 //
 // Controls (arrays of v per voice, of 4 per layer):
-//   fund[v] glide lev[v] gate[v] atk rel     voice: fundamental (Hz), level, ASR
-//   lon[4]                 layer on (0 / 1)
+//   fund[v] glide lev[v] gate[v]     voice: fundamental (Hz), level, gate
+//   atk dec sus rel ca cd cr gated   the Amp Envelope (ADSR, curves) on each
+//                          voice's gate, x the gate's level; gated 0: drone
 //   lmode[4] lhz[4] lrat[4]    formant: 0 = lhz Hz, 1 = lrat x the fundamental
 //   lcyc[4]                cycles of the formant under the envelope
 //   lamp[4] loff[4] lpan[4]    level, delay (share of a period), output offset
@@ -25,7 +27,6 @@
 //                          each, one per voice; -1: none): 0 pitch (st),
 //                          1 formant (st), 2 cycles (oct), 3 level, 4 probability,
 //                          5 pan (channels)
-//   vca                    1: an envelope is routed to Level, it replaces the ASR
 //   out
 //
 // A pulse whose envelope outlasts the period overlaps the next ones: the level
@@ -42,7 +43,8 @@ File.mkdir(d);
 
 (1..maxVoices).do { |nv|
     (1..maxOutputs).do { |no|
-        SynthDef(("PulsarBox_" ++ nv ++ "_" ++ no).asSymbol, {
+    (1..layers).do { |nl|
+        SynthDef(("PulsarBox_" ++ nv ++ "_" ++ no ++ "_" ++ nl).asSymbol, {
             var fund = \fund.kr(100 ! nv).clip(0.05, 4000).lag(\glide.kr(0));
             var lev = \lev.kr(0.5 ! nv, 1/30, fixedLag: true);
             // the gates: their levels from ModGate (\gatebus, audio, nv), else the values
@@ -51,8 +53,9 @@ File.mkdir(d);
             // the pitch from a cable (MIDI notes + \tr semitones), else \fund (Hz)
             var pcable = (A2K.kr(\pitch_ar.ar(57 ! nv)).asArray + \tr.kr(0)).midicps;
             var psel = \pitch_sel.kr(0) > 0.5;
-            var atk = \atk.kr(0.005), rel = \rel.kr(0.3);
-            var lon = \lon.kr([1, 0, 0, 0]);
+            var atk = \atk.kr(0.005), dec = \dec.kr(0.3), sus = \sus.kr(1), rel = \rel.kr(0.3);
+            var curves = [\ca.kr(-4), \cd.kr(-4), \cr.kr(-4)].collect { |c| c.clip(-12, 12) };
+            var gated = \gated.kr(1);
             var lmode = \lmode.kr(0 ! layers);
             var lhz = \lhz.kr([800, 1600, 3200, 6400]);
             var lrat = \lrat.kr([4, 8, 16, 32]);
@@ -68,7 +71,7 @@ File.mkdir(d);
             var sieve = \sieve.kr(1 ! sieveSize);
             var slen = \slen.kr(1).round.clip(1, sieveSize);
             var pmode = \pmode.kr(0), rot = \rot.kr(0);
-            var modbus = \mod.kr(-1), vca = \vca.kr(0);
+            var modbus = \mod.kr(-1);
             var mod = { |t| (In.kr(modbus.max(0) + (t * 16), nv) * (modbus >= 0)).asArray };
             var mPitch = mod.(0), mForm = mod.(1), mCyc = mod.(2), mLev = mod.(3), mProb = mod.(4), mPan = mod.(5);
             var sig = 0;
@@ -79,15 +82,20 @@ File.mkdir(d);
                 var pulse = Impulse.ar(f);
                 var count = PulseCount.ar(pulse) - 1;
                 var burstGate = (count % (burst + rest)) < burst;
-                var sieveGate = Select.ar(count % slen, K2A.ar(sieve)) > 0.5;
+                // the sieve's step for this pulse, read only when a pulse comes
+                // (Dswitch1: no audio-rate copy of the 32 steps)
+                var sieveGate = Demand.ar(pulse, 0, Dswitch1(sieve, count % slen)) > 0.5;
                 var trig = CoinGate.ar((prob + mProb[v]).clip(0, 1), pulse) * burstGate * sieveGate;
-                // the ASR, or (vca) the envelope routed to Level
-                // a gate rising to 0.2 plays at 0.2 (its level, held until the next)
+                // the Amp Envelope on the gate (a gate rising to 0.2 plays at
+                // 0.2: its level, held until the next); not gated: a drone
                 var glev = Gate.kr(gate[v], gate[v] > 0);
-                var env = Select.kr(vca > 0.5, [EnvGen.kr(Env.asr(atk, 1, rel), gate[v] > 0), mLev[v].clip(0, 1)]) * glev;
-                var levMod = Select.kr(vca > 0.5, [(1 + mLev[v]).max(0), 1]);
-                var voice = layers.collect { |g|
-                    var t = DelayN.ar(trig * lon[g], 2, (loff[g] / f).clip(0, 2));
+                var env = Select.kr(gated > 0.5, [1, EnvGen.kr(Env.adsr(atk.max(0.001), dec.max(0.001), sus.clip(0, 1),
+                    rel.max(0.001), 1, curves), gate[v] > 0) * glev]);
+                var levMod = (1 + mLev[v]).max(0);   // routes to Level add
+                var voice = nl.collect { |g|
+                    // the layer's Delay (a share of the period): the trigger delayed
+                    // (TDelay: no buffer; one pending pulse is enough below a period)
+                    var t = Select.ar(K2A.ar(loff[g] > 0), [trig, TDelay.ar(trig, (loff[g].min(0.999) / f).clip(0, 20))]);
                     var hz = Select.kr(lmode[g], [lhz[g], f * lrat[g]])
                         * (2 ** ((TRand.ar(-1, 1, t) * fjit + mForm[v]) / 12));
                     var dur, amp, base, pos, pan;
@@ -112,6 +120,7 @@ File.mkdir(d);
             Out.ar(\out.kr(0), Limiter.ar(LeakDC.ar(sig), 0.98));
         }).writeDefFile(d);
     };
+    };
 };
-"PulsarBox: % defs in %".format(maxVoices * maxOutputs, d).postln;
+"PulsarBox: % defs in %".format(maxVoices * maxOutputs * layers, d).postln;
 )

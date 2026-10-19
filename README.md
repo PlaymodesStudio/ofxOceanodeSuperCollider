@@ -20,6 +20,14 @@ Everything else, realtime SuperCollider playback included, is unaffected.
 To override the detection, define `OFXOCEANODESC_HAS_TIMELINE` as `0` or `1`
 in your project (see `src/ofxOceanodeSuperColliderConfig.h`).
 
+## AliasingBox
+
+`aliasingBox` adds the Reaktor-inspired table instrument, 38 imported factory
+snapshots, shared dynamic LFOs/envelopes and routing, timeline instrument
+inputs, and a dockable editor with live table and waveform displays. See
+[`synthdefs/Defaults/AliasingBox/README.md`](synthdefs/Defaults/AliasingBox/README.md)
+for compilation, preset recovery and fidelity notes.
+
 ## SynthDef collection
 
 <!-- synthdef-tree:start -->
@@ -783,6 +791,8 @@ Defaults/
 ├── AdditiveBox/
 │   ├── Presets/
 │   └── additiveBox.scd
+├── AliasingBox/
+│   └── aliasingBox.scd
 ├── Analysis/
 │   ├── a2k.scd
 │   ├── beattracker.scd

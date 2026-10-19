@@ -394,6 +394,11 @@ private:
         bool randomized = false;
     };
     struct Onset { int64_t tick; float amp; int dur; bool accent, isLong; float pitch; int voice; };
+    // The Note outputs revisit the same 16-beat history every frame. Keep the
+    // three intersecting chunks, bounded independently for each track.
+    struct NoteHistoryChunk { int64_t chunk = NO_CHUNK; std::vector<Onset> events; };
+    std::array<std::array<NoteHistoryChunk, 3>, MAX_TRACKS> noteHistory;
+
 
     int voices() const { return std::clamp(numVoices.get(), 1, MAX_VOICES); }
     std::string playerDef() const { return "EuclideanBoxPlayer" + ofToString(voices()); }
@@ -591,9 +596,19 @@ private:
             const auto& cur = notes[ti].get();
             for(int k = 0; k < V && k < (int)cur.size(); k++) v[k] = cur[k];
             bool any = false;
-            for(const auto& o : onsets(ti, now - 2 * CHUNK, now + 1)){
-                if(o.voice < 0) std::fill(v.begin(), v.end(), o.pitch); else v[o.voice] = o.pitch;
-                any = true;
+            const int64_t from = now - 2 * CHUNK;
+            const int64_t lastChunk = metrobox::floorDiv(now, CHUNK);
+            for(int64_t chunk = metrobox::floorDiv(from, CHUNK); chunk <= lastChunk; chunk++){
+                auto& cached = noteHistory[ti][metrobox::positiveMod64(chunk, 3)];
+                if(cached.chunk != chunk){
+                    cached.events = onsets(ti, chunk * CHUNK, (chunk + 1) * CHUNK);
+                    cached.chunk = chunk;
+                }
+                for(const auto& o : cached.events){
+                    if(o.tick < from || o.tick > now) continue;
+                    if(o.voice < 0) std::fill(v.begin(), v.end(), o.pitch); else v[o.voice] = o.pitch;
+                    any = true;
+                }
             }
             if(any && v != cur) notes[ti] = v;
         }
@@ -763,6 +778,8 @@ private:
             && server->buffers[st.buffer->index] == st.buffer;
     }
     void invalidate(int ti){
+        for(int i = 0; i < MAX_TRACKS; i++) if(ti < 0 || i == ti)
+            for(auto& cached : noteHistory[i]) cached.chunk = NO_CHUNK;
         for(auto& [server, st] : servers)
             for(int i = 0; i < MAX_TRACKS; i++) if(ti < 0 || i == ti) st.slotChunk[i].fill(NO_CHUNK);
     }

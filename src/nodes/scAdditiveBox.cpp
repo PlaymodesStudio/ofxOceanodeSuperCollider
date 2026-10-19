@@ -299,6 +299,7 @@ void scAdditiveBox::setup(){
     revPosition.set("Rev Position", 0.8f, 0.0f, 1.0f);       // early -> late
     revSpread.set("Rev Spread", 0.15f, -1.0f, 1.0f);
 
+    snaps.setupParameters();   // Snapshot, Morph... (scSnapshots, shared by the synths)
     initializePublishActions();
 
     // ── The shared modulation (after the publish actions: it adds its own) ──
@@ -362,6 +363,17 @@ void scAdditiveBox::setup(){
         mod.targetOfKey = {{cutoff.getEscapedName(), 0}, {morph.getEscapedName(), 1}, {pitch.getEscapedName(), 2},
                            {levels.getEscapedName(), 3}, {sweepAmt.getEscapedName(), 4}, {pan.getEscapedName(), 5},
                            {noise.getEscapedName(), 6}};
+    }
+    {
+        scSnapshots::Host h;
+        h.folder = "AdditiveBox";
+        h.title = "AdditiveBox";
+        h.presetFolder = "Supercollider/AdditiveBox/Presets";   // the named presets it always had
+        h.capture = [this](){ return captureSound(); };
+        h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySound(a, b, t, sw); };
+        h.bpm = [this](){ return currentBpm; };
+        h.paramMenu = [this](const std::string& k){ controlMenu(k); };
+        snaps.setup(h);
     }
     noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.created) return true; return false; });
     publishByKey(pitch.getEscapedName());
@@ -458,6 +470,7 @@ void scAdditiveBox::setup(){
 
 void scAdditiveBox::update(ofEventArgs&){
     timeline.update();
+    snaps.update();
     const float now = ofGetElapsedTimef();
     mod.update();   // (showing: set below, from the last frame's drawing)
 
@@ -1774,6 +1787,9 @@ void scAdditiveBox::addPublishAction(ofParameter<T>& parameter, std::vector<std:
 
 void scAdditiveBox::initializePublishActions(){
     publishActions.clear();
+    for(auto* p : {&snaps.snapshotP, &snaps.morphAP, &snaps.morphBP, &snaps.morphCurveP, &snaps.morphSwitchP}) addPublishAction(*p);
+    for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) addPublishAction(*p);
+    for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) addPublishAction(*p);
     addPublishAction(pitch);
     addPublishAction(transpose);
     addPublishAction(gate);
@@ -1978,7 +1994,7 @@ void scAdditiveBox::presetSave(ofJson& json){
     json["publishedEditorParameters"] = publishedKeys;
     timeline.save(json, "timelineHiddenEditorParameters");
     json["viewHeight"] = viewHeight;
-    json["bankPreset"] = currentPreset;
+    json["bankPreset"] = snaps.currentPreset;
     // Window-only controls; published ones are saved by Oceanode as usual
     for(const auto& action : publishActions)
         if(action.save && !isPublished(action.key)) action.save(json);
@@ -1997,7 +2013,7 @@ void scAdditiveBox::presetRecallBeforeSettingParameters(ofJson& json){
 }
 
 void scAdditiveBox::presetRecallAfterSettingParameters(ofJson& json){
-    if(json.contains("bankPreset") && json["bankPreset"].is_string()) currentPreset = json["bankPreset"].get<std::string>();
+    if(json.contains("bankPreset") && json["bankPreset"].is_string()) snaps.currentPreset = json["bankPreset"].get<std::string>();
     if(json.contains("viewHeight") && json["viewHeight"].is_number())
         viewHeight = ofClamp(json["viewHeight"].get<float>(), 140.0f, 2000.0f);
     for(const auto& action : publishActions){
@@ -2097,31 +2113,40 @@ void scAdditiveBox::migrateOldModulation(const ofJson& json){
 // Preset bank
 // ════════════════════════════════════════════════════════════════════════════
 
-std::string scAdditiveBox::presetDir() const {
-    return ofToDataPath("Supercollider/AdditiveBox/Presets", true);
-}
-
 // Played, not part of a sound: a preset leaves them as they are
 bool scAdditiveBox::notInPresets(const std::string& key) const {
-    return key == gate.getEscapedName() || key == trig.getEscapedName() || key == transpose.getEscapedName();
+    return key == gate.getEscapedName() || key == trig.getEscapedName() || key == transpose.getEscapedName()
+        || scSnapshots::isOwnKey(key);
 }
 
-void scAdditiveBox::scanPresets(){
-    presetsScanned = true;
-    bankPresets.clear();
-    std::error_code ec;
-    for(const auto& entry : fs::directory_iterator(presetDir(), ec)){
-        if(entry.is_regular_file(ec) && entry.path().extension() == ".json")
-            bankPresets.push_back(entry.path().stem().string());
-    }
-    std::sort(bankPresets.begin(), bankPresets.end());
-}
-
-void scAdditiveBox::loadBankPreset(const std::string& name){
-    std::ifstream file(presetDir() + "/" + name + ".json");
-    if(!file) return;
+// The sound (a snapshot / a named preset): Voices, every control a preset holds, the modulation
+ofJson scAdditiveBox::captureSound() const {
     ofJson json;
-    try { file >> json; } catch(...) { ofLogWarning("scAdditiveBox") << "Cannot read preset " << name; return; }
+    json["Voices"] = numVoices.get();
+    for(const auto& action : publishActions)
+        if(action.save && !notInPresets(action.key)) action.save(json);
+    mod.patchBases(json);
+    mod.save(json, "additiveBoxMod");
+    return json;
+}
+
+// Between two sounds: numbers glide, the rest (voices, partials, modes, the
+// routing) switches at the switch point; the end is a whole load
+void scAdditiveBox::applySound(const ofJson& a, const ofJson& b, float t, bool sw){
+    if(t >= 1.0f && sw){ loadSound(b); return; }
+    scSnapshots::blendActions(publishActions, a, b, t, sw, [this](const std::string& k){ return notInPresets(k); });
+    const ofJson& src = sw ? b : a;
+    if(src.contains("Voices") && src["Voices"].is_number_integer() && src["Voices"].get<int>() != numVoices.get())
+        numVoices = src["Voices"].get<int>();
+    if(&src != modSource && src.contains("additiveBoxModMatrix")){
+        modSource = &src;
+        mod.load(src, "additiveBoxMod");
+        mod.afterLoad();
+    }
+}
+
+void scAdditiveBox::loadSound(const ofJson& json){
+    modSource = nullptr;
     // Every control back to its default, then the preset's values; the synths
     // change once afterwards (a voice count, partial cap or output change each
     // replacing every synth on its own made a burst of large /s_new on the
@@ -2142,69 +2167,6 @@ void scAdditiveBox::loadBankPreset(const std::string& name){
     mod.afterLoad();
     loadingBankPreset = false;
     applyStructure();
-    currentPreset = name;
-}
-
-bool scAdditiveBox::saveBankPreset(const std::string& rawName){
-    std::string name;
-    for(char c : rawName) name += (std::isalnum((unsigned char)c) || c == ' ' || c == '-' || c == '_') ? c : '_';
-    name = ofTrim(name);
-    if(name.empty()) return false;
-    ofJson json;
-    json["Voices"] = numVoices.get();
-    for(const auto& action : publishActions)
-        if(action.save && !notInPresets(action.key)) action.save(json);
-    mod.patchBases(json);
-    mod.save(json, "additiveBoxMod");
-    std::error_code ec;
-    fs::create_directories(presetDir(), ec);
-    std::ofstream file(presetDir() + "/" + name + ".json");
-    if(!file) return false;
-    file << json.dump(4);
-    currentPreset = name;
-    scanPresets();
-    return true;
-}
-
-void scAdditiveBox::drawPresetBar(){
-    if(!presetsScanned) scanPresets();
-    ImGui::SetNextItemWidth(260.0f);
-    const std::string preview = currentPreset.empty() ? "Preset..." : currentPreset;
-    if(ImGui::BeginCombo("##abpreset", preview.c_str(), ImGuiComboFlags_HeightLarge)){
-        if(ImGui::IsWindowAppearing()) scanPresets();
-        for(const auto& name : bankPresets)
-            if(ImGui::Selectable(name.c_str(), name == currentPreset)) loadBankPreset(name);
-        if(bankPresets.empty()) ImGui::TextDisabled("No presets in %s", presetDir().c_str());
-        ImGui::EndCombo();
-    }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Sound presets (Gate, Transpose and Outputs are left as they are)");
-    ImGui::SameLine();
-    if(ImGui::ArrowButton("##abprevpreset", ImGuiDir_Left) && !bankPresets.empty()){
-        auto it = std::find(bankPresets.begin(), bankPresets.end(), currentPreset);
-        const int i = it == bankPresets.end() ? 0 : int(it - bankPresets.begin()) - 1;
-        loadBankPreset(bankPresets[(i + bankPresets.size()) % bankPresets.size()]);
-    }
-    ImGui::SameLine(0, 2);
-    if(ImGui::ArrowButton("##abnextpreset", ImGuiDir_Right) && !bankPresets.empty()){
-        auto it = std::find(bankPresets.begin(), bankPresets.end(), currentPreset);
-        const int i = it == bankPresets.end() ? 0 : int(it - bankPresets.begin()) + 1;
-        loadBankPreset(bankPresets[i % bankPresets.size()]);
-    }
-    ImGui::SameLine();
-    static char name[128] = "";
-    if(ImGui::Button("Save...")){
-        std::snprintf(name, sizeof(name), "%s", currentPreset.c_str());
-        ImGui::OpenPopup("##absavepreset");
-    }
-    if(ImGui::BeginPopup("##absavepreset")){
-        ImGui::TextDisabled("Preset name (same name overwrites)");
-        ImGui::SetNextItemWidth(240.0f);
-        if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-        const bool enter = ImGui::InputText("##abpresetname", name, sizeof(name), ImGuiInputTextFlags_EnterReturnsTrue);
-        ImGui::SameLine();
-        if((ImGui::Button("Save") || enter) && saveBankPreset(name)) ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2297,7 +2259,6 @@ void scAdditiveBox::drawWindow(){
 }
 
 void scAdditiveBox::drawHeader(){
-    drawPresetBar();
     ImGui::SetNextItemWidth(130.0f);
     sliderInt(numVoices);
     ImGui::SameLine();
@@ -2336,6 +2297,8 @@ void scAdditiveBox::drawHeader(){
                           "Spectrum: drag to move filter 1's cutoff (x) and resonance (y), wheel: slope,\n"
                           "double-click: filter 1 on / off.");
     }
+    // snapshots, named presets, morph (scSnapshots)
+    snaps.drawBar(std::max(1.0f, ImGui::GetContentRegionAvail().x));
 }
 
 void scAdditiveBox::drawSpectrum(ImVec2 size){

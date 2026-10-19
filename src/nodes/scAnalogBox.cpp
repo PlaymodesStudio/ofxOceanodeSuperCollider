@@ -341,17 +341,11 @@ void scAnalogBox::setup() {
                    &rvbHiDamp, &rvbLoDamp, &rvbModRate, &rvbSpin, &rvbWander}) reg(*p, toStage(StRvb));
 
     // ── Snapshots ────────────────────────────────────────────────────────────
-    snapshotP.set("Snapshot", 0, 0, NUM_SNAPS);
-    reg(snapshotP, [this]() {
-        if(snapRecalling || snapshotP.get() <= 0) return;
-        if(morphGlideP.get()) startGlide(snapshotP.get() - 1); else recallSnapshot(snapshotP.get() - 1);
-    });
-    morphP.set("Morph", 0.0f, 0.0f, 1.0f);              reg(morphP, [this]() { applyAB(); });
-    morphAP.set("Morph A", 0, 0, NUM_SNAPS);            reg(morphAP, [this]() { applyAB(); });
-    morphBP.set("Morph B", 0, 0, NUM_SNAPS);            reg(morphBP, [this]() { applyAB(); });
-    morphTimeP.set("Morph Time", 4.0f, 0.0f, 64.0f);    reg(morphTimeP, [](){});
-    morphBeatsP.set("Morph Beats", true);               reg(morphBeatsP, [](){});
-    morphGlideP.set("Morph Glide", false);              reg(morphGlideP, [](){});
+    // (scSnapshots: the parameters act through their own listeners)
+    snaps.setupParameters();
+    for(auto* p : {&snaps.snapshotP, &snaps.morphAP, &snaps.morphBP, &snaps.morphCurveP, &snaps.morphSwitchP}) reg(*p, [](){});
+    for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) reg(*p, [](){});
+    for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) reg(*p, [](){});
 
     // ── The shared modulation ───────────────────────────────────────────────
     {
@@ -418,8 +412,18 @@ void scAnalogBox::setup() {
     listeners.push(resetLFOs.newListener([this]() { modulation.resetLfos(); }));
 
     requireSynthdefs();
-    defaultSnap = captureSnapshot();
-    loadSnapshotLibrary();
+    defaultSnap = captureSnapshot();     // what the factory snapshots start from
+    {
+        scSnapshots::Host h;
+        h.folder = "AnalogBox";
+        h.title = "AnalogBox";
+        h.capture = [this](){ return captureSnapshot(); };
+        h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applyState(a, b, t, sw); };
+        h.factory = [this](){ return factorySnapshots(); };
+        h.bpm = [this](){ return currentBpm; };
+        h.paramMenu = [this](const std::string& k){ publishedUnderline(k); publishMenu(k); };
+        snaps.setup(h);
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -941,28 +945,7 @@ void scAnalogBox::update(ofEventArgs&) {
     if(ampDirty){ ampDirty = false; forStates([this](ofxSCServer*, ServerState& st){ sendAmp(st); }); }
     modulation.showing = showWindow.get();
     modulation.update();
-    if(snapLoadDialog){
-        snapLoadDialog = false;
-        ofFileDialogResult r = ofSystemLoadDialog("Snapshots from a bank or an Oceanode preset file", false, snapDir());
-        if(r.bSuccess) loadSnapshotBank(r.filePath);
-    }
-    if(ofGetElapsedTimef() >= snapLibCheckAt){
-        snapLibCheckAt = ofGetElapsedTimef() + 1.0f;
-        if(snapSetTime() != snapLibTime) loadSnapshotLibrary();
-    }
-    if(morphRun){
-        const float u = (ofGetElapsedTimef() - morphT0) / std::max(0.001f, morphDur);
-        morphProgress = ofClamp(u, 0.0f, 1.0f);
-        const float e = morphProgress * morphProgress * (3.0f - 2.0f * morphProgress);
-        applyState(morphFrom, morphTo, morphProgress >= 1.0f ? 1.0f : e);
-        if(morphProgress >= 1.0f){
-            morphRun = false;
-            activeSnap = morphTarget;
-            snapRecalling = true;
-            snapshotP.set(morphTarget + 1);
-            snapRecalling = false;
-        }
-    }
+    snaps.update();
     const float now = ofGetElapsedTimef();
     for(auto& [server, st] : states){
         if(!st.created) continue;
@@ -1194,7 +1177,8 @@ void scAnalogBox::requireSynthdefs() {
 bool scAnalogBox::droning() const {
     if(envMode.get() == 2) return true;
     if(envMode.get() == 1) return false;
-    if(gateTouched || gateIn.connected()) return false;
+    // a cable, or a timeline track playing the Gate: notes, not a drone
+    if(gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined())) return false;
     return true;
 }
 
@@ -1605,7 +1589,7 @@ float blendNum(float x, float y, float t, bool lg) {
     if(lg && x > 0.0f && y > 0.0f) return std::exp(ofLerp(std::log(x), std::log(y), t));
     return ofLerp(x, y, t);
 }
-ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float t) {
+ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float t, bool sw) {
     if(t <= 0.0f) return x;
     if(t >= 1.0f) return y;
     const bool lg = logKey(key);
@@ -1618,11 +1602,11 @@ ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float
             r.push_back(blendNum(x[std::min(i, x.size() - 1)].get<float>(), y[std::min(i, y.size() - 1)].get<float>(), t, lg));
         return r;
     }
-    return t < 0.5f ? x : y;
+    return sw ? y : x;   // switches and modes: at the switch point
 }
 }
 
-void scAnalogBox::applyState(const ofJson& a, const ofJson& b, float t) {
+void scAnalogBox::applyState(const ofJson& a, const ofJson& b, float t, bool sw) {
     if(!a.is_object() || !b.is_object()) return;
     t = ofClamp(t, 0.0f, 1.0f);
     // the counts first (the routes need their sources): while blending, the larger
@@ -1658,9 +1642,9 @@ void scAnalogBox::applyState(const ofJson& a, const ofJson& b, float t) {
         if(snapExcluded(k) || drivenByConnection(k)) continue;
         const bool ha = ca.contains(k), hb = cb.contains(k);
         ofJson v;
-        if(ha && hb) v = blendJson(k, ca[k], cb[k], t);
-        else if(hb && t >= 0.5f) v = cb[k];
-        else if(ha && t < 0.5f) v = ca[k];
+        if(ha && hb) v = blendJson(k, ca[k], cb[k], t, sw);
+        else if(hb && sw) v = cb[k];
+        else if(ha && !sw) v = ca[k];
         else continue;
         if(v != control.save()) control.load(v);
     }
@@ -1682,307 +1666,9 @@ void scAnalogBox::applyState(const ofJson& a, const ofJson& b, float t) {
     if(t >= 1.0f) M.loadParamsJson(b.contains("params") ? b["params"] : ofJson::array());
 }
 
-void scAnalogBox::storeSnapshot(int slot, const std::string& name) {
-    if(slot < 0 || slot >= NUM_SNAPS) return;
-    const std::string keep = name.empty() ? snapName(slot) : name;
-    snapSlots[slot] = captureSnapshot();
-    snapSlots[slot]["name"] = keep.empty() ? "Snapshot " + ofToString(slot + 1) : keep;
-    snapUsed[slot] = true;
-    activeSnap = slot;
-    saveSnapshotLibrary();
-}
-
-void scAnalogBox::recallSnapshot(int slot) {
-    if(slot < 0 || slot >= NUM_SNAPS || !snapUsed[slot]) return;
-    morphRun = false;
-    applyState(snapSlots[slot], snapSlots[slot], 1.0f);
-    activeSnap = slot;
-    snapRecalling = true;
-    snapshotP.set(slot + 1);      // shows / outputs it, without a second recall
-    snapRecalling = false;
-}
-
-void scAnalogBox::startGlide(int slot) {
-    if(slot < 0 || slot >= NUM_SNAPS || !snapUsed[slot]) return;
-    morphDur = morphBeatsP.get() ? morphTimeP.get() * 60.0f / std::max(1.0f, currentBpm) : morphTimeP.get();
-    if(morphDur <= 0.001f){ recallSnapshot(slot); return; }
-    morphFrom = captureSnapshot();
-    morphTo = snapSlots[slot];
-    morphTarget = slot;
-    morphT0 = ofGetElapsedTimef();
-    morphProgress = 0.0f;
-    morphRun = true;
-}
-
-void scAnalogBox::applyAB() {
-    const int a = morphAP.get() - 1, b = morphBP.get() - 1;
-    if(a < 0 || b < 0 || a >= NUM_SNAPS || b >= NUM_SNAPS || !snapUsed[a] || !snapUsed[b]) return;
-    morphRun = false;              // the slider takes over from a glide
-    applyState(snapSlots[a], snapSlots[b], morphP.get());
-}
-
-std::string scAnalogBox::snapName(int k) const {
-    if(k < 0 || k >= NUM_SNAPS || !snapUsed[k] || !snapSlots[k].contains("name")) return "";
-    try { return snapSlots[k]["name"].get<std::string>(); } catch(...) { return ""; }
-}
-
 // ── Library (shared files) and banks ─────────────────────────────────────────
-std::string scAnalogBox::snapDir() const {
-    const std::string dir = ofToDataPath("nodeSnapshots/AnalogBox", true);
-    try { std::filesystem::create_directories(std::filesystem::path(dir) / "banks"); } catch(...) {}
-    return dir;
-}
-
-std::filesystem::file_time_type scAnalogBox::snapSetTime() const {
-    std::filesystem::file_time_type t{};
-    try {
-        for(auto& e : std::filesystem::directory_iterator(snapDir()))
-            if(e.is_regular_file() && e.path().filename().string().rfind("snapshot_", 0) == 0)
-                t = std::max(t, std::filesystem::last_write_time(e.path()));
-    } catch(...) {}
-    return t;
-}
-
-void scAnalogBox::saveSnapshotLibrary() {
-    const std::filesystem::path dir = snapDir();
-    for(int k = 0; k < NUM_SNAPS; k++){
-        const auto f = dir / ("snapshot_" + ofToString(k) + ".json");
-        try {
-            if(snapUsed[k]) ofSavePrettyJson(f.string(), snapSlots[k]);
-            else if(std::filesystem::exists(f)) std::filesystem::remove(f);
-        } catch(...) {}
-    }
-    // a marker: the library exists (empty slots stay empty, no factory refill)
-    try { ofSaveJson((dir / "library.json").string(), ofJson{{"analogBoxSnapshots", 1}}); } catch(...) {}
-    snapLibTime = snapSetTime();
-}
-
-void scAnalogBox::loadSnapshotLibrary() {
-    const std::filesystem::path dir = snapDir();
-    const auto bank = dir / "banks" / "Factory.json";
-    {
-        // the factory collection, as a bank anyone can reload (rewritten every
-        // start, so it always holds this build's sounds)
-        ofJson j;
-        j["analogBoxSnapshotBank"] = 1;
-        j["slots"] = ofJson::array();
-        for(auto& s : factorySnapshots()) j["slots"].push_back(s);
-        ofSavePrettyJson(bank.string(), j);
-    }
-    if(!std::filesystem::exists(dir / "library.json")){ loadFactory(); return; }   // first run
-    snapUsed.fill(false);
-    for(int k = 0; k < NUM_SNAPS; k++){
-        const auto f = dir / ("snapshot_" + ofToString(k) + ".json");
-        if(!std::filesystem::exists(f)) continue;
-        try {
-            ofJson j = ofLoadJson(f.string());
-            if(j.is_object() && j.contains("controls")){ snapSlots[k] = j; snapUsed[k] = true; }
-        } catch(...) {}
-    }
-    if(activeSnap >= 0 && !snapUsed[activeSnap]) activeSnap = -1;
-    snapLibTime = snapSetTime();
-}
-
-void scAnalogBox::saveSnapshotBank(const std::string& path) {
-    ofJson j;
-    j["analogBoxSnapshotBank"] = 1;
-    j["slots"] = ofJson::array();
-    for(int k = 0; k < NUM_SNAPS; k++) j["slots"].push_back(snapUsed[k] ? snapSlots[k] : ofJson(nullptr));
-    std::string p = path;
-    if(std::filesystem::path(p).extension().string() != ".json") p += ".json";
-    snapMsg = ofSavePrettyJson(p, j) ? "Saved " + std::filesystem::path(p).stem().string() : "Could not save " + p;
-}
-
-bool scAnalogBox::loadSnapshotBank(const std::string& path) {
-    ofJson j;
-    try { j = ofLoadJson(path); } catch(...) {}
-    if(!j.contains("slots") || !j["slots"].is_array()){
-        snapMsg = "No snapshots in " + std::filesystem::path(path).filename().string();
-        return false;
-    }
-    snapUsed.fill(false);
-    for(int k = 0; k < std::min(NUM_SNAPS, (int)j["slots"].size()); k++)
-        if(j["slots"][k].is_object() && j["slots"][k].contains("controls")){ snapSlots[k] = j["slots"][k]; snapUsed[k] = true; }
-    activeSnap = -1;
-    snapMsg = "Loaded " + std::filesystem::path(path).stem().string();
-    saveSnapshotLibrary();          // becomes the shared current set
-    return true;
-}
-
-void scAnalogBox::loadFactory() {
-    snapUsed.fill(false);
-    auto f = factorySnapshots();
-    for(int k = 0; k < std::min(NUM_SNAPS, (int)f.size()); k++){ snapSlots[k] = f[k]; snapUsed[k] = true; }
-    activeSnap = -1;
-    snapMsg = "Loaded the factory snapshots";
-    saveSnapshotLibrary();
-}
-
-
 // ── The bar under the header: a slot menu (recall), store, glide, A/B morph,
 //    banks. Every one of them publishable. ─────────────────────────────────────
-void scAnalogBox::drawSnapshotBar(float w) {
-    const float z = zoom();
-    const float m = 10.0f * z;
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(ImColor(pal::accent), "Snapshot");
-    publishedUnderline(snapshotP.getEscapedName());
-    publishMenu(snapshotP.getEscapedName());
-    ImGui::SameLine();
-    auto label = [this](int k) {
-        return ofToString(k + 1) + "  " + (snapUsed[k] ? snapName(k) : std::string("(empty)"));
-    };
-    ImGui::SetNextItemWidth(220 * z);
-    const std::string prev = activeSnap >= 0 ? label(activeSnap) : std::string("-");
-    if(ImGui::BeginCombo("##abSnap", prev.c_str(), ImGuiComboFlags_HeightLarge)){
-        for(int k = 0; k < NUM_SNAPS; k++){
-            if(!snapUsed[k]) continue;
-            if(ImGui::Selectable(label(k).c_str(), k == activeSnap)){
-                if(morphGlideP.get() || ImGui::GetIO().KeyAlt) startGlide(k); else recallSnapshot(k);
-            }
-            // right-click: replace with the current sound, or delete
-            if(ImGui::BeginPopupContextItem(("##abSnapItem" + ofToString(k)).c_str())){
-                ImGui::TextDisabled("%s", label(k).c_str());
-                if(ImGui::MenuItem("Replace with the current sound")) storeSnapshot(k, snapName(k));
-                if(ImGui::MenuItem("Delete")){
-                    snapUsed[k] = false;
-                    if(activeSnap == k) activeSnap = -1;
-                    saveSnapshotLibrary();
-                }
-                ImGui::EndPopup();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("Recall a snapshot (Alt: glide to it over Time).\nRight-click a snapshot in the list: replace or delete it.");
-    if(morphRun){
-        ImGui::SameLine();
-        ImGui::ProgressBar(morphProgress, ImVec2(60 * z, ImGui::GetFrameHeight()), "");
-    }
-    ImGui::SameLine();
-    if(ImGui::Button("Store...")){
-        const std::string n = activeSnap >= 0 ? snapName(activeSnap) : std::string();
-        std::snprintf(snapNameBuf, sizeof(snapNameBuf), "%s", n.c_str());
-        ImGui::OpenPopup("##abSnapStore");
-    }
-    if(ImGui::BeginPopup("##abSnapStore")){
-        ImGui::TextDisabled("Store the current sound");
-        ImGui::SetNextItemWidth(200 * z);
-        if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-        if(ImGui::InputTextWithHint("##abSnapName", "name", snapNameBuf, sizeof(snapNameBuf),
-                                    ImGuiInputTextFlags_EnterReturnsTrue)){
-            // Enter: over the snapshot with this name, else the first empty slot
-            const std::string nm = ofTrim(std::string(snapNameBuf));
-            int slot = -1;
-            for(int k = 0; k < NUM_SNAPS && slot < 0 && !nm.empty(); k++)
-                if(snapUsed[k] && snapName(k) == nm) slot = k;
-            for(int k = 0; k < NUM_SNAPS && slot < 0; k++) if(!snapUsed[k]) slot = k;
-            if(slot < 0) slot = activeSnap >= 0 ? activeSnap : 0;
-            storeSnapshot(slot, nm);
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::TextDisabled("Enter: a new snapshot (or over the one with this name)");
-        ImGui::Separator();
-        int firstFree = -1;
-        for(int k = 0; k < NUM_SNAPS && firstFree < 0; k++) if(!snapUsed[k]) firstFree = k;
-        if(firstFree >= 0 && ImGui::Selectable("+ New snapshot")){ storeSnapshot(firstFree, snapNameBuf); ImGui::CloseCurrentPopup(); }
-        ImGui::TextDisabled("Replace");
-        for(int k = 0; k < NUM_SNAPS; k++){
-            if(!snapUsed[k]) continue;
-            if(ImGui::Selectable(label(k).c_str(), k == activeSnap)){ storeSnapshot(k, snapNameBuf); ImGui::CloseCurrentPopup(); }
-        }
-        ImGui::EndPopup();
-    }
-    ImGui::SameLine();
-    if(ImGui::Button("Snapshots")) ImGui::OpenPopup("##abSnapMenu");
-    if(ImGui::BeginPopup("##abSnapMenu")){
-        if(activeSnap >= 0 && snapUsed[activeSnap]){
-            ImGui::TextDisabled("%s", label(activeSnap).c_str());
-            if(ImGui::MenuItem("Recall again")) recallSnapshot(activeSnap);
-            if(ImGui::MenuItem("Delete this snapshot")){ snapUsed[activeSnap] = false; activeSnap = -1; saveSnapshotLibrary(); }
-            ImGui::Separator();
-        }
-        if(ImGui::MenuItem("Factory collection")) loadFactory();
-        if(ImGui::BeginMenu("Load bank")){
-            bool any = false;
-            try {
-                for(auto& e : std::filesystem::directory_iterator(std::filesystem::path(snapDir()) / "banks")){
-                    if(e.path().extension() != ".json") continue;
-                    any = true;
-                    if(ImGui::MenuItem(e.path().stem().string().c_str())) loadSnapshotBank(e.path().string());
-                }
-            } catch(...) {}
-            if(!any) ImGui::TextDisabled("No banks yet");
-            ImGui::EndMenu();
-        }
-        if(ImGui::BeginMenu("Save bank as")){
-            ImGui::SetNextItemWidth(180 * z);
-            const bool enter = ImGui::InputText("##abBankName", snapBankName, sizeof(snapBankName),
-                                                ImGuiInputTextFlags_EnterReturnsTrue);
-            if((ImGui::Button("Save") || enter) && snapBankName[0]){
-                saveSnapshotBank((std::filesystem::path(snapDir()) / "banks" / snapBankName).string());
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndMenu();
-        }
-        if(ImGui::MenuItem("From file...")) snapLoadDialog = true;
-        if(ImGui::MenuItem("Clear all")){ snapUsed.fill(false); activeSnap = -1; saveSnapshotLibrary(); }
-        if(!snapMsg.empty()){ ImGui::Separator(); ImGui::TextDisabled("%s", snapMsg.c_str()); }
-        ImGui::EndPopup();
-    }
-
-    // glide
-    ImGui::SameLine(0, m);
-    {
-        bool g = morphGlideP.get();
-        if(ImGui::Checkbox("Glide", &g)) morphGlideP.set(g);
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-            ImGui::SetTooltip("On: every recall glides from the current sound over Time.\nOff: recalls jump (Alt to glide).");
-        publishedUnderline(morphGlideP.getEscapedName());
-        publishMenu(morphGlideP.getEscapedName());
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(90 * z);
-        float v = morphTimeP.get();
-        const bool beats = morphBeatsP.get();
-        if(ImGui::SliderFloat("##abMorphT", &v, 0.0f, 64.0f, beats ? "%.2f beats" : "%.2f s", ImGuiSliderFlags_Logarithmic))
-            morphTimeP.set(v);
-        publishedUnderline(morphTimeP.getEscapedName());
-        publishMenu(morphTimeP.getEscapedName());
-        ImGui::SameLine(0, 2 * z);
-        if(ImGui::SmallButton(beats ? "b##pcMTU" : "s##pcMTU")) morphBeatsP.set(!beats);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Time in beats (b) or seconds (s)");
-    }
-
-    // A / B morph
-    ImGui::SameLine(0, m);
-    auto slotCombo = [&](const char* id, ofParameter<int>& p) {
-        ImGui::SetNextItemWidth(44 * z);
-        const std::string cur = p.get() > 0 ? ofToString(p.get()) : std::string("-");
-        if(ImGui::BeginCombo(id, cur.c_str(), ImGuiComboFlags_HeightLarge)){
-            if(ImGui::Selectable("-", p.get() == 0)) p.set(0);
-            for(int k = 0; k < NUM_SNAPS; k++)
-                if(snapUsed[k] && ImGui::Selectable(label(k).c_str(), p.get() == k + 1)) p.set(k + 1);
-            ImGui::EndCombo();
-        }
-        publishedUnderline(p.getEscapedName());
-        publishMenu(p.getEscapedName());
-    };
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("A"); ImGui::SameLine(); slotCombo("##abMorphA", morphAP);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("B"); ImGui::SameLine(); slotCombo("##abMorphB", morphBP);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(std::max(80.0f * z, w - ImGui::GetCursorPosX()));
-    float mv = morphP.get();
-    if(ImGui::SliderFloat("##abMorph", &mv, 0.0f, 1.0f, "Morph %.3f")) morphP.set(mv);
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
-        ImGui::SetTooltip("Blends snapshot A (0) into B (1). Publish it (right-click) to drive it from a connection.");
-    publishedUnderline(morphP.getEscapedName());
-    publishMenu(morphP.getEscapedName());
-}
-
-
 // ════════════════════════════════════════════════════════════════════════════
 // Window
 // ════════════════════════════════════════════════════════════════════════════
@@ -2029,7 +1715,7 @@ void scAnalogBox::drawWindow() {
         ImGui::SameLine(0, 12 * z);
         if(ImGui::Button("Reset LFOs")) resetLFOs.trigger();
     }
-    drawSnapshotBar(w);
+    snaps.drawBar(w);
     ImGui::Spacing();
 
     if(ImGui::BeginTabBar("##abTabs")){

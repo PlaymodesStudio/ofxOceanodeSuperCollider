@@ -86,6 +86,11 @@ public:
             return input.getName() == parameter.getName();
         });
     }
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+    // A SynthDef with a gate and a pitch control (pitch / note / midinote;
+    // velocity / vel optional) plays notes: one per channel (N Chan).
+    bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override;
+#endif
     ofEvent<void> resendParams;
     ofEvent<std::pair<ofxSCServer*, int>> resetAudioRateBusAssignments;
     ofEvent<std::tuple<ofxSCServer*, scNode*, int>> setAudioRateBusAssignment;

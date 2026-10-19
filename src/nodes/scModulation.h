@@ -146,6 +146,7 @@ public:
     void sendMatrix();
     void modulateMenu(const std::string& key);                // inside a control's right-click menu
     // the mod envelopes (cards, 4 per row); lead: a card of the node's own first (PolyComb's amp envelope)
+    void drawEnvelopeCards(float w, const std::vector<std::function<void(float)>>& leads);
     void drawEnvelopes(float w, const std::function<void(float)>& lead = nullptr);
     // the sources created / freed after lfoCount / envCount changed, and the routes
     void refresh();

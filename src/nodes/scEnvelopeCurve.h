@@ -44,7 +44,7 @@ struct ADSR { float a = 0.01f, d = 0.3f, s = 0.8f, r = 1.0f; float curve[3] = {k
 //    middle); Alt + double-click: back to -4.
 // Returns true when something changed. invert: drawn upside down.
 inline bool editADSR(const char* id, ImVec2 size, ADSR& e, ImU32 color, ImU32 background,
-                     bool invert = false, float maxTime = 20.0f){
+                     bool invert = false, float maxTime = 20.0f, float minTime = 0.001f){
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + size.x, a.y + size.y);
     ImGui::InvisibleButton(id, ImVec2(std::max(1.0f, size.x), std::max(1.0f, size.y)));
@@ -53,7 +53,7 @@ inline bool editADSR(const char* id, ImVec2 size, ADSR& e, ImU32 color, ImU32 ba
     const ImGuiID kPoint = ImGui::GetID("##pt"), kSeg = ImGui::GetID("##seg"), kPps = ImGui::GetID("##pps");
     const ImGuiIO& io = ImGui::GetIO();
 
-    e.a = std::max(0.001f, e.a); e.d = std::max(0.001f, e.d); e.r = std::max(0.001f, e.r);
+    e.a = std::max(minTime, e.a); e.d = std::max(minTime, e.d); e.r = std::max(minTime, e.r);
     e.s = std::min(1.0f, std::max(0.0f, e.s));
     const float hold = std::max(0.05f, (e.a + e.d + e.r) * 0.35f);
     const float total = e.a + e.d + hold + e.r;
@@ -88,7 +88,7 @@ inline bool editADSR(const char* id, ImVec2 size, ADSR& e, ImU32 color, ImU32 ba
     bool changed = false;
     if(point >= 0 && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f)){
         const float frozen = st->GetFloat(kPps, iw / total);
-        auto seconds = [&](float fromT){ return std::min(maxTime, std::max(0.001f, (m.x - (a.x + pad + fromT * frozen)) / frozen)); };
+        auto seconds = [&](float fromT){ return std::min(maxTime, std::max(minTime, (m.x - (a.x + pad + fromT * frozen)) / frozen)); };
         switch(point){
             case 0: e.a = seconds(0); break;
             case 1: e.d = seconds(e.a); e.s = level(m.y); break;

@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 private let moduleSignatures: Set<UInt32> = [0x00228D00, 0x0022F300]
 private let rootSentinelID: UInt32 = 0x75646F4D
-private let panelControlKinds: Set<UInt32> = [20, 22, 24, 25]
+private let panelControlKinds: Set<UInt32> = [20, 22, 23, 24, 25]
 private let applicationVersion = Bundle.main.object(
     forInfoDictionaryKey: "CFBundleShortVersionString"
 ) as? String ?? "development"
@@ -75,6 +75,8 @@ final class ModuleNode {
     var savedControlNormalized: Double?
     var savedControlValue: Double?
     var constantValue: String?
+    var snapshotControlID: UInt32?
+    var constantNumericValue: Double?
     var children: [ModuleNode] = []
 
     init(offset: Int, version: UInt32, signature: UInt32, kind: UInt32, objectID: UInt32) {
@@ -116,6 +118,8 @@ final class ModuleNode {
         if let savedControlNormalized { result["saved_control_normalized"] = savedControlNormalized }
         if let savedControlValue { result["saved_control_value"] = savedControlValue }
         if let constantValue { result["constant_value"] = constantValue }
+        if let snapshotControlID { result["snapshot_control_id"] = snapshotControlID }
+        if let constantNumericValue { result["constant_numeric_value"] = constantNumericValue }
         return result
     }
 }
@@ -206,7 +210,7 @@ struct ParseReport {
 
     var inputPortCount: Int { ports.filter { $0.className == "KInPort" }.count }
     var outputPortCount: Int { ports.filter { $0.className == "KOutPort" }.count }
-    var macroCount: Int { modules.filter { $0.kind == 4 }.count }
+    var macroCount: Int { modules.filter { $0.kind == 4 || $0.kind == 7 }.count }
     var resolvedWireCount: Int { wires.filter { $0.targetObjectID != nil }.count }
     var decodedCoreCellCount: Int {
         coreCells.filter {
@@ -231,7 +235,7 @@ struct ParseReport {
         let coreTotals = coreGraphTotals
         let object: [String: Any] = [
             "source": sourceURL.path,
-            "schema": "reaktor-patch-report-v4",
+            "schema": "reaktor-patch-report-v5",
             "size_bytes": size,
             "nrkt_headers": nrktHeaders.map { String(format: "0x%x", $0) },
             "counts": [
@@ -307,7 +311,7 @@ struct ParseReport {
         ]
         func visit(_ nodes: [ModuleNode], _ depth: Int) {
             for node in nodes {
-                if node.kind == 4 || node.kind == 9 {
+                if node.kind == 4 || node.kind == 7 || node.kind == 9 {
                     lines.append(String(repeating: "  ", count: depth) + "• \(node.label) [id \(node.objectID), kind \(node.kind), fills \(node.childCount)]")
                     visit(node.children, depth + 1)
                 } else {
@@ -410,6 +414,18 @@ final class NRKTParser {
                 !["KSModul", "KInPort", "KOutPort"].contains($0.1)
             }
             if panelControlKinds.contains(module.kind) {
+                // Legacy controls can insert a link word ahead of the property
+                // block. Validate its stable reference before shifting offsets.
+                let referenceShift = [0, 4, 8].first { shift in
+                    guard module.offset + 0xd6 + shift <= end,
+                          let ref = try? u32(module.offset + 0xd2 + shift) else { return false }
+                    return ref > 10000 && ref < 1_000_000
+                }
+                let linkShift = module.signature == 0x00228D00 ? (referenceShift ?? 0) : 0
+                if let ref = try? u32(module.offset + 0xd2 + linkShift),
+                   ref > 10000, ref < 1_000_000 {
+                    module.snapshotControlID = ref - 10000
+                }
                 if strings.count >= 2 {
                     for pairIndex in 0..<(strings.count - 1) {
                         let first = strings[pairIndex]
@@ -424,9 +440,9 @@ final class NRKTParser {
                     }
                 }
                 if module.offset + 0x64 <= end,
-                   let step = try? f64(module.offset + 0x48),
-                   let endpoint1 = try? f32(module.offset + 0x5c),
-                   let endpoint2 = try? f32(module.offset + 0x60),
+                   let step = try? f64(module.offset + 0x48 + linkShift),
+                   let endpoint1 = try? f32(module.offset + 0x5c + linkShift),
+                   let endpoint2 = try? f32(module.offset + 0x60 + linkShift),
                    step.isFinite, endpoint1.isFinite, endpoint2.isFinite,
                    abs(step) >= 1e-12, abs(step) < 1e9,
                    abs(endpoint1) < 1e12, abs(endpoint2) < 1e12 {
@@ -441,7 +457,7 @@ final class NRKTParser {
                 // module record.  Snapshot-isolated controls do not appear in
                 // a snapshot's parameter list, so this state is required to
                 // reconstruct the complete effective preset.
-                let stateOffset = module.offset + 0x112
+                let stateOffset = module.offset + 0x112 + linkShift
                 if stateOffset + 4 <= end, let raw = try? u32(stateOffset) {
                     module.savedControlRawU32 = raw
 
@@ -485,10 +501,17 @@ final class NRKTParser {
                     ]
                 }
             } else if module.kind == 100 {
-                for (offset, value) in strings where offset >= module.offset + 0x80 {
-                    if Double(value) != nil {
-                        module.constantValue = value
-                        break
+                // The displayed label can be renamed independently (the line
+                // table's constants are labelled 0 but store 2 and -1).
+                if module.signature == 0x00228D00,
+                   let value = try? f32(module.offset + 0x44), value.isFinite {
+                    module.constantNumericValue = Double(value)
+                }
+                if let value = module.constantNumericValue {
+                    module.constantValue = String(value)
+                } else {
+                    for (offset, value) in strings where offset >= module.offset + 0x80 {
+                        if Double(value) != nil { module.constantValue = value; break }
                     }
                 }
             }
@@ -498,6 +521,7 @@ final class NRKTParser {
     private func parseMacroMetadata(_ module: ModuleNode) {
         do {
             let nameOffset = module.offset + (module.signature == 0x00228D00 ? 0xf0 : 0x104)
+                + (module.kind == 7 && module.signature == 0x00228D00 ? 4 : 0)
             let trailerVersion: UInt32 = module.signature == 0x00228D00 ? 2 : 4
             let (name, afterName) = try nrktString(nameOffset)
             let (detail, afterDetail) = try nrktString(afterName)
@@ -530,7 +554,7 @@ final class NRKTParser {
             let objectID = try u32(offset + 24)
             let module = ModuleNode(offset: offset, version: version, signature: signature,
                                     kind: kind, objectID: objectID)
-            if kind == 4 { parseMacroMetadata(module) }
+            if kind == 4 || kind == 7 { parseMacroMetadata(module) }
             if objectID == rootSentinelID { specialRoots += 1 } else { modules.append(module) }
         }
 
@@ -637,7 +661,8 @@ final class NRKTParser {
             var metadataExtensionBytes = 0
             func parameterRecordStarts(_ offset: Int) -> Bool {
                 guard offset + 12 <= data.count else { return false }
-                return [32, 40, 60].contains(Int((try? u32(offset)) ?? 0))
+                let size = Int((try? u32(offset)) ?? 0)
+                return size >= 32 && size <= (1 << 20) && size % 4 == 0 && offset + size + 8 <= data.count
                     && (try? u32(offset + 4)) == 9
                     && (try? u32(offset + 8)) == 2
             }
@@ -652,11 +677,11 @@ final class NRKTParser {
             while cursor + 8 <= data.count {
                 guard let sizeValue = try? u32(cursor) else { break }
                 let size = Int(sizeValue)
-                guard [32, 40, 60].contains(size), cursor + size + 8 <= data.count,
+                guard size >= 32, size <= (1 << 20), size % 4 == 0, cursor + size + 8 <= data.count,
                       (try? u32(cursor + 4)) == 9,
                       (try? u32(cursor + 8)) == 2,
                       let typeCode = try? u32(cursor + 12),
-                      let localID = try? u32(cursor + 4 + size),
+                      let localID = try? u32(cursor - 4),
                       localID != 0 else { break }
                 var record: [String: Any] = [
                     "module_object_id": localID,
@@ -689,41 +714,56 @@ final class NRKTParser {
             }
             guard let firstParameter = parameters.first,
                   let firstLocalID = firstParameter["module_object_id"] as? UInt32 else { continue }
-            var orderedOffsets = preferredOffsets
-            orderedOffsets.append(0)
-            orderedOffsets.append(contentsOf: moduleIDs.map { Int64($0) - Int64(firstLocalID) }.sorted { abs($0) < abs($1) })
-            var seenOffsets: Set<Int64> = []
-            orderedOffsets = orderedOffsets.filter { seenOffsets.insert($0).inserted }
-            var bestOffset = orderedOffsets.first ?? 0
-            var bestScore = -1
-            for candidate in orderedOffsets {
-                let score = parameters.reduce(0) { partial, record in
-                    guard let local = record["module_object_id"] as? UInt32 else { return partial }
-                    let adjusted = Int64(local) + candidate
-                    return partial + (adjusted >= 0 && adjusted <= Int64(UInt32.max)
-                        && moduleIDs.contains(UInt32(adjusted)) ? 1 : 0)
+            // Stable panel IDs are independent of module traversal IDs.
+            // Only unique references are safe across multi-instrument files.
+            let references = Dictionary(grouping: modules.filter { $0.snapshotControlID != nil }, by: { $0.snapshotControlID! })
+            let stable = references.compactMapValues { $0.count == 1 ? $0.first : nil }
+            let stableScore = parameters.filter { stable[$0["module_object_id"] as! UInt32] != nil }.count
+            // UI state, MIDI assignments and table data can outnumber panel
+            // controls. Validate normalized scalar controls separately so those
+            // unrelated records cannot veto byte-backed panel identities.
+            let scalarStates = parameters.filter { ($0["value_type"] as? String) == "normalized_float" }
+            let scalarMatches = scalarStates.filter { stable[$0["module_object_id"] as! UInt32] != nil }.count
+            let useStable = Double(stableScore) / Double(parameters.count) >= 0.9 ||
+                (scalarStates.count >= 3 && Double(scalarMatches) / Double(scalarStates.count) >= 0.9)
+            var bestOffset: Int64 = 0
+            var bestScore = stableScore
+            var mappingConfident = useStable
+            if !useStable {
+                // Existing revisions can use instrument-relative traversal IDs.
+                // A dense ID range alone is insufficient evidence: require
+                // scalar states to land on panel controls, not arithmetic.
+                var ordered = preferredOffsets + [0]
+                ordered += moduleIDs.map { Int64($0) - Int64(firstLocalID) }.sorted { abs($0) < abs($1) }
+                var seen = Set<Int64>()
+                bestScore = -1
+                for candidate in ordered where seen.insert(candidate).inserted {
+                    let score = parameters.reduce(0) { partial, record in
+                        let adjusted = Int64(record["module_object_id"] as! UInt32) + candidate
+                        guard adjusted >= 0, adjusted <= Int64(UInt32.max),
+                              let m = modulesByID[UInt32(adjusted)] else { return partial }
+                        let scalar = (record["record_size"] as? Int) == 40
+                        return partial + (!scalar || panelControlKinds.contains(m.kind) ? 1 : 0)
+                    }
+                    if score > bestScore { bestOffset = candidate; bestScore = score }
                 }
-                if score > bestScore {
-                    bestOffset = candidate
-                    bestScore = score
-                }
+                mappingConfident = Double(bestScore) / Double(parameters.count) >= 0.9
             }
-            let mappingConfident = Double(bestScore) / Double(parameters.count) >= 0.9
-            guard mappingConfident || (metadataExtensionBytes == 8 && parameters.count >= 3) else {
-                continue
-            }
+            guard mappingConfident || (metadataExtensionBytes == 8 && parameters.count >= 3) else { continue }
             for index in parameters.indices {
                 let local = parameters[index]["module_object_id"] as! UInt32
                 parameters[index]["local_module_object_id"] = local
                 if mappingConfident {
-                    let globalID = UInt32(Int64(local) + bestOffset)
-                    parameters[index]["module_object_id"] = globalID
-                    if let module = modulesByID[globalID] {
+                    let adjusted = Int64(local) + bestOffset
+                    let mapped = useStable ? stable[local] :
+                        (adjusted >= 0 && adjusted <= Int64(UInt32.max) ? modulesByID[UInt32(adjusted)] : nil)
+                    if let module = mapped {
+                        parameters[index]["module_object_id"] = module.objectID
                         parameters[index]["module_kind"] = module.kind
                         if let value = module.typeName { parameters[index]["module_type_name"] = value }
                         if let value = module.instanceLabel { parameters[index]["instance_label"] = value }
                         if let value = module.hierarchyPath { parameters[index]["hierarchy_path"] = value }
-                    }
+                    } else { parameters[index].removeValue(forKey: "module_object_id") }
                 } else {
                     parameters[index].removeValue(forKey: "module_object_id")
                 }
@@ -733,13 +773,13 @@ final class NRKTParser {
                 "name": name,
                 "parameter_count": parameters.count,
                 "resolved_parameter_count": bestScore,
-                "candidate_object_id_offset": bestOffset,
+                "object_id_mapping_method": useStable ? "stable_panel_reference" : "validated_traversal_offset",
                 "object_id_mapping_status": mappingConfident ? "resolved" : "unresolved",
                 "metadata_extension_bytes": metadataExtensionBytes,
                 "parameters": parameters
             ]
             if mappingConfident {
-                snapshot["object_id_offset"] = bestOffset
+                if !useStable { snapshot["object_id_offset"] = bestOffset }
 
                 var overrides: [UInt32: Double] = [:]
                 for parameter in parameters {
@@ -752,7 +792,9 @@ final class NRKTParser {
                 for module in modules {
                     guard var normalized = module.savedControlNormalized else { continue }
                     var source = "module_saved_state"
+                    var selection: Double? = module.kind == 24 ? module.savedControlRawU32.map { Double($0) } : nil
                     if let override = overrides[module.objectID] {
+                        if module.kind == 24 { selection = override }
                         normalized = min(1.0, max(0.0, override))
                         source = "snapshot_override"
                     }
@@ -773,6 +815,11 @@ final class NRKTParser {
                             control["value"] = endpoint1
                                 + normalized * (endpoint2 - endpoint1)
                         }
+                    }
+                    if let selection {
+                        control.removeValue(forKey: "normalized_value")
+                        control["selection_index"] = Int(selection)
+                        control["value"] = selection
                     }
                     effectiveControls.append(control)
                 }

@@ -509,6 +509,31 @@ void scSynthdef::setup(){
     }
 }
 
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+bool scSynthdef::getTimelineInstrument(ofxOceanodeTimelineInstrument& out){
+    // Numeric controls only (a trigger t_gate is not a held gate).
+    auto find = [this](std::initializer_list<const char*> names) -> ofxOceanodeAbstractParameter* {
+        for(const char* name : names){
+            for(auto& entry : getParameterGroup()){
+                if(ofToLower(entry->getName()) != name) continue;
+                auto parameter = std::dynamic_pointer_cast<ofxOceanodeAbstractParameter>(entry);
+                if(!parameter) continue;
+                const std::string type = parameter->valueType();
+                if(type == typeid(float).name() || type == typeid(std::vector<float>).name() ||
+                   type == typeid(int).name() || type == typeid(std::vector<int>).name()) return parameter.get();
+            }
+        }
+        return nullptr;
+    };
+    out.gate = find({"gate"});
+    out.pitch = find({"pitch", "note", "midinote"});
+    if(out.gate == nullptr || out.pitch == nullptr) return false;
+    out.velocity = find({"velocity", "vel"});
+    out.voices = numChannels.get();
+    return true;
+}
+#endif
+
 void scSynthdef::update(ofEventArgs &e){
     if(pendingTriggerRestores.empty()) return;
     const uint64_t frame = ofGetFrameNum();

@@ -41,6 +41,8 @@
 #include "scModulation.h"
 #include "scAudioParam.h"
 #include "scScheduledInputs.h"
+#include "scEnvelopeCurve.h"
+#include "scSnapshots.h"
 #include "ofxOceanodeShared.h"
 #include "imgui.h"
 #include <algorithm>
@@ -304,9 +306,10 @@ public:
             pitchTouched = true; viewDirty = true;
             if(noteInputs.isSending()) sendNotes(); else controlsDirty = true;
         }));
-        listeners.push(gate.newListener([this](std::vector<float>&){
+        listeners.push(gate.newListener([this](std::vector<float>& v){
             if(scScheduling::isBackendSendSuppressed()) return;
             viewDirty = true;
+            if(!gateTouched) for(float x : v) if(x > 0.0f) { gateTouched = true; break; }   // Auto: now gated
             if(noteInputs.isSending()) sendNotes(); else controlsDirty = true;
         }));
 
@@ -315,8 +318,15 @@ public:
         transpose.set("Transpose", 0.0f, -48.0f, 48.0f);
         glide.set("Glide", 0.0f, 0.0f, 5.0f);
         levels.set("Levels", {0.5f}, {0.0f}, {1.0f});
+        // the Amp Envelope on each voice's gate (Gate Mode: whether it plays through it)
+        gateMode.set("Gate Mode", 0, 0, 2);
         attack.set("Attack", 0.005f, 0.0f, 10.0f);
+        decay.set("Decay", 0.3f, 0.001f, 10.0f);
+        sustain.set("Sustain", 1.0f, 0.0f, 1.0f);
         release.set("Release", 0.3f, 0.0f, 10.0f);
+        attackCurve.set("Attack Curve", -4.0f, -12.0f, 12.0f);
+        decayCurve.set("Decay Curve", -4.0f, -12.0f, 12.0f);
+        releaseCurve.set("Release Curve", -4.0f, -12.0f, 12.0f);
         volume.set("Volume", 1.0f, 0.0f, 2.0f);
         rateJitter.set("Rate Jitter", 0.0f, 0.0f, 1.0f);
 
@@ -348,8 +358,20 @@ public:
         rotate.set("Rotate", 0.0f, 0.0f, 16.0f);
         panJitter.set("Pan Jitter", 0.0f, 0.0f, 8.0f);
 
+        snaps.setupParameters();   // Snapshot, Morph... (scSnapshots, shared by the synths)
         initializePublishActions();
         setupModulation();
+        {
+            scSnapshots::Host h;
+            h.folder = "PulsarBox";
+            h.title = "PulsarBox";
+            h.presetFolder = "Supercollider/PulsarBox/Presets";   // the named presets it always had
+            h.capture = [this](){ return captureSound(); };
+            h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySound(a, b, t, sw); };
+            h.bpm = [this](){ return currentBpm; };
+            h.paramMenu = [this](const std::string& k){ controlMenu(k); };
+            snaps.setup(h);
+        }
         publishByKey(fundamental.getEscapedName());
         publishByKey(levels.getEscapedName());
 
@@ -359,11 +381,14 @@ public:
         listeners.push(numOutputs.newListener([this](int&){ if(!loadingBankPreset) structureDirty = true; viewDirty = true; }));
         for(auto* p : {&fundamental, &levels})
             listeners.push(p->newListener([controls](std::vector<float>&){ controls(); }));
-        for(auto* p : {&transpose, &glide, &attack, &release, &volume, &rateJitter, &formantShift, &cyclesScale,
+        for(auto* p : {&transpose, &glide, &attack, &decay, &sustain, &release, &attackCurve, &decayCurve, &releaseCurve,
+                       &volume, &rateJitter, &formantShift, &cyclesScale,
                        &formantJitter, &levelJitter, &probability, &rotate, &panJitter})
             listeners.push(p->newListener([controls](float&){ controls(); }));
-        for(auto* p : {&numLayers, &burst, &rest, &panMode})
+        for(auto* p : {&burst, &rest, &panMode, &gateMode})
             listeners.push(p->newListener([controls](int&){ controls(); }));
+        // Formants: a synth with that many layers (the others are not built)
+        listeners.push(numLayers.newListener([this, controls](int&){ if(!loadingBankPreset) structureDirty = true; controls(); }));
         listeners.push(sieve.newListener([controls](std::vector<int>&){ controls(); }));
         for(int g = 0; g < LAYERS; g++){
             listeners.push(formantMode[g].newListener([controls](int&){ controls(); }));
@@ -381,6 +406,7 @@ public:
 
     void update(ofEventArgs&) override {
         timeline.update();
+        snaps.update();
         const float now = ofGetElapsedTimef();
         if(pendingDialog){
             const int g = (pendingDialog - 1) / 2, kind = (pendingDialog - 1) % 2;
@@ -393,6 +419,7 @@ public:
             }
         }
         if(structureDirty){ structureDirty = false; applyStructure(); }
+        if(const int g = ampGated() ? 1 : 0; g != ampGatedSent){ ampGatedSent = g; controlsDirty = true; }
         if(tablesDirty){
             tablesDirty = false;
             refreshTables();
@@ -436,7 +463,7 @@ public:
         freeMod(server, st, true);
         ensureBuffers(server);
         st.synth = new ofxSCSynth(defName(), server);
-        st.builtVoices = voices(); st.builtOutputs = outputs();
+        st.builtVoices = voices(); st.builtOutputs = outputs(); st.builtLayers = layers();
         st.sent.clear();
         sendAll(server, true);   // set before /s_new: baked into it
     }
@@ -501,7 +528,7 @@ public:
         for(auto& [server, st] : states){ uploadTables(server, true); sendAll(server, true); sendGate(server, st); sendModArgs(server, st); }
         mod.resend();
     }
-    void setBpm(float bpm) override { mod.setBpm(bpm); }
+    void setBpm(float bpm) override { mod.setBpm(bpm); currentBpm = bpm; }
 
     // ════════════════════════════════════════════════════════════════════════
     // Presets
@@ -511,7 +538,7 @@ public:
         json["publishedEditorParameters"] = publishedKeys;
         timeline.save(json, "timelineHiddenEditorParameters");
         json["viewHeight"] = viewHeight;
-        json["bankPreset"] = currentPreset;
+        json["bankPreset"] = snaps.currentPreset;
         for(const auto& a : publishActions) if(a.save && !isPublished(a.key)) a.save(json);
         mod.patchBases(json);   // a modulated control: its own value
         mod.save(json, "pulsarBoxMod");
@@ -533,13 +560,16 @@ public:
     }
 #endif
     void presetRecallAfterSettingParameters(ofJson& json) override {
-        if(json.contains("bankPreset") && json["bankPreset"].is_string()) currentPreset = json["bankPreset"].get<std::string>();
+        if(json.contains("bankPreset") && json["bankPreset"].is_string()) snaps.currentPreset = json["bankPreset"].get<std::string>();
         if(json.contains("viewHeight") && json["viewHeight"].is_number())
             viewHeight = ofClamp(json["viewHeight"].get<float>(), 160.0f, 2000.0f);
+        // Saved before Gate Mode: the gate always went through the envelope
+        if(!json.contains(gateMode.getEscapedName())) gateMode = 1;
         for(const auto& a : publishActions){
             if(isPublished(a.key) || !json.contains(a.key) || !a.load) continue;
             a.load(json[a.key]);
         }
+        gateTouched = false;   // Auto drones again until the Gate is used
         loadModulation(json);
     }
 
@@ -551,7 +581,7 @@ private:
     struct ServerState {
         ofxSCSynth* synth = nullptr;
         int outBus = -1;
-        int builtVoices = 0, builtOutputs = 0;
+        int builtVoices = 0, builtOutputs = 0, builtLayers = 0;
         std::array<ofxSCBuffer*, 2 * LAYERS> bufs{};   // layer g: pulsaret 2g, envelope 2g + 1
         bool bufsPending = false;
         float allocTime = 0;
@@ -569,7 +599,15 @@ private:
     int voices() const { return std::clamp(numVoices.get(), 1, MAX_VOICES); }
     int outputs() const { return std::clamp(numOutputs.get(), 1, MAX_OUTPUTS); }
     int layers() const { return std::clamp(numLayers.get(), 1, LAYERS); }
-    std::string defName() const { return "PulsarBox_" + ofToString(voices()) + "_" + ofToString(outputs()); }
+    std::string defName() const {
+        return "PulsarBox_" + ofToString(voices()) + "_" + ofToString(outputs()) + "_" + ofToString(layers());
+    }
+    // The Amp Envelope is the voices' VCA: Gated, or Auto once the Gate is used
+    bool ampGated() const {
+        if(gateMode.get() == 2) return false;
+        if(gateMode.get() == 1) return true;
+        return gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined());
+    }
 
     float voiceFund(int v) const {
         if(pitchMode(nullptr) == 1)   // from Pitch (Oceanode values)
@@ -606,11 +644,13 @@ private:
         // the gates' levels from ModGate (Gate values / cable), the pitch cable
         c["gatebus"] = {st.modCreated && st.gateBus ? (float)st.gateBus->index : -1.0f};
         c["tr"] = {transpose.get()};
-        c["glide"] = {glide.get()}; c["atk"] = {attack.get()}; c["rel"] = {release.get()};
-        std::vector<float> lon(LAYERS), lmode(LAYERS), lhz(LAYERS), lrat(LAYERS), lcyc(LAYERS), lamp(LAYERS),
+        c["glide"] = {glide.get()};
+        c["atk"] = {attack.get()}; c["dec"] = {decay.get()}; c["sus"] = {sustain.get()}; c["rel"] = {release.get()};
+        c["ca"] = {attackCurve.get()}; c["cd"] = {decayCurve.get()}; c["cr"] = {releaseCurve.get()};
+        c["gated"] = {ampGated() ? 1.0f : 0.0f};
+        std::vector<float> lmode(LAYERS), lhz(LAYERS), lrat(LAYERS), lcyc(LAYERS), lamp(LAYERS),
                            loff(LAYERS), lpan(LAYERS), pbuf(LAYERS), ebuf(LAYERS);
         for(int g = 0; g < LAYERS; g++){
-            lon[g] = g < L ? 1.0f : 0.0f;
             lmode[g] = float(formantMode[g].get());
             lhz[g] = std::clamp(formantHz[g].get() * shiftFactor(), 1.0f, 20000.0f);
             lrat[g] = formantRatio[g].get() * shiftFactor();
@@ -621,7 +661,7 @@ private:
             pbuf[g] = st.bufs[2 * g] ? float(st.bufs[2 * g]->index) : -1.0f;
             ebuf[g] = st.bufs[2 * g + 1] ? float(st.bufs[2 * g + 1]->index) : -1.0f;
         }
-        c["lon"] = lon; c["lmode"] = lmode; c["lhz"] = lhz; c["lrat"] = lrat; c["lcyc"] = lcyc;
+        c["lmode"] = lmode; c["lhz"] = lhz; c["lrat"] = lrat; c["lcyc"] = lcyc;
         c["lamp"] = lamp; c["loff"] = loff; c["lpan"] = lpan; c["pbuf"] = pbuf; c["ebuf"] = ebuf;
         c["rjit"] = {rateJitter.get()}; c["fjit"] = {formantJitter.get()};
         c["ajit"] = {levelJitter.get()}; c["pjit"] = {panJitter.get()};
@@ -648,13 +688,13 @@ private:
         if(force && st.outBus >= 0) st.synth->set("out", st.outBus);
     }
 
-    // Voices / Outputs changed: the synth replaced in place (/s_new action 4)
+    // Voices / Outputs / Formants changed: the synth replaced in place (/s_new action 4)
     void applyStructure(){
         for(auto& [server, st] : states){
-            if(!st.synth || (st.builtVoices == voices() && st.builtOutputs == outputs())) continue;
+            if(!st.synth || (st.builtVoices == voices() && st.builtOutputs == outputs() && st.builtLayers == layers())) continue;
             auto* old = st.synth;
             st.synth = new ofxSCSynth(defName(), server);
-            st.builtVoices = voices(); st.builtOutputs = outputs();
+            st.builtVoices = voices(); st.builtOutputs = outputs(); st.builtLayers = layers();
             st.sent.clear();
             sendAll(server, true);
             if(old->isCreated()) st.synth->createAndRun(4, old->nodeID, getActive());
@@ -709,12 +749,6 @@ private:
         mod.targetOfKey[levels.getEscapedName()] = TGT_LEVEL;
         mod.targetOfKey[probability.getEscapedName()] = TGT_PROB;
         mod.targetOfKey[rotate.getEscapedName()] = TGT_PAN;
-    }
-    // An envelope routed to Level: it replaces the ASR (the voices' VCA)
-    bool vcaOn() const {
-        for(int e = 0; e < mod.envCount; e++)
-            if(std::abs(mod.matrix[(scModulation::SRC_ENV + e) * NUM_TARGETS + TGT_LEVEL]) > 1e-4f) return true;
-        return false;
     }
     void createGate(ofxSCServer* server, ServerState& st){
         if(!st.modSources) return;
@@ -789,10 +823,9 @@ private:
         if(pb >= 0) st.synth->mapan("pitch_ar", pb, voices());
         st.synth->set("gatebus", st.modCreated && st.gateBus ? (float)st.gateBus->index : -1.0f);
         st.synth->set("mod", st.modCreated ? (float)mod.targetBus(server, 0) : -1.0f);
-        st.synth->set("vca", vcaOn() ? 1.0f : 0.0f);
     }
     void loadModulation(const ofJson& json){
-        if(json.contains("pulsarBoxModMatrix")) mod.load(json, "pulsarBoxMod");
+        if(json.contains("pulsarBoxModMatrix")){ mod.load(json, "pulsarBoxMod"); migrateAmpEnvelope(json); }
         else {   // presets from before it: nothing routed
             std::fill(mod.matrix.begin(), mod.matrix.end(), 0.0f);
             mod.lfoCount = mod.envCount = mod.extCount = 0;
@@ -801,6 +834,25 @@ private:
         mod.afterLoad();
         mod.refresh();
         modDirty = true;
+    }
+
+    // Saved before the Amp Envelope: an envelope routed to Level replaced the
+    // ASR (it was the VCA); it becomes the Amp Envelope, played Gated
+    void migrateAmpEnvelope(const ofJson& json){
+        if(json.contains(decay.getEscapedName())) return;   // saved with the Amp Envelope
+        bool found = false;
+        for(int e = 0; e < scModulation::MAX_ENVS; e++){
+            float& cell = mod.matrix[(scModulation::SRC_ENV + e) * NUM_TARGETS + TGT_LEVEL];
+            if(std::abs(cell) < 1e-4f) continue;
+            if(!found && e < mod.envCount){
+                const auto E = mod.envValues(e);
+                attack = E.a; decay = E.d; sustain = E.s; release = E.r;
+                attackCurve = E.ca; decayCurve = E.cd; releaseCurve = E.cr;
+                gateMode = 1;
+                found = true;
+            }
+            cell = 0.0f;   // now a route to Level adds to it
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1061,12 +1113,21 @@ private:
 
     void initializePublishActions(){
         publishActions.clear();
+        for(auto* p : {&snaps.snapshotP, &snaps.morphAP, &snaps.morphBP, &snaps.morphCurveP, &snaps.morphSwitchP}) addPublishAction(*p);
+        for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) addPublishAction(*p);
+        for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) addPublishAction(*p);
         addPublishAction(fundamental);
         addPublishAction(transpose);
         addPublishAction(glide);
         addPublishAction(levels);
+        addPublishAction(gateMode);
         addPublishAction(attack);
+        addPublishAction(decay);
+        addPublishAction(sustain);
         addPublishAction(release);
+        addPublishAction(attackCurve);
+        addPublishAction(decayCurve);
+        addPublishAction(releaseCurve);
         addPublishAction(volume);
         addPublishAction(rateJitter);
         addPublishAction(numLayers);
@@ -1169,29 +1230,25 @@ private:
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Preset bank: data/Supercollider/PulsarBox/Presets/<name>.json
+    // Snapshots and named presets (data/Supercollider/PulsarBox/Presets): the sound as json
     // ════════════════════════════════════════════════════════════════════════
 
-    std::string presetDir() const { return ofToDataPath("Supercollider/PulsarBox/Presets", true); }
     // Played, not part of a sound: a preset leaves them as they are
     bool notInPresets(const std::string& key) const {
-        return key == gate.getEscapedName() || key == transpose.getEscapedName();
+        return key == gate.getEscapedName() || key == transpose.getEscapedName() || scSnapshots::isOwnKey(key);
     }
-    void scanPresets(){
-        presetsScanned = true;
-        bankPresets.clear();
-        std::error_code ec;
-        for(const auto& e : std::filesystem::directory_iterator(presetDir(), ec))
-            if(e.is_regular_file(ec) && e.path().extension() == ".json") bankPresets.push_back(e.path().stem().string());
-        std::sort(bankPresets.begin(), bankPresets.end());
-    }
-    void loadBankPreset(const std::string& name){
-        std::ifstream file(presetDir() + "/" + name + ".json");
-        if(!file) return;
+    // The sound (a snapshot / a named preset): Voices, every control a preset holds, the modulation
+    ofJson captureSound() const {
         ofJson json;
-        try { file >> json; } catch(...) { ofLogWarning("scPulsarBox") << "Cannot read preset " << name; return; }
-        // Every control back to its default, then the preset's values; the
-        // synth is replaced once afterwards if the voice count changed
+        json["Voices"] = numVoices.get();
+        for(const auto& a : publishActions) if(a.save && !notInPresets(a.key)) a.save(json);
+        mod.patchBases(json);
+        mod.save(json, "pulsarBoxMod");
+        return json;
+    }
+    // Every control back to its default, then the sound's values; the synth
+    // is replaced once afterwards if the voice count changed
+    void loadSound(const ofJson& json){
         loadingBankPreset = true;
         for(const auto& a : publishActions) if(a.reset && !notInPresets(a.key)) a.reset();
         numVoices = json.contains("Voices") && json["Voices"].is_number_integer() ? json["Voices"].get<int>() : 1;
@@ -1200,65 +1257,20 @@ private:
         loadModulation(json);
         loadingBankPreset = false;
         structureDirty = true;
-        currentPreset = name;
+        modSource = nullptr;
     }
-    bool saveBankPreset(const std::string& rawName){
-        std::string name;
-        for(char c : rawName) name += (std::isalnum((unsigned char)c) || c == ' ' || c == '-' || c == '_') ? c : '_';
-        name = ofTrim(name);
-        if(name.empty()) return false;
-        ofJson json;
-        json["Voices"] = numVoices.get();
-        for(const auto& a : publishActions) if(a.save && !notInPresets(a.key)) a.save(json);
-        mod.patchBases(json);
-        mod.save(json, "pulsarBoxMod");
-        std::error_code ec;
-        std::filesystem::create_directories(presetDir(), ec);
-        std::ofstream file(presetDir() + "/" + name + ".json");
-        if(!file) return false;
-        file << json.dump(4);
-        currentPreset = name;
-        scanPresets();
-        return true;
+    // Between two sounds: numbers glide, the rest (voices, layers, modes,
+    // tables, the routing) switches at the switch point
+    void applySound(const ofJson& a, const ofJson& b, float t, bool sw){
+        if(t >= 1.0f && sw){ loadSound(b); return; }
+        scSnapshots::blendActions(publishActions, a, b, t, sw, [this](const std::string& k){ return notInPresets(k); });
+        const ofJson& src = sw ? b : a;
+        if(src.contains("Voices") && src["Voices"].is_number_integer() && src["Voices"].get<int>() != numVoices.get())
+            numVoices = src["Voices"].get<int>();
+        if(&src != modSource && src.contains("pulsarBoxModMatrix")){ modSource = &src; loadModulation(src); }
     }
-    void drawPresetBar(){
-        if(!presetsScanned) scanPresets();
-        ImGui::SetNextItemWidth(240.0f);
-        if(ImGui::BeginCombo("##pbpreset", currentPreset.empty() ? "Preset..." : currentPreset.c_str(), ImGuiComboFlags_HeightLarge)){
-            if(ImGui::IsWindowAppearing()) scanPresets();
-            for(const auto& name : bankPresets)
-                if(ImGui::Selectable(name.c_str(), name == currentPreset)) loadBankPreset(name);
-            if(bankPresets.empty()) ImGui::TextDisabled("No presets in %s", presetDir().c_str());
-            ImGui::EndCombo();
-        }
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Sound presets (Gate, Transpose and Outputs are left as they are)");
-        ImGui::SameLine();
-        auto step = [this](int d){
-            if(bankPresets.empty()) return;
-            auto it = std::find(bankPresets.begin(), bankPresets.end(), currentPreset);
-            const int n = int(bankPresets.size());
-            const int i = it == bankPresets.end() ? (d > 0 ? -1 : 0) : int(it - bankPresets.begin());
-            loadBankPreset(bankPresets[((i + d) % n + n) % n]);
-        };
-        if(ImGui::ArrowButton("##pbprev", ImGuiDir_Left)) step(-1);
-        ImGui::SameLine(0, 2);
-        if(ImGui::ArrowButton("##pbnext", ImGuiDir_Right)) step(1);
-        ImGui::SameLine();
-        static char name[128] = "";
-        if(ImGui::Button("Save...")){
-            std::snprintf(name, sizeof(name), "%s", currentPreset.c_str());
-            ImGui::OpenPopup("##pbsave");
-        }
-        if(ImGui::BeginPopup("##pbsave")){
-            ImGui::TextDisabled("Preset name (same name overwrites)");
-            ImGui::SetNextItemWidth(240.0f);
-            if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-            const bool enter = ImGui::InputText("##pbname", name, sizeof(name), ImGuiInputTextFlags_EnterReturnsTrue);
-            ImGui::SameLine();
-            if((ImGui::Button("Save") || enter) && saveBankPreset(name)) ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-        }
-    }
+    const ofJson* modSource = nullptr;   // the routing switched to (a blend's side)
+    float currentBpm = 120.0f;
 
     // ════════════════════════════════════════════════════════════════════════
     // Window
@@ -1284,14 +1296,30 @@ private:
             ImGui::GetWindowDrawList()->AddLine(ImVec2(h.x + w / 2 - 24, h.y + 4), ImVec2(h.x + w / 2 + 24, h.y + 4),
                 ImGui::GetColorU32(hot ? ImGuiCol_Text : ImGuiCol_TextDisabled), 2.0f);
             if(ImGui::BeginTabBar("##pbtabs")){
-                if(ImGui::BeginTabItem("Formants")){ drawFormantsTab(); ImGui::EndTabItem(); }
-                if(ImGui::BeginTabItem("Pulse")){ drawPulseTab(); ImGui::EndTabItem(); }
-                if(ImGui::BeginTabItem("Masking")){ drawMaskingTab(); ImGui::EndTabItem(); }
-                if(ImGui::BeginTabItem("Space")){ drawSpaceTab(); ImGui::EndTabItem(); }
+                // Few tabs, many columns: short sections stacked
                 const float tw = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-                if(ImGui::BeginTabItem("Envelopes")){ mod.drawEnvelopes(tw); ImGui::EndTabItem(); }
-                if(ImGui::BeginTabItem("LFOs")){ mod.drawLfos(tw); ImGui::EndTabItem(); }
-                if(ImGui::BeginTabItem("Routing")){ mod.drawRouting(tw); ImGui::EndTabItem(); }
+                if(ImGui::BeginTabItem("Sound")){
+                    drawPulseTab();
+                    ImGui::Spacing();
+                    drawFormantsTab();
+                    ImGui::EndTabItem();
+                }
+                if(ImGui::BeginTabItem("Masking & Space")){
+                    drawMaskingTab();
+                    ImGui::Spacing();
+                    drawSpaceTab();
+                    ImGui::EndTabItem();
+                }
+                if(ImGui::BeginTabItem("Envelopes")){
+                    mod.drawEnvelopes(tw, [this](float cw){ drawAmpCard(cw); });
+                    ImGui::EndTabItem();
+                }
+                if(ImGui::BeginTabItem("Modulation")){
+                    mod.drawLfos(tw);
+                    ImGui::Spacing();
+                    mod.drawRouting(tw);
+                    ImGui::EndTabItem();
+                }
                 ImGui::EndTabBar();
             }
             drawTableBrowser();
@@ -1303,8 +1331,6 @@ private:
 
     void drawHeader(){
         ImGui::TextUnformatted("PULSARBOX");
-        ImGui::SameLine();
-        drawPresetBar();
         ImGui::SameLine(0, 24);
         ImGui::TextDisabled("Formants");
         for(int n = 1; n <= LAYERS; n++){
@@ -1330,6 +1356,8 @@ private:
             int vv = std::clamp(viewVoice, 0, voices() - 1) + 1;
             if(ImGui::SliderInt("##pbviewvoice", &vv, 1, voices(), "View voice %d")){ viewVoice = vv - 1; viewDirty = true; }
         }
+        // snapshots, named presets, morph (scSnapshots)
+        snaps.drawBar(std::max(1.0f, ImGui::GetContentRegionAvail().x));
     }
 
     // ── The views ──────────────────────────────────────────────────────────
@@ -1624,8 +1652,41 @@ private:
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Every pulse's level lowered at random by up to this share");
         ImGui::Spacing();
         ImGui::TextDisabled("Click a table to change it.");
-        ImGui::TextDisabled("Formants 1..4 in the header.");
+        ImGui::TextDisabled("Formants 1..4 in the header (only those run).");
         ImGui::EndTable();
+    }
+
+    // The Envelopes tab's lead card: Gate Mode and the Amp Envelope
+    void drawAmpCard(float cw){
+        ImGui::BeginChild("##pbAmpCard", ImVec2(cw, 0), ImGuiChildFlags_AutoResizeY);
+        heading("AMP ENVELOPE");
+        combo(gateMode, {"Auto", "Gated", "Drone"});
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Auto: drones until the Gate is used (a value set, a cable, the timeline),\n"
+                              "then each voice plays through the Amp Envelope\n"
+                              "Gated: always through the Amp Envelope (Gate 0: silent)\n"
+                              "Drone: the Gate opens nothing");
+        scEnvCurve::ADSR e{std::max(0.001f, attack.get()), decay.get(), sustain.get(), std::max(0.001f, release.get()),
+                           {attackCurve.get(), decayCurve.get(), releaseCurve.get()}};
+        if(scEnvCurve::editADSR("##pbAmpEnv", ImVec2(cw, 90), e, pulsarbox::layerColor(0), IM_COL32(13, 16, 24, 255),
+                                false, release.getMax())){
+            attack = ofClamp(e.a, attack.getMin(), attack.getMax());
+            decay = ofClamp(e.d, decay.getMin(), decay.getMax());
+            sustain = e.s;
+            release = ofClamp(e.r, release.getMin(), release.getMax());
+            attackCurve = e.curve[0]; decayCurve = e.curve[1]; releaseCurve = e.curve[2];
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Drag the points; Alt+drag a segment to bend it");
+        sliderFloat(attack, "%.3f s", true);
+        sliderFloat(decay, "%.3f s", true);
+        sliderFloat(sustain, "%.2f");
+        sliderFloat(release, "%.3f s", true);
+        sliderVector(gate, "%.2f");
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
+        ImGui::TextDisabled(ampGated() ? "Each voice plays through it; the Gate's level is its velocity."
+                                       : "Droning: the voices play continuously.");
+        ImGui::PopTextWrapPos();
+        ImGui::EndChild();
     }
 
     void drawPulseTab(){
@@ -1644,9 +1705,8 @@ private:
         ImGui::TableNextColumn();
         heading("VOICE");
         sliderVector(levels, "%.2f");
-        sliderVector(gate, "%.0f");
-        sliderFloat(attack, "%.3f s", true);
-        sliderFloat(release, "%.3f s", true);
+        sliderVector(gate, "%.2f");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Each voice's gate: its Amp Envelope (Envelopes tab); its level is the velocity");
         sliderFloat(volume, "%.2f");
         ImGui::TableNextColumn();
         heading("HOW IT WORKS");
@@ -1860,6 +1920,10 @@ private:
     bool pitchTouched = false;
     void refreshOutputs() { for(auto& output : scNode::outputs) output = output; }
     ofParameter<float> transpose, glide, attack, release, volume, rateJitter;
+    ofParameter<float> decay, sustain, attackCurve, decayCurve, releaseCurve;
+    ofParameter<int> gateMode;            // 0 Auto (gated once the Gate is used), 1 Gated, 2 Drone
+    bool gateTouched = false;
+    int ampGatedSent = -1;
     // Formants
     ofParameter<int> numLayers;
     ofParameter<float> formantShift, cyclesScale, formantJitter, levelJitter;
@@ -1901,9 +1965,9 @@ private:
     scTimelineMenu timeline;              // "Add to Timeline" from the window
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> publishedHandles;
     bool publishedSeparatorAdded = false;
-    std::vector<std::string> bankPresets;
-    std::string currentPreset;
-    bool presetsScanned = false, loadingBankPreset = false;
+    // Snapshots and named presets (data/Supercollider/PulsarBox/Presets): scSnapshots
+    scSnapshots snaps;
+    bool loadingBankPreset = false;   // a whole sound is being set (structure changes wait)
 
     ofEventListeners listeners;
 };

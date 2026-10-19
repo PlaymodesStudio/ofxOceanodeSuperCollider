@@ -40,6 +40,7 @@
 #include "scTransportSync.h"
 #include "scChordBoxEngine.h"
 #include "scChordLink.h"
+#include "scSnapshots.h"
 #include "ofxSCSynth.h"
 #include "ofxSCGroup.h"
 #include "ofxSCBuffer.h"
@@ -98,6 +99,7 @@ public:
         addParameter(transposeP.set("Transpose", 0, -48, 48));
         addParameter(bendP.set("Pitchbend", 0.0f, -24.0f, 24.0f));
         addParameter(inversionP.set("Inversion", 0, -16, 16));
+        snaps.setupParameters();
         addParameter(scaleIn.set("Scale", {0, 2, 4, 5, 7, 9, 11}, {-127.0f}, {127.0f}));
         addParameter(resetP.set("Reset"));
         addOutputParameter(rootOut.set("Root", 0.0f, 0.0f, 11.0f));
@@ -142,7 +144,36 @@ public:
             for(auto& [server, st] : servers) sendStatic(server, st);
             follower.requestAnchor();
         }));
-        loadSnapshotFile();
+        addParameter(snaps.snapshotP);   // recalls by number (1..)
+        {
+            scSnapshots::Host h;
+            h.folder = "ChordBox";
+            h.title = "ChordBox";
+            h.capture = [this](){ return ofJson{{"state", engine.toJson()}}; };
+            // a progression does not blend: the state switches at the switch point
+            h.apply = [this](const ofJson& a, const ofJson& b, float, bool sw){
+                const ofJson& s = sw ? b : a;
+                if(!s.contains("state") || s["state"] == appliedSnapshotState) return;
+                appliedSnapshotState = s["state"];
+                loadState(appliedSnapshotState);
+                changed();
+            };
+            h.importLegacy = [this](){   // the list this node kept before (Snapshots.json)
+                const std::string old = ofToDataPath("nodeSnapshots/ChordBox/Snapshots.json", true);
+                if(!ofFile(old).exists()) return false;
+                bool any = false;
+                try {
+                    const ofJson j = ofLoadJson(old);
+                    if(j.contains("snapshots") && j["snapshots"].is_array())
+                        for(const auto& o : j["snapshots"])
+                            if(o.is_object()) any = snaps.appendSnapshot({{"name", o.value("name", std::string("Snapshot"))},
+                                                                           {"state", o.value("state", ofJson::object())}}) || any;
+                } catch(...) {}
+                return any;
+            };
+            h.bpm = [this](){ return std::max(1.0f, getFrameTransportState().current.bpm); };
+            snaps.setup(h);
+        }
         rebuildControls();
         changed();
     }
@@ -160,10 +191,9 @@ public:
                 invalidateServer(st);
             }
         }
-        if(snapshotRevision() != loadedSnapshotRevision) loadSnapshotFile();
+        snaps.update();
         watchTransport();
         if(dirty){ dirty = false; rebuild(); }
-        updateMorph();
         syncPublishedProxies();
         updateControlOutputs();
         fillBuffers();
@@ -260,6 +290,7 @@ public:
         json["ChordBoxPublished"] = publishedKeys;
         timeline.save(json, "ChordBoxTimeline");
         json["ChordBoxTab"] = selectedTab;
+        json["ChordBoxSnapshots"] = snaps.settingsJson();
     }
     void loadBeforeConnections(ofJson& json) override {
         int n = 1;
@@ -283,6 +314,7 @@ public:
     void presetRecallAfterSettingParameters(ofJson& json) override {
         if(json.contains("state") && json["state"].is_object()) loadState(json["state"]);
         if(json.contains("ChordBoxTab") && json["ChordBoxTab"].is_number_integer()) selectedTab = json["ChordBoxTab"].get<int>();
+        if(json.contains("ChordBoxSnapshots")) snaps.loadSettings(json["ChordBoxSnapshots"]);
         engine.originBeat = 0.0;
         newSalt();
         changed();
@@ -1065,48 +1097,9 @@ private:
     // Snapshots (shared by every ChordBox; the old node's import)
     // ════════════════════════════════════════════════════════════════════════
 
-    struct Snapshot { std::string name; ofJson state; };
-    std::vector<Snapshot> snapshots;
-    int loadedSnapshotRevision = -1, activeSnapshot = -1;
-    std::array<char, 96> snapName{};
-    static int& snapshotRevisionRef(){ static int r = 0; return r; }
-    static int snapshotRevision(){ return snapshotRevisionRef(); }
-    static std::string snapshotPath(){ return ofToDataPath("nodeSnapshots/ChordBox/Snapshots.json", true); }
-    void loadSnapshotFile(){
-        loadedSnapshotRevision = snapshotRevision();
-        snapshots.clear();
-        if(!ofFile(snapshotPath()).exists()) return;
-        try {
-            const ofJson j = ofLoadJson(snapshotPath());
-            if(j.contains("snapshots") && j["snapshots"].is_array())
-                for(const auto& s : j["snapshots"]) if(s.is_object()) snapshots.push_back({s.value("name", std::string("Snapshot")), s.value("state", ofJson::object())});
-        } catch(...) {}
-    }
-    void saveSnapshotFile(){
-        ofDirectory dir(ofFilePath::getEnclosingDirectory(snapshotPath()));
-        if(!dir.exists()) dir.create(true);
-        ofJson j;
-        j["snapshots"] = ofJson::array();
-        for(const auto& s : snapshots) j["snapshots"].push_back({{"name", s.name}, {"state", s.state}});
-        ofSavePrettyJson(snapshotPath(), j);
-        snapshotRevisionRef()++;
-        loadedSnapshotRevision = snapshotRevision();
-    }
-    void storeSnapshot(int slot, const std::string& name){
-        Snapshot s{name.empty() ? "Snapshot " + ofToString((slot >= 0 ? slot : (int)snapshots.size()) + 1) : name, engine.toJson()};
-        if(slot >= 0 && slot < (int)snapshots.size()) snapshots[slot] = s;
-        else if((int)snapshots.size() < NUM_SNAPS) snapshots.push_back(s);
-        saveSnapshotFile();
-    }
-    // Recall: Morph Time > 0 glides the outputs (the steps switch at once)
-    float morphSeconds = 0.0f;
-    void recallSnapshot(int slot){
-        if(slot < 0 || slot >= (int)snapshots.size()) return;
-        activeSnapshot = slot;
-        loadState(snapshots[slot].state);
-        changed();
-    }
-    void updateMorph(){}
+    // Snapshots: scSnapshots (shared by the synths), a snapshot = {"name", "state"}
+    scSnapshots snaps;
+    ofJson appliedSnapshotState;      // the last state a recall / morph loaded
     int importOldSnapshots(){
         const std::string dirPath = ofToDataPath("nodeSnapshots/ChordSequence/", true);
         ofDirectory dir(dirPath);
@@ -1121,14 +1114,13 @@ private:
         std::sort(files.begin(), files.end());
         int count = 0;
         for(const auto& [slot, path] : files){
-            if((int)snapshots.size() >= NUM_SNAPS) break;
             ofJson j;
             try { j = ofLoadJson(path); } catch(...) { continue; }
             if(!j.is_object() || !j.contains("entries")) continue;
-            snapshots.push_back({j.value("name", std::string("Chord Sequence ") + ofToString(slot + 1)), j});
+            if(!snaps.appendSnapshot({{"name", j.value("name", std::string("Chord Sequence ") + ofToString(slot + 1))}, {"state", j}})) break;
             count++;
         }
-        if(count) saveSnapshotFile();
+        if(count) snaps.saveLibrary();
         return count;
     }
 
@@ -1713,36 +1705,14 @@ private:
         columns(2, [&](int k){
             if(k == 0){
                 heading("Snapshots (shared by every ChordBox)");
-                ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x - 150.0f));
-                const bool enter = ImGui::InputTextWithHint("##cbSnapName", "name", snapName.data(), snapName.size(), ImGuiInputTextFlags_EnterReturnsTrue);
-                ImGui::SameLine();
-                if(ImGui::Button("Store") || enter){
-                    const std::string name(snapName.data());
-                    int slot = -1;
-                    for(int i = 0; i < (int)snapshots.size(); i++) if(!name.empty() && snapshots[i].name == name) slot = i;
-                    storeSnapshot(slot, name);
-                    activeSnapshot = slot >= 0 ? slot : (int)snapshots.size() - 1;
-                }
-                ImGui::SameLine();
-                ImGui::TextDisabled("%d/%d", (int)snapshots.size(), NUM_SNAPS);
-                ImGui::BeginChild("##cbSnapList", ImVec2(0, 0), true);
-                for(int i = 0; i < (int)snapshots.size(); i++){
-                    ImGui::PushID(i);
-                    if(ImGui::Selectable((ofToString(i + 1) + "  " + snapshots[i].name).c_str(), i == activeSnapshot)) recallSnapshot(i);
-                    bool erased = false;
-                    if(ImGui::BeginPopupContextItem("##cbSnapCtx")){
-                        if(ImGui::MenuItem("Replace with the current settings")) storeSnapshot(i, snapshots[i].name);
-                        if(ImGui::MenuItem("Rename to the name field") && snapName[0]){ snapshots[i].name = snapName.data(); saveSnapshotFile(); }
-                        if(ImGui::MenuItem("Delete")){ snapshots.erase(snapshots.begin() + i); saveSnapshotFile(); if(activeSnapshot >= (int)snapshots.size()) activeSnapshot = -1; erased = true; }
-                        ImGui::EndPopup();
-                    }
-                    ImGui::PopID();
-                    if(erased) break;
-                }
-                ImGui::EndChild();
+                snaps.drawBar(ImGui::GetContentRegionAvail().x, false);
+                ImGui::TextDisabled("Click a number to recall it, drag it to move it; type to rename.");
+                snaps.drawList();
             }else{
                 heading("Recall");
-                ImGui::TextWrapped("Click a snapshot to recall it (the whole progression and its outputs); right-click it to replace, rename or delete it.");
+                snaps.drawMorph(ImGui::GetContentRegionAvail().x);
+                ImGui::TextWrapped("A snapshot is the whole progression and its outputs: a recall or a morph switches it "
+                                   "at the switch point (...). The node's Snapshot input recalls by number (1..).");
                 ImGui::Spacing();
                 heading("Import");
                 if(ImGui::Button("Import the Chord Sequence node's snapshots"))

@@ -48,6 +48,8 @@
 #include "scModulation.h"
 #include "scTimelineMenu.h"
 #include "scAudioParam.h"
+#include "scScheduledInputs.h"
+#include "scSnapshots.h"
 #include <vector>
 #include <string>
 #include <map>
@@ -72,13 +74,15 @@ public:
     static constexpr int   MAX_VOICES          = 500;  // playheads per engine (largest GrainBoxPolyCtl_<cap>)
     // Modulation (the shared system, per engine): what the X voice variants
     // run (scGrainBoxPoly.scd: modApply)
-    static constexpr int   MOD_LFOS            = 4;
-    static constexpr int   MOD_ENVS            = 2;
-    static constexpr int   MOD_EXTS            = 4;
+    static constexpr int   MOD_LFOS            = 8;   // as PolyComb's (scGrainBoxPoly.scd: nL nE nX)
+    static constexpr int   MOD_ENVS            = 4;
+    static constexpr int   MOD_EXTS            = 8;
     static constexpr int   MOD_TARGETS         = 7;   // Pos Dur Pitch Amp Pan Rate Cut
-    static constexpr int   MOD_SOURCES         = 12;  // LFO 1-4, Env 1-2, Ext 1-4, Random, Voice
-    static constexpr int   MOD_HDR             = 132;
-    static constexpr int   MOD_VIS             = 17 * 6;
+    static constexpr int   MOD_SOURCES         = 22;  // LFO 1-8, Env 1-4, Ext 1-8, Random, Voice
+    static constexpr int   MOD_HDR             = 256;
+    static constexpr int   MOD_VIS_STRIDE      = MOD_LFOS + MOD_ENVS + 1;   // + the Amp Envelope
+    static constexpr int   MOD_VIS             = 17 * MOD_VIS_STRIDE;
+    static constexpr int   MOD_VOX             = MOD_EXTS + MOD_LFOS + 1;   // per playhead: Ext, LFO offsets, Gate
     static constexpr int   MOD_TABLE           = 257;
 
     // ── Constructor / Destructor ──────────────────────────────────────────────
@@ -168,6 +172,13 @@ private:
         //    listeners: they listen to its parameters.) ──
         std::unique_ptr<scModulation> mod;
         ofParameter<vector<float>> gate;          // per playhead: the envelopes' gate
+        // The Amp Envelope: each playhead's VCA on its Gate (its whole output,
+        // x the gate's level), while Gate Mode is gated. 0 Auto: gated once the
+        // Gate is used (a value > 0, a cable, the timeline), 1 Gated, 2 Drone
+        ofParameter<int>           gateMode;
+        ofParameter<float>         ampA, ampD, ampS, ampR, ampCA, ampCD, ampCR;
+        bool                       gateTouched = false;
+        int                        ampGatedSent = -1;   // what the header says (rewritten when it changes)
         // Gate and Pitch (when published) also take audio cables: the gate copied
         // onto the playheads' gates (GrainBoxGateIn<k>, after the control synth),
         // the pitch mapped onto the control synth (MIDI notes, 60: as recorded)
@@ -182,7 +193,7 @@ private:
         std::vector<ofParameter<vector<float>>*> modV;
         struct ModSC {
             ofxSCBus* hdr = nullptr;              // control, MOD_HDR
-            ofxSCBus* vox = nullptr;              // control, 9 x capacity (while on)
+            ofxSCBus* vox = nullptr;              // control, MOD_VOX x capacity (while on)
             ofxSCBus* vis = nullptr;              // control, MOD_VIS
             int voxCap = 0;
             std::array<ofxSCBuffer*, 2 * MOD_LFOS> tables{};          // the shapes, then the noise curves
@@ -217,6 +228,9 @@ private:
         ofParameter<int>           syncGate;
         // Grain
         ofParameter<vector<float>> amp, pitch, duration, position, panAz;
+        // Pitch's units: 0 Semitones (0 = as recorded, -48..48), 1 MIDI note
+        // (60 = as recorded, 0..127: what a keyboard or a piano roll sends)
+        ofParameter<int>           pitchMode;
         ofParameter<vector<float>> reverse;          // per-grain probability of playing backwards
         // Pitch to scale: 0 Off, 1 Chromatic ... 11 Custom (scaleMask bits, relative to root)
         ofParameter<int>           scaleType, scaleRoot, scaleMask;
@@ -450,7 +464,17 @@ private:
     void  sendDiv(Playhead& ph);
     // ── Modulation (per engine) ───────────────────────────────────────────
     void setupModulation(Playhead& ph);              // its scModulation, its parameters
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+public:
+    // Engine 1 plays notes (MIDI Pitch on): one per playhead, the gate opens its Amp Envelope
+    bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override;
+private:
+#endif
     bool modWanted(const Playhead& ph) const;        // something routed (a used source, a GrainBox target)
+    bool ampGated(const Playhead& ph) const;         // the Amp Envelope is the VCA (Gate Mode)
+    // Saved before the Amp Envelope: an envelope routed to Amp was the VCA; it becomes the Amp Envelope
+    void migrateAmpEnvelope(Playhead& ph, const ofJson& j);
+    void writeGate(Playhead& ph, ofxSCServer* srv);  // the playheads' gates onto the modulation's block
     float regionSecOf(const Playhead& ph) const;     // the region's length (s): LFOs in Smp
     std::vector<float> panSend(const Playhead& ph, int n) const;   // PanAz after Placement
     void ensureModResources(Playhead& ph, ofxSCServer* srv);       // buses (+ tables while on)
@@ -535,60 +559,20 @@ private:
     bool tabsInitialized = false;
     void drawGlobalPanel(float w);
 
-    // ── Snapshots: 16 slots of every editor parameter (not samples / live
-    //    buffer length); click recall, Shift-click store, right-click clear.
-    //    "Snapshot" (1..16, publishable) recalls from a connection. ──
-    std::array<ofJson, 16> snapSlots;
-    std::array<bool, 16>   snapUsed{};
-    int  activeSnap   = -1;
-    bool snapRecalling = false;
-    ofParameter<int> snapshotP;
-
-    // ── Morph between snapshots ──
-    //   A/B: Morph (0..1) blends snapshot A into snapshot B (publishable, so a
-    //   connection can drive it). Glide: a recall (Alt-click, or every recall
-    //   with "Glide" on) moves from the current state to the slot over Morph
-    //   Time (beats or seconds), with a curve. Continuous values glide (pitch
-    //   in semitones; frequencies / speeds / intervals in log), switches /
-    //   shapes / units jump at the switch point (start, middle, end).
-    ofParameter<float> morphP, morphTimeP;
-    ofParameter<int>   morphAP, morphBP, morphCurveP, morphSwitchP;
-    ofParameter<bool>  morphBeatsP, morphGlideP;
-    bool   morphRun = false;
-    float  morphT0 = 0.0f, morphDur = 1.0f, morphProgress = 0.0f;
-    int    morphTarget = -1;
-    ofJson morphFrom, morphTo;
-    void applyMorph(const ofJson& a, const ofJson& b, float t);
-    void startGlide(int slot);
-    void applyAB();
-    float morphCurve(float u) const;
+    // ── Snapshots and Morph (scSnapshots, shared by the synths): every
+    //    editor parameter (not the samples, the live buffer length, the
+    //    gates / triggers). Morph: numbers glide (pitch in semitones;
+    //    frequencies / speeds / intervals in log), switches / shapes / units
+    //    jump at the switch point. ──
+    scSnapshots snaps;
+    void applyMorph(const ofJson& a, const ofJson& b, float t, bool sw);
     void drawMorphPanel(float w);
     bool snapshotExcluded(const std::string& key) const;
     ofJson captureSnapshot() const;
     void applySnapshot(const ofJson& snap);
-    void storeSnapshot(int slot);
-    void recallSnapshot(int slot);
-    void drawSnapshotBar(float w);     // the presets dropdown above the waveform
-    // Snapshot library: the 16 slots live in shared files
-    // (data/nodeSnapshots/GrainBoxPoly/snapshot_<n>.json), saved on every
-    // change and read at start, so every project / preset / node sees them
-    // (another node's change is picked up within a second). Named banks are
-    // files in its banks/ folder. Each slot can have a "name".
-    bool snapLoadDialog = false;        // "From file..." (run in update, outside ImGui)
-    std::string snapBankMsg;
-    char snapBankName[64] = "my bank";
-    char snapRenameBuf[48] = "";
-    std::filesystem::file_time_type snapLibTime{};
-    float snapLibCheckAt = 0.0f;
-    std::string snapLibPath() const;
-    std::string snapBankDir() const;   // .../banks
-    std::string snapSetDir() const;    // data/nodeSnapshots/GrainBoxPoly
-    std::filesystem::file_time_type snapSetTime() const;
-    void saveSnapshotLibrary();
-    void loadSnapshotLibrary();
-    void saveSnapshotBank(const std::string& path);
-    bool loadSnapshotBank(const std::string& path);
-    std::string snapName(int k) const;
+    // A snapshot's Pitch in each playhead's current units (Pitch Mode is not
+    // recalled; snapshots from before it hold semitones)
+    ofJson pitchInCurrentUnits(const ofJson& snap) const;
     void drawGlobalWaveform(ImDrawList* dl, ImVec2 pos, float w, float h);
     void drawFxPanel(float w);
     void drawPlayheadHeader(Playhead& ph, float w);   // sample mode + channels row
@@ -650,6 +634,9 @@ private:
     std::vector<EditorPublishAction> publishableEditorParameters;
     std::vector<std::string> publishedEditorParameterKeys;
     scTimelineMenu timeline;              // "Add to Timeline" from the window
+    // Engine 1's Gate and Pitch on the node (cables, the timeline's notes timetagged)
+    std::shared_ptr<ofxOceanodeAbstractParameter> p0GateHandle, p0PitchHandle;
+    scScheduledInputs noteInputs;
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> publishedEditorParameterHandles;
     bool publishedEditorSeparatorAdded = false;
     std::vector<std::string> legacyAutoPublishedKeys;   // see loadBeforeConnections
@@ -698,6 +685,8 @@ private:
     void onEditorParameterPublished(const std::string& key);     // Gate / Pitch: their cables
     void onEditorParameterUnpublished(const std::string& key);
     void sendPitchTo(Playhead& ph, ofxSCServer* srv, ofxSCSynth* s);   // values, or the cable mapped
+    void applyPitchModeRange(Playhead& ph);    // Pitch's min / max for its mode
+    void switchPitchMode(Playhead& ph, int mode);   // the window's switch: the values follow (+-60)
     void syncGateCopy(Playhead& ph, ofxSCServer* srv);
 
 #if OFXOCEANODESC_HAS_TRANSPORT

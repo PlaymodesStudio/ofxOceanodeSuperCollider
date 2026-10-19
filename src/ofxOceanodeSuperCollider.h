@@ -73,6 +73,7 @@
 #include "nodes/scBeatRepeatPro.h"
 #include "nodes/scPolyComb.h"
 #include "nodes/scAnalogBox.h"
+#include "nodes/scAliasingBox.h"
 #include "nodes/scEchoBox.h"
 #include "nodes/scFeedbackNode.h"
 #include "nodes/scCodeNode.h"
@@ -227,6 +228,7 @@ static void registerModels(ofxOceanode &o){
 	o.registerModel<scBeatRepeatPro>("SuperCollider/Effect/Time/Looping", controller->getServers());
 	o.registerModel<scPolyComb>("SuperCollider", controller->getServers());
 	o.registerModel<scAnalogBox>("SuperCollider", controller->getServers());
+	o.registerModel<scAliasingBox>("SuperCollider", controller->getServers());
 	o.registerModel<scEchoBox>("SuperCollider", controller->getServers());
 #if OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<scNRTRecorder>("SuperCollider", controller.get());

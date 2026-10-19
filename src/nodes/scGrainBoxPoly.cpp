@@ -4,6 +4,7 @@
 //
 
 #include "scGrainBoxPoly.h"
+#include "scEnvelopeCurve.h"
 #include "ofxSuperCollider.h"
 #include <algorithm>
 #include <cmath>
@@ -335,7 +336,13 @@ void scGrainBoxPoly::setup() {
 
     addSeparator("Grain");
     addParameter(p0.amp);
-    addParameter(p0.pitch);
+    p0PitchHandle = addParameter(p0.pitch);
+    p0GateHandle = addParameter(p0.gate);   // the notes: each playhead's Amp Envelope (Envelopes)
+    p0.gateIn.attach(p0GateHandle, availableInputs, [this](){ for(auto& o : outputs) o = o; });
+    p0.pitchIn.attach(p0PitchHandle, availableInputs, [this](){ for(auto& o : outputs) o = o; });
+    noteInputs.add(p0GateHandle, p0.gate);
+    noteInputs.add(p0PitchHandle, p0.pitch);
+    noteInputs.enable(this, [this](){ for(auto& [srv, s] : ph0().synths) if(s) return true; return false; });
     addParameter(p0.duration);
     addParameter(p0.position);
     addParameter(p0.panAz);      // GrainBoxPoly: per-playhead placement (a vector = one value per playhead)
@@ -354,15 +361,7 @@ void scGrainBoxPoly::setup() {
     gDurP.set      ("Global Duration", 0.0f, -1.0f, 1.0f);
     gChanceP.set   ("Global Chance",   0.0f, -1.0f, 1.0f);
     timeUnitsP.set ("Time Units", 0, 0, 2);   // 0 Relative, 1 ms, 2 Beats
-    snapshotP.set  ("Snapshot",   0, 0, 16);  // 1..16 recalls that slot (0 = none)
-    morphP.set      ("Morph",        0.0f, 0.0f, 1.0f);   // A -> B
-    morphAP.set     ("Morph A",      0, 0, 16);           // 0 = none
-    morphBP.set     ("Morph B",      0, 0, 16);
-    morphTimeP.set  ("Morph Time",   4.0f, 0.0f, 64.0f);  // beats (or s)
-    morphBeatsP.set ("Morph Beats",  true);
-    morphCurveP.set ("Morph Curve",  1, 0, 3);            // Lin, Ease, Exp, Log
-    morphSwitchP.set("Morph Switch", 1, 0, 2);            // switches jump at start / middle / end
-    morphGlideP.set ("Morph Glide",  false);              // every recall glides
+    snaps.setupParameters();   // Snapshot, Morph... (scSnapshots, shared by the synths)
     fxOnP[FX_EQ].set     ("EQ On",     false);
     fxOnP[FX_ECHO].set   ("Echo On",   false);
     fxOnP[FX_REVERB].set ("Reverb On", false);
@@ -442,14 +441,6 @@ void scGrainBoxPoly::setup() {
     nodeListeners.push(speedP.newListener([this](float&)     { sendMixParams(); }));
     // Time units: convert the stored values (no jump), or, while a preset is
     // setting them (already in its unit), just adopt the unit
-    nodeListeners.push(snapshotP.newListener([this](int& v) {
-        if(snapRecalling || v < 1 || v > 16) return;
-        if(morphGlideP.get()) startGlide(v - 1);
-        else                  recallSnapshot(v - 1);
-    }));
-    nodeListeners.push(morphP.newListener([this](float&)  { applyAB(); }));
-    nodeListeners.push(morphAP.newListener([this](int&)   { applyAB(); }));
-    nodeListeners.push(morphBP.newListener([this](int&)   { applyAB(); }));
     nodeListeners.push(timeUnitsP.newListener([this](int& m) {
         const int to = std::max(0, std::min(2, m));
         if(to == timeUnitsCur) { updateTimeRanges(); return; }
@@ -513,7 +504,58 @@ void scGrainBoxPoly::setup() {
 #endif
 
     initializePublishableEditorParameters();
-    loadSnapshotLibrary();   // the shared snapshots (every project / preset)
+    {
+        // the shared snapshots (scSnapshots); their older homes taken over once
+        const std::filesystem::path home = ofToDataPath("nodeSnapshots/GrainBox", true);
+        try {
+            const std::filesystem::path old = ofToDataPath("nodeSnapshots/GrainBoxPoly", true);
+            if(!std::filesystem::exists(home) && std::filesystem::exists(old))
+                std::filesystem::copy(old, home, std::filesystem::copy_options::recursive);
+            std::filesystem::create_directories(home / "banks");
+            // banks once kept beside the slots, or in Supercollider/GrainBoxSnapshots
+            for(const std::filesystem::path from : {std::filesystem::path(ofToDataPath("Supercollider/GrainBoxSnapshots", true)), home}) {
+                if(!std::filesystem::exists(from)) continue;
+                for(auto& e : std::filesystem::directory_iterator(from)) {
+                    const std::string fn = e.path().filename().string();
+                    if(!e.is_regular_file() || e.path().extension() != ".json") continue;
+                    if(fn.rfind("snapshot_", 0) == 0 || fn == "_current.json" || fn == "library.json") continue;
+                    const auto to = home / "banks" / fn;
+                    if(!std::filesystem::exists(to)) std::filesystem::copy_file(e.path(), to);
+                }
+            }
+        } catch(...) {}
+        scSnapshots::Host h;
+        h.folder = "GrainBox";
+        h.title = "GrainBox";
+        h.capture = [this](){ return captureSnapshot(); };
+        h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){
+            if(t >= 1.0f && &a == &b) applySnapshot(b);   // a recall: every value it holds
+            else applyMorph(a, b, t, sw);
+        };
+        h.importLegacy = [this, home](){   // an earlier build's single file
+            for(const std::filesystem::path old : {home / "_current.json",
+                     std::filesystem::path(ofToDataPath("Supercollider/GrainBoxSnapshots/_current.json", true))}) {
+                if(!std::filesystem::exists(old)) continue;
+                ofJson j;
+                try { j = ofLoadJson(old.string()); } catch(...) { continue; }
+                const ofJson* arr = j.contains("slots") && j["slots"].is_array() ? &j["slots"]
+                                  : j.contains("gbpSnapshots") && j["gbpSnapshots"].is_array() ? &j["gbpSnapshots"] : nullptr;
+                if(!arr) continue;
+                bool any = false;
+                for(int k = 0; k < std::min(scSnapshots::SLOTS, (int)arr->size()); k++) {
+                    if(!(*arr)[k].is_object()) continue;
+                    ofJson s = (*arr)[k];
+                    if(s.contains("__name")) { s["name"] = s["__name"]; s.erase("__name"); }
+                    snaps.slots[k] = s; snaps.used[k] = true; any = true;
+                }
+                if(any) return true;
+            }
+            return false;
+        };
+        h.bpm = [this](){ return effectiveBpm(); };
+        h.paramMenu = [this](const std::string& k){ drawPublishedCurrentItemUnderline(k); drawNodePublishContextMenu(k); };
+        snaps.setup(h);
+    }
 }
 
 void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
@@ -533,7 +575,10 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.syncGate.set       ("SyncGate"     + x, 0, 0, 1);
 
     ph.amp.set            ("Amp"          + x, {1.0f},   {0.0f},   {1.0f});
-    ph.pitch.set          ("Pitch"        + x, {0.0f},   {-48.0f}, {48.0f});
+    // A new playhead plays MIDI notes (60: as recorded); presets from before
+    // Pitch Mode load as Semitones (presetRecallBeforeSettingParameters).
+    ph.pitchMode.set      ("PitchMode"    + x, 1, 0, 1);
+    ph.pitch.set          ("Pitch"        + x, {60.0f},  {0.0f},   {127.0f});
     ph.dynamicDur.set     ("DynamicDur"   + x, false);
     ph.trigDur.set        ("TrigDur"      + x, false);
     ph.duration.set       ("Duration"     + x, {0.1f},   {0.0f},   {1.0f});
@@ -582,6 +627,14 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
 
     // Modulation: the gate the envelopes follow, the voices' placement
     ph.gate.set           ("Gate"         + x, {0.0f},   {0.0f},   {1.0f});
+    ph.gateMode.set       ("Gate Mode"    + x, 0, 0, 2);
+    ph.ampA.set           ("Amp Attack"   + x, 0.01f, 0.001f, 10.0f);
+    ph.ampD.set           ("Amp Decay"    + x, 0.3f,  0.001f, 10.0f);
+    ph.ampS.set           ("Amp Sustain"  + x, 1.0f,  0.0f,   1.0f);
+    ph.ampR.set           ("Amp Release"  + x, 0.5f,  0.001f, 20.0f);
+    ph.ampCA.set          ("Amp Attack Curve"  + x, -4.0f, -12.0f, 12.0f);
+    ph.ampCD.set          ("Amp Decay Curve"   + x, -4.0f, -12.0f, 12.0f);
+    ph.ampCR.set          ("Amp Release Curve" + x, -4.0f, -12.0f, 12.0f);
     ph.placement.set      ("Placement"    + x, 0, 0, 2);
     ph.spreadWidth.set    ("Spread Width" + x, 1.0f, 0.0f, 1.0f);
     ph.envData.assign(ENV_BUFFER_SIZE, 0.0f);
@@ -1279,6 +1332,11 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     };
     vfListener("amp",              ph.amp);
     ph.listeners.push(ph.pitch.newListener([this, p](vector<float>&) {
+        if(scScheduling::isBackendSendSuppressed()) return;   // sent timetagged already
+        for(auto& [srv, s] : p->synths) if(s) sendPitchTo(*p, srv, s);
+    }));
+    ph.listeners.push(ph.pitchMode.newListener([this, p](int&) {
+        applyPitchModeRange(*p);
         for(auto& [srv, s] : p->synths) if(s) sendPitchTo(*p, srv, s);
     }));
     // position / duration / chance: + the global offsets (sendOffsetParams)
@@ -1378,7 +1436,16 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     vfListener("panazjit",         ph.panAzJit);
     vfListener("levels",           ph.levels);
     // Modulation: the gate, the placement (PanAz per playhead)
-    ph.listeners.push(ph.gate.newListener([p](vector<float>&) { p->modDirty = true; }));
+    // The gate: straight onto the playheads' gate block (a scheduled one
+    // inside its timetag); its first use turns Auto into gated
+    ph.listeners.push(ph.gate.newListener([this, p](vector<float>& v) {
+        if(scScheduling::isBackendSendSuppressed()) return;
+        if(!p->gateTouched) for(float x : v) if(x > 0.0f) { p->gateTouched = true; break; }
+        for(auto& [srv, s] : p->synths) if(s && p->gateIn.bus(srv) < 0) writeGate(*p, srv);
+    }));
+    for(auto* q : {&ph.ampA, &ph.ampD, &ph.ampS, &ph.ampR, &ph.ampCA, &ph.ampCD, &ph.ampCR})
+        ph.listeners.push(q->newListener([p](float&) { p->modDirty = true; }));
+    ph.listeners.push(ph.gateMode.newListener([p](int&) { p->modDirty = true; }));
     auto toPan = [this, p]() {
         const auto ev = panSend(*p, phVoices(*p));
         for(auto& [srv, s] : p->synths) if(s) s->set("panaz", ev);
@@ -2010,15 +2077,34 @@ void scGrainBoxPoly::onEditorParameterUnpublished(const std::string& key) {
 }
 void scGrainBoxPoly::sendPitchTo(Playhead& ph, ofxSCServer* srv, ofxSCSynth* s) {
     if(!s) return;
+    auto inEffect = noteInputs.inEffectNow();   // not a scheduled send: the notes as they stand now
     const int nv = phVoices(ph);
     const int pb = ph.pitchIn.bus(srv);
     if(pb >= 0){
         s->set("pitchoff", -60.0f);                          // MIDI 60: the sample as recorded
         s->mapan("pitch", pb, std::min(nv, 128));
     }else{
-        s->set("pitchoff", 0.0f);
+        s->set("pitchoff", ph.pitchMode.get() == 1 ? -60.0f : 0.0f);   // MIDI mode: 60 as recorded
         s->set("pitch", expandF(ph.pitch.get(), nv));        // (a set also unmaps)
     }
+}
+void scGrainBoxPoly::applyPitchModeRange(Playhead& ph) {
+    const bool midi = ph.pitchMode.get() == 1;
+    const std::vector<float> mn{midi ? 0.0f : -48.0f}, mx{midi ? 127.0f : 48.0f};
+    if(ph.pitch.getMin() == mn && ph.pitch.getMax() == mx) return;
+    ph.pitch.setMin(mn);
+    ph.pitch.setMax(mx);
+    std::string name = ph.pitch.getName();
+    parameterChangedMinMax.notify(name);
+}
+void scGrainBoxPoly::switchPitchMode(Playhead& ph, int mode) {
+    mode = std::clamp(mode, 0, 1);
+    if(mode == ph.pitchMode.get()) return;
+    // The same sound in the other units: MIDI = semitones + 60
+    auto v = ph.pitch.get();
+    for(float& x : v) x = mode == 1 ? std::clamp(x + 60.0f, 0.0f, 127.0f) : std::clamp(x - 60.0f, -48.0f, 48.0f);
+    ph.pitchMode.set(mode);
+    ph.pitch.set(v);
 }
 // The Gate cable onto the playheads' gates: a GrainBoxGateIn<k> after the
 // control synth, writing the modulation's gate block (only while modulating)
@@ -2028,7 +2114,7 @@ void scGrainBoxPoly::syncGateCopy(Playhead& ph, ofxSCServer* srv) {
     ofxSCSynth* ctl = ph.synths.count(srv) ? ph.synths[srv] : nullptr;
     const auto mit = ph.modSC.find(srv);
     const bool can = bus >= 0 && ph.modOn && ctl && mit != ph.modSC.end() && mit->second.vox;
-    const int out = can ? mit->second.vox->index + 8 * mit->second.voxCap : -1;
+    const int out = can ? mit->second.vox->index + (MOD_EXTS + MOD_LFOS) * mit->second.voxCap : -1;
     const int k = can ? std::min({phVoices(ph), mit->second.voxCap, 128}) : 0;
     const int ctlID = ctl ? ctl->nodeID : -1;
     if(c.synth && (!can || c.ctlID != ctlID || c.bus != bus || c.out != out || c.k != k)){
@@ -2708,33 +2794,7 @@ void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
         }
     }
     updatePausing();
-    // Snapshot bank dialogs (outside ImGui, as scDynGenNode)
-    if(snapLoadDialog) {
-        snapLoadDialog = false;
-        ofFileDialogResult r = ofSystemLoadDialog("Snapshots from a bank or an Oceanode preset file",
-                                                  false, snapBankDir());
-        if(r.bSuccess) loadSnapshotBank(r.filePath);
-    }
-    // Shared library changed by another GrainBox node / app: take it over
-    if(ofGetElapsedTimef() >= snapLibCheckAt) {
-        snapLibCheckAt = ofGetElapsedTimef() + 1.0f;
-        try {
-            if(snapSetTime() != snapLibTime) loadSnapshotLibrary();
-        } catch(...) {}
-    }
-    // Morph glide (from the state at its start to the target slot)
-    if(morphRun) {
-        const float u = (ofGetElapsedTimef() - morphT0) / std::max(0.001f, morphDur);
-        morphProgress = std::max(0.0f, std::min(1.0f, u));
-        applyMorph(morphFrom, morphTo, morphCurve(morphProgress));
-        if(u >= 1.0f) {
-            morphRun   = false;
-            activeSnap = morphTarget;
-            snapRecalling = true;
-            snapshotP.set(morphTarget + 1);
-            snapRecalling = false;
-        }
-    }
+    snaps.update();   // bank dialog, another node's library change, a glide
     // A per-playhead vector whose connection was removed: back to one value
     // (its first), so no hidden per-playhead values remain. Checked every few
     // frames: 14 parameter lookups by name per playhead per frame for an
@@ -3468,6 +3528,7 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
         // Grain
         regVF(ph, ph.amp,              true);
         regVF(ph, ph.pitch,            true);
+        regS (ph, ph.pitchMode,        false);
         regS (ph, ph.dynamicDur,       true);
         regS (ph, ph.trigDur,          true);
         regVF(ph, ph.duration,         true);
@@ -3510,6 +3571,8 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
         regS (ph, ph.fbTone,           false);
         // Modulation: the gate, the placement, every LFO / envelope / ext control
         regVF(ph, ph.gate,             false);
+        regS (ph, ph.gateMode,         false);
+        for(auto* q : {&ph.ampA, &ph.ampD, &ph.ampS, &ph.ampR, &ph.ampCA, &ph.ampCD, &ph.ampCR}) regS(ph, *q, false);
         regS (ph, ph.placement,        false);
         regS (ph, ph.spreadWidth,      false);
         for(auto* q : ph.modF) regS(ph, *q, false);
@@ -3540,9 +3603,9 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
     regG(gDurP);
     regG(gChanceP);
     regG(timeUnitsP);
-    regG(snapshotP);
-    regG(morphP); regG(morphAP); regG(morphBP); regG(morphTimeP); regG(morphBeatsP);
-    regG(morphCurveP); regG(morphSwitchP); regG(morphGlideP);
+    regG(snaps.snapshotP);
+    regG(snaps.morphP); regG(snaps.morphAP); regG(snaps.morphBP); regG(snaps.morphTimeP); regG(snaps.morphBeatsP);
+    regG(snaps.morphCurveP); regG(snaps.morphSwitchP); regG(snaps.morphGlideP);
     for(int st = 0; st < FX_COUNT; st++) regG(fxOnP[st]);
     for(int b = 0; b < 5; b++) { regG(eqGainP[b]); regG(eqFreqP[b]); regG(eqShapeP[b]); }
     regG(eqMixP);
@@ -3779,9 +3842,13 @@ void scGrainBoxPoly::presetSave(ofJson& j) {
     j["globalTab"]      = globalTab;
     j["publishedEditorParameters"] = publishedEditorParameterKeys;
     timeline.save(j, "timelineHiddenEditorParameters");
-    j["activeSnapshot"] = activeSnap;
-    j["gbpSnapshots"]   = ofJson::array();
-    for(int k = 0; k < 16; k++) j["gbpSnapshots"].push_back(snapUsed[k] ? snapSlots[k] : ofJson(nullptr));
+    j["activeSnapshot"] = snaps.active;
+    j["gbpSnapshots"]   = ofJson::array();   // (a copy: the library is in data/nodeSnapshots/GrainBox)
+    {
+        int last = -1;
+        for(int k = 0; k < scSnapshots::SLOTS; k++) if(snaps.used[k]) last = k;
+        for(int k = 0; k <= last; k++) j["gbpSnapshots"].push_back(snaps.used[k] ? snaps.slots[k] : ofJson(nullptr));
+    }
 
     // Values of the parameters that are not in the node right now (the node
     // saves the others itself), under their usual names.
@@ -3858,6 +3925,17 @@ void scGrainBoxPoly::presetRecallBeforeSettingParameters(ofJson& j) {
     int n = 1;
     if(j.contains("numPlayheads") && j["numPlayheads"].is_number()) n = j["numPlayheads"].get<int>();
     setNumPlayheads(n);
+    // Pitch arrives in the preset's units: its mode first (none: from before
+    // Pitch Mode, Semitones)
+    for(auto& ph : playheads) {
+        const std::string k = ph->pitchMode.getEscapedName();
+        int mode = 0;
+        if(j.contains(k)) {
+            if(j[k].is_number()) mode = j[k].get<int>();
+            else if(j[k].is_string()) mode = ofToInt(j[k].get<std::string>());
+        }
+        ph->pitchMode.set(std::clamp(mode, 0, 1));
+    }
     if(j.contains("publishedEditorParameters") && j["publishedEditorParameters"].is_array()) {
         std::vector<std::string> keys;
         try { keys = j["publishedEditorParameters"].get<std::vector<std::string>>(); } catch(...) {}
@@ -3893,8 +3971,8 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
         };
         rs(transposeP, 0.0f); rs(volumeP, 1.0f); rs(speedP, 1.0f);
         rs(timeUnitsP, 0);   // before the values: old presets are Relative
-        rs(morphP, 0.0f); rs(morphAP, 0); rs(morphBP, 0); rs(morphTimeP, 4.0f); rs(morphBeatsP, true);
-        rs(morphCurveP, 1); rs(morphSwitchP, 1); rs(morphGlideP, false);
+        rs(snaps.morphP, 0.0f); rs(snaps.morphAP, 0); rs(snaps.morphBP, 0); rs(snaps.morphTimeP, 4.0f); rs(snaps.morphBeatsP, true);
+        rs(snaps.morphCurveP, 1); rs(snaps.morphSwitchP, 1); rs(snaps.morphGlideP, false);
         rs(gPosP, 0.0f); rs(gDurP, 0.0f); rs(gChanceP, 0.0f);
         for(int st = 0; st < FX_COUNT; st++) rs(fxOnP[st], false);
         for(int b = 0; b < 5; b++) rs(eqGainP[b], 0.0f);
@@ -3924,6 +4002,10 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
             rv(ph->autoTrigBeatDiv, defaultInterval(ph->intervalUnit.get()));
             rv(ph->trigPhase, 0.0f); rs(ph->maxGrains, 0);
             rv(ph->gate, 0.0f); rs(ph->placement, 0); rs(ph->spreadWidth, 1.0f);
+            rs(ph->gateMode, 0);
+            rs(ph->ampA, 0.01f); rs(ph->ampD, 0.3f); rs(ph->ampS, 1.0f); rs(ph->ampR, 0.5f);
+            rs(ph->ampCA, -4.0f); rs(ph->ampCD, -4.0f); rs(ph->ampCR, -4.0f);
+            ph->gateTouched = false;   // Auto starts droning again
         }
     }
 
@@ -3939,7 +4021,7 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
     for(auto& ph : playheads) {
         auto& m = *ph->mod;
         const std::string pre = "gbpMod" + ph->sfx;
-        if(j.contains(pre + "Matrix")) m.load(j, pre);
+        if(j.contains(pre + "Matrix")) { m.load(j, pre); migrateAmpEnvelope(*ph, j); }
         else {
             std::fill(m.matrix.begin(), m.matrix.end(), 0.0f);
             m.lfoCount = m.envCount = m.extCount = 0;
@@ -4027,13 +4109,12 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
     // Snapshots: they live in the shared library, not in the preset. A preset
     // saved with snapshots before that fills the library only while it is empty.
     {
-        bool any = false;
-        for(bool u : snapUsed) any = any || u;
-        if(!any && j.contains("gbpSnapshots") && j["gbpSnapshots"].is_array()) {
+        if(snaps.empty() && j.contains("gbpSnapshots") && j["gbpSnapshots"].is_array()) {
             const auto& a = j["gbpSnapshots"];
-            for(int k = 0; k < std::min(16, (int)a.size()); k++)
-                if(a[k].is_object()) { snapSlots[k] = a[k]; snapUsed[k] = true; any = true; }
-            if(any) saveSnapshotLibrary();
+            bool any = false;
+            for(int k = 0; k < std::min(scSnapshots::SLOTS, (int)a.size()); k++)
+                if(a[k].is_object()) { snaps.slots[k] = a[k]; snaps.used[k] = true; any = true; }
+            if(any) snaps.saveLibrary();
         }
     }
     loadingPreset = false;
@@ -4183,8 +4264,9 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
     if(waveH <= 0.0f) waveH = totalH * 0.52f;
 
     // ── Left: file browser (shared component, as in RhythmBox) ────────────
-    ImGui::BeginChild("##gbpBrowser", ImVec2(bw, totalH), false);
+    if(ImGui::BeginChild("##gbpBrowser", ImVec2(bw, totalH), false)) {
     drawBrowser(bw, totalH);
+    } else browser.stopPreview();
     ImGui::EndChild();
 
     // ── Browser resize handle (RhythmBox's splitter) ──────────────────────
@@ -4197,15 +4279,19 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
     ImGui::SameLine(0.0f, 0.0f);
 
     // ── Right panel (single scrollable column) ────────────────────────────
-    ImGui::BeginChild("##gbpRight", ImVec2(rw, totalH), false,
-                      ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    if(!ImGui::BeginChild("##gbpRight", ImVec2(rw, totalH), false,
+                      ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
+        ImGui::EndChild();
+        ImGui::End();
+        return;
+    }
     float rightW = rw - ImGui::GetStyle().ScrollbarSize - m;
 
     // ── Waveform (resizable height); drop a browser file on it to load it
     //    into the selected playhead's sample ──────────────────────────────
     {
         // Presets (the 16 shared snapshot slots, by name): a bar above the waveform
-        drawSnapshotBar(rightW);
+        snaps.drawBar(rightW, false);
         const float waveW = std::max(1.0f, rightW);
         ImVec2 pos = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##gbpWave", ImVec2(waveW, std::max(1.0f, waveH)));
@@ -4312,9 +4398,10 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
 
     if(!glRow) {
         // Cell 0 — envelope (wrapped in child so SameLine works correctly)
-        ImGui::BeginChild("##gbpEnvCell", ImVec2(cellW, bottomH), false,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        if(ImGui::BeginChild("##gbpEnvCell", ImVec2(cellW, bottomH), false,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         drawEnvelopePanel(ph, cellW, bottomH);
+        }
         ImGui::EndChild();
         ImGui::SameLine(0.0f, m);
     }
@@ -5069,7 +5156,7 @@ bool scGrainBoxPoly::snapshotExcluded(const std::string& key) const {
         || key.rfind("Gate", 0) == 0 || key.rfind("Ext_", 0) == 0          // played, not the sound
         || key.rfind("Live Length", 0) == 0 || key.rfind("LiveLenBeats", 0) == 0
         || key.rfind("Morph", 0) == 0
-        || key == snapshotP.getEscapedName();
+        || scSnapshots::isOwnKey(key);
 }
 
 ofJson scGrainBoxPoly::captureSnapshot() const {
@@ -5083,8 +5170,30 @@ ofJson scGrainBoxPoly::captureSnapshot() const {
 
 // Values arrive in the snapshot's units (as a preset: no conversion), then
 // one consistent send (timeDirty -> update)
-void scGrainBoxPoly::applySnapshot(const ofJson& snap) {
-    if(!snap.is_object()) return;
+ofJson scGrainBoxPoly::pitchInCurrentUnits(const ofJson& snap) const {
+    if(!snap.is_object()) return snap;
+    ofJson out = snap;
+    for(const auto& ph : playheads) {
+        const std::string pitchKey = ph->pitch.getEscapedName(), modeKey = ph->pitchMode.getEscapedName();
+        int mode = 0;
+        if(out.contains(modeKey)) {
+            if(out[modeKey].is_number()) mode = out[modeKey].get<int>();
+            else if(out[modeKey].is_string()) mode = ofToInt(out[modeKey].get<std::string>());
+            out.erase(modeKey);
+        }
+        const int current = ph->pitchMode.get();
+        if(!out.contains(pitchKey) || mode == current) continue;
+        const float shift = current == 1 ? 60.0f : -60.0f;
+        auto& v = out[pitchKey];
+        if(v.is_number()) v = v.get<float>() + shift;
+        else if(v.is_array()) for(auto& x : v) if(x.is_number()) x = x.get<float>() + shift;
+    }
+    return out;
+}
+
+void scGrainBoxPoly::applySnapshot(const ofJson& snapIn) {
+    if(!snapIn.is_object()) return;
+    const ofJson snap = pitchInCurrentUnits(snapIn);
     const bool wasLoading = loadingPreset;
     loadingPreset = true;
     std::vector<std::pair<std::function<void(const ofJson&)>, ofJson>> todo;
@@ -5098,29 +5207,11 @@ void scGrainBoxPoly::applySnapshot(const ofJson& snap) {
         const std::string pre = "gbpMod" + ph->sfx;
         if(!snap.contains(pre + "Matrix")) continue;
         ph->mod->load(snap, pre);
+        migrateAmpEnvelope(*ph, snap);
         ph->mod->afterLoad();
     }
     loadingPreset = wasLoading;
     timeDirty = true;
-}
-
-void scGrainBoxPoly::storeSnapshot(int slot) {
-    if(slot < 0 || slot >= 16) return;
-    const std::string keepName = snapUsed[slot] ? snapName(slot) : std::string();
-    snapSlots[slot] = captureSnapshot();
-    if(!keepName.empty()) snapSlots[slot]["name"] = keepName;
-    snapUsed[slot]  = true;
-    activeSnap      = slot;
-    saveSnapshotLibrary();
-}
-
-void scGrainBoxPoly::recallSnapshot(int slot) {
-    if(slot < 0 || slot >= 16 || !snapUsed[slot]) return;
-    applySnapshot(snapSlots[slot]);
-    activeSnap = slot;
-    snapRecalling = true;
-    snapshotP.set(slot + 1);   // shows / outputs the slot, without a second recall
-    snapRecalling = false;
 }
 
 // A square 4 x 4 matrix of side w (left of the waveform)
@@ -5133,149 +5224,15 @@ void scGrainBoxPoly::recallSnapshot(int slot) {
 // once; the old folder stays.)
 // What earlier builds saved (Supercollider/GrainBoxSnapshots, or a single
 // _current.json) is taken over once, if there are no slot files yet.
-std::string scGrainBoxPoly::snapSetDir() const {
-    const std::string dir = ofToDataPath("nodeSnapshots/GrainBox", true);
-    try {
-        const std::string old = ofToDataPath("nodeSnapshots/GrainBoxPoly", true);
-        if(!std::filesystem::exists(dir) && std::filesystem::exists(old))
-            std::filesystem::copy(old, dir, std::filesystem::copy_options::recursive);
-        std::filesystem::create_directories(dir);
-    } catch(...) {}
-    return dir;
-}
-std::string scGrainBoxPoly::snapBankDir() const {
-    const std::string dir = (std::filesystem::path(snapSetDir()) / "banks").string();
-    static bool migrated = false;
-    try {
-        std::filesystem::create_directories(dir);
-        if(!migrated) {
-            migrated = true;
-            for(const std::filesystem::path old : {std::filesystem::path(ofToDataPath("Supercollider/GrainBoxSnapshots", true)),
-                                                   std::filesystem::path(snapSetDir())}) {
-                if(!std::filesystem::exists(old)) continue;
-                for(auto& e : std::filesystem::directory_iterator(old)) {
-                    const std::string fn = e.path().filename().string();
-                    if(!e.is_regular_file() || e.path().extension() != ".json") continue;
-                    if(fn.rfind("snapshot_", 0) == 0 || fn == "_current.json") continue;
-                    const auto to = std::filesystem::path(dir) / fn;
-                    if(!std::filesystem::exists(to)) std::filesystem::copy_file(e.path(), to);
-                }
-            }
-        }
-    } catch(...) {}
-    return dir;
-}
-std::string scGrainBoxPoly::snapLibPath() const {   // slot 0's file (see snapSlotPath)
-    return (std::filesystem::path(snapSetDir()) / "snapshot_0.json").string();
-}
-std::string scGrainBoxPoly::snapName(int k) const {
-    if(k < 0 || k >= 16 || !snapUsed[k] || !snapSlots[k].is_object() || !snapSlots[k].contains("name")) return "";
-    try { return snapSlots[k]["name"].get<std::string>(); } catch(...) { return ""; }
-}
 // newest change among the slot files (another node / app wrote them?)
-std::filesystem::file_time_type scGrainBoxPoly::snapSetTime() const {
-    std::filesystem::file_time_type t{};
-    try {
-        for(auto& e : std::filesystem::directory_iterator(snapSetDir()))
-            if(e.is_regular_file() && e.path().filename().string().rfind("snapshot_", 0) == 0)
-                t = std::max(t, std::filesystem::last_write_time(e.path()));
-    } catch(...) {}
-    return t;
-}
-
-void scGrainBoxPoly::saveSnapshotLibrary() {
-    const std::filesystem::path dir = snapSetDir();
-    for(int k = 0; k < 16; k++) {
-        const auto f = dir / ("snapshot_" + ofToString(k) + ".json");
-        try {
-            if(snapUsed[k]) ofSavePrettyJson(f.string(), snapSlots[k]);
-            else if(std::filesystem::exists(f)) std::filesystem::remove(f);
-        } catch(...) {}
-    }
-    snapLibTime = snapSetTime();
-}
-
-void scGrainBoxPoly::loadSnapshotLibrary() {
-    const std::filesystem::path dir = snapSetDir();
-    bool any = false;
-    for(int k = 0; k < 16; k++)
-        any = any || std::filesystem::exists(dir / ("snapshot_" + ofToString(k) + ".json"));
-    if(!any) {
-        // take over an earlier build's single file, once
-        for(const std::filesystem::path old : {dir / "_current.json",
-                 std::filesystem::path(ofToDataPath("Supercollider/GrainBoxSnapshots/_current.json", true))}) {
-            if(!std::filesystem::exists(old)) continue;
-            if(loadSnapshotBank(old.string())) { snapBankMsg.clear(); return; }   // (saves the slot files)
-        }
-        return;
-    }
-    snapUsed.fill(false);
-    for(int k = 0; k < 16; k++) {
-        const auto f = dir / ("snapshot_" + ofToString(k) + ".json");
-        if(!std::filesystem::exists(f)) continue;
-        try {
-            ofJson j = ofLoadJson(f.string());
-            if(!j.is_object()) continue;
-            if(j.contains("__name")) { j["name"] = j["__name"]; j.erase("__name"); }
-            snapSlots[k] = j; snapUsed[k] = true;
-        } catch(...) {}
-    }
-    if(activeSnap >= 0 && !snapUsed[activeSnap]) activeSnap = -1;
-    snapLibTime = snapSetTime();
-}
-
-void scGrainBoxPoly::saveSnapshotBank(const std::string& path) {
-    ofJson j;
-    j["gbpSnapshotBank"] = 1;
-    j["active"] = activeSnap;
-    j["slots"]  = ofJson::array();
-    for(int k = 0; k < 16; k++) j["slots"].push_back(snapUsed[k] ? snapSlots[k] : ofJson(nullptr));
-    std::string p = path;
-    if(std::filesystem::path(p).extension().string() != ".json") p += ".json";
-    snapBankMsg = ofSavePrettyJson(p, j) ? "Saved " + std::filesystem::path(p).filename().string()
-                                         : "Could not save " + p;
-}
-
-bool scGrainBoxPoly::loadSnapshotBank(const std::string& path) {
-    ofJson j;
-    try { j = ofLoadJson(path); } catch(...) {}
-    // a bank file, or an Oceanode preset / node json holding "gbpSnapshots"
-    const ofJson* arr = nullptr;
-    if(j.contains("slots") && j["slots"].is_array())               arr = &j["slots"];
-    else if(j.contains("gbpSnapshots") && j["gbpSnapshots"].is_array()) arr = &j["gbpSnapshots"];
-    if(!arr) { snapBankMsg = "No snapshots in " + std::filesystem::path(path).filename().string(); return false; }
-    snapUsed.fill(false);
-    for(int k = 0; k < std::min(16, (int)arr->size()); k++)
-        if((*arr)[k].is_object()) {
-            snapSlots[k] = (*arr)[k]; snapUsed[k] = true;
-            if(snapSlots[k].contains("__name")) { snapSlots[k]["name"] = snapSlots[k]["__name"]; snapSlots[k].erase("__name"); }
-        }
-    int a = j.value("active", j.value("activeSnapshot", -1));
-    activeSnap = (a >= 0 && a < 16 && snapUsed[a]) ? a : -1;
-    snapBankMsg = "Loaded " + std::filesystem::path(path).stem().string();
-    saveSnapshotLibrary();   // becomes the shared current set
-    return true;
-}
-
 // ── Morph ─────────────────────────────────────────────────────────────────────
-float scGrainBoxPoly::morphCurve(float u) const {
-    u = std::max(0.0f, std::min(1.0f, u));
-    switch(morphCurveP.get()) {
-        case 1:  return u * u * (3.0f - 2.0f * u);              // Ease (in and out)
-        case 2:  return u * u * u;                               // Exp: slow start
-        case 3:  return 1.0f - (1.0f - u) * (1.0f - u) * (1.0f - u);   // Log: fast start
-        default: return u;                                       // Lin
-    }
-}
-
 // Every parameter both states hold: continuous ones glide, switches jump at
 // the switch point; a value in a time unit that differs between a and b jumps
 // too (the two numbers are not comparable). As a preset: values arrive in
 // their units (no conversion), one consistent send at the next update.
-void scGrainBoxPoly::applyMorph(const ofJson& a, const ofJson& b, float t) {
-    if(!a.is_object() || !b.is_object()) return;
-    const int swm = morphSwitchP.get();
-    const bool sw = swm == 0 ? t > 0.0f : swm == 1 ? t >= 0.5f : t >= 1.0f;
+void scGrainBoxPoly::applyMorph(const ofJson& aIn, const ofJson& bIn, float t, bool sw) {
+    if(!aIn.is_object() || !bIn.is_object()) return;
+    const ofJson a = pitchInCurrentUnits(aIn), b = pitchInCurrentUnits(bIn);
     auto differ = [&](const std::string& k) { return a.contains(k) && b.contains(k) && a[k] != b[k]; };
     const bool tuDiff = differ(timeUnitsP.getEscapedName());
     const bool wasLoading = loadingPreset;
@@ -5299,196 +5256,18 @@ void scGrainBoxPoly::applyMorph(const ofJson& a, const ofJson& b, float t) {
         const auto before = m.matrix;
         const int lc = m.lfoCount, ec = m.envCount, xc = m.extCount;
         m.load(r, pre);
+        migrateAmpEnvelope(*ph, r);
         if(m.matrix != before || m.lfoCount != lc || m.envCount != ec || m.extCount != xc) m.afterLoad();
     }
     loadingPreset = wasLoading;
     timeDirty = true;
 }
 
-void scGrainBoxPoly::startGlide(int slot) {
-    if(slot < 0 || slot >= 16 || !snapUsed[slot]) return;
-    const float bpm = std::max(1.0f, effectiveBpm());
-    morphDur = morphBeatsP.get() ? morphTimeP.get() * 60.0f / bpm : morphTimeP.get();
-    if(morphDur <= 0.001f) { morphRun = false; recallSnapshot(slot); return; }
-    morphFrom     = captureSnapshot();
-    morphTo       = snapSlots[slot];
-    morphTarget   = slot;
-    morphT0       = ofGetElapsedTimef();
-    morphProgress = 0.0f;
-    morphRun      = true;
-}
-
-void scGrainBoxPoly::applyAB() {
-    const int a = morphAP.get() - 1, b = morphBP.get() - 1;
-    if(a < 0 || b < 0 || a >= 16 || b >= 16 || !snapUsed[a] || !snapUsed[b]) return;
-    morphRun = false;   // the slider takes over from a running glide
-    applyMorph(snapSlots[a], snapSlots[b], morphCurve(morphP.get()));
-}
-
 void scGrainBoxPoly::drawMorphPanel(float w) {
     const float zoom = ofxOceanodeShared::getZoomLevel();
     const float m = 6.0f * zoom;
     gbpSectionHeader("Morph", w - m, zoom);
-    auto slotCombo = [&](const char* id, ofParameter<int>& p, const char* tip) {
-        const std::string key = p.getEscapedName();
-        ImGui::SetNextItemWidth(48.0f * zoom);
-        std::string prev = p.get() > 0 ? ofToString(p.get()) : std::string("-");
-        if(ImGui::BeginCombo(id, prev.c_str())) {
-            if(ImGui::Selectable("-", p.get() == 0)) p.set(0);
-            for(int k = 0; k < 16; k++) {
-                if(!snapUsed[k]) continue;
-                if(ImGui::Selectable(ofToString(k + 1).c_str(), p.get() == k + 1)) p.set(k + 1);
-            }
-            ImGui::EndCombo();
-        }
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-        drawPublishedCurrentItemUnderline(key);
-        drawNodePublishContextMenu(key);
-    };
-    // Row 1: A / B crossfade
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("A");  ImGui::SameLine();
-    slotCombo("##gbpMorphA", morphAP, "Snapshot at Morph 0");
-    ImGui::SameLine(0, m);
-    ImGui::TextUnformatted("B");  ImGui::SameLine();
-    slotCombo("##gbpMorphB", morphBP, "Snapshot at Morph 1");
-    ImGui::SameLine(0, m);
-    {
-        const std::string key = morphP.getEscapedName();
-        ImGui::TextUnformatted("Morph");
-        drawPublishedCurrentItemUnderline(key);
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(std::max(80.0f * zoom, w * 0.35f));
-        float v = morphP.get();
-        if(gbpSliderFloat("##gbpMorph", &v, 0.0f, 1.0f, "%.3f")) morphP.set(v);
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
-            ImGui::SetTooltip("Blend snapshot A (0) into B (1), through the Curve. Publish it\n"
-                              "(right-click) to drive it from an LFO, envelope or sequence.");
-        drawNodePublishContextMenu(key);
-    }
-    // Row 2: glide
-    {
-        bool g = morphGlideP.get();
-        if(ImGui::Checkbox("Glide##gbpMG", &g)) morphGlideP.set(g);
-        if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("On: every recall (click, or the Snapshot input) glides from the current\n"
-                              "state over Morph Time. Off: recalls jump; Alt-click a slot to glide.");
-        drawNodePublishContextMenu(morphGlideP.getEscapedName(), "Glide##gbpMG", 0.0f, true);
-    }
-    ImGui::SameLine(0, m);
-    {
-        const std::string key = morphTimeP.getEscapedName();
-        ImGui::TextUnformatted("Time");
-        drawPublishedCurrentItemUnderline(key);
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(110.0f * zoom);
-        float v = morphTimeP.get();
-        const bool beats = morphBeatsP.get();
-        if(gbpSliderFloat("##gbpMorphT", &v, 0.0f, 64.0f, beats ? "%.2f b" : "%.2f s", ImGuiSliderFlags_Logarithmic))
-            morphTimeP.set(v);
-        drawNodePublishContextMenu(key);
-        ImGui::SameLine(0, 2.0f * zoom);
-        if(ImGui::SmallButton(beats ? "b##gbpMTU" : "s##gbpMTU")) morphBeatsP.set(!beats);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Morph Time in beats (b, follows the tempo) or seconds (s)");
-        drawNodePublishContextMenu(morphBeatsP.getEscapedName());
-    }
-    ImGui::SameLine(0, m);
-    {
-        static const char* curves[4] = {"Lin", "Ease", "Exp", "Log"};
-        ImGui::TextUnformatted("Curve");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(62.0f * zoom);
-        int c = std::max(0, std::min(3, morphCurveP.get()));
-        if(ImGui::Combo("##gbpMorphC", &c, curves, 4)) morphCurveP.set(c);
-        if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("Lin: even. Ease: soft start and end. Exp: slow start. Log: fast start.\n"
-                              "(Glides and the Morph slider)");
-        drawNodePublishContextMenu(morphCurveP.getEscapedName());
-    }
-    ImGui::SameLine(0, m);
-    {
-        static const char* sws[3] = {"Start", "Middle", "End"};
-        ImGui::TextUnformatted("Switch");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(72.0f * zoom);
-        int c = std::max(0, std::min(2, morphSwitchP.get()));
-        if(ImGui::Combo("##gbpMorphS", &c, sws, 3)) morphSwitchP.set(c);
-        if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("When the things that can't blend jump: toggles, shapes, units,\n"
-                              "playhead counts (and time values whose units differ).");
-        drawNodePublishContextMenu(morphSwitchP.getEscapedName());
-    }
-    if(morphRun) {
-        ImGui::SameLine(0, m);
-        ImGui::Text("-> %d  %.0f%%", morphTarget + 1, morphProgress * 100.0f);
-    }
-    // Row 3: banks. The 16 slots are shared by every project / preset (saved
-    // on every change); a bank is a named copy of them in the same folder.
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Bank");
-    ImGui::SameLine(0, m);
-    ImGui::SetNextItemWidth(120.0f * zoom);
-    ImGui::InputTextWithHint("##gbpBankName", "bank name", snapBankName, sizeof(snapBankName));
-    ImGui::SameLine(0, 4.0f * zoom);
-    if(ImGui::Button("Save##gbpSB")) {
-        std::string nm = snapBankName;
-        for(char& c : nm) if(c == '/' || c == '\\' || c == ':') c = '_';
-        if(!nm.empty() && nm != "_current") saveSnapshotBank((std::filesystem::path(snapBankDir()) / nm).string());
-    }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Save the 16 snapshots (with their names) as a bank");
-    ImGui::SameLine(0, m);
-    // the banks in the folder
-    std::vector<std::string> banks;
-    try {
-        for(auto& e : std::filesystem::directory_iterator(snapBankDir()))
-            if(e.is_regular_file() && e.path().extension() == ".json" && e.path().stem() != "_current")
-                banks.push_back(e.path().stem().string());
-    } catch(...) {}
-    std::sort(banks.begin(), banks.end());
-    ImGui::SetNextItemWidth(130.0f * zoom);
-    if(ImGui::BeginCombo("##gbpBanks", "Load bank...")) {
-        if(banks.empty()) ImGui::TextDisabled("(no banks yet)");
-        for(const auto& bk : banks) {
-            if(ImGui::Selectable(bk.c_str())) {
-                loadSnapshotBank((std::filesystem::path(snapBankDir()) / (bk + ".json")).string());
-                std::snprintf(snapBankName, sizeof(snapBankName), "%s", bk.c_str());
-            }
-            if(ImGui::BeginPopupContextItem()) {   // right-click a bank: delete it
-                if(ImGui::MenuItem("Delete this bank")) {
-                    try { std::filesystem::remove(std::filesystem::path(snapBankDir()) / (bk + ".json")); } catch(...) {}
-                    snapBankMsg = "Deleted " + bk;
-                }
-                ImGui::EndPopup();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    if(ImGui::IsItemHovered())
-        ImGui::SetTooltip("Load a bank into the 16 slots (replaces them). Right-click a bank\n"
-                          "in the list to delete it.");
-    ImGui::SameLine(0, 4.0f * zoom);
-    if(ImGui::Button("From file...##gbpLB")) snapLoadDialog = true;
-    if(ImGui::IsItemHovered())
-        ImGui::SetTooltip("Take the snapshots from a bank file or from an Oceanode preset file\n"
-                          "(a GrainBox node's file that has snapshots)");
-    ImGui::SameLine(0, 4.0f * zoom);
-    if(ImGui::Button("Clear all##gbpCA")) ImGui::OpenPopup("##gbpClearAll");
-    if(ImGui::BeginPopup("##gbpClearAll")) {
-        ImGui::TextUnformatted("Clear all 16 snapshots?");
-        if(ImGui::Button("Clear")) {
-            for(int k = 0; k < 16; k++) { snapSlots[k] = ofJson(); snapUsed[k] = false; }
-            activeSnap = -1;
-            saveSnapshotLibrary();
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if(ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
-    if(!snapBankMsg.empty()) {
-        ImGui::SameLine(0, m);
-        ImGui::TextDisabled("%s", snapBankMsg.c_str());
-    }
+    snaps.drawMorph(w - m);
     ImGui::Spacing();
 }
 
@@ -5497,118 +5276,6 @@ void scGrainBoxPoly::drawMorphPanel(float w) {
 // overwrites, a new one takes the next free slot), and a menu (delete, banks,
 // Morph A / B, publish "Snapshot"). Recall glides when Glide is on (Alt: the
 // other way).
-void scGrainBoxPoly::drawSnapshotBar(float w) {
-    const float zoom = ofxOceanodeShared::getZoomLevel();
-    std::vector<int> used;
-    for(int k = 0; k < 16; k++) if(snapUsed[k]) used.push_back(k);
-    auto label = [this](int k) {
-        const std::string nm = snapName(k);
-        return nm.empty() ? "Snapshot " + ofToString(k + 1) : nm;
-    };
-    auto recall = [this](int k) {
-        if(morphGlideP.get() != ImGui::GetIO().KeyAlt) startGlide(k);
-        else { morphRun = false; recallSnapshot(k); }
-    };
-    ImGui::SetNextItemWidth(std::min(260.0f * zoom, w * 0.35f));
-    const std::string prev = activeSnap >= 0 && snapUsed[activeSnap] ? label(activeSnap) : std::string("Preset...");
-    if(ImGui::BeginCombo("##gbpPreset", prev.c_str(), ImGuiComboFlags_HeightLarge)) {
-        for(int k : used)
-            if(ImGui::Selectable((label(k) + "##p" + ofToString(k)).c_str(), k == activeSnap)) recall(k);
-        if(used.empty()) ImGui::TextDisabled("No presets yet: Save...");
-        ImGui::EndCombo();
-    }
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Recall a preset (Glide on: glides over Morph Time; Alt: the other way)");
-    drawPublishedCurrentItemUnderline(snapshotP.getEscapedName());
-    ImGui::SameLine();
-    auto step = [&](int dir) {
-        if(used.empty()) return;
-        auto it = std::find(used.begin(), used.end(), activeSnap);
-        int i = it == used.end() ? (dir > 0 ? -1 : 0) : int(it - used.begin());
-        i = (i + dir + (int)used.size()) % (int)used.size();
-        recall(used[i]);
-    };
-    if(ImGui::ArrowButton("##gbpPrevPreset", ImGuiDir_Left)) step(-1);
-    ImGui::SameLine(0, 2.0f * zoom);
-    if(ImGui::ArrowButton("##gbpNextPreset", ImGuiDir_Right)) step(1);
-    ImGui::SameLine();
-    if(ImGui::Button("Save...##gbpSave")) {
-        const std::string nm = activeSnap >= 0 ? snapName(activeSnap) : std::string();
-        std::snprintf(snapRenameBuf, sizeof(snapRenameBuf), "%s", nm.c_str());
-        ImGui::OpenPopup("##gbpSavePreset");
-    }
-    if(ImGui::BeginPopup("##gbpSavePreset")) {
-        ImGui::TextDisabled("Preset name (the same name overwrites)");
-        ImGui::SetNextItemWidth(240.0f * zoom);
-        if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-        const bool enter = ImGui::InputText("##gbpPresetName", snapRenameBuf, sizeof(snapRenameBuf),
-                                            ImGuiInputTextFlags_EnterReturnsTrue);
-        ImGui::SameLine();
-        if(ImGui::Button("Save") || enter) {
-            const std::string nm = ofTrim(std::string(snapRenameBuf));
-            int slot = -1;
-            for(int k = 0; k < 16 && slot < 0; k++) if(snapUsed[k] && !nm.empty() && snapName(k) == nm) slot = k;
-            for(int k = 0; k < 16 && slot < 0; k++) if(!snapUsed[k]) slot = k;
-            if(slot < 0) snapBankMsg = "All 16 presets are used: delete one first";
-            else {
-                storeSnapshot(slot);
-                snapSlots[slot]["name"] = nm.empty() ? "Snapshot " + ofToString(slot + 1) : nm;
-                saveSnapshotLibrary();
-                ImGui::CloseCurrentPopup();
-            }
-        }
-        if(!snapBankMsg.empty()) ImGui::TextDisabled("%s", snapBankMsg.c_str());
-        ImGui::EndPopup();
-    }
-    ImGui::SameLine();
-    if(ImGui::Button("...##gbpPresetMenu")) ImGui::OpenPopup("##gbpPresetMenu");
-    if(ImGui::BeginPopup("##gbpPresetMenu")) {
-        const bool cur = activeSnap >= 0 && snapUsed[activeSnap];
-        if(cur) {
-            ImGui::TextDisabled("%s", label(activeSnap).c_str());
-            if(ImGui::MenuItem("Set as Morph A")) morphAP.set(activeSnap + 1);
-            if(ImGui::MenuItem("Set as Morph B")) morphBP.set(activeSnap + 1);
-            if(ImGui::MenuItem("Delete")) {
-                snapSlots[activeSnap] = ofJson();
-                snapUsed[activeSnap] = false;
-                activeSnap = -1;
-                saveSnapshotLibrary();
-            }
-            ImGui::Separator();
-        }
-        if(ImGui::BeginMenu("Load bank")) {
-            bool any = false;
-            try {
-                for(auto& e : std::filesystem::directory_iterator(snapBankDir())) {
-                    if(e.path().extension() != ".json") continue;
-                    any = true;
-                    if(ImGui::MenuItem(e.path().stem().string().c_str())) loadSnapshotBank(e.path().string());
-                }
-            } catch(...) {}
-            if(!any) ImGui::TextDisabled("No banks yet");
-            ImGui::EndMenu();
-        }
-        if(ImGui::BeginMenu("Save bank as")) {
-            ImGui::SetNextItemWidth(180.0f * zoom);
-            ImGui::InputText("##gbpBankName", snapBankName, sizeof(snapBankName));
-            if(ImGui::Button("Save")) {
-                saveSnapshotBank((std::filesystem::path(snapBankDir()) / snapBankName).string());
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndMenu();
-        }
-        if(ImGui::MenuItem("Bank from file...")) snapLoadDialog = true;
-        ImGui::Separator();
-        ImGui::TextDisabled("\"Snapshot\" (1..16): recall from a connection");
-        drawNodePublishMenuItems(snapshotP.getEscapedName());
-        if(!snapBankMsg.empty()) { ImGui::Separator(); ImGui::TextDisabled("%s", snapBankMsg.c_str()); }
-        ImGui::EndPopup();
-    }
-    if(morphRun) {
-        ImGui::SameLine();
-        ImGui::ProgressBar(morphProgress, ImVec2(70.0f * zoom, ImGui::GetFrameHeight()), "");
-    }
-}
-
 // ── FX EQ: scGraphicEQ's curve display (scEQEditor) with draggable band
 //    handles (drag: frequency / gain, wheel: Q / slope, double-click: 0 dB).
 //    The band values stay saved / publishable parameters ("EQ Low Freq",
@@ -5725,8 +5392,8 @@ void scGrainBoxPoly::drawFxPanel(float w) {
     };
 
     // EQ: On + Mix, then the curve editor (drag the band handles)
-    ImGui::BeginChild("##gbpFxEq", ImVec2(halfW, colH), false,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if(ImGui::BeginChild("##gbpFxEq", ImVec2(halfW, colH), false,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
     header(FX_EQ, "EQ", "On##fxeq");
     ImGui::SameLine(0, 2.0f * m);
     {
@@ -5742,10 +5409,11 @@ void scGrainBoxPoly::drawFxPanel(float w) {
         if(!fxOnP[FX_EQ].get()) ImGui::EndDisabled();
     }
     drawEqSection(halfW - 4.0f * zoom, colH - ImGui::GetCursorPosY() - 8.0f * zoom);
+    }
     ImGui::EndChild();
     ImGui::SameLine(0, m);
 
-    ImGui::BeginChild("##gbpFxEcho", ImVec2(colW, colH), false, ImGuiWindowFlags_NoScrollbar);
+    if(ImGui::BeginChild("##gbpFxEcho", ImVec2(colW, colH), false, ImGuiWindowFlags_NoScrollbar)) {
     header(FX_ECHO, "Echo", "On##fxecho");
     if(!fxOnP[FX_ECHO].get()) ImGui::BeginDisabled();
     {   // Delay: seconds, or a note value (b) that follows the tempo
@@ -5793,10 +5461,11 @@ void scGrainBoxPoly::drawFxPanel(float w) {
     slider("Reso",   "##ecres", echoResonanceP);
     slider("Mix",    "##ecmix", echoMixP);
     if(!fxOnP[FX_ECHO].get()) ImGui::EndDisabled();
+    }
     ImGui::EndChild();
     ImGui::SameLine(0, m);
 
-    ImGui::BeginChild("##gbpFxRev", ImVec2(colW, colH), false, ImGuiWindowFlags_NoScrollbar);
+    if(ImGui::BeginChild("##gbpFxRev", ImVec2(colW, colH), false, ImGuiWindowFlags_NoScrollbar)) {
     header(FX_REVERB, "Reverb", "On##fxrev");
     if(!fxOnP[FX_REVERB].get()) ImGui::BeginDisabled();
     slider("Size",     "##rvsize", revSizeP,     "%.1f");
@@ -5807,6 +5476,7 @@ void scGrainBoxPoly::drawFxPanel(float w) {
     slider("Spread",   "##rvspr",  revSpreadP,   "%+.2f");
     slider("Mix",      "##rvmix",  revMixP);
     if(!fxOnP[FX_REVERB].get()) ImGui::EndDisabled();
+    }
     ImGui::EndChild();
 }
 
@@ -6053,9 +5723,10 @@ void scGrainBoxPoly::drawControlsPanel(Playhead& ph, float w, float h) {
         ImGui::SetCursorScreenPos(ImVec2(cur.x, cur.y + bh + m * 0.5f));
     };
 
+    // Fully clipped child panels keep their layout space without building widgets.
     // ── Column 0: Trigger + Region ───────────────────────────────────────────
-    ImGui::BeginChild("##gbpCol0", ImVec2(colW, h), false,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if(ImGui::BeginChild("##gbpCol0", ImVec2(colW, h), false,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(m, m));
     secHdr(glUI ? "Delay" : "Trigger");
     if(!glUI) {   // Grainless: only Reset (the LFOs) and the Region
@@ -6185,13 +5856,14 @@ void scGrainBoxPoly::drawControlsPanel(Playhead& ph, float w, float h) {
     sliderScalar("Out",  "##outp", ph.outPoint, 0.f, 1.f);
     ctrlMeasure = std::max(ctrlMeasure, ImGui::GetCursorPosY());   // content height
     ImGui::PopStyleVar();
+    }
     ImGui::EndChild();
 
     ImGui::SameLine(0.0f, gap);
 
     // ── Column 1: Grain ──────────────────────────────────────────────────────
-    ImGui::BeginChild("##gbpCol1", ImVec2(colW, h), false,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if(ImGui::BeginChild("##gbpCol1", ImVec2(colW, h), false,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(m, m));
     secHdr(glUI ? "Delay tap" : "Grain");
     if(!glUI) {
@@ -6201,12 +5873,28 @@ void scGrainBoxPoly::drawControlsPanel(Playhead& ph, float w, float h) {
     }
     sliderF ("Amp",    "##amp", ph.amp,       0.f,  1.f);
     if(!glUI) {
-    sliderF ("Pitch",  "##pit", ph.pitch,   -48.f, 48.f);
+    const bool midiPitch = ph.pitchMode.get() == 1;
+    sliderF ("Pitch",  "##pit", ph.pitch,   midiPitch ? 0.f : -48.f, midiPitch ? 127.f : 48.f);
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
-        ImGui::SetTooltip("Pitch (semitones). With a Scale set, the total pitch (pitch +\n"
-                          "jitter + LFO + transpose) snaps to the nearest scale note.\n"
-                          "Shift+drag: fine (10x slower); Ctrl/Cmd+drag (after starting\n"
-                          "it): whole semitones.");
+        ImGui::SetTooltip(midiPitch
+                          ? "Pitch (MIDI note: 60 plays the sample as recorded). With a Scale\n"
+                            "set, the total pitch snaps to the nearest scale note.\n"
+                            "Shift+drag: fine (10x slower); Ctrl/Cmd+drag (after starting\n"
+                            "it): whole semitones."
+                          : "Pitch (semitones: 0 plays the sample as recorded). With a Scale\n"
+                            "set, the total pitch (pitch + jitter + LFO + transpose) snaps\n"
+                            "to the nearest scale note.\n"
+                            "Shift+drag: fine (10x slower); Ctrl/Cmd+drag (after starting\n"
+                            "it): whole semitones.");
+    {
+        bool midi = midiPitch;
+        if(ImGui::Checkbox("MIDI Pitch##pm", &midi)) switchPitchMode(ph, midi ? 1 : 0);
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+            ImGui::SetTooltip("On: Pitch is a MIDI note, 60 plays the sample as recorded\n"
+                              "(what a keyboard or a timeline piano roll sends).\n"
+                              "Off: semitones, 0 plays it as recorded.");
+        drawNodePublishContextMenu(ph.pitchMode.getEscapedName(), "MIDI Pitch##pm", 0.0f, true);
+    }
     if(ph.trigDur.get()) {
         // TrgDur: the grain length follows the trigger period; Overlap scales it
         // (x1: back to back, x2: each grain overlaps the next by half -> with a
@@ -6286,13 +5974,14 @@ void scGrainBoxPoly::drawControlsPanel(Playhead& ph, float w, float h) {
     sliderF ("Levels", "##lvl", ph.levels,    0.f,  1.f);
     ctrlMeasure = std::max(ctrlMeasure, ImGui::GetCursorPosY());   // content height
     ImGui::PopStyleVar();
+    }
     ImGui::EndChild();
 
     ImGui::SameLine(0.0f, gap);
 
     // ── Column 2: Jitter ─────────────────────────────────────────────────────
-    ImGui::BeginChild("##gbpCol2", ImVec2(colW, h), false,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if(ImGui::BeginChild("##gbpCol2", ImVec2(colW, h), false,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(m, m));
     if(!glUI) {   // Grainless: no jitter (Filter only)
     secHdr("Jitter");
@@ -6358,8 +6047,10 @@ void scGrainBoxPoly::drawControlsPanel(Playhead& ph, float w, float h) {
     }
     ctrlMeasure = std::max(ctrlMeasure, ImGui::GetCursorPosY());   // content height
     ImGui::PopStyleVar();
+    }
     ImGui::EndChild();
-    ctrlContentH = ctrlMeasure;   // the row's height next frame (no empty gap)
+    // Clipped columns were not measured: keep the last height until visible.
+    if(ctrlMeasure > 0.0f) ctrlContentH = ctrlMeasure;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -6374,9 +6065,13 @@ void scGrainBoxPoly::drawControlsPanel(Playhead& ph, float w, float h) {
 namespace {
 // the scModulation sources the X voices run, in modApply's order
 const int kModSrc[scGrainBoxPoly::MOD_SOURCES] = {
-    0, 1, 2, 3, scModulation::SRC_ENV, scModulation::SRC_ENV + 1,
+    0, 1, 2, 3, 4, 5, 6, 7,
+    scModulation::SRC_ENV, scModulation::SRC_ENV + 1, scModulation::SRC_ENV + 2, scModulation::SRC_ENV + 3,
     scModulation::SRC_EXT, scModulation::SRC_EXT + 1, scModulation::SRC_EXT + 2, scModulation::SRC_EXT + 3,
+    scModulation::SRC_EXT + 4, scModulation::SRC_EXT + 5, scModulation::SRC_EXT + 6, scModulation::SRC_EXT + 7,
     scModulation::SRC_RND, scModulation::SRC_VOICE};
+static_assert(scModulation::MAX_LFOS >= scGrainBoxPoly::MOD_LFOS && scModulation::MAX_ENVS >= scGrainBoxPoly::MOD_ENVS
+              && scModulation::MAX_EXT >= scGrainBoxPoly::MOD_EXTS, "GrainBox runs more sources than scModulation has");
 const char* kModTargets[scGrainBoxPoly::MOD_TARGETS] = {"Pos", "Dur", "Pitch", "Amp", "Pan", "Rate", "Cut"};
 const float kModRange[scGrainBoxPoly::MOD_TARGETS]   = {1.0f, 0.5f, 24.0f, 1.0f, 1.0f, 8.0f, 48.0f};
 const char* kModUnit[scGrainBoxPoly::MOD_TARGETS]    = {"of the region", "of the region", "st", "", "(2 = round)",
@@ -6453,9 +6148,8 @@ void scGrainBoxPoly::setupModulation(Playhead& ph) {
             return tab[i0] + (tab[i0 + 1] - tab[i0]) * (x - i0);
         }
         int slot = -1;
-        if(s == scModulation::SRC_ENV) slot = 4;
-        else if(s == scModulation::SRC_ENV + 1) slot = 5;
-        const int i = std::min(v, 16) * 6 + slot;
+        if(s >= scModulation::SRC_ENV && s < scModulation::SRC_ENV + MOD_ENVS) slot = MOD_LFOS + (s - scModulation::SRC_ENV);
+        const int i = std::min(v, 16) * MOD_VIS_STRIDE + slot;
         return (slot >= 0 && i < (int)p->modLive.size()) ? p->modLive[i] : 0.0f;
     };
     std::vector<scModulation::Target> targets;
@@ -6468,6 +6162,7 @@ void scGrainBoxPoly::setupModulation(Playhead& ph) {
 
 // Something routed: a used source (of the ones the voices run) to a target
 bool scGrainBoxPoly::modWanted(const Playhead& ph) const {
+    if(ampGated(ph)) return true;   // the Amp Envelope runs in the same voices
     const auto& m = *ph.mod;
     if((int)m.matrix.size() < scModulation::NUM_SOURCES * MOD_TARGETS) return false;
     for(int s : kModSrc) {
@@ -6475,6 +6170,26 @@ bool scGrainBoxPoly::modWanted(const Playhead& ph) const {
         for(int t = 0; t < MOD_TARGETS; t++) if(std::abs(m.matrix[s * MOD_TARGETS + t]) > 1e-4f) return true;
     }
     return false;
+}
+
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+bool scGrainBoxPoly::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
+    Playhead& p = ph0();
+    if(p.pitchMode.get() != 1 || !p0GateHandle || !p0PitchHandle) return false;   // notes need MIDI Pitch
+    out.gate = p0GateHandle.get();
+    out.pitch = p0PitchHandle.get();
+    out.voices = phVoices(p);
+    return true;
+}
+#endif
+
+// The Amp Envelope is the playheads' VCA: Gated, or Auto once the Gate is used
+bool scGrainBoxPoly::ampGated(const Playhead& ph) const {
+    const int mode = ph.gateMode.get();
+    if(mode == 2) return false;
+    if(mode == 1) return true;
+    if(ph.gateTouched || ph.gateIn.connected()) return true;
+    return ph.gateIn.handle && ph.gateIn.handle->isTimelined();
 }
 
 float scGrainBoxPoly::regionSecOf(const Playhead& ph) const {
@@ -6524,7 +6239,7 @@ void scGrainBoxPoly::ensureModResources(Playhead& ph, ofxSCServer* srv) {
     control(M.vis, MOD_VIS);
     if(ph.modOn) {
         const int cap = ctlCap(ph);
-        control(M.vox, 9 * cap);
+        control(M.vox, MOD_VOX * cap);
         M.voxCap = M.vox ? cap : 0;
         for(int k = 0; k < 2 * MOD_LFOS; k++) {
             auto*& b = M.tables[k];
@@ -6601,10 +6316,11 @@ std::vector<float> scGrainBoxPoly::modTableData(const Playhead& ph, int k) const
 void scGrainBoxPoly::writeMod(Playhead& ph, ofxSCServer* srv) {
     auto it = ph.modSC.find(srv);
     if(it == ph.modSC.end() || !it->second.hdr) return;
+    auto inEffect = noteInputs.inEffectNow();   // the gates as they stand now
     auto& M = it->second;
     const auto& m = *ph.mod;
     const int nv = phVoices(ph);
-    // header +4..109
+    // header +8..213 (scGrainBoxPoly.scd)
     std::vector<float> h;
     for(int k = 0; k < MOD_LFOS; k++) h.push_back(k < m.lfoCount ? m.lfoSampleHold(k) : 0.0f);
     for(int k = 0; k < MOD_LFOS; k++) h.push_back(M.tables[k] ? (float)M.tables[k]->index : 0.0f);
@@ -6612,26 +6328,29 @@ void scGrainBoxPoly::writeMod(Playhead& ph, ofxSCServer* srv) {
         const auto E = m.envValues(e);
         for(float x : {E.a, E.d, E.s, E.r, E.ca, E.cd, E.cr}) h.push_back(x);
     }
+    // the Amp Envelope, and whether it is the VCA
+    for(auto* q : {&ph.ampA, &ph.ampD, &ph.ampS, &ph.ampR, &ph.ampCA, &ph.ampCD, &ph.ampCR}) h.push_back(q->get());
+    h.push_back(ampGated(ph) ? 1.0f : 0.0f);
     for(int si = 0; si < MOD_SOURCES; si++) {
         const int sc = kModSrc[si];
         const bool used = m.sourceUsed(sc);
         for(int t = 0; t < MOD_TARGETS; t++)
             h.push_back(used ? m.matrix[sc * MOD_TARGETS + t] * kModRange[t] : 0.0f);
     }
-    gbpSetn(srv, M.hdr->index + 4, h);
-    gbpSetn(srv, M.hdr->index + 111, {(float)nv});
+    gbpSetn(srv, M.hdr->index + 8, h);
+    gbpSetn(srv, M.hdr->index + 215, {(float)nv});
     std::vector<float> glides;
     for(int k = 0; k < MOD_LFOS; k++) glides.push_back(m.lfoShGlide(k));
-    gbpSetn(srv, M.hdr->index + 112, glides);   // S&H glide (s)
-    std::vector<float> noiseHdr;                 // +116 noise on, +120 Noise Scale
+    gbpSetn(srv, M.hdr->index + 216, glides);   // S&H glide (s)
+    std::vector<float> noiseHdr;                 // +224 noise on, +232 Noise Scale
     for(int k = 0; k < MOD_LFOS; k++) noiseHdr.push_back(k < m.lfoCount && m.lfoIsNoise(k) ? 1.0f : 0.0f);
     for(int k = 0; k < MOD_LFOS; k++) noiseHdr.push_back(m.lfoNoiseScale(k));
-    gbpSetn(srv, M.hdr->index + 116, noiseHdr);
-    std::vector<float> curves;                   // +128 the noise curves' buffers
+    gbpSetn(srv, M.hdr->index + 224, noiseHdr);
+    std::vector<float> curves;                   // +248 the noise curves' buffers
     for(int k = 0; k < MOD_LFOS; k++) curves.push_back(M.tables[MOD_LFOS + k] ? (float)M.tables[MOD_LFOS + k]->index : 0.0f);
-    gbpSetn(srv, M.hdr->index + 128, curves);
-    if(!ph.modOn) gbpSetn(srv, M.hdr->index + 110, {0.0f});   // no voice writes the Cut modulation
-    // per playhead: Ext 1-4, the LFOs' phase offsets, the Gate
+    gbpSetn(srv, M.hdr->index + 248, curves);
+    if(!ph.modOn) gbpSetn(srv, M.hdr->index + 214, {0.0f});   // no voice writes the Cut modulation
+    // per playhead: Ext 1-8, the LFOs' phase offsets, the Gate
     if(ph.modOn && M.vox && M.voxCap >= nv) {
         for(int k = 0; k < MOD_EXTS; k++) {
             auto v = m.extValues(k);
@@ -6641,9 +6360,9 @@ void scGrainBoxPoly::writeMod(Playhead& ph, ofxSCServer* srv) {
         for(int k = 0; k < MOD_LFOS; k++) {
             auto v = m.lfoVoiceOffsets(k);
             v.resize(nv, 0.0f);
-            gbpSetn(srv, M.vox->index + (4 + k) * M.voxCap, v);
+            gbpSetn(srv, M.vox->index + (MOD_EXTS + k) * M.voxCap, v);
         }
-        if(ph.gateIn.bus(srv) < 0) gbpSetn(srv, M.vox->index + 8 * M.voxCap, expandF(ph.gate.get(), nv));   // (a cable: copied there)
+        if(ph.gateIn.bus(srv) < 0) writeGate(ph, srv);   // (a cable: copied there)
     }
     // the LFOs' cycles
     for(int k = 0; k < 2 * MOD_LFOS; k++) {
@@ -6671,6 +6390,15 @@ void scGrainBoxPoly::writeMod(Playhead& ph, ofxSCServer* srv) {
     }
 }
 
+// The playheads' gates (the envelopes', the Amp Envelope's)
+void scGrainBoxPoly::writeGate(Playhead& ph, ofxSCServer* srv) {
+    auto it = ph.modSC.find(srv);
+    if(it == ph.modSC.end() || !it->second.vox) return;
+    const int nv = phVoices(ph);
+    if(it->second.voxCap < nv) return;
+    gbpSetn(srv, it->second.vox->index + (MOD_EXTS + MOD_LFOS) * it->second.voxCap, expandF(ph.gate.get(), nv));
+}
+
 // Per frame: the tempo, the voice count, on / off (the voices change variant),
 // what changed written, the live values while the window is open
 void scGrainBoxPoly::updateModulation(Playhead& ph) {
@@ -6678,6 +6406,8 @@ void scGrainBoxPoly::updateModulation(Playhead& ph) {
     auto& m = *ph.mod;
     m.setBpm(effectiveBpm());
     if(ph.modVoices != phVoices(ph)) { ph.modVoices = phVoices(ph); m.voicesChanged(); ph.modDirty = true; }
+    const int gated = ampGated(ph) ? 1 : 0;
+    if(gated != ph.ampGatedSent) { ph.ampGatedSent = gated; ph.modDirty = true; }
     const bool want = modWanted(ph);
     if(want != ph.modOn) {
         ph.modOn = want;
@@ -6712,7 +6442,7 @@ void scGrainBoxPoly::updateModulation(Playhead& ph) {
             const float now = ofGetElapsedTimef();
             if(now >= ph.nextModVisRead){
                 ph.nextModVisRead = now + 1.0f / 30.0f;
-                srv->requestControlValues(M.vis->index, std::min(phVoices(ph), 17) * 6);
+                srv->requestControlValues(M.vis->index, std::min(phVoices(ph), 17) * MOD_VIS_STRIDE);
             }
             break;
         }
@@ -6721,6 +6451,25 @@ void scGrainBoxPoly::updateModulation(Playhead& ph) {
 
 // Presets from before the shared modulation: each per-target LFO with a
 // strength becomes an LFO routed to its target (the first MOD_LFOS of them)
+void scGrainBoxPoly::migrateAmpEnvelope(Playhead& ph, const ofJson& j) {
+    if(j.contains(ph.ampA.getEscapedName())) return;   // saved with the Amp Envelope
+    auto& m = *ph.mod;
+    constexpr int kAmp = 3;
+    bool found = false;
+    for(int e = 0; e < 2; e++) {   // (there were 2 envelopes)
+        float& cell = m.matrix[(scModulation::SRC_ENV + e) * MOD_TARGETS + kAmp];
+        if(std::abs(cell) < 1e-4f) continue;
+        if(!found && e < m.envCount) {
+            const auto E = m.envValues(e);
+            ph.ampA.set(E.a); ph.ampD.set(E.d); ph.ampS.set(E.s); ph.ampR.set(E.r);
+            ph.ampCA.set(E.ca); ph.ampCD.set(E.cd); ph.ampCR.set(E.cr);
+            ph.gateMode.set(1);
+            found = true;
+        }
+        cell = 0.0f;   // now a route to Amp sets each grain's level
+    }
+}
+
 void scGrainBoxPoly::migrateOldLfos(Playhead& ph, const ofJson& j) {
     static const char* names[7] = {"Pos", "Dur", "Pitch", "Amp", "Pan", "TrRt", "Cut"};
     static const float oldMax[7] = {1.0f, 1.0f, 48.0f, 1.0f, 2.0f, 16.0f, 8.0f};
@@ -6796,20 +6545,76 @@ void scGrainBoxPoly::drawModRow(Playhead& ph, float w, float /*h*/) {
     ImGui::PushID("gbpModRow");
     switch(modTab) {
         case 0:
-            // the Gate card first: what the envelopes follow
+            // the lead card: the Gate, its mode, the Amp Envelope it opens
             m.drawEnvelopes(w, [this, &ph, zoom](float cw) {
-                gbpSectionHeader("Gate", cw, zoom);
+                gbpSectionHeader("Amp Envelope", cw, zoom);
+                {
+                    static const char* modes[3] = {"Auto", "Gated", "Drone"};
+                    int gm = std::clamp(ph.gateMode.get(), 0, 2);
+                    ImGui::SetNextItemWidth(cw);
+                    if(ImGui::Combo("##gbpGateMode", &gm, modes, 3)) ph.gateMode.set(gm);
+                    if(ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Auto: drones until the Gate is used (a value above 0, a cable,\n"
+                                          "the timeline), then each playhead plays through its Amp Envelope\n"
+                                          "Gated: always through the Amp Envelope (Gate 0: silent)\n"
+                                          "Drone: the Gate opens nothing (the envelopes below still follow it)");
+                    drawNodePublishContextMenu(ph.gateMode.getEscapedName());
+                }
+                // the ADSR (drag points, Alt+drag a segment), each playhead's level on the right
+                {
+                    const float meterW = 14.0f * zoom, eh = 90.0f * zoom;
+                    const ImVec2 o = ImGui::GetCursorScreenPos();
+                    scEnvCurve::ADSR e{ph.ampA.get(), ph.ampD.get(), ph.ampS.get(), ph.ampR.get(),
+                                       {ph.ampCA.get(), ph.ampCD.get(), ph.ampCR.get()}};
+                    const ImU32 col = gbpAccent(ph.index, 230);
+                    if(scEnvCurve::editADSR("##gbpAmpEnv", ImVec2(cw - meterW - 4.0f * zoom, eh), e, col, gbpPal::canvas,
+                                            false, ph.ampR.getMax())) {
+                        ph.ampA.set(ofClamp(e.a, ph.ampA.getMin(), ph.ampA.getMax()));
+                        ph.ampD.set(ofClamp(e.d, ph.ampD.getMin(), ph.ampD.getMax()));
+                        ph.ampS.set(ofClamp(e.s, 0.0f, 1.0f));
+                        ph.ampR.set(ofClamp(e.r, ph.ampR.getMin(), ph.ampR.getMax()));
+                        ph.ampCA.set(e.curve[0]); ph.ampCD.set(e.curve[1]); ph.ampCR.set(e.curve[2]);
+                    }
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    const ImVec2 ma(o.x + cw - meterW, o.y), mb(o.x + cw, o.y + eh);
+                    dl->AddRectFilled(ma, mb, gbpPal::canvas, 3.0f * zoom);
+                    const int nv = std::min(phVoices(ph), 17);
+                    for(int v = 0; v < nv; v++) {
+                        const int i = v * MOD_VIS_STRIDE + MOD_LFOS + MOD_ENVS;
+                        const float level = i < (int)ph.modLive.size() ? ofClamp(ph.modLive[i], 0.0f, 1.0f) : 0.0f;
+                        const float y = mb.y - 4.0f * zoom - level * (eh - 8.0f * zoom);
+                        const float x = ma.x + meterW * (0.25f + 0.5f * (nv > 1 ? (float)v / (nv - 1) : 0.5f));
+                        dl->AddCircleFilled(ImVec2(x, y), 2.2f * zoom, level > 0.001f ? col : IM_COL32(70, 70, 76, 255));
+                    }
+                    ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + eh + ImGui::GetStyle().ItemSpacing.y));
+                }
+                auto slider = [&](ofParameter<float>& q, const char* label, const char* fmt) {
+                    ImGui::TextUnformatted(label);
+                    ImGui::SameLine(58.0f * zoom);
+                    ImGui::SetNextItemWidth(cw - 58.0f * zoom);
+                    float v = q.get();
+                    if(gbpSliderFloat((std::string("##gbpAmp") + label).c_str(), &v, q.getMin(), q.getMax(), fmt)) q.set(v);
+                    drawNodePublishContextMenu(q.getEscapedName());
+                };
+                slider(ph.ampA, "Attack", "%.3f s");
+                slider(ph.ampD, "Decay", "%.3f s");
+                slider(ph.ampS, "Sustain", "%.2f");
+                slider(ph.ampR, "Release", "%.3f s");
+                // the Gate (one value per playhead; engine 1's is on the node)
                 const std::string key = ph.gate.getEscapedName();
-                ImGui::SetNextItemWidth(cw);
+                ImGui::TextUnformatted("Gate");
+                ImGui::SameLine(58.0f * zoom);
+                ImGui::SetNextItemWidth(cw - 58.0f * zoom);
                 const auto& g = ph.gate.get();
                 float v = g.empty() ? 0.0f : g[0];
                 if(gbpSliderFloat("##gbpGate", &v, 0.0f, 1.0f, g.size() > 1 ? "%.2f (vector)" : "%.2f"))
                     ph.gate.set(vector<float>{v});
                 drawNodePublishContextMenu(key);
                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
-                ImGui::TextDisabled("One value per playhead (publish it and connect a vector). The envelopes "
-                                    "follow it. Until an envelope is routed to Amp the engine drones; then "
-                                    "that envelope is each playhead's VCA.");
+                ImGui::TextDisabled(ampGated(ph)
+                    ? "Each playhead plays through its Amp Envelope: the Gate's level is its velocity; "
+                      "a release fades the grains already sounding."
+                    : "Droning: the playheads play continuously. Use the Gate (or set Gated) to play notes.");
                 ImGui::PopTextWrapPos();
             });
             break;

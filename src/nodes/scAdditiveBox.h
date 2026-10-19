@@ -55,6 +55,7 @@
 #include "scModulation.h"
 #include "scAudioParam.h"
 #include "scScheduledInputs.h"
+#include "scSnapshots.h"
 #include "ofxSCGroup.h"
 #include "imgui.h"
 #include <array>
@@ -104,7 +105,7 @@ public:
     void draw(ofEventArgs&) override;
     void activate() override;
     void deactivate() override;
-    void setBpm(float bpm) override { mod.setBpm(bpm); }
+    void setBpm(float bpm) override { mod.setBpm(bpm); currentBpm = bpm; }
 
     // scNode interface
     void buildSynth(ofxSCServer* server) override;
@@ -297,15 +298,14 @@ private:
     scEQEditor eqEditor;
     bool eqCurveDirty = true;
 
-    // ── Preset bank: data/Supercollider/AdditiveBox/Presets/<name>.json ─────
-    std::string presetDir() const;
-    void scanPresets();
-    void loadBankPreset(const std::string& name);
-    bool saveBankPreset(const std::string& name);
-    void drawPresetBar();
-    std::vector<std::string> bankPresets;
-    std::string currentPreset;
-    bool presetsScanned = false;
+    // ── Snapshots and named presets (data/Supercollider/AdditiveBox/Presets):
+    //    scSnapshots; a sound = Voices + every control a preset holds + the modulation ──
+    scSnapshots snaps;
+    ofJson captureSound() const;
+    void loadSound(const ofJson& json);                                     // a whole sound
+    void applySound(const ofJson& a, const ofJson& b, float t, bool sw);    // a blend
+    const ofJson* modSource = nullptr;   // the routing a blend switched to
+    float currentBpm = 120.0f;
     bool loadingBankPreset = false;   // structure changes wait for applyStructure()
 
     // ── Window ───────────────────────────────────────────────────────────────

@@ -1087,14 +1087,18 @@ void scModulation::refresh() {
 }
 
 void scModulation::drawEnvelopes(float w, const std::function<void(float)>& lead) {
+    drawEnvelopeCards(w,lead ? std::vector<std::function<void(float)>>{lead} : std::vector<std::function<void(float)>>{});
+}
+
+void scModulation::drawEnvelopeCards(float w, const std::vector<std::function<void(float)>>& leads) {
     const float z = zoom();
     const float cw = colW(w, 4);
-    const int first = lead ? 1 : 0;
+    const int first = leads.size();
     const int cards = first + envCount + (envCount < std::min((int)MAX_ENVS, maxEnvs) ? 1 : 0);
     for(int c = 0; c < cards; c++){
         if(c % 4) ImGui::SameLine(0, gapW());
         else if(c) ImGui::Spacing();
-        if(c < first){ ImGui::BeginGroup(); lead(cw); ImGui::EndGroup(); continue; }
+        if(c < first){ ImGui::BeginGroup(); leads[c](cw); ImGui::EndGroup(); continue; }
         if(c - first < envCount) drawEnvCard(c - first, cw);
         else{
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.13f, 0.15f, 1.0f));

@@ -47,6 +47,7 @@
 #include "scTransportSync.h"
 #include "scArpeggiatorBoxEngine.h"
 #include "scChordLink.h"
+#include "scSnapshots.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "ofxSCBus.h"
@@ -121,7 +122,8 @@ public:
         addParameter(scale.set("Scale", {0, 2, 4, 5, 7, 9, 11}, {-24.0f}, {127.0f}));
         addParameter(root.set("Root", 0.0f, -24.0f, 127.0f));
         addParameter(seed.set("Seed", 1, 0, 99999));
-        addParameter(snapshotRecall.set("Snapshot", 0, 0, NUM_SNAPS));
+        snaps.setupParameters();
+        addParameter(snaps.snapshotP);   // recalls by number (1..)
         for(const char* n : {"Trig", "Gate", "Pitch", "Bass Trig", "Bass Gate", "Bass Pitch"}) scNode::addOutput(n);
         addOutputParameter(pitchOut.set("PitchOut", std::vector<float>(4, 60.0f), {0.0f}, {127.0f}));
         addOutputParameter(gateOut.set("GateOut", std::vector<int>(4, 0), {0}, {1}));
@@ -168,12 +170,6 @@ public:
             for(auto& [server, st] : servers) sendStaticControls(st);
             follower.requestAnchor();
         }));
-        // a recall command (as the GUI node's: back to 0, so a preset does not recall on load)
-        listeners.push(snapshotRecall.newListener([this](int& v){
-            if(v <= 0) return;
-            recallSnapshot(v - 1);
-            snapshotRecall.setWithoutEventNotifications(0);
-        }));
         listeners.push(resendParams.newListener([this](){
             for(auto& [server, st] : servers) sendStaticControls(st);
             follower.requestAnchor();
@@ -182,8 +178,29 @@ public:
         engine.resetSource(currentSource());
         syncEngine();
         defaultValues = captureValues();
-        loadSnapshotFile();
-        if(!ofFile(snapshotPath()).exists()) addDemoSnapshots();
+        {
+            scSnapshots::Host h;
+            h.folder = "ArpeggiatorBox";
+            h.title = "ArpeggiatorBox";
+            h.capture = [this](){ return ofJson{{"values", captureValues()}}; };
+            h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySnapshots(a, b, t, sw); };
+            h.factory = [this](){ return demoSnapshots(); };
+            h.importLegacy = [this](){   // the list this node kept before (Snapshots.json)
+                const std::string old = ofToDataPath("nodeSnapshots/ArpeggiatorBox/Snapshots.json", true);
+                if(!ofFile(old).exists()) return false;
+                bool any = false;
+                try {
+                    const ofJson j = ofLoadJson(old);
+                    if(j.contains("snapshots") && j["snapshots"].is_array())
+                        for(const auto& o : j["snapshots"])
+                            if(o.is_object()) any = snaps.appendSnapshot({{"name", o.value("name", std::string("Snapshot"))},
+                                                                           {"values", o.value("values", ofJson::object())}}) || any;
+                } catch(...) {}
+                return any;
+            };
+            h.bpm = [this](){ return std::max(1.0f, getFrameTransportState().current.bpm); };
+            snaps.setup(h);
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -199,8 +216,7 @@ public:
                 invalidateServer(st);
             }
         }
-        if(snapshotRevision() != loadedSnapshotRevision) loadSnapshotFile();
-        updateMorph();
+        snaps.update();
         watchTransport();
         learnChain();
         updateLinks();
@@ -313,6 +329,7 @@ public:
         json["ArpeggiatorBoxPublished"] = publishedKeys;
         timeline.save(json, "ArpeggiatorBoxTimeline");
         json["ArpeggiatorBoxTab"] = selectedTab;
+        json["ArpeggiatorBoxSnapshots"] = snaps.settingsJson();
     }
     void loadBeforeConnections(ofJson& json) override {
         if(!json.contains("ArpeggiatorBoxPublished") || !json["ArpeggiatorBoxPublished"].is_array()) return;
@@ -331,6 +348,12 @@ public:
             for(const auto& ctl : controls) if(!ctl.fixed && c.contains(ctl.key)) ctl.load(c[ctl.key]);
         }
         if(json.contains("ArpeggiatorBoxTab") && json["ArpeggiatorBoxTab"].is_number_integer()) selectedTab = json["ArpeggiatorBoxTab"].get<int>();
+        if(json.contains("ArpeggiatorBoxSnapshots")) snaps.loadSettings(json["ArpeggiatorBoxSnapshots"]);
+        else if(json.contains("ArpeggiatorBox") && json["ArpeggiatorBox"].contains("morphTime")){
+            // before the shared snapshots: Morph Time > 0 (seconds) glided every recall
+            const float t = json["ArpeggiatorBox"].value("morphTime", 0.0f);
+            snaps.loadSettings({{"glide", t > 0.0f}, {"time", t}, {"beats", false}, {"switch", 2}});
+        }
         syncPatternSizes();
         engine.origin = 0;
         engine.armed = false;
@@ -691,7 +714,6 @@ private:
         ctlI("eucDurOff", durOff.set("Long Offset", 0, 0, 63));
         ctlF("durEucStrength", durStrength.set("Long Strength", 0.0f, 0.0f, 4.0f));
         // snapshots
-        ctlF("morphTime", morphTime.set("Morph Time", 0.0f, 0.0f, 10.0f));
 
         listeners.push(seqSize.newListener([this](int&){ syncPatternSizes(); }));
         listeners.push(trigAmp.newListener([this](bool&){ for(auto& [s, st] : servers) if(st.synth) st.synth->set("trigAmp", trigAmp ? 1.0f : 0.0f); }));
@@ -1370,35 +1392,8 @@ private:
     // Snapshots (shared by every ArpeggiatorBox)
     // ════════════════════════════════════════════════════════════════════════
 
-    struct Snapshot { std::string name; ofJson values; };
-    std::vector<Snapshot> snapshots;
-    int loadedSnapshotRevision = -1;
-    static int& snapshotRevisionRef(){ static int r = 0; return r; }
-    static int snapshotRevision(){ return snapshotRevisionRef(); }
-    static std::string snapshotPath(){ return ofToDataPath("nodeSnapshots/ArpeggiatorBox/Snapshots.json", true); }
-
-    void loadSnapshotFile(){
-        loadedSnapshotRevision = snapshotRevision();
-        snapshots.clear();
-        ofFile f(snapshotPath());
-        if(!f.exists()) return;
-        try {
-            const ofJson j = ofLoadJson(snapshotPath());
-            if(j.contains("snapshots") && j["snapshots"].is_array())
-                for(const auto& s : j["snapshots"])
-                    if(s.is_object()) snapshots.push_back({s.value("name", std::string("Snapshot")), s.value("values", ofJson::object())});
-        } catch(...) {}
-    }
-    void saveSnapshotFile(){
-        ofDirectory dir(ofFilePath::getEnclosingDirectory(snapshotPath()));
-        if(!dir.exists()) dir.create(true);
-        ofJson j;
-        j["snapshots"] = ofJson::array();
-        for(const auto& s : snapshots) j["snapshots"].push_back({{"name", s.name}, {"values", s.values}});
-        ofSavePrettyJson(snapshotPath(), j);
-        snapshotRevisionRef()++;
-        loadedSnapshotRevision = snapshotRevision();
-    }
+    // Snapshots: scSnapshots (shared by the synths), a snapshot = {"name", "values"}
+    scSnapshots snaps;
     // ── Demo snapshots: the defaults with a few settings changed ────────────
     ofJson defaultValues;
     static std::vector<std::pair<std::string, ofJson>> demoOverrides(){
@@ -1456,20 +1451,24 @@ private:
                                           {"bassEucHits", 3}, {"bassOctave", -1}}},
         };
     }
+    std::vector<ofJson> demoSnapshots() const {
+        std::vector<ofJson> out;
+        for(const auto& [name, over] : demoOverrides()){
+            ofJson v = defaultValues;
+            for(auto it = over.begin(); it != over.end(); ++it) v[it.key()] = it.value();
+            out.push_back({{"name", name}, {"values", v}});
+        }
+        return out;
+    }
     // Adds the demos not in the list yet; the number added
     int addDemoSnapshots(){
         int added = 0;
-        for(const auto& [name, over] : demoOverrides()){
-            if((int)snapshots.size() >= NUM_SNAPS) break;
+        for(const auto& d : demoSnapshots()){
             bool present = false;
-            for(const auto& sn : snapshots) if(sn.name == name) present = true;
-            if(present) continue;
-            ofJson v = defaultValues;
-            for(auto it = over.begin(); it != over.end(); ++it) v[it.key()] = it.value();
-            snapshots.push_back({name, v});
-            added++;
+            for(int k = 0; k < scSnapshots::SLOTS; k++) if(snaps.used[k] && snaps.name(k) == d["name"].get<std::string>()) present = true;
+            if(!present && snaps.appendSnapshot(d)) added++;
         }
-        saveSnapshotFile();
+        snaps.saveLibrary();
         return added;
     }
     ofJson captureValues() const {
@@ -1477,40 +1476,22 @@ private:
         for(const auto& c : controls) if(c.key != "morphTime" && c.key != "voices" && c.key != "clockMode") v[c.key] = c.save();
         return v;
     }
-    void storeSnapshot(int slot, const std::string& name){
-        Snapshot s{name.empty() ? "Snapshot " + ofToString(slot + 1) : name, captureValues()};
-        if(slot >= 0 && slot < (int)snapshots.size()) snapshots[slot] = s;
-        else if((int)snapshots.size() < NUM_SNAPS) snapshots.push_back(s);
-        saveSnapshotFile();
-    }
-    // the clock, the outputs and Morph Time stay as set
+    // the clock, the outputs stay as set
     static bool recalled(const std::string& key){ return key != "morphTime" && key != "voices" && key != "clockMode"; }
-    void recallSnapshot(int slot){
-        if(slot < 0 || slot >= (int)snapshots.size()) return;
-        activeSnapshot = slot;
-        const ofJson& v = snapshots[slot].values;
-        if(morphTime.get() <= 0.0f){
-            for(const auto& c : controls) if(v.contains(c.key) && recalled(c.key)) c.load(v[c.key]);
-            return;
-        }
-        // numbers glide over Morph Time; the rest switch at its end
-        morphFrom.clear();
-        morphTarget = v;
-        for(const auto& c : controls) if(c.get && recalled(c.key) && v.contains(c.key) && v[c.key].is_number()) morphFrom[c.key] = c.get();
-        morphStart = ofGetElapsedTimef();
-        morphing = true;
-    }
-    void updateMorph(){
-        if(!morphing) return;
-        const float t = std::clamp((ofGetElapsedTimef() - morphStart) / std::max(0.001f, morphTime.get()), 0.0f, 1.0f);
+    // A blend of two snapshots: numbers glide, the rest switch at the switch point
+    void applySnapshots(const ofJson& a, const ofJson& b, float t, bool sw){
+        static const ofJson none = ofJson::object();
+        const ofJson& va = a.contains("values") ? a["values"] : none;
+        const ofJson& vb = b.contains("values") ? b["values"] : none;
         for(const auto& c : controls){
-            auto it = morphFrom.find(c.key);
-            if(it == morphFrom.end() || !c.set) continue;
-            c.set(it->second + (morphTarget[c.key].get<double>() - it->second) * t);
-        }
-        if(t >= 1.0f){
-            morphing = false;
-            for(const auto& c : controls) if(morphTarget.contains(c.key) && recalled(c.key)) c.load(morphTarget[c.key]);
+            if(!recalled(c.key)) continue;
+            const bool ha = va.contains(c.key), hb = vb.contains(c.key);
+            if(ha && hb && va[c.key].is_number() && vb[c.key].is_number() && c.set && t > 0.0f && t < 1.0f){
+                c.set(va[c.key].get<double>() + (vb[c.key].get<double>() - va[c.key].get<double>()) * t);
+                continue;
+            }
+            const ofJson& src = sw ? vb : va;
+            if(src.contains(c.key) && c.save() != src[c.key]) c.load(src[c.key]);
         }
     }
     // The Polyphonic Arpeggiator GUI's snapshots (its units: older ones in ms)
@@ -1529,7 +1510,6 @@ private:
         std::sort(files.begin(), files.end());
         int count = 0;
         for(const auto& [slot, path] : files){
-            if((int)snapshots.size() >= NUM_SNAPS) break;
             ofJson j;
             try { j = ofLoadJson(path); } catch(...) { continue; }
             if(!j.is_object()) continue;
@@ -1548,10 +1528,10 @@ private:
             if(!j.contains("pulseMode")) v["pulseMode"] = arpbox::PULSE_EUCLID;
             if(!j.contains("bassPatternMode") && j.contains("bassOnAccent"))
                 v["bassPatternMode"] = j.value("bassOnAccent", false) ? arpbox::BASS_VEL_ACCENT : arpbox::BASS_ALTERNATE;
-            snapshots.push_back({j.value("name", "Imported " + ofToString(slot)), v});
+            if(!snaps.appendSnapshot({{"name", j.value("name", "Imported " + ofToString(slot))}, {"values", v}})) break;
             count++;
         }
-        if(count) saveSnapshotFile();
+        if(count) snaps.saveLibrary();
         return count;
     }
 
@@ -2480,39 +2460,15 @@ private:
         columns(2, [&](int k){
             if(k == 0){
                 heading("Snapshots (shared by every ArpeggiatorBox)");
-                ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x - 150.0f));
-                const bool enter = ImGui::InputTextWithHint("##abSnapName", "name", snapName.data(), snapName.size(), ImGuiInputTextFlags_EnterReturnsTrue);
-                ImGui::SameLine();
-                if(ImGui::Button("Store") || enter){
-                    // a name in the list: replaced; else a new one
-                    const std::string name(snapName.data());
-                    int slot = -1;
-                    for(int i = 0; i < (int)snapshots.size(); i++) if(!name.empty() && snapshots[i].name == name) slot = i;
-                    storeSnapshot(slot, name);
-                    activeSnapshot = slot >= 0 ? slot : (int)snapshots.size() - 1;
-                }
-                ImGui::SameLine();
-                ImGui::TextDisabled("%d/%d", (int)snapshots.size(), NUM_SNAPS);
-                ImGui::BeginChild("##abSnapList", ImVec2(0, 0), true);
-                for(int i = 0; i < (int)snapshots.size(); i++){
-                    ImGui::PushID(i);
-                    if(ImGui::Selectable((ofToString(i + 1) + "  " + snapshots[i].name).c_str(), i == activeSnapshot)) recallSnapshot(i);
-                    if(ImGui::BeginPopupContextItem("##abSnapCtx")){
-                        if(ImGui::MenuItem("Replace with the current settings")){ storeSnapshot(i, snapshots[i].name); }
-                        if(ImGui::MenuItem("Rename to the name field") && snapName[0]){ snapshots[i].name = snapName.data(); saveSnapshotFile(); }
-                        if(ImGui::MenuItem("Delete")){ snapshots.erase(snapshots.begin() + i); saveSnapshotFile(); if(activeSnapshot >= (int)snapshots.size()) activeSnapshot = -1; ImGui::EndPopup(); ImGui::PopID(); break; }
-                        ImGui::EndPopup();
-                    }
-                    ImGui::PopID();
-                }
-                ImGui::EndChild();
+                snaps.drawBar(ImGui::GetContentRegionAvail().x, false);
+                ImGui::TextDisabled("Click a number to recall it, drag it to move it; type to rename.");
+                snaps.drawList();
             }else{
-                heading("Recall");
-                sliderF("morphTime", morphTime, "Morph time (s)");
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Numbers glide to the snapshot; the rest switch at the end");
-                ImGui::TextWrapped("The node's Snapshot input recalls by number (1..). Click one in the list to recall it; "
-                                   "right-click it to replace, rename or delete it.");
-                if(morphing) ImGui::TextDisabled("Morphing...");
+                heading("Recall and morph");
+                snaps.drawMorph(ImGui::GetContentRegionAvail().x);
+                ImGui::TextWrapped("The node's Snapshot input recalls by number (1..). Glide: numbers glide to the "
+                                   "snapshot over Time; the rest switch at the switch point (...).");
+                if(snaps.gliding()) ImGui::TextDisabled("Gliding...");
                 ImGui::Spacing();
                 heading("Demos");
                 if(ImGui::Button("Add the demo snapshots")) importMessage = "Added " + ofToString(addDemoSnapshots()) + " demo(s)";
@@ -2540,7 +2496,7 @@ private:
     scAudioParam trigIn;
     ofParameter<std::vector<float>> notePool, scale;
     ofParameter<float> root;
-    ofParameter<int> seed, snapshotRecall, totalVoicesOut;
+    ofParameter<int> seed, totalVoicesOut;
     ofParameter<std::vector<float>> pitchOut, velOut, durOut, gateVelOut;
     ofParameter<std::vector<int>> gateOut, eucGateOut, eucAccOut, eucDurOut;
     // controls
@@ -2581,7 +2537,6 @@ private:
     ofParameter<bool> durRndPerStep, durRndCycle;
     ofParameter<int> durMode, durEvery, durShift, durSeed, durLen, durHits, durOff;
     ofParameter<std::vector<int>> durSteps;
-    ofParameter<float> morphTime;
 
     arpbox::Engine engine;
     std::map<int64_t, std::vector<arpbox::Note>> noteCache;
@@ -2612,14 +2567,7 @@ private:
     int selectedTab = 0;
     int64_t nowPulse = 0;
     int viewBeats = 8;
-    int activeSnapshot = -1;
-    std::array<char, 96> snapName{};
     std::string importMessage;
-    // morph
-    bool morphing = false;
-    float morphStart = 0.0f;
-    std::map<std::string, double> morphFrom;
-    ofJson morphTarget;
 };
 
 #endif // OFXOCEANODESC_HAS_TRANSPORT
