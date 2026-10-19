@@ -8,6 +8,9 @@
 #include "scMixerPro.h"
 #include "ofxOceanodeContainer.h"
 #include "ofxOceanodeNode.h"
+#if OFXOCEANODESC_HAS_TIMELINE
+#include "ofxOceanodeTimeline.h"
+#endif
 #include "ofxOceanodeNodeMacro.h"
 #include "imgui_internal.h"
 #include "ofxOceanodeConnection.h"
@@ -551,6 +554,17 @@ void scMixerPro::useLegacyInputNames() {
 void scMixerPro::syncFaderNames() {
     auto& group = getParameterGroup();
     auto strips = allStrips();
+#if OFXOCEANODESC_HAS_TIMELINE
+    // the timeline paths of the Levels in the node, before the rename
+    auto* container = getHostContainer();
+    const bool retarget = container && !reorderingTracks && !ofxOceanodeShared::isPresetLoading();
+    std::map<Track*, std::string> oldPaths;
+    if(retarget)
+        for(Track* tr : strips) {
+            auto it = nodeHandles.find(tr->levelKey);
+            if(it != nodeHandles.end() && it->second) oldPaths[tr] = container->getTimelineParameterPath(*it->second);
+        }
+#endif
     for(Track* tr : strips) tr->level.setName("__MixerPro fader slot " + tr->levelKey);
 
     const std::string zeroWidth = "\xE2\x80\x8B";
@@ -566,6 +580,18 @@ void scMixerPro::syncFaderNames() {
         tr->level.setName(candidate);
         assigned.push_back(candidate);
     }
+#if OFXOCEANODESC_HAS_TIMELINE
+    if(retarget && !oldPaths.empty()) {
+        std::map<std::string, std::string> moved;
+        for(auto& [tr, oldPath] : oldPaths) {
+            auto it = nodeHandles.find(tr->levelKey);
+            if(it == nodeHandles.end() || !it->second) continue;
+            const std::string newPath = container->getTimelineParameterPath(*it->second);
+            if(newPath != oldPath) moved[oldPath] = newPath;
+        }
+        if(!moved.empty()) container->getTimelineManager().retargetParameterPaths(moved);
+    }
+#endif
     reorderNodeParameters();
 }
 
@@ -717,6 +743,7 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
 
     struct Snapshot {
         ofJson json;
+        bool levelOnTimeline = false;   // its Level's automation follows it (by name)
         ofxOceanodeAbstractParameter* inputSource = nullptr;
         std::vector<bool> published;
         std::vector<ofxOceanodeAbstractParameter*> roleIn;
@@ -734,6 +761,7 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
         Track& tr = *tracks[j];
         Snapshot& snap = snaps[j];
         snap.json = saveStrip(tr);
+        snap.levelOnTimeline = std::find(timelineKeys.begin(), timelineKeys.end(), tr.levelKey) != timelineKeys.end();
         if(j < (int)inputs.size()) {
             if(auto* in = paramByName(inputs[j].getEscapedName())) {
                 if(auto* c = in->getInConnection()) {
@@ -779,7 +807,13 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
     setTrackCount((int)order.size());
     for(int i = 0; i < (int)order.size(); i++) loadStrip(*tracks[i], snaps[order[i]].json);
     syncTrackInputNames();
+    reorderingTracks = true;    // the Level names (and their automation) go with the tracks
     syncFaderNames();
+    reorderingTracks = false;
+    // a moved Level the timeline drives needs its (hidden) parameter on its new strip
+    for(int i = 0; i < (int)order.size(); i++)
+        if(snaps[order[i]].levelOnTimeline) timelineHandle(tracks[i]->levelKey);
+    nextTimelinePrune = ofGetElapsedTimef() + 1.0f;   // the strips it left are pruned once the timeline agrees
     // Sidechain sources refer to track numbers
     for(Track* tr : allStrips()) {
         const int s = tr->scSource.get() - 1;
@@ -2274,6 +2308,7 @@ void scMixerPro::unregisterTrackActions(Track& tr) {
         }
         publishedKeys.erase(std::remove(publishedKeys.begin(), publishedKeys.end(), key), publishedKeys.end());
         faderKeys.erase(std::remove(faderKeys.begin(), faderKeys.end(), key), faderKeys.end());
+        timelineKeys.erase(std::remove(timelineKeys.begin(), timelineKeys.end(), key), timelineKeys.end());
         publishActions.erase(key);
     }
     removeFaderBadge(tr);
@@ -2301,6 +2336,7 @@ bool scMixerPro::publishKey(const std::string& key) {
     }
     if(Track* tr = stripForLevelKey(key)) ensureFaderBadge(*tr);
     publishedKeys.push_back(key);
+    updateHandleVisibility(key);
     reorderNodeParameters();
     return true;
 }
@@ -2311,6 +2347,7 @@ bool scMixerPro::unpublishKey(const std::string& key) {
     if(!fader && hasNodeConnection(key)) return false;
     publishedKeys.erase(std::remove(publishedKeys.begin(), publishedKeys.end(), key), publishedKeys.end());
     if(!fader) removeNodeHandleIfUnused(key);
+    updateHandleVisibility(key);   // still on the timeline: hidden again
     if(publishedKeys.empty() && publishedSeparatorAdded) { removeSeparator("Published"); publishedSeparatorAdded = false; }
     reorderNodeParameters();
     return true;
@@ -2322,6 +2359,7 @@ void scMixerPro::removeNodeHandleIfUnused(const std::string& key) {
     if(isPublished(key)) return;
     if(std::find(faderKeys.begin(), faderKeys.end(), key) != faderKeys.end()) return;
     if(hasNodeConnection(key)) return;
+    if(isOnTimeline(key)) return;      // the timeline drives it through this parameter
     removeParameter(it->second->getName());
     nodeHandles.erase(it);
     if(Track* tr = stripForLevelKey(key)) removeFaderBadge(*tr);
@@ -2405,18 +2443,138 @@ void scMixerPro::updateFaders() {
         for(const auto& key : keys) removeNodeHandleIfUnused(key);
         // Connected faders stay, still counted as faders
         for(const auto& key : keys)
-            if(nodeHandles.count(key) && !isPublished(key)) faderKeys.push_back(key);
+            if(nodeHandles.count(key) && !isPublished(key) && !isOnTimeline(key)) faderKeys.push_back(key);
     }
+    for(Track* tr : allStrips()) updateHandleVisibility(tr->levelKey);
     syncFaderSeparators();
     reorderNodeParameters();
 }
 
 void scMixerPro::markPublished(const std::string& key) const {
-    if(!isPublished(key)) return;
     const ImVec2 a = ImGui::GetItemRectMin();
     const ImVec2 b = ImGui::GetItemRectMax();
-    ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f),
-                                        ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
+    if(isPublished(key))
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f),
+                                            ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
+#if OFXOCEANODESC_HAS_TIMELINE
+    // on the timeline: a line in its track's colour along the top
+    auto it = nodeHandles.find(key);
+    auto* container = it != nodeHandles.end() && it->second ? getHostContainer() : nullptr;
+    ofColor colour;
+    if(container && container->getTimelineManager().getParameterTrackColor(*it->second, colour))
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, a.y + 1.0f), ImVec2(b.x, a.y + 1.0f),
+                                            IM_COL32(colour.r, colour.g, colour.b, 255), 2.0f);
+#endif
+}
+
+// ── Timeline ────────────────────────────────────────────────────────────────
+
+bool scMixerPro::isOnTimeline(const std::string& key) const {
+#if OFXOCEANODESC_HAS_TIMELINE
+    auto it = nodeHandles.find(key);
+    if(it == nodeHandles.end() || !it->second) return false;
+    auto* container = getHostContainer();
+    return container && container->getTimelineManager().isParameterBound(*it->second);
+#else
+    return false;
+#endif
+}
+
+// Hidden while only the timeline needs it in the node
+void scMixerPro::updateHandleVisibility(const std::string& key) {
+    auto it = nodeHandles.find(key);
+    if(it == nodeHandles.end() || !it->second) return;
+    const bool timeline = std::find(timelineKeys.begin(), timelineKeys.end(), key) != timelineKeys.end();
+    const bool fader = std::find(faderKeys.begin(), faderKeys.end(), key) != faderKeys.end();
+    const bool hidden = timeline && !isPublished(key) && !fader;
+    const auto flags = it->second->getFlags();
+    const auto wanted = hidden ? (flags | ofxOceanodeParameterFlags_NoGuiWidget) : (flags & ~ofxOceanodeParameterFlags_NoGuiWidget);
+    if(wanted != flags) it->second->setFlags(wanted);
+}
+
+// The control's node parameter, made (hidden) if it has none yet
+std::shared_ptr<ofxOceanodeAbstractParameter> scMixerPro::timelineHandle(const std::string& key) {
+    auto action = publishActions.find(key);
+    if(action == publishActions.end() || action->second.output) return nullptr;
+    if(std::find(timelineKeys.begin(), timelineKeys.end(), key) == timelineKeys.end()) timelineKeys.push_back(key);
+    if(nodeHandles.count(key) == 0) {
+        nodeHandles[key] = action->second.add();
+        updateHandleVisibility(key);
+        reorderNodeParameters();
+    } else {
+        updateHandleVisibility(key);
+    }
+    return nodeHandles[key];
+}
+
+// A control no timeline track binds any more (removed here or in the
+// timeline) gives its hidden parameter back
+void scMixerPro::pruneTimelineKeys() {
+    const auto keys = timelineKeys;
+    bool changed = false;
+    for(const auto& key : keys) {
+        if(nodeHandles.count(key) && isOnTimeline(key)) continue;
+        timelineKeys.erase(std::remove(timelineKeys.begin(), timelineKeys.end(), key), timelineKeys.end());
+        removeNodeHandleIfUnused(key);
+        updateHandleVisibility(key);
+        changed = true;
+    }
+    if(changed) reorderNodeParameters();
+}
+
+// As the node GUI's parameter menu: add to a timeline track (new or
+// existing), as a piano roll, remove
+void scMixerPro::drawTimelineItems(const std::string& key) {
+#if OFXOCEANODESC_HAS_TIMELINE
+    auto action = publishActions.find(key);
+    auto* container = getHostContainer();
+    if(action == publishActions.end() || action->second.output || !action->second.parameter || !container) return;
+    const std::string type = action->second.parameter->valueType();
+    if(type != typeid(float).name() && type != typeid(int).name() && type != typeid(bool).name()) return;
+    auto& timeline = container->getTimelineManager();
+    auto handle = nodeHandles.find(key);
+    const std::string path = handle != nodeHandles.end() && handle->second ? container->getTimelineParameterPath(*handle->second) : "";
+    struct Bound { std::string trackId, trackName, bindingId; };
+    std::vector<Bound> bound;
+    if(!path.empty())
+        for(const auto& track : timeline.getTracks())
+            for(const auto& binding : track.bindings)
+                if(binding.parameterPath == path) bound.push_back({track.id, track.name, binding.id});
+    ImGui::Separator();
+    if(ImGui::BeginMenu(("Add to Timeline Track##" + key).c_str())) {
+        if(ImGui::Selectable("New Timeline Track")) {
+            if(auto h = timelineHandle(key)) {
+                const std::string trackId = timeline.createTrack();
+                if(!timeline.addBinding(trackId, *h).empty()) timeline.requestTrackRename(trackId, true);
+            }
+        }
+        if(!timeline.getTracks().empty()) {
+            ImGui::Separator();
+            for(const auto& track : timeline.getTracks()) {
+                if(track.isWaveTrack) continue;
+                const bool already = std::any_of(bound.begin(), bound.end(), [&](const Bound& b) { return b.trackId == track.id; });
+                if(ImGui::Selectable((track.name + "##" + track.id).c_str(), already, already ? ImGuiSelectableFlags_Disabled : 0))
+                    if(auto h = timelineHandle(key)) timeline.addBinding(track.id, *h);
+            }
+        }
+        ImGui::EndMenu();
+    }
+    if(ImGui::Selectable(("Add to Timeline as Piano Roll...##" + key).c_str()))
+        if(auto h = timelineHandle(key)) timeline.requestNoteGroupSetup(h.get());
+    if(bound.size() == 1) {
+        if(ImGui::Selectable(("Remove from Timeline##" + key).c_str())) {
+            timeline.removeBinding(bound.front().trackId, bound.front().bindingId);
+            pruneTimelineKeys();
+        }
+    } else if(bound.size() > 1 && ImGui::BeginMenu(("Remove from Timeline##" + key).c_str())) {
+        for(const auto& b : bound)
+            if(ImGui::MenuItem((b.trackName + "##" + b.bindingId).c_str())) {
+                timeline.removeBinding(b.trackId, b.bindingId);
+                pruneTimelineKeys();
+            }
+        ImGui::EndMenu();
+    }
+#endif
 }
 
 // Value field + publish / unpublish, inside an already open popup
@@ -2458,6 +2616,7 @@ void scMixerPro::drawPublishItems(const std::string& key, const char* title, boo
     } else if(ImGui::MenuItem(("Publish to Node GUI##" + key).c_str())) {
         publishKey(key);
     }
+    drawTimelineItems(key);
 }
 
 void scMixerPro::drawVuPublishMenu(const std::string& key) {
@@ -2491,6 +2650,11 @@ void scMixerPro::updatePeaks(std::vector<float>& vu, std::vector<float>& peak, s
 
 void scMixerPro::update(ofEventArgs&) {
     processFxTimers();
+    // a binding removed in the timeline itself: its hidden parameter goes
+    if(!timelineKeys.empty() && ofGetElapsedTimef() >= nextTimelinePrune) {
+        nextTimelinePrune = ofGetElapsedTimef() + 1.0f;
+        pruneTimelineKeys();
+    }
     if(pendingDelete >= 0) {
         const int k = pendingDelete;
         pendingDelete = -1;
@@ -2691,6 +2855,8 @@ void scMixerPro::presetSave(ofJson& json) {
     state["numChannels"] = currentChannels;
     state["showFaders"] = showFaders.get();
     state["published"] = publishedKeys;
+    pruneTimelineKeys();
+    state["timeline"] = timelineKeys;
     state["tracks"] = ofJson::array();
     for(auto& tr : tracks) state["tracks"].push_back(saveStrip(*tr));
     state["numBuses"] = (int)buses.size();
@@ -2875,6 +3041,12 @@ void scMixerPro::loadBeforeConnections(ofJson& json) {
         updateFaders();
         if(state.contains("published") && state["published"].is_array())
             syncPublished(state["published"].get<std::vector<std::string>>());
+        // The timeline binds parameters by their path: its controls must be
+        // in the node (hidden) before it resolves them
+        timelineKeys.clear();
+        nextTimelinePrune = ofGetElapsedTimef() + 5.0f;   // the timeline loads its bindings after us
+        if(state.contains("timeline") && state["timeline"].is_array())
+            for(const auto& k : state["timeline"]) if(k.is_string()) timelineHandle(k.get<std::string>());
     } catch(const std::exception& e) {
         ofLogError("scMixerPro") << "Could not load the mixer state: " << e.what();
     }

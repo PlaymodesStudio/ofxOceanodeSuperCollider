@@ -430,6 +430,24 @@ private:
     void drawPublishPopup(const std::string& key);
     void drawPublishItems(const std::string& key, const char* title, bool focus);
     void markPublished(const std::string& key) const;
+    // --- timeline: "Add to Timeline" straight from the window ---
+    // A control added to the timeline gets a node parameter (the timeline
+    // binds parameters by their path in the node), hidden from the node GUI
+    // (ofxOceanodeParameterFlags_NoGuiWidget) unless it is also published
+    // or a shown fader. Kept while a timeline track binds it (saved with the
+    // mixer, recreated before the timeline resolves its bindings).
+    std::vector<std::string> timelineKeys;
+    float nextTimelinePrune = 0.0f;
+    // A Level's parameter is named after its track: renaming the track moves
+    // its timeline bindings to the new name (syncFaderNames). Not while
+    // reordering: the names follow the tracks to their new strips, and so
+    // does the timeline, by name.
+    bool reorderingTracks = false;
+    std::shared_ptr<ofxOceanodeAbstractParameter> timelineHandle(const std::string& key);
+    bool isOnTimeline(const std::string& key) const;
+    void updateHandleVisibility(const std::string& key);
+    void drawTimelineItems(const std::string& key);
+    void pruneTimelineKeys();
     template<typename T>
     void addAction(const std::string& key, ofParameter<T>& parameter) {
         PublishAction action;
