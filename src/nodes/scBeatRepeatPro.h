@@ -11,6 +11,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "ofxOceanodeShared.h"
 #include "scNode.h"
+#include "scTimelineMenu.h"
 #include "serverManager.h"
 #include "ofxSCSynth.h"
 #include "imgui.h"
@@ -210,6 +211,7 @@ private:
     };
     std::vector<PublishAction> publishActions;
     std::vector<std::string> publishedKeys;
+    scTimelineMenu timeline;              // "Add to Timeline" from the window
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> publishedHandles;
     bool publishedSeparatorAdded = false;
 

@@ -42,6 +42,7 @@
 #if OFXOCEANODESC_HAS_TRANSPORT
 
 #include "scNode.h"
+#include "scTimelineMenu.h"
 #include "scAudioParam.h"
 #include "scTransportSync.h"
 #include "scArpeggiatorBoxEngine.h"
@@ -103,6 +104,8 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
+                       [this](){ return publishedKeys; });
         description = "Polyphonic arpeggiator played sample accurately: a scale or a chord pool, patterns, polyphony, "
                       "bass, euclidean / random / step accents and long notes, strum, swing, chances and seeded "
                       "randomness. Clock: the transport, its own clock or triggers (a bang or an audio cable). "
@@ -188,6 +191,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void update(ofEventArgs&) override {
+        timeline.update();
         const float now = ofGetElapsedTimef();
         for(auto& [server, st] : servers){
             if(st.allocPending && (!server->isNRTSyncPending() || now - st.allocTime > 2.0f)){
@@ -307,6 +311,7 @@ public:
         auto& c = json["ArpeggiatorBox"] = ofJson::object();
         for(const auto& ctl : controls) if(!ctl.fixed && !published.count(ctl.key)) c[ctl.key] = ctl.save();
         json["ArpeggiatorBoxPublished"] = publishedKeys;
+        timeline.save(json, "ArpeggiatorBoxTimeline");
         json["ArpeggiatorBoxTab"] = selectedTab;
     }
     void loadBeforeConnections(ofJson& json) override {
@@ -317,7 +322,8 @@ public:
         for(const auto& k : old)
             if(std::find(wanted.begin(), wanted.end(), k) == wanted.end() && !hasConnection(k)) unpublish(k);
         for(const auto& k : wanted) publish(k);
-    }
+            timeline.load(json, "ArpeggiatorBoxTimeline");
+}
     void presetRecallBeforeSettingParameters(ofJson& json) override { loadBeforeConnections(json); }
     void presetRecallAfterSettingParameters(ofJson& json) override {
         if(json.contains("ArpeggiatorBox") && json["ArpeggiatorBox"].is_object()){
@@ -355,6 +361,7 @@ private:
     std::vector<Control> controls;
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
     std::vector<std::string> publishedKeys;
+    scTimelineMenu timeline;              // "Add to Timeline" from the window
     bool publishedSeparator = false;
 
     // a change (connections may send the same value again)
@@ -469,7 +476,8 @@ private:
     void controlMenu(const std::string& key){
         const Control* c = findControl(key);
         if(!c) return;
-        if(published.count(key) || c->fixed){
+        timeline.mark(key);
+        if((published.count(key) && !timeline.isHidden(key)) || c->fixed){
             const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
             ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1), ImVec2(b.x, b.y - 1), ImGui::GetColorU32(ImGuiCol_Text, c->fixed ? 0.35f : 1.0f));
         }
@@ -488,10 +496,13 @@ private:
         if(enter || ImGui::IsItemDeactivatedAfterEdit()){ c->apply(std::string(buf.data())); if(enter) ImGui::CloseCurrentPopup(); }
         ImGui::Separator();
         if(c->fixed) ImGui::TextDisabled("Always on the node");
-        else if(published.count(key)){
+        else if(timeline.isHidden(key)){
+            if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
+        }else if(published.count(key)){
             if(hasConnection(key)) ImGui::TextDisabled("Disconnect it to unpublish");
-            else if(ImGui::MenuItem("Unpublish from Node")) unpublish(key);
-        }else if(ImGui::MenuItem("Publish to Node")) publish(key);
+            else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
+        }else if(ImGui::MenuItem("Publish to Node GUI")) publish(key);
+        timeline.menuItems(key);
         ImGui::EndPopup();
     }
 

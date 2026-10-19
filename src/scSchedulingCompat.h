@@ -52,6 +52,14 @@ inline void registerParameterTarget(const ofxOceanodeAbstractParameter* paramete
 #endif
 }
 
+inline void unregisterParameterTarget(const ofxOceanodeAbstractParameter* parameter){
+#if OFXOCEANODESC_HAS_TIMELINE
+	ofxOceanodeScheduling::unregisterParameterTarget(parameter);
+#else
+	(void)parameter;
+#endif
+}
+
 inline void unregisterOwner(const void* owner){
 #if OFXOCEANODESC_HAS_TIMELINE
 	ofxOceanodeScheduling::unregisterOwner(owner);

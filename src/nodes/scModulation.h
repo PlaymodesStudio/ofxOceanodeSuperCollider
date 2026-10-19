@@ -166,6 +166,20 @@ public:
     void afterLoad();                                          // after the node's controls are back
 
 private:
+    // Tables depend on shape settings, not tempo, routing or envelope edits.
+    // Keep each LFO's last cycle and transfer at their requested size.
+    struct TableCache {
+        std::array<float, 9> key{};
+        std::vector<float> values;
+    };
+    mutable std::array<TableCache, MAX_LFOS> cycleCache, transferCache;
+    struct PreviewCache {
+        std::array<float, 8> key{};
+        std::array<float, 97> values{};
+        bool valid = false;
+    };
+    std::array<PreviewCache, MAX_LFOS> previewCache;
+
     struct ParamTarget {
         std::string key, name;
         ofAbstractParameter* p = nullptr;

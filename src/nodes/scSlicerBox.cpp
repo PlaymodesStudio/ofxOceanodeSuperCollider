@@ -318,6 +318,8 @@ scSlicerBox::~scSlicerBox(){
 }
 
 void scSlicerBox::setup(){
+        timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
+                       [this](){ return publishedKeys; });
     addParameter(showWindow.set("Show", false));
     gate.set("Gate", {0.0f}, {0.0f}, {1.0f});
     auto gateHandle = addParameter(gate);
@@ -1048,6 +1050,7 @@ void scSlicerBox::deactivate(){
 // ════════════════════════════════════════════════════════════════════════════
 
 void scSlicerBox::update(ofEventArgs&){
+    timeline.update();
     // A file chosen in the window or dropped on it
     if(pendingLoadDialog){
         pendingLoadDialog = false;
@@ -1151,6 +1154,7 @@ void scSlicerBox::draw(ofEventArgs&){
 
 void scSlicerBox::presetSave(ofJson& json){
     json["publishedEditorParameters"] = publishedKeys;
+    timeline.save(json, "timelineHiddenEditorParameters");
     json["file"] = audio.path.empty() ? pendingPath : audio.path;
     json["points"] = points;
     json["browseDir"] = browser.getDir();
@@ -1165,6 +1169,7 @@ void scSlicerBox::presetSave(ofJson& json){
 void scSlicerBox::loadBeforeConnections(ofJson& json){
     if(!json.contains("publishedEditorParameters") || !json["publishedEditorParameters"].is_array()) return;
     try { syncPublished(json["publishedEditorParameters"].get<std::vector<std::string>>()); } catch(...) {}
+    timeline.load(json, "timelineHiddenEditorParameters");
 }
 
 void scSlicerBox::presetRecallBeforeSettingParameters(ofJson& json){
@@ -1321,7 +1326,8 @@ void scSlicerBox::syncPublished(const std::vector<std::string>& keys){
 }
 
 void scSlicerBox::controlMenu(const std::string& key){
-    if(isPublished(key)){
+    timeline.mark(key);
+    if(isPublished(key) && !timeline.isHidden(key)){
         const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f),
                                             ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
@@ -1352,13 +1358,16 @@ void scSlicerBox::controlMenuItems(const std::string& key, const char* title){
     }
     if(action == nullptr){
         ImGui::TextDisabled("Not publishable");
+    } else if(timeline.isHidden(key)){
+        if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
     } else if(isPublished(key)){
         ImGui::TextDisabled("Published in node");
         if(hasPublishedConnection(key)) ImGui::TextDisabled("Connected: disconnect to unpublish");
-        else if(ImGui::MenuItem("Unpublish from Node")) unpublishByKey(key);
-    } else if(ImGui::MenuItem("Publish to Node")){
+        else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
+    } else if(ImGui::MenuItem("Publish to Node GUI")){
         publishByKey(key);
     }
+    timeline.menuItems(key, title);
     ImGui::PopID();
 }
 

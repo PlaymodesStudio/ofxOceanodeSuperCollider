@@ -166,6 +166,8 @@ scAnalogBox::~scAnalogBox() {
 }
 
 void scAnalogBox::setup() {
+    timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
+                   [this](){ return publishedKeys; });
     auto vec = [](ofParameter<std::vector<float>>& p, const std::string& name, float def, float lo, float hi) {
         p.set(name, {def}, {lo}, {hi});
     };
@@ -186,6 +188,10 @@ void scAnalogBox::setup() {
     gateIn.attach(addParameter(gate.set("Gate", {0.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
     pitchIn.attach(addParameter(pitch.set("Pitch", {48.0f}, {0.0f}, {127.0f})), availableInputs, [this](){ refreshOutputs(); });
     velIn.attach(addParameter(velocity.set("Velocity", {1.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
+    noteInputs.add(gateIn.handle, gate);
+    noteInputs.add(pitchIn.handle, pitch);
+    noteInputs.add(velIn.handle, velocity);
+    noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.created && st.gateS) return true; return false; });
     addParameter(master.set("Master", 0.7f, 0.0f, 1.0f));
     addParameter(resetLFOs.set("Reset"));
     scNode::addOutput("Out");
@@ -393,12 +399,18 @@ void scAnalogBox::setup() {
     // ── Node parameters' listeners ───────────────────────────────────────────
     listeners.push(voices.newListener([this](int&) { modulation.voicesChanged(); rebuildAll(); }));
     listeners.push(outChannels.newListener([this](int&) { rebuildOutput(); }));
+    // The timeline's frame set of a value it already sent timetagged: nothing to do.
     listeners.push(gate.newListener([this, toGate](std::vector<float>& v) {
+        if(scScheduling::isBackendSendSuppressed()) return;
         for(float x : v) if(x > 0.0f) gateTouched = true;
         toGate();
     }));
-    listeners.push(velocity.newListener([toGate](std::vector<float>&) { toGate(); }));
+    listeners.push(velocity.newListener([toGate](std::vector<float>&) {
+        if(scScheduling::isBackendSendSuppressed()) return;
+        toGate();
+    }));
     listeners.push(pitch.newListener([this, toPitch](std::vector<float>&) {
+        if(scScheduling::isBackendSendSuppressed()) return;
         toPitch();
         if(allocating()) forStates([this](ofxSCServer*, ServerState& st){ sendGate(st); });   // the pitches go through the allocator
     }));
@@ -426,9 +438,21 @@ void scAnalogBox::sendVec(ofxSCSynth* s, const std::string& name, const std::vec
     else s->set(name, expand(v, n()));
 }
 
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+bool scAnalogBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
+    if(!gateIn.handle || !pitchIn.handle || !velIn.handle) return false;
+    out.gate = gateIn.handle.get();
+    out.pitch = pitchIn.handle.get();
+    out.velocity = velIn.handle.get();
+    out.voices = nIn();
+    return true;
+}
+#endif
+
 void scAnalogBox::sendGate(ServerState& st) {
     auto* s = st.gateS;
     if(!s) return;
+    auto inEffect = noteInputs.inEffectNow();   // not a scheduled send: the notes as they stand now
     if(allocating()){
         // ABGateAlloc<Voices>: the inputs (Voices wide) -> the pool (n() wide)
         const int ni = nIn();
@@ -465,6 +489,7 @@ void scAnalogBox::sendGate(ServerState& st) {
 void scAnalogBox::sendPitch(ServerState& st) {
     auto* s = st.pitchS;
     if(!s) return;
+    auto inEffect = noteInputs.inEffectNow();
     s->set("out", st.noteBus ? st.noteBus->index : 0);
     s->set("mpitch", mod(st, TPitch));
     sendVec(s, "pitch", pitch.get());
@@ -905,6 +930,7 @@ void scAnalogBox::routeChain(ServerState& st) {
 }
 
 void scAnalogBox::update(ofEventArgs&) {
+    timeline.update();
     sendEnvMode();
     // the pool's size follows Voices, Extra Voices and gated / droning: rebuilt at the new one
     {
@@ -1105,6 +1131,7 @@ void scAnalogBox::presetSave(ofJson& j) {
     modulation.patchBases(j);
     modulation.save(j, "analogBoxMod");
     j["analogBoxPublished"] = publishedKeys;
+    timeline.save(j, "analogBoxTimeline");
 }
 
 void scAnalogBox::loadBeforeConnections(ofJson& j) {
@@ -1114,6 +1141,7 @@ void scAnalogBox::loadBeforeConnections(ofJson& j) {
     const auto old = publishedKeys;
     for(const auto& k : old) if(std::find(wanted.begin(), wanted.end(), k) == wanted.end()) unpublish(k);
     for(const auto& k : wanted) publish(k);
+    timeline.load(j, "analogBoxTimeline");
 }
 
 void scAnalogBox::presetRecallAfterSettingParameters(ofJson& j) {
@@ -1215,17 +1243,21 @@ void scAnalogBox::publishMenu(const std::string& key) {
     // the value, typed
     auto it = std::find_if(controls.begin(), controls.end(), [&](const Control& c){ return c.key == key; });
     if(it != controls.end()) scTyped::jsonField(key, it->save, it->load);
-    if(published.count(key)){
+    if(timeline.isHidden(key)){
+        if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
+    }else if(published.count(key)){
         if(isConnected(key)) ImGui::TextDisabled("Disconnect it to unpublish");
-        else if(ImGui::MenuItem("Unpublish from Node")) unpublish(key);
+        else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
     }else if(getParameterGroup().contains(key)) ImGui::TextDisabled("On the node");
-    else if(ImGui::MenuItem("Publish to Node")) publish(key);
+    else if(ImGui::MenuItem("Publish to Node GUI")) publish(key);
+    timeline.menuItems(key);
     modulation.modulateMenu(key);
     ImGui::EndPopup();
 }
 
 void scAnalogBox::publishedUnderline(const std::string& key) const {
-    if(!published.count(key)) return;
+    timeline.mark(key);
+    if(!published.count(key) || timeline.isHidden(key)) return;
     const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f), ImGui::GetColorU32(ImGuiCol_Text));
 }

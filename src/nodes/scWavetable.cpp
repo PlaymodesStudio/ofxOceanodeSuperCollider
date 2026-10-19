@@ -254,6 +254,8 @@ scWavetable::~scWavetable(){
 }
 
 void scWavetable::setup(){
+        timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
+                       [this](){ return publishedKeys; });
     // ── Node ─────────────────────────────────────────────────────────────────
     addParameter(showWindow.set("Show", false));
     addParameter(numChannels.set("N Chan", 1, 1, MAX_CHANNELS));
@@ -361,6 +363,7 @@ void scWavetable::setup(){
 // ════════════════════════════════════════════════════════════════════════════
 
 void scWavetable::update(ofEventArgs&){
+    timeline.update();
     const float now = ofGetElapsedTimef();
 
     if(pendingDialog){
@@ -1105,7 +1108,8 @@ void scWavetable::syncPublished(const std::vector<std::string>& keys){
 }
 
 void scWavetable::controlMenu(const std::string& key){
-    if(isPublished(key)){
+    timeline.mark(key);
+    if(isPublished(key) && !timeline.isHidden(key)){
         const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f),
                                             ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
@@ -1127,12 +1131,15 @@ void scWavetable::controlMenu(const std::string& key){
         }
         ImGui::Separator();
     }
-    if(isPublished(key)){
+    if(timeline.isHidden(key)){
+        if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
+    } else if(isPublished(key)){
         if(hasPublishedConnection(key)) ImGui::TextDisabled("Connected: disconnect to unpublish");
-        else if(ImGui::MenuItem("Unpublish from Node")) unpublishByKey(key);
-    } else if(ImGui::MenuItem("Publish to Node")){
+        else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
+    } else if(ImGui::MenuItem("Publish to Node GUI")){
         publishByKey(key);
     }
+    timeline.menuItems(key);
     ImGui::EndPopup();
 }
 
@@ -1142,6 +1149,7 @@ void scWavetable::controlMenu(const std::string& key){
 
 void scWavetable::presetSave(ofJson& json){
     json["publishedEditorParameters"] = publishedKeys;
+    timeline.save(json, "timelineHiddenEditorParameters");
     json["waterfallHeight"] = waterfallHeight;
     // Window-only controls; published ones are saved by Oceanode as usual
     for(const auto& action : publishActions)
@@ -1151,6 +1159,7 @@ void scWavetable::presetSave(ofJson& json){
 void scWavetable::loadBeforeConnections(ofJson& json){
     if(!json.contains("publishedEditorParameters") || !json["publishedEditorParameters"].is_array()) return;
     try { syncPublished(json["publishedEditorParameters"].get<std::vector<std::string>>()); } catch(...) {}
+    timeline.load(json, "timelineHiddenEditorParameters");
 }
 
 void scWavetable::presetRecallBeforeSettingParameters(ofJson& json){

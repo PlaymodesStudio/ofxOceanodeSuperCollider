@@ -126,11 +126,18 @@ scSampleBox::~scSampleBox() {
 void scSampleBox::setup() {
     addSeparator("SampleBox");
     addParameter(showWindow.set("Show", false));
-    addParameter(trigger.set("Trigger/Gate", {0.0f}, {0.0f}, {1.0f}));
+    triggerHandle = addParameter(trigger.set("Trigger/Gate", {0.0f}, {0.0f}, {1.0f}));
     pitchIn.attach(addParameter(pitch.set("Pitch", {60.0f}, {0.0f}, {127.0f})), availableInputs,
                    [this](){ for(auto& o : outputs) o = o; });
     velIn.attach(addParameter(velocity.set("Velocity", {1.0f}, {0.0f}, {1.0f})), availableInputs,
                  [this](){ for(auto& o : outputs) o = o; });
+    noteInputs.add(triggerHandle, trigger);
+    noteInputs.add(pitchIn.handle, pitch);
+    noteInputs.add(velIn.handle, velocity);
+    noteInputs.enable(this, [this](){
+        for(auto& p : pads) for(auto& [srv, sc] : p->sc) if(sc.engine) return true;
+        return false;
+    });
     addParameter(gain.set("Gain", 0.7f, 0.0f, 2.0f));
     addParameter(channels.set("N Chan", 2, 1, MaxChannels));
     addInput("Trig/Gate Audio");
@@ -138,7 +145,10 @@ void scSampleBox::setup() {
 
     // Trigger/Gate: element n is channel n; a rising edge plays the pads on
     // it (pulses shorter than a control block survive: SC sees a counter)
+    // (The timeline's frame set of a value it already sent timetagged: nothing
+    // to do -- the edges were taken when it was scheduled.)
     nodeListeners.push(trigger.newListener([this](std::vector<float>& v) {
+        if(scScheduling::isBackendSendSuppressed()) return;
         for(auto& up : pads) {
             Pad& p = *up;
             const int ch = padChannel(p);
@@ -149,8 +159,14 @@ void scSampleBox::setup() {
             if(!p.auditionHeld && !p.autoPlaying) for(auto& [srv, s] : p.sc) if(s.engine) s.engine->set("gate", lvl);
         }
     }));
-    nodeListeners.push(pitch.newListener([this](std::vector<float>&) { for(auto& p : pads) sendChannelInputs(*p); }));
-    nodeListeners.push(velocity.newListener([this](std::vector<float>&) { for(auto& p : pads) sendChannelInputs(*p); }));
+    nodeListeners.push(pitch.newListener([this](std::vector<float>&) {
+        if(scScheduling::isBackendSendSuppressed()) return;
+        for(auto& p : pads) sendChannelInputs(*p);
+    }));
+    nodeListeners.push(velocity.newListener([this](std::vector<float>&) {
+        if(scScheduling::isBackendSendSuppressed()) return;
+        for(auto& p : pads) sendChannelInputs(*p);
+    }));
     nodeListeners.push(gain.newListener([this](float&) {
         for(auto& p : pads) for(auto& [srv, s] : p->sc) if(s.strip) s.strip->set("master", gain.get());
     }));
@@ -161,6 +177,8 @@ void scSampleBox::setup() {
         pendingDropFile = info.files.front().string();
     });
     addPad();
+    timeline.setup(this, [this](const std::string& k) { publish(k); }, [this](const std::string& k) { unpublish(k); },
+                   [this]() { return publishedKeys; });
     requireSynthdefs();
 }
 
@@ -741,7 +759,20 @@ void scSampleBox::sendStrip(ofxSCServer* srv, Pad& p) {
     if(sc.meter) s->set("meterbus", sc.meter->index);
 }
 
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+bool scSampleBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
+    if(!triggerHandle || !velIn.handle) return false;
+    out.gate = triggerHandle.get();
+    out.velocity = velIn.handle.get();
+    out.kit = true;
+    out.voices = 1;
+    for(const auto& p : pads) out.voices = std::max(out.voices, padChannel(*p) + 1);
+    return true;
+}
+#endif
+
 void scSampleBox::sendChannelInputs(Pad& p) {
+    auto inEffect = noteInputs.inEffectNow();   // not a scheduled send: the notes as they stand now
     for(auto& [srv, sc] : p.sc) {
         if(!sc.engine) continue;
         const int ch = padChannel(p);
@@ -1105,6 +1136,7 @@ void scSampleBox::updateTempo() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scSampleBox::update(ofEventArgs&) {
+    timeline.update();
     // Pads waiting for the definitions (createSynth): created once the server
     // has synced (or after 3 s without a reply)
     for(auto& [srv, n] : nodeSC) {
@@ -1184,6 +1216,7 @@ void scSampleBox::presetSave(ofJson& j) {
     j["sampleBoxSelected"] = selected;
     j["sampleBoxBrowseDir"] = browser.getDir();
     j["sampleBoxPublished"] = publishedKeys;
+    timeline.save(j, "sampleBoxTimeline");
     j["sampleBoxBrowserWidth"] = browserWidth;
     j["sampleBoxWaveformHeight"] = waveformHeight / std::max(0.01f, ofxOceanodeShared::getZoomLevel());
 }
@@ -1204,6 +1237,7 @@ void scSampleBox::loadBeforeConnections(ofJson& j) {
     for(const auto& key : old)
         if(std::find(wanted.begin(), wanted.end(), key) == wanted.end()) unpublish(key);
     for(const auto& key : wanted) publish(key);
+    timeline.load(j, "sampleBoxTimeline");
 }
 void scSampleBox::presetRecallBeforeSettingParameters(ofJson& j) { loadBeforeConnections(j); }
 
@@ -1265,10 +1299,12 @@ void scSampleBox::drawPublishMenu(const std::string& key) {
     if(Control* c = findControl(key); c && c->save && c->load)
         scTyped::field(key, c->save, [&](const std::string& t){ c->load(ofTrim(t)); }, false);
     if(getParameterGroup().contains(key) && !published.count(key)) ImGui::TextDisabled("Always on the node");
+    else if(timeline.isHidden(key)) { if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key); }
     else if(published.count(key)) {
         if(isConnected(key)) ImGui::TextDisabled("Disconnect it to unpublish");
-        else if(ImGui::MenuItem("Unpublish from Node")) unpublish(key);
-    } else if(ImGui::MenuItem("Publish to Node")) publish(key);
+        else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
+    } else if(ImGui::MenuItem("Publish to Node GUI")) publish(key);
+    timeline.menuItems(key);
     // Modulate with: the modulation of the pad the control belongs to (the
     // selected pad's for the node's own)
     if(Control* c = findControl(key); c && c->pad >= 0 && c->pad < (int)pads.size()) pads[c->pad]->mod.modulateMenu(key);
@@ -1276,7 +1312,8 @@ void scSampleBox::drawPublishMenu(const std::string& key) {
     ImGui::EndPopup();
 }
 void scSampleBox::drawPublishedUnderline(const std::string& key) const {
-    if(!published.count(key)) return;
+    timeline.mark(key);
+    if(!published.count(key) || timeline.isHidden(key)) return;
     const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f),
                                         ImGui::GetColorU32(ImGuiCol_Text), 1.0f);

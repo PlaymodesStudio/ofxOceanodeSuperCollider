@@ -10,6 +10,7 @@
 
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
+#include "scTimelineMenu.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
 #include "imgui.h"
@@ -129,6 +130,16 @@ private:
 
 	// Keep parameters alive
 	std::map<int, shared_ptr<ofParameter<vector<float>>>> trackLevelParams;
+	scTimelineMenu timeline;   // right-click a fader: typed value, timeline
+public:
+	// levels: their timeline curves in dB
+	std::string getTimelineValueScale(ofxOceanodeAbstractParameter& parameter) const override {
+		const std::string name = parameter.getEscapedName();
+		if(name == masterLevel.getEscapedName()) return "dB";
+		for(const auto& [t, p] : trackLevelParams) if(p && name == p->getEscapedName()) return "dB";
+		return {};
+	}
+private:
 	std::map<int, shared_ptr<ofParameter<float>>> trackBalanceParams; // NEW: Per-track balance params
 	std::map<int, shared_ptr<ofParameter<bool>>> trackMuteParams;
 	std::map<int, shared_ptr<ofParameter<bool>>> trackSoloParams;

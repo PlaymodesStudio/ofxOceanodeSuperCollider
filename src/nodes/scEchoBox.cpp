@@ -111,6 +111,8 @@ void scEchoBox::reg(ofParameter<T>& p, std::function<void()> send) {
 }
 
 void scEchoBox::setup() {
+    timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
+                   [this](){ return publishedKeys; });
     addParameter(showWindow.set("Show", false));
     addParameter(channels.set("Channels", 2, 1, MAX_CHANNELS));
     addParameter(mix.set("Mix", 0.35f, 0.0f, 1.0f));
@@ -563,6 +565,7 @@ void scEchoBox::setBpm(float bpm) {
 }
 
 void scEchoBox::update(ofEventArgs&) {
+    timeline.update();
     const float now = ofGetElapsedTimef();
     modulation.showing = showWindow.get();
     modulation.update();
@@ -600,6 +603,7 @@ void scEchoBox::presetSave(ofJson& j) {
     j["echoBoxTaps"] = tapCount;
     modulation.save(j, "echoBoxMod");
     j["echoBoxPublished"] = publishedKeys;
+    timeline.save(j, "echoBoxTimeline");
     j["echoBoxMapHeight"] = mapHeight / std::max(0.01f, zoom());
 }
 
@@ -610,6 +614,7 @@ void scEchoBox::loadBeforeConnections(ofJson& j) {
     const auto old = publishedKeys;
     for(const auto& k : old) if(std::find(wanted.begin(), wanted.end(), k) == wanted.end()) unpublish(k);
     for(const auto& k : wanted) publish(k);
+    timeline.load(j, "echoBoxTimeline");
 }
 
 void scEchoBox::presetRecallAfterSettingParameters(ofJson& j) {
@@ -671,16 +676,20 @@ void scEchoBox::publishMenu(const std::string& key) {
     // the value, typed
     auto it = std::find_if(controls.begin(), controls.end(), [&](const Control& c){ return c.key == key; });
     if(it != controls.end()) scTyped::jsonField(key, it->save, it->load);
-    if(published.count(key)){
+    if(timeline.isHidden(key)){
+        if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
+    }else if(published.count(key)){
         if(isConnected(key)) ImGui::TextDisabled("Disconnect it to unpublish");
-        else if(ImGui::MenuItem("Unpublish from Node")) unpublish(key);
+        else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
     }else if(getParameterGroup().contains(key)) ImGui::TextDisabled("On the node");
-    else if(ImGui::MenuItem("Publish to Node")) publish(key);
+    else if(ImGui::MenuItem("Publish to Node GUI")) publish(key);
+    timeline.menuItems(key);
     modulation.modulateMenu(key);
     ImGui::EndPopup();
 }
 void scEchoBox::publishedUnderline(const std::string& key) const {
-    if(!published.count(key)) return;
+    timeline.mark(key);
+    if(!published.count(key) || timeline.isHidden(key)) return;
     const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f), ImGui::GetColorU32(ImGuiCol_Text));
 }

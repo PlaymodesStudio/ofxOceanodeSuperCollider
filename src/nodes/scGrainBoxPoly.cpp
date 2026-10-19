@@ -312,6 +312,9 @@ scGrainBoxPoly::~scGrainBoxPoly() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scGrainBoxPoly::setup() {
+    timeline.setup(this, [this](const std::string& k){ publishEditorParameterToNode(k); },
+                   [this](const std::string& k){ unpublishEditorParameterFromNode(k); },
+                   [this](){ return publishedEditorParameterKeys; });
     // Playhead 1: its parameters keep their original names (presets, connections).
     playheads.push_back(std::make_unique<Playhead>());
     Playhead& p0 = ph0();
@@ -2061,8 +2064,14 @@ void scGrainBoxPoly::ensureLiveResources(Playhead& ph, ofxSCServer* srv) {
     ph.live.bufs[srv] = { l.buf };
     ph.live.numChannels  = 1;
     ph.live.durationSecs = (float)l.buf->frames / sr;
-    if((int)ph.live.peaks.size() != WAVEFORM_BINS) ph.live.peaks.assign(WAVEFORM_BINS, 0.0f);
-    if((int)ph.liveRing.size()   != WAVEFORM_BINS) ph.liveRing.assign(WAVEFORM_BINS, 0.0f);
+    if((int)ph.live.peaks.size() != WAVEFORM_BINS) {
+        ph.live.peaks.assign(WAVEFORM_BINS, 0.0f);
+        ph.livePeaksDirty = true;
+    }
+    if((int)ph.liveRing.size() != WAVEFORM_BINS) {
+        ph.liveRing.assign(WAVEFORM_BINS, 0.0f);
+        ph.livePeaksDirty = true;
+    }
 }
 
 void scGrainBoxPoly::setRecArgs(Playhead& ph, ofxSCSynth* rec, ofxSCServer* srv) {
@@ -2133,6 +2142,7 @@ void scGrainBoxPoly::createLiveRecorder(Playhead& ph, ofxSCServer* srv) {
             p->liveRingMin[b] = lo;
         }
         p->liveHead = pos;
+        p->livePeaksDirty = true;
     });
     l.rec->createAndRun(2, before->nodeID, getActive());   // addBefore
     recOrder[srv].push_front(l.rec);
@@ -2206,11 +2216,14 @@ void scGrainBoxPoly::resizeLiveBuffers(Playhead& ph) {
     std::fill(ph.liveRing.begin(), ph.liveRing.end(), 0.0f);
     std::fill(ph.liveRingMin.begin(), ph.liveRingMin.end(), 0.0f);
     ph.liveHead = 0.0f;
+    ph.livePeaksDirty = true;
 }
 
 // Display: the ring (buffer order) re-read in age order, 0 = the write head
 void scGrainBoxPoly::updateLivePeaks(Playhead& ph) {
     const int bins = WAVEFORM_BINS;
+    if(!ph.livePeaksDirty && (int)ph.live.peaks.size() == bins &&
+       (int)ph.live.lows.size() == bins) return;
     if((int)ph.liveRing.size()    != bins) ph.liveRing.assign(bins, 0.0f);
     if((int)ph.liveRingMin.size() != bins) ph.liveRingMin.assign(bins, 0.0f);
     if((int)ph.live.peaks.size()  != bins) ph.live.peaks.assign(bins, 0.0f);
@@ -2221,6 +2234,8 @@ void scGrainBoxPoly::updateLivePeaks(Playhead& ph) {
         ph.live.peaks[b] = ph.liveRing[r];
         ph.live.lows[b]  = ph.liveRingMin[r];
     }
+    ph.livePeaksDirty = false;
+    ++ph.live.waveformRevision;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2642,6 +2657,7 @@ void scGrainBoxPoly::rebuildFxAll() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
+    timeline.update();
     float dt = (float)ofGetLastFrameTime();
     const Playhead* visibleModPlayhead = windowDrawn && !playheads.empty()
         ? playheads[std::clamp(activePlayhead, 0, (int)playheads.size() - 1)].get() : nullptr;
@@ -3003,6 +3019,7 @@ void scGrainBoxPoly::reloadSampleBuffersForServer(SampleData& sd, ofxSCServer* s
 
 void scGrainBoxPoly::loadWaveformData(SampleData& sd, const std::string& path) {
     if(path.empty()) return;
+    ++sd.waveformRevision;
     sd.peaks.assign(WAVEFORM_BINS, 0.0f);
     sd.durationSecs = 0.0f;
 
@@ -3621,7 +3638,8 @@ void scGrainBoxPoly::drawPublishedLabelUnderline(const std::string& key,
                                              const char* label,
                                              float frameWidth,
                                              bool checkbox) const {
-    if(!isEditorParameterPublished(key) || label == nullptr || label[0] == '\0' || label[0] == '#') return;
+    timeline.mark(key);
+    if(!isEditorParameterPublished(key) || timeline.isHidden(key) || label == nullptr || label[0] == '\0' || label[0] == '#') return;
 
     const ImVec2 itemMin = ImGui::GetItemRectMin();
     const ImVec2 itemMax = ImGui::GetItemRectMax();
@@ -3641,7 +3659,8 @@ void scGrainBoxPoly::drawPublishedLabelUnderline(const std::string& key,
 }
 
 void scGrainBoxPoly::drawPublishedCurrentItemUnderline(const std::string& key) const {
-    if(!isEditorParameterPublished(key)) return;
+    timeline.mark(key);
+    if(!isEditorParameterPublished(key) || timeline.isHidden(key)) return;
 
     const ImVec2 itemMin = ImGui::GetItemRectMin();
     const ImVec2 itemMax = ImGui::GetItemRectMax();
@@ -3689,18 +3708,21 @@ void scGrainBoxPoly::drawNodePublishMenuItems(const std::string& key, bool focus
     }
     if(action == nullptr) {
         ImGui::TextDisabled("Not publishable");
+    } else if(timeline.isHidden(key)) {
+        if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
     } else if(action->isPublished()) {
         ImGui::TextDisabled("Published in node");
         if(ImGui::MenuItem("Unpublish from Node")) {
-            unpublishEditorParameterFromNode(key);
+            timeline.unpublish(key);
         }
     } else if(action->isAvailableInNode != nullptr && action->isAvailableInNode()) {
         ImGui::TextDisabled("Already in node");
     } else {
-        if(ImGui::MenuItem("Publish to Node")) {
+        if(ImGui::MenuItem("Publish to Node GUI")) {
             publishEditorParameterToNode(key);
         }
     }
+    if(action != nullptr) timeline.menuItems(key, title);
     // a modulation target of its engine, or any other control: its engine's sources (global ones: engine 1's)
     {
         scModulation* m = nullptr;
@@ -3756,6 +3778,7 @@ void scGrainBoxPoly::presetSave(ofJson& j) {
     j["activePlayhead"] = activePlayhead;
     j["globalTab"]      = globalTab;
     j["publishedEditorParameters"] = publishedEditorParameterKeys;
+    timeline.save(j, "timelineHiddenEditorParameters");
     j["activeSnapshot"] = activeSnap;
     j["gbpSnapshots"]   = ofJson::array();
     for(int k = 0; k < 16; k++) j["gbpSnapshots"].push_back(snapUsed[k] ? snapSlots[k] : ofJson(nullptr));
@@ -3813,6 +3836,7 @@ void scGrainBoxPoly::loadBeforeConnections(ofJson& j) {
         std::vector<std::string> keys;
         try { keys = j["publishedEditorParameters"].get<std::vector<std::string>>(); } catch(...) {}
         syncPublishedEditorParameters(keys);
+        timeline.load(j, "timelineHiddenEditorParameters");
     } else {
         // Saved before Publish to Node existed: every one of these was a node
         // parameter and may be the target of a saved connection.
@@ -3838,6 +3862,7 @@ void scGrainBoxPoly::presetRecallBeforeSettingParameters(ofJson& j) {
         std::vector<std::string> keys;
         try { keys = j["publishedEditorParameters"].get<std::vector<std::string>>(); } catch(...) {}
         syncPublishedEditorParameters(keys);
+        timeline.load(j, "timelineHiddenEditorParameters");
     }
     // Old preset: leave the published set as loadBeforeConnections made it.
 }
@@ -4386,6 +4411,8 @@ void scGrainBoxPoly::drawBrowser(float w, float h) {
 // that sample, each in its playhead's accent colour.
 
 void scGrainBoxPoly::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, float h) {
+    if(!ImGui::IsRectVisible(pos, ImVec2(pos.x + w, pos.y + h)) &&
+       !ImGui::IsItemActive() && wavDragMode == WavDrag::None) return;
     float zoom = ofxOceanodeShared::getZoomLevel();
     Playhead& ph = *playheads[std::max(0, std::min((int)playheads.size() - 1, activePlayhead))];
     const SampleData& sd = sampleOf(ph);   // the selected playhead's sample
@@ -4444,24 +4471,29 @@ void scGrainBoxPoly::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, floa
 
     // ── Waveform: light neutral grey inside the region, faint outside ─────
     if(!sd.peaks.empty()) {
-        int bins = (int)sd.peaks.size();
-        for(int i = 0; i < (int)w; i++) {
-            float norm    = visStart + ((float)i / w) * visW;
-            int   binIdx  = std::max(0, std::min((int)(norm * bins), bins - 1));
-            float peak    = sd.peaks[binIdx];
-            // Live: signed max / min (a real waveform shape); files: +-|peak|
-            const bool  signedMM = !sd.lows.empty();
-            float low     = signedMM ? sd.lows[std::min(binIdx, (int)sd.lows.size() - 1)] : -peak;
-            if(!signedMM && peak <= 0.0f) continue;
-            if(signedMM && peak <= low) { peak += 0.002f; low -= 0.002f; }   // silence: a hairline
-            float px      = pos.x + (float)i;
-            float py      = midY - peak * (h * 0.45f);
-            float py2     = midY - low  * (h * 0.45f);
-            const bool inside = norm >= inP && norm <= outP;
-            // the selected playhead's accent (playhead 1: its blue, like its grains)
-            dl->AddLine(ImVec2(px, py), ImVec2(px, py2),
-                        gbpAccent(ph.index, inside ? gbpPal::waveAlpha : gbpPal::waveAlphaDim));
-        }
+        const ImU32 insideColor = gbpAccent(ph.index, gbpPal::waveAlpha);
+        const ImU32 outsideColor = gbpAccent(ph.index, gbpPal::waveAlphaDim);
+        sd.waveformMesh.draw(dl, std::array<double, 11>{pos.x, pos.y, w, h, visStart, visW,
+            inP, outP, (double)insideColor, (double)outsideColor, 0}, sd.waveformRevision, [&] {
+            int bins = (int)sd.peaks.size();
+            for(int i = 0; i < (int)w; i++) {
+                float norm    = visStart + ((float)i / w) * visW;
+                int   binIdx  = std::max(0, std::min((int)(norm * bins), bins - 1));
+                float peak    = sd.peaks[binIdx];
+                // Live: signed max / min (a real waveform shape); files: +-|peak|
+                const bool  signedMM = !sd.lows.empty();
+                float low     = signedMM ? sd.lows[std::min(binIdx, (int)sd.lows.size() - 1)] : -peak;
+                if(!signedMM && peak <= 0.0f) continue;
+                if(signedMM && peak <= low) { peak += 0.002f; low -= 0.002f; }   // silence: a hairline
+                float px      = pos.x + (float)i;
+                float py      = midY - peak * (h * 0.45f);
+                float py2     = midY - low  * (h * 0.45f);
+                const bool inside = norm >= inP && norm <= outP;
+                // the selected playhead's accent (playhead 1: its blue, like its grains)
+                dl->AddLine(ImVec2(px, py), ImVec2(px, py2),
+                            inside ? insideColor : outsideColor);
+            }
+        });
     }
 
     // Out-of-region areas dimmed
@@ -4781,6 +4813,7 @@ void scGrainBoxPoly::drawPlayheadHeader(Playhead& ph, float /*w*/) {
 // lines, numbered), grains and position cursors in its accent. View only.
 
 void scGrainBoxPoly::drawGlobalWaveform(ImDrawList* dl, ImVec2 pos, float w, float h) {
+    if(!ImGui::IsRectVisible(pos, ImVec2(pos.x + w, pos.y + h)) && !ImGui::IsItemActive()) return;
     float zoom = ofxOceanodeShared::getZoomLevel();
     const ImVec2 end(pos.x + w, pos.y + h);
     const float visStart = waveScroll;
@@ -4816,16 +4849,19 @@ void scGrainBoxPoly::drawGlobalWaveform(ImDrawList* dl, ImVec2 pos, float w, flo
     // Waveforms: shared one neutral, own ones tinted
     auto drawPeaks = [&](const SampleData& sd, ImU32 col) {
         if(sd.peaks.empty()) return;
-        const int bins = (int)sd.peaks.size();
-        for(int i = 0; i < (int)w; i++) {
-            float norm = visStart + ((float)i / w) * visW;
-            const int b = std::max(0, std::min(bins - 1, (int)(norm * bins)));
-            float peak = sd.peaks[b];
-            float low  = sd.lows.empty() ? -peak : sd.lows[std::min(b, (int)sd.lows.size() - 1)];
-            if(sd.lows.empty() && peak <= 0.0f) continue;
-            if(peak <= low) { peak += 0.002f; low -= 0.002f; }
-            dl->AddLine(ImVec2(pos.x + i, midY - peak * h * 0.45f), ImVec2(pos.x + i, midY - low * h * 0.45f), col);
-        }
+        sd.waveformMesh.draw(dl, std::array<double, 8>{pos.x, pos.y, w, h, visStart, visW,
+            (double)col, 1}, sd.waveformRevision, [&] {
+            const int bins = (int)sd.peaks.size();
+            for(int i = 0; i < (int)w; i++) {
+                float norm = visStart + ((float)i / w) * visW;
+                const int b = std::max(0, std::min(bins - 1, (int)(norm * bins)));
+                float peak = sd.peaks[b];
+                float low  = sd.lows.empty() ? -peak : sd.lows[std::min(b, (int)sd.lows.size() - 1)];
+                if(sd.lows.empty() && peak <= 0.0f) continue;
+                if(peak <= low) { peak += 0.002f; low -= 0.002f; }
+                dl->AddLine(ImVec2(pos.x + i, midY - peak * h * 0.45f), ImVec2(pos.x + i, midY - low * h * 0.45f), col);
+            }
+        });
     };
     // Every waveform at the same alpha, in its playhead's accent. The shared
     // sample is playhead 1's: drawn once in its blue accent, also when other

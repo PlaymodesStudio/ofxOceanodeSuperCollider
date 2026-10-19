@@ -32,7 +32,9 @@
 #include "ofxSCGroup.h"
 #include "scEQEditor.h"
 #include "scModulation.h"
+#include "scTimelineMenu.h"
 #include "scAudioParam.h"
+#include "scScheduledInputs.h"
 #include "imgui.h"
 #include <array>
 #include <filesystem>
@@ -84,6 +86,10 @@ public:
     void presetSave(ofJson& j) override;
     void loadBeforeConnections(ofJson& j) override;
     void presetRecallAfterSettingParameters(ofJson& j) override;
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+    // Gate / Pitch / Velocity, one note per voice (timeline piano rolls)
+    bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override;
+#endif
 
 private:
     // ── Per server: a root group, one subgroup per slot (in this order, so
@@ -142,6 +148,7 @@ private:
     std::vector<Control> controls;
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
     std::vector<std::string> publishedKeys;
+    scTimelineMenu timeline;              // "Add to Timeline" from the window
     bool publishedSeparator = false;
     template<typename T> void reg(ofParameter<T>& p, std::function<void()> send);
     void publish(const std::string& key);
@@ -187,7 +194,7 @@ private:
     std::string stageDef(int s) const;
     float stageTail(int s) const;
     float echoDelaySec() const;
-    void sendStage(int s, ofxSCSynth* synth);
+    void sendStage(int s, ofxSCSynth* synth, ofxSCServer* server);
     void sendStageAll(int s);
     void updateStages(ofxSCServer* server, ServerState& st);
     void routeChain(ServerState& st);
@@ -201,6 +208,7 @@ private:
     ofParameter<float> spreadWidth, spreadCenter;
     ofParameter<std::vector<float>> panP; // Manual: each voice's position, 0..1 across the speakers
     ofParameter<std::vector<float>> gate, pitch, velocity;
+    scScheduledInputs noteInputs;    // the timeline's notes, timetagged
     ofParameter<float> master;
     ofParameter<void> resetLFOs;
 

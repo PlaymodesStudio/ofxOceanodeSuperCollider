@@ -111,8 +111,12 @@ float scModulation::noise2(float x, float y, float salt) {
 // Pow, BiPow, as a transfer curve 0..1 -> 0..1 (the nodes that run the noise
 // themselves read it as a table)
 std::vector<float> scModulation::lfoTransfer(int li, int size) const {
-    std::vector<float> t(std::max(2, size));
     const float gain = first(lfoGain[li].get(), 1.0f), pw2 = first(lfoPow[li].get()), bp = first(lfoBiPow[li].get());
+    const std::array<float, 9> key{gain, pw2, bp, grainExtras ? (float)lfoSteps[li].get() : 0.0f};
+    auto& cache = transferCache[li];
+    const int count = std::max(2, size);
+    if(cache.values.size() == (size_t)count && cache.key == key) return cache.values;
+    std::vector<float> t(count);
     for(int i = 0; i < (int)t.size(); i++){
         float v = float(i) / (t.size() - 1);
         v = ofClamp((v - 0.5f) * gain + 0.5f, 0.0f, 1.0f);
@@ -124,6 +128,8 @@ std::vector<float> scModulation::lfoTransfer(int li, int size) const {
         }
         t[i] = ofClamp(v, 0.0f, 1.0f);
     }
+    cache.key = key;
+    cache.values = t;
     return t;
 }
 
@@ -481,9 +487,15 @@ void scModulation::sendMatrix() {
 
 // ── The LFOs for a node's own copies ─────────────────────────────────────────
 std::vector<float> scModulation::lfoTable(int li, int size) const {
-    std::vector<float> t(std::max(2, size));
     const float rnd = first(lfoRound[li].get(), 0.5f), sk = first(lfoSkew[li].get()), pw = first(lfoPw[li].get(), 0.5f);
     const float pw2 = first(lfoPow[li].get()), bp = first(lfoBiPow[li].get()), gain = first(lfoGain[li].get(), 1.0f);
+    const std::array<float, 9> key{rnd, sk, pw, pw2, bp, gain,
+        lfoNoise[li].get() ? 1.0f : 0.0f, lfoCentered[li].get() ? 1.0f : 0.0f,
+        grainExtras ? (float)lfoSteps[li].get() : 0.0f};
+    auto& cache = cycleCache[li];
+    const int count = std::max(2, size);
+    if(cache.values.size() == (size_t)count && cache.key == key) return cache.values;
+    std::vector<float> t(count);
     const float seed = li * 17.31f;
     for(int i = 0; i < (int)t.size(); i++){
         const float ph = float(i) / (t.size() - 1);
@@ -501,6 +513,8 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
         t[i] = ofClamp(v, 0.0f, 1.0f);
     }
     t.back() = t.front();
+    cache.key = key;
+    cache.values = t;
     return t;
 }
 float scModulation::lfoVoiceOffset(int li, int voice) const {
@@ -1129,8 +1143,16 @@ void scModulation::drawLfoCard(int li, float w) {
             if(std::abs(bp) > 1e-4f) v = biPow(v, bp);
             return v;
         };
-        std::vector<ImVec2> pts;
-        for(int i = 0; i <= 96; i++) pts.push_back(ImVec2(a.x + w * i / 96.0f, b.y - 4 * z - value(i / 96.0f) * (h - 8 * z)));
+        const std::array<float, 8> key{rnd, sk, pw, pw2, bp, gain,
+            lfoNoise[li].get() ? 1.0f : 0.0f, lfoCentered[li].get() ? 1.0f : 0.0f};
+        auto& preview = previewCache[li];
+        if(!preview.valid || preview.key != key){
+            for(int i = 0; i <= 96; i++) preview.values[i] = value(i / 96.0f);
+            preview.key = key;
+            preview.valid = true;
+        }
+        std::array<ImVec2, 97> pts;
+        for(int i = 0; i <= 96; i++) pts[i] = ImVec2(a.x + w * i / 96.0f, b.y - 4 * z - preview.values[i] * (h - 8 * z));
         dl->AddPolyline(pts.data(), (int)pts.size(), (pal::lfo[li] & 0x00FFFFFF) | 0x80000000, 0, 1.5f * z);
         if(perVoice)
             for(int v = 0; v < nv && v < (int)lfoPhases[li].size(); v++)

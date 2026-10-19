@@ -157,6 +157,8 @@ scAdditiveBox::~scAdditiveBox(){
 }
 
 void scAdditiveBox::setup(){
+        timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
+                       [this](){ return publishedKeys; });
     // ── Node ─────────────────────────────────────────────────────────────────
     addParameter(showWindow.set("Show", false));
     addParameter(numVoices.set("Voices", 1, 1, MAX_VOICES));
@@ -361,6 +363,7 @@ void scAdditiveBox::setup(){
                            {levels.getEscapedName(), 3}, {sweepAmt.getEscapedName(), 4}, {pan.getEscapedName(), 5},
                            {noise.getEscapedName(), 6}};
     }
+    noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.created) return true; return false; });
     publishByKey(pitch.getEscapedName());
     publishByKey(gate.getEscapedName());
     publishByKey(levels.getEscapedName());
@@ -397,7 +400,17 @@ void scAdditiveBox::setup(){
     nodeListeners.push(volume.newListener([this](float& v){
         for(auto& [server, st] : states) if(st.out) st.out->set("volume", v);
     }));
-    nodeListeners.push(gate.newListener([this](std::vector<float>& v){ onGate(v); }));
+    // The timeline's frame set of a value it already sent timetagged: nothing to do.
+    nodeListeners.push(gate.newListener([this](std::vector<float>& v){
+        if(scScheduling::isBackendSendSuppressed()) return;
+        onGate(v);
+    }));
+    // A scheduled pitch is sent at its instant: the voices recomputed now.
+    nodeListeners.push(pitch.newListener([this](std::vector<float>&){
+        if(scScheduling::isBackendSendSuppressed()) return;
+        markDirty();
+        if(noteInputs.isSending()) flushDirty();
+    }));
     nodeListeners.push(trig.newListener([this](std::vector<int>& v){ onTrig(v); }));
     nodeListeners.push(seed.newListener([this](int&){ markDirty(); }));
     nodeListeners.push(reroll.newListener([this](bool&){ markDirty(); }));
@@ -406,7 +419,7 @@ void scAdditiveBox::setup(){
     for(auto* p : {&transpose, &sweepVoiceOffset, &unisonDetune, &unisonSpread, &unisonInterval, &unisonBlend})
         nodeListeners.push(p->newListener([this](float&){ markDirty(); }));
     nodeListeners.push(speakerLayout.newListener([this](int&){ markDirty(); }));
-    for(auto* p : {&pitch, &levels, &glide, &morph, &harmonicsA, &harmonicsB, &harmBlur,
+    for(auto* p : {&levels, &glide, &morph, &harmonicsA, &harmonicsB, &harmBlur,
                    &tilt, &stretch, &inharm, &evenOdd, &detune, &shift,
                    &cutoff, &keytrack, &slope, &resonance, &safeBass, &filterShape,
                    &vowel, &formantShift, &formantWidth, &filter2Mix, &drawnEq,
@@ -444,6 +457,7 @@ void scAdditiveBox::setup(){
 // ════════════════════════════════════════════════════════════════════════════
 
 void scAdditiveBox::update(ofEventArgs&){
+    timeline.update();
     const float now = ofGetElapsedTimef();
     mod.update();   // (showing: set below, from the last frame's drawing)
 
@@ -474,17 +488,7 @@ void scAdditiveBox::update(ofEventArgs&){
             for(int v = 0; v < (int)st.voices.size(); v++) syncVoice(server, v, false);
         }
     }
-    if(dirty){
-        dirty = false;
-        modDirty = false;
-        computeAll();
-        // every voice: parts switched on / off where needed, what changed sent
-        for(auto& [server, st] : states){
-            if(!st.created) continue;
-            uploadCurves(server, false);
-            for(int v = 0; v < (int)st.voices.size(); v++) syncVoice(server, v, false);
-        }
-    }
+    if(dirty) flushDirty();
 
     // Display bus of the first server, only while the window is open
     // only while the window was really drawn (not hidden behind a tab or
@@ -506,6 +510,29 @@ void scAdditiveBox::update(ofEventArgs&){
         }
     }
 }
+
+void scAdditiveBox::flushDirty(){
+    auto inEffect = noteInputs.inEffectNow();   // not a scheduled send: the notes as they stand now
+    dirty = false;
+    modDirty = false;
+    computeAll();
+    // every voice: parts switched on / off where needed, what changed sent
+    for(auto& [server, st] : states){
+        if(!st.created) continue;
+        uploadCurves(server, false);
+        for(int v = 0; v < (int)st.voices.size(); v++) syncVoice(server, v, false);
+    }
+}
+
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+bool scAdditiveBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out){
+    if(!gateIn.handle && !pitchIn.handle) return false;
+    out.gate = gateIn.handle.get();
+    out.pitch = pitchIn.handle.get();
+    out.voices = numVoicesClamped();
+    return true;
+}
+#endif
 
 void scAdditiveBox::draw(ofEventArgs&){
     if(showWindow) drawWindow();
@@ -1248,7 +1275,8 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
     // the gate is a level (a gate rising to 0.2 plays at 0.2); a cable: mapped
     const int gb = gateIn.bus(server), pb = pitchIn.bus(server);
     const float rawPitch = valueFor(pitch.get(), v, 48.0f);
-    extra["gate"] = v < (int)gateOpen.size() && gateOpen[v] ? std::max(0.0f, valueFor(gate.get(), v, 0.0f)) : 0.0f;
+    // (from the value, not gateOpen: scheduled notes move gateOpen ahead of now)
+    extra["gate"] = std::max(0.0f, valueFor(gate.get(), v, 0.0f));
     extra["velbus"] = float(st.modCreated ? mod.sourceBus(server, scModulation::SRC_VEL) + v : (st.visJunk ? st.visJunk->index : 0));
     extra["pitchoff"] = pb >= 0 ? transpose.get() : 0.0f;
     skipScalars.clear();
@@ -1857,8 +1885,14 @@ bool scAdditiveBox::publishByKey(const std::string& key){
     publishedHandles[key] = action->publish();
     publishedKeys.push_back(key);
     // Gate and Pitch: audio cables too
-    if(key == gate.getEscapedName()) gateIn.attach(publishedHandles[key], availableInputs, [this](){ refreshOutputs(); });
-    if(key == pitch.getEscapedName()) pitchIn.attach(publishedHandles[key], availableInputs, [this](){ refreshOutputs(); });
+    if(key == gate.getEscapedName()){
+        gateIn.attach(publishedHandles[key], availableInputs, [this](){ refreshOutputs(); });
+        noteInputs.add(publishedHandles[key], gate);
+    }
+    if(key == pitch.getEscapedName()){
+        pitchIn.attach(publishedHandles[key], availableInputs, [this](){ refreshOutputs(); });
+        noteInputs.add(publishedHandles[key], pitch);
+    }
     parameterGroupChanged.notify(this);
     return true;
 }
@@ -1866,8 +1900,8 @@ bool scAdditiveBox::publishByKey(const std::string& key){
 bool scAdditiveBox::unpublishByKey(const std::string& key){
     auto it = publishedHandles.find(key);
     if(it == publishedHandles.end() || hasPublishedConnection(key)) return false;
-    if(key == gate.getEscapedName()) gateIn.detach(availableInputs);
-    if(key == pitch.getEscapedName()) pitchIn.detach(availableInputs);
+    if(key == gate.getEscapedName()){ gateIn.detach(availableInputs); noteInputs.remove(gate); }
+    if(key == pitch.getEscapedName()){ pitchIn.detach(availableInputs); noteInputs.remove(pitch); }
     removeParameter(it->second->getEscapedName());
     publishedHandles.erase(it);
     publishedKeys.erase(std::remove(publishedKeys.begin(), publishedKeys.end(), key), publishedKeys.end());
@@ -1888,7 +1922,8 @@ void scAdditiveBox::syncPublished(const std::vector<std::string>& keys){
 }
 
 void scAdditiveBox::controlMenu(const std::string& key){
-    if(isPublished(key)){
+    timeline.mark(key);
+    if(isPublished(key) && !timeline.isHidden(key)){
         const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f),
                                             ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
@@ -1921,13 +1956,16 @@ void scAdditiveBox::controlMenuItems(const std::string& key, const char* title){
     if(action == nullptr){
         const bool onNode = key == numVoices.getEscapedName() || key == numOutputs.getEscapedName();
         ImGui::TextDisabled("%s", onNode ? "Already in node" : "Not publishable");
+    } else if(timeline.isHidden(key)){
+        if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
     } else if(isPublished(key)){
         ImGui::TextDisabled("Published in node");
         if(hasPublishedConnection(key)) ImGui::TextDisabled("Connected: disconnect to unpublish");
-        else if(ImGui::MenuItem("Unpublish from Node")) unpublishByKey(key);
-    } else if(ImGui::MenuItem("Publish to Node")){
+        else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
+    } else if(ImGui::MenuItem("Publish to Node GUI")){
         publishByKey(key);
     }
+    timeline.menuItems(key, title);
     mod.modulateMenu(key);   // a modulation target: route sources to it
     ImGui::PopID();
 }
@@ -1938,6 +1976,7 @@ void scAdditiveBox::controlMenuItems(const std::string& key, const char* title){
 
 void scAdditiveBox::presetSave(ofJson& json){
     json["publishedEditorParameters"] = publishedKeys;
+    timeline.save(json, "timelineHiddenEditorParameters");
     json["viewHeight"] = viewHeight;
     json["bankPreset"] = currentPreset;
     // Window-only controls; published ones are saved by Oceanode as usual
@@ -1950,6 +1989,7 @@ void scAdditiveBox::presetSave(ofJson& json){
 void scAdditiveBox::loadBeforeConnections(ofJson& json){
     if(!json.contains("publishedEditorParameters") || !json["publishedEditorParameters"].is_array()) return;
     try { syncPublished(json["publishedEditorParameters"].get<std::vector<std::string>>()); } catch(...) {}
+    timeline.load(json, "timelineHiddenEditorParameters");
 }
 
 void scAdditiveBox::presetRecallBeforeSettingParameters(ofJson& json){

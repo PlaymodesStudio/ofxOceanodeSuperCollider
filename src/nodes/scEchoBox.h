@@ -32,6 +32,7 @@
 #include "ofxSCBus.h"
 #include "ofxSCGroup.h"
 #include "scModulation.h"
+#include "scTimelineMenu.h"
 #include "imgui.h"
 #include <array>
 #include <functional>
@@ -115,6 +116,7 @@ private:
     std::vector<Control> controls;
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
     std::vector<std::string> publishedKeys;
+    scTimelineMenu timeline;              // "Add to Timeline" from the window
     bool publishedSeparator = false;
     bool restoring = false;
     template<typename T> void reg(ofParameter<T>& p, std::function<void()> send);

@@ -44,7 +44,9 @@
 #include "scTransportSync.h"
 #include "scSampleBrowser.h"
 #include "scEQEditor.h"
+#include "scGuiMeshCache.h"
 #include "scModulation.h"
+#include "scTimelineMenu.h"
 #include "scAudioParam.h"
 #include <vector>
 #include <string>
@@ -119,6 +121,8 @@ private:
         std::string        path;
         std::vector<float> peaks;             // WAVEFORM_BINS peak values 0..1
         std::vector<float> lows;              // Live only: signed min per bin (peaks = signed max)
+        std::uint64_t waveformRevision = 0;
+        mutable scGuiMeshCache waveformMesh;
         float              durationSecs = 0.0f;
         int                numChannels  = 1;  // from the WAV header, 1..MAX_SAMPLE_CHANNELS
         std::map<ofxSCServer*, std::vector<ofxSCBuffer*>> bufs;
@@ -257,6 +261,7 @@ private:
         std::vector<float> liveRing;                // signed max per bin, buffer order
         std::vector<float> liveRingMin;             // signed min per bin
         float              liveHead = 0.0f;         // write position 0..1
+        bool               livePeaksDirty = true;
         float              liveResizeAt = -1.0f;    // debounced re-allocation after a length change
         struct LiveSC {
             ofxSCBuffer*    buf      = nullptr;
@@ -644,6 +649,7 @@ private:
     };
     std::vector<EditorPublishAction> publishableEditorParameters;
     std::vector<std::string> publishedEditorParameterKeys;
+    scTimelineMenu timeline;              // "Add to Timeline" from the window
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> publishedEditorParameterHandles;
     bool publishedEditorSeparatorAdded = false;
     std::vector<std::string> legacyAutoPublishedKeys;   // see loadBeforeConnections

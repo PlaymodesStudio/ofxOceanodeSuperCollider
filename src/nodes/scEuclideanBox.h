@@ -50,6 +50,7 @@
 #if OFXOCEANODESC_HAS_TRANSPORT
 
 #include "scNode.h"
+#include "scTimelineMenu.h"
 #include "scTransportSync.h"
 #include "scMetroBoxEngine.h"     // hashOf, unit, floorDiv, positiveMod64, tickAt
 #include "ofxSCSynth.h"
@@ -107,6 +108,8 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
+                       [this](){ return publishedKeys; });
         description = "Euclidean sequencer locked to the transport: up to 8 tracks of hits spread over steps, "
                       "with euclidean accents and long notes, swing, chance and a pitch progression over a scale. "
                       "Seeded randomization every N cycles / bars / beats (Seed 0: unseeded, new every pass). Each track has "
@@ -220,6 +223,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void update(ofEventArgs&) override {
+        timeline.update();
         const float now = ofGetElapsedTimef();
         for(auto& [server, st] : servers){
             if(st.allocPending && (!server->isNRTSyncPending() || now - st.allocTime > 2.0f)){
@@ -322,6 +326,7 @@ public:
         auto& c = json["EuclideanBox"] = ofJson::object();
         for(const auto& ctl : controls) if(!published.count(ctl.key)) c[ctl.key] = ctl.save();
         json["EuclideanBoxPublished"] = publishedKeys;
+        timeline.save(json, "EuclideanBoxTimeline");
         json["EuclideanBoxSelected"] = selectedTrack;
     }
     void loadBeforeConnections(ofJson& json) override {
@@ -332,7 +337,8 @@ public:
         for(const auto& k : old)
             if(std::find(wanted.begin(), wanted.end(), k) == wanted.end() && !hasConnection(k)) unpublish(k);
         for(const auto& k : wanted) publish(k);
-    }
+            timeline.load(json, "EuclideanBoxTimeline");
+}
     void presetRecallBeforeSettingParameters(ofJson& json) override { loadBeforeConnections(json); }
     void presetRecallAfterSettingParameters(ofJson& json) override {
         if(json.contains("EuclideanBox") && json["EuclideanBox"].is_object()){
@@ -609,6 +615,7 @@ private:
     std::vector<Control> controls;
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
     std::vector<std::string> publishedKeys;
+    scTimelineMenu timeline;              // "Add to Timeline" from the window
     bool publishedSeparator = false;
 
     void regI(int ti, ofParameter<int>& p, const std::vector<std::string>& dropdown = {}){
@@ -674,7 +681,8 @@ private:
         parameterGroupChanged.notify(this);
     }
     void controlMenu(const std::string& key){
-        if(published.count(key)){
+        timeline.mark(key);
+        if(published.count(key) && !timeline.isHidden(key)){
             const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
             ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1), ImVec2(b.x, b.y - 1), ImGui::GetColorU32(ImGuiCol_Text));
         }
@@ -693,10 +701,13 @@ private:
                                                 ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
             if(enter || ImGui::IsItemDeactivatedAfterEdit()){ c->apply(std::string(buf.data())); if(enter) ImGui::CloseCurrentPopup(); }
             ImGui::Separator();
-            if(published.count(key)){
+            if(timeline.isHidden(key)){
+                if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
+            }else if(published.count(key)){
                 if(hasConnection(key)) ImGui::TextDisabled("Disconnect it to unpublish");
-                else if(ImGui::MenuItem("Unpublish from Node")) unpublish(key);
-            }else if(ImGui::MenuItem("Publish to Node")) publish(key);
+                else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
+            }else if(ImGui::MenuItem("Publish to Node GUI")) publish(key);
+            timeline.menuItems(key);
         }
         ImGui::EndPopup();
     }

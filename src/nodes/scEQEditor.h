@@ -181,6 +181,17 @@ public:
 
     // Combined response of the 5 bands, clamped to the display range +/- 3 dB
     void recompute(float sr) {
+        // Several editors call this on every draw. Compare the actual inputs
+        // so presets, automation and sample-rate changes invalidate it too.
+        std::array<float, NUM_BANDS * 3 + 2> key{};
+        for(int b = 0; b < NUM_BANDS; b++) {
+            key[b * 3] = bands[b].freqHz;
+            key[b * 3 + 1] = bands[b].gainDb;
+            key[b * 3 + 2] = bands[b].shape;
+        }
+        key[NUM_BANDS * 3] = sr;
+        key[NUM_BANDS * 3 + 1] = dbRange;
+        if(responseValid && key == responseKey) return;
         BiquadCoeffs c[NUM_BANDS];
         for(int b = 0; b < NUM_BANDS; b++) {
             const Band& bd = bands[b];
@@ -197,7 +208,15 @@ public:
             for(int b = 0; b < NUM_BANDS; b++) db += computeMagnitudeDb(c[b], freq, sr);
             curveDb[i] = ofClamp(db, -dbRange - 3.0f, dbRange + 3.0f);
         }
+        responseKey = key;
+        responseValid = true;
     }
+
+private:
+    std::array<float, NUM_BANDS * 3 + 2> responseKey{};
+    bool responseValid = false;
+
+public:
 
     static float logFreqToX(float freq, float xStart, float width) {
         float logMin = std::log10(FREQ_MIN);

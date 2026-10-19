@@ -32,6 +32,7 @@
 #pragma once
 
 #include "scNode.h"
+#include "scTimelineMenu.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "ofxSCBus.h"
@@ -39,6 +40,7 @@
 #include "ofxSCServer.h"
 #include "scModulation.h"
 #include "scAudioParam.h"
+#include "scScheduledInputs.h"
 #include "ofxOceanodeShared.h"
 #include "imgui.h"
 #include <algorithm>
@@ -282,6 +284,8 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
+                       [this](){ return publishedKeys; });
         addParameter(showWindow.set("Show", false));
         addParameter(numVoices.set("Voices", 1, 1, MAX_VOICES));
         addParameter(numOutputs.set("Outputs", 2, 1, MAX_OUTPUTS));
@@ -290,7 +294,21 @@ public:
         // once used, they set the voices' fundamentals): Oceanode values or audio cables
         gateIn.attach(addParameter(gate.set("Gate", {1.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
         pitchIn.attach(addParameter(pitchP.set("Pitch", {57.0f}, {0.0f}, {127.0f})), availableInputs, [this](){ refreshOutputs(); });
-        listeners.push(pitchP.newListener([this](std::vector<float>&){ pitchTouched = true; controlsDirty = true; viewDirty = true; }));
+        noteInputs.add(gateIn.handle, gate);
+        noteInputs.add(pitchIn.handle, pitchP);
+        noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.synth) return true; return false; });
+        // The timeline's frame set of a value it already sent timetagged:
+        // nothing to do. A scheduled one is sent at its instant, right away.
+        listeners.push(pitchP.newListener([this](std::vector<float>&){
+            if(scScheduling::isBackendSendSuppressed()) return;
+            pitchTouched = true; viewDirty = true;
+            if(noteInputs.isSending()) sendNotes(); else controlsDirty = true;
+        }));
+        listeners.push(gate.newListener([this](std::vector<float>&){
+            if(scScheduling::isBackendSendSuppressed()) return;
+            viewDirty = true;
+            if(noteInputs.isSending()) sendNotes(); else controlsDirty = true;
+        }));
 
         // Window (any of these can be published to the node)
         fundamental.set("Fundamental", {110.0f}, {0.1f}, {2000.0f});
@@ -339,7 +357,7 @@ public:
         auto controls = [this](){ controlsDirty = true; viewDirty = true; };
         listeners.push(numVoices.newListener([this](int&){ if(!loadingBankPreset) structureDirty = true; viewDirty = true; }));
         listeners.push(numOutputs.newListener([this](int&){ if(!loadingBankPreset) structureDirty = true; viewDirty = true; }));
-        for(auto* p : {&fundamental, &levels, &gate})
+        for(auto* p : {&fundamental, &levels})
             listeners.push(p->newListener([controls](std::vector<float>&){ controls(); }));
         for(auto* p : {&transpose, &glide, &attack, &release, &volume, &rateJitter, &formantShift, &cyclesScale,
                        &formantJitter, &levelJitter, &probability, &rotate, &panJitter})
@@ -362,6 +380,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void update(ofEventArgs&) override {
+        timeline.update();
         const float now = ofGetElapsedTimef();
         if(pendingDialog){
             const int g = (pendingDialog - 1) / 2, kind = (pendingDialog - 1) % 2;
@@ -387,6 +406,7 @@ public:
             uploadTables(server, true);
         }
         if(controlsDirty){
+            auto inEffect = noteInputs.inEffectNow();   // the notes as they stand now
             controlsDirty = false;
             for(auto& [server, st] : states){ sendAll(server, false); sendGate(server, st); }
         }
@@ -489,6 +509,7 @@ public:
 
     void presetSave(ofJson& json) override {
         json["publishedEditorParameters"] = publishedKeys;
+        timeline.save(json, "timelineHiddenEditorParameters");
         json["viewHeight"] = viewHeight;
         json["bankPreset"] = currentPreset;
         for(const auto& a : publishActions) if(a.save && !isPublished(a.key)) a.save(json);
@@ -498,8 +519,19 @@ public:
     void loadBeforeConnections(ofJson& json) override {
         if(!json.contains("publishedEditorParameters") || !json["publishedEditorParameters"].is_array()) return;
         try { syncPublished(json["publishedEditorParameters"].get<std::vector<std::string>>()); } catch(...) {}
+        timeline.load(json, "timelineHiddenEditorParameters");
     }
     void presetRecallBeforeSettingParameters(ofJson& json) override { loadBeforeConnections(json); }
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+    // Gate (its level is the velocity) and Pitch, one note per voice
+    bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override {
+        if(!gateIn.handle || !pitchIn.handle) return false;
+        out.gate = gateIn.handle.get();
+        out.pitch = pitchIn.handle.get();
+        out.voices = voices();
+        return true;
+    }
+#endif
     void presetRecallAfterSettingParameters(ofJson& json) override {
         if(json.contains("bankPreset") && json["bankPreset"].is_string()) currentPreset = json["bankPreset"].get<std::string>();
         if(json.contains("viewHeight") && json["viewHeight"].is_number())
@@ -689,6 +721,19 @@ private:
         st.gateS = new ofxSCSynth("ModGate" + ofToString(voices()), server);
         sendGate(server, st);
         st.gateS->createAndRun(0, st.modSources->nodeID, true);   // the head of the sources
+    }
+    // A scheduled note (inside its timetag): only what a note changes.
+    void sendNotes(){
+        for(auto& [server, st] : states){
+            if(!st.synth) continue;
+            auto values = synthValues(st);
+            for(const char* name : {"fund", "gate"}){
+                const auto& v = values[name];
+                st.sent[name] = v;
+                if(v.size() == 1) st.synth->set(name, double(v[0])); else st.synth->set(name, v);
+            }
+            sendGate(server, st);
+        }
     }
     void sendGate(ofxSCServer* server, ServerState& st){
         if(!st.gateS) return;
@@ -1083,7 +1128,8 @@ private:
         for(const auto& key : keys) if(!isPublished(key)) publishByKey(key);
     }
     void controlMenu(const std::string& key){
-        if(isPublished(key)){
+        timeline.mark(key);
+        if(isPublished(key) && !timeline.isHidden(key)){
             const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
             ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f), ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
         }
@@ -1109,11 +1155,14 @@ private:
         if(!a){
             const bool onNode = key == numVoices.getEscapedName() || key == numOutputs.getEscapedName();
             ImGui::TextDisabled("%s", onNode ? "Already in node" : "Not publishable");
+        } else if(timeline.isHidden(key)){
+            if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
         } else if(isPublished(key)){
             ImGui::TextDisabled("Published in node");
             if(hasPublishedConnection(key)) ImGui::TextDisabled("Connected: disconnect to unpublish");
-            else if(ImGui::MenuItem("Unpublish from Node")) unpublishByKey(key);
-        } else if(ImGui::MenuItem("Publish to Node")) publishByKey(key);
+            else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
+        } else if(ImGui::MenuItem("Publish to Node GUI")) publishByKey(key);
+        timeline.menuItems(key);
         mod.modulateMenu(key);   // route sources to it
         ImGui::PopID();
         ImGui::EndPopup();
@@ -1806,6 +1855,7 @@ private:
     ofParameter<int> numVoices, numOutputs;
     // Pulse / voice
     ofParameter<std::vector<float>> fundamental, levels, gate, pitchP;
+    scScheduledInputs noteInputs;    // the timeline's notes, timetagged
     scAudioParam gateIn, pitchIn;
     bool pitchTouched = false;
     void refreshOutputs() { for(auto& output : scNode::outputs) output = output; }
@@ -1848,6 +1898,7 @@ private:
     // Publishing and presets
     std::vector<PublishAction> publishActions;
     std::vector<std::string> publishedKeys;
+    scTimelineMenu timeline;              // "Add to Timeline" from the window
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> publishedHandles;
     bool publishedSeparatorAdded = false;
     std::vector<std::string> bankPresets;

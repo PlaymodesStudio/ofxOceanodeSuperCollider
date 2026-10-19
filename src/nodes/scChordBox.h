@@ -35,6 +35,7 @@
 #if OFXOCEANODESC_HAS_TRANSPORT
 
 #include "scNode.h"
+#include "scTimelineMenu.h"
 #include "scAudioParam.h"
 #include "scTransportSync.h"
 #include "scChordBoxEngine.h"
@@ -86,6 +87,8 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
+                       [this](){ return publishedKeys; });
         description = "Chord progressions locked to the transport: chords, scales, cypher symbols, degrees or functional "
                       "harmony per step; Index, ascending, descending, random or Markov order; each output voiced, "
                       "voice led and shaped. Vector outputs and sample-accurate audio (Pitch per output, Trig, Root, "
@@ -149,6 +152,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void update(ofEventArgs&) override {
+        timeline.update();
         const float now = ofGetElapsedTimef();
         for(auto& [server, st] : servers){
             if(st.allocPending && (!server->isNRTSyncPending() || now - st.allocTime > 2.0f)){
@@ -254,6 +258,7 @@ public:
     void presetSave(ofJson& json) override {
         json["state"] = engine.toJson();
         json["ChordBoxPublished"] = publishedKeys;
+        timeline.save(json, "ChordBoxTimeline");
         json["ChordBoxTab"] = selectedTab;
     }
     void loadBeforeConnections(ofJson& json) override {
@@ -272,7 +277,8 @@ public:
         const auto old = publishedKeys;
         for(const auto& k : old) if(std::find(wanted.begin(), wanted.end(), k) == wanted.end() && !hasConnection(k)) unpublish(k);
         for(const auto& k : wanted) publish(k);
-    }
+            timeline.load(json, "ChordBoxTimeline");
+}
     void presetRecallBeforeSettingParameters(ofJson& json) override { loadBeforeConnections(json); }
     void presetRecallAfterSettingParameters(ofJson& json) override {
         if(json.contains("state") && json["state"].is_object()) loadState(json["state"]);
@@ -751,6 +757,7 @@ private:
     std::map<std::string, std::shared_ptr<ofParameter<float>>> proxyF;
     std::map<std::string, std::shared_ptr<ofParameter<bool>>> proxyB;
     std::vector<std::string> publishedKeys;
+    scTimelineMenu timeline;              // "Add to Timeline" from the window
     bool publishedSeparator = false;
 
     void addControl(const std::string& key, char kind, float lo, float hi, std::function<float()> get, std::function<void(float)> set,
@@ -903,7 +910,8 @@ private:
     void controlMenu(const std::string& key){
         auto it = controls.find(key);
         if(it == controls.end()) return;
-        if(published.count(key)){
+        timeline.mark(key);
+        if(published.count(key) && !timeline.isHidden(key)){
             const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
             ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1), ImVec2(b.x, b.y - 1), ImGui::GetColorU32(ImGuiCol_Text));
         }
@@ -921,10 +929,13 @@ private:
         const bool enter = ImGui::InputText("##cbTyped", buf.data(), buf.size(), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
         if(enter || ImGui::IsItemDeactivatedAfterEdit()){ c.set(std::clamp(ofToFloat(std::string(buf.data())), c.lo, c.hi)); if(enter) ImGui::CloseCurrentPopup(); }
         ImGui::Separator();
-        if(published.count(key)){
+        if(timeline.isHidden(key)){
+            if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
+        }else if(published.count(key)){
             if(hasConnection(key)) ImGui::TextDisabled("Disconnect it to unpublish");
-            else if(ImGui::MenuItem("Unpublish from Node")) unpublish(key);
-        }else if(ImGui::MenuItem("Publish to Node")) publish(key);
+            else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
+        }else if(ImGui::MenuItem("Publish to Node GUI")) publish(key);
+        timeline.menuItems(key);
         ImGui::EndPopup();
     }
     // Widgets on controls (a label's '%' is text, not a format)

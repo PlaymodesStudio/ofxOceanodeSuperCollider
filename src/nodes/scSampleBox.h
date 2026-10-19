@@ -54,6 +54,8 @@
 #include "scEQEditor.h"
 #include "scModulation.h"
 #include "scAudioParam.h"
+#include "scScheduledInputs.h"
+#include "scTimelineMenu.h"
 #include "ofxSCGroup.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
@@ -100,6 +102,10 @@ public:
     void loadBeforeConnections(ofJson&) override;
     void presetRecallBeforeSettingParameters(ofJson&) override;
     void presetRecallAfterSettingParameters(ofJson&) override;
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+    // A kit: Trigger/Gate and Velocity, key C1 = channel 1 (the pads keep their own pitch)
+    bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override;
+#endif
 
 private:
     // Which synth a pad control goes to
@@ -222,6 +228,8 @@ private:
     // ── The node's parameters ───────────────────────────────────────────────
     ofParameter<bool> showWindow;
     ofParameter<std::vector<float>> trigger, pitch, velocity;   // per channel
+    std::shared_ptr<ofxOceanodeAbstractParameter> triggerHandle;
+    scScheduledInputs noteInputs;    // the timeline's notes, timetagged
     ofParameter<float> gain;                                    // the mix's (and every Pad output's) level
     ofParameter<int> channels;                                  // N Chan
     scAudioParam pitchIn, velIn;   // Pitch / Velocity audio cables: channel c for a pad on channel c
@@ -293,6 +301,7 @@ private:
     std::vector<std::string> publishedKeys;
     bool publishedSeparator = false;
     bool restoring = false;
+    scTimelineMenu timeline;              // "Add to Timeline" from the window
     void publish(const std::string&);
     void unpublish(const std::string&, bool force = false);
     bool isConnected(const std::string&) const;

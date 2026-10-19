@@ -83,6 +83,7 @@
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
 #include "scEQEditor.h"
+#include "scGuiMeshCache.h"
 #include "imgui.h"
 
 #include <array>
@@ -95,6 +96,8 @@
 class scMixerPro : public scNode {
 public:
     // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    // gains (Levels, sends, the master level): their timeline curves in dB
+    std::string getTimelineValueScale(ofxOceanodeAbstractParameter& parameter) const override;
     std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "SC Mixer Pro " + ofToString(getNumIdentifier()); }
     ofParameter<bool>* getWindowToggle() override { return &showWindow; }
 private:
@@ -244,6 +247,7 @@ private:
         std::vector<float> vu, peak, peakAge;
         scEQEditor eqEditor;
         bool eqCurveDirty = true;
+        scGuiMeshCache miniCurveMesh;
     };
 
     struct MasterRuntime {

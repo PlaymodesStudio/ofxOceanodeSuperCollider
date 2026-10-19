@@ -98,6 +98,8 @@ scBeatRepeatPro::~scBeatRepeatPro() {
 }
 
 void scBeatRepeatPro::setup() {
+    timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
+                   [this](){ return publishedKeys; });
     description = "Coherent multichannel beat repeater with a live waveform, loop region and read/write heads.";
 
     addSeparator("BeatRepeat Pro");
@@ -293,7 +295,8 @@ void scBeatRepeatPro::syncPublished(const std::vector<std::string>& keys) {
 }
 
 void scBeatRepeatPro::markPublishedItem(const std::string& key) const {
-    if(!isPublished(key)) return;
+    timeline.mark(key);
+    if(!isPublished(key) || timeline.isHidden(key)) return;
     const ImVec2 a = ImGui::GetItemRectMin();
     const ImVec2 b = ImGui::GetItemRectMax();
     ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 2.0f), ImVec2(b.x, b.y - 2.0f),
@@ -320,16 +323,19 @@ void scBeatRepeatPro::drawPublishMenu(const std::string& key) {
         }
         ImGui::Separator();
     }
-    if(isPublished(key)) {
+    if(timeline.isHidden(key)) {
+        if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
+    } else if(isPublished(key)) {
         ImGui::TextDisabled("Published in node");
         if(hasPublishedConnection(key)) {
             ImGui::TextDisabled("Disconnect before unpublishing");
         } else if(ImGui::MenuItem("Unpublish from Node")) {
-            unpublishByKey(key);
+            timeline.unpublish(key);
         }
     } else if(ImGui::MenuItem("Publish to Node GUI")) {
         publishByKey(key);
     }
+    timeline.menuItems(key);
     ImGui::EndPopup();
 }
 
@@ -583,6 +589,7 @@ void scBeatRepeatPro::setVisualizationEnabled(bool enabled) {
 }
 
 void scBeatRepeatPro::update(ofEventArgs&) {
+    timeline.update();
     if(resetParameterPending) {
         resetParameterPending = false;
         reset.setWithoutEventNotifications(0);
@@ -1585,6 +1592,7 @@ void scBeatRepeatPro::draw(ofEventArgs&) {
 
 void scBeatRepeatPro::presetSave(ofJson& json) {
     json["publishedEditorParameters"] = publishedKeys;
+    timeline.save(json, "timelineHiddenEditorParameters");
     json["editorWaveformHeight"] = waveformHeight;
     for(const auto& action : publishActions) if(action.save) action.save(json);
     json["activeSnapshot"] = activeSnapshot;
@@ -1601,6 +1609,7 @@ void scBeatRepeatPro::presetSave(ofJson& json) {
 void scBeatRepeatPro::loadBeforeConnections(ofJson& json) {
     if(!json.contains("publishedEditorParameters") || !json["publishedEditorParameters"].is_array()) return;
     try { syncPublished(json["publishedEditorParameters"].get<std::vector<std::string>>()); } catch(...) {}
+    timeline.load(json, "timelineHiddenEditorParameters");
 }
 
 void scBeatRepeatPro::presetRecallBeforeSettingParameters(ofJson& json) {

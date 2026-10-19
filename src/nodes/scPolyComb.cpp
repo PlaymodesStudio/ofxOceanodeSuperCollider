@@ -4,6 +4,7 @@
 //
 
 #include "scPolyComb.h"
+#include "scSynthControlBatch.h"
 #include "scEnvelopeCurve.h"
 #include "scTypedValue.h"
 #include "ofxOceanodeShared.h"
@@ -72,6 +73,8 @@ scPolyComb::~scPolyComb() {
 }
 
 void scPolyComb::setup() {
+    timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
+                   [this](){ return publishedKeys; });
     auto vec = [](ofParameter<std::vector<float>>& p, const std::string& name, float def, float lo, float hi) {
         p.set(name, {def}, {lo}, {hi});
     };
@@ -82,7 +85,19 @@ void scPolyComb::setup() {
     auto toFm = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendFm(st); }); };
     auto toAmp = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendAmp(st); }); };
     auto toSpread = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendSpread(st); }); };
-    auto toOsc = [this](int o) { return [this, o]() { forStates([this, o](ofxSCServer* sv, ServerState& st){ sendOsc(st, o); updateParts(sv, st); }); }; };
+    auto toOsc = [this](int o) { return [this, o]() {
+        forStates([this, o](ofxSCServer* sv, ServerState& st){
+            const Part& p = st.osc[o];
+            const bool wanted = oscWanted(o);
+            // A level edit only changes the graph when it starts/stops an
+            // oscillator (or cancels a pending stop). Keep that transition
+            // path intact; ordinary automation need not resend every part.
+            const bool transition = wanted ? (!p.synth || !p.running || p.offAt >= 0.0f)
+                                           : (p.synth && p.running && p.offAt < 0.0f);
+            if(transition) updateParts(sv, st);
+            else sendOsc(st, o);
+        });
+    }; };
     auto toAllOsc = [this]() { forStates([this](ofxSCServer*, ServerState& st){ for(int o = 0; o < NumOsc; o++) sendOsc(st, o); }); };
     auto toIns = [this](int i) { return [this, i]() { forStates([this, i](ofxSCServer*, ServerState& st){ sendIns(st, i); }); }; };
     auto toParts = [this]() { forStates([this](ofxSCServer* sv, ServerState& st){ updateParts(sv, st); }); };
@@ -96,6 +111,10 @@ void scPolyComb::setup() {
     gateIn.attach(addParameter(gate), availableInputs, [this](){ refreshOutputs(); });
     pitchIn.attach(addParameter(pitch.set("Pitch", {60.0f}, {0.0f}, {127.0f})), availableInputs, [this](){ refreshOutputs(); });
     velIn.attach(addParameter(velocity.set("Velocity", {1.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
+    noteInputs.add(gateIn.handle, gate);
+    noteInputs.add(pitchIn.handle, pitch);
+    noteInputs.add(velIn.handle, velocity);
+    noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.created && st.gateS) return true; return false; });
     combPitch.set("Comb Pitch", {0}, {-48}, {127});
     combPitchHandle = addParameter(combPitch);
     addParameter(master.set("Master", 0.8f, 0.0f, 1.0f));
@@ -272,12 +291,20 @@ void scPolyComb::setup() {
         rebuildAll();
     }));
     listeners.push(outChannels.newListener([this](int&) { rebuildOutput(); }));
+    // The timeline's frame set of a value it already sent timetagged: nothing to do.
     listeners.push(gate.newListener([this, toGate](std::vector<float>& v) {
+        if(scScheduling::isBackendSendSuppressed()) return;
         for(float x : v) if(x > 0.0f) gateTouched = true;
         toGate();
     }));
-    listeners.push(velocity.newListener([toGate](std::vector<float>&) { toGate(); }));
-    listeners.push(pitch.newListener([toPitch](std::vector<float>&) { toPitch(); }));
+    listeners.push(velocity.newListener([toGate](std::vector<float>&) {
+        if(scScheduling::isBackendSendSuppressed()) return;
+        toGate();
+    }));
+    listeners.push(pitch.newListener([toPitch](std::vector<float>&) {
+        if(scScheduling::isBackendSendSuppressed()) return;
+        toPitch();
+    }));
     listeners.push(master.newListener([toAmp](float&) { toAmp(); }));
     listeners.push(resetLFOs.newListener([this]() { modulation.resetLfos(); }));
 
@@ -303,9 +330,21 @@ void scPolyComb::sendVec(ofxSCSynth* s, const std::string& name, const std::vect
     else s->set(name, expand(v, n()));
 }
 
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+bool scPolyComb::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
+    if(!gateIn.handle || !pitchIn.handle || !velIn.handle) return false;
+    out.gate = gateIn.handle.get();
+    out.pitch = pitchIn.handle.get();
+    out.velocity = velIn.handle.get();
+    out.voices = n();
+    return true;
+}
+#endif
+
 void scPolyComb::sendGate(ServerState& st) {
     auto* s = st.gateS;
     if(!s) return;
+    auto inEffect = noteInputs.inEffectNow();   // not a scheduled send: the notes as they stand now
     sendVec(s, "gate", gate.get());
     sendVec(s, "velocity", velocity.get());
     s->set("drone", droning() ? 1.0f : 0.0f);
@@ -335,6 +374,7 @@ void scPolyComb::sendAmpEnv(ServerState& st) {
 void scPolyComb::sendPitch(ServerState& st) {
     auto* s = st.pitchS;
     if(!s) return;
+    auto inEffect = noteInputs.inEffectNow();
     s->set("out", st.noteBus ? st.noteBus->index : 0);
     s->set("mpitch", mod(st, 0));
     sendVec(s, "pitch", processedPitch());
@@ -716,7 +756,7 @@ void scPolyComb::resendParametersForNRT() {
         sendGate(st); sendAmpEnv(st); sendPitch(st); sendFm(st); sendAmp(st); sendSpread(st);
         for(int o = 0; o < NumOsc; o++) sendOsc(st, o);
         for(int i = 0; i < NumIns; i++) sendIns(st, i);
-        for(int s = 0; s < NumStages; s++) if(st.fx[s].synth) sendStage(s, st.fx[s].synth);
+        for(int s = 0; s < NumStages; s++) if(st.fx[s].synth) sendStage(s, st.fx[s].synth, server);
         routeVoice(st);
         routeChain(st);
     });
@@ -749,10 +789,10 @@ void scPolyComb::updateStages(ofxSCServer* server, ServerState& st) {
                 f.synth = new ofxSCSynth(stageDef(s), server);
                 f.synth->set("in", f.in->index);
                 f.synth->set("out", st.outBus);
-                sendStage(s, f.synth);
+                sendStage(s, f.synth, server);
                 f.synth->createAndRun(1, st.groups[SlEq + s]->nodeID, true);
             }else{
-                sendStage(s, f.synth);
+                sendStage(s, f.synth, server);
                 if(!f.running) f.synth->run(true);
             }
             f.running = true;
@@ -782,6 +822,7 @@ void scPolyComb::routeChain(ServerState& st) {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scPolyComb::update(ofEventArgs&) {
+    timeline.update();
     sendEnvMode();      // Auto follows Gate's connections
     modulation.showing = showWindow.get();
     modulation.update();   // the LFO / envelope live values (window)
@@ -870,49 +911,51 @@ float scPolyComb::stageTail(int s) const {
     return std::min(30.0f, rvbDecay.get() + rvbPredelay.get() * 0.001f + 0.3f);
 }
 
-void scPolyComb::sendStage(int s, ofxSCSynth* x) {
+void scPolyComb::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     if(!x) return;
+    scSynthControlBatch controls(x, server);
     const float on = stageOn(s) ? 1.0f : 0.0f;
     if(s == StEq){
         // mixerProEQ: gains dB, freqs Hz, shelves bNslope (= 1/S), peaks bNrq (= 1/Q)
         for(int b = 0; b < 5; b++){
             const std::string k = "b" + ofToString(b + 1);
-            x->set(k + "gain", eqGain[b].get());
-            x->set(k + "freq", eqFreq[b].get());
-            if(scEQEditor::isShelf(b)) x->set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get()));
-            else x->set(k + "rq", 1.0f / std::max(0.01f, eqShape[b].get()));
+            controls.set(k + "gain", eqGain[b].get());
+            controls.set(k + "freq", eqFreq[b].get());
+            if(scEQEditor::isShelf(b)) controls.set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get()));
+            else controls.set(k + "rq", 1.0f / std::max(0.01f, eqShape[b].get()));
         }
     }else if(s == StEcho){
-        x->set("delay", echoDelaySec());
-        x->set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
-        x->set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
-        x->set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
-        x->set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
-        x->set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
-        x->set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
-        x->set("on", on);
+        controls.set("delay", echoDelaySec());
+        controls.set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
+        controls.set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
+        controls.set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
+        controls.set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
+        controls.set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
+        controls.set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
+        controls.set("on", on);
     }else{
-        x->set("mix", ofClamp(rvbMix.get(), 0.0f, 1.0f));
-        x->set("decay", std::max(0.05f, rvbDecay.get()));
-        x->set("size", ofClamp(rvbSize.get(), 0.0f, 60.0f));
-        x->set("predelay", ofClamp(rvbPredelay.get(), 0.0f, 500.0f));
-        x->set("position", ofClamp(rvbLate.get(), 0.0f, 1.0f));
-        x->set("spread", ofClamp(rvbSpread.get(), -1.0f, 1.0f));
-        x->set("lowpass", ofClamp(rvbLowpass.get(), 20.0f, 20000.0f));
-        x->set("highdamp", ofClamp(rvbHiDamp.get(), 0.0f, 60.0f));
-        x->set("lowdamp", ofClamp(rvbLoDamp.get(), 0.0f, 60.0f));
-        x->set("modfreq", ofClamp(rvbModRate.get(), 0.001f, 20.0f));
-        x->set("spin", ofClamp(rvbSpin.get(), 0.0f, 20.0f));
-        x->set("wander", ofClamp(rvbWander.get(), 0.0f, 20.0f));
-        x->set("on", on);
+        controls.set("mix", ofClamp(rvbMix.get(), 0.0f, 1.0f));
+        controls.set("decay", std::max(0.05f, rvbDecay.get()));
+        controls.set("size", ofClamp(rvbSize.get(), 0.0f, 60.0f));
+        controls.set("predelay", ofClamp(rvbPredelay.get(), 0.0f, 500.0f));
+        controls.set("position", ofClamp(rvbLate.get(), 0.0f, 1.0f));
+        controls.set("spread", ofClamp(rvbSpread.get(), -1.0f, 1.0f));
+        controls.set("lowpass", ofClamp(rvbLowpass.get(), 20.0f, 20000.0f));
+        controls.set("highdamp", ofClamp(rvbHiDamp.get(), 0.0f, 60.0f));
+        controls.set("lowdamp", ofClamp(rvbLoDamp.get(), 0.0f, 60.0f));
+        controls.set("modfreq", ofClamp(rvbModRate.get(), 0.001f, 20.0f));
+        controls.set("spin", ofClamp(rvbSpin.get(), 0.0f, 20.0f));
+        controls.set("wander", ofClamp(rvbWander.get(), 0.0f, 20.0f));
+        controls.set("on", on);
     }
+    controls.send();
 }
 
 void scPolyComb::sendStageAll(int s) {
     for(auto& [server, st] : states){
         auto& f = st.fx[s];
         if(!f.synth) continue;
-        sendStage(s, f.synth);
+        sendStage(s, f.synth, server);
         if(!stageOn(s) && s != StEq) f.synth->set("on", 0.0f);
     }
 }
@@ -928,6 +971,7 @@ void scPolyComb::presetSave(ofJson& j) {
     j["polyCombEnvs"] = modulation.envCount;
     j["polyCombExts"] = modulation.extCount;
     j["polyCombPublished"] = publishedKeys;
+    timeline.save(j, "polyCombTimeline");
 }
 
 void scPolyComb::loadBeforeConnections(ofJson& j) {
@@ -937,6 +981,7 @@ void scPolyComb::loadBeforeConnections(ofJson& j) {
     const auto old = publishedKeys;
     for(const auto& k : old) if(std::find(wanted.begin(), wanted.end(), k) == wanted.end()) unpublish(k);
     for(const auto& k : wanted) publish(k);
+    timeline.load(j, "polyCombTimeline");
 }
 
 void scPolyComb::presetRecallAfterSettingParameters(ofJson& j) {
@@ -1021,17 +1066,21 @@ void scPolyComb::publishMenu(const std::string& key) {
     // the value, typed
     auto it = std::find_if(controls.begin(), controls.end(), [&](const Control& c){ return c.key == key; });
     if(it != controls.end()) scTyped::jsonField(key, it->save, it->load);
-    if(published.count(key)){
+    if(timeline.isHidden(key)){
+        if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
+    }else if(published.count(key)){
         if(isConnected(key)) ImGui::TextDisabled("Disconnect it to unpublish");
-        else if(ImGui::MenuItem("Unpublish from Node")) unpublish(key);
+        else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
     }else if(getParameterGroup().contains(key)) ImGui::TextDisabled("On the node");
-    else if(ImGui::MenuItem("Publish to Node")) publish(key);
+    else if(ImGui::MenuItem("Publish to Node GUI")) publish(key);
+    timeline.menuItems(key);
     modulation.modulateMenu(key);
     ImGui::EndPopup();
 }
 
 void scPolyComb::publishedUnderline(const std::string& key) const {
-    if(!published.count(key)) return;
+    timeline.mark(key);
+    if(!published.count(key) || timeline.isHidden(key)) return;
     const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f), ImGui::GetColorU32(ImGuiCol_Text));
 }

@@ -79,6 +79,7 @@ vector<float> scGraphicEQ::qToRq(const vector<float>& qVec, int nCh) const {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void scGraphicEQ::setup() {
+    timeline.setup(this, nullptr, nullptr, nullptr);
     // ── Core ────────────────────────────────────────────────────────────────
     addParameter(showWindow.set("Show", false));
     addParameter(numChannels.set("Num Channels", 2, 1, MAX_NODE_CHANNELS));
@@ -691,6 +692,7 @@ void scGraphicEQ::drawEditorWindow() {
             v[0] = m;
             mix = v;
         }
+        timeline.nodeParameterMenu(mix.getEscapedName(), "Mix");
 
         ImGui::SameLine();
         bool pin = showParamsInNode.get();
@@ -753,6 +755,11 @@ void scGraphicEQ::drawEditorWindow() {
                             shelf ? windowEditor.slopeMin : windowEditor.qMin,
                             shelf ? windowEditor.slopeMax : windowEditor.qMax, "%.2f")) changed = true;
         if(ImGui::Button("0 dB")) { bd.gainDb = 0.0f; changed = true; }
+        // the band's parameters on the timeline
+        const std::string band = "B" + ofToString(b + 1) + " ";
+        timeline.menuItems(band + "Pitch", "Pitch");
+        timeline.menuItems(band + "Gain", "Gain");
+        timeline.menuItems(band + (shelf ? "Slope" : "Q"), shelf ? "Slope" : "Q");
         if(changed) {
             windowEditor.bands[b] = bd;
             applyBandEdit(b, bd);

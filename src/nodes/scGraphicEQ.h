@@ -18,6 +18,7 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
+#include "scTimelineMenu.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
 #include "serverManager.h"
@@ -171,6 +172,7 @@ private:
     void freeAllFFTSynths();
 
     ofEventListeners listeners;
+    scTimelineMenu timeline;   // right-click a window control: typed value, timeline
 };
 
 #endif /* scGraphicEQ_h */

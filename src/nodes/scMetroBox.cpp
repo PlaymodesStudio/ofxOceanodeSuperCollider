@@ -410,7 +410,8 @@ bool scMetroBox::drawField(int li, const std::string& name, const char* label) {
 
 void scMetroBox::fieldMenu(int li, const Field& f) {
     const std::string key = publishKey(li, f.name);
-    if(published.count(key)) {
+    timeline.mark(key);
+    if(published.count(key) && !timeline.isHidden(key)) {
         const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f), ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
     }
@@ -439,13 +440,16 @@ void scMetroBox::fieldMenu(int li, const Field& f) {
         }
         ImGui::Separator();
     }
-    if(published.count(key)) {
+    if(timeline.isHidden(key)) {
+        if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key);
+    } else if(published.count(key)) {
         ImGui::TextDisabled("Published in node as \"%s\"", key.c_str());
         if(hasConnection(key)) ImGui::TextDisabled("Connected: disconnect to unpublish");
-        else if(ImGui::MenuItem("Unpublish from Node")) unpublish(key);
-    } else if(ImGui::MenuItem("Publish to Node")) {
+        else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
+    } else if(ImGui::MenuItem("Publish to Node GUI")) {
         publish(li, f.name);
     }
+    timeline.menuItems(key);
     ImGui::EndPopup();
 }
 
@@ -518,6 +522,13 @@ bool scMetroBox::unpublish(const std::string& key) {
     }
     parameterGroupChanged.notify(this);
     return true;
+}
+
+void scMetroBox::publishKey(const std::string& key) {
+    if(key.size() < 4 || key[0] != 'L') return;
+    const size_t space = key.find(' ');
+    if(space == std::string::npos) return;
+    publish(ofToInt(key.substr(1, space - 1)) - 1, key.substr(space + 1));
 }
 
 void scMetroBox::syncPublished(const std::vector<std::string>& keys) {
@@ -771,6 +782,8 @@ scMetroBox::~scMetroBox() {
 }
 
 void scMetroBox::setup() {
+    timeline.setup(this, [this](const std::string& k) { publishKey(k); }, [this](const std::string& k) { unpublish(k); },
+                   [this]() { return publishedOrder; });
     description = "Generative rhythm locked to the transport: up to 8 lanes, each a "
                   "metro you shape with a few controls (Every, Offset, Chance, Length, "
                   "Accent, Change, Smart) and a role (Kick, Snare, Hat, Perc). More "
@@ -1018,6 +1031,7 @@ void scMetroBox::sendTransportAnchors() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scMetroBox::update(ofEventArgs&) {
+    timeline.update();
     const float now = ofGetElapsedTimef();
     for(auto& [server, st] : servers) {
         if(st.allocPending && (!server->isNRTSyncPending() || now - st.allocTime > allocTimeout)) {
@@ -1131,6 +1145,7 @@ void scMetroBox::presetSave(ofJson &json) {
     for(const auto& L : layers) arr.push_back(layerToJson(L));
     json["MetroBoxLayers"] = arr;
     json["MetroBoxPublished"] = publishedOrder;
+    timeline.save(json, "MetroBoxTimeline");
 }
 
 // The published parameters must exist before Oceanode sets their values and
@@ -1138,6 +1153,7 @@ void scMetroBox::presetSave(ofJson &json) {
 void scMetroBox::loadBeforeConnections(ofJson &json) {
     if(!json.contains("MetroBoxPublished") || !json["MetroBoxPublished"].is_array()) return;
     try { syncPublished(json["MetroBoxPublished"].get<std::vector<std::string>>()); } catch(...) {}
+    timeline.load(json, "MetroBoxTimeline");
 }
 
 void scMetroBox::presetRecallBeforeSettingParameters(ofJson &json) {

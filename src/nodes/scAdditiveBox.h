@@ -47,12 +47,14 @@
 #pragma once
 
 #include "scNode.h"
+#include "scTimelineMenu.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
 #include "ofxSCBuffer.h"
 #include "scEQEditor.h"
 #include "scModulation.h"
 #include "scAudioParam.h"
+#include "scScheduledInputs.h"
 #include "ofxSCGroup.h"
 #include "imgui.h"
 #include <array>
@@ -121,6 +123,10 @@ public:
     void loadBeforeConnections(ofJson& json) override;
     void presetRecallBeforeSettingParameters(ofJson& json) override;
     void presetRecallAfterSettingParameters(ofJson& json) override;
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+    // Gate (its level is the velocity) and Pitch, one note per voice
+    bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override;
+#endif
 
 private:
     // ── One voice (or unison copy), as sent to its synth ─────────────────────
@@ -225,6 +231,7 @@ private:
     void onGate(const std::vector<float>& values);
     void onTrig(const std::vector<int>& values);
     void markDirty() { dirty = true; }
+    void flushDirty();                              // every voice recomputed, what changed sent
     void laneData(int v, VoiceData& d) const;      // the modulation's share of a voice's data
     void computeLaneTables();
     bool lanesHaveNoise() const;                    // the lane part runs the noise variant
@@ -332,6 +339,7 @@ private:
     ofParameter<int> numVoices, numOutputs;
     // Voice
     ofParameter<std::vector<float>> pitch, gate, levels, glide;
+    scScheduledInputs noteInputs;    // the timeline's notes, timetagged (Gate, Pitch while published)
     ofParameter<std::vector<int>> trig;
     ofParameter<float> volume;
     ofParameter<float> transpose;   // semitones added to every voice's Pitch
@@ -393,6 +401,7 @@ private:
 
     std::vector<PublishAction> publishActions;
     std::vector<std::string> publishedKeys;
+    scTimelineMenu timeline;              // "Add to Timeline" from the window
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> publishedHandles;
     bool publishedSeparatorAdded = false;
 

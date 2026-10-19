@@ -6,6 +6,7 @@
 //
 
 #include "scMixerPro.h"
+#include "scSynthControlBatch.h"
 #include "ofxOceanodeContainer.h"
 #include "ofxOceanodeNode.h"
 #if OFXOCEANODESC_HAS_TIMELINE
@@ -1901,79 +1902,91 @@ void scMixerPro::processFxTimers() {
 void scMixerPro::sendHP(Track& tr) {
     ofxSCSynth* s = tr.fx[FX_HP].synth;
     if(!s) return;
-    s->set("freq", ofClamp(tr.hpFreq.get(), 10.0f, 20000.0f));
-    s->set("slope", tr.hp24.get() ? 1.0f : 0.0f);
-    s->set("on", (tr.hp.get() && tr.fx[FX_HP].offAt < 0.0f) ? 1.0f : 0.0f);
+    scSynthControlBatch controls(s, tr.liveServer);
+    controls.set("freq", ofClamp(tr.hpFreq.get(), 10.0f, 20000.0f));
+    controls.set("slope", tr.hp24.get() ? 1.0f : 0.0f);
+    controls.set("on", (tr.hp.get() && tr.fx[FX_HP].offAt < 0.0f) ? 1.0f : 0.0f);
+    controls.send();
 }
 
 void scMixerPro::sendComp(Track& tr) {
     ofxSCSynth* s = tr.fx[FX_COMP].synth;
     if(!s) return;
-    s->set("threshold", tr.compThreshold.get());
-    s->set("ratio", std::max(1.0f, tr.compRatio.get()));
-    s->set("knee", std::max(0.0f, tr.compKnee.get()));
-    s->set("attack", std::max(0.01f, tr.compAttack.get()));
-    s->set("release", std::max(1.0f, tr.compRelease.get()));
-    s->set("makeup", tr.compMakeup.get());
-    s->set("automakeup", tr.compAuto.get() ? 1.0f : 0.0f);
-    s->set("rms", ofClamp(tr.compRms.get(), 0.0f, 1.0f));
-    s->set("schpf", ofClamp(tr.compHpf.get(), 10.0f, 2000.0f));
-    s->set("mix", ofClamp(tr.compMix.get(), 0.0f, 1.0f));
-    s->set("grBus", tr.vuBus ? tr.vuBus->index + currentChannels + 4 : -1);
-    s->set("on", (tr.comp.get() && tr.fx[FX_COMP].offAt < 0.0f) ? 1.0f : 0.0f);
+    scSynthControlBatch controls(s, tr.liveServer);
+    controls.set("threshold", tr.compThreshold.get());
+    controls.set("ratio", std::max(1.0f, tr.compRatio.get()));
+    controls.set("knee", std::max(0.0f, tr.compKnee.get()));
+    controls.set("attack", std::max(0.01f, tr.compAttack.get()));
+    controls.set("release", std::max(1.0f, tr.compRelease.get()));
+    controls.set("makeup", tr.compMakeup.get());
+    controls.set("automakeup", tr.compAuto.get() ? 1.0f : 0.0f);
+    controls.set("rms", ofClamp(tr.compRms.get(), 0.0f, 1.0f));
+    controls.set("schpf", ofClamp(tr.compHpf.get(), 10.0f, 2000.0f));
+    controls.set("mix", ofClamp(tr.compMix.get(), 0.0f, 1.0f));
+    controls.set("grBus", tr.vuBus ? tr.vuBus->index + currentChannels + 4 : -1);
+    controls.set("on", (tr.comp.get() && tr.fx[FX_COMP].offAt < 0.0f) ? 1.0f : 0.0f);
+    controls.send();
 }
 
 void scMixerPro::sendSat(Track& tr) {
     ofxSCSynth* s = tr.fx[FX_SAT].synth;
     if(!s) return;
-    s->set("drive", ofClamp(tr.satDrive.get(), 0.0f, 36.0f));
-    s->set("bias", ofClamp(tr.satBias.get(), 0.0f, 1.0f));
-    s->set("tone", ofClamp(tr.satTone.get(), 500.0f, 20000.0f));
-    s->set("output", ofClamp(tr.satOutput.get(), -24.0f, 24.0f));
-    s->set("autogain", tr.satAuto.get() ? 1.0f : 0.0f);
-    s->set("mix", ofClamp(tr.satMix.get(), 0.0f, 1.0f));
-    s->set("on", (tr.sat.get() && tr.fx[FX_SAT].offAt < 0.0f) ? 1.0f : 0.0f);
+    scSynthControlBatch controls(s, tr.liveServer);
+    controls.set("drive", ofClamp(tr.satDrive.get(), 0.0f, 36.0f));
+    controls.set("bias", ofClamp(tr.satBias.get(), 0.0f, 1.0f));
+    controls.set("tone", ofClamp(tr.satTone.get(), 500.0f, 20000.0f));
+    controls.set("output", ofClamp(tr.satOutput.get(), -24.0f, 24.0f));
+    controls.set("autogain", tr.satAuto.get() ? 1.0f : 0.0f);
+    controls.set("mix", ofClamp(tr.satMix.get(), 0.0f, 1.0f));
+    controls.set("on", (tr.sat.get() && tr.fx[FX_SAT].offAt < 0.0f) ? 1.0f : 0.0f);
+    controls.send();
 }
 
 void scMixerPro::sendWide(Track& tr) {
     ofxSCSynth* s = tr.fx[FX_WIDE].synth;
     if(!s) return;
-    s->set("width", ofClamp(tr.wideWidth.get(), 0.0f, 2.0f));
-    s->set("diffuse", ofClamp(tr.wideDiffuse.get(), 0.0f, 1.0f));
-    s->set("bassMono", tr.wideBassMono.get() ? 1.0f : 0.0f);
-    s->set("bassFreq", ofClamp(tr.wideBassFreq.get(), 20.0f, 1000.0f));
-    s->set("on", (tr.wide.get() && tr.fx[FX_WIDE].offAt < 0.0f) ? 1.0f : 0.0f);
+    scSynthControlBatch controls(s, tr.liveServer);
+    controls.set("width", ofClamp(tr.wideWidth.get(), 0.0f, 2.0f));
+    controls.set("diffuse", ofClamp(tr.wideDiffuse.get(), 0.0f, 1.0f));
+    controls.set("bassMono", tr.wideBassMono.get() ? 1.0f : 0.0f);
+    controls.set("bassFreq", ofClamp(tr.wideBassFreq.get(), 20.0f, 1000.0f));
+    controls.set("on", (tr.wide.get() && tr.fx[FX_WIDE].offAt < 0.0f) ? 1.0f : 0.0f);
+    controls.send();
 }
 
 void scMixerPro::sendEcho(Track& tr) {
     ofxSCSynth* s = tr.fx[FX_ECHO].synth;
     if(!s) return;
-    s->set("delay", echoDelaySec(tr));
-    s->set("feed", ofClamp(tr.echoFeed.get(), 0.0f, 0.98f));
-    s->set("cutoff", ofClamp(tr.echoCutoff.get(), 12.0f, 130.0f));
-    s->set("resonance", ofClamp(tr.echoResonance.get(), 0.0f, 0.9f));
-    s->set("filtertype", (float)ofClamp(tr.echoFilter.get(), 0, 3));
-    s->set("pingpong", ofClamp(tr.echoPingPong.get(), 0.0f, 1.0f));
-    s->set("mix", ofClamp(tr.echoMix.get(), 0.0f, 1.0f));
-    s->set("on", (tr.echo.get() && tr.fx[FX_ECHO].offAt < 0.0f) ? 1.0f : 0.0f);
+    scSynthControlBatch controls(s, tr.liveServer);
+    controls.set("delay", echoDelaySec(tr));
+    controls.set("feed", ofClamp(tr.echoFeed.get(), 0.0f, 0.98f));
+    controls.set("cutoff", ofClamp(tr.echoCutoff.get(), 12.0f, 130.0f));
+    controls.set("resonance", ofClamp(tr.echoResonance.get(), 0.0f, 0.9f));
+    controls.set("filtertype", (float)ofClamp(tr.echoFilter.get(), 0, 3));
+    controls.set("pingpong", ofClamp(tr.echoPingPong.get(), 0.0f, 1.0f));
+    controls.set("mix", ofClamp(tr.echoMix.get(), 0.0f, 1.0f));
+    controls.set("on", (tr.echo.get() && tr.fx[FX_ECHO].offAt < 0.0f) ? 1.0f : 0.0f);
+    controls.send();
 }
 
 void scMixerPro::sendRvb(Track& tr) {
     ofxSCSynth* s = tr.fx[FX_RVB].synth;
     if(!s) return;
-    s->set("mix", ofClamp(tr.rvbMix.get(), 0.0f, 1.0f));
-    s->set("decay", std::max(0.05f, tr.rvbDecay.get()));
-    s->set("size", ofClamp(tr.rvbSize.get(), 0.0f, 60.0f));
-    s->set("predelay", ofClamp(tr.rvbPredelay.get(), 0.0f, 500.0f));
-    s->set("position", ofClamp(tr.rvbPosition.get(), 0.0f, 1.0f));
-    s->set("spread", ofClamp(tr.rvbSpread.get(), -1.0f, 1.0f));
-    s->set("lowpass", ofClamp(tr.rvbLowpass.get(), 20.0f, 20000.0f));
-    s->set("highdamp", ofClamp(tr.rvbHighDamp.get(), 0.0f, 60.0f));
-    s->set("lowdamp", ofClamp(tr.rvbLowDamp.get(), 0.0f, 60.0f));
-    s->set("modfreq", ofClamp(tr.rvbModFreq.get(), 0.001f, 20.0f));
-    s->set("spin", ofClamp(tr.rvbSpin.get(), 0.0f, 20.0f));
-    s->set("wander", ofClamp(tr.rvbWander.get(), 0.0f, 20.0f));
-    s->set("on", (tr.rvb.get() && tr.fx[FX_RVB].offAt < 0.0f) ? 1.0f : 0.0f);
+    scSynthControlBatch controls(s, tr.liveServer);
+    controls.set("mix", ofClamp(tr.rvbMix.get(), 0.0f, 1.0f));
+    controls.set("decay", std::max(0.05f, tr.rvbDecay.get()));
+    controls.set("size", ofClamp(tr.rvbSize.get(), 0.0f, 60.0f));
+    controls.set("predelay", ofClamp(tr.rvbPredelay.get(), 0.0f, 500.0f));
+    controls.set("position", ofClamp(tr.rvbPosition.get(), 0.0f, 1.0f));
+    controls.set("spread", ofClamp(tr.rvbSpread.get(), -1.0f, 1.0f));
+    controls.set("lowpass", ofClamp(tr.rvbLowpass.get(), 20.0f, 20000.0f));
+    controls.set("highdamp", ofClamp(tr.rvbHighDamp.get(), 0.0f, 60.0f));
+    controls.set("lowdamp", ofClamp(tr.rvbLowDamp.get(), 0.0f, 60.0f));
+    controls.set("modfreq", ofClamp(tr.rvbModFreq.get(), 0.001f, 20.0f));
+    controls.set("spin", ofClamp(tr.rvbSpin.get(), 0.0f, 20.0f));
+    controls.set("wander", ofClamp(tr.rvbWander.get(), 0.0f, 20.0f));
+    controls.set("on", (tr.rvb.get() && tr.fx[FX_RVB].offAt < 0.0f) ? 1.0f : 0.0f);
+    controls.send();
 }
 
 // Fader times Gain Vec (a missing entry counts as 1)
@@ -2002,17 +2015,19 @@ void scMixerPro::sendMasterLevel(Track& tr) {
 
 void scMixerPro::sendEQ(Track& tr) {
     if(!tr.insert || !(tr.insertVariant & 1)) return;
+    scSynthControlBatch controls(tr.insert, tr.liveServer);
     for(int b = 0; b < scEQEditor::NUM_BANDS; b++) {
         const std::string k = "b" + ofToString(b + 1);
-        tr.insert->set(k + "gain", tr.eqGain[b].get());
-        tr.insert->set(k + "freq", tr.eqFreq[b].get());
+        controls.set(k + "gain", tr.eqGain[b].get());
+        controls.set(k + "freq", tr.eqFreq[b].get());
         // As GrainBox / Graphic EQ: shelves take rs = 1/S, kept where the
         // shelf stays defined; peaks take rq = 1/Q
         if(scEQEditor::isShelf(b))
-            tr.insert->set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(tr.eqShape[b].get(), tr.eqGain[b].get()));
+            controls.set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(tr.eqShape[b].get(), tr.eqGain[b].get()));
         else
-            tr.insert->set(k + "rq", 1.0f / std::max(0.01f, tr.eqShape[b].get()));
+            controls.set(k + "rq", 1.0f / std::max(0.01f, tr.eqShape[b].get()));
     }
+    controls.send();
 }
 
 void scMixerPro::sendAll(Track& tr) {
@@ -2041,10 +2056,12 @@ void scMixerPro::sendAll(Track& tr) {
 
 void scMixerPro::sendSidechainShape(Track& tr) {
     if(!tr.synth) return;
-    tr.synth->set("scStrength", ofClamp(tr.scStrength.get(), 0.0f, 1.0f));
-    tr.synth->set("scAttack", std::max(0.1f, tr.scAttack.get()));
-    tr.synth->set("scRelease", std::max(0.1f, tr.scRelease.get()));
-    tr.synth->set("scThresh", ofClamp(std::pow(10.0f, tr.scThreshold.get() / 20.0f), 0.0001f, 1.0f));
+    scSynthControlBatch controls(tr.synth, tr.liveServer);
+    controls.set("scStrength", ofClamp(tr.scStrength.get(), 0.0f, 1.0f));
+    controls.set("scAttack", std::max(0.1f, tr.scAttack.get()));
+    controls.set("scRelease", std::max(0.1f, tr.scRelease.get()));
+    controls.set("scThresh", ofClamp(std::pow(10.0f, tr.scThreshold.get() / 20.0f), 0.0001f, 1.0f));
+    controls.send();
 }
 
 // Each target chooses which source tap to read. On the same server both taps
@@ -2468,6 +2485,17 @@ void scMixerPro::markPublished(const std::string& key) const {
 }
 
 // ── Timeline ────────────────────────────────────────────────────────────────
+
+std::string scMixerPro::getTimelineValueScale(ofxOceanodeAbstractParameter& parameter) const {
+    const std::string name = parameter.getEscapedName();
+    if(name == masterLevel.getEscapedName() || name == gainVec.getEscapedName()) return "dB";
+    auto strips = const_cast<scMixerPro*>(this)->allStrips();
+    for(Track* tr : strips) {
+        if(name == tr->level.getEscapedName()) return "dB";
+        for(int k = 0; k < MAX_RETURNS; k++) if(name == tr->sendLevel[k].getEscapedName()) return "dB";
+    }
+    return {};
+}
 
 bool scMixerPro::isOnTimeline(const std::string& key) const {
 #if OFXOCEANODESC_HAS_TIMELINE
@@ -3267,21 +3295,22 @@ void scMixerPro::drawToolbar() {
 }
 
 void scMixerPro::drawMeters(const std::vector<float>& vu, const std::vector<float>& peak, ImVec2 pos, ImVec2 size, bool bus) {
+    if(!ImGui::IsRectVisible(pos, ImVec2(pos.x + size.x, pos.y + size.y))) return;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const int channels = std::max(1, (int)vu.size());
     dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(10, 10, 12, 255), 2.0f);
     const float gap = channels > 8 ? 0.0f : 1.0f;
     const float w = std::max(1.0f, (size.x - gap * (channels + 1)) / channels);
     const float y0dB = pos.y + size.y * (1.0f - gainToPos(1.0f));
+    const float yGreen = pos.y + size.y * (1.0f - gainToPos(std::pow(10.0f, -12.0f / 20.0f)));
+    const float yYellow = pos.y + size.y * (1.0f - gainToPos(std::pow(10.0f, -3.0f / 20.0f)));
+    const float yBottom = pos.y + size.y;
     for(int c = 0; c < channels; c++) {
         const float x = pos.x + gap + c * (w + gap);
         const float v = c < (int)vu.size() ? vu[c] : 0.0f;
         const float p = gainToPos(v);
         const float yTop = pos.y + size.y * (1.0f - p);
         // green up to -12 dB, yellow up to -3 dB, red above
-        const float yGreen  = pos.y + size.y * (1.0f - gainToPos(std::pow(10.0f, -12.0f / 20.0f)));
-        const float yYellow = pos.y + size.y * (1.0f - gainToPos(std::pow(10.0f, -3.0f / 20.0f)));
-        const float yBottom = pos.y + size.y;
         if(yTop < yBottom) {
             dl->AddRectFilled(ImVec2(x, std::max(yTop, yGreen)), ImVec2(x + w, yBottom), bus ? IM_COL32(70, 140, 235, 255) : IM_COL32(70, 200, 90, 255));
             if(yTop < yGreen) dl->AddRectFilled(ImVec2(x, std::max(yTop, yYellow)), ImVec2(x + w, yGreen), IM_COL32(220, 200, 60, 255));
@@ -3382,10 +3411,12 @@ void scMixerPro::recomputeEqCurve(Track& tr) {
     }
     tr.eqEditor.dbRange = 24.0f;
     tr.eqEditor.recompute(sr);
+    tr.miniCurveMesh.invalidate();
     tr.eqCurveDirty = false;
 }
 
 void scMixerPro::drawMiniCurve(Track& tr, ImVec2 pos, ImVec2 size) {
+    if(!ImGui::IsRectVisible(pos, ImVec2(pos.x + size.x, pos.y + size.y))) return;
     recomputeEqCurve(tr);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(12, 14, 20, 255), 2.0f);
@@ -3395,13 +3426,14 @@ void scMixerPro::drawMiniCurve(Track& tr, ImVec2 pos, ImVec2 size) {
     const auto& curve = tr.eqEditor.curveDb;
     const int N = (int)curve.size();
     const float range = 24.0f;
-    for(int i = 0; i + 1 < N; i++) {
-        const float x1 = pos.x + size.x * (float)i / (N - 1);
-        const float x2 = pos.x + size.x * (float)(i + 1) / (N - 1);
-        const float y1 = midY - ofClamp(curve[i] / range, -1.0f, 1.0f) * size.y * 0.5f;
-        const float y2 = midY - ofClamp(curve[i + 1] / range, -1.0f, 1.0f) * size.y * 0.5f;
-        dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), col, 1.0f);
-    }
+    tr.miniCurveMesh.draw(dl, std::array<double, 5>{pos.x, pos.y, size.x, size.y, (double)col}, 0, [&] {
+        std::array<ImVec2, scEQEditor::NUM_FREQ_POINTS> points;
+        for(int i = 0; i < N; i++) {
+            points[i] = ImVec2(pos.x + size.x * (float)i / (N - 1),
+                               midY - ofClamp(curve[i] / range, -1.0f, 1.0f) * size.y * 0.5f);
+        }
+        dl->AddPolyline(points.data(), N, col, 0, 1.0f);
+    });
 }
 
 void scMixerPro::drawMasterStrip(float w, float h) {

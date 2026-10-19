@@ -35,6 +35,7 @@
 #include "scNode.h"
 #include "scTransportSync.h"
 #include "scMetroBoxEngine.h"
+#include "scTimelineMenu.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "imgui.h"
@@ -151,6 +152,8 @@ private:
     };
     std::map<std::string, std::unique_ptr<Published>> published;
     std::vector<std::string> publishedOrder;
+    scTimelineMenu timeline;                  // "Add to Timeline" from the window
+    void publishKey(const std::string& key);  // "L<n> <Setting>"
     bool publishedSeparatorAdded = false;
     bool publish(int layer, const std::string& field);
     bool unpublish(const std::string& key);

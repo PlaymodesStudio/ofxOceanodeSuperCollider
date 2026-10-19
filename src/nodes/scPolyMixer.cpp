@@ -48,6 +48,7 @@ scPolyMixer::~scPolyMixer() {
 }
 
 void scPolyMixer::setup() {
+	timeline.setup(this, nullptr, nullptr, nullptr);
 	ofLogNotice("scPolyMixer") << "=== POLYMIXER SETUP - NEW CODE VERSION ===";
 	
 	try {
@@ -2473,6 +2474,11 @@ void scPolyMixer::drawMixerStrip(int trackIndex, float stripWidth, float stripHe
 		} else if(trackLevelParams.count(trackIndex) > 0) {
 			trackLevelParams[trackIndex]->set(vector<float>(1, level));
 		}
+	}
+	{
+		const std::string levelKey = master ? masterLevel.getEscapedName()
+			: (trackLevelParams.count(trackIndex) && trackLevelParams[trackIndex] ? trackLevelParams[trackIndex]->getEscapedName() : std::string());
+		if(!levelKey.empty()) timeline.nodeParameterMenu(levelKey, master ? "Master level" : "Level");
 	}
 	ImGui::PopID();
 
