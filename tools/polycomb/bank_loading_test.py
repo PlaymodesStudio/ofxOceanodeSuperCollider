@@ -18,6 +18,7 @@ bool ofSavePrettyJson(const std::string& p,const ofJson& j){
     if(failWrites){std::ofstream f(p);f<<"{";return false;}std::ofstream f(p);f<<j.dump(2);return f.good();
 }
 ofJson ofLoadJson(const std::string& p){std::ifstream f(p);return ofJson::parse(f);}
+std::string ofToLower(std::string s){for(char&c:s)c=std::tolower((unsigned char)c);return s;}
 std::string ofToString(int n){return std::to_string(n);}
 std::string ofGetTimestampString(){return "fixed-time";}
 class scSnapshots {public:
@@ -25,7 +26,7 @@ class scSnapshots {public:
     std::array<ofJson,SLOTS> slots;
     std::array<bool,SLOTS> used{};
     int active=-1,saves=0;bool running=true;
-    std::string message;std::filesystem::path root;
+    std::string message,currentBank;std::filesystem::path root;
     std::filesystem::path dir()const{return root;}
     void saveLibrary(){saves++;}
 '''

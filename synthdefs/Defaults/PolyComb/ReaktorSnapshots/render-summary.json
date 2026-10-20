@@ -1,0 +1,53 @@
+{
+  "1.7": {
+    "snapshots": 210,
+    "finite": 210,
+    "audible_sustained": 209,
+    "exceed_full_scale": 95,
+    "maximum_peak": 3.9365549087524414,
+    "conditions": {
+      "master": 0.8,
+      "voices": 16,
+      "duration": 12.0,
+      "midi_note": 60,
+      "bpm": 120,
+      "sub_layer_checked": true,
+      "incremental_rerender_count": 10,
+      "verification": "Active sub-layer snapshots re-rendered; unchanged sub-off snapshots retain the previous render measurements."
+    }
+  },
+  "2018": {
+    "snapshots": 86,
+    "finite": 86,
+    "audible_sustained": 82,
+    "exceed_full_scale": 25,
+    "maximum_peak": 12.916543006896973,
+    "conditions": {
+      "master": 0.8,
+      "voices": 16,
+      "duration": 12.0,
+      "midi_note": 60,
+      "bpm": 120,
+      "sub_layer_checked": true,
+      "incremental_rerender_count": 63,
+      "verification": "Active sub-layer snapshots re-rendered; unchanged sub-off snapshots retain the previous render measurements."
+    }
+  },
+  "2025": {
+    "snapshots": 403,
+    "finite": 403,
+    "audible_sustained": 390,
+    "exceed_full_scale": 146,
+    "maximum_peak": 5.346248149871826,
+    "conditions": {
+      "master": 0.8,
+      "voices": 16,
+      "duration": 12.0,
+      "midi_note": 60,
+      "bpm": 120,
+      "sub_layer_checked": true,
+      "incremental_rerender_count": 25,
+      "verification": "Active sub-layer snapshots re-rendered; unchanged sub-off snapshots retain the previous render measurements."
+    }
+  }
+}

@@ -50,15 +50,15 @@ struct Bus{int index=128;};
 struct Part{ofxSCSynth* synth=nullptr;};
 struct ServerState{
     ofxSCServer* server;ofxSCSynth *gateS=nullptr,*pitchS=nullptr;
-    Part sub,ins[1];Bus *gateBus=nullptr,*noteBus=nullptr,*voiceBus=nullptr,*visBlock=nullptr;
+    Part sub,ins[2];Bus *gateBus=nullptr,*noteBus=nullptr,*voiceBus=nullptr,*visBlock=nullptr;
 };
 struct scPolyComb {
-    static constexpr int SRC_VEL=0,SRC_RND=1,VIS_SUB=65,IComb=0;
+    static constexpr int SRC_VEL=0,SRC_RND=1,VIS_SUB=65,IComb=0,IRing=1;
     Param<std::vector<float>> gate{{1}},pitch{{60}},transpose{{0}},detune{{0}};
     Param<float> glide{0},vibRate{5},vibRand{0},vibAmt{0};
-    Param<float> subTranspose{-12},subLevel{.25},master{.8},velSens{.5};
+    Param<float> subTranspose{-12},subFineTune{0},subVibRate{5},subVibAmt{0},subVibRand{0},subLevel{.25},master{.8},velSens{.5};
     Param<float> subA{.01},subD{.5},subS{1},subR{.5},subCA{-4},subCD{-4},subCR{-4};
-    Param<bool> subOn{true};
+    Param<bool> subOn{true};Param<int> ringPitchSource{1};
     struct Input{int cable=-1;int bus(ofxSCServer*){return cable;}} gateIn,pitchIn;
     struct Notes{int inEffectNow(){return 0;}}noteInputs;
     int oscMap=0,combMap=1,insSends=0;bool internal=false,mapped=false,drone=false;
@@ -69,6 +69,8 @@ struct scPolyComb {
     int src(const ServerState&,int i){return 200+i*32;}
     int mod(const ServerState&,int i){return 400+i*32;}
     std::vector<float> mapPitches(int m){return m==0?std::vector<float>{60,64,67}:std::vector<float>{48,52,55};}
+    std::vector<float> oscillatorPitches(){return internal?mapPitches(oscMap):expand(pitch.get(),n());}
+    std::vector<float> resonatorPitches(){return mapped?mapPitches(combMap):oscillatorPitches();}
     std::vector<float> processedPitch(){return pitch.get();}
     void sendIns(ServerState&,int){++insSends;}
     void sendVec(ofxSCSynth* s,std::string key,std::vector<float> v){
@@ -116,6 +118,11 @@ int main(){
     assert(values(node.server.sent[0],"pitch")==std::vector<float>({62,65,65}));
     assert(values(node.server.sent[1],"pitch")==std::vector<float>({60,64,67}));
     assert(values(node.server.sent[2],"combpitch")==std::vector<float>({48,52,55}));
+    // Resonator-follow ringmod updates its mapped pitches on each played note.
+    ofxSCSynth ring;ring.nodeID=14;st.ins[1].synth=&ring;node.ringPitchSource.value=2;
+    node.server.sent.clear();node.sendPitch(st,true);
+    assert(values(node.server.sent[2],"ringpitch")==std::vector<float>({48,52,55}));
+    node.ringPitchSource.value=1;st.ins[1].synth=nullptr;
     // Creation/reconnection still configures every bus and maps live audio cables.
     node.server.sent.clear();node.internal=node.mapped=false;node.gateIn.cable=20;node.pitchIn.cable=30;
     node.sendGate(st);node.sendPitch(st);

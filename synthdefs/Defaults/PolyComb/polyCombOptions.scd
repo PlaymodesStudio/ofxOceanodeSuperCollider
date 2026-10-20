@@ -22,7 +22,11 @@ File.mkdir(root); File.mkdir(dir);
         var env = EnvGen.ar(Env.adsr(\atk.kr(0.01), \dec.kr(0.5), \sus.kr(1), \rel.kr(0.5),
             curve:[\cA.kr(-4),\cD.kr(-4),\cR.kr(-4)]), gate);
         var velocity = (1-\velsens.kr(1)) + (In.kr(\vel.kr(0),n).clip(0,1)*\velsens.kr(1));
-        var sig = SinOsc.ar((pitch+\transpose.kr(-12)).clip(0,135).midicps.min(SampleRate.ir*0.45));
+        // One vibrato LFO for the single root tone, independent of main voices.
+        var rate = \vibrate.kr(5,0.03) * (1 + (Rand(-1,1) * \vibrand.kr(0,0.03).clip(0,1)));
+        var vibrato = SinOsc.kr(rate, Rand(0,2pi)) * \vibamt.kr(0,0.03);
+        var tuned = K2A.ar(Lag.kr(pitch+\transpose.kr(-12),0.02)+vibrato);
+        var sig = SinOsc.ar(tuned.clip(0,135).midicps.min(SampleRate.ir*0.45));
         Out.kr(\vis.kr(0), A2K.kr(env)*on);
         Out.ar(\out.kr(0),sig*env*velocity*\level.kr(0.25,0.03)*\master.kr(0.8)*on);
     }).writeDefFile(dir);

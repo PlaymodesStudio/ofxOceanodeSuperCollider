@@ -45,12 +45,12 @@ for original,slot in zip(raw,slots):
     v=original['effective_values'];c=slot['controls']
     for li,sid,count in ((1,'193',7),(2,'209',7),(3,'361',8),(4,'386',8)):
         wf=min(max(int(v.get(sid,5))-1,0),count-1)  # the row from 1 (5: Sin) -> the List's value; past the end: its last entry
-        assert c[f'LFO{li}_Random_Type']==LFO_RANDOM.get(wf,0),(slot['name'],li,wf)
+        assert c[f'LFO{li}_Random_Type']==(1 if wf in LFO_RANDOM else 0),(slot['name'],li,wf)
         if wf in ROUND:assert c[f'LFO{li}_Round']==[ROUND[wf]]
         if wf in (0,1):assert c[f'LFO{li}_Skew']==[-1.0 if wf==0 else 1.0] and c[f'LFO{li}_Round']==[0.0]
     mean,depth=lfo_span(v['181'],v['182'])
     assert abs(slot['matrix'][12]-depth/max(.0001,mean))<1e-6
 # 256: both poly LFOs on row 5 (Sin), no random; mono LFO1 on its last row (jumps)
 s256=next(s for s in slots if s['name']=='256')['controls']
-assert s256['LFO1_Random_Type']==0 and s256['LFO1_Round']==[.5] and s256['LFO2_Random_Type']==0 and s256['LFO3_Random_Type']==3,s256['LFO1_Random_Type']
+assert s256['LFO1_Random_Type']==0 and s256['LFO1_Round']==[.5] and s256['LFO2_Random_Type']==0 and s256['LFO3_Random_Type']==1 and s256['LFO3_Model']==3,s256['LFO1_Random_Type']
 print('PASS: pulse/triangle/sine (List values 2/3/4) match the rendered native LFO; saws and random types follow the decoded Lists (rows from 1: 5 is Sin); all 210 amplitude routes respect clipped endpoints.')

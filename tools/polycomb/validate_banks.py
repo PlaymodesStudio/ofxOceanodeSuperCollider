@@ -21,6 +21,7 @@ def validate(folder=P):
     for p in banks:slots+=json.loads(p.read_text())['slots']
     assert len(slots)==len(raw['snapshots'])==manifest['snapshot_count']
     for i,(slot,source)in enumerate(zip(slots,raw['snapshots'])):
+        assert slot['controls']['Ring_Model']==1
         assert slot['controls']['Comb_Model']==1 and slot['controls']['Comb_Saturation'] is False
         assert slot['name']==source['name'] and len(source['records'])==count
         assert len({r['snapshot_id']for r in source['records']})==count
@@ -44,7 +45,7 @@ def render(slots,n=16,duration=12.0,output="/tmp/polycomb-bank-render",master=.8
     out=pathlib.Path(output);out.mkdir(exist_ok=True)
     pc=ROOT/'synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb';mod=ROOT/'synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation';fx=ROOT/'synthdefs/Defaults/MixerPro/CompiledSynthdefs/mixerpro'
     names=['PCSub','PCFilterSlopes','PCFilterR','PCCombR','PCRingR','PCPitch','PCFm','PCOscSaw','PCOscTri','PCOscPulse','PCOscSine','PCOscSSaw','PCOscWhite','PCOscDust','PCOscImp','PCFilter','PCComb','PCRing','PCAmp']
-    paths=[pc/f'{s}{n}.scsyndef' for s in names]+[pc/'PolyCombSpread2.scsyndef']+[mod/f'{s}{n}.scsyndef' for s in ('ModGate','ModEnv','ModEnvAr','ModLfo','ModRoute')]+[fx/f'mixerPro{s}2.scsyndef' for s in ('Comp','Echo','Rvb')]
+    paths=[pc/f'{s}{n}.scsyndef' for s in names]+[pc/'PolyCombSpread2.scsyndef']+[mod/f'{s}{n}.scsyndef' for s in ('ModGate','ModEnv','ModEnvAr','ModLfo','ModLfoX','ModRoute')]+[fx/f'mixerPro{s}2.scsyndef' for s in ('Comp','Echo','Rvb')]
     score=bundle(0,[message('/d_recv',p.read_bytes())for p in paths]+[message('/g_new',1,0,0)])
     length=duration
     for i,s in enumerate(slots):
@@ -64,7 +65,7 @@ def render(slots,n=16,duration=12.0,output="/tmp/polycomb-bank-render",master=.8
         synth(f'ModEnvAr{n}',gate=600,out=3100,aout=616,atk=c['Amp_Attack'],dec=c['Amp_Decay'],sus=c['Amp_Sustain'],rel=c['Amp_Release'],cA=-4,cD=-4,cR=-4)
         for li in range(4):
             L=f'LFO{li+1}_';spread=c[L+'Spread']
-            synth(f'ModLfo{n}',out=1000+li*16,freq=[2/x for x in vec(L+'Beats')],initphase=c[L+'Phase'],phoff=[v*spread/n for v in range(n)],round=vec(L+'Round'),skew=vec(L+'Skew'),pw=vec(L+'Width'),noise=c[L+'Noise'],shglide=c[L+'S&H_Glide'],gain=vec(L+'Gain'))
+            synth(f'ModLfoX{n}' if c.get(L+'Model',1)==3 else f'ModLfo{n}',rtype=1. if c.get(L+'Model',1)==3 else 0.,rsmooth=c.get(L+'Random_Smooth',0.),out=1000+li*16,freq=[2/x for x in vec(L+'Beats')],initphase=c[L+'Phase'],phoff=[v*spread/n for v in range(n)],round=vec(L+'Round'),skew=vec(L+'Skew'),pw=vec(L+'Width'),noise=c[L+'Noise'],shglide=c[L+'S&H_Glide'],gain=vec(L+'Gain'))
         synth(f'ModEnv{n}',gate=600,out=1128,atk=c['Env1_Attack'],dec=c['Env1_Decay'],sus=c['Env1_Sustain'],rel=c['Env1_Release'],velbus=1192)
         ranges=[24,1,4,48,1,24,1,1,1,48,10,.5,1,1]
         for src in range(23):
@@ -79,7 +80,7 @@ def render(slots,n=16,duration=12.0,output="/tmp/polycomb-bank-render",master=.8
         synth(f'PCCombR{n}',satlevel=c.get('Comb_Sat_Level',12),note=512,**{'in':664},out=680,on=1,combmode=c['Comb_Mode'],combpitch=vec('Comb_Pitch'),combtranspose=vec('Comb_Transpose'),combdetune=vec('Comb_Detune'),combfeed=vec('Comb_Feedback'),combtone=c['Comb_Tone'],combmix=vec('Comb_Mix'),mcpitch=mb(5),mcfb=mb(6),mcmix=mb(7))
         last=680
         if c['Ring_On']:
-            synth(f'PCRingR{n}' if c.get('Ring_Model',0)==1 else f'PCRing{n}',note=512,**{'in':last},out=696,on=1,ringpitch=vec('Ring_Pitch'),ringtranspose=vec('Ring_Transpose'),ringdetune=vec('Ring_Detune'),ringmix=vec('Ring_Mix'),ringratio=c.get('Ring_Ratio',[1.0]),ringwidth=c.get('Ring_Width',0.0),mrmix=mb(8));last=696
+            synth(f'PCRingR{n}',note=512,**{'in':last},out=696,on=1,ringpitch=vec('Ring_Pitch'),ringtranspose=vec('Ring_Transpose'),ringdetune=vec('Ring_Detune'),ringmix=vec('Ring_Mix'),ringratio=c.get('Ring_Ratio',[1.0]),ringwidth=c.get('Ring_Width',0.0),mrmix=mb(8));last=696
         synth(f'PCFilterR{n}' if c.get('Filter_Model',0)==1 else f'PCFilterSlopes{n}' if c['Post_Type']>=4 else f'PCFilter{n}',note=512,**{'in':last},out=712,on=1,slope=filterchoice(c['Post_Type'])[1],type=c['Post_Type'] if c.get('Filter_Model',0)==1 else filterchoice(c['Post_Type'])[0],cutoff=vec('Post_Cutoff'),res=vec('Post_Resonance'),mcut=mb(9),mres=mb(14))
         synth(f'PCAmp{n}',**{'in':712},out=728,env=616,gate=600,vel=1192,velsens=1,level=master,mamp=mb(12))
         if c.get('Sub_On',False):

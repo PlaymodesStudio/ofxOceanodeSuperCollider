@@ -49,7 +49,7 @@ File.mkdir(root); File.mkdir(dir);
 };
 // PCEchoR<C>: the original PolyComb's delay (its Core cell): a line per
 // speaker at \delay x (1 +- \spread) (alternating), each through a resonant
-// 2-pole lowpass (\hi Hz, \res: -inf..0.98, the SV filter's) and a one-pole
+// peak-normalized 2-pole lowpass (\hi Hz, \res: -inf..0.98) and a one-pole
 // highpass (\lo Hz); the lines' mean x \feed back into every line (the
 // original: 0.5 x Feed x (L + R)); out: dry and the filtered lines crossfaded
 // by \mix squared. \on: dry, the tail rings out.
@@ -61,11 +61,21 @@ File.mkdir(root); File.mkdir(dir);
         var times = if(c == 1, { [t] }, { c.collect { |i| t * (1 + (lr * (if(i.even, 1, -1)))) } });
         var fb = LocalIn.ar(1);
         var lines = c.collect { |i| DelayC.ar((dry[i] * on) + fb, 5.5, (times[i] - ControlDur.ir).max(0)) };
-        var rq = (2 * (1 - \res.kr(0).clip(-4, 0.98))).clip(0.04, 4);
-        var hi = \hi.kr(8000).clip(20, 20000), lo = \lo.kr(40).clip(1, 10000);
-        var wet = lines.collect { |x| var lp = RLPF.ar(x, hi, rq); lp - OnePole.ar(lp, exp(-2pi * lo * SampleDur.ir)) };
+        var rq = (2 * (1 - \res.kr(0).clip(-4, 0.98).lag(0.03))).clip(0.04, 4);
+        var hi = \hi.kr(8000).clip(20, SampleRate.ir * 0.45).lag(0.03);
+        var lo = \lo.kr(40).clip(1, SampleRate.ir * 0.45).lag(0.03);
+        // RLPF uses tan(pi * hi * rq / sr): rq up to 4 made that pole
+        // mapping unstable within the Hi slider's range. RBJ's bilinear
+        // lowpass is stable for every positive rq and cutoff below Nyquist.
+        // Its resonant peak must also be <= 1 inside a feedback loop:
+        // max |H| = 1/(rq * sqrt(1-rq^2/4)) when rq < sqrt(2), else 1.
+        var peakGain = Select.kr(rq < 2.sqrt, [1, rq * (1 - (rq.squared * 0.25)).max(0).sqrt]);
+        var wet = lines.collect { |x|
+            var lp = BLowPass.ar(x, hi, rq) * peakGain;
+            lp - OnePole.ar(lp, exp(-2pi * lo * SampleDur.ir))
+        };
         var m = \mix.kr(0.3).clip(0, 1).squared * on;
-        LocalOut.ar(Sanitize.ar(wet.sum / c * \feed.kr(0.5).clip(0, 1)));
+        LocalOut.ar(Sanitize.ar(wet.sum / c * \feed.kr(0.5).clip(0, 0.98)));
         Out.ar(\out.kr(0), c.collect { |i| (dry[i] * (1 - m)) + (wet[i] * m) });
     }).writeDefFile(dir);
 };
@@ -79,8 +89,9 @@ File.mkdir(root); File.mkdir(dir);
     var base = { In.kr(\note.kr(0) + n, n) };
     SynthDef(("PCCombR" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
-        var cnote = kv.(\combpitch, 0) + kv.(\combtranspose, 0) + (base.() * (1 - (\combmode.kr(0) > 0.5))) +
-            (({ Rand(-1, 1) } ! n) * kv.(\combdetune, 0)) + modIn.(\mcpitch);
+        // Smooth pitch targets at audio rate so delay retuning has no GUI/control-block steps.
+        var cnote = Lag.ar(K2A.ar(kv.(\combpitch, 0) + kv.(\combtranspose, 0) + (base.() * (1 - (\combmode.kr(0) > 0.5)))), 0.02) +
+            K2A.ar((({ Rand(-1, 1) } ! n) * kv.(\combdetune, 0)) + modIn.(\mcpitch));
         var fc = cnote.clip(0, 135).midicps.clip(20, 20000);
         var fb = (kv.(\combfeed, 0.7) + modIn.(\mcfb)).clip(-1.2, 1.2);
         var level = \satlevel.kr(48, 0.03).clip(0, 48).dbamp;
@@ -115,7 +126,8 @@ File.mkdir(root); File.mkdir(dir);
     var note = { In.kr(\note.kr(0), n) };
     SynthDef(("PCRingR" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
-        var pitch = note.() + (({ Rand(-1, 1) } ! n) * kv.(\ringdetune, 0));
+        var pitch = Select.kr(\ringmode.kr(0), [note.(), kv.(\ringpitch, 72)])
+            + kv.(\ringtranspose, 0) + (({ Rand(-1, 1) } ! n) * kv.(\ringdetune, 0));
         var freq = (pitch.clip(0, 135).midicps * kv.(\ringratio, 1)).clip(0, SampleRate.ir * 0.45);
         var width = kv.(\ringwidth, 0).clip(-1, 1);
         var k = Select.kr(width > 0, [width + 1, 1 + (7 * width)]);

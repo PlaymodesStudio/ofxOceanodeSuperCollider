@@ -1,0 +1,395 @@
+{
+  "entries": 296,
+  "changed_files": 3,
+  "legacy_ring_active": 0,
+  "random_approximations": 535,
+  "pitch_maps": [
+    {
+      "name": "clocks",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "magic",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "flight club 1",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.0625,
+      "max_error_semitones": 10.0
+    },
+    {
+      "name": "flight club 1",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "griffi",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.0625,
+      "max_error_semitones": 10.0
+    },
+    {
+      "name": "griffi",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.4375,
+      "max_error_semitones": 2.0
+    },
+    {
+      "name": "evolving clusters",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "melodies",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 1.71875,
+      "max_error_semitones": 6.0
+    },
+    {
+      "name": "foundation",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "foundation",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "de-foundation",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "molon",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "Carl Sagan",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "imperial hammer2",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.21875,
+      "max_error_semitones": 4.0
+    },
+    {
+      "name": "tiovivo",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "the moon",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "hard minor",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "hit2",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.40625,
+      "max_error_semitones": 10.0
+    },
+    {
+      "name": "hit2",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.4375,
+      "max_error_semitones": 2.0
+    },
+    {
+      "name": "flight club",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.0625,
+      "max_error_semitones": 10.0
+    },
+    {
+      "name": "flight club",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "test",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "yas",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.90625,
+      "max_error_semitones": 8.0
+    },
+    {
+      "name": "yas",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 3.46875,
+      "max_error_semitones": 12.0
+    },
+    {
+      "name": "sweeper",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "symmetry",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "eighties 1",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.40625,
+      "max_error_semitones": 9.0
+    },
+    {
+      "name": "yas2",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.0625,
+      "max_error_semitones": 10.0
+    },
+    {
+      "name": "yas2",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.4375,
+      "max_error_semitones": 2.0
+    },
+    {
+      "name": "circuz",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "mclaren",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "mysteriund",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "major",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.125,
+      "max_error_semitones": 12.0
+    },
+    {
+      "name": "major",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.4375,
+      "max_error_semitones": 2.0
+    },
+    {
+      "name": "rhody",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.125,
+      "max_error_semitones": 12.0
+    },
+    {
+      "name": "rhody",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "rhody 1",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.125,
+      "max_error_semitones": 12.0
+    },
+    {
+      "name": "minor",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 3.1875,
+      "max_error_semitones": 12.0
+    },
+    {
+      "name": "minor",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "lead",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "lead",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "sweeper 1",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "apocalypse",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "riser",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "evolving clusters",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "altadis",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 1.53125,
+      "max_error_semitones": 5.0
+    },
+    {
+      "name": "melodica",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "melodica",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "imperium",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "imperium",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "foundation",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "foundation",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "foundation 1",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "tricks",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "tricks",
+      "map": "Comb_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "organ",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 1.5,
+      "max_error_semitones": 5.0
+    },
+    {
+      "name": "organ 1",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 1.5,
+      "max_error_semitones": 5.0
+    },
+    {
+      "name": "bacalado",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 2.53125,
+      "max_error_semitones": 8.0
+    },
+    {
+      "name": "11th",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "harmonics",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    },
+    {
+      "name": "organ 1",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 1.75,
+      "max_error_semitones": 8.0
+    },
+    {
+      "name": "organ 2",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 1.71875,
+      "max_error_semitones": 6.0
+    },
+    {
+      "name": "organ 3",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.46875,
+      "max_error_semitones": 4.0
+    },
+    {
+      "name": "magic",
+      "map": "Osc_Map_",
+      "mean_error_semitones": 0.0,
+      "max_error_semitones": 0.0
+    }
+  ],
+  "reference_voices": 32,
+  "reference_midi_note": 60,
+  "warning": "User scales approximate old 12-entry remaps. Smooth/Jumps become smoothed/stepped Random; sound identity is not guaranteed."
+}

@@ -35,13 +35,14 @@ filter = { |sig, type, note, res|
     var kv = { |name, def| NamedControl.kr(name, def ! n) };
     var modIn = { |name| In.kr(NamedControl.kr(name, 0), n) };
     var insert = { |dry, wet| LinXFade2.ar(dry, wet, \on.kr(1, 0.03) * 2 - 1) };
-    var note = { In.kr(\note.kr(0), n) };            // the note, with vibrato and pitch modulation
+    var note = { K2A.ar(In.kr(\note.kr(0), n)) };            // the note, with vibrato and pitch modulation
     var base = { In.kr(\note.kr(0) + n, n) };        // the note before them (key tracking, the comb)
 
     // The note: glide, transpose, a random detune per voice, vibrato (a rate per voice), modulation
     SynthDef(("PCPitch" ++ n).asSymbol, {
         var p = Select.kr(\pitch_sel.kr(0) > 0.5, [kv.(\pitch, 60), A2K.kr(\pitch_ar.ar(60 ! n))]);   // or an audio cable
-        var b = Lag.kr(p, \glide.kr(0)) + kv.(\transpose, 0) + (({ Rand(-1, 1) } ! n) * kv.(\detune, 0));
+        // A short minimum lag removes GUI/map stepping; longer musical glide still applies.
+        var b = Lag.kr(p, \glide.kr(0).max(0.02)) + Lag.kr(kv.(\transpose, 0), 0.02) + (({ Rand(-1, 1) } ! n) * kv.(\detune, 0));
         // each voice its own vibrato rate: Rate * (1 ± a random part up to \vibrand)
         var rate = \vibrate.kr(5) * (1 + (({ Rand(-1, 1) } ! n) * \vibrand.kr(0).clip(0, 1)));
         var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * \vibamt.kr(0);

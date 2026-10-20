@@ -207,7 +207,10 @@ private:
     std::vector<float> processedPitch() const;
     // ── Pitch & Harmony: the internal pitch maps (External off) ──────────────
     struct MapParams {
-        ofParameter<int> shape, mode, quantize;
+        ofParameter<int> scaleSelection, shape, mode, quantize, indexSymmetry, indexSeed, indexCycleShift, version;
+        ofParameter<bool> indexInvert, indexSeedOnGate;
+        ofParameter<float> indexSkew, indexRoundness, indexPW, indexPow;
+        ofParameter<float> degreeOffset, octaveJump, indexComb, indexQuantize, indexRandom, indexWaves;
         ofParameter<float> first, interval, transpose, bend, offset, root, harmonicBase, span;
         ofParameter<std::vector<float>> tones, table;
     };
@@ -218,10 +221,19 @@ private:
     ofJson pitchDefaults = ofJson::object();
     bool internalPitch() const { return !pitchExternal.get(); }
     bool combMapped() const { return internalPitch() && combMapOn.get(); }
+    std::vector<float> previousMapGate;
+    void randomizeMapSeedsOnGate(const std::vector<float>& values);
+    void updatePitchIndexLimits();
     pcmap::Map mapOf(const MapParams& m) const;
+    std::vector<float> oscillatorPitches() const;
+    std::vector<float> resonatorPitches() const;
+    std::vector<float> ringSourcePitches() const;
     std::vector<float> mapPitches(const MapParams& m) const;   // n, with the played Pitch
     std::vector<chordbox::LibItem> scaleLibrary, chordLibrary;
     void loadPitchLibraries();
+    void selectMapScale(MapParams& m);
+    void syncMapScale(MapParams& m);
+    const chordbox::LibItem* mapScaleAt(int index) const;
     // ── Delta: how much two LFOs moved (the original's DELTA), a source ─────
     ofParameter<int> deltaSrcA, deltaSrcB;
     ofParameter<float> deltaMixA, deltaMixB, deltaWindow, deltaGain;
@@ -277,6 +289,7 @@ private:
     ofParameter<int> filterModel;        // both filters: 0 classic, 1 the original PolyComb's ladder (PCFilterR)
     ofParameter<bool> combSaturation;
     ofParameter<float> combSatLevel;
+    ofParameter<int> ringPitchSource;    // external / oscillator note bus / resonator map
     ofParameter<int> ringModel;          // 0 classic (a note), 1 the original PolyComb's (PCRingR: a ratio of the voice's note)
     ofParameter<float> ringWidth;
     ofParameter<std::vector<float>> ringRatio;
@@ -299,7 +312,7 @@ private:
     ofJson compDefaults = ofJson::object();
     ofJson subDefaults = ofJson::object();
     ofParameter<bool> subOn;
-    ofParameter<float> subLevel, subTranspose, subA, subD, subS, subR, subCA, subCD, subCR;
+    ofParameter<float> subLevel, subTranspose, subFineTune, subVibRate, subVibAmt, subVibRand, subA, subD, subS, subR, subCA, subCD, subCR;
     ofParameter<bool> eqOn;
     ofParameter<float> eqGain[5], eqFreq[5], eqShape[5];
     scEQEditor eqEditor;
@@ -328,6 +341,8 @@ private:
     void drawOscTab(float w);
     void drawFilterTab(float w);
     void drawResonatorTab(float w);
+    void drawRingPitchVector(float w);
+    void drawResonatorPitchMap(float w);
     void drawFxTab(float w);
     void drawCompPanel(float w);
     void drawPanTab(float w);

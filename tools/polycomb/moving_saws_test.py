@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """Use the real MOVING_SAWS state with production snapshot recall/blend code.
 Proves the feedback toggle resets off when absent in older snapshots, including
-recall after a saturated patch. Also checks legacy DSP except Sub/Amp, which have dedicated render tests.
+recall after a saturated patch. Also checks legacy DSP except the intentionally updated Sub/Amp and smoothed pitch/oscillator definitions, covered by render tests.
 """
 import hashlib,json,pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2];HERE=pathlib.Path(__file__).resolve().parent
 fixture=HERE/'fixtures/MOVING_SAWS.json'
 assert hashlib.sha256(fixture.read_bytes()).hexdigest()=='0650ef23fe5868c2105f059a6b586222e95dc2418da87d6a5cc7176424b25652'
 expected=json.loads((HERE/'fixtures/legacy-definitions.sha256.json').read_text());defs=ROOT/'synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb'
-# Independent-sub and tremolo changes intentionally replaced these definitions.
-expected={name:sha for name,sha in expected.items() if not name.startswith(('PCSub','PCAmp'))}
+# Independent sub, tremolo and pitch interpolation intentionally replace these definitions.
+expected={name:sha for name,sha in expected.items() if not name.startswith(('PCSub','PCAmp','PCPitch','PCFm','PCOsc'))}
 for name,sha in expected.items():assert hashlib.sha256((defs/name).read_bytes()).hexdigest()==sha,name
 code=(ROOT/'src/nodes/scPolyComb.cpp').read_text()
 helpers=code[code.index('bool logKey('):code.index('void scPolyComb::applyState(')]
 apply=code[code.index('void scPolyComb::applyState('):code.index('// ── Library (shared files)')]
 prelude=r'''
 #include <nlohmann/json.hpp>
+#include "scPolyCombMigration.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -83,11 +84,12 @@ int main(int argc,char** argv){
     node.add("Comb_Saturation",true);node.add("Comb_Sat_Level",0.0f);
     for(auto i=node.compDefaults.begin();i!=node.compDefaults.end();++i)node.add(i.key(),i.key()=="Comp_On" ? ofJson(true) : i.value());
     for(auto i=node.subDefaults.begin();i!=node.subDefaults.end();++i)node.add(i.key(),i.key()=="Sub_On" ? ofJson(true) : i.value());
+    const auto migrated=pcmigration::controls(moving["controls"]);
     auto check=[&](){
         for(auto i=node.subDefaults.begin();i!=node.subDefaults.end();++i)assert(node.current[i.key()]==i.value());
         assert(!node.combSaturation.value && node.combSatLevel.value==12.0f);
         for(auto i=node.compDefaults.begin();i!=node.compDefaults.end();++i)assert(node.current[i.key()]==i.value());
-        for(auto i=moving["controls"].begin();i!=moving["controls"].end();++i)assert(node.current[i.key()]==i.value());
+        for(auto i=moving["controls"].begin();i!=moving["controls"].end();++i)assert(node.current[i.key()]==migrated[i.key()]);
         {
             auto m=node.modulation.matrix; auto saved=moving["matrix"].get<std::vector<float>>();
             assert(m.size()==336);
@@ -95,7 +97,7 @@ int main(int argc,char** argv){
         }
         assert(node.voices.value==node.userVoices);
         for(auto i=node.pitchDefaults.begin();i!=node.pitchDefaults.end();++i)assert(node.current[i.key()]==i.value());
-        for(auto i=node.deltaDefaults.begin();i!=node.deltaDefaults.end();++i)assert(node.current[i.key()]==i.value());
+        for(auto i=node.deltaDefaults.begin();i!=node.deltaDefaults.end();++i)assert(node.current[i.key()]==(migrated.contains(i.key()) ? migrated[i.key()] : i.value()));
         assert(node.modulation.lfoCount==moving["lfos"] && node.modulation.envCount==moving["envs"] && node.modulation.extCount==moving["exts"]);
         assert(node.modulation.params==moving["params"]);
     };
@@ -134,11 +136,11 @@ int main(int argc,char** argv){
     saturated["controls"]["Comp_On"]=true;
     saturated["controls"]["Comp_Threshold"]=-48.5f;
     node.applyState(saturated,saturated,1,true);
-    assert(node.combSaturation.value && node.combSatLevel.value==6.0f);
+    assert(!node.combSaturation.value && node.combSatLevel.value==6.0f);
     assert(node.current["Comp_On"]==true && node.current["Comp_Threshold"]==-48.5f);
     node.applyState(moving,moving,1,true);check();
     node.applyState(moving,saturated,.25f,false);assert(!node.combSaturation.value);
-    node.applyState(moving,saturated,.75f,true);assert(node.combSaturation.value);
+    node.applyState(moving,saturated,.75f,true);assert(!node.combSaturation.value);
     node.applyState(moving,moving,1,true);check();
 }
 '''
@@ -149,14 +151,14 @@ with tempfile.TemporaryDirectory(prefix='polycomb_moving_') as d:
     pitch={'Pitch_External':True,'Pitch_Shift':0,'Comb_Map_On':False}
     for pre in ('Osc_Map_','Comb_Map_'):
         pitch.update({pre+'Shape':0,pre+'First':1.0,pre+'Interval':3.0,pre+'Transpose':0.0,pre+'Bend':1.0,pre+'Mode':0,pre+'Quantize':0,pre+'Root':0.0,
-                      pre+'Tones':[0,2,4,5,7,9,11],pre+'Table':list(range(12)),pre+'Harmonic_Base':36.0,pre+'Offset':0.0,pre+'Span':0.0})
+                      pre+'Tones':[0,2,4,5,7,9,11],pre+'Table':list(range(12)),pre+'Harmonic_Base':36.0,pre+'Fine_Tune':0.0,pre+'Span':0.0})
     delta={'Delta_LFO_A':0,'Delta_LFO_B':1,'Delta_Mix_A':0.0,'Delta_Mix_B':1.0,'Delta_Window':1000.0,'Delta_Gain':3.0}
     lfo_random={f'LFO{i}_Random_{k}':d for i in range(1,9) for k,d in (('Type',0),('Smooth',0.0))}
     lfo_random.update({f'LFO{i}_Steps':0 for i in range(1,9)})
     # Older snapshots keep the classic filter/echo, but always use the Reaktor comb.
     schema=controls_from_source()
     models={k:schema[k]['default'] for k in ('Ring_Model','Ring_Ratio','Ring_Width','Filter_Model','Comb_Model','Echo_Model','Echo_Hi','Echo_Lo','Echo_Res','Echo_Spread')}
-    assert models['Ring_Model']==0 and models['Filter_Model']==0 and models['Comb_Model']==1 and models['Echo_Model']==0
+    assert models['Ring_Model']==1 and models['Filter_Model']==0 and models['Comb_Model']==1 and models['Echo_Model']==0
     for k in models: assert f'c.key == "{k}"' in code, k
     lfo_random.update(models)
     # the defaults written in the node's source (no drift between this test and it)
@@ -168,6 +170,6 @@ with tempfile.TemporaryDirectory(prefix='polycomb_moving_') as d:
     main=main.replace('COMP_DEFAULTS',json.dumps(comp)).replace('SUB_DEFAULTS',json.dumps({k:v['default'] for k,v in controls_from_source().items() if k.startswith('Sub_')}))
     src=pathlib.Path(d)/'test.cpp';src.write_text(prelude+helpers+apply+main)
     out=pathlib.Path(d)/'test'
-    subprocess.run(['clang++','-std=c++17','-O2','-I'+str(ROOT.parent.parent/'libs/json/include'),str(src),'-o',str(out)],check=True)
+    subprocess.run(['clang++','-std=c++17','-O2','-I'+str(ROOT.parent.parent/'libs/json/include'),'-I'+str(ROOT/'src/nodes'),str(src),'-o',str(out)],check=True)
     subprocess.run([str(out),str(fixture)],check=True)
-print(f'PASS: actual MOVING_SAWS values/matrix/counts/voices restore unchanged after an imported sound (pitch maps, Delta routes, 24 voices), saturation, compression and independent sub; option morphing; {len(expected)} original compiled DSP definitions byte-identical.')
+print(f'PASS: MOVING_SAWS values/matrix/counts/voices restore with migrated ring/LFO models after an imported sound (pitch maps, Delta routes, 24 voices), saturation, compression and independent sub; option morphing; {len(expected)} original compiled DSP definitions byte-identical.')

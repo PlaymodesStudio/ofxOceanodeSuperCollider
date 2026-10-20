@@ -115,17 +115,20 @@ def controls_from_source():
         out[name.replace(' ','_')]=dict(name=name,default=int(number(d)) if typ=='int' else number(d),min=number(lo),max=number(hi),type=typ)
     for var,name,val in re.findall(r'(\w+)\.set\("([^"]+)",\s*(true|false)\)',cpp):
         if var in types and name not in ('Show','Scramble'):out[name.replace(' ','_')]=dict(name=name,default=val=='true',type='bool')
+    out['Ring_Pitch_Source']=dict(name='Ring Pitch Source',default=1,min=0,max=2,type='int')
     out['Scramble']=dict(name='Scramble',default=False,type='bool')
     for var,name,d,lo,hi in re.findall(r'vec\((\w+),\s*"([^"]+)",\s*([-\d.]+f?),\s*([-\d.]+f?),\s*([-\d.]+f?)\)',cpp):
         out[name.replace(' ','_')]=dict(name=name,default=[number(d)],min=number(lo),max=number(hi),type='vector')
     out['Comb_Pitch']=dict(name='Comb Pitch',default=[0.0],min=-48,max=127,type='vector')
     # Pitch & Harmony maps and Delta: set in loops / with named limits in the source
     for pre in ('Osc_Map_','Comb_Map_'):
-        for k,(d,lo,hi,typ) in dict(Shape=(0,0,1,'int'),First=(1.0,0,32,'float'),Interval=(3.0,-24,24,'float'),Transpose=(0.0,-48,48,'float'),
+        for k,(d,lo,hi,typ) in dict(Shape=(0,0,2,'int'),First=(1.0,0,32,'float'),Interval=(3.0,-24,24,'float'),Transpose=(0.0,-72,72,'float'),
                 Bend=(1.0,1,6,'float'),Mode=(0,0,3,'int'),Quantize=(0,0,2,'int'),Root=(0.0,0,11,'float'),Harmonic_Base=(36.0,0,127,'float'),
-                Offset=(0.0,-24,24,'float'),Span=(0.0,0,48,'float')).items():out[pre+k]=dict(name=(pre+k).replace('_',' '),default=d,min=lo,max=hi,type=typ)
+                Fine_Tune=(0.0,-1,1,'float'),Span=(0.0,0,48,'float')).items():out[pre+k]=dict(name=(pre+k).replace('_',' '),default=d,min=lo,max=hi,type=typ)
         out[pre+'Tones']=dict(name=pre.replace('_',' ')+'Tones',default=[0.0,2,4,5,7,9,11],min=0,max=24,type='vector')
-        out[pre+'Table']=dict(name=pre.replace('_',' ')+'Table',default=[float(i) for i in range(12)],min=-12,max=24,type='vector')
+        for k,d,lo,hi,typ in [('New_Seed_On_Gate',False,0,1,'bool'),('Cycle_Shift',0,-31,31,'int'),('Scale',0,0,1024,'int'),('Skew',-1.,-1,1,'float'),('Roundness',0.,0,1,'float'),('PW',.5,.001,1,'float'),('Pow',0.,-1,1,'float'),('Octave_Jump',1.0,0,4,'float'),('Num_Waves',1.0,0,16,'float'),('Version',2,2,2,'int'),('Degree_Offset',0.,-256,256,'float'),('Invert',False,0,1,'bool'),('Symmetry',0,0,32,'int'),('Comb',0.,0,1,'float'),('Index_Quantize',0.,0,16,'float'),('Index_Random',0.,0,16,'float'),('Seed',0,0,9999,'int')]:
+            out[pre+k]=dict(name=(pre+k).replace('_',' '),default=d,min=lo,max=hi,type=typ)
+        out[pre+'Table']=dict(name=pre.replace('_',' ')+'Table',default=[float(i) for i in range(12)],min=0,max=11,type='vector')
     for k,d in (('Delta_LFO_A',0),('Delta_LFO_B',1)):out[k]=dict(name=k.replace('_',' '),default=d,min=0,max=7,type='int')
     out['Pan']=dict(name='Pan',default=[.5],min=0,max=1,type='vector')
     for b,f in zip(('Low','Lo_Mid','Mid','Hi_Mid','High'),(80,250,1000,4000,12000)):
@@ -142,6 +145,8 @@ def controls_from_source():
         for suffix,(d,lo,hi) in scalars.items():out[f'LFO{i}_{suffix}']=dict(default=float(d),min=lo,max=hi,type='float')
         for suffix,d in [('Sync',True),('Centered',True),('Noise',False),('Normalize',False)]:out[f'LFO{i}_{suffix}']=dict(default=d,type='bool')
         for suffix,d,hi in [('Symmetry',0,8),('Quantize',32,32),('Modulo',32,32),('Random_Type',0,3),('Steps',0,32)]:out[f'LFO{i}_{suffix}']=dict(default=d,min=0 if suffix in ('Symmetry','Random_Type','Steps') else 1,max=hi,type='int')
+        out[f'LFO{i}_Model']=dict(default=1,min=0,max=3,type='int')
+        out[f'LFO{i}_Value']=dict(default=0.0,min=0,max=1,type='float')
         out[f'LFO{i}_Random_Smooth']=dict(default=0.0,min=0,max=10,type='float')
     for e in range(1,5):
         for suffix,d,lo,hi in [('Attack',.01,.001,10),('Decay',.5,.001,10),('Sustain',0,0,1),('Release',.5,.001,20),('Attack_Curve',-4,-12,12),('Decay_Curve',-4,-12,12),('Release_Curve',-4,-12,12),('Vel',0,0,1)]:
@@ -221,10 +226,14 @@ def main():
             projected,profile_issues,static_notes=projection(args.profile,effective,args.voices)
         else:projected=effective;profile_issues=[];static_notes=None
         def v(sid,default=0):return projected.get(sid,default)
-        state=copy.deepcopy(defaults);matrix=[0.0]*(24*14);issues=[];clips=[];mapped=set();params=[]   # 23 shared sources + Delta
+        state=copy.deepcopy(defaults);state.update({'Osc_Map_Offset':0.,'Comb_Map_Offset':0.});matrix=[0.0]*(24*14);issues=[];clips=[];mapped=set();params=[]   # 23 shared sources + Delta
         issues.extend(profile_issues)
         def put(key,value):
+            if key in ('Osc_Map_Offset','Comb_Map_Offset'):
+                state[key]=float(clamp(value,-24,24));return  # legacy post-map shift; migrated after translation
             assert key in schema,key
+            if key.endswith('Map_Table'):
+                state[key]=[float(x) for x in value];return
             meta=schema[key];typ=meta['type']
             if typ=='bool':state[key]=bool(value);return
             arr=value if isinstance(value,list) else [value];checked=[]
@@ -285,7 +294,7 @@ def main():
             mapped.update((37,351,380))
             put('Pitch_External',False);put('Pitch_Shift',1 if v(356)>0 else 0);put('Comb_Map_On',True)
             put('Transpose',0.0);put('Comb_Pitch',0.0);put('Comb_Transpose',0.0);put('Comb_Mode',1)
-            mainnotes,combnotes=pitchmap.generate(maps[True],args.voices),pitchmap.generate(maps[False],args.voices)
+            mainnotes,combnotes=pitchmap.generate_legacy(maps[True],args.voices),pitchmap.generate_legacy(maps[False],args.voices)
             issues.append('Live pitch maps (Pitch & Harmony): NI\'s scale quantizer tables are unrecoverable from the file; scales use the dictionary with nearest-note quantization')
         else:
             # The later versions' pitch grids as live maps (External off):
@@ -332,7 +341,7 @@ def main():
                             ('Mode',m['mode']),('Quantize',m['quantize']),('Root',m['root']),('Tones',m['tones']),('Table',m['table']),('Harmonic_Base',m['harmonic_base']),('Span',m['span'])):put(pre+k,x)
             put('Pitch_External',False);put('Pitch_Shift',0);put('Comb_Map_On',True)
             put('Transpose',0.0);put('Comb_Pitch',0.0);put('Comb_Transpose',0.0);put('Comb_Mode',1)
-            mainnotes,combnotes=pitchmap.generate(maps[True],N),pitchmap.generate(maps[False],N)
+            mainnotes,combnotes=pitchmap.generate_legacy(maps[True],N),pitchmap.generate_legacy(maps[False],N)
             put('Osc_Map_Offset',state['Osc_Map_Offset']+v(55)*pitch_mean);put('Comb_Map_Offset',state['Comb_Map_Offset']+v(56)*pitch_mean)
             mainnotes=[p+v(55)*pitch_mean for p in mainnotes];combnotes=[p+v(56)*pitch_mean for p in combnotes]
             issues.append('Live pitch grid (Pitch & Harmony); '+('the Harmony sequence approximated by its first slot\'s chord (Tones)' if args.profile=='2018' or (args.profile=='2025' and args.chord)
@@ -517,6 +526,11 @@ def main():
         audit=dict(index=ordinal,name=name,bank=snap.get('bank_name'),limitations=sorted(set(issues)),clipped=clips,source_main_notes=mainnotes,source_comb_notes=combnotes)
         audit['mapped_panel_ids' if args.profile=='1.7' else 'projected_legacy_control_ids']=sorted(mapped)
         audits.append(audit)
+    from migration import migrate
+    for slot in translated:
+        for pre in ('Osc_Map_','Comb_Map_'):slot['controls'][pre+'Version']=1
+        for i in range(1,9):slot['controls'].pop(f'LFO{i}_Model',None)
+    for slot,controls in zip(translated,migrate([s['controls'] for s in translated])):slot['controls']=controls
     args.output.mkdir(parents=True,exist_ok=True)
     write(args.output/'source-controls.json',descriptors)
     write(args.output/'native-controls.json',schema)

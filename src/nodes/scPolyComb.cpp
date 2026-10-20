@@ -4,7 +4,11 @@
 //
 
 #include "scPolyComb.h"
+#include "scPolyCombControlSteps.h"
+#include "../scQuantizedSlider.h"
+#include "scPolyCombMigration.h"
 #include "scSynthControlBatch.h"
+#include "scPitchMapView.h"
 #include "scEnvelopeCurve.h"
 #include "scTypedValue.h"
 #include "ofxOceanodeShared.h"
@@ -159,30 +163,50 @@ void scPolyComb::setup() {
     // ── Pitch & Harmony: internal pitch maps (the original PolyComb's). External
     //    on (the default, and every snapshot without these): the Pitch values as
     //    they are. Older snapshots restore these defaults, as the Sub's. ──────
-    auto toPitchComb = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); sendIns(st, IComb); }); };
+    auto toPitchComb = [this]() { syncMapScale(oscMap);syncMapScale(combMap);forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); sendIns(st, IComb); }); };
     pitchExternal.set("Pitch External", true);             reg(pitchExternal, toPitchComb);
     pitchShiftMode.set("Pitch Shift", 0, 0, 1);            reg(pitchShiftMode, toPitchComb);
     combMapOn.set("Comb Map On", false);                   reg(combMapOn, toPitchComb);
     for(auto* mp : {&oscMap, &combMap}){
         const std::string pre = mp == &oscMap ? "Osc Map " : "Comb Map ";
         auto& m = *mp;
-        m.shape.set(pre + "Shape", 0, 0, 1);                reg(m.shape, toPitchComb);
+        m.shape.set(pre + "Shape", 0, 0, 2);                reg(m.shape, toPitchComb);
         m.first.set(pre + "First", 1.0f, 0.0f, 32.0f);      reg(m.first, toPitchComb);
         m.interval.set(pre + "Interval", 3.0f, -24.0f, 24.0f); reg(m.interval, toPitchComb);
-        m.transpose.set(pre + "Transpose", 0.0f, -48.0f, 48.0f); reg(m.transpose, toPitchComb);
+        m.transpose.set(pre + "Transpose", 0.0f, -72.0f, 72.0f); reg(m.transpose, toPitchComb);
         m.bend.set(pre + "Bend", 1.0f, 1.0f, 6.0f);         reg(m.bend, toPitchComb);
         m.mode.set(pre + "Mode", 0, 0, pcmap::NumModes - 1); reg(m.mode, toPitchComb);
         m.quantize.set(pre + "Quantize", 0, 0, 2);          reg(m.quantize, toPitchComb);
         m.root.set(pre + "Root", 0.0f, 0.0f, 11.0f);        reg(m.root, toPitchComb);
         m.tones.set(pre + "Tones", {0, 2, 4, 5, 7, 9, 11}, {0.0f}, {24.0f}); reg(m.tones, toPitchComb);
-        m.table.set(pre + "Table", {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, {-12.0f}, {24.0f}); reg(m.table, toPitchComb);
+        m.table.set(pre + "Table", {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, {0.0f}, {11.0f}); reg(m.table, toPitchComb);
         m.harmonicBase.set(pre + "Harmonic Base", 36.0f, 0.0f, 127.0f); reg(m.harmonicBase, toPitchComb);
-        m.offset.set(pre + "Offset", 0.0f, -24.0f, 24.0f);  reg(m.offset, toPitchComb);
+        m.offset.set(pre + "Fine Tune", 0.0f, -1.0f, 1.0f);  reg(m.offset, toPitchComb);
         m.span.set(pre + "Span", 0.0f, 0.0f, 48.0f);        reg(m.span, toPitchComb);
-        dropdowns.set(m.shape.getEscapedName(), {"Linear", "Circular"});
-        dropdowns.set(m.mode.getEscapedName(), {"Off", "Table", "Scale / chord", "Harmonic"});
+        m.version.set(pre + "Version", 2, 2, 2); reg(m.version, toPitchComb);
+        m.degreeOffset.set(pre + "Degree Offset", 0.0f, -256.0f, 256.0f); reg(m.degreeOffset, toPitchComb);
+        m.octaveJump.set(pre + "Octave Jump", 1.0f, 0.0f, 4.0f);
+        reg(m.octaveJump, toPitchComb);
+        m.indexSkew.set(pre+"Skew", -1.f,-1.f,1.f);reg(m.indexSkew,toPitchComb);
+        m.indexRoundness.set(pre+"Roundness",0.f,0.f,1.f);reg(m.indexRoundness,toPitchComb);
+        m.indexPW.set(pre+"PW",.5f,.001f,1.f);reg(m.indexPW,toPitchComb);
+        m.indexPow.set(pre+"Pow",0.f,-1.f,1.f);reg(m.indexPow,toPitchComb);
+        m.indexWaves.set(pre + "Num Waves", 1.0f, 0.0f, 16.0f); reg(m.indexWaves, toPitchComb);
+        m.indexCycleShift.set(pre+"Cycle Shift",0,-31,31);reg(m.indexCycleShift,toPitchComb);
+        m.indexInvert.set(pre + "Invert", false); reg(m.indexInvert, toPitchComb);
+        m.indexSymmetry.set(pre + "Symmetry", 0, 0, 32); reg(m.indexSymmetry, toPitchComb);
+        m.indexComb.set(pre + "Comb", 0.0f, 0.0f, 1.0f); reg(m.indexComb, toPitchComb);
+        m.indexQuantize.set(pre + "Index Quantize", 0.0f, 0.0f, 16.0f); reg(m.indexQuantize, toPitchComb);
+        m.indexRandom.set(pre + "Index Random", 0.0f, 0.0f, 16.0f); reg(m.indexRandom, toPitchComb);
+        m.indexSeed.set(pre + "Seed", 0, 0, 9999); reg(m.indexSeed, toPitchComb);
+        m.indexSeedOnGate.set(pre+"New Seed On Gate",false);reg(m.indexSeedOnGate,[](){});
+        m.scaleSelection.set(pre+"Scale",0,0,1024);
+        reg(m.scaleSelection,[this,mp](){selectMapScale(*mp);});
+        dropdowns.set(m.shape.getEscapedName(), {"Ramp", "Mirror", "Sine"});
+        dropdowns.set(m.mode.getEscapedName(), {"Semitones", "User scale", "Snap to scale", "Harmonic series"});
         dropdowns.set(m.quantize.getEscapedName(), {"Nearest", "Down", "Up"});
     }
+    updatePitchIndexLimits();
     dropdowns.set(pitchShiftMode.getEscapedName(), {"After the map", "In the scale"});
     for(const auto& c : controls)
         if(c.key.rfind("Osc_Map_", 0) == 0 || c.key.rfind("Comb_Map_", 0) == 0 || c.key.rfind("Pitch_", 0) == 0) pitchDefaults[c.key] = c.save();
@@ -247,12 +271,14 @@ void scPolyComb::setup() {
     combTone.set("Comb Tone", 1.0f, 0.0f, 1.0f); reg(combTone, toIns(IComb));
     vec(combMix, "Comb Mix", 1, 0, 1);        reg(combMix, toIns(IComb));
     ringOn.set("Ring On", false);             reg(ringOn, toParts);
+    ringPitchSource.set("Ring Pitch Source", 1, 0, 2); reg(ringPitchSource, toIns(IRing));
+    dropdowns.set(ringPitchSource.getEscapedName(), {"External", "Oscillators", "Resonators map"});
     vec(ringPitch, "Ring Pitch", 72, 0, 135); reg(ringPitch, toIns(IRing));
     vec(ringTranspose, "Ring Transpose", 0, -48, 48); reg(ringTranspose, toIns(IRing));
     vec(ringDetune, "Ring Detune", 0, 0, 12);  reg(ringDetune, toIns(IRing));
     vec(ringMix, "Ring Mix", 1, 0, 1);        reg(ringMix, toIns(IRing));
-    // the original PolyComb's ring modulator as a second model (older snapshots: the classic one)
-    ringModel.set("Ring Model", 0, 0, 1);     reg(ringModel, toParts);
+    // Legacy model field fixed to the Reaktor ring modulator (PCRingR).
+    ringModel.set("Ring Model", 1, 1, 1);     reg(ringModel, toParts);
     vec(ringRatio, "Ring Ratio", 1, 0, 32);   reg(ringRatio, toIns(IRing));
     ringWidth.set("Ring Width", 0.0f, -1.0f, 1.0f); reg(ringWidth, toIns(IRing));
     shaperOn.set("Shaper On", false);         reg(shaperOn, toParts);
@@ -265,6 +291,10 @@ void scPolyComb::setup() {
     subOn.set("Sub On", false); reg(subOn, toParts);
     subLevel.set("Sub Level", 0.25f, 0.0f, 16.0f); reg(subLevel, toSub);
     subTranspose.set("Sub Transpose", -12.0f, -96.0f, 96.0f); reg(subTranspose, toSub);
+    subFineTune.set("Sub Fine Tune", 0.0f, -1.0f, 1.0f); reg(subFineTune, toSub);
+    subVibRate.set("Sub Vib Rate", 5.0f, 0.0f, 20.0f); reg(subVibRate, toSub);
+    subVibAmt.set("Sub Vib Amount", 0.0f, 0.0f, 2.0f); reg(subVibAmt, toSub);
+    subVibRand.set("Sub Vib Rate Random", 0.0f, 0.0f, 1.0f); reg(subVibRand, toSub);
     subA.set("Sub Attack", 0.01f, 0.001f, 10.0f); reg(subA, toSub);
     subD.set("Sub Decay", 0.5f, 0.001f, 10.0f); reg(subD, toSub);
     subS.set("Sub Sustain", 1.0f, 0.0f, 1.0f); reg(subS, toSub);
@@ -332,10 +362,9 @@ void scPolyComb::setup() {
     echoSpread.set("Echo Spread", 0.0f, -0.33f, 0.33f);
     for(auto* p : {&echoHi, &echoLo, &echoRes, &echoSpread}) reg(*p, [this]() { sendStageAll(StEcho); });
     for(const auto& c : controls)
-        if(c.key == "Ring_Model" || c.key == "Ring_Ratio" || c.key == "Ring_Width" || c.key == "Filter_Model" || c.key == "Comb_Model" || c.key == "Echo_Model" || c.key == "Echo_Hi" || c.key == "Echo_Lo" || c.key == "Echo_Res" || c.key == "Echo_Spread") deltaDefaults[c.key] = c.save();
+        if(c.key == "Ring_Pitch_Source" || c.key == "Ring_Model" || c.key == "Ring_Ratio" || c.key == "Ring_Width" || c.key == "Filter_Model" || c.key == "Comb_Model" || c.key == "Echo_Model" || c.key == "Echo_Hi" || c.key == "Echo_Lo" || c.key == "Echo_Res" || c.key == "Echo_Spread") deltaDefaults[c.key] = c.save();
     dropdowns.set(echoModel.getEscapedName(), {"MixerPro", "PolyComb 1.7"});
     dropdowns.set(filterModel.getEscapedName(), {"Classic", "PolyComb 1.7"});
-    dropdowns.set(ringModel.getEscapedName(), {"Classic", "PolyComb 1.7"});
     // the combos' names (published: dropdowns)
     dropdowns.set(spreadMode.getEscapedName(), {"Spread", "Channels", "Manual"});
     dropdowns.set(spreadLayout.getEscapedName(), {"Ring", "Line"});
@@ -389,7 +418,9 @@ void scPolyComb::setup() {
         modulation.extraSources = {"Delta"};      // SRC_DELTA
         modulation.busWidth = W;
         modulation.maxVoices = MAX_VOICES;
+        modulation.unifiedLfoModels = true;
         modulation.setup(h, targets, true, true, true);
+        for(int i=1;i<=NUM_LFOS;++i) dropdowns.set("LFO"+ofToString(i)+"_Model", {"Off", "Classic", "Noise", "Random"});
         modulation.lfoCount = 2;
         modulation.envCount = 1;
         modulation.extCount = 2;
@@ -404,11 +435,12 @@ void scPolyComb::setup() {
     // the LFOs' Random type and Steps are newer than the older snapshots: they restore them off
     for(const auto& c : controls)
         if(c.key.find("_Random_Type") != std::string::npos || c.key.find("_Random_Smooth") != std::string::npos
-           || (c.key.rfind("LFO", 0) == 0 && c.key.find("_Steps") != std::string::npos)) deltaDefaults[c.key] = c.save();
+           || (c.key.rfind("LFO", 0) == 0 && (c.key.find("_Steps") != std::string::npos || c.key.find("_Model") != std::string::npos || c.key.find("_Value") != std::string::npos))) deltaDefaults[c.key] = c.save();
 
     // ── Node parameters' listeners ───────────────────────────────────────────
     listeners.push(voices.newListener([this](int& v) {
         if(!voicesFromSnapshot) userVoices = v;
+        updatePitchIndexLimits();
         updateScramble();
         modulation.voicesChanged();   // the LFOs' voice phases, even before anything runs
         requestRebuild();
@@ -418,6 +450,7 @@ void scPolyComb::setup() {
     listeners.push(gate.newListener([this, toGate](std::vector<float>& v) {
         if(scScheduling::isBackendSendSuppressed()) return;
         for(float x : v) if(x > 0.0f) gateTouched = true;
+        randomizeMapSeedsOnGate(v);
         toGate();
     }));
     listeners.push(pitch.newListener([this](std::vector<float>&) {
@@ -528,7 +561,7 @@ void scPolyComb::sendPitch(ServerState& st, bool notesOnly) {
     if(!s) return;
     auto inEffect = noteInputs.inEffectNow();
     scSynthControlBatch controls(s, st.server);
-    controls.set("pitch", internalPitch() ? mapPitches(oscMap) : expand(processedPitch(), n()));
+    controls.set("pitch", oscillatorPitches());
     if(!notesOnly || !s->isCreated()){
         controls.set("out", st.noteBus ? st.noteBus->index : 0);
         controls.set("mpitch", mod(st, 0));
@@ -543,10 +576,12 @@ void scPolyComb::sendPitch(ServerState& st, bool notesOnly) {
         controls.set("vibamt", vibAmt.get());
     }
     controls.send();
+    if(ringPitchSource.get()==2 && st.ins[IRing].synth)
+        sendVec(st.ins[IRing].synth,"ringpitch",resonatorPitches());
     if(combMapped()){
         // The resonators' mapped notes move with Pitch; their other controls do not.
         if(notesOnly && st.ins[IComb].synth && st.ins[IComb].synth->isCreated())
-            sendVec(st.ins[IComb].synth, "combpitch", mapPitches(combMap));
+            sendVec(st.ins[IComb].synth, "combpitch", resonatorPitches());
         else sendIns(st, IComb);
     }
 }
@@ -623,10 +658,14 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             s->set("satlevel",combSatLevel.get());
             if(combMapped()){              // the resonators' own map: fixed notes
                 s->set("combmode", 1.0f);
-                sendVec(s, "combpitch", mapPitches(combMap));
+                sendVec(s, "combpitch", resonatorPitches());
             }else{
-                s->set("combmode", (float)combMode.get());
-                sendVec(s, "combpitch", combPitch.get());
+                // Follow the oscillator note bus so glide and live pitch inputs
+                // keep working; the shared-map controls are an added interval.
+                s->set("combmode",internalPitch()?0.f:(float)combMode.get());
+                auto interval=internalPitch()?std::vector<float>{0.f}:combPitch.get();
+                for(auto& value:interval)value+=combMap.transpose.get()+combMap.offset.get();
+                sendVec(s,"combpitch",interval);
             }
             sendVec(s, "combtranspose", combTranspose.get());
             sendVec(s, "combdetune", combDetune.get());
@@ -636,7 +675,8 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             s->set("mcpitch", mod(st, 5)); s->set("mcfb", mod(st, 6)); s->set("mcmix", mod(st, 7));
             break;
         case IRing:
-            sendVec(s, "ringpitch", ringPitch.get());
+            s->set("ringmode", ringPitchSource.get()==1 ? 0.0f : 1.0f);
+            sendVec(s, "ringpitch", ringPitchSource.get()==2 ? resonatorPitches() : ringPitch.get());
             sendVec(s, "ringtranspose", ringTranspose.get());
             sendVec(s, "ringdetune", ringDetune.get());
             sendVec(s, "ringmix", ringMix.get());
@@ -674,6 +714,8 @@ void scPolyComb::sendSub(ServerState& st, bool notesOnly) {
     scSynthControlBatch controls(s, st.server);
     controls.set("pitch", expand(pitch.get(), n()));
     if(notesOnly && s->isCreated()){ controls.send(); return; }
+    // Join PCAmp output directly: all voice inserts have already run.
+    // SlSub executes after SlAmp and before SlSpread / shared effects.
     controls.set("out", st.voiceBus ? st.voiceBus->index : 0);
     controls.set("gate", st.gateBus ? st.gateBus->index : 0);
     // PCSub uses the first input pitch as its root, independently of the main pitch map.
@@ -681,7 +723,8 @@ void scPolyComb::sendSub(ServerState& st, bool notesOnly) {
     if(pb >= 0){ controls.set("pitch_sel", 1.0f); s->mapan("pitch_ar", pb, n()); }
     else controls.set("pitch_sel", 0.0f);
     controls.set("vis", st.visBlock ? st.visBlock->index + VIS_SUB : 0);
-    controls.set("transpose", subTranspose.get());
+    controls.set("transpose", subTranspose.get() + subFineTune.get());
+    controls.set("vibrate", subVibRate.get()); controls.set("vibamt", subVibAmt.get()); controls.set("vibrand", subVibRand.get());
     controls.set("level", subLevel.get()); controls.set("master", master.get());
     controls.set("vel", src(st, SRC_VEL)); controls.set("velsens", velSens.get());
     controls.set("on", subOn.get() ? 1.0f : 0.0f);
@@ -745,13 +788,12 @@ void scPolyComb::updateParts(ofxSCServer* server, ServerState& st) {
     bring(st.sub, subOn.get(), def("PCSub"), SlSub, 0.05f, [&](){ sendSub(st); });
     bring(st.fm, fmOn.get(), def("PCFm"), SlFm, 0.0f, [&](){ sendFm(st); });
     for(int o = 0; o < NumOsc; o++) bring(st.osc[o], oscWanted(o), def(kOscDefs[o]), SlOsc, 0.0f, [&, o](){ sendOsc(st, o); });
-    static const char* insDefs[NumIns] = {"PCFilter", "PCCombR", "PCRing", "PCFilter", "PCShaper"};
+    static const char* insDefs[NumIns] = {"PCFilter", "PCCombR", "PCRingR", "PCFilter", "PCShaper"};
     static const int insSlots[NumIns] = {SlFilter, SlComb, SlRing, SlPost, SlShaper};
     for(int i = 0; i < NumIns; i++) {
         const char* name=insDefs[i];
         if((i==IFilter && fType.get()>=4) || (i==IPost && postType.get()>=4)) name="PCFilterSlopes";
         if((i==IFilter || i==IPost) && filterModel.get()==1) name="PCFilterR";
-        if(i==IRing && ringModel.get()==1) name="PCRingR";
         bring(st.ins[i],insWanted(i),def(name),insSlots[i],i==IComb ? 2.0f : 0.1f,[&,i](){sendIns(st,i);});
     }
     for(int o = 0; o < NumOsc; o++) sendOsc(st, o);   // FM on / off
@@ -1245,8 +1287,9 @@ void scPolyComb::presetRecallAfterSettingParameters(ofJson& j) {
     restoring=false;
     if(j.contains("polyComb") && j["polyComb"].is_object()){
         restoring = true;
+        const auto saved = pcmigration::controls(j["polyComb"]);
         for(const auto& control : controls)
-            if(j["polyComb"].contains(control.key)) control.load(j["polyComb"][control.key]);
+            if(saved.contains(control.key)) control.load(saved[control.key]);
         restoring = false;
     }
     if(j.contains("polyCombMatrix") && j["polyCombMatrix"].is_array()){
@@ -1371,10 +1414,64 @@ std::vector<float> scPolyComb::processedPitch() const {
     return out;
 }
 
+// A scheduled Gate invokes this listener once with its timetag in effect; the
+// later GUI delivery is suppressed. Generate one seed per map, not per server
+// or per voice, and send only the affected pitch controls before the new gate.
+void scPolyComb::randomizeMapSeedsOnGate(const std::vector<float>& values) {
+    bool rising=false;
+    for(int i=0;i<n();++i){
+        const float now=values.empty()?0.f:values[std::min((size_t)i,values.size()-1)];
+        const float before=previousMapGate.empty()?0.f:previousMapGate[std::min((size_t)i,previousMapGate.size()-1)];
+        if(now>0.f && before<=0.f)rising=true;
+    }
+    previousMapGate=values;
+    if(!rising)return;
+    auto reseed=[](MapParams& m){
+        if(!m.indexSeedOnGate.get())return false;
+        int seed=(int)ofRandom(10000.f);
+        if(seed==m.indexSeed.get())seed=(seed+1)%10000;
+        m.indexSeed.setWithoutEventNotifications(seed);
+        return true;
+    };
+    const bool oscillators=reseed(oscMap),resonators=reseed(combMap);
+    if(!oscillators && !resonators)return;
+    auto inEffect=noteInputs.inEffectNow();
+    forStates([&](ofxSCServer*,ServerState& st){
+        if(oscillators && internalPitch() && st.pitchS){
+            scSynthControlBatch controls(st.pitchS,st.server);
+            controls.set("pitch",mapPitches(oscMap));controls.send();
+        }
+        if(resonators && combMapped() && st.ins[IComb].synth)
+            sendVec(st.ins[IComb].synth,"combpitch",resonatorPitches());
+        if((combMapped()?resonators:(oscillators && internalPitch())) && ringPitchSource.get()==2 && st.ins[IRing].synth)
+            sendVec(st.ins[IRing].synth,"ringpitch",resonatorPitches());
+    });
+}
+
+// The index domain and its published controls follow the active voice count.
+void scPolyComb::updatePitchIndexLimits() {
+    const int count=std::clamp(n(),1,(int)MAX_VOICES);
+    for(auto* m:{&oscMap,&combMap}){
+        m->first.setMin(1.f);m->first.setMax((float)count);
+        m->first.setWithoutEventNotifications(std::clamp(std::round(m->first.get()),1.f,(float)count));
+        m->indexCycleShift.setMin(1-count);m->indexCycleShift.setMax(count-1);
+        m->indexCycleShift.setWithoutEventNotifications(std::clamp(m->indexCycleShift.get(),1-count,count-1));
+        m->indexSymmetry.setMax(count-1);
+        m->indexSymmetry.setWithoutEventNotifications(std::clamp(m->indexSymmetry.get(),0,count-1));
+        m->indexQuantize.setMax((float)count);
+        m->indexQuantize.setWithoutEventNotifications(std::clamp(std::round(m->indexQuantize.get()),0.f,(float)count));
+        m->indexRandom.setMax((float)(count-1));
+        m->indexRandom.setWithoutEventNotifications(std::clamp(m->indexRandom.get(),0.f,(float)(count-1)));
+    }
+}
+
 // ── Pitch & Harmony ─────────────────────────────────────────────────────────
 
 pcmap::Map scPolyComb::mapOf(const MapParams& m) const {
     pcmap::Map r;
+    r.morphGeometry=true;
+    r.skew=m.indexSkew.get();r.roundness=m.indexRoundness.get();
+    r.pulseWidth=m.indexPW.get();r.pow=m.indexPow.get();
     r.shape = m.shape.get();
     r.first = m.first.get();
     r.interval = m.interval.get();
@@ -1388,6 +1485,16 @@ pcmap::Map scPolyComb::mapOf(const MapParams& m) const {
     r.table = m.table.get();
     r.harmonicBase = m.harmonicBase.get();
     r.span = m.span.get();
+    r.degreeOffset = m.degreeOffset.get();
+    r.octaveJump = m.octaveJump.get();
+    r.waves = m.indexWaves.get();
+    r.cycleShift = m.indexCycleShift.get();
+    r.invert = m.indexInvert.get();
+    r.symmetry = m.indexSymmetry.get();
+    r.comb = m.indexComb.get();
+    r.indexQuantize = m.indexQuantize.get();
+    r.indexRandom = m.indexRandom.get();
+    r.seed = m.indexSeed.get();
     return r;
 }
 
@@ -1396,7 +1503,9 @@ pcmap::Map scPolyComb::mapOf(const MapParams& m) const {
 // ("in the scale"). Scrambled as Pitch's own values would be.
 std::vector<float> scPolyComb::mapPitches(const MapParams& m) const {
     const int nv = n();
-    std::vector<float> shift = expand(pitch.get(), nv, 60.0f);
+    // A map expands one played root into voices. Incoming chord positions must
+    // not add a second, unrelated per-voice pitch shape after indexation.
+    std::vector<float> shift(nv, first(pitch.get(),60.0f));
     for(auto& s : shift) s -= 60.0f;
     const bool inScale = pitchShiftMode.get() == 1;
     std::vector<float> v = pcmap::generate(mapOf(m), nv, inScale ? shift : std::vector<float>{});
@@ -1410,11 +1519,71 @@ std::vector<float> scPolyComb::mapPitches(const MapParams& m) const {
     return v;
 }
 
+// Shared map means the same voice order and note choices, with only the
+// resonators' own coarse/fine pitch adjustment applied after that source.
+std::vector<float> scPolyComb::oscillatorPitches() const {
+    return internalPitch()?mapPitches(oscMap):expand(processedPitch(),n(),60.f);
+}
+std::vector<float> scPolyComb::resonatorPitches() const {
+    if(combMapped())return mapPitches(combMap);
+    auto notes=oscillatorPitches();
+    for(auto& note:notes)note=ofClamp(note+combMap.transpose.get()+combMap.offset.get(),0.f,135.f);
+    return notes;
+}
+
+std::vector<float> scPolyComb::ringSourcePitches() const {
+    if(ringPitchSource.get()==0)return expand(ringPitch.get(),n());
+    if(ringPitchSource.get()==2)return resonatorPitches();
+    auto notes=oscillatorPitches();
+    const auto coarse=expand(transpose.get(),n());
+    for(int i=0;i<n();++i)notes[i]+=coarse[i];
+    return notes;
+}
+
+// One registered parameter backs both the editor library and the node dropdown.
+const chordbox::LibItem* scPolyComb::mapScaleAt(int index) const {
+    if(index<=0)return nullptr;
+    --index;
+    if(index<(int)scaleLibrary.size())return &scaleLibrary[index];
+    index-=(int)scaleLibrary.size();
+    return index<(int)chordLibrary.size()?&chordLibrary[index]:nullptr;
+}
+void scPolyComb::selectMapScale(MapParams& m) {
+    const auto* item=mapScaleAt(m.scaleSelection.get());
+    if(!item)return; // User: keep the editable notes.
+    std::vector<float> notes;
+    for(float value:item->values){const float pc=pcmap::floorMod(std::round(value),12);
+        if(std::find(notes.begin(),notes.end(),pc)==notes.end())notes.push_back(pc);}
+    if(notes.empty())notes={0};
+    if(m.mode.get()==pcmap::ModeTones)m.tones.set(notes);else m.table.set(notes);
+}
+void scPolyComb::syncMapScale(MapParams& m) {
+    auto minimal=[](const std::vector<float>& input){std::vector<float> out;
+        for(float value:input){const float pc=pcmap::floorMod(std::round(value),12);
+            if(std::find(out.begin(),out.end(),pc)==out.end())out.push_back(pc);}
+        return out.empty()?std::vector<float>{0}:out;};
+    const auto notes=minimal(m.mode.get()==pcmap::ModeTones?m.tones.get():m.table.get());
+    const auto* selected=mapScaleAt(m.scaleSelection.get());
+    if(selected && minimal(selected->values)==notes)return;
+    int match=0;
+    for(int i=1;i<=int(scaleLibrary.size()+chordLibrary.size());++i)
+        if(minimal(mapScaleAt(i)->values)==notes){match=i;break;}
+    m.scaleSelection.setWithoutEventNotifications(match);
+}
+
 // ChordBox's libraries (Supercollider/Pitchclass): the scales and chords a map takes its tones from
 void scPolyComb::loadPitchLibraries() {
     const std::string dir = ofToDataPath("Supercollider/Pitchclass/", true);
     scaleLibrary = chordbox::Engine::parsePitchClassFile(dir + "scales.txt");
     chordLibrary = chordbox::Engine::parsePitchClassFile(dir + "chords.txt");
+    std::vector<std::string> names{"User"};
+    for(const auto& item:scaleLibrary)names.push_back("Scale: "+item.name);
+    for(const auto& item:chordLibrary)names.push_back("Chord: "+item.name);
+    for(auto* m:{&oscMap,&combMap}){
+        m->scaleSelection.setMax((int)names.size()-1);
+        dropdowns.set(m->scaleSelection.getEscapedName(),names);
+        syncMapScale(*m);
+    }
 }
 
 // ── Delta ───────────────────────────────────────────────────────────────────
@@ -1516,9 +1685,15 @@ void scPolyComb::reg(ofParameter<T>& p, std::function<void()> send) {
     c.param = &p;
     c.add = [this, &p]() { return addParameter(p); };
     c.save = [&p]() { return ofJson(p.get()); };
-    c.load = [&p](const ofJson& j) { try { p.set(j.get<T>()); } catch(...) {} };
+    c.load = [&p,key=c.key](const ofJson& j) {
+        try { p.set(pccontrol::normalize(key,j.get<T>(),p.getMin(),p.getMax())); } catch(...) {}
+    };
     controls.push_back(std::move(c));
-    listeners.push(p.newListener([this, send](T&) { if(!restoring) send(); }));
+    listeners.push(p.newListener([this,&p,key=p.getEscapedName(),send](T& value) {
+        const auto normalized=pccontrol::normalize(key,value,p.getMin(),p.getMax());
+        if(normalized!=value)p.setWithoutEventNotifications(normalized);
+        if(!restoring)send();
+    }));
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1589,7 +1764,12 @@ void scPolyComb::slider(ofParameter<float>& p, const char* label, float w, const
     ImGui::SetCursorPosX(x0 + labelW * z);
     ImGui::SetNextItemWidth(std::max(30.0f * z, w - labelW * z));
     float v = p.get();
-    if(ImGui::SliderFloat("##v", &v, p.getMin(), p.getMax(), fmt, log ? ImGuiSliderFlags_Logarithmic : 0)) p.set(v);
+    const float step=pccontrol::step(key);
+    ImGuiSliderFlags flags=log?ImGuiSliderFlags_Logarithmic:0;
+    if(key=="Osc_Map_Fine_Tune" || key=="Comb_Map_Fine_Tune" || key=="Sub_Fine_Tune")flags|=ImGuiSliderFlags_NoRoundToFormat;
+    const bool changed=step>0?scwidgets::quantizedSlider("##v",v,p.getMin(),p.getMax(),step,fmt)
+        :ImGui::SliderFloat("##v",&v,p.getMin(),p.getMax(),fmt,flags);
+    if(changed)p.set(v);
     publishMenu(key);
     ImGui::PopID();
 }
@@ -1621,13 +1801,18 @@ void scPolyComb::sliderVec(ofParameter<std::vector<float>>& p, const char* label
         }
         if(ImGui::IsItemActive()){
             const float t = ofClamp((ImGui::GetMousePos().x - a.x) / size.x, 0.0f, 1.0f);
-            p.set({lo + t * (hi - lo)});
+            float value=lo+t*(hi-lo);
+            if(std::string(label)=="Transpose")value=std::round(value*4.f)*.25f;
+            p.set({value});
         }
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("%d values, one per voice (from a connection)\nDrag: one value for every voice", (int)values.size());
     }else{
         ImGui::SetNextItemWidth(sw);
         float v = first(values, lo);
-        if(ImGui::SliderFloat("##v", &v, lo, hi, fmt, log ? ImGuiSliderFlags_Logarithmic : 0)) p.set({v});
+        const float step=pccontrol::step(key);
+        const bool changed=step>0?scwidgets::quantizedSlider("##v",v,lo,hi,step,fmt)
+            :ImGui::SliderFloat("##v",&v,lo,hi,fmt,log?ImGuiSliderFlags_Logarithmic:0);
+        if(changed)p.set({v});
     }
     publishMenu(key);
     ImGui::PopID();
@@ -1842,7 +2027,7 @@ void scPolyComb::drawEnvTab(float w) {
 
 void scPolyComb::drawOscTab(float w) {
     const float z = zoom();
-    const float qw = colW(w, 4);
+    const float qw = colW(w, 5);
     const float mixW = qw * 2 + gapW();
     ImGui::BeginGroup();
     sectionHeader("Oscillators", mixW);
@@ -1884,9 +2069,13 @@ void scPolyComb::drawOscTab(float w) {
     ImGui::BeginGroup(); sliderVec(oscPw, "Pulse W", half, "%.2f"); ImGui::EndGroup();
     ImGui::SameLine(0, gapW());
     ImGui::BeginGroup(); sliderVec(oscSSDetune, "SS Detune", half, "%.2f"); ImGui::EndGroup();
+    auto pitches=oscillatorPitches();
+    const auto coarse=expand(transpose.get(),n());
+    for(int i=0;i<n();++i)pitches[i]=ofClamp(pitches[i]+coarse[i],0.f,135.f);
+    scPitchMapView::pitchBars(pitches,mixW,64*z,z,pal::accent);
     nextCol();
     sectionHeader("Pitch", qw);
-    labelW = 62.0f;
+    labelW = 80.0f;
     slider(glide, "Glide", qw, "%.3f s", true);
     sliderVec(transpose, "Transpose", qw, "%+.2f st");
     sliderVec(detune, "Detune", qw, "%.2f st");
@@ -1895,7 +2084,6 @@ void scPolyComb::drawOscTab(float w) {
     slider(vibRand, "Rate Rnd", qw, "%.2f");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Each voice its own vibrato rate: Rate x (1 +- up to this much, at random)");
     slider(vibAmt, "Vib Depth", qw, "%.2f st");
-    toggle(scramble, "Scramble pitches");
     nextCol();
     sectionHeader("FM", qw, &fmOn);
     sliderVec(fmAmt, "Amount", qw, "%.3f");
@@ -1950,30 +2138,41 @@ void scPolyComb::drawOscTab(float w) {
         }
         ImGui::Dummy(ImVec2(qw, h));
     }
+    nextCol();
+    sectionHeader("Tremolo", qw);
+    slider(tremRate, "Trem Rate", qw, "%.2f Hz");
+    slider(tremRand, "Rate Rnd", qw, "%.2f");
+    slider(tremDepth, "Trem Depth", qw, "%.2f");
     labelW = 70.0f;
     ImGui::EndGroup();
-    ImGui::Separator();
+    ImGui::Spacing();
+    const auto divider=ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(divider.x,divider.y+4*z),ImVec2(divider.x+w,divider.y+4*z),pal::accent,2*z);
+    ImGui::Dummy(ImVec2(w,12*z));
     const float sw = colW(w, 3);
     ImGui::BeginGroup();
     sectionHeader("Independent Sub", sw, &subOn);
     slider(subLevel, "Level", sw, "%.3f");
-    slider(subTranspose, "Transpose", sw, "%+.2f st");
+    slider(subTranspose, "Transpose", sw, "%+.0f st");
+    slider(subFineTune, "Fine Tune", sw, "%+.3f st");
     slider(subA, "Attack", sw, "%.3f s", true);
     slider(subD, "Decay", sw, "%.3f s", true);
     slider(subS, "Sustain", sw, "%.2f");
     slider(subR, "Release", sw, "%.3f s", true);
     ImGui::EndGroup(); ImGui::SameLine(0, gapW()); ImGui::BeginGroup();
-    sectionHeader("Tremolo", sw);
-    slider(tremRate, "Trem Rate", sw, "%.2f Hz");
-    slider(tremRand, "Rate Rnd", sw, "%.2f");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Each voice its own tremolo rate: Rate x (1 +- up to this much, at random)");
-    slider(tremDepth, "Trem Depth", sw, "%.2f");
+    sectionHeader("Sub Vibrato", sw);
+    slider(subVibRate, "Vib Rate", sw, "%.2f Hz");
+    slider(subVibAmt, "Vib Amp", sw, "%.2f st");
+    slider(subVibRand, "Rate Rnd", sw, "%.2f");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("A random rate offset for the independent sub's single vibrato oscillator");
     ImGui::EndGroup(); ImGui::SameLine(0, gapW()); ImGui::BeginGroup();
     sectionHeader("Sub Envelope", sw, nullptr, pal::envAmp);
     envelopeEditor("##subEnv", subA, subD, subS, subR, subCA, subCD, subCR, sw, 90*z, pal::envAmp, VIS_SUB);
+    labelW = 100.0f;
     slider(subCA, "Attack curve", sw, "%.1f");
     slider(subCD, "Decay curve", sw, "%.1f");
     slider(subCR, "Release curve", sw, "%.1f");
+    labelW = 70.0f;
     ImGui::EndGroup();
 
 }
@@ -2050,14 +2249,33 @@ void scPolyComb::drawFilterTab(float w) {
     ImGui::TextColored(ImColor(pal::textDim), "Envelopes and LFOs move the cutoffs from Routing (or right-click a Cutoff: Modulate with).");
 }
 
+void scPolyComb::drawResonatorPitchMap(float w) {
+    const float z=zoom();
+    auto notes=resonatorPitches();
+    const auto global=expand(transpose.get(),n());
+    const auto tuning=expand(combTranspose.get(),n());
+    for(int i=0;i<n();++i)
+        notes[i]=ofClamp(notes[i]+(combMapped()?0.f:global[i])+tuning[i],0.f,135.f);
+    ImGui::TextDisabled("%s / %d voices",combMapped()?"Own pitch map":"Oscillators pitch map",n());
+    scPitchMapView::pitchBars(notes,w,64*z,z,pal::accent);
+}
+
+void scPolyComb::drawRingPitchVector(float w) {
+    scPitchMapView::pitchVector(ringSourcePitches(),expand(ringTranspose.get(),n()),expand(ringRatio.get(),n()),w,82*zoom(),zoom(),pal::accent);
+}
+
 void scPolyComb::drawResonatorTab(float w) {
     const float z = zoom();
     const float cw = colW(w, 3);
     ImGui::BeginGroup();
     sectionHeader("Comb", cw, &combOn);
-    combo(combMode, "Pitch", cw);
     const bool follow = combMode.get() == 0;
-    sliderVec(combPitch, follow ? "Interval" : "Note", cw, follow ? "%+.2f st" : "%.2f");
+    if(internalPitch()){
+        drawResonatorPitchMap(cw);
+    }else{
+        combo(combMode, "Pitch", cw);
+        sliderVec(combPitch, follow ? "Interval" : "Note", cw, follow ? "%+.2f st" : "%.2f");
+    }
     sliderVec(combTranspose, "Transpose", cw, "%+.2f st");
     sliderVec(combDetune, "Detune", cw, "%.2f st");
     slider(combSatLevel,"Sat Level",cw,"%.1f dB");
@@ -2090,23 +2308,17 @@ void scPolyComb::drawResonatorTab(float w) {
     }
     nextCol();
     sectionHeader("Ring Modulator", cw, &ringOn);
-    combo(ringModel, "Model", cw);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("PolyComb 1.7: the original's ring modulator, a ratio of each voice's note,\nits width shaping the modulator and its amount from dry to fully modulated");
-    if(ringModel.get() == 1){
-        sliderVec(ringRatio, "Ratio", cw, "x%.3f");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("The modulator's frequency: the voice's note x this");
-        slider(ringWidth, "Width", cw, "%+.2f");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("-1: flat (no modulation), 0: a sine, 1: narrow peaks");
-        sliderVec(ringDetune, "Detune", cw, "%.2f st");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("A random offset per voice, up to this many semitones");
-        sliderVec(ringMix, "Amount", cw, "%.2f");
-    }else{
-        sliderVec(ringPitch, "Note", cw, "%.1f");
-        sliderVec(ringTranspose, "Transpose", cw, "%+.2f st");
-        sliderVec(ringDetune, "Detune", cw, "%.2f st");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("A random offset per voice, up to this many semitones");
-        sliderVec(ringMix, "Mix", cw, "%.2f");
-    }
+    combo(ringPitchSource,"Pitch source",cw);
+    if(ringPitchSource.get()==0)sliderVec(ringPitch,"Pitch",cw,"%.1f MIDI");
+    sliderVec(ringTranspose,"Transpose",cw,"%+.2f st");
+    sliderVec(ringRatio, "Ratio", cw, "x%.3f");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("The modulator frequency: selected pitch + Transpose, converted to Hz, multiplied by Ratio");
+    slider(ringWidth, "Width", cw, "%+.2f");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("-1: flat (no modulation), 0: a sine, 1: narrow peaks");
+    sliderVec(ringDetune, "Detune", cw, "%.2f st");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("A random offset per voice, up to this many semitones");
+    sliderVec(ringMix, "Amount", cw, "%.2f");
+    drawRingPitchVector(cw);
     nextCol();
     sectionHeader("Sine Shaper", cw, &shaperOn);
     sliderVec(drive, "Drive", cw, "%.2f");
@@ -2444,146 +2656,203 @@ void scPolyComb::drawPanTab(float w) {
 
 // ── Pitch & Harmony: External, then the oscillators' and resonators' maps ────
 void scPolyComb::drawPitchTab(float w) {
-    const float z = zoom();
-    const float cw = colW(w, 3);
+    const float z=zoom(),savedLabel=labelW;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(6*z,3*z));
+    toggle(pitchExternal,"Incoming pitches");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("On: use the incoming Pitch values directly. Off: expand a scale with the maps below.");
+    ImGui::SameLine(0,12*z);
+    labelW=72;
+    ImGui::BeginGroup();combo(pitchShiftMode,"Transpose",245*z);ImGui::EndGroup();
+    ImGui::SameLine(0,12*z);
+    toggle(combMapOn,"Resonators: own map");
+    if(w<950*z)ImGui::NewLine();else ImGui::SameLine(0,12*z);
+    ImGui::TextDisabled("Pitch %s / %.1f   |   %d voices",scPitchMapView::noteName(first(pitch.get(),60)).c_str(),first(pitch.get(),60),n());
+    toggle(scramble,"Scramble pitches");
+    const bool sideBySide=w>=900*z;
+    const float cw=sideBySide?(w-gapW())*.5f:w;
     ImGui::BeginGroup();
-    sectionHeader("Pitch", cw);
-    toggle(pitchExternal, "External");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("On: each voice plays the Pitch values (a cable, the timeline, a sequencer).\nOff: the maps below; Pitch transposes them, 60 = as they are.");
-    const bool internal = internalPitch();
-    if(!internal) ImGui::BeginDisabled();
-    combo(pitchShiftMode, "Pitch", cw);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("After the map: Pitch - 60 moves every voice as it is.\nIn the scale: it moves the map before the quantization (stays in the scale).");
-    toggle(combMapOn, "Resonators: own map");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("On: the comb resonators play the second map (fixed notes).\nOff: they follow the Resonator tab (the note + an interval).");
-    if(!internal) ImGui::EndDisabled();
-    ImGui::Spacing();
-    ImGui::TextColored(ImColor(pal::textDim), internal ? "Pitch now %.1f (%+.1f)" : "External: Pitch %.1f", first(pitch.get(), 60.0f), first(pitch.get(), 60.0f) - 60.0f);
+    if(!internalPitch()) ImGui::BeginDisabled();
+    drawMapColumn(oscMap,"osc",cw,false);
+    if(!internalPitch()) ImGui::EndDisabled();
     ImGui::EndGroup();
-    ImGui::SameLine(0, gapW());
+    if(sideBySide)ImGui::SameLine(0,gapW());else ImGui::Spacing();
     ImGui::BeginGroup();
-    if(!internal) ImGui::BeginDisabled();
-    drawMapColumn(oscMap, "osc", cw, false);
-    if(!internal) ImGui::EndDisabled();
+    drawMapColumn(combMap,"comb",cw,true);
     ImGui::EndGroup();
-    ImGui::SameLine(0, gapW());
-    ImGui::BeginGroup();
-    if(!combMapped()) ImGui::BeginDisabled();
-    drawMapColumn(combMap, "comb", cw, true);
-    if(!combMapped()) ImGui::EndDisabled();
-    ImGui::EndGroup();
-    (void)z;
+    labelW=savedLabel;ImGui::PopStyleVar();
 }
 
-void scPolyComb::drawMapColumn(MapParams& m, const char* id, float w, bool comb) {
-    const float z = zoom();
+void scPolyComb::drawMapColumn(MapParams& edits,const char* id,float w,bool comb) {
+    const bool inherited=comb&&!combMapped();
+    auto& m=inherited?oscMap:edits;
+    const float z=zoom(),savedLabel=labelW;
+    const ImU32 accent=comb?pal::envMod:pal::accent;
     ImGui::PushID(id);
-    sectionHeader(comb ? "Resonators map" : "Oscillators map", w);
-    combo(m.shape, "Index", w);
-    slider(m.first, "First", w, "%.0f");
-    slider(m.interval, "Interval", w, m.mode.get() == pcmap::ModeHarmonic ? "x%.2f" : "%+.2f st");
-    slider(m.bend, "Bend", w, "%.2f");
-    combo(m.mode, "Mode", w);
-    const int mode = m.mode.get();
-    if(mode == pcmap::ModeHarmonic) slider(m.harmonicBase, "Base note", w, "%.1f");
-    else{
-        slider(m.transpose, "Transpose", w, "%+.1f st");
-        slider(m.span, "Span", w, m.span.get() > 0.0f ? "%.2f st" : "off");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Interval x index wraps every Span semitones: a pitch set repeating across the voices (0: off)");
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(4*z,1*z));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(5*z,2*z));
+    sectionHeader(comb?"Resonators map":"Oscillators map",w,nullptr,accent);
+    if(inherited)ImGui::BeginDisabled();
+    labelW=45;
+    const int previousMode=m.mode.get();
+    const bool previousRestoring=restoring;restoring=true;
+    combo(m.mode,"Map",w);
+    if(previousMode!=m.mode.get()){
+        if(m.mode.get()==pcmap::ModeTable){
+            m.interval.set(1);m.octaveJump.set(1);
+            m.degreeOffset.set(0);m.span.set(0);
+        }else if(m.mode.get()==pcmap::ModeHarmonic){m.interval.set(1);m.span.set(0);}
     }
-    if(mode == pcmap::ModeTones || mode == pcmap::ModeTable){
-        {   // the key, by name
-            const char* const* keys = chordbox::keyNames();
-            const float x0 = ImGui::GetCursorPosX();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Root");
-            publishedUnderline(m.root.getEscapedName());
-            ImGui::SameLine();
-            ImGui::SetCursorPosX(x0 + labelW * z);
-            ImGui::SetNextItemWidth(std::max(30.0f * z, w - labelW * z));
-            int r = std::clamp((int)std::lround(m.root.get()), 0, 11);
-            if(ImGui::Combo("##root", &r, keys, 12)) m.root.set((float)r);
-            publishMenu(m.root.getEscapedName());
-        }
+    restoring=previousRestoring;
+    if(previousMode!=m.mode.get()&&!restoring)forStates([this](ofxSCServer*,ServerState& st){sendPitch(st);sendIns(st,IComb);});
+    const int mode=m.mode.get();
+    const bool user=mode==pcmap::ModeTable,tones=mode==pcmap::ModeTones,harmonic=mode==pcmap::ModeHarmonic;
+    const float left=(w-10*z)*.47f,right=w-left-10*z;
+    ImGui::BeginGroup();
+    ImGui::TextColored(ImColor(accent),"1  SOURCE / SMALL SCALE");
+    if(harmonic){
+        labelW=65;slider(m.harmonicBase,"Base note",left,"%.0f");
+        ImGui::TextDisabled("%s  /  MIDI %.0f",scPitchMapView::noteName(m.harmonicBase.get()).c_str(),m.harmonicBase.get());
+    }else{
+        const float x0=ImGui::GetCursorPosX();
+        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("Root");
+        publishedUnderline(m.root.getEscapedName());ImGui::SameLine();ImGui::SetCursorPosX(x0+50*z);
+        ImGui::SetNextItemWidth(std::max(40*z,left-50*z));
+        int root=std::clamp((int)std::lround(m.root.get()),0,11);
+        if(!user&&!tones)ImGui::BeginDisabled();
+        if(ImGui::Combo("##root",&root,chordbox::keyNames(),12))m.root.set((float)root);
+        if(!user&&!tones)ImGui::EndDisabled();
+        publishMenu(m.root.getEscapedName());
     }
-    if(mode == pcmap::ModeTones){
-        combo(m.quantize, "Quantize", w);
-        // the tones from ChordBox's libraries (Supercollider/Pitchclass)
-        const auto& tones = m.tones.get();
-        auto sameTones = [&](const std::vector<float>& v){
-            if(v.size() != tones.size()) return false;
-            for(size_t i = 0; i < v.size(); i++) if(std::abs(v[i] - tones[i]) > 1e-3f) return false;
-            return true;
-        };
-        std::string current = "Custom";
-        for(const auto& it : scaleLibrary) if(sameTones(it.values)){ current = it.name; break; }
-        if(current == "Custom") for(const auto& it : chordLibrary) if(sameTones(it.values)){ current = "chord " + it.name; break; }
-        const float x0 = ImGui::GetCursorPosX();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Tones");
-        publishedUnderline(m.tones.getEscapedName());
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(x0 + labelW * z);
-        ImGui::SetNextItemWidth(std::max(30.0f * z, w - labelW * z));
-        if(ImGui::BeginCombo("##tones", current.c_str(), ImGuiComboFlags_HeightLarge)){
-            ImGui::TextDisabled("Scales");
-            for(const auto& it : scaleLibrary) if(ImGui::Selectable(it.name.c_str(), sameTones(it.values))) m.tones.set(it.values);
-            ImGui::Separator();
-            ImGui::TextDisabled("Chords");
-            for(const auto& it : chordLibrary) if(ImGui::Selectable(("chord " + it.name).c_str(), sameTones(it.values))) m.tones.set(it.values);
+    auto minimal=[](const std::vector<float>& values){
+        std::vector<float> out;
+        for(float v:values){const float pc=pcmap::floorMod(std::round(v),12);if(std::find(out.begin(),out.end(),pc)==out.end())out.push_back(pc);}
+        return out.empty()?std::vector<float>{0}:out;
+    };
+    auto scale=minimal(tones?m.tones.get():m.table.get());
+    if(user||tones){
+        syncMapScale(m);
+        const auto* selected=mapScaleAt(m.scaleSelection.get());
+        const std::string current=selected?selected->name:"User";
+        ImGui::SetNextItemWidth(left);
+        if(ImGui::BeginCombo("##library",current.c_str(),ImGuiComboFlags_HeightLarge)){
+            if(ImGui::Selectable("User",m.scaleSelection.get()==0))m.scaleSelection.set(0);
+            int index=0;
+            auto choose=[&](const chordbox::LibItem& item){
+                ++index;
+                if(ImGui::Selectable(item.name.c_str(),m.scaleSelection.get()==index)){
+                    m.scaleSelection.set(index);scale=minimal(item.values);
+                }
+            };
+            ImGui::TextDisabled("Scales");for(const auto& item:scaleLibrary)choose(item);
+            ImGui::Separator();ImGui::TextDisabled("Chords");for(const auto& item:chordLibrary)choose(item);
             ImGui::EndCombo();
         }
-        publishMenu(m.tones.getEscapedName());
+        publishedUnderline(m.scaleSelection.getEscapedName());
+        publishMenu(m.scaleSelection.getEscapedName());
+        int count=(int)scale.size();ImGui::SetNextItemWidth(left);
+        if(ImGui::SliderInt("##scale-size",&count,1,12,"%d notes per octave")){
+            while((int)scale.size()>count)scale.pop_back();
+            for(int note=0;(int)scale.size()<count&&note<12;++note)
+                if(std::find(scale.begin(),scale.end(),(float)note)==scale.end())scale.push_back((float)note);
+            if(user)m.table.set(scale);else m.tones.set(scale);
+        }
+        if(scPitchMapView::scaleEditor(scale,(int)std::lround(m.root.get()),left,120*z,z,accent)){
+            if(user)m.table.set(scale);else m.tones.set(scale);
+        }
+    }else if(harmonic){
+        // A compact source reference instead of an irrelevant scale editor.
+        const auto a=ImGui::GetCursorScreenPos();auto* dl=ImGui::GetWindowDrawList();
+        const float h=120*z;scPitchMapView::frame(dl,a,ImVec2(a.x+left,a.y+h),z);
+        for(int i=1;i<=8;++i){
+            const float y=a.y+h-(i/8.f)*(h-16*z);
+            const float x=a.x+(i-1)*left/8;
+            dl->AddLine(ImVec2(x+5*z,a.y+h-5*z),ImVec2(x+5*z,y),accent,3*z);
+            scPitchMapView::smallText(dl,ImVec2(x+2*z,y-12*z),pal::textDim,"x"+ofToString(i),z);
+        }
+        ImGui::Dummy(ImVec2(left,h));
+        ImGui::TextDisabled("1, 2, 3... = harmonic multiples");
+        ImGui::TextDisabled("2x = +12 st, 4x = +24 st");
     }
-    if(mode == pcmap::ModeTable){
-        // each pitch class (from Root) to a semitone: drag a bar
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        const float h = 70.0f * z;
-        const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + w, a.y + h);
-        canvas(dl, a, b);
-        auto table = m.table.get();
-        table.resize(12, 0.0f);
-        const float cell = w / 12.0f;
-        for(int i = 0; i < 12; i++){
-            const float y = b.y - ofClamp((table[i] + 1.0f) / 13.0f, 0.0f, 1.0f) * h;
-            dl->AddRectFilled(ImVec2(a.x + i * cell + 1, y), ImVec2(a.x + (i + 1) * cell - 1, b.y - 1), (int)std::lround(table[i]) == i ? pal::gridStrong : pal::accent, 2.0f * z);
-        }
-        ImGui::InvisibleButton("##table", ImVec2(w, h));
-        if(ImGui::IsItemActive()){
-            const ImVec2 mp = ImGui::GetIO().MousePos;
-            const int i = std::clamp((int)((mp.x - a.x) / cell), 0, 11);
-            table[i] = std::round(ofClamp((b.y - mp.y) / h * 13.0f - 1.0f, -1.0f, 12.0f));
-            m.table.set(table);
-        }
-        publishMenu(m.table.getEscapedName());
+    // Drag integer ticks; a float slider renders its unsnapped drag value before
+    // the caller can round it, making the displayed number disagree with the map.
+    auto ticks=[&](ofParameter<float>& p,const char* label,float width,float quantum,const char* format){
+        const float x0=ImGui::GetCursorPosX();
+        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(label);publishedUnderline(p.getEscapedName());
+        ImGui::SameLine();ImGui::SetCursorPosX(x0+labelW*z);
+        ImGui::SetNextItemWidth(std::max(30*z,width-labelW*z));
+        const std::string widget="##ticks-"+p.getEscapedName();
+        float value=p.get();
+        if(scwidgets::quantizedSlider(widget.c_str(),value,p.getMin(),p.getMax(),quantum,format))p.set(value);
+        publishMenu(p.getEscapedName());
+    };
+    labelW=78;
+    if(user){
+        ticks(m.octaveJump,"Octave jump",left,.25f,"%.2f oct");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Distance between repeats of the small scale. 1 = next octave; 0.25 = three semitones. Step selects whole scale degrees independently.");
     }
-    slider(m.offset, "Offset", w, "%+.2f st");
-    {   // the voices' notes now (the played Pitch included)
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        const float h = 90.0f * z;
-        const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + w, a.y + h);
-        canvas(dl, a, b);
-        const auto notes = mapPitches(m);
-        float lo = 1e9f, hi = -1e9f;
-        for(float x : notes){ lo = std::min(lo, x); hi = std::max(hi, x); }
-        lo = std::floor((lo - 1.0f) / 12.0f) * 12.0f; hi = std::max(lo + 12.0f, std::ceil((hi + 1.0f) / 12.0f) * 12.0f);
-        for(float o = lo; o <= hi; o += 12.0f){
-            const float y = b.y - (o - lo) / (hi - lo) * h;
-            dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), pal::grid);
-        }
-        const int nv = (int)notes.size();
-        for(int i = 0; i < nv; i++){
-            const float x = a.x + (i + 0.5f) * w / std::max(1, nv);
-            const float y = b.y - (notes[i] - lo) / (hi - lo) * h;
-            dl->AddCircleFilled(ImVec2(x, y), 3.0f * z, comb ? pal::envMod : pal::accent);
-        }
-        char t[48];
-        std::snprintf(t, sizeof(t), "%.0f..%.0f", notes.empty() ? 0.0f : *std::min_element(notes.begin(), notes.end()),
-                      notes.empty() ? 0.0f : *std::max_element(notes.begin(), notes.end()));
-        dl->AddText(ImVec2(a.x + 4 * z, a.y + 2 * z), pal::textDim, t);
-        ImGui::Dummy(ImVec2(w, h));
+    if(inherited)ImGui::EndDisabled();
+    ticks(edits.transpose,"Transpose",left,1.f,"%+.0f st");
+    slider(edits.offset,"Fine tune",left,"%+.3f st");
+    if(inherited)ImGui::BeginDisabled();
+    if(!user&&!tones)ImGui::BeginDisabled();
+    combo(m.quantize,"Note snap",left);
+    if(!user&&!tones)ImGui::EndDisabled();
+    ImGui::EndGroup();
+    ImGui::SameLine(0,10*z);
+    ImGui::BeginGroup();
+    ImGui::TextColored(ImColor(accent),"2  INTEGER INDEX / GEOMETRY");
+    labelW=90;
+    slider(m.indexSkew,"Skew",right,"%+.2f");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Same morph waveform as Classic LFO. -1: rising; 0: symmetric; +1: falling.");
+    slider(m.indexRoundness,"Roundness",right,"%.2f");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("0: straight edges; 0.5: sine; 1: pulse.");
+    slider(m.indexPW,"PW",right,"%.2f");
+    ticks(m.indexWaves,"Num waves",right,.25f,"%.2f");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("How many copies of the index geometry fit across the voices. 1: one pass; 2: repeat twice; 0: all at the start.");
+    sliderInt(m.indexCycleShift,"Cycle shift",right);
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Whole-index shift added on each waveform cycle, before the remaining geometry and pitch mapping. 0: exact repeats; +1: each repeat starts one index higher; -1: lower. Wraps within the active voice range.");
+    {   // Present the one-based stored offset as a zero-based UI position.
+        const float x0=ImGui::GetCursorPosX();
+        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("Start index");publishedUnderline(m.first.getEscapedName());
+        ImGui::SameLine();ImGui::SetCursorPosX(x0+labelW*z);ImGui::SetNextItemWidth(std::max(30*z,right-labelW*z));
+        int start=(int)std::lround(m.first.get()-1);
+        if(ImGui::SliderInt("##start-index",&start,0,n()-1))m.first.set((float)start+1);
+        publishMenu(m.first.getEscapedName());
     }
-    ImGui::PopID();
+    ticks(m.interval,"Step",right,1.f,user?"%.0f deg":harmonic?"x%.0f":"%.0f st");
+    if(!user)ImGui::BeginDisabled();
+    ticks(m.degreeOffset,"Degree shift",right,1.f,"%.0f");
+    if(!user)ImGui::EndDisabled();
+    if(harmonic)ImGui::BeginDisabled();
+    slider(m.span,"Repeat after",right,m.span.get()>0?(user?"%.1f deg":"%.1f st"):"off");
+    if(harmonic)ImGui::EndDisabled();
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Wrap the pitch sequence after this many degrees/semitones. 0: keep expanding into higher octaves.");
+    sliderInt(m.indexSymmetry,"Symmetry",right);
+    slider(m.indexComb,"Comb",right,"%.2f");
+    ticks(m.indexQuantize,"Group size",right,1.f,m.indexQuantize.get()>0?"%.0f":"off");
+    slider(m.indexRandom,"Scatter",right,"%.2f");
+    sliderInt(m.indexSeed,"Seed",right);
+    toggle(m.indexSeedOnGate,"New seed on gate");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Choose a fresh Scatter seed when any Oceanode/timeline Gate voice rises from zero. Held gates and note-offs keep it. Audio-rate gate cables do not regenerate this CPU pitch map.");
+    toggle(m.indexInvert,"Reverse");
+    slider(m.indexPow,"Pow",right,"%+.2f");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Applied last, normalized to the final index range. 0: linear; +1: maximum logarithmic; -1: maximum exponential. Preserves symmetry and range.");
+    ImGui::EndGroup();
+    if(inherited)ImGui::EndDisabled();
+    const auto map=mapOf(m);
+    std::vector<float> positions;
+    for(int i=0;i<n();++i){
+        const float index=pcmap::voiceIndex(map,i,n());
+        positions.push_back(user?std::floor(map.interval*(index-1)+map.degreeOffset+1e-5f):map.interval*index);
+    }
+    // Keep hover information in the same voice order as the final notes.
+    if(scramble.get() && (int)scrambleOrder.size()>=n()){
+        const auto rawPositions=positions;
+        for(int i=0;i<n();++i){const int j=std::clamp(scrambleOrder[i],0,n()-1);positions[i]=rawPositions[j];}
+    }
+    ImGui::TextColored(ImColor(accent),"GENERATED NOTES  /  %d voices, indices 0..%d",n(),n()-1);
+    scPitchMapView::result(comb?resonatorPitches():oscillatorPitches(),positions,w,132*z,z,inherited?pal::textDim:accent);
+    labelW=savedLabel;ImGui::PopStyleVar(2);ImGui::PopID();
 }
 
 // ── Delta: the matrix's last source, set here (the LFOs it watches) ───────────
@@ -2718,8 +2987,8 @@ void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t, bool sw) 
 
     // the controls: only what changes is set (each sends what it needs)
     static const ofJson none = ofJson::object();
-    const ofJson& ca = a.contains("controls") ? a["controls"] : none;
-    const ofJson& cb = b.contains("controls") ? b["controls"] : none;
+    const ofJson ca = pcmigration::controls(a.contains("controls") ? a["controls"] : none);
+    const ofJson cb = pcmigration::controls(b.contains("controls") ? b["controls"] : none);
     for(const auto& control : controls){
         const std::string& k = control.key;
         if(snapExcluded(k) || drivenByConnection(k)) continue;
@@ -3000,6 +3269,10 @@ std::vector<ofJson> scPolyComb::factorySnapshots() const {
             else if(d.is_number_integer()) c[k->second] = (int)std::lround(v.get<float>());
             else c[k->second] = v.get<float>();
         }
+        // Factory descriptions use the old Noise flags / absolute ring note.
+        for(int i=1;i<=NUM_LFOS;++i) c.erase("LFO"+ofToString(i)+"_Model");
+        if(f["set"].contains("Ring Pitch")) c["Ring_Model"]=0;
+        c=pcmigration::controls(c);
         std::vector<float> m(NUM_SOURCES * NUM_TARGETS, 0.0f);
         for(const auto& r : f["routes"]){
             const int so = r[0].get<int>(), ta = r[1].get<int>();

@@ -1,0 +1,10 @@
+{
+  "master": 0.8,
+  "voices": 16,
+  "duration": 12.0,
+  "midi_note": 60,
+  "bpm": 120,
+  "sub_layer_checked": true,
+  "incremental_rerender_count": 63,
+  "verification": "Active sub-layer snapshots re-rendered; unchanged sub-off snapshots retain the previous render measurements."
+}

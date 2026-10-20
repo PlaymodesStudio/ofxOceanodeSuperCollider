@@ -71,6 +71,7 @@ public:
     // (Partial Spread, Partial Random), for a node that runs its own copies of
     // the LFOs per partial (AdditiveBox) with lfoTable / lfoRate / lfoPhase
     bool partialLfos = false;
+    bool unifiedLfoModels = false; // PolyComb: Off / Classic / Noise / Random
     // Set before setup: the most voices the node can have (the indexer ranges; GrainBox: 500)
     int maxVoices = 16;
     // The bus stride of every source and target: as many voices as the host
@@ -131,7 +132,7 @@ public:
     float lfoShGlide(int li) const { return lfoSHGlide[li].get(); }   // S&H glide (s)
     // Noise (2D Perlin, as Oceanode's Noise node): x the rising counter, y = index x Scale + seed
     static float noise2(float x, float y, float salt = 0.0f);   // salt: each LFO (voice) its own field
-    bool lfoIsNoise(int li) const { return lfoNoise[li].get(); }
+    bool lfoIsNoise(int li) const { return effectiveNoise(li); }
     float lfoNoiseScale(int li) const { return lfoNScale[li].get(); }
     float lfoNoiseSeed(int li) const { return li * 17.31f; }
     std::vector<float> lfoTransfer(int li, int size) const;   // Gain / Steps / Pow / BiPow as a curve
@@ -238,7 +239,11 @@ private:
     std::array<ofParameter<bool>, MAX_LFOS> lfoSync, lfoCentered, lfoNorm, lfoNoise;
     // Random type (ModLfoRnd): 0 off (the waveform / noise), 1 stepped, 2 smooth, 3 jumps;
     // Random Smooth: the stepped values' glide (s)
-    std::array<ofParameter<int>, MAX_LFOS> lfoRndType;
+    std::array<ofParameter<int>, MAX_LFOS> lfoRndType, lfoModel;
+    std::array<ofParameter<float>, MAX_LFOS> lfoManual;
+    int effectiveRandom(int li) const { return unifiedLfoModels ? (lfoModel[li].get() == 3 ? 1 : 0) : lfoRndType[li].get(); }
+    bool effectiveNoise(int li) const { return unifiedLfoModels ? lfoModel[li].get() == 2 : lfoNoise[li].get(); }
+    bool manualLfo(int li) const { return unifiedLfoModels && lfoModel[li].get() == 0; }
     std::array<ofParameter<float>, MAX_LFOS> lfoRndSmooth;
     static float rndPreview(int li, float ph, int type, float smooth);   // a fixed random pattern, for the drawings
     std::array<ofParameter<std::vector<float>>, MAX_LFOS> lfoGain;
