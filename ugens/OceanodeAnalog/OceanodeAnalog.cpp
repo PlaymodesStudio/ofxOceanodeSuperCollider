@@ -602,8 +602,123 @@ void AnalogFilter_next(AnalogFilter* unit, int inNumSamples) {
     unit->damp = flush(unit->damp); unit->dcOut = flush(unit->dcOut);
 }
 
+// ReaktorComb: the original PolyComb's comb (its Comb Filter macro and Core
+// cell), per sample: y = in + fb * sat(y[n - period], level), the period one
+// cycle of freq (cubic read); sat: the Core library's parabolic saturator,
+// x (1 - |x| / 4L) on x clipped at +-2L (full saturation at L). Out: the dry
+// input and the delayed signal crossfaded by mix, through the same saturator
+// at outLevel (the macro's output Saturator). Feedback may exceed 1: the
+// saturator holds the loop.
+struct ReaktorComb : public Unit {
+    float* line;
+    int mask, writePos;
+};
+static void ReaktorComb_next(ReaktorComb* unit, int inNumSamples);
+static inline double rcSat(double x, double L) {
+    L = std::max(L, 2e-12);
+    const double m = 2.0 * L;
+    x = std::clamp(x, -m, m);
+    return x * (1.0 - std::fabs(x) / (4.0 * L));
+}
+static void ReaktorComb_Ctor(ReaktorComb* unit) {
+    int len = 1;
+    while (len < (int)(SAMPLERATE * 0.11) + 8) len <<= 1;
+    unit->line = (float*)RTAlloc(unit->mWorld, len * sizeof(float));
+    unit->mask = unit->line ? len - 1 : 0;
+    if (unit->line) std::fill(unit->line, unit->line + len, 0.0f);
+    unit->writePos = 0;
+    SETCALC(ReaktorComb_next);
+    OUT0(0) = 0.0f;
+}
+static void ReaktorComb_Dtor(ReaktorComb* unit) {
+    if (unit->line) RTFree(unit->mWorld, unit->line);
+}
+static void ReaktorComb_next(ReaktorComb* unit, int inNumSamples) {
+    const float* in = IN(0);
+    float* out = OUT(0);
+    if (!unit->line) { for (int i = 0; i < inNumSamples; ++i) out[i] = in[i]; return; }
+    auto at = [&](int index, int i) -> double { return INRATE(index) == calc_FullRate ? IN(index)[i] : IN0(index); };
+    float* b = unit->line;
+    const int m = unit->mask;
+    int w = unit->writePos;
+    const double sr = SAMPLERATE, maxDelay = (double)(m - 4);
+    for (int i = 0; i < inNumSamples; ++i) {
+        const double x = in[i];
+        const double fc = std::clamp(at(1, i), 1.0, sr * 0.45);
+        const double fb = at(2, i), L = at(3, i), mix = std::clamp(at(4, i), 0.0, 1.0), outL = at(5, i);
+        const double delay = std::clamp(sr / fc, 2.0, maxDelay);
+        const double pos = w - delay;
+        const int k = (int)std::floor(pos);
+        const double t = pos - k;
+        const double y0 = b[(k - 1) & m], y1 = b[k & m], y2 = b[(k + 1) & m], y3 = b[(k + 2) & m];
+        const double c1 = 0.5 * (y2 - y0), c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3, c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
+        const double d = ((c3 * t + c2) * t + c1) * t + y1;
+        double y = x + fb * rcSat(d, L);
+        if (!std::isfinite(y) || std::fabs(y) < 1e-30) y = 0.0;
+        b[w & m] = (float)y;
+        w = (w + 1) & m;
+        out[i] = (float)rcSat((1.0 - mix) * x + mix * d, outL);
+    }
+    unit->writePos = w;
+}
+
+// ReaktorMulti4: the original PolyComb's filters (Reaktor's Multi/LP 4-Pole): a
+// 4-pole ladder (zero-delay feedback, linear), resonance 0..1 -> loop gain 0..4
+// (1: self-oscillation), its outputs mixed from the stages (u: the input after
+// the loop, y1..y4 the stages). type as PolyComb's filter types:
+//   0 LP (4-pole)  1 HP (2-pole)  2 BP (2-pole)  3 notch  4 LP2  5 LP4  6 HP2
+//   7 HP4  8 BP2  9 BP4  10 BL4 (1-pole HP, 3-pole LP)  11 notch
+struct ReaktorMulti4 : public Unit {
+    double s[4];
+};
+static void ReaktorMulti4_next(ReaktorMulti4* unit, int inNumSamples);
+static void ReaktorMulti4_Ctor(ReaktorMulti4* unit) {
+    for (double& v : unit->s) v = 0.0;
+    SETCALC(ReaktorMulti4_next);
+    OUT0(0) = 0.0f;
+}
+static void ReaktorMulti4_next(ReaktorMulti4* unit, int inNumSamples) {
+    const float* in = IN(0);
+    float* out = OUT(0);
+    auto at = [&](int index, int i) -> double { return INRATE(index) == calc_FullRate ? IN(index)[i] : IN0(index); };
+    const double sr = SAMPLERATE;
+    const int type = std::clamp((int)IN0(3), 0, 11);
+    double* s = unit->s;
+    for (int i = 0; i < inNumSamples; ++i) {
+        const double fc = std::clamp(at(1, i), 10.0, sr * 0.45);
+        const double k = 4.0 * std::clamp(at(2, i), 0.0, 0.995);
+        const double g = std::tan(M_PI * fc / sr), G = g / (1.0 + g);
+        // y4 = G^4 u + S, u = x - k y4
+        const double S = G * G * G * (1.0 - G) * s[0] + G * G * (1.0 - G) * s[1] + G * (1.0 - G) * s[2] + (1.0 - G) * s[3];
+        const double G4 = G * G * G * G;
+        const double u = (in[i] - k * S) / (1.0 + k * G4);
+        double y[4], x = u;
+        for (int n = 0; n < 4; ++n) {
+            const double v = (x - s[n]) * G;
+            y[n] = v + s[n];
+            s[n] = y[n] + v;
+            if (!std::isfinite(s[n]) || std::fabs(s[n]) < 1e-30) s[n] = 0.0;
+            x = y[n];
+        }
+        double o;
+        switch (type) {
+            case 1: case 6: o = u - 2.0 * y[0] + y[1]; break;                                   // HP2
+            case 2: case 8: o = 2.0 * (y[0] - y[1]); break;                                     // BP2
+            case 3: case 11: o = u - 2.0 * y[0] + 2.0 * y[1]; break;                            // notch
+            case 4: o = y[1]; break;                                                            // LP2
+            case 7: o = u - 4.0 * y[0] + 6.0 * y[1] - 4.0 * y[2] + y[3]; break;                 // HP4
+            case 9: o = 4.0 * (y[1] - 2.0 * y[2] + y[3]); break;                                // BP4
+            case 10: o = 3.0 * (y[2] - y[3]); break;                                            // BL4 (about unity at its peak)
+            default: o = y[3];                                                                  // LP4
+        }
+        out[i] = (float)o;
+    }
+}
+
 PluginLoad(OceanodeAnalog) {
     ft = inTable;
     DefineSimpleUnit(MorphOsc);
     DefineDtorUnit(AnalogFilter);
+    DefineDtorUnit(ReaktorComb);
+    DefineSimpleUnit(ReaktorMulti4);
 }

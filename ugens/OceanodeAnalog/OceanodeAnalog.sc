@@ -16,3 +16,22 @@ AnalogFilter : UGen {
     }
     checkInputs { ^this.checkValidInputs }
 }
+// ReaktorComb: the original PolyComb's comb: one period of freq, feedback fb through a
+// parabolic saturator at level (full saturation there; fb may exceed 1), out: dry and
+// the delayed signal crossfaded by mix, through the same saturator at outLevel.
+ReaktorComb : UGen {
+    *ar { arg in = 0.0, freq = 440.0, fb = 0.9, level = 1.0, mix = 1.0, outLevel = 1.0, mul = 1.0, add = 0.0;
+        ^this.multiNew('audio', in, freq, fb, level, mix, outLevel).madd(mul, add)
+    }
+    checkInputs { ^this.checkValidInputs }
+}
+
+// ReaktorMulti4: the original PolyComb's filters (Reaktor's Multi/LP 4-Pole): a 4-pole
+// ladder, res 0..1 (1: self-oscillation), its outputs mixed from the stages; type as
+// PolyComb's: 0 LP4, 1 HP2, 2 BP2, 3 notch, 4 LP2, 5 LP4, 6 HP2, 7 HP4, 8 BP2, 9 BP4, 10 BL4, 11 notch
+ReaktorMulti4 : UGen {
+    *ar { arg in = 0.0, freq = 1000.0, res = 0.0, type = 0, mul = 1.0, add = 0.0;
+        ^this.multiNew('audio', in, freq, res, type).madd(mul, add)
+    }
+    checkInputs { ^this.checkValidInputs }
+}
