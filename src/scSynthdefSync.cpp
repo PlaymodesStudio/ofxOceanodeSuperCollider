@@ -137,6 +137,7 @@ struct RemoteFile {
     std::string path;       // in the repository
     std::string sha;        // git blob id
     bool executable = false;
+    bool preset = false;    // the user may have changed it: never overwritten
     fs::path dest;          // in the app's data folder
 };
 
@@ -277,14 +278,30 @@ private:
             const std::string extension = fs::path(parts[2]).extension().string();
             if(extension == ".scx" || extension == ".sc") return extensions / parts[1] / parts[2];
         }
+        // Shared presets, at their path in the data folder:
+        // presets/nodeSnapshots/<Node>/banks|Presets/<x>.json, presets/Supercollider/<Node>/Presets/<x>.json
+        if(isPresetPath(path)) return data.parent_path() / path.substr(std::string("presets/").size());
         return {};
+    }
+
+    static bool isPresetPath(const std::string& path){
+        const auto parts = ofSplitString(path, "/", true);
+        if(parts.size() != 5 || parts[0] != "presets" || fs::path(parts[4]).extension() != ".json") return false;
+        return (parts[1] == "nodeSnapshots" && (parts[3] == "banks" || parts[3] == "Presets"))
+            || (parts[1] == "Supercollider" && parts[3] == "Presets");
+    }
+
+    // Where the repository's version of a preset goes when the user's copy
+    // differs: "<name> (repo).json" next to it
+    static fs::path repoCopyOf(const fs::path& dest){
+        return dest.parent_path() / (dest.stem().string() + " (repo)" + dest.extension().string());
     }
 
     bool listFiles(){
         phase("Reading the repository", fromCheckout ? addonRoot : std::string(repository) + " @ " + branch);
         files.clear();
         if(fromCheckout){
-            for(const std::string top : {"synthdefs", "sclang", "ugens"}){
+            for(const std::string top : {"synthdefs", "sclang", "ugens", "presets"}){
                 const fs::path root = fs::path(addonRoot) / top;
                 if(!fs::exists(root)) continue;
                 for(auto it = fs::recursive_directory_iterator(root); it != fs::recursive_directory_iterator(); ++it){
@@ -297,6 +314,7 @@ private:
                     file.path = fs::relative(it->path(), addonRoot).generic_string();
                     file.dest = destinationOf(file.path);
                     if(file.dest.empty()) continue;
+                    file.preset = isPresetPath(file.path);
                     file.sha = scSynthdefSync::gitBlobSha(it->path().string());
                     file.executable = (fs::status(it->path()).permissions() & fs::perms::owner_exec) != fs::perms::none;
                     files.push_back(file);
@@ -331,6 +349,7 @@ private:
                 file.path = entry.value("path", "");
                 file.dest = destinationOf(file.path);
                 if(file.dest.empty()) continue;
+                file.preset = isPresetPath(file.path);
                 file.sha = entry.value("sha", "");
                 file.executable = mode == "100755";
                 files.push_back(file);
@@ -348,12 +367,23 @@ private:
     // ── 2. Download ───────────────────────────────────────────────────────────
 
     void downloadFiles(){
+        // What the last sync installed: a preset still like that was not
+        // changed by the user and can be updated
+        if(state.contains("files") && state["files"].is_object()){
+            for(auto it = state["files"].begin(); it != state["files"].end(); ++it) synced[it.key()] = it.value().get<std::string>();
+        }
         std::vector<const RemoteFile*> missing;
         phase("Comparing files", "", (int)files.size());
         for(const auto& file : files){
-            if(!fs::exists(file.dest) || scSynthdefSync::gitBlobSha(file.dest.string()) != file.sha){
-                missing.push_back(&file);
+            const std::string local = fs::exists(file.dest) ? scSynthdefSync::gitBlobSha(file.dest.string()) : "";
+            bool needed = local != file.sha;
+            // A preset the user changed keeps its place; the repository's
+            // version goes next to it, unless that copy is already current
+            if(needed && file.preset && !local.empty() && (!synced.count(file.path) || synced[file.path] != local)){
+                const fs::path copy = repoCopyOf(file.dest);
+                needed = !fs::exists(copy) || scSynthdefSync::gitBlobSha(copy.string()) != file.sha;
             }
+            if(needed) missing.push_back(&file);
             step("");
         }
 
@@ -372,8 +402,11 @@ private:
             for(auto it = state["files"].begin(); it != state["files"].end(); ++it){
                 if(current.count(it.key())) continue;
                 const fs::path dest = destinationOf(it.key());
+                if(dest.empty() || !fs::exists(dest)) continue;
+                // A preset the user changed stays
+                if(isPresetPath(it.key()) && scSynthdefSync::gitBlobSha(dest.string()) != it.value().get<std::string>()) continue;
                 std::error_code ignored;
-                if(!dest.empty() && fs::remove(dest, ignored)) removed++;
+                if(fs::remove(dest, ignored)) removed++;
             }
         }
         // Defaults and the shared prelude are exactly the repository's: a
@@ -424,8 +457,18 @@ private:
                 failure(file.path, "the download failed");
                 continue;
             }
+            fs::path dest = file.dest;
+            if(file.preset && fs::exists(dest)){
+                const std::string local = scSynthdefSync::gitBlobSha(dest.string());
+                const auto last = synced.find(file.path);
+                if(last == synced.end() || last->second != local){
+                    dest = repoCopyOf(dest);
+                    edit([&](scSynthdefSync::Report& r){ r.presetCopies.push_back(fs::relative(dest, data.parent_path()).generic_string()); });
+                }
+            }
             try {
-                replaceFile(temp, file.dest, file.executable);
+                replaceFile(temp, dest, file.executable);
+                if(file.preset) edit([](scSynthdefSync::Report& r){ r.presets++; });
                 {
                     std::lock_guard<std::mutex> lock(rewrittenMutex);
                     rewritten.insert(file.dest.lexically_normal().string());
@@ -456,7 +499,9 @@ private:
             return;
         }
         std::map<std::string, std::string> assets;
-        for(const auto& asset : ofJson::parse(readFile(work / "release.json"))["assets"]){
+        // Kept in a variable: a range-for over a member of a temporary dangles
+        const ofJson release = ofJson::parse(readFile(work / "release.json"));
+        for(const auto& asset : release.value("assets", ofJson::array())){
             assets[asset.value("name", "")] = asset.value("browser_download_url", "");
         }
         if(!assets.count("extensions.json") ||
@@ -1013,6 +1058,7 @@ private:
     bool fromCheckout, rebuildAll;
     std::string addonRoot, branch, commit, sourceId;
     std::set<std::string> rewritten;    // files this sync wrote
+    std::map<std::string, std::string> synced;  // repository path -> blob id the last sync installed
     std::mutex rewrittenMutex;
     fs::path data, sources, sclangDir, extensions, synthdefs, retiredRoot, work, statePath, classConfig;
     int parallel = 2;
@@ -1152,8 +1198,8 @@ void scSynthdefSync::drawPopup(){
     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 42);
 
     if(stage == Stage::Confirm){
-        ImGui::TextUnformatted("Brings the SynthDef sources, the SuperCollider compiler and the UGens "
-                               "up to date, then compiles what changed or is missing.");
+        ImGui::TextUnformatted("Brings the SynthDef sources, the SuperCollider compiler, the UGens and the "
+                               "shared presets and snapshot banks up to date, then compiles what changed or is missing.");
         ImGui::TextDisabled("No GitHub account is needed. The first sync can take several minutes; "
                             "the next ones only handle what changed.");
         ImGui::Spacing();
@@ -1214,6 +1260,14 @@ void scSynthdefSync::drawPopup(){
         }
         ImGui::Spacing();
         if(report.downloaded || report.removed) ImGui::BulletText("%d files downloaded, %d removed", report.downloaded, report.removed);
+        if(report.presets) ImGui::BulletText("%d presets and snapshot banks updated", report.presets);
+        if(!report.presetCopies.empty()){
+            ImGui::BulletText("%d presets you changed were kept; the shared version is next to each as \"(repo)\":",
+                              (int)report.presetCopies.size());
+            ImGui::Indent();
+            for(const auto& path : report.presetCopies) ImGui::TextDisabled("%s", path.c_str());
+            ImGui::Unindent();
+        }
         if(!report.extensions.empty()) ImGui::BulletText("UGens installed: %s", ofJoinString(report.extensions, ", ").c_str());
         if(report.compiledSynths || report.compiledScripts){
             ImGui::BulletText("%d synths and %d Defaults scripts compiled, %d SynthDefs installed",
@@ -1250,6 +1304,250 @@ void scSynthdefSync::drawPopup(){
             stage = Stage::Closed;
             ImGui::CloseCurrentPopup();
         }
+    }
+    ImGui::PopTextWrapPos();
+    ImGui::EndPopup();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Share Presets to Git
+// ════════════════════════════════════════════════════════════════════════════
+
+namespace {
+
+constexpr const char* sharePopupId = "Share Presets to Git##scPresetShare";
+
+// git in the checkout; "" when it succeeded, else its last lines
+std::string git(const std::string& root, std::vector<std::string> args, const fs::path& log, int timeout = 300){
+    args.insert(args.begin(), {"-C", root});
+    return runProcess("/usr/bin/git", args, log.string(), timeout);
+}
+
+// Snapshot banks and presets as the sync installs them, relative to the data folder
+std::vector<std::string> sharablePresets(const fs::path& data){
+    std::vector<std::string> found;
+    const auto add = [&](const fs::path& folder){
+        if(!fs::exists(folder)) return;
+        for(const auto& entry : fs::directory_iterator(folder)){
+            const std::string name = entry.path().filename().string();
+            if(!entry.is_regular_file() || entry.path().extension() != ".json") continue;
+            // the sync's copies, automatic backups, generated factory sets
+            if(name.find(" (repo)") != std::string::npos || startsWith(name, "Before ") || name == "Factory.json") continue;
+            found.push_back(fs::relative(entry.path(), data).generic_string());
+        }
+    };
+    for(const fs::path& root : {data / "nodeSnapshots", data / "Supercollider"}){
+        if(!fs::exists(root)) continue;
+        for(const auto& node : fs::directory_iterator(root)){
+            if(!node.is_directory()) continue;
+            if(root.filename() == "nodeSnapshots") add(node.path() / "banks");
+            add(node.path() / "Presets");
+        }
+    }
+    std::sort(found.begin(), found.end());
+    return found;
+}
+
+}
+
+scPresetShare::scPresetShare(){
+    const fs::path root = fs::path(__FILE__).parent_path().parent_path();
+    if(fs::exists(root / ".git") && fs::exists(root / "presets")){
+        addonRoot = root.string();
+        branch = checkoutBranch(root);
+    }
+}
+
+scPresetShare::~scPresetShare(){
+    // A running git finishes on its own
+    if(worker.joinable()) worker.detach();
+}
+
+void scPresetShare::drawMenuItem(){
+    if(ImGui::MenuItem("Share Presets to Git...", nullptr, false, stage != Stage::Running)) openRequested = true;
+}
+
+void scPresetShare::scan(){
+    candidates.clear();
+    problem.clear();
+    if(addonRoot.empty()){
+        problem = "Sharing needs this addon's git checkout (ofxOceanodeSuperCollider with its presets/ folder).";
+        return;
+    }
+    if(branch.empty()){
+        problem = "The addon checkout is not on a branch.";
+        return;
+    }
+    const fs::path data = ofToDataPath("", true);
+    // What the last sync installed: unchanged since then means nothing to share
+    std::map<std::string, std::string> synced;
+    try {
+        const ofJson state = ofJson::parse(readFile(data / "Supercollider" / "Config" / "SynthdefSync.json"));
+        if(state.contains("files")) for(auto it = state["files"].begin(); it != state["files"].end(); ++it){
+            if(startsWith(it.key(), "presets/")) synced[it.key().substr(8)] = it.value().get<std::string>();
+        }
+    } catch(...) {}
+    for(const auto& rel : sharablePresets(data)){
+        const fs::path local = data / rel, shared = fs::path(addonRoot) / "presets" / rel;
+        const std::string localSha = scSynthdefSync::gitBlobSha(local.string());
+        const auto last = synced.find(rel);
+        Candidate candidate;
+        candidate.rel = rel;
+        if(last != synced.end()){
+            if(localSha == last->second) continue;
+            candidate.isNew = false;
+            candidate.sharedChanged = fs::exists(shared) && scSynthdefSync::gitBlobSha(shared.string()) != last->second;
+        }else{
+            if(fs::exists(shared) && scSynthdefSync::gitBlobSha(shared.string()) == localSha) continue;
+            candidate.isNew = !fs::exists(shared);
+            candidate.sharedChanged = !candidate.isNew;
+        }
+        // Someone else's newer version would be replaced: only on purpose
+        candidate.selected = !candidate.sharedChanged;
+        candidates.push_back(candidate);
+    }
+    std::snprintf(message, sizeof(message), "%s", "Presets: ");
+}
+
+void scPresetShare::start(){
+    std::vector<std::string> chosen;
+    for(const auto& c : candidates) if(c.selected) chosen.push_back(c.rel);
+    task = std::make_shared<Task>();
+    stage = Stage::Running;
+    std::string text = ofTrim(message);
+    if(text.empty() || text == "Presets:"){
+        std::vector<std::string> names;
+        for(const auto& rel : chosen) names.push_back(fs::path(rel).stem().string());
+        text = "Presets: " + ofJoinString(names, ", ");
+    }
+    worker = std::thread([task = task, root = addonRoot, branch = branch, chosen, text,
+                          data = fs::path(ofToDataPath("", true))](){
+        const fs::path log = data / "Supercollider" / "tmp" / "presetShare.log";
+        fs::create_directories(log.parent_path());
+        const auto status = [&](const std::string& s){ std::lock_guard<std::mutex> lock(task->mutex); task->status = s; };
+        const auto finish = [&](bool ok, const std::string& result){
+            std::lock_guard<std::mutex> lock(task->mutex);
+            task->ok = ok;
+            task->result = result;
+            task->done = true;
+        };
+        try {
+            // Up to date first, so the commit applies on the latest presets
+            status("Updating the checkout (git pull)...");
+            std::string error = git(root, {"pull", "--rebase", "--autostash", "origin", branch}, log);
+            if(!error.empty()){
+                git(root, {"rebase", "--abort"}, log.string() + ".abort");
+                return finish(false, "git pull failed: " + error);
+            }
+            status("Copying...");
+            std::vector<std::string> paths;
+            for(const auto& rel : chosen){
+                const fs::path from = data / rel, to = fs::path(root) / "presets" / rel;
+                if(fs::exists(to) && sameContents(from, to)) continue;
+                fs::create_directories(to.parent_path());
+                fs::copy_file(from, to, fs::copy_options::overwrite_existing);
+                paths.push_back("presets/" + rel);
+            }
+            if(paths.empty()) return finish(true, "Those presets are already shared.");
+            status("Committing...");
+            std::vector<std::string> add = {"add", "--"};
+            add.insert(add.end(), paths.begin(), paths.end());
+            if(!(error = git(root, add, log)).empty()) return finish(false, "git add failed: " + error);
+            // Only these files: other changes in the checkout stay as they are
+            std::vector<std::string> commit = {"commit", "-m", text, "--"};
+            commit.insert(commit.end(), paths.begin(), paths.end());
+            if(!(error = git(root, commit, log)).empty()) return finish(false, "git commit failed: " + error);
+            status("Pushing...");
+            if(!git(root, {"push", "origin", "HEAD:" + branch}, log).empty()){
+                // Someone pushed in between
+                if(!git(root, {"pull", "--rebase", "--autostash", "origin", branch}, log).empty()){
+                    git(root, {"rebase", "--abort"}, log.string() + ".abort");
+                    return finish(false, "Someone changed the same presets meanwhile. Your commit is in the checkout, "
+                                         "not pushed: run Sync with SynthDefs Git, then ask for help merging it.");
+                }
+                if(!(error = git(root, {"push", "origin", "HEAD:" + branch}, log)).empty())
+                    return finish(false, "git push failed (" + error + "). The commit is in the checkout, not pushed.");
+            }
+            finish(true, ofToString(paths.size()) + " presets shared on " + branch + ". Everyone gets them with Sync with SynthDefs Git.");
+        } catch(const std::exception& e) {
+            finish(false, e.what());
+        }
+    });
+}
+
+void scPresetShare::drawPopup(){
+    if(openRequested){
+        openRequested = false;
+        if(stage != Stage::Running){
+            scan();
+            stage = Stage::Choose;
+        }
+        ImGui::OpenPopup(sharePopupId);
+    }
+    if(stage == Stage::Running){
+        bool done = false;
+        {
+            std::lock_guard<std::mutex> lock(task->mutex);
+            done = task->done;
+        }
+        if(done){
+            if(worker.joinable()) worker.join();
+            stage = Stage::Done;
+        }
+    }
+    if(stage == Stage::Closed) return;
+    if(!ImGui::IsPopupOpen(sharePopupId)) ImGui::OpenPopup(sharePopupId);
+    if(!ImGui::BeginPopupModal(sharePopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 40);
+    bool close = false;
+    if(stage == Stage::Choose){
+        if(!problem.empty()){
+            ImGui::TextUnformatted(problem.c_str());
+        }else if(candidates.empty()){
+            ImGui::TextUnformatted("Nothing to share: every snapshot bank and preset is the same as the shared one.");
+        }else{
+            ImGui::TextUnformatted("Snapshot banks and presets that are new or changed here:");
+            ImGui::TextDisabled("Shared in the addon's presets/ on branch %s, with your git account.", branch.c_str());
+            ImGui::Spacing();
+            ImGui::BeginChild("candidates", ImVec2(ImGui::GetFontSize() * 38, ImGui::GetFontSize() * std::min(14.0f, 1.6f * candidates.size() + 1)), true);
+            for(size_t i = 0; i < candidates.size(); i++){
+                auto& c = candidates[i];
+                ImGui::PushID((int)i);
+                ImGui::Checkbox(c.rel.c_str(), &c.selected);
+                ImGui::SameLine();
+                if(c.sharedChanged) ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "replaces a newer shared version");
+                else ImGui::TextDisabled(c.isNew ? "new" : "changed");
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 30);
+            ImGui::InputText("Message", message, sizeof(message));
+        }
+        ImGui::Spacing();
+        const bool any = std::any_of(candidates.begin(), candidates.end(), [](const Candidate& c){ return c.selected; });
+        ImGui::BeginDisabled(!any || !problem.empty());
+        if(ImGui::Button("Share", ImVec2(120, 0))) start();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if(ImGui::Button("Cancel", ImVec2(120, 0))) close = true;
+    }else if(stage == Stage::Running){
+        std::string status;
+        {
+            std::lock_guard<std::mutex> lock(task->mutex);
+            status = task->status;
+        }
+        ImGui::TextUnformatted(status.c_str());
+        ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(ImGui::GetFontSize() * 30, 0), "");
+    }else{
+        std::lock_guard<std::mutex> lock(task->mutex);
+        if(task->ok) ImGui::TextUnformatted(task->result.c_str());
+        else ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", task->result.c_str());
+        ImGui::Spacing();
+        if(ImGui::Button("OK", ImVec2(120, 0))) close = true;
+    }
+    if(close){
+        stage = Stage::Closed;
+        ImGui::CloseCurrentPopup();
     }
     ImGui::PopTextWrapPos();
     ImGui::EndPopup();

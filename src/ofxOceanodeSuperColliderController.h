@@ -209,6 +209,7 @@ private:
     vector<serverManager*> outputServers;
     std::function<void()> synthdefReloadCallback;
     scSynthdefSync synthdefSync;
+    scPresetShare presetShare;
 
 #if OFXOCEANODESC_HAS_TIMELINE
     enum class NRTArmState { Disarmed, Settling, Armed };

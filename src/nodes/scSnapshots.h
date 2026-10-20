@@ -60,7 +60,7 @@ public:
         std::function<float()> bpm;                           // Morph Time in beats
         std::function<void(const std::string& key)> paramMenu;   // after a parameter's widget: its menu
         std::string presetFolder;                             // data-relative; "": nodeSnapshots/<folder>/Presets
-        std::vector<std::pair<std::string,std::string>> bundledBanks; // optional label / read-only JSON path
+        std::string defaultBank;                              // banks/<file> loaded on the first run (no library yet)
     };
 
     ofParameter<int> snapshotP, morphAP, morphBP, morphCurveP, morphSwitchP;
@@ -391,6 +391,8 @@ public:
             // first run: an older format, else the factory set
             used.fill(false);
             if(host.importLegacy && host.importLegacy()) { active = -1; saveLibrary(); return; }
+            if(!host.defaultBank.empty() && std::filesystem::is_regular_file(d / "banks" / host.defaultBank)
+               && loadBank((d / "banks" / host.defaultBank).string())) return;
             if(host.factory) { loadFactory(); return; }
             saveLibrary();
             return;
@@ -561,23 +563,6 @@ public:
             && ofToLower(source.filename().string())!="factory.json"?source.filename().string():std::string();
         saveLibrary();
         message = "Loaded " + source.stem().string();   // becomes the shared set
-        return true;
-    }
-    // Bundled collections must not erase a user's only copy of their current
-    // slots. Keep a named bank first; a failed backup leaves the library alone.
-    bool loadBundledBank(const std::string& path) {
-        const auto folder=dir()/"banks";
-        const auto stem="Before collection - "+ofGetTimestampString();
-        auto backup=folder/(stem+".json");
-        for(int suffix=1;std::filesystem::exists(backup);suffix++) backup=folder/(stem+"-"+ofToString(suffix)+".json");
-        if(!saveBank(backup.string())){
-            std::error_code error;
-            std::filesystem::remove(backup,error); // only this new, failed backup
-            return false;
-        }
-        running=false;
-        if(!loadBank(path)) return false;
-        message+="; previous slots saved as "+backup.stem().string();
         return true;
     }
 
@@ -771,11 +756,6 @@ public:
             }
             ImGui::Separator();
             if(host.factory && ImGui::MenuItem("Factory collection")) loadFactory();
-            if(!host.bundledBanks.empty() && ImGui::BeginMenu("Bundled collections")) {
-                for(const auto& bank : host.bundledBanks)
-                    if(ImGui::MenuItem(bank.first.c_str())) loadBundledBank(bank.second);
-                ImGui::EndMenu();
-            }
             if(ImGui::BeginMenu("Load bank")) {
                 bool any = false;
                 try {

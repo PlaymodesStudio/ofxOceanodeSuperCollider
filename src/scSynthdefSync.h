@@ -26,6 +26,10 @@
 //       (nodes find their SynthDefs by file name, so the move is safe), as is,
 //       once every Defaults source has been compiled by a sync, every file
 //       under Synthdefs/Defaults that no Defaults source builds.
+//    Shared presets (addon presets/, laid out like the data folder:
+//    nodeSnapshots/<Node>/banks|Presets, Supercollider/<Node>/Presets) are
+//    downloaded with the rest. One the user changed since the last sync is
+//    kept; the repository's version is written next to it as "<name> (repo)".
 //    5. Loads the new SynthDefs into the running servers, or offers to restart
 //       them when UGens changed (scsynth loads plugins only when it boots).
 //
@@ -69,6 +73,8 @@ public:
     struct Report {
         std::string error;                      // the sync stopped
         int downloaded = 0, removed = 0;
+        int presets = 0;                        // presets / snapshot banks written
+        std::vector<std::string> presetCopies;  // "(repo)" copies next to presets the user changed
         std::vector<std::string> extensions;    // UGen folders installed
         int compiledSynths = 0, compiledScripts = 0;
         int installed = 0, retired = 0;
@@ -109,6 +115,45 @@ private:
     std::shared_ptr<Progress> progress;
     std::shared_ptr<std::atomic<bool>> cancelFlag;
     Report report;                  // of the finished sync
+};
+
+// "Share Presets to Git" (SuperCollider menu): the snapshot banks and presets
+// of this app that are new or changed since the last sync are listed; the
+// chosen ones are copied to the addon checkout's presets/, committed on their
+// own and pushed to its branch, with the user's own git and credentials.
+// Everyone gets them with "Sync with SynthDefs Git".
+class scPresetShare {
+public:
+    scPresetShare();
+    ~scPresetShare();
+
+    void drawMenuItem();
+    void drawPopup();
+
+    struct Candidate {
+        std::string rel;            // in the data folder, as under presets/
+        bool isNew = true;
+        bool sharedChanged = false; // the shared copy changed since the last sync too
+        bool selected = true;
+    };
+    struct Task {
+        std::mutex mutex;
+        std::string status, result;
+        bool done = false, ok = false;
+    };
+
+private:
+    enum class Stage { Closed, Choose, Running, Done };
+    void scan();
+    void start();
+
+    Stage stage = Stage::Closed;
+    bool openRequested = false;
+    std::string addonRoot, branch, problem;
+    std::vector<Candidate> candidates;
+    char message[256] = "";
+    std::thread worker;
+    std::shared_ptr<Task> task;
 };
 
 #endif /* scSynthdefSync_h */

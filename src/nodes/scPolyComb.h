@@ -372,10 +372,8 @@ private:
     //    driven by a connection. ──
     scSnapshots snaps;
     scDropdowns dropdowns;   // the combos' names (a published combo is a dropdown)
-    ofJson defaultSnap;                   // the factory snapshots start from it
     bool snapExcluded(const std::string& key) const;
     bool drivenByConnection(const std::string& key) const;
     ofJson captureSnapshot() const;
     void applyState(const ofJson& a, const ofJson& b, float t, bool sw);   // t 0: a, 1: b; sw: switches take b's
-    std::vector<ofJson> factorySnapshots() const;
 };

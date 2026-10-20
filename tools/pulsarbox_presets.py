@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Demo presets for the SC PulsarBox node (src/nodes/scPulsarBox.h).
 
-Writes <name>.json into synthdefs/Defaults/PulsarBox/Presets (the source) and,
+Writes <name>.json into presets/Supercollider/PulsarBox/Presets (the source) and,
 if it exists, the OceanAudio app's data/Supercollider/PulsarBox/Presets. Keys
 are the parameters' escaped names; a preset resets every control to its
 default first, so only what differs is listed here.
@@ -12,7 +12,7 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 ADDON = os.path.dirname(HERE)
 TARGETS = [
-    os.path.join(ADDON, "synthdefs/Defaults/PulsarBox/Presets"),
+    os.path.join(ADDON, "presets/Supercollider/PulsarBox/Presets"),
     os.path.join(ADDON, "../../apps/Playmodes/OceanAudio/bin/data/Supercollider/PulsarBox/Presets"),
 ]
 NUPG = "Supercollider/PulsarBox/nuPG_TABLES/"

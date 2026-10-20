@@ -1011,6 +1011,7 @@ void ofxOceanodeSuperColliderController::setup(){
 void ofxOceanodeSuperColliderController::drawPopups(){
     scSynthdefCompiler::get().drawPopups();
     synthdefSync.drawPopup();
+    presetShare.drawPopup();
 }
 
 void ofxOceanodeSuperColliderController::draw(){
@@ -1025,6 +1026,7 @@ void ofxOceanodeSuperColliderController::draw(){
         for(auto s : outputServers) s->loadDefs(true);
     }
     synthdefSync.drawMenuItem();
+    presetShare.drawMenuItem();
 #if OFXOCEANODESC_HAS_TIMELINE
     if(ImGui::BeginMenu("NRT Rendering")){
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);

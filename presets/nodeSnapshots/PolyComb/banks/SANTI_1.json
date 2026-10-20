@@ -1,0 +1,2279 @@
+{
+    "active": 1,
+    "slots": [
+        {
+            "controls": {
+                "Amp_Attack": 0.009999999776482582,
+                "Amp_Attack_Curve": -4.0,
+                "Amp_Decay": 0.30000001192092896,
+                "Amp_Decay_Curve": -4.0,
+                "Amp_Release": 1.0,
+                "Amp_Release_Curve": -4.0,
+                "Amp_Sustain": 0.800000011920929,
+                "Comb_Detune": [
+                    0.0
+                ],
+                "Comb_Feedback": [
+                    0.6859999895095825
+                ],
+                "Comb_Map_Bend": 1.0,
+                "Comb_Map_Comb": 0.0,
+                "Comb_Map_Cycle_Shift": 0,
+                "Comb_Map_Degree_Offset": 0.0,
+                "Comb_Map_Fine_Tune": 0.0,
+                "Comb_Map_First": 1.0,
+                "Comb_Map_Harmonic_Base": 36.0,
+                "Comb_Map_Index_Quantize": 0.0,
+                "Comb_Map_Index_Random": 0.0,
+                "Comb_Map_Interval": 3.0,
+                "Comb_Map_Invert": false,
+                "Comb_Map_Mode": 0,
+                "Comb_Map_New_Seed_On_Gate": false,
+                "Comb_Map_Num_Waves": 1.0,
+                "Comb_Map_Octave_Jump": 1.0,
+                "Comb_Map_On": false,
+                "Comb_Map_PW": 0.5,
+                "Comb_Map_Pow": 0.0,
+                "Comb_Map_Quantize": 0,
+                "Comb_Map_Root": 0.0,
+                "Comb_Map_Roundness": 0.0,
+                "Comb_Map_Scale": 62,
+                "Comb_Map_Seed": 0,
+                "Comb_Map_Shape": 0,
+                "Comb_Map_Skew": -1.0,
+                "Comb_Map_Span": 0.0,
+                "Comb_Map_Symmetry": 0,
+                "Comb_Map_Table": [
+                    0.0,
+                    1.0,
+                    2.0,
+                    3.0,
+                    4.0,
+                    5.0,
+                    6.0,
+                    7.0,
+                    8.0,
+                    9.0,
+                    10.0,
+                    11.0
+                ],
+                "Comb_Map_Tones": [
+                    0.0,
+                    2.0,
+                    4.0,
+                    5.0,
+                    7.0,
+                    9.0,
+                    11.0
+                ],
+                "Comb_Map_Transpose": 0.0,
+                "Comb_Map_Version": 2,
+                "Comb_Mix": [
+                    1.0
+                ],
+                "Comb_Mode": 0,
+                "Comb_Model": 1,
+                "Comb_On": true,
+                "Comb_Pitch": [
+                    0.0
+                ],
+                "Comb_Sat_Level": 12.0,
+                "Comb_Saturation": false,
+                "Comb_Tone": 1.0,
+                "Comb_Transpose": [
+                    0.0
+                ],
+                "Comp_Attack": 10.0,
+                "Comp_Auto_Makeup": false,
+                "Comp_Knee": 6.0,
+                "Comp_Makeup": 0.0,
+                "Comp_Mix": 1.0,
+                "Comp_On": false,
+                "Comp_RMS": 0.0,
+                "Comp_Ratio": 3.0,
+                "Comp_Release": 150.0,
+                "Comp_SC_HPF": 20.0,
+                "Comp_Threshold": -18.0,
+                "Cutoff": [
+                    85.55844116210938
+                ],
+                "Delta_Gain": 3.0,
+                "Delta_LFO_A": 0,
+                "Delta_LFO_B": 1,
+                "Delta_Mix_A": 0.0,
+                "Delta_Mix_B": 1.0,
+                "Delta_Window": 1000.0,
+                "Detune": [
+                    0.05999999865889549
+                ],
+                "Drive": [
+                    0.41999998688697815
+                ],
+                "Dust": [
+                    0.0
+                ],
+                "EQ_Hi_Mid": 0.0,
+                "EQ_Hi_Mid_Freq": 4000.0,
+                "EQ_Hi_Mid_Q": 1.0,
+                "EQ_High": 0.0,
+                "EQ_High_Freq": 12000.0,
+                "EQ_High_Slope": 1.0,
+                "EQ_Lo_Mid": 0.0,
+                "EQ_Lo_Mid_Freq": 250.0,
+                "EQ_Lo_Mid_Q": 1.0,
+                "EQ_Low": 0.0,
+                "EQ_Low_Freq": 80.0,
+                "EQ_Low_Slope": 1.0,
+                "EQ_Mid": 6.079999923706055,
+                "EQ_Mid_Freq": 2793.37548828125,
+                "EQ_Mid_Q": 1.0,
+                "EQ_On": true,
+                "Echo_Beats": 0.75,
+                "Echo_Cutoff": 84.0,
+                "Echo_Delay": 0.375,
+                "Echo_Feed": 0.44999998807907104,
+                "Echo_Filter": 0,
+                "Echo_Hi": 6000.0,
+                "Echo_Lo": 40.0,
+                "Echo_Mix": 0.30000001192092896,
+                "Echo_Model": 0,
+                "Echo_On": false,
+                "Echo_Ping-pong": 0.5,
+                "Echo_Res": 0.0,
+                "Echo_Resonance": 0.20000000298023224,
+                "Echo_Spread": 0.0,
+                "Echo_Sync": true,
+                "Env1_Attack": 0.009999999776482582,
+                "Env1_Attack_Curve": -4.0,
+                "Env1_Decay": 0.5,
+                "Env1_Decay_Curve": -4.0,
+                "Env1_Release": 0.5,
+                "Env1_Release_Curve": -4.0,
+                "Env1_Sustain": 0.0,
+                "Env1_Vel": 0.0,
+                "Env2_Attack": 0.009999999776482582,
+                "Env2_Attack_Curve": -4.0,
+                "Env2_Decay": 0.5,
+                "Env2_Decay_Curve": -4.0,
+                "Env2_Release": 0.5,
+                "Env2_Release_Curve": -4.0,
+                "Env2_Sustain": 0.0,
+                "Env2_Vel": 0.0,
+                "Env3_Attack": 0.009999999776482582,
+                "Env3_Attack_Curve": -4.0,
+                "Env3_Decay": 0.5,
+                "Env3_Decay_Curve": -4.0,
+                "Env3_Release": 0.5,
+                "Env3_Release_Curve": -4.0,
+                "Env3_Sustain": 0.0,
+                "Env3_Vel": 0.0,
+                "Env4_Attack": 0.009999999776482582,
+                "Env4_Attack_Curve": -4.0,
+                "Env4_Decay": 0.5,
+                "Env4_Decay_Curve": -4.0,
+                "Env4_Release": 0.5,
+                "Env4_Release_Curve": -4.0,
+                "Env4_Sustain": 0.0,
+                "Env4_Vel": 0.0,
+                "Env_Mode": 2,
+                "FM_Amount": [
+                    0.3310000002384186
+                ],
+                "FM_Feedback": 0.0,
+                "FM_On": true,
+                "FM_Ratio": [
+                    1.0
+                ],
+                "FM_Ratio_Snap": true,
+                "Filter_Model": 0,
+                "Filter_On": true,
+                "Filter_Type": 0,
+                "Glide": 1.9259999990463257,
+                "Impulse": [
+                    0.0
+                ],
+                "Key_Track": 0.0,
+                "LFO1_Beats": [
+                    1.0
+                ],
+                "LFO1_BiPow": [
+                    0.0
+                ],
+                "LFO1_Centered": true,
+                "LFO1_Combination": 0.0,
+                "LFO1_Detune": [
+                    0.0
+                ],
+                "LFO1_Gain": [
+                    1.1399999856948853
+                ],
+                "LFO1_Hz": [
+                    0.11999999731779099
+                ],
+                "LFO1_Invert": 0.0,
+                "LFO1_Model": 2,
+                "LFO1_Modulo": 16,
+                "LFO1_Noise": true,
+                "LFO1_Noise_Scale": 5.869999885559082,
+                "LFO1_Normalize": false,
+                "LFO1_Offset": 0.0,
+                "LFO1_Phase": 0.0,
+                "LFO1_Pow": [
+                    0.0
+                ],
+                "LFO1_Quantize": 16,
+                "LFO1_Random": 0.0,
+                "LFO1_Random_Smooth": 0.0,
+                "LFO1_Random_Type": 0,
+                "LFO1_Round": [
+                    0.5
+                ],
+                "LFO1_S&H": [
+                    0.0
+                ],
+                "LFO1_S&H_Glide": 0.0,
+                "LFO1_Shuffle": 0.0,
+                "LFO1_Skew": [
+                    0.0
+                ],
+                "LFO1_Spread": 1.0,
+                "LFO1_Steps": 0,
+                "LFO1_Symmetry": 0,
+                "LFO1_Sync": false,
+                "LFO1_Value": 0.0,
+                "LFO1_Width": [
+                    0.5
+                ],
+                "LFO2_Beats": [
+                    2.0
+                ],
+                "LFO2_BiPow": [
+                    0.0
+                ],
+                "LFO2_Centered": true,
+                "LFO2_Combination": 0.0,
+                "LFO2_Detune": [
+                    0.0
+                ],
+                "LFO2_Gain": [
+                    1.0
+                ],
+                "LFO2_Hz": [
+                    0.14800000190734863
+                ],
+                "LFO2_Invert": 0.0,
+                "LFO2_Model": 2,
+                "LFO2_Modulo": 16,
+                "LFO2_Noise": true,
+                "LFO2_Noise_Scale": 1.149999976158142,
+                "LFO2_Normalize": false,
+                "LFO2_Offset": 0.0,
+                "LFO2_Phase": 0.0,
+                "LFO2_Pow": [
+                    0.0
+                ],
+                "LFO2_Quantize": 16,
+                "LFO2_Random": 0.0,
+                "LFO2_Random_Smooth": 0.0,
+                "LFO2_Random_Type": 0,
+                "LFO2_Round": [
+                    0.5
+                ],
+                "LFO2_S&H": [
+                    0.0
+                ],
+                "LFO2_S&H_Glide": 0.0,
+                "LFO2_Shuffle": 0.0,
+                "LFO2_Skew": [
+                    0.0
+                ],
+                "LFO2_Spread": 1.0,
+                "LFO2_Steps": 0,
+                "LFO2_Symmetry": 0,
+                "LFO2_Sync": false,
+                "LFO2_Value": 0.0,
+                "LFO2_Width": [
+                    0.5
+                ],
+                "LFO3_Beats": [
+                    54.540000915527344
+                ],
+                "LFO3_BiPow": [
+                    0.0
+                ],
+                "LFO3_Centered": true,
+                "LFO3_Combination": 0.0,
+                "LFO3_Detune": [
+                    0.0
+                ],
+                "LFO3_Gain": [
+                    1.0
+                ],
+                "LFO3_Hz": [
+                    1.0
+                ],
+                "LFO3_Invert": 0.0,
+                "LFO3_Model": 1,
+                "LFO3_Modulo": 16,
+                "LFO3_Noise": false,
+                "LFO3_Noise_Scale": 1.0,
+                "LFO3_Normalize": false,
+                "LFO3_Offset": 0.0,
+                "LFO3_Phase": 0.0,
+                "LFO3_Pow": [
+                    0.0
+                ],
+                "LFO3_Quantize": 16,
+                "LFO3_Random": 0.0,
+                "LFO3_Random_Smooth": 0.0,
+                "LFO3_Random_Type": 0,
+                "LFO3_Round": [
+                    0.5
+                ],
+                "LFO3_S&H": [
+                    0.0
+                ],
+                "LFO3_S&H_Glide": 0.0,
+                "LFO3_Shuffle": 0.0,
+                "LFO3_Skew": [
+                    0.0
+                ],
+                "LFO3_Spread": 1.0,
+                "LFO3_Steps": 0,
+                "LFO3_Symmetry": 0,
+                "LFO3_Sync": true,
+                "LFO3_Value": 0.0,
+                "LFO3_Width": [
+                    0.5
+                ],
+                "LFO4_Beats": [
+                    8.0
+                ],
+                "LFO4_BiPow": [
+                    0.0
+                ],
+                "LFO4_Centered": true,
+                "LFO4_Combination": 0.0,
+                "LFO4_Detune": [
+                    0.0
+                ],
+                "LFO4_Gain": [
+                    1.0
+                ],
+                "LFO4_Hz": [
+                    1.0
+                ],
+                "LFO4_Invert": 0.0,
+                "LFO4_Model": 1,
+                "LFO4_Modulo": 16,
+                "LFO4_Noise": false,
+                "LFO4_Noise_Scale": 1.0,
+                "LFO4_Normalize": false,
+                "LFO4_Offset": 0.0,
+                "LFO4_Phase": 0.0,
+                "LFO4_Pow": [
+                    0.0
+                ],
+                "LFO4_Quantize": 16,
+                "LFO4_Random": 0.0,
+                "LFO4_Random_Smooth": 0.0,
+                "LFO4_Random_Type": 0,
+                "LFO4_Round": [
+                    0.5
+                ],
+                "LFO4_S&H": [
+                    0.0
+                ],
+                "LFO4_S&H_Glide": 0.0,
+                "LFO4_Shuffle": 0.0,
+                "LFO4_Skew": [
+                    0.0
+                ],
+                "LFO4_Spread": 1.0,
+                "LFO4_Steps": 0,
+                "LFO4_Symmetry": 0,
+                "LFO4_Sync": true,
+                "LFO4_Value": 0.0,
+                "LFO4_Width": [
+                    0.18000000715255737
+                ],
+                "LFO5_Beats": [
+                    16.0
+                ],
+                "LFO5_BiPow": [
+                    0.0
+                ],
+                "LFO5_Centered": true,
+                "LFO5_Combination": 0.0,
+                "LFO5_Detune": [
+                    0.0
+                ],
+                "LFO5_Gain": [
+                    1.0
+                ],
+                "LFO5_Hz": [
+                    1.0
+                ],
+                "LFO5_Invert": 0.0,
+                "LFO5_Model": 1,
+                "LFO5_Modulo": 16,
+                "LFO5_Noise": false,
+                "LFO5_Noise_Scale": 1.0,
+                "LFO5_Normalize": false,
+                "LFO5_Offset": 0.0,
+                "LFO5_Phase": 0.0,
+                "LFO5_Pow": [
+                    0.0
+                ],
+                "LFO5_Quantize": 16,
+                "LFO5_Random": 0.0,
+                "LFO5_Random_Smooth": 0.0,
+                "LFO5_Random_Type": 0,
+                "LFO5_Round": [
+                    0.5
+                ],
+                "LFO5_S&H": [
+                    0.0
+                ],
+                "LFO5_S&H_Glide": 0.0,
+                "LFO5_Shuffle": 0.0,
+                "LFO5_Skew": [
+                    0.0
+                ],
+                "LFO5_Spread": 1.0,
+                "LFO5_Steps": 0,
+                "LFO5_Symmetry": 0,
+                "LFO5_Sync": true,
+                "LFO5_Value": 0.0,
+                "LFO5_Width": [
+                    0.5
+                ],
+                "LFO6_Beats": [
+                    16.0
+                ],
+                "LFO6_BiPow": [
+                    0.0
+                ],
+                "LFO6_Centered": true,
+                "LFO6_Combination": 0.0,
+                "LFO6_Detune": [
+                    0.0
+                ],
+                "LFO6_Gain": [
+                    1.0
+                ],
+                "LFO6_Hz": [
+                    1.0
+                ],
+                "LFO6_Invert": 0.0,
+                "LFO6_Model": 1,
+                "LFO6_Modulo": 16,
+                "LFO6_Noise": false,
+                "LFO6_Noise_Scale": 1.0,
+                "LFO6_Normalize": false,
+                "LFO6_Offset": 0.0,
+                "LFO6_Phase": 0.0,
+                "LFO6_Pow": [
+                    0.0
+                ],
+                "LFO6_Quantize": 16,
+                "LFO6_Random": 0.0,
+                "LFO6_Random_Smooth": 0.0,
+                "LFO6_Random_Type": 0,
+                "LFO6_Round": [
+                    0.5
+                ],
+                "LFO6_S&H": [
+                    0.0
+                ],
+                "LFO6_S&H_Glide": 0.0,
+                "LFO6_Shuffle": 0.0,
+                "LFO6_Skew": [
+                    0.0
+                ],
+                "LFO6_Spread": 1.0,
+                "LFO6_Steps": 0,
+                "LFO6_Symmetry": 0,
+                "LFO6_Sync": true,
+                "LFO6_Value": 0.0,
+                "LFO6_Width": [
+                    0.5
+                ],
+                "LFO7_Beats": [
+                    16.0
+                ],
+                "LFO7_BiPow": [
+                    0.0
+                ],
+                "LFO7_Centered": true,
+                "LFO7_Combination": 0.0,
+                "LFO7_Detune": [
+                    0.0
+                ],
+                "LFO7_Gain": [
+                    1.0
+                ],
+                "LFO7_Hz": [
+                    1.0
+                ],
+                "LFO7_Invert": 0.0,
+                "LFO7_Model": 1,
+                "LFO7_Modulo": 16,
+                "LFO7_Noise": false,
+                "LFO7_Noise_Scale": 1.0,
+                "LFO7_Normalize": false,
+                "LFO7_Offset": 0.0,
+                "LFO7_Phase": 0.0,
+                "LFO7_Pow": [
+                    0.0
+                ],
+                "LFO7_Quantize": 16,
+                "LFO7_Random": 0.0,
+                "LFO7_Random_Smooth": 0.0,
+                "LFO7_Random_Type": 0,
+                "LFO7_Round": [
+                    0.5
+                ],
+                "LFO7_S&H": [
+                    0.0
+                ],
+                "LFO7_S&H_Glide": 0.0,
+                "LFO7_Shuffle": 0.0,
+                "LFO7_Skew": [
+                    0.0
+                ],
+                "LFO7_Spread": 1.0,
+                "LFO7_Steps": 0,
+                "LFO7_Symmetry": 0,
+                "LFO7_Sync": true,
+                "LFO7_Value": 0.0,
+                "LFO7_Width": [
+                    0.5
+                ],
+                "LFO8_Beats": [
+                    16.0
+                ],
+                "LFO8_BiPow": [
+                    0.0
+                ],
+                "LFO8_Centered": true,
+                "LFO8_Combination": 0.0,
+                "LFO8_Detune": [
+                    0.0
+                ],
+                "LFO8_Gain": [
+                    1.0
+                ],
+                "LFO8_Hz": [
+                    1.0
+                ],
+                "LFO8_Invert": 0.0,
+                "LFO8_Model": 1,
+                "LFO8_Modulo": 16,
+                "LFO8_Noise": false,
+                "LFO8_Noise_Scale": 1.0,
+                "LFO8_Normalize": false,
+                "LFO8_Offset": 0.0,
+                "LFO8_Phase": 0.0,
+                "LFO8_Pow": [
+                    0.0
+                ],
+                "LFO8_Quantize": 16,
+                "LFO8_Random": 0.0,
+                "LFO8_Random_Smooth": 0.0,
+                "LFO8_Random_Type": 0,
+                "LFO8_Round": [
+                    0.5
+                ],
+                "LFO8_S&H": [
+                    0.0
+                ],
+                "LFO8_S&H_Glide": 0.0,
+                "LFO8_Shuffle": 0.0,
+                "LFO8_Skew": [
+                    0.0
+                ],
+                "LFO8_Spread": 1.0,
+                "LFO8_Steps": 0,
+                "LFO8_Symmetry": 0,
+                "LFO8_Sync": true,
+                "LFO8_Value": 0.0,
+                "LFO8_Width": [
+                    0.5
+                ],
+                "Osc_Amp": [
+                    0.5
+                ],
+                "Osc_Map_Bend": 1.0,
+                "Osc_Map_Comb": 0.0,
+                "Osc_Map_Cycle_Shift": 1,
+                "Osc_Map_Degree_Offset": 0.0,
+                "Osc_Map_Fine_Tune": 0.0,
+                "Osc_Map_First": 1.0,
+                "Osc_Map_Harmonic_Base": 36.0,
+                "Osc_Map_Index_Quantize": 0.0,
+                "Osc_Map_Index_Random": 0.0,
+                "Osc_Map_Interval": 1.0,
+                "Osc_Map_Invert": false,
+                "Osc_Map_Mode": 3,
+                "Osc_Map_New_Seed_On_Gate": false,
+                "Osc_Map_Num_Waves": 1.0,
+                "Osc_Map_Octave_Jump": 1.0,
+                "Osc_Map_PW": 0.5,
+                "Osc_Map_Pow": 0.0,
+                "Osc_Map_Quantize": 0,
+                "Osc_Map_Root": 0.0,
+                "Osc_Map_Roundness": 0.0,
+                "Osc_Map_Scale": 62,
+                "Osc_Map_Seed": 0,
+                "Osc_Map_Shape": 0,
+                "Osc_Map_Skew": -1.0,
+                "Osc_Map_Span": 0.0,
+                "Osc_Map_Symmetry": 0,
+                "Osc_Map_Table": [
+                    0.0,
+                    1.0,
+                    2.0,
+                    3.0,
+                    4.0,
+                    5.0,
+                    6.0,
+                    7.0,
+                    8.0,
+                    9.0,
+                    10.0,
+                    11.0
+                ],
+                "Osc_Map_Tones": [
+                    0.0,
+                    2.0,
+                    4.0,
+                    5.0,
+                    7.0,
+                    9.0,
+                    11.0
+                ],
+                "Osc_Map_Transpose": 0.0,
+                "Osc_Map_Version": 2,
+                "Pan": [
+                    0.5
+                ],
+                "Pink": [
+                    0.0
+                ],
+                "Pitch_External": false,
+                "Pitch_Shift": 0,
+                "Placement": 0,
+                "Post_Cutoff": [
+                    20.042016983032227
+                ],
+                "Post_Filter_On": false,
+                "Post_Resonance": [
+                    0.0
+                ],
+                "Post_Type": 1,
+                "Pulse": [
+                    0.0
+                ],
+                "Pulse_Width": [
+                    0.5
+                ],
+                "Resonance": [
+                    0.30000001192092896
+                ],
+                "Reverb_Decay": 4.75,
+                "Reverb_Hi_Damp": 6.0,
+                "Reverb_Late": 1.0,
+                "Reverb_Lo_Damp": 0.0,
+                "Reverb_Lowpass": 10000.0,
+                "Reverb_Mix": 0.25999999046325684,
+                "Reverb_Mod_Rate": 0.20000000298023224,
+                "Reverb_On": true,
+                "Reverb_Predelay": 20.0,
+                "Reverb_Size": 39.0,
+                "Reverb_Spin": 1.0,
+                "Reverb_Spread": 0.15000000596046448,
+                "Reverb_Wander": 0.25,
+                "Ring_Detune": [
+                    0.0
+                ],
+                "Ring_Mix": [
+                    0.0
+                ],
+                "Ring_Model": 1,
+                "Ring_On": false,
+                "Ring_Pitch": [
+                    72.0
+                ],
+                "Ring_Pitch_Source": 1,
+                "Ring_Ratio": [
+                    0.125,
+                    1.0,
+                    1.2599210739135742,
+                    1.3348398208618164,
+                    1.6817928552627563,
+                    2.0,
+                    2.5198421478271484,
+                    2.669679641723633,
+                    3.3635857105255127,
+                    4.0,
+                    5.039683818817139,
+                    5.339359760284424,
+                    6.727171421051025,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0
+                ],
+                "Ring_Transpose": [
+                    0.0
+                ],
+                "Ring_Width": 0.0,
+                "SS_Detune": [
+                    0.5
+                ],
+                "Saw": [
+                    0.0
+                ],
+                "Scramble": false,
+                "Shaper_Mix": [
+                    0.23000000417232513
+                ],
+                "Shaper_On": true,
+                "Sine": [
+                    0.0
+                ],
+                "Spread": 1.0,
+                "Spread_Center": 0.0,
+                "Sub_Attack": 0.009999999776482582,
+                "Sub_Attack_Curve": -4.0,
+                "Sub_Decay": 0.5,
+                "Sub_Decay_Curve": -4.0,
+                "Sub_Level": 0.5540000200271606,
+                "Sub_On": false,
+                "Sub_Release": 0.5,
+                "Sub_Release_Curve": -4.0,
+                "Sub_Sustain": 1.0,
+                "Sub_Transpose": -12.0,
+                "SuperSaw": [
+                    1.0
+                ],
+                "Transpose": [
+                    0.0
+                ],
+                "Trem_Depth": 0.25,
+                "Trem_Rate": 5.0,
+                "Trem_Rate_Random": 0.4099999964237213,
+                "Tri": [
+                    0.0
+                ],
+                "Vel_Sens": 0.5,
+                "Vib_Amount": 0.14000000059604645,
+                "Vib_Rate": 0.23999999463558197,
+                "Vib_Rate_Random": 0.8399999737739563,
+                "White": [
+                    0.0
+                ]
+            },
+            "envs": 0,
+            "exts": 0,
+            "lfos": 3,
+            "matrix": [
+                0.0,
+                0.7280000448226929,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.3440000116825104,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.24799993634223938,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "name": "Grisey",
+            "params": [],
+            "voices": 14
+        },
+        {
+            "controls": {
+                "Amp_Attack": 0.009999999776482582,
+                "Amp_Attack_Curve": -4.0,
+                "Amp_Decay": 0.30000001192092896,
+                "Amp_Decay_Curve": -4.0,
+                "Amp_Release": 1.0,
+                "Amp_Release_Curve": -4.0,
+                "Amp_Sustain": 0.800000011920929,
+                "Comb_Detune": [
+                    0.0
+                ],
+                "Comb_Feedback": [
+                    0.6859999895095825
+                ],
+                "Comb_Map_Bend": 1.0,
+                "Comb_Map_Comb": 0.0,
+                "Comb_Map_Cycle_Shift": 0,
+                "Comb_Map_Degree_Offset": 0.0,
+                "Comb_Map_Fine_Tune": 0.0,
+                "Comb_Map_First": 1.0,
+                "Comb_Map_Harmonic_Base": 36.0,
+                "Comb_Map_Index_Quantize": 0.0,
+                "Comb_Map_Index_Random": 0.0,
+                "Comb_Map_Interval": 3.0,
+                "Comb_Map_Invert": false,
+                "Comb_Map_Mode": 0,
+                "Comb_Map_New_Seed_On_Gate": false,
+                "Comb_Map_Num_Waves": 1.0,
+                "Comb_Map_Octave_Jump": 1.0,
+                "Comb_Map_On": false,
+                "Comb_Map_PW": 0.5,
+                "Comb_Map_Pow": 0.0,
+                "Comb_Map_Quantize": 0,
+                "Comb_Map_Root": 0.0,
+                "Comb_Map_Roundness": 0.0,
+                "Comb_Map_Scale": 0,
+                "Comb_Map_Seed": 0,
+                "Comb_Map_Shape": 0,
+                "Comb_Map_Skew": -1.0,
+                "Comb_Map_Span": 0.0,
+                "Comb_Map_Symmetry": 0,
+                "Comb_Map_Table": [
+                    0.0,
+                    1.0,
+                    2.0,
+                    3.0,
+                    4.0,
+                    5.0,
+                    6.0,
+                    7.0,
+                    8.0,
+                    9.0,
+                    10.0,
+                    11.0
+                ],
+                "Comb_Map_Tones": [
+                    0.0,
+                    2.0,
+                    4.0,
+                    5.0,
+                    7.0,
+                    9.0,
+                    11.0
+                ],
+                "Comb_Map_Transpose": 0.0,
+                "Comb_Map_Version": 2,
+                "Comb_Mix": [
+                    1.0
+                ],
+                "Comb_Mode": 0,
+                "Comb_Model": 1,
+                "Comb_On": true,
+                "Comb_Pitch": [
+                    0.0
+                ],
+                "Comb_Sat_Level": 12.0,
+                "Comb_Saturation": false,
+                "Comb_Tone": 1.0,
+                "Comb_Transpose": [
+                    0.0
+                ],
+                "Comp_Attack": 10.0,
+                "Comp_Auto_Makeup": false,
+                "Comp_Knee": 6.0,
+                "Comp_Makeup": 0.0,
+                "Comp_Mix": 1.0,
+                "Comp_On": false,
+                "Comp_RMS": 0.0,
+                "Comp_Ratio": 3.0,
+                "Comp_Release": 150.0,
+                "Comp_SC_HPF": 20.0,
+                "Comp_Threshold": -18.0,
+                "Cutoff": [
+                    85.55844116210938
+                ],
+                "Delta_Gain": 3.0,
+                "Delta_LFO_A": 0,
+                "Delta_LFO_B": 1,
+                "Delta_Mix_A": 0.0,
+                "Delta_Mix_B": 1.0,
+                "Delta_Window": 1000.0,
+                "Detune": [
+                    0.05999999865889549
+                ],
+                "Drive": [
+                    0.41999998688697815
+                ],
+                "Dust": [
+                    0.0
+                ],
+                "EQ_Hi_Mid": 0.0,
+                "EQ_Hi_Mid_Freq": 4000.0,
+                "EQ_Hi_Mid_Q": 1.0,
+                "EQ_High": 0.0,
+                "EQ_High_Freq": 12000.0,
+                "EQ_High_Slope": 1.0,
+                "EQ_Lo_Mid": 0.0,
+                "EQ_Lo_Mid_Freq": 250.0,
+                "EQ_Lo_Mid_Q": 1.0,
+                "EQ_Low": 0.0,
+                "EQ_Low_Freq": 80.0,
+                "EQ_Low_Slope": 1.0,
+                "EQ_Mid": 6.079999923706055,
+                "EQ_Mid_Freq": 2793.37548828125,
+                "EQ_Mid_Q": 1.0,
+                "EQ_On": true,
+                "Echo_Beats": 0.75,
+                "Echo_Cutoff": 84.0,
+                "Echo_Delay": 0.375,
+                "Echo_Feed": 0.44999998807907104,
+                "Echo_Filter": 0,
+                "Echo_Hi": 6000.0,
+                "Echo_Lo": 40.0,
+                "Echo_Mix": 0.30000001192092896,
+                "Echo_Model": 0,
+                "Echo_On": false,
+                "Echo_Ping-pong": 0.5,
+                "Echo_Res": 0.0,
+                "Echo_Resonance": 0.20000000298023224,
+                "Echo_Spread": 0.0,
+                "Echo_Sync": true,
+                "Env1_Attack": 0.009999999776482582,
+                "Env1_Attack_Curve": -4.0,
+                "Env1_Decay": 0.5,
+                "Env1_Decay_Curve": -4.0,
+                "Env1_Release": 0.5,
+                "Env1_Release_Curve": -4.0,
+                "Env1_Sustain": 0.0,
+                "Env1_Vel": 0.0,
+                "Env2_Attack": 0.009999999776482582,
+                "Env2_Attack_Curve": -4.0,
+                "Env2_Decay": 0.5,
+                "Env2_Decay_Curve": -4.0,
+                "Env2_Release": 0.5,
+                "Env2_Release_Curve": -4.0,
+                "Env2_Sustain": 0.0,
+                "Env2_Vel": 0.0,
+                "Env3_Attack": 0.009999999776482582,
+                "Env3_Attack_Curve": -4.0,
+                "Env3_Decay": 0.5,
+                "Env3_Decay_Curve": -4.0,
+                "Env3_Release": 0.5,
+                "Env3_Release_Curve": -4.0,
+                "Env3_Sustain": 0.0,
+                "Env3_Vel": 0.0,
+                "Env4_Attack": 0.009999999776482582,
+                "Env4_Attack_Curve": -4.0,
+                "Env4_Decay": 0.5,
+                "Env4_Decay_Curve": -4.0,
+                "Env4_Release": 0.5,
+                "Env4_Release_Curve": -4.0,
+                "Env4_Sustain": 0.0,
+                "Env4_Vel": 0.0,
+                "Env_Mode": 2,
+                "FM_Amount": [
+                    0.3310000002384186
+                ],
+                "FM_Feedback": 0.0,
+                "FM_On": true,
+                "FM_Ratio": [
+                    1.0
+                ],
+                "FM_Ratio_Snap": true,
+                "Filter_Model": 0,
+                "Filter_On": true,
+                "Filter_Type": 0,
+                "Glide": 1.9259999990463257,
+                "Impulse": [
+                    0.0
+                ],
+                "Key_Track": 0.0,
+                "LFO1_Beats": [
+                    1.0
+                ],
+                "LFO1_BiPow": [
+                    0.0
+                ],
+                "LFO1_Centered": true,
+                "LFO1_Combination": 0.0,
+                "LFO1_Detune": [
+                    0.0
+                ],
+                "LFO1_Gain": [
+                    1.1399999856948853
+                ],
+                "LFO1_Hz": [
+                    0.11999999731779099
+                ],
+                "LFO1_Invert": 0.0,
+                "LFO1_Model": 2,
+                "LFO1_Modulo": 16,
+                "LFO1_Noise": true,
+                "LFO1_Noise_Scale": 5.869999885559082,
+                "LFO1_Normalize": false,
+                "LFO1_Offset": 0.0,
+                "LFO1_Phase": 0.0,
+                "LFO1_Pow": [
+                    0.0
+                ],
+                "LFO1_Quantize": 16,
+                "LFO1_Random": 0.0,
+                "LFO1_Random_Smooth": 0.0,
+                "LFO1_Random_Type": 0,
+                "LFO1_Round": [
+                    0.5
+                ],
+                "LFO1_S&H": [
+                    0.0
+                ],
+                "LFO1_S&H_Glide": 0.0,
+                "LFO1_Shuffle": 0.0,
+                "LFO1_Skew": [
+                    0.0
+                ],
+                "LFO1_Spread": 1.0,
+                "LFO1_Steps": 0,
+                "LFO1_Symmetry": 0,
+                "LFO1_Sync": false,
+                "LFO1_Value": 0.0,
+                "LFO1_Width": [
+                    0.5
+                ],
+                "LFO2_Beats": [
+                    2.0
+                ],
+                "LFO2_BiPow": [
+                    0.0
+                ],
+                "LFO2_Centered": true,
+                "LFO2_Combination": 0.0,
+                "LFO2_Detune": [
+                    0.0
+                ],
+                "LFO2_Gain": [
+                    1.0
+                ],
+                "LFO2_Hz": [
+                    0.14800000190734863
+                ],
+                "LFO2_Invert": 0.0,
+                "LFO2_Model": 2,
+                "LFO2_Modulo": 16,
+                "LFO2_Noise": true,
+                "LFO2_Noise_Scale": 1.149999976158142,
+                "LFO2_Normalize": false,
+                "LFO2_Offset": 0.0,
+                "LFO2_Phase": 0.0,
+                "LFO2_Pow": [
+                    0.0
+                ],
+                "LFO2_Quantize": 16,
+                "LFO2_Random": 0.0,
+                "LFO2_Random_Smooth": 0.0,
+                "LFO2_Random_Type": 0,
+                "LFO2_Round": [
+                    0.5
+                ],
+                "LFO2_S&H": [
+                    0.0
+                ],
+                "LFO2_S&H_Glide": 0.0,
+                "LFO2_Shuffle": 0.0,
+                "LFO2_Skew": [
+                    0.0
+                ],
+                "LFO2_Spread": 1.0,
+                "LFO2_Steps": 0,
+                "LFO2_Symmetry": 0,
+                "LFO2_Sync": false,
+                "LFO2_Value": 0.0,
+                "LFO2_Width": [
+                    0.5
+                ],
+                "LFO3_Beats": [
+                    54.540000915527344
+                ],
+                "LFO3_BiPow": [
+                    0.0
+                ],
+                "LFO3_Centered": true,
+                "LFO3_Combination": 0.0,
+                "LFO3_Detune": [
+                    0.0
+                ],
+                "LFO3_Gain": [
+                    1.0
+                ],
+                "LFO3_Hz": [
+                    1.0
+                ],
+                "LFO3_Invert": 0.0,
+                "LFO3_Model": 1,
+                "LFO3_Modulo": 16,
+                "LFO3_Noise": false,
+                "LFO3_Noise_Scale": 1.0,
+                "LFO3_Normalize": false,
+                "LFO3_Offset": 0.0,
+                "LFO3_Phase": 0.0,
+                "LFO3_Pow": [
+                    0.0
+                ],
+                "LFO3_Quantize": 16,
+                "LFO3_Random": 0.0,
+                "LFO3_Random_Smooth": 0.0,
+                "LFO3_Random_Type": 0,
+                "LFO3_Round": [
+                    0.5
+                ],
+                "LFO3_S&H": [
+                    0.0
+                ],
+                "LFO3_S&H_Glide": 0.0,
+                "LFO3_Shuffle": 0.0,
+                "LFO3_Skew": [
+                    0.0
+                ],
+                "LFO3_Spread": 1.0,
+                "LFO3_Steps": 0,
+                "LFO3_Symmetry": 0,
+                "LFO3_Sync": true,
+                "LFO3_Value": 0.0,
+                "LFO3_Width": [
+                    0.5
+                ],
+                "LFO4_Beats": [
+                    8.0
+                ],
+                "LFO4_BiPow": [
+                    0.0
+                ],
+                "LFO4_Centered": true,
+                "LFO4_Combination": 0.0,
+                "LFO4_Detune": [
+                    0.0
+                ],
+                "LFO4_Gain": [
+                    1.0
+                ],
+                "LFO4_Hz": [
+                    1.0
+                ],
+                "LFO4_Invert": 0.0,
+                "LFO4_Model": 1,
+                "LFO4_Modulo": 16,
+                "LFO4_Noise": false,
+                "LFO4_Noise_Scale": 1.0,
+                "LFO4_Normalize": false,
+                "LFO4_Offset": 0.0,
+                "LFO4_Phase": 0.0,
+                "LFO4_Pow": [
+                    0.0
+                ],
+                "LFO4_Quantize": 16,
+                "LFO4_Random": 0.0,
+                "LFO4_Random_Smooth": 0.0,
+                "LFO4_Random_Type": 0,
+                "LFO4_Round": [
+                    0.5
+                ],
+                "LFO4_S&H": [
+                    0.0
+                ],
+                "LFO4_S&H_Glide": 0.0,
+                "LFO4_Shuffle": 0.0,
+                "LFO4_Skew": [
+                    0.0
+                ],
+                "LFO4_Spread": 1.0,
+                "LFO4_Steps": 0,
+                "LFO4_Symmetry": 0,
+                "LFO4_Sync": true,
+                "LFO4_Value": 0.0,
+                "LFO4_Width": [
+                    0.18000000715255737
+                ],
+                "LFO5_Beats": [
+                    16.0
+                ],
+                "LFO5_BiPow": [
+                    0.0
+                ],
+                "LFO5_Centered": true,
+                "LFO5_Combination": 0.0,
+                "LFO5_Detune": [
+                    0.0
+                ],
+                "LFO5_Gain": [
+                    1.0
+                ],
+                "LFO5_Hz": [
+                    1.0
+                ],
+                "LFO5_Invert": 0.0,
+                "LFO5_Model": 1,
+                "LFO5_Modulo": 16,
+                "LFO5_Noise": false,
+                "LFO5_Noise_Scale": 1.0,
+                "LFO5_Normalize": false,
+                "LFO5_Offset": 0.0,
+                "LFO5_Phase": 0.0,
+                "LFO5_Pow": [
+                    0.0
+                ],
+                "LFO5_Quantize": 16,
+                "LFO5_Random": 0.0,
+                "LFO5_Random_Smooth": 0.0,
+                "LFO5_Random_Type": 0,
+                "LFO5_Round": [
+                    0.5
+                ],
+                "LFO5_S&H": [
+                    0.0
+                ],
+                "LFO5_S&H_Glide": 0.0,
+                "LFO5_Shuffle": 0.0,
+                "LFO5_Skew": [
+                    0.0
+                ],
+                "LFO5_Spread": 1.0,
+                "LFO5_Steps": 0,
+                "LFO5_Symmetry": 0,
+                "LFO5_Sync": true,
+                "LFO5_Value": 0.0,
+                "LFO5_Width": [
+                    0.5
+                ],
+                "LFO6_Beats": [
+                    16.0
+                ],
+                "LFO6_BiPow": [
+                    0.0
+                ],
+                "LFO6_Centered": true,
+                "LFO6_Combination": 0.0,
+                "LFO6_Detune": [
+                    0.0
+                ],
+                "LFO6_Gain": [
+                    1.0
+                ],
+                "LFO6_Hz": [
+                    1.0
+                ],
+                "LFO6_Invert": 0.0,
+                "LFO6_Model": 1,
+                "LFO6_Modulo": 16,
+                "LFO6_Noise": false,
+                "LFO6_Noise_Scale": 1.0,
+                "LFO6_Normalize": false,
+                "LFO6_Offset": 0.0,
+                "LFO6_Phase": 0.0,
+                "LFO6_Pow": [
+                    0.0
+                ],
+                "LFO6_Quantize": 16,
+                "LFO6_Random": 0.0,
+                "LFO6_Random_Smooth": 0.0,
+                "LFO6_Random_Type": 0,
+                "LFO6_Round": [
+                    0.5
+                ],
+                "LFO6_S&H": [
+                    0.0
+                ],
+                "LFO6_S&H_Glide": 0.0,
+                "LFO6_Shuffle": 0.0,
+                "LFO6_Skew": [
+                    0.0
+                ],
+                "LFO6_Spread": 1.0,
+                "LFO6_Steps": 0,
+                "LFO6_Symmetry": 0,
+                "LFO6_Sync": true,
+                "LFO6_Value": 0.0,
+                "LFO6_Width": [
+                    0.5
+                ],
+                "LFO7_Beats": [
+                    16.0
+                ],
+                "LFO7_BiPow": [
+                    0.0
+                ],
+                "LFO7_Centered": true,
+                "LFO7_Combination": 0.0,
+                "LFO7_Detune": [
+                    0.0
+                ],
+                "LFO7_Gain": [
+                    1.0
+                ],
+                "LFO7_Hz": [
+                    1.0
+                ],
+                "LFO7_Invert": 0.0,
+                "LFO7_Model": 1,
+                "LFO7_Modulo": 16,
+                "LFO7_Noise": false,
+                "LFO7_Noise_Scale": 1.0,
+                "LFO7_Normalize": false,
+                "LFO7_Offset": 0.0,
+                "LFO7_Phase": 0.0,
+                "LFO7_Pow": [
+                    0.0
+                ],
+                "LFO7_Quantize": 16,
+                "LFO7_Random": 0.0,
+                "LFO7_Random_Smooth": 0.0,
+                "LFO7_Random_Type": 0,
+                "LFO7_Round": [
+                    0.5
+                ],
+                "LFO7_S&H": [
+                    0.0
+                ],
+                "LFO7_S&H_Glide": 0.0,
+                "LFO7_Shuffle": 0.0,
+                "LFO7_Skew": [
+                    0.0
+                ],
+                "LFO7_Spread": 1.0,
+                "LFO7_Steps": 0,
+                "LFO7_Symmetry": 0,
+                "LFO7_Sync": true,
+                "LFO7_Value": 0.0,
+                "LFO7_Width": [
+                    0.5
+                ],
+                "LFO8_Beats": [
+                    16.0
+                ],
+                "LFO8_BiPow": [
+                    0.0
+                ],
+                "LFO8_Centered": true,
+                "LFO8_Combination": 0.0,
+                "LFO8_Detune": [
+                    0.0
+                ],
+                "LFO8_Gain": [
+                    1.0
+                ],
+                "LFO8_Hz": [
+                    1.0
+                ],
+                "LFO8_Invert": 0.0,
+                "LFO8_Model": 1,
+                "LFO8_Modulo": 16,
+                "LFO8_Noise": false,
+                "LFO8_Noise_Scale": 1.0,
+                "LFO8_Normalize": false,
+                "LFO8_Offset": 0.0,
+                "LFO8_Phase": 0.0,
+                "LFO8_Pow": [
+                    0.0
+                ],
+                "LFO8_Quantize": 16,
+                "LFO8_Random": 0.0,
+                "LFO8_Random_Smooth": 0.0,
+                "LFO8_Random_Type": 0,
+                "LFO8_Round": [
+                    0.5
+                ],
+                "LFO8_S&H": [
+                    0.0
+                ],
+                "LFO8_S&H_Glide": 0.0,
+                "LFO8_Shuffle": 0.0,
+                "LFO8_Skew": [
+                    0.0
+                ],
+                "LFO8_Spread": 1.0,
+                "LFO8_Steps": 0,
+                "LFO8_Symmetry": 0,
+                "LFO8_Sync": true,
+                "LFO8_Value": 0.0,
+                "LFO8_Width": [
+                    0.5
+                ],
+                "Osc_Amp": [
+                    0.5
+                ],
+                "Osc_Map_Bend": 1.0,
+                "Osc_Map_Comb": 0.0,
+                "Osc_Map_Cycle_Shift": 0,
+                "Osc_Map_Degree_Offset": 0.0,
+                "Osc_Map_Fine_Tune": 0.0,
+                "Osc_Map_First": 1.0,
+                "Osc_Map_Harmonic_Base": 36.0,
+                "Osc_Map_Index_Quantize": 0.0,
+                "Osc_Map_Index_Random": 0.0,
+                "Osc_Map_Interval": 3.0,
+                "Osc_Map_Invert": false,
+                "Osc_Map_Mode": 0,
+                "Osc_Map_New_Seed_On_Gate": false,
+                "Osc_Map_Num_Waves": 1.0,
+                "Osc_Map_Octave_Jump": 1.0,
+                "Osc_Map_PW": 0.5,
+                "Osc_Map_Pow": 0.0,
+                "Osc_Map_Quantize": 0,
+                "Osc_Map_Root": 0.0,
+                "Osc_Map_Roundness": 0.0,
+                "Osc_Map_Scale": 0,
+                "Osc_Map_Seed": 0,
+                "Osc_Map_Shape": 0,
+                "Osc_Map_Skew": -1.0,
+                "Osc_Map_Span": 0.0,
+                "Osc_Map_Symmetry": 0,
+                "Osc_Map_Table": [
+                    0.0,
+                    1.0,
+                    2.0,
+                    3.0,
+                    4.0,
+                    5.0,
+                    6.0,
+                    7.0,
+                    8.0,
+                    9.0,
+                    10.0,
+                    11.0
+                ],
+                "Osc_Map_Tones": [
+                    0.0,
+                    2.0,
+                    4.0,
+                    5.0,
+                    7.0,
+                    9.0,
+                    11.0
+                ],
+                "Osc_Map_Transpose": 0.0,
+                "Osc_Map_Version": 2,
+                "Pan": [
+                    0.5
+                ],
+                "Pink": [
+                    0.0
+                ],
+                "Pitch_External": true,
+                "Pitch_Shift": 0,
+                "Placement": 0,
+                "Post_Cutoff": [
+                    20.042016983032227
+                ],
+                "Post_Filter_On": false,
+                "Post_Resonance": [
+                    0.0
+                ],
+                "Post_Type": 1,
+                "Pulse": [
+                    0.0
+                ],
+                "Pulse_Width": [
+                    0.5
+                ],
+                "Resonance": [
+                    0.30000001192092896
+                ],
+                "Reverb_Decay": 4.75,
+                "Reverb_Hi_Damp": 6.0,
+                "Reverb_Late": 1.0,
+                "Reverb_Lo_Damp": 0.0,
+                "Reverb_Lowpass": 10000.0,
+                "Reverb_Mix": 0.25999999046325684,
+                "Reverb_Mod_Rate": 0.20000000298023224,
+                "Reverb_On": true,
+                "Reverb_Predelay": 20.0,
+                "Reverb_Size": 39.0,
+                "Reverb_Spin": 1.0,
+                "Reverb_Spread": 0.15000000596046448,
+                "Reverb_Wander": 0.25,
+                "Ring_Detune": [
+                    0.0
+                ],
+                "Ring_Mix": [
+                    0.0
+                ],
+                "Ring_Model": 1,
+                "Ring_On": false,
+                "Ring_Pitch": [
+                    24.0,
+                    60.0,
+                    62.0,
+                    65.0,
+                    69.0,
+                    72.0
+                ],
+                "Ring_Pitch_Source": 1,
+                "Ring_Ratio": [
+                    0.125,
+                    1.0,
+                    1.2599210739135742,
+                    1.3348398208618164,
+                    1.6817928552627563,
+                    2.0,
+                    2.5198421478271484,
+                    2.669679641723633,
+                    3.3635857105255127,
+                    4.0,
+                    5.039683818817139,
+                    5.339359760284424,
+                    6.727171421051025,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0,
+                    8.0
+                ],
+                "Ring_Transpose": [
+                    0.0
+                ],
+                "Ring_Width": 0.0,
+                "SS_Detune": [
+                    0.5
+                ],
+                "Saw": [
+                    0.0
+                ],
+                "Scramble": false,
+                "Shaper_Mix": [
+                    0.23000000417232513
+                ],
+                "Shaper_On": true,
+                "Sine": [
+                    0.0
+                ],
+                "Spread": 1.0,
+                "Spread_Center": 0.0,
+                "Sub_Attack": 0.009999999776482582,
+                "Sub_Attack_Curve": -4.0,
+                "Sub_Decay": 0.5,
+                "Sub_Decay_Curve": -4.0,
+                "Sub_Level": 0.5540000200271606,
+                "Sub_On": false,
+                "Sub_Release": 0.5,
+                "Sub_Release_Curve": -4.0,
+                "Sub_Sustain": 1.0,
+                "Sub_Transpose": -12.0,
+                "SuperSaw": [
+                    1.0
+                ],
+                "Transpose": [
+                    0.0
+                ],
+                "Trem_Depth": 0.0,
+                "Trem_Rate": 5.0,
+                "Trem_Rate_Random": 0.0,
+                "Tri": [
+                    0.0
+                ],
+                "Vel_Sens": 0.5,
+                "Vib_Amount": 0.14000000059604645,
+                "Vib_Rate": 0.23999999463558197,
+                "Vib_Rate_Random": 0.8399999737739563,
+                "White": [
+                    0.0
+                ]
+            },
+            "envs": 0,
+            "exts": 0,
+            "lfos": 3,
+            "matrix": [
+                0.0,
+                0.7280000448226929,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.3440000116825104,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.24799993634223938,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "name": "MOVING SAWS",
+            "params": [],
+            "voices": 6
+        }
+    ],
+    "snapshotBank": 1
+}

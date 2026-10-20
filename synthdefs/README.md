@@ -70,6 +70,9 @@ other copy of the same file, and anything under `Synthdefs/Defaults/` that no
 source builds, moves to `data/Supercollider/_retired_synthdefs/`. What it did is
 recorded in `data/Supercollider/Config/SynthdefSync.json`.
 
+The same sync installs the shared presets and snapshot banks of `../presets/`
+(see `presets/README.md`).
+
 A synth that is removed or renamed goes in `Oceanode/retiredSynthdefs.txt`:
 the sync then retires its installed builds too. Presets using a renamed synth
 are migrated with a script (`tools/migrate_synth_renames.py` for the renames
