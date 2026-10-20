@@ -365,11 +365,19 @@ public:
             } catch(...) {}
         }
         // the marker: the library exists (empty slots stay empty, no refill)
-        try { ofSaveJson((d / "library.json").string(), ofJson{{"snapshots", 1}}); } catch(...) {}
+        try { ofSaveJson((d / "library.json").string(), ofJson{{"snapshots", 1}, {"bank", currentBank}}); } catch(...) {}
+        if(!currentBank.empty())saveBank((d/"banks"/currentBank).string());
         libTime = setTime();
     }
     void loadLibrary() {
         const auto d = dir();
+        currentBank.clear();
+        try {
+            const auto saved=ofLoadJson((d/"library.json").string()).value("bank",std::string());
+            const std::filesystem::path file(saved);
+            if(!saved.empty() && file==file.filename() && file.extension()==".json" && ofToLower(saved)!="factory.json"
+                && std::filesystem::is_regular_file(d/"banks"/file))currentBank=saved;
+        }catch(...){}
         if(host.factory) {   // the factory set as a bank (rewritten: this build's sounds)
             ofJson j;
             j["snapshotBank"] = 1;
@@ -405,12 +413,119 @@ public:
     }
     void loadFactory() {
         if(!host.factory) return;
+        currentBank.clear();
         used.fill(false);
         auto f = host.factory();
         for(int k = 0; k < std::min(SLOTS, (int)f.size()); k++) { slots[k] = f[k]; used[k] = true; }
         active = -1;
         message = "Loaded the factory snapshots";
         saveLibrary();
+    }
+    bool newBank(const std::string& requestedName) {
+        const std::string trimmed=ofTrim(requestedName);
+        const std::filesystem::path leaf(trimmed);
+        if(trimmed.empty() || trimmed=="." || trimmed==".." || leaf!=leaf.filename()
+            || trimmed.find('\\')!=std::string::npos){message="Enter a bank name without folders";return false;}
+        std::string filename=trimmed;
+        if(leaf.extension()!=".json")filename+=".json";
+        if(ofToLower(filename)=="factory.json"){message="Factory is reserved; choose another name";return false;}
+        const auto path=dir()/"banks"/filename;
+        if(std::filesystem::exists(path)){message="That bank already exists; choose another name";return false;}
+        if(!host.capture){message="Could not capture the current sound";return false;}
+        ofJson sound;
+        try{sound=host.capture();}catch(...){message="Could not capture the current sound";return false;}
+        if(!sound.is_object()){message="Could not capture the current sound";return false;}
+        sound["name"]=name(active).empty()?"Snapshot 1":name(active);
+        const ofJson bank{{"snapshotBank",1},{"active",0},{"slots",ofJson::array({sound})}};
+        if(!ofSavePrettyJson(path.string(),bank)){
+            std::error_code error;std::filesystem::remove(path,error);
+            message="Could not create "+filename;return false;
+        }
+        // A working collection can contain edits never exported as a bank.
+        // Preserve it before replacing slots, even if it has a named source.
+        const auto stem="Before new bank - "+ofGetTimestampString();
+        auto backup=dir()/"banks"/(stem+".json");
+        for(int suffix=1;std::filesystem::exists(backup);++suffix)
+            backup=dir()/"banks"/(stem+"-"+ofToString(suffix)+".json");
+        if(!saveBank(backup.string())){
+            std::error_code error;std::filesystem::remove(path,error);std::filesystem::remove(backup,error);
+            return false;
+        }
+        running=false;target=-1;used.fill(false);slots.fill(ofJson{});
+        slots[0]=sound;used[0]=true;setActive(0);
+        morphAP.setWithoutEventNotifications(0);morphBP.setWithoutEventNotifications(0);
+        morphP.setWithoutEventNotifications(0.f);
+        currentBank=filename;saveLibrary();
+        message="Created "+path.stem().string()+" with the current sound";
+        return true;
+    }
+    std::vector<std::string> storeBankNames() const {
+        std::vector<std::string> names;
+        try{
+            for(const auto& file:std::filesystem::directory_iterator(dir()/"banks"))
+                if(file.is_regular_file() && file.path().extension()==".json"
+                    && ofToLower(file.path().filename().string())!="factory.json")names.push_back(file.path().filename().string());
+        }catch(...){}
+        std::sort(names.begin(),names.end());return names;
+    }
+    static std::string storeSnapshotName(const ofJson& snapshot,int slot) {
+        for(const char* key:{"name","__name"})
+            if(snapshot.contains(key) && snapshot[key].is_string())return snapshot[key].get<std::string>();
+        return "Snapshot "+ofToString(slot+1);
+    }
+    bool readStoreBank(const std::string& filename,ofJson& bank) {
+        if(filename.empty() || filename==currentBank){
+            bank=ofJson{{"snapshotBank",1},{"active",active},{"slots",ofJson::array()}};
+            int last=-1;for(int k=0;k<SLOTS;++k)if(used[k])last=k;
+            for(int k=0;k<=last;++k)bank["slots"].push_back(used[k]?slots[k]:ofJson(nullptr));
+            return true;
+        }
+        const std::filesystem::path file(filename);
+        if(file!=file.filename() || filename.find('\\')!=std::string::npos || file.extension()!=".json"
+            || ofToLower(filename)=="factory.json"){
+            message="Choose a writable bank";return false;
+        }
+        try{bank=ofLoadJson((dir()/"banks"/file).string());}catch(...){bank=ofJson();}
+        if(!bank.is_object() || !bank.contains("slots") || !bank["slots"].is_array()){
+            message="Cannot read bank "+file.stem().string();return false;
+        }
+        return true;
+    }
+    void refreshStoreDestination() {
+        if(!readStoreBank(storeBank,storeDestination)){storeDestination=ofJson();storeError=message;}
+        else storeError.clear();
+    }
+    int storeInBank(const std::string& filename,const std::string& requestedName,int replace=-1,bool matchName=false) {
+        ofJson bank;if(!readStoreBank(filename,bank))return -1;
+        auto& entries=bank["slots"];const std::string nm=ofTrim(requestedName);
+        int slot=replace;
+        if(matchName && slot<0 && !nm.empty())
+            for(int k=0;k<std::min(SLOTS,(int)entries.size());++k)
+                if(entries[k].is_object() && storeSnapshotName(entries[k],k)==nm){slot=k;break;}
+        if(slot<0)for(int k=0;k<SLOTS;++k)
+            if(k>=(int)entries.size() || !entries[k].is_object()){slot=k;break;}
+        if(slot<0 || slot>=SLOTS){message="This bank is full; choose a snapshot to replace";return -1;}
+        if(!host.capture){message="Could not capture the current sound";return -1;}
+        if(filename.empty() || filename==currentBank){store(slot,nm);return slot;}
+        ofJson sound;
+        try{sound=host.capture();}catch(...){message="Could not capture the current sound";return -1;}
+        if(!sound.is_object()){message="Could not capture the current sound";return -1;}
+        const std::string keep=slot<(int)entries.size() && entries[slot].is_object()?storeSnapshotName(entries[slot],slot):std::string();
+        sound["name"]=!nm.empty()?nm:!keep.empty()?keep:"Snapshot "+ofToString(slot+1);
+        while((int)entries.size()<=slot)entries.push_back(nullptr);
+        entries[slot]=sound;bank["active"]=slot;
+        const auto path=dir()/"banks"/filename;
+        auto temporary=std::filesystem::path(path.string()+".store.tmp");
+        for(int suffix=1;std::filesystem::exists(temporary);++suffix)
+            temporary=std::filesystem::path(path.string()+".store-"+ofToString(suffix)+".tmp");
+        bool saved=false;try{saved=ofSavePrettyJson(temporary.string(),bank);}catch(...){}
+        std::error_code error;
+        if(saved)std::filesystem::rename(temporary,path,error);
+        if(!saved || error){
+            std::filesystem::remove(temporary,error);message="Could not save bank "+std::filesystem::path(filename).stem().string();return -1;
+        }
+        message="Stored "+sound["name"].get<std::string>()+" in "+std::filesystem::path(filename).stem().string();
+        return slot;
     }
     bool saveBank(const std::string& path) {
         ofJson j;
@@ -441,8 +556,11 @@ public:
         }
         const int a = j.value("active", -1);
         active = a >= 0 && a < SLOTS && used[a] ? a : -1;
-        message = "Loaded " + std::filesystem::path(path).stem().string();
-        saveLibrary();   // becomes the shared set
+        const std::filesystem::path source(path);
+        currentBank=source.parent_path().lexically_normal()==(dir()/"banks").lexically_normal()
+            && ofToLower(source.filename().string())!="factory.json"?source.filename().string():std::string();
+        saveLibrary();
+        message = "Loaded " + source.stem().string();   // becomes the shared set
         return true;
     }
     // Bundled collections must not erase a user's only copy of their current
@@ -587,34 +705,50 @@ public:
         ImGui::SameLine();
         if(ImGui::Button("Store...")) {
             std::snprintf(nameBuf, sizeof(nameBuf), "%s", active >= 0 ? name(active).c_str() : "");
+            storeBank=currentBank;storeBanks=storeBankNames();refreshStoreDestination();
             ImGui::OpenPopup("##snapStore");
         }
         if(ImGui::BeginPopup("##snapStore")) {
             ImGui::TextDisabled("Store the current sound");
-            ImGui::SetNextItemWidth(200 * z);
-            if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-            if(ImGui::InputTextWithHint("##snapName", "name", nameBuf, sizeof(nameBuf), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                // Enter: over the snapshot with this name, else a new one
-                const std::string nm = ofTrim(std::string(nameBuf));
-                int slot = -1;
-                for(int k = 0; k < SLOTS && slot < 0 && !nm.empty(); k++) if(used[k] && name(k) == nm) slot = k;
-                if(slot >= 0) store(slot, nm);
-                else if(storeNew(nm) < 0 && active >= 0) store(active, nm);
-                ImGui::CloseCurrentPopup();
+            ImGui::SetNextItemWidth(260*z);
+            const auto destination=storeBank.empty()?std::string("Current collection"):std::filesystem::path(storeBank).stem().string();
+            if(ImGui::BeginCombo("Bank",destination.c_str(),ImGuiComboFlags_HeightLarge)){
+                if(currentBank.empty() && ImGui::Selectable("Current collection (unnamed)",storeBank.empty())){
+                    storeBank.clear();refreshStoreDestination();
+                }
+                ImGuiListClipper clipper;clipper.Begin((int)storeBanks.size());
+                while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i){
+                    const auto& file=storeBanks[i];
+                    std::string label=std::filesystem::path(file).stem().string();if(file==currentBank)label+=" (current)";
+                    if(ImGui::Selectable(label.c_str(),file==storeBank)){storeBank=file;refreshStoreDestination();}
+                }
+                ImGui::EndCombo();
             }
-            ImGui::TextDisabled("Enter: a new snapshot (or over the one with this name)");
+            ImGui::SetNextItemWidth(260*z);
+            if(ImGui::IsWindowAppearing())ImGui::SetKeyboardFocusHere();
+            const bool enter=ImGui::InputTextWithHint("##snapName","Snapshot name",nameBuf,sizeof(nameBuf),ImGuiInputTextFlags_EnterReturnsTrue);
+            auto save=[&](int replace,bool match){
+                if(storeInBank(storeBank,nameBuf,replace,match)>=0){ImGui::CloseCurrentPopup();return;}
+                storeError=message;
+            };
+            const bool sameCollection=storeBank.empty() || storeBank==currentBank;
+            if(ImGui::Button("Save snapshot") || enter)save(-1,sameCollection);
+            ImGui::TextDisabled(sameCollection?"Enter: new snapshot or replace matching name":"Enter: new snapshot in the selected bank");
             ImGui::Separator();
-            bool full = true;
-            for(bool u : used) if(!u) full = false;
-            if(!full && ImGui::Selectable("+ New snapshot")) { storeNew(ofTrim(std::string(nameBuf))); ImGui::CloseCurrentPopup(); }
-            ImGui::TextDisabled("Replace");
-            for(int k = 0; k < SLOTS; k++) {
-                if(!used[k]) continue;
-                if(ImGui::Selectable(label(k).c_str(), k == active)) {
-                    store(k, ofTrim(std::string(nameBuf)));
-                    ImGui::CloseCurrentPopup();
+            const auto* entries=storeDestination.is_object() && storeDestination.contains("slots")?&storeDestination["slots"]:nullptr;
+            if(entries){
+                bool full=true;for(int k=0;k<SLOTS;++k)
+                    if(k>=(int)entries->size() || !(*entries)[k].is_object()){full=false;break;}
+                if(!full && ImGui::Selectable("+ New snapshot"))save(-1,false);
+                if(full)ImGui::TextDisabled("Bank full: choose a snapshot to replace");
+                ImGui::TextDisabled("Replace");
+                for(int k=0;k<std::min(SLOTS,(int)entries->size());++k){
+                    if(!(*entries)[k].is_object())continue;
+                    const auto label=ofToString(k+1)+"  "+storeSnapshotName((*entries)[k],k);
+                    if(ImGui::Selectable(label.c_str(),(storeBank.empty() || storeBank==currentBank) && k==active))save(k,false);
                 }
             }
+            if(!storeError.empty())ImGui::TextWrapped("%s",storeError.c_str());
             ImGui::EndPopup();
         }
         ImGui::SameLine();
@@ -624,6 +758,18 @@ public:
         ImGui::SameLine();
         if(ImGui::Button("Banks")) ImGui::OpenPopup("##snapBanks");
         if(ImGui::BeginPopup("##snapBanks")) {
+            if(!currentBank.empty())ImGui::TextDisabled("Current: %s",std::filesystem::path(currentBank).stem().string().c_str());
+            if(ImGui::BeginMenu("New bank")){
+                ImGui::SetNextItemWidth(180*z);
+                const bool enter=ImGui::InputText("##newBankName",newBankName,sizeof(newBankName),ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::TextDisabled("Starts with the current sound. Store adds snapshots.");
+                if((ImGui::Button("Create") || enter) && newBankName[0]){
+                    if(newBank(newBankName)){newBankName[0]='\0';ImGui::CloseCurrentPopup();}
+                }
+                if(!message.empty())ImGui::TextWrapped("%s",message.c_str());
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
             if(host.factory && ImGui::MenuItem("Factory collection")) loadFactory();
             if(!host.bundledBanks.empty() && ImGui::BeginMenu("Bundled collections")) {
                 for(const auto& bank : host.bundledBanks)
@@ -646,7 +792,14 @@ public:
                 ImGui::SetNextItemWidth(180 * z);
                 const bool enter = ImGui::InputText("##snapBankName", bankName, sizeof(bankName), ImGuiInputTextFlags_EnterReturnsTrue);
                 if((ImGui::Button("Save") || enter) && bankName[0]) {
-                    saveBank((dir() / "banks" / bankName).string());
+                    const auto path=dir()/"banks"/bankName;
+                    if(saveBank(path.string())){
+                        currentBank=path.parent_path().lexically_normal()==(dir()/"banks").lexically_normal()
+                            ?path.filename().string():std::string();
+                        if(!currentBank.empty() && std::filesystem::path(currentBank).extension()!=".json")currentBank+=".json";
+                        if(ofToLower(currentBank)=="factory.json")currentBank.clear();
+                        saveLibrary();
+                    }
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndMenu();
@@ -822,6 +975,10 @@ private:
     std::string message;
     char nameBuf[64] = "";
     char bankName[64] = "my bank";
+    char newBankName[64] = "";
+    std::string currentBank,storeBank,storeError;
+    std::vector<std::string> storeBanks;
+    ofJson storeDestination;
     char presetBuf[96] = "";
     std::filesystem::file_time_type libTime{};
     float libCheckAt = 0.0f;
