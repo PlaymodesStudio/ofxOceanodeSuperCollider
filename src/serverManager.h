@@ -143,6 +143,17 @@ public:
     // reconnected within the same frame are not freed and recreated.
     void requestRecomputeGraph(){ recomputePending = true; }
 
+    bool hasGraphNodes() const { return !nodesList.empty(); }
+    // Tickets are submitted only by a successful rebuild. An older /synced
+    // cannot release resources retired after that rebuild was submitted.
+    uint64_t requestMixerRouting(std::shared_ptr<void> lease = {}) {
+        if(!initialized) return 0;
+        const auto ticket=++mixerRoutingRequested;
+        if(lease) mixerRetirements.emplace_back(ticket,std::move(lease));
+        requestRecomputeGraph(); return ticket;
+    }
+    bool mixerRoutingReady(uint64_t ticket) const { return mixerRoutingCompleted>=ticket; }
+
     void recomputeGraphOnce(){
         numRecomputeGraphOnce++;
         if(numRecomputeGraphOnce == outputs.size()){
@@ -248,6 +259,18 @@ private:
     std::map<scNode*, ofEventListener> nodeDestroyedListeners;
     bool nodesListChanged = false;
     uint64_t graphGeneration = 0;
+    uint64_t mixerRoutingRequested=0,mixerRoutingSubmitted=0,mixerRoutingCompleted=0;
+    std::vector<std::pair<uint64_t,std::shared_ptr<void>>> mixerRetirements;
+    void completeMixerRouting(uint64_t ticket) {
+        mixerRoutingCompleted=std::max(mixerRoutingCompleted,ticket);
+        // Destroy leases after compacting the pending list: native destruction
+        // can request another graph rebuild from an event callback.
+        std::vector<std::shared_ptr<void>> released;
+        for(auto it=mixerRetirements.begin();it!=mixerRetirements.end();) {
+            if(it->first<=mixerRoutingCompleted) { released.push_back(std::move(it->second)); it=mixerRetirements.erase(it); }
+            else ++it;
+        }
+    }
     std::map<std::string, std::string> synthdefFolders;
     std::function<void()> synthdefReloadCallback;
     

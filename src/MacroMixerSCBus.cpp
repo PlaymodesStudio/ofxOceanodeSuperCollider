@@ -24,6 +24,8 @@ class AudioBridge : public scNode {
     int channels=2;
     float gainA=1,gainB=0,smoothing=.02f;
     ofEventListeners graphListeners;
+    std::vector<serverManager*> managers;
+    std::map<serverManager*,uint64_t> routingTickets;
     void send(State& state) {
         if(!state.synth) return;
         state.synth->set("inA",state.a); state.synth->set("inB",state.b); state.synth->set("out",state.out);
@@ -36,7 +38,7 @@ class AudioBridge : public scNode {
         retired.erase(std::remove_if(retired.begin(),retired.end(),[](const auto& r){return r.pending.empty();}),retired.end());
     }
 public:
-    explicit AudioBridge(const std::vector<serverManager*>& managers):scNode("MacroMixer Audio") {
+    explicit AudioBridge(const std::vector<serverManager*>& managers):scNode("MacroMixer Audio"),managers(managers) {
         addInput("A"); addInput("B"); addOutput("Out");
         for(auto* manager:managers) if(manager) graphListeners.push(manager->graphComputed.newListener([this,manager] { completed(manager->getServer()); }));
     }
@@ -44,7 +46,14 @@ public:
     void check() const {
         for(const auto& item:states) if(item.second.failed) throw std::runtime_error("SC audio-bus allocation failed; origin retained. Free server resources and retry.");
     }
-    bool ready() const { for(const auto& item:states) if(!item.second.ready) return false; return true; }
+    bool ready() const {
+        for(const auto& item:routingTickets) if(!item.first->mixerRoutingReady(item.second)) return false;
+        for(const auto& item:states) if(!item.second.ready) return false;
+        return true;
+    }
+    void retire(const std::shared_ptr<void>& lease) {
+        for(auto* manager:managers) if(manager && (manager->hasGraphNodes() || states.count(manager->getServer()))) manager->requestMixerRouting(lease);
+    }
     bool isMacroMixerBridge() const override { return true; }
     void graphWillRebuild(ofxSCServer* server) override { states[server].ready=false; }
     void updateSources(const Value& av,const Value& bv,float progress,const ofJson& options,const std::string& policy) {
@@ -62,6 +71,8 @@ public:
             if(!r.pending.empty()) retired.push_back(std::move(r));
             sourceA=av; sourceB=bv;
             suppressInputRefresh=true; inputs[0]=a; inputs[1]=b; suppressInputRefresh=false;
+            for(auto* manager:managers) if(manager && (manager->hasGraphNodes() || states.count(manager->getServer())))
+                routingTickets[manager]=manager->requestMixerRouting();
         } else { sourceA=av; sourceB=bv; }
         // Keep the prepared start gains while the server is still executing
         // the scheduled rebuild; host frames cannot advance that fade yet.
@@ -140,6 +151,9 @@ void registerMacroMixerSCBus(const std::vector<serverManager*>& servers) {
             };
         };
         p.ready=[](const Value& v) {return static_cast<AudioBridge*>(MacroMixerMixing::object<nodePort>(v).getNodeRef())->ready();};
+        p.retire=[](const Value& v,std::shared_ptr<void> lease) {
+            if(auto* bridge=dynamic_cast<AudioBridge*>(MacroMixerMixing::object<nodePort>(v).getNodeRef())) bridge->retire(lease);
+        };
         registry.registerPolicy(std::move(p),spec.first=="linear");
     }
 }

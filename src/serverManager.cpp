@@ -97,6 +97,7 @@ serverManager::~serverManager(){
     nodesList.clear();
     connections.clear(); nodeLinks.clear(); nodeDestroyedListeners.clear();
     releaseGraphBusses();
+    mixerRetirements.clear();
 }
 
 void serverManager::setup(){
@@ -967,8 +968,10 @@ void serverManager::watchMixerGraphSync(){
         if(message.getAddress()!="/synced" || message.getNumArgs()!=1
            || message.getArgAsInt(0)!=mixerGraphSyncID) return;
         mixerGraphSyncID=-1;
+        const auto routingTicket=mixerRoutingSubmitted;
         for(auto* node:nodesList) node->graphDidRebuild(server,true);
         graphComputed.notify();
+        completeMixerRouting(routingTicket);
     });
 }
 
@@ -1018,6 +1021,7 @@ void serverManager::recomputeGraph(){
     if(ofxOceanodeContainer::isClearingContainers()) return;
     if(ofxOceanodeShared::isPresetLoading()) return;
     if(!initialized) return;
+    const auto routingTicket=mixerRoutingRequested;
 //    ofLog() << "Recompute Graph";
     if(outputs.size() == 0){
         clearFoldedWaveforms();
@@ -1026,6 +1030,11 @@ void serverManager::recomputeGraph(){
         nodesList.clear();
         connections.clear(); nodeLinks.clear(); nodeDestroyedListeners.clear();
         releaseGraphBusses();
+        mixerRoutingSubmitted=routingTicket;
+        if(routingTicket>mixerRoutingCompleted && !(server->isNRTCapturing() && server->isNRTCaptureOnly())) {
+            server->setBLatency(true); mixerGraphSyncID=server->requestSync(); server->setBLatency(false);
+            return;
+        }
     }else{
         
 //        server->setWaitToSend(true);
@@ -1049,7 +1058,7 @@ void serverManager::recomputeGraph(){
                 newNodesList.push_back(outputs[i]);
             }
         }
-        const bool audioMixer=std::any_of(newNodesList.begin(),newNodesList.end(),[](const auto* node){return node->isMacroMixerBridge();});
+        const bool audioMixer=routingTicket>mixerRoutingCompleted || std::any_of(newNodesList.begin(),newNodesList.end(),[](const auto* node){return node->isMacroMixerBridge();});
         if(audioMixer) {
             for(auto* node:newNodesList) requireSynthdefFolder(node->requiredSynthdefFolder());
             if(areRequiredSynthdefsLoading()) {
@@ -1070,11 +1079,18 @@ void serverManager::recomputeGraph(){
         for(auto* node : newNodesList) newAudioEnabled.push_back(node->isAudioEnabled());
         if(nodesList == newNodesList && !nodesListChanged && newConnections == connections &&
            graphAudioEnabled == newAudioEnabled){
+            if(audioMixer && mixerGraphSyncID>=0 && routingTicket>mixerRoutingSubmitted) {
+                mixerRoutingSubmitted=routingTicket;
+                server->setBLatency(true); mixerGraphSyncID=server->requestSync(); server->setBLatency(false);
+                return;
+            }
             // A SynthDef /sync can defer a rebuild even when its topology did
             // not change. Release that readiness fence on the unchanged graph.
             if(audioMixer && mixerGraphSyncID<0) {
+                mixerRoutingSubmitted=routingTicket;
                 for(auto* node:newNodesList) node->graphDidRebuild(server,true);
                 graphComputed.notify();
+                completeMixerRouting(routingTicket);
             }
             return;
         }
@@ -1235,6 +1251,7 @@ void serverManager::recomputeGraph(){
         nodesList = newNodesList;
         graphAudioEnabled = std::move(newAudioEnabled);
         connections = newConnections;
+        mixerRoutingSubmitted=routingTicket;
         // Route and change running state with the same server latency. An Off
         // synth is never freed merely because its output has been redirected.
         for(auto* node : nodesList) node->applyAudioEnabled(server);
@@ -1252,6 +1269,7 @@ void serverManager::recomputeGraph(){
         if(mixerGraphSyncID>=0) return;
     }
     graphComputed.notify();
+    completeMixerRouting(routingTicket);
 }
 
 void serverManager::loadSynthdefsFromPreset(const std::string& path, bool forceLoad, bool waitForLoad){
