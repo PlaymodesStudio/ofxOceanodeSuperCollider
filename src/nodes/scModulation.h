@@ -44,6 +44,8 @@ public:
     static constexpr int NUM_SOURCES = MAX_LFOS + MAX_ENVS + 2 + MAX_EXT + 1;
     static constexpr int SRC_ENV = MAX_LFOS, SRC_VEL = MAX_LFOS + MAX_ENVS, SRC_RND = SRC_VEL + 1,
                          SRC_EXT = SRC_RND + 1, SRC_VOICE = SRC_EXT + MAX_EXT;
+    // room for a host's own sources after the built-in ones (extraSources)
+    static constexpr int MAX_EXTRA_SOURCES = 4, MAX_SOURCES = NUM_SOURCES + MAX_EXTRA_SOURCES;
 
     // unipolar: an LFO moves it 0..1 x amount (positions: +1 reaches the end),
     // else -1..1 around the control's value
@@ -71,10 +73,14 @@ public:
     bool partialLfos = false;
     // Set before setup: the most voices the node can have (the indexer ranges; GrainBox: 500)
     int maxVoices = 16;
-    // Optional per-host additions; defaults preserve every existing node layout.
+    // The bus stride of every source and target: as many voices as the host
+    // can have. W (16) for every host but PolyComb (32). Set before create().
     int busWidth = W;
+    // A host's own sources after the built-in ones (PolyComb: "Delta"): matrix
+    // rows NUM_SOURCES..., written by the host on sourceBus(server, NUM_SOURCES + k).
+    // Set before setup(). None: the layout every other host has.
     std::vector<std::string> extraSources;
-    int sourceCount() const { return NUM_SOURCES + (int)extraSources.size(); }
+    int sourceCount() const { return NUM_SOURCES + std::min((int)extraSources.size(), (int)MAX_EXTRA_SOURCES); }
     // Set before setup: appended to every parameter's name (GrainBox's engines: " 2"...)
     std::string nameSuffix;
     // How many LFOs / envelopes / external sources the node runs (the "+ Add" buttons stop there)
@@ -191,7 +197,7 @@ private:
         int kind = 0;                                          // 0 float, 1 int, 2 vector<float>, 3 vector<int>
         float lo = 0.0f, hi = 1.0f;
         std::vector<float> base, written;
-        std::vector<float> amount = std::vector<float>(NUM_SOURCES, 0.0f);
+        std::array<float, MAX_SOURCES> amount{};
         bool applied = false;                                  // the control holds base + modulation now
         bool pending = false;                                  // a loaded base, not set yet
         bool routed() const { for(float a : amount) if(std::abs(a) > 1e-4f) return true; return false; }
@@ -211,6 +217,7 @@ private:
         ofxSCBus* srcBlock = nullptr;                          // NUM_SOURCES * W
         ofxSCBus* modBlock = nullptr;                          // (targets + 1) * W
         std::array<ofxSCSynth*, MAX_LFOS> lfo{};
+        std::array<std::string, MAX_LFOS> lfoDef;   // ModLfo or ModLfoRnd
         std::array<ofxSCSynth*, MAX_ENVS> env{};
         std::map<int, ofxSCSynth*> routes;
         int sourceGroup = -1, routeGroup = -1, gateBus = -1;
@@ -229,6 +236,11 @@ private:
 
     // parameters
     std::array<ofParameter<bool>, MAX_LFOS> lfoSync, lfoCentered, lfoNorm, lfoNoise;
+    // Random type (ModLfoRnd): 0 off (the waveform / noise), 1 stepped, 2 smooth, 3 jumps;
+    // Random Smooth: the stepped values' glide (s)
+    std::array<ofParameter<int>, MAX_LFOS> lfoRndType;
+    std::array<ofParameter<float>, MAX_LFOS> lfoRndSmooth;
+    static float rndPreview(int li, float ph, int type, float smooth);   // a fixed random pattern, for the drawings
     std::array<ofParameter<std::vector<float>>, MAX_LFOS> lfoGain;
     std::array<ofParameter<std::vector<float>>, MAX_LFOS> lfoBeats, lfoHz, lfoDetune, lfoRound, lfoSkew, lfoPw,
                                                           lfoPow, lfoBiPow, lfoSH;

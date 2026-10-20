@@ -112,7 +112,7 @@ float scModulation::noise2(float x, float y, float salt) {
 // themselves read it as a table)
 std::vector<float> scModulation::lfoTransfer(int li, int size) const {
     const float gain = first(lfoGain[li].get(), 1.0f), pw2 = first(lfoPow[li].get()), bp = first(lfoBiPow[li].get());
-    const std::array<float, 9> key{gain, pw2, bp, grainExtras ? (float)lfoSteps[li].get() : 0.0f};
+    const std::array<float, 9> key{gain, pw2, bp, (float)lfoSteps[li].get()};
     auto& cache = transferCache[li];
     const int count = std::max(2, size);
     if(cache.values.size() == (size_t)count && cache.key == key) return cache.values;
@@ -122,7 +122,7 @@ std::vector<float> scModulation::lfoTransfer(int li, int size) const {
         v = ofClamp((v - 0.5f) * gain + 0.5f, 0.0f, 1.0f);
         if(std::abs(pw2) > 1e-4f) v = reflectUnit(customPow(v, pw2));
         if(std::abs(bp) > 1e-4f) v = biPow(v, bp);
-        if(grainExtras && lfoSteps[li].get() >= 2){
+        if(lfoSteps[li].get() >= 2){
             const float q = (float)lfoSteps[li].get();
             v = std::min(std::floor(v * q), q - 1.0f) / (q - 1.0f);
         }
@@ -169,10 +169,15 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
         lfoNoise[li].set(L + "Noise" + X, false);                 host.regB(lfoNoise[li], toLfo);
         lfoSHGlide[li].set(L + "S&H Glide" + X, 0.0f, 0.0f, 10.0f); host.regF(lfoSHGlide[li], toLfo);
         lfoNScale[li].set(L + "Noise Scale" + X, 1.0f, 0.0f, 10.0f); host.regF(lfoNScale[li], toLfo);
+        // Random: each voice a new value per cycle (at its own phase): another SynthDef
+        auto toRnd = [this, toLfo]() { forStates([this](ofxSCServer* sv, ServerState& st){ updateSources(sv, st); }); toLfo(); };
+        lfoRndType[li].set(L + "Random Type" + X, 0, 0, 3);      host.regI(lfoRndType[li], toRnd);
+        lfoRndSmooth[li].set(L + "Random Smooth" + X, 0.0f, 0.0f, 10.0f); host.regF(lfoRndSmooth[li], toLfo);
+        // Steps: the output quantized to that many levels (0: smooth; server LFOs: ModLfoX)
+        lfoSteps[li].set(L + "Steps" + X, 0, 0, 32);              host.regI(lfoSteps[li], toRnd);
         auto phases = [this]() { updatePhases(); notify(); };
         if(grainExtras){
             lfoRegion[li].set(L + "Smp" + X, false);          host.regB(lfoRegion[li], toLfo);
-            lfoSteps[li].set(L + "Steps" + X, 0, 0, 32);      host.regI(lfoSteps[li], toLfo);
         }
         if(partialLfos){
             lfoPSpread[li].set(L + "Partial Spread" + X, 0.0f, -8.0f, 8.0f); host.regF(lfoPSpread[li], [this]() { notify(); });
@@ -218,7 +223,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
                 &lfoDetune[li], &lfoInit[li], &lfoRound[li], &lfoSkew[li], &lfoPw[li], &lfoCentered[li], &lfoGain[li],
                 &lfoPow[li], &lfoBiPow[li], &lfoNoise[li], &lfoSHGlide[li], &lfoNScale[li], &lfoRegion[li], &lfoSteps[li],
                 &lfoPSpread[li], &lfoPRand[li], &lfoNWaves[li], &lfoNorm[li], &lfoInvert[li], &lfoSym[li], &lfoShuffle[li],
-                &lfoRand[li], &lfoOffset[li], &lfoQuant[li], &lfoComb[li], &lfoModulo[li]}) own(*q);
+                &lfoRand[li], &lfoOffset[li], &lfoQuant[li], &lfoComb[li], &lfoModulo[li], &lfoRndType[li], &lfoRndSmooth[li]}) own(*q);
     }
     for(auto& E : envs) for(auto* q : std::initializer_list<ofAbstractParameter*>{&E.a, &E.d, &E.s, &E.r, &E.ca, &E.cd, &E.cr, &E.vt}) own(*q);
     for(auto& e : exts) own(e);
@@ -288,6 +293,26 @@ void scModulation::sendLfo(ServerState& st, int li) {
     s->set("seed", li * 17.31f);
     s->set("phoff", perVoice ? expand(lfoPhases[li], n()) : std::vector<float>(n(), 0.0f));
     s->set("reset", (float)resetCounter);
+    s->set("rtype", (float)lfoRndType[li].get());     // ModLfoX only
+    s->set("steps", (float)lfoSteps[li].get());
+    s->set("rsmooth", lfoRndSmooth[li].get());
+}
+
+// One value per cycle, from a hash of the LFO and the cycle (no state): the
+// cards' pictures of a random LFO, two cycles wide
+float scModulation::rndPreview(int li, float ph, int type, float smooth) {
+    auto value = [&](int cycle){ const float x = std::sin(cycle * 12.9898f + li * 78.233f) * 43758.5453f; return x - std::floor(x); };
+    const float pos = ph * 2.0f;
+    const int c = (int)std::floor(pos);
+    const float f = pos - c;
+    float stepped = value(c);
+    if(smooth > 0.0f) stepped = value(c - 1) + (stepped - value(c - 1)) * (1.0f - std::exp(-f * 0.5f / std::max(1e-3f, smooth)));
+    const float v0 = value(c - 2), v1 = value(c - 1), v2 = value(c), v3 = value(c + 1);
+    const float cubic = ofClamp(v1 + 0.5f * f * ((v2 - v0) + f * ((2 * v0 - 5 * v1 + 4 * v2 - v3) + f * (3 * (v1 - v2) + v3 - v0))), 0.0f, 1.0f);
+    if(type == 1) return stepped;
+    if(type == 2) return cubic;
+    const float j = stepped + cubic - 1.0f;
+    return j - std::floor(j);
 }
 
 void scModulation::sendEnv(ServerState& st, int e) {
@@ -327,8 +352,11 @@ void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
     if(!st.created) return;
     for(int li = 0; li < MAX_LFOS; li++){
         auto*& s = st.lfo[li];
+        const std::string wanted = lfoRndType[li].get() > 0 || lfoSteps[li].get() >= 2 ? "ModLfoX" : "ModLfo";
+        if(s && st.lfoDef[li] != wanted){ s->free(); delete s; s = nullptr; }   // its Random type changed
         if(li < lfoCount && !s){
-            s = new ofxSCSynth(def("ModLfo"), server);
+            st.lfoDef[li] = wanted;
+            s = new ofxSCSynth(def(wanted), server);
             sendLfo(st, li);
             s->createAndRun(1, st.sourceGroup, true);
         }else if(li >= lfoCount && s){ s->free(); delete s; s = nullptr; }
@@ -490,8 +518,8 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
     const float rnd = first(lfoRound[li].get(), 0.5f), sk = first(lfoSkew[li].get()), pw = first(lfoPw[li].get(), 0.5f);
     const float pw2 = first(lfoPow[li].get()), bp = first(lfoBiPow[li].get()), gain = first(lfoGain[li].get(), 1.0f);
     const std::array<float, 9> key{rnd, sk, pw, pw2, bp, gain,
-        lfoNoise[li].get() ? 1.0f : 0.0f, lfoCentered[li].get() ? 1.0f : 0.0f,
-        grainExtras ? (float)lfoSteps[li].get() : 0.0f};
+        (lfoNoise[li].get() ? 1.0f : 0.0f) + lfoRndType[li].get() * 2.0f + lfoRndSmooth[li].get() * 10.0f, lfoCentered[li].get() ? 1.0f : 0.0f,
+        (float)lfoSteps[li].get()};
     auto& cache = cycleCache[li];
     const int count = std::max(2, size);
     if(cache.values.size() == (size_t)count && cache.key == key) return cache.values;
@@ -501,12 +529,13 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
         const float ph = float(i) / (t.size() - 1);
         float v;
         // noise: 4 Perlin steps per cycle, crossfaded into the next cycle's start so it loops
-        if(lfoNoise[li].get()) v = perlin(ph * 4.0f, seed) * (1.0f - ph) + perlin(ph * 4.0f - 4.0f, seed) * ph;
+        if(lfoRndType[li].get() > 0) v = rndPreview(li, ph, lfoRndType[li].get(), lfoRndSmooth[li].get());
+        else if(lfoNoise[li].get()) v = perlin(ph * 4.0f, seed) * (1.0f - ph) + perlin(ph * 4.0f - 4.0f, seed) * ph;
         else v = morph(ph, rnd, sk, pw, lfoCentered[li].get());
         v = ofClamp((v - 0.5f) * gain + 0.5f, 0.0f, 1.0f);
         if(std::abs(pw2) > 1e-4f) v = reflectUnit(customPow(v, pw2));
         if(std::abs(bp) > 1e-4f) v = biPow(v, bp);
-        if(grainExtras && lfoSteps[li].get() >= 2){
+        if(lfoSteps[li].get() >= 2){
             const float q = (float)lfoSteps[li].get();
             v = std::min(std::floor(v * q), q - 1.0f) / (q - 1.0f);
         }
@@ -601,7 +630,7 @@ float scModulation::liveValue(int source, int voice) const {
 // ════════════════════════════════════════════════════════════════════════════
 
 std::string scModulation::sourceName(int s) const {
-    if(s >= NUM_SOURCES && s < sourceCount()) return extraSources[s-NUM_SOURCES];
+    if(s >= NUM_SOURCES) return s < sourceCount() ? extraSources[s - NUM_SOURCES] : "";
     if(s < MAX_LFOS) return "LFO " + ofToString(s + 1);
     if(s < SRC_VEL) return "Env " + ofToString(s - SRC_ENV + 1);
     if(s == SRC_VEL) return "Velocity";
@@ -619,6 +648,7 @@ bool scModulation::sourceUsed(int s) const {
     return n() > 1;
 }
 ImU32 scModulation::sourceColor(int s) const {
+    if(s >= NUM_SOURCES) return pal::lfo[(s - NUM_SOURCES + 3) % MAX_LFOS];
     if(s < MAX_LFOS) return pal::lfo[s];
     if(s < SRC_VEL) return pal::env[s - SRC_ENV];
     return pal::headerText;
@@ -651,7 +681,6 @@ void scModulation::load(const ofJson& j, const std::string& prefix) {
     if(j.contains(prefix + "Matrix") && j[prefix + "Matrix"].is_array()){
         try {
             auto m = j[prefix + "Matrix"].get<std::vector<float>>();
-            if((int)m.size()==NUM_SOURCES*T()) m.resize(sourceCount()*T(),0.0f);
             m = fitMatrix(m, sourceCount(), T());
             if((int)m.size() == sourceCount() * T()) matrix = m;
         } catch(...) {}
@@ -672,7 +701,6 @@ void scModulation::afterLoad() {
 // ════════════════════════════════════════════════════════════════════════════
 
 bool scModulation::resolveParam(const std::string& key, ParamTarget& pt) const {
-    pt.amount.resize(sourceCount(), 0.0f);
     if(ownKeys.count(key) || targetOfKey.count(key) || !host.control) return false;
     ofAbstractParameter* q = host.control(key);
     if(!q) return false;
@@ -740,7 +768,7 @@ bool scModulation::isParamTarget(const std::string& key) const {
 // A source as it moves a control: LFOs, Random, Ext and Voice around the
 // value (-0.5..0.5: amount 1 sweeps the whole range), envelopes and velocity up from it
 float scModulation::paramSource(int s, int voice) const {
-    if(s >= NUM_SOURCES) return liveValue(s, voice);
+    if(s >= NUM_SOURCES) return liveValue(s, voice);    // a host's source: up from the value
     if(s < MAX_LFOS) return liveValue(s, perVoice ? voice : 0) - 0.5f;
     if(s < SRC_RND) return liveValue(s, voice);
     if(s == SRC_RND) return liveValue(s, voice) * 0.5f;
@@ -1146,14 +1174,16 @@ void scModulation::drawLfoCard(int li, float w) {
         const float rnd = first(lfoRound[li].get(), 0.5f), sk = first(lfoSkew[li].get()), pw = first(lfoPw[li].get(), 0.5f);
         const float pw2 = first(lfoPow[li].get()), bp = first(lfoBiPow[li].get()), gain = first(lfoGain[li].get(), 1.0f);
         auto value = [&](float ph){
-            float v = lfoNoise[li].get() ? noise2(ph * 3.0f, 0.0f, li * 17.31f) : morph(ph, rnd, sk, pw, lfoCentered[li].get());
+            float v = lfoRndType[li].get() > 0 ? rndPreview(li, ph, lfoRndType[li].get(), lfoRndSmooth[li].get())
+                    : lfoNoise[li].get() ? noise2(ph * 3.0f, 0.0f, li * 17.31f) : morph(ph, rnd, sk, pw, lfoCentered[li].get());
             v = ofClamp((v - 0.5f) * gain + 0.5f, 0.0f, 1.0f);
             if(std::abs(pw2) > 1e-4f) v = reflectUnit(customPow(v, pw2));
             if(std::abs(bp) > 1e-4f) v = biPow(v, bp);
+            if(lfoSteps[li].get() >= 2){ const float q = (float)lfoSteps[li].get(); v = std::min(std::floor(v * q), q - 1.0f) / (q - 1.0f); }
             return v;
         };
-        const std::array<float, 8> key{rnd, sk, pw, pw2, bp, gain,
-            lfoNoise[li].get() ? 1.0f : 0.0f, lfoCentered[li].get() ? 1.0f : 0.0f};
+        const std::array<float, 8> key{rnd, sk, pw + lfoSteps[li].get() * 3.0f, pw2, bp, gain,
+            (lfoNoise[li].get() ? 1.0f : 0.0f) + lfoRndType[li].get() * 2.0f + lfoRndSmooth[li].get() * 10.0f, lfoCentered[li].get() ? 1.0f : 0.0f};
         auto& preview = previewCache[li];
         if(!preview.valid || preview.key != key){
             for(int i = 0; i <= 96; i++) preview.values[i] = value(i / 96.0f);
@@ -1198,8 +1228,11 @@ void scModulation::drawLfoCard(int li, float w) {
     ImGui::BeginGroup();
     const bool region = grainExtras && lfoRegion[li].get();
     if(!region){ toggle(lfoSync[li], "Sync"); ImGui::SameLine(); }
-    toggle(lfoNoise[li], "Noise");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Perlin noise instead of a waveform (as Oceanode's Noise node)");
+    const bool random = lfoRndType[li].get() > 0;
+    if(!random){
+        toggle(lfoNoise[li], "Noise");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Perlin noise instead of a waveform (as Oceanode's Noise node)");
+    }
     if(grainExtras){
         ImGui::SameLine();
         toggle(lfoRegion[li], "Smp");
@@ -1210,7 +1243,29 @@ void scModulation::drawLfoCard(int li, float w) {
     else sliderVec(lfoHz[li], "Rate", half, "%.3fHz", true);
     if(perVoice) sliderVec(lfoDetune[li], "Detune", half, "%.2f");
     slider(lfoInit[li], "Phase", half, "%.2f");
-    if(lfoNoise[li].get()){
+    {   // Random: per voice, a new value each cycle at the voice's own phase (not S&H's common clock)
+        static const char* types[] = {"Off", "Stepped", "Smooth", "Jumps"};
+        const std::string key = lfoRndType[li].getEscapedName();
+        const float x0 = ImGui::GetCursorPosX();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Rnd");
+        if(host.publishedUnderline) host.publishedUnderline(key);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(x0 + labelW * z);
+        ImGui::SetNextItemWidth(std::max(30.0f * z, half - labelW * z));
+        int t = std::clamp(lfoRndType[li].get(), 0, 3);
+        if(ImGui::Combo(("##rnd" + key).c_str(), &t, types, 4)) lfoRndType[li].set(t);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Random instead of the waveform: each voice draws a new value every cycle,\n"
+                                                     "at its own phase. Stepped: held (Smooth glides it); Smooth: a curve through\n"
+                                                     "the values; Jumps: both added, wrapped (sudden leaps).");
+        if(host.publishMenu) host.publishMenu(key);
+        if(lfoRndType[li].get() == 1){
+            slider(lfoRndSmooth[li], "Smooth", half, "%.3f s", true);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("The stepped values glide (one-pole) over this time (0: they jump)");
+        }
+    }
+    if(random){
+    }else if(lfoNoise[li].get()){
         if(perVoice || partialLfos) slider(lfoNScale[li], "Scale", half, "%.2f");
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("How different the voices' noises are: each voice reads the noise at\n"
                                                      "its own seed (its index x Scale). 0: all the same; 1 and up: independent.\n"
@@ -1226,14 +1281,12 @@ void scModulation::drawLfoCard(int li, float w) {
     sliderVec(lfoPow[li], "Pow", half, "%+.2f");
     sliderVec(lfoBiPow[li], "BiPow", half, "%+.2f");
     sliderVec(lfoSH[li], "S&H", half, "%.2f");
-    if(grainExtras){
-        sliderInt(lfoSteps[li], "Steps", half);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Quantize the shape to this many levels (0: smooth)");
-    }
+    sliderInt(lfoSteps[li], "Steps", half);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Quantize the shape to this many levels (0: smooth)");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip(lfoSync[li].get() ? "Sample & hold: steps per beat" : "Sample & hold: steps per second");
     slider(lfoSHGlide[li], "Glide", half, "%.3f s", true);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("S&H glide: each held value slides to the next over this time (0: steps)");
-    if(!lfoNoise[li].get()) toggle(lfoCentered[li], "Centered");
+    if(!lfoNoise[li].get() && !random) toggle(lfoCentered[li], "Centered");
     ImGui::EndGroup();
     if(perVoice){
         ImGui::SameLine(0, 8.0f * z);

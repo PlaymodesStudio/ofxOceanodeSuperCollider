@@ -1,0 +1,117 @@
+// ModLfoX<N>: ModLfo (modulation.scd, its code as is) plus the original
+// PolyComb's random types and Steps. The node uses it only for an LFO with a
+// Random type or Steps; ModLfo stays as it was for every other one.
+//
+//   \rtype 1  Stepped: a new random value each cycle (sample & hold), at the
+//             voice's own phase; glided by a one-pole of time \rsmooth (s)
+//   \rtype 2  Smooth: the cycle's values joined by a cubic (Catmull-Rom) curve
+//   \rtype 3  Jumps: Stepped + Smooth wrapped into 0..1
+//   \steps    the output quantized to that many levels (0: off)
+// The random values are a hash of the cycle number (and \seed): voices on the
+// same phase share them (a mono LFO: one value for all), as the original's
+// mono LFOs; once the voices' phases differ (Spread, Detune) each voice hashes
+// its own index too, as the original's poly LFOs (a random per voice).
+(
+var root, dir, perlin2;
+root = if(thisProcess.nowExecutingPath.notNil,
+    { thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs" },
+    { Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs" });
+dir = root +/+ "Modulation";
+File.mkdir(root); File.mkdir(dir);
+
+perlin2 = { |x, y, salt = 0|
+    var ix = x.floor, iy = y.floor, fx = x - ix, fy = y - iy;
+    var grad = { |cx, cy, dx, dy|
+        var h = ((((cx % 4096) * 12.9898) + ((cy % 4096) * 78.233) + salt).sin * 43758.5453).frac * 2pi;   // salt: each LFO (voice) its own field
+        (h.cos * dx) + (h.sin * dy)
+    };
+    var u = fx * fx * fx * (fx * (fx * 6 - 15) + 10), v = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+    var n00 = grad.(ix, iy, fx, fy), n10 = grad.(ix + 1, iy, fx - 1, fy);
+    var n01 = grad.(ix, iy + 1, fx, fy - 1), n11 = grad.(ix + 1, iy + 1, fx - 1, fy - 1);
+    var a = n00 + ((n10 - n00) * u), b = n01 + ((n11 - n01) * u);
+    ((a + ((b - a) * v)) * 1.4 + 0.5).clip(0, 1)
+};
+
+(1..32).do { |n|
+    var kv = { |name, def| NamedControl.kr(name, def ! n) };
+    SynthDef(("ModLfoX" ++ n).asSymbol, {
+        var customPow = { |value, powAmt|
+            var k1 = 2 * powAmt * 0.99999;
+            var k2 = k1 / ((powAmt.neg * 0.999999) + 1);
+            var k3 = (k2 * value.abs) + 1;
+            value * (k2 + 1) / k3.max(1.0e-6)
+        };
+        var reflect = { |v| v + ((v < 0) * v.neg) + ((v > 1) * (1 - v)) };
+        var reset = Changed.kr(\reset.kr(0));
+        var freq = kv.(\freq, 1), detune = kv.(\freqdetune, 0);
+        var spread = { TRand.kr(0, 1, reset + Impulse.kr(0)) } ! n;
+        var sweep = Sweep.kr(reset, freq + (spread * detune));
+        var phoff = kv.(\phoff, 0);
+        // the random types: per voice, a new value each cycle at the voice's own phase
+        var rpos = (sweep * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff;
+        var rcycle = rpos.floor, rfrac = rpos - rcycle;
+        var mono = ((phoff.asArray - phoff.asArray[0]).abs.sum < 1.0e-6) * (detune.asArray.abs.sum < 1.0e-6);
+        var rsalt = (\seed.kr(0) * 7.13) + ((0 .. (n - 1)) * 3.7193 * (1 - mono));
+        var rhash = { |c| ((((c % 8192) * 12.9898) + rsalt).sin * 43758.5453).frac };
+        var v3 = rhash.(rcycle), v2 = rhash.(rcycle - 1), v1 = rhash.(rcycle - 2), v0 = rhash.(rcycle - 3);
+        var rstepped = OnePole.kr(v3, exp(-1 / (\rsmooth.kr(0).max(1.0e-4) * ControlRate.ir)) * (\rsmooth.kr(0) > 0));
+        var rsmooth = (v1 + (0.5 * rfrac * ((v2 - v0) + (rfrac * (((2 * v0) - (5 * v1) + (4 * v2) - v3)
+            + (rfrac * ((3 * (v1 - v2)) + v3 - v0))))))).clip(0, 1);
+        var rjumps = ((rstepped + rsmooth) - 1).wrap(0, 1);
+        var steps = \steps.kr(0);
+        // Hold: stopped at the start, each voice at its offset (an indexer)
+        var ph = ((sweep * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff).wrap(0, 1);
+        var pw = kv.(\pw, 0.5).clip(0.001, 1), skew = kv.(\skew, 0), round = kv.(\round, 0.5);
+        var midpoint, leftMax, rightMin, centered, left, narrowed, wLo, wHi, widened;
+        var threshold, lo, hi, w, tri, cosRaw, cosMapped, upper, shape, noise, sh, held, out;
+        // width (PolyComb's applyPulseWidth)
+        midpoint = LinLin.kr(skew, -1, 1, 1, 0).clip(0, 1);
+        leftMax = LinLin.kr(1 - pw, 0, 0.5, 0, midpoint).clip(0, 1);
+        rightMin = LinLin.kr(pw, 0.5, 1, midpoint, 1).clip(0, 1);
+        centered = LinLin.kr(ph, (0.5 - pw).clip(0, 1), (0.5 + pw).clip(0, 1), 0, 1).clip(0, 1);
+        left = LinLin.kr(ph, 0, (pw * 2).max(1.0e-7).min(1), 0, 1).clip(0, 1);
+        narrowed = Select.kr(\centered.kr(1) > 0.5, [left, centered]);
+        narrowed = narrowed * (1 - ((skew < 0) * (narrowed >= 0.99999)));
+        wLo = LinLin.kr(ph, 0, leftMax.max(1.0e-7), 0, midpoint).clip(0, 1);
+        wHi = LinLin.kr(ph, rightMin.min(1 - 1.0e-7), 1, midpoint, 1).clip(0, 1);
+        widened = Select.kr(ph < midpoint, [wHi, wLo]);
+        ph = Select.kr(pw < 0.5, [Select.kr(pw >= 0.99999, [widened, midpoint]), narrowed]);
+        // skew
+        threshold = (0.5 - (skew * 0.5)).clip(0, 1);
+        lo = LinLin.kr(ph, 0, threshold.max(1.0e-7), 0, 0.5).clip(0, 0.5);
+        hi = LinLin.kr(ph, threshold.min(1 - 1.0e-7), 1, 0.5, 1).clip(0.5, 1);
+        ph = Select.kr(ph >= threshold, [lo, hi]);
+        // the shape: triangle .. cosine .. square
+        w = ph * 2 * pi;
+        tri = (1 - (2 * ph - 1).abs).max(0);
+        cosRaw = cos(w + pi);
+        cosMapped = LinLin.kr(cosRaw, -1, 1, 0, 1).clip(0, 1);
+        upper = customPow.(cosRaw, (round - 0.5) * 2);
+        shape = Select.kr(((round >= 0.5) + (round >= 1)).clip(0, 2), [
+            LinLin.kr(round, 0, 0.5, tri, cosMapped).clip(0, 1),
+            LinLin.kr(upper, -1, 1, 0, 1).clip(0, 1),
+            (ph >= 0.25) * (ph < 0.75)]);
+        // Noise: 2D Perlin noise (Oceanode's Noise node): x = the ever-rising
+        // counter (the LFO's rate: Hz or Beats), y = each voice's seed = its
+        // index x \nscale (how different the voices are); \seed: this LFO's
+        // own noise field (no two LFOs share values)
+        noise = perlin2.(sweep + \initphase.kr(0), (0 .. (n - 1)) * \nscale.kr(1), \seed.kr(0));
+        shape = Select.kr(\noise.kr(0) > 0.5, [shape, noise]);
+        shape = Select.kr(\rtype.kr(0).clip(0, 3), [shape, rstepped, rsmooth, rjumps]);
+        // Gain: stretched around the middle, clipped at 0 / 1 (before S&H, Pow, BiPow)
+        shape = (((shape - 0.5) * kv.(\gain, 1)) + 0.5).clip(0, 1);
+        // sample & hold, pow, bipow
+        sh = kv.(\sh, 0);
+        // S&H Glide (s): each held value slides to the next instead of jumping
+        held = Lag.kr(Latch.kr(shape, Impulse.kr(sh.max(0.001))), \shglide.kr(0).max(0));
+        shape = (shape * (sh <= 0)) + (held * (sh > 0));
+        out = Select.kr(kv.(\pow, 0).abs > 0.0001, [shape, reflect.(customPow.(shape, kv.(\pow, 0)))]);
+        out = Select.kr(kv.(\bipow, 0).abs > 0.0001, [out,
+            reflect.((customPow.((out * 2) - 1, kv.(\bipow, 0)) + 1) * 0.5)]);
+        // Steps: that many levels (0 / 1: smooth), as GrainBox's
+        out = Select.kr(steps >= 2, [out, (out * steps).floor.min(steps - 1) / (steps - 1).max(1)]);
+        Out.kr(\out.kr(0), Sanitize.kr(out));
+    }).writeDefFile(dir);
+};
+"Modulation LFOs (random / steps) written to ".post; dir.postln;
+)
