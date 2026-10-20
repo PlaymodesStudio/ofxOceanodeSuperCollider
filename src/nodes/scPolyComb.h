@@ -32,12 +32,13 @@
 #include "ofxSCGroup.h"
 #include "scEQEditor.h"
 #include "scModulation.h"
-#include "scPolyCombPitch.h"
 #include "scTimelineMenu.h"
 #include "scSnapshots.h"
 #include "scDropdowns.h"
 #include "scAudioParam.h"
 #include "scScheduledInputs.h"
+#include "scPolyCombPitchMap.h"
+#include "scChordBoxEngine.h"
 #include "imgui.h"
 #include <array>
 #include <filesystem>
@@ -55,13 +56,17 @@ public:
 private:
 public:
     static constexpr int MAX_VOICES = 32;
+    static constexpr int MAX_CHANNELS = 16;                // PolyCombSpread<1..16>
+    static constexpr int LEGACY_VOICES = 16;               // up to here: the original 16-lane spreader
     static constexpr int NUM_LFOS = scModulation::MAX_LFOS;
     static constexpr int NUM_ENVS = scModulation::MAX_ENVS;
     static constexpr int NUM_EXT = scModulation::MAX_EXT;
     // sources: LFO 1-8, Env 1-4, Velocity, Random, Ext 1-8, Voice
-    static constexpr int NUM_SOURCES = scModulation::NUM_SOURCES + 1;
+    static constexpr int NUM_SOURCES = scModulation::NUM_SOURCES;
     static constexpr int SRC_ENV = scModulation::SRC_ENV, SRC_VEL = scModulation::SRC_VEL, SRC_RND = scModulation::SRC_RND,
                          SRC_EXT = scModulation::SRC_EXT, SRC_VOICE = scModulation::SRC_VOICE;
+    // the node's own source after the shared ones (a matrix row of its own)
+    static constexpr int SRC_DELTA = scModulation::NUM_SOURCES, ALL_SOURCES = SRC_DELTA + 1;
     static constexpr int NUM_TARGETS = 14;
     enum Stage { StComp, StEq, StEcho, StRvb, NumStages };
 
@@ -97,14 +102,14 @@ public:
 private:
     // ── Per server: a root group, one subgroup per slot (in this order, so
     //    any part can come and go without breaking the order), small synths ──
-    static constexpr int W = 32;                       // every voice bus is 16 wide
+    static constexpr int W = MAX_VOICES;               // every voice bus is as wide as the most voices
     static constexpr int VIS_AMP = 0;                  // the display bus: amp env levels
     static constexpr int VIS_PAN = W;                  //   and the voices' positions
     static constexpr int VIS_GR = 2 * W;
     static constexpr int VIS_SUB = 2 * W + 1;
     static constexpr int ZERO_TARGET = NUM_TARGETS;    // a modulation bus nobody writes
-    enum Slot { SlGate, SlSrc, SlDelta, SlRoute, SlPitch, SlFm, SlOsc, SlFilter, SlComb, SlRing, SlPost, SlShaper,
-                SlAmp, SlSub, SlFade, SlSpread, SlComp, SlEq, SlEcho, SlRvb, NumSlots };
+    enum Slot { SlGate, SlSrc, SlRoute, SlPitch, SlFm, SlOsc, SlFilter, SlComb, SlRing, SlPost, SlShaper,
+                SlAmp, SlSub, SlSpread, SlComp, SlEq, SlEcho, SlRvb, NumSlots };
     enum Osc { OSaw, OTri, OPulse, OSine, OSSaw, OWhite, OPink, ODust, OImp, NumOsc };
     enum Ins { IFilter, IComb, IRing, IPost, IShaper, NumIns };
     struct Part { ofxSCSynth* synth = nullptr; bool running = false; float offAt = -1.0f; std::string definition; };
@@ -117,15 +122,16 @@ private:
         ofxSCSynth* ampEnv = nullptr;                   // ModEnvAr: the amp envelope
         ofxSCServer* server = nullptr;
         bool modCreated = false;                        // the shared modulation's synths and buses
-        ofxSCSynth* deltaS = nullptr;
-        ofxSCSynth* fadeS = nullptr;
         ofxSCSynth* pitchS = nullptr;                   // PCPitch
         Part fm;                                        // PCFm
         std::array<Part, NumOsc> osc;                   // PCOsc<Type>, the ones audible
         std::array<Part, NumIns> ins;                   // PCFilter / Comb / Ring / Filter (post) / Shaper
         Part sub;                                      // independent sine layer
         ofxSCSynth* amp = nullptr;                      // PCAmp
-        ofxSCSynth* spread = nullptr;                   // PolyCombSpread<C>
+        ofxSCSynth* spread = nullptr;                   // PolyCombSpread<C> (PCSpreadWide<C> over 16 voices)
+        int spreadLanes = LEGACY_VOICES;                // the spreader's voices: 16 or 32
+        ofxSCSynth* delta = nullptr;                    // PCDelta: only while Delta is routed
+        ofxSCBus* scratch = nullptr;                    // audio, nobody listens: a new part's in / out until routed
         std::array<Fx, NumStages> fx;                   // mixerProEQ / Echo / Rvb
         // buses (all W wide per voice set)
         ofxSCBus* gateBus = nullptr;                    // audio: the gates
@@ -173,31 +179,14 @@ private:
     void forStates(const std::function<void(ofxSCServer*, ServerState&)>& f);
     void sendVec(ofxSCSynth* s, const std::string& name, const std::vector<float>& v);
     // what each part needs, sent to it (on creation and when its controls change)
-    void sendGate(ServerState& st);
+    void sendGate(ServerState& st, bool notesOnly = false);
     void sendAmpEnv(ServerState& st);
-    void sendPitch(ServerState& st);
+    void sendPitch(ServerState& st, bool notesOnly = false);
     void sendFm(ServerState& st);
     void sendOsc(ServerState& st, int o);
     void sendIns(ServerState& st, int i);
     void sendAmp(ServerState& st);
-    void sendSub(ServerState& st);
-    void sendDelta(ServerState& st);
-    void drawPitchTab(float w);
-    polycombPitch::Map pitchMap(int bank) const;
-    double harmonyBeat() const;
-    std::vector<float> internalMap(int bank) const;
-    chordbox::Engine pitchLibrary;
-    ofParameter<bool> pitchExternal, harmonyOn;
-    ofParameter<int> pitchScale, pitchChord;
-    ofParameter<float> pitchRoot, harmonyBeats;
-    ofParameter<std::vector<float>> harmonySteps, pitchCustomChord;
-    ofParameter<bool> pitchUseCustom;
-    ofParameter<int> mapShape[2], mapQuant[2], mapFirst[2], mapInversion[2];
-    ofParameter<float> mapInterval[2], mapTranspose[2], mapFine[2], mapBend[2], mapLength[2], mapOffset[2], mapHarmonic[2];
-    ofParameter<std::vector<float>> mapTable[2], mapScaleTones[2];
-    ofParameter<float> deltaWindow, deltaGain, deltaMix1, deltaMix2;
-    ofJson pitchDefaults = ofJson::object();
-    std::vector<float> lastHarmony;
+    void sendSub(ServerState& st, bool notesOnly = false);
     void sendSpread(ServerState& st);
     // parts: created when wanted, paused (after a fade) when not
     bool oscWanted(int o) const;
@@ -210,8 +199,36 @@ private:
     void freeAll(ofxSCServer* server, ServerState& st);
     void ensureBuses(ofxSCServer* server, ServerState& st);
     void rebuildAll();
+    // a new voice count: the voices fade out, are rebuilt, fade back in
+    float rebuildAt = -1.0f;
+    bool fadingIn = false;
+    void requestRebuild();
     void rebuildOutput();
     std::vector<float> processedPitch() const;
+    // ── Pitch & Harmony: the internal pitch maps (External off) ──────────────
+    struct MapParams {
+        ofParameter<int> shape, mode, quantize;
+        ofParameter<float> first, interval, transpose, bend, offset, root, harmonicBase, span;
+        ofParameter<std::vector<float>> tones, table;
+    };
+    MapParams oscMap, combMap;
+    ofParameter<bool> pitchExternal;      // on: the Pitch values as they are (as before)
+    ofParameter<int> pitchShiftMode;      // External off, Pitch around 60: 0 after the map, 1 in the scale
+    ofParameter<bool> combMapOn;          // External off: the resonators follow their own map
+    ofJson pitchDefaults = ofJson::object();
+    bool internalPitch() const { return !pitchExternal.get(); }
+    bool combMapped() const { return internalPitch() && combMapOn.get(); }
+    pcmap::Map mapOf(const MapParams& m) const;
+    std::vector<float> mapPitches(const MapParams& m) const;   // n, with the played Pitch
+    std::vector<chordbox::LibItem> scaleLibrary, chordLibrary;
+    void loadPitchLibraries();
+    // ── Delta: how much two LFOs moved (the original's DELTA), a source ─────
+    ofParameter<int> deltaSrcA, deltaSrcB;
+    ofParameter<float> deltaMixA, deltaMixB, deltaWindow, deltaGain;
+    ofJson deltaDefaults = ofJson::object();
+    bool deltaRouted() const;
+    void updateDelta(ofxSCServer* server, ServerState& st);
+    void sendDelta(ServerState& st);
     void updateScramble();
     std::vector<float> panPositions() const;
 
@@ -245,6 +262,8 @@ private:
     bool droning() const;          // Drone, or Auto with nothing on Gate
     void sendEnvMode(bool force = false);
     ofParameter<float> ampA, ampD, ampS, ampR, ampCA, ampCD, ampCR, velSens, glide, vibRate, vibRand, vibAmt;
+    ofParameter<float> tremRate, tremRand, tremDepth;
+    ofJson tremDefaults = ofJson::object();
     ofParameter<std::vector<float>> transpose, detune;
     ofParameter<bool> scramble;
     // ── Oscillators and FM ───────────────────────────────────────────────────
@@ -255,8 +274,13 @@ private:
     ofParameter<bool> fmSnap;
     // ── Filters ──────────────────────────────────────────────────────────────
     ofParameter<int> fType, postType;
+    ofParameter<int> filterModel;        // both filters: 0 classic, 1 the original PolyComb's ladder (PCFilterR)
     ofParameter<bool> combSaturation;
     ofParameter<float> combSatLevel;
+    ofParameter<int> ringModel;          // 0 classic (a note), 1 the original PolyComb's (PCRingR: a ratio of the voice's note)
+    ofParameter<float> ringWidth;
+    ofParameter<std::vector<float>> ringRatio;
+    ofParameter<int> combModel;          // legacy snapshot field, fixed to 1 (PCCombR)
     ofParameter<std::vector<float>> cutoff, res, postCut, postRes;
     ofParameter<float> keyTrack;
     // ── Resonator, ring, shaper ──────────────────────────────────────────────
@@ -282,6 +306,10 @@ private:
     ofParameter<bool> echoOn, echoBeats;
     ofParameter<int> echoFilter;
     ofParameter<float> echoDelay, echoBeatVal, echoFeed, echoCutoff, echoResonance, echoPingPong, echoMix;
+    // Echo Model 1: the original PolyComb's delay (PCEchoR): its lowpass (Hz), resonance,
+    // highpass (Hz) in the loop, the lines' L / R time spread
+    ofParameter<int> echoModel;
+    ofParameter<float> echoHi, echoLo, echoRes, echoSpread;
     ofParameter<bool> rvbOn;
     ofParameter<float> rvbMix, rvbDecay, rvbSize, rvbPredelay, rvbLate, rvbSpread, rvbLowpass,
                        rvbHiDamp, rvbLoDamp, rvbModRate, rvbSpin, rvbWander;
@@ -303,6 +331,9 @@ private:
     void drawFxTab(float w);
     void drawCompPanel(float w);
     void drawPanTab(float w);
+    void drawPitchTab(float w);
+    void drawMapColumn(MapParams& m, const char* id, float w, bool comb);
+    void drawDeltaCard(float w);
     int panDragVoice = -1;
     void sectionHeader(const char* title, float w, ofParameter<bool>* on = nullptr, ImU32 accent = 0);
     void slider(ofParameter<float>& p, const char* label, float w, const char* fmt = "%.2f", bool log = false);
@@ -315,6 +346,9 @@ private:
                         float w, float h, ImU32 color, int visOffset);
     float labelW = 70.0f;
     std::shared_ptr<ofxOceanodeAbstractParameter> combPitchHandle;
+    std::shared_ptr<ofxOceanodeAbstractParameter> voicesHandle;   // a connection drives Voices: snapshots leave it
+    int userVoices = -1;              // the patch's own voice count (a preset, by hand): not a snapshot's
+    bool voicesFromSnapshot = false;
     void drawAmpCard(float w);
 
     // ── Snapshots (scSnapshots, shared by the synths): every window control,

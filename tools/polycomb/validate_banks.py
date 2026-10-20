@@ -21,14 +21,15 @@ def validate(folder=P):
     for p in banks:slots+=json.loads(p.read_text())['slots']
     assert len(slots)==len(raw['snapshots'])==manifest['snapshot_count']
     for i,(slot,source)in enumerate(zip(slots,raw['snapshots'])):
+        assert slot['controls']['Comb_Model']==1 and slot['controls']['Comb_Saturation'] is False
         assert slot['name']==source['name'] and len(source['records'])==count
         assert len({r['snapshot_id']for r in source['records']})==count
         assert set(slot['controls'])==set(schema)
-        assert len(slot['matrix'])==23*14 and all(math.isfinite(x)and -1<=x<=1 for x in slot['matrix'])
+        assert len(slot["matrix"])==24*14 and all(math.isfinite(x)and -1<=x<=1 for x in slot['matrix'])
         for key,value in slot['controls'].items():
             meta=schema[key];typ=meta['type']
             if typ=='bool':assert type(value)is bool;continue
-            if typ=='vector':assert type(value)is list and 1<=len(value)<=16
+            if typ=='vector':assert type(value)is list and 1<=len(value)<=32
             elif typ=='int':assert type(value)is int
             else:assert type(value)is float
             for v in value if typ=='vector' else [value]:assert math.isfinite(v) and meta['min']<=v<=meta['max'],(i,key,v)
@@ -42,7 +43,7 @@ def render(slots,n=16,duration=12.0,output="/tmp/polycomb-bank-render",master=.8
     import numpy as np
     out=pathlib.Path(output);out.mkdir(exist_ok=True)
     pc=ROOT/'synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb';mod=ROOT/'synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation';fx=ROOT/'synthdefs/Defaults/MixerPro/CompiledSynthdefs/mixerpro'
-    names=['PCSub','PCFilterSlopes','PCCombSat','PCPitch','PCFm','PCOscSaw','PCOscTri','PCOscPulse','PCOscSine','PCOscSSaw','PCOscWhite','PCOscDust','PCOscImp','PCFilter','PCComb','PCRing','PCAmp']
+    names=['PCSub','PCFilterSlopes','PCCombSat','PCFilterR','PCCombR','PCRingR','PCPitch','PCFm','PCOscSaw','PCOscTri','PCOscPulse','PCOscSine','PCOscSSaw','PCOscWhite','PCOscDust','PCOscImp','PCFilter','PCComb','PCRing','PCAmp']
     paths=[pc/f'{s}{n}.scsyndef' for s in names]+[pc/'PolyCombSpread2.scsyndef']+[mod/f'{s}{n}.scsyndef' for s in ('ModGate','ModEnv','ModEnvAr','ModLfo','ModRoute')]+[fx/f'mixerPro{s}2.scsyndef' for s in ('Comp','Echo','Rvb')]
     score=bundle(0,[message('/d_recv',p.read_bytes())for p in paths]+[message('/g_new',1,0,0)])
     length=duration
@@ -74,12 +75,12 @@ def render(slots,n=16,duration=12.0,output="/tmp/polycomb-bank-render",master=.8
         if c['FM_On']:synth(f'PCFm{n}',note=512,out=632,mamt=mb(1),mratio=mb(2),fmamt=vec('FM_Amount'),fmratio=vec('FM_Ratio'),fmfb=c['FM_Feedback'])
         for name,key in [('Saw','Saw'),('Tri','Tri'),('Pulse','Pulse'),('Sine','Sine'),('SSaw','SuperSaw'),('White','White'),('Dust','Dust'),('Imp','Impulse')]:
             if max(vec(key))>0:synth(f'PCOsc{name}{n}',note=512,out=648,fm=632,fmon=c['FM_On'],level=vec(key),oscamp=vec('Osc_Amp'),pw=vec('Pulse_Width'),mpw=mb(11),ssdetune=vec('SS_Detune'))
-        synth(f'PCFilterSlopes{n}' if c['Filter_Type']>=4 else f'PCFilter{n}',note=512,**{'in':648},out=664,on=1,slope=filterchoice(c['Filter_Type'])[1],type=filterchoice(c['Filter_Type'])[0],cutoff=vec('Cutoff'),res=vec('Resonance'),mcut=mb(3),mres=mb(4))
-        synth(f'PCCombSat{n}' if c.get('Comb_Saturation',False) else f'PCComb{n}',satlevel=c.get('Comb_Sat_Level',12),note=512,**{'in':664},out=680,on=1,combmode=c['Comb_Mode'],combpitch=vec('Comb_Pitch'),combtranspose=vec('Comb_Transpose'),combdetune=vec('Comb_Detune'),combfeed=vec('Comb_Feedback'),combtone=c['Comb_Tone'],combmix=vec('Comb_Mix'),mcpitch=mb(5),mcfb=mb(6),mcmix=mb(7))
+        synth(f'PCFilterR{n}' if c.get('Filter_Model',0)==1 else f'PCFilterSlopes{n}' if c['Filter_Type']>=4 else f'PCFilter{n}',note=512,**{'in':648},out=664,on=1,slope=filterchoice(c['Filter_Type'])[1],type=c['Filter_Type'] if c.get('Filter_Model',0)==1 else filterchoice(c['Filter_Type'])[0],cutoff=vec('Cutoff'),res=vec('Resonance'),mcut=mb(3),mres=mb(4))
+        synth(f'PCCombR{n}',satlevel=c.get('Comb_Sat_Level',12),note=512,**{'in':664},out=680,on=1,combmode=c['Comb_Mode'],combpitch=vec('Comb_Pitch'),combtranspose=vec('Comb_Transpose'),combdetune=vec('Comb_Detune'),combfeed=vec('Comb_Feedback'),combtone=c['Comb_Tone'],combmix=vec('Comb_Mix'),mcpitch=mb(5),mcfb=mb(6),mcmix=mb(7))
         last=680
         if c['Ring_On']:
-            synth(f'PCRing{n}',note=512,**{'in':last},out=696,on=1,ringpitch=vec('Ring_Pitch'),ringtranspose=vec('Ring_Transpose'),ringdetune=vec('Ring_Detune'),ringmix=vec('Ring_Mix'),mrmix=mb(8));last=696
-        synth(f'PCFilterSlopes{n}' if c['Post_Type']>=4 else f'PCFilter{n}',note=512,**{'in':last},out=712,on=1,slope=filterchoice(c['Post_Type'])[1],type=filterchoice(c['Post_Type'])[0],cutoff=vec('Post_Cutoff'),res=vec('Post_Resonance'),mcut=mb(9),mres=mb(14))
+            synth(f'PCRingR{n}' if c.get('Ring_Model',0)==1 else f'PCRing{n}',note=512,**{'in':last},out=696,on=1,ringpitch=vec('Ring_Pitch'),ringtranspose=vec('Ring_Transpose'),ringdetune=vec('Ring_Detune'),ringmix=vec('Ring_Mix'),ringratio=c.get('Ring_Ratio',[1.0]),ringwidth=c.get('Ring_Width',0.0),mrmix=mb(8));last=696
+        synth(f'PCFilterR{n}' if c.get('Filter_Model',0)==1 else f'PCFilterSlopes{n}' if c['Post_Type']>=4 else f'PCFilter{n}',note=512,**{'in':last},out=712,on=1,slope=filterchoice(c['Post_Type'])[1],type=c['Post_Type'] if c.get('Filter_Model',0)==1 else filterchoice(c['Post_Type'])[0],cutoff=vec('Post_Cutoff'),res=vec('Post_Resonance'),mcut=mb(9),mres=mb(14))
         synth(f'PCAmp{n}',**{'in':712},out=728,env=616,gate=600,vel=1192,velsens=1,level=master,mamp=mb(12))
         if c.get('Sub_On',False):
             synth(f'PCSub{n}',out=728,gate=600,vel=1192,vis=3400,pitch=[60.0],transpose=c['Sub_Transpose'],level=c['Sub_Level'],master=master,velsens=1,on=1,atk=c['Sub_Attack'],dec=c['Sub_Decay'],sus=c['Sub_Sustain'],rel=c['Sub_Release'],cA=c['Sub_Attack_Curve'],cD=c['Sub_Decay_Curve'],cR=c['Sub_Release_Curve'])
@@ -118,8 +119,8 @@ def render(slots,n=16,duration=12.0,output="/tmp/polycomb-bank-render",master=.8
     print(f'PASS: {len(slots)} candidates render finite audio at {n} voices; {sum(x["rms"]>1e-7 for x in results)} audible within sustained test; reports in {out}')
     print(f'LEVEL AUDIT: {sum(x["peak"]>1 for x in results)} exceed full scale during the complete note/release window; maximum peak {max(x["peak"] for x in results):.4f}. Finite output does not imply a level-safe bank.')
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--render',action='store_true');p.add_argument('--collection',choices=('1.7','2018','2025','all'),default='1.7');a=p.parse_args()
-    for version in (('1.7','2018','2025')if a.collection=='all' else (a.collection,)):
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--render',action='store_true');p.add_argument('--collection',choices=('1.7','2018','all'),default='1.7');a=p.parse_args()
+    for version in (('1.7','2018')if a.collection=='all' else (a.collection,)):
         folder=P if version=='1.7' else P/version
         slots=validate(folder)
         if a.render:render(slots,output=f'/tmp/polycomb-bank-render-{version}')

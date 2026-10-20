@@ -2,7 +2,8 @@
 """Check imported waveform choices against the real shared LFO SynthDef."""
 import json,math,pathlib,subprocess,sys
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-from import_ensemble import lfo_shape,lfo_span
+from import_ensemble import lfo_span,LFO_RANDOM
+ROUND={2:1.0,3:0.0,4:.5}   # the Lists' pulse / triangle / sine
 sys.path.insert(0,str(ROOT/'tools/aliasingbox'))
 from render_test import message,bundle,read_wav
 
@@ -15,10 +16,10 @@ r=subprocess.run([str(ROOT/'sclang/osx/sclang'),'-l',str(config),str(source)],ca
 assert r.returncode==0,r.stdout+r.stderr
 paths=[out/'PCLfoProbe.scsyndef',ROOT/'synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation/ModLfo1.scsyndef']
 score=bundle(0,[message('/d_recv',p.read_bytes())for p in paths]+[message('/g_new',1,0,0)])
-waves=[3,4,5];length=.1
+waves=[2,3,4];length=.1
 for i,wave in enumerate(waves):
     # Freeze the LFO at phase 1/8: square=0, triangle=1/4, cosine≈.14645.
-    score+=bundle(i*length+.01,[message('/s_new','ModLfo1',100,1,1,'out',100,'freq',0.0,'initphase',.125,'round',lfo_shape(wave),'skew',0.0,'pw',.5),message('/s_new','PCLfoProbe',101,1,1,'in',100)])
+    score+=bundle(i*length+.01,[message('/s_new','ModLfo1',100,1,1,'out',100,'freq',0.0,'initphase',.125,'round',ROUND[wave],'skew',0.0,'pw',.5),message('/s_new','PCLfoProbe',101,1,1,'in',100)])
     score+=bundle((i+1)*length-.01,[message('/g_freeAll',1)])
 score+=bundle(.31,[message('/c_set',0,0.0)])
 osc=out/'test.osc';osc.write_bytes(score);wav=out/'test.wav'
@@ -42,8 +43,14 @@ slots=[]
 for p in sorted(P.glob('Reaktor PolyComb*.json')):slots+=json.loads(p.read_text())['slots']
 for original,slot in zip(raw,slots):
     v=original['effective_values'];c=slot['controls']
-    for li,sid in ((1,'193'),(2,'209'),(3,'361'),(4,'386')):
-        assert c[f'LFO{li}_Round']==[lfo_shape(int(v[sid]))]
+    for li,sid,count in ((1,'193',7),(2,'209',7),(3,'361',8),(4,'386',8)):
+        wf=min(max(int(v.get(sid,5))-1,0),count-1)  # the row from 1 (5: Sin) -> the List's value; past the end: its last entry
+        assert c[f'LFO{li}_Random_Type']==LFO_RANDOM.get(wf,0),(slot['name'],li,wf)
+        if wf in ROUND:assert c[f'LFO{li}_Round']==[ROUND[wf]]
+        if wf in (0,1):assert c[f'LFO{li}_Skew']==[-1.0 if wf==0 else 1.0] and c[f'LFO{li}_Round']==[0.0]
     mean,depth=lfo_span(v['181'],v['182'])
     assert abs(slot['matrix'][12]-depth/max(.0001,mean))<1e-6
-print('PASS: pulse/triangle/sine mappings match rendered native LFO; all 210 amplitude routes respect clipped endpoints.')
+# 256: both poly LFOs on row 5 (Sin), no random; mono LFO1 on its last row (jumps)
+s256=next(s for s in slots if s['name']=='256')['controls']
+assert s256['LFO1_Random_Type']==0 and s256['LFO1_Round']==[.5] and s256['LFO2_Random_Type']==0 and s256['LFO3_Random_Type']==3,s256['LFO1_Random_Type']
+print('PASS: pulse/triangle/sine (List values 2/3/4) match the rendered native LFO; saws and random types follow the decoded Lists (rows from 1: 5 is Sin); all 210 amplitude routes respect clipped endpoints.')

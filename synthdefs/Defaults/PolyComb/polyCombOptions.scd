@@ -16,8 +16,9 @@ File.mkdir(root); File.mkdir(dir);
         var gate = In.ar(\gate.kr(0), n);
         var on = \on.kr(1,0.03);
         var cable=A2K.kr(NamedControl.ar(\pitch_ar,60!n));
-        var count=\pitch_channels.kr(n).clip(1,n);
-        var pitch = Select.kr(\pitch_sel.kr(0), [kv.(\pitch,60), n.collect{|i|Select.kr(i.min(count-1),cable)}]);
+        // One oscillator at the input root (first pitch), shared by the voice
+        // envelopes. Chord tones must never become extra sub frequencies.
+        var pitch = Select.kr(\pitch_sel.kr(0), [kv.(\pitch,60).asArray[0], cable.asArray[0]]);
         var env = EnvGen.ar(Env.adsr(\atk.kr(0.01), \dec.kr(0.5), \sus.kr(1), \rel.kr(0.5),
             curve:[\cA.kr(-4),\cD.kr(-4),\cR.kr(-4)]), gate);
         var velocity = (1-\velsens.kr(1)) + (In.kr(\vel.kr(0),n).clip(0,1)*\velsens.kr(1));

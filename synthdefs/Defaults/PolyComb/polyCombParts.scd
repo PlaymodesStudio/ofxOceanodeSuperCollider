@@ -133,8 +133,12 @@ filter = { |sig, type, note, res|
         // blends in the velocity (\vel = level x Velocity)
         var lev = In.ar(\gate.kr(0), n);
         var vs = \velsens.kr(0.5).clip(0, 1);
+        // Like vibrato, each voice has a random rate offset and initial phase.
+        // Depth 0 is unity; depth 1 sweeps the amplitude from silence to unity.
+        var rate = \tremrate.kr(5) * (1 + (({ Rand(-1, 1) } ! n) * \tremrand.kr(0).clip(0, 1)));
+        var trem = 1 - ((SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * 0.5 + 0.5) * \tremdepth.kr(0, 0.03).clip(0, 1));
         var amp = In.ar(\env.kr(0), n) * ((Gate.ar(lev, lev > 0) * (1 - vs)) + K2A.ar(vel * vs)) *
-            K2A.ar((1 + modIn.(\mamp)).clip(0, 2));
+            K2A.ar((1 + modIn.(\mamp)).clip(0, 2) * trem);
         Out.ar(\out.kr(0), Sanitize.ar(LeakDC.ar(sig * amp) * \level.kr(0.8, 0.05)));
     }).writeDefFile(dir);
 };
