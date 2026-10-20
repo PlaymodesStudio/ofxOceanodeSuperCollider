@@ -4,6 +4,7 @@
 //
 
 #include "scModulation.h"
+#include "scSynthStartup.h"
 #include "scEnvelopeCurve.h"
 #include "../scMorphWave.h"
 #include <algorithm>
@@ -215,7 +216,9 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
 // ════════════════════════════════════════════════════════════════════════════
 
 void scModulation::forStates(const std::function<void(ofxSCServer*, ServerState&)>& f) {
-    for(auto& [server, st] : states) if(st.created) f(server, st);
+    // A new voice count can precede its rebuild: never resize controls on the
+    // old definitions, including LFO phase arrays sent by voicesChanged().
+    for(auto& [server, st] : states) if(st.created && st.builtVoices == n()) f(server, st);
 }
 int scModulation::targetBus(ofxSCServer* server, int t) const {
     auto it = states.find(server);
@@ -253,6 +256,7 @@ std::vector<float> scModulation::lfoShFor(int li) const {
 }
 
 void scModulation::sendLfo(ServerState& st, int li) {
+    if(st.builtVoices != n()) return;
     auto* s = st.lfo[li];
     if(!s) return;
     s->set("out", st.srcBlock ? st.srcBlock->index + li * busWidth : 0);
@@ -306,6 +310,7 @@ float scModulation::rndPreview(int li, float ph, int type, float smooth) {
 }
 
 void scModulation::sendEnv(ServerState& st, int e) {
+    if(st.builtVoices != n()) return;
     auto* s = st.env[e];
     if(!s) return;
     auto& E = envs[e];
@@ -339,6 +344,7 @@ void scModulation::writeSources(ofxSCServer* server, ServerState& st) {
 }
 
 void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
+    if(st.builtVoices != n()) return;
     if(!st.created) return;
     for(int li = 0; li < MAX_LFOS; li++){
         auto*& s = st.lfo[li];
@@ -347,21 +353,20 @@ void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
         if(li < lfoCount && !s){
             st.lfoDef[li] = wanted;
             s = new ofxSCSynth(def(wanted), server);
-            sendLfo(st, li);
-            s->createAndRun(1, st.sourceGroup, true);
+            scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendLfo(st, li); });
         }else if(li >= lfoCount && s){ s->free(); delete s; s = nullptr; }
     }
     for(int e = 0; e < MAX_ENVS; e++){
         auto*& s = st.env[e];
         if(e < envCount && !s){
             s = new ofxSCSynth(def("ModEnv"), server);
-            sendEnv(st, e);
-            s->createAndRun(1, st.sourceGroup, true);
+            scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendEnv(st, e); });
         }else if(e >= envCount && s){ s->free(); delete s; s = nullptr; }
     }
 }
 
 void scModulation::syncRoutes(ofxSCServer* server, ServerState& st) {
+    if(st.builtVoices != n()) return;
     if(!st.created || !st.modBlock || !st.srcBlock) return;
     std::vector<bool> routed(T(), false);
     for(int s = 0; s < sourceCount(); s++){
@@ -415,6 +420,7 @@ void scModulation::create(ofxSCServer* server, int sourceGroup, int routeGroup, 
     control(st.srcBlock, sourceCount() * busWidth);
     control(st.modBlock, (T() + 1) * busWidth);
     st.created = true;
+    st.builtVoices = n();
     updatePhases();          // as many offsets as voices now
     writeSources(server, st);
     updateSources(server, st);
@@ -441,11 +447,12 @@ void scModulation::rebuild(ofxSCServer* server) {
     if(it == states.end() || !it->second.created) return;
     auto& st = it->second;
     for(int li = 0; li < MAX_LFOS; li++) lfoIndexers[li].indexCountChanged(n());
-    updatePhases();
     for(auto*& s : st.lfo) if(s){ s->free(); delete s; s = nullptr; }
     for(auto*& s : st.env) if(s){ s->free(); delete s; s = nullptr; }
     for(auto& [idx, r] : st.routes){ r->free(); delete r; }
     st.routes.clear();
+    st.builtVoices = n();
+    updatePhases();
     writeSources(server, st);
     updateSources(server, st);
     syncRoutes(server, st);
@@ -1150,7 +1157,7 @@ void scModulation::drawLfoCard(int li, float w) {
         static const char* models[] = {"Off", "Classic", "Noise", "Random"};
         int model = lfoModel[li].get();
         ImGui::SetNextItemWidth(w);
-        if(ImGui::Combo("Model",&model,models,4)) lfoModel[li].set(model);
+        if(ImGui::Combo("##model",&model,models,4)) lfoModel[li].set(model);
         if(host.publishMenu) host.publishMenu(lfoModel[li].getEscapedName());
     }
     {   // each voice's value now (bars across the whole display), the shape over them
@@ -1230,14 +1237,17 @@ void scModulation::drawLfoCard(int li, float w) {
     labelW = 40.0f;
     ImGui::BeginGroup();
     const bool region = grainExtras && lfoRegion[li].get();
-    if(!region){ toggle(lfoSync[li], "Sync"); ImGui::SameLine(); }
     const bool random = effectiveRandom(li) > 0;
+    bool sameLine = false;   // the toggles share a row; the rate slider goes below them
+    if(!region){ toggle(lfoSync[li], "Sync"); sameLine = true; }
     if(!random && !unifiedLfoModels){
+        if(sameLine) ImGui::SameLine();
         toggle(lfoNoise[li], "Noise");
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Perlin noise instead of a waveform (as Oceanode's Noise node)");
+        sameLine = true;
     }
     if(grainExtras){
-        ImGui::SameLine();
+        if(sameLine) ImGui::SameLine();
         toggle(lfoRegion[li], "Smp");
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("The cycle in lengths of the sample region (In..Out) instead of beats / Hz");
     }
@@ -1326,10 +1336,17 @@ void scModulation::drawLfoCard(int li, float w) {
 void scModulation::drawLfos(float w) {
     const float z = zoom();
     const float cw = colW(w, 4);
+    float prevBottom = 0.0f;
     for(int li = 0; li < lfoCount; li++){
         if(li % 4) ImGui::SameLine(0, gapW());
         else if(li) ImGui::Spacing();
         drawLfoCard(li, cw);
+        const ImVec2 c0 = ImGui::GetItemRectMin(), c1 = ImGui::GetItemRectMax();
+        if(li % 4){   // a vertical line between this card and the previous one
+            const float x = c0.x - gapW() * 0.5f;
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(x, c0.y), ImVec2(x, std::max(c1.y, prevBottom)), pal::grid, 1.0f * z);
+        }
+        prevBottom = c1.y;
     }
     ImGui::Spacing();
     if(lfoCount < std::min((int)MAX_LFOS, maxLfos)){

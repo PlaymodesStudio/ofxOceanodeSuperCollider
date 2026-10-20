@@ -223,6 +223,7 @@ private:
         std::map<int, ofxSCSynth*> routes;
         int sourceGroup = -1, routeGroup = -1, gateBus = -1;
         bool created = false;
+        int builtVoices = 0;
     };
     Host host;
     std::vector<Target> targetList;

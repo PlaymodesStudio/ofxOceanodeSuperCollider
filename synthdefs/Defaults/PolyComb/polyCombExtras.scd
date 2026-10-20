@@ -92,7 +92,9 @@ File.mkdir(root); File.mkdir(dir);
         // Smooth pitch targets at audio rate so delay retuning has no GUI/control-block steps.
         var cnote = Lag.ar(K2A.ar(kv.(\combpitch, 0) + kv.(\combtranspose, 0) + (base.() * (1 - (\combmode.kr(0) > 0.5)))), 0.02) +
             K2A.ar((({ Rand(-1, 1) } ! n) * kv.(\combdetune, 0)) + modIn.(\mcpitch));
-        var fc = cnote.clip(0, 135).midicps.clip(20, 20000);
+        var rate = \combvibrate.kr(5, 0.03) * (1 + (({ Rand(-1, 1) } ! n) * \combvibrand.kr(0, 0.03).clip(0, 1)));
+        var vibrato = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * \combvibamt.kr(0, 0.03);
+        var fc = (cnote + K2A.ar(vibrato)).clip(0, 135).midicps.clip(20, 20000);
         var fb = (kv.(\combfeed, 0.7) + modIn.(\mcfb)).clip(-1.2, 1.2);
         var level = \satlevel.kr(48, 0.03).clip(0, 48).dbamp;
         var mix = (kv.(\combmix, 1) + modIn.(\mcmix)).clip(0, 1);

@@ -49,6 +49,7 @@ std::vector<float> expand(const std::vector<float>& v,int n,float fallback=0){
 struct Bus{int index=128;};
 struct Part{ofxSCSynth* synth=nullptr;};
 struct ServerState{
+    int builtVoices=3;
     ofxSCServer* server;ofxSCSynth *gateS=nullptr,*pitchS=nullptr;
     Part sub,ins[2];Bus *gateBus=nullptr,*noteBus=nullptr,*voiceBus=nullptr,*visBlock=nullptr;
 };
@@ -134,6 +135,11 @@ int main(){
     node.sendGate(st,true);node.sendPitch(st,true);
     assert(node.server.sent.empty());
     assert(gate.stored.count("velocity") && pitch.stored.count("vibrate") && sub.stored.count("rel"));
+    // Connections/notes arriving during a voice-count fade must not resize
+    // arrays on the old definitions, even through the direct send functions.
+    gate.created=pitch.created=sub.created=true;st.builtVoices=2;node.server.sent.clear();
+    node.sendGate(st);node.sendPitch(st);
+    assert(node.server.sent.empty());
     std::cout<<"PASS: 3 packets per gate+pitch update with sub; 4 with mapped comb; note-off, vector expansion, maps, cable reconnect, pending creation.\n";
 }
 '''

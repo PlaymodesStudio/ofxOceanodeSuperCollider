@@ -286,7 +286,7 @@ private:
     ofParameter<bool> fmSnap;
     // ── Filters ──────────────────────────────────────────────────────────────
     ofParameter<int> fType, postType;
-    ofParameter<int> filterModel;        // both filters: 0 classic, 1 the original PolyComb's ladder (PCFilterR)
+    ofParameter<int> filterModel, postFilterModel; // 0 classic, 1 the original PolyComb's ladder (PCFilterR)
     ofParameter<bool> combSaturation;
     ofParameter<float> combSatLevel;
     ofParameter<int> ringPitchSource;    // external / oscillator note bus / resonator map
@@ -296,11 +296,13 @@ private:
     ofParameter<int> combModel;          // legacy snapshot field, fixed to 1 (PCCombR)
     ofParameter<std::vector<float>> cutoff, res, postCut, postRes;
     ofParameter<float> keyTrack;
+    ofParameter<float> postKeyTrack;
     // ── Resonator, ring, shaper ──────────────────────────────────────────────
     ofParameter<int> combMode;                                 // 0 follow the note, 1 fixed
     ofParameter<std::vector<float>> combPitch, combTranspose, combDetune, combFeed, combMix, ringPitch, ringTranspose, ringDetune,
                                     ringMix, drive, shaperMix;
     ofParameter<float> combTone;
+    ofParameter<float> combVibRate, combVibRand, combVibAmt;
     // parts switched on / off (the oscillators: by their level)
     ofParameter<bool> fmOn, filterOn, combOn, ringOn, postOn, shaperOn;
     // ── Modulation: LFOs, envelopes, external sources, the matrix ──────────
@@ -342,7 +344,6 @@ private:
     void drawFilterTab(float w);
     void drawResonatorTab(float w);
     void drawRingPitchVector(float w);
-    void drawResonatorPitchMap(float w);
     void drawFxTab(float w);
     void drawCompPanel(float w);
     void drawPanTab(float w);

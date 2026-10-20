@@ -52,6 +52,9 @@ inline std::vector<float> legacyNotes(const pcmap::Map& m,int n) {
 }
 inline Json controls(Json c) {
     if(!c.is_object()) return c;
+    // The post filter used to share the pre-filter's model and had no tracking.
+    if(!c.contains("Post_Filter_Model")) c["Post_Filter_Model"]=(int)scalar(c,"Filter_Model",0);
+    if(!c.contains("Post_Key_Track")) c["Post_Key_Track"]=0.0f;
     // Preserve the combined sub tuning when splitting legacy fractional offsets.
     if(c.contains("Sub_Transpose") || c.contains("Sub_Fine_Tune")){
         const float old=scalar(c,"Sub_Transpose",-12.f);

@@ -1,9 +1,20 @@
 # Pitch editor update
 
-The pitch tab now has two wide map panels. Each shows a minimal editable scale,
-integer voice-index geometry, and a piano-roll result with MIDI/note labels,
-first/last pitches and the actual range. All applicable controls are visible;
-there are no Index shaping foldouts. Narrow windows stack the panels.
+The pitch tab has oscillator and resonator map panels, each with three columns:
+scale/sequence, index geometry, and tuning/vibrato. The tuning column groups
+Transpose, Fine Tune, Note Snap, Detune and vibrato rate/randomness/amplitude;
+the oscillator column also includes Glide. Sound tuning stays editable with
+incoming pitches or an inherited resonator map. The generated-note piano roll
+remains beneath each map, with MIDI/note labels and the actual range. Windows
+narrower than 1320 scaled pixels stack the two map panels.
+
+The Oscillators and Resonator tabs omit the duplicate pitch displays and
+Transpose widgets. Existing saved transpose parameters remain compatible.
+The resonator has independent per-voice vibrato, defaulting to zero amplitude
+for older patches and snapshots. Recompile/reload the `PCCombR1..32` SynthDefs
+to use it. The post-filter offers the same independent model, type, cutoff,
+resonance and key tracking as the pre-filter. Older sounds inherit the previous
+shared filter model and retain zero post-filter key tracking.
 
 The shared Classic LFO morph waveform defines geometry with Skew, Roundness and
 PW; shape menus and direction/pattern buttons have been removed. Skew -1 rises,
@@ -226,6 +237,9 @@ python3 tools/polycomb/compressor_render_test.py
 python3 tools/polycomb/sub_render_test.py
 python3 tools/polycomb/moving_saws_test.py
 python3 tools/polycomb/bank_loading_test.py
+python3 tools/polycomb/voice_rebuild_test.py
+python3 tools/polycomb/resonator_vibrato_render_test.py
+python3 tools/polycomb/post_filter_test.py
 ```
 
 Import writes only the recovery directories. Rendering writes under `/tmp` and

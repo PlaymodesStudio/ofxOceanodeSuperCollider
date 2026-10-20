@@ -8,12 +8,13 @@ ROOT=pathlib.Path(__file__).resolve().parents[2];HERE=pathlib.Path(__file__).res
 fixture=HERE/'fixtures/MOVING_SAWS.json'
 assert hashlib.sha256(fixture.read_bytes()).hexdigest()=='0650ef23fe5868c2105f059a6b586222e95dc2418da87d6a5cc7176424b25652'
 expected=json.loads((HERE/'fixtures/legacy-definitions.sha256.json').read_text());defs=ROOT/'synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb'
-# Independent sub, tremolo and pitch interpolation intentionally replace these definitions.
-expected={name:sha for name,sha in expected.items() if not name.startswith(('PCSub','PCAmp','PCPitch','PCFm','PCOsc'))}
+# Independent sub/vibrato, tremolo and pitch interpolation are covered by audio render tests.
+expected={name:sha for name,sha in expected.items() if not name.startswith(('PCSub','PCAmp','PCPitch','PCFm','PCOsc','PCCombR'))}
 for name,sha in expected.items():assert hashlib.sha256((defs/name).read_bytes()).hexdigest()==sha,name
 code=(ROOT/'src/nodes/scPolyComb.cpp').read_text()
 helpers=code[code.index('bool logKey('):code.index('void scPolyComb::applyState(')]
-apply=code[code.index('void scPolyComb::applyState('):code.index('// ── Library (shared files)')]
+start=code.index('void scPolyComb::applyState(')
+apply=code[start:code.index('\n}\n',start)+3]
 prelude=r'''
 #include <nlohmann/json.hpp>
 #include "scPolyCombMigration.h"
@@ -119,9 +120,11 @@ int main(int argc,char** argv){
     imported["controls"]["Delta_Mix_A"]=1.0f;
     imported["controls"]["LFO1_Random_Type"]=2;
     imported["controls"]["LFO3_Random_Smooth"]=0.4f;
+    imported["controls"]["Comb_Vib_Amount"]=0.75f;
     {auto m=std::vector<float>(336,0.0f); auto saved=moving["matrix"].get<std::vector<float>>(); std::copy(saved.begin(),saved.end(),m.begin()); m[23*14+0]=0.5f; m[23*14+5]=-0.25f; imported["matrix"]=m;}
     imported["voices"]=24;
     node.applyState(imported,imported,1,true);
+    assert(node.current["Comb_Vib_Amount"]==0.75f);
     assert(node.voices.value==24 && node.current["Pitch_External"]==false && node.modulation.matrix[23*14]==0.5f);
     node.applyState(moving,moving,1,true);check();
     node.applyState(imported,moving,.5f,false);assert(node.voices.value==24);   // morphing: switches at the switch point
@@ -157,6 +160,7 @@ with tempfile.TemporaryDirectory(prefix='polycomb_moving_') as d:
     lfo_random.update({f'LFO{i}_Steps':0 for i in range(1,9)})
     # Older snapshots keep the classic filter/echo, but always use the Reaktor comb.
     schema=controls_from_source()
+    pitch.update({k:v['default'] for k,v in schema.items() if k.startswith('Comb_Vib_')})
     models={k:schema[k]['default'] for k in ('Ring_Model','Ring_Ratio','Ring_Width','Filter_Model','Comb_Model','Echo_Model','Echo_Hi','Echo_Lo','Echo_Res','Echo_Spread')}
     assert models['Ring_Model']==1 and models['Filter_Model']==0 and models['Comb_Model']==1 and models['Echo_Model']==0
     for k in models: assert f'c.key == "{k}"' in code, k

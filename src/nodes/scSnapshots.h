@@ -8,10 +8,9 @@
 //  banks (banks/<name>.json, Factory.json rewritten from the node's factory
 //  list), Store / Recall / Glide (over Morph Time, beats or seconds) and an A
 //  / B Morph, the bar that draws them and the Manage window (rename, delete,
-//  reorder: scSnapshotManager), and named presets: a folder of <name>.json
-//  files, each a snapshot kept by name (loaded or glided to, stepped
-//  through, saved, renamed, deleted, copied into a slot). Its parameters
-//  keep the names the nodes had
+//  reorder: scSnapshotManager). Legacy named preset file helpers remain for
+//  compatibility; the UI uses snapshots and banks. Its parameters keep the
+//  names the nodes had
 //  (Snapshot, Morph, Morph A / B, Morph Time, Morph Beats, Morph Glide, Morph
 //  Curve, Morph Switch), so presets and connections keep working.
 //
@@ -71,9 +70,8 @@ public:
     std::array<bool, SLOTS> used{};
     int active = -1;
     scSnapshotManager manager;            // the slots in the Manage window
-    scSnapshotManager presetManager;      // the named presets in it
     std::vector<std::string> presetNames; // sorted
-    std::string currentPreset;            // the last loaded / saved (shown)
+    std::string currentPreset;            // legacy named preset state
 
     // ── Setup ──────────────────────────────────────────────────────────────
     void setupParameters(float morphTime = 4.0f, bool beats = true) {
@@ -106,17 +104,6 @@ public:
             }
         });
         loadLibrary();
-        presetManager.emptyText = "No presets yet: Save as...";
-        presetManager.count = [this]() { return (int)presetNames.size(); };
-        presetManager.number = [](int e) { return e + 1; };
-        presetManager.name = [this](int e) { return e < (int)presetNames.size() ? presetNames[e] : std::string(); };
-        presetManager.rename = [this](int e, const std::string& nm) { if(e < (int)presetNames.size()) renamePreset(presetNames[e], nm); };
-        presetManager.remove = [this](int e) { if(e < (int)presetNames.size()) deletePreset(presetNames[e]); };
-        presetManager.recall = [this](int e) { if(e < (int)presetNames.size()) loadPresetFromGui(presetNames[e]); };
-        presetManager.active = [this]() {
-            const auto it = std::find(presetNames.begin(), presetNames.end(), currentPreset);
-            return it == presetNames.end() ? -1 : (int)(it - presetNames.begin());
-        };
         scanPresets();
     }
     // The snapshot controls themselves (never captured, never recalled)
@@ -645,6 +632,7 @@ public:
     void drawBar(float w, bool withMorph = true, bool separator = true) {
         ImGui::PushID(this);
         const float z = std::max(0.5f, ImGui::GetFontSize() / 13.0f);
+        const float barX = ImGui::GetCursorScreenPos().x;
         auto label = [this](int k) { return ofToString(k + 1) + "  " + (used[k] ? name(k) : std::string("(empty)")); };
         // label + combo are one item for the node's menu: right-click either
         // to publish Snapshot (the slot number, an int) to the node
@@ -738,7 +726,7 @@ public:
         }
         ImGui::SameLine();
         if(ImGui::Button("Manage...")) manager.windowOpen = true;
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("Rename, delete or reorder the snapshots and the presets");
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("Rename, delete or reorder the snapshots");
         drawManageWindow();
         ImGui::SameLine();
         if(ImGui::Button("Banks")) ImGui::OpenPopup("##snapBanks");
@@ -789,16 +777,12 @@ public:
             if(!message.empty()) { ImGui::Separator(); ImGui::TextDisabled("%s", message.c_str()); }
             ImGui::EndPopup();
         }
-        // Keep named presets reachable when the snapshot controls fill the
-        // row (a narrower window, or a larger font/zoom).
-        const float presetRight = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
-        if(presetRight - (ImGui::GetItemRectMax().x + 10 * z) > 440 * z) ImGui::SameLine(0, 10 * z);
-        drawPresets();
         if(withMorph) {
             // on this row if it fits, else on the next
-            const float left = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x - (ImGui::GetItemRectMax().x + 10 * z);
-            if(left > 520 * z) ImGui::SameLine(0, 10 * z);
-            drawMorph(w);
+            const float right = std::min(barX + w, ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x);
+            const float left = right - (ImGui::GetItemRectMax().x + 10 * z);
+            if(left > 520 * z){ ImGui::SameLine(0, 10 * z); drawMorph(w, barX); }
+            else drawMorph(w);
         }
         ImGui::PopID();
         if(separator) {
@@ -807,82 +791,24 @@ public:
             ImGui::Spacing();
         }
     }
-    // Preset: the named presets, arrows, Save as... and its menu
-    void drawPresets() {
-        ImGui::PushID("snapPresets");
-        const float z = std::max(0.5f, ImGui::GetFontSize() / 13.0f);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Preset");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(180 * z);
-        if(ImGui::BeginCombo("##presetCombo", currentPreset.empty() ? "-" : currentPreset.c_str(), ImGuiComboFlags_HeightLarge)) {
-            if(ImGui::IsWindowAppearing()) scanPresets();
-            for(const auto& nm : presetNames)
-                if(ImGui::Selectable(nm.c_str(), nm == currentPreset)) loadPresetFromGui(nm);
-            if(presetNames.empty()) ImGui::TextDisabled("No presets yet: Save as...");
-            ImGui::EndCombo();
-        }
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-            ImGui::SetTooltip("Named presets: files in %s\n(Glide on: it glides over Time; Alt: the other way)", presetDir().string().c_str());
-        auto step = [this](int dir) {
-            if(presetNames.empty()) return;
-            const auto it = std::find(presetNames.begin(), presetNames.end(), currentPreset);
-            const int n = (int)presetNames.size();
-            const int i = it == presetNames.end() ? (dir > 0 ? -1 : 0) : int(it - presetNames.begin());
-            loadPresetFromGui(presetNames[((i + dir) % n + n) % n]);
-        };
-        ImGui::SameLine(0, 2 * z);
-        if(ImGui::ArrowButton("##presetPrev", ImGuiDir_Left)) step(-1);
-        ImGui::SameLine(0, 2 * z);
-        if(ImGui::ArrowButton("##presetNext", ImGuiDir_Right)) step(1);
-        ImGui::SameLine();
-        if(ImGui::Button("Save as...")) {
-            std::snprintf(presetBuf, sizeof(presetBuf), "%s", currentPreset.c_str());
-            ImGui::OpenPopup("##presetSave");
-        }
-        if(ImGui::BeginPopup("##presetSave")) {
-            ImGui::TextDisabled("Preset name (the same name overwrites)");
-            ImGui::SetNextItemWidth(220 * z);
-            if(ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-            const bool enter = ImGui::InputText("##presetName", presetBuf, sizeof(presetBuf), ImGuiInputTextFlags_EnterReturnsTrue);
-            ImGui::SameLine();
-            if((ImGui::Button("Save") || enter) && savePreset(presetBuf)) ImGui::CloseCurrentPopup();
-            if(!currentPreset.empty()) {
-                ImGui::Separator();
-                if(ImGui::MenuItem(("Copy \"" + currentPreset + "\" to a snapshot slot").c_str())) {
-                    const int k = presetToSlot(currentPreset);
-                    message = k >= 0 ? "In slot " + ofToString(k + 1) : "No free slot";
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            if(ImGui::MenuItem("Show the folder")) ofLaunchBrowser("file://" + presetDir().string());
-            ImGui::EndPopup();
-        }
-        ImGui::PopID();
-    }
-    // The Manage window: the slots, then the named presets
+    // The Manage window: snapshot slots only
     void drawManageWindow() {
         if(!manager.windowOpen) return;
         ImGui::SetNextWindowSize(ImVec2(440, 560), ImGuiCond_FirstUseEver);
         if(ImGui::Begin((host.title + " snapshots##scSnapManager").c_str(), &manager.windowOpen)) {
-            const float h = std::max(120.0f, ImGui::GetContentRegionAvail().y * 0.55f);
             ImGui::TextDisabled("SNAPSHOTS: click a number to recall, drag it to move; type to rename");
             ImGui::PushID("slots");
-            manager.drawList(h);
-            ImGui::PopID();
-            ImGui::Spacing();
-            ImGui::TextDisabled("PRESETS: click a number to load; type to rename (the file)");
-            ImGui::PushID("presets");
-            presetManager.drawList();
+            manager.drawList();
             ImGui::PopID();
         }
         ImGui::End();
     }
     // Glide + Time, A / B and the Morph slider, the curve / switch settings
-    void drawMorph(float w) {
+    // rowX: where the row of width w starts (screen x), when the morph shares the bar's row
+    void drawMorph(float w, float rowX = -1.0f) {
         ImGui::PushID("snapMorph");
         const float z = std::max(0.5f, ImGui::GetFontSize() / 13.0f);
-        const float x0 = ImGui::GetCursorScreenPos().x - ImGui::GetWindowPos().x;
+        const float x0 = rowX >= 0.0f ? rowX : ImGui::GetCursorScreenPos().x;
         bool g = morphGlideP.get();
         if(ImGui::Checkbox("Glide", &g)) morphGlideP.set(g);
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
@@ -915,7 +841,9 @@ public:
         ImGui::TextUnformatted("B"); ImGui::SameLine(); slotCombo("##b", morphBP);
         ImGui::SameLine();
         const float gear = ImGui::GetFrameHeight();
-        ImGui::SetNextItemWidth(std::max(80.0f * z, w - (ImGui::GetCursorPosX() - x0) - gear - 8 * z));
+        // up to the row's end, and never past the window's
+        const float right = std::min(x0 + w, ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x);
+        ImGui::SetNextItemWidth(std::max(80.0f * z, right - ImGui::GetCursorScreenPos().x - gear - ImGui::GetStyle().ItemSpacing.x));
         float mv = morphP.get();
         if(ImGui::SliderFloat("##morph", &mv, 0.0f, 1.0f, "Morph %.3f")) morphP.set(mv);
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
@@ -959,7 +887,6 @@ private:
     std::string currentBank,storeBank,storeError;
     std::vector<std::string> storeBanks;
     ofJson storeDestination;
-    char presetBuf[96] = "";
     std::filesystem::file_time_type libTime{};
     float libCheckAt = 0.0f;
 
@@ -969,7 +896,6 @@ private:
     void recallFromGui(int k) {
         if(morphGlideP.get() != ImGui::GetIO().KeyAlt) glide(k); else recall(k);
     }
-    void loadPresetFromGui(const std::string& nm) { loadPreset(nm, morphGlideP.get() != ImGui::GetIO().KeyAlt); }
     std::filesystem::file_time_type setTime() const {
         std::filesystem::file_time_type t{};
         try {
