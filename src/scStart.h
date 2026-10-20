@@ -103,10 +103,10 @@ public:
             }
             args.push_back("-D");
             args.push_back("0"); //Deactivate synthdefs
-            const std::string pluginsPath = scPath.substr(0, scPath.size()-7);
-            if(launchPrefs.ugensPlugins != ""){
+            const std::string ugenPaths = scUgenPluginPaths(launchPrefs.ugensPlugins, scPath);
+            if(!ugenPaths.empty()){
                 args.push_back("-U");
-                args.push_back(ofToDataPath(launchPrefs.ugensPlugins, true) + ":" + pluginsPath);
+                args.push_back(ugenPaths);
             }
 
             std::string described;

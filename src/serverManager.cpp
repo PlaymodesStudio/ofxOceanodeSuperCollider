@@ -55,6 +55,17 @@ std::string getScPluginPath(const std::string& scsynthPath){
 }
 }
 
+std::string scUgenPluginPaths(const std::string& ugensPlugins, const std::string& scsynthPath){
+    std::string custom = ugensPlugins.empty() ? "" : ofToDataPath(ugensPlugins, true);
+    // a saved folder that is gone (the older LocalUgens' data/Supercollider/Ugens) falls back too
+    if(!custom.empty() && custom.find(':') == std::string::npos && !ofDirectory::doesDirectoryExist(custom, false)) custom.clear();
+    if(custom.empty()){
+        const std::string bundled = ofToDataPath("Supercollider/Extensions", true);
+        if(ofDirectory::doesDirectoryExist(bundled, false)) custom = bundled;
+    }
+    return custom.empty() ? "" : custom + ":" + getScPluginPath(scsynthPath);
+}
+
 serverManager::serverManager(){
     initialized = false;
     volume = 1;
@@ -262,13 +273,8 @@ void serverManager::draw(){
             else preferences.verbosity = 0;
         }
 
-        bool localUgens = (preferences.ugensPlugins != "");
-        if(ImGui::Checkbox("LocalUgens", &localUgens)){
-            if(localUgens)
-                preferences.ugensPlugins = ofToDataPath("Supercollider/Ugens", true);
-            else
-                preferences.ugensPlugins = "";
-        }
+        // the servers' UGens: data/Supercollider/Extensions (or a custom folder set in the preferences)
+        ImGui::TextDisabled("UGens: %s", preferences.ugensPlugins.empty() ? "data/Supercollider/Extensions" : preferences.ugensPlugins.c_str());
 
         if(ImGui::Checkbox("Dump Osc", &dumpOsc)){
             ofxOscMessage m;
@@ -709,12 +715,10 @@ int serverManager::renderNRT(const std::string& scorePath, const std::string& ou
         "-z", ofToString(p.blockSize),
         "-D", "0"
     };
-    if(!p.ugensPlugins.empty()){
-        // scsynth does not search its standard plugin locations when -U is
-        // supplied. Keep the bundled SuperCollider plugins available in NRT
-        // renders, in addition to Oceanode's optional custom UGen folder.
+    const std::string ugenPaths = scUgenPluginPaths(p.ugensPlugins, scPath);
+    if(!ugenPaths.empty()){
         args.push_back("-U");
-        args.push_back(ofToDataPath(p.ugensPlugins, true) + ":" + getScPluginPath(scPath));
+        args.push_back(ugenPaths);
     }
 
     // scsynth prints one progress line per score packet in NRT mode, which

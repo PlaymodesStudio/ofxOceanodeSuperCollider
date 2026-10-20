@@ -54,6 +54,12 @@ struct scPreferences{
     std::string ugensPlugins = ""; //-U (list of paths separated by :)
 };
 
+// scsynth's -U: the custom UGen folders (a preference), else the app's own
+// data/Supercollider/Extensions, plus scsynth's bundled plugins (scsynth does
+// not search its standard locations once -U is given). Empty: no -U (the
+// standard locations, ~/Library/Application Support/SuperCollider/Extensions).
+std::string scUgenPluginPaths(const std::string& ugensPlugins, const std::string& scsynthPath);
+
 class serverManager{
 public:
     serverManager();
