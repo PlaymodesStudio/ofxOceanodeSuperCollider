@@ -13,8 +13,5 @@
 
 	Out.ar(OceanodeOutput.kr(\out), sig);
 
-},
-metadata: (
-	description: "VLC internet radio — output connects to any effect chain",
-	category: "Source/Radio"
-));
+}, description: "VLC internet radio — output connects to any effect chain",
+category: "Source/Radio");

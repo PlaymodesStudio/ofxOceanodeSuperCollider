@@ -1,5 +1,5 @@
 (
-~synthCreator.value("CircularBufferFFT2", {|n|
+~synthCreator.value("CircularBufferFFT_B", {|n|
 	var input, circularBufs, writePos, output;
 	var bufFrames, numActiveReaders, readerAmps;
 	var bufferSize, maxReaders, fftSize, overlaps, fftBufs;

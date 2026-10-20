@@ -1,14 +1,21 @@
+// Info<n> for scInfo: amplitude, peak and value of n audio channels, written
+// to three control buses.
 (
-File.mkdir(d ++ "/" ++ "info");
-[1, 2, 4, 6, 21, 126].do({arg n;
-	var numChan = n;
-	SynthDef.new(\info ++ (numChan).asSymbol, {
-		arg in, amp, peak, value, lagTime = 0.2, decay = 0.99;
-		var sig;
-		sig = In.ar(in, numChan);
-		Out.kr(amp, Lag.kr(Amplitude.kr(sig), lagTime));
-		Out.kr(peak, PeakFollower.kr(sig, decay));
-		Out.kr(value, A2K.kr(sig));
-	}).writeDefFile(d ++ "/info");
-})
-)
+if(thisProcess.nowExecutingPath.notNil) {
+    d = thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs";
+} {
+    d = Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs";
+};
+File.mkdir(d);
+File.mkdir(d +/+ "Info");
+
+(1..100).do({ arg n;
+    SynthDef.new(\Info ++ n.asSymbol, {
+        arg in, amp, peak, value, lagTime = 0.2, decay = 0.99;
+        var sig = In.ar(in, n);
+        Out.kr(amp, Lag.kr(Amplitude.kr(sig), lagTime));
+        Out.kr(peak, PeakFollower.kr(sig, decay));
+        Out.kr(value, A2K.kr(sig));
+    }).writeDefFile(d +/+ "Info");
+});
+);

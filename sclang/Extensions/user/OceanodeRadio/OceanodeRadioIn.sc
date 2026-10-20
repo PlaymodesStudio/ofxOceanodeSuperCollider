@@ -31,11 +31,10 @@ OceanodeRadioIn : MultiOutUGen {
         ^this.multiNew(\audio, instanceId)
     }
 
-    init {
+    // instanceId is a control (or constant) input: the default checkInputs
+    // accepts it, where checkNInputs(1) wanted it at audio rate.
+    init { |... theInputs|
+        inputs = theInputs;
         ^this.initOutputs(2, rate)
-    }
-
-    checkInputs {
-        ^this.checkNInputs(1)
     }
 }

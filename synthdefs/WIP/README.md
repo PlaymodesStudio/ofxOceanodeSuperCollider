@@ -28,3 +28,15 @@ the bottom of the file one at a time.
 (read in sclang as int8, uint8 or int16 and played with `PlayBuf`). It became
 the **SC DataBox** node (`src/nodes/scDataBox.*`, synth in
 `Defaults/DataBox/databox.scd`); kept here as the original sketch.
+
+## Core/
+
+`outputVariants.scd`: earlier and alternative versions of the output SynthDef
+(plain `~maxVoices` channels, 13 channels, circular stereo mix of 100). The one
+in use is `Defaults/Core/output.scd`.
+
+## CustomBuffer/
+
+`custombufferplayer.scd`: a ping-pong wavetable player (`customBufferPlayer`)
+that `.add`s itself to a running server. No node uses it.
+

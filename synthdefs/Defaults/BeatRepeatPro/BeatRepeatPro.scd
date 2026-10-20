@@ -7,8 +7,20 @@
 // limiter.  The original parameter names and ranges are retained; the extra
 // tone/safety controls default to transparent values.
 
+// Built for the BeatRepeat Pro node (scBeatRepeatPro), which asks for
+// BeatRepeatPro<N Chan>: 1 to 16 channels, no metadata SynthDef (it is not a
+// generic node).
 (
-~synthCreator.value("BeatRepeatPro", {|n|
+var build;
+if(thisProcess.nowExecutingPath.notNil) {
+    d = thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs";
+} {
+    d = Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs";
+};
+File.mkdir(d);
+File.mkdir(d +/+ "BeatRepeatPro");
+
+build = {|n|
     var input, recordInput, buffer, output, loopOutput, filteredLoop;
     var bufferSeconds, bufferFrames, writePos, readPos, readPhase, captureAnchor, startAnchor;
     var musicalDur, pitchedDur, loopDur, loopSamples, offsetSamples;
@@ -242,6 +254,11 @@
         cyclePhase
     ]);
 
-}, description: "Coherent multichannel beat repeater with live waveform GUI",
-category: "Effect/Time/Looping");
+};
+
+(1..16).do { |n|
+    SynthDef.new(("BeatRepeatPro" ++ n).asSymbol, {
+        var sig = SynthDef.wrap(build, prependArgs: [n, nil]);
+    }).writeDefFile(d +/+ "BeatRepeatPro", mdPlugin: AbstractMDPlugin);
+};
 )

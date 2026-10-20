@@ -30,7 +30,7 @@ def main():
     for src in sorted(defs.glob('*.scsyndef')):
         if src.stem.startswith('PolyCombSpread'):continue      # the original spreaders: left as installed
         planned.append((src,synths/src.name))
-    for family in ('PCSub','PCFilterSlopes','PCCombSat','PCDelta','PCPitch','PCAmp'):
+    for family in ('PCSub','PCFilterSlopes','PCDelta','PCPitch','PCAmp'):
         for n in range(1,33):assert (defs/f'{family}{n}.scsyndef').is_file(),family+str(n)
     for n in range(1,17):assert (defs/f'PCSpreadWide{n}.scsyndef').is_file()
     mods=ROOT/'synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation'

@@ -35,7 +35,14 @@ void refreshSynthdefModels(ofxOceanode &o){
 			}else{
 				//Get synthdefs
 				if(f.getExtension() == "txarcmeta"){
-					auto desc = scSynthdef::readAndCreateSynthdef(f.getAbsolutePath());
+					synthdefDesc desc;
+					try {
+						desc = scSynthdef::readAndCreateSynthdef(f.getAbsolutePath());
+					} catch(const std::exception& error) {
+						// Not an Oceanode description (VSTPlugin writes its own .txarcmeta)
+						ofLogWarning("ofxOceanodeSuperCollider") << "Skipping " << f.getAbsolutePath() << ": " << error.what();
+						continue;
+					}
 					if(desc.type == "multi"){
 
 					}else if(desc.type == "events"){

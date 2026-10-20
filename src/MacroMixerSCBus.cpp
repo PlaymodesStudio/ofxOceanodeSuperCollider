@@ -119,7 +119,10 @@ void registerMacroMixerSCBus(const std::vector<serverManager*>& servers) {
         if(p.getNodeRef() && (p.getIndex()<0 || p.getIndex()>=p.getNodeRef()->getNumOutputs())) throw std::runtime_error("Invalid ScBus output reference");
         if(auto* bridge=dynamic_cast<AudioBridge*>(p.getNodeRef())) bridge->check();
     })) return;
-    auto folder=std::filesystem::path(ofToDataPath(std::string(SYNTHDEF_DIRECTORY)+"/Defaults/macromixer",true));
+    // Defaults/MacroMixer in a synced data folder, Defaults/macromixer before
+    auto folder=std::filesystem::path(ofToDataPath(std::string(SYNTHDEF_DIRECTORY)+"/Defaults/MacroMixer",true));
+    if(!std::filesystem::exists(folder/"macroMixer.scsyndef"))
+        folder=std::filesystem::path(ofToDataPath(std::string(SYNTHDEF_DIRECTORY)+"/Defaults/macromixer",true));
     if(!std::filesystem::exists(folder/"macroMixer.scsyndef"))
         folder=std::filesystem::path(__FILE__).parent_path().parent_path()/"data/Supercollider/Synthdefs/Defaults/macromixer";
     for(auto* manager:servers) if(manager) manager->requireSynthdefFolder(folder.string());

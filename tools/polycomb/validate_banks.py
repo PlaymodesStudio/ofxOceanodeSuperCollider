@@ -43,7 +43,7 @@ def render(slots,n=16,duration=12.0,output="/tmp/polycomb-bank-render",master=.8
     import numpy as np
     out=pathlib.Path(output);out.mkdir(exist_ok=True)
     pc=ROOT/'synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb';mod=ROOT/'synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation';fx=ROOT/'synthdefs/Defaults/MixerPro/CompiledSynthdefs/mixerpro'
-    names=['PCSub','PCFilterSlopes','PCCombSat','PCFilterR','PCCombR','PCRingR','PCPitch','PCFm','PCOscSaw','PCOscTri','PCOscPulse','PCOscSine','PCOscSSaw','PCOscWhite','PCOscDust','PCOscImp','PCFilter','PCComb','PCRing','PCAmp']
+    names=['PCSub','PCFilterSlopes','PCFilterR','PCCombR','PCRingR','PCPitch','PCFm','PCOscSaw','PCOscTri','PCOscPulse','PCOscSine','PCOscSSaw','PCOscWhite','PCOscDust','PCOscImp','PCFilter','PCComb','PCRing','PCAmp']
     paths=[pc/f'{s}{n}.scsyndef' for s in names]+[pc/'PolyCombSpread2.scsyndef']+[mod/f'{s}{n}.scsyndef' for s in ('ModGate','ModEnv','ModEnvAr','ModLfo','ModRoute')]+[fx/f'mixerPro{s}2.scsyndef' for s in ('Comp','Echo','Rvb')]
     score=bundle(0,[message('/d_recv',p.read_bytes())for p in paths]+[message('/g_new',1,0,0)])
     length=duration

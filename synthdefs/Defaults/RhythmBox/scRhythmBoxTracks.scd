@@ -222,12 +222,7 @@ makeSource = { |defName, kind|
         if(kind == \slice) {
             gate = (sliceOn > 0.5) * probabilityPass * seqActive * active
         } {
-            if(kind == \legacy) {
-                gate = (Select.kr(slicerMode > 0.5, [on, sliceOn]) > 0.5)
-                       * probabilityPass * seqActive * active
-            } {
-                gate = (on > 0.5) * probabilityPass * seqActive * active
-            }
+            gate = (on > 0.5) * probabilityPass * seqActive * active
         };
         baseTrig = stepTrig * gate;
 
@@ -316,15 +311,13 @@ makeSource = { |defName, kind|
             totalPitch = globalPitch + latchedPitch
                          + effectiveArpSemis;
 
-            source = if((kind == \sample) or: { kind == \slice } or: { kind == \legacy }, {
+            source = if((kind == \sample) or: { kind == \slice }, {
                 var useSlice, voiceStart, voiceEnd, baseRate, signedRate;
                 var farEnd, farStart, voiceFwdHi, voiceRevLo, phasorLo, phasorHi;
                 var resetPos, playGate, declickFadeOut, declickActive, phasorTrigAR, declickAmp;
                 var cleanSample, shapedSample, drive;
                 numFrames = BufFrames.kr(bufnum).max(2);
-                useSlice = if(kind == \slice) { 1 } {
-                    if(kind == \legacy) { slicerMode > 0.5 } { 0 }
-                };
+                useSlice = if(kind == \slice) { 1 } { 0 };
                 startFrame = inPoint * numFrames;
                 endFrame = (outPoint * numFrames).max(startFrame + 1);
                 voiceStart = Select.kr(useSlice, [startFrame, latchedSliceStart * numFrames]);
@@ -338,11 +331,6 @@ makeSource = { |defName, kind|
                 // constant-folded to Boolean false once per polyphonic voice.
                 if(kind == \slice) {
                     baseRate = Select.kr(sliceFit > 0.5,
-                        [baseRate, (regionFrames / (60 / bpm / stepsPerBeat * SampleRate.ir).max(1))
-                                   * totalPitch.midiratio])
-                };
-                if(kind == \legacy) {
-                    baseRate = Select.kr((slicerMode * sliceFit) > 0.5,
                         [baseRate, (regionFrames / (60 / bpm / stepsPerBeat * SampleRate.ir).max(1))
                                    * totalPitch.midiratio])
                 };
@@ -428,7 +416,7 @@ makeSource = { |defName, kind|
                         [envCurveA, 0, envCurveD, 0]), trigAR)
                 })
             });
-            if((kind == \sample) or: { kind == \slice } or: { kind == \legacy }) {
+            if((kind == \sample) or: { kind == \slice }) {
                 ampEnv = Select.ar(K2A.ar(envEnabled > 0.5), [DC.ar(1), ampEnv])
             };
             // Preserve the sampler's mono-ARP gate-width behavior for every
@@ -519,8 +507,6 @@ makeSource.(\RhythmBoxKickTrack,   \kick);
 makeSource.(\RhythmBoxNoiseTrack,  \noise);
 makeSource.(\RhythmBoxSnareTrack,  \snare);
 makeSource.(\RhythmBoxClickTrack,  \click);
-// Legacy alias retained for old deployments and code that instantiates it directly.
-makeSource.(\RhythmBoxTrack,       \legacy);
 
 "RhythmBox typed dry sources written to: ".post; defDir.postln;
 )

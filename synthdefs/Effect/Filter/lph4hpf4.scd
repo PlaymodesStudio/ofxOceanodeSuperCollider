@@ -1,5 +1,5 @@
 (
-~synthCreator.value("RLPF4", {|n|
+~synthCreator.value("RLPF4Pole", {|n|
 	var input, filters, filtered, freq, res, type, dry, mix, sig,fmin;
 
 	// Parameters
@@ -25,7 +25,7 @@
 );
 
 (
-~synthCreator.value("RHPF4", {|n|
+~synthCreator.value("RHPF4Pole", {|n|
 	var input, filters, filtered, freq, res, type, dry, mix, sig,fmin;
 
 	// Parameters

@@ -546,8 +546,11 @@ void serverManager::loadNRTSynthdefs(){
                                       << " only the boot-time SynthDefs were loaded";
     }
 
-    // Output is a legacy SynthDef without a .txarcmeta descriptor.
-    const std::string outputSynthDef = ofToDataPath(
+    // Output is a legacy SynthDef without a .txarcmeta descriptor. Synced
+    // data folders keep it with its source's folder (Defaults/Core).
+    std::string outputSynthDef = ofToDataPath(
+        std::string(SYNTHDEF_DIRECTORY) + "/Defaults/Core/output.scsyndef", true);
+    if(!ofFile::doesFileExist(outputSynthDef)) outputSynthDef = ofToDataPath(
         std::string(SYNTHDEF_DIRECTORY) + "/Defaults/output.scsyndef", true);
     if(ofFile::doesFileExist(outputSynthDef)){
         ofxOscMessage message;

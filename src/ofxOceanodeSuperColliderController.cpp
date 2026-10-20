@@ -1005,10 +1005,12 @@ void ofxOceanodeSuperColliderController::setup(){
 		s->setStereoMixSize(stereomixSize);
 	}
     scSynthdefCompiler::get().setServers(outputServers);
+    synthdefSync.setServers(outputServers);
 }
 
 void ofxOceanodeSuperColliderController::drawPopups(){
     scSynthdefCompiler::get().drawPopups();
+    synthdefSync.drawPopup();
 }
 
 void ofxOceanodeSuperColliderController::draw(){
@@ -1022,6 +1024,7 @@ void ofxOceanodeSuperColliderController::draw(){
         if(synthdefReloadCallback) synthdefReloadCallback();
         for(auto s : outputServers) s->loadDefs(true);
     }
+    synthdefSync.drawMenuItem();
 #if OFXOCEANODESC_HAS_TIMELINE
     if(ImGui::BeginMenu("NRT Rendering")){
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);

@@ -1,5 +1,5 @@
 (
-~synthCreator.value("Pulsar2", {|n|
+~synthCreator.value("Pulsar_B", {|n|
     var freq, grainFreq, overlap, index, skew, lfoFreq, lfoAmount, level;
     var trig, phase, windowPhase, rectWindow, mod, sig;
     var measurePhase, measureSlope, accumulator, lfoPhase, transferFunc, lfo;

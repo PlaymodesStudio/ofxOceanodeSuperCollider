@@ -421,6 +421,46 @@ d = thisProcess.nowExecutingPath.dirname +/+ "/CompiledSynthdefs";
     ("Writing exact SynthDef finished").postln;
 };
 
+// Helper used by Oceanode's "Sync with SynthDefs Git": the metadata SynthDef
+// plus the given builds, each a channel count and its variable values (empty:
+// every variable at 1, what a new node asks for). Other builds are compiled
+// on demand.
+//
+//     ~useSyncSynthCreator.([[1, []], [2, []]]);
+//     "/path/to/lpf.scd".load;       // LPF, LPF1, LPF2
+~synthCreatorSync = {|name, func, description = "", category = "", variables, variableDimensions|
+    var variableNames = variables ? [];
+    var placeholderArgs = variableNames.collect { 1 };
+    File.mkdir(d +/+ name);
+    description = description.replace(" ", "_");
+    description = description.replace(",", "|");
+    SynthDef.new(name, {
+        var sig = SynthDef.wrap(func, prependArgs: [1, placeholderArgs]);
+    }, metadata: (
+        name: name,
+        type: "source",
+        description: description,
+        category: category,
+        variables: variableNames.join(":"),
+        variableDimensions: (variableDimensions ? []).collect(_.asString).join(":")
+    )).writeDefFile(d +/+ name);
+    ~syncBuilds.do { |build|
+        var n = build[0].asInteger;
+        var values = if(build[1].size == variableNames.size) { build[1].collect(_.asInteger) } { placeholderArgs };
+        var synthdefName = name ++ n.asSymbol;
+        values.do { |value| synthdefName = synthdefName ++ "_" ++ value.asSymbol };
+        SynthDef.new(synthdefName, {
+            var sig = SynthDef.wrap(func, prependArgs: [n, values]);
+        }).writeDefFile(d +/+ name, mdPlugin: AbstractMDPlugin);
+    };
+    ~syncBuilt = (~syncBuilt ? 0) + 1;
+};
+
+~useSyncSynthCreator = {|builds|
+    ~syncBuilds = builds;
+    ~synthCreator = ~synthCreatorSync;
+};
+
 ~useExactSynthCreator = {|numChannels, variableValues = #[]|
     if(numChannels.asInteger < 1) {
         Error("Exact SynthDef channel count must be greater than zero").throw;

@@ -66,6 +66,9 @@ public:
     std::string getSourcesFolder(){ return getPaths().sources; }
     // A source was added or changed: read the source tree again on the next request
     void invalidateSourceIndex(){ indexBuilt = false; sourceBySynth.clear(); noAutocompile.clear(); }
+    // Sources or compiler installed in the data folder (Sync with SynthDefs
+    // Git): look for them again on the next request
+    void refreshPaths(){ pathsResolved = false; paths = Paths(); invalidateSourceIndex(); }
     // Any thread, blocking. "" when sclang exited with status 0, else why not.
     static std::string runScript(const ScriptJob& job);
 

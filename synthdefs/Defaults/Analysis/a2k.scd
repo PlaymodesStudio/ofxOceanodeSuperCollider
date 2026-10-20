@@ -1,4 +1,10 @@
 (
+if(thisProcess.nowExecutingPath.notNil) {
+    d = thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs";
+} {
+    d = Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs";
+};
+File.mkdir(d);
 File.mkdir(d ++ "/" ++ "a2k");
 [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,24,25,30].do({arg n;
 	var numChan = n;

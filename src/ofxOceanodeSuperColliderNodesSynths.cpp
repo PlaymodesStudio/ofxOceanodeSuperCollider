@@ -37,7 +37,6 @@ void registerSynthNodes(ofxOceanode &o){
 	o.registerModel<scDynGenNode>("SuperCollider");
 	o.registerModel<scDynGenPolyNode>("SuperCollider");
 	o.registerModel<pinkTromboneNode>("SuperCollider");
-//	o.registerModel<scGrainBox>("SuperCollider", controller->getServers());
 	o.registerModel<scGrainBoxPoly>("SuperCollider", controller->getServers());
 	o.registerModel<scSampleBox>("SuperCollider", controller->getServers());
 	o.registerModel<scSlicerBox>("SuperCollider", controller->getServers());

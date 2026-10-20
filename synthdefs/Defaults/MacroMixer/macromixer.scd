@@ -1,8 +1,15 @@
-// Private MacroMixer audio bridges, 1..128 channels in one SynthDef file.
-// Rebuild with: sclang -D /absolute/path/to/this/build.scd
+// Private MacroMixer audio bridges (MacroMixerSCBus), 1..128 channels in one
+// SynthDef file: macroMixer.scsyndef.
 (
-var destination = (thisProcess.nowExecutingPath.dirname +/+ "../../data/Supercollider/Synthdefs/Defaults/macromixer").standardizePath;
-var bytes = Int8Array.newFrom([83, 67, 103, 102, 0, 0, 0, 2, 0, 128]);
+var destination, bytes;
+if(thisProcess.nowExecutingPath.notNil) {
+    d = thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs";
+} {
+    d = Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs";
+};
+destination = d +/+ "macromixer";
+File.mkdir(d);
+bytes = Int8Array.newFrom([83, 67, 103, 102, 0, 0, 0, 2, 0, 128]);
 File.mkdir(destination);
 (1..128).do { |channels|
     var definition = SynthDef(("oceanodeMacroMixer" ++ channels).asSymbol, {
@@ -15,5 +22,4 @@ File.mkdir(destination);
 };
 File.use(destination +/+ "macroMixer.scsyndef", "wb", { |file| file.write(bytes) });
 ("Wrote " ++ destination ++ "/macroMixer.scsyndef").postln;
-0.exit;
 )

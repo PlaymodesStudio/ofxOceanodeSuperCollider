@@ -1,0 +1,16 @@
+# SynthDefs that no longer exist. "Sync with SynthDefs Git" moves their
+# installed builds (the folder holding <Name>.txarcmeta: <Name>.scsyndef,
+# <Name>.txarcmeta and <Name><channels>[_<variables>].scsyndef) to
+# data/Supercollider/_retired_synthdefs. One name per line.
+
+# Renamed 2026-10-20: their builds clashed with another synth's
+# (Pulsar's stereo build was Pulsar2.scsyndef). tools/migrate_synth_renames.py
+# moves presets to the new names.
+Pulsar2
+CircularBufferFFT2
+RLPF4
+RHPF4
+
+# Not used by any node
+polyComb
+RhythmBoxTrack

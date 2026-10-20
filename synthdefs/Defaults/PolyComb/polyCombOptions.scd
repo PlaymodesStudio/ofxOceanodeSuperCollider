@@ -47,23 +47,6 @@ File.mkdir(root); File.mkdir(dir);
         wet=Select.ar(\type.kr(0).clip(0,3),[lp,hp,bp,br]);
         Out.ar(\out.kr(0),LinXFade2.ar(sig,wet,\on.kr(1,0.03)*2-1));
     }).writeDefFile(dir);
-    SynthDef(("PCCombSat" ++ n).asSymbol, {
-        var sig=In.ar(\in.kr(0),n);
-        var note=kv.(\combpitch,0)+kv.(\combtranspose,0)+(base.()*(1-(\combmode.kr(0)>0.5)))
-            +(({Rand(-1,1)}!n)*kv.(\combdetune,0))+modIn.(\mcpitch);
-        var fc=note.clip(0,127).midicps.clip(20,10000);
-        var fb=(kv.(\combfeed,0.7)+modIn.(\mcfb)).clip(-0.995,0.995);
-        var threshold=\satlevel.kr(12,0.03).clip(0,48).dbamp;
-        var tone=LPF.ar(sig,\combtone.kr(1).linexp(0,1,300,20000));
-        // AnalogFilter's existing cubic, sample-by-sample comb has tanh in
-        // the feedback path. No LocalIn block delay is added to its pitch.
-        // The small drive enables that loop; threshold scales its saturation
-        // level. Its DC block, normalization and loop damping differ from NI.
-        var wet=AnalogFilter.ar(tone/threshold,fc,fb.abs/0.995,4,fb<0,1.001,0,0)*threshold;
-        wet=Sanitize.ar(wet);
-        wet=XFade2.ar(sig,wet,(kv.(\combmix,1)+modIn.(\mcmix)).clip(0,1)*2-1);
-        Out.ar(\out.kr(0),LinXFade2.ar(sig,wet,\on.kr(1,0.03)*2-1));
-    }).writeDefFile(dir);
 };
 "PolyComb optional inserts written to ".post;dir.postln;
 )

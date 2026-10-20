@@ -1,9 +1,17 @@
 (
+if(thisProcess.nowExecutingPath.notNil) {
+    d = thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs";
+} {
+    d = Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs";
+};
+File.mkdir(d);
+File.mkdir(d +/+ "vst");
+
 SynthDef(\vst, {
 	arg in, out;
 	Out.ar(out, VSTPlugin.ar(In.ar(in, 2), 2));
-}).writeDefFile(d);
-)
+}).writeDefFile(d +/+ "vst");
+);
 
 // Mono VST SynthDef
 (
@@ -16,8 +24,8 @@ SynthDef(\vstMono, {
     // mix=0: 100% dry (bypass), mix=1: 100% wet (fully processed)
     output = XFade2.ar(input, wetSignal, mix * 2 - 1);
     Out.ar(out, output);
-}).writeDefFile(d);
-)
+}).writeDefFile(d +/+ "vst");
+);
 
 // Stereo VST SynthDef
 (
@@ -30,5 +38,5 @@ SynthDef(\vstStereo, {
     // mix=0: 100% dry (bypass), mix=1: 100% wet (fully processed)
     output = XFade2.ar(input, wetSignal, mix * 2 - 1);
     Out.ar(out, output);
-}).writeDefFile(d);
-)
+}).writeDefFile(d +/+ "vst");
+);
