@@ -718,7 +718,7 @@ private:
                     if(!synth.is_directory()) continue;
                     const std::string name = synth.path().filename().string();
                     if(run.mode == "full") installFull(*source, synth.path(), outputs);
-                    else installGeneric(*source, name, synth.path(), outputs);
+                    else installGeneric(*source, name, synth.path(), outputs, sourceChanged(*source, compiled));
                 }
                 compiled[source->rel] = {{"key", source->key}, {"outputs", outputs}};
                 edit([](scSynthdefSync::Report& rep){ rep.compiledSynths++; });
@@ -893,6 +893,12 @@ private:
         }
     }
 
+    // Built because its source is new or changed, not only for missing builds
+    bool sourceChanged(const Source& source, const ofJson& compiled){
+        if(rebuildAll || rewritten.count(source.path.lexically_normal().string())) return true;
+        return compiled.contains(source.rel) && compiled[source.rel].value("key", "") != source.key;
+    }
+
     // Synths listed in Oceanode/retiredSynthdefs.txt: their metadata and
     // builds, in the folder holding their .txarcmeta (another synth's build
     // may share a file name elsewhere: Pulsar2 was Pulsar's stereo build)
@@ -939,7 +945,7 @@ private:
     }
 
     void installGeneric(const Source& source, const std::string& name, const fs::path& synthFolder,
-                        std::vector<std::string>& outputs){
+                        std::vector<std::string>& outputs, bool sourceChanged){
         // Where its builds already are, unless under Defaults (a generic synth
         // that used to be filed there): then next to its source's category.
         fs::path dest = synthdefs / fs::path(source.rel).parent_path() / name;
@@ -964,7 +970,9 @@ private:
                 dest = existing;
             }
         }
-        const bool changed = !sameContents(synthFolder / (name + ".scsyndef"), dest / (name + ".scsyndef"));
+        // A new source can change only higher channel counts (code under
+        // `if(n > 2)`), where the metadata SynthDef (1 channel) stays the same
+        const bool changed = sourceChanged || !sameContents(synthFolder / (name + ".scsyndef"), dest / (name + ".scsyndef"));
 
         std::set<std::string> fresh;
         for(const auto& entry : fs::directory_iterator(synthFolder)){
