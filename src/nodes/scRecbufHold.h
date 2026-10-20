@@ -7,6 +7,7 @@
 
 #include "ofxOceanodeNodeModel.h"
 #include "scNode.h"
+#include "serverManager.h"
 
 #include "ofxSCBuffer.h"
 #include "ofxSCSynth.h"

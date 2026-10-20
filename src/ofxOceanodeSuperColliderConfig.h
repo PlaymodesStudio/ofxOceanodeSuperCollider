@@ -24,6 +24,16 @@
 // ---------------------------------------------------------------------------
 #ifndef OFXOCEANODESC_HAS_TIMELINE
 	#if defined(__has_include)
+		#if __has_include("ofxOceanodeTransport.h")
+			#include "ofxOceanodeTransport.h"
+		#endif
+	#endif
+	// Branches with the timeline announce it in ofxOceanodeTransport.h. Probing
+	// the timeline headers with __has_include makes them a build dependency of
+	// every file including this one, so that is only the fallback.
+	#if defined(OFX_OCEANODE_HAS_TIMELINE)
+		#define OFXOCEANODESC_HAS_TIMELINE OFX_OCEANODE_HAS_TIMELINE
+	#elif defined(__has_include)
 		#if __has_include("ofxOceanodeScheduling.h") && __has_include("ofxOceanodeTimeline.h")
 			#define OFXOCEANODESC_HAS_TIMELINE 1
 		#else

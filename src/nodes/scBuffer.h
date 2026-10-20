@@ -11,6 +11,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "ofxOceanodeShared.h"
 #include "ofxSuperCollider.h"
+#include "serverManager.h"
 #include <filesystem>
 
 // WAVE file header format

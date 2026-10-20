@@ -6,6 +6,7 @@
 //
 
 #include "scMixerPro.h"
+#include "ofxOceanodeTimeline.h"
 #include "scSynthControlBatch.h"
 #include "ofxOceanodeContainer.h"
 #include "ofxOceanodeNode.h"
