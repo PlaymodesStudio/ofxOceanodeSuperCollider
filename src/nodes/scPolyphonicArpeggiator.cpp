@@ -1,4 +1,5 @@
 #include "scPolyphonicArpeggiator.h"
+#include "scSynthControlBatch.h"
 #include "ofxOceanodeShared.h"
 #include "ofxSCSynth.h"
 #include "imgui.h"
@@ -424,20 +425,25 @@ void scPolyphonicArpeggiator::sendTransportAnchors() {
         anchorIdCounter = anchorIdCounter % (1 << 20) + 1;
         if(hard) anchorHardCounter = anchorHardCounter % (1 << 20) + 1;
 
+        bool pending = false;
         scTransportSync::AnchorScope scope(a);
         for(auto& pair : synthInstances) {
             auto* s = pair.second;
             if(!s) continue;
-            s->set("bpm",        a.bpm);
-            s->set("div",        (float)div);
-            s->set("run",        a.playing ? 1.0f : 0.0f); // stop: no new steps; sounding notes finish
-            s->set("anchorPos",  (float)sa.pos);
-            s->set("anchorFire", sa.fire ? 1.0f : 0.0f);
-            s->set("seqbase",    seqBase);
-            s->set("hashbase",   hashBase);
-            if(hard) s->set("anchorHard", (float)anchorHardCounter);
-            s->set("anchorId",   (float)anchorIdCounter);
+            if(!s->isCreated()) { pending = true; continue; }
+            scSynthControlBatch controls(s, pair.first);
+            controls.set("bpm",        a.bpm);
+            controls.set("div",        (float)div);
+            controls.set("run",        a.playing ? 1.0f : 0.0f); // stop: no new steps; sounding notes finish
+            controls.set("anchorPos",  (float)sa.pos);
+            controls.set("anchorFire", sa.fire ? 1.0f : 0.0f);
+            controls.set("seqbase",    seqBase);
+            controls.set("hashbase",   hashBase);
+            controls.set("anchorHard", (float)anchorHardCounter);
+            controls.set("anchorId",   (float)anchorIdCounter);
+            controls.send();
         }
+        if(pending) { forceHardAnchor = true; follower.requestAnchor(); }
     }
 }
 #endif

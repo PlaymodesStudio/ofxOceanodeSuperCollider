@@ -461,6 +461,7 @@ private:
     double anchorIdCounter = 0.0;       // "anchorId" counter shared by all tracks (only increases)
     float  syncBpm = 120.0f;            // tempo of the last anchor
     uint64_t lastAnchorUs = 0;          // steady time of the latest anchor sent (ordering of the sync-off message)
+    uint64_t lastAnchorTimetag = 0;    // exact queued OSC deadline for sync-off ordering
     void handleSyncChanged(bool on);
     void updateTransportSync();
     void sendAnchor(const scTransportSync::Anchor& a);

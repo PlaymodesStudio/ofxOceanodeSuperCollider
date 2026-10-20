@@ -6,6 +6,7 @@
 #include "scSampleBox.h"
 #include "scTypedValue.h"
 #include "scEnvelopeCurve.h"
+#include "scSynthControlBatch.h"
 #include "ofxOceanodeShared.h"
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxSuperCollider.h"
@@ -1215,10 +1216,12 @@ void scSampleBox::sendTransportAnchors() {
                 if(!sc.engine) continue;
                 // sets on a synth not confirmed yet would go out without the timetag
                 if(!sc.engine->isCreated()) { pending = true; continue; }
-                sc.engine->set("tbpm", a.bpm);
-                sc.engine->set("run", a.playing ? 1.0f : 0.0f);
-                sc.engine->set("anchorPos", pos);
-                sc.engine->set("anchorId", (float)anchorIdCounter);   // last: starts the anchor
+                scSynthControlBatch controls(sc.engine, srv);
+                controls.set("tbpm", a.bpm);
+                controls.set("run", a.playing ? 1.0f : 0.0f);
+                controls.set("anchorPos", pos);
+                controls.set("anchorId", (float)anchorIdCounter);
+                controls.send();
             }
         }
     }

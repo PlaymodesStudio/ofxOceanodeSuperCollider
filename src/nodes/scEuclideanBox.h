@@ -56,6 +56,7 @@
 #include "scTransportSync.h"
 #include "scMetroBoxEngine.h"     // hashOf, unit, floorDiv, positiveMod64, tickAt
 #include "ofxSCSynth.h"
+#include "scSynthControlBatch.h"
 #include "ofxSCBuffer.h"
 #include "ofxSCServer.h"
 #include "ofxOceanodeShared.h"
@@ -960,14 +961,16 @@ private:
                 if(!s) continue;
                 // sets stored on a synth not confirmed yet would go out later without the timetag
                 if(!s->isCreated()){ pending = true; continue; }
-                s->set("bpm", a.bpm);
-                s->set("run", a.playing ? 1.0f : 0.0f);
-                s->set("anchorPos", (float)sa.pos);
-                s->set("anchorFire", sa.fire ? 1.0f : 0.0f);
-                s->set("cycleTicks", chunkTicks);
-                s->set("base", bases);
-                if(hard) s->set("anchorHard", (float)anchorHardCounter);
-                s->set("anchorId", (float)anchorIdCounter);   // last: starts the new anchor
+                scSynthControlBatch controls(s, server);
+                controls.set("bpm", a.bpm);
+                controls.set("run", a.playing ? 1.0f : 0.0f);
+                controls.set("anchorPos", (float)sa.pos);
+                controls.set("anchorFire", sa.fire ? 1.0f : 0.0f);
+                controls.set("cycleTicks", chunkTicks);
+                controls.set("base", bases);
+                controls.set("anchorHard", (float)anchorHardCounter);
+                controls.set("anchorId", (float)anchorIdCounter);   // last: starts the new anchor
+                controls.send();
             }
             if(pending){ forceHardAnchor = true; follower.requestAnchor(); }
         }

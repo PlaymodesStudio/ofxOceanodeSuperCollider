@@ -4,6 +4,7 @@
 //
 
 #include "scRhythmBox.h"
+#include "scSynthControlBatch.h"
 #include "ofxSuperCollider.h"
 #include <algorithm>
 #include <cmath>
@@ -6008,13 +6009,16 @@ void scRhythmBox::handleSyncChanged(bool on) {
         // could otherwise be overridden by one of them landing afterwards.
         scTransportSync::Anchor off;
         off.steadyTimeUs = std::max(getFrameTransportState().current.steadyTimeUs, lastAnchorUs);
+        if(off.steadyTimeUs == lastAnchorUs) off.oscTimetag = lastAnchorTimetag;
         scTransportSync::AnchorScope scope(off);
         for(auto& [srv, synths] : trackSynths)
             for(auto* s : synths)
                 if(s) {
-                    s->set("sync", 0.0f);
-                    s->set("run",  0.0f);
-                    s->set("bpm",  currentBpm);
+                    scSynthControlBatch controls(s, srv);
+                    controls.set("sync", 0.0f);
+                    controls.set("run",  0.0f);
+                    controls.set("bpm",  currentBpm);
+                    controls.send();
                 }
     }
 }
@@ -6053,7 +6057,10 @@ void scRhythmBox::updateTransportSync() {
 void scRhythmBox::sendAnchor(const scTransportSync::Anchor& a) {
     const double offset = beatOffsetP.get();
     syncBpm = a.bpm;
-    lastAnchorUs = std::max(lastAnchorUs, a.steadyTimeUs);
+    if(a.steadyTimeUs >= lastAnchorUs) {
+        lastAnchorUs = a.steadyTimeUs;
+        lastAnchorTimetag = a.oscTimetag;
+    }
     anchorIdCounter += 1.0;
 
     // A synth not confirmed by /n_go yet would store these sets and flush them
@@ -6082,13 +6089,15 @@ void scRhythmBox::sendAnchor(const scTransportSync::Anchor& a) {
             for(int ti = 0; ti < numTracks && ti < (int)synths.size(); ti++) {
                 auto* s = synths[ti];
                 if(!s || !s->isCreated()) continue;
-                s->set("sync",       1.0f);
-                s->set("bpm",        a.bpm);
-                s->set("run",        a.playing ? 1.0f : 0.0f);
-                s->set("anchorPos",  anchors[ti].pos);
-                s->set("anchorFire", fire[ti] ? 1.0f : 0.0f);
-                s->set("anchorHard", hardCounters[ti]);
-                s->set("anchorId",   anchorIdCounter);   // last: starts the new anchor
+                scSynthControlBatch controls(s, srv);
+                controls.set("sync",       1.0f);
+                controls.set("bpm",        a.bpm);
+                controls.set("run",        a.playing ? 1.0f : 0.0f);
+                controls.set("anchorPos",  anchors[ti].pos);
+                controls.set("anchorFire", fire[ti] ? 1.0f : 0.0f);
+                controls.set("anchorHard", hardCounters[ti]);
+                controls.set("anchorId",   anchorIdCounter);   // last: starts the new anchor
+                controls.send();
             }
         }
     }

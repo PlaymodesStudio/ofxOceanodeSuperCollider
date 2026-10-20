@@ -700,6 +700,7 @@ private:
     scTransportSync::StepClock stepClock;   // unit = beats, grid block = 32 beats
     double   anchorIdCounter = 0.0;
     uint64_t lastAnchorUs    = 0;
+    uint64_t lastAnchorTimetag = 0;    // exact queued OSC deadline for sync-off ordering
     float    syncBpm         = 120.0f;
     void handleSyncChanged(bool on);
     void updateTransportSync();

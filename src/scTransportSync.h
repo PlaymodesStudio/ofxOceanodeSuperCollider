@@ -44,7 +44,8 @@
 //    - play state or tempo changes
 //    - a loop restart is coming: sent AHEAD, timetagged at the exact wrap
 //      instant, so the loop point is sample accurate
-//    - periodically (drift between the SC audio clock and the steady clock)
+//    - periodically (drift between the SC audio clock and the steady clock),
+//      sent ahead at the next beat/time deadline rather than after it passed
 //
 
 #pragma once
@@ -56,6 +57,7 @@
 #include "ofxOceanodeTransport.h"
 #include "ofxSCServer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -115,7 +117,9 @@ struct Anchor {
 	float bpm = 120.0f;
 	bool playing = false;
 	bool discontinuity = false;   // a jump (seek/stop/start): not a correction
-	bool loopWrap = false;        // pre-sent loop restart
+	bool loopWrap = false;        // exact loop restart (pre-sent in realtime)
+	// Keep an enqueued deadline exact when a transport change replaces it.
+	uint64_t oscTimetag = 0;
 	// Transport seconds from the frame that sends it to the anchor's instant
 	// (a loop restart ahead: > 0; a start between two frames: < 0). An NRT
 	// capture stamps the anchor there (ofxSCServer::ScopedNRTOffset).
@@ -130,7 +134,8 @@ struct Anchor {
 class AnchorScope {
 public:
 	explicit AnchorScope(const Anchor& anchor)
-	: tag(anchor.steadyTimeUs != 0 ? ofxSCServer::timetagForSteadyTimeUs(anchor.steadyTimeUs) : 0),
+	: tag(anchor.oscTimetag != 0 ? anchor.oscTimetag :
+	      anchor.steadyTimeUs != 0 ? ofxSCServer::timetagForSteadyTimeUs(anchor.steadyTimeUs) : 0),
 	  nrt(anchor.offsetSeconds) {}
 private:
 	ofxSCServer::ScopedTimetag tag;
@@ -150,7 +155,7 @@ public:
 	void requestAnchor() { forceNext = true; }
 
 	// Once per frame. Returns the anchors to send now, in time order (usually
-	// none, one when something changed, a second one for a coming loop wrap).
+	// none; a change also replaces any outstanding future deadlines).
 	std::vector<Anchor> poll(const ofxOceanodeFrameTransportState& frame) {
 		std::vector<Anchor> out;
 		const auto& cur = frame.current;
@@ -168,6 +173,22 @@ public:
 		} else if(cur.steadyTimeUs > frame.previous.steadyTimeUs) {
 			frameSeconds = std::min(0.1, static_cast<double>(cur.steadyTimeUs - frame.previous.steadyTimeUs) / 1e6);
 		}
+		const bool realtime = cur.driverMode != TransportDriverMode::FrameStep;
+		const double lookaheadSeconds = std::max(3.0 * frameSeconds, 0.05);
+		// Only unexecuted realtime anchors need replacement. Offline periodic
+		// corrections keep their original frame/score positions.
+		if(!realtime) pending.clear();
+		pending.erase(std::remove_if(pending.begin(), pending.end(), [&](const Anchor& a) {
+			return a.steadyTimeUs <= cur.steadyTimeUs;
+		}), pending.end());
+		const bool loopChanged = initialized && (cur.loopEnabled != lastLoopEnabled ||
+			cur.loopStartBeat != lastLoopStart || cur.loopEndBeat != lastLoopEnd);
+		const bool changed = !initialized || forceNext || cur.generation != lastGeneration ||
+			cur.isPlaying != lastPlaying || std::abs(cur.bpm - lastBpm) > 1e-3f || loopChanged ||
+			cur.driverMode != lastDriver;
+		if(!initialized || cur.generation != lastGeneration || loopChanged || cur.driverMode != lastDriver ||
+		   cur.isPlaying != lastPlaying || std::abs(cur.bpm - lastBpm) > 1e-3f)
+			wrapScheduledFor = 0;
 		auto anchorNow = [&](bool discontinuity) {
 			Anchor a;
 			a.beat = cur.beatPosition;
@@ -220,28 +241,94 @@ public:
 			lastAnchorUs = a.steadyTimeUs;
 		} else if(!cur.isPlaying && lastPlaying) {
 			anchorNow(false); // stopped: hold here
+		} else if(!realtime && cur.loopCount != lastLoopCount && cur.loopActive() && bps > 0.0) {
+			// An offline score has no delivery deadline. Record the exact
+			// wrap retrospectively, as starts already are, instead of
+			// leaving speculative anchors across future tempo/seek edits.
+			Anchor a;
+			a.beat = cur.loopStartBeat;
+			a.offsetSeconds = -(cur.beatPosition - cur.loopStartBeat) / bps;
+			a.steadyTimeUs = static_cast<uint64_t>(std::max<int64_t>(1,
+				static_cast<int64_t>(cur.steadyTimeUs) + static_cast<int64_t>(std::llround(a.offsetSeconds * 1e6))));
+			a.bpm = cur.bpm;
+			a.playing = cur.isPlaying;
+			a.loopWrap = a.discontinuity = true;
+			out.push_back(a);
 		} else if(forceNext) {
 			anchorNow(false);
-		} else if(std::abs(cur.bpm - lastBpm) > 1e-3f) {
+		} else if(std::abs(cur.bpm - lastBpm) > 1e-3f || loopChanged || cur.driverMode != lastDriver) {
 			anchorNow(false);
 		} else if(cur.loopCount != lastLoopCount && !wrapSentFor(cur.loopCount)) {
-			// A wrap we did not see coming (tempo jump, long frame): fix it now.
-			anchorNow(false);
-		} else if(cur.isPlaying &&
-				  (std::abs(cur.beatPosition - lastAnchorBeat) >= periodicBeats ||
-				   (cur.steadyTimeUs > lastAnchorUs &&
-					static_cast<double>(cur.steadyTimeUs - lastAnchorUs) / 1e6 >= periodicSeconds))) {
+			// A realtime wrap missed by a stalled frame remains a timing error.
 			anchorNow(false);
 		}
+
+		// OSC packets already in scsynth's queue cannot be withdrawn. Replace
+		// every outstanding deadline in place after a seek, stop, tempo/loop
+		// edit or reset. Both writes share the EXACT OSC tag; the newer complete
+		// anchor wins at that instant without restoring the old transport state.
+		if(changed && realtime) {
+			for(const auto& queued : pending) {
+				Anchor replacement;
+				replacement.steadyTimeUs = queued.steadyTimeUs;
+				replacement.oscTimetag = queued.oscTimetag;
+				replacement.offsetSeconds = static_cast<double>(queued.steadyTimeUs - cur.steadyTimeUs) / 1e6;
+				replacement.beat = cur.beatPosition + (cur.isPlaying ? replacement.offsetSeconds * bps : 0.0);
+				if(cur.isPlaying && cur.loopActive() && replacement.beat >= cur.loopEndBeat)
+					replacement.beat = cur.loopStartBeat + positiveMod(replacement.beat - cur.loopEndBeat,
+						cur.loopEndBeat - cur.loopStartBeat);
+				// An unchanged upcoming wrap still needs its hard reset and first
+				// step. A tempo/seek/loop edit moves that reset to the new wrap.
+				if(queued.loopWrap && cur.isPlaying && cur.loopActive() && bps > 0.0 &&
+				   std::abs(replacement.offsetSeconds - (cur.loopEndBeat - cur.beatPosition) / bps) < 1.5e-6) {
+					replacement.beat = cur.loopStartBeat;
+					replacement.loopWrap = true;
+					replacement.discontinuity = true;
+				}
+				replacement.bpm = cur.bpm;
+				replacement.playing = cur.isPlaying;
+				out.push_back(replacement);
+			}
+		}
+
+		// A queued wrap belongs to the next loop iteration. Do not compare
+		// this iteration's position with its future post-wrap beat (the old
+		// absolute-difference check produced a second hard reset at each wrap).
+		const bool awaitingWrap = wrapScheduledFor > cur.loopCount;
+		if(out.empty() && cur.isPlaying && bps > 0.0 && !awaitingWrap) {
+			const double beatsUntil = periodicBeats > 0.0 ?
+				(lastAnchorBeat + periodicBeats - cur.beatPosition) / bps : INFINITY;
+			const double secondsUntil = periodicSeconds > 0.0 ?
+				static_cast<double>(lastAnchorUs) / 1e6 + periodicSeconds - static_cast<double>(cur.steadyTimeUs) / 1e6 : INFINITY;
+			const double until = std::min(beatsUntil, secondsUntil);
+			if(realtime && until <= lookaheadSeconds) {
+				Anchor a;
+				a.offsetSeconds = until;
+				a.beat = cur.beatPosition + until * bps;
+				a.steadyTimeUs = static_cast<uint64_t>(std::max<int64_t>(1,
+					static_cast<int64_t>(cur.steadyTimeUs) + static_cast<int64_t>(std::llround(until * 1e6))));
+				a.bpm = cur.bpm;
+				a.playing = true;
+				// The exact loop anchor replaces a correction at/beyond the wrap.
+				if(!cur.loopActive() || a.beat < cur.loopEndBeat - 1e-9) {
+					out.push_back(a);
+					lastAnchorBeat = a.beat;
+					lastAnchorUs = a.steadyTimeUs;
+				}
+			} else if(!realtime && until <= 0.0) {
+				anchorNow(false);
+			}
+		}
+
 		forceNext = false;
 
 		// Loop restart coming within the next ~3 frames: send it ahead, at the
 		// exact instant of the wrap, so it is not heard a frame late.
-		if(cur.isPlaying && cur.loopActive() && bps > 0.0) {
+		if(realtime && cur.isPlaying && cur.loopActive() && bps > 0.0) {
 			const double remaining = cur.loopEndBeat - cur.beatPosition;
 			// Keep the window short: an anchor already sent cannot be taken
 			// back if the user seeks before it plays.
-			const double lookahead = std::max(3.0 * frameSeconds, 0.05) * bps;
+			const double lookahead = lookaheadSeconds * bps;
 			const uint64_t nextLoop = cur.loopCount + 1;
 			if(remaining > 0.0 && remaining <= lookahead && wrapScheduledFor != nextLoop) {
 				Anchor a;
@@ -252,7 +339,13 @@ public:
 				a.playing = true;
 				a.loopWrap = true;
 				a.discontinuity = true;
-				out.push_back(a);
+				// A reset may already have repaired this same queued wrap.
+				// Reuse its original tag instead of enqueueing a second reset.
+				const bool repaired = std::any_of(out.begin(), out.end(), [&](const Anchor& q) {
+					return q.loopWrap && std::abs(static_cast<int64_t>(q.steadyTimeUs) -
+						static_cast<int64_t>(a.steadyTimeUs)) <= 1;
+				});
+				if(!repaired) out.push_back(a);
 				wrapScheduledFor = nextLoop;
 			}
 		}
@@ -262,10 +355,27 @@ public:
 		lastPlaying = cur.isPlaying;
 		lastBpm = cur.bpm;
 		lastLoopCount = cur.loopCount;
+		lastLoopEnabled = cur.loopEnabled;
+		lastLoopStart = cur.loopStartBeat;
+		lastLoopEnd = cur.loopEndBeat;
+		lastDriver = cur.driverMode;
 		if(!out.empty() && out.back().loopWrap) {
 			// The periodic timer restarts from the wrap.
 			lastAnchorBeat = out.back().beat;
 			lastAnchorUs = out.back().steadyTimeUs;
+		}
+		std::stable_sort(out.begin(), out.end(), [](const Anchor& a, const Anchor& b) {
+			return a.steadyTimeUs < b.steadyTimeUs;
+		});
+		for(auto& a : out) {
+			if(a.oscTimetag == 0 && a.steadyTimeUs != 0)
+				a.oscTimetag = ofxSCServer::timetagForSteadyTimeUs(a.steadyTimeUs);
+			if(!realtime || a.steadyTimeUs <= cur.steadyTimeUs) continue;
+			auto it = std::find_if(pending.begin(), pending.end(), [&](const Anchor& q) {
+				return q.oscTimetag == a.oscTimetag;
+			});
+			if(it == pending.end()) pending.push_back(a);
+			else *it = a;
 		}
 		return out;
 	}
@@ -279,6 +389,10 @@ private:
 	float lastBpm = 0.0f;
 	uint64_t lastLoopCount = 0;
 	uint64_t wrapScheduledFor = 0;
+	bool lastLoopEnabled = false;
+	double lastLoopStart = 0.0, lastLoopEnd = 0.0;
+	TransportDriverMode lastDriver = TransportDriverMode::RealTime;
+	std::vector<Anchor> pending;
 	double frameStepSeconds = 1.0 / 60.0;
 	double lastAnchorBeat = 0.0;
 	uint64_t lastAnchorUs = 0;

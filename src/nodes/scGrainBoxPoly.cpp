@@ -4,6 +4,7 @@
 //
 
 #include "scGrainBoxPoly.h"
+#include "scSynthControlBatch.h"
 #include "scEnvelopeCurve.h"
 #include "ofxSuperCollider.h"
 #include <algorithm>
@@ -4176,13 +4177,16 @@ void scGrainBoxPoly::handleSyncChanged(bool on) {
         // ahead of time), so a late anchor cannot override sync=0.
         scTransportSync::Anchor off;
         off.steadyTimeUs = std::max(getFrameTransportState().current.steadyTimeUs, lastAnchorUs);
+        if(off.steadyTimeUs == lastAnchorUs) off.oscTimetag = lastAnchorTimetag;
         scTransportSync::AnchorScope scope(off);
         for(auto& ph : playheads)
             for(auto& [srv, s] : ph->synths)
                 if(s) {
-                    s->set("sync", 0.0f);
-                    s->set("run",  0.0f);
-                    s->set("bpm",  currentBpm);
+                    scSynthControlBatch controls(s, srv);
+                    controls.set("sync", 0.0f);
+                    controls.set("run",  0.0f);
+                    controls.set("bpm",  currentBpm);
+                    controls.send();
                 }
     }
 }
@@ -4196,7 +4200,10 @@ void scGrainBoxPoly::updateTransportSync() {
 void scGrainBoxPoly::sendAnchor(const scTransportSync::Anchor& a) {
     const double beat = a.beat + (double)beatOffsetP.get();
     syncBpm = a.bpm;
-    lastAnchorUs = std::max(lastAnchorUs, a.steadyTimeUs);
+    if(a.steadyTimeUs >= lastAnchorUs) {
+        lastAnchorUs = a.steadyTimeUs;
+        lastAnchorTimetag = a.oscTimetag;
+    }
     anchorIdCounter += 1.0;
 
     // One clock (beats) for every playhead; anchorPos wraps at 2048 beats, a
@@ -4228,14 +4235,16 @@ void scGrainBoxPoly::sendAnchor(const scTransportSync::Anchor& a) {
         scTransportSync::AnchorScope scope(a);
         for(auto& [srv, s] : ph.synths) {
             if(!s || !s->isCreated()) continue;
-            s->set("sync",       1.0f);
-            s->set("bpm",        a.bpm);
-            s->set("run",        a.playing ? 1.0f : 0.0f);
-            s->set("anchorPos",  sa.pos);
-            s->set("anchorFire", fire ? 1.0f : 0.0f);
-            s->set("anchorHard", ph.hardCounter);
-            for(int k = 0; k < MOD_LFOS; k++) s->set("lfoanchor" + ofToString(k), lfoAnchor[k]);
-            s->set("anchorId",   anchorIdCounter);   // last: starts the new anchor
+            scSynthControlBatch controls(s, srv);
+            controls.set("sync",       1.0f);
+            controls.set("bpm",        a.bpm);
+            controls.set("run",        a.playing ? 1.0f : 0.0f);
+            controls.set("anchorPos",  sa.pos);
+            controls.set("anchorFire", fire ? 1.0f : 0.0f);
+            controls.set("anchorHard", ph.hardCounter);
+            for(int k = 0; k < MOD_LFOS; k++) controls.set("lfoanchor" + ofToString(k), lfoAnchor[k]);
+            controls.set("anchorId",   anchorIdCounter);   // last: starts the new anchor
+            controls.send();
         }
     }
     if(anyPending) follower.requestAnchor();

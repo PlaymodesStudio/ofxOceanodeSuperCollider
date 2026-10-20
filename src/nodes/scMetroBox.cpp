@@ -7,6 +7,8 @@
 
 #if OFXOCEANODESC_HAS_TRANSPORT
 
+#include "scSynthControlBatch.h"
+
 #include "ofxSCServer.h"
 #include "ofxOceanodeShared.h"
 #if OFXOCEANODESC_HAS_TIMELINE
@@ -1160,14 +1162,16 @@ void scMetroBox::sendTransportAnchors() {
             // Sets stored on a synth not confirmed yet would go out later
             // without the timetag: anchor it (hard) next frame instead.
             if(!s->isCreated()) { pending = true; continue; }
-            s->set("bpm",        a.bpm);
-            s->set("run",        a.playing ? 1.0f : 0.0f);
-            s->set("anchorPos",  (float)sa.pos);
-            s->set("anchorFire", sa.fire ? 1.0f : 0.0f);
-            s->set("cycleTicks", cycleTicks);
-            s->set("base",       bases);
-            if(hard) s->set("anchorHard", (float)anchorHardCounter);
-            s->set("anchorId",   (float)anchorIdCounter);   // last: starts the new anchor
+            scSynthControlBatch controls(s, server);
+            controls.set("bpm",        a.bpm);
+            controls.set("run",        a.playing ? 1.0f : 0.0f);
+            controls.set("anchorPos",  (float)sa.pos);
+            controls.set("anchorFire", sa.fire ? 1.0f : 0.0f);
+            controls.set("cycleTicks", cycleTicks);
+            controls.set("base",       bases);
+            controls.set("anchorHard", (float)anchorHardCounter);
+            controls.set("anchorId",   (float)anchorIdCounter);   // last: starts the new anchor
+            controls.send();
         }
         if(pending) { forceHardAnchor = true; follower.requestAnchor(); }
     }
