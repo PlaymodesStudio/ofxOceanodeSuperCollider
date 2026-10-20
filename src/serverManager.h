@@ -193,6 +193,7 @@ private:
     
     std::vector<scOutput*> outputs;
     std::vector<scNode*> nodesList;
+    std::vector<bool> graphAudioEnabled;
 
     static std::map<ofxSCServer*, int> serverSampleRates;
     

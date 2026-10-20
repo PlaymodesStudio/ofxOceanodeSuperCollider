@@ -13,6 +13,14 @@ scOldSynthdef::scOldSynthdef(oldSynthdefDesc _description) : description(_descri
 }
 
 void scOldSynthdef::setup(){
+    ofxOceanodeParameterFlags onFlags = ofxOceanodeParameterFlags_DisableOutConnection;
+#ifdef OFXOCEANODE_HAS_HEADER_TOGGLE
+    onFlags |= ofxOceanodeParameterFlags_HeaderToggle;
+#endif
+    addParameter(synthOn.set("On", true), onFlags);
+    listeners.push(synthOn.newListener([this](bool&){
+        for(auto& output : outputs) output = output;
+    }));
     for(int i = 0; i < description.numInputs; i++){
         string paramName = "In";
         if(i > 0) paramName += ofToString(i+1);
@@ -195,11 +203,16 @@ void scOldSynthdef::setup(){
 }
 
 void scOldSynthdef::activate(){
-    for(auto &synth : synths) synth.second->run(true);
+    for(auto &synth : synths) synth.second->run(synthOn);
 }
 
 void scOldSynthdef::deactivate(){
     for(auto &synth : synths) synth.second->run(false);
+}
+
+void scOldSynthdef::applyAudioEnabled(ofxSCServer* server){
+    auto synth = synths.find(server);
+    if(synth != synths.end()) synth->second->run(getActive() && synthOn);
 }
 
 void scOldSynthdef::buildSynth(ofxSCServer* server){
@@ -208,7 +221,7 @@ void scOldSynthdef::buildSynth(ofxSCServer* server){
 
 void scOldSynthdef::createSynth(ofxSCServer* server){
     resendParams.notify();
-    synths[server]->createAndRun(0, 1, getActive());
+    synths[server]->createAndRun(0, 1, getActive() && synthOn);
 }
 
 void scOldSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
@@ -217,6 +230,7 @@ void scOldSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
 }
 
 void scOldSynthdef::free(ofxSCServer* server){
+    bypassedOutputBuses.erase(server);
     if(synths.count(server) == 1){
         synths[server]->free();
         delete synths[server];
@@ -225,6 +239,7 @@ void scOldSynthdef::free(ofxSCServer* server){
 }
 
 void scOldSynthdef::freeAll(){
+    bypassedOutputBuses.clear();
     for(auto &synth : synths) synth.second->free();
     synths.clear();
 }
@@ -261,6 +276,10 @@ void scOldSynthdef::resetInputBusses(ofxSCServer* server, int targetBus){
 }
 
 int scOldSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
+    if(!synthOn){
+        auto node = bypassedOutputBuses.find(server);
+        if(node != bypassedOutputBuses.end() && node->second.count(index)) return node->second.at(index);
+    }
     return outputBus[server]; //Only one output in this type
 }
 

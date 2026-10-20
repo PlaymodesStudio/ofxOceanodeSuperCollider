@@ -7,8 +7,15 @@
 
 #include "scNode.h"
 #include "ofxSuperCollider.h"
+#include "scAudioRouting.h"
 
 ofxSCServer* scNode::graphTraversalServer = nullptr;
+
+nodePort scNode::resolveAudioSource(nodePort port){
+    return scResolveAudioSource(port,
+        [](scNode* node){ return node->isAudioEnabled(); },
+        [](scNode* node){ return node->inputs.empty() ? nodePort() : node->inputs.front().get(); });
+}
 
 int nodePort::getBusIndex(ofxSCServer* server) const{
     if(nodeRef == nullptr) return -1;

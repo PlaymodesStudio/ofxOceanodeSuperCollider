@@ -1,6 +1,29 @@
 # ofxOceanodeSuperCollider
 
 Addon for interfacing [ofxOceanode](https://github.com/PlaymodesStudio/ofxOceanode) and [Supercollider](https://github.com/supercollider/supercollider) via [ofxSupercollider](https://github.com/PlaymodesStudio/ofxSuperCollider)
+
+## SynthDef On/Off
+
+SynthDef nodes (`scSynthdef` and legacy `scOldSynthdef`) have an `On`
+boolean, enabled by default. An unlabeled checkbox appears just to the right
+of the collapse arrow in the node header, with a connectable inlet that also works when collapsed.
+Connect a Router B to expose it inside a macro; the value saves with presets.
+The header display requires an ofxOceanode version with
+`OFXOCEANODE_HAS_HEADER_TOGGLE`; older versions show `On` as a normal parameter.
+
+Turning `On` off pauses the running synth to stop its DSP processing while
+retaining its memory and state. Its first audio input feeds every output;
+other inputs are ignored for forwarding. With no first input connected, the
+outputs carry silence. Consecutive Off nodes are resolved through the chain.
+The visible cables remain intact, and turning `On` back on restores processing.
+Macro activation respects the switch. No `.scd` changes are needed.
+
+Pausing freezes delay/reverb state and cuts the current tail; resuming can
+restore stored audio. Switching currently changes routing directly, without
+a crossfade. Custom C++ instrument/effect nodes are unchanged.
+
+Run the routing regression tests with `sh tools/audio_routing_test/run.sh`.
+
 ## Optional timeline integration
 
 Some features need ofxOceanode's timeline, its scheduling layer and its

@@ -88,6 +88,18 @@ void scSynthdef::setup(){
     // model lifecycle changes and setup() runs after construction-only state.
     description = synthDescription.description;
 
+    // Host control: never forwarded to the SynthDef as an /n_set argument.
+    ofxOceanodeParameterFlags onFlags = ofxOceanodeParameterFlags_DisableOutConnection;
+#ifdef OFXOCEANODE_HAS_HEADER_TOGGLE
+    onFlags |= ofxOceanodeParameterFlags_HeaderToggle;
+#endif
+    addParameter(synthOn.set("On", true), onFlags);
+    listeners.push(synthOn.newListener([this](bool&){
+        // Propagate the topology notification through ordinary cables, routers
+        // and macros. Each connected Output coalesces it into one graph update.
+        for(auto& output : outputs) output = output;
+    }));
+
     //First check for inputs
     for(auto spec : synthDescription.params){
         auto specMap = spec.second;
@@ -564,7 +576,7 @@ void scSynthdef::replaceSynths(){
         }
         const bool wasLatency = server->getBLatency();
         if(!oldSynth->isCreated()) server->setBLatency(true);
-        newSynth->createAndRun(4, oldSynth->nodeID, getActive()); //replace synth
+        newSynth->createAndRun(4, oldSynth->nodeID, getActive() && synthOn && !waitingForSynthdef); //replace synth
         server->setBLatency(wasLatency);
         delete oldSynth;
     }
@@ -614,11 +626,17 @@ void scSynthdef::revertToBuiltSynthdef(){
 
 void scSynthdef::activate(){
     if(waitingForSynthdef) return;
-    for(auto &synth : synths) synth.second->run(true);
+    for(auto &synth : synths) synth.second->run(synthOn);
 }
 
 void scSynthdef::deactivate(){
     for(auto &synth : synths) synth.second->run(false);
+}
+
+void scSynthdef::applyAudioEnabled(ofxSCServer* server){
+    auto synth = synths.find(server);
+    if(synth != synths.end())
+        synth->second->run(getActive() && synthOn && !waitingForSynthdef);
 }
 
 void scSynthdef::buildSynth(ofxSCServer* server){
@@ -631,7 +649,7 @@ void scSynthdef::buildSynth(ofxSCServer* server){
 void scSynthdef::createSynth(ofxSCServer* server){
     if(synths.count(server) == 0) return;
     resendParams.notify();
-    synths[server]->createAndRun(0, 1, getActive() && !waitingForSynthdef);
+    synths[server]->createAndRun(0, 1, getActive() && synthOn && !waitingForSynthdef);
 }
 
 void scSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
@@ -666,6 +684,7 @@ void scSynthdef::resendBusesToSynth(ofxSCServer* server){
 }
 
 void scSynthdef::free(ofxSCServer* server){
+    bypassedOutputBuses.erase(server);
     if(synths.count(server) == 1){
         synths[server]->free();
         delete synths[server];
@@ -717,6 +736,10 @@ void scSynthdef::resetInputBusses(ofxSCServer* server, int targetBus){
 }
 
 int scSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
+    if(!synthOn){
+        auto node = bypassedOutputBuses.find(server);
+        if(node != bypassedOutputBuses.end() && node->second.count(index)) return node->second.at(index);
+    }
     return outputBuses[server][index];
 }
 

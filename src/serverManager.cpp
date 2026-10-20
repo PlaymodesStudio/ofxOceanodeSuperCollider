@@ -965,7 +965,10 @@ void serverManager::recomputeGraph(){
         }
         
         //Skip all proceses if the list is the same and if the nodeList has not changed (due to destroyed nodes)
-        if(nodesList == newNodesList && !nodesListChanged && newConnections == connections){
+        std::vector<bool> newAudioEnabled;
+        for(auto* node : newNodesList) newAudioEnabled.push_back(node->isAudioEnabled());
+        if(nodesList == newNodesList && !nodesListChanged && newConnections == connections &&
+           graphAudioEnabled == newAudioEnabled){
             // A SynthDef /sync can defer a rebuild even when its topology did
             // not change. Release that readiness fence on the unchanged graph.
             if(audioMixer && mixerGraphSyncID<0) {
@@ -1072,6 +1075,28 @@ void serverManager::recomputeGraph(){
                 outputBussesRefToNode[(*it)][i] = busindex;
             }
         }
+
+        // Keep each paused instance and its private output allocation, while
+        // exposing its first input bus on every output. Resolve the whole chain
+        // before looking up buses, including feedback and disconnected sources.
+        for(auto* node : newNodesList){
+            if(node->isAudioEnabled()) continue;
+            for(int i = 0; i < node->getNumOutputs(); ++i){
+                const auto source = scNode::resolveAudioSource(nodePort(i, node));
+                int busindex = busFromSilent->index;
+                if(source.getNodeRef()){
+                    const auto sourceNode = outputBussesRefToNode.find(source.getNodeRef());
+                    if(sourceNode != outputBussesRefToNode.end() && sourceNode->second.count(source.getIndex()))
+                        busindex = sourceNode->second.at(source.getIndex());
+                    else {
+                        const int sourceBus = source.getBusIndex(server);
+                        if(sourceBus >= 0) busindex = sourceBus;
+                    }
+                }
+                outputBussesRefToNode[node][i] = busindex;
+                node->setBypassedOutputBus(server, i, busindex);
+            }
+        }
         
             for(auto &c : newConnections){
                 for(auto &dest : c.second){
@@ -1106,7 +1131,11 @@ void serverManager::recomputeGraph(){
         }
         
         nodesList = newNodesList;
+        graphAudioEnabled = std::move(newAudioEnabled);
         connections = newConnections;
+        // Route and change running state with the same server latency. An Off
+        // synth is never freed merely because its output has been redirected.
+        for(auto* node : nodesList) node->applyAudioEnabled(server);
 //            nodesList.insert(nodesList.end(), newNodesList.begin(), newNodesList.end());
 //        }
 //        server->sendStoredBundle();

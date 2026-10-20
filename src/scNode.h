@@ -55,6 +55,13 @@ public:
     
     virtual void getConnections(std::map<nodePort, vector<scNode*>> &connections);
 
+    // Paused nodes stay in the graph (and retain their synths and buses), but
+    // consumers read their first audio input instead of their processed output.
+    virtual bool isAudioEnabled() const { return true; }
+    virtual void applyAudioEnabled(ofxSCServer* server) {}
+    virtual void setBypassedOutputBus(ofxSCServer* server, int index, int bus) {}
+    static nodePort resolveAudioSource(nodePort port);
+
     // The server whose graph serverManager::recomputeGraph() is building while
     // it calls appendOrderedNodes() and getConnections(); nullptr otherwise.
     // Lets a node that spans several servers (SC Mixer Pro) take part in each

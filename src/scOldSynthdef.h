@@ -51,6 +51,12 @@ public:
     
     void deactivate() override;
 
+    bool isAudioEnabled() const override { return synthOn.get(); }
+    void applyAudioEnabled(ofxSCServer* server) override;
+    void setBypassedOutputBus(ofxSCServer* server, int index, int bus) override {
+        bypassedOutputBuses[server][index] = bus;
+    }
+
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;
     void moveSynthBefore(ofxSCServer* server, int nodeID) override;
@@ -85,6 +91,8 @@ private:
     std::string synthdefName;
     string file;
     ofParameter<int> numChannels;
+    ofParameter<bool> synthOn;
+    std::map<ofxSCServer*, std::map<int, int>> bypassedOutputBuses;
     std::map<ofxSCServer*, int> outputBus;
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
 

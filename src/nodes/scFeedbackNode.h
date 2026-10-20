@@ -18,8 +18,11 @@ public:
     : scSynthdef(description) {}
 
     bool appendOrderedNodes(vector<scNode*> &nodesList,
-                            map<scNode*, std::pair<int, vector<int>>>&,
-                            vector<scNode*>) override {
+                            map<scNode*, std::pair<int, vector<int>>>& visited,
+                            vector<scNode*> parents) override {
+        // Off removes this processor's block delay: its first input becomes a
+        // normal ordering dependency, just like any other paused effect.
+        if(!isAudioEnabled()) return scNode::appendOrderedNodes(nodesList, visited, parents);
         // Deliberately do not traverse availableInputs. The bus connection is
         // still assigned normally, but it does not impose an execution-order
         // dependency because the SynthDef reads it with InFeedback.
