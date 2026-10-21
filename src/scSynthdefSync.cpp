@@ -610,7 +610,10 @@ private:
                     if(needed) break;
                     needed = !fs::exists(synthdefs / output.get<std::string>());
                 }
-            }else if(!needed && source.kind == Source::Generic){
+            }
+            // Also when a sync compiled it: the builds a generic synth gets by
+            // default can grow (stereo, then mono and stereo)
+            if(!needed && source.kind == Source::Generic){
                 for(const auto& name : source.names){
                     if(!hasGenericBuilds(name)){ needed = true; break; }
                 }
