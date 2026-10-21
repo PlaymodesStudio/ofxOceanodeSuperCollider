@@ -3,7 +3,7 @@
 //
 //     sclang syncCompile.scd <mode> <outDir> <source.scd> [source.scd ...]
 //
-//   stereo  a ~synthCreator source: its metadata SynthDef plus 2 channels,
+//   stereo  a ~synthCreator source: its metadata SynthDef plus 1 and 2 channels,
 //           into <outDir>/<i>/<Name>/ (i = the source's position).
 //           <source.scd>::<builds> builds those instead, a comma-separated
 //           list of <channels>[_<variable value>...], e.g. lpf.scd::1,2,16
@@ -30,7 +30,7 @@ sources.do { |entry, i|
             var numbers = build.split($_).collect(_.asInteger);
             [numbers[0], numbers.copyRange(1, numbers.size - 1)]
         }
-    } { [[2, []]] };
+    } { [[1, []], [2, []]] };
     try {
         switch(mode,
             \stereo, {

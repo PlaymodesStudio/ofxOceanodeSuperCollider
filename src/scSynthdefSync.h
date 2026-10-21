@@ -16,7 +16,7 @@
 //       the app does not have: sources this sync downloaded, sources changed
 //       since a sync compiled them, and synths whose SynthDefs are missing
 //       (or everything, with "Compile everything again"):
-//         - ~synthCreator synths: the metadata SynthDef plus the stereo build.
+//         - ~synthCreator synths: the metadata SynthDef plus the mono and stereo builds.
 //           When a synth changed, its other installed builds are retired.
 //           Other channel counts are compiled on demand (scSynthdefCompiler).
 //         - Defaults/ scripts (SynthDefs of the C++ nodes): run whole.

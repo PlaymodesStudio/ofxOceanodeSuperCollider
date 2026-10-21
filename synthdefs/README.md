@@ -59,7 +59,7 @@ bundled sclang and `Oceanode/syncCompile.scd`, only what the app does not
 have: sources it downloaded (new or changed) and synths whose SynthDefs are
 missing. "Compile everything again" rebuilds all of them:
 
-- `~synthCreator` synths: the metadata SynthDef plus the stereo build. When a
+- `~synthCreator` synths: the metadata SynthDef plus the mono and stereo builds. When a
   synth changed, its other installed builds are retired; any channel count is
   compiled on demand when a node asks for it.
 - `Defaults/` scripts: run whole. A `~synthCreator` source under `Defaults/`

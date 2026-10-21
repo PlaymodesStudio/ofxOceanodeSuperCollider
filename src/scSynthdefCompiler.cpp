@@ -9,6 +9,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <regex>
 #include <sstream>
 
@@ -289,11 +290,31 @@ std::string scSynthdefCompiler::runScript(const ScriptJob& job){
 
     int status = 0;
     const auto start = std::chrono::steady_clock::now();
+    auto lastLogCheck = start;
+    std::streamoff logRead = 0;
+    std::string logCarry;
     while(waitpid(pid, &status, WNOHANG) == 0){
-        if(std::chrono::steady_clock::now() - start > std::chrono::seconds(job.timeoutSeconds)){
+        const auto now = std::chrono::steady_clock::now();
+        if(now - start > std::chrono::seconds(job.timeoutSeconds)){
             kill(pid, SIGKILL);
             waitpid(pid, &status, 0);
             return "sclang did not finish within " + ofToString(job.timeoutSeconds) + " s";
+        }
+        // A class library that fails to compile never runs the script and
+        // sclang then idles until the timeout: stop it at once.
+        if(now - lastLogCheck > std::chrono::milliseconds(500)){
+            lastLogCheck = now;
+            std::ifstream log(job.logPath, std::ios::binary);
+            log.seekg(logRead);
+            std::string chunk((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+            logRead += chunk.size();
+            logCarry += chunk;
+            if(logCarry.find("Library has not been compiled successfully") != std::string::npos){
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+                return "SuperCollider class library failed: " + summarizeLog(job.logPath);
+            }
+            if(logCarry.size() > 256) logCarry.erase(0, logCarry.size() - 256);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }

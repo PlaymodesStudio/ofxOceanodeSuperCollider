@@ -775,7 +775,27 @@ private:
             if(isInside(file.dest, extensions) && file.dest.extension() == ".sc") ownPlugins.insert(file.dest.parent_path());
         }
         for(const auto& folder : ownPlugins) conf << "    -   \"" << folder.string() << "\"\n";
-        conf << "excludePaths:\n    []\n"
+        // The bundled sclang can carry its own copy of these classes
+        // (Extensions/user/OceanodePhysical): two copies fail the class
+        // library, so the just-synced one wins.
+        std::vector<fs::path> shadowed;
+        const fs::path bundled = sclangDir / "Extensions";
+        if(fs::exists(bundled)){
+            std::error_code error;
+            for(auto it = fs::recursive_directory_iterator(bundled, fs::directory_options::skip_permission_denied, error);
+                it != fs::recursive_directory_iterator(); it.increment(error)){
+                if(error) break;
+                if(it.depth() >= 1) it.disable_recursion_pending();
+                if(!it->is_directory()) continue;
+                for(const auto& folder : ownPlugins){
+                    if(it->path().filename() == folder.filename()) shadowed.push_back(it->path());
+                }
+            }
+        }
+        conf << "excludePaths:\n";
+        if(shadowed.empty()) conf << "    []\n";
+        for(const auto& folder : shadowed) conf << "    -   \"" << folder.string() << "\"\n";
+        conf
              << "postInlineWarnings: false\n"
              << "excludeDefaultPaths: true\n";
     }
@@ -924,12 +944,12 @@ private:
         return std::regex_replace(text, std::regex(R"([.^$|()\[\]{}*+?\\])"), R"(\$&)");
     }
 
-    // The metadata SynthDef and the stereo build (every variable at 1)
+    // The metadata SynthDef and the mono and stereo builds (every variable at 1)
     bool hasGenericBuilds(const std::string& name){
         fs::path folder;
         for(const auto& path : index[name + ".txarcmeta"]) if(fs::exists(path)){ folder = path.parent_path(); break; }
         if(folder.empty() || !fs::exists(folder / (name + ".scsyndef"))) return false;
-        for(const std::string n : {"2"}){
+        for(const std::string n : {"1", "2"}){
             bool found = false;
             for(const auto& entry : fs::directory_iterator(folder)){
                 const std::string file = entry.path().filename().string();
