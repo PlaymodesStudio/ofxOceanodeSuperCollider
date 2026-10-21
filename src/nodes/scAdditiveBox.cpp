@@ -2214,6 +2214,7 @@ void scAdditiveBox::loadSound(const ofJson& json){
     // replacing every synth on its own made a burst of large /s_new on the
     // server: audio dropouts). Outputs, Gate, Trig and Transpose are not loaded.
     loadingBankPreset = true;
+    const int voicesBefore = numVoicesClamped();
     for(const auto& action : publishActions)
         if(action.reset && !notInPresets(action.key)) action.reset();
     std::fill(mod.matrix.begin(), mod.matrix.end(), 0.0f);
@@ -2226,6 +2227,13 @@ void scAdditiveBox::loadSound(const ofJson& json){
     mod.load(json, "additiveBoxMod");
     migrateOldModulation(json);
     migrateOldEnvelope(json);
+    // A new voice count: the modulation N voices wide before it is sent (the
+    // structure listener waits for the load, and scModulation sends nothing
+    // while built for another count: no Level route, a silent VCA)
+    if(numVoicesClamped() != voicesBefore){
+        mod.voicesChanged();
+        for(auto& [server, st] : states) if(st.modCreated) mod.rebuild(server);
+    }
     mod.afterLoad();
     loadingBankPreset = false;
     applyStructure();
