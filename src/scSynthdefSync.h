@@ -2,6 +2,10 @@
 //  scSynthdefSync.h
 //  ofxOceanodeSuperCollider
 //
+//  At launch, compares the installed files in the background and offers to
+//  update when they differ. Checking writes only temporary metadata; the
+//  existing sync below runs only after the user chooses Update.
+//
 //  "Sync with SynthDefs Git" (SuperCollider menu): brings an app's
 //  SuperCollider data up to date with this addon's repository, without git or
 //  a GitHub account (the repository is public).
@@ -59,6 +63,10 @@ public:
     // Re-reads the SynthDef descriptions (registered node types)
     void setReloadCallback(std::function<void()> callback){ reloadCallback = std::move(callback); }
 
+    // Once at app setup: compare installed files with GitHub in the background.
+    // A difference opens an opt-in update prompt; an offline check only logs.
+    void checkForUpdates();
+
     // Inside the SuperCollider menu
     void drawMenuItem();
     // Every frame, at the top level of the ImGui frame
@@ -73,6 +81,7 @@ public:
     struct Report {
         std::string error;                      // the sync stopped
         int downloaded = 0, removed = 0;
+        int pendingFiles = 0;                   // check only: new or changed files
         int presets = 0;                        // presets / snapshot banks written
         std::vector<std::string> presetCopies;  // "(repo)" copies next to presets the user changed
         std::vector<std::string> extensions;    // UGen folders installed
@@ -95,7 +104,7 @@ public:
     };
 
 private:
-    enum class Stage { Closed, Confirm, Running, Done };
+    enum class Stage { Closed, Checking, UpdateAvailable, Confirm, Running, Done };
 
     void start();
     void finish();
@@ -106,6 +115,7 @@ private:
 
     Stage stage = Stage::Closed;
     bool openRequested = false;
+    bool startupCheckStarted = false;
     std::string addonRoot;          // this checkout, "" when not on this machine
     char branch[128] = "";
     bool fromCheckout = false;

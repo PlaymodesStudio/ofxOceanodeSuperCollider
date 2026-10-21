@@ -1000,6 +1000,7 @@ void ofxOceanodeSuperColliderController::setup(){
 	}
     scSynthdefCompiler::get().setServers(outputServers);
     synthdefSync.setServers(outputServers);
+    synthdefSync.checkForUpdates();
 }
 
 void ofxOceanodeSuperColliderController::drawPopups(){

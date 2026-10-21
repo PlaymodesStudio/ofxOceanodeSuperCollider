@@ -113,11 +113,11 @@ std::string runProcess(const std::string& executable, const std::vector<std::str
 }
 
 // GET into a file; the HTTP status, 0 when there was no answer
-int httpGet(const std::string& url, const fs::path& out, const fs::path& log){
+int httpGet(const std::string& url, const fs::path& out, const fs::path& log, int timeout = downloadTimeoutSeconds){
     runProcess("/usr/bin/curl", {"-sSL", "--retry", "2", "--connect-timeout", "20",
                                  "-H", "Accept: application/vnd.github+json",
                                  "-o", out.string(), "-w", "\n%{http_code}", url},
-               log.string(), downloadTimeoutSeconds);
+               log.string(), timeout);
     const std::string text = ofTrim(readFile(log));
     const size_t newline = text.find_last_of('\n');
     return ofToInt(newline == std::string::npos ? text : text.substr(newline + 1));
@@ -164,16 +164,16 @@ struct CompileRun {
 class SyncRun {
 public:
     SyncRun(std::shared_ptr<scSynthdefSync::Progress> progress, std::shared_ptr<std::atomic<bool>> cancel,
-            bool fromCheckout, bool rebuildAll, std::string addonRoot, std::string branch)
+            bool fromCheckout, bool rebuildAll, std::string addonRoot, std::string branch, bool checkOnly = false)
     : progress(std::move(progress)), cancel(std::move(cancel)), fromCheckout(fromCheckout), rebuildAll(rebuildAll),
-      addonRoot(std::move(addonRoot)), branch(std::move(branch)){
+      checkOnly(checkOnly), addonRoot(std::move(addonRoot)), branch(std::move(branch)){
         data = ofToDataPath("Supercollider", true);
         sources = data / "SynthdefSources";
         sclangDir = data / "Sclang";
         extensions = data / "Extensions";
         synthdefs = ofToDataPath(SYNTHDEF_DIRECTORY, true);
         retiredRoot = data / "_retired_synthdefs";
-        work = data / "tmp" / "synthdefSync";
+        work = data / "tmp" / (checkOnly ? "synthdefUpdateCheck" : "synthdefSync");
         statePath = data / "Config" / "SynthdefSync.json";
         parallel = std::clamp((int)std::thread::hardware_concurrency() / 2, 2, 6);
     }
@@ -187,14 +187,16 @@ public:
             std::error_code ignored;
             fs::remove_all(work, ignored);
             fs::create_directories(work / "home");
-            fs::create_directories(statePath.parent_path());
+            if(!checkOnly) fs::create_directories(statePath.parent_path());
             loadState();
             if(!listFiles() || cancelled()) return;
             downloadFiles();
             // What was done is kept even when stopped halfway
             if(!cancelled()) syncExtensions();
-            if(!cancelled()) compile();
-            saveState();
+            if(!checkOnly){
+                if(!cancelled()) compile();
+                saveState();
+            }
             if(!cancelled()) fs::remove_all(work, ignored);
             phase("Done", "");
         } catch(const std::exception& error) {
@@ -322,7 +324,7 @@ private:
             sourceId = "checkout:" + addonRoot;
         }else{
             const std::string api = std::string("https://api.github.com/repos/") + repository;
-            const int status = httpGet(api + "/commits/" + urlEncodePath(branch), work / "commit.json", work / "commit.log");
+            const int status = httpGet(api + "/commits/" + urlEncodePath(branch), work / "commit.json", work / "commit.log", checkOnly ? 45 : downloadTimeoutSeconds);
             if(status != 200){
                 fail(status == 0 ? "GitHub could not be reached (no internet connection?)"
                      : status == 404 ? "The branch \"" + branch + "\" does not exist in " + repository
@@ -331,7 +333,7 @@ private:
                 return false;
             }
             commit = ofJson::parse(readFile(work / "commit.json")).value("sha", "");
-            if(httpGet(api + "/git/trees/" + commit + "?recursive=1", work / "tree.json", work / "tree.log") != 200){
+            if(httpGet(api + "/git/trees/" + commit + "?recursive=1", work / "tree.json", work / "tree.log", checkOnly ? 45 : downloadTimeoutSeconds) != 200){
                 fail("Could not read the file list of " + commit.substr(0, 7));
                 return false;
             }
@@ -386,17 +388,19 @@ private:
             step("");
         }
 
+        edit([&](scSynthdefSync::Report& r){ r.pendingFiles = (int)missing.size(); });
         phase(fromCheckout ? "Copying files" : "Downloading files", "", (int)missing.size());
         std::vector<std::vector<const RemoteFile*>> batches;
         for(size_t i = 0; i < missing.size(); i += downloadBatch){
             batches.emplace_back(missing.begin() + i, missing.begin() + std::min(missing.size(), i + downloadBatch));
         }
-        runParallel(batches.size(), 6, [&](size_t b){ fetchBatch(b, batches[b]); });
+        if(!checkOnly) runParallel(batches.size(), 6, [&](size_t b){ fetchBatch(b, batches[b]); });
 
         // Files of an earlier sync that are gone from the repository
         std::set<std::string> current;
         for(const auto& file : files) current.insert(file.path);
         int removed = 0;
+        std::set<fs::path> countedRemovals;
         if(state.contains("files") && state["files"].is_object()){
             for(auto it = state["files"].begin(); it != state["files"].end(); ++it){
                 if(current.count(it.key())) continue;
@@ -405,7 +409,7 @@ private:
                 // A preset the user changed stays
                 if(isPresetPath(it.key()) && scSynthdefSync::gitBlobSha(dest.string()) != it.value().get<std::string>()) continue;
                 std::error_code ignored;
-                if(fs::remove(dest, ignored)) removed++;
+                if((checkOnly || fs::remove(dest, ignored)) && countedRemovals.insert(dest.lexically_normal()).second) removed++;
             }
         }
         // Defaults and the shared prelude are exactly the repository's: a
@@ -425,14 +429,17 @@ private:
                    !wanted.count(it->path().lexically_normal().string())) extra.push_back(it->path());
             }
             std::error_code ignored;
-            for(const auto& path : extra) if(fs::remove(path, ignored)) removed++;
+            for(const auto& path : extra){
+                if((checkOnly || fs::remove(path, ignored)) && countedRemovals.insert(path.lexically_normal()).second) removed++;
+            }
         }
+        edit([&](scSynthdefSync::Report& r){ r.removed = removed; });
+        if(checkOnly) return;
         ofJson record = ofJson::object();
         for(const auto& file : files) record[file.path] = file.sha;
         state["files"] = record;
         state["source"] = sourceId;
         if(!commit.empty()) state["commit"] = commit;
-        edit([&](scSynthdefSync::Report& r){ r.removed = removed; });
     }
 
     void fetchBatch(size_t index, const std::vector<const RemoteFile*>& batch){
@@ -488,7 +495,7 @@ private:
     void syncExtensions(){
         phase("Checking UGens", "");
         const std::string api = std::string("https://api.github.com/repos/") + repository;
-        const int status = httpGet(api + "/releases/tags/" + extensionsRelease, work / "release.json", work / "release.log");
+        const int status = httpGet(api + "/releases/tags/" + extensionsRelease, work / "release.json", work / "release.log", checkOnly ? 45 : downloadTimeoutSeconds);
         if(status == 404){
             note("No third-party UGens are published yet (release \"" + std::string(extensionsRelease) + "\")");
             return;
@@ -504,7 +511,7 @@ private:
             assets[asset.value("name", "")] = asset.value("browser_download_url", "");
         }
         if(!assets.count("extensions.json") ||
-           httpGet(assets["extensions.json"], work / "extensions.json", work / "extensions.log") != 200){
+           httpGet(assets["extensions.json"], work / "extensions.json", work / "extensions.log", checkOnly ? 45 : downloadTimeoutSeconds) != 200){
             failure("Third-party UGens", "the release has no readable extensions.json");
             return;
         }
@@ -517,6 +524,12 @@ private:
             if(!fs::exists(local) || scSynthdefSync::folderHash(local.string()) != it.value().value("hash", "")){
                 outdated.push_back({it.key(), it.value()});
             }
+        }
+        if(checkOnly){
+            edit([&](scSynthdefSync::Report& r){
+                for(const auto& entry : outdated) r.extensions.push_back(entry.first);
+            });
+            return;
         }
         phase("Installing UGens", "", (int)outdated.size());
         for(const auto& [name, entry] : outdated){
@@ -1086,6 +1099,7 @@ private:
     std::shared_ptr<scSynthdefSync::Progress> progress;
     std::shared_ptr<std::atomic<bool>> cancel;
     bool fromCheckout, rebuildAll;
+    bool checkOnly;
     std::string addonRoot, branch, commit, sourceId;
     std::set<std::string> rewritten;    // files this sync wrote
     std::map<std::string, std::string> synced;  // repository path -> blob id the last sync installed
@@ -1161,14 +1175,30 @@ scSynthdefSync::scSynthdefSync(){
 
 scSynthdefSync::~scSynthdefSync(){
     if(worker.joinable()){
-        // A running sclang finishes on its own; nothing waits for it
+        // A running process finishes on its own; nothing waits for it
         if(cancelFlag) cancelFlag->store(true);
         worker.detach();
     }
 }
 
+void scSynthdefSync::checkForUpdates(){
+#ifdef __APPLE__
+    if(startupCheckStarted || stage != Stage::Closed) return;
+    startupCheckStarted = true;
+    progress = std::make_shared<Progress>();
+    cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    stage = Stage::Checking;
+    auto run = std::make_shared<SyncRun>(progress, cancelFlag, false, false, addonRoot, std::string(branch), true);
+    worker = std::thread([run, shared = progress](){
+        run->run();
+        std::lock_guard<std::mutex> lock(shared->mutex);
+        shared->finished = true;
+    });
+#endif
+}
+
 void scSynthdefSync::drawMenuItem(){
-    const bool running = stage == Stage::Running;
+    const bool running = stage == Stage::Running || stage == Stage::Checking;
     if(ImGui::MenuItem("Sync with SynthDefs Git...", nullptr, false, !running)) openRequested = true;
 }
 
@@ -1208,6 +1238,21 @@ void scSynthdefSync::restartServers(){
 }
 
 void scSynthdefSync::drawPopup(){
+    if(stage == Stage::Checking){
+        bool finished;
+        {
+            std::lock_guard<std::mutex> lock(progress->mutex);
+            finished = progress->finished;
+        }
+        if(!finished) return;
+        if(worker.joinable()) worker.join();
+        {
+            std::lock_guard<std::mutex> lock(progress->mutex);
+            report = progress->report;
+        }
+        const bool different = report.pendingFiles > 0 || report.removed > 0 || !report.extensions.empty();
+        stage = report.error.empty() && !report.cancelled && different ? Stage::UpdateAvailable : Stage::Closed;
+    }
     if(openRequested){
         openRequested = false;
         if(stage != Stage::Running) stage = Stage::Confirm;
@@ -1227,7 +1272,26 @@ void scSynthdefSync::drawPopup(){
     if(!ImGui::BeginPopupModal(popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 42);
 
-    if(stage == Stage::Confirm){
+    if(stage == Stage::UpdateAvailable){
+        ImGui::TextUnformatted("SynthDefs, UGens or shared node snapshots differ from the repository. Update now?");
+        ImGui::TextDisabled("%s @ %s", repository, branch);
+        if(report.pendingFiles) ImGui::BulletText("%d new or changed files", report.pendingFiles);
+        if(report.removed) ImGui::BulletText("%d obsolete files", report.removed);
+        if(!report.extensions.empty()) ImGui::BulletText("UGens: %s", ofJoinString(report.extensions, ", ").c_str());
+        ImGui::TextUnformatted("Updating downloads the changes and compiles the SynthDefs. Locally edited presets "
+                               "are kept, with the repository version saved alongside them as \"(repo)\".");
+        ImGui::Spacing();
+        if(ImGui::Button("Update", ImVec2(120, 0))){
+            fromCheckout = false;
+            rebuildAll = false;
+            start();
+        }
+        ImGui::SameLine();
+        if(ImGui::Button("Later", ImVec2(120, 0))){
+            stage = Stage::Closed;
+            ImGui::CloseCurrentPopup();
+        }
+    }else if(stage == Stage::Confirm){
         ImGui::TextUnformatted("Brings the SynthDef sources, the SuperCollider compiler, the UGens and the "
                                "shared presets and snapshot banks up to date, then compiles what changed or is missing.");
         ImGui::TextDisabled("No GitHub account is needed. The first sync can take several minutes; "

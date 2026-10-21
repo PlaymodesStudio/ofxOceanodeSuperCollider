@@ -2,6 +2,21 @@
 
 Addon for interfacing [ofxOceanode](https://github.com/PlaymodesStudio/ofxOceanode) and [Supercollider](https://github.com/supercollider/supercollider) via [ofxSupercollider](https://github.com/PlaymodesStudio/ofxSuperCollider)
 
+## Startup updates
+
+On macOS, launching an app with this addon checks the public addon repository
+in the background for differences in the installed SynthDef sources, bundled
+compiler, UGens, and shared node snapshot banks/presets. It uses the addon
+checkout's branch, or `main` when the checkout is unavailable, and also checks
+the third-party UGens published in the `sc-extensions` release.
+
+When changes are available, **Update** runs the existing sync and compilation
+workflow; **Later** leaves the installed files untouched. Locally edited presets
+are preserved, with the repository version saved beside them as ` (repo)`.
+Updated UGens offer a server restart after syncing. Up-to-date launches show no
+prompt; connection failures are logged without blocking startup. You can also
+update manually through **SuperCollider → Sync with SynthDefs Git…**.
+
 ## Keyboard piano
 
 Focus the PolyComb, AdditiveBox, SteamPipeBox, PulsarBox, GrainBox, AliasingBox,
