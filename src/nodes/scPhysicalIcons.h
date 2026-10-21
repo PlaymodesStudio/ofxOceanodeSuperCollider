@@ -281,7 +281,7 @@ inline void drawModel(ImDrawList* dl, ImVec2 a, ImVec2 b, int model, float mater
 
 // ── small line icons for the section bars ────────────────────────────────────
 enum Icon { Mallet, Bow, Air, Rasp, Contact, Speaker, ResOff, ResTube, ResGourd, ResBox, ResShell, ResCone,
-            String, Pipe, Couple, Rattle, Drift, Placement, Saturate, Equalizer, Echo, Reverb, Space, NumIcons };
+            String, Pipe, Couple, Rattle, Drift, Placement, Saturate, Equalizer, Echo, Reverb, Space, Strings, NumIcons };
 
 // an icon in a square of side s centred at c
 inline void drawIcon(ImDrawList* dl, ImVec2 c, float s, int icon, ImU32 col) {
@@ -376,6 +376,10 @@ inline void drawIcon(ImDrawList* dl, ImVec2 c, float s, int icon, ImU32 col) {
         break;
     case Reverb:
         for(int i = 0; i < 3; ++i) { dl->PathArcTo(P(-0.8f, 0.6f), u * (0.5f + 0.5f * i), -kPi * 0.5f, 0); dl->PathStroke(col, 0, t); }
+        break;
+    case Strings:   // a row of strings over a bridge, one ringing
+        for(int i = 0; i < 5; ++i) { const float y = -0.7f + 0.35f * i; if(i == 2) poly([&](float k){ return P(-0.9f + 1.8f * k, y + 0.16f * std::sin(kPi * k * 3)); }); else L(-0.9f, y, 0.9f, y); }
+        L(0.55f, -0.85f, 0.55f, 0.85f);
         break;
     case Space:
         for(int i = 0; i < 5; ++i) {

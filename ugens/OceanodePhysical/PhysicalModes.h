@@ -42,7 +42,8 @@ constexpr double kTilt0 = 0.64;   // the brightness tilt at the default B Bright
     X(material, 0.5) X(excite, 0.5) X(listen, 0.5) X(couple, 0) X(mutual, 0) \
     X(rattle, 0) X(rattleth, 0.3) X(tension, 0) X(cascade, 0) \
     X(drift, 0) X(driftrate, 0.3) X(freeze, 0) \
-    X(damper, 0) X(radiator, 0) X(radmix, 0.5) X(radtune, 0) X(tremrate, 0) X(tremdepth, 0.5)
+    X(damper, 0) X(radiator, 0) X(radmix, 0.5) X(radtune, 0) X(tremrate, 0) X(tremdepth, 0.5) \
+    X(jawari, 0) X(symp, 0) X(sympset, 0) X(sympdecay, 3) X(sympbright, 0.5) X(sympshimmer, 3)
 
 enum Param {
     P_EXT_IN = 0,
@@ -459,6 +460,37 @@ constexpr double kPairDecay = 0.85;
 inline double pairSpread(int k) {   // per-mode spread of the split, 0.5 .. 1.5, fixed
     const double x = std::sin(k * 12.9898 + 1.7) * 43758.5453;
     return 0.5 + (x - std::floor(x));
+}
+
+// ── sympathetic strings ──────────────────────────────────────────────────────
+// NSYM strings ringing along with the voice (a sitar's taraf, a handpan's other
+// note fields), tuned in semitones from the played note, each slightly detuned
+// (Shimmer cents x its own offset) so they beat against the note and each other.
+constexpr int NSYM = 11;
+constexpr int NSYMSETS = 8;
+inline const char* sympSetName(int s) {
+    static const char* n[NSYMSETS] = {"Taraf", "Pan", "Kurd", "Fifths", "Octaves", "Cluster", "Cymbal", "Metal"};
+    return n[std::clamp(s, 0, NSYMSETS - 1)];
+}
+inline const double* sympIntervals(int s) {
+    static const double iv[NSYMSETS][NSYM] = {
+        {-12, 0, 2, 4, 5, 7, 9, 11, 12, 14, 16},     // Taraf: a sitar's sympathetic strings, the scale over 1.5 octaves
+        {0, 7, 12, 12, 19, 19, 24, 24, 28, 31, 36},  // Pan: the note field's own fifth and octaves (the handpan's bloom)
+        {0, 7, 8, 10, 12, 14, 15, 17, 19, 20, 22},   // Kurd: a handpan's other fields (D Kurd from the ding)
+        {-12, -5, 0, 0, 7, 7, 12, 12, 19, 24, 31},   // Fifths
+        {-24, -12, -12, 0, 0, 0, 12, 12, 24, 24, 36},// Octaves
+        {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10},          // Cluster: chromatic
+        // Cymbal: short combs ~1.17 apart (cymbalB's 3.5..19 ms bank), down from the note:
+        // their harmonics overlap into a dense metallic wash
+        {0, -2.7, -5.4, -8.1, -10.8, -13.4, -16.0, -18.7, -21.3, -24.0, -26.6},
+        // Metal: short combs high above the note at irrational spacings: their
+        // harmonics interleave into a dense, high metallic shimmer (a brushed cymbal's)
+        {19.3, 22.1, 24.6, 26.9, 29.2, 31.0, 32.7, 34.6, 36.3, 38.1, 39.8}};
+    return iv[std::clamp(s, 0, NSYMSETS - 1)];
+}
+inline double sympDetune(int j) {   // each string's own offset, -1..1 (times Shimmer cents)
+    static const double d[NSYM] = {0, 0.6, -0.8, 0.3, -0.45, 1, -1, 0.5, -0.65, 0.9, -0.2};
+    return d[std::clamp(j, 0, NSYM - 1)];
 }
 
 }  // namespace physical

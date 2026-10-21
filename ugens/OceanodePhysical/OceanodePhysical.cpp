@@ -13,6 +13,14 @@
 //    Blow   -+                   each mode one or a beating pair)
 //              (bow and blow read the resonators' own motion at the contact)
 //
+//  Jawari: A's bridge end is a curved bridge: as the string swings into it the
+//  vibrating length shortens with the swing, every cycle (a sitar's, a
+//  tanpura's buzz and the brightness that sweeps as the note dies). The swing
+//  is measured against its own recent peak, so the buzz lasts the whole note.
+//  Sympathetic: NSYM strings (a taraf, a handpan's other fields: a tuning set
+//  in semitones from the note, each slightly detuned) driven by the pickups,
+//  ringing on into the pickups after the note.
+//
 //  ext, gate and strk are read per sample (audio rate) or per block; the other
 //  inputs once per block, the ones used inside the sample loop ramped across it.
 //  The gate is a level: a strike fires when the gate settles after its edge
@@ -46,10 +54,15 @@ constexpr double kcba = 0.25;       // B -> A coupling
 constexpr double kcas = 12;         // cascade: low modes into the upper modes
 constexpr double krat = 1.0;        // rattle into the modes
 constexpr double kair = 0.25;       // the mouthpiece's breath noise into the pickups
+constexpr double kjaw = 1.5;        // jawari: the bridge's buzz into the pickups at 1
+constexpr double ksymIn = 0.6;      // the voice into the sympathetic strings (energy-normalised)
+constexpr double ksymOut = 1.2;     // the sympathetic strings into the pickups
+constexpr double ksymCap = 0.3;     // their soft ceiling (sat: at most ~0.3 x 1 per side)
 
 constexpr int NA = 16384;           // waveguide segments
 constexpr int NJ = 8192;            // jet delay
 constexpr int NT = 4096;            // resonator tube (per pickup)
+constexpr int NSY = 4096;           // each sympathetic string
 
 inline double clip(double x, double lo, double hi) { return x < lo ? lo : (x > hi ? hi : x); }
 inline double sat(double x) { const double c = clip(x, -3, 3); return c * (27 + c * c) / (27 + 9 * c * c); }
@@ -81,9 +94,14 @@ inline float clean(double v) { return std::fabs(v) < 1e-15 ? 0.f : float(v); }
 }  // namespace
 
 struct PhysicalVoice : public Unit {
-    float* mem;                 // dln | dlb | dlh (NA each) | dlj (NJ) | dlt (2 x NT)
-    float *dln, *dlb, *dlh, *dlj, *dlt;
-    int wn, wb, wh, wj, wt;
+    float* mem;                 // dln | dlb | dlh (NA each) | dlj (NJ) | dlt (2 x NT) | dls (NSYM x NSY)
+    float *dln, *dlb, *dlh, *dlj, *dlt, *dls;
+    int wn, wb, wh, wj, wt, ws;
+    // jawari: the bridge-side wave (lowpassed) and its recent peak
+    double jx, jpk, jb;
+    // sympathetic strings: delay, loop gain, input gain, loop lowpass and its state, pans
+    double sl[NSYM], sg[NSYM], sgi[NSYM], sb[NSYM], slp[NSYM], spl[NSYM], spr[NSYM];
+    bool sOn;
     // damper: on after the gate falls (not after Strike), smoothed per block
     int damped;
     double dmp;
@@ -129,7 +147,9 @@ struct PhysicalVoice : public Unit {
 static void PhysicalVoice_next(PhysicalVoice* unit, int inNumSamples);
 
 static void clearState(PhysicalVoice* u) {
-    std::memset(u->mem, 0, sizeof(float) * (3 * NA + NJ + 2 * NT));
+    std::memset(u->mem, 0, sizeof(float) * (3 * NA + NJ + 2 * NT + NSYM * NSY));
+    u->jx = u->jpk = u->jb = 0;
+    for (int j = 0; j < NSYM; ++j) u->slp[j] = 0;
     for (int c = 0; c < 2; ++c) {
         u->rx1[c] = u->rx2[c] = u->rlp[c] = 0;
         for (int m = 0; m < RADMODES; ++m) u->ry1[c][m] = u->ry2[c][m] = 0;
@@ -140,7 +160,7 @@ static void clearState(PhysicalVoice* u) {
 }
 
 static void PhysicalVoice_Ctor(PhysicalVoice* unit) {
-    unit->mem = (float*)RTAlloc(unit->mWorld, sizeof(float) * (3 * NA + NJ + 2 * NT));
+    unit->mem = (float*)RTAlloc(unit->mWorld, sizeof(float) * (3 * NA + NJ + 2 * NT + NSYM * NSY));
     if (!unit->mem) {
         Print("PhysicalVoice: could not allocate its delay lines\n");
         SETCALC(ft->fClearUnitOutputs);
@@ -149,7 +169,10 @@ static void PhysicalVoice_Ctor(PhysicalVoice* unit) {
     }
     unit->dln = unit->mem; unit->dlb = unit->dln + NA; unit->dlh = unit->dlb + NA; unit->dlj = unit->dlh + NA;
     unit->dlt = unit->dlj + NJ;
-    unit->wn = unit->wb = unit->wh = unit->wj = unit->wt = 0;
+    unit->dls = unit->dlt + 2 * NT;
+    unit->wn = unit->wb = unit->wh = unit->wj = unit->wt = unit->ws = 0;
+    unit->sOn = false;
+    for (int j = 0; j < NSYM; ++j) unit->sl[j] = 100, unit->sg[j] = unit->sgi[j] = unit->sb[j] = 0, unit->spl[j] = unit->spr[j] = 0.5;
     unit->damped = 0; unit->dmp = 0; unit->tph = 0; unit->rtype = 0;
     unit->airdc = unit->airlp = 0;
     unit->aOn = unit->bOn = true;
@@ -174,7 +197,7 @@ static void PhysicalVoice_Ctor(PhysicalVoice* unit) {
     SETCALC(PhysicalVoice_next);
     PhysicalVoice_next(unit, 1);
     // the first call must not count as time passed
-    unit->wn = unit->wb = unit->wh = unit->wj = unit->wt = 0;
+    unit->wn = unit->wb = unit->wh = unit->wj = unit->wt = unit->ws = 0;
     clearState(unit);
     unit->damped = 0; unit->dmp = 0; unit->tph = 0;
     unit->envf = unit->prevg = 0; unit->st = 1e9; unit->armed = 0; unit->armPrev = 0; unit->prevStrk = 0;
@@ -191,7 +214,14 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
     RGET
     auto rnd2 = [&]() { return double(frand2(s1, s2, s3)); };
     auto rnd1 = [&]() { return double(frand(s1, s2, s3)); };
-    auto in = [&](int p) { return double(IN0(p)); };
+    // a SynthDef built before an input existed has fewer: those read their default
+    static const double defaults[P_COUNT] = {0,
+#define PHYSICAL_DEFAULT(name, def) double(def),
+        PHYSICAL_PARAMS(PHYSICAL_DEFAULT)
+#undef PHYSICAL_DEFAULT
+    };
+    const int nin = int(unit->mNumInputs);
+    auto in = [&](int p) { return p < nin ? double(IN0(p)) : defaults[p]; };
 
     // ── block ───────────────────────────────────────────────────────────────
     double cur[P_COUNT];
@@ -359,6 +389,34 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
             u->ra2[m] = (1 - al) / a0;
         }
     }
+    // sympathetic strings: tuned from the note, octave-folded into the delay's range
+    const double symp = clip(P(P_symp), 0, 1);
+    const bool sympOn = symp > 0;
+    if (sympOn) {
+        if (!u->sOn) { std::memset(u->dls, 0, sizeof(float) * NSYM * NSY); for (int j = 0; j < NSYM; ++j) u->slp[j] = 0; }
+        const double* iv = sympIntervals(int(clip(std::lround(P(P_sympset)), 0, NSYMSETS - 1)));
+        const double shim = clip(P(P_sympshimmer), 0, 50) / 100;
+        const double t60 = clip(P(P_sympdecay), 0.05, 30) * frz;
+        const double sbr = clip(P(P_sympbright), 0, 1);
+        for (int j = 0; j < NSYM; ++j) {
+            double f = P(P_freq) * std::pow(2, (iv[j] + sympDetune(j) * shim) / 12);
+            while (f > sr * 0.25) f *= 0.5;
+            while (f < sr / (NSY - 8)) f *= 2;
+            const double w = 2 * M_PI * f / sr;
+            // Brightness: 0 a soft string, 1 open to the top (a cymbal's combs)
+            const double b = std::exp(-2 * M_PI * std::min(f * (1 + 400 * sbr * sbr * sbr), sr * 0.45) / sr);
+            const double L = std::max(sr / f - lppd(b, w), 2.0);
+            double g = std::pow(0.001, L / (sr * t60));
+            g = std::min(g * std::sqrt(1 - 2 * b * std::cos(w) + b * b) / (1 - b), 0.99995);
+            u->sl[j] = L; u->sg[j] = g; u->sb[j] = b;
+            u->sgi[j] = ksymIn * std::sqrt(1 - g * g);
+            const double side = (j % 2 ? 1 : -1) * (0.15 + 0.7 * double(j) / (NSYM - 1));
+            u->spl[j] = 0.5 - 0.5 * side; u->spr[j] = 0.5 + 0.5 * side;
+        }
+    }
+    u->sOn = sympOn;
+    const double jaw = clip(P(P_jawari), 0, 1);
+    const double jrel = std::exp(-1 / (0.25 * sr)), jhp = 1 - std::exp(-2 * M_PI * 900 / sr);
     const double tinc = 2 * M_PI * clip(P(P_tremrate), 0, 20) / sr;
     const double tdep = clip(P(P_tremdepth), 0, 1);
     // one pickup through the resonator
@@ -442,6 +500,25 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
             u->lpa = (1 - bla) * s + bla * u->lpa;
             s = u->lpa;
             for (auto& a : u->ap) { a[1] = apc * s + a[0] - apc * a[1]; a[0] = s; s = a[1]; }
+            // jawari: the curved bridge. The part of the wave swinging past the
+            // bridge's curve (a share of its recent peak) folds back off it, after
+            // the loop's filters, so the new harmonics travel a whole round trip:
+            // every period, so the buzz stays harmonic, and it lasts the whole note
+            if (jaw > 0) {
+                u->jpk = std::max(std::fabs(s), u->jpk * jrel);
+                if (u->jpk > 1e-7) {
+                    // the contact: one-sided, sharp (squared past the bridge's reach)
+                    const double c = std::max(0.0, s / u->jpk - 0.35);
+                    const double kink = u->jpk * c * c * 4;
+                    // the bridge radiates the contact's highs: the buzz, heard at the
+                    // pickups (it follows the string, so it is harmonic and dies with
+                    // the note; it does not circulate, so it cannot sustain it). The
+                    // peak it is measured against lags the decay: the contact narrows
+                    // as the note dies and the buzz sweeps
+                    u->jb = kink - u->jx;
+                    u->jx += (kink - u->jx) * jhp;
+                }
+            }
             s -= v[P_rattle] * dz(s, v[P_rattleth]) * (1 + 0.5 * rnd2());
             u->brefl = u->rbs * ga * s;
             va = u->nutrefl + u->brefl;
@@ -573,9 +650,26 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         const double pa1 = runA ? u->ya - rdl(u->dlh, NA, u->wh, std::max(lt * pfold(v[P_pick1]), 1.0)) : 0.0;
         const double pa2 = runA ? u->ya - rdl(u->dlh, NA, u->wh, std::max(lt * pfold(v[P_pick2]), 1.0)) : 0.0;
         const double lb = clip(v[P_listen], 0, 1);
-        double x1 = lin(lb, pa1, o1 * u->bnorm) + air;
-        double x2 = lin(lb, pa2, o2 * u->bnorm) + air;
+        const double buzz = runA && jaw > 0 ? jaw * kjaw * (1 - lb) * u->jb : 0.0;
+        double x1 = lin(lb, pa1, o1 * u->bnorm) + air + buzz;
+        double x2 = lin(lb, pa2, o2 * u->bnorm) + air + buzz;
         u->enve += (std::fabs(x1) - u->enve) * 0.001;
+        if (sympOn) {
+            const double xin = 0.5 * (x1 + x2);
+            double yl = 0, yr = 0;
+            for (int j = 0; j < NSYM; ++j) {
+                float* b = u->dls + j * NSY;
+                u->slp[j] = (1 - u->sb[j]) * rdl(b, NSY, u->ws, u->sl[j]) + u->sb[j] * u->slp[j];
+                const double y = xin * u->sgi[j] + u->sg[j] * u->slp[j];
+                b[u->ws] = clean(y);
+                yl += y * u->spl[j]; yr += y * u->spr[j];
+            }
+            if (++u->ws >= NSY) u->ws = 0;
+            // a soft ceiling: a sustained note (bowed, blown) keeps driving the strings at
+            // resonance; they saturate gently instead of outgrowing the string that feeds them
+            yl = ksymCap * sat(yl / ksymCap); yr = ksymCap * sat(yr / ksymCap);
+            x1 += symp * ksymOut * yl; x2 += symp * ksymOut * yr;
+        }
 
         // safety: anything non-finite or runaway clears the voice
         if (!std::isfinite(x1) || !std::isfinite(x2) || std::fabs(x1) > 1000 || std::fabs(x2) > 1000) {
