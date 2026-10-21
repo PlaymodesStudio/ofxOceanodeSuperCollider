@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 import UniformTypeIdentifiers
 
-private let moduleSignatures: Set<UInt32> = [0x00228D00, 0x0022F300]
+private let moduleSignatures: Set<UInt32> = [0x00228D00, 0x0022F300, 0x0022F200]
 private let rootSentinelID: UInt32 = 0x75646F4D
 private let panelControlKinds: Set<UInt32> = [20, 22, 23, 24, 25]
 private let applicationVersion = Bundle.main.object(
@@ -534,7 +534,7 @@ final class NRKTParser {
                 // table's constants are labelled 0 but store 2 and -1).
                 // SteamPipe's newer 0x0022F300 records use the same field:
                 // its feedback key-track constant is labelled 0 but is -60.
-                if (module.signature == 0x00228D00 || module.signature == 0x0022F300),
+                if moduleSignatures.contains(module.signature),
                    module.offset + 0x48 <= end,
                    let value = try? f32(module.offset + 0x44), value.isFinite {
                     module.constantNumericValue = Double(value)
@@ -555,7 +555,7 @@ final class NRKTParser {
         do {
             let nameOffset = module.offset + (module.signature == 0x00228D00 ? 0xf0 : 0x104)
                 + (module.kind == 7 && module.signature == 0x00228D00 ? 4 : 0)
-            let trailerVersion: UInt32 = module.signature == 0x00228D00 ? 2 : 4
+            let trailerVersion: UInt32 = module.signature == 0x00228D00 ? 2 : module.signature == 0x0022F200 ? 3 : 4
             let (name, afterName) = try nrktString(nameOffset)
             let (detail, afterDetail) = try nrktString(afterName)
             let limit = min(data.count, afterDetail + 32)
@@ -596,7 +596,7 @@ final class NRKTParser {
             let end = index + 1 < modules.count ? modules[index + 1].offset : data.count
             var cursor = module.offset
             while cursor < end, let close = data[cursor..<end].firstIndex(of: 0x5d) {
-                if close + 9 <= end, [2, 4].contains(try u32(close + 1)) {
+                if close + 9 <= end, [2, 3, 4].contains(try u32(close + 1)) {
                     let candidate = Int(try u32(close + 5))
                     if candidate > 0 && candidate < 10_000 { module.childCount = candidate }
                 }

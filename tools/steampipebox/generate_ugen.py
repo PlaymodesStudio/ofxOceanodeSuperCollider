@@ -65,7 +65,7 @@ def translate(path,name):
  params=sorted(set(re.findall(r'(?<![A-Za-z0-9_])(_[A-Za-z0-9_]+)',source)))
  # All non-local identifiers are persistent kernel state (EEL defaults to zero).
  ids=set(re.findall(r'\b[A-Za-z_]\w*\b',init+sample));fnnames={f[0] for f in functions}
- builtins={'sin','cos','tan','exp','pow','sqrt','floor','ceil','abs','min','max','mod','clip','buf','srate','f32','niPitch','niTimeRate','niDelay','niFilterF','niFilterD'}
+ builtins={'sin','cos','tan','atan','exp','pow','sqrt','floor','ceil','abs','min','max','mod','clip','buf','srate','f32','niPitch','niTimeRate','niDelay','niFilterF','niFilterD'}
  globals_=ids-builtins-fnnames
  code=f'struct {name} {{\n double* buf=nullptr; double srate=48000;\n'
  code+=''.join(f' double {v}=0;\n' for v in sorted(globals_))
@@ -97,7 +97,7 @@ inline double clip(double x,double lo,double hi){return std::clamp(x,lo,hi);}
 inline double min(double x,double y){return std::min(x,y);}
 inline double max(double x,double y){return std::max(x,y);}
 inline double mod(double x,double y){return std::fmod(x,y);}
-using std::sin; using std::cos; using std::tan; using std::exp; using std::pow; using std::sqrt;
+using std::sin; using std::cos; using std::tan; using std::atan; using std::exp; using std::pow; using std::sqrt;
 using std::floor; using std::ceil; using std::abs;
 '''
  wrappers='''// Controls that trigger an event must not ramp across a server block.

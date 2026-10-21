@@ -1,0 +1,694 @@
+{
+  "samples": 32000,
+  "sample_rate": 48000,
+  "cases": [
+    {
+      "name": "Flute",
+      "sha256": "9341d04f30e10ebf4de1663dfc3fb3c293c141e742ce25b5062292c36e811945"
+    },
+    {
+      "name": "Pan",
+      "sha256": "652ff6eefcd07a60e4dc3fc30a9bfde7f6883a1f54f31d134679ea926a0275a6"
+    },
+    {
+      "name": "The Pipe",
+      "sha256": "ced2586a790bc021d5c44945928919c65ef7d63fef3c41a341a61ec90f4b7f3b"
+    },
+    {
+      "name": "SoloPhone",
+      "sha256": "be74d022bf307367b688036173becfcb8db121257a6ee1a79fccd17f1298b2f9"
+    },
+    {
+      "name": "Harmonix",
+      "sha256": "b7609d450e8a6c4c94bf7d8e7028bb6ec1d4931895fc0861eed62f9c437db10a"
+    },
+    {
+      "name": "Guitar",
+      "sha256": "489f7beb5efd40256f43e9aee02a907dc6fc46f53ea7f79835908dfda4f78787"
+    },
+    {
+      "name": "StringThing",
+      "sha256": "7b34f56e3d13173d055f36fbb1c8830afe0bfc2321da83c42e1ae9e72743b103"
+    },
+    {
+      "name": "Bell",
+      "sha256": "9ed9e17125935e92c6be50ce887680b7952450273a504f8fd2718c3cbd1a4c2f"
+    },
+    {
+      "name": "SteamPipe",
+      "sha256": "7c7b6a3c18e3932a7e1b35ef41be94187db7b61d33a9d3580aabf5d820fa053e"
+    },
+    {
+      "name": "Bowed Bell",
+      "sha256": "6f598a1f4780cd30bb62d97b209b889a7efb879d11397bb629c97b70260fc4b5"
+    },
+    {
+      "name": "SteamGhost",
+      "sha256": "f53502698c01e66e228ac417cba9ff72cd799a6368f1c6c5b06b1bae535df352"
+    },
+    {
+      "name": "Bong",
+      "sha256": "fe4437529eca57e42bd5e7d758c304f1e3b62eca489d4f2d02b57126b24c4336"
+    },
+    {
+      "name": "Pipe Organ 1",
+      "sha256": "1cc76b13ad74aafd1c66ec31b8390a26f827af67c1b6555a5a3478d0d1ce9142"
+    },
+    {
+      "name": "Pipe Organ 2",
+      "sha256": "faf9e0362fcca6252b83a37c08261ee2a36ff04e31b5c85ec5b1cb8a406efe93"
+    },
+    {
+      "name": "Flute 2",
+      "sha256": "e734d98e211b76ed82f0a4408e412d6de327a8d66057e8cde68f0892abb86767"
+    },
+    {
+      "name": "Acc Bass",
+      "sha256": "fb61f0ea32db536f6a8495532c190797da564e6c482b1cce78963e92039907bb"
+    },
+    {
+      "name": "Harp",
+      "sha256": "f64dddb9535d240a5b587b9fbb0cb5ad65a817c17bd24f7feb5670caf24944c0"
+    },
+    {
+      "name": "Ethnic I",
+      "sha256": "07e5298707db11070eed93ef240c55d5fc89c41719c63ebe85b44a43843467c1"
+    },
+    {
+      "name": "NoiseFlute",
+      "sha256": "c94ba0bdfec1ec3ffa75d7e9981ccbb9208ac6aca30be09c34042e441d01b92e"
+    },
+    {
+      "name": "Tri",
+      "sha256": "9a2327aeb8854fdec26171c2e66f4ca2ed74a4d1c0319a01caaf6cf4fab9f3b0"
+    },
+    {
+      "name": "Ethnic II",
+      "sha256": "f7c428a388dd7f2c93441bb3e1aebf83826fbd354647b4f482eb83794c63a227"
+    },
+    {
+      "name": "SortofBass",
+      "sha256": "74feca166852d42ed7361974c052c2bde4e2fad118aff6e38936b2a9c0b74868"
+    },
+    {
+      "name": "Waterdrum",
+      "sha256": "c386856943496b0c1f49d581609567aeafe6696ac4805dead2a4118ffe5de350"
+    },
+    {
+      "name": "MuteGuitar",
+      "sha256": "25d868c0245bc19da05c48613a1b83ad80ce320a89cc0180c3d9973919fb69fa"
+    },
+    {
+      "name": "MuteBass",
+      "sha256": "ec3d4dd9ca91076fc1bb8bcb18265ad074d2e11c3d99886c17a2f2e1bddd13c7"
+    },
+    {
+      "name": "Glass?",
+      "sha256": "4861b37e70b66005bf6f9f711e4547665b8e491d38a6b82d0e756f35a056b51c"
+    },
+    {
+      "name": "Glockenspiel",
+      "sha256": "eab15099fa4e5e855879c3212fbce91306e678b5724d64906f8a2523e0a1ca6d"
+    },
+    {
+      "name": "GlassWoodTemplate",
+      "sha256": "1429dd74d58e91373d647f059b894c8288e64ea8e32ea0c675e26e882f0f9f59"
+    },
+    {
+      "name": "Far far away",
+      "sha256": "5b316490b60eeec6c3fd14499c3fe834bf45198f555c29d8377d17ba67e19948"
+    },
+    {
+      "name": "Ethnic III",
+      "sha256": "da9830348032fc163da412788a672a545b135c2087f0935513cbcb8a5c87327d"
+    },
+    {
+      "name": "Banjo",
+      "sha256": "48f9a5ebe7856a362a4ba1c6eaeb5f4359caeeea28c190b7c6005710c668af6d"
+    },
+    {
+      "name": "ShangHai",
+      "sha256": "ed03b801cc4fbf416ca74522c1dd3a89cef38ac363aab105a675618c9f016303"
+    },
+    {
+      "name": "Cello (use low registers)",
+      "sha256": "edc38e657d5d34b46195dff839d0084a7609a599ec74155503c259bac0574e79"
+    },
+    {
+      "name": "Distant Brass",
+      "sha256": "c89691257116367fb96715ae10ef3eca0b218b0ec98184cfdac8a5dd31a68173"
+    },
+    {
+      "name": "Fagot",
+      "sha256": "e9151dadb9bfca5c7acb7056331ffdd96eb7055bd3fd56ad74f63399d7ef4bcb"
+    },
+    {
+      "name": "Bariton Sax",
+      "sha256": "d5725b0e4550f4b7c7db9c08050ea88401d17efffe2b3f59ec06e52bbd39f199"
+    },
+    {
+      "name": "Sax",
+      "sha256": "39b22b03c4fe00e6ce6f0990978da265d95dadb907d207c651224cb4f1c665fd"
+    },
+    {
+      "name": "Rough",
+      "sha256": "9a362a8df8e5604cee3d8d884b59d7151a1b74fb28c9ba2f6f82a6d8bcf434bf"
+    },
+    {
+      "name": "MiddleAges",
+      "sha256": "83d5495067371e0918040fd689a085b91e14d30789c00271cdaf25b5caf21ae2"
+    },
+    {
+      "name": "Rondo",
+      "sha256": "1dc4f52115185f1a3b1fd70b3e492cdee454e659bcc27fe50fbec1a463cdb62b"
+    },
+    {
+      "name": "SomeDrum",
+      "sha256": "234f682c17790e571e41f967d6497398bc0d6ddf08cd113b792625b32e745f73"
+    },
+    {
+      "name": "Tibet",
+      "sha256": "12fbb0c53ac41df586074930fdf509edeb0fd1be1ecb229fa863154f33641ecf"
+    },
+    {
+      "name": "Timpani",
+      "sha256": "98f609e3e8f59ffbf220edc7a494aea84da1dc64cee91bafd616a5391819b2a8"
+    },
+    {
+      "name": "MW Cry",
+      "sha256": "74f9df19325c3753f01a48646f5094d877d514b2faea7984e548654c3571e5ae"
+    },
+    {
+      "name": "Vacquie",
+      "sha256": "75cc221969b981927268bbb935e39cb7f6667fe75d91d6f9433a56c5ae200ed7"
+    },
+    {
+      "name": "cloudy",
+      "sha256": "faa437c36da2848dedd38da261e990b08c9b901b1c1aedd1fe134929e803e602"
+    },
+    {
+      "name": "starwars",
+      "sha256": "87a1b345c3c4acd874b1193b5fef25e0b7bae283ddbe46fd4890fbe766648c97"
+    },
+    {
+      "name": "spanish guitar",
+      "sha256": "489f7beb5efd40256f43e9aee02a907dc6fc46f53ea7f79835908dfda4f78787"
+    },
+    {
+      "name": "flamenco glass",
+      "sha256": "82a85b7bda8abbb71ef2dec3f9d6f2bd83098dc688635e760d8f2215f5668f9c"
+    },
+    {
+      "name": "blow",
+      "sha256": "50a32eb707fb9b83e557e8c028137faf57a5dab26b35e209659596cf1d0e9930"
+    },
+    {
+      "name": "progressive",
+      "sha256": "7d0e2ef537a14d3c865b725537e14a7efacc23d5fb0023998979c2ef782d18b1"
+    },
+    {
+      "name": "organic",
+      "sha256": "615c863854cd87a480332c55c95c93cde2500317b05f6d3a20323016a38fa06d"
+    },
+    {
+      "name": "pvc",
+      "sha256": "843f730de3ed094ea8947b124f2b83883e4dedc6da3710aae5f20ad374397237"
+    },
+    {
+      "name": "coolharp",
+      "sha256": "7b3a656e1d6eaf125c365ccd907736601fb9304ae0c94c582db15c4ee9bb36ab"
+    },
+    {
+      "name": "tarrega",
+      "sha256": "0b1b74dd2e8d018802943c288b9ba62e245404dec1a502e8f925da57c759d7cf"
+    },
+    {
+      "name": "nutcracker",
+      "sha256": "d6beb4df89937dd5fb8e98c19b4afc6fe82b61625bd005df5575aa5048934bd1"
+    },
+    {
+      "name": "war_of_worlds",
+      "sha256": "1187ef523c810a8cb2cbfa9fec370ffba021542a7c294a9ba15959b31f14b754"
+    },
+    {
+      "name": "war_of_worlds2",
+      "sha256": "6bc20977b5d3608b93d804136f0c01059dfeec6c52cf66dcb1cf5a158219c38e"
+    },
+    {
+      "name": "air",
+      "sha256": "a5cc912d8fd11bb0fe81a4ae866de24bbe4a6b18ae24cddf4eff5ca5d2f41285"
+    },
+    {
+      "name": "crystal_strings",
+      "sha256": "4a0c6f151192031c731a6231a8f0c165f950ae508e008e9921c6164861500a81"
+    },
+    {
+      "name": "carroussel",
+      "sha256": "9a3df66d8e865ef2746fe1f149211d3a65ff6ece57c6f5cc8aa9174f7f942657"
+    },
+    {
+      "name": "carroussel 1",
+      "sha256": "9727b81ac464e501844c6263efd882eaf1efce72eb6df5cf10d3ae79e8b0973a"
+    },
+    {
+      "name": "carroussel 2",
+      "sha256": "0f7b1c994bfe896464dcd6d0d9cc9085868fc8d854ba343e9125358a09788c86"
+    },
+    {
+      "name": "war_of_worlds3",
+      "sha256": "a14f179092d0cf252dd45c94c1f4e5f2b369fcbfbab5e3d9f142ee66eb3be429"
+    },
+    {
+      "name": "war_of_worlds 1",
+      "sha256": "8ffceff810ffaed2f3bacd5d647e44a369e7fd9b080e59167daf6251bc40ed34"
+    },
+    {
+      "name": "THRILLER",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "THRILLER 1",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "THRILLER 2",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "andalusi 1",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "SLOW",
+      "sha256": "cd7fc1a5bb9ad91ad8ca5ddf5903db5f9150b8b085c70df7efdf87fbdccbdd0d"
+    },
+    {
+      "name": "TRAIN",
+      "sha256": "0986130d45ccab016b86e8e6d3bee11f846c7067620da8bd2ba213136dfb08bd"
+    },
+    {
+      "name": "long runs 2",
+      "sha256": "d442afca772b29712d79ad578885faaa103b9c3e873ba71b8a744882ba456959"
+    },
+    {
+      "name": "evilglass",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "stakka 1",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "mediant semitone: apertura",
+      "sha256": "51cb225ea3ba8f423a55bfaada64a241a726745bea4604eac351feee44639297"
+    },
+    {
+      "name": "chartres 1",
+      "sha256": "3e817c9f43214ea080426f884fb4d99e57d203f0876f6b0ec386f2dc3a515cfe"
+    },
+    {
+      "name": "chartres 2",
+      "sha256": "418367034b034a0ab6fa1af4d8a30da566a0e788b360c032a4ed533ec886111c"
+    },
+    {
+      "name": "magic",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "andalusi 1",
+      "sha256": "424f4560a2b01aee85eae98f581ddb5d2583b843032c2b2dfb6e179882641baa"
+    },
+    {
+      "name": "cromatic",
+      "sha256": "50fa90dc03c050dad6b9eccde0d6ddd0e51c23b6c9c0f9dc055abc30a8a2d95a"
+    },
+    {
+      "name": "mM",
+      "sha256": "d6beb4df89937dd5fb8e98c19b4afc6fe82b61625bd005df5575aa5048934bd1"
+    },
+    {
+      "name": "mM 1",
+      "sha256": "d6beb4df89937dd5fb8e98c19b4afc6fe82b61625bd005df5575aa5048934bd1"
+    },
+    {
+      "name": "stakka 2",
+      "sha256": "dacc9d4f4d333ab19b6cf568a459af6042a6db62c00e0254ddb12bf6429a2997"
+    },
+    {
+      "name": "mediant semitone: apertura 1",
+      "sha256": "51cb225ea3ba8f423a55bfaada64a241a726745bea4604eac351feee44639297"
+    },
+    {
+      "name": "jazzMaths",
+      "sha256": "dacc9d4f4d333ab19b6cf568a459af6042a6db62c00e0254ddb12bf6429a2997"
+    },
+    {
+      "name": "pascal",
+      "sha256": "111941438f5cc0c3f72b33d746b57a40c39e3d509dec3c005005638354b8d64a"
+    },
+    {
+      "name": "null",
+      "sha256": "dacc9d4f4d333ab19b6cf568a459af6042a6db62c00e0254ddb12bf6429a2997"
+    },
+    {
+      "name": "null2",
+      "sha256": "dacc9d4f4d333ab19b6cf568a459af6042a6db62c00e0254ddb12bf6429a2997"
+    },
+    {
+      "name": "JazzMaths",
+      "sha256": "dacc9d4f4d333ab19b6cf568a459af6042a6db62c00e0254ddb12bf6429a2997"
+    },
+    {
+      "name": "JazzMaths2",
+      "sha256": "dacc9d4f4d333ab19b6cf568a459af6042a6db62c00e0254ddb12bf6429a2997"
+    },
+    {
+      "name": "JazzMaths3",
+      "sha256": "dacc9d4f4d333ab19b6cf568a459af6042a6db62c00e0254ddb12bf6429a2997"
+    },
+    {
+      "name": "trap",
+      "sha256": "70f9a156d7c16b0e93a28d4a26d4602c190591521593b4c39eb2b1ba5c78b9fb"
+    },
+    {
+      "name": "nigro",
+      "sha256": "975a63f7779074bc5125b0cb0742825cf2a0d2ccdd2e29e94e4ee03038123a28"
+    },
+    {
+      "name": "pascal",
+      "sha256": "dacc9d4f4d333ab19b6cf568a459af6042a6db62c00e0254ddb12bf6429a2997"
+    },
+    {
+      "name": "mediants",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "mediants-quartet",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "evil",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "majestic",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "andalusi",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "andalusi4th",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "magic",
+      "sha256": "bbb0e1159f39ffe1a9d1fda7c07d5ef0309694c96ef4ac3fa05c406a40fe9e8f"
+    },
+    {
+      "name": "magic2",
+      "sha256": "d6beb4df89937dd5fb8e98c19b4afc6fe82b61625bd005df5575aa5048934bd1"
+    },
+    {
+      "name": "andalusi 1",
+      "sha256": "664bdf682380ba1f615dbf9f84e6aa5adedb43965405570bd04be289523c7128"
+    },
+    {
+      "name": "rarut",
+      "sha256": "664bdf682380ba1f615dbf9f84e6aa5adedb43965405570bd04be289523c7128"
+    },
+    {
+      "name": "chordbuilder",
+      "sha256": "2e2de577d4db752c444741b9bb48ae6a3a0b6e1302a5ba48be74c9d32b195f28"
+    },
+    {
+      "name": "whole-builds",
+      "sha256": "0188ff7678d3f9de6f727d75a05df5511a8e735adeeb308a27dd639c5780a185"
+    },
+    {
+      "name": "eolian-builds",
+      "sha256": "37d7e8811687354ee258e591d9d0eb74488f09d0c918234fa7f46d104c2af110"
+    },
+    {
+      "name": "noteprob",
+      "sha256": "1429dd74d58e91373d647f059b894c8288e64ea8e32ea0c675e26e882f0f9f59"
+    },
+    {
+      "name": "long runs",
+      "sha256": "d442afca772b29712d79ad578885faaa103b9c3e873ba71b8a744882ba456959"
+    },
+    {
+      "name": "andalusi 2",
+      "sha256": "664bdf682380ba1f615dbf9f84e6aa5adedb43965405570bd04be289523c7128"
+    },
+    {
+      "name": "long runs 1",
+      "sha256": "d442afca772b29712d79ad578885faaa103b9c3e873ba71b8a744882ba456959"
+    },
+    {
+      "name": "magic3",
+      "sha256": "d6beb4df89937dd5fb8e98c19b4afc6fe82b61625bd005df5575aa5048934bd1"
+    },
+    {
+      "name": "magic4",
+      "sha256": "d6beb4df89937dd5fb8e98c19b4afc6fe82b61625bd005df5575aa5048934bd1"
+    },
+    {
+      "name": "classic",
+      "sha256": "d6beb4df89937dd5fb8e98c19b4afc6fe82b61625bd005df5575aa5048934bd1"
+    },
+    {
+      "name": "latin",
+      "sha256": "d6beb4df89937dd5fb8e98c19b4afc6fe82b61625bd005df5575aa5048934bd1"
+    },
+    {
+      "name": "mM",
+      "sha256": "d6beb4df89937dd5fb8e98c19b4afc6fe82b61625bd005df5575aa5048934bd1"
+    },
+    {
+      "name": "train",
+      "sha256": "0986130d45ccab016b86e8e6d3bee11f846c7067620da8bd2ba213136dfb08bd"
+    },
+    {
+      "name": "majestic quartet",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "MaxRichter",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "philipglass",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "probabilityglass",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "autojazz",
+      "sha256": "1a3ea65e5eaed7253e57227e763b40dde6ce96dcaaaa9104427482fb1c504b21"
+    },
+    {
+      "name": "long runs 2",
+      "sha256": "d442afca772b29712d79ad578885faaa103b9c3e873ba71b8a744882ba456959"
+    },
+    {
+      "name": "evil 1",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "walkingFujiMount",
+      "sha256": "5cb8442a23f2e5b0b4049f4f93ea716c5b3224ea8368d4e14bdb78182c98c026"
+    },
+    {
+      "name": "evilglass",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "evilglass 1",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "evilglass 2",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "evilglass-jazz",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "getlucky",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "80s",
+      "sha256": "9bb97648945efafc80be9fe4dea2a46348bb79f4fd6bba5992fd56ca78e35d26"
+    },
+    {
+      "name": "magic",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "slow",
+      "sha256": "8e99106785a6792a14f71aba08b05c5a3d45cc0a47e003b6ede8528f3fdf35e7"
+    },
+    {
+      "name": "manual sequence",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "manual notes",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "stakka",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "House",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "lydian manual",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "lydian quartet",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "mediant quartet",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "maxRichterQuartet",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "mediantquartet2",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "apparat_pizzicatos",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "A new error",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "Another error",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "And yet another",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "fratres",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "mediant semitone: apertura",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "semitone modulator",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "modal_exchange",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "user",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "arab",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "TensorFlow",
+      "sha256": "1c50311038408c282c4894fc984293e68971248e9311d4d73f9c0f156017218f"
+    },
+    {
+      "name": "arab2",
+      "sha256": "1c50311038408c282c4894fc984293e68971248e9311d4d73f9c0f156017218f"
+    },
+    {
+      "name": "lobohombre",
+      "sha256": "1c50311038408c282c4894fc984293e68971248e9311d4d73f9c0f156017218f"
+    },
+    {
+      "name": "arab3",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "mediant scales",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "MAJORMEDIANTS",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "MINORMEDIANTS",
+      "sha256": "d3044cd95dfae717b63b27079107538d077d82e3ec901960977353e05df0cc2a"
+    },
+    {
+      "name": "MAJORMEDIANTS2",
+      "sha256": "d3044cd95dfae717b63b27079107538d077d82e3ec901960977353e05df0cc2a"
+    },
+    {
+      "name": "MEDIANTSEMITONES-MOLA",
+      "sha256": "d3044cd95dfae717b63b27079107538d077d82e3ec901960977353e05df0cc2a"
+    },
+    {
+      "name": "MEDIANT-MODES",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    },
+    {
+      "name": "MEDIANT-MODES2",
+      "sha256": "d3044cd95dfae717b63b27079107538d077d82e3ec901960977353e05df0cc2a"
+    },
+    {
+      "name": "MANUAL MEDIANTS MINOR",
+      "sha256": "e115b9c1ab561ae1456255e2cf4677dbf4dd55ff13496836edc971d4ba7d986b"
+    },
+    {
+      "name": "MANUAL MEDIANTS MAJOR",
+      "sha256": "e115b9c1ab561ae1456255e2cf4677dbf4dd55ff13496836edc971d4ba7d986b"
+    },
+    {
+      "name": "MEDIANTS-MINOR-MOLA",
+      "sha256": "e115b9c1ab561ae1456255e2cf4677dbf4dd55ff13496836edc971d4ba7d986b"
+    },
+    {
+      "name": "MEDIANTS BIEN",
+      "sha256": "e115b9c1ab561ae1456255e2cf4677dbf4dd55ff13496836edc971d4ba7d986b"
+    },
+    {
+      "name": "GOD chords",
+      "sha256": "590102d1c5f680e592bc25ab4605913705402551356f19ae6b2b50b2954d2568"
+    },
+    {
+      "name": "Manual GOD",
+      "sha256": "590102d1c5f680e592bc25ab4605913705402551356f19ae6b2b50b2954d2568"
+    },
+    {
+      "name": "lorn",
+      "sha256": "1c50311038408c282c4894fc984293e68971248e9311d4d73f9c0f156017218f"
+    },
+    {
+      "name": "chartres",
+      "sha256": "3e817c9f43214ea080426f884fb4d99e57d203f0876f6b0ec386f2dc3a515cfe"
+    },
+    {
+      "name": "fitc",
+      "sha256": "621bd402289ee82e60c71ac85165237ef37d4db86cbb05e45f39e7811729f410"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-# Reaktor Patch Extractor 0.5.4
+# Reaktor Patch Extractor 0.5.5
 
 Aplicació macOS universal (`arm64` i `x86_64`) i executable de terminal per
 inspeccionar qualsevol fitxer binari `NRKT` de Reaktor (`.ism` i `.ens`).
@@ -218,3 +218,10 @@ scopes. `container_bank_slot` is resolved through the bank UUID table;
 These are different for ensemble snapshots such as THRILLER. Reports include
 `container_uuid`, `container_bank_size`, `snapshot_scope` and original ensemble
 tempo where present. File storage order must not be used as preset numbering.
+
+### SteamPipe 2 serialization (0.5.5)
+
+The `0x0022F200` module revision uses macro trailer version 3. SteamPipe 2
+regression extraction resolves 1,487 Primary modules, all 1,502 wires and all
+11 Core documents. Stored numeric constants use the same float32 field as
+the other supported revisions. Snapshot scope/UUID ordering remains unchanged.

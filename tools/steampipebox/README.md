@@ -2,7 +2,7 @@
 
 See [the instrument documentation](../../synthdefs/Defaults/SteamPipeBox/README.md).
 
-- `import_ensemble.py`: native extractor -> controls, snapshots, audit, five native
+- `import_ensemble.py`: native extractor -> controls, snapshots, audit, native
   banks and embedded node data. `--report` accepts a previously extracted report.
 - `generate_ugen.py`: strict build-time expression translation of the audited
   kernels into the native UGen source and both copies of its SC class.
@@ -20,3 +20,9 @@ The input ensemble is read-only and is not distributed here. No scripts change
 installed apps, user presets or unrelated synths.
 
 - `snapshot_banks_test.py`: native UUID slot order and ensemble/instrument scope; verifies Flute #1, Tarrega #55 and all 65 unchanged instrument sounds.
+
+- `steampipe2_presets.py`: capture the 87 native V2 instrument snapshots. The
+  subsequent `import_ensemble.py` run keeps that capture and adds a separate
+  V2 bank, with R66 reverb approximations and unmapped voice settings documented.
+- `v2_test.py`: compares all 172 old voice renders against `v1-voice-reference.json`
+  and checks four-point interpolation, phase compensation, legato and cutoff depth.

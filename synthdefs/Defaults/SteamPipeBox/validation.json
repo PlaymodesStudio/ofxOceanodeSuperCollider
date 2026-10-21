@@ -1,9 +1,9 @@
 {
   "ensemble_sha256": "4d5e7754ddc5bee0f8eb501bff70bc2d2f327eeccc3dfc012ad4ad80a1ea301f",
-  "ugen_sha256": "5812d4dd08b57da36ba56f4ca84fbe7b5f9d2af93ec80f06480c43242ecfe04e",
+  "ugen_sha256": "6cd1955389ec3bf7fc2bc4d3e93b71756accbdfc6138a9912427b46a958c13d4",
   "sample_rate": 48000,
-  "snapshots": 172,
-  "audible": 172,
+  "snapshots": 259,
+  "audible": 259,
   "max_peak": 1.328348159790039,
   "block_size_peak_differences": {
     "1": 0.0,
@@ -14,17 +14,17 @@
     {
       "voices": 1,
       "channels": 1,
-      "peak": 0.3221352994441986
+      "peak": 0.1337495893239975
     },
     {
       "voices": 6,
       "channels": 2,
-      "peak": 0.5361753702163696
+      "peak": 0.25579389929771423
     },
     {
       "voices": 16,
       "channels": 16,
-      "peak": 0.7538319826126099
+      "peak": 0.4086454510688782
     }
   ],
   "unverified": [
@@ -32,7 +32,7 @@
     "Live Oceanode editor interactions"
   ],
   "audio_cable": {
-    "peak": 0.03206346929073334,
+    "peak": 0.03206561505794525,
     "edge_offset_samples": 48,
     "block_size": 64
   },
@@ -110,5 +110,28 @@
     "feedback_keytrack_offset": -60,
     "r66_damping_shelf_pitch": 112,
     "source": "binary numeric fields, not editable display labels"
+  },
+  "steamPipe2": {
+    "presets": 87,
+    "resonator_mode_default": false,
+    "noise_envelope_default": 0,
+    "legato_default": false,
+    "original_voice_cases_bit_identical": 172,
+    "samples_per_original_case": 32000,
+    "source_sha256": "d72f1ddd7f451bd3fef2356af262f099c7d9ac9bc1e4864a2ea6f6b4f5f60988",
+    "tests": [
+      "four-point interpolation and buffer wrap",
+      "source HP/LP phase compensation coefficients",
+      "legato and fresh gate velocity",
+      "noise envelope pitch depth"
+    ],
+    "approximations": [
+      "Space Master Deluxe mapped to R66"
+    ],
+    "unmapped": [
+      "voice modes",
+      "glide",
+      "arpeggiator"
+    ]
   }
 }

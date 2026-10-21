@@ -42,6 +42,21 @@ local(pos, i0, i1, frac, y0, y1) (
     f32(y0 + f32(f32(y1-y0)*frac));
 );
 
+// SteamPipe 2 Core "Interpol RT": four-point cubic Hermite interpolation.
+// Minimum delay is two samples, so the newest neighbor is already written.
+function readH(ofs, size, write_pos, delay_samples)
+local(i0, im1, i1, i2, frac, ym1, y0, y1, y2, m0, m1, delta, a, b, c, d) (
+    i0 = write_pos-floor(delay_samples); i0<0 ? i0+=size;
+    im1=i0+1; im1>=size ? im1-=size;
+    i1=i0-1; i1<0 ? i1+=size;
+    i2=i0-2; i2<0 ? i2+=size;
+    frac=delay_samples-floor(delay_samples);
+    ym1=buf[ofs+im1]; y0=buf[ofs+i0]; y1=buf[ofs+i1]; y2=buf[ofs+i2];
+    m0=0.5*(y1-ym1); m1=0.5*(y2-y0);
+    delta=y0-y1; a=m0+delta; b=m1+a; c=b+delta; d=a+c;
+    f32(y0+frac*(m0+frac*(frac*c-d)));
+);
+
 // Exact transfer function of Reaktor 6.5's mono::AudioSaturator:
 // unity slope at zero, quadratic soft knee, hard limits at +/-2.
 function reaktorSat(x)
@@ -113,7 +128,7 @@ gain_db = _gain;
 gate_on = gate_control > 0;
 // A new positive gate level is a Primary gate event too. This lets a
 // manual slider update the note velocity instead of retaining its first pixel.
-retrigger = gate_on && ((previous_gate <= 0) || (gate_control != previous_gate_level));
+retrigger = gate_on && ((previous_gate <= 0) || ((_legato < 0.5) && (gate_control != previous_gate_level)));
 retrigger ? held_velocity=clip(velocity,0,1);
 velocity=clip(held_velocity,0,1);
 peak=f32((1-clip(vel_amt,0,1))+clip(vel_amt,0,1)*velocity);
@@ -194,6 +209,8 @@ white = noise_bit - 0.5;
 // The Note Pitch modules inside Reaktor's key-track macros are offset by -60.
 noise_pitch = noise_cut + ((pitch - 60.0) * noise_key_track);
 noise_pitch *= (1.0 - clip(noise_vel_track, 0.0, 1.0)) + (clip(noise_vel_track, 0.0, 1.0) * velocity);
+// V2 adds the steam envelope AFTER the keyboard/velocity tracking macro.
+_noise_env != 0 ? noise_pitch += env*clip(_noise_env,0,120);
 noise_frequency = midiCps(noise_pitch);
 noise_input = f32(white * env);
 // Reaktor HP/LP 1-Pole uses forward Euler with its original 0.99 cap.
@@ -216,14 +233,23 @@ main_frequency = max(0.1, midiCps(main_pitch));
 // Primary LFO #212065 feeds the pitch adder #212054, before P2D.
 vib_delay_samples = 0;
 main_delay = clip(niDelay(main_pitch,sample_correction,srate), 2.0, main_size - 3.0);
-pipe_delayed = f32(readL(main_ofs, main_size, main_w, main_delay)+1e-12);
+_steampipe2>=0.5 ? (
+    comp_hp=hp0+((hp1-hp0)*clip(mod_wheel,0,1))+((pitch-60)*hp_key_track);
+    comp_lp=lp0+((lp1-lp0)*clip(mod_wheel,0,1))+((pitch-60)*lp_key_track);
+    // Primary ArcTan outputs cycles (atan / 2pi), not radians.
+    // Audited V2 Phase HP coefficient .333 and Phase LP coefficient -.5.
+    phase_hp=0.3330000042915344*atan(midiCps(comp_hp)/main_frequency)/6.283185307179586;
+    phase_lp=-0.5*atan(main_frequency/max(0.1,midiCps(comp_lp)))/6.283185307179586;
+    main_delay=clip(niDelay(main_pitch,0,srate)*(1+phase_hp+phase_lp)+sample_correction,2,main_size-3);
+);
+pipe_delayed = f32((_steampipe2>=0.5 ? readH(main_ofs,main_size,main_w,main_delay) : readL(main_ofs, main_size, main_w, main_delay))+1e-12);
 
 ap_pitch = pitch + bend + ap_tune + ap_fine + (mod_wheel * ap_mw);
 ap_frequency = max(0.1, midiCps(ap_pitch));
 ap_delay = clip(niDelay(ap_pitch,ap_sample_correction,srate), 2.0, ap_size - 3.0);
 // Diffuser Delay advances its write pointer before writing; its stored
 // recurrence has one more sample of delay than Single Delay.
-ap_delayed = readL(ap_ofs, ap_size, ap_w, ap_delay+1);
+ap_delayed = _steampipe2>=0.5 ? readH(ap_ofs,ap_size,ap_w,ap_delay+1) : readL(ap_ofs, ap_size, ap_w, ap_delay+1);
 ap_g = clip(diffusion, -1, 1);
 // Exact AudioDelayAllpass recurrence used by Reaktor's Diffuser Delay.
 ap_write = f32(pipe_delayed-f32(ap_g*f32(ap_delayed+1e-12)));

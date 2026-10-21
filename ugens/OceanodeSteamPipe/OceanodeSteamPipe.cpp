@@ -12,7 +12,7 @@ inline double clip(double x,double lo,double hi){return std::clamp(x,lo,hi);}
 inline double min(double x,double y){return std::min(x,y);}
 inline double max(double x,double y){return std::max(x,y);}
 inline double mod(double x,double y){return std::fmod(x,y);}
-using std::sin; using std::cos; using std::tan; using std::exp; using std::pow; using std::sqrt;
+using std::sin; using std::cos; using std::tan; using std::atan; using std::exp; using std::pow; using std::sqrt;
 using std::floor; using std::ceil; using std::abs;
 struct PipeKernel {
  double* buf=nullptr; double srate=48000;
@@ -39,11 +39,13 @@ struct PipeKernel {
  double _hp0=0;
  double _hp1=0;
  double _hp_key_track=0;
+ double _legato=0;
  double _lp0=0;
  double _lp1=0;
  double _lp_key_track=0;
  double _mod_wheel=0;
  double _noise_cut=0;
+ double _noise_env=0;
  double _noise_key_track=0;
  double _noise_one_pole=0;
  double _noise_resonance=0;
@@ -56,6 +58,7 @@ struct PipeKernel {
  double _release_damp=0;
  double _sample_correction=0;
  double _soft_hard=0;
+ double _steampipe2=0;
  double _sustain=0;
  double _symmetry=0;
  double _tune=0;
@@ -84,6 +87,8 @@ struct PipeKernel {
  double attack_seconds=0;
  double bend=0;
  double c=0;
+ double comp_hp=0;
+ double comp_lp=0;
  double dc_noise=0;
  double dec=0;
  double decay_mult=0;
@@ -155,6 +160,8 @@ struct PipeKernel {
  double out1=0;
  double output_gain=0;
  double peak=0;
+ double phase_hp=0;
+ double phase_lp=0;
  double pipe_delayed=0;
  double pipe_output=0;
  double pitch=0;
@@ -209,6 +216,25 @@ double frac=0;
 double y0=0;
 double y1=0;
 return ([&]() -> double {(i0=(write_pos-floor(delay_samples)));((i0<0) ? (i0+=size) : 0.0);(i1=(i0-1));((i1<0) ? (i1+=size) : 0.0);(frac=f32((delay_samples-floor(delay_samples))));(y0=buf[static_cast<int>((ofs+i0))]);(y1=buf[static_cast<int>((ofs+i1))]);return f32((y0+f32((f32((y1-y0))*frac))));}());
+}
+double readH(double ofs,double size,double write_pos,double delay_samples) {
+double i0=0;
+double im1=0;
+double i1=0;
+double i2=0;
+double frac=0;
+double ym1=0;
+double y0=0;
+double y1=0;
+double y2=0;
+double m0=0;
+double m1=0;
+double delta=0;
+double a=0;
+double b=0;
+double c=0;
+double d=0;
+return ([&]() -> double {(i0=(write_pos-floor(delay_samples)));((i0<0) ? (i0+=size) : 0.0);(im1=(i0+1));((im1>=size) ? (im1-=size) : 0.0);(i1=(i0-1));((i1<0) ? (i1+=size) : 0.0);(i2=(i0-2));((i2<0) ? (i2+=size) : 0.0);(frac=(delay_samples-floor(delay_samples)));(ym1=buf[static_cast<int>((ofs+im1))]);(y0=buf[static_cast<int>((ofs+i0))]);(y1=buf[static_cast<int>((ofs+i1))]);(y2=buf[static_cast<int>((ofs+i2))]);(m0=(0.5*((y1-ym1))));(m1=(0.5*((y2-y0))));(delta=(y0-y1));(a=(m0+delta));(b=(m1+a));(c=(b+delta));(d=(a+c));return f32((y0+(frac*((m0+(frac*(((frac*c)-d))))))));}());
 }
 double reaktorSat(double x) {
 double z=0;
@@ -287,7 +313,7 @@ void sample() {
 (lp_key_track=_lp_key_track);
 (gain_db=_gain);
 (gate_on=(gate_control>0));
-(retrigger=(gate_on&&((((previous_gate<=0))||((gate_control!=previous_gate_level))))));
+(retrigger=(gate_on&&((((previous_gate<=0))||((((_legato<0.5))&&((gate_control!=previous_gate_level))))))));
 (retrigger ? (held_velocity=clip(velocity,0,1)) : 0.0);
 (velocity=clip(held_velocity,0,1));
 (peak=f32((((1-clip(vel_amt,0,1)))+(clip(vel_amt,0,1)*velocity))));
@@ -309,6 +335,7 @@ void sample() {
 (white=(noise_bit-0.5));
 (noise_pitch=(noise_cut+((((pitch-60.0))*noise_key_track))));
 (noise_pitch*=(((1.0-clip(noise_vel_track,0.0,1.0)))+((clip(noise_vel_track,0.0,1.0)*velocity))));
+((_noise_env!=0) ? (noise_pitch+=(env*clip(_noise_env,0,120))) : 0.0);
 (noise_frequency=midiCps(noise_pitch));
 (noise_input=f32((white*env)));
 (noise_a=min(0.99,f32((noise_frequency*f32((6.2829999923706055/srate))))));
@@ -326,11 +353,12 @@ void sample() {
 (main_frequency=max(0.1,midiCps(main_pitch)));
 (vib_delay_samples=0);
 (main_delay=clip(niDelay(main_pitch,sample_correction,srate),2.0,(main_size-3.0)));
-(pipe_delayed=f32((readL(main_ofs,main_size,main_w,main_delay)+1e-12)));
+((_steampipe2>=0.5) ? ([&]() -> double {(comp_hp=((hp0+((((hp1-hp0))*clip(mod_wheel,0,1))))+((((pitch-60))*hp_key_track))));(comp_lp=((lp0+((((lp1-lp0))*clip(mod_wheel,0,1))))+((((pitch-60))*lp_key_track))));(phase_hp=((0.3330000042915344*atan((midiCps(comp_hp)/main_frequency)))/6.283185307179586));(phase_lp=(((-0.5)*atan((main_frequency/max(0.1,midiCps(comp_lp)))))/6.283185307179586));return (main_delay=clip(((niDelay(main_pitch,0,srate)*(((1+phase_hp)+phase_lp)))+sample_correction),2,(main_size-3)));}()) : 0.0);
+(pipe_delayed=f32(((((_steampipe2>=0.5) ? readH(main_ofs,main_size,main_w,main_delay) : readL(main_ofs,main_size,main_w,main_delay)))+1e-12)));
 (ap_pitch=((((pitch+bend)+ap_tune)+ap_fine)+((mod_wheel*ap_mw))));
 (ap_frequency=max(0.1,midiCps(ap_pitch)));
 (ap_delay=clip(niDelay(ap_pitch,ap_sample_correction,srate),2.0,(ap_size-3.0)));
-(ap_delayed=readL(ap_ofs,ap_size,ap_w,(ap_delay+1)));
+(ap_delayed=((_steampipe2>=0.5) ? readH(ap_ofs,ap_size,ap_w,(ap_delay+1)) : readL(ap_ofs,ap_size,ap_w,(ap_delay+1))));
 (ap_g=clip(diffusion,(-1),1));
 (ap_write=f32((pipe_delayed-f32((ap_g*f32((ap_delayed+1e-12)))))));
 (ap_output=f32((ap_delayed+f32((ap_g*ap_write)))));
@@ -634,31 +662,34 @@ k._gate = INRATE(19)==calc_FullRate ? IN(19)[i] : IN0(19);
 k._hp0 = INRATE(20)==calc_FullRate ? IN(20)[i] : IN0(20);
 k._hp1 = INRATE(21)==calc_FullRate ? IN(21)[i] : IN0(21);
 k._hp_key_track = INRATE(22)==calc_FullRate ? IN(22)[i] : IN0(22);
-k._lp0 = INRATE(23)==calc_FullRate ? IN(23)[i] : IN0(23);
-k._lp1 = INRATE(24)==calc_FullRate ? IN(24)[i] : IN0(24);
-k._lp_key_track = INRATE(25)==calc_FullRate ? IN(25)[i] : IN0(25);
-k._mod_wheel = INRATE(26)==calc_FullRate ? IN(26)[i] : IN0(26);
-k._noise_cut = INRATE(27)==calc_FullRate ? IN(27)[i] : IN0(27);
-k._noise_key_track = INRATE(28)==calc_FullRate ? IN(28)[i] : IN0(28);
-k._noise_one_pole = INRATE(29)==calc_FullRate ? IN(29)[i] : IN0(29);
-k._noise_resonance = INRATE(30)==calc_FullRate ? IN(30)[i] : IN0(30);
-k._noise_velocity_track = INRATE(31)==calc_FullRate ? IN(31)[i] : IN0(31);
-k._offset = INRATE(32)==calc_FullRate ? IN(32)[i] : IN0(32);
-k._pitch = INRATE(33)==calc_FullRate ? IN(33)[i] : IN0(33);
-k._polarity = INRATE(34)==calc_FullRate ? IN(34)[i] : IN0(34);
-k._push = INRATE(35)==calc_FullRate ? IN(35)[i] : IN0(35);
-k._release = INRATE(36)==calc_FullRate ? IN(36)[i] : IN0(36);
-k._release_damp = INRATE(37)==calc_FullRate ? IN(37)[i] : IN0(37);
-k._sample_correction = INRATE(38)==calc_FullRate ? IN(38)[i] : IN0(38);
-k._soft_hard = INRATE(39)==calc_FullRate ? IN(39)[i] : IN0(39);
-k._sustain = INRATE(40)==calc_FullRate ? IN(40)[i] : IN0(40);
-k._symmetry = INRATE(41)==calc_FullRate ? IN(41)[i] : IN0(41);
-k._tune = INRATE(42)==calc_FullRate ? IN(42)[i] : IN0(42);
-k._tune_mw = INRATE(43)==calc_FullRate ? IN(43)[i] : IN0(43);
-k._velocity = INRATE(44)==calc_FullRate ? IN(44)[i] : IN0(44);
-k._velocity_amount = INRATE(45)==calc_FullRate ? IN(45)[i] : IN0(45);
-k._vibrato_amount = INRATE(46)==calc_FullRate ? IN(46)[i] : IN0(46);
-k._vibrato_frequency = INRATE(47)==calc_FullRate ? IN(47)[i] : IN0(47);
+k._legato = INRATE(23)==calc_FullRate ? IN(23)[i] : IN0(23);
+k._lp0 = INRATE(24)==calc_FullRate ? IN(24)[i] : IN0(24);
+k._lp1 = INRATE(25)==calc_FullRate ? IN(25)[i] : IN0(25);
+k._lp_key_track = INRATE(26)==calc_FullRate ? IN(26)[i] : IN0(26);
+k._mod_wheel = INRATE(27)==calc_FullRate ? IN(27)[i] : IN0(27);
+k._noise_cut = INRATE(28)==calc_FullRate ? IN(28)[i] : IN0(28);
+k._noise_env = INRATE(29)==calc_FullRate ? IN(29)[i] : IN0(29);
+k._noise_key_track = INRATE(30)==calc_FullRate ? IN(30)[i] : IN0(30);
+k._noise_one_pole = INRATE(31)==calc_FullRate ? IN(31)[i] : IN0(31);
+k._noise_resonance = INRATE(32)==calc_FullRate ? IN(32)[i] : IN0(32);
+k._noise_velocity_track = INRATE(33)==calc_FullRate ? IN(33)[i] : IN0(33);
+k._offset = INRATE(34)==calc_FullRate ? IN(34)[i] : IN0(34);
+k._pitch = INRATE(35)==calc_FullRate ? IN(35)[i] : IN0(35);
+k._polarity = INRATE(36)==calc_FullRate ? IN(36)[i] : IN0(36);
+k._push = INRATE(37)==calc_FullRate ? IN(37)[i] : IN0(37);
+k._release = INRATE(38)==calc_FullRate ? IN(38)[i] : IN0(38);
+k._release_damp = INRATE(39)==calc_FullRate ? IN(39)[i] : IN0(39);
+k._sample_correction = INRATE(40)==calc_FullRate ? IN(40)[i] : IN0(40);
+k._soft_hard = INRATE(41)==calc_FullRate ? IN(41)[i] : IN0(41);
+k._steampipe2 = INRATE(42)==calc_FullRate ? IN(42)[i] : IN0(42);
+k._sustain = INRATE(43)==calc_FullRate ? IN(43)[i] : IN0(43);
+k._symmetry = INRATE(44)==calc_FullRate ? IN(44)[i] : IN0(44);
+k._tune = INRATE(45)==calc_FullRate ? IN(45)[i] : IN0(45);
+k._tune_mw = INRATE(46)==calc_FullRate ? IN(46)[i] : IN0(46);
+k._velocity = INRATE(47)==calc_FullRate ? IN(47)[i] : IN0(47);
+k._velocity_amount = INRATE(48)==calc_FullRate ? IN(48)[i] : IN0(48);
+k._vibrato_amount = INRATE(49)==calc_FullRate ? IN(49)[i] : IN0(49);
+k._vibrato_frequency = INRATE(50)==calc_FullRate ? IN(50)[i] : IN0(50);
 k.sample();
 OUT(0)[i]=std::isfinite(k.out0) ? k.out0 : 0;
 OUT(1)[i]=std::isfinite(k.out1) ? k.out1 : 0;
@@ -666,7 +697,7 @@ OUT(1)[i]=std::isfinite(k.out1) ? k.out1 : 0;
 }
 void SteamPipeVoice_Ctor(SteamPipeVoice* unit) {
  new (&unit->dsp) PipeKernel();auto& k=unit->dsp;k.srate=SAMPLERATE;
- if(unit->mNumInputs!=48 || unit->mNumOutputs!=2) {
+ if(unit->mNumInputs!=51 || unit->mNumOutputs!=2) {
   Print("SteamPipeVoice: incompatible SynthDef; recompile steampipeBox.scd\n");
   SETCALC(ClearUnitOutputs);ClearUnitOutputs(unit,1);return;
  }

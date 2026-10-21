@@ -101,6 +101,8 @@ private:
     ofParameter<float> satDrive,satBias,satTone,satOutput,satMix;
     ofParameter<float> envCurves[1][3];
     ofParameter<bool> originalEnvelope;
+    ofParameter<bool> steamPipe2, legato;
+    ofParameter<float> noiseEnvelopeAmount;
     // Gate Mode Pulse: the automatic gates (scPulseGate); their vis after the spreader's
     static constexpr int VIS_PULSE=112, VIS_SIZE=VIS_PULSE+scPulseGate::VIS_SIZE;
     scPulseGate pulse;

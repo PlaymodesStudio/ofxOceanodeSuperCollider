@@ -128,6 +128,9 @@ void scSteamPipeBox::setup() {
         sound.push_back(std::move(c));
     }
     originalEnvelope.set("Original ADSR",true); reg(originalEnvelope,[this](){sendAll();});
+    steamPipe2.set("SteamPipe 2",false); reg(steamPipe2,[this](){sendAll();});
+    legato.set("Legato",false); reg(legato,[this](){sendAll();});
+    noiseEnvelopeAmount.set("Noise Filter Envelope",0,0,120); reg(noiseEnvelopeAmount,[this](){sendAll();});
     // ── Effects (MixerPro's inserts) ─────────────────────────────────────────
     auto toStages = [this]() { for(auto& [sv, st] : states) if(st.created) updateStages(sv, st); };
     eqOn.set("EQ On", false);                 reg(eqOn, toStages);
@@ -311,6 +314,9 @@ void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
         set("master",master.get()); set("bpm",bpm);
         set("normalization",1.0f);
         set("amp_original",originalEnvelope.get()?1.f:0.f);
+        set("steampipe2",steamPipe2.get()?1.f:0.f);
+        set("legato",legato.get()?1.f:0.f);
+        set("noise_env",noiseEnvelopeAmount.get());
         set("vca", vca ? 1.0f : 0.0f);
         set("vis",st.vis->index);
         for(int t=0;t<NUM_TARGETS-1;++t) set(names[t],mod.targetBus(server,t)+i);
@@ -486,6 +492,7 @@ std::vector<ofJson> scSteamPipeBox::factory() const {
     for(const auto& preset:ofJson::parse(steamPipeBoxData::factory)) {
         ofJson j=initial;j["name"]=preset["name"];
         for(const auto& c:sound) if(preset["values"].contains(c->p.getName())) j[c->p.getEscapedName()]=preset["values"][c->p.getName()];
+        if(preset.contains("extras")) for(auto it=preset["extras"].begin();it!=preset["extras"].end();++it) j[it.key()]=it.value();
         out.push_back(j);
     }
     return out;
@@ -901,6 +908,8 @@ void scSteamPipeBox::drawNativeEnvelope(int e,float w) {
     ImGui::PushID("steamEnvelope");ImGui::BeginGroup();
     sectionHeader("Steam Envelope",w,nullptr,col);
     toggle(originalEnvelope,"Original ADSR");
+    toggle(legato,"Legato");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Retrigger only after Gate closes. Positive gate-level changes keep the current envelope and velocity.");
     labelW=58;
     const bool native=originalEnvelope.get();
     const float tailScale=native?5.f:1.f;
@@ -958,6 +967,11 @@ void scSteamPipeBox::drawSoundTab(float w) {
     for(int i=0;i<7;++i) {
         if(i==0 || i==4) {ImGui::BeginGroup();ImGui::BeginGroup();} else nextCol();
         sectionHeader(groups[i],cw);labelW=115;
+        if(i==0) slider(noiseEnvelopeAmount,"Env -> cutoff",cw,"%.1f st");
+        if(i==1) {
+            toggle(steamPipe2,"SteamPipe 2");
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Four-point pipe / diffusion delay interpolation and HP/LP phase tuning compensation. Off preserves the original resonator.");
+        }
         for(auto& c:sound) if(c->group==groups[i]) {
             std::string label=c->p.getName();
             for(const auto& prefix:{std::string("Allpass "),std::string("Noise "),std::string("Feedback ")})

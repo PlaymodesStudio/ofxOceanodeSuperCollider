@@ -88,6 +88,33 @@ state. Delay buffers start empty. The old `Source/PhysicalModelling/steamPipe`
 and lowercase compatibility SynthDef are retired; `steampipeBox` is the sole
 SteamPipe instrument.
 
+## Optional SteamPipe 2 features
+
+The Sound tab's **SteamPipe 2** switch enables four-point cubic Hermite reads
+for the pipe and diffusion delays, plus the source patch's filter-phase tuning
+compensation. The phase macros use ArcTan in cycles: HP coefficient
+`0.3330000042915344`, LP coefficient `-0.5`. The original delay/interpolation
+path remains the default. Switching modes retains the delay buffers.
+
+**Env -> cutoff** in the Steam section adds the Steam envelope to noise-filter
+pitch, after keyboard/velocity tracking (0..120 semitones, default 0).
+**Legato** on the Steam envelope card suppresses retriggers from positive gate
+level changes; a fresh gate after zero always retriggers. It defaults off.
+Both controls are publishable, modulatable and stored in snapshots.
+
+The existing 172 factory states are unchanged. A captured 32,000-sample render
+for every original state remains bit-identical with the new features off.
+The additional **Reaktor SteamPipe 2 - Bank 1** contains all 87 native V2
+instrument presets, in original slot order, and enables SteamPipe 2 mode.
+
+These are translations of the supported synthesis controls: Space Master
+Deluxe is approximated with R66, while the source voice modes, glide and arp
+remain unimplemented. Original Space Master and voice settings are retained
+in `steampipe2-source.json` for future work. V2 noise filters, envelope and
+saturator retain this port's existing implementations; the switch is not a
+complete V2 engine replacement. Imported V2 presets disable the original tempo
+delay, which is absent from that source patch.
+
 ## Snapshots and regeneration
 
 The native **Instrument — Bank 1** is the default, with all 65 original slots:
@@ -103,7 +130,7 @@ An ensemble snapshot also stores context such as transport tempo (120 BPM for
 THRILLER). It is not an additional instrument preset. That tempo is retained
 in the audit; playback tempo continues to follow Oceanode transport.
 
-Five banks are bundled under `presets/nodeSnapshots/SteamPipeBox/banks` and seeded
+Six banks are bundled under `presets/nodeSnapshots/SteamPipeBox/banks` and seeded
 without overwriting existing files. Upgrading an active old mixed bank backs up
 its working library and both old banks in `Legacy bank layout - <timestamp>`
 before switching to the instrument bank. Factory collection combines the scoped
@@ -112,9 +139,11 @@ collections; use the individual banks for the complete native numbering.
 `controls.json` records module paths and
 ranges; `graph-constants.json` audits every stored DSP constant;
 `reaktor-snapshots.json` preserves every raw state, unresolved records
-and the ensemble SHA-256.
+and the ensemble SHA-256. `steampipe2-source.json` separately audits the V2 instrument snapshots and source SHA-256.
 
 ```sh
+# Optional: refresh the V2 source capture before rebuilding the combined banks.
+python3 tools/steampipebox/steampipe2_presets.py /path/to/SteamPipe2_forms.ens
 python3 tools/steampipebox/import_ensemble.py /path/to/steampipe_santi.ens
 bash ugens/OceanodeSteamPipe/build.sh /path/to/SuperCollider/source
 python3 tools/steampipebox/primary_test.py

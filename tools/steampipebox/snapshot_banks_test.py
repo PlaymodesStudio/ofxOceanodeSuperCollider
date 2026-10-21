@@ -36,7 +36,8 @@ assert all(s['ensemble_tempo_bpm'] == 120 for s in thriller)
 folder = ROOT / 'synthdefs/Defaults/SteamPipeBox'
 factory = json.loads((folder / 'factory.json').read_text())
 banks = json.loads((folder / 'banks.json').read_text())
-assert len(factory) == 172 and len(banks) == 5
+has_v2=(folder/'steampipe2-source.json').exists()
+assert len(factory) == (259 if has_v2 else 172) and len(banks) == (6 if has_v2 else 5)
 assert [s['name'] for s in factory[:3]] == ['Flute', 'Pan', 'The Pipe']
 assert factory[54]['name'] == 'tarrega'
 assert all(s['scope'] == 'instrument' and s['bank_slot'] == i for i, s in enumerate(factory[:65]))
@@ -55,8 +56,15 @@ for bank in banks:
         assert preset['scope'] == bank['scope'] and preset['bank_slot'] == slot
         assert slots[slot]['name'] == preset['name']
         seen.append(index)
-assert sorted(seen) == list(range(172))
-assert banks[-1]['source_bank'] == 'AlgoMus' and banks[-1]['indices'][:6] == [None] * 6
+assert sorted(seen) == list(range(len(factory)))
+algo=next(b for b in banks if b['source_bank']=='AlgoMus')
+assert algo['indices'][:6] == [None] * 6
+if has_v2:
+    v2=factory[172:]
+    assert len(v2)==87 and banks[-1]['source_version']==2
+    assert all(p['extras']['SteamPipe_2'] and p['bank_slot']==i for i,p in enumerate(v2))
+    assert any(p['extras']['Noise_Filter_Envelope']>0 for p in v2)
+    print('PASS: 87 separate V2 presets enable V2 mode and retain source slot order; V1 bank data stays unchanged')
 print('PASS: 5 native banks, UUID slot order, Flute #1 / Tarrega #55, 65 unchanged instrument sounds, 107 separately scoped ensemble states and preserved unresolved slots')
 
 # Exercise the actual migration block against real temporary files. A failed

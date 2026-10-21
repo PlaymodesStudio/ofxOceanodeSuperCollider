@@ -35,6 +35,8 @@ def main():
  def notes(preset,t):
   params=[]
   for c in controls:params +=[c['sc'],float(preset['values'][c['name']])]
+  extra=preset.get('extras',{})
+  params += ['steampipe2',float(extra.get('SteamPipe_2',False)),'legato',float(extra.get('Legato',False)),'noise_env',float(extra.get('Noise_Filter_Envelope',0))]
   return bundle(t,[message('/s_new','SteamPipeBoxGate1',1000,0,1,'out',16,'velout',48,'gate',1.0,'velocity',1.0,'vel',0,'rnd',1),message('/s_new','SteamPipeBoxVoice',1001,1,1,'gatebus',16,'velabus',48,'pitch',60.0,'master',1.0,'normalization',1.0,'vis',2048,'out',18,*params,*sum(([name,32] for name in mods),[])),message('/s_new','SteamPipeBoxOriginal2',1002,1,1,'in',18,'out',0,*params)])
  for i,preset in enumerate(bank):
   t=i*1.6+.016;score+=notes(preset,t)
@@ -56,7 +58,7 @@ def main():
  def ordered(path):
   return sorted(set(re.findall(r'(?<![A-Za-z0-9_])(_[A-Za-z0-9_]+)',re.sub(r'//[^\n]*','',path.read_text()))))
  values={c['sc']:bank[0]['values'][c['name']] for c in controls}
- values.update(pitch=60,gate=1,velocity=1,bpm=120,amp_original=1,amp_curve0=-4,amp_curve1=-4,amp_curve2=-4)
+ values.update(pitch=60,gate=1,velocity=1,bpm=120,amp_original=1,amp_curve0=-4,amp_curve1=-4,amp_curve2=-4,steampipe2=1,noise_env=24,legato=1)
  def args(path):return ','.join('DC.ar('+str(values[p[1:]])+')' for p in ordered(path))
  source='Archive.archiveDir="/tmp";\nSynthDef(\\SteamPipeBoxTimingTest,{var sig=SteamPipeVoice.ar(['+args(FOLDER/'steamPipeBox.eel2')+']);Out.ar(0,SteamPipeOriginal.ar(['+args(FOLDER/'originalEffects.eel2')+'],sig[0],sig[0]));}).writeDefFile("'+str(a.output)+'");\n0.exit;\n'
  source=source.replace('0.exit;', 'SynthDef(\\SteamPipeBoxCableInput,{var edge=DelayN.ar(Impulse.ar(0),0.01,48/SampleRate.ir);Out.ar(200,Trig1.ar(edge,0.2)*0.25);Out.ar(201,DC.ar(0.8));}).writeDefFile("'+str(a.output)+'");\n0.exit;')

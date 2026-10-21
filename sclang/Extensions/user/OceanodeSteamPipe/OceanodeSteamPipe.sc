@@ -3,7 +3,7 @@ SteamPipeStep : PureUGen {
  *ar { |input=0| ^this.multiNew('audio',input); }
 }
 SteamPipeVoice : MultiOutUGen {
- *parameterNames { ^#[allpass_fine,allpass_mw,allpass_on,allpass_sample_correction,allpass_tune,amp_curve0,amp_curve1,amp_curve2,amp_original,attack,bend,dc_noise,decay,diffusion,env_key_scaling,feedback_key_track,feedback_rt,fine,gain,gate,hp0,hp1,hp_key_track,lp0,lp1,lp_key_track,mod_wheel,noise_cut,noise_key_track,noise_one_pole,noise_resonance,noise_velocity_track,offset,pitch,polarity,push,release,release_damp,sample_correction,soft_hard,sustain,symmetry,tune,tune_mw,velocity,velocity_amount,vibrato_amount,vibrato_frequency]; }
+ *parameterNames { ^#[allpass_fine,allpass_mw,allpass_on,allpass_sample_correction,allpass_tune,amp_curve0,amp_curve1,amp_curve2,amp_original,attack,bend,dc_noise,decay,diffusion,env_key_scaling,feedback_key_track,feedback_rt,fine,gain,gate,hp0,hp1,hp_key_track,legato,lp0,lp1,lp_key_track,mod_wheel,noise_cut,noise_env,noise_key_track,noise_one_pole,noise_resonance,noise_velocity_track,offset,pitch,polarity,push,release,release_damp,sample_correction,soft_hard,steampipe2,sustain,symmetry,tune,tune_mw,velocity,velocity_amount,vibrato_amount,vibrato_frequency]; }
  *ar { |params|
   ^this.multiNewList(['audio'] ++ params);
  }

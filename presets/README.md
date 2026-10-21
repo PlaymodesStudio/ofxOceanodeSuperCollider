@@ -51,3 +51,9 @@ instrument snapshots and their native numbering, starting with **1 Flute**;
 UUID slot order, including six unresolved/empty AlgoMus slots. THRILLER is an
 ensemble snapshot name; its inner instrument state is Flute. See
 `synthdefs/Defaults/SteamPipeBox/README.md` for scope and migration details.
+
+`Reaktor SteamPipe 2 - Bank 1` adds 87 translated instrument presets in native
+order. They enable SteamPipe 2 resonator mode and import filter-envelope/legato
+settings. Space Master Deluxe is approximated with R66; the V2 voice modes,
+glide and arpeggiator are not reproduced. Existing SteamPipe banks keep their
+original synthesis behavior.
