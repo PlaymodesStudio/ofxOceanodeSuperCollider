@@ -48,6 +48,7 @@ constexpr double krat = 1.0;        // rattle into the modes
 
 constexpr int NA = 16384;           // waveguide segments
 constexpr int NJ = 8192;            // jet delay
+constexpr int NT = 4096;            // resonator tube (per pickup)
 
 inline double clip(double x, double lo, double hi) { return x < lo ? lo : (x > hi ? hi : x); }
 inline double sat(double x) { const double c = clip(x, -3, 3); return c * (27 + c * c) / (27 + 9 * c * c); }
@@ -79,9 +80,16 @@ inline float clean(double v) { return std::fabs(v) < 1e-15 ? 0.f : float(v); }
 }  // namespace
 
 struct PhysicalVoice : public Unit {
-    float* mem;                 // dln | dlb | dlh (NA each) | dlj (NJ)
-    float *dln, *dlb, *dlh, *dlj;
-    int wn, wb, wh, wj;
+    float* mem;                 // dln | dlb | dlh (NA each) | dlj (NJ) | dlt (2 x NT)
+    float *dln, *dlb, *dlh, *dlj, *dlt;
+    int wn, wb, wh, wj, wt;
+    // damper: on after the gate falls (not after Strike), smoothed per block
+    int damped;
+    double dmp;
+    // resonator: per pickup c, the modes' outputs and the shared input history; the tube
+    double rx1[2], rx2[2], ry1[2][RADMODES], ry2[2][RADMODES], rlp[2], tph;
+    double rb0[RADMODES], ra1[RADMODES], ra2[RADMODES], tlen, tg, tnorm;
+    int rtype;
     double lpa, ap[4][2];
     double nutrefl, brefl, ya, sc;
     double envf, enve, prevg;
@@ -110,14 +118,18 @@ struct PhysicalVoice : public Unit {
 static void PhysicalVoice_next(PhysicalVoice* unit, int inNumSamples);
 
 static void clearState(PhysicalVoice* u) {
-    std::memset(u->mem, 0, sizeof(float) * (3 * NA + NJ));
+    std::memset(u->mem, 0, sizeof(float) * (3 * NA + NJ + 2 * NT));
+    for (int c = 0; c < 2; ++c) {
+        u->rx1[c] = u->rx2[c] = u->rlp[c] = 0;
+        for (int m = 0; m < RADMODES; ++m) u->ry1[c][m] = u->ry2[c][m] = 0;
+    }
     for (int k = 0; k < 2 * MAXM; ++k) u->my1[k] = u->my2[k] = u->mfr[k] = 0;
     u->lpa = 0; std::memset(u->ap, 0, sizeof(u->ap));
     u->nutrefl = u->brefl = u->ya = u->sc = u->sclp = u->enve = 0;
 }
 
 static void PhysicalVoice_Ctor(PhysicalVoice* unit) {
-    unit->mem = (float*)RTAlloc(unit->mWorld, sizeof(float) * (3 * NA + NJ));
+    unit->mem = (float*)RTAlloc(unit->mWorld, sizeof(float) * (3 * NA + NJ + 2 * NT));
     if (!unit->mem) {
         Print("PhysicalVoice: could not allocate its delay lines\n");
         SETCALC(ft->fClearUnitOutputs);
@@ -125,7 +137,11 @@ static void PhysicalVoice_Ctor(PhysicalVoice* unit) {
         return;
     }
     unit->dln = unit->mem; unit->dlb = unit->dln + NA; unit->dlh = unit->dlb + NA; unit->dlj = unit->dlh + NA;
-    unit->wn = unit->wb = unit->wh = unit->wj = 0;
+    unit->dlt = unit->dlj + NJ;
+    unit->wn = unit->wb = unit->wh = unit->wj = unit->wt = 0;
+    unit->damped = 0; unit->dmp = 0; unit->tph = 0; unit->rtype = 0;
+    unit->tlen = 100; unit->tg = 0; unit->tnorm = 1;
+    for (int m = 0; m < RADMODES; ++m) unit->rb0[m] = unit->ra1[m] = unit->ra2[m] = 0;
     clearState(unit);
     for (int k = 0; k < 2 * MAXM; ++k) {
         unit->ma1[k] = unit->ma2[k] = unit->mgi[k] = unit->mgx[k] = 0;
@@ -145,8 +161,9 @@ static void PhysicalVoice_Ctor(PhysicalVoice* unit) {
     SETCALC(PhysicalVoice_next);
     PhysicalVoice_next(unit, 1);
     // the first call must not count as time passed
-    unit->wn = unit->wb = unit->wh = unit->wj = 0;
+    unit->wn = unit->wb = unit->wh = unit->wj = unit->wt = 0;
     clearState(unit);
+    unit->damped = 0; unit->dmp = 0; unit->tph = 0;
     unit->envf = unit->prevg = 0; unit->st = 1e9; unit->armed = 0; unit->armPrev = 0; unit->prevStrk = 0;
     unit->first = true;
 }
@@ -173,6 +190,10 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
     u->catk = std::exp(-1 / (std::max(P(P_atk), 0.001) * sr));
     u->crel = std::exp(-1 / (std::max(P(P_rel), 0.001) * sr));
     const double mat = P(P_material);
+    // damper: the gate released (not held, not a Strike) adds damping to every mode
+    u->dmp += ((u->damped && P(P_hold) < 0.5 ? 1.0 : 0.0) - u->dmp) * 0.25;
+    const double sdamp = u->dmp * std::pow(clip(P(P_damper), 0, 1), 2) * 138;   // 1: rings stop within ~50 ms
+    auto damped = [&](double t60) { return sdamp > 0 ? 6.91 / (6.91 / t60 + sdamp) : t60; };
 
     // resonator A: a waveguide split at the contact into a nut-side and a
     // bridge-side segment. bore: 0 string (-1, -1), 0.5 closed tube (+1, -1,
@@ -195,7 +216,7 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         u->pda = lppd(u->bla, wa0) + 4 * appd(u->apc, wa0);
     }
     {
-        const double tsec = std::max(P(P_adecay) * mat3(mat, 0.4, 1.3, 2.2) * frz, 0.01);
+        const double tsec = damped(std::max(P(P_adecay) * mat3(mat, 0.4, 1.3, 2.2) * frz, 0.01));
         double ga = std::pow(0.001, lt0 / (sr * tsec));
         ga = std::min(ga * std::sqrt(1 - 2 * u->bla * std::cos(wa0) + u->bla * u->bla) / (1 - u->bla), 0.99999);
         u->ga = ga;
@@ -219,7 +240,7 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         }
     }
     const int mc = u->bcount;
-    const double tens = 1 + P(P_tension) * u->enve * 3;
+    const double tens = glide(P(P_tension), u->enve);
     const double split = clip(P(P_split), 0, 100), beat = clip(P(P_beat), 0, 50);
     const bool pairs = split > 0 || beat > 0;
     const double gA = pairs ? 1 / (1 + kPairGain) : 1, gB = kPairGain / (1 + kPairGain);
@@ -250,8 +271,8 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         // the pair sits around the mode: split cents (spread per mode) and beat Hz (at the pitch, times the ratio)
         const double c = pairs ? std::pow(2, split * pairSpread(k) / 2400) : 1;
         const double bw = pairs ? M_PI * beat * (rt / r0) / sr : 0;
-        bool on = m.on && setRes(k, w / c - bw, m.t60, gA);
-        bool onB = on && pairs && setRes(MAXM + k, w * c + bw, m.t60 * kPairDecay, gB);
+        bool on = m.on && setRes(k, w / c - bw, damped(m.t60), gA);
+        bool onB = on && pairs && setRes(MAXM + k, w * c + bw, damped(m.t60 * kPairDecay), gB);
         if (!onB) { u->my1[MAXM + k] = u->my2[MAXM + k] = 0; u->ma1[MAXM + k] = u->ma2[MAXM + k] = 0; }
         if (on) {
             u->mpe[k] = std::sin(M_PI * m.q * P(P_pos) + m.ph);
@@ -287,6 +308,53 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
     u->cba = P(P_couple) * P(P_mutual) * kcba;
     u->lref = lin(u->exb, u->la0, sr / u->fb0);
 
+    // resonator after the pickups
+    u->rtype = int(clip(std::lround(P(P_radiator)), 0, NRADIATORS - 1));
+    const double rmix = clip(P(P_radmix), 0, 1);
+    const double rtune = std::pow(2, clip(P(P_radtune), -36, 36) / 12);
+    if (u->rtype == 1) {
+        const double f = clip(P(P_freq) * rtune, sr / (2.0 * (NT - 4)), sr / 8);
+        // the loop's lowpass delays it: shorten the tube by as much, or it plays flat
+        u->tlen = std::max(sr / (2 * f) - lppd(0.35, 2 * M_PI * f / sr), 1.0);
+        u->tg = std::pow(0.001, u->tlen / (sr * kTubeT60));
+        u->tnorm = 1 - u->tg;
+    } else if (u->rtype >= 2) {
+        const RadMode* rm = radiatorModes(u->rtype);
+        for (int m = 0; m < RADMODES; ++m) {
+            const double f = radiatorBase(u->rtype) * rtune * rm[m].ratio;
+            if (rm[m].amp <= 0 || f >= sr * 0.45 || f < 10) { u->rb0[m] = u->ra1[m] = u->ra2[m] = 0; continue; }
+            const double w = 2 * M_PI * f / sr;
+            const double q = M_PI * f * rm[m].t60 / 6.91;
+            const double al = std::sin(w) / (2 * q), a0 = 1 + al;
+            u->rb0[m] = 0.6 * rm[m].amp * al / a0;
+            u->ra1[m] = -2 * std::cos(w) / a0;
+            u->ra2[m] = (1 - al) / a0;
+        }
+    }
+    const double tinc = 2 * M_PI * clip(P(P_tremrate), 0, 20) / sr;
+    const double tdep = clip(P(P_tremdepth), 0, 1);
+    // one pickup through the resonator
+    auto radiate = [&](int c, double x) {
+        double y = 0;
+        if (u->rtype == 1) {
+            float* t = u->dlt + c * NT;
+            u->rlp[c] = 0.65 * rdl(t, NT, u->wt, u->tlen) + 0.35 * u->rlp[c];
+            const double yt = x - u->tg * u->rlp[c];
+            t[u->wt] = clean(yt);
+            y = yt * u->tnorm;
+        } else {
+            const RadMode* rm = radiatorModes(u->rtype);
+            for (int m = 0; m < RADMODES; ++m) {
+                if (rm[m].amp <= 0) continue;
+                const double ym = u->rb0[m] * (x - u->rx2[c]) - u->ra1[m] * u->ry1[c][m] - u->ra2[m] * u->ry2[c][m];
+                u->ry2[c][m] = u->ry1[c][m]; u->ry1[c][m] = ym;
+                y += ym;
+            }
+            u->rx2[c] = u->rx1[c]; u->rx1[c] = x;
+        }
+        return y;
+    };
+
     // ── samples ─────────────────────────────────────────────────────────────
     float* out0 = OUT(0);
     float* out1 = OUT(1);
@@ -315,7 +383,7 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         u->envf = lvl + (lvl > u->envf ? u->catk : u->crel) * (u->envf - lvl);
 
         // A: waves arriving at the contact (the pitch ramped across the block)
-        const double fa = fa0 * (v[P_freq] / freqBase) * (1 + v[P_tension] * u->enve * 3);
+        const double fa = fa0 * (v[P_freq] / freqBase) * glide(v[P_tension], u->enve);
         const double lt = sr / fa * lfac;
         const double beta = clip(v[P_pos], 0.02, 0.98);
         const double dn = std::max(beta * lt, 3.0);
@@ -343,7 +411,8 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
 
         // strike: a half-sine contact pulse of unit area, armed on the gate's
         // rising edge and fired once the gate settles (at its level)
-        if (g > 0.0001 && u->prevg <= 0.0001) { u->armed = 1; u->armCount = 0; }
+        if (g > 0.0001 && u->prevg <= 0.0001) { u->armed = 1; u->armCount = 0; u->damped = 0; }
+        if (g <= 0.0001 && u->prevg > 0.0001) u->damped = 1;
         u->prevg = g;
         bool fire = false;
         if (u->armed) {
@@ -352,7 +421,7 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
             else { fire = g > 0.0001; u->armed = 0; }
         }
         u->armPrev = g;
-        if (strk > 0 && u->prevStrk <= 0) fire = true;
+        if (strk > 0 && u->prevStrk <= 0) { fire = true; u->damped = 0; }
         u->prevStrk = strk;
         if (fire) {
             u->samp = g > 0.0001 ? g : 1;
@@ -442,6 +511,16 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         if (!std::isfinite(x1) || !std::isfinite(x2) || std::fabs(x1) > 1000 || std::fabs(x2) > 1000) {
             clearState(u);
             x1 = x2 = 0;
+        }
+        if (u->rtype > 0) {
+            // the fan in a vibraphone's tubes: only what the resonator radiates trembles
+            const double am = 1 - tdep * (0.5 - 0.5 * std::cos(u->tph));
+            u->tph += tinc; if (u->tph > 2 * M_PI) u->tph -= 2 * M_PI;
+            const double r1 = radiate(0, x1), r2 = radiate(1, x2);
+            if (u->rtype == 1 && ++u->wt >= NT) u->wt = 0;
+            x1 = x1 * (1 - 0.3 * rmix) + rmix * am * r1 * 1.5;
+            x2 = x2 * (1 - 0.3 * rmix) + rmix * am * r2 * 1.5;
+            if (!std::isfinite(x1) || !std::isfinite(x2)) { clearState(u); x1 = x2 = 0; }
         }
         out0[i] = float(sat(x1));
         out1[i] = float(sat(x2));

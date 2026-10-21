@@ -41,7 +41,8 @@ constexpr double kTilt0 = 0.64;   // the brightness tilt at the default B Bright
     X(split, 0) X(beat, 0) \
     X(material, 0.5) X(excite, 0.5) X(listen, 0.5) X(couple, 0) X(mutual, 0) \
     X(rattle, 0) X(rattleth, 0.3) X(tension, 0) X(cascade, 0) \
-    X(drift, 0) X(driftrate, 0.3) X(freeze, 0)
+    X(drift, 0) X(driftrate, 0.3) X(freeze, 0) \
+    X(damper, 0) X(radiator, 0) X(radmix, 0.5) X(radtune, 0) X(tremrate, 0) X(tremdepth, 0.5)
 
 enum Param {
     P_EXT_IN = 0,
@@ -323,6 +324,36 @@ inline int modeCount(const Body& b) {
     const auto& T = tables();
     return p.f > 1e-6 ? std::max(T.count[p.a], T.count[p.b]) : T.count[p.a];
 }
+
+// Tension: + the pitch rises with the level and falls back as it decays (a
+// drum head, the big opera gong), - it starts low and rises (the small gong)
+inline double glide(double tension, double level) {
+    return tension >= 0 ? 1 + 3 * tension * level : 1 / (1 + 3 * -tension * level);
+}
+
+// The resonator after the pickups: what turns a bare bar into an instrument.
+// 1 Tube: a closed tube under the bar, tuned to the note (odd harmonics), its
+// fan (Tremolo) like a vibraphone's; the others fixed bodies, Res Tune from
+// their own pitch: 2 Gourd (Helmholtz + shell), 3 Box (a guitar-like air and
+// top), 4 Shell (a drum's wooden shell), 5 Cone (a metal horn, Baschet).
+constexpr int NRADIATORS = 6;
+constexpr int RADMODES = 6;
+inline const char* radiatorName(int r) {
+    static const char* n[NRADIATORS] = {"Off", "Tube", "Gourd", "Box", "Shell", "Cone"};
+    return n[std::clamp(r, 0, NRADIATORS - 1)];
+}
+struct RadMode { double ratio, amp, t60; };
+inline double radiatorBase(int r) { static const double b[NRADIATORS] = {0, 0, 180, 110, 240, 350}; return b[std::clamp(r, 0, NRADIATORS - 1)]; }
+inline const RadMode* radiatorModes(int r) {
+    static const RadMode m[NRADIATORS][RADMODES] = {
+        {}, {},
+        {{1, 1, 0.25}, {2.7, 0.5, 0.12}, {4.1, 0.35, 0.08}, {6.3, 0.2, 0.05}, {0, 0, 0}, {0, 0, 0}},
+        {{1, 1, 0.2}, {2.0, 0.8, 0.15}, {3.9, 0.5, 0.1}, {5.5, 0.35, 0.07}, {8.2, 0.2, 0.05}, {0, 0, 0}},
+        {{1, 0.8, 0.08}, {1.6, 0.7, 0.07}, {2.4, 0.5, 0.06}, {3.3, 0.4, 0.05}, {4.4, 0.3, 0.04}, {0, 0, 0}},
+        {{1, 0.6, 0.6}, {2.89, 0.5, 0.5}, {4.95, 0.45, 0.4}, {6.99, 0.4, 0.35}, {9.53, 0.3, 0.3}, {11.97, 0.25, 0.25}}};
+    return m[std::clamp(r, 0, NRADIATORS - 1)];
+}
+constexpr double kTubeT60 = 0.35;
 
 // Doublets: each mode a pair, split by cents (an imperfect round object: warble)
 // and by Hz at the pitch (a twin tuned apart: gamelan ombak), the partner

@@ -31,6 +31,21 @@ cases = models.collect { |m|
 	["bowed_glass_old", 6, [\bfamily, 2, \bshape, 0, \freq, 300, \material, 0.5, \excite, 1, \listen, 1, \strike, 0, \bow, 1, \bowpress, 0.2, \bowspeed, 0.7, \atk, 0.3, \pos, 0.5]],
 	["bowed_bowl_pos", 6, [\bfamily, 2, \bshape, 0.25, \freq, 300, \material, 1, \excite, 1, \listen, 1, \strike, 0, \bow, 1, \bowpress, 0.2, \bowspeed, 0.7, \atk, 0.3, \pos, 0.5]],
 	["bowed_bar_metal", 6, [\bfamily, 1, \bshape, 0, \freq, 300, \material, 1, \excite, 1, \listen, 1, \strike, 0, \bow, 1]],
+	// step 2: glide, damper, resonators (gate released at 1.0 s in the damper cases)
+	["glide_up", 4, [\bfamily, 4, \bshape, 1, \freq, 120, \material, 0.4, \excite, 1, \listen, 1, \tension, 1, \hardness, 0.9]],
+	["glide_down", 4, [\bfamily, 4, \bshape, 1, \freq, 120, \material, 0.4, \excite, 1, \listen, 1, \tension, -1, \hardness, 0.9]],
+	["damper_off", 4, [\bfamily, 2, \bshape, 0.25, \freq, 300, \material, 1, \excite, 1, \listen, 1, \bdecay, 8], 1.0],
+	["damper_on", 4, [\bfamily, 2, \bshape, 0.25, \freq, 300, \material, 1, \excite, 1, \listen, 1, \bdecay, 8, \damper, 1], 1.0],
+	["damper_half", 4, [\bfamily, 2, \bshape, 0.25, \freq, 300, \material, 1, \excite, 1, \listen, 1, \bdecay, 8, \damper, 0.5], 1.0],
+	["res_none", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4]],
+	["res_tube", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \radiator, 1, \radmix, 1]],
+	["res_tube_trem", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \radiator, 1, \radmix, 1, \tremrate, 5, \tremdepth, 1]],
+	["res_gourd", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \radiator, 2, \radmix, 1]],
+	["res_box", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \radiator, 3, \radmix, 1]],
+	["res_shell", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \radiator, 4, \radmix, 1]],
+	["res_cone", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \radiator, 5, \radmix, 1]],
+	["res_tube_low", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \freq, 40, \radiator, 1, \radmix, 1]],
+	["res_tube_high", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \freq, 4000, \radiator, 1, \radmix, 1]],
 	["highnote_gong", 3, [\bfamily, 2, \bshape, 1, \freq, 3000, \material, 1, \excite, 1, \listen, 1, \bdecay, 3, \split, 20, \beat, 20]]
 ];
 if(filter.notNil and: { filter != "all" }) { cases = cases.select { |c| c[0].contains(filter) } };
@@ -48,7 +63,7 @@ run = { |i|
 		score = Score([
 			[0.0, [\s_new, \pbModel, 1000, 0, 0] ++ c[2]],
 			[0.1, [\n_set, 1000, \gate, 0.8]],
-			[c[1] - 0.5, [\n_set, 1000, \gate, 0]],
+			[c[3] ? (c[1] - 0.5), [\n_set, 1000, \gate, 0]],
 			[c[1], [\c_set, 0, 0]]
 		]);
 		score.recordNRT(nil, path, sampleRate: rate, headerFormat: "WAV", sampleFormat: "float",

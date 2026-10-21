@@ -59,7 +59,7 @@ const std::vector<Factory>& factorySounds() {
         {"init", {}},
         {"Struck string", {{"excite", 0}, {"listen", 0}, {"adecay", 3}, {"hardness", 0.6f}}},
         {"Stiff string", {{"excite", 0}, {"listen", 0}, {"astiff", 0.35f}, {"adecay", 5}, {"hardness", 0.75f}, {"abright", 0.8f}, {"mass", 0.4f}}},
-        {"Sitar", {{"excite", 0}, {"listen", 0}, {"adecay", 4}, {"rattle", 0.6f}, {"rattleth", 0.05f}, {"hardness", 0.8f}, {"pos", 0.1f}}},
+        {"Sitar", {{"excite", 0}, {"listen", 0}, {"adecay", 4}, {"rattle", 0.6f}, {"rattleth", 0.05f}, {"hardness", 0.8f}, {"pos", 0.1f}, {"radiator", 2}, {"radmix", 0.6f}}},
         {"Bowed string", {{"strike", 0}, {"bow", 1}, {"excite", 0}, {"listen", 0}, {"adecay", 2}, {"pos", 0.12f}, {"atk", 0.15f}}},
         {"Scratchy bow", {{"strike", 0}, {"bow", 1}, {"excite", 0}, {"listen", 0}, {"adecay", 2}, {"pos", 0.12f}, {"bowpress", 1.1f}, {"rosin", 0.8f}, {"atk", 0.1f}}},
         {"Flute", {{"strike", 0}, {"blow", 1}, {"blowtype", 0}, {"abore", 0.5f}, {"abright", 0.25f}, {"adecay", 0.3f}, {"breath", 0.6f}, {"pos", 0.02f}, {"turb", 0.25f}, {"excite", 0}, {"listen", 0}}},
@@ -67,9 +67,11 @@ const std::vector<Factory>& factorySounds() {
         // Bars (Family 1; Shape: free bar 0, xylophone 0.25, gamelan 0.5, marimba 0.75, kalimba 1)
         {"Wood bar", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0}, {"material", 0}, {"bdecay", 2}, {"hardness", 0.5f}}},
         {"Xylophone", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0.25f}, {"material", 0}, {"bdecay", 3}, {"hardness", 0.85f}}},
-        {"Marimba", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0.75f}, {"material", 0}, {"bdecay", 4}, {"hardness", 0.45f}, {"mass", 0.4f}, {"pos", 0.25f}}},
+        {"Marimba", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0.75f}, {"material", 0}, {"bdecay", 4}, {"hardness", 0.45f}, {"mass", 0.4f}, {"pos", 0.25f}, {"radiator", 1}, {"radmix", 0.8f}}},
+        {"Vibraphone", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0.75f}, {"material", 1}, {"bdecay", 6}, {"hardness", 0.55f}, {"pos", 0.25f}, {"radiator", 1}, {"radmix", 0.8f}, {"tremrate", 5}, {"tremdepth", 0.6f}, {"damper", 0.6f}}},
         {"Gamelan", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0.5f}, {"material", 1}, {"bdecay", 4}, {"hardness", 0.7f}, {"beat", 5}}},
-        {"Kalimba", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 1}, {"material", 1}, {"bdecay", 2.5f}, {"hardness", 0.6f}, {"pos", 0.85f}}},
+        {"Kalimba", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 1}, {"material", 1}, {"bdecay", 2.5f}, {"hardness", 0.6f}, {"pos", 0.85f}, {"radiator", 3}, {"radmix", 0.6f}}},
+        {"Cristal Baschet", {{"strike", 0}, {"bow", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0}, {"material", 0.5f}, {"bdecay", 3}, {"bowpress", 0.25f}, {"bowspeed", 0.6f}, {"atk", 0.25f}, {"radiator", 5}, {"radmix", 0.7f}, {"damper", 0.3f}}},
         {"Bowed metal bar", {{"strike", 0}, {"bow", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0}, {"material", 1}}},
         // Shells & bells (Family 2; Shape: wine glass 0, singing bowl 0.25, hand bell 0.5, church bell 0.75, gong 1)
         {"Wine glass", {{"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0}, {"material", 0.5f}, {"bdecay", 4}, {"hardness", 0.9f}, {"split", 2}}},
@@ -85,10 +87,11 @@ const std::vector<Factory>& factorySounds() {
         {"Handpan", {{"excite", 1}, {"listen", 1}, {"bfamily", 3}, {"bshape", 0}, {"material", 1}, {"bdecay", 4}, {"hardness", 0.35f}, {"mass", 0.5f}, {"split", 6}}},
         {"Steel pan", {{"excite", 1}, {"listen", 1}, {"bfamily", 3}, {"bshape", 1}, {"material", 1}, {"bdecay", 2.5f}, {"hardness", 0.7f}, {"split", 3}}},
         // Membranes (Family 4; Shape: tabla 0, timpani 0.5, membrane 1)
-        {"Tabla", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 0}, {"material", 0.4f}, {"bdecay", 1.5f}, {"hardness", 0.7f}, {"tension", 0.3f}}},
+        {"Tabla", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 0}, {"material", 0.4f}, {"bdecay", 1.5f}, {"hardness", 0.7f}, {"tension", 0.3f}, {"radiator", 4}, {"radmix", 0.4f}}},
         {"Timpani", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 0.5f}, {"material", 0.4f}, {"bdecay", 3}, {"hardness", 0.3f}, {"mass", 0.7f}, {"pos", 0.25f}}},
         {"Tom", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 1}, {"material", 0.4f}, {"tension", 0.8f}, {"bdecay", 1}, {"hardness", 0.4f}}},
-        {"Frame drum", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 1}, {"material", 0.2f}, {"bdecay", 0.8f}, {"hardness", 0.25f}, {"mass", 0.6f}, {"pos", 0.8f}}},
+        {"Frame drum", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 1}, {"material", 0.2f}, {"bdecay", 0.8f}, {"hardness", 0.25f}, {"mass", 0.6f}, {"pos", 0.8f}, {"radiator", 4}, {"radmix", 0.5f}}},
+        {"Opera gong", {{"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 1}, {"material", 1}, {"bdecay", 3}, {"hardness", 0.6f}, {"tension", -0.8f}, {"btune", 12}}},
         // Plates & blocks (Family 5; Shape: plate 0, wood block 1)
         {"Wood block", {{"excite", 1}, {"listen", 1}, {"bfamily", 5}, {"bshape", 1}, {"material", 0}, {"bdecay", 1}, {"hardness", 0.9f}}},
         {"Tam-tam bloom", {{"excite", 1}, {"listen", 1}, {"bfamily", 5}, {"bshape", 0}, {"material", 1}, {"bdecay", 4}, {"cascade", 0.8f}, {"hardness", 0.8f}, {"mass", 0.8f}}},
@@ -162,7 +165,7 @@ void scPhysicalBox::setup() {
     addInput("In");
     addOutput("Out");
     // Auto: a drone until Gate is connected, timelined or gets a note; Pulse: the automatic gates
-    gateMode.set("Gate Mode", 0, 0, 3);
+    gateMode.set("Gate Mode", 2, 0, 3);
     reg(gateMode, [this](){ sendAll(); });
     dropdowns.set(gateMode.getEscapedName(), {"Auto", "Gated", "Drone", "Pulse"});
     {
@@ -228,6 +231,7 @@ void scPhysicalBox::setup() {
     addSound("Attack", "atk", d("atk"), 0.001f, 4, "Contact", "%.3f s", true);
     addSound("Release", "rel", d("rel"), 0.01f, 8, "Contact", "%.2f s", true);
     addSound("Hold", "hold", d("hold"), 0, 1, "Contact", "%.0f", false, true);
+    addSound("Damper", "damper", d("damper"), 0, 1, "Contact");
     addSound("A Tune", "atune", d("atune"), -24, 24, "A", "%+.2f st");
     addSound("A Decay", "adecay", d("adecay"), 0.02f, 20, "A", "%.2f s", true);
     addSound("A Brightness", "abright", d("abright"), 0, 1, "A");
@@ -252,11 +256,21 @@ void scPhysicalBox::setup() {
     addSound("Pickup 2", "pick2", d("pick2"), 0, 1, "Couple");
     addSound("Rattle", "rattle", d("rattle"), 0, 1, "Break");
     addSound("Rattle Threshold", "rattleth", d("rattleth"), 0.01f, 1, "Break", "%.3f", true);
-    addSound("Tension", "tension", d("tension"), 0, 1, "Break");
+    addSound("Tension", "tension", d("tension"), -1, 1, "Break", "%+.2f");
     addSound("Cascade", "cascade", d("cascade"), 0, 1, "Break");
     addSound("Drift", "drift", d("drift"), 0, 1, "Life");
     addSound("Drift Rate", "driftrate", d("driftrate"), 0, 1, "Life");
     addSound("Freeze", "freeze", d("freeze"), 0, 1, "Life");
+    addSound("Resonator", "radiator", d("radiator"), 0, physical::NRADIATORS - 1, "Res", "%.0f", false, true);
+    {
+        std::vector<std::string> names;
+        for(int r = 0; r < physical::NRADIATORS; ++r) names.push_back(physical::radiatorName(r));
+        dropdowns.set(soundParam("radiator").getEscapedName(), names);
+    }
+    addSound("Res Mix", "radmix", d("radmix"), 0, 1, "Res");
+    addSound("Res Tune", "radtune", d("radtune"), -24, 24, "Res", "%+.2f st");
+    addSound("Tremolo", "tremrate", d("tremrate"), 0, 12, "Res", "%.2f Hz");
+    addSound("Trem Depth", "tremdepth", d("tremdepth"), 0, 1, "Res");
     addSound("Level", "level", 0, -40, 12, "Output", "%+.1f dB");
     addSound("Width", "width", 0.5f, 0, 1, "Pan");
     addSound("Spread", "spread", 0.6f, 0, 1, "Pan");
@@ -1166,7 +1180,7 @@ void scPhysicalBox::soundSlider(const std::string& sc, const char* label, float 
     auto* c = sound(sc);
     if(!c) return;
     const std::string key = c->p.getEscapedName();
-    if(sc == "bfamily") {   // a combo; published, an Oceanode dropdown
+    if(dropdowns.has(key)) {   // Family, Resonator: a combo; published, an Oceanode dropdown
         const float z = zoom();
         const auto items = dropdowns.names(key);
         ImGui::PushID(key.c_str());
@@ -1237,10 +1251,15 @@ void scPhysicalBox::drawSoundTab(float w) {
     nextCol();
     sectionHeader("Contact", cw, nullptr, pal::exciter); soundGroup("Contact", cw);
     note("Attack / Release shape the sustained exciters (bow, blow, scrape). Hold keeps them on. "
+         "Damper chokes the ring when the gate is released (a hand, a pedal). "
          "Ext In plays the node's In through the object.");
     ImGui::Spacing();
     sectionHeader("Output", cw); soundGroup("Output", cw);
     note("Where the voices and their two pickups sit: the Panning tab.");
+    ImGui::Spacing();
+    sectionHeader("Resonator", cw, nullptr, pal::body); soundGroup("Res", cw);
+    note("After the pickups: Tube under the bar, tuned to the note (Res Tune from it; Tremolo is a "
+         "vibraphone's fan), or a fixed Gourd, Box, Shell or metal Cone (Res Tune from their own pitch).");
     nextCol();
     labelW = 70;
     sectionHeader("A  Waveguide", cw, nullptr, pal::waveguide); soundGroup("A", cw);
@@ -1252,6 +1271,7 @@ void scPhysicalBox::drawSoundTab(float w) {
     sectionHeader("Material & Coupling", cw); soundGroup("Couple", cw);
     ImGui::Spacing();
     sectionHeader("Break", cw); soundGroup("Break", cw);
+    note("Tension +: the pitch jumps up with the hit and falls back (drums, big gong); -: starts low and rises.");
     ImGui::Spacing();
     sectionHeader("Life", cw); soundGroup("Life", cw);
     ImGui::EndGroup();
