@@ -230,13 +230,32 @@ void scSteamPipeBox::setup() {
         const auto path=bankDir/bank["file"].get<std::string>();
         if(std::filesystem::exists(path)) continue;
         ofJson slots=ofJson::array();
-        const int start=bank["start"],count=bank["count"];
-        for(int i=start;i<start+count;++i) slots.push_back(bundled[i]);
+        for(const auto& index:bank["indices"])
+            slots.push_back(index.is_null() ? ofJson(nullptr) : bundled.at(index.get<size_t>()));
         ofSavePrettyJson(path.string(),ofJson{{"snapshotBank",1},{"active",0},{"slots",slots}});
     }
-    sh.defaultBank="Reaktor SteamPipe 001-128.json";
+    sh.defaultBank="Reaktor SteamPipe 01 - Instrument - Bank 1.json";
     snaps.setup(sh);
-    if(snaps.active<0 && snaps.used[0] && snaps.name(0)=="THRILLER") { snaps.active=0; snaps.snapshotP.setWithoutEventNotifications(1); }
+    // The old importer mixed ensemble and instrument collections in file order.
+    // Keep a complete, recoverable copy of the working library and old banks
+    // before switching an old bundled collection to the instrument's native bank.
+    const std::vector<std::string> legacyBanks={"Reaktor SteamPipe 001-128.json","Reaktor SteamPipe 129-172.json"};
+    std::string storedBank;
+    try { storedBank=ofLoadJson((bankDir.parent_path()/"library.json").string()).value("bank",std::string()); } catch(...) {}
+    if(std::find(legacyBanks.begin(),legacyBanks.end(),storedBank)!=legacyBanks.end()) {
+        try {
+            const auto backup=bankDir.parent_path()/("Legacy bank layout - "+ofGetTimestampString("%Y%m%d-%H%M%S-%i"));
+            std::filesystem::create_directories(backup/"banks");
+            for(const auto& entry:std::filesystem::directory_iterator(bankDir.parent_path()))
+                if(entry.is_regular_file() && (entry.path().filename()=="library.json" || entry.path().filename().string().rfind("snapshot_",0)==0))
+                    std::filesystem::copy_file(entry.path(),backup/entry.path().filename());
+            for(const auto& name:legacyBanks) if(std::filesystem::exists(bankDir/name))
+                std::filesystem::copy_file(bankDir/name,backup/"banks"/name);
+            if(snaps.loadBank((bankDir/sh.defaultBank).string()))
+                for(const auto& name:legacyBanks) std::filesystem::remove(bankDir/name);
+        } catch(const std::exception& e) { ofLogWarning("steampipeBox")<<"Bank layout migration: "<<e.what(); }
+    }
+    if(snaps.active<0 && snaps.used[0] && snaps.name(0)=="Flute") { snaps.active=0; snaps.snapshotP.setWithoutEventNotifications(1); }
     requireSynthdefs();
 }
 

@@ -1,7 +1,7 @@
 # SteamPipeBox
 
 `steampipeBox` is a dedicated Defaults instrument reconstructed from the supplied
-`steampipe_santi.ens` with **Reaktor Patch Extractor**. It starts with **THRILLER**,
+`steampipe_santi.ens` with **Reaktor Patch Extractor**. It starts with **1 Flute**,
 six voices, stereo output and Master 1. Gate, Pitch and Velocity accept vectors,
 audio cables and scheduled timeline notes. Auto/Gated/Drone follows the other boxes.
 
@@ -90,16 +90,26 @@ SteamPipe instrument.
 
 ## Snapshots and regeneration
 
-All **172** snapshot/container names are included, in original order:
+The native **Instrument — Bank 1** is the default, with all 65 original slots:
+**1 Flute**, **2 Pan**, **3 The Pipe**, ... **55 tarrega**. Its sound values are
+unchanged. The 107 extracted ensemble instrument states are in four separate
+banks: **Bank 1**, **select**, **Bank 3**, and **AlgoMus**. Each bank keeps the
+original UUID-based slot numbers; the six AlgoMus containers with no extractable
+panel state remain empty slots rather than invented sounds.
 
-- `Reaktor SteamPipe 001-128.json`: 128 snapshots.
-- `Reaktor SteamPipe 129-172.json`: 44 snapshots.
+The THRILLER names belong to ensemble containers. Their inner instrument state
+retains the name Flute; the first three have identical instrument parameters.
+An ensemble snapshot also stores context such as transport tempo (120 BPM for
+THRILLER). It is not an additional instrument preset. That tempo is retained
+in the audit; playback tempo continues to follow Oceanode transport.
 
-Both banks are bundled under `presets/nodeSnapshots/SteamPipeBox/banks` and seeded
-on first use, without overwriting an existing bank. The first is the default.
-The factory collection uses the manager's usual 128 working slots; load the
-second bank to reach the remaining 44. `factory.json` retains original inner
-names and source bank/slot metadata. `controls.json` records module paths and
+Five banks are bundled under `presets/nodeSnapshots/SteamPipeBox/banks` and seeded
+without overwriting existing files. Upgrading an active old mixed bank backs up
+its working library and both old banks in `Legacy bank layout - <timestamp>`
+before switching to the instrument bank. Factory collection combines the scoped
+collections; use the individual banks for the complete native numbering.
+`factory.json` retains source scope, inner names, native slots and ensemble tempo.
+`controls.json` records module paths and
 ranges; `graph-constants.json` audits every stored DSP constant;
 `reaktor-snapshots.json` preserves every raw state, unresolved records
 and the ensemble SHA-256.

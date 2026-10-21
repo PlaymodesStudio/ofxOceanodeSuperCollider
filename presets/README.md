@@ -44,8 +44,10 @@ and `tools/pulsarbox_presets.py`.
 
 ## SteamPipeBox
 
-All 172 snapshots from `steampipe_santi.ens` are available in
-`Reaktor SteamPipe 001-128` and `Reaktor SteamPipe 129-172`. The first bank is the
-default; the second holds the remaining 44 sounds. Source/container names and
-values are preserved. This is a structural port with approximated NI DSP;
-see `synthdefs/Defaults/SteamPipeBox/README.md`.
+The default **Reaktor SteamPipe 01 - Instrument - Bank 1** preserves the 65
+instrument snapshots and their native numbering, starting with **1 Flute**;
+**tarrega** is **55**. Four separately labelled Ensemble banks hold the other
+107 extracted instrument states. They preserve original bank boundaries and
+UUID slot order, including six unresolved/empty AlgoMus slots. THRILLER is an
+ensemble snapshot name; its inner instrument state is Flute. See
+`synthdefs/Defaults/SteamPipeBox/README.md` for scope and migration details.

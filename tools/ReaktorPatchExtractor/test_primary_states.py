@@ -30,7 +30,7 @@ def core_structure(s):
   if 'inner_structure'in m:core_structure(m['inner_structure'])
 for path in a.ensembles:
  j=extract(path);mods=modules(j);raw=path.read_bytes()
- assert j['parser_revision']=='2026-10-21-primary-state-audit'
+ assert j['parser_revision']=='2026-10-21-snapshot-bank-scope'
  assert j['counts']['connections']==j['counts']['resolved_connections']
  for cell in j['core_cells']:
   assert cell['core_document']['parse_status']=='decoded'

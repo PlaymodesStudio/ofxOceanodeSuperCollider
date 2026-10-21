@@ -245,7 +245,7 @@ struct ParseReport {
         let object: [String: Any] = [
             "source": sourceURL.path,
             "schema": "reaktor-patch-report-v5",
-            "parser_revision": "2026-10-21-primary-state-audit",
+            "parser_revision": "2026-10-21-snapshot-bank-scope",
             "size_bytes": size,
             "nrkt_headers": nrktHeaders.map { String(format: "0x%x", $0) },
             "counts": [
@@ -674,11 +674,33 @@ final class NRKTParser {
         // preset (e.g. TEST-CHANS). Preserve both names and the bank boundary.
         var bankNames: [(offset: Int, name: String)] = []
         var containerNames: [(offset: Int, name: String)] = []
+        var bankSlots: [Int: [Data: Int]] = [:]
+        var entries: [(start: Int, end: Int, uuid: Data)] = []
+        var states: [(start: Int, end: Int, scope: String, tempo: Double?)] = []
         var metadataCursor = 0
         let marker = Data("DSIN".utf8)
         while metadataCursor < data.count,
               let range = data.range(of: marker, in: metadataCursor..<data.count) {
             let base = range.lowerBound
+            // Native container envelopes: their sizes bound the ownership of
+            // nested legacy instrument states. A nearby name is not ownership.
+            if base + 124 <= data.count,
+               let tag = try? u32(base + 4), tag == 101 || tag == 109,
+               let size = try? u32(base + 8), size >= 112,
+               (try? u32(base + 12)) == 0, (try? u32(base + 16)) == 1,
+               data.subdata(in: (base + 20)..<(base + 24)) == Data("hsin".utf8) {
+                let end = base + Int(size) + 12
+                if end <= data.count {
+                    if tag == 101 {
+                        entries.append((base, end, data.subdata(in: (base + 32)..<(base + 48))))
+                    } else if data.subdata(in: (base + 76)..<(base + 80)) == marker,
+                              let scope = try? u32(base + 120), scope <= 1 {
+                        let bpm = scope == 1 ? Double(Float(bitPattern: (try? u32(base + 124)) ?? 0)) : nil
+                        states.append((base, end, scope == 1 ? "ensemble" : "instrument",
+                                       bpm.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }))
+                    }
+                }
+            }
             for delta in [20, 32] {
                 guard base + delta + 4 <= data.count,
                       let length = try? u32(base + delta), length >= 2, length <= 512 else { continue }
@@ -686,7 +708,24 @@ final class NRKTParser {
                 guard end <= data.count,
                       let name = String(data: data[start..<end], encoding: .utf16LittleEndian),
                       name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else { continue }
-                if delta == 20 { bankNames.append((base, name)) }
+                if delta == 20 {
+                    bankNames.append((base, name))
+                    // Bank order is an explicit slot -> UUID table. Chunk order
+                    // and the selected instrument's bank/slot are different.
+                    if end + 12 <= data.count,
+                       (try? u32(end)) == 1, (try? u32(end + 4)) == 1,
+                       let count = try? u32(end + 8), count <= 128,
+                       end + 12 + Int(count) * 20 <= data.count {
+                        var slots: [Data: Int] = [:]
+                        for index in 0..<Int(count) {
+                            let row = end + 12 + index * 20
+                            if let slot = try? u32(row), slot < 128 {
+                                slots[data.subdata(in: (row + 4)..<(row + 20))] = Int(slot)
+                            }
+                        }
+                        bankSlots[base] = slots
+                    }
+                }
                 else { containerNames.append((base, name)) }
             }
             metadataCursor = base + marker.count
@@ -838,8 +877,19 @@ final class NRKTParser {
             if let bank = bankNames.last(where: { $0.offset < offset }) {
                 snapshot["bank_name"] = bank.name
                 snapshot["bank_name_offset"] = "0x" + String(bank.offset, radix: 16)
+                if let entry = entries.last(where: { $0.start < offset && offset < $0.end }),
+                   let slot = bankSlots[bank.offset]?[entry.uuid] {
+                    snapshot["container_bank_slot"] = slot
+                    snapshot["container_uuid"] = entry.uuid.map { String(format: "%02x", $0) }.joined()
+                    snapshot["container_bank_size"] = bankSlots[bank.offset]?.count
+                }
             }
-            if let container = containerNames.last(where: { $0.offset < offset }), offset - container.offset < 4096 {
+            if let state = states.last(where: { $0.start < offset && offset < $0.end }) {
+                snapshot["snapshot_scope"] = state.scope
+                if let bpm = state.tempo { snapshot["ensemble_tempo_bpm"] = bpm }
+            }
+            if let container = containerNames.last(where: { $0.offset < offset }), offset - container.offset < 4096,
+               let entry = entries.last(where: { $0.start < offset && offset < $0.end }), container.offset > entry.start {
                 snapshot["container_name"] = container.name
                 snapshot["container_name_offset"] = "0x" + String(container.offset, radix: 16)
             }

@@ -1,4 +1,4 @@
-# Reaktor Patch Extractor 0.5.3
+# Reaktor Patch Extractor 0.5.4
 
 Aplicació macOS universal (`arm64` i `x86_64`) i executable de terminal per
 inspeccionar qualsevol fitxer binari `NRKT` de Reaktor (`.ism` i `.ens`).
@@ -209,3 +209,12 @@ known corpus, not every possible Reaktor record format.
 The historical `verify_parsers.py` additionally needs the archived Python
 reference parser under `docs/steampipe_extraction/`; it is not included in this
 checkout. The byte-backed native regressions above are the current checks.
+
+### Snapshot bank ownership (0.5.4)
+
+Native DSIN container bounds now distinguish ensemble and instrument snapshot
+scopes. `container_bank_slot` is resolved through the bank UUID table;
+`bank_slot` still describes the nested instrument state's selected snapshot.
+These are different for ensemble snapshots such as THRILLER. Reports include
+`container_uuid`, `container_bank_size`, `snapshot_scope` and original ensemble
+tempo where present. File storage order must not be used as preset numbering.

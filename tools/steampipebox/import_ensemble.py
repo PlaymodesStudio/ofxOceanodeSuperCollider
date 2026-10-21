@@ -21,7 +21,7 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('ensemble',type=pathlib.Path);ap.add_argument('--report',type=pathlib.Path);a=ap.parse_args()
     extractor=ROOT/'tools/ReaktorPatchExtractor/dist/Reaktor Patch Extractor.app/Contents/MacOS/ReaktorPatchExtractor'
     r=json.loads(a.report.read_text() if a.report else subprocess.check_output([str(extractor),str(a.ensemble)],text=True))
-    assert r.get('parser_revision'), 'Stale extractor report: regenerate it with Reaktor Patch Extractor 0.5.3 or later.'
+    assert r.get('parser_revision') == '2026-10-21-snapshot-bank-scope', 'Regenerate the report with Reaktor Patch Extractor 0.5.4: snapshot bank scope and UUID slots are required.'
     modules={}
     def walk(ms):
         for m in ms:modules[m['object_id']]=m;walk(m['children'])
@@ -41,8 +41,16 @@ def main():
         assert modules[mid]['snapshot_control_id']==sid
         controls.append(dict(id=mid,snapshot_id=sid,name=name,sc=sc,group='R66',min=0,max=1,mode='switch',path=modules[mid]['hierarchy_path']))
     for name,sc,lo,hi in [('Mod Wheel','mod_wheel',0,1),('Bend','bend',-24,24)]:controls.append(dict(id=None,name=name,sc=sc,group='Performance',min=lo,max=hi,mode='float'))
+    # Put the instrument's own snapshot banks first. Ensemble snapshots capture
+    # an instrument state plus ensemble settings; their inner name is the last
+    # recalled instrument snapshot, not the ensemble preset's name or number.
+    snapshots = sorted(r['snapshots'], key=lambda s: (
+        0 if s.get('snapshot_scope') == 'instrument' else 1,
+        int(s['bank_name_offset'], 16), s['container_bank_slot']))
     presets=[]
-    for s in r['snapshots']:
+    for s in snapshots:
+        assert s.get('snapshot_scope') in ('instrument', 'ensemble'), s['name']
+
         effective={c['module_object_id']:c for c in s['effective_controls']};raw={p.get('module_object_id'):p for p in s['parameters']};values={}
         for c in controls:
             mid=c['id']
@@ -61,7 +69,7 @@ def main():
                 if mid in [212034,212150]:v=float(v==1) # 1=first input, 2=second
             assert math.isfinite(v) and c['min']-1e-5<=v<=c['max']+1e-5,(s['name'],c,v)
             values[c['name']]=v
-        presets.append(dict(name=s.get('container_name',s['name']),original_name=s['name'],bank=s.get('bank_name','Bank'),bank_index=s.get('bank_index'),bank_slot=s.get('bank_slot'),values=values))
+        presets.append(dict(name=s.get('container_name',s['name']),original_name=s['name'],bank=s.get('bank_name','Bank'),bank_index=s.get('bank_index'),bank_slot=s['container_bank_slot'],scope=s['snapshot_scope'],bank_id=s['bank_name_offset'],bank_size=s['container_bank_size'],selected_instrument_slot=s.get('bank_slot'),ensemble_tempo_bpm=s.get('ensemble_tempo_bpm'),values=values))
     assert len(presets)==172 and len(controls)==65
     dest=ROOT/'synthdefs/Defaults/SteamPipeBox'
     def save(p,j):
@@ -77,12 +85,20 @@ def main():
     ])
     save(dest/'controls.json',controls);save(dest/'factory.json',presets)
     save(dest/'reaktor-snapshots.json',dict(source=a.ensemble.name,sha256=hashlib.sha256(a.ensemble.read_bytes()).hexdigest(),counts=r['counts'],snapshots=[{**{k:v for k,v in snap.items() if k not in ['effective_controls','parameters']},'parameters':[{k:v for k,v in rec.items() if k not in ['hierarchy_path','instance_label','module_type_name']} for rec in snap['parameters']]} for snap in r['snapshots']]))
-    # Split at 128 regardless of duplicate source bank names. Keep source order.
+    # Preserve native bank boundaries and slot numbers, including unused or
+    # unresolved slots. Never split unrelated scopes into arbitrary groups of 128.
+    groups={}
+    for index,p in enumerate(presets):groups.setdefault((p['scope'],p['bank_id']),[]).append((index,p))
     banks=[]
-    for start in range(0,len(presets),128):
-        bank=presets[start:start+128];name=f'Reaktor SteamPipe {start+1:03d}-{start+len(bank):03d}.json';banks.append(dict(file=name,start=start,count=len(bank)))
-        slots=[dict(name=p['name'],**{re.sub(r'[^a-zA-Z0-9]', '_',c['name']):p['values'][c['name']] for c in controls}) for p in bank]
-        # ofParameter::getEscapedName replaces spaces, slash and punctuation with '_'.
+    for number,((scope,_),group) in enumerate(groups.items(),1):
+        title=group[0][1]['bank'];size=group[0][1]['bank_size']
+        name=f'Reaktor SteamPipe {number:02d} - {scope.title()} - {title}.json'
+        indices=[None]*size;slots=[None]*size
+        for index,p in group:
+            slot=p['bank_slot'];assert indices[slot] is None
+            indices[slot]=index
+            slots[slot]=dict(name=p['name'],**{re.sub(r'[^a-zA-Z0-9]', '_',c['name']):p['values'][c['name']] for c in controls})
+        banks.append(dict(file=name,scope=scope,source_bank=title,indices=indices,count=len(group),slot_count=size))
         save(ROOT/'presets/nodeSnapshots/SteamPipeBox/banks'/name,dict(snapshotBank=1,active=0,slots=slots))
     save(dest/'banks.json',banks)
     data='// Generated by tools/steampipebox/import_ensemble.py.\n#pragma once\nnamespace steamPipeBoxData {\n'
