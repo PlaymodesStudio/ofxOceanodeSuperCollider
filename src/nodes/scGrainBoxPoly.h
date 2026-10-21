@@ -65,6 +65,7 @@ public:
     std::string getWindowTitle() override { return "GrainBox " + ofToString(getNumIdentifier()); }
     ofParameter<bool>* getWindowToggle() override { return &showWindow; }
 private:
+    ofParameter<bool> embedSamples;
 public:
     // ── Constants ─────────────────────────────────────────────────────────────
     static constexpr int   MAX_CHANNELS        = 16;

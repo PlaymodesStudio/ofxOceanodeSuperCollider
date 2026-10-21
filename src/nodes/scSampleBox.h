@@ -77,6 +77,7 @@ public:
     std::string getWindowTitle() override { return "SampleBox " + ofToString(getNumIdentifier()); }
     ofParameter<bool>* getWindowToggle() override { return &showWindow; }
 private:
+    ofParameter<bool> embedSamples;
 public:
     static constexpr int MaxChannels = 16;
     static constexpr int MaxVoices = 8;

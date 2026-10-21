@@ -4,6 +4,7 @@
 //
 
 #include "scDataBox.h"
+#include "scSampleEmbedding.h"
 #include "serverManager.h"
 #include "ofxSCServer.h"
 #include "ofxOceanodeShared.h"
@@ -91,6 +92,7 @@ scDataBox::~scDataBox(){
 // ════════════════════════════════════════════════════════════════════════════
 
 void scDataBox::setup(){
+    addInspectorParameter(embedSamples.set("Embed Samples", true));
     addOutput("Out");
 
     addParameter(showWindow.set("Show", false));
@@ -743,4 +745,15 @@ void scDataBox::drawSettings(){
     ImGui::SetNextItemWidth(field);
     if(ImGui::SliderFloat("Fade", &f, 0, 0.5f, "%.2f")) fade = f;
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Fade at the loop point, as a fraction of the window");
+}
+
+void scDataBox::presetSave(ofJson& json) {
+    json["embedSamples"] = embedSamples.get();
+    json["Path"] = embedSamples.get() ? scSampleEmbedding::embed(path.get()) : path.get();
+}
+
+void scDataBox::presetRecallAfterSettingParameters(ofJson& json) {
+    embedSamples = json.value("embedSamples", true);
+    const auto resolved = scSampleEmbedding::resolve(path.get());
+    if(resolved != path.get()) path = resolved;
 }

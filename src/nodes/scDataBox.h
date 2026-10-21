@@ -33,6 +33,7 @@ public:
     std::string getWindowTitle() override { return "DataBox " + ofToString(getNumIdentifier()); }
     ofParameter<bool>* getWindowToggle() override { return &showWindow; }
 private:
+    ofParameter<bool> embedSamples;
 public:
     static constexpr int MAX_HEADS = 64;
     // Upper bound of decoded samples, all data channels together (64 MB of floats)
@@ -46,6 +47,8 @@ public:
     ~scDataBox();
 
     void setup() override;
+    void presetSave(ofJson&) override;
+    void presetRecallAfterSettingParameters(ofJson&) override;
     void update(ofEventArgs&) override;
     void draw(ofEventArgs&) override;
 

@@ -480,7 +480,12 @@ makeSource = { |defName, kind|
             eq = (eq * eqEnabled) + (filtered * (1 - eqEnabled));
             effectiveVol = Select.kr(volLatch > 0.5, [gatedVol, latchedVol]);
             panSig = Balance2.ar(eq[0], eq[1], (latchedPan + globalPanOffset).clip(-1, 1));
-            panSig = panSig * effectiveVol;
+            // A click is one sample long. Interpolating a fresh 0 -> level
+            // control with K2A mutes that sample on the first trigger. Demand
+            // reads the current step level at the trigger, without a ramp.
+            panSig = panSig * if(kind == \click, {
+                Demand.ar(trigAR, 0, Dseq([effectiveVol], inf))
+            }, { effectiveVol });
             panSig
         });
 

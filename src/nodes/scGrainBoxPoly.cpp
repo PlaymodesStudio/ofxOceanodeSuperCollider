@@ -4,6 +4,7 @@
 //
 
 #include "scGrainBoxPoly.h"
+#include "scSampleEmbedding.h"
 #include "scSynthControlBatch.h"
 #include "scEnvelopeCurve.h"
 #include "ofxSuperCollider.h"
@@ -314,6 +315,7 @@ scGrainBoxPoly::~scGrainBoxPoly() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scGrainBoxPoly::setup() {
+    addInspectorParameter(embedSamples.set("Embed Samples", true));
     timeline.setup(this, [this](const std::string& k){ publishEditorParameterToNode(k); },
                    [this](const std::string& k){ unpublishEditorParameterFromNode(k); },
                    [this](){ return publishedEditorParameterKeys; });
@@ -3837,13 +3839,14 @@ void scGrainBoxPoly::drawNodePublishMenuItems(const std::string& key, bool focus
 
 void scGrainBoxPoly::presetSave(ofJson& j) {
     Playhead& p0 = ph0();
-    j["samplePath"]  = mainSample.path;
+    j["embedSamples"] = embedSamples.get();
+    j["samplePath"] = embedSamples.get() ? scSampleEmbedding::embed(mainSample.path) : mainSample.path;
     j["browseDir"]   = browser.getDir();
     // Playheads 2+: sample mode and own sample ("sampleOwn 2", "samplePath 2"...)
     for(auto& ph : playheads) {
         if(ph->index == 0) continue;
         j["sampleOwn"  + ph->sfx] = ph->ownSample;
-        j["samplePath" + ph->sfx] = ph->own.path;
+        j["samplePath" + ph->sfx] = embedSamples.get() ? scSampleEmbedding::embed(ph->own.path) : ph->own.path;
     }
     // Live input, any playhead ("sampleLive", "sampleLive 2"...)
     for(auto& ph : playheads) j["sampleLive" + ph->sfx] = ph->liveInput;
@@ -3974,6 +3977,7 @@ void scGrainBoxPoly::presetHasLoaded() {
 }
 
 void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
+    embedSamples = j.value("embedSamples", true);
     Playhead& p0 = ph0();
 
     // Features newer than the preset: back to their defaults (= today's sound),
@@ -4051,7 +4055,7 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
     }
 
     if(j.contains("samplePath") && !j["samplePath"].get<std::string>().empty())
-        loadSample(j["samplePath"].get<std::string>());
+        loadSample(scSampleEmbedding::resolve(j["samplePath"].get<std::string>()));
     if(j.contains("browseDir") && j["browseDir"].is_string()) {
         std::string d = j["browseDir"].get<std::string>();
         if(std::filesystem::exists(d)) browser.refresh(d);
@@ -4068,7 +4072,7 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
         bool own = false;
         if(j.contains(ownKey) && j[ownKey].is_boolean()) own = j[ownKey].get<bool>();
         std::string path;
-        if(j.contains(pathKey) && j[pathKey].is_string()) path = j[pathKey].get<std::string>();
+        if(j.contains(pathKey) && j[pathKey].is_string()) path = scSampleEmbedding::resolve(j[pathKey].get<std::string>());
         if(own) {
             if(ph->ownSample) {
                 if(!path.empty() && path != ph->own.path) loadSampleInto(ph->own, path);

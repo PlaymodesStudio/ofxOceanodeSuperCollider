@@ -4,6 +4,7 @@
 //
 
 #include "scSlicerBox.h"
+#include "scSampleEmbedding.h"
 #include "scEnvelopeCurve.h"
 #include "serverManager.h"
 #include "ofxSCServer.h"
@@ -318,6 +319,7 @@ scSlicerBox::~scSlicerBox(){
 }
 
 void scSlicerBox::setup(){
+    addInspectorParameter(embedSamples.set("Embed Samples", true));
         timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                        [this](){ return publishedKeys; });
     addParameter(showWindow.set("Show", false));
@@ -1172,7 +1174,9 @@ void scSlicerBox::draw(ofEventArgs&){
 void scSlicerBox::presetSave(ofJson& json){
     json["publishedEditorParameters"] = publishedKeys;
     timeline.save(json, "timelineHiddenEditorParameters");
-    json["file"] = audio.path.empty() ? pendingPath : audio.path;
+    json["embedSamples"] = embedSamples.get();
+    const auto file = audio.path.empty() ? pendingPath : audio.path;
+    json["file"] = embedSamples.get() ? scSampleEmbedding::embed(file) : file;
     json["points"] = points;
     json["browseDir"] = browser.getDir();
     json["seqSlice"] = seqSlice;
@@ -1194,6 +1198,7 @@ void scSlicerBox::presetRecallBeforeSettingParameters(ofJson& json){
 }
 
 void scSlicerBox::presetRecallAfterSettingParameters(ofJson& json){
+    embedSamples = json.value("embedSamples", true);
     for(const auto& action : publishActions){
         if(isPublished(action.key) || !json.contains(action.key) || !action.load) continue;
         action.load(json[action.key]);
@@ -1206,7 +1211,7 @@ void scSlicerBox::presetRecallAfterSettingParameters(ofJson& json){
         } catch(...) {}
     }
     if(json.contains("file") && json["file"].is_string()){
-        const std::string file = json["file"].get<std::string>();
+        const std::string file = scSampleEmbedding::resolve(json["file"].get<std::string>());
         if(!file.empty() && file != audio.path) pendingDroppedFile = file;
         else if(file == audio.path) pointsFromPreset = false;
     }

@@ -4,6 +4,7 @@
 //
 
 #include "scSampleBox.h"
+#include "scSampleEmbedding.h"
 #include "scTypedValue.h"
 #include "scEnvelopeCurve.h"
 #include "scSynthControlBatch.h"
@@ -125,6 +126,7 @@ scSampleBox::~scSampleBox() {
 }
 
 void scSampleBox::setup() {
+    addInspectorParameter(embedSamples.set("Embed Samples", true));
     addSeparator("SampleBox");
     addParameter(showWindow.set("Show", false));
     triggerHandle = addParameter(trigger.set("Trigger/Gate", {0.0f}, {0.0f}, {1.0f}));
@@ -1341,6 +1343,9 @@ void scSampleBox::update(ofEventArgs&) {
 void scSampleBox::presetSave(ofJson& j) {
     ofJson arr = ofJson::array();
     for(int k = 0; k < (int)pads.size(); k++) arr.push_back(padState(k));
+    j["embedSamples"] = embedSamples.get();
+    if(embedSamples.get()) for(auto& pad : arr)
+        pad["path"] = scSampleEmbedding::embed(pad.value("path", std::string()));
     j["sampleBoxPads"] = arr;
     j["sampleBoxSelected"] = selected;
     j["sampleBoxBrowseDir"] = browser.getDir();
@@ -1373,11 +1378,12 @@ void scSampleBox::loadBeforeConnections(ofJson& j) {
 void scSampleBox::presetRecallBeforeSettingParameters(ofJson& j) { loadBeforeConnections(j); }
 
 void scSampleBox::presetRecallAfterSettingParameters(ofJson& j) {
+    embedSamples = j.value("embedSamples", true);
     if(j.contains("sampleBoxPads") && j["sampleBoxPads"].is_array()) {
         const auto& arr = j["sampleBoxPads"];
         for(int k = 0; k < (int)pads.size() && k < (int)arr.size(); k++) {
             applyPadState(k, arr[k]);
-            const std::string path = arr[k].value("path", std::string());
+            const std::string path = scSampleEmbedding::resolve(arr[k].value("path", std::string()));
             if(!path.empty() && path != pads[k]->sample->path) loadSample(*pads[k], path);
         }
     }

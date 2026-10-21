@@ -57,6 +57,7 @@ public:
     std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "SlicerBox " + ofToString(getNumIdentifier()); }
     ofParameter<bool>* getWindowToggle() override { return &showWindow; }
 private:
+    ofParameter<bool> embedSamples;
 public:
     static constexpr int MAX_SLICES = 64;
     static constexpr int OVERVIEW_BINS = 4096;     // waveform peaks of the whole file

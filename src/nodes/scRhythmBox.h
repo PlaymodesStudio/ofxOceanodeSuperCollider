@@ -29,7 +29,13 @@
 #include "imgui.h"
 #include "scSampleBrowser.h"
 #include "scSnapshots.h"
+#include "scTimelineMenu.h"
 #include "scDropdowns.h"
+#include <cctype>
+#include <array>
+#include <memory>
+#include <functional>
+#include <type_traits>
 #include <vector>
 #include <string>
 #include <map>
@@ -386,11 +392,75 @@ private:
     void serializeSlots(ofJson& j) const;
     void deserializeSlots(const ofJson& j);
 
+    scTimelineMenu timeline;
+    std::map<std::string, ofAbstractParameter*> controlValues;
+    std::map<ofxSCServer*, ofxSCBuffer*> silentBuffers;
+    std::vector<ofAbstractParameter*> storedControls;
+    std::vector<std::function<void(ofJson&)>> controlSavers;
+    std::vector<std::string> legacyControlKeys;
+    std::array<std::map<std::string, std::string>, MAX_TRACKS> trackControlKeys;
+    std::vector<std::function<void()>> trackControlPulls;
+    bool trackControlsDirty = false, legacyPublishing = false;
+    void initializeTrackControls();
+    std::vector<ofxSCServer*> activeGraphServers() const;
+    void controlMenuItems(const std::string& key, bool withValue = true);
+    void stepMenu(int ti, const std::string& field, int step);
+    void flushTrackControls();
+    std::vector<std::function<void()>> pendingTrackEdits;
+    void presetHasLoaded() override;
+    void presetRecallBeforeSettingParameters(ofJson& j) override { loadBeforeConnections(j); }
+    std::string trackControlKey(int ti, const std::string& field) const {
+        const auto it = trackControlKeys[ti].find(field);
+        return it == trackControlKeys[ti].end() ? std::string() : it->second;
+    }
+    template<typename Draw> bool windowControl(const std::string& key, Draw draw) {
+        const bool changed = draw();
+        if(!key.empty()) snapMenu(key);
+        return changed;
+    }
+    template<typename T> void registerControl(ofParameter<T>& parameter, bool legacy = true, bool stored = true) {
+        const auto key = parameter.getEscapedName();
+        snapParams[key] = [this, &parameter](){ return addParameter(parameter); };
+        controlValues[key] = &parameter;
+        if(legacy) legacyControlKeys.push_back(key);
+        if(stored) {
+            storedControls.push_back(&parameter);
+            controlSavers.push_back([this, &parameter, key](ofJson& j){
+                if(!snapPublished.count(key)) j[key] = parameter.get();
+            });
+        }
+    }
+    template<typename T, typename Get, typename Set>
+    void bindTrackControl(int ti, const std::string& field, T lo, T hi, Get get, Set set) {
+        auto p = std::make_shared<ofParameter<T>>();
+        std::string label;
+        for(char c : field) {
+            if(!label.empty() && std::isupper(static_cast<unsigned char>(c))) label += ' ';
+            label += label.empty() ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c;
+        }
+        p->set(label + " " + ofToString(ti + 1), ti < numTracks ? get() : T{}, lo, hi);
+        registerControl(*p, false, false);
+        trackControlKeys[ti][field] = p->getEscapedName();
+        nodeListeners.push(p->newListener([this, ti, set, lo, hi](T& value){
+            if(ti >= numTracks) return;
+            T sanitized = value;
+            if constexpr(std::is_same_v<T, std::vector<float>> || std::is_same_v<T, std::vector<int>>) {
+                if(sanitized.size() == 1) sanitized.resize(MAX_STEPS, sanitized.front());
+                for(auto& v : sanitized) v = std::max(lo.front(), std::min(v, hi.front()));
+            }
+            pendingTrackEdits.push_back([this, ti, set, sanitized](){
+                if(ti < numTracks) { set(sanitized); trackControlsDirty = true; }
+            });
+        }));
+        trackControlPulls.push_back([this, ti, p, get](){
+            if(ti < numTracks) p->setWithoutEventNotifications(get());
+        });
+    }
+
     // ── Sample embed helpers (mirrors scBuffer pattern) ───────────────────────
     // Copy all slot samples into <folderRootAbs>/samples/ and rewrite the JSON paths.
     void        embedSamplesIntoJson(ofJson& j, const std::string& folderRootAbs);
     std::string resolveToAbsolutePath(const std::string& inputPath) const;
-    std::string computeDataRelativePath(const std::string& absPath) const;
 
     // ── Waveform display ─────────────────────────────────────────────────────
     // 8192 bins gives ~1px resolution per bin at 16x zoom with a ~512px display.
@@ -456,6 +526,7 @@ private:
     std::vector<scTransportSync::StepClock>  stepClocks;   // [MAX_TRACKS]
     std::vector<int>    syncSpb;        // stepsPerBeat last anchored per track (-1 = unknown)
     std::vector<int>    syncNs;         // numSteps last anchored per track (-1 = unknown)
+    std::map<ofxSCServer*, std::vector<bool>> syncJoined;
     std::vector<double> hardCounters;   // per-track "anchorHard" counter (only increases)
     std::vector<bool>   needHard;       // next anchor for this track must be hard (new synth, geometry change)
     double anchorIdCounter = 0.0;       // "anchorId" counter shared by all tracks (only increases)
