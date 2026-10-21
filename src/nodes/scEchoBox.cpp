@@ -185,6 +185,7 @@ void scEchoBox::setup() {
     // ── Modulation: LFOs (one oscillator per tap), external sources, routing ──
     {
         scModulation::Host h;
+        h.node = this;
         h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
         h.control = [this](const std::string& k) -> ofAbstractParameter* {
             for(auto& c : controls) if(c.key == k) return c.param;
@@ -673,6 +674,7 @@ void scEchoBox::update(ofEventArgs&) {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scEchoBox::presetSave(ofJson& j) {
+    modulation.saveLfoOutputs(j);
     auto& c = j["echoBox"] = ofJson::object();
     for(const auto& control : controls) c[control.key] = control.save();
     modulation.patchBases(c);        // a modulated control: its own value
@@ -685,6 +687,7 @@ void scEchoBox::presetSave(ofJson& j) {
 }
 
 void scEchoBox::loadBeforeConnections(ofJson& j) {
+    modulation.loadLfoOutputs(j);
     if(!j.contains("echoBoxPublished") || !j["echoBoxPublished"].is_array()) return;
     std::vector<std::string> wanted;
     for(const auto& k : j["echoBoxPublished"]) if(k.is_string()) wanted.push_back(k.get<std::string>());

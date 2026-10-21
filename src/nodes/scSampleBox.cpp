@@ -496,6 +496,7 @@ void scSampleBox::setupPad(Pad& p) {
 
     // ── The pad's modulation: envelopes, LFOs, routing to its targets ───────
     scModulation::Host h;
+    h.node = this;
     auto reg = [this, pp](auto& param, std::function<void()> send) {
         using P = std::decay_t<decltype(param)>;
         registerModControl(*pp, param, [this, &param]() { return addParameter(param); },
@@ -570,6 +571,7 @@ void scSampleBox::removePad(int k) {
     if(pads.size() <= 1 || k < 0 || k >= (int)pads.size()) return;
     movePad(k, (int)pads.size() - 1);
     Pad& p = *pads.back();
+    const bool hadLfoOutputs = p.mod.hasLfoOutputs();
     const int idx = p.index;
     std::vector<ofxSCServer*> active;
     for(auto& [srv, s] : p.sc) active.push_back(srv);
@@ -585,6 +587,7 @@ void scSampleBox::removePad(int k) {
     for(auto& [srv, m] : outputBuses) m.erase(idx + 1);
     removeOutput(idx + 1);
     pads.pop_back();
+    if(hadLfoOutputs) parameterGroupChanged.notify(this);
     selected = std::clamp(selected, 0, (int)pads.size() - 1);
     sendChokeMasks();
     sendMutes();
@@ -1330,6 +1333,7 @@ void scSampleBox::update(ofEventArgs&) {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scSampleBox::presetSave(ofJson& j) {
+    for(auto& p : pads) p->mod.saveLfoOutputs(j);
     ofJson arr = ofJson::array();
     for(int k = 0; k < (int)pads.size(); k++) arr.push_back(padState(k));
     j["embedSamples"] = embedSamples.get();
@@ -1354,6 +1358,7 @@ void scSampleBox::loadBeforeConnections(ofJson& j) {
         while((int)pads.size() < n) if(!addPad()) break;
         while((int)pads.size() > n) removePad((int)pads.size() - 1);
     }
+    for(auto& p : pads) p->mod.loadLfoOutputs(j);
     if(!j.contains("sampleBoxPublished") || !j["sampleBoxPublished"].is_array()) return;
     std::vector<std::string> wanted;
     for(const auto& key : j["sampleBoxPublished"])

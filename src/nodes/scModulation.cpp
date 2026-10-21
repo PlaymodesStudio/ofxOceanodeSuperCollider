@@ -4,6 +4,7 @@
 //
 
 #include "scModulation.h"
+#include "ofxOceanodeNodeModel.h"
 #include "scSynthStartup.h"
 #include "scEnvelopeCurve.h"
 #include "../scMorphWave.h"
@@ -599,12 +600,13 @@ void scModulation::updatePhases() {
 void scModulation::update() {
     applyParams();
     const bool forParams = paramsActive() && !liveHook;
-    if(!showing && !forParams){ live.clear(); return; }
-    // the live values 30 times a second while shown (less OSC); every frame
-    // while they move a control
+    if(!showing && !forParams && !hasLfoOutputs()){ live.clear(); return; }
+    // Read at 30 Hz for the editor or published output pins; every frame
+    // while the sources move a control
     const float now = ofGetElapsedTimef();
-    if(now < nextLiveRead && !forParams) return;
+    if(now < nextLiveRead && !forParams){ updateLfoOutputs(); return; }
     nextLiveRead = now + 1.0f / 30.0f;
+    live.clear();
     for(auto& [server, st] : states){
         if(!st.created || !liveControlBus(server, st.srcBlock)) continue;
         live = st.srcBlock->readValues;
@@ -615,6 +617,69 @@ void scModulation::update() {
             if(sourceUsed(s)) server->requestControlValues(st.srcBlock->index + s * busWidth, n());
         break;
     }
+    updateLfoOutputs();
+}
+
+scModulation::~scModulation() {
+    // A removed pad / engine must also release its output pins. The containing
+    // node owns its layout notification and is still alive here.
+    if(host.node) for(int li = 0; li < MAX_LFOS; ++li)
+        if(lfoOutputPins[li]) host.node->removeParameter(lfoOutputs[li].getName());
+}
+
+bool scModulation::hasLfoOutputs() const {
+    for(const auto& pin : lfoOutputPins) if(pin) return true;
+    return false;
+}
+
+bool scModulation::publishLfoOutput(int li, bool publish) {
+    if(!host.node || li < 0 || li >= std::min((int)MAX_LFOS, maxLfos)) return false;
+    auto& pin = lfoOutputPins[li];
+    if(bool(pin) == publish) return false;
+    if(publish){
+        lfoOutputs[li].set("LFO " + ofToString(li + 1) + " Out" + nameSuffix,
+                          std::vector<float>(perVoice ? n() : 1, 0.0f),
+                          std::vector<float>{0.0f}, std::vector<float>{1.0f});
+        pin = host.node->addOutputParameter(lfoOutputs[li],
+            ofxOceanodeParameterFlags_DisableSavePreset | ofxOceanodeParameterFlags_DisableSaveProject);
+        nextLiveRead = 0.0f;
+        updateLfoOutputs();
+    }else{
+        if(pin->hasOutConnections()) return false;
+        host.node->removeParameter(lfoOutputs[li].getName());
+        pin.reset();
+    }
+    host.node->parameterGroupChanged.notify(host.node);
+    return true;
+}
+
+void scModulation::updateLfoOutputs() {
+    for(int li = 0; li < MAX_LFOS; ++li){
+        if(!lfoOutputPins[li]) continue;
+        // Match the top display, including AdditiveBox's per-partial bars.
+        auto values = li < lfoCount && partialBars ? partialBars(li) : std::vector<float>{};
+        if(values.empty()){
+            values.resize(perVoice ? n() : 1, 0.0f);
+            if(li < lfoCount) for(int v = 0; v < (int)values.size(); ++v) values[v] = liveValue(li, v);
+        }
+        for(auto& value : values) value = std::isfinite(value) ? ofClamp(value, 0.0f, 1.0f) : 0.0f;
+        lfoOutputs[li].set(values);
+    }
+}
+
+void scModulation::saveLfoOutputs(ofJson& j) const {
+    auto& list = j["modulationLfoOutputs"][nameSuffix] = ofJson::array();
+    for(int li = 0; li < MAX_LFOS; ++li) if(lfoOutputPins[li]) list.push_back(li);
+}
+
+void scModulation::loadLfoOutputs(const ofJson& j) {
+    std::set<int> wanted;
+    if(j.contains("modulationLfoOutputs") && j["modulationLfoOutputs"].is_object()){
+        const auto& outputs = j["modulationLfoOutputs"];
+        if(outputs.contains(nameSuffix) && outputs[nameSuffix].is_array())
+            for(const auto& li : outputs[nameSuffix]) if(li.is_number_integer()) wanted.insert(li.get<int>());
+    }
+    for(int li = 0; li < std::min((int)MAX_LFOS, maxLfos); ++li) publishLfoOutput(li, wanted.count(li) != 0);
 }
 
 float scModulation::liveValue(int source, int voice) const {
@@ -1203,8 +1268,18 @@ void scModulation::drawLfoCard(int li, float w) {
             for(int v = 0; v < nv && v < (int)lfoPhases[li].size(); v++)
                 dl->AddCircleFilled(ImVec2(a.x + w * ofClamp(lfoPhases[li][v], 0.0f, 1.0f), a.y + 5 * z), 2.0f * z, pal::headerText);
         ImGui::Dummy(ImVec2(w, h));
+        if(host.node && ImGui::BeginPopupContextItem("##lfoOutput")){
+            if(!lfoOutputPins[li]){
+                if(ImGui::MenuItem("Publish LFO output to Node GUI")) publishLfoOutput(li, true);
+            }else if(lfoOutputPins[li]->hasOutConnections()){
+                ImGui::TextDisabled("Disconnect the LFO output to unpublish");
+            }else if(ImGui::MenuItem("Unpublish LFO output from Node GUI")) publishLfoOutput(li, false);
+            ImGui::TextDisabled("0..1 values, updated at the node frame rate");
+            ImGui::EndPopup();
+        }
         if(ImGui::IsItemHovered())
-            ImGui::SetTooltip(perPartial ? "Bars: each partial's value now (voice 1; this LFO runs per partial).\nLine: the shape. Dots: each voice's phase offset"
+            ImGui::SetTooltip("%s\nRight-click to publish the LFO values as a node output.",
+                              perPartial ? "Bars: each partial's value now (voice 1; this LFO runs per partial).\nLine: the shape. Dots: each voice's phase offset"
                               : perVoice ? "Bars: each voice's value now. Line: the shape. Dots: each voice's phase offset"
                                          : "Bar: the value now. Line: the shape");
     }

@@ -426,6 +426,7 @@ void scPolyComb::setup() {
     // ── The shared modulation: LFOs, envelopes, external sources, routing ───
     {
         scModulation::Host h;
+        h.node = this;
         h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
         h.control = [this](const std::string& k) -> ofAbstractParameter* {
             for(auto& c : controls) if(c.key == k) return c.param;
@@ -1307,6 +1308,7 @@ void scPolyComb::sendStageAll(int s) {
 }
 
 void scPolyComb::presetSave(ofJson& j) {
+    modulation.saveLfoOutputs(j);
     auto& c = j["polyComb"] = ofJson::object();
     for(const auto& control : controls) c[control.key] = control.save();
     modulation.patchBases(c);        // a modulated control: its own value
@@ -1321,6 +1323,7 @@ void scPolyComb::presetSave(ofJson& j) {
 }
 
 void scPolyComb::loadBeforeConnections(ofJson& j) {
+    modulation.loadLfoOutputs(j);
     if(!j.contains("polyCombPublished") || !j["polyCombPublished"].is_array()) return;
     std::vector<std::string> wanted;
     for(const auto& k : j["polyCombPublished"]) if(k.is_string()) wanted.push_back(k.get<std::string>());

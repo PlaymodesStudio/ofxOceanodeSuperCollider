@@ -1604,6 +1604,7 @@ bool scGrainBoxPoly::addPlayhead() {
 bool scGrainBoxPoly::removeLastPlayhead() {
     if(playheads.size() <= 1) return false;
     Playhead& ph = *playheads.back();
+    const bool hadLfoOutputs = ph.mod && ph.mod->hasLfoOutputs();
 
     // Unpublish its parameters (removes them from the node, with their connections).
     std::vector<std::string> keys;
@@ -1618,6 +1619,7 @@ bool scGrainBoxPoly::removeLastPlayhead() {
                                          [idx](const GrainHighlight& g) { return g.playhead == idx; }),
                           grainHighlights.end());
     playheads.pop_back();
+    if(hadLfoOutputs) parameterGroupChanged.notify(this);
     activePlayhead = std::min(activePlayhead, (int)playheads.size() - 1);
     initializePublishableEditorParameters();
     sendMixParams();   // a removed solo no longer silences the others
@@ -3824,6 +3826,7 @@ void scGrainBoxPoly::drawNodePublishMenuItems(const std::string& key, bool focus
 //     (incrementally) in presetRecallBeforeSettingParameters.
 
 void scGrainBoxPoly::presetSave(ofJson& j) {
+    for(auto& ph : playheads) ph->mod->saveLfoOutputs(j);
     Playhead& p0 = ph0();
     j["embedSamples"] = embedSamples.get();
     j["samplePath"] = embedSamples.get() ? scSampleEmbedding::embed(mainSample.path) : mainSample.path;
@@ -3903,6 +3906,7 @@ void scGrainBoxPoly::loadBeforeConnections(ofJson& j) {
     int n = 1;
     if(j.contains("numPlayheads") && j["numPlayheads"].is_number()) n = j["numPlayheads"].get<int>();
     setNumPlayheads(n);
+    for(auto& ph : playheads) ph->mod->loadLfoOutputs(j);
 
     legacyAutoPublishedKeys.clear();
     if(j.contains("publishedEditorParameters") && j["publishedEditorParameters"].is_array()) {
@@ -6105,6 +6109,7 @@ void scGrainBoxPoly::setupModulation(Playhead& ph) {
     ph.mod = std::make_unique<scModulation>();
     auto& m = *ph.mod;
     scModulation::Host h;
+    h.node = this;
     // its parameters join the publish registry (initializePublishableEditorParameters);
     // any change only marks the engine's buses to write
     h.regF = [p](ofParameter<float>& q, std::function<void()>) {

@@ -34,9 +34,13 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
+
+class ofxOceanodeNodeModel;
+class ofxOceanodeAbstractParameter;
 
 class scModulation {
 public:
@@ -52,6 +56,7 @@ public:
     struct Target { std::string name; float range; std::string unit; bool unipolar = false; };
     // What the module needs from its node
     struct Host {
+        ofxOceanodeNodeModel* node = nullptr; // optional live LFO output pins
         // registers a parameter in the node's publishable registry; send runs on every change
         std::function<void(ofParameter<float>&, std::function<void()>)> regF;
         std::function<void(ofParameter<int>&, std::function<void()>)> regI;
@@ -67,6 +72,10 @@ public:
     };
 
     scModulation() = default;
+    ~scModulation();
+    void saveLfoOutputs(ofJson& j) const;
+    void loadLfoOutputs(const ofJson& j); // before restoring node connections
+    bool hasLfoOutputs() const;
     // Set before setup: each LFO also gets "across partials" phase controls
     // (Partial Spread, Partial Random), for a node that runs its own copies of
     // the LFOs per partial (AdditiveBox) with lfoTable / lfoRate / lfoPhase
@@ -226,6 +235,10 @@ private:
         int builtVoices = 0;
     };
     Host host;
+    std::array<ofParameter<std::vector<float>>, MAX_LFOS> lfoOutputs;
+    std::array<std::shared_ptr<ofxOceanodeAbstractParameter>, MAX_LFOS> lfoOutputPins{};
+    bool publishLfoOutput(int li, bool publish);
+    void updateLfoOutputs();
     std::vector<Target> targetList;
     bool perVoice = true, velocity = false, random = false;
     std::map<ofxSCServer*, ServerState> states;

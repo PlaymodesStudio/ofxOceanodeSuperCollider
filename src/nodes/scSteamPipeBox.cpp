@@ -172,6 +172,7 @@ void scSteamPipeBox::setup() {
     for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) reg(*p, [](){});
     for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) reg(*p, [](){});
     scModulation::Host h;
+    h.node = this;
     h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
     h.regI = [this](ofParameter<int>& p, std::function<void()> f){ reg(p, f); };
     h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ reg(p, f); };
@@ -182,10 +183,13 @@ void scSteamPipeBox::setup() {
     h.unpublish = [this](const std::string& k){ unpublish(k); };
     h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
     h.voices = [this](){ return voices.get(); };
+    mod.unifiedLfoModels = true; // Same shared LFO models and editor as PolyComb.
     mod.setup(h, {{"Pitch",24,"st"}, {"Tune",48,"st"}, {"Allpass Tune",48,"st"},
         {"Noise Cutoff",48,"st"}, {"Noise Resonance",1,""}, {"Diffusion",1,""},
         {"Push",2,""}, {"Offset",1,""}, {"Feedback RT",60,"st"}, {"HP 0",48,"st"},
         {"LP 0",48,"st"}, {"Mod Wheel",1,""}, {"Amp",1,""}, {"Pan",1,""}}, true, true, true);
+    for(int i=1;i<=scModulation::MAX_LFOS;++i)
+        dropdowns.set("LFO"+ofToString(i)+"_Model", {"Off", "Classic", "Noise", "Random"});
     mod.lfoCount = mod.envCount = mod.extCount = 0;
     const std::map<std::string,int> targets={{"tune",Tune},{"allpass_tune",AllpassTune},
         {"noise_cut",NoiseCut},{"noise_resonance",NoiseRes},{"diffusion",Diffusion},{"push",Push},
@@ -403,9 +407,20 @@ ofJson scSteamPipeBox::capture() const {
 void scSteamPipeBox::apply(const ofJson& a,const ofJson& b,float t,bool sw) {
     restoring=true;
     for(const auto& c:controls) if(!scSnapshots::isOwnKey(c.key)&&!(published.count(c.key)&&published.at(c.key)->hasInConnection())) {
-        const auto& av=a.contains(c.key)?a[c.key]:initial[c.key];
-        const auto& bv=b.contains(c.key)?b[c.key]:initial[c.key];
-        c.load(blend(av,bv,t,sw,c.discrete));
+        // Older SteamPipe snapshots stored Noise / Random Type separately.
+        // Infer the new selector when absent, so recalling them keeps their LFO mode.
+        auto value = [&](const ofJson& state) -> ofJson {
+            if(state.contains(c.key)) return state[c.key];
+            for(int i=1;i<=scModulation::MAX_LFOS;++i) {
+                const auto prefix="LFO"+ofToString(i)+"_";
+                if(c.key==prefix+"Model") {
+                    if(state.value(prefix+"Random_Type",0)>0) return 3;
+                    return state.value(prefix+"Noise",false) ? 2 : 1;
+                }
+            }
+            return initial[c.key];
+        };
+        c.load(blend(value(a),value(b),t,sw,c.discrete));
     }
     const auto& src=sw?b:a;
     if(modSource!=&src || t>=1) { modSource=&src; mod.load(src,"steamPipeMod");mod.afterLoad(); }
@@ -434,6 +449,7 @@ std::vector<ofJson> scSteamPipeBox::factory() const {
     return out;
 }
 void scSteamPipeBox::presetSave(ofJson& j) {
+    mod.saveLfoOutputs(j);
     j["steampipeBox"]=capture();
     // Snapshot controls belong in a patch, but never inside a sound snapshot.
     for(const auto& c:controls) if(scSnapshots::isOwnKey(c.key)) j["steampipeBox"][c.key]=c.save();
@@ -441,6 +457,7 @@ void scSteamPipeBox::presetSave(ofJson& j) {
 
 }
 void scSteamPipeBox::loadBeforeConnections(ofJson& j) {
+    mod.loadLfoOutputs(j);
     std::vector<std::string> wanted;
     if(j.contains("steampipeBoxPublished")&&j["steampipeBoxPublished"].is_array()) for(const auto& k:j["steampipeBoxPublished"]) if(k.is_string()) wanted.push_back(k.get<std::string>());
     const auto old=publishedKeys;for(const auto& k:old) if(std::find(wanted.begin(),wanted.end(),k)==wanted.end()) unpublish(k);

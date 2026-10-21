@@ -308,6 +308,7 @@ void scAdditiveBox::setup(){
     // ── The shared modulation (after the publish actions: it adds its own) ──
     {
         scModulation::Host h;
+        h.node = this;
         h.regF = [this](ofParameter<float>& p, std::function<void()> f){ regMod(p, f); };
         h.regI = [this](ofParameter<int>& p, std::function<void()> f){ regMod(p, f); };
         h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ regMod(p, f); };
@@ -2053,6 +2054,7 @@ void scAdditiveBox::controlMenuItems(const std::string& key, const char* title){
 // ════════════════════════════════════════════════════════════════════════════
 
 void scAdditiveBox::presetSave(ofJson& json){
+    mod.saveLfoOutputs(json);
     json["publishedEditorParameters"] = publishedKeys;
     timeline.save(json, "timelineHiddenEditorParameters");
     json["viewHeight"] = viewHeight;
@@ -2065,6 +2067,7 @@ void scAdditiveBox::presetSave(ofJson& json){
 }
 
 void scAdditiveBox::loadBeforeConnections(ofJson& json){
+    mod.loadLfoOutputs(json);
     if(!json.contains("publishedEditorParameters") || !json["publishedEditorParameters"].is_array()) return;
     try { syncPublished(json["publishedEditorParameters"].get<std::vector<std::string>>()); } catch(...) {}
     timeline.load(json, "timelineHiddenEditorParameters");

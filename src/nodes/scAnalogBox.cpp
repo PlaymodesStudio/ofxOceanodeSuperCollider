@@ -358,6 +358,7 @@ void scAnalogBox::setup() {
     // ── The shared modulation ───────────────────────────────────────────────
     {
         scModulation::Host h;
+        h.node = this;
         h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
         h.regI = [this](ofParameter<int>& p, std::function<void()> f){ reg(p, f); };
         h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ reg(p, f); };
@@ -1117,6 +1118,7 @@ void scAnalogBox::sendStageAll(int s) {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scAnalogBox::presetSave(ofJson& j) {
+    modulation.saveLfoOutputs(j);
     auto& c = j["analogBox"] = ofJson::object();
     for(const auto& control : controls) c[control.key] = control.save();
     modulation.patchBases(c);
@@ -1127,6 +1129,7 @@ void scAnalogBox::presetSave(ofJson& j) {
 }
 
 void scAnalogBox::loadBeforeConnections(ofJson& j) {
+    modulation.loadLfoOutputs(j);
     if(!j.contains("analogBoxPublished") || !j["analogBoxPublished"].is_array()) return;
     std::vector<std::string> wanted;
     for(const auto& k : j["analogBoxPublished"]) if(k.is_string()) wanted.push_back(k.get<std::string>());

@@ -296,6 +296,7 @@ void scPhysicalBox::setup() {
     for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) reg(*p, [](){});
     for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) reg(*p, [](){});
     scModulation::Host h;
+    h.node = this;
     h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
     h.regI = [this](ofParameter<int>& p, std::function<void()> f){ reg(p, f); };
     h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ reg(p, f); };
@@ -783,12 +784,14 @@ std::vector<ofJson> scPhysicalBox::factory() const {
     return out;
 }
 void scPhysicalBox::presetSave(ofJson& j) {
+    mod.saveLfoOutputs(j);
     j["physicalBox"] = capture();
     // Snapshot controls belong in a patch, but never inside a sound snapshot.
     for(const auto& c : controls) if(scSnapshots::isOwnKey(c.key)) j["physicalBox"][c.key] = c.save();
     j["physicalBoxPublished"] = publishedKeys; timeline.save(j, "physicalBoxTimeline");
 }
 void scPhysicalBox::loadBeforeConnections(ofJson& j) {
+    mod.loadLfoOutputs(j);
     std::vector<std::string> wanted;
     if(j.contains("physicalBoxPublished") && j["physicalBoxPublished"].is_array())
         for(const auto& k : j["physicalBoxPublished"]) if(k.is_string()) wanted.push_back(k.get<std::string>());

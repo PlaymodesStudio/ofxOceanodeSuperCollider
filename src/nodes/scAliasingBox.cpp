@@ -178,6 +178,7 @@ void scAliasingBox::setup() {
     for(auto* p : {&snaps.morphP, &snaps.morphTimeP}) reg(*p, [](){});
     for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) reg(*p, [](){});
     scModulation::Host h;
+    h.node = this;
     h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
     h.regI = [this](ofParameter<int>& p, std::function<void()> f){ reg(p, f); };
     h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ reg(p, f); };
@@ -422,6 +423,7 @@ std::vector<ofJson> scAliasingBox::factory() const {
     return out;
 }
 void scAliasingBox::presetSave(ofJson& j) {
+    mod.saveLfoOutputs(j);
     j["aliasingBox"]=capture();
     // Snapshot controls belong in a patch, but never inside a sound snapshot.
     for(const auto& c:controls) if(scSnapshots::isOwnKey(c.key)) j["aliasingBox"][c.key]=c.save();
@@ -429,6 +431,7 @@ void scAliasingBox::presetSave(ofJson& j) {
     j["aliasingBoxDisplay"]={{"mode",tableMode}};
 }
 void scAliasingBox::loadBeforeConnections(ofJson& j) {
+    mod.loadLfoOutputs(j);
     std::vector<std::string> wanted;
     if(j.contains("aliasingBoxPublished")&&j["aliasingBoxPublished"].is_array()) for(const auto& k:j["aliasingBoxPublished"]) if(k.is_string()) wanted.push_back(k.get<std::string>());
     const auto old=publishedKeys;for(const auto& k:old) if(std::find(wanted.begin(),wanted.end(),k)==wanted.end()) unpublish(k);
