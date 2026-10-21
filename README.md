@@ -6,10 +6,13 @@ Addon for interfacing [ofxOceanode](https://github.com/PlaymodesStudio/ofxOceano
 
 Focus the PolyComb, AdditiveBox, SteamPipeBox, PulsarBox, GrainBox, AliasingBox,
 PhysicalBox, SampleBox or AnalogBox editor to play it from the computer keyboard.
-`qwertyuiopasdfghjklñzxcvbnm,.` plays consecutive chromatic semitones, starting
-with **Q = C4 (MIDI 60)**. On keyboards without ñ, use the semicolon key in
-that position. **Up / Down** shifts new notes by one octave; held notes retain
-their original pitch. The current starting octave appears in the editor.
+`zxcvbnm,.` plays white keys starting with **Z = C4 (MIDI 60)**.
+`qwertyuiop` plays white keys one octave higher, starting with **Q = C5**.
+The matching black keys are `s d` (C♯, D♯), `g h j` (F♯, G♯, A♯),
+and `l ñ` (the next C♯, D♯); `a f k` are silent gaps.
+On keyboards without ñ, use the semicolon key in that position.
+**Up / Down** shifts new notes by one octave; held notes retain their original
+pitch. The current starting octave appears in the editor.
 
 Hold several keys for chords, up to the instrument's configured voice count.
 When voices run out, the newest notes take priority. Releasing a key closes

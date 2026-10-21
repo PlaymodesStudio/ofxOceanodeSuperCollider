@@ -22,20 +22,27 @@ public:
         if(ImGui::IsKeyPressed(ImGuiKey_UpArrow, false)) base = std::min(96, base + 12);
         if(ImGui::IsKeyPressed(ImGuiKey_DownArrow, false)) base = std::max(0, base - 12);
 
+        // Piano layout: white keys on the bottom/top rows, matching black
+        // keys between the bottom-row whites. A/F/K are the gaps at B-C/E-F.
         // Semicolon is the physical key occupied by ñ on a Spanish keyboard.
-        static constexpr std::array<ImGuiKey, 29> keys = {{
-            ImGuiKey_Q, ImGuiKey_W, ImGuiKey_E, ImGuiKey_R, ImGuiKey_T,
-            ImGuiKey_Y, ImGuiKey_U, ImGuiKey_I, ImGuiKey_O, ImGuiKey_P,
-            ImGuiKey_A, ImGuiKey_S, ImGuiKey_D, ImGuiKey_F, ImGuiKey_G,
-            ImGuiKey_H, ImGuiKey_J, ImGuiKey_K, ImGuiKey_L, ImGuiKey_Semicolon,
-            ImGuiKey_Z, ImGuiKey_X, ImGuiKey_C, ImGuiKey_V, ImGuiKey_B,
-            ImGuiKey_N, ImGuiKey_M, ImGuiKey_Comma, ImGuiKey_Period
+        struct KeyPitch { ImGuiKey key; int semitones; };
+        static constexpr std::array<KeyPitch, 26> keys = {{
+            {ImGuiKey_Z, 0}, {ImGuiKey_X, 2}, {ImGuiKey_C, 4},
+            {ImGuiKey_V, 5}, {ImGuiKey_B, 7}, {ImGuiKey_N, 9},
+            {ImGuiKey_M, 11}, {ImGuiKey_Comma, 12}, {ImGuiKey_Period, 14},
+            {ImGuiKey_S, 1}, {ImGuiKey_D, 3}, {ImGuiKey_G, 6},
+            {ImGuiKey_H, 8}, {ImGuiKey_J, 10}, {ImGuiKey_L, 13},
+            {ImGuiKey_Semicolon, 15},
+            {ImGuiKey_Q, 12}, {ImGuiKey_W, 14}, {ImGuiKey_E, 16},
+            {ImGuiKey_R, 17}, {ImGuiKey_T, 19}, {ImGuiKey_Y, 21},
+            {ImGuiKey_U, 23}, {ImGuiKey_I, 24}, {ImGuiKey_O, 26},
+            {ImGuiKey_P, 28}
         }};
         held.erase(std::remove_if(held.begin(), held.end(), [](const Note& n){
             return !ImGui::IsKeyDown(n.key);
         }), held.end());
-        for(int i = 0; i < (int)keys.size(); ++i) {
-            if(ImGui::IsKeyPressed(keys[i], false)) held.push_back({keys[i], float(base + i) + pitchOffset});
+        for(const auto& mapping : keys) {
+            if(ImGui::IsKeyPressed(mapping.key, false)) held.push_back({mapping.key, float(base + mapping.semitones) + pitchOffset});
         }
         if(!held.empty() || gates) {
             const bool starting = !gates;
@@ -68,7 +75,7 @@ public:
             if(held.empty()) { gates = nullptr; slots.clear(); }
         }
         ImGui::TextDisabled("Keyboard piano: C%d | Up/Down: octave", base / 12 - 1);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("qwertyuiopasdfghjklñzxcvbnm,. : chromatic notes\nHold keys to play; release to close gates. Chords use the available voices.");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("White keys: zxcvbnm,. (Z = C), qwertyuiop (Q = next C)\nBlack keys: s d   g h j   l ñ (semicolon); a/f/k are gaps\nHold keys to play; release to close gates. Chords use the available voices.");
     }
 
     // Call after the node's draw, even when hidden/collapsed: missed windows
