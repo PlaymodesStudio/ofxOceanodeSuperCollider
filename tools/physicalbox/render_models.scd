@@ -46,6 +46,17 @@ cases = models.collect { |m|
 	["res_cone", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \radiator, 5, \radmix, 1]],
 	["res_tube_low", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \freq, 40, \radiator, 1, \radmix, 1]],
 	["res_tube_high", 4, [\bfamily, 1, \bshape, 0.75, \freq, 220, \material, 0, \excite, 1, \listen, 1, \bdecay, 4, \freq, 4000, \radiator, 1, \radmix, 1]],
+	// step 3: 2-D positions (a drum: radius + angle; a plate: x, y)
+	["drum_centre", 3, [\bfamily, 4, \bshape, 1, \freq, 120, \material, 0.4, \excite, 1, \listen, 1, \bdecay, 2, \hardness, 0.6, \pos, 0.02, \pick1, 0.5, \pick2, 0.5]],
+	["drum_mid", 3, [\bfamily, 4, \bshape, 1, \freq, 120, \material, 0.4, \excite, 1, \listen, 1, \bdecay, 2, \hardness, 0.6, \pos, 0.5, \pick1, 0.5, \pick2, 0.5]],
+	["drum_rim", 3, [\bfamily, 4, \bshape, 1, \freq, 120, \material, 0.4, \excite, 1, \listen, 1, \bdecay, 2, \hardness, 0.6, \pos, 0.92, \pick1, 0.5, \pick2, 0.5]],
+	["drum_angle_same", 3, [\bfamily, 4, \bshape, 1, \freq, 120, \material, 0.4, \excite, 1, \listen, 1, \bdecay, 2, \hardness, 0.6, \pos, 0.6, \posy, 0, \pick1, 0.6, \pick1y, 0, \pick2, 0.6, \pick2y, 0]],
+	["drum_angle_quarter", 3, [\bfamily, 4, \bshape, 1, \freq, 120, \material, 0.4, \excite, 1, \listen, 1, \bdecay, 2, \hardness, 0.6, \pos, 0.6, \posy, 0, \pick1, 0.6, \pick1y, 0.25, \pick2, 0.6, \pick2y, 0.25]],
+	["plate_centre", 3, [\bfamily, 5, \bshape, 0, \freq, 200, \material, 1, \excite, 1, \listen, 1, \bdecay, 3, \pos, 0.5, \posy, 0.5]],
+	["plate_corner", 3, [\bfamily, 5, \bshape, 0, \freq, 200, \material, 1, \excite, 1, \listen, 1, \bdecay, 3, \pos, 0.1, \posy, 0.12]],
+	["tabla_rim", 3, [\bfamily, 4, \bshape, 0, \freq, 220, \material, 0.4, \excite, 1, \listen, 1, \bdecay, 1.5, \hardness, 0.7, \pos, 0.85]],
+	["timpani_075", 3, [\bfamily, 4, \bshape, 0.5, \freq, 100, \material, 0.4, \excite, 1, \listen, 1, \bdecay, 3, \pos, 0.75]],
+	["drum_morph", 3, [\bfamily, 4, \bshape, 0.3, \freq, 150, \material, 0.4, \excite, 1, \listen, 1, \pos, 0.7]],
 	["highnote_gong", 3, [\bfamily, 2, \bshape, 1, \freq, 3000, \material, 1, \excite, 1, \listen, 1, \bdecay, 3, \split, 20, \beat, 20]]
 ];
 if(filter.notNil and: { filter != "all" }) { cases = cases.select { |c| c[0].contains(filter) } };

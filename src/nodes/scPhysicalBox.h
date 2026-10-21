@@ -129,6 +129,7 @@ private:
     void drawDisplay(float);
     void drawPad(ImVec2, float);
     void drawObject(ImVec2, ImVec2);
+    void drawSurface(ImVec2 a, float side, int kind, float presence);
     void drawMeters(ImVec2, ImVec2);
     bool droning() const;
     void sliderInt(ofParameter<int>&, const char*, float);

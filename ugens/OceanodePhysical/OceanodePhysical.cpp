@@ -262,6 +262,11 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         u->my1[j] = u->my2[j] = 0;
         return false;
     };
+    // the contact and pickups on the body (x shared with the waveguide; y: a plate's other side, a drum's angle)
+    Spots spots;
+    spots.cx = clip(P(P_pos), 0, 1); spots.cy = P(P_posy);
+    spots.p1x = clip(P(P_pick1), 0, 1); spots.p1y = P(P_pick1y);
+    spots.p2x = clip(P(P_pick2), 0, 1); spots.p2y = P(P_pick2y);
     int na = 0;
     for (int k = 0; k < mc; ++k) {
         const Mode& m = u->bm[k];
@@ -275,10 +280,11 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         bool onB = on && pairs && setRes(MAXM + k, w * c + bw, damped(m.t60 * kPairDecay), gB);
         if (!onB) { u->my1[MAXM + k] = u->my2[MAXM + k] = 0; u->ma1[MAXM + k] = u->ma2[MAXM + k] = 0; }
         if (on) {
-            u->mpe[k] = std::sin(M_PI * m.q * P(P_pos) + m.ph);
-            u->mp1[k] = std::sin(M_PI * m.q * P(P_pick1) + m.ph) * m.amp;
-            u->mp2[k] = std::sin(M_PI * m.q * P(P_pick2) + m.ph) * m.amp;
-            u->mpc[k] = std::sin(M_PI * m.q * 0.137 + m.ph);
+            const Weights wt = weights(m, spots);
+            u->mpe[k] = wt.e;
+            u->mp1[k] = wt.p1 * m.amp;
+            u->mp2[k] = wt.p2 * m.amp;
+            u->mpc[k] = wt.c;
             u->act[na++] = k;
             if (onB) u->act[na++] = MAXM + k;
         } else {

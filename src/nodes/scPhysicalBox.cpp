@@ -87,9 +87,9 @@ const std::vector<Factory>& factorySounds() {
         {"Handpan", {{"excite", 1}, {"listen", 1}, {"bfamily", 3}, {"bshape", 0}, {"material", 1}, {"bdecay", 4}, {"hardness", 0.35f}, {"mass", 0.5f}, {"split", 6}}},
         {"Steel pan", {{"excite", 1}, {"listen", 1}, {"bfamily", 3}, {"bshape", 1}, {"material", 1}, {"bdecay", 2.5f}, {"hardness", 0.7f}, {"split", 3}}},
         // Membranes (Family 4; Shape: tabla 0, timpani 0.5, membrane 1)
-        {"Tabla", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 0}, {"material", 0.4f}, {"bdecay", 1.5f}, {"hardness", 0.7f}, {"tension", 0.3f}, {"radiator", 4}, {"radmix", 0.4f}}},
-        {"Timpani", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 0.5f}, {"material", 0.4f}, {"bdecay", 3}, {"hardness", 0.3f}, {"mass", 0.7f}, {"pos", 0.25f}}},
-        {"Tom", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 1}, {"material", 0.4f}, {"tension", 0.8f}, {"bdecay", 1}, {"hardness", 0.4f}}},
+        {"Tabla", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 0}, {"material", 0.4f}, {"bdecay", 1.5f}, {"hardness", 0.7f}, {"tension", 0.3f}, {"radiator", 4}, {"radmix", 0.4f}, {"pos", 0.85f}}},
+        {"Timpani", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 0.5f}, {"material", 0.4f}, {"bdecay", 3}, {"hardness", 0.3f}, {"mass", 0.7f}, {"pos", 0.75f}}},
+        {"Tom", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 1}, {"material", 0.4f}, {"tension", 0.8f}, {"bdecay", 1}, {"hardness", 0.4f}, {"pos", 0.5f}}},
         {"Frame drum", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 1}, {"material", 0.2f}, {"bdecay", 0.8f}, {"hardness", 0.25f}, {"mass", 0.6f}, {"pos", 0.8f}, {"radiator", 4}, {"radmix", 0.5f}}},
         {"Opera gong", {{"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 1}, {"material", 1}, {"bdecay", 3}, {"hardness", 0.6f}, {"tension", -0.8f}, {"btune", 12}}},
         // Plates & blocks (Family 5; Shape: plate 0, wood block 1)
@@ -227,6 +227,7 @@ void scPhysicalBox::setup() {
     addSound("Grit", "grit", d("grit"), 0, 1, "Scrape");
     addSound("Chatter", "chatter", d("chatter"), 0, 1, "Scrape");
     addSound("Position", "pos", d("pos"), 0, 1, "Contact");
+    addSound("Position Y", "posy", d("posy"), 0, 1, "Contact");
     addSound("Ext In", "ext", d("ext"), 0, 1, "Contact");
     addSound("Attack", "atk", d("atk"), 0.001f, 4, "Contact", "%.3f s", true);
     addSound("Release", "rel", d("rel"), 0.01f, 8, "Contact", "%.2f s", true);
@@ -254,6 +255,8 @@ void scPhysicalBox::setup() {
     addSound("Mutual", "mutual", d("mutual"), 0, 1, "Couple");
     addSound("Pickup 1", "pick1", d("pick1"), 0, 1, "Couple");
     addSound("Pickup 2", "pick2", d("pick2"), 0, 1, "Couple");
+    addSound("Pickup 1 Y", "pick1y", d("pick1y"), 0, 1, "Couple");
+    addSound("Pickup 2 Y", "pick2y", d("pick2y"), 0, 1, "Couple");
     addSound("Rattle", "rattle", d("rattle"), 0, 1, "Break");
     addSound("Rattle Threshold", "rattleth", d("rattleth"), 0.01f, 1, "Break", "%.3f", true);
     addSound("Tension", "tension", d("tension"), -1, 1, "Break", "%+.2f");
@@ -969,7 +972,11 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
     dl->AddRectFilled(a, b, pal::canvas, 3 * z);
     dl->AddRect(a, b, pal::border, 3 * z);
     const float exc = soundParam("excite").get(), lis = soundParam("listen").get();
-    const float x0 = a.x + 18 * z, x1 = b.x - 18 * z;
+    const float family = soundParam("bfamily").get(), shape = soundParam("bshape").get();
+    // a drum or plate body: its own 2-D view at the right of the waveguide's
+    const int kind2 = physical::bodyKind(family, shape);
+    const float view = kind2 != physical::K_LINE ? size.y * 0.55f - 10 * z : 0;
+    const float x0 = a.x + 18 * z, x1 = b.x - 18 * z - (view > 0 ? view + 18 * z : 0);
     const float rowA = a.y + size.y * 0.27f, ampA = size.y * 0.16f;
     auto& pos = soundParam("pos"); auto& p1 = soundParam("pick1"); auto& p2 = soundParam("pick2");
     const float bore = soundParam("abore").get();
@@ -1013,7 +1020,7 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
     }
     static int dragging = -1;
     ImGui::SetCursorScreenPos(ImVec2(a.x, a.y));
-    ImGui::InvisibleButton("##object", ImVec2(size.x, size.y * 0.55f));
+    ImGui::InvisibleButton("##object", ImVec2(view > 0 ? x1 - a.x + 9 * z : size.x, size.y * 0.55f));
     const auto mouse = ImGui::GetMousePos();
     const float mx = ofClamp((mouse.x - x0) / std::max(1.0f, x1 - x0), 0.0f, 1.0f);
     if(ImGui::IsItemActivated()) {
@@ -1028,10 +1035,10 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
     if(ImGui::IsItemHovered() && dragging < 0)
         ImGui::SetTooltip("Drag the contact (where it is struck, bowed, blown) or a pickup (where it is heard).\n"
                           "Contact %.2f   Pickup 1 %.2f   Pickup 2 %.2f", pos.get(), p1.get(), p2.get());
+    if(view > 0) drawSurface(ImVec2(b.x - 10 * z - view, a.y + 6 * z), view, kind2, std::max(exc, lis));
 
     // the body's modes: log frequency, height = how much the contact and pickups get of them
     const float rowTop = a.y + size.y * 0.58f, rowBottom = b.y - 8 * z;
-    const float family = soundParam("bfamily").get(), shape = soundParam("bshape").get();
     std::string shapeName = std::string(physical::familyName(int(std::lround(family)))) + ": " + shapeLabel(family, shape);
     dl->AddText(ImVec2(a.x + 6 * z, rowTop - 16 * z), mixColor(pal::textDim, pal::body, std::max(exc, lis)), ("B  " + shapeName).c_str());
     const float lo = std::log2(0.4f), hi = std::log2(64.0f);
@@ -1046,14 +1053,19 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
     body.material = soundParam("material").get(); body.bdecay = soundParam("bdecay").get();
     body.freeze = soundParam("freeze").get(); body.bright = soundParam("bbright").get(); body.f0 = fb0;
     const int modes = std::min(std::clamp(int(std::round(soundParam("bmodes").get())), 1, physical::MAXM), physical::modeCount(body));
+    physical::Spots spots;
+    spots.cx = pos.get(); spots.cy = soundParam("posy").get();
+    spots.p1x = p1.get(); spots.p1y = soundParam("pick1y").get();
+    spots.p2x = p2.get(); spots.p2y = soundParam("pick2y").get();
     int hovered = -1; float hoverD = 6 * z;
     std::vector<physical::Mode> ms(modes);
     for(int k = 0; k < modes; ++k) {
         ms[k] = physical::mode(k, body);
         const auto& m = ms[k];
         if(!m.on || m.ratio > 64 || fb0 * m.ratio > 20000) continue;
-        const float e = std::abs(std::sin(PI * m.q * pos.get() + m.ph));
-        const float l = 0.5f * (std::abs(std::sin(PI * m.q * p1.get() + m.ph)) + std::abs(std::sin(PI * m.q * p2.get() + m.ph)));
+        const auto wt = physical::weights(m, spots);
+        const float e = float(std::abs(wt.e));
+        const float l = 0.5f * float(std::abs(wt.p1) + std::abs(wt.p2));
         const float hgt = ofClamp(float(e * l * m.amp), 0.03f, 1.0f);
         const float x = xOf(m.ratio);
         const float ring = ofClamp(std::log10(m.t60 * 10) / 2.5f, 0.0f, 1.0f);   // 0.1 s .. 30 s
@@ -1069,6 +1081,84 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
         ImGui::SetTooltip("The body's modes (log frequency, octave lines): height = how much the contact\n"
                           "and pickups get of each, colour = how long it rings (Material, B Decay).\n"
                           "Split and Beat make each mode a beating pair (warble, gamelan ombak).");
+}
+
+// A drum head (radius and angle) or a plate (x, y) seen from above, with the
+// contact and the pickups on it; drag them. The nodal lines of the lowest
+// modes are drawn faintly, so it shows where a mode cannot be struck or heard.
+void scPhysicalBox::drawSurface(ImVec2 a, float side, int kind, float presence) {
+    const float z = zoom();
+    auto* dl = ImGui::GetWindowDrawList();
+    const bool drum = kind == physical::K_MEMBRANE;
+    const float w = drum ? side : side * 0.618f, h = side;
+    const ImVec2 o(a.x + (side - w) * 0.5f, a.y), c(a.x + side * 0.5f, a.y + side * 0.5f);
+    const float R = side * 0.5f;
+    const ImU32 edge = mixColor(IM_COL32(222, 170, 105, 60), pal::body, presence);
+    struct Spot { ofParameter<float>* x; ofParameter<float>* y; ImU32 color; const char* name; };
+    Spot spots[3] = {{&soundParam("pos"), &soundParam("posy"), pal::exciter, "Contact"},
+                     {&soundParam("pick1"), &soundParam("pick1y"), pal::pickup, "1"},
+                     {&soundParam("pick2"), &soundParam("pick2y"), pal::pickup, "2"}};
+    auto at = [&](float x, float y) {
+        if(drum) { const float t = 2 * PI * y; return ImVec2(c.x + R * x * std::cos(t), c.y - R * x * std::sin(t)); }
+        return ImVec2(o.x + x * w, o.y + y * h);
+    };
+    if(drum) {
+        dl->AddCircleFilled(c, R, IM_COL32(222, 170, 105, 14), 48);
+        dl->AddCircle(c, R, edge, 48, 1.5f * z);
+        // nodal circles of (0,2), (0,3) and diameters of (1,1), (2,1), relative to the contact's angle
+        for(float rr : {2.4048f / 5.5201f, 2.4048f / 8.6537f, 5.5201f / 8.6537f}) dl->AddCircle(c, R * rr, IM_COL32(255, 255, 255, 18), 40, 1 * z);
+        const float ref = spots[0].y->get();
+        for(int m : {1, 2}) for(int i = 0; i < m; ++i) {
+            const float t = 2 * PI * (ref + (0.25f + i * 0.5f) / m);
+            dl->AddLine(ImVec2(c.x - R * std::cos(t), c.y + R * std::sin(t)), ImVec2(c.x + R * std::cos(t), c.y - R * std::sin(t)), IM_COL32(255, 255, 255, 14), 1 * z);
+        }
+    } else {
+        dl->AddRectFilled(o, ImVec2(o.x + w, o.y + h), IM_COL32(222, 170, 105, 14));
+        dl->AddRect(o, ImVec2(o.x + w, o.y + h), edge, 0, 0, 1.5f * z);
+        for(float t : {1 / 3.0f, 0.5f, 2 / 3.0f}) {
+            dl->AddLine(ImVec2(o.x + w * t, o.y), ImVec2(o.x + w * t, o.y + h), IM_COL32(255, 255, 255, 14), 1 * z);
+            dl->AddLine(ImVec2(o.x, o.y + h * t), ImVec2(o.x + w, o.y + h * t), IM_COL32(255, 255, 255, 14), 1 * z);
+        }
+    }
+    for(int i = 0; i < 3; ++i) {
+        const ImVec2 p = at(spots[i].x->get(), spots[i].y->get());
+        if(i == 0) dl->AddTriangleFilled(ImVec2(p.x, p.y - 6 * z), ImVec2(p.x - 5.5f * z, p.y + 4 * z), ImVec2(p.x + 5.5f * z, p.y + 4 * z), pal::exciter);
+        else {
+            dl->AddCircleFilled(p, 4.5f * z, spots[i].color);
+            dl->AddText(ImVec2(p.x + 5 * z, p.y - 14 * z), spots[i].color, spots[i].name);
+        }
+    }
+    static int dragging = -1;
+    ImGui::SetCursorScreenPos(ImVec2(a.x - 6 * z, a.y - 6 * z));
+    ImGui::InvisibleButton("##surface", ImVec2(side + 12 * z, side + 12 * z));
+    const auto mouse = ImGui::GetMousePos();
+    if(ImGui::IsItemActivated()) {
+        float best = 1e9f; dragging = -1;
+        for(int i = 0; i < 3; ++i) {
+            const ImVec2 p = at(spots[i].x->get(), spots[i].y->get());
+            const float d = std::hypot(p.x - mouse.x, p.y - mouse.y);
+            if(d < best) { best = d; dragging = i; }
+        }
+    }
+    if(ImGui::IsItemActive() && dragging >= 0) {
+        auto& sp = spots[dragging];
+        if(drum) {
+            const float dx = mouse.x - c.x, dy = c.y - mouse.y;
+            *sp.x = ofClamp(std::hypot(dx, dy) / R, 0.0f, 1.0f);
+            float t = std::atan2(dy, dx) / (2 * PI);
+            *sp.y = t < 0 ? t + 1 : t;
+        } else {
+            *sp.x = ofClamp((mouse.x - o.x) / w, 0.0f, 1.0f);
+            *sp.y = ofClamp((mouse.y - o.y) / h, 0.0f, 1.0f);
+        }
+    }
+    if(!ImGui::IsItemActive()) dragging = -1;
+    if(ImGui::IsItemHovered() && dragging < 0)
+        ImGui::SetTooltip(drum ? "The drum head from above: drag the contact or a pickup.\n"
+                                 "Centre: only the round modes (a thud); towards the rim: every mode (ringing).\n"
+                                 "A pickup on a mode's nodal diameter (faint lines) does not hear it."
+                               : "The plate from above: drag the contact or a pickup.\n"
+                                 "The centre strikes only the odd-odd modes; near the edges and corners, all of them.");
 }
 
 void scPhysicalBox::drawMeters(ImVec2 a, ImVec2 size) {
@@ -1252,6 +1342,7 @@ void scPhysicalBox::drawSoundTab(float w) {
     sectionHeader("Contact", cw, nullptr, pal::exciter); soundGroup("Contact", cw);
     note("Attack / Release shape the sustained exciters (bow, blow, scrape). Hold keeps them on. "
          "Damper chokes the ring when the gate is released (a hand, a pedal). "
+         "On a drum Position is the radius (centre 0, rim 1) and Y the angle; on a plate X and Y. "
          "Ext In plays the node's In through the object.");
     ImGui::Spacing();
     sectionHeader("Output", cw); soundGroup("Output", cw);

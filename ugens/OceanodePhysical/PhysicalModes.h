@@ -35,7 +35,7 @@ constexpr double kTilt0 = 0.64;   // the brightness tilt at the default B Bright
     X(bow, 0) X(bowpress, 0.5) X(bowspeed, 0.5) X(rosin, 0.2) \
     X(blow, 0) X(breath, 0.75) X(blowtype, 0) X(jetratio, 0.48) X(turb, 0.2) \
     X(scrape, 0) X(scrapespeed, 0.5) X(rough, 0.5) X(grit, 0.3) X(chatter, 0) \
-    X(ext, 0) X(pos, 0.3) X(pick1, 0.2) X(pick2, 0.58) \
+    X(ext, 0) X(pos, 0.3) X(pick1, 0.2) X(pick2, 0.58) X(posy, 0.37) X(pick1y, 0.23) X(pick2y, 0.71) \
     X(atune, 0) X(adecay, 3) X(abright, 0.7) X(abore, 0) X(astiff, 0) \
     X(btune, 0) X(bdecay, 3) X(bfamily, 1) X(bshape, 0) X(bstretch, 0) X(bmodes, 32) X(bbright, 0.6) \
     X(split, 0) X(beat, 0) \
@@ -74,6 +74,25 @@ inline const char* modelName(int m) {
 inline int familyStart(int f) { static const int s[NFAMILIES + 1] = {0, 1, 6, 11, 13, 16, 18}; return s[std::clamp(f, 0, NFAMILIES)]; }
 inline int familySize(int f) { return familyStart(f + 1) - familyStart(f); }
 
+// J_m(x): Bessel's integral over a full period, where the trapezoid rule
+// converges exponentially (no special-function library on macOS)
+inline double besselJ(int m, double x) {
+    constexpr int N = 128;
+    double s = 0;
+    for (int i = 0; i < N; ++i) {
+        const double t = 2 * M_PI * i / N;
+        s += std::cos(m * t - x * std::sin(t));
+    }
+    return s / N;
+}
+
+// How a mode is shaped across the object: 0 along a line (sin(pi q x + ph)),
+// 1 a circular membrane (J_m(j_mn r) cos(m angle)), 2 a rectangular plate
+// (sin(m pi x) sin(n pi y))
+enum Kind { K_LINE, K_MEMBRANE, K_PLATE };
+constexpr int NZ = 96;      // circular modes (m, n) known: j_mn < 26, m < 16
+constexpr int NR = 65;      // their radial shapes, sampled from centre to rim
+
 struct Tables {
     double ratio[NMODELS][MAXM];   // mode frequency / the played pitch
     double amp[NMODELS][MAXM];     // strike amplitude (at the default brightness)
@@ -82,6 +101,12 @@ struct Tables {
     double ph[NMODELS][MAXM];      // spatial phase
     int count[NMODELS];
     double native[NMODELS];        // material the decays were heard on; < 0: none (the law alone)
+    int kind[NMODELS];             // Kind
+    int mi[NMODELS][MAXM], ni[NMODELS][MAXM];   // membrane: mi = zero index; plate: (m, n)
+    // circular modes: j_mn, sorted, with m and the radial shape normalised to a peak of 1
+    double zj[NZ], zr[NZ][NR];
+    int zm[NZ], zn[NZ], nz = 0;
+    int zero(int m, int n) const { for (int i = 0; i < nz; ++i) if (zm[i] == m && zn[i] == n) return i; return 0; }
 
     void computedAmps(int m) { for (int k = 0; k < count[m]; ++k) { amp[m][k] = std::pow(ratio[m][k] / ratio[m][0], -kTilt0); dec[m][k] = 1; } }
     template <int N>
@@ -107,8 +132,33 @@ struct Tables {
 
     Tables() {
         for (int m = 0; m < NMODELS; ++m) {
-            count[m] = MAXM; native[m] = -1;
-            for (int k = 0; k < MAXM; ++k) ratio[m][k] = amp[m][k] = dec[m][k] = q[m][k] = ph[m][k] = 0;
+            count[m] = MAXM; native[m] = -1; kind[m] = K_LINE;
+            for (int k = 0; k < MAXM; ++k) { ratio[m][k] = amp[m][k] = dec[m][k] = q[m][k] = ph[m][k] = 0; mi[m][k] = ni[m][k] = 0; }
+        }
+        // the zeros of J_0 .. J_15 below 26 (scan and bisect), sorted
+        for (int m = 0; m < 16; ++m) {
+            int n = 0;
+            // the first zero lies above m; below it J_m is tiny and the sum only noise
+            double xa = m + 0.5, fa = besselJ(m, xa);
+            for (double xb = xa + 0.05; xb < 26 && nz < NZ; xb += 0.05) {
+                const double fb = besselJ(m, xb);
+                if ((fa > 0) != (fb > 0)) {
+                    double lo = xa, hi = xb, flo = fa;
+                    for (int it = 0; it < 40; ++it) {
+                        const double mid = 0.5 * (lo + hi), fm = besselJ(m, mid);
+                        if ((fm > 0) == (flo > 0)) { lo = mid; flo = fm; } else hi = mid;
+                    }
+                    zj[nz] = 0.5 * (lo + hi); zm[nz] = m; zn[nz] = ++n; ++nz;
+                }
+                xa = xb; fa = fb;
+            }
+        }
+        for (int i = 1; i < nz; ++i)
+            for (int j = i; j > 0 && zj[j] < zj[j - 1]; --j) { std::swap(zj[j], zj[j - 1]); std::swap(zm[j], zm[j - 1]); std::swap(zn[j], zn[j - 1]); }
+        for (int i = 0; i < nz; ++i) {
+            double peak = 0;
+            for (int r = 0; r < NR; ++r) { zr[i][r] = besselJ(zm[i], zj[i] * r / (NR - 1.0)); peak = std::max(peak, std::fabs(zr[i][r])); }
+            for (int r = 0; r < NR; ++r) zr[i][r] /= peak;
         }
         // Harmonic: string / tube
         for (int k = 0; k < MAXM; ++k) ratio[M_HARMONIC][k] = k + 1;
@@ -198,24 +248,23 @@ struct Tables {
             const double a[] = {1, 0.8, 0.5, 0.45, 0.35, 0.3, 0.22, 0.2, 0.18};
             const double d[] = {0.6, 1, 0.8, 0.75, 0.6, 0.55, 0.45, 0.42, 0.4};
             measured(M_TABLA, r, a, d, -1);
+            const int id[9][2] = {{0, 1}, {1, 1}, {2, 1}, {0, 2}, {3, 1}, {1, 2}, {4, 1}, {2, 2}, {0, 3}};
+            for (int k = 0; k < 9; ++k) mi[M_TABLA][k] = zero(id[k][0], id[k][1]);
         }
         {   // timpani: the air-loaded head, (1,1) the pitch, (n,1) near 1 : 1.5 : 2 (Rossing)
             const double r[] = {0.82, 1, 1.5, 1.72, 1.98, 2.27, 2.44, 2.85, 2.89, 3.33};
             const double a[] = {0.5, 1, 0.8, 0.3, 0.6, 0.3, 0.45, 0.2, 0.3, 0.2};
             const double d[] = {0.12, 1, 0.85, 0.2, 0.7, 0.35, 0.6, 0.3, 0.5, 0.4};
             measured(M_TIMPANI, r, a, d, -1);
+            const int id[10][2] = {{0, 1}, {1, 1}, {2, 1}, {0, 2}, {3, 1}, {1, 2}, {4, 1}, {2, 2}, {5, 1}, {6, 1}};
+            for (int k = 0; k < 10; ++k) mi[M_TIMPANI][k] = zero(id[k][0], id[k][1]);
         }
-        {   // ideal membrane: the zeros of the Bessel functions J_m, sorted
-            static const double mem[36] = {2.4048, 3.8317, 5.1356, 5.5201, 6.3802, 7.0156, 7.5883, 8.4172,
-                8.6537, 8.7715, 9.7610, 9.9361, 10.1735, 11.0647, 11.0864, 11.6198, 11.7915, 12.2251,
-                12.3386, 13.0152, 13.3237, 13.3543, 13.5893, 14.3725, 14.4755, 14.7960, 14.8213, 14.9309,
-                15.5898, 15.7002, 16.0378, 16.2235, 16.4706, 16.6983, 17.0038, 17.2412};
-            count[M_MEMBRANE] = 36; native[M_MEMBRANE] = -1;
-            for (int k = 0; k < 36; ++k) ratio[M_MEMBRANE][k] = mem[k] / 2.4048;
+        {   // ideal membrane: every circular mode, by frequency
+            count[M_MEMBRANE] = std::min(MAXM, nz); native[M_MEMBRANE] = -1;
+            for (int k = 0; k < count[M_MEMBRANE]; ++k) { ratio[M_MEMBRANE][k] = zj[k] / zj[0]; mi[M_MEMBRANE][k] = k; }
             computedAmps(M_MEMBRANE);
         }
-        spatial(M_MEMBRANE, 1, 0.5, 0.61);
-        for (int m : {M_TABLA, M_TIMPANI}) spatialByRatio(m, 0.61);
+        for (int m : {M_TABLA, M_TIMPANI, M_MEMBRANE}) kind[m] = K_MEMBRANE;
 
         // Plates & blocks
         {   // plate: lowest MAXM of m^2 + (n * 0.618)^2, m, n = 1..12 (first minimum wins)
@@ -226,12 +275,13 @@ struct Tables {
             for (int k = 0; k < MAXM; ++k) {
                 int best = 0;
                 for (int j = 1; j < c; ++j) if (cand[j] < cand[best]) best = j;
-                ratio[M_PLATE][k] = cand[best]; q[M_PLATE][k] = cm[best]; ph[M_PLATE][k] = 0.9 * cn[best];
+                ratio[M_PLATE][k] = cand[best]; mi[M_PLATE][k] = int(cm[best]); ni[M_PLATE][k] = int(cn[best]);
                 cand[best] = 1e6;
             }
             const double p0 = ratio[M_PLATE][0];
             for (int k = 0; k < MAXM; ++k) ratio[M_PLATE][k] /= p0;
             computedAmps(M_PLATE);
+            kind[M_PLATE] = K_PLATE;
         }
         {   // wood / temple block: the old WoodBlock ratios, TempleBlock spectrum
             const double r[] = {1, 1.47, 2.09, 2.56, 3.39, 4.08, 4.87, 5.62, 6.15, 7.23, 8.17, 9.32};
@@ -277,18 +327,22 @@ struct Body {
     double f0 = 220;   // the body's pitch (freq with B Tune)
 };
 
-// One mode of the body B as the voice computes it (no drift / tension / doublet)
-struct Mode { double ratio = 1, q = 1, ph = 0, t60 = 0.002, amp = 0; bool on = false; };
+// One mode of the body B as the voice computes it (no drift / tension / doublet).
+// Where it is touched and heard: weights(), from the models it blends.
+struct Mode {
+    double ratio = 1, t60 = 0.002, amp = 0; bool on = false;
+    int k = 0, ma = 0, mb = 0; bool aOn = false, bOn = false; double f = 0;
+};
 
 inline Mode modelMode(int m, int k, const Body& b) {
     const auto& T = tables();
     Mode o;
+    o.k = k; o.ma = o.mb = m;
     if (k >= T.count[m]) return o;
-    o.on = true;
+    o.on = o.aOn = true;
     const double st = 1 + 0.25 * b.stretch;
     const double r0 = std::pow(T.ratio[m][0], st);
     o.ratio = std::pow(T.ratio[m][k], st);
-    o.q = T.q[m][k]; o.ph = T.ph[m][k];
     const double bexp = lin(std::clamp(b.bright, 0.0, 1.0), 1.6, 0);
     o.amp = T.amp[m][k] * std::pow(o.ratio / r0, -(bexp - kTilt0));
     const double mat = std::clamp(b.material, 0.0, 1.0);
@@ -311,14 +365,56 @@ inline Mode mode(int k, const Body& b) {
     if (!A.on) { B.amp *= p.f; return B; }
     if (!B.on) { A.amp *= 1 - p.f; return A; }
     Mode o;
-    o.on = true;
+    o.on = true; o.k = k; o.ma = p.a; o.mb = p.b; o.aOn = o.bOn = true; o.f = p.f;
     o.ratio = std::exp(lin(p.f, std::log(A.ratio), std::log(B.ratio)));
-    o.q = lin(p.f, A.q, B.q);
-    o.ph = lin(p.f, A.ph, B.ph);
     o.t60 = std::exp(lin(p.f, std::log(A.t60), std::log(B.t60)));
     o.amp = lin(p.f, A.amp, B.amp);
     return o;
 }
+// Where on the object: x along it (a membrane: the radius, centre 0 .. rim 1),
+// y across it (a membrane: the angle, in turns; a plate: its other side)
+struct Spots { double cx = 0.3, cy = 0.37, p1x = 0.2, p1y = 0.23, p2x = 0.58, p2y = 0.71; };
+struct Weights { double e = 0, p1 = 0, p2 = 0, c = 0; };   // contact, pickups, the coupling point
+
+// mode k of model m at (x, y); a membrane's angle counts from the contact's (ref)
+inline double shapeAt(int m, int k, double x, double y, double ref) {
+    const auto& T = tables();
+    switch (T.kind[m]) {
+        case K_MEMBRANE: {
+            const int z = T.mi[m][k];
+            const double r = std::clamp(x, 0.0, 1.0) * (NR - 1);
+            const int i = std::min(int(r), NR - 2);
+            const double radial = T.zr[z][i] + (r - i) * (T.zr[z][i + 1] - T.zr[z][i]);
+            return radial * std::cos(2 * M_PI * T.zm[z] * (y - ref));
+        }
+        case K_PLATE:
+            return std::sin(M_PI * T.mi[m][k] * x) * std::sin(M_PI * T.ni[m][k] * y);
+        default:
+            return std::sin(M_PI * T.q[m][k] * x + T.ph[m][k]);
+    }
+}
+inline Weights modelWeights(int m, int k, const Spots& s) {
+    Weights w;
+    w.e = shapeAt(m, k, s.cx, s.cy, s.cy);
+    w.p1 = shapeAt(m, k, s.p1x, s.p1y, s.cy);
+    w.p2 = shapeAt(m, k, s.p2x, s.p2y, s.cy);
+    w.c = shapeAt(m, k, 0.137, 0.29, 0.29);   // where the waveguide, cascade and rattle meet the body
+    return w;
+}
+inline Weights weights(const Mode& md, const Spots& s) {
+    if (!md.aOn) return modelWeights(md.mb, md.k, s);
+    const Weights a = modelWeights(md.ma, md.k, s);
+    if (!md.bOn || md.f <= 1e-6) return a;
+    const Weights b = modelWeights(md.mb, md.k, s);
+    return {lin(md.f, a.e, b.e), lin(md.f, a.p1, b.p1), lin(md.f, a.p2, b.p2), lin(md.f, a.c, b.c)};
+}
+// a model shaped in two dimensions (a membrane or plate): Kind, else K_LINE
+inline int bodyKind(double family, double shape) {
+    const Place p = place(family, shape);
+    const auto& T = tables();
+    return T.kind[p.f < 0.5 ? p.a : p.b];
+}
+
 inline int modeCount(const Body& b) {
     const Place p = place(b.family, b.shape);
     const auto& T = tables();
