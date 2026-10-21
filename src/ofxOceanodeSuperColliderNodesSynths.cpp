@@ -23,6 +23,7 @@
 #include "nodes/scAnalogBox.h"
 #include "nodes/scAliasingBox.h"
 #include "nodes/scPhysicalBox.h"
+#include "nodes/scSteamPipeBox.h"
 #include "nodes/scSlicerBox.h"
 
 namespace ofxOceanodeSuperCollider{
@@ -44,6 +45,7 @@ void registerSynthNodes(ofxOceanode &o){
 	o.registerModel<scAnalogBox>("SuperCollider", controller->getServers());
 	o.registerModel<scAliasingBox>("SuperCollider", controller->getServers());
 	o.registerModel<scPhysicalBox>("SuperCollider", controller->getServers());
+	o.registerModel<scSteamPipeBox>("SuperCollider", controller->getServers());
 	o.registerModel<scPolyComb>("SuperCollider", controller->getServers());
 }
 

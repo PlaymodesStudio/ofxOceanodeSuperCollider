@@ -1,0 +1,114 @@
+{
+  "ensemble_sha256": "4d5e7754ddc5bee0f8eb501bff70bc2d2f327eeccc3dfc012ad4ad80a1ea301f",
+  "ugen_sha256": "5812d4dd08b57da36ba56f4ca84fbe7b5f9d2af93ec80f06480c43242ecfe04e",
+  "sample_rate": 48000,
+  "snapshots": 172,
+  "audible": 172,
+  "max_peak": 1.328348159790039,
+  "block_size_peak_differences": {
+    "1": 0.0,
+    "64": 0.0,
+    "256": 0.0
+  },
+  "graphs": [
+    {
+      "voices": 1,
+      "channels": 1,
+      "peak": 0.3221352994441986
+    },
+    {
+      "voices": 6,
+      "channels": 2,
+      "peak": 0.5361753702163696
+    },
+    {
+      "voices": 16,
+      "channels": 16,
+      "peak": 0.7538319826126099
+    }
+  ],
+  "unverified": [
+    "Audio identity against Reaktor",
+    "Live Oceanode editor interactions"
+  ],
+  "audio_cable": {
+    "peak": 0.03206346929073334,
+    "edge_offset_samples": 48,
+    "block_size": 64
+  },
+  "app_build": {
+    "target": "OceanAudio Release",
+    "result": "passed",
+    "existing_build_workaround": "ofxOceanodeMacroMixer.cpp compiled without ARC; its source was unchanged"
+  },
+  "primary_reference": {
+    "source": "installed Reaktor 6.5.0 arm64 engine, isolated DSP primitives",
+    "sample_rate": 48000,
+    "adsr_samples": 60000,
+    "pitches": [
+      36,
+      60,
+      84
+    ],
+    "adsr_max_error": 0,
+    "filter_coefficient_cases": 20,
+    "filter_coefficient_max_error": 0,
+    "full_ensemble_audio_identity": "unverified"
+  },
+  "changes": [
+    "Original linear/exponential ADSR and continuation on retrigger",
+    "Float32 Primary one-pole feedback filters and two-pole excitation filter grid",
+    "Original exponential pitch/time table interpolation",
+    "Linear per-voice distributor and summed voices before original saturator",
+    "Diffuser Delay state delay and float32 interpolation",
+    "Unsmoothed gate/velocity/pitch/native parameter conversion",
+    "Positive manual gate-level changes update the note instead of retaining the first mouse movement velocity",
+    "Original effects receive recalled control batches after startup",
+    "Recovered stored -60 feedback keytrack offset; restores resonant plucked tails",
+    "Removed artificial 0.1 Hz floor from feedback-time conversion",
+    "Fixed newer-record numeric constant extraction and R66 shelf constant"
+  ],
+  "manual_gate_regression": {
+    "notes": 216,
+    "slider_drags": 6,
+    "block_sizes": [
+      1,
+      64,
+      256
+    ],
+    "existing_voices_across_recall": true,
+    "onset_velocity": "exact",
+    "pitch_steps": "passed",
+    "tarrega_and_pvc": "audible",
+    "cause": "K2A control ramps latched a tiny onset velocity; small positive slider levels also persisted without another gate event",
+    "fix": "unsmoothed SteamPipeStep inputs and Primary-style gate events on changed positive manual levels"
+  },
+  "dry_resonance": [
+    {
+      "name": "tarrega",
+      "pitch": 60,
+      "gate_seconds": 0.1,
+      "dry_peak": 0.4978080093860626,
+      "tail_rms_500_700ms": 0.020798958649406306,
+      "tail_rms_1000_1200ms": 0.006145809390519068,
+      "periodicity": 0.9985288551384391,
+      "fundamental_hz": 134.0782122905028
+    },
+    {
+      "name": "coolharp",
+      "pitch": 60,
+      "gate_seconds": 0.1,
+      "dry_peak": 0.5008861422538757,
+      "tail_rms_500_700ms": 0.019549142180374214,
+      "tail_rms_1000_1200ms": 0.005990063344096425,
+      "periodicity": 0.9919155892358137,
+      "fundamental_hz": 134.0782122905028
+    }
+  ],
+  "stored_constant_regression": {
+    "constants_verified": 98,
+    "feedback_keytrack_offset": -60,
+    "r66_damping_shelf_pitch": 112,
+    "source": "binary numeric fields, not editable display labels"
+  }
+}

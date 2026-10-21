@@ -20,3 +20,7 @@ RhythmBoxTrack
 # metadata: their sources are gone, installed builds were moved by hand.)
 PV_Blur
 TimeBlur
+
+# Replaced by the dedicated steampipeBox node, 2026-10-21.
+SteamPipe
+steampipe

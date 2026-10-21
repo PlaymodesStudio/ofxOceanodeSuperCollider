@@ -41,3 +41,11 @@ A file removed from here is removed from apps where it was not changed.
 AdditiveBox and PulsarBox named presets (they lived in `Supercollider/<Node>/Presets`
 until 2026-10-21; the nodes move a user's old ones over on load) are written by `tools/additivebox_demo_presets.py`
 and `tools/pulsarbox_presets.py`.
+
+## SteamPipeBox
+
+All 172 snapshots from `steampipe_santi.ens` are available in
+`Reaktor SteamPipe 001-128` and `Reaktor SteamPipe 129-172`. The first bank is the
+default; the second holds the remaining 44 sounds. Source/container names and
+values are preserved. This is a structural port with approximated NI DSP;
+see `synthdefs/Defaults/SteamPipeBox/README.md`.

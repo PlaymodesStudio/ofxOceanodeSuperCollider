@@ -1,0 +1,129 @@
+// SteamPipe: post-combiner gain/saturation -> tempo delay -> R66.
+// Delay and cross-coupled diffusion loops run per sample, independent of SC block size.
+// NI's Core filter, shelf coefficients and random modulation remain approximations.
+@init
+phase = 0;
+random_state = 12345;
+fb_left = 0; fb_right = 0;
+echo_left = 0; echo_right = 0;
+lp_left = 0; lp_right = 0;
+function hz(p) (440 * pow(2, (p-69)/12););
+function sat(x) local(z) (z=clip(x,-4,4);z*(1-0.125*abs(z)););
+function base(id) (128 + (id<2 ? id*(ceil(srate*8)+4) : 2*(ceil(srate*8)+4)+(id-2)*(ceil(srate*1.5)+4)););
+function capacity(id) (id<2 ? ceil(srate*8)+4 : ceil(srate*1.5)+4;);
+function readDelay(id,d) local(w,size,pos,i,j,f,ofs) (
+    size=capacity(id);ofs=base(id);w=buf[id];
+    pos=w-clip(d,1,size-2);pos<0?pos+=size;
+    i=floor(pos);f=pos-i;j=i+1;j>=size?j=0;
+    buf[ofs+i]+f*(buf[ofs+j]-buf[ofs+i]);
+);
+function writeDelay(id,x) local(w,size,ofs) (
+    size=capacity(id);ofs=base(id);w=buf[id];buf[ofs+w]=x;
+    w+=1;w>=size?w=0;buf[id]=w;
+);
+function delay(id,x,d) local(y) (y=readDelay(id,d);writeDelay(id,x);y;);
+function allpass(id,x,d,g) local(y,v) (
+    y=readDelay(id,d);v=x-g*y;writeDelay(id,v);y+g*v;
+);
+// Stable RBJ shelf pair at the recovered 112 / 60 pitches. NI coefficients
+// are not asserted to be identical. Each biquad has independent stereo state.
+function shelf(x,id,p,gain,high)
+local(a,w,c,s,alpha,beta,b0,b1,b2,a0,a1,a2,y,ofs) (
+    a=pow(10,gain/40);w=6.283185307*min(hz(p),srate*.45)/srate;
+    c=cos(w);s=sin(w);alpha=s*0.70710678;beta=2*sqrt(a)*alpha;
+    high ? (
+        b0=a*((a+1)+(a-1)*c+beta);b1=-2*a*((a-1)+(a+1)*c);b2=a*((a+1)+(a-1)*c-beta);
+        a0=(a+1)-(a-1)*c+beta;a1=2*((a-1)-(a+1)*c);a2=(a+1)-(a-1)*c-beta;
+    ) : (
+        b0=a*((a+1)-(a-1)*c+beta);b1=2*a*((a-1)-(a+1)*c);b2=a*((a+1)-(a-1)*c-beta);
+        a0=(a+1)+(a-1)*c+beta;a1=-2*((a-1)+(a+1)*c);a2=(a+1)+(a-1)*c-beta;
+    );
+    ofs=32+id*4;
+    y=(b0*x+b1*buf[ofs]+b2*buf[ofs+1]-a1*buf[ofs+2]-a2*buf[ofs+3])/a0;
+    buf[ofs+1]=buf[ofs];buf[ofs]=x;buf[ofs+3]=buf[ofs+2];buf[ofs+2]=y;y;
+);
+// Two-pole TPT lowpass, matching the recovered Core P/Q -> LP topology.
+// Q calibration is an approximation until measured against NI's Core cell.
+function lowpass(x,id,f,res)
+local(g,k,a,v1,v2,ofs) (
+    g=tan(3.141592653589793*clip(f,10,srate*.45)/srate);
+    k=2*(1-clip(res,0,.666));a=1/(1+g*(g+k));ofs=64+id*2;
+    v1=(buf[ofs]+g*(x-buf[ofs+1]))*a;
+    v2=buf[ofs+1]+g*v1;
+    buf[ofs]=2*v1-buf[ofs];buf[ofs+1]=2*v2-buf[ofs+1];v2;
+);
+function slowRandom(id)
+local(target,a) (
+    tick ? (
+        random_state=mod(random_state*16807,2147483647);
+        buf[84+id]=random_state/1073741823.5-1;
+    );
+    a=1-exp(-6.283185307*max(.001,_r66_frequency)/srate);
+    buf[80+id]+=a*(buf[84+id]-buf[80+id]);
+    buf[80+id];
+);
+@sample
+gain=pow(10,_gain/20);
+x_left=sat(in0*gain);x_right=sat(in1*gain);
+bpm=max(1,_bpm);
+dl=clip((240/bpm/16)*(_delay_left_steps+_delay_stereo_difference),1/srate,8);
+dr=clip((240/bpm/16)*(_delay_right_steps-_delay_stereo_difference),1/srate,8);
+rt=pow(10,_delay_decay/20)*.001;
+e_left=readDelay(0,dl*srate);e_right=readDelay(1,dr*srate);
+// The original delay uses a resonant Core lowpass in its feedback path.
+cut=clip(hz(_delay_cutoff),10,srate*.45);
+el=lowpass(e_left,0,cut,_delay_resonance);
+er=lowpass(e_right,1,cut,_delay_resonance);
+writeDelay(0,x_left+el*pow(10,-3*dl/max(.001,rt)));
+writeDelay(1,x_right+er*pow(10,-3*dr/max(.001,rt)));
+dmix=clip(_delay_mix,0,.5);
+y_left=x_left*sqrt(1-dmix)+el*sqrt(dmix);
+y_right=x_right*sqrt(1-dmix)+er*sqrt(dmix);
+_delay_bypass>=.5 ? (y_left=x_left;y_right=x_right;);
+// R66 pre-delay and early diffuser: recovered Primary offsets, 65-Size.
+pre=_r66_predelay*.001;
+pl=delay(2,y_left,pre*(1+_r66_spread)*srate);
+pr=delay(3,y_right,pre*(1-_r66_spread)*srate);
+g=clip(.5+_r66_size/240,.0001,.999);
+ep=65-_r66_size;
+el=allpass(4,pl,srate/hz(ep),g);
+el=allpass(5,el,srate/hz(ep-4),g);
+el=allpass(6,el,srate/hz(ep-8),g);
+er=allpass(7,pr,srate/hz(ep-2),g);
+er=allpass(8,er,srate/hz(ep-6),g);
+er=allpass(9,er,srate/hz(ep-10),g);
+a=1-exp(-6.283185307*clip(hz(_r66_lp),5,srate*.45)/srate);
+lp_left+=a*(el-lp_left);lp_right+=a*(er-lp_right);
+tl=shelf(lp_left+fb_right,0,112,-_r66_high_damp,1);
+tl=shelf(tl,1,60,-_r66_low_damp,0);
+tr=shelf(lp_right+fb_left,2,112,-_r66_high_damp,1);
+tr=shelf(tr,3,60,-_r66_low_damp,0);
+// 16-phase source: deterministic phase, independent noise per delay tap.
+phase+=6.283185307*max(0,_r66_frequency)/srate;
+phase>=6.283185307?phase-=6.283185307;
+mod_clock+=400/srate;tick=mod_clock>=1;
+tick ? mod_clock-=1;
+m0=sin(phase)*_r66_spin+slowRandom(0)*_r66_dizzy;
+m1=sin(phase-.7853981633974483)*_r66_spin+slowRandom(1)*_r66_dizzy;
+m2=sin(phase-1.5707963267948966)*_r66_spin+slowRandom(2)*_r66_dizzy;
+m3=sin(phase-2.356194490192345)*_r66_spin+slowRandom(3)*_r66_dizzy;
+late_pitch=30-_r66_size;
+d0=max(1,srate/hz(late_pitch+8)+srate*.001*m0);
+d1=max(1,srate/hz(late_pitch+4)+srate*.001*m1);
+d2=max(1,srate/hz(late_pitch)+srate*.001*m2);
+d3=max(1,srate/hz(late_pitch-7)+srate*.001*m3);
+tll=allpass(10,tl,d0,g);tll=allpass(11,tll,d1,g);tll=allpass(12,tll,d2,g);
+rt_sec=1/max(.001,hz(-_r66_rt));
+fb_left=delay(16,tll,d3)*pow(10,-3*(d3/srate)/rt_sec);
+d0=max(1,srate/hz(late_pitch+10)-srate*.001*m0);
+d1=max(1,srate/hz(late_pitch+6)-srate*.001*m1);
+d2=max(1,srate/hz(late_pitch+2)-srate*.001*m2);
+d3=max(1,srate/hz(late_pitch-5)-srate*.001*m3);
+trr=allpass(13,tr,d0,g);trr=allpass(14,trr,d1,g);trr=allpass(15,trr,d2,g);
+fb_right=delay(17,trr,d3)*pow(10,-3*(d3/srate)/rt_sec);
+pos=clip(_r66_position,0,1);
+wet_left=lp_left*sqrt(1-pos)+tll*sqrt(pos);
+wet_right=lp_right*sqrt(1-pos)+trr*sqrt(pos);
+mix=clip(_r66_mix,0,1);
+out0=_r66_left_on >= .5 ? y_left*sqrt(1-mix)+wet_left*sqrt(mix) : y_left;
+out1=_r66_right_on >= .5 ? y_right*sqrt(1-mix)+wet_right*sqrt(mix) : y_right;

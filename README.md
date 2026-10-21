@@ -549,7 +549,6 @@ Source/
 │   ├── PrayerBell — Tibetan prayer bell model with inharmonic resonances
 │   ├── Rhodes — FM-based Fender Rhodes electric piano emulation
 │   ├── Sitar — Digital waveguide sitar model with dual string planes and gourd resonance
-│   ├── SteamPipe — Dry sample-accurate reconstruction of SteamPipe without reverb or post-delay
 │   ├── SteelDrum — Physical model of a steel drum with resonant modes
 │   ├── StoneModel — Physical model of stone percussion and friction from polished to chaotic
 │   ├── Tabla — Realistic tabla physical modeling synthesizer
@@ -831,7 +830,6 @@ Compatibility/
     ├── softsaturator.scd
     ├── solochannel.scd
     ├── spectralmorph.scd
-    ├── steampipe.scd
     ├── steelDrum.scd
     ├── stereomix.scd
     ├── stereopan13.scd
@@ -856,7 +854,7 @@ Compatibility/
 </details>
 
 <details>
-<summary><b>Defaults</b> (54)</summary>
+<summary><b>Defaults</b> (55)</summary>
 
 ```
 Defaults/
@@ -947,6 +945,8 @@ Defaults/
 │   └── slicerBox.scd
 ├── SpectralFilterBox/
 │   └── spectralFilterBox.scd
+├── SteamPipeBox/
+│   └── steampipeBox.scd
 ├── VelvetReverb/
 │   └── scvelvetreverb.scd
 ├── VST/

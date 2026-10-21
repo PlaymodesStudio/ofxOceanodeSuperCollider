@@ -74,6 +74,9 @@ final class ModuleNode {
     var savedControlRawU32: UInt32?
     var savedControlNormalized: Double?
     var savedControlValue: Double?
+    var axisControlProperties: [[String: Double]]?
+    var savedControlAxes: [Double]?
+    var constantLabel: String?
     var constantValue: String?
     var snapshotControlID: UInt32?
     var constantNumericValue: Double?
@@ -117,9 +120,15 @@ final class ModuleNode {
         if let savedControlRawU32 { result["saved_control_raw_u32"] = savedControlRawU32 }
         if let savedControlNormalized { result["saved_control_normalized"] = savedControlNormalized }
         if let savedControlValue { result["saved_control_value"] = savedControlValue }
+        if let axisControlProperties { result["axis_control_properties"] = axisControlProperties }
+        if let savedControlAxes { result["saved_control_axes"] = savedControlAxes }
+        if let constantLabel { result["constant_label"] = constantLabel }
         if let constantValue { result["constant_value"] = constantValue }
         if let snapshotControlID { result["snapshot_control_id"] = snapshotControlID }
-        if let constantNumericValue { result["constant_numeric_value"] = constantNumericValue }
+        if let constantNumericValue {
+            result["constant_numeric_value"] = constantNumericValue
+            result["constant_value_source"] = "stored_float32"
+        }
         return result
     }
 }
@@ -236,6 +245,7 @@ struct ParseReport {
         let object: [String: Any] = [
             "source": sourceURL.path,
             "schema": "reaktor-patch-report-v5",
+            "parser_revision": "2026-10-21-primary-state-audit",
             "size_bytes": size,
             "nrkt_headers": nrktHeaders.map { String(format: "0x%x", $0) },
             "counts": [
@@ -336,6 +346,7 @@ final class NRKTParser {
     private let inPortMarker = Data([0x5b, 0x07, 0, 0, 0] + Array("KInPort".utf8))
     private let outPortMarker = Data([0x5b, 0x08, 0, 0, 0] + Array("KOutPort".utf8))
     private let catalog = loadBundledCatalog()
+    private var metadataWarnings: [String] = []
 
     init(url: URL) throws {
         sourceURL = url
@@ -421,8 +432,9 @@ final class NRKTParser {
                           let ref = try? u32(module.offset + 0xd2 + shift) else { return false }
                     return ref > 10000 && ref < 1_000_000
                 }
-                let linkShift = module.signature == 0x00228D00 ? (referenceShift ?? 0) : 0
-                if let ref = try? u32(module.offset + 0xd2 + linkShift),
+                let linkShift = referenceShift ?? 0
+                if module.offset + 0xd6 + linkShift <= end,
+                   let ref = try? u32(module.offset + 0xd2 + linkShift),
                    ref > 10000, ref < 1_000_000 {
                     module.snapshotControlID = ref - 10000
                 }
@@ -439,7 +451,7 @@ final class NRKTParser {
                         }
                     }
                 }
-                if module.offset + 0x64 <= end,
+                if module.offset + 0x64 + linkShift <= end,
                    let step = try? f64(module.offset + 0x48 + linkShift),
                    let endpoint1 = try? f32(module.offset + 0x5c + linkShift),
                    let endpoint2 = try? f32(module.offset + 0x60 + linkShift),
@@ -467,15 +479,17 @@ final class NRKTParser {
                         if candidate >= -0.000001 && candidate <= 1.000001 {
                             normalized = min(1.0, max(0.0, candidate))
                         }
-                    } else if module.kind == 22, raw <= 1 {
-                        normalized = Double(raw)
-                    } else if module.kind == 24,
-                              let properties = module.controlProperties,
-                              properties["range_endpoint_1"] == 0,
-                              properties["range_endpoint_2"] == 1 {
-                        // Two-position Primary switches use a small integer
-                        // selection code here (observed as 0, 1 or 2).
-                        normalized = raw == 0 ? 0.0 : 1.0
+                    } else if module.kind == 22 {
+                        // Button image-frame position is float32 (on is often
+                        // 0.5), not an integer or a linear output amplitude.
+                        let value = Double(Float(bitPattern: raw))
+                        if raw <= 1 { normalized = Double(raw) }
+                        else if value == 0.5 || value == 1 { normalized = value }
+                    } else if module.kind == 24 {
+                        // Selection is signed: -1 is a saved sentinel in real
+                        // ensembles. Preserve it instead of producing 4294967295.
+                        let selection = Int32(bitPattern: raw)
+                        if selection >= -1 && selection <= 4096 { normalized = selection <= 0 ? 0 : 1 }
                     }
 
                     if let normalized {
@@ -483,10 +497,25 @@ final class NRKTParser {
                         if let properties = module.controlProperties,
                            let endpoint1 = properties["range_endpoint_1"],
                            let endpoint2 = properties["range_endpoint_2"] {
-                            module.savedControlValue = endpoint1
-                                + normalized * (endpoint2 - endpoint1)
+                            module.savedControlValue = module.kind == 22
+                                ? (normalized >= 0.5 ? endpoint2 : endpoint1)
+                                : endpoint1 + normalized * (endpoint2 - endpoint1)
                         }
                     }
+                }
+                // XY serializes a second axis property/state block. Both axes
+                // are needed when a snapshot isolates the panel's saved state.
+                if module.kind == 25, let xProperties = module.controlProperties,
+                   module.offset + 0x214 + linkShift <= end,
+                   let x = try? f32(module.offset + 0x112 + linkShift),
+                   let y = try? f32(module.offset + 0x210 + linkShift),
+                   let y1 = try? f32(module.offset + 0x15a + linkShift),
+                   let y2 = try? f32(module.offset + 0x15e + linkShift),
+                   x.isFinite, y.isFinite, x >= 0, x <= 1, y >= 0, y <= 1,
+                   y1.isFinite, y2.isFinite, abs(y1) < 1e12, abs(y2) < 1e12 {
+                    module.axisControlProperties = [xProperties,
+                        ["range_endpoint_1": Double(y1), "range_endpoint_2": Double(y2)]]
+                    module.savedControlAxes = [Double(x), Double(y)]
                 }
             } else if module.kind == 50 {
                 // Primary Note Pitch stores its Transpose property directly
@@ -503,16 +532,20 @@ final class NRKTParser {
             } else if module.kind == 100 {
                 // The displayed label can be renamed independently (the line
                 // table's constants are labelled 0 but store 2 and -1).
-                if module.signature == 0x00228D00,
+                // SteamPipe's newer 0x0022F300 records use the same field:
+                // its feedback key-track constant is labelled 0 but is -60.
+                if (module.signature == 0x00228D00 || module.signature == 0x0022F300),
+                   module.offset + 0x48 <= end,
                    let value = try? f32(module.offset + 0x44), value.isFinite {
                     module.constantNumericValue = Double(value)
                 }
+                // Keep the editable label as annotation only. Never present
+                // a label as a decoded value for an unknown/non-finite record.
+                module.constantLabel = strings.first { $0.0 >= module.offset + 0x80 && Double($0.1) != nil }?.1
                 if let value = module.constantNumericValue {
                     module.constantValue = String(value)
                 } else {
-                    for (offset, value) in strings where offset >= module.offset + 0x80 {
-                        if Double(value) != nil { module.constantValue = value; break }
-                    }
+                    metadataWarnings.append("Unresolved numeric Constant #\(module.objectID) at 0x\(String(module.offset, radix: 16)); display label was not used as DSP data")
                 }
             }
         }
@@ -717,7 +750,9 @@ final class NRKTParser {
                         record["value"] = Int32(bitPattern: rawValue)
                     } else if typeCode == 2 {
                         record["value_type"] = "normalized_float"
-                        record["value"] = Double(Float(bitPattern: rawValue))
+                        let value = Double(Float(bitPattern: rawValue))
+                        if value.isFinite { record["value"] = value }
+                        else { record["decode_status"] = "non_finite_value" }
                     } else {
                         record["value_type"] = "unknown"
                     }
@@ -818,7 +853,13 @@ final class NRKTParser {
                 if !useStable { snapshot["object_id_offset"] = bestOffset }
 
                 var overrides: [UInt32: Double] = [:]
+                var compound: [UInt32: [UInt32]] = [:]
+                var invalidOverrides = Set<UInt32>()
                 for parameter in parameters {
+                    if let id = parameter["module_object_id"] as? UInt32,
+                       parameter["decode_status"] as? String == "non_finite_value" { invalidOverrides.insert(id) }
+                    if let id = parameter["module_object_id"] as? UInt32,
+                       let words = parameter["payload_words"] as? [UInt32] { compound[id] = words }
                     guard let objectID = parameter["module_object_id"] as? UInt32,
                           let value = numericValue(parameter["value"]) else { continue }
                     overrides[objectID] = value
@@ -826,9 +867,43 @@ final class NRKTParser {
 
                 var effectiveControls: [[String: Any]] = []
                 for module in modules {
+                    if module.kind == 25, var axes = module.savedControlAxes,
+                       let properties = module.axisControlProperties {
+                        var source = "module_saved_state"
+                        var status = "resolved"
+                        if let words = compound[module.objectID] {
+                            if words.count == 19, words[0] == 9, words[1] == 2,
+                               words[10] == 9, words[11] == 2 {
+                                let values = [Double(Float(bitPattern: words[8])), Double(Float(bitPattern: words[18]))]
+                                if values.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 1 }) {
+                                    axes = values; source = "snapshot_override"
+                                } else { status = "unresolved_compound_state" }
+                            } else if words.count == 15, words[6] == 0, words[14] == 0 {
+                                source = "module_saved_state_snapshot_isolated"
+                            } else { status = "unresolved_compound_state" }
+                        }
+                        var control: [String: Any] = ["module_object_id": module.objectID,
+                            "module_kind": module.kind, "module_type_name": "XY", "decode_status": status]
+                        if status == "resolved" {
+                            control["axes"] = (0..<2).map { axis -> [String: Any] in
+                                let p = properties[axis]
+                                return ["axis": axis == 0 ? "x" : "y", "normalized_value": axes[axis],
+                                    "source": source, "control_properties": p,
+                                    "value": p["range_endpoint_1"]! + axes[axis] * (p["range_endpoint_2"]! - p["range_endpoint_1"]!)]
+                            }
+                        }
+                        if let value = module.hierarchyPath { control["hierarchy_path"] = value }
+                        effectiveControls.append(control)
+                        continue
+                    }
+                    if invalidOverrides.contains(module.objectID) {
+                        effectiveControls.append(["module_object_id": module.objectID, "module_kind": module.kind,
+                            "decode_status": "unresolved_snapshot_override", "source": "snapshot_override"])
+                        continue
+                    }
                     guard var normalized = module.savedControlNormalized else { continue }
                     var source = "module_saved_state"
-                    var selection: Double? = module.kind == 24 ? module.savedControlRawU32.map { Double($0) } : nil
+                    var selection: Double? = module.kind == 24 ? module.savedControlRawU32.map { Double(Int32(bitPattern: $0)) } : nil
                     if let override = overrides[module.objectID] {
                         if module.kind == 24 { selection = override }
                         normalized = min(1.0, max(0.0, override))
@@ -848,8 +923,10 @@ final class NRKTParser {
                         control["control_properties"] = properties
                         if let endpoint1 = properties["range_endpoint_1"],
                            let endpoint2 = properties["range_endpoint_2"] {
-                            control["value"] = endpoint1
-                                + normalized * (endpoint2 - endpoint1)
+                            control["value"] = module.kind == 22
+                                ? (normalized >= 0.5 ? endpoint2 : endpoint1)
+                                : endpoint1 + normalized * (endpoint2 - endpoint1)
+                            if module.kind == 22 { control["value_encoding"] = "button_frame_position" }
                         }
                     }
                     if let selection {
@@ -1009,9 +1086,10 @@ final class NRKTParser {
     }
 
     func parse() throws -> ParseReport {
+        metadataWarnings.removeAll()
         let (modules, specialRoots) = try parseModules()
         parseInstanceMetadata(modules)
-        var warnings: [String] = []
+        var warnings: [String] = metadataWarnings
         let forest = buildForest(modules, warnings: &warnings)
         enrichHierarchy(forest)
         let ports = parsePorts(modules, warnings: &warnings)

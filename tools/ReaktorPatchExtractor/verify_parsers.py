@@ -25,6 +25,8 @@ EXPECTED_COUNTS = {
 
 
 def load_python_parser():
+    if not PYTHON_PARSER.is_file():
+        raise SystemExit("Archived Python comparison parser is not present. Use test_primary_states.py and the ensemble-specific native regressions; see README.md.")
     spec = importlib.util.spec_from_file_location("parse_nrkt", PYTHON_PARSER)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot import {PYTHON_PARSER}")

@@ -277,7 +277,9 @@ final class CoreCellParser {
             if words[1] == 1, raw.count >= 12,
                let low = u32(raw, raw.count - 8), let high = u32(raw, raw.count - 4) {
                 result["value_type"] = "float64"
-                result["value"] = Double(bitPattern: UInt64(low) | (UInt64(high) << 32))
+                let value = Double(bitPattern: UInt64(low) | (UInt64(high) << 32))
+                if value.isFinite { result["value"] = value }
+                else { result["decode_status"] = "non_finite_value" }
             } else if words[1] == 2, let value = words.last {
                 result["value_type"] = "integer"
                 result["value"] = i32(value)

@@ -1,0 +1,590 @@
+[
+  {
+    "id": 211973,
+    "path": "/Instrument#211947/Steam#211949/Env#211950/Kyb-Scaling#211957/Constant#211973",
+    "offset": "0x982c",
+    "value": -60
+  },
+  {
+    "id": 211978,
+    "path": "/Instrument#211947/Steam#211949/Env#211950/Vel Amt#211975/Constant#211978",
+    "offset": "0x9e1e",
+    "value": 1
+  },
+  {
+    "id": 211985,
+    "path": "/Instrument#211947/Steam#211949/Env#211950/Vel Amt#211975/XFade#211982/Constant#211985",
+    "offset": "0xa529",
+    "value": 1
+  },
+  {
+    "id": 212020,
+    "path": "/Instrument#211947/Steam#211949/Gen#212001/VelTrack#212014/Constant#212020",
+    "offset": "0xcda3",
+    "value": 1
+  },
+  {
+    "id": 212024,
+    "path": "/Instrument#211947/Steam#211949/Gen#212001/VelTrack#212014/XFade#212021/Constant#212024",
+    "offset": "0xd219",
+    "value": 1
+  },
+  {
+    "id": 212048,
+    "path": "/Instrument#211947/Pipe#212039/Del Tune#212042/P2D#212043/Constant#212048",
+    "offset": "0xee4f",
+    "value": 1000
+  },
+  {
+    "id": 212064,
+    "path": "/Instrument#211947/Pipe#212039/Del Tune#212042/Constant#212064",
+    "offset": "0x10830",
+    "value": 1000
+  },
+  {
+    "id": 212066,
+    "path": "/Instrument#211947/Pipe#212039/Del Tune#212042/Constant#212066",
+    "offset": "0x10a9d",
+    "value": 1
+  },
+  {
+    "id": 212067,
+    "path": "/Instrument#211947/Pipe#212039/Del Tune#212042/Constant#212067",
+    "offset": "0x10b8a",
+    "value": 5
+  },
+  {
+    "id": 212068,
+    "path": "/Instrument#211947/Pipe#212039/Del Tune#212042/Constant#212068",
+    "offset": "0x10c77",
+    "value": 1
+  },
+  {
+    "id": 212069,
+    "path": "/Instrument#211947/Pipe#212039/Del Tune#212042/Constant#212069",
+    "offset": "0x10d6c",
+    "value": 0
+  },
+  {
+    "id": 212070,
+    "path": "/Instrument#211947/Pipe#212039/Del Tune#212042/Constant#212070",
+    "offset": "0x10e61",
+    "value": 0
+  },
+  {
+    "id": 212080,
+    "path": "/Instrument#211947/Pipe#212039/Allpass Tune#212074/P2D#212075/Constant#212080",
+    "offset": "0x11c34",
+    "value": 1000
+  },
+  {
+    "id": 212096,
+    "path": "/Instrument#211947/Pipe#212039/Allpass Tune#212074/Constant#212096",
+    "offset": "0x137be",
+    "value": 1000
+  },
+  {
+    "id": 212115,
+    "path": "/Instrument#211947/Pipe#212039/FeedBack#212108/RT#212112/Constant#212115",
+    "offset": "0x14f19",
+    "value": -60
+  },
+  {
+    "id": 212126,
+    "path": "/Instrument#211947/Pipe#212039/FeedBack#212108/KeyTrack#212120/Constant#212126",
+    "offset": "0x15d7d",
+    "value": -60
+  },
+  {
+    "id": 212133,
+    "path": "/Instrument#211947/Pipe#212039/FeedBack#212108/P2D#212128/Constant#212133",
+    "offset": "0x16417",
+    "value": 1000
+  },
+  {
+    "id": 212139,
+    "path": "/Instrument#211947/Pipe#212039/FeedBack#212108/Constant#212139",
+    "offset": "0x16a6e",
+    "value": 1
+  },
+  {
+    "id": 212158,
+    "path": "/Instrument#211947/Pipe#212039/Saturation#212153/Constant#212158",
+    "offset": "0x1849e",
+    "value": 1
+  },
+  {
+    "id": 212160,
+    "path": "/Instrument#211947/Pipe#212039/Saturation#212153/Constant#212160",
+    "offset": "0x18650",
+    "value": 1
+  },
+  {
+    "id": 212173,
+    "path": "/Instrument#211947/Pipe#212039/Saturation#212153/ParaSatASym#212163/ParaSat#212170/Constant#212173",
+    "offset": "0x193ea",
+    "value": 0.5
+  },
+  {
+    "id": 212186,
+    "path": "/Instrument#211947/Pipe#212039/Saturation#212153/ParaSatASym#212163/ParaSat#212170/Constant#212186",
+    "offset": "0x19fe7",
+    "value": 9.999999747378752e-06
+  },
+  {
+    "id": 212187,
+    "path": "/Instrument#211947/Pipe#212039/Saturation#212153/ParaSatASym#212163/ParaSat#212170/Constant#212187",
+    "offset": "0x1a0e6",
+    "value": 0.9999899864196777
+  },
+  {
+    "id": 212205,
+    "path": "/Instrument#211947/Pipe#212039/Saturation#212153/ParaSatASym#212163/ParaSat#212202/Constant#212205",
+    "offset": "0x1afeb",
+    "value": 0.5
+  },
+  {
+    "id": 212218,
+    "path": "/Instrument#211947/Pipe#212039/Saturation#212153/ParaSatASym#212163/ParaSat#212202/Constant#212218",
+    "offset": "0x1bbe8",
+    "value": 9.999999747378752e-06
+  },
+  {
+    "id": 212219,
+    "path": "/Instrument#211947/Pipe#212039/Saturation#212153/ParaSatASym#212163/ParaSat#212202/Constant#212219",
+    "offset": "0x1bce7",
+    "value": 0.9999899864196777
+  },
+  {
+    "id": 212242,
+    "path": "/Instrument#211947/Pipe#212039/MW Filter#212235/XFade#212239/Constant#212242",
+    "offset": "0x1d552",
+    "value": 1
+  },
+  {
+    "id": 212255,
+    "path": "/Instrument#211947/Pipe#212039/MW Filter#212235/XFade#212252/Constant#212255",
+    "offset": "0x1e81c",
+    "value": 1
+  },
+  {
+    "id": 212297,
+    "path": "/Instrument#211947/Pipe#212039/Constant#212297",
+    "offset": "0x2173c",
+    "value": 2
+  },
+  {
+    "id": 212298,
+    "path": "/Instrument#211947/Pipe#212039/Constant#212298",
+    "offset": "0x21831",
+    "value": 1
+  },
+  {
+    "id": 212328,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff L#212320/Constant#212328",
+    "offset": "0x239e3",
+    "value": 8
+  },
+  {
+    "id": 212329,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff L#212320/Constant#212329",
+    "offset": "0x23add",
+    "value": 4
+  },
+  {
+    "id": 212330,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff L#212320/Constant#212330",
+    "offset": "0x23bd7",
+    "value": 0
+  },
+  {
+    "id": 212333,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff L#212320/Constant#212333",
+    "offset": "0x23e70",
+    "value": -7
+  },
+  {
+    "id": 212338,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff L#212320/RT#212335/Constant#212338",
+    "offset": "0x243e6",
+    "value": -60
+  },
+  {
+    "id": 212350,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff L#212320/DMod#212343/P2D#212345/Constant#212350",
+    "offset": "0x24f9c",
+    "value": 1000
+  },
+  {
+    "id": 212361,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff L#212320/DMod#212354/P2D#212356/Constant#212361",
+    "offset": "0x25a60",
+    "value": 1000
+  },
+  {
+    "id": 212372,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff L#212320/DMod#212365/P2D#212367/Constant#212372",
+    "offset": "0x26524",
+    "value": 1000
+  },
+  {
+    "id": 212383,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff L#212320/DMod#212376/P2D#212378/Constant#212383",
+    "offset": "0x26fe8",
+    "value": 1000
+  },
+  {
+    "id": 212396,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff L#212320/P2D#212391/Constant#212396",
+    "offset": "0x27c73",
+    "value": 1000
+  },
+  {
+    "id": 212415,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff R#212407/Constant#212415",
+    "offset": "0x29314",
+    "value": 10
+  },
+  {
+    "id": 212416,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff R#212407/Constant#212416",
+    "offset": "0x2940f",
+    "value": 6
+  },
+  {
+    "id": 212417,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff R#212407/Constant#212417",
+    "offset": "0x29509",
+    "value": 2
+  },
+  {
+    "id": 212420,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff R#212407/Constant#212420",
+    "offset": "0x297a2",
+    "value": -5
+  },
+  {
+    "id": 212425,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff R#212407/RT#212422/Constant#212425",
+    "offset": "0x29d18",
+    "value": -60
+  },
+  {
+    "id": 212437,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff R#212407/DMod#212430/P2D#212432/Constant#212437",
+    "offset": "0x2a8ce",
+    "value": 1000
+  },
+  {
+    "id": 212448,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff R#212407/DMod#212441/P2D#212443/Constant#212448",
+    "offset": "0x2b392",
+    "value": 1000
+  },
+  {
+    "id": 212459,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff R#212407/DMod#212452/P2D#212454/Constant#212459",
+    "offset": "0x2be56",
+    "value": 1000
+  },
+  {
+    "id": 212470,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff R#212407/DMod#212463/P2D#212465/Constant#212470",
+    "offset": "0x2c91a",
+    "value": 1000
+  },
+  {
+    "id": 212483,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Diff R#212407/P2D#212478/Constant#212483",
+    "offset": "0x2d5a5",
+    "value": 1000
+  },
+  {
+    "id": 212501,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Damp#212495/Constant#212501",
+    "offset": "0x2ec38",
+    "value": 112
+  },
+  {
+    "id": 212503,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Damp#212495/Constant#212503",
+    "offset": "0x2ee69",
+    "value": 60
+  },
+  {
+    "id": 212510,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Damp#212504/Constant#212510",
+    "offset": "0x2f641",
+    "value": 96
+  },
+  {
+    "id": 212512,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Damp#212504/Constant#212512",
+    "offset": "0x2f872",
+    "value": 60
+  },
+  {
+    "id": 212514,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Constant#212514",
+    "offset": "0x2fa2a",
+    "value": -30
+  },
+  {
+    "id": 212520,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Constant#212520",
+    "offset": "0x2ffc1",
+    "value": 240
+  },
+  {
+    "id": 212521,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Constant#212521",
+    "offset": "0x300bd",
+    "value": 0.5
+  },
+  {
+    "id": 212535,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/P2D#212530/Constant#212535",
+    "offset": "0x31002",
+    "value": 1000
+  },
+  {
+    "id": 212537,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/Constant#212537",
+    "offset": "0x311c4",
+    "value": -4
+  },
+  {
+    "id": 212543,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/P2D#212538/Constant#212543",
+    "offset": "0x31768",
+    "value": 1000
+  },
+  {
+    "id": 212545,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/Constant#212545",
+    "offset": "0x31922",
+    "value": -4
+  },
+  {
+    "id": 212551,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/P2D#212546/Constant#212551",
+    "offset": "0x31ec6",
+    "value": 1000
+  },
+  {
+    "id": 212553,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/Constant#212553",
+    "offset": "0x32088",
+    "value": -2
+  },
+  {
+    "id": 212559,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/P2D#212554/Constant#212559",
+    "offset": "0x3262c",
+    "value": 1000
+  },
+  {
+    "id": 212561,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/Constant#212561",
+    "offset": "0x327ee",
+    "value": -4
+  },
+  {
+    "id": 212567,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/P2D#212562/Constant#212567",
+    "offset": "0x32d92",
+    "value": 1000
+  },
+  {
+    "id": 212569,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/Constant#212569",
+    "offset": "0x32f4c",
+    "value": -4
+  },
+  {
+    "id": 212575,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Early Diff#212524/P2D#212570/Constant#212575",
+    "offset": "0x334f0",
+    "value": 1000
+  },
+  {
+    "id": 212584,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/Constant#212584",
+    "offset": "0x33fa4",
+    "value": -65
+  },
+  {
+    "id": 212593,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/PowerFade#212587/Constant#212593",
+    "offset": "0x3494e",
+    "value": 1
+  },
+  {
+    "id": 212606,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/PowerFade#212600/Constant#212606",
+    "offset": "0x35483",
+    "value": 1
+  },
+  {
+    "id": 212637,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/16Phase#212615/Mod#212627/Constant#212637",
+    "offset": "0x37344",
+    "value": -0.125
+  },
+  {
+    "id": 212648,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/16Phase#212615/Mod#212638/Constant#212648",
+    "offset": "0x37ee7",
+    "value": -0.125
+  },
+  {
+    "id": 212659,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/16Phase#212615/Mod#212649/Constant#212659",
+    "offset": "0x38a8a",
+    "value": -0.125
+  },
+  {
+    "id": 212670,
+    "path": "/Instrument#211947/R66#212312/Diffusion#212315/16Phase#212615/Mod#212660/Constant#212670",
+    "offset": "0x39625",
+    "value": -0.125
+  },
+  {
+    "id": 212716,
+    "path": "/Instrument#211947/R66#212312/Out#212702/PowerFade#212710/Constant#212716",
+    "offset": "0x3cb82",
+    "value": 1
+  },
+  {
+    "id": 212729,
+    "path": "/Instrument#211947/R66#212312/Out#212702/PowerFade#212723/Constant#212729",
+    "offset": "0x3d6b7",
+    "value": 1
+  },
+  {
+    "id": 212763,
+    "path": "/Instrument#211947/Delay#212749/const decay#212752/Constant#212763",
+    "offset": "0x1652cd",
+    "value": -60
+  },
+  {
+    "id": 212786,
+    "path": "/Instrument#211947/Delay#212749/const decay#212752/EqualP Crossfade#212765/1-x hoch y (event)#212777/Constant#212786",
+    "offset": "0x1669eb",
+    "value": 1
+  },
+  {
+    "id": 212787,
+    "path": "/Instrument#211947/Delay#212749/const decay#212752/EqualP Crossfade#212765/Constant#212787",
+    "offset": "0x166ae0",
+    "value": 0.5
+  },
+  {
+    "id": 212788,
+    "path": "/Instrument#211947/Delay#212749/const decay#212752/EqualP Crossfade#212765/Constant#212788",
+    "offset": "0x166bdc",
+    "value": 0.5
+  },
+  {
+    "id": 212793,
+    "path": "/Instrument#211947/Delay#212749/const decay#212752/EqualP Crossfade#212765/Constant#212793",
+    "offset": "0x166fcc",
+    "value": 1.4140000343322754
+  },
+  {
+    "id": 212801,
+    "path": "/Instrument#211947/Delay#212749/bpm->time#212797/Constant#212801",
+    "offset": "0x167956",
+    "value": 240000
+  },
+  {
+    "id": 212812,
+    "path": "/Instrument#211947/Delay#212749/bpm->time#212808/Constant#212812",
+    "offset": "0x168468",
+    "value": 240000
+  },
+  {
+    "id": 212829,
+    "path": "/Instrument#211947/Delay#212749/const decay#212818/Constant#212829",
+    "offset": "0x16946c",
+    "value": -60
+  },
+  {
+    "id": 212852,
+    "path": "/Instrument#211947/Delay#212749/const decay#212818/EqualP Crossfade#212831/1-x hoch y (event)#212843/Constant#212852",
+    "offset": "0x16ab8a",
+    "value": 1
+  },
+  {
+    "id": 212853,
+    "path": "/Instrument#211947/Delay#212749/const decay#212818/EqualP Crossfade#212831/Constant#212853",
+    "offset": "0x16ac7f",
+    "value": 0.5
+  },
+  {
+    "id": 212854,
+    "path": "/Instrument#211947/Delay#212749/const decay#212818/EqualP Crossfade#212831/Constant#212854",
+    "offset": "0x16ad7b",
+    "value": 0.5
+  },
+  {
+    "id": 212859,
+    "path": "/Instrument#211947/Delay#212749/const decay#212818/EqualP Crossfade#212831/Constant#212859",
+    "offset": "0x16b16b",
+    "value": 1.4140000343322754
+  },
+  {
+    "id": 212868,
+    "path": "/Instrument#211947/Delay#212749/Constant#212868",
+    "offset": "0x16bb2d",
+    "value": 60
+  },
+  {
+    "id": 212869,
+    "path": "/Instrument#211947/Delay#212749/Constant#212869",
+    "offset": "0x16bc28",
+    "value": 120
+  },
+  {
+    "id": 212873,
+    "path": "/Instrument#211947/Delay#212749/Constant#212873",
+    "offset": "0x16bf9b",
+    "value": 16
+  },
+  {
+    "id": 212889,
+    "path": "/Instrument#211947/Delay#212749/Constant#212889",
+    "offset": "0x16de1e",
+    "value": 90
+  },
+  {
+    "id": 212890,
+    "path": "/Instrument#211947/Delay#212749/Constant#212890",
+    "offset": "0x16df19",
+    "value": 0.30000001192092896
+  },
+  {
+    "id": 212891,
+    "path": "/Instrument#211947/Delay#212749/Constant#212891",
+    "offset": "0x16e015",
+    "value": 8
+  },
+  {
+    "id": 212892,
+    "path": "/Instrument#211947/Delay#212749/Constant#212892",
+    "offset": "0x16e10f",
+    "value": 8
+  },
+  {
+    "id": 212893,
+    "path": "/Instrument#211947/Delay#212749/Constant#212893",
+    "offset": "0x16e209",
+    "value": 73
+  },
+  {
+    "id": 212894,
+    "path": "/Instrument#211947/Delay#212749/Constant#212894",
+    "offset": "0x16e304",
+    "value": 0.25
+  }
+]

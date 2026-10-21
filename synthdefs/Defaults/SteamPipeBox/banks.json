@@ -1,0 +1,12 @@
+[
+  {
+    "file": "Reaktor SteamPipe 001-128.json",
+    "start": 0,
+    "count": 128
+  },
+  {
+    "file": "Reaktor SteamPipe 129-172.json",
+    "start": 128,
+    "count": 44
+  }
+]

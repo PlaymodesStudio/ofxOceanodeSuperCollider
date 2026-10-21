@@ -24,3 +24,5 @@ synthdefs/**/CompiledSynthdefs/
 ugens/**/*.scx
 !ugens/OceanodeAnalog/OceanodeAnalog.scx
 !ugens/OceanodeSpectral/OceanodeSpectral.scx
+
+!ugens/OceanodeSteamPipe/OceanodeSteamPipe.scx

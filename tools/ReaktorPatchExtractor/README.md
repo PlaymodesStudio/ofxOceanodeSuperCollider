@@ -1,4 +1,4 @@
-# Reaktor Patch Extractor 0.5.1
+# Reaktor Patch Extractor 0.5.3
 
 Aplicació macOS universal (`arm64` i `x86_64`) i executable de terminal per
 inspeccionar qualsevol fitxer binari `NRKT` de Reaktor (`.ism` i `.ens`).
@@ -168,3 +168,44 @@ snapshot IDs remain local to their instrument and can be ambiguous across
 instruments. Do not treat the flattened panel lookup as a universal ID scope.
 
 Regression: `python3 test_polycomb_later.py /path/to/2018.ens /path/to/2025.ens`.
+
+
+### Shared Primary state audit (0.5.3)
+
+The numeric-constant fix applies to both supported record signatures. Editable
+constant labels are retained as `constant_label`, never used as DSP values;
+`constant_value_source` identifies the stored float32. Unknown/non-finite
+constants remain unresolved and generate a warning.
+
+The common extractor now handles the cases previously compensated only by the
+SteamPipe importer:
+
+- Shifted panel link words in newer records, including R66 Power switch IDs.
+- Button float32 image-frame positions and endpoint outputs (also reversed
+  ranges); a 0.5 on-frame is not a half-amplitude output.
+- Signed switch selections, including the -1 saved sentinel.
+- Both XY ranges and saved axes; complete snapshot overrides and known isolated
+  state records. `effective_controls[].axes` provides values and provenance.
+- Non-finite snapshot values remain explicitly unresolved rather than silently
+  using a saved global value. Raw words remain available for inspection.
+
+Reports retain schema v5 and add `parser_revision` so stale caches can be
+identified. Regenerate older JSON reports. The SteamPipe importer consumes this
+shared state decoding and rejects stale reports. All 172 preset values remain
+unchanged from the installed instrument.
+
+```sh
+python3 test_primary_states.py /path/to/aliasing_synth_midi.ens /path/to/PolyComb_1.7.ens /path/to/steampipe_santi.ens
+python3 test_steampipe.py /path/to/steampipe_santi.ens
+```
+
+The state audit checks 464 constants, 2,710 button states, 4,352 switch states,
+3,704 XY axes, and deliberately invalid constant/snapshot data across these
+three files. SteamPipe's four Core cells also pass recursive count/property/pin
+checks (132 structures, 896 modules, 1,010 connections). Existing wire,
+snapshot identity and ambiguous-ID regressions still pass. This verifies the
+known corpus, not every possible Reaktor record format.
+
+The historical `verify_parsers.py` additionally needs the archived Python
+reference parser under `docs/steampipe_extraction/`; it is not included in this
+checkout. The byte-backed native regressions above are the current checks.

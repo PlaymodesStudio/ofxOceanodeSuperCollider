@@ -114,6 +114,15 @@ a loaded binary in place makes macOS kill scsynth when it loads it (exit 137).
 `build.sh` signs the result.
 
 
+### OceanodeSteamPipe (`OceanodeSteamPipe/`)
+
+`SteamPipeVoice` and `SteamPipeOriginal` provide SteamPipeBox's sample-level pipe,
+tempo delay and cross-coupled R66 kernels. The universal `.scx` is committed.
+`build.sh` regenerates C++ and classes from
+`synthdefs/Defaults/SteamPipeBox/*.eel2` before compiling. No DynGen is required.
+Install this folder's `.sc` and `.scx` like the other own plugins.
+See `synthdefs/Defaults/SteamPipeBox/README.md` for fidelity limits and validation.
+
 ### OceanodePhysical (`OceanodePhysical/`)
 
 `PhysicalVoice` is PhysicalBox's whole voice:
