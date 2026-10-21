@@ -586,7 +586,7 @@ private:
     void unpublishSnap(const std::string& key);
     void snapMenu(const std::string& key);
     void refreshProjectsList();
-    void drawProjectMenu();
+    void drawGlobalControls();
     std::string getProjectsDirectory() const;
     std::string currentProjectLocation(const std::string& path) const;
     

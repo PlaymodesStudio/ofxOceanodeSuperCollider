@@ -1712,8 +1712,8 @@ void scRhythmBox::drawSequencerWindow() {
         // ── Snapshots, named presets, morph (scSnapshots), then the box ────────
         snaps.drawBar(std::max(1.0f, ImGui::GetContentRegionAvail().x));
 
-        // ── Project Menu ──────────────────────────────────────────────────────
-        drawProjectMenu();
+        // ── Transport and global sound controls ───────────────────────────────
+        drawGlobalControls();
         ImGui::Separator();
         ImGui::Spacing();
 
@@ -5857,9 +5857,8 @@ void scRhythmBox::snapMenu(const std::string& key) {
     ImGui::EndPopup();
 }
 
-void scRhythmBox::drawProjectMenu() {
+void scRhythmBox::drawGlobalControls() {
     float zoom = ofxOceanodeShared::getZoomLevel();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.8f, 0.9f, 1.0f));
     if(ImGui::Button("Parameters")) ImGui::OpenPopup("##rhythmControls");
     if(ImGui::BeginPopup("##rhythmControls")) {
         for(const auto& key : legacyControlKeys) if(ImGui::BeginMenu(key.c_str())) {
@@ -5868,88 +5867,7 @@ void scRhythmBox::drawProjectMenu() {
         }
         ImGui::EndPopup();
     }
-    ImGui::SameLine();
-    ImGui::TextUnformatted("PROJECT");
-    ImGui::PopStyleColor();
-
-    ImGui::SameLine(0, 8 * zoom);
-
-    // Project name field — always shows the current project name.
-    // Editing it and pressing Save As writes a new file; Save overwrites the existing one.
-    ImGui::SetNextItemWidth(160.0f * zoom);
-    ImGui::InputText("##projectname", projectNameBuffer, sizeof(projectNameBuffer));
-
-    ImGui::SameLine(0, 4 * zoom);
-
-    // Save — overwrite currentProjectPath. If no project is loaded yet, behave like Save As.
-    bool hasCurrent = !currentProjectPath.empty();
-    if(!hasCurrent) {
-        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
-    }
-    if(ImGui::Button("Save")) {
-        if(hasCurrent) {
-            // Overwrite the existing file, keeping its original name.
-            std::string stem = std::filesystem::path(currentProjectPath).stem().string();
-            saveProject(stem);
-            // Keep the buffer in sync with the saved name.
-            strncpy(projectNameBuffer, stem.c_str(), sizeof(projectNameBuffer) - 1);
-            projectNameBuffer[sizeof(projectNameBuffer) - 1] = '\0';
-        } else {
-            // No project loaded yet — treat as Save As.
-            std::string name = std::string(projectNameBuffer);
-            if(!name.empty()) saveProject(name);
-        }
-    }
-    if(!hasCurrent) ImGui::PopStyleColor(2);
-    if(ImGui::IsItemHovered())
-        ImGui::SetTooltip(hasCurrent ? "Overwrite current project" : "Save new project");
-
-    ImGui::SameLine(0, 4 * zoom);
-
-    // Save As — always saves under the name in the text field.
-    if(ImGui::Button("Save As")) {
-        std::string name = std::string(projectNameBuffer);
-        if(!name.empty()) saveProject(name);
-    }
-    if(ImGui::IsItemHovered())
-        ImGui::SetTooltip("Save under the name shown in the field");
-
-    ImGui::SameLine(0, 4 * zoom);
-
-    // Load dropdown
-    if(ImGui::Button("Load")) {
-        refreshProjectsList();
-        ImGui::OpenPopup("##projectpopup");
-    }
-    if(ImGui::BeginPopup("##projectpopup")) {
-        if(availableProjects.empty()) {
-            ImGui::TextDisabled("(no projects saved)");
-        } else {
-            for(const auto& project : availableProjects) {
-                if(ImGui::MenuItem(project.c_str())) {
-                    loadProject(project);
-                }
-            }
-        }
-        ImGui::EndPopup();
-    }
-
-    ImGui::SameLine(0, 4);
-
-    // New — clears everything to defaults.
-    if(ImGui::Button("New")) {
-        currentProjectPath.clear();
-        strcpy(projectNameBuffer, "New Project");
-        numTracksP = 0;
-        currentSlotP = 0;
-        freeAllSamples();
-        initSlots();
-        ofLogNotice("scRhythmBox") << "New project";
-    }
-
-    // ── Transport + Master Volume ─────────────────────────────────────────────
-    ImGui::Spacing();
+    ImGui::SameLine(0, 14 * zoom);
 
     // In Sync To Transport mode the global transport drives play/stop/position:
     // the node's own Play / Stop / Reset are disabled (the synths ignore them).
