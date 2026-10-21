@@ -64,6 +64,8 @@ if("PB_CASES".getenv.notNil) { cases = File.readAllString("PB_CASES".getenv).int
 if(filter.notNil and: { filter != "all" }) { cases = cases.select { |c| c[0].contains(filter) } };
 File.mkdir(outDir);
 SynthDef(\pbModel, {
+	// a fixed seed: renders repeat sample for sample (a null test can compare builds)
+	var seed = RandSeed.ir(1, ("PB_SEED".getenv ? "1234").asInteger);
 	var names = PhysicalVoice.names;
 	var pairs = names.collect { |n|
 		[n, switch(n, \gate, { \gate.ar(0) }, \strk, { 0 }, { NamedControl.kr(n, PhysicalVoice.defaults[names.indexOf(n)]) })]

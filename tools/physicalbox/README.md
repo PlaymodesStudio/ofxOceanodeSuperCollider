@@ -48,3 +48,17 @@ struck, the doublets (Split cents, Beat Hz), a near-zero Split against none
   voice; `compare_flute.py` measures harmonics, breath noise, tuning and pitch
   wobble of any renders (MIDI note in the file name, `_<note>`). The factory
   Flute was matched to it this way (open Bore, Air 1, Breath 0.9, Jet Ratio 0.5).
+
+## CPU and null tests
+
+- `bench_voice.scd [filter]` times 20 s of `PB_VOICES` (default 16) voices per
+  case offline. The wall time includes ~3.4 s of scsynth start-up and plugin
+  loading: the cost of a voice is (T16 - T1) / (15 x 20 s). Measured
+  2026-10-21: about 0.26 % of a core per voice for a string or flute, 0.29 %
+  for a bar, 0.39 % for a membrane or a bar with Split (all 32 modes below
+  Nyquist, or doubled).
+- `render_models.scd` seeds its noise (`PB_SEED`, default 1234), so two builds
+  can be null-tested sample for sample. Struck sounds must match; bowed and
+  blown ones are chaotic (a rounding change gives another realisation, as
+  another seed does), so compare their level and spectrum against the
+  variation between two seeds instead.

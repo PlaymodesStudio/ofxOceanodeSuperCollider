@@ -93,6 +93,8 @@ struct PhysicalVoice : public Unit {
     int rtype;
     // Air: the mouthpiece heard (the jet and the breath's turbulence), DC-free and lowpassed
     double airdc, airlp;
+    // which resonators run (one neither heard nor felt is skipped; cleared when it comes back)
+    bool aOn, bOn;
     double lpa, ap[4][2];
     double nutrefl, brefl, ya, sc;
     double envf, enve, prevg;
@@ -105,6 +107,12 @@ struct PhysicalVoice : public Unit {
     double ma1[2 * MAXM], ma2[2 * MAXM], mgi[2 * MAXM], mgx[2 * MAXM];
     double mpe[2 * MAXM], mp1[2 * MAXM], mp2[2 * MAXM], mpc[2 * MAXM], mcs[2 * MAXM], mlo[2 * MAXM];
     int act[2 * MAXM], nact;
+    // the running modes packed in a row for the sample loop (so it vectorises):
+    // their state, copied in and out each block, and their coefficients
+    // (excitation gains pre-multiplied by where they are touched)
+    double cy1[2 * MAXM], cy2[2 * MAXM], cfr[2 * MAXM], ca1[2 * MAXM], ca2[2 * MAXM];
+    double cpe[2 * MAXM], cplo[2 * MAXM], cp1[2 * MAXM], cp2[2 * MAXM], cpc[2 * MAXM];
+    double cei[2 * MAXM], cex[2 * MAXM], cec[2 * MAXM], ces[2 * MAXM];
     // the body's modes, recomputed when what they depend on changes
     Mode bm[MAXM];
     double bkey[9];
@@ -144,6 +152,7 @@ static void PhysicalVoice_Ctor(PhysicalVoice* unit) {
     unit->wn = unit->wb = unit->wh = unit->wj = unit->wt = 0;
     unit->damped = 0; unit->dmp = 0; unit->tph = 0; unit->rtype = 0;
     unit->airdc = unit->airlp = 0;
+    unit->aOn = unit->bOn = true;
     unit->tlen = 100; unit->tg = 0; unit->tnorm = 1;
     for (int m = 0; m < RADMODES; ++m) unit->rb0[m] = unit->ra1[m] = unit->ra2[m] = 0;
     clearState(unit);
@@ -308,6 +317,15 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         u->mcs[k] = u->mcs[MAXM + k] = k < u->kcut ? 0 : 1;
     }
     u->nact = na;
+    for (int i2 = 0; i2 < na; ++i2) {
+        const int j = u->act[i2];
+        u->cy1[i2] = u->my1[j]; u->cy2[i2] = u->my2[j];
+        u->ca1[i2] = u->ma1[j]; u->ca2[i2] = u->ma2[j];
+        u->cpe[i2] = u->mpe[j]; u->cplo[i2] = u->mpc[j] * u->mlo[j];
+        u->cp1[i2] = u->mp1[j]; u->cp2[i2] = u->mp2[j]; u->cpc[i2] = u->mpc[j];
+        u->cei[i2] = u->mpe[j] * u->mgi[j]; u->cex[i2] = u->mpe[j] * u->mgx[j];
+        u->cec[i2] = u->mpc[j] * u->mgx[j]; u->ces[i2] = u->mpc[j] * u->mcs[j] * u->mgx[j];
+    }
     u->mcount = std::max(mc, 1);
     u->bnorm = 1.5 / std::sqrt(double(u->mcount));
 
@@ -383,6 +401,25 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
     const double exa = u->exa, exb = u->exb, kia = u->kia, kca = u->kca;
     const double freqBase = std::max(P(P_freq), 1e-6);
     const double airc = 1 - std::exp(-2 * M_PI * 5000 / sr);
+    // A resonator that cannot be heard (Listen exactly at the other one all block)
+    // and does not touch anything (no coupling, its exciters off or Excite away
+    // from it) is skipped: the output is the same, the random draws stay in order
+    const bool lis1 = u->last[P_listen] >= 1 && cur[P_listen] >= 1, lis0 = u->last[P_listen] <= 0 && cur[P_listen] <= 0;
+    const bool coupled = u->cab != 0 || u->cba != 0;
+    const bool runA = !(exa == 0 && lis1 && !coupled);
+    const bool runB = !(exb == 0 && lis0 && !coupled);
+    if (runA && !u->aOn) {
+        std::memset(u->mem, 0, sizeof(float) * 3 * NA);
+        u->lpa = 0; std::memset(u->ap, 0, sizeof(u->ap));
+        u->nutrefl = u->brefl = u->ya = 0;
+    }
+    if (runB && !u->bOn) {
+        for (int k = 0; k < 2 * MAXM; ++k) u->my1[k] = u->my2[k] = u->mfr[k] = 0;
+        for (int i2 = 0; i2 < u->nact; ++i2) u->cy1[i2] = u->cy2[i2] = 0;
+    }
+    if (!runB) u->sc = 0;
+    u->aOn = runA; u->bOn = runB;
+    const bool bowing = u->last[P_bow] != 0 || cur[P_bow] != 0;
 
     for (int i = 0; i < n; ++i) {
         for (int p : ramped) v[p] += dv[p];
@@ -398,25 +435,32 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         const double lt = sr / fa * lfac;
         const double beta = clip(v[P_pos], 0.02, 0.98);
         const double dn = std::max(beta * lt, 3.0);
-        u->nutrefl = u->rn * rdc(u->dln, u->wn, dn);
-        double s = rdc(u->dlb, u->wb, std::max(lt - dn - pda, 3.0));
-        u->lpa = (1 - bla) * s + bla * u->lpa;
-        s = u->lpa;
-        for (auto& a : u->ap) { a[1] = apc * s + a[0] - apc * a[1]; a[0] = s; s = a[1]; }
-        s -= v[P_rattle] * dz(s, v[P_rattleth]) * (1 + 0.5 * rnd2());
-        u->brefl = u->rbs * ga * s;
-        const double va = u->nutrefl + u->brefl;
+        double va = 0;
+        if (runA) {
+            u->nutrefl = u->rn * rdc(u->dln, u->wn, dn);
+            double s = rdc(u->dlb, u->wb, std::max(lt - dn - pda, 3.0));
+            u->lpa = (1 - bla) * s + bla * u->lpa;
+            s = u->lpa;
+            for (auto& a : u->ap) { a[1] = apc * s + a[0] - apc * a[1]; a[0] = s; s = a[1]; }
+            s -= v[P_rattle] * dz(s, v[P_rattleth]) * (1 + 0.5 * rnd2());
+            u->brefl = u->rbs * ga * s;
+            va = u->nutrefl + u->brefl;
+        } else rnd2();
 
         // B: free response
         double se = 0, slo = 0;
-        const int na = u->nact;
-        const int* act = u->act;
-        for (int i2 = 0; i2 < na; ++i2) {
-            const int k = act[i2];
-            const double yf = u->ma1[k] * u->my1[k] - u->ma2[k] * u->my2[k];
-            u->mfr[k] = yf;
-            se += yf * u->mpe[k];
-            slo += yf * u->mpc[k] * u->mlo[k];
+        const int na = runB ? u->nact : 0;
+        {
+            double* __restrict cfr = u->cfr;
+            const double* __restrict cy1 = u->cy1; const double* __restrict cy2 = u->cy2;
+            const double* __restrict ca1 = u->ca1; const double* __restrict ca2 = u->ca2;
+            const double* __restrict cpe = u->cpe; const double* __restrict cplo = u->cplo;
+            for (int i2 = 0; i2 < na; ++i2) {
+                const double yf = ca1[i2] * cy1[i2] - ca2[i2] * cy2[i2];
+                cfr[i2] = yf;
+                se += yf * cpe[i2];
+                slo += yf * cplo[i2];
+            }
         }
         const double vr = exa * va + exb * kvb * se;
 
@@ -466,7 +510,7 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         const double vbow = v[P_bowspeed] * u->envf * (1 + v[P_rosin] * 0.5 * rnd2());
         const double dvb = vbow - vr;
         const double slope = std::max(5 - 4.5 * v[P_bowpress], 0.3);
-        const double fbow = v[P_bow] * dvb * std::min(std::pow(std::fabs(dvb * slope) + 0.75, -4.0), 1.0);
+        const double fbow = bowing ? v[P_bow] * dvb * std::min(std::pow(std::fabs(dvb * slope) + 0.75, -4.0), 1.0) : 0.0;
 
         // blow: jet (flute) <-> reed (clarinet) on the same breath
         const double pb = 1.5 * v[P_breath] * u->envf * (1 + v[P_turb] * 0.4 * rnd2());
@@ -487,14 +531,16 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         const double fblow = v[P_blow] * lin(clip(v[P_blowtype], 0, 1), fjet * kjet, freed * kreed);
 
         // A: junction
-        const double fja = exa * (fimp * kia + fcont * kca + fbow * kfba + fblow) + u->cba * u->sc * u->ga2;
-        u->dln[u->wn] = clean(sat(u->brefl + fja));
-        u->dlb[u->wb] = clean(sat(u->nutrefl + fja));
-        if (++u->wn >= NA) u->wn = 0;
-        if (++u->wb >= NA) u->wb = 0;
-        u->ya = u->brefl;
-        u->dlh[u->wh] = clean(u->ya);
-        if (++u->wh >= NA) u->wh = 0;
+        if (runA) {
+            const double fja = exa * (fimp * kia + fcont * kca + fbow * kfba + fblow) + u->cba * u->sc * u->ga2;
+            u->dln[u->wn] = clean(sat(u->brefl + fja));
+            u->dlb[u->wb] = clean(sat(u->nutrefl + fja));
+            if (++u->wn >= NA) u->wn = 0;
+            if (++u->wb >= NA) u->wb = 0;
+            u->ya = u->brefl;
+            u->dlh[u->wh] = clean(u->ya);
+            if (++u->wh >= NA) u->wh = 0;
+        }
 
         // B: update (cascade feeds forward only: it cannot run away)
         slo *= u->bnorm;
@@ -504,21 +550,28 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         const double fxb = exb * fcont * kcontb;
         const double fcpl = u->cab * u->ya;
         double o1 = 0, o2 = 0, scn = 0;
-        for (int i2 = 0; i2 < na; ++i2) {
-            const int k = act[i2];
-            const double y = u->mfr[k] + u->mpe[k] * (fib * u->mgi[k] + fxb * u->mgx[k])
-                + u->mpc[k] * ((fcpl + frat + u->mcs[k] * fcas) * u->mgx[k]);
-            u->my2[k] = u->my1[k];
-            u->my1[k] = y;
-            o1 += y * u->mp1[k];
-            o2 += y * u->mp2[k];
-            scn += y * u->mpc[k];
+        {
+            const double fc = fcpl + frat;
+            double* __restrict cy1 = u->cy1; double* __restrict cy2 = u->cy2;
+            const double* __restrict cfr = u->cfr;
+            const double* __restrict cei = u->cei; const double* __restrict cex = u->cex;
+            const double* __restrict cec = u->cec; const double* __restrict ces = u->ces;
+            const double* __restrict cp1 = u->cp1; const double* __restrict cp2 = u->cp2;
+            const double* __restrict cpc = u->cpc;
+            for (int i2 = 0; i2 < na; ++i2) {
+                const double y = cfr[i2] + fib * cei[i2] + fxb * cex[i2] + fc * cec[i2] + fcas * ces[i2];
+                cy2[i2] = cy1[i2];
+                cy1[i2] = y;
+                o1 += y * cp1[i2];
+                o2 += y * cp2[i2];
+                scn += y * cpc[i2];
+            }
         }
-        u->sc = scn * u->bnorm;
+        if (runB) u->sc = scn * u->bnorm;
 
         // pickups
-        const double pa1 = u->ya - rdl(u->dlh, NA, u->wh, std::max(lt * pfold(v[P_pick1]), 1.0));
-        const double pa2 = u->ya - rdl(u->dlh, NA, u->wh, std::max(lt * pfold(v[P_pick2]), 1.0));
+        const double pa1 = runA ? u->ya - rdl(u->dlh, NA, u->wh, std::max(lt * pfold(v[P_pick1]), 1.0)) : 0.0;
+        const double pa2 = runA ? u->ya - rdl(u->dlh, NA, u->wh, std::max(lt * pfold(v[P_pick2]), 1.0)) : 0.0;
         const double lb = clip(v[P_listen], 0, 1);
         double x1 = lin(lb, pa1, o1 * u->bnorm) + air;
         double x2 = lin(lb, pa2, o2 * u->bnorm) + air;
@@ -527,6 +580,7 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         // safety: anything non-finite or runaway clears the voice
         if (!std::isfinite(x1) || !std::isfinite(x2) || std::fabs(x1) > 1000 || std::fabs(x2) > 1000) {
             clearState(u);
+            for (int i2 = 0; i2 < u->nact; ++i2) u->cy1[i2] = u->cy2[i2] = 0;
             x1 = x2 = 0;
         }
         if (u->rtype > 0) {
@@ -542,6 +596,7 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         out0[i] = float(sat(x1));
         out1[i] = float(sat(x2));
     }
+    for (int i2 = 0; i2 < u->nact; ++i2) { u->my1[u->act[i2]] = u->cy1[i2]; u->my2[u->act[i2]] = u->cy2[i2]; }
     for (int p : ramped) u->last[p] = cur[p];
     RPUT
 }
