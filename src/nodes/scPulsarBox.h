@@ -367,6 +367,8 @@ public:
             h.folder = "PulsarBox";
             h.title = "PulsarBox";
             h.presetFolder = "Supercollider/PulsarBox/Presets";   // the named presets it always had
+            // ... as a bank (tools/presets_to_bank.py): the bar lists slots and banks only
+            h.defaultBank = "PulsarBox Presets.json";
             h.capture = [this](){ return captureSound(); };
             h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySound(a, b, t, sw); };
             h.bpm = [this](){ return currentBpm; };
