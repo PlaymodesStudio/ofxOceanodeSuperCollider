@@ -302,7 +302,7 @@ void scPolyComb::setup() {
     // reset every Sub control, so an imported patch cannot change their sound.
     auto toSub = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendSub(st); }); };
     subOn.set("Sub On", false); reg(subOn, toParts);
-    subLevel.set("Sub Level", 0.25f, 0.0f, 16.0f); reg(subLevel, toSub);
+    subLevel.set("Sub Level", 0.25f, 0.0f, 1.0f); reg(subLevel, toSub);
     subTranspose.set("Sub Transpose", -12.0f, -96.0f, 96.0f); reg(subTranspose, toSub);
     subFineTune.set("Sub Fine Tune", 0.0f, -1.0f, 1.0f); reg(subFineTune, toSub);
     subVibRate.set("Sub Vib Rate", 5.0f, 0.0f, 20.0f); reg(subVibRate, toSub);
@@ -2171,33 +2171,6 @@ void scPolyComb::drawOscTab(float w) {
     }
     slider(fmFb, "Feedback", qw, "%.2f");
     toggle(fmSnap, "Snap ratio");
-    {   // operators: modulator (with its feedback loop) -> oscillators
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        const float h = 70.0f * z;
-        const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + qw, a.y + h);
-        canvas(dl, a, b);
-        const float bw = qw * 0.36f, bh = 26.0f * z;
-        const ImVec2 m0(a.x + qw * 0.06f, a.y + (h - bh) * 0.5f + 6 * z), m1(m0.x + bw, m0.y + bh);
-        const ImVec2 c0(b.x - qw * 0.06f - bw, m0.y), c1(c0.x + bw, m1.y);
-        const float amt = ofClamp(first(fmAmt.get()), 0.0f, 1.0f);
-        dl->AddRectFilled(m0, m1, IM_COL32(40, 44, 60, 255), 4.0f * z);
-        dl->AddRect(m0, m1, pal::accent, 4.0f * z);
-        dl->AddRectFilled(c0, c1, IM_COL32(40, 44, 60, 255), 4.0f * z);
-        dl->AddRect(c0, c1, pal::headerText, 4.0f * z);
-        char t[32];
-        std::snprintf(t, sizeof(t), "x%.3g", first(fmRatio.get(), 1.0f));
-        dl->AddText(ImVec2(m0.x + 5 * z, m0.y + (bh - ImGui::GetTextLineHeight()) * 0.5f), pal::headerText, t);
-        dl->AddText(ImVec2(c0.x + 5 * z, c0.y + (bh - ImGui::GetTextLineHeight()) * 0.5f), pal::headerText, "Oscs");
-        const ImU32 arrow = (pal::accent & 0x00FFFFFF) | ((ImU32)(60 + 195 * amt) << 24);
-        dl->AddLine(ImVec2(m1.x, (m0.y + m1.y) * 0.5f), ImVec2(c0.x - 4 * z, (c0.y + c1.y) * 0.5f), arrow, (1.0f + 3.0f * amt) * z);
-        dl->AddTriangleFilled(ImVec2(c0.x, (c0.y + c1.y) * 0.5f), ImVec2(c0.x - 8 * z, (c0.y + c1.y) * 0.5f - 5 * z),
-                              ImVec2(c0.x - 8 * z, (c0.y + c1.y) * 0.5f + 5 * z), arrow);
-        if(fmFb.get() > 0.001f){
-            const ImVec2 p0(m0.x + bw * 0.75f, m0.y), p3(m0.x + bw * 0.25f, m0.y);
-            dl->AddBezierCubic(p0, ImVec2(p0.x, p0.y - 18 * z), ImVec2(p3.x, p3.y - 18 * z), p3, pal::accent, (1.0f + fmFb.get()) * z);
-        }
-        ImGui::Dummy(ImVec2(qw, h));
-    }
     nextCol();
     sectionHeader("Tremolo", qw);
     slider(tremRate, "Trem Rate", qw, "%.2f Hz");

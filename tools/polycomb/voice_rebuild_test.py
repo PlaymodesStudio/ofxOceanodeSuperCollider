@@ -39,6 +39,11 @@ struct ofxSCServer {
  bool getBLatency(){return latency;}
  void setBLatency(bool b){latency=b;}
  void sendMsg(ofxOscMessage& m){packets.push_back(Json::array({m.payload}));}
+ // the resume goes a few blocks after the creation (scsynth ignores an earlier one)
+ static uint64_t getScopedTimetag(){return 0;}
+ static uint64_t timetagNow(double){return 2;}
+ struct ScopedNRTOffset{explicit ScopedNRTOffset(double){}};
+ void sendMsgAt(ofxOscMessage& m,uint64_t timetag){assert(timetag>1);sendMsg(m);}
 };
 struct ofxSCBus {int index;void free(){}};
 bool liveAudioBus(ofxSCServer*,ofxSCBus* b){return b!=nullptr;}
