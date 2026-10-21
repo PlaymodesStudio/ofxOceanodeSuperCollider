@@ -48,7 +48,8 @@ ofJson blend(const ofJson& a, const ofJson& b, float t, bool sw, bool discrete) 
 scSteamPipeBox::scSteamPipeBox(std::vector<serverManager*> s) : scNode("steampipeBox"), servers(std::move(s)) {
     description = "SteamPipe physical modelling: steam exciter, tuned pipe feedback, diffuser, "
                   "MW filters, original tempo delay and R66. Includes the recovered Reaktor snapshots, "
-                  "dynamic envelopes, LFOs, routing and box effects. Right-click controls to publish or automate.";
+                  "dynamic envelopes, LFOs, routing and box effects. Gate Mode Pulse plays the voices by itself, "
+                  "from a clock to a Geiger counter. Right-click controls to publish or automate.";
 }
 scSteamPipeBox::~scSteamPipeBox() {
     scheduled.disable();
@@ -79,9 +80,26 @@ void scSteamPipeBox::setup() {
     addParameter(resetLFOs.set("Reset"));
     addOutput("Out");
     // Auto: a drone until Gate is connected, timelined or gets a note
-    gateMode.set("Gate Mode",0,0,2);
+    // Pulse: the automatic gates
+    gateMode.set("Gate Mode",0,0,3);
     reg(gateMode,[this](){sendAll();});
-    dropdowns.set(gateMode.getEscapedName(),{"Auto","Gated","Drone"});
+    dropdowns.set(gateMode.getEscapedName(),{"Auto","Gated","Drone","Pulse"});
+    {
+        scPulseGate::Host ph;
+        ph.regF=[this](ofParameter<float>& p,std::function<void()> f){reg(p,f);};
+        ph.regI=[this](ofParameter<int>& p,std::function<void()> f){reg(p,f);};
+        ph.regB=[this](ofParameter<bool>& p,std::function<void()> f){reg(p,f);};
+        ph.sendAll=[this](){sendAll();};
+        ph.bpm=[this](){return bpm;};
+        ph.voices=[this](){return voices.get();};
+        ph.section=[this](const char* t,float w){sectionHeader(t,w);};
+        ph.slider=[this](ofParameter<float>& p,const char* l,float w,const char* f,bool log){slider(p,l,w,f,log);};
+        ph.toggle=[this](ofParameter<bool>& p,const char* l){toggle(p,l);};
+        ph.mark=[this](const std::string& k){mark(k);};
+        ph.menu=[this](const std::string& k){menu(k);};
+        ph.labelW=&labelW;
+        pulse.setup(ph);
+    }
     scheduled.add(gateIn.handle, gate); scheduled.add(pitchIn.handle, pitch); scheduled.add(velIn.handle, velocity);
     scheduled.enable(this, [this](){ for(auto& [s, st] : states) if(st.created) return true; return false; });
     for(auto* p : {&gate, &pitch, &velocity}) {
@@ -95,7 +113,7 @@ void scSteamPipeBox::setup() {
     listeners.push(voices.newListener([this](int&) { structureDirty = true; }));
     listeners.push(channels.newListener([this](int&) { structureDirty = true; }));
     listeners.push(master.newListener([this](float&) { if(!restoring) sendAll(); }));
-    listeners.push(resetLFOs.newListener([this]() { mod.resetLfos(); }));
+    listeners.push(resetLFOs.newListener([this]() { mod.resetLfos(); pulse.restart=true; }));
 
     const auto firstSnapshot=ofJson::parse(steamPipeBoxData::factory)[0]["values"];
     for(const auto& item : ofJson::parse(steamPipeBoxData::controls)) {
@@ -230,7 +248,9 @@ void scSteamPipeBox::sendNotes(ofxSCServer* server, State& st) {
         std::vector<float> out(n); for(int i=0;i<n;++i) out[i] = first(v,i,fallback);
         st.gate->set(name,out);
     };
-    vec("gate",gate.get(),0); vec("velocity",velocity.get(),1);
+    // Pulse: the gate synth takes the generator's gates, Gate (Follow Gate) holds its voices
+    const int pbus=pulse.bus(server);
+    vec("gate",pbus>=0 ? std::vector<float>{0.0f} : gate.get(),0); vec("velocity",velocity.get(),1);
     st.gate->set("out", st.gates->index);
     st.gate->set("velout",st.velocities->index);
     st.gate->set("vel", mod.sourceBus(server,scModulation::SRC_VEL));
@@ -238,10 +258,11 @@ void scSteamPipeBox::sendNotes(ofxSCServer* server, State& st) {
     st.droneSent=droning() ? 1 : 0;
     st.gate->set("drone",float(st.droneSent));
     for(auto [p,name] : {std::make_pair(&gateIn,"gate"),std::make_pair(&velIn,"vel")}) {
-        const int bus = p->bus(server);
+        const int bus = p==&gateIn && pbus>=0 ? pbus : p->bus(server);
         st.gate->set(std::string(name)+"_sel",bus >= 0 ? 1.0f : 0.0f);
         if(bus>=0) st.gate->mapan(std::string(name)+"_ar",bus,n);
     }
+    pulse.enable(server,gate.get(),n,gateIn.bus(server));
     const int bus = pitchIn.bus(server);
     for(int i=0;i<n;++i) if(auto* v=st.voices[i]) {
         v->set("pitch", first(pitch.get(),i,60));
@@ -293,7 +314,7 @@ void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
     }
     updateStages(server,st);
 }
-void scSteamPipeBox::sendAll() { for(auto& [s,st] : states) { sendNotes(s,st); sendSound(s,st); } }
+void scSteamPipeBox::sendAll() { for(auto& [s,st] : states) { sendNotes(s,st); sendSound(s,st); } pulse.sendAll(); }
 void scSteamPipeBox::buildSynth(ofxSCServer* server) {
     if(!server) return;
     auto& st=states[server]; release(server,st); st.root=new ofxSCGroup(server);
@@ -304,10 +325,11 @@ void scSteamPipeBox::createSynth(ofxSCServer* server) {
     if(placeBefore>=0) st.root->create(2,placeBefore); else st.root->create(0,1);
     for(auto*& g:st.groups) { g=new ofxSCGroup(server); g->create(1,st.root->nodeID); }
     st.gates=new ofxSCBus(RATE_AUDIO,16,server); st.velocities=new ofxSCBus(RATE_AUDIO,16,server); st.audio=new ofxSCBus(RATE_AUDIO,16,server);
-    st.vis=new ofxSCBus(RATE_CONTROL,128,server);
+    st.vis=new ofxSCBus(RATE_CONTROL,VIS_SIZE,server);
     if(!liveBus(server,st.gates,true)||!liveBus(server,st.velocities,true)||!liveBus(server,st.audio,true)||!liveBus(server,st.vis,false)) { release(server,st); return; }
     st.builtVoices=voices.get(); st.builtChannels=channels.get(); st.created=true;
     mod.create(server,st.groups[SlSrc]->nodeID,st.groups[SlRoute]->nodeID,st.gates->index);
+    if(pulsing()) pulse.start(server,st.groups[SlGate]->nodeID,st.vis->index+VIS_PULSE,st.builtVoices);
     st.gate=new ofxSCSynth("SteamPipeBoxGate"+ofToString(st.builtVoices),server);
     for(int i=0;i<st.builtVoices;++i) st.voices[i]=new ofxSCSynth("SteamPipeBoxVoice",server);
     st.spread=new ofxSCSynth("SteamPipeBoxSpread"+ofToString(st.builtChannels),server);
@@ -323,6 +345,7 @@ void scSteamPipeBox::release(ofxSCServer* server, State& st) {
     if(st.created) mod.free(server,false);
     for(auto& f:st.fx) { delete f.synth; f.synth=nullptr; dropBus(server,f.in,true); f.running=false; f.offAt=-1; }
     delete st.gate; st.gate=nullptr; delete st.spread; st.spread=nullptr;
+    pulse.release(server);
     for(auto*& v:st.voices) { delete v; v=nullptr; }
     for(auto& cache:st.sent) cache.clear();
     for(auto*& g:st.groups) { delete g; g=nullptr; }
@@ -474,7 +497,7 @@ void scSteamPipeBox::presetRecallAfterSettingParameters(ofJson& j) {
 }
 void scSteamPipeBox::requireSynthdefs() {
     for(const auto& entry:std::vector<std::pair<std::string,std::string>>{
-        {"SteamPipeBoxVoice.scsyndef","SteamPipeBox"},{"ModLfo1.scsyndef","Modulation"},{"SteamPipeBoxSpread2.scsyndef","SteamPipeBox"},{"mixerProEQ2.scsyndef","MixerPro"}}) {
+        {"SteamPipeBoxVoice.scsyndef","SteamPipeBox"},{"ModLfo1.scsyndef","Modulation"},{"SteamPipeBoxSpread2.scsyndef","SteamPipeBox"},{"PulseGate.scsyndef","Modulation"},{"mixerProEQ2.scsyndef","MixerPro"}}) {
         std::filesystem::path folder;
         try {
             const std::filesystem::path data=ofToDataPath(SYNTHDEF_DIRECTORY,true);
@@ -494,6 +517,13 @@ void scSteamPipeBox::update(ofEventArgs&) {
     }
     if(structureDirty) rebuild();
     for(auto& [server,st]:states) if(st.created && st.droneSent!=(droning()?1:0)) sendNotes(server,st);
+    // Pulse on / off / again (a new Seed, Reset); SteamPipeBoxGate holds no level, so it stays
+    for(auto& [server,st]:states) if(st.created && st.groups[SlGate] && liveBus(server,st.vis,false)) {
+        if(pulsing() && (!pulse.running(server) || pulse.restart)) {
+            if(pulse.start(server,st.groups[SlGate]->nodeID,st.vis->index+VIS_PULSE,st.builtVoices)) sendNotes(server,st);
+        } else if(!pulsing() && pulse.running(server)) { pulse.stop(server); sendNotes(server,st); }
+    }
+    pulse.restart=false;
     mod.showing=show.get();mod.update();
     const float now=ofGetElapsedTimef();
     for(auto& [server,st]:states) if(st.created) {
@@ -505,9 +535,10 @@ void scSteamPipeBox::update(ofEventArgs&) {
     if(!show.get()) return;
     for(auto& [s,st]:states) if(st.created&&liveBus(s,st.vis,false)) {
         live=st.vis->readValues;
-        if(now>=nextRead){nextRead=now+1.0f/25;s->requestControlValues(st.vis->index,128);}
+        if(now>=nextRead){nextRead=now+1.0f/(pulsing()?60:25);s->requestControlValues(st.vis->index,VIS_SIZE);}
         break;
     }
+    if(pulsing()) pulse.read(live,VIS_PULSE);
 }
 void scSteamPipeBox::drawDisplay(float w) {
     const float z=zoom();
@@ -535,6 +566,7 @@ void scSteamPipeBox::drawWindow() {
     drawHeader();
     snaps.drawBar(w);
     drawDisplay(w);
+    if(pulsing()) pulse.drawPanel(w);
     ImGui::Spacing();
     if(ImGui::BeginTabBar("##steamTabs")) {
         auto tab=[&](const char* name,std::function<void(float)> body) {
@@ -993,6 +1025,7 @@ void scSteamPipeBox::combo(ofParameter<int>& p, const char* label, float w) {
 
 
 bool scSteamPipeBox::droning() const {
+    if(pulsing()) return false;
     if(gateMode.get()==2) return true;
     if(gateMode.get()==1) return false;
     return !(gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined()));
@@ -1013,12 +1046,13 @@ void scSteamPipeBox::drawHeader() {
     ImGui::BeginGroup();slider(master,"Master",170*z,"%.2f");ImGui::EndGroup();
     next(190*z);labelW=64;
     ImGui::BeginGroup();combo(gateMode,"Gate Mode",190*z);ImGui::EndGroup();
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: drone until Gate is connected, timelined or receives a note.\nGated: follow Gate. Drone: every voice always plays.");
-    next(ImGui::CalcTextSize("droning").x,6);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: drone until Gate is connected, timelined or receives a note.\nGated: follow Gate. Drone: every voice always plays.\nPulse: the voices play by themselves (the Pulse panel).");
+    next(ImGui::CalcTextSize("pulsing").x,6);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(droning()?ImVec4(.96f,.73f,.45f,1):ImVec4(.59f,.65f,1,1),droning()?"droning":"gated");
+    if(pulsing()) ImGui::TextColored(ImVec4(.42f,.83f,.77f,1),"pulsing");
+    else ImGui::TextColored(droning()?ImVec4(.96f,.73f,.45f,1):ImVec4(.59f,.65f,1,1),droning()?"droning":"gated");
     next(ImGui::CalcTextSize("Reset LFOs").x+ImGui::GetStyle().FramePadding.x*2);
-    if(ImGui::Button("Reset LFOs")) resetLFOs.trigger();
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Reset the added modulation LFOs together");
+    if(ImGui::Button(pulsing()?"Reset":"Reset LFOs")) resetLFOs.trigger();
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip(pulsing()?"Reset the LFOs and restart the pulse pattern":"Reset the added modulation LFOs together");
     labelW=70;
 }

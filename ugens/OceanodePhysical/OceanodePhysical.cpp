@@ -9,8 +9,9 @@
 //    Strike -+ impulsive -+                                  +- pick1 -> out0
 //    Scrape -+            +-> A: waveguide (string <> tube) -+
 //    Ext    -+            |        couple / mutual           +- pick2 -> out1
-//    Bow    -+ feedback  -+-> B: modal bank (bar .. membrane) +
-//    Blow   -+ (they read the resonators' own motion at the contact)
+//    Bow    -+ feedback  -+-> B: modal body (a model from a family, +
+//    Blow   -+                   each mode one or a beating pair)
+//              (bow and blow read the resonators' own motion at the contact)
 //
 //  ext, gate and strk are read per sample (audio rate) or per block; the other
 //  inputs once per block, the ones used inside the sample loop ramped across it.
@@ -88,9 +89,15 @@ struct PhysicalVoice : public Unit {
     int nb, armed, armCount;
     double armPrev, prevStrk;
     double sclp, vdc, vrx;
-    double my1[MAXM], my2[MAXM], mfr[MAXM], mdr[MAXM];
-    double ma1[MAXM], ma2[MAXM], mgi[MAXM], mgf[MAXM], mgx[MAXM];
-    double mpe[MAXM], mp1[MAXM], mp2[MAXM], mpc[MAXM];
+    // the modes: k at k, its doublet partner at MAXM + k; act lists the running ones
+    double my1[2 * MAXM], my2[2 * MAXM], mfr[2 * MAXM], mdr[MAXM];
+    double ma1[2 * MAXM], ma2[2 * MAXM], mgi[2 * MAXM], mgx[2 * MAXM];
+    double mpe[2 * MAXM], mp1[2 * MAXM], mp2[2 * MAXM], mpc[2 * MAXM], mcs[2 * MAXM], mlo[2 * MAXM];
+    int act[2 * MAXM], nact;
+    // the body's modes, recomputed when what they depend on changes
+    Mode bm[MAXM];
+    double bkey[9];
+    int bcount;
     // per block
     double apc, pda, ga, bla, la0, fa0, fb0, lfac, rn, rbs, kia, kca, catk, crel;
     double bnorm, scgc, exa, exb, cab, cba, lref, ga2;
@@ -104,7 +111,7 @@ static void PhysicalVoice_next(PhysicalVoice* unit, int inNumSamples);
 
 static void clearState(PhysicalVoice* u) {
     std::memset(u->mem, 0, sizeof(float) * (3 * NA + NJ));
-    for (int k = 0; k < MAXM; ++k) u->my1[k] = u->my2[k] = u->mfr[k] = 0;
+    for (int k = 0; k < 2 * MAXM; ++k) u->my1[k] = u->my2[k] = u->mfr[k] = 0;
     u->lpa = 0; std::memset(u->ap, 0, sizeof(u->ap));
     u->nutrefl = u->brefl = u->ya = u->sc = u->sclp = u->enve = 0;
 }
@@ -120,11 +127,14 @@ static void PhysicalVoice_Ctor(PhysicalVoice* unit) {
     unit->dln = unit->mem; unit->dlb = unit->dln + NA; unit->dlh = unit->dlb + NA; unit->dlj = unit->dlh + NA;
     unit->wn = unit->wb = unit->wh = unit->wj = 0;
     clearState(unit);
-    for (int k = 0; k < MAXM; ++k) {
-        unit->mdr[k] = 0;
-        unit->ma1[k] = unit->ma2[k] = unit->mgi[k] = unit->mgf[k] = unit->mgx[k] = 0;
-        unit->mpe[k] = unit->mp1[k] = unit->mp2[k] = unit->mpc[k] = 0;
+    for (int k = 0; k < 2 * MAXM; ++k) {
+        unit->ma1[k] = unit->ma2[k] = unit->mgi[k] = unit->mgx[k] = 0;
+        unit->mpe[k] = unit->mp1[k] = unit->mp2[k] = unit->mpc[k] = unit->mcs[k] = unit->mlo[k] = 0;
     }
+    for (int k = 0; k < MAXM; ++k) unit->mdr[k] = 0;
+    unit->nact = 0;
+    for (double& k : unit->bkey) k = -1e30;
+    unit->bcount = 0;
     unit->envf = unit->prevg = 0;
     unit->st = 1e9; unit->stlen = 1; unit->samp = unit->nextb = unit->gap = unit->hard = 0;
     unit->nb = 0; unit->armed = 0; unit->armCount = 0; unit->armPrev = 0; unit->prevStrk = 0;
@@ -194,55 +204,81 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
     u->kia = kstrikea * lt0;
     u->kca = kconta * u->ga2;
 
-    // resonator B: modes
-    const auto& T = tables();
+    // resonator B: the model's modes (cached), drift, tension and doublets
     u->fb0 = std::max(P(P_freq) * std::pow(2, P(P_btune) / 12), 1.0);
-    const int mc = int(clip(std::floor(P(P_bmodes)), 1, MAXM));
-    const double tilt = mat3(mat, 1.6, 0.6, 0.15);
-    const double dsc = mat3(mat, 0.3, 1.6, 3.0);
-    const double tens = 1 + P(P_tension) * u->enve * 3;
-    const double shp = clip(P(P_bshape), 0, NSHAPES - 1);
-    const int sh0 = int(std::floor(shp));
-    const double sfr = shp - sh0;
-    const int sh1 = std::min(sh0 + 1, NSHAPES - 1);
-    const double bexp = lin(clip(P(P_bbright), 0, 1), 1.6, 0);
-    for (int k = 0; k < mc; ++k) {
-        double rt = std::exp(lin(sfr, std::log(T.ratio[sh0][k]), std::log(T.ratio[sh1][k])));
-        rt = std::pow(rt, 1 + 0.25 * P(P_bstretch));
-        u->mdr[k] = (u->mdr[k] + rnd2() * P(P_driftrate) * 0.05) * 0.995;
-        rt *= 1 + P(P_drift) * 0.02 * u->mdr[k];
-        const double w = 2 * M_PI * u->fb0 * rt * tens / sr;
-        if (w < 2.9 && w > 0.0005) {
-            const double tsec = std::max(P(P_bdecay) * dsc * std::pow(rt, -tilt) * frz, 0.002);
-            const double r = std::min(std::pow(0.001, 1 / (tsec * sr)), 0.999995);
-            u->ma1[k] = 2 * r * std::cos(w);
-            u->ma2[k] = r * r;
-            const double sw = std::sin(w);
-            u->mgi[k] = sw;
-            u->mgf[k] = 2 * (1 - r) * sw;
-            u->mgx[k] = sw * std::sqrt(2 * (1 - r));
-            const double q = lin(sfr, T.q[sh0][k], T.q[sh1][k]);
-            const double ph = lin(sfr, T.ph[sh0][k], T.ph[sh1][k]);
-            const double amp = std::pow(rt, -bexp);
-            u->mpe[k] = std::sin(M_PI * q * P(P_pos) + ph);
-            u->mp1[k] = std::sin(M_PI * q * P(P_pick1) + ph) * amp;
-            u->mp2[k] = std::sin(M_PI * q * P(P_pick2) + ph) * amp;
-            u->mpc[k] = std::sin(M_PI * q * 0.137 + ph);
-            // decayed below anything audible: no denormals
-            if (std::fabs(u->my1[k]) < 1e-25 && std::fabs(u->my2[k]) < 1e-25) u->my1[k] = u->my2[k] = 0;
-        } else {
-            u->ma1[k] = u->ma2[k] = u->mgi[k] = u->mgf[k] = u->mgx[k] = 0;
-            u->mpe[k] = u->mp1[k] = u->mp2[k] = u->mpc[k] = 0;
-            u->my1[k] = u->my2[k] = 0;
+    {
+        Body bd;
+        bd.family = P(P_bfamily); bd.shape = P(P_bshape); bd.stretch = P(P_bstretch);
+        bd.material = mat; bd.bdecay = P(P_bdecay); bd.freeze = P(P_freeze); bd.bright = P(P_bbright);
+        bd.f0 = u->fb0;
+        const double key[9] = {bd.family, bd.shape, bd.stretch, bd.material, bd.bdecay, bd.freeze, bd.bright, bd.f0, P(P_bmodes)};
+        if (!std::equal(key, key + 9, u->bkey)) {
+            std::copy(key, key + 9, u->bkey);
+            u->bcount = std::min(int(clip(std::floor(P(P_bmodes)), 1, MAXM)), modeCount(bd));
+            for (int k = 0; k < u->bcount; ++k) u->bm[k] = mode(k, bd);
         }
     }
-    for (int k = mc; k < MAXM; ++k) u->my1[k] = u->my2[k] = 0;
+    const int mc = u->bcount;
+    const double tens = 1 + P(P_tension) * u->enve * 3;
+    const double split = clip(P(P_split), 0, 100), beat = clip(P(P_beat), 0, 50);
+    const bool pairs = split > 0 || beat > 0;
+    const double gA = pairs ? 1 / (1 + kPairGain) : 1, gB = kPairGain / (1 + kPairGain);
+    const double r0 = mc > 0 ? u->bm[0].ratio : 1;
+    // one resonator: frequency (radians per sample), ring time, excitation gain
+    auto setRes = [&](int j, double w, double t60, double g) {
+        if (w < 2.9 && w > 0.0005) {
+            const double r = std::min(std::pow(0.001, 1 / (t60 * sr)), 0.999995);
+            u->ma1[j] = 2 * r * std::cos(w);
+            u->ma2[j] = r * r;
+            const double sw = std::sin(w);
+            u->mgi[j] = sw * g;
+            u->mgx[j] = sw * std::sqrt(2 * (1 - r)) * g;
+            // decayed below anything audible: no denormals
+            if (std::fabs(u->my1[j]) < 1e-25 && std::fabs(u->my2[j]) < 1e-25) u->my1[j] = u->my2[j] = 0;
+            return true;
+        }
+        u->ma1[j] = u->ma2[j] = u->mgi[j] = u->mgx[j] = 0;
+        u->my1[j] = u->my2[j] = 0;
+        return false;
+    };
+    int na = 0;
+    for (int k = 0; k < mc; ++k) {
+        const Mode& m = u->bm[k];
+        u->mdr[k] = (u->mdr[k] + rnd2() * P(P_driftrate) * 0.05) * 0.995;
+        const double rt = m.ratio * (1 + P(P_drift) * 0.02 * u->mdr[k]);
+        const double w = 2 * M_PI * u->fb0 * rt * tens / sr;
+        // the pair sits around the mode: split cents (spread per mode) and beat Hz (at the pitch, times the ratio)
+        const double c = pairs ? std::pow(2, split * pairSpread(k) / 2400) : 1;
+        const double bw = pairs ? M_PI * beat * (rt / r0) / sr : 0;
+        bool on = m.on && setRes(k, w / c - bw, m.t60, gA);
+        bool onB = on && pairs && setRes(MAXM + k, w * c + bw, m.t60 * kPairDecay, gB);
+        if (!onB) { u->my1[MAXM + k] = u->my2[MAXM + k] = 0; u->ma1[MAXM + k] = u->ma2[MAXM + k] = 0; }
+        if (on) {
+            u->mpe[k] = std::sin(M_PI * m.q * P(P_pos) + m.ph);
+            u->mp1[k] = std::sin(M_PI * m.q * P(P_pick1) + m.ph) * m.amp;
+            u->mp2[k] = std::sin(M_PI * m.q * P(P_pick2) + m.ph) * m.amp;
+            u->mpc[k] = std::sin(M_PI * m.q * 0.137 + m.ph);
+            u->act[na++] = k;
+            if (onB) u->act[na++] = MAXM + k;
+        } else {
+            u->mpe[k] = u->mp1[k] = u->mp2[k] = u->mpc[k] = 0;
+        }
+    }
+    for (int k = mc; k < MAXM; ++k) u->my1[k] = u->my2[k] = u->my1[MAXM + k] = u->my2[MAXM + k] = 0;
     // both pickups keep the lowest mode in phase: the pair never cancels in mono
     const double sg1 = u->mp1[0] < 0 ? -1 : 1, sg2 = u->mp2[0] < 0 ? -1 : 1;
-    for (int k = 0; k < mc; ++k) { u->mp1[k] *= sg1; u->mp2[k] *= sg2; }
-    u->mcount = mc;
-    u->bnorm = 1.5 / std::sqrt(double(mc));
     u->kcut = std::max(2, mc / 4);
+    for (int k = 0; k < mc; ++k) {
+        u->mp1[k] *= sg1; u->mp2[k] *= sg2;
+        // the partner is heard and touched where its mode is
+        u->mpe[MAXM + k] = u->mpe[k]; u->mp1[MAXM + k] = u->mp1[k];
+        u->mp2[MAXM + k] = u->mp2[k]; u->mpc[MAXM + k] = u->mpc[k];
+        u->mlo[k] = u->mlo[MAXM + k] = k < u->kcut ? 1 : 0;
+        u->mcs[k] = u->mcs[MAXM + k] = k < u->kcut ? 0 : 1;
+    }
+    u->nact = na;
+    u->mcount = std::max(mc, 1);
+    u->bnorm = 1.5 / std::sqrt(double(u->mcount));
 
     u->scgc = std::exp(-2 * M_PI * (200 + 14000 * std::pow(1 - clip(P(P_grit), 0, 1), 2)) / sr);
     u->exa = 1 - clip(P(P_excite), 0, 1);
@@ -294,12 +330,14 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
 
         // B: free response
         double se = 0, slo = 0;
-        const int mc2 = u->mcount, kc = u->kcut;
-        for (int k = 0; k < mc2; ++k) {
+        const int na = u->nact;
+        const int* act = u->act;
+        for (int i2 = 0; i2 < na; ++i2) {
+            const int k = act[i2];
             const double yf = u->ma1[k] * u->my1[k] - u->ma2[k] * u->my2[k];
             u->mfr[k] = yf;
             se += yf * u->mpe[k];
-            if (k < kc) slo += yf * u->mpc[k];
+            slo += yf * u->mpc[k] * u->mlo[k];
         }
         const double vr = exa * va + exb * kvb * se;
 
@@ -380,9 +418,10 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         const double fxb = exb * fcont * kcontb;
         const double fcpl = u->cab * u->ya;
         double o1 = 0, o2 = 0, scn = 0;
-        for (int k = 0; k < mc2; ++k) {
+        for (int i2 = 0; i2 < na; ++i2) {
+            const int k = act[i2];
             const double y = u->mfr[k] + u->mpe[k] * (fib * u->mgi[k] + fxb * u->mgx[k])
-                + u->mpc[k] * ((fcpl + frat + (k >= kc ? fcas : 0)) * u->mgx[k]);
+                + u->mpc[k] * ((fcpl + frat + u->mcs[k] * fcas) * u->mgx[k]);
             u->my2[k] = u->my1[k];
             u->my1[k] = y;
             o1 += y * u->mp1[k];

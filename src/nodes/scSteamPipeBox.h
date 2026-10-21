@@ -13,6 +13,7 @@
 
 #include "scEQEditor.h"
 #include "scDropdowns.h"
+#include "scPulseGate.h"
 #include <array>
 #include <map>
 #include <memory>
@@ -98,6 +99,10 @@ private:
     ofParameter<float> satDrive,satBias,satTone,satOutput,satMix;
     ofParameter<float> envCurves[1][3];
     ofParameter<bool> originalEnvelope;
+    // Gate Mode Pulse: the automatic gates (scPulseGate); their vis after the spreader's
+    static constexpr int VIS_PULSE=112, VIS_SIZE=VIS_PULSE+scPulseGate::VIS_SIZE;
+    scPulseGate pulse;
+    bool pulsing() const { return gateMode.get()==3; }
     float labelW=70;
     void drawNativeEnvelope(int,float);
     void drawSoundTab(float);

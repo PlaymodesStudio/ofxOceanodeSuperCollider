@@ -25,3 +25,13 @@ instead of the DynGen script, to compare the two.
 - the lowest partial within 20 dB of the strongest one.
 
 The measured results are listed in `synthdefs/WIP/PhysicalBox/README.md`.
+
+## Body models (C++ PhysicalVoice)
+
+```bash
+/Applications/SuperCollider.app/Contents/MacOS/sclang render_models.scd /tmp/physicalbox-models [filter]
+```
+
+Renders every body model (Family / Shape, see `ugens/OceanodePhysical/PhysicalModes.h`)
+struck, the doublets (Split cents, Beat Hz), a near-zero Split against none
+(must match) and bowed cases. Needs OceanodePhysical in the user extensions.

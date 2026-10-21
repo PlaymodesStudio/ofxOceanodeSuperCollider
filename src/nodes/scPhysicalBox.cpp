@@ -64,27 +64,58 @@ const std::vector<Factory>& factorySounds() {
         {"Scratchy bow", {{"strike", 0}, {"bow", 1}, {"excite", 0}, {"listen", 0}, {"adecay", 2}, {"pos", 0.12f}, {"bowpress", 1.1f}, {"rosin", 0.8f}, {"atk", 0.1f}}},
         {"Flute", {{"strike", 0}, {"blow", 1}, {"blowtype", 0}, {"abore", 0.5f}, {"abright", 0.25f}, {"adecay", 0.3f}, {"breath", 0.6f}, {"pos", 0.02f}, {"turb", 0.25f}, {"excite", 0}, {"listen", 0}}},
         {"Clarinet", {{"strike", 0}, {"blow", 1}, {"blowtype", 1}, {"abore", 0.5f}, {"pos", 0.02f}, {"adecay", 0.5f}, {"excite", 0}, {"listen", 0}}},
-        {"Wood bar", {{"excite", 1}, {"listen", 1}, {"bshape", 1}, {"material", 0}, {"bdecay", 2}, {"hardness", 0.5f}}},
-        {"Glass bar", {{"excite", 1}, {"listen", 1}, {"bshape", 1}, {"material", 0.5f}, {"bdecay", 2}, {"hardness", 0.7f}}},
-        {"Bell", {{"excite", 1}, {"listen", 1}, {"bshape", 3}, {"material", 1}, {"bdecay", 3}, {"hardness", 0.7f}}},
-        {"Tam-tam bloom", {{"excite", 1}, {"listen", 1}, {"bshape", 4}, {"material", 1}, {"bdecay", 4}, {"cascade", 0.8f}, {"hardness", 0.8f}, {"mass", 0.8f}}},
-        {"Tom", {{"excite", 1}, {"listen", 1}, {"bshape", 5}, {"material", 0.4f}, {"tension", 0.8f}, {"bdecay", 1}, {"hardness", 0.4f}}},
-        {"Singing glass", {{"strike", 0}, {"bow", 1}, {"excite", 1}, {"listen", 1}, {"bshape", 2}, {"material", 0.5f}, {"bdecay", 3}, {"pos", 0.5f}, {"bowpress", 0.2f}, {"bowspeed", 0.7f}, {"atk", 0.3f}}},
-        {"Bowed metal bar", {{"strike", 0}, {"bow", 1}, {"excite", 1}, {"listen", 1}, {"bshape", 1}, {"material", 1}}},
-        {"Blown bell drone", {{"strike", 0}, {"blow", 1}, {"blowtype", 0}, {"excite", 1}, {"listen", 1}, {"bshape", 3}, {"material", 1}, {"atk", 0.5f}}},
-        {"Scraped plate", {{"strike", 0}, {"scrape", 1}, {"excite", 1}, {"listen", 1}, {"bshape", 4}, {"material", 1}, {"chatter", 0.5f}}},
-        {"Harsh scrape", {{"strike", 0}, {"scrape", 1}, {"rough", 0.9f}, {"grit", 0.8f}, {"chatter", 1}, {"cascade", 0.6f}, {"rattle", 0.4f}, {"rattleth", 0.1f}, {"material", 1}, {"bshape", 4}, {"excite", 1}, {"listen", 1}}},
-        {"Sympathetic strings", {{"excite", 0}, {"listen", 0.5f}, {"btune", 0.15f}, {"bshape", 0}, {"couple", 0.4f}, {"mutual", 1}, {"adecay", 4}, {"bdecay", 4}}},
-        {"Glass drone", {{"strike", 0}, {"bow", 0.6f}, {"blow", 0.4f}, {"excite", 0.6f}, {"listen", 0.6f}, {"bshape", 2}, {"drift", 1}, {"freeze", 0.5f}, {"atk", 1}, {"rel", 3}}},
+        // Bars (Family 1; Shape: free bar 0, xylophone 0.25, gamelan 0.5, marimba 0.75, kalimba 1)
+        {"Wood bar", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0}, {"material", 0}, {"bdecay", 2}, {"hardness", 0.5f}}},
+        {"Xylophone", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0.25f}, {"material", 0}, {"bdecay", 3}, {"hardness", 0.85f}}},
+        {"Marimba", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0.75f}, {"material", 0}, {"bdecay", 4}, {"hardness", 0.45f}, {"mass", 0.4f}, {"pos", 0.25f}}},
+        {"Gamelan", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0.5f}, {"material", 1}, {"bdecay", 4}, {"hardness", 0.7f}, {"beat", 5}}},
+        {"Kalimba", {{"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 1}, {"material", 1}, {"bdecay", 2.5f}, {"hardness", 0.6f}, {"pos", 0.85f}}},
+        {"Bowed metal bar", {{"strike", 0}, {"bow", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0}, {"material", 1}}},
+        // Shells & bells (Family 2; Shape: wine glass 0, singing bowl 0.25, hand bell 0.5, church bell 0.75, gong 1)
+        {"Wine glass", {{"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0}, {"material", 0.5f}, {"bdecay", 4}, {"hardness", 0.9f}, {"split", 2}}},
+        {"Singing glass", {{"strike", 0}, {"bow", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0}, {"material", 0.5f}, {"bdecay", 3}, {"pos", 0.5f}, {"bowpress", 0.2f}, {"bowspeed", 0.7f}, {"atk", 0.3f}}},
+        {"Singing bowl", {{"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0.25f}, {"material", 1}, {"bdecay", 8}, {"hardness", 0.4f}, {"mass", 0.6f}, {"split", 1.5f}, {"drift", 0.3f}}},
+        {"Bowed bowl", {{"strike", 0}, {"bow", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0.25f}, {"material", 1}, {"bdecay", 8}, {"pos", 0.05f}, {"bowpress", 0.3f}, {"bowspeed", 0.4f}, {"atk", 0.3f}}},
+        {"Hand bell", {{"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0.5f}, {"material", 1}, {"bdecay", 3}, {"hardness", 0.8f}}},
+        {"Church bell", {{"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0.75f}, {"material", 1}, {"bdecay", 6}, {"hardness", 0.8f}, {"split", 1}}},
+        {"Blown bell drone", {{"strike", 0}, {"blow", 1}, {"blowtype", 0}, {"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0.75f}, {"material", 1}, {"atk", 0.5f}}},
+        {"Gong ageng", {{"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 1}, {"material", 1}, {"bdecay", 8}, {"hardness", 0.3f}, {"mass", 0.8f}, {"beat", 3}}},
+        {"Glass drone", {{"strike", 0}, {"bow", 0.6f}, {"blow", 0.4f}, {"excite", 0.6f}, {"listen", 0.6f}, {"bfamily", 2}, {"bshape", 0}, {"drift", 1}, {"freeze", 0.5f}, {"atk", 1}, {"rel", 3}}},
+        // Tonefields (Family 3; Shape: handpan 0, steel pan 1)
+        {"Handpan", {{"excite", 1}, {"listen", 1}, {"bfamily", 3}, {"bshape", 0}, {"material", 1}, {"bdecay", 4}, {"hardness", 0.35f}, {"mass", 0.5f}, {"split", 6}}},
+        {"Steel pan", {{"excite", 1}, {"listen", 1}, {"bfamily", 3}, {"bshape", 1}, {"material", 1}, {"bdecay", 2.5f}, {"hardness", 0.7f}, {"split", 3}}},
+        // Membranes (Family 4; Shape: tabla 0, timpani 0.5, membrane 1)
+        {"Tabla", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 0}, {"material", 0.4f}, {"bdecay", 1.5f}, {"hardness", 0.7f}, {"tension", 0.3f}}},
+        {"Timpani", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 0.5f}, {"material", 0.4f}, {"bdecay", 3}, {"hardness", 0.3f}, {"mass", 0.7f}, {"pos", 0.25f}}},
+        {"Tom", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 1}, {"material", 0.4f}, {"tension", 0.8f}, {"bdecay", 1}, {"hardness", 0.4f}}},
+        {"Frame drum", {{"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 1}, {"material", 0.2f}, {"bdecay", 0.8f}, {"hardness", 0.25f}, {"mass", 0.6f}, {"pos", 0.8f}}},
+        // Plates & blocks (Family 5; Shape: plate 0, wood block 1)
+        {"Wood block", {{"excite", 1}, {"listen", 1}, {"bfamily", 5}, {"bshape", 1}, {"material", 0}, {"bdecay", 1}, {"hardness", 0.9f}}},
+        {"Tam-tam bloom", {{"excite", 1}, {"listen", 1}, {"bfamily", 5}, {"bshape", 0}, {"material", 1}, {"bdecay", 4}, {"cascade", 0.8f}, {"hardness", 0.8f}, {"mass", 0.8f}}},
+        {"Scraped plate", {{"strike", 0}, {"scrape", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 5}, {"bshape", 0}, {"material", 1}, {"chatter", 0.5f}}},
+        {"Harsh scrape", {{"strike", 0}, {"scrape", 1}, {"rough", 0.9f}, {"grit", 0.8f}, {"chatter", 1}, {"cascade", 0.6f}, {"rattle", 0.4f}, {"rattleth", 0.1f}, {"material", 1}, {"bfamily", 5}, {"bshape", 0}, {"excite", 1}, {"listen", 1}}},
+        // Harmonic (Family 0)
+        {"Sympathetic strings", {{"excite", 0}, {"listen", 0.5f}, {"btune", 0.15f}, {"bfamily", 0}, {"couple", 0.4f}, {"mutual", 1}, {"adecay", 4}, {"bdecay", 4}}},
     };
     return f;
 }
-const char* shapeNames[physical::NSHAPES] = {"harmonic", "bar", "glass", "bell", "plate", "membrane"};
+// "Marimba", or "Marimba > Kalimba 0.40" between two models
+std::string shapeLabel(float family, float shape) {
+    const auto p = physical::place(family, shape);
+    std::string s = physical::modelName(p.a);
+    if(p.f > 0.04) s += " > " + std::string(physical::modelName(p.b)) + " " + ofToString(p.f, 2);
+    return s;
+}
+std::vector<std::string> familyNames() {
+    std::vector<std::string> out;
+    for(int f = 0; f < physical::NFAMILIES; ++f) out.push_back(physical::familyName(f));
+    return out;
+}
 }
 
 scPhysicalBox::scPhysicalBox(std::vector<serverManager*> s) : scNode("physicalBox"), servers(std::move(s)) {
     description = "Physical modelling: strike, bow, blow, scrape or feed audio into a waveguide (string to tube) "
-                  "and a modal body (bar, glass, bell, plate, membrane), coupled, with rattle, tension and "
+                  "and a modal body (bars, glasses, bowls, bells, gongs, handpan, steel pan, drums, plates, blocks), coupled, with rattle, tension and "
                   "cascade, heard by two pickups. Every voice is its own instrument, so LFOs and envelopes "
                   "can move each one separately. Gate is a level (the velocity); In feeds the Ext exciter. "
                   "Gate Mode Pulse plays the voices by itself, from a clock to a Geiger counter, together or each its own. "
@@ -135,25 +166,20 @@ void scPhysicalBox::setup() {
     reg(gateMode, [this](){ sendAll(); });
     dropdowns.set(gateMode.getEscapedName(), {"Auto", "Gated", "Drone", "Pulse"});
     {
-        auto toPulse = [this]() { for(auto& [s, st] : states) sendPulse(s, st); };
-        pulseSync.set("Pulse Sync", false);                     reg(pulseSync, toPulse);
-        pulseRate.set("Pulse Rate", 4.0f, 0.05f, 200.0f);       reg(pulseRate, toPulse);
-        pulseBeats.set("Pulse Beats", 0.5f, 0.0625f, 16.0f);    reg(pulseBeats, toPulse);
-        pulseChaos.set("Pulse Chaos", 0.0f, 0.0f, 1.0f);        reg(pulseChaos, toPulse);
-        pulseCluster.set("Pulse Cluster", 0.0f, 0.0f, 1.0f);    reg(pulseCluster, toPulse);
-        pulseChance.set("Pulse Chance", 1.0f, 0.0f, 1.0f);      reg(pulseChance, toPulse);
-        pulseLink.set("Pulse Link", 1.0f, 0.0f, 1.0f);          reg(pulseLink, toPulse);
-        pulsePhasing.set("Pulse Phasing", 0.0f, 0.0f, 1.0f);    reg(pulsePhasing, toPulse);
-        pulseStrum.set("Pulse Strum", 0.0f, -80.0f, 80.0f);     reg(pulseStrum, toPulse);
-        pulseLength.set("Pulse Length", 0.5f, 0.01f, 2.0f);     reg(pulseLength, toPulse);
-        pulseFixed.set("Pulse Fixed Length", false);            reg(pulseFixed, toPulse);
-        pulseTime.set("Pulse Length Time", 0.1f, 0.001f, 8.0f); reg(pulseTime, toPulse);
-        pulseJitter.set("Pulse Length Jitter", 0.0f, 0.0f, 1.0f); reg(pulseJitter, toPulse);
-        pulseVelocity.set("Pulse Velocity", 0.8f, 0.0f, 1.0f);  reg(pulseVelocity, toPulse);
-        pulseVelJitter.set("Pulse Velocity Jitter", 0.0f, 0.0f, 1.0f); reg(pulseVelJitter, toPulse);
-        pulseFollow.set("Pulse Follow Gate", false);            reg(pulseFollow, [this](){ sendAll(); });
-        // a new seed starts the pattern again (0: a fresh one every start)
-        pulseSeed.set("Pulse Seed", 0, 0, 9999);                reg(pulseSeed, [this](){ pulseRestart = true; });
+        scPulseGate::Host ph;
+        ph.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
+        ph.regI = [this](ofParameter<int>& p, std::function<void()> f){ reg(p, f); };
+        ph.regB = [this](ofParameter<bool>& p, std::function<void()> f){ reg(p, f); };
+        ph.sendAll = [this](){ sendAll(); };
+        ph.bpm = [this](){ return bpm; };
+        ph.voices = [this](){ return voices.get(); };
+        ph.section = [this](const char* t, float w){ sectionHeader(t, w, nullptr, pal::pickup); };
+        ph.slider = [this](ofParameter<float>& p, const char* l, float w, const char* f, bool log){ slider(p, l, w, f, log); };
+        ph.toggle = [this](ofParameter<bool>& p, const char* l){ toggle(p, l); };
+        ph.mark = [this](const std::string& k){ mark(k); };
+        ph.menu = [this](const std::string& k){ menu(k); };
+        ph.labelW = &labelW;
+        pulse.setup(ph);
     }
     scheduled.add(gateIn.handle, gate); scheduled.add(pitchIn.handle, pitch);
     scheduled.enable(this, [this](){ for(auto& [s, st] : states) if(st.created) return true; return false; });
@@ -168,7 +194,7 @@ void scPhysicalBox::setup() {
     listeners.push(voices.newListener([this](int&) { structureDirty = true; }));
     listeners.push(channels.newListener([this](int&) { structureDirty = true; }));
     listeners.push(master.newListener([this](float&) { if(!restoring) sendAll(); }));
-    listeners.push(resetLFOs.newListener([this]() { mod.resetLfos(); pulseRestart = true; }));
+    listeners.push(resetLFOs.newListener([this]() { mod.resetLfos(); pulse.restart = true; }));
 
     // ── Sound: the PhysicalVoice inputs (defaults: PhysicalModes.h) ─────────
     auto d = [](const char* sc) {
@@ -209,10 +235,14 @@ void scPhysicalBox::setup() {
     addSound("Stiffness", "astiff", d("astiff"), 0, 1, "A");
     addSound("B Tune", "btune", d("btune"), -24, 24, "B", "%+.2f st");
     addSound("B Decay", "bdecay", d("bdecay"), 0.02f, 20, "B", "%.2f s", true);
-    addSound("Shape", "bshape", d("bshape"), 0, 5, "B");
+    addSound("Family", "bfamily", d("bfamily"), 0, physical::NFAMILIES - 1, "B", "%.0f", false, true);
+    dropdowns.set(soundParam("bfamily").getEscapedName(), familyNames());
+    addSound("Shape", "bshape", d("bshape"), 0, 1, "B");
     addSound("Stretch", "bstretch", d("bstretch"), -1, 1, "B", "%+.2f");
     addSound("Modes", "bmodes", d("bmodes"), 1, 48, "B", "%.0f");
     addSound("B Brightness", "bbright", d("bbright"), 0, 1, "B");
+    addSound("Split", "split", d("split"), 0, 30, "B", "%.1f cents");
+    addSound("Beat", "beat", d("beat"), 0, 12, "B", "%.2f Hz");
     addSound("Material", "material", d("material"), 0, 1, "Couple");
     addSound("Excite", "excite", d("excite"), 0, 1, "Couple");
     addSound("Listen", "listen", d("listen"), 0, 1, "Couple");
@@ -228,8 +258,18 @@ void scPhysicalBox::setup() {
     addSound("Drift Rate", "driftrate", d("driftrate"), 0, 1, "Life");
     addSound("Freeze", "freeze", d("freeze"), 0, 1, "Life");
     addSound("Level", "level", 0, -40, 12, "Output", "%+.1f dB");
-    addSound("Width", "width", 0.5f, 0, 1, "Output");
-    addSound("Spread", "spread", 0.6f, 0, 1, "Output");
+    addSound("Width", "width", 0.5f, 0, 1, "Pan");
+    addSound("Spread", "spread", 0.6f, 0, 1, "Pan");
+    // Panning: Spread (Spread, Center), each voice on a speaker, or each where it is put
+    {
+        auto toSpread = [this]() { sendAll(); };
+        placement.set("Placement", 0, 0, 2);                 reg(placement, toSpread);
+        spreadCenter.set("Spread Center", 0.0f, -1.0f, 1.0f); reg(spreadCenter, toSpread);
+        panP.set("Pan", {0.5f}, {0.0f}, {1.0f});             reg(panP, toSpread);
+        speakerLayout.set("Speaker Layout", 0, 0, 1);        reg(speakerLayout, toSpread);
+        dropdowns.set(placement.getEscapedName(), {"Spread", "Channels", "Manual"});
+        dropdowns.set(speakerLayout.getEscapedName(), {"Ring", "Line"});
+    }
 
     // ── Effects: MixerPro's inserts, then MiVerb ─────────────────────────────
     auto toStages = [this]() { for(auto& [sv, st] : states) if(st.created) updateStages(sv, st); };
@@ -309,7 +349,7 @@ void scPhysicalBox::setup() {
     h.voices = [this](){ return voices.get(); };
     mod.setup(h, {{"Pitch", 24, "st"}, {"Material", 1, ""}, {"Excite", 1, ""}, {"Position", 1, ""},
         {"Hardness", 1, ""}, {"Bow Pressure", 1, ""}, {"Bow Speed", 1, ""}, {"Breath", 1, ""},
-        {"Scrape Speed", 1, ""}, {"Brightness", 1, ""}, {"Decay", 4, "oct"}, {"Shape", 5, ""},
+        {"Scrape Speed", 1, ""}, {"Brightness", 1, ""}, {"Decay", 4, "oct"}, {"Shape", 1, ""},
         {"Couple", 1, ""}, {"Cascade", 1, ""}, {"Amp", 1, ""}, {"Pan", 1, ""}}, true, true, true);
     mod.lfoCount = mod.envCount = mod.extCount = 0;
     {
@@ -321,6 +361,7 @@ void scPhysicalBox::setup() {
             auto it = targets.find(c->sc);
             if(it != targets.end()) mod.targetOfKey[c->p.getEscapedName()] = it->second;
         }
+        mod.targetOfKey[panP.getEscapedName()] = Pan;
     }
     mod.changed = [this](){ if(!restoring) sendAll(); };
     initial = capture();
@@ -341,9 +382,9 @@ void scPhysicalBox::sendNotes(ofxSCServer* server, State& st) {
     auto now = scheduled.inEffectNow();   // not a scheduled send: the notes as they stand now
     const int n = st.builtVoices;
     // Pulse: ModGate takes the generator's gates, Gate (Follow Gate) holds its voices
-    const bool pulse = st.pulse && st.pulseBus;
+    const int pbus = pulse.bus(server);
     std::vector<float> g(n), ones(n, 1.0f);
-    for(int i = 0; i < n; ++i) g[i] = pulse ? 0.0f : first(gate.get(), i, 0);
+    for(int i = 0; i < n; ++i) g[i] = pbus >= 0 ? 0.0f : first(gate.get(), i, 0);
     st.gate->set("gate", g);
     st.gate->set("velocity", ones);       // the gate's level is the velocity
     st.gate->set("out", st.gates->index);
@@ -352,17 +393,10 @@ void scPhysicalBox::sendNotes(ofxSCServer* server, State& st) {
     st.droneSent = droning() ? 1 : 0;
     st.gate->set("drone", float(st.droneSent));
     const int gbus = gateIn.bus(server);
-    st.gate->set("gate_sel", gbus >= 0 || pulse ? 1.0f : 0.0f);
-    if(pulse) st.gate->mapan("gate_ar", st.pulseBus->index, n);
+    st.gate->set("gate_sel", gbus >= 0 || pbus >= 0 ? 1.0f : 0.0f);
+    if(pbus >= 0) st.gate->mapan("gate_ar", pbus, n);
     else if(gbus >= 0) st.gate->mapan("gate_ar", gbus, n);
-    if(pulse) {
-        std::vector<float> held(16, 0.0f);
-        for(int i = 0; i < n; ++i) held[i] = first(gate.get(), i, 0);
-        st.pulse->set("enable", held);
-        st.pulse->set("free", pulseFollow.get() ? 0.0f : 1.0f);
-        st.pulse->set("enable_sel", gbus >= 0 ? 1.0f : 0.0f);
-        if(gbus >= 0) st.pulse->mapan("enable_ar", gbus, n);
-    }
+    pulse.enable(server, gate.get(), n, gbus);
     const int bus = pitchIn.bus(server);
     for(int i = 0; i < n; ++i) if(auto* v = st.voices[i]) {
         v->set("pitch", first(pitch.get(), i, 48));
@@ -399,104 +433,30 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
     if(st.spread) {
         st.spread->set("in", st.audio->index);
         st.spread->set("voices", st.builtVoices);
-        const float spread = soundParam("spread").get();
-        std::vector<float> pans(16, 0.5f);
-        for(int i = 0; i < st.builtVoices; ++i)
-            pans[i] = ofClamp(0.5f + (st.builtVoices > 1 ? (float(i) / (st.builtVoices - 1) - 0.5f) * spread : 0), 0.0f, 1.0f);
+        std::vector<float> pans = panPositions();
+        pans.resize(16, 0.5f);
         st.spread->set("pan", pans);
+        st.spread->set("line", speakerLayout.get() == 1 ? 1.0f : 0.0f);
         st.spread->set("width", soundParam("width").get());
         st.spread->set("mpan", mod.targetBus(server, Pan));
         st.spread->set("vis", st.vis->index + VIS_PAN);
     }
     updateStages(server, st);
 }
-void scPhysicalBox::sendAll() { for(auto& [s, st] : states) { sendNotes(s, st); sendSound(s, st); sendPulse(s, st); } }
+void scPhysicalBox::sendAll() { for(auto& [s, st] : states) { sendNotes(s, st); sendSound(s, st); } pulse.sendAll(); }
 
-// ── Pulse: the automatic gates ───────────────────────────────────────────────
-float scPhysicalBox::pulseHz() const {
-    if(pulseSync.get()) return bpm / 60.0f / std::max(0.0625f, pulseBeats.get());
-    return std::max(0.01f, pulseRate.get());
-}
-void scPhysicalBox::sendPulse(ofxSCServer* server, State& st) {
-    if(!st.pulse) return;
-    scSynthControlBatch c(st.pulse, server);
-    c.set("voices", float(st.builtVoices));
-    c.set("rate", pulseHz());
-    c.set("chaos", pulseChaos.get()); c.set("cluster", pulseCluster.get());
-    c.set("chance", pulseChance.get()); c.set("link", pulseLink.get());
-    c.set("phasing", pulsePhasing.get()); c.set("strum", pulseStrum.get() * 0.001f);
-    c.set("length", pulseLength.get()); c.set("lengthsec", pulseTime.get());
-    c.set("fixed", pulseFixed.get() ? 1.0f : 0.0f); c.set("jitter", pulseJitter.get());
-    c.set("velocity", pulseVelocity.get()); c.set("veljitter", pulseVelJitter.get());
-    c.send();
-}
-// a new generator (Seed > 0: its pattern from the start) at the head of the gate
-// group, and a fresh ModGate after it: a level held from Oceanode gate values
-// played before would otherwise floor every pulse's velocity
+// Pulse: a new generator at the head of the gate group and a fresh ModGate
+// after it (a level held from Oceanode gate values played before would floor
+// every pulse's velocity)
 void scPhysicalBox::startPulse(ofxSCServer* server, State& st) {
     if(!st.created || !st.groups[SlGate] || !liveBus(server, st.vis, false)) return;
-    if(!liveBus(server, st.pulseBus, true)) {
-        dropBus(server, st.pulseBus, true);
-        st.pulseBus = new ofxSCBus(RATE_AUDIO, 16, server);
-        if(!liveBus(server, st.pulseBus, true)) { st.pulseBus->free(); delete st.pulseBus; st.pulseBus = nullptr; return; }
-    }
-    stopPulse(st);
-    st.pulse = new ofxSCSynth("PhysicalBoxPulse", server);
-    st.pulse->set("seed", pulseSeed.get() > 0 ? pulseSeed.get() : int(ofRandom(1, 99999)));
-    st.pulse->set("out", st.pulseBus->index);
-    st.pulse->set("vis", st.vis->index + VIS_PULSE);
-    sendPulse(server, st);
-    st.pulse->createAndRun(0, st.groups[SlGate]->nodeID, true);
-    pulseCounts.fill(0);
-    for(auto& events : pulseEvents) events.clear();
+    if(!pulse.start(server, st.groups[SlGate]->nodeID, st.vis->index + VIS_PULSE, st.builtVoices)) return;
     if(st.gate) {
         st.gate->free(); delete st.gate;
         st.gate = new ofxSCSynth("ModGate" + ofToString(st.builtVoices), server);
         sendNotes(server, st);
         st.gate->createAndRun(1, st.groups[SlGate]->nodeID, true);
     }
-}
-void scPhysicalBox::stopPulse(State& st) {
-    if(!st.pulse) return;
-    st.pulse->free(); delete st.pulse; st.pulse = nullptr;
-}
-// the characters: a starting point each (Rate stays the user's)
-void scPhysicalBox::pulseShape(int shape) {
-    struct Shape { float chaos, cluster, chance, link, phasing, strum, length, jitter, veljitter; };
-    static const Shape shapes[] = {
-        {0, 0, 1, 1, 0, 0, 0.5f, 0, 0},              // Clock
-        {0, 0, 1, 1, 0, 30, 0.8f, 0.1f, 0.25f},      // Strum
-        {0, 0, 1, 0, 0.03f, 0, 0.3f, 0, 0.1f},       // Phasing
-        {1, 0, 1, 0, 0, 0, 0.15f, 0.5f, 0.7f},       // Rain
-        {1, 0.6f, 1, 0, 0, 0, 0.05f, 0.3f, 0.3f},    // Geiger
-        {0.6f, 0.2f, 0.85f, 0.35f, 0.2f, 0, 0.4f, 0.6f, 0.5f},   // Swarm
-        {0.15f, 1, 1, 1, 0, 0, 0.3f, 0.2f, 0.35f},   // Bursts
-    };
-    const auto& x = shapes[std::clamp(shape, 0, int(std::size(shapes)) - 1)];
-    restoring = true;
-    pulseChaos = x.chaos; pulseCluster = x.cluster; pulseChance = x.chance; pulseLink = x.link;
-    pulsePhasing = x.phasing; pulseStrum = x.strum; pulseLength = x.length; pulseFixed = false;
-    pulseJitter = x.jitter; pulseVelJitter = x.veljitter;
-    restoring = false;
-    for(auto& [s, st] : states) sendPulse(s, st);
-}
-// the generator's event counts since the last read: new events into the raster
-void scPhysicalBox::readPulse() {
-    const float now = ofGetElapsedTimef(), window = 6.0f;
-    if(live.size() >= size_t(VIS_SIZE)) {
-        const float since = std::clamp(now - pulseReadAt, 0.0f, 0.25f);
-        for(int v = 0; v < 16; ++v) {
-            const float count = live[VIS_PULSE + v];
-            if(count < pulseCounts[v]) pulseCounts[v] = count;      // a new generator
-            const int fresh = std::min(16, int(count - pulseCounts[v]));
-            pulseCounts[v] = count;
-            for(int k = 0; k < fresh; ++k)
-                pulseEvents[v].push_back({now - since * (1 - float(k + 1) / fresh), live[VIS_PULSE + 16 + v], live[VIS_PULSE + 32 + v]});
-        }
-    }
-    pulseReadAt = now;
-    for(auto& events : pulseEvents)
-        events.erase(events.begin(), std::find_if(events.begin(), events.end(), [&](const PulseEvent& e){ return e.t + e.dur > now - window; }));
 }
 
 void scPhysicalBox::buildSynth(ofxSCServer* server) {
@@ -533,7 +493,7 @@ void scPhysicalBox::release(ofxSCServer* server, State& st) {
     if(st.created) mod.free(server, false);
     for(auto& f : st.fx) { delete f.synth; f.synth = nullptr; dropBus(server, f.in, true); f.running = false; f.offAt = -1; }
     delete st.gate; st.gate = nullptr; delete st.spread; st.spread = nullptr;
-    delete st.pulse; st.pulse = nullptr; dropBus(server, st.pulseBus, true);
+    pulse.release(server);
     for(auto*& v : st.voices) { delete v; v = nullptr; }
     for(auto& cache : st.sent) cache.clear();
     for(auto*& g : st.groups) { delete g; g = nullptr; }
@@ -745,12 +705,13 @@ void scPhysicalBox::menu(const std::string& k) {
 }
 ofJson scPhysicalBox::capture() const {
     ofJson j = ofJson::object();
-    for(const auto& c : controls) if(!scSnapshots::isOwnKey(c.key)) j[c.key] = c.save();
+    for(const auto& c : controls) if(!scSnapshots::isOwnKey(c.key) && c.key != speakerLayout.getEscapedName()) j[c.key] = c.save();
     mod.patchBases(j); mod.save(j, "physicalMod"); return j;
 }
 void scPhysicalBox::apply(const ofJson& a, const ofJson& b, float t, bool sw) {
     restoring = true;
-    for(const auto& c : controls) if(!scSnapshots::isOwnKey(c.key) && !(published.count(c.key) && published.at(c.key)->hasInConnection())) {
+    for(const auto& c : controls) if(!scSnapshots::isOwnKey(c.key) && c.key != speakerLayout.getEscapedName()
+                                     && !(published.count(c.key) && published.at(c.key)->hasInConnection())) {
         const auto& av = a.contains(c.key) ? a[c.key] : initial[c.key];
         const auto& bv = b.contains(c.key) ? b[c.key] : initial[c.key];
         c.load(blend(av, bv, t, sw, c.discrete));
@@ -788,6 +749,7 @@ void scPhysicalBox::presetSave(ofJson& j) {
     j["physicalBox"] = capture();
     // Snapshot controls belong in a patch, but never inside a sound snapshot.
     for(const auto& c : controls) if(scSnapshots::isOwnKey(c.key)) j["physicalBox"][c.key] = c.save();
+    j["physicalBox"][speakerLayout.getEscapedName()] = speakerLayout.get();   // the room, not the sound
     j["physicalBoxPublished"] = publishedKeys; timeline.save(j, "physicalBoxTimeline");
 }
 void scPhysicalBox::loadBeforeConnections(ofJson& j) {
@@ -806,10 +768,11 @@ void scPhysicalBox::presetRecallAfterSettingParameters(ofJson& j) {
     gateTouched = false;
     apply(state, state, 1, true);
     restoring = true; for(const auto& c : controls) if(scSnapshots::isOwnKey(c.key) && state.contains(c.key)) c.load(state[c.key]); restoring = false;
+    if(state.contains(speakerLayout.getEscapedName())) speakerLayout = state.value(speakerLayout.getEscapedName(), 0);
 }
 void scPhysicalBox::requireSynthdefs() {
     for(const auto& entry : std::vector<std::pair<std::string, std::string>>{
-        {"PhysicalBoxVoice.scsyndef", "PhysicalBox"}, {"ModGate1.scsyndef", "Modulation"}, {"mixerProEQ2.scsyndef", "MixerPro"}}) {
+        {"PhysicalBoxVoice.scsyndef", "PhysicalBox"}, {"ModGate1.scsyndef", "Modulation"}, {"PulseGate.scsyndef", "Modulation"}, {"mixerProEQ2.scsyndef", "MixerPro"}}) {
         std::filesystem::path folder;
         try {
             const std::filesystem::path data = ofToDataPath(SYNTHDEF_DIRECTORY, true);
@@ -832,10 +795,10 @@ void scPhysicalBox::update(ofEventArgs&) {
     // Pulse on / off / again (a new Seed, Reset)
     for(auto& [server, st] : states) if(st.created) {
         const bool want = pulsing();
-        if(want && (!st.pulse || pulseRestart)) startPulse(server, st);
-        else if(!want && st.pulse) { stopPulse(st); sendNotes(server, st); }
+        if(want && (!pulse.running(server) || pulse.restart)) startPulse(server, st);
+        else if(!want && pulse.running(server)) { pulse.stop(server); sendNotes(server, st); }
     }
-    pulseRestart = false;
+    pulse.restart = false;
     mod.showing = show.get(); mod.update();
     const float now = ofGetElapsedTimef();
     for(auto& [server, st] : states) if(st.created) {
@@ -850,7 +813,7 @@ void scPhysicalBox::update(ofEventArgs&) {
         if(now >= nextRead) { nextRead = now + 1.0f / (pulsing() ? 60 : 25); s->requestControlValues(st.vis->index, VIS_SIZE); }
         break;
     }
-    if(pulsing()) readPulse();
+    if(pulsing()) pulse.read(live, VIS_PULSE);
 }
 bool scPhysicalBox::droning() const {
     if(pulsing()) return false;
@@ -878,7 +841,7 @@ void scPhysicalBox::drawWindow() {
     drawHeader();
     snaps.drawBar(w);
     drawDisplay(w);
-    if(pulsing()) drawPulse(w);
+    if(pulsing()) pulse.drawPanel(w);
     ImGui::Spacing();
     if(ImGui::BeginTabBar("##physTabs")) {
         auto tab = [&](const char* name, std::function<void(float)> body) {
@@ -894,6 +857,7 @@ void scPhysicalBox::drawWindow() {
         tab("Sound", [this](float tw){ drawSoundTab(tw); });
         tab("Modulation", [this](float tw){ mod.drawEnvelopeCards(tw, {}); ImGui::Spacing(); mod.drawLfos(tw); });
         tab("Routing", [this](float tw){ mod.drawRouting(tw); });
+        tab("Panning", [this](float tw){ drawPanTab(tw); });
         tab("Effects", [this](float tw){ drawFxTab(tw); });
         ImGui::EndTabBar();
     }
@@ -1053,11 +1017,8 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
 
     // the body's modes: log frequency, height = how much the contact and pickups get of them
     const float rowTop = a.y + size.y * 0.58f, rowBottom = b.y - 8 * z;
-    const auto* sh = sound("bshape");
-    const float shape = sh->p.get();
-    const int s0 = std::clamp(int(std::floor(shape)), 0, physical::NSHAPES - 1), s1 = std::min(s0 + 1, physical::NSHAPES - 1);
-    std::string shapeName = shapeNames[s0];
-    if(shape - s0 > 0.04f && s1 != s0) shapeName += " > " + std::string(shapeNames[s1]) + " " + ofToString(shape - s0, 2);
+    const float family = soundParam("bfamily").get(), shape = soundParam("bshape").get();
+    std::string shapeName = std::string(physical::familyName(int(std::lround(family)))) + ": " + shapeLabel(family, shape);
     dl->AddText(ImVec2(a.x + 6 * z, rowTop - 16 * z), mixColor(pal::textDim, pal::body, std::max(exc, lis)), ("B  " + shapeName).c_str());
     const float lo = std::log2(0.4f), hi = std::log2(64.0f);
     auto xOf = [&](float ratio) { return ofLerp(x0, x1, (std::log2(std::max(ratio, 0.01f)) - lo) / (hi - lo)); };
@@ -1065,19 +1026,21 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
         const float x = xOf(float(k));
         dl->AddLine(ImVec2(x, rowTop), ImVec2(x, rowBottom), pal::grid);
     }
-    const int modes = std::clamp(int(std::round(soundParam("bmodes").get())), 1, physical::MAXM);
-    const float material = soundParam("material").get(), bdecay = soundParam("bdecay").get(), freeze = soundParam("freeze").get();
-    const float bexp = ofLerp(1.6f, 0.0f, soundParam("bbright").get());
     const float fb0 = 440 * std::pow(2.0f, (first(pitch.get(), 0, 48) + soundParam("btune").get() - 69) / 12);
+    physical::Body body;
+    body.family = family; body.shape = shape; body.stretch = soundParam("bstretch").get();
+    body.material = soundParam("material").get(); body.bdecay = soundParam("bdecay").get();
+    body.freeze = soundParam("freeze").get(); body.bright = soundParam("bbright").get(); body.f0 = fb0;
+    const int modes = std::min(std::clamp(int(std::round(soundParam("bmodes").get())), 1, physical::MAXM), physical::modeCount(body));
     int hovered = -1; float hoverD = 6 * z;
     std::vector<physical::Mode> ms(modes);
     for(int k = 0; k < modes; ++k) {
-        ms[k] = physical::mode(k, shape, soundParam("bstretch").get(), material, bdecay, freeze);
+        ms[k] = physical::mode(k, body);
         const auto& m = ms[k];
-        if(m.ratio > 64 || fb0 * m.ratio > 20000) continue;
+        if(!m.on || m.ratio > 64 || fb0 * m.ratio > 20000) continue;
         const float e = std::abs(std::sin(PI * m.q * pos.get() + m.ph));
         const float l = 0.5f * (std::abs(std::sin(PI * m.q * p1.get() + m.ph)) + std::abs(std::sin(PI * m.q * p2.get() + m.ph)));
-        const float hgt = ofClamp(e * l * std::pow(float(m.ratio), -bexp), 0.03f, 1.0f);
+        const float hgt = ofClamp(float(e * l * m.amp), 0.03f, 1.0f);
         const float x = xOf(m.ratio);
         const float ring = ofClamp(std::log10(m.t60 * 10) / 2.5f, 0.0f, 1.0f);   // 0.1 s .. 30 s
         const ImU32 col = mixColor(IM_COL32(120, 80, 50, 200), IM_COL32(255, 230, 170, 255), ring);
@@ -1090,7 +1053,8 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
         ImGui::SetTooltip("Mode %d: x%.3f  %.1f Hz  rings %.2f s", hovered + 1, ms[hovered].ratio, fb0 * ms[hovered].ratio, ms[hovered].t60);
     else if(ImGui::IsItemHovered())
         ImGui::SetTooltip("The body's modes (log frequency, octave lines): height = how much the contact\n"
-                          "and pickups get of each, colour = how long it rings (Material, B Decay)");
+                          "and pickups get of each, colour = how long it rings (Material, B Decay).\n"
+                          "Split and Beat make each mode a beating pair (warble, gamelan ombak).");
 }
 
 void scPhysicalBox::drawMeters(ImVec2 a, ImVec2 size) {
@@ -1202,6 +1166,20 @@ void scPhysicalBox::soundSlider(const std::string& sc, const char* label, float 
     auto* c = sound(sc);
     if(!c) return;
     const std::string key = c->p.getEscapedName();
+    if(sc == "bfamily") {   // a combo; published, an Oceanode dropdown
+        const float z = zoom();
+        const auto items = dropdowns.names(key);
+        ImGui::PushID(key.c_str());
+        const float x0 = ImGui::GetCursorPosX();
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(label); mark(key);
+        ImGui::SameLine(); ImGui::SetCursorPosX(x0 + labelW * z);
+        ImGui::SetNextItemWidth(std::max(30.0f * z, w - labelW * z));
+        int v = std::clamp(int(std::lround(c->p.get())), 0, int(items.size()) - 1);
+        if(ImGui::Combo("##v", &v, items.data(), int(items.size()))) c->p = float(v);
+        menu(key);
+        ImGui::PopID();
+        return;
+    }
     if(c->discrete) {
         ImGui::PushID(key.c_str());
         bool on = c->p.get() > 0.5f;
@@ -1225,8 +1203,8 @@ void scPhysicalBox::soundSlider(const std::string& sc, const char* label, float 
     }
     std::string fmt = c->fmt;
     if(sc == "bshape") {
-        const int s0 = std::clamp(int(std::floor(c->p.get())), 0, physical::NSHAPES - 1);
-        fmt = std::string(shapeNames[s0]) + " %.2f";
+        fmt = shapeLabel(soundParam("bfamily").get(), c->p.get());
+        for(size_t i = fmt.find('%'); i != std::string::npos; i = fmt.find('%', i + 2)) fmt.insert(i, "%");
     }
     slider(c->p, label, w, fmt.c_str(), c->log);
 }
@@ -1236,170 +1214,6 @@ void scPhysicalBox::soundGroup(const std::string& group, float w) {
         for(const char* strip : {"A ", "B "}) if(label.rfind(strip, 0) == 0 && group.size() == 1) label.erase(0, 2);
         soundSlider(c->sc, label.c_str(), w);
     }
-}
-
-// Pulse (Gate Mode Pulse): the events as they play, a character to start from,
-// then Time / Voices / Notes
-void scPhysicalBox::drawPulse(float w) {
-    const float z = zoom();
-    const float cw = colW(w, 5), rasterW = cw * 2 + gapW();
-    auto tip = [](const char* text) { if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text); };
-    ImGui::Spacing();
-    ImGui::BeginGroup();
-    labelW = 66;
-    sectionHeader("Pulse", rasterW, nullptr, pal::pickup);
-    {
-        static const char* names[] = {"Clock", "Strum", "Phasing", "Rain", "Geiger", "Swarm", "Bursts"};
-        static const char* tips[] = {
-            "Every voice on the same beat",
-            "Together, rolled across the voices like a strummed chord",
-            "Each voice its own clock, slightly apart: they drift in and out of phase",
-            "Each voice its own random drops (Poisson), soft and loud",
-            "Random clicks with bursts and silences, each voice its own counter",
-            "Loose, partly shared, partly free: a flock",
-            "Together, in clusters of quick repeats"};
-        const int count = int(std::size(names));
-        const float gap = 4 * z, bw = (rasterW - gap * (count - 1)) / count;
-        for(int i = 0; i < count; ++i) {
-            if(i) ImGui::SameLine(0, gap);
-            if(ImGui::Button(names[i], ImVec2(bw, 0))) pulseShape(i);
-            tip(tips[i]);
-        }
-    }
-    const ImVec2 at = ImGui::GetCursorScreenPos();
-    const float rows = 6 * ImGui::GetFrameHeightWithSpacing() - ImGui::GetFrameHeight() - 4 * z;
-    drawPulseRaster(at, ImVec2(rasterW, rows));
-    ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + rows));
-    ImGui::Dummy(ImVec2(rasterW, 0));
-    nextCol();
-    sectionHeader("Time", cw, nullptr, pal::pickup);
-    toggle(pulseSync, "Sync to tempo");
-    tip("Rate from the tempo (a note value) instead of Hz");
-    if(pulseSync.get()) {
-        static const std::vector<std::pair<const char*, float>> notes = {
-            {"1/32", 0.125f}, {"1/16T", 1.0f / 6.0f}, {"1/16", 0.25f}, {"1/8T", 1.0f / 3.0f}, {"1/8", 0.5f},
-            {"1/4T", 2.0f / 3.0f}, {"1/4", 1.0f}, {"1/2", 2.0f}, {"1 bar", 4.0f}, {"2 bars", 8.0f}, {"4 bars", 16.0f}};
-        int k = 0;
-        for(int i = 0; i < (int)notes.size(); i++)
-            if(std::abs(notes[i].second - pulseBeats.get()) < std::abs(notes[k].second - pulseBeats.get())) k = i;
-        const float x0 = ImGui::GetCursorPosX();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Every");
-        mark(pulseBeats.getEscapedName());
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(x0 + labelW * z);
-        ImGui::SetNextItemWidth(cw - labelW * z);
-        if(ImGui::SliderInt("##pulseNote", &k, 0, (int)notes.size() - 1, notes[k].first)) pulseBeats = notes[k].second;
-        tip("The average time between events, in beats");
-        menu(pulseBeats.getEscapedName());
-    } else {
-        slider(pulseRate, "Rate", cw, "%.2f Hz", true);
-        tip("Events per second per voice, on average (whatever Chaos and Cluster are)");
-    }
-    slider(pulseChaos, "Chaos", cw);
-    tip("0: periodic, a clock\n1: random like a Geiger counter (Poisson): same average rate, no pattern");
-    slider(pulseCluster, "Cluster", cw);
-    tip("Gather the events into bursts of quick repeats and long silences (same average rate)");
-    slider(pulseChance, "Chance", cw);
-    tip("The chance each event plays (thins the pattern)");
-    nextCol();
-    sectionHeader("Voices", cw, nullptr, pal::pickup);
-    slider(pulseLink, "Link", cw, pulseLink.get() >= 0.995f ? "together" : pulseLink.get() <= 0.005f ? "independent" : "%.2f");
-    tip("1: every voice plays the same events (one seed for all)\n0: each voice its own events (its own seed)\n"
-        "between: each event is shared or a voice's own by chance");
-    slider(pulsePhasing, "Phasing", cw);
-    tip("Each voice's own clock a little faster or slower (up to an octave):\nperiodic voices drift in and out of phase. Acts where Link < 1");
-    slider(pulseStrum, "Strum", cw, "%+.0f ms");
-    tip("Roll the shared events across the voices, ms per voice (negative: downwards)");
-    {
-        const std::string key = pulseSeed.getEscapedName();
-        ImGui::PushID(key.c_str());
-        const float x0 = ImGui::GetCursorPosX();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Seed");
-        mark(key);
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(x0 + labelW * z);
-        ImGui::SetNextItemWidth(std::max(30.0f * z, cw - labelW * z));
-        int v = pulseSeed.get();
-        if(ImGui::DragInt("##v", &v, 0.2f, 0, 9999, v == 0 ? "fresh" : "%d")) pulseSeed = std::clamp(v, 0, 9999);
-        tip("0: a new pattern every start\nabove 0: the same pattern every time (Reset plays it from the start)");
-        menu(key);
-        ImGui::PopID();
-    }
-    toggle(pulseFollow, "Follow Gate");
-    tip("Off: the pulses run by themselves\nOn: a voice pulses only while its Gate is held, as loud as the Gate\n"
-        "(hold notes from a keyboard or the timeline to play rolls)");
-    nextCol();
-    sectionHeader("Notes", cw, nullptr, pal::pickup);
-    if(pulseFixed.get()) {
-        slider(pulseTime, "Length", cw, "%.3f s", true);
-        tip("How long each gate stays open, in seconds");
-    } else {
-        char fmt[48];
-        std::snprintf(fmt, sizeof(fmt), "%%.2f x  (%.0f ms)", pulseLength.get() / pulseHz() * 1000);
-        slider(pulseLength, "Length", cw, fmt);
-        tip("How long each gate stays open, as a fraction of the average period.\n"
-            "Struck sounds only need the start; bow, blow and scrape sound while it is open.\n"
-            "Past 1 notes run into the next: legato, each event a new strike");
-    }
-    toggle(pulseFixed, "Length in seconds");
-    slider(pulseJitter, "Jitter", cw);
-    tip("Random length per event: up to 4x shorter or longer");
-    slider(pulseVelocity, "Velocity", cw);
-    tip("How hard each event plays (the gate level)");
-    slider(pulseVelJitter, "Vel Jitter", cw);
-    tip("Random velocity per event: accents and ghost notes");
-    ImGui::EndGroup();
-    labelW = 70;
-}
-
-// the last seconds of events per voice: a block per gate (its length), as
-// bright and tall as its velocity
-void scPhysicalBox::drawPulseRaster(ImVec2 a, ImVec2 size) {
-    const float z = zoom();
-    auto* dl = ImGui::GetWindowDrawList();
-    const ImVec2 b(a.x + size.x, a.y + size.y);
-    dl->AddRectFilled(a, b, pal::canvas, 3 * z);
-    dl->AddRect(a, b, pal::border, 3 * z);
-    const int n = std::max(1, voices.get());
-    const float hz = pulseHz();
-    const float window = ofClamp(24.0f / hz, 1.5f, 6.0f), now = ofGetElapsedTimef();
-    const float x0 = a.x + 4 * z, x1 = b.x - 4 * z, top = a.y + 4 * z, bottom = b.y - 18 * z;
-    const float rh = (bottom - top) / n;
-    auto xOf = [&](float t) { return ofLerp(x0, x1, ofClamp(1 - (now - t) / window, 0.0f, 1.0f)); };
-    // a line per average period (sync: per beat value)
-    const float period = 1.0f / hz;
-    if(window / period < 64)
-        for(float t = now - std::fmod(now, period); t > now - window; t -= period)
-            dl->AddLine(ImVec2(xOf(t), top), ImVec2(xOf(t), bottom), pal::grid);
-    dl->PushClipRect(ImVec2(x0, top), ImVec2(x1, bottom), true);
-    for(int v = 0; v < n; ++v) {
-        const float y0 = top + v * rh, y1 = y0 + rh;
-        if(v % 2) dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(255, 255, 255, 6));
-        for(const auto& e : pulseEvents[v]) {
-            const float vel = ofClamp(e.vel, 0.0f, 1.0f);
-            const float h = (rh - 2 * z) * (0.3f + 0.7f * vel) * 0.5f, mid = (y0 + y1) * 0.5f;
-            const float ex0 = xOf(e.t), ex1 = std::max(ex0 + 2 * z, xOf(e.t + e.dur));
-            const ImU32 col = mixColor(IM_COL32(106, 212, 196, 70), IM_COL32(220, 255, 245, 230), vel);
-            dl->AddRectFilled(ImVec2(ex0, mid - h), ImVec2(ex1, mid + h), mixColor(IM_COL32(106, 212, 196, 30), IM_COL32(106, 212, 196, 120), vel));
-            dl->AddLine(ImVec2(ex0, mid - h), ImVec2(ex0, mid + h), col, 1.5f * z);
-        }
-    }
-    dl->PopClipRect();
-    // what it is, in words
-    const float chaos = pulseChaos.get(), link = pulseLink.get();
-    std::string text = ofToString(hz, hz < 10 ? 2 : 1) + " /s per voice   " +
-        (chaos < 0.05f ? "periodic" : chaos > 0.95f ? "random (Poisson)" : "loose " + ofToString(int(chaos * 100)) + "%") +
-        (pulseCluster.get() > 0.05f ? ", clustered" : "") + "   " +
-        (link > 0.995f ? "together" : link < 0.005f ? "independent" : ofToString(int(link * 100)) + "% shared") +
-        (pulseFollow.get() ? "   held by Gate" : "");
-    dl->AddText(ImVec2(a.x + 6 * z, b.y - 16 * z), pal::textDim, text.c_str());
-    ImGui::SetCursorScreenPos(a);
-    ImGui::InvisibleButton("##pulseRaster", size);
-    if(ImGui::IsItemHovered())
-        ImGui::SetTooltip("The pulses as they play: a row per voice, newest on the right (%.1f s).\n"
-                          "Each block is a gate, its length and its velocity.", window);
 }
 
 void scPhysicalBox::drawSoundTab(float w) {
@@ -1426,7 +1240,7 @@ void scPhysicalBox::drawSoundTab(float w) {
          "Ext In plays the node's In through the object.");
     ImGui::Spacing();
     sectionHeader("Output", cw); soundGroup("Output", cw);
-    note("Width: the two pickups apart; Spread: the voices across the speakers.");
+    note("Where the voices and their two pickups sit: the Panning tab.");
     nextCol();
     labelW = 70;
     sectionHeader("A  Waveguide", cw, nullptr, pal::waveguide); soundGroup("A", cw);
@@ -1442,6 +1256,188 @@ void scPhysicalBox::drawSoundTab(float w) {
     sectionHeader("Life", cw); soundGroup("Life", cw);
     ImGui::EndGroup();
     labelW = 70;
+}
+
+// ── Panning ──────────────────────────────────────────────────────────────────
+// Spread: evenly (ring or line); Channels: voice i on speaker i; Manual: Pan
+std::vector<float> scPhysicalBox::panPositions() const {
+    const int nv = voices.get(), c = channels.get();
+    const bool ring = c > 2 && speakerLayout.get() == 0;
+    std::vector<float> p(nv, 0.5f);
+    if(placement.get() == 2) {
+        for(int i = 0; i < nv; ++i) p[i] = first(panP.get(), i, 0.5f);
+        return p;
+    }
+    const float spread = const_cast<scPhysicalBox*>(this)->soundParam("spread").get();
+    for(int i = 0; i < nv; ++i) {
+        if(placement.get() == 1) {
+            const int ch = i % std::max(1, c);
+            p[i] = c <= 1 ? 0.5f : ring ? float(ch) / c : float(ch) / (c - 1);
+        } else if(ring) {
+            p[i] = float(i) / nv * spread + spreadCenter.get() * 0.5f;
+        } else {
+            const float t = nv > 1 ? float(i) / (nv - 1) : 0.5f;
+            p[i] = 0.5f + (t - 0.5f) * spread + spreadCenter.get() * 0.5f;
+        }
+    }
+    return p;
+}
+void scPhysicalBox::sliderVec(ofParameter<std::vector<float>>& p, const char* label, float w, const char* fmt) {
+    const float z = zoom();
+    const std::string key = p.getEscapedName();
+    ImGui::PushID(key.c_str());
+    const float x0 = ImGui::GetCursorPosX();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    mark(key);
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(x0 + labelW * z);
+    const float sw = std::max(30.0f * z, w - labelW * z);
+    const auto& values = p.get();
+    if(values.size() > 1) {
+        const ImVec2 a = ImGui::GetCursorScreenPos(), size(sw, ImGui::GetFrameHeight());
+        ImGui::InvisibleButton("##bars", size);
+        auto* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(a, ImVec2(a.x + size.x, a.y + size.y), pal::canvas, 2 * z);
+        const float bw = size.x / values.size();
+        for(size_t i = 0; i < values.size(); ++i) {
+            const float t = ofClamp(values[i], 0.0f, 1.0f);
+            dl->AddRectFilled(ImVec2(a.x + i * bw + 1, a.y + size.y * (1 - t)), ImVec2(a.x + (i + 1) * bw - 1, a.y + size.y), pal::accent);
+        }
+        if(ImGui::IsItemActive()) p.set({ofClamp((ImGui::GetMousePos().x - a.x) / size.x, 0.0f, 1.0f)});
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%d values, one per voice\nDrag: one value for every voice", int(values.size()));
+    } else {
+        ImGui::SetNextItemWidth(sw);
+        float v = first(values, 0, 0.5f);
+        if(ImGui::SliderFloat("##v", &v, 0, 1, fmt)) p.set({v});
+    }
+    menu(key);
+    ImGui::PopID();
+}
+void scPhysicalBox::drawPanTab(float w) {
+    const float z = zoom();
+    const int nv = voices.get(), c = channels.get();
+    const bool ring = c > 2 && speakerLayout.get() == 0;
+    const float cw = colW(w, 3);
+    auto voiceCol = [](int v, int alpha) {
+        ImColor col = ImColor::HSV(std::fmod(v * 0.61803f, 1.0f), 0.5f, 0.98f);
+        col.Value.w = alpha / 255.0f;
+        return (ImU32)col;
+    };
+    const float width = soundParam("width").get();
+    ImGui::BeginGroup();
+    labelW = 70;
+    sectionHeader("Placement", cw, nullptr, pal::pickup);
+    combo(placement, "Mode", cw);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Spread: evenly across the speakers\nChannels: voice 1 on speaker 1, voice 2 on speaker 2...\n"
+                                                 "Manual: each voice where you put it (drag it, or the Pan vector)");
+    if(placement.get() == 0) {
+        soundSlider("spread", "Spread", cw);
+        slider(spreadCenter, "Center", cw, "%+.2f");
+    }
+    if(placement.get() == 2) sliderVec(panP, "Pan", cw);
+    soundSlider("width", "Pickups", cw);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("How far apart each voice's two pickups sit (0: both on the voice)");
+    if(c > 2) combo(speakerLayout, "Speakers", cw);
+    ImGui::Spacing();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
+    ImGui::TextColored(ImColor(pal::textDim), "%d voices on %d speaker%s, each heard by two pickups (the small dots). "
+                       "Drag a voice to place it (Shift: onto a speaker). To move them, route an LFO (or anything) to Pan "
+                       "in Routing: the filled dots show where each voice is now.", nv, c, c == 1 ? "" : "s");
+    ImGui::PopTextWrapPos();
+    if(c == 1) ImGui::TextColored(ImColor(pal::exciter), "One channel: nothing to pan.");
+    nextCol();
+    const float vw = 2 * cw + gapW();
+    sectionHeader("Speakers", vw, nullptr, pal::pickup);
+    {
+        auto* dl = ImGui::GetWindowDrawList();
+        const float h = ring ? std::min(vw, 340.0f * z) : std::max(120.0f * z, nv * 18.0f * z + 40 * z);
+        const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + vw, a.y + h);
+        ImGui::InvisibleButton("##panView", ImVec2(vw, h));
+        const bool hovered = ImGui::IsItemHovered();
+        dl->AddRectFilled(a, b, pal::canvas, 3 * z);
+        dl->AddRect(a, b, pal::border, 3 * z);
+        const auto base = panPositions();
+        auto now = [&](int v) { const size_t i = size_t(VIS_PAN + v); return i < live.size() ? live[i] : base[v]; };
+        const ImVec2 m = ImGui::GetMousePos();
+        int hoverVoice = -1;
+        std::function<ImVec2(float, int)> place;
+        const float pad = 30.0f * z;
+        if(ring) {
+            const ImVec2 ctr((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+            const float R = h * 0.5f - pad;
+            dl->AddCircle(ctr, R, IM_COL32(255, 255, 255, 34), 64, 1.0f * z);
+            for(int k = 0; k < c; ++k) {
+                const float ang = -HALF_PI + TWO_PI * k / c;
+                const ImVec2 sp(ctr.x + std::cos(ang) * (R + 14 * z), ctr.y + std::sin(ang) * (R + 14 * z));
+                dl->AddRectFilled(ImVec2(sp.x - 7 * z, sp.y - 7 * z), ImVec2(sp.x + 7 * z, sp.y + 7 * z), pal::header, 2 * z);
+                dl->AddRect(ImVec2(sp.x - 7 * z, sp.y - 7 * z), ImVec2(sp.x + 7 * z, sp.y + 7 * z), pal::headerText, 2 * z);
+                const std::string t = ofToString(k + 1);
+                const ImVec2 ts = ImGui::CalcTextSize(t.c_str());
+                dl->AddText(ImVec2(sp.x - ts.x * 0.5f, sp.y - ts.y * 0.5f), pal::headerText, t.c_str());
+            }
+            place = [=](float p, int v) {
+                const float r = R * (0.35f + 0.6f * (nv > 1 ? float(v) / (nv - 1) : 1.0f));
+                const float ang = -HALF_PI + TWO_PI * p;
+                return ImVec2(ctr.x + std::cos(ang) * r, ctr.y + std::sin(ang) * r);
+            };
+            for(int v = 0; v < nv; ++v) dl->AddCircle(ctr, R * (0.35f + 0.6f * (nv > 1 ? float(v) / (nv - 1) : 1.0f)), pal::grid, 64);
+        } else {
+            const float x0 = a.x + pad, x1 = b.x - pad;
+            for(int k = 0; k < std::max(1, c); ++k) {
+                const float x = c <= 1 ? (x0 + x1) * 0.5f : x0 + (x1 - x0) * k / (c - 1);
+                dl->AddLine(ImVec2(x, a.y + 22 * z), ImVec2(x, b.y - 6 * z), pal::grid);
+                dl->AddRectFilled(ImVec2(x - 9 * z, a.y + 4 * z), ImVec2(x + 9 * z, a.y + 20 * z), pal::header, 2 * z);
+                const std::string t = c == 2 ? (k == 0 ? "L" : "R") : ofToString(k + 1);
+                const ImVec2 ts = ImGui::CalcTextSize(t.c_str());
+                dl->AddText(ImVec2(x - ts.x * 0.5f, a.y + 12 * z - ts.y * 0.5f), pal::headerText, t.c_str());
+            }
+            const float rowH = (h - 34 * z) / std::max(1, nv);
+            place = [=](float p, int v) { return ImVec2(x0 + (x1 - x0) * ofClamp(p, 0.0f, 1.0f), a.y + 28 * z + (v + 0.5f) * rowH); };
+        }
+        for(int v = 0; v < nv; ++v) {
+            const ImVec2 pb = place(base[v], v), pl = place(now(v), v);
+            // the two pickups, Width apart around where the voice is now
+            const ImVec2 l = place(now(v) - width * 0.25f, v), r = place(now(v) + width * 0.25f, v);
+            if(width > 0.01f && c > 1) {
+                dl->AddLine(l, r, voiceCol(v, 60), 1.0f * z);
+                dl->AddCircleFilled(l, 2.5f * z, voiceCol(v, 180));
+                dl->AddCircleFilled(r, 2.5f * z, voiceCol(v, 180));
+            }
+            dl->AddLine(pb, pl, voiceCol(v, 90), 1.0f * z);
+            dl->AddCircle(pb, 7 * z, voiceCol(v, 230), 0, 2 * z);
+            dl->AddCircleFilled(pl, 4.5f * z, voiceCol(v, 255));
+            dl->AddText(ImVec2(pb.x + 9 * z, pb.y - 7 * z), voiceCol(v, 200), ofToString(v + 1).c_str());
+            if(hovered && std::hypot(m.x - pb.x, m.y - pb.y) < 9 * z) hoverVoice = v;
+        }
+        // dragging a voice: Manual from here on
+        if(ImGui::IsItemActivated() && hoverVoice >= 0) {
+            panDragVoice = hoverVoice;
+            if(placement.get() != 2) { panP.set(panPositions()); placement = 2; }
+        }
+        if(ImGui::IsItemActive() && panDragVoice >= 0 && panDragVoice < nv) {
+            float p;
+            if(ring) {
+                const ImVec2 ctr((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+                p = std::fmod(std::atan2(m.y - ctr.y, m.x - ctr.x) + HALF_PI + TWO_PI, TWO_PI) / TWO_PI;
+            } else {
+                p = ofClamp((m.x - (a.x + pad)) / (vw - 2 * pad), 0.0f, 1.0f);
+            }
+            if(ImGui::GetIO().KeyShift && c > 1) {      // onto the nearest speaker
+                const float steps = ring ? float(c) : float(c - 1);
+                p = std::round(p * steps) / steps;
+                if(ring) p = std::fmod(p, 1.0f);
+            }
+            std::vector<float> v(nv);
+            for(int i = 0; i < nv; ++i) v[i] = first(panP.get(), i, 0.5f);
+            v[panDragVoice] = p;
+            panP.set(v);
+        }
+        if(ImGui::IsItemDeactivated()) panDragVoice = -1;
+        if(hovered && hoverVoice >= 0 && panDragVoice < 0)
+            ImGui::SetTooltip("Voice %d at %.2f (now %.2f)\nDrag to place it (Shift: onto a speaker)", hoverVoice + 1, base[hoverVoice], now(hoverVoice));
+    }
+    ImGui::EndGroup();
 }
 
 void scPhysicalBox::drawFxTab(float w) {
