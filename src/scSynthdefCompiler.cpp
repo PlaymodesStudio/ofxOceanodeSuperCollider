@@ -168,6 +168,12 @@ void scSynthdefCompiler::update(ofEventArgs&){
 void scSynthdefCompiler::startNextBuild(){
     for(auto& [defName, job] : jobs){
         if(job.state != State::Queued) continue;
+        // Sync may have invalidated the source index since this job was queued.
+        job.message = unavailableReason(job.target);
+        if(!job.message.empty()){
+            job.state = State::Unavailable;
+            continue;
+        }
         job.state = State::Compiling;
         building = defName;
         ofLogNotice("scSynthdefCompiler") << "Compiling " << defName
@@ -188,6 +194,7 @@ void scSynthdefCompiler::finishBuild(BuildResult result){
     if(result.ok){
         const fs::path destination = fs::path(job.target.synthFolder) / (defName + ".scsyndef");
         try {
+            fs::create_directories(destination.parent_path());
             fs::copy_file(result.file, destination, fs::copy_options::overwrite_existing);
             fs::remove_all(fs::path(result.file).parent_path().parent_path());
         } catch(const std::exception& error) {
@@ -222,10 +229,10 @@ scSynthdefCompiler::BuildResult scSynthdefCompiler::runBuild(Paths paths, Target
 
     ScriptJob job;
     job.sclang = paths.sclang;
+    job.confPath = (fs::path(paths.work) / "sclang_conf.yaml").string();
     if(!paths.sclangBundle.empty()){
         // The bundled compiler gets a private HOME, so the user's startup.scd
         // and SuperCollider settings never run inside it.
-        job.confPath = (fs::path(paths.work) / "sclang_conf.yaml").string();
         job.home = (fs::path(paths.work) / "home").string();
     }
     job.args.push_back((fs::path(paths.sources) / "Oceanode" / "compileExact.scd").string());
@@ -332,20 +339,7 @@ scSynthdefCompiler::ScriptJob scSynthdefCompiler::prepareScript(const std::strin
     job.sclang = p.sclang;
     if(p.sclang.empty()) return job;
     const fs::path conf = fs::path(p.work) / ("sclang_conf_" + name + ".yaml");
-    std::ofstream out(conf);
-    out << "includePaths:\n";
-    if(!p.sclangBundle.empty()){
-        out << "    -   \"" << (fs::path(p.sclangBundle) / "SCClassLibrary").string() << "\"\n"
-            << "    -   \"" << (fs::path(p.sclangBundle) / "Extensions").string() << "\"\n";
-        if(!p.sources.empty()) out << "    -   \"" << (fs::path(p.sources) / "Oceanode").string() << "\"\n";
-    }
-    // A system sclang keeps its default paths (the user's Extensions, where
-    // the Oceanode classes already are) and only gets the extra folders.
-    for(auto& folder : extraClassFolders) out << "    -   \"" << folder << "\"\n";
-    out << "excludePaths:\n    []\n"
-        << "postInlineWarnings: false\n"
-        << "excludeDefaultPaths: " << (p.sclangBundle.empty() ? "false" : "true") << "\n";
-    out.close();
+    writeClassLibraryConfig(p, conf.string(), extraClassFolders);
     job.confPath = conf.string();
     if(!p.sclangBundle.empty()) job.home = (fs::path(p.work) / "home").string();
     return job;
@@ -386,21 +380,76 @@ const scSynthdefCompiler::Paths& scSynthdefCompiler::getPaths(){
     }
 
     // The bundled compiler sees only its own class library, the bundled
-    // extensions and the Oceanode classes next to the sources.
-    if(!paths.sclangBundle.empty() && !paths.sources.empty()){
-        std::ofstream conf(fs::path(paths.work) / "sclang_conf.yaml");
-        conf << "includePaths:\n"
-             << "    -   \"" << (fs::path(paths.sclangBundle) / "SCClassLibrary").string() << "\"\n"
-             << "    -   \"" << (fs::path(paths.sclangBundle) / "Extensions").string() << "\"\n"
-             << "    -   \"" << (fs::path(paths.sources) / "Oceanode").string() << "\"\n"
-             << "excludePaths:\n    []\n"
-             << "postInlineWarnings: false\n"
-             << "excludeDefaultPaths: true\n";
+    // synced extensions and the Oceanode classes next to the sources.
+    if(!paths.sclang.empty() && !paths.sources.empty()){
+        writeClassLibraryConfig(paths, (fs::path(paths.work) / "sclang_conf.yaml").string());
     }
 
     ofLogNotice("scSynthdefCompiler") << "Sources: " << (paths.sources.empty() ? "none" : paths.sources)
         << " | sclang: " << (paths.sclang.empty() ? "none" : paths.sclang);
     return paths;
+}
+
+void scSynthdefCompiler::writeClassLibraryConfig(const Paths& p, const std::string& file,
+                                                  const std::vector<std::string>& extraClassFolders){
+    std::ofstream conf(file);
+    conf << "includePaths:\n";
+    if(!p.sclangBundle.empty()){
+        conf << "    -   \"" << (fs::path(p.sclangBundle) / "SCClassLibrary").string() << "\"\n"
+             << "    -   \"" << (fs::path(p.sclangBundle) / "Extensions").string() << "\"\n";
+    }
+    if(!p.sources.empty()) conf << "    -   \"" << (fs::path(p.sources) / "Oceanode").string() << "\"\n";
+    const fs::path installed = ofToDataPath("Supercollider/Extensions", true);
+    std::set<std::string> plugins;
+    if(fs::exists(installed)){
+        // Synced UGen classes must be visible to exact-channel builds too.
+        for(const auto& entry : fs::directory_iterator(installed)){
+            const std::string name = entry.path().filename().string();
+            // Legacy installations also keep Oceanode classes here; the
+            // synced source tree already supplies their current version.
+            if(!entry.is_directory() || name == "Oceanode" || name == "synthdefs") continue;
+            bool hasClasses = false;
+            for(const auto& file : fs::recursive_directory_iterator(entry.path())){
+                if(file.is_regular_file() && file.path().extension() == ".sc"){
+                    hasClasses = true;
+                    break;
+                }
+            }
+            if(!hasClasses) continue; // binary-only folders still need their bundled classes
+            plugins.insert(name);
+            conf << "    -   \"" << entry.path().string() << "\"\n";
+        }
+    }
+    for(const auto& folder : extraClassFolders) conf << "    -   \"" << folder << "\"\n";
+    // As in the sync compiler, the installed plugin wins over a bundled
+    // copy; loading both would fail the entire SC class library.
+    std::vector<fs::path> shadowed;
+    const fs::path bundled = fs::path(p.sclangBundle) / "Extensions";
+    if(!p.sclangBundle.empty() && fs::exists(bundled)){
+        for(auto it = fs::recursive_directory_iterator(bundled); it != fs::recursive_directory_iterator(); ++it){
+            if(it.depth() >= 1) it.disable_recursion_pending();
+            if(it->is_directory() && plugins.count(it->path().filename().string())) shadowed.push_back(it->path());
+        }
+    }
+    conf << "excludePaths:\n";
+    if(shadowed.empty()) conf << "    []\n";
+    for(const auto& folder : shadowed) conf << "    -   \"" << folder.string() << "\"\n";
+    conf << "postInlineWarnings: false\n"
+         << "excludeDefaultPaths: " << (p.sclangBundle.empty() ? "false" : "true") << "\n";
+}
+
+void scSynthdefCompiler::refreshPaths(){
+    pathsResolved = false;
+    paths = Paths();
+    invalidateSourceIndex();
+    // A request made before syncing may have lacked its source or compiler.
+    // Reconsider it without requiring the user to change N Chan again.
+    for(auto& [name, job] : jobs){
+        if(job.state == State::Compiling || job.state == State::Loading) continue;
+        job.message = unavailableReason(job.target);
+        if(!job.message.empty()) job.state = State::Unavailable;
+        else if(job.state != State::Queued) job.state = State::Asking;
+    }
 }
 
 void scSynthdefCompiler::buildSourceIndex(){
@@ -415,8 +464,10 @@ void scSynthdefCompiler::buildSourceIndex(){
         for(auto it = fs::recursive_directory_iterator(root); it != fs::recursive_directory_iterator(); ++it){
             const fs::path relative = fs::relative(it->path(), root);
             const std::string top = relative.begin()->string();
-            // Defaults are built by hand with their own scripts.
-            if(it->is_directory() && (top == "Defaults" || top == "Oceanode")){
+            // Defaults may also contain ~synthCreator sources (e.g. FM7).
+            // Plain scripts have no matching creator and are naturally skipped.
+            if(it->is_directory() && (top == "Oceanode" || top == "OceanodeCode" || top == "WIP" ||
+                                      it->path().filename() == "CompiledSynthdefs")){
                 it.disable_recursion_pending();
                 continue;
             }

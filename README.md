@@ -17,6 +17,16 @@ Updated UGens offer a server restart after syncing. Up-to-date launches show no
 prompt; connection failures are logged without blocking startup. You can also
 update manually through **SuperCollider → Sync with SynthDefs Git…**.
 
+After syncing, choosing an uncompiled **N Chan** count on a `~synthCreator`
+SynthDef opens the **Compile** prompt. The addon builds that exact channel count
+and variable combination from the synced sources, installs it, loads it into
+the running servers, and resumes the node. Synced UGen classes are included.
+Sources explicitly marked `@oceanode-no-autocompile` and standalone scripts
+without `~synthCreator` cannot use this workflow.
+
+Run the compiler integration test on macOS with
+`python3 tools/synthdef_compiler_test/run.py` (requires the bundled sclang).
+
 ## Keyboard piano
 
 Focus the PolyComb, AdditiveBox, SteamPipeBox, PulsarBox, GrainBox, AliasingBox,

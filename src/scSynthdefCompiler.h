@@ -68,7 +68,7 @@ public:
     void invalidateSourceIndex(){ indexBuilt = false; sourceBySynth.clear(); noAutocompile.clear(); }
     // Sources or compiler installed in the data folder (Sync with SynthDefs
     // Git): look for them again on the next request
-    void refreshPaths(){ pathsResolved = false; paths = Paths(); invalidateSourceIndex(); }
+    void refreshPaths();
     // Any thread, blocking. "" when sclang exited with status 0, else why not.
     static std::string runScript(const ScriptJob& job);
 
@@ -118,6 +118,8 @@ private:
 
     const Paths& getPaths();
     void buildSourceIndex();
+    void writeClassLibraryConfig(const Paths& p, const std::string& file,
+                                 const std::vector<std::string>& extraClassFolders = {});
     std::string unavailableReason(const Target& target);
     static BuildResult runBuild(Paths paths, Target target, std::string source);
 
