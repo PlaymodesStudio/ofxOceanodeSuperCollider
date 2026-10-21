@@ -64,7 +64,7 @@
 //   engine drones. Routes to Amp set each grain's level as it starts.
 
 (
-var d, subDir, nslot = 15, g0 = 0, vbase = 80, caps = [8, 32, 128, 500], modApply, perlin2;
+var d, subDir, nslot = 15, g0 = 0, vbase = 80, caps = [8, 32, 128, 500], modApply, valueNoise2;
 var nL = 8, nE = 4, nX = 8, nT = 7, nS = 8 + 4 + 8 + 2;   // LFOs, envelopes, ext, targets, sources
 if(thisProcess.nowExecutingPath.notNil) {
     d = thisProcess.nowExecutingPath.dirname +/+ "/CompiledSynthdefs";
@@ -79,18 +79,19 @@ File.mkdir(subDir);
 // LFO's phase + this playhead's offset, read on the LFO's table), its
 // envelopes (its Gate), Ext values, a random value per gate, its place among
 // the playheads, through the amounts -> pos dur pitch amp pan div
-// 2D Perlin noise, 0..1 (as Modulation/modulation.scd and Oceanode's Noise node)
-perlin2 = {|x, y, salt = 0|
-    var ix = x.floor, iy = y.floor, fx = x - ix, fy = y - iy;
-    var grad = {|cx, cy, dx, dy|
-        var h = ((((cx % 4096) * 12.9898) + ((cy % 4096) * 78.233) + salt).sin * 43758.5453).frac * 2pi;   // salt: each LFO (voice) its own field
-        (h.cos * dx) + (h.sin * dy)
+// Smooth 2D value noise, 0..1 (as Modulation/modulation.scd)
+valueNoise2 = { |x, y, salt = 0|
+    // Stagger knots between voices; random values have no forced 0.5 crossing.
+    var nx = x + 0.371 - (y * 0.754877666), ny = y + 0.619;
+    var ix = nx.floor, iy = ny.floor, fx = nx - ix, fy = ny - iy;
+    var value = { |cx, cy|
+        ((((cx % 4096) * 12.9898) + ((cy % 4096) * 78.233) + salt).sin * 43758.5453).frac
     };
     var u = fx * fx * fx * (fx * (fx * 6 - 15) + 10), v = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
-    var n00 = grad.(ix, iy, fx, fy), n10 = grad.(ix + 1, iy, fx - 1, fy);
-    var n01 = grad.(ix, iy + 1, fx, fy - 1), n11 = grad.(ix + 1, iy + 1, fx - 1, fy - 1);
+    var n00 = value.(ix, iy), n10 = value.(ix + 1, iy);
+    var n01 = value.(ix, iy + 1), n11 = value.(ix + 1, iy + 1);
     var a = n00 + ((n10 - n00) * u), b = n01 + ((n11 - n01) * u);
-    ((a + ((b - a) * v)) * 1.4 + 0.5).clip(0, 1)
+    (a + ((b - a) * v)).clip(0, 1)
 };
 
 modApply = {|idx, posV, durV, pitchV, ampV, panV, divV|
@@ -98,11 +99,12 @@ modApply = {|idx, posV, durV, pitchV, ampV, panV, divV|
     var vox = \modvox.kr(0), cap = \modcap.kr(8);
     var gate = In.kr(vox + ((nX + nL) * cap) + idx);
     var lfoV, envV, extV, rnd, vv, srcs, amt, m, ampEnv, vca;
+    var amp = 7.collect { |k| In.kr(vox + ((nX + nL + 1 + k) * cap) + idx) };
     lfoV = nL.collect({|k|
         var ph = (hdr[k] + In.kr(vox + ((nX + k) * cap) + idx)).frac;
         // a shape: its cycle (table); Noise: the 2D noise at the LFO's counter
         // and this playhead's seed (index x Scale), through Gain / Pow / BiPow
-        var nz = IndexL.kr(hdr[248 + k], perlin2.(hdr[240 + k], idx * hdr[232 + k], k * 17.31) * 256);
+        var nz = IndexL.kr(hdr[248 + k], valueNoise2.(hdr[240 + k], idx * hdr[232 + k], k * 17.31) * 256);
         var x = Select.kr(hdr[224 + k] > 0.5, [IndexL.kr(hdr[16 + k], ph * 256), nz]);
         var sh = hdr[8 + k];
         Select.kr(sh > 0, [x, Lag.kr(Latch.kr(x, Impulse.kr(sh.max(0.01))), hdr[216 + k])])   // + S&H Glide
@@ -124,8 +126,8 @@ modApply = {|idx, posV, durV, pitchV, ampV, panV, divV|
         }).sum
     });
     // the Amp Envelope: the playhead's VCA (x the gate's level), when gated
-    ampEnv = EnvGen.kr(Env.adsr(hdr[52].max(0.001), hdr[53].max(0.001), hdr[54].clip(0, 1), hdr[55].max(0.001), 1,
-        [hdr[56], hdr[57], hdr[58]].collect({|c| c.clip(-12, 12) })), gate);
+    ampEnv = EnvGen.kr(Env.adsr(amp[0].max(0.001), amp[1].max(0.001), amp[2].clip(0, 1), amp[3].max(0.001), 1,
+        [amp[4], amp[5], amp[6]].collect({|c| c.clip(-12, 12) })), gate);
     vca = Select.kr(hdr[59] > 0.5, [1, ampEnv * Gate.kr(gate, gate > 0)]);
     Out.kr(\modvis.kr(0) + (idx.min(16) * 13), lfoV ++ envV ++ [ampEnv]);
     Out.kr(\modhdr.kr(0) + 214, m[6] * (idx < 0.5));

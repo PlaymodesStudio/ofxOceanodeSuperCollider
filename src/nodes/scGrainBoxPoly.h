@@ -85,7 +85,7 @@ public:
     static constexpr int   MOD_HDR             = 256;
     static constexpr int   MOD_VIS_STRIDE      = MOD_LFOS + MOD_ENVS + 1;   // + the Amp Envelope
     static constexpr int   MOD_VIS             = 17 * MOD_VIS_STRIDE;
-    static constexpr int   MOD_VOX             = MOD_EXTS + MOD_LFOS + 1;   // per playhead: Ext, LFO offsets, Gate
+    static constexpr int   MOD_VOX             = MOD_EXTS + MOD_LFOS + 1 + 7;   // per playhead: Ext, LFO offsets, Gate, amp ADSR/curves
     static constexpr int   MOD_TABLE           = 257;
 
     // ── Constructor / Destructor ──────────────────────────────────────────────

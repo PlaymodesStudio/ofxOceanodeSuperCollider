@@ -236,8 +236,8 @@ spaceMaster = { |input, n, size, decay, predelay, lowpass, position, spread, mix
                     // A one-shot fades out over its last 4 ms, reaching
                     // silence exactly at the region's end.
                     edge = Select.ar(loopOn, [((len - endPos) / (step * SampleRate.ir * 0.004).max(1)).clip(0, 1), DC.ar(1)]);
-                    amp = LagUD.ar(K2A.ar(held), vm.(30, \attack.kr(0.005)).max(0.001),
-                        Select.kr(choke > 0, [vm.(31, \release.kr(0.05)).max(0.001), 0.005])) * edge;
+                    amp = LagUD.ar(K2A.ar(held), vm.(30, NamedControl.kr(\attack,0.005!8)[v]).max(0.001),
+                        Select.kr(choke > 0, [vm.(31, NamedControl.kr(\release,0.05!8)[v]).max(0.001), 0.005])) * edge;
                     voicePan = vm.(6, \pan.kr(0)).clip(-1, 1);
                     if(k == 1) {
                         raw = if(n == 1, { [left] }, { PanAz.ar(n, left, voicePan) });

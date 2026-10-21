@@ -372,7 +372,10 @@ scSampleBox::Control& scSampleBox::registerPadControl(Pad& p, ofParameter<T>& pa
             if(!s) return;
             if constexpr(std::is_same<T, bool>::value) s->set(name, int(value)); else s->set(name, value);
         };
-        if(dest == DEST_ENGINE) { for(auto& [srv, s] : pad.sc) send(s.engine); }
+        if(dest == DEST_ENGINE) {
+            if(name=="attack" || name=="release") { for(auto& [srv, s] : pad.sc) sendEngine(srv,pad); }
+            else for(auto& [srv, s] : pad.sc) send(s.engine);
+        }
         else if(dest == DEST_STRIP) { for(auto& [srv, s] : pad.sc) send(s.strip); }
         else if(dest >= DEST_FX && dest < DEST_FX + FX_COUNT) {
             if(name == "on") { for(auto& [srv, s] : pad.sc) syncFx(srv, pad); }
@@ -530,6 +533,7 @@ void scSampleBox::setupPad(Pad& p) {
     h.publishedUnderline = [this](const std::string& k) { drawPublishedUnderline(k); };
     h.unpublish = [this](const std::string& k) { unpublish(k); };
     h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
+    h.voiceParamsChanged = [this, pp](){ if(!restoring) for(auto& [srv, sc] : pp->sc) sendEngine(srv, *pp); };
     h.voices = []() { return MaxVoices; };      // the synth's 8 voices
     p.mod.nameSuffix = p.suffix();
     // the synth reads these, in this order (samplebox.scd)
@@ -542,6 +546,7 @@ void scSampleBox::setupPad(Pad& p) {
                          {p.stretch.getEscapedName(), 6}, {p.warpWindow.getEscapedName(), 7}, {p.loopCrossfade.getEscapedName(), 8},
                          {p.cutoff.getEscapedName(), 9}, {p.resonance.getEscapedName(), 10}, {p.satDrive.getEscapedName(), 11},
                          {p.compThreshold.getEscapedName(), 12}, {p.revMix.getEscapedName(), 13}, {p.width.getEscapedName(), 14}};
+    p.mod.addVoiceParam(p.attack); p.mod.addVoiceParam(p.release);
     p.mod.setBpm(bpm);
 }
 
@@ -810,7 +815,10 @@ void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p) {
     ofxSCSynth* s = sc.engine;
     for(const auto& c : controls) {
         if(c.pad != p.index || c.dest != DEST_ENGINE || c.scName.empty() || c.scName == "stretchmode") continue;
-        if(c.f) s->set(c.scName, c.f->get());
+        if(c.f) {
+            if(c.f==&p.attack || c.f==&p.release) s->set(c.scName,p.mod.voiceValues(*c.f));
+            else s->set(c.scName, c.f->get());
+        }
         else if(c.i) s->set(c.scName, c.i->get());
         else if(c.b) s->set(c.scName, int(c.b->get()));
     }

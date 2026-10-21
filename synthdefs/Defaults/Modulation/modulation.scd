@@ -9,8 +9,7 @@
 //                 edge). Per note: the velocity (x that level) -> \vel
 //                 (control, N), a random -1..1 -> \rnd.
 //   ModLfo<N>     a morph LFO per voice (PolyComb's: round / skew / width /
-//                 pow / bipow / sample & hold), or Perlin noise (\noise 1, as
-//                 Oceanode's Noise node) -> \out (control, N), 0..1.
+//                 pow / bipow / sample & hold), or smooth value noise (\noise 1) -> \out (control, N), 0..1.
 //                 Per-voice phase offsets (\phoff) come from the node.
 //   ModEnv<N>     an ADSR per voice (a tension curve per segment), gated by
 //                 \gate (an audio bus, N: ModGate's or the node's voices; read
@@ -22,28 +21,29 @@
 //                 \out (control bus, N). A target bus with no route left is
 //                 zeroed by the node.
 (
-var root, dir, perlin2;
+var root, dir, valueNoise2;
 root = if(thisProcess.nowExecutingPath.notNil,
     { thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs" },
     { Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs" });
 dir = root +/+ "Modulation";
 File.mkdir(root); File.mkdir(dir);
 
-// 2D Perlin noise (as Oceanode's Noise node: ofNoise(x, y)), 0..1: x an
+// Smooth 2D value noise 0..1: x an
 // ever-rising counter (the LFO's rate), y a fixed seed per voice (index x
 // Noise Scale: how different neighbouring voices are). The hash wraps every
-// 4096 cells (never repeats in practice). The node's C++ preview runs the same.
-perlin2 = { |x, y, salt = 0|
-    var ix = x.floor, iy = y.floor, fx = x - ix, fy = y - iy;
-    var grad = { |cx, cy, dx, dy|
-        var h = ((((cx % 4096) * 12.9898) + ((cy % 4096) * 78.233) + salt).sin * 43758.5453).frac * 2pi;   // salt: each LFO (voice) its own field
-        (h.cos * dx) + (h.sin * dy)
+// 4096 cells. The node's C++ preview runs the same algorithm.
+valueNoise2 = { |x, y, salt = 0|
+    // Stagger knots between voices; random values have no forced 0.5 crossing.
+    var nx = x + 0.371 - (y * 0.754877666), ny = y + 0.619;
+    var ix = nx.floor, iy = ny.floor, fx = nx - ix, fy = ny - iy;
+    var value = { |cx, cy|
+        ((((cx % 4096) * 12.9898) + ((cy % 4096) * 78.233) + salt).sin * 43758.5453).frac
     };
     var u = fx * fx * fx * (fx * (fx * 6 - 15) + 10), v = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
-    var n00 = grad.(ix, iy, fx, fy), n10 = grad.(ix + 1, iy, fx - 1, fy);
-    var n01 = grad.(ix, iy + 1, fx, fy - 1), n11 = grad.(ix + 1, iy + 1, fx - 1, fy - 1);
+    var n00 = value.(ix, iy), n10 = value.(ix + 1, iy);
+    var n01 = value.(ix, iy + 1), n11 = value.(ix + 1, iy + 1);
     var a = n00 + ((n10 - n00) * u), b = n01 + ((n11 - n01) * u);
-    ((a + ((b - a) * v)) * 1.4 + 0.5).clip(0, 1)
+    (a + ((b - a) * v)).clip(0, 1)
 };
 
 (1..32).do { |n|
@@ -115,11 +115,11 @@ perlin2 = { |x, y, salt = 0|
             LinLin.kr(round, 0, 0.5, tri, cosMapped).clip(0, 1),
             LinLin.kr(upper, -1, 1, 0, 1).clip(0, 1),
             (ph >= 0.25) * (ph < 0.75)]);
-        // Noise: 2D Perlin noise (Oceanode's Noise node): x = the ever-rising
+        // Noise: smooth 2D value noise: x = the ever-rising
         // counter (the LFO's rate: Hz or Beats), y = each voice's seed = its
         // index x \nscale (how different the voices are); \seed: this LFO's
         // own noise field (no two LFOs share values)
-        noise = perlin2.(sweep + \initphase.kr(0), (0 .. (n - 1)) * \nscale.kr(1), \seed.kr(0));
+        noise = valueNoise2.(sweep + \initphase.kr(0), (0 .. (n - 1)) * \nscale.kr(1), \seed.kr(0));
         shape = Select.kr(\noise.kr(0) > 0.5, [shape, noise]);
         // Gain: stretched around the middle, clipped at 0 / 1 (before S&H, Pow, BiPow)
         shape = (((shape - 0.5) * kv.(\gain, 1)) + 0.5).clip(0, 1);
@@ -143,9 +143,13 @@ perlin2 = { |x, y, salt = 0|
             // the note's velocity, \velbus: control, n)
             var vt = \veltrack.kr(0).clip(0, 1);
             var vel = K2A.ar(In.kr(\velbus.kr(0), n));   // held per note by the gates
-            var env = EnvGen.ar(Env.adsr(\atk.kr(0.01).max(0.001), \dec.kr(0.3).max(0.001), \sus.kr(0.8).clip(0, 1),
-                \rel.kr(1).max(0.001), 1, [\cA.kr(-4), \cD.kr(-4), \cR.kr(-4)].collect(_.clip(-12, 12))), gate)
-                * (1 - vt + (vt * vel));
+            var atk = kv.(\atk,0.01).asArray, dec = kv.(\dec,0.3).asArray;
+            var sus = kv.(\sus,0.8).asArray, rel = kv.(\rel,1).asArray;
+            var curves = [kv.(\cA,-4),kv.(\cD,-4),kv.(\cR,-4)].collect(_.asArray);
+            var env = n.collect { |i|
+                EnvGen.ar(Env.adsr(atk[i].max(0.001),dec[i].max(0.001),sus[i].clip(0,1),rel[i].max(0.001),1,
+                    curves.collect { |c| c[i].clip(-12,12) }),gate.asArray[i])
+            } * (1-vt+(vt*vel));
             Out.kr(\out.kr(0), A2K.kr(env));
             if(audio) { Out.ar(\aout.kr(0), env) };
         }).writeDefFile(dir);

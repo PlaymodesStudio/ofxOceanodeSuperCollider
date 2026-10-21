@@ -186,6 +186,7 @@ void scEchoBox::setup() {
     {
         scModulation::Host h;
         h.node = this;
+        h.voiceParamsChanged = [this](){ for(int t=0;t<MAX_TAPS;++t) sendTap(t); };
         h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
         h.control = [this](const std::string& k) -> ofAbstractParameter* {
             for(auto& c : controls) if(c.key == k) return c.param;
@@ -209,6 +210,7 @@ void scEchoBox::setup() {
         modulation.extCount = 0;
         for(int t = 0; t < MAX_TAPS; t++){
             Tap& tp = taps[t];
+            for(auto* p : {&tp.spread,&tp.wowRate,&tp.wowDepth,&tp.res,&tp.lowcut,&tp.blurTime,&tp.shift}) modulation.addVoiceParam(*p);
             for(auto& [p, target] : std::vector<std::pair<ofAbstractParameter*, int>>{
                     {&tp.ms, 0}, {&tp.beats, 0}, {&tp.feed, 1}, {&tp.cutoff, 2}, {&tp.level, 3}, {&tp.pingpong, 4},
                     {&tp.drive, 5}, {&tp.shiftMix, 6}, {&tp.blur, 7}, {&tp.send, 8}})
@@ -328,17 +330,17 @@ void scEchoBox::sendTap(ofxSCSynth* s, int t) {
     s->set("pingpong", tp.pingpong.get());
     s->set("bounce", tp.bounce.get() == 0 ? 1.0f : -1.0f);
     s->set("rotate", (float)std::min(tp.rotate.get(), n() - 1));
-    s->set("spread", tp.spread.get());
-    s->set("wowrate", tp.wowRate.get());
-    s->set("wowdepth", tp.wowDepth.get());
+    s->set("spread", modulation.voiceValues(tp.spread));
+    s->set("wowrate", modulation.voiceValues(tp.wowRate));
+    s->set("wowdepth", modulation.voiceValues(tp.wowDepth));
     s->set("ftype", (float)tp.ftype.get());
     s->set("cutoff", tp.cutoff.get());
-    s->set("res", tp.res.get());
-    s->set("lowcut", tp.lowcut.get());
+    s->set("res", modulation.voiceValues(tp.res));
+    s->set("lowcut", modulation.voiceValues(tp.lowcut));
     s->set("blur", tp.blur.get());
-    s->set("blurtime", tp.blurTime.get());
+    s->set("blurtime", modulation.voiceValues(tp.blurTime));
     s->set("drive", tp.drive.get());
-    s->set("shift", tp.shift.get());
+    s->set("shift", modulation.voiceValues(tp.shift));
     s->set("shiftmix", tp.shiftMix.get());
 }
 void scEchoBox::sendTap(int t) { for(auto& [s, st] : states) sendTap(st.taps[t], t); }

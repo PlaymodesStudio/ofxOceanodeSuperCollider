@@ -658,27 +658,30 @@ private:
         // the gates' levels from ModGate (Gate values / cable), the pitch cable
         c["gatebus"] = {st.modCreated && st.gateBus ? (float)st.gateBus->index : -1.0f};
         c["tr"] = {transpose.get()};
-        c["glide"] = {glide.get()};
-        c["atk"] = {attack.get()}; c["dec"] = {decay.get()}; c["sus"] = {sustain.get()}; c["rel"] = {release.get()};
-        c["ca"] = {attackCurve.get()}; c["cd"] = {decayCurve.get()}; c["cr"] = {releaseCurve.get()};
+        c["glide"] = mod.voiceValues(glide);
+        c["atk"] = mod.voiceValues(attack); c["dec"] = mod.voiceValues(decay); c["sus"] = mod.voiceValues(sustain); c["rel"] = mod.voiceValues(release);
+        c["ca"] = mod.voiceValues(attackCurve); c["cd"] = mod.voiceValues(decayCurve); c["cr"] = mod.voiceValues(releaseCurve);
         c["gated"] = {ampGated() ? 1.0f : 0.0f};
-        std::vector<float> lmode(LAYERS), lhz(LAYERS), lrat(LAYERS), lcyc(LAYERS), lamp(LAYERS),
-                           loff(LAYERS), lpan(LAYERS), pbuf(LAYERS), ebuf(LAYERS);
+        std::vector<float> lmode(LAYERS), lhz(LAYERS*V), lrat(LAYERS*V), lcyc(LAYERS*V), lamp(LAYERS*V),
+                           loff(LAYERS*V), lpan(LAYERS*V), pbuf(LAYERS), ebuf(LAYERS);
         for(int g = 0; g < LAYERS; g++){
             lmode[g] = float(formantMode[g].get());
-            lhz[g] = std::clamp(formantHz[g].get() * shiftFactor(), 1.0f, 20000.0f);
-            lrat[g] = formantRatio[g].get() * shiftFactor();
-            lcyc[g] = layerCycles(g);
-            lamp[g] = layerLevel[g].get();
-            loff[g] = layerDelay[g].get();
-            lpan[g] = layerPan[g].get();
+            for(int v=0;v<V;++v){
+                const int i=g*V+v;
+                lhz[i]=std::clamp(mod.voiceValue(formantHz[g],v)*shiftFactor(),1.0f,20000.0f);
+                lrat[i]=mod.voiceValue(formantRatio[g],v)*shiftFactor();
+                lcyc[i]=std::max(0.01f,mod.voiceValue(cycles[g],v)*cyclesScale.get());
+                lamp[i]=mod.voiceValue(layerLevel[g],v);
+                loff[i]=mod.voiceValue(layerDelay[g],v);
+                lpan[i]=mod.voiceValue(layerPan[g],v);
+            }
             pbuf[g] = st.bufs[2 * g] ? float(st.bufs[2 * g]->index) : -1.0f;
             ebuf[g] = st.bufs[2 * g + 1] ? float(st.bufs[2 * g + 1]->index) : -1.0f;
         }
         c["lmode"] = lmode; c["lhz"] = lhz; c["lrat"] = lrat; c["lcyc"] = lcyc;
         c["lamp"] = lamp; c["loff"] = loff; c["lpan"] = lpan; c["pbuf"] = pbuf; c["ebuf"] = ebuf;
-        c["rjit"] = {rateJitter.get()}; c["fjit"] = {formantJitter.get()};
-        c["ajit"] = {levelJitter.get()}; c["pjit"] = {panJitter.get()};
+        c["rjit"] = mod.voiceValues(rateJitter); c["fjit"] = mod.voiceValues(formantJitter);
+        c["ajit"] = mod.voiceValues(levelJitter); c["pjit"] = mod.voiceValues(panJitter);
         c["prob"] = {probability.get()};
         c["burst"] = {float(std::max(1, burst.get()))}; c["rest"] = {float(std::max(0, rest.get()))};
         std::vector<float> sv(SIEVE_MAX, 1.0f);
@@ -737,6 +740,7 @@ private:
     void setupModulation(){
         scModulation::Host h;
         h.node = this;
+        h.voiceParamsChanged = [this](){ controlsDirty = true; };
         h.regF = [this](ofParameter<float>& p, std::function<void()> f){ regMod(p, f); };
         h.regI = [this](ofParameter<int>& p, std::function<void()> f){ regMod(p, f); };
         h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ regMod(p, f); };
@@ -751,6 +755,8 @@ private:
         h.unpublish = [this](const std::string& k){ unpublishByKey(k); };
         h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
         h.voices = [this](){ return voices(); };
+        for(auto* p : {&glide,&attack,&decay,&sustain,&release,&attackCurve,&decayCurve,&releaseCurve,&rateJitter,&formantJitter,&levelJitter,&panJitter}) mod.addVoiceParam(*p);
+        for(int g=0;g<LAYERS;++g) for(auto* p : {&formantHz[g],&formantRatio[g],&cycles[g],&layerLevel[g],&layerDelay[g],&layerPan[g]}) mod.addVoiceParam(*p);
         mod.maxVoices = MAX_VOICES;
         mod.changed = [this](){ modDirty = true; };
         mod.setup(h, {

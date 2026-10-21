@@ -11,24 +11,25 @@
 // \rshare 1 (one series for every voice, each at its own phase), of the
 // voice's index: each voice its own random.
 (
-var root, dir, perlin2;
+var root, dir, valueNoise2;
 root = if(thisProcess.nowExecutingPath.notNil,
     { thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs" },
     { Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs" });
 dir = root +/+ "Modulation";
 File.mkdir(root); File.mkdir(dir);
 
-perlin2 = { |x, y, salt = 0|
-    var ix = x.floor, iy = y.floor, fx = x - ix, fy = y - iy;
-    var grad = { |cx, cy, dx, dy|
-        var h = ((((cx % 4096) * 12.9898) + ((cy % 4096) * 78.233) + salt).sin * 43758.5453).frac * 2pi;   // salt: each LFO (voice) its own field
-        (h.cos * dx) + (h.sin * dy)
+valueNoise2 = { |x, y, salt = 0|
+    // Stagger knots between voices; random values have no forced 0.5 crossing.
+    var nx = x + 0.371 - (y * 0.754877666), ny = y + 0.619;
+    var ix = nx.floor, iy = ny.floor, fx = nx - ix, fy = ny - iy;
+    var value = { |cx, cy|
+        ((((cx % 4096) * 12.9898) + ((cy % 4096) * 78.233) + salt).sin * 43758.5453).frac
     };
     var u = fx * fx * fx * (fx * (fx * 6 - 15) + 10), v = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
-    var n00 = grad.(ix, iy, fx, fy), n10 = grad.(ix + 1, iy, fx - 1, fy);
-    var n01 = grad.(ix, iy + 1, fx, fy - 1), n11 = grad.(ix + 1, iy + 1, fx - 1, fy - 1);
+    var n00 = value.(ix, iy), n10 = value.(ix + 1, iy);
+    var n01 = value.(ix, iy + 1), n11 = value.(ix + 1, iy + 1);
     var a = n00 + ((n10 - n00) * u), b = n01 + ((n11 - n01) * u);
-    ((a + ((b - a) * v)) * 1.4 + 0.5).clip(0, 1)
+    (a + ((b - a) * v)).clip(0, 1)
 };
 
 (1..32).do { |n|
@@ -90,11 +91,11 @@ perlin2 = { |x, y, salt = 0|
             LinLin.kr(round, 0, 0.5, tri, cosMapped).clip(0, 1),
             LinLin.kr(upper, -1, 1, 0, 1).clip(0, 1),
             (ph >= 0.25) * (ph < 0.75)]);
-        // Noise: 2D Perlin noise (Oceanode's Noise node): x = the ever-rising
+        // Noise: smooth 2D value noise: x = the ever-rising
         // counter (the LFO's rate: Hz or Beats), y = each voice's seed = its
         // index x \nscale (how different the voices are); \seed: this LFO's
         // own noise field (no two LFOs share values)
-        noise = perlin2.(sweep + \initphase.kr(0), (0 .. (n - 1)) * \nscale.kr(1), \seed.kr(0));
+        noise = valueNoise2.(sweep + \initphase.kr(0), (0 .. (n - 1)) * \nscale.kr(1), \seed.kr(0));
         shape = Select.kr(\noise.kr(0) > 0.5, [shape, noise]);
         shape = Select.kr(\rtype.kr(0).clip(0, 3), [shape, rstepped, rsmooth, rjumps]);
         // Gain: stretched around the middle, clipped at 0 / 1 (before S&H, Pow, BiPow)

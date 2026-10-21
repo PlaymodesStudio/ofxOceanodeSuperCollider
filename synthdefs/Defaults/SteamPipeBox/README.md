@@ -11,6 +11,14 @@ LFOs, external modulation inputs, a routing matrix and the optional MixerPro
 saturation/EQ/echo/reverb inserts. Added modulation sources and insert effects
 start disabled. Original tempo delay and R66 controls are in **Original FX**;
 they retain their imported settings independently of the extra box inserts.
+**Panning** follows the box-series speaker editor: Spread with Center, one voice
+per Channel, or Manual positions (drag a voice; Shift snaps it onto a speaker).
+The view shows base rings and live Pan modulation dots. More than two outputs
+can form a Ring or Line. All controls support right-click publication, timelines
+and snapshots; the Manual Pan vector also routes to the native Pan target.
+**Original** is the default placement mode for recovered and older snapshots,
+using their original Width and Random controls without changing their placement.
+
 BPM follows Oceanode transport through the usual `setBpm` path. Snapshot recall
 preserves connected controls; A/B morphing blends continuous values and routes,
 while polarity and switches change discretely.

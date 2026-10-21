@@ -6147,6 +6147,8 @@ void scGrainBoxPoly::setupModulation(Playhead& ph) {
     m.grainExtras = true;
     m.regionSec = [this, p]() { return regionSecOf(*p); };
     m.changed = [p]() { p->modDirty = true; };
+    h.voiceParamsChanged = [p]() { p->modDirty = true; };
+    for(auto* q : {&ph.ampA,&ph.ampD,&ph.ampS,&ph.ampR,&ph.ampCA,&ph.ampCD,&ph.ampCR}) m.addVoiceParam(*q);
     // the window's live values: the LFOs computed here (their cycle at each
     // playhead's phase now: they move whether or not routed), the envelopes
     // from what playheads 0..15 write on the vis bus
@@ -6385,6 +6387,9 @@ void scGrainBoxPoly::writeMod(Playhead& ph, ofxSCServer* srv) {
             v.resize(nv, 0.0f);
             gbpSetn(srv, M.vox->index + (MOD_EXTS + k) * M.voxCap, v);
         }
+        int ampSlot = MOD_EXTS + MOD_LFOS + 1;
+        for(auto* q : {&ph.ampA,&ph.ampD,&ph.ampS,&ph.ampR,&ph.ampCA,&ph.ampCD,&ph.ampCR})
+            gbpSetn(srv, M.vox->index + ampSlot++ * M.voxCap, m.voiceValues(*q));
         if(ph.gateIn.bus(srv) < 0) writeGate(ph, srv);   // (a cable: copied there)
     }
     // the LFOs' cycles

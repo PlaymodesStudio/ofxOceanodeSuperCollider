@@ -26,14 +26,21 @@ dir=root +/+ "SteamPipeBox";File.mkdir(root);File.mkdir(dir);
 (1..16).do { |n|
     SynthDef(("SteamPipeBoxSpread"++n).asSymbol, {
         var input=In.ar(\in.kr(0),16), voices=\voices.kr(6).clip(1,16);
-        var pans=(NamedControl.kr(\pan,0.5!16)+In.kr(\mpan.kr(0),16)).clip(0,1);
+        var ring=(\line.kr(1)<0.5)*(n>2);
+        var pan=NamedControl.kr(\pan,0.5!16)+In.kr(\mpan.kr(0),16);
+        var pans=Select.kr(ring,[pan.clip(0,1),pan.wrap(0,1)]);
         var output=0!n;
         16.do { |v|
-            var sig=input[v]*(v<voices), pos=pans[v]*(n-1);
-            n.do { |ch| output[ch]=output[ch]+(sig*(1-(pos-ch).abs).max(0)); };
+            var sig=input[v]*(v<voices), pos=pans[v]*Select.kr(ring,[n-1,n]);
+            n.do { |ch|
+                var distance=(pos-ch).abs;
+                distance=Select.kr(ring,[distance,distance.min(n-distance)]);
+                output[ch]=output[ch]+(sig*(1-distance).max(0));
+            };
         };
         Out.ar(\out.kr(0),output);
         Out.kr(\vis.kr(0),Array.fill(n,{|i| Amplitude.kr(output[i])}));
+        Out.kr(\vispan.kr(0),pans);
     }).writeDefFile(dir);
 };
 SynthDef(\SteamPipeBoxVoice, {

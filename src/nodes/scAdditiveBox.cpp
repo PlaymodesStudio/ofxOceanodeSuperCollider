@@ -309,6 +309,7 @@ void scAdditiveBox::setup(){
     {
         scModulation::Host h;
         h.node = this;
+        h.voiceParamsChanged = [this](){ markDirty(); };
         h.regF = [this](ofParameter<float>& p, std::function<void()> f){ regMod(p, f); };
         h.regI = [this](ofParameter<int>& p, std::function<void()> f){ regMod(p, f); };
         h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ regMod(p, f); };
@@ -324,6 +325,7 @@ void scAdditiveBox::setup(){
         h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
         h.voices = [this](){ return numVoicesClamped(); };
         mod.partialLfos = true;
+        for(auto* p : {&transpose,&sweepVoiceOffset,&unisonDetune,&unisonSpread,&unisonInterval,&unisonBlend}) mod.addVoiceParam(*p);
         // LFOs to the per-partial targets run in the voices (lanes), not as routes
         mod.skipRoute = [](int s, int t){ return s < scModulation::MAX_LFOS && t >= FIRST_PARTIAL_TARGET; };
         mod.changed = [this](){ modDirty = true; };   // only the modulation's data, not every partial
@@ -688,7 +690,7 @@ std::vector<float> scAdditiveBox::filter1Curve(int voice) const {
 }
 
 float scAdditiveBox::voiceCutoff(int voice) const {
-    const float p = valueFor(pitch.get(), voice, 48.0f) + transpose.get();
+    const float p = valueFor(pitch.get(), voice, 48.0f) + mod.voiceValue(transpose, voice);
     return valueFor(cutoff.get(), voice, 100.0f) + valueFor(keytrack.get(), voice, 0.0f) * (p - 60.0f);
 }
 
@@ -705,8 +707,8 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
         const float steps = std::ceil((U - 1) / 2.0f);
         side = ((u % 2) ? 1.0f : -1.0f) * std::ceil(u / 2.0f) / steps;
     }
-    const float p = valueFor(pitch.get(), v, 48.0f) + transpose.get()
-                  + side * unisonDetune.get() / 200.0f + u * unisonInterval.get();
+    const float p = valueFor(pitch.get(), v, 48.0f) + mod.voiceValue(transpose, v)
+                  + side * mod.voiceValue(unisonDetune, v) / 200.0f + u * mod.voiceValue(unisonInterval, v);
     const float f0 = midiToHz(p);
     const float st = valueFor(stretch.get(), v, 1.0f);
     const float B = valueFor(inharm.get(), v, 0.0f);
@@ -726,7 +728,7 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
     const float tBlur = valueFor(timeBlur.get(), v, 0.0f);
     const float waves = valueFor(sweepWaves.get(), v, 2.0f);
     const int swMode = valueFor(sweepMode.get(), v, 0);
-    const float pn = valueFor(pan.get(), v, 0.5f) + side * unisonSpread.get() * 0.5f;
+    const float pn = valueFor(pan.get(), v, 0.5f) + side * mod.voiceValue(unisonSpread, v) * 0.5f;
     const float spr = valueFor(spread.get(), v, 1.0f);
     const int pMode = std::clamp(valueFor(panMode.get(), v, 0), 0, NumPanModes - 1);
     const float dRate = valueFor(driftRate.get(), v, 0.1f);
@@ -834,7 +836,7 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
     }
 
 
-    const float blend = unisonBlend.get();
+    const float blend = mod.voiceValue(unisonBlend, v);
     const float uGain = (u == 0 ? 1.0f : blend) / std::sqrt(1.0f + blend * blend * (U - 1));
 
     d.pitch = p;
@@ -855,7 +857,7 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
         {"shimmer", valueFor(shimmer.get(), v, 0.0f)},
         {"swamt", valueFor(sweepAmt.get(), v, 0.0f)},
         {"swrate", valueFor(sweepRate.get(), v, 0.2f)},
-        {"swphase", valueFor(sweepPhase.get(), v, 0.0f) + v * sweepVoiceOffset.get()},
+        {"swphase", valueFor(sweepPhase.get(), v, 0.0f) + v * mod.voiceValue(sweepVoiceOffset, v)},
         {"swretrig", sweepRetrig ? 1.0f : 0.0f},
         {"drift", valueFor(drift.get(), v, 0.0f)},
         {"width", valueFor(width.get(), v, 2.0f)},
@@ -1226,12 +1228,12 @@ float scAdditiveBox::unisonSide(int u) const {
 std::map<std::string, float> scAdditiveBox::coreScalars(int v, int u) const {
     const int U = unisonClamped();
     const float side = unisonSide(u);
-    const float blend = unisonBlend.get();
+    const float blend = mod.voiceValue(unisonBlend, v);
     const float uGain = (u == 0 ? 1.0f : blend) / std::sqrt(1.0f + blend * blend * (U - 1));
     return {
-        {"pitch", valueFor(pitch.get(), v, 48.0f) + transpose.get() + side * unisonDetune.get() / 200.0f + u * unisonInterval.get()},
+        {"pitch", valueFor(pitch.get(), v, 48.0f) + mod.voiceValue(transpose, v) + side * mod.voiceValue(unisonDetune, v) / 200.0f + u * mod.voiceValue(unisonInterval, v)},
         {"amp", valueFor(levels.get(), v, 0.5f) * uGain},
-        {"panoff", side * unisonSpread.get() * 0.5f},
+        {"panoff", side * mod.voiceValue(unisonSpread, v) * 0.5f},
     };
 }
 
@@ -1306,7 +1308,7 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
     // (from the value, not gateOpen: scheduled notes move gateOpen ahead of now)
     extra["gate"] = std::max(0.0f, valueFor(gate.get(), v, 0.0f));
     extra["velbus"] = float(st.modCreated ? mod.sourceBus(server, scModulation::SRC_VEL) + v : (st.visJunk ? st.visJunk->index : 0));
-    extra["pitchoff"] = pb >= 0 ? transpose.get() : 0.0f;
+    extra["pitchoff"] = pb >= 0 ? mod.voiceValue(transpose, v) : 0.0f;
     skipScalars.clear();
     if(gb >= 0) skipScalars.insert("gate");
     if(pb >= 0) skipScalars.insert("pitch");

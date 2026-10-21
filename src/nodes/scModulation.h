@@ -69,6 +69,8 @@ public:
         std::function<int()> voices;                                      // N
         // any control of the node by key (for "Modulate" on every control); null: not modulatable
         std::function<ofAbstractParameter*(const std::string& key)> control;
+        // Resend voice controls even when only voices after the first changed.
+        std::function<void()> voiceParamsChanged;
     };
 
     scModulation() = default;
@@ -139,7 +141,7 @@ public:
     std::vector<float> lfoVoiceOffsets(int li) const;         // every voice's
     float lfoSampleHold(int li) const;                        // S&H steps per second (first value), 0 off
     float lfoShGlide(int li) const { return lfoSHGlide[li].get(); }   // S&H glide (s)
-    // Noise (2D Perlin, as Oceanode's Noise node): x the rising counter, y = index x Scale + seed
+    // Noise (smooth 2D random values): x the rising counter, y = index x Scale + seed
     static float noise2(float x, float y, float salt = 0.0f);   // salt: each LFO (voice) its own field
     bool lfoIsNoise(int li) const { return effectiveNoise(li); }
     float lfoNoiseScale(int li) const { return lfoNScale[li].get(); }
@@ -178,6 +180,11 @@ public:
     // at the frame rate). The base is what is saved; the node's own saving
     // calls patchBases on its json of controls.
     bool isParamTarget(const std::string& key) const;
+    // Scalar editor controls whose DSP input belongs to each voice. Effects,
+    // transport and structural settings remain shared unless explicitly added.
+    void addVoiceParam(const ofAbstractParameter& p) { voiceParamKeys.insert(p.getEscapedName()); }
+    float voiceValue(const ofParameter<float>& p, int voice) const;
+    std::vector<float> voiceValues(const ofParameter<float>& p) const;
     void patchBases(ofJson& controls) const;                   // modulated keys in it -> their base
     ofJson paramsJson() const;                                 // the targets, amounts, bases
     void loadParamsJson(const ofJson& j);                      // (set the bases: afterLoad / applyParamBases)
@@ -206,13 +213,14 @@ private:
         ofAbstractParameter* p = nullptr;
         int kind = 0;                                          // 0 float, 1 int, 2 vector<float>, 3 vector<int>
         float lo = 0.0f, hi = 1.0f;
-        std::vector<float> base, written;
+        std::vector<float> base, written, voiceWritten;
         std::array<float, MAX_SOURCES> amount{};
         bool applied = false;                                  // the control holds base + modulation now
         bool pending = false;                                  // a loaded base, not set yet
         bool routed() const { for(float a : amount) if(std::abs(a) > 1e-4f) return true; return false; }
     };
     std::vector<ParamTarget> params;
+    std::set<std::string> voiceParamKeys;
     std::set<std::string> ownKeys;                             // the module's own controls (not targets)
     bool resolveParam(const std::string& key, ParamTarget& pt) const;
     std::vector<float> readParam(const ParamTarget& pt) const;

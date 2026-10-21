@@ -179,6 +179,7 @@ void scAliasingBox::setup() {
     for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) reg(*p, [](){});
     scModulation::Host h;
     h.node = this;
+    h.voiceParamsChanged = [this](){ if(!restoring) sendAll(); };
     h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
     h.regI = [this](ofParameter<int>& p, std::function<void()> f){ reg(p, f); };
     h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ reg(p, f); };
@@ -201,6 +202,8 @@ void scAliasingBox::setup() {
         auto it = targets.find(c->p.getName()); if(it != targets.end()) mod.targetOfKey[c->p.getEscapedName()] = it->second;
     }
     mod.changed = [this](){ if(!restoring) sendAll(); };
+    for(const auto& c : sound) if(c->sc!="stereo") mod.addVoiceParam(c->p);
+    for(auto& curves : envCurves) for(auto& p : curves) mod.addVoiceParam(p);
     initial = capture();
     scSnapshots::Host sh;
     sh.folder = "AliasingBox"; sh.title = "AliasingBox";
@@ -253,8 +256,8 @@ void scAliasingBox::sendSound(ofxSCServer* server, State& st) {
             if(it!=sent.end()&&it->second==value) return;
             sent[name]=value;v->set(name,value);
         };
-        for(const auto& c : sound) if(c->sc!="stereo") set(c->sc,c->p.get());
-        for(int e=0;e<2;++e) for(int k=0;k<3;++k) set(std::string(e?"filter_curve":"amp_curve")+ofToString(k),envCurves[e][k].get());
+        for(const auto& c : sound) if(c->sc!="stereo") set(c->sc,mod.voiceValue(c->p,i));
+        for(int e=0;e<2;++e) for(int k=0;k<3;++k) set(std::string(e?"filter_curve":"amp_curve")+ofToString(k),mod.voiceValue(envCurves[e][k],i));
         set("gatebus",st.gates->index+i);
         set("velbus",mod.sourceBus(server,scModulation::SRC_VEL)+i);
         set("out",st.audio->index+i);

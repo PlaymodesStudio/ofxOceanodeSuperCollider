@@ -68,20 +68,23 @@ float perlin(float x, float seed) {
 }
 }
 
-// 2D Perlin noise as the synths run it (modulation.scd: perlin2), 0..1
+// Smooth 2D value noise, shared with the server's valueNoise2 function.
 float scModulation::noise2(float x, float y, float salt) {
-    auto grad = [salt](float cx, float cy, float dx, float dy){
+    // Stagger each voice's interpolation knots as well as its random values.
+    // Unlike gradient noise, integer coordinates have no forced middle value.
+    x += 0.371f - y * 0.754877666f;
+    y += 0.619f;
+    auto value = [salt](float cx, float cy){
         const float a = std::fmod(cx, 4096.0f), b = std::fmod(cy, 4096.0f);
         const float s = std::sin((a < 0 ? a + 4096.0f : a) * 12.9898f + (b < 0 ? b + 4096.0f : b) * 78.233f + salt) * 43758.5453f;
-        const float h = (s - std::floor(s)) * TWO_PI;
-        return std::cos(h) * dx + std::sin(h) * dy;
+        return s - std::floor(s);
     };
     const float ix = std::floor(x), iy = std::floor(y), fx = x - ix, fy = y - iy;
     const float u = fx * fx * fx * (fx * (fx * 6 - 15) + 10), v = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
-    const float n00 = grad(ix, iy, fx, fy), n10 = grad(ix + 1, iy, fx - 1, fy);
-    const float n01 = grad(ix, iy + 1, fx, fy - 1), n11 = grad(ix + 1, iy + 1, fx - 1, fy - 1);
+    const float n00 = value(ix, iy), n10 = value(ix + 1, iy);
+    const float n01 = value(ix, iy + 1), n11 = value(ix + 1, iy + 1);
     const float a = n00 + (n10 - n00) * u, b = n01 + (n11 - n01) * u;
-    return ofClamp((a + (b - a) * v) * 1.4f + 0.5f, 0.0f, 1.0f);
+    return ofClamp(a + (b - a) * v, 0.0f, 1.0f);
 }
 
 // What the shape goes through after the shape (or the noise): Gain, Steps,
@@ -320,8 +323,8 @@ void scModulation::sendEnv(ServerState& st, int e) {
     auto& E = envs[e];
     s->set("gate", st.gateBus);
     s->set("out", st.srcBlock ? st.srcBlock->index + (SRC_ENV + e) * busWidth : 0);
-    s->set("atk", E.a.get()); s->set("dec", E.d.get()); s->set("sus", E.s.get()); s->set("rel", E.r.get());
-    s->set("cA", E.ca.get()); s->set("cD", E.cd.get()); s->set("cR", E.cr.get());
+    s->setMultiple("atk", E.a.get(), n()); s->setMultiple("dec", E.d.get(), n()); s->setMultiple("sus", E.s.get(), n()); s->setMultiple("rel", E.r.get(), n());
+    s->setMultiple("cA", E.ca.get(), n()); s->setMultiple("cD", E.cd.get(), n()); s->setMultiple("cR", E.cr.get(), n());
     // velocity tracking: the note's velocity (the velocity source, written by the node's gates)
     s->set("velbus", st.srcBlock ? st.srcBlock->index + SRC_VEL * busWidth : 0);
     s->set("veltrack", velocity ? E.vt.get() : 0.0f);
@@ -838,6 +841,23 @@ bool scModulation::isParamTarget(const std::string& key) const {
     return false;
 }
 
+float scModulation::voiceValue(const ofParameter<float>& p, int voice) const {
+    for(const auto& pt : params)
+        if(pt.key == p.getEscapedName() && !pt.voiceWritten.empty() && pt.written.size() == 1 && p.get() == pt.written[0])
+            return pt.voiceWritten[ofClamp(voice, 0, int(pt.voiceWritten.size()) - 1)];
+    return p.get();
+}
+
+std::vector<float> scModulation::voiceValues(const ofParameter<float>& p) const {
+    std::vector<float> out(n(), p.get());
+    for(const auto& pt : params){
+        if(pt.key != p.getEscapedName() || pt.voiceWritten.empty() || pt.written.size() != 1 || p.get() != pt.written[0]) continue;
+        for(size_t i = 0; i < out.size(); ++i) out[i] = pt.voiceWritten[std::min(i, pt.voiceWritten.size() - 1)];
+        break;
+    }
+    return out;
+}
+
 // A source as it moves a control: LFOs, Random, Ext and Voice around the
 // value (-0.5..0.5: amount 1 sweeps the whole range), envelopes and velocity up from it
 float scModulation::paramSource(int s, int voice) const {
@@ -860,6 +880,7 @@ bool scModulation::paramsActive() const {
 
 void scModulation::applyParams() {
     const int nv = n();
+    bool voicesDirty = false;
     applyParamBases();   // loaded ones (when the node did not call afterLoad)
     for(auto& pt : params){
         if(!pt.p) continue;
@@ -870,10 +891,12 @@ void scModulation::applyParams() {
         bool on = false;
         for(int s = 0; s < sourceCount() && !on; s++) on = std::abs(pt.amount[s]) > 1e-4f && sourceUsed(s);
         if(!on || pt.base.empty()){
+            if(!pt.voiceWritten.empty()) { pt.voiceWritten.clear(); voicesDirty = true; }
             if(pt.applied){ writeParam(pt, pt.base); pt.applied = false; }
             continue;
         }
-        const size_t size = pt.kind >= 2 ? (pt.base.size() <= 1 ? (size_t)nv : pt.base.size()) : 1;
+        const bool voiceScalar = pt.kind == 0 && voiceParamKeys.count(pt.key);
+        const size_t size = voiceScalar ? (size_t)nv : pt.kind >= 2 ? (pt.base.size() <= 1 ? (size_t)nv : pt.base.size()) : 1;
         const float span = pt.hi - pt.lo;
         std::vector<float> out(size);
         for(size_t i = 0; i < size; i++){
@@ -890,16 +913,25 @@ void scModulation::applyParams() {
             if(pt.kind == 1 || pt.kind == 3) v = std::round(v);
             out[i] = v;
         }
-        if(out != cur) writeParam(pt, out); else pt.written = cur;
+        if(voiceScalar){
+            if(out != pt.voiceWritten) { pt.voiceWritten = out; voicesDirty = true; }
+            // Keep the scalar editor/connection value at its shared base.
+            // Only the DSP reads the separate base + modulation per voice.
+            pt.written = cur;
+        }else if(out != cur) writeParam(pt, out); else pt.written = cur;
         pt.applied = true;
     }
+    if(voicesDirty && host.voiceParamsChanged) host.voiceParamsChanged();
 }
 
 void scModulation::removeParam(size_t i) {
     if(i >= params.size()) return;
     auto& pt = params[i];
+    const bool voice = !pt.voiceWritten.empty();
+    pt.voiceWritten.clear();
     if(pt.applied && pt.p) writeParam(pt, pt.base);
     params.erase(params.begin() + i);
+    if(voice && host.voiceParamsChanged) host.voiceParamsChanged();
 }
 
 void scModulation::patchBases(ofJson& controls) const {
@@ -954,6 +986,7 @@ void scModulation::applyParamBases() {
     for(auto& pt : params){
         if(!pt.pending) continue;
         pt.pending = false;
+        pt.voiceWritten.clear();
         if(pt.p && !pt.base.empty()) writeParam(pt, pt.base);
         pt.applied = false;
     }
@@ -1343,7 +1376,7 @@ void scModulation::drawLfoCard(int li, float w) {
     if(!random && !unifiedLfoModels){
         if(sameLine) ImGui::SameLine();
         toggle(lfoNoise[li], "Noise");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Perlin noise instead of a waveform (as Oceanode's Noise node)");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Smooth random values instead of a waveform; each voice follows its own trajectory");
         sameLine = true;
     }
     if(grainExtras){

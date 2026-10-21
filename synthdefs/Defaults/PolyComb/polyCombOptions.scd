@@ -19,9 +19,11 @@ File.mkdir(root); File.mkdir(dir);
         // One oscillator at the input root (first pitch), shared by the voice
         // envelopes. Chord tones must never become extra sub frequencies.
         var pitch = Select.kr(\pitch_sel.kr(0), [kv.(\pitch,60).asArray[0], cable.asArray[0]]);
-        var env = EnvGen.ar(Env.adsr(\atk.kr(0.01), \dec.kr(0.5), \sus.kr(1), \rel.kr(0.5),
-            curve:[\cA.kr(-4),\cD.kr(-4),\cR.kr(-4)]), gate);
-        var velocity = (1-\velsens.kr(1)) + (In.kr(\vel.kr(0),n).clip(0,1)*\velsens.kr(1));
+        var atk=kv.(\atk,0.01).asArray, dec=kv.(\dec,0.5).asArray, sus=kv.(\sus,1).asArray, rel=kv.(\rel,0.5).asArray;
+        var curves=[kv.(\cA,-4),kv.(\cD,-4),kv.(\cR,-4)].collect(_.asArray);
+        var env = n.collect { |i| EnvGen.ar(Env.adsr(atk[i],dec[i],sus[i],rel[i],
+            curve:curves.collect { |c| c[i] }),gate.asArray[i]) };
+        var velocity = (1-kv.(\velsens, 1)) + (In.kr(\vel.kr(0),n).clip(0,1)*kv.(\velsens, 1));
         // One vibrato LFO for the single root tone, independent of main voices.
         var rate = \vibrate.kr(5,0.03) * (1 + (Rand(-1,1) * \vibrand.kr(0,0.03).clip(0,1)));
         var vibrato = SinOsc.kr(rate, Rand(0,2pi)) * \vibamt.kr(0,0.03);
@@ -32,7 +34,7 @@ File.mkdir(root); File.mkdir(dir);
     }).writeDefFile(dir);
     SynthDef(("PCFilterSlopes" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0),n);
-        var cut = kv.(\cutoff,100)+(\keytrack.kr(0)*(base.()-60))+modIn.(\mcut);
+        var cut = kv.(\cutoff,100)+(kv.(\keytrack, 0)*(base.()-60))+modIn.(\mcut);
         var fc = cut.clip(0,135).midicps.clip(20,(SampleRate.ir*0.45).min(20000));
         var rq = (1-(kv.(\res,0.3)+modIn.(\mres))).clip(0.02,1);
         var slope = \slope.kr(1).clip(1,3)-1;

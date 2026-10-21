@@ -20,7 +20,7 @@
 //                          S&H trigger, shared by the lane chunks
 //   AdditiveBoxLanes<C>    an LFO per partial (up to 2 lanes): level *, pan +,
 //                          pitch (frequency stream *), on C partials from \first
-//   AdditiveBoxLanesN<C>   the same, with Noise: 2D Perlin noise per partial
+//   AdditiveBoxLanesN<C>   the same, with Noise: Smooth 2D value noise per partial
 //                          (x the LFO's rising counter, y = the partial's
 //                          index x Noise Scale + the voice's seed), through
 //                          the LFO's Gain / Pow / BiPow curve (\l<l>cbuf)
@@ -73,7 +73,7 @@
 
 (
 var d, caps = [8, 16, 32, 64, 128, 256], chunks = [8, 16, 32, 64], noiseChunk = 32, maxOut = 16, dispMax = 64, dir;
-var mod, lag, streams, chunk, part, perlin2;
+var mod, lag, streams, chunk, part, valueNoise2;
 if(thisProcess.nowExecutingPath.notNil) {
     d = thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs";
 } {
@@ -91,18 +91,19 @@ streams = { |np| var b = \bus.kr(0); [In.kr(b, np), In.kr(b + np, np), In.kr(b +
 // a chunk: the stream bus offsets of nc partials from \first, in a voice of \np
 chunk = { |nc| var b = \bus.kr(0), np = \np.kr(8), f = \first.kr(0); [b + f, b + np + f, b + (2 * np) + f] };
 part = { |name, np, func| SynthDef((name ++ np).asSymbol, { func.(np) }).writeDefFile(dir) };
-// 2D Perlin noise, 0..1 (as Modulation/modulation.scd and Oceanode's Noise node)
-perlin2 = { |x, y, salt = 0|
-    var ix = x.floor, iy = y.floor, fx = x - ix, fy = y - iy;
-    var grad = { |cx, cy, dx, dy|
-        var h = ((((cx % 4096) * 12.9898) + ((cy % 4096) * 78.233) + salt).sin * 43758.5453).frac * 2pi;   // salt: each LFO (voice) its own field
-        (h.cos * dx) + (h.sin * dy)
+// Smooth 2D value noise, 0..1 (as Modulation/modulation.scd)
+valueNoise2 = { |x, y, salt = 0|
+    // Stagger knots between voices; random values have no forced 0.5 crossing.
+    var nx = x + 0.371 - (y * 0.754877666), ny = y + 0.619;
+    var ix = nx.floor, iy = ny.floor, fx = nx - ix, fy = ny - iy;
+    var value = { |cx, cy|
+        ((((cx % 4096) * 12.9898) + ((cy % 4096) * 78.233) + salt).sin * 43758.5453).frac
     };
     var u = fx * fx * fx * (fx * (fx * 6 - 15) + 10), v = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
-    var n00 = grad.(ix, iy, fx, fy), n10 = grad.(ix + 1, iy, fx - 1, fy);
-    var n01 = grad.(ix, iy + 1, fx, fy - 1), n11 = grad.(ix + 1, iy + 1, fx - 1, fy - 1);
+    var n00 = value.(ix, iy), n10 = value.(ix + 1, iy);
+    var n01 = value.(ix, iy + 1), n11 = value.(ix + 1, iy + 1);
     var a = n00 + ((n10 - n00) * u), b = n01 + ((n11 - n01) * u);
-    ((a + ((b - a) * v)) * 1.4 + 0.5).clip(0, 1)
+    (a + ((b - a) * v)).clip(0, 1)
 };
 
 caps.do { |np|
@@ -213,7 +214,7 @@ SynthDef(\AdditiveBoxLaneClock, {
 
 chunks.do { |nc|
     // ── LFO lanes: each partial reads the LFO's cycle at its own phase; the
-    //    N variant also runs Noise (2D Perlin, a seed per partial) ──────────
+    //    N variant also runs Noise (smooth random values, a seed per partial) ──────────
     [false, true].do { |withNoise|
         if(withNoise.not or: { nc <= noiseChunk }) { part.(if(withNoise, "AdditiveBoxLanesN", "AdditiveBoxLanes"), nc, { |nc|
             var o = chunk.(nc), first = \first.kr(0);
@@ -226,7 +227,7 @@ chunks.do { |nc|
                 var sh, v, amt;
                 if(withNoise) {
                     // the seed: this LFO's and this voice's own noise field
-                    var nz = perlin2.(clock[3 * l + 1], (first + (0 .. (nc - 1))) * k.("nscale", 1), k.("seed", 0));
+                    var nz = valueNoise2.(clock[3 * l + 1], (first + (0 .. (nc - 1))) * k.("nscale", 1), k.("seed", 0));
                     x = Select.kr(k.("noise", 0) > 0.5, [x, IndexL.kr(k.("cbuf", -1), nz * 256)]);
                 };
                 // S&H (steps / s) with its glide (s)

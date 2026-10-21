@@ -53,10 +53,10 @@ filter = { |sig, type, note, res|
         var p = Select.kr(\pitch_sel.kr(0) > 0.5, [kv.(\pitch, 60), spread]);
         // A short minimum lag removes GUI/map stepping; longer musical glide still applies.
         var d = Lag.kr(kv.(\transpose, 0), 0.02) + (({ Rand(-1, 1) } ! n) * kv.(\detune, 0));
-        var b = Lag.kr(p, \glide.kr(0).max(0.02)) + d;
+        var b = Lag.kr(p, kv.(\glide, 0).max(0.02)) + d;
         // each voice its own vibrato rate: Rate * (1 ± a random part up to \vibrand)
-        var rate = \vibrate.kr(5) * (1 + (({ Rand(-1, 1) } ! n) * \vibrand.kr(0).clip(0, 1)));
-        var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * \vibamt.kr(0);
+        var rate = kv.(\vibrate, 5) * (1 + (({ Rand(-1, 1) } ! n) * kv.(\vibrand, 0).clip(0, 1)));
+        var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * kv.(\vibamt, 0);
         // the note, the note before vibrato / modulation, and that before the glide (the resonators glide on their own)
         Out.kr(\out.kr(0), (b + v + modIn.(\mpitch)) ++ b ++ (p + d));
     }).writeDefFile(dir);
@@ -66,7 +66,7 @@ filter = { |sig, type, note, res|
         var freq = note.().clip(0, 135).midicps;
         var amt = (kv.(\fmamt, 0) + modIn.(\mamt)).clip(0, 2);
         var ratio = (kv.(\fmratio, 1) + modIn.(\mratio)).clip(0.0625, 32);
-        Out.ar(\out.kr(0), SinOscFB.ar(freq * ratio, \fmfb.kr(0).clip(0, 1.5)) * freq * amt * 8);
+        Out.ar(\out.kr(0), SinOscFB.ar(freq * ratio, kv.(\fmfb, 0).clip(0, 1.5)) * freq * amt * 8);
     }).writeDefFile(dir);
 
     // One synth per oscillator type, all adding into the oscillator bus
@@ -94,7 +94,7 @@ filter = { |sig, type, note, res|
         [\Pink,  { |f, fr| PinkNoise.ar(1 ! n) }],
         // Dust: a short burst per grain (a single-sample click had almost no energy), ±;
         // \dustoct: the grain rate this many octaves below the note (0 .. -10)
-        [\Dust,  { |f, fr| Decay2.ar(Dust2.ar((fr * (2 ** \dustoct.kr(0, 0.03).clip(-10, 0))).clip(0.001, 10000)), 0.0002, 0.004) * 3 }],
+        [\Dust,  { |f, fr| Decay2.ar(Dust2.ar((fr * (2 ** Lag.kr(kv.(\dustoct, 0), 0.03).clip(-10, 0))).clip(0.001, 10000)), 0.0002, 0.004) * 3 }],
         [\Imp,   { |f, fr| Impulse.ar(f) }],
     ].do { |o|
         SynthDef(("PCOsc" ++ o[0] ++ n).asSymbol, {
@@ -107,7 +107,7 @@ filter = { |sig, type, note, res|
     // A filter (the main one and the post filter)
     SynthDef(("PCFilter" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
-        var cut = kv.(\cutoff, 100) + (\keytrack.kr(0) * (base.() - 60)) + modIn.(\mcut);
+        var cut = kv.(\cutoff, 100) + (kv.(\keytrack, 0) * (base.() - 60)) + modIn.(\mcut);
         Out.ar(\out.kr(0), insert.(sig, filter.(sig, \type.kr(0), cut, (kv.(\res, 0.3) + modIn.(\mres)).clip(0, 1))));
     }).writeDefFile(dir);
 
@@ -119,7 +119,7 @@ filter = { |sig, type, note, res|
             (({ Rand(-1, 1) } ! n) * kv.(\combdetune, 0)) + modIn.(\mcpitch);
         var delay = cnote.clip(0, 127).midicps.clip(20, 10000).reciprocal;
         var fb = (kv.(\combfeed, 0.7) + modIn.(\mcfb)).clip(-0.999, 0.999);
-        var comb = CombC.ar(LPF.ar(sig, \combtone.kr(1).linexp(0, 1, 300, 20000)), 0.05, delay,
+        var comb = CombC.ar(LPF.ar(sig, kv.(\combtone, 1).linexp(0, 1, 300, 20000)), 0.05, delay,
             delay * (0.001.log / fb.abs.max(0.0001).log) * fb.sign);
         comb = (LeakDC.ar(comb) * (1 - (fb.abs * 0.9))).tanh;
         Out.ar(\out.kr(0), insert.(sig, XFade2.ar(sig, comb, (kv.(\combmix, 1) + modIn.(\mcmix)).clip(0, 1) * 2 - 1)));
@@ -146,11 +146,11 @@ filter = { |sig, type, note, res|
         // the gate's level (held from its rising edge, 1 while droning); Vel Sens
         // blends in the velocity (\vel = level x Velocity)
         var lev = In.ar(\gate.kr(0), n);
-        var vs = \velsens.kr(0.5).clip(0, 1);
+        var vs = kv.(\velsens, 0.5).clip(0, 1);
         // Like vibrato, each voice has a random rate offset and initial phase.
         // Depth 0 is unity; depth 1 sweeps the amplitude from silence to unity.
-        var rate = \tremrate.kr(5) * (1 + (({ Rand(-1, 1) } ! n) * \tremrand.kr(0).clip(0, 1)));
-        var trem = 1 - ((SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * 0.5 + 0.5) * \tremdepth.kr(0, 0.03).clip(0, 1));
+        var rate = kv.(\tremrate, 5) * (1 + (({ Rand(-1, 1) } ! n) * kv.(\tremrand, 0).clip(0, 1)));
+        var trem = 1 - ((SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * 0.5 + 0.5) * Lag.kr(kv.(\tremdepth, 0), 0.03).clip(0, 1));
         var amp = In.ar(\env.kr(0), n) * ((Gate.ar(lev, lev > 0) * (1 - vs)) + K2A.ar(vel * vs)) *
             K2A.ar((1 + modIn.(\mamp)).clip(0, 2) * trem);
         Out.ar(\out.kr(0), Sanitize.ar(LeakDC.ar(sig * amp) * \level.kr(0.8, 0.05)));

@@ -131,6 +131,14 @@ void scSteamPipeBox::setup() {
     steamPipe2.set("SteamPipe 2",false); reg(steamPipe2,[this](){sendAll();});
     legato.set("Legato",false); reg(legato,[this](){sendAll();});
     noiseEnvelopeAmount.set("Noise Filter Envelope",0,0,120); reg(noiseEnvelopeAmount,[this](){sendAll();});
+    // Preserve the recovered snapshots' placement unless another mode is chosen.
+    placement.set("Placement",0,0,3); reg(placement,[this](){sendAll();});
+    speakerLayout.set("Speaker Layout",1,0,1); reg(speakerLayout,[this](){sendAll();});
+    spreadWidth.set("Spread",1,0,1); reg(spreadWidth,[this](){sendAll();});
+    spreadCenter.set("Spread Center",0,-1,1); reg(spreadCenter,[this](){sendAll();});
+    panP.set("Pan",{0.5f},{0.0f},{1.0f}); reg(panP,[this](){sendAll();});
+    dropdowns.set(placement.getEscapedName(),{"Original","Spread","Channels","Manual"});
+    dropdowns.set(speakerLayout.getEscapedName(),{"Ring","Line"});
     // ── Effects (MixerPro's inserts) ─────────────────────────────────────────
     auto toStages = [this]() { for(auto& [sv, st] : states) if(st.created) updateStages(sv, st); };
     eqOn.set("EQ On", false);                 reg(eqOn, toStages);
@@ -194,6 +202,7 @@ void scSteamPipeBox::setup() {
     for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) reg(*p, [](){});
     scModulation::Host h;
     h.node = this;
+    h.voiceParamsChanged = [this](){ if(!restoring) sendAll(); };
     h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
     h.regI = [this](ofParameter<int>& p, std::function<void()> f){ reg(p, f); };
     h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ reg(p, f); };
@@ -216,7 +225,12 @@ void scSteamPipeBox::setup() {
         {"noise_cut",NoiseCut},{"noise_resonance",NoiseRes},{"diffusion",Diffusion},{"push",Push},
         {"offset",Offset},{"feedback_rt",FeedbackRT},{"hp0",HP},{"lp0",LP},{"mod_wheel",MW}};
     for(const auto& c:sound) {auto it=targets.find(c->sc);if(it!=targets.end()) mod.targetOfKey[c->p.getEscapedName()]=it->second;}
+    mod.targetOfKey[panP.getEscapedName()]=Pan;
     mod.changed = [this](){ if(!restoring) sendAll(); };
+    for(const auto& c : sound)
+        if(c->group!="Output" && c->group!="R66" && c->group!="Delay") mod.addVoiceParam(c->p);
+    for(auto& curves : envCurves) for(auto& p : curves) mod.addVoiceParam(p);
+    mod.addVoiceParam(noiseEnvelopeAmount);
     initial = capture();
     scSnapshots::Host sh;
     sh.folder = "SteamPipeBox"; sh.title = "SteamPipeBox";
@@ -305,8 +319,8 @@ void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
             if(it!=sent.end()&&it->second==value) return;
             sent[name]=value;updates.set(name,value);
         };
-        for(const auto& c : sound) if(c->sc!="stereo") set(c->sc,c->p.get());
-        for(int e=0;e<1;++e) for(int k=0;k<3;++k) set(std::string(e?"filter_curve":"amp_curve")+ofToString(k),envCurves[e][k].get());
+        for(const auto& c : sound) if(c->sc!="stereo") set(c->sc,mod.voiceValue(c->p,i));
+        for(int e=0;e<1;++e) for(int k=0;k<3;++k) set(std::string(e?"filter_curve":"amp_curve")+ofToString(k),mod.voiceValue(envCurves[e][k],i));
         set("gatebus",st.gates->index+i);
         set("velabus",st.velocities->index+i);
         set("out",st.audio->index+i);
@@ -316,7 +330,7 @@ void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
         set("amp_original",originalEnvelope.get()?1.f:0.f);
         set("steampipe2",steamPipe2.get()?1.f:0.f);
         set("legato",legato.get()?1.f:0.f);
-        set("noise_env",noiseEnvelopeAmount.get());
+        set("noise_env",mod.voiceValue(noiseEnvelopeAmount,i));
         set("vca", vca ? 1.0f : 0.0f);
         set("vis",st.vis->index);
         for(int t=0;t<NUM_TARGETS-1;++t) set(names[t],mod.targetBus(server,t)+i);
@@ -325,15 +339,11 @@ void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
     if(st.spread) {
         st.spread->set("in",st.audio->index);
         st.spread->set("voices",st.builtVoices);
-        float width=1;
-        for(const auto& c : sound) if(c->sc=="stereo") width=c->p.get();
-        std::vector<float> pans(16,0.5f);
-        for(int i=0;i<st.builtVoices;++i) {
-            const float random=std::sin((i+1)*127.1f)*43758.5453f;
-            const float pan=random-std::floor(random);
-            pans[i]=ofClamp(.5f+(pan-.5f)*soundParam("pan_random").get()*width,0.f,1.f);
-        }
+        auto pans=panPositions();
+        pans.resize(16,0.5f);
         st.spread->set("pan",pans); st.spread->set("mpan",mod.targetBus(server,Pan));
+        st.spread->set("line",speakerLayout.get()==1?1.f:0.f);
+        st.spread->set("vispan",st.vis->index+VIS_PAN);
         // Spreader telemetry has its own space after the voice meters.
         st.spread->set("vis",st.vis->index+96);
     }
@@ -597,6 +607,7 @@ void scSteamPipeBox::drawWindow() {
         });
         tab("LFOs",[this](float tw){mod.drawLfos(tw);});
         tab("Routing",[this](float tw){mod.drawRouting(tw);});
+        tab("Panning",[this](float tw){drawPanTab(tw);});
         tab("Original FX",[this](float tw){drawOriginalFx(tw);});
         tab("Effects",[this](float tw){drawFxTab(tw);});
         ImGui::EndTabBar();
@@ -972,7 +983,7 @@ void scSteamPipeBox::drawSoundTab(float w) {
             toggle(steamPipe2,"SteamPipe 2");
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Four-point pipe / diffusion delay interpolation and HP/LP phase tuning compensation. Off preserves the original resonator.");
         }
-        for(auto& c:sound) if(c->group==groups[i]) {
+        for(auto& c:sound) if(c->group==groups[i] && c->sc!="stereo" && c->sc!="pan_random") {
             std::string label=c->p.getName();
             for(const auto& prefix:{std::string("Allpass "),std::string("Noise "),std::string("Feedback ")})
                 if(label.rfind(prefix,0)==0) {label.erase(0,prefix.size());break;}
@@ -983,6 +994,192 @@ void scSteamPipeBox::drawSoundTab(float w) {
     }
     labelW=70;
 }
+// Placement modes match the other box synths; Original keeps imported snapshots.
+std::vector<float> scSteamPipeBox::panPositions() const {
+    const int nv=voices.get(), c=channels.get();
+    const bool ring=c>2 && speakerLayout.get()==0;
+    std::vector<float> out(nv,0.5f);
+    float width=1,randomAmount=1;
+    for(const auto& control:sound){
+        if(control->sc=="stereo") width=control->p.get();
+        if(control->sc=="pan_random") randomAmount=control->p.get();
+    }
+    for(int i=0;i<nv;++i){
+        if(placement.get()==0){
+            const float random=std::sin((i+1)*127.1f)*43758.5453f;
+            const float pan=random-std::floor(random);
+            out[i]=ofClamp(.5f+(pan-.5f)*randomAmount*width,0.f,1.f);
+        }else if(placement.get()==3) out[i]=first(panP.get(),i,0.5f);
+        else if(placement.get()==2){
+            const int ch=i%std::max(1,c);
+            out[i]=c<=1?0.5f:ring?float(ch)/c:float(ch)/(c-1);
+        }else if(ring) out[i]=float(i)/nv*spreadWidth.get()+spreadCenter.get()*0.5f;
+        else {
+            const float t=nv>1?float(i)/(nv-1):0.5f;
+            out[i]=0.5f+(t-0.5f)*spreadWidth.get()+spreadCenter.get()*0.5f;
+        }
+    }
+    return out;
+}
+
+void scSteamPipeBox::sliderVec(ofParameter<std::vector<float>>& p, const char* label, float w, const char* fmt) {
+    const float z = zoom();
+    const std::string key = p.getEscapedName();
+    ImGui::PushID(key.c_str());
+    const float x0 = ImGui::GetCursorPosX();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    mark(key);
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(x0 + labelW * z);
+    const float sw = std::max(30.0f * z, w - labelW * z);
+    const auto& values = p.get();
+    if(values.size() > 1) {
+        const ImVec2 a = ImGui::GetCursorScreenPos(), size(sw, ImGui::GetFrameHeight());
+        ImGui::InvisibleButton("##bars", size);
+        auto* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(a, ImVec2(a.x + size.x, a.y + size.y), pal::canvas, 2 * z);
+        const float bw = size.x / values.size();
+        for(size_t i = 0; i < values.size(); ++i) {
+            const float t = ofClamp(values[i], 0.0f, 1.0f);
+            dl->AddRectFilled(ImVec2(a.x + i * bw + 1, a.y + size.y * (1 - t)), ImVec2(a.x + (i + 1) * bw - 1, a.y + size.y), pal::accent);
+        }
+        if(ImGui::IsItemActive()) p.set({ofClamp((ImGui::GetMousePos().x - a.x) / size.x, 0.0f, 1.0f)});
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%d values, one per voice\nDrag: one value for every voice", int(values.size()));
+    } else {
+        ImGui::SetNextItemWidth(sw);
+        float v = first(values, 0, 0.5f);
+        if(ImGui::SliderFloat("##v", &v, 0, 1, fmt)) p.set({v});
+    }
+    menu(key);
+    ImGui::PopID();
+}
+void scSteamPipeBox::drawPanTab(float w) {
+    const float z = zoom();
+    const int nv = voices.get(), c = channels.get();
+    const bool ring = c > 2 && speakerLayout.get() == 0;
+    const float cw = colW(w, 3);
+    auto voiceCol = [](int v, int alpha){
+        ImColor col = ImColor::HSV(std::fmod(v * 0.61803f, 1.0f), 0.5f, 0.98f);
+        col.Value.w = alpha / 255.0f;
+        return (ImU32)col;
+    };
+    ImGui::BeginGroup();
+    sectionHeader("Placement", cw);
+    combo(placement, "Mode", cw);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Original: recovered snapshot placement\nSpread: evenly across the speakers\nChannels: voice 1 on speaker 1, voice 2 on speaker 2...\n"
+                                                 "Manual: each voice where you put it (drag it, or the Pan vector)");
+    if(placement.get() == 0){
+        slider(soundParam("stereo"),"Width",cw,"%.2f");
+        slider(soundParam("pan_random"),"Random",cw,"%.2f");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("The recovered ensemble's deterministic random voice placement.");
+    }
+    if(placement.get() == 1){
+        slider(spreadWidth, "Spread", cw, "%.2f");
+        slider(spreadCenter, "Center", cw, "%+.2f");
+    }
+    if(placement.get() == 3) sliderVec(panP, "Pan", cw, "%.2f");
+    if(c > 2) combo(speakerLayout, "Speakers", cw);
+    ImGui::Spacing();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
+    ImGui::TextColored(ImColor(pal::textDim), "%d voices on %d speaker%s. Drag a voice to place it (Shift: onto a speaker). "
+                       "To move them, route an LFO (or anything) to Pan in Routing: the filled dots show where each voice is now.",
+                       nv, c, c == 1 ? "" : "s");
+    ImGui::PopTextWrapPos();
+    if(c == 1) ImGui::TextColored(ImColor(pal::accent), "One channel: nothing to pan.");
+    nextCol();
+    const float vw = 2 * cw + gapW();
+    sectionHeader("Speakers", vw);
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float h = ring ? std::min(vw, 340.0f * z) : std::max(120.0f * z, nv * 18.0f * z + 40 * z);
+        const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + vw, a.y + h);
+        ImGui::InvisibleButton("##panView", ImVec2(vw, h));
+        const bool hovered = ImGui::IsItemHovered();
+        dl->AddRectFilled(a,b,pal::canvas,3*z);
+        dl->AddRect(a,b,pal::border,3*z);
+        const auto base = panPositions();
+        auto live = [&](int v){ const int i = VIS_PAN + v; return i < (int)this->live.size() ? this->live[i] : base[v]; };
+        const ImVec2 m = ImGui::GetMousePos();
+        int hoverVoice = -1;
+        // where position p (0..1) is drawn, for voice v
+        std::function<ImVec2(float, int)> place;
+        float pad = 30.0f * z;
+        if(ring){
+            const ImVec2 ctr((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+            const float R = h * 0.5f - pad;
+            dl->AddCircle(ctr, R, IM_COL32(255,255,255,34), 64, 1.0f * z);
+            for(int k = 0; k < c; k++){
+                const float ang = -HALF_PI + TWO_PI * k / c;
+                const ImVec2 sp(ctr.x + std::cos(ang) * (R + 14 * z), ctr.y + std::sin(ang) * (R + 14 * z));
+                dl->AddRectFilled(ImVec2(sp.x - 7 * z, sp.y - 7 * z), ImVec2(sp.x + 7 * z, sp.y + 7 * z), pal::header, 2 * z);
+                dl->AddRect(ImVec2(sp.x - 7 * z, sp.y - 7 * z), ImVec2(sp.x + 7 * z, sp.y + 7 * z), pal::headerText, 2 * z);
+                const std::string t = ofToString(k + 1);
+                const ImVec2 ts = ImGui::CalcTextSize(t.c_str());
+                dl->AddText(ImVec2(sp.x - ts.x * 0.5f, sp.y - ts.y * 0.5f), pal::headerText, t.c_str());
+            }
+            place = [=](float p, int v){
+                const float r = R * (0.35f + 0.6f * (nv > 1 ? (float)v / (nv - 1) : 1.0f));
+                const float ang = -HALF_PI + TWO_PI * p;
+                return ImVec2(ctr.x + std::cos(ang) * r, ctr.y + std::sin(ang) * r);
+            };
+            for(int v = 0; v < nv; v++){
+                const float r = R * (0.35f + 0.6f * (nv > 1 ? (float)v / (nv - 1) : 1.0f));
+                dl->AddCircle(ctr, r, IM_COL32(255,255,255,20), 64);
+            }
+        }else{
+            const float x0 = a.x + pad, x1 = b.x - pad;
+            const int sp = std::max(1, c);
+            for(int k = 0; k < sp; k++){
+                const float x = c <= 1 ? (x0 + x1) * 0.5f : x0 + (x1 - x0) * k / (c - 1);
+                dl->AddLine(ImVec2(x, a.y + 22 * z), ImVec2(x, b.y - 6 * z), IM_COL32(255,255,255,20));
+                dl->AddRectFilled(ImVec2(x - 9 * z, a.y + 4 * z), ImVec2(x + 9 * z, a.y + 20 * z), pal::header, 2 * z);
+                const std::string t = c == 2 ? (k == 0 ? "L" : "R") : ofToString(k + 1);
+                const ImVec2 ts = ImGui::CalcTextSize(t.c_str());
+                dl->AddText(ImVec2(x - ts.x * 0.5f, a.y + 12 * z - ts.y * 0.5f), pal::headerText, t.c_str());
+            }
+            const float rowH = (h - 34 * z) / std::max(1, nv);
+            place = [=](float p, int v){ return ImVec2(x0 + (x1 - x0) * ofClamp(p, 0.0f, 1.0f), a.y + 28 * z + (v + 0.5f) * rowH); };
+        }
+        for(int v = 0; v < nv; v++){
+            const ImVec2 pb = place(base[v], v), pl = place(live(v), v);
+            dl->AddLine(pb, pl, voiceCol(v, 90), 1.0f * z);
+            dl->AddCircle(pb, 7 * z, voiceCol(v, 230), 0, 2 * z);
+            dl->AddCircleFilled(pl, 4.5f * z, voiceCol(v, 255));
+            const std::string t = ofToString(v + 1);
+            dl->AddText(ImVec2(pb.x + 9 * z, pb.y - 7 * z), voiceCol(v, 200), t.c_str());
+            if(hovered && std::hypot(m.x - pb.x, m.y - pb.y) < 9 * z) hoverVoice = v;
+        }
+        // dragging a voice: Manual from here on
+        if(ImGui::IsItemActivated() && hoverVoice >= 0){
+            panDragVoice = hoverVoice;
+            if(placement.get() != 3){ panP.set(panPositions()); placement = 3; }
+        }
+        if(ImGui::IsItemActive() && panDragVoice >= 0 && panDragVoice < nv){
+            float p;
+            if(ring){
+                const ImVec2 ctr((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+                p = std::fmod(std::atan2(m.y - ctr.y, m.x - ctr.x) + HALF_PI + TWO_PI, TWO_PI) / TWO_PI;
+            }else{
+                p = ofClamp((m.x - (a.x + pad)) / (vw - 2 * pad), 0.0f, 1.0f);
+            }
+            if(ImGui::GetIO().KeyShift && c > 1){       // onto the nearest speaker
+                const float steps = ring ? (float)c : (float)(c - 1);
+                p = std::round(p * steps) / steps;
+                if(ring) p = std::fmod(p, 1.0f);
+            }
+            std::vector<float> v(nv);
+            for(int i=0;i<nv;++i) v[i]=first(panP.get(),i,0.5f);
+            v[panDragVoice] = p;
+            panP.set(v);
+        }
+        if(ImGui::IsItemDeactivated()) panDragVoice = -1;
+        if(hovered && hoverVoice >= 0 && panDragVoice < 0)
+            ImGui::SetTooltip("Voice %d at %.2f (now %.2f)\nDrag to place it (Shift: onto a speaker)", hoverVoice + 1, base[hoverVoice], live(hoverVoice));
+    }
+    ImGui::EndGroup();
+}
+
 void scSteamPipeBox::drawOriginalFx(float w) {
     const float cw=colW(w,2);ImGui::BeginGroup();
     for(int i=0;i<2;++i) {

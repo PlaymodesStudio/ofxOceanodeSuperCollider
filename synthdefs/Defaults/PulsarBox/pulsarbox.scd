@@ -45,27 +45,28 @@ File.mkdir(d);
     (1..maxOutputs).do { |no|
     (1..layers).do { |nl|
         SynthDef(("PulsarBox_" ++ nv ++ "_" ++ no ++ "_" ++ nl).asSymbol, {
-            var fund = \fund.kr(100 ! nv).clip(0.05, 4000).lag(\glide.kr(0));
-            var lev = \lev.kr(0.5 ! nv, 1/30, fixedLag: true);
+            var kv = { |name, def| NamedControl.kr(name,def!nv).asArray };
+            var fund = \fund.kr(100 ! nv).clip(0.05, 4000).lag(kv.(\glide,0));
+            var lev = \lev.kr(0.5 ! nv, 1/30, fixedLag: true).asArray;
             // the gates: their levels from ModGate (\gatebus, audio, nv), else the values
             var gbus = \gatebus.kr(-1);
             var gate = Select.kr(gbus >= 0, [\gate.kr(1 ! nv), A2K.kr(In.ar(gbus.max(0), nv)).asArray]);
             // the pitch from a cable (MIDI notes + \tr semitones), else \fund (Hz)
             var pcable = (A2K.kr(\pitch_ar.ar(57 ! nv)).asArray + \tr.kr(0)).midicps;
             var psel = \pitch_sel.kr(0) > 0.5;
-            var atk = \atk.kr(0.005), dec = \dec.kr(0.3), sus = \sus.kr(1), rel = \rel.kr(0.3);
-            var curves = [\ca.kr(-4), \cd.kr(-4), \cr.kr(-4)].collect { |c| c.clip(-12, 12) };
+            var atk = kv.(\atk,0.005), dec = kv.(\dec,0.3), sus = kv.(\sus,1), rel = kv.(\rel,0.3);
+            var curves = [kv.(\ca,-4), kv.(\cd,-4), kv.(\cr,-4)].collect { |c| c.clip(-12, 12) };
             var gated = \gated.kr(1);
             var lmode = \lmode.kr(0 ! layers);
-            var lhz = \lhz.kr([800, 1600, 3200, 6400]);
-            var lrat = \lrat.kr([4, 8, 16, 32]);
-            var lcyc = \lcyc.kr(1 ! layers);
-            var lamp = \lamp.kr(1 ! layers, 1/30, fixedLag: true);
-            var loff = \loff.kr(0 ! layers);
-            var lpan = \lpan.kr(0 ! layers);
+            var lhz = \lhz.kr(Array.fill(layers*nv,{ |i| [800,1600,3200,6400][i.div(nv)] }));
+            var lrat = \lrat.kr(Array.fill(layers*nv,{ |i| [4,8,16,32][i.div(nv)] }));
+            var lcyc = \lcyc.kr(1 ! (layers*nv));
+            var lamp = \lamp.kr(1 ! (layers*nv), 1/30, fixedLag: true);
+            var loff = \loff.kr(0 ! (layers*nv));
+            var lpan = \lpan.kr(0 ! (layers*nv));
             var pbuf = \pbuf.kr(-1 ! layers);
             var ebuf = \ebuf.kr(-1 ! layers);
-            var rjit = \rjit.kr(0), fjit = \fjit.kr(0), ajit = \ajit.kr(0), pjit = \pjit.kr(0);
+            var rjit = kv.(\rjit,0), fjit = kv.(\fjit,0), ajit = kv.(\ajit,0), pjit = kv.(\pjit,0);
             var prob = \prob.kr(1);
             var burst = \burst.kr(1).round.max(1), rest = \rest.kr(0).round.max(0);
             var sieve = \sieve.kr(1 ! sieveSize);
@@ -77,6 +78,7 @@ File.mkdir(d);
             var sig = 0;
 
             nv.do { |v|
+                var rjit = kv.(\rjit,0)[v], fjit = kv.(\fjit,0)[v], ajit = kv.(\ajit,0)[v], pjit = kv.(\pjit,0)[v];
                 var f0 = (Select.kr(psel, [fund[v], pcable[v]]) * (2 ** (mPitch[v] / 12))).clip(0.05, 4000);
                 var f = f0 * (2 ** (LFNoise0.kr(f0.min(500)) * rjit));
                 var pulse = Impulse.ar(f);
@@ -89,25 +91,25 @@ File.mkdir(d);
                 // the Amp Envelope on the gate (a gate rising to 0.2 plays at
                 // 0.2: its level, held until the next); not gated: a drone
                 var glev = Gate.kr(gate[v], gate[v] > 0);
-                var env = Select.kr(gated > 0.5, [1, EnvGen.kr(Env.adsr(atk.max(0.001), dec.max(0.001), sus.clip(0, 1),
-                    rel.max(0.001), 1, curves), gate[v] > 0) * glev]);
+                var env = Select.kr(gated > 0.5, [1, EnvGen.kr(Env.adsr(atk[v].max(0.001), dec[v].max(0.001), sus[v].clip(0, 1),
+                    rel[v].max(0.001), 1, curves.collect { |c| c[v] }), gate[v] > 0) * glev]);
                 var levMod = (1 + mLev[v]).max(0);   // routes to Level add
                 var voice = nl.collect { |g|
                     // the layer's Delay (a share of the period): the trigger delayed
                     // (TDelay: no buffer; one pending pulse is enough below a period)
-                    var t = Select.ar(K2A.ar(loff[g] > 0), [trig, TDelay.ar(trig, (loff[g].min(0.999) / f).clip(0, 20))]);
-                    var hz = Select.kr(lmode[g], [lhz[g], f * lrat[g]])
+                    var t = Select.ar(K2A.ar(loff[g*nv+v] > 0), [trig, TDelay.ar(trig, (loff[g*nv+v].min(0.999) / f).clip(0, 20))]);
+                    var hz = Select.kr(lmode[g], [lhz[g*nv+v], f * lrat[g*nv+v]])
                         * (2 ** ((TRand.ar(-1, 1, t) * fjit + mForm[v]) / 12));
                     var dur, amp, base, pos, pan;
                     hz = hz.clip(1, SampleRate.ir * 0.45);
-                    dur = (lcyc[g] * (2 ** mCyc[v]) / hz).clip(2 * SampleDur.ir, 2).min(200 / f);   // GrainBuf holds 256 grains
-                    amp = lamp[g] * (dur * f).max(1).sqrt.reciprocal
+                    dur = (lcyc[g*nv+v] * (2 ** mCyc[v]) / hz).clip(2 * SampleDur.ir, 2).min(200 / f);   // GrainBuf holds 256 grains
+                    amp = lamp[g*nv+v] * (dur * f).max(1).sqrt.reciprocal
                         * Latch.ar(1 - (TRand.ar(0, 1, t) * ajit), t);
                     // The output of this pulse, in channels (fractions crossfade)
                     base = Select.ar(pmode, [
                         DC.ar(v), count + v, TIRand.ar(0, no - 1, t), DC.ar(v + g)
                     ]);
-                    pos = base + lpan[g] + rot + mPan[v] + (TRand.ar(-1, 1, t) * pjit);
+                    pos = base + lpan[g*nv+v] + rot + mPan[v] + (TRand.ar(-1, 1, t) * pjit);
                     pan = case
                         { no == 1 } { 0 }
                         { no == 2 } { pos.fold(0, 1) * 2 - 1 }

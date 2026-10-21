@@ -359,6 +359,7 @@ void scAnalogBox::setup() {
     {
         scModulation::Host h;
         h.node = this;
+        h.voiceParamsChanged = [this](){ forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); for(int k=0;k<oscs();++k) sendOsc(st,k); sendNoise(st); sendFilter(st); sendAmp(st); }); };
         h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
         h.regI = [this](ofParameter<int>& p, std::function<void()> f){ reg(p, f); };
         h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ reg(p, f); };
@@ -376,6 +377,9 @@ void scAnalogBox::setup() {
         std::vector<scModulation::Target> targets;
         for(int t = 0; t < NUM_TARGETS; t++) targets.push_back({kTargets[t], kTargetRange[t], kTargetUnit[t]});
         modulation.setup(h, targets, true, true, true);
+        for(auto* p : {&glide, &vibRate, &vibRand, &vibAmt, &drift, &noiseColor, &velSens, &hpf}) modulation.addVoiceParam(*p);
+        for(auto& o : osc) for(auto* p : {&o.semi,&o.fine,&o.ratio,&o.skew,&o.round,&o.width,&o.noise}) modulation.addVoiceParam(*p);
+        for(int k=0;k<MAX_FILTERS;++k){ auto f=filterRef(k); for(auto* p : {f.keyTrack,f.drive,f.sat,f.feedback,f.level}) modulation.addVoiceParam(*p); }
         modulation.lfoCount = 1;
         modulation.envCount = 2;
         modulation.extCount = 0;
@@ -511,10 +515,10 @@ void scAnalogBox::sendPitch(ServerState& st) {
     else s->set("pitch_sel", 0.0f);
     sendVec(s, "transpose", transpose.get());
     sendVec(s, "detune", detune.get());
-    s->set("glide", glide.get());
-    s->set("vibrate", vibRate.get());
-    s->set("vibrand", vibRand.get());
-    s->set("vibamt", vibAmt.get());
+    s->set("glide", modulation.voiceValues(glide));
+    s->set("vibrate", modulation.voiceValues(vibRate));
+    s->set("vibrand", modulation.voiceValues(vibRand));
+    s->set("vibamt", modulation.voiceValues(vibAmt));
 }
 
 void scAnalogBox::sendOsc(ServerState& st, int k) {
@@ -526,15 +530,15 @@ void scAnalogBox::sendOsc(ServerState& st, int k) {
     s->set("raw", st.raw[k] ? st.raw[k]->index : 0);
     s->set("freqout", st.freq[k] ? st.freq[k]->index : 0);
     s->set("oct", (float)O.oct.get());
-    s->set("semi", O.semi.get());
-    s->set("fine", O.fine.get());
-    s->set("ratio", O.ratio.get());
-    s->set("skew", O.skew.get());
-    s->set("round", O.round.get());
-    s->set("pw", O.width.get());
+    s->set("semi", modulation.voiceValues(O.semi));
+    s->set("fine", modulation.voiceValues(O.fine));
+    s->set("ratio", modulation.voiceValues(O.ratio));
+    s->set("skew", modulation.voiceValues(O.skew));
+    s->set("round", modulation.voiceValues(O.round));
+    s->set("pw", modulation.voiceValues(O.width));
     s->set("centered", O.centered.get() ? 1.0f : 0.0f);
-    s->set("noise", O.noise.get());
-    s->set("drift", drift.get());
+    s->set("noise", modulation.voiceValues(O.noise));
+    s->set("drift", modulation.voiceValues(drift));
     s->set("slave", k > 0 ? 1.0f : 0.0f);
     // hard sync: to oscillator 1's frequency
     s->set("sync", (k > 0 && O.sync.get()) ? 1.0f : 0.0f);
@@ -555,7 +559,7 @@ void scAnalogBox::sendNoise(ServerState& st) {
     if(!s) return;
     s->set("out", st.mixBus ? st.mixBus->index : 0);
     sendVec(s, "level", noiseLevel.get());
-    s->set("color", noiseColor.get());
+    s->set("color", modulation.voiceValues(noiseColor));
     s->set("mnoise", mod(st, TNoise));
 }
 
@@ -597,12 +601,12 @@ void scAnalogBox::sendFilterK(ServerState& st, int k) {
     s->set("type", (float)f.type->get());
     sendVec(s, "cutoff", f.cutoff->get());
     sendVec(s, "res", f.res->get());
-    s->set("keytrack", f.keyTrack->get());
-    s->set("drive", f.drive->get());
-    s->set("sat", f.sat->get());
-    s->set("fb", f.feedback->get());
-    s->set("level", f.level->get());
-    s->set("hpf", k == 0 ? hpf.get() : 10.0f);
+    s->set("keytrack", modulation.voiceValues(*f.keyTrack));
+    s->set("drive", modulation.voiceValues(*f.drive));
+    s->set("sat", modulation.voiceValues(*f.sat));
+    s->set("fb", modulation.voiceValues(*f.feedback));
+    s->set("level", modulation.voiceValues(*f.level));
+    s->set("hpf", k == 0 ? modulation.voiceValues(hpf) : std::vector<float>(n(),10.0f));
     s->set("vis", st.visBlock ? st.visBlock->index + VIS_CUT : 0);
     s->set("vison", k == 0 ? 1.0f : 0.0f);
     static const Target cuts[MAX_FILTERS] = {TCut, TCut2, TCut3, TCut4}, ress[MAX_FILTERS] = {TRes, TRes2, TRes3, TRes4};
@@ -623,7 +627,7 @@ void scAnalogBox::sendAmp(ServerState& st) {
     s->set("vca", vcaOn() ? 1.0f : 0.0f);
     s->set("gate", st.gateBus ? st.gateBus->index : 0);
     s->set("vel", src(st, SRC_VEL));
-    s->set("velsens", velSens.get());
+    s->set("velsens", modulation.voiceValues(velSens));
     s->set("level", master.get());
     s->set("mamp", mod(st, TAmp));
 }

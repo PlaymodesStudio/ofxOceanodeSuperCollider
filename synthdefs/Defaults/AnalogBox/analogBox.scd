@@ -31,9 +31,9 @@ File.mkdir(root); File.mkdir(dir);
     // the pitch: Oceanode values, or an audio cable (\pitch_ar mapped, \pitch_sel 1)
     SynthDef(("ABPitch" ++ n).asSymbol, {
         var p = Select.kr(\pitch_sel.kr(0) > 0.5, [kv.(\pitch, 60), A2K.kr(\pitch_ar.ar(60 ! n))]);
-        var b = Lag.kr(p, \glide.kr(0)) + kv.(\transpose, 0) + (({ Rand(-1, 1) } ! n) * kv.(\detune, 0));
-        var rate = \vibrate.kr(5) * (1 + (({ Rand(-1, 1) } ! n) * \vibrand.kr(0).clip(0, 1)));
-        var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * \vibamt.kr(0);
+        var b = Lag.kr(p, kv.(\glide, 0)) + kv.(\transpose, 0) + (({ Rand(-1, 1) } ! n) * kv.(\detune, 0));
+        var rate = kv.(\vibrate, 5) * (1 + (({ Rand(-1, 1) } ! n) * kv.(\vibrand, 0).clip(0, 1)));
+        var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * kv.(\vibamt, 0);
         Out.kr(\out.kr(0), (b + v + modIn.(\mpitch)) ++ b);
     }).writeDefFile(dir);
 
@@ -43,18 +43,18 @@ File.mkdir(root); File.mkdir(dir);
     // hard sync to the first oscillator's frequency. Its raw output -> \raw (FM,
     // ring), its frequency -> \freqout (sync), x level -> \out (the mix).
     SynthDef(("ABOsc" ++ n).asSymbol, {
-        var note = In.kr(\note.kr(0), n) + (\oct.kr(0) * 12) + \semi.kr(0) + (\fine.kr(0) / 100)
+        var note = In.kr(\note.kr(0), n) + (\oct.kr(0) * 12) + kv.(\semi, 0) + (kv.(\fine, 0) / 100)
             + (modIn.(\mslave) * \slave.kr(0))
-            + (LFNoise2.kr({ Rand(0.08, 0.25) } ! n) * \drift.kr(0) * 0.25);
-        var freq = (note.clip(-36, 150).midicps * \ratio.kr(1)).clip(0.01, 22000);
+            + (LFNoise2.kr({ Rand(0.08, 0.25) } ! n) * kv.(\drift, 0) * 0.25);
+        var freq = (note.clip(-36, 150).midicps * kv.(\ratio, 1)).clip(0.01, 22000);
         var fm = (kv.(\fmamt, 0) + modIn.(\mfm)).max(0) * \fmon.kr(0);
         var pm = InFeedback.ar(\fmsrc.kr(0), n) * fm;
-        var skew = (\skew.kr(0) + modIn.(\mskew)).clip(-1, 1);
-        var round = (\round.kr(0.5) + modIn.(\mround)).clip(0, 1);
-        var pw = (\pw.kr(0.5) + modIn.(\mpw)).clip(0.001, 1);
+        var skew = (kv.(\skew, 0) + modIn.(\mskew)).clip(-1, 1);
+        var round = (kv.(\round, 0.5) + modIn.(\mround)).clip(0, 1);
+        var pw = (kv.(\pw, 0.5) + modIn.(\mpw)).clip(0.001, 1);
         var sync = In.kr(\syncfreq.kr(0), n) * \sync.kr(0);
         var sig = LeakDC.ar(MorphOsc.ar(freq, pm, skew, round, pw, \centered.kr(1), sync))
-            + (WhiteNoise.ar(1 ! n) * \noise.kr(0).clip(0, 1) * 1.5);   // Noise: added to this oscillator
+            + (WhiteNoise.ar(1 ! n) * kv.(\noise, 0).clip(0, 1) * 1.5);   // Noise: added to this oscillator
         Out.kr(\freqout.kr(0), freq);
         Out.ar(\raw.kr(0), sig);
         Out.ar(\out.kr(0), sig * kv.(\level, 0.5));
@@ -63,7 +63,7 @@ File.mkdir(root); File.mkdir(dir);
     // Noise: color -1 (dark) .. 0 (white) .. 1 (bright)
     SynthDef(("ABNoise" ++ n).asSymbol, {
         var w = WhiteNoise.ar(1 ! n);
-        var c = \color.kr(0).clip(-1, 1);
+        var c = kv.(\color, 0).clip(-1, 1);
         var dark = OnePole.ar(w, c.neg.max(0) * 0.995) * (1 + (c.neg.max(0) * 5));
         var bright = w - OnePole.ar(w, c.max(0) * 0.9);
         var sig = Select.ar(c < 0, [bright, dark]);
@@ -81,16 +81,16 @@ File.mkdir(root); File.mkdir(dir);
     // poles, or a comb) with drive, saturation and feedback; \on crossfades to
     // dry, \level after. Only the first writes \vis (\vison)
     SynthDef(("ABFilter" ++ n).asSymbol, {
-        var sig = HPF.ar(In.ar(\in.kr(0), n), \hpf.kr(10).clip(10, 4000));
-        var cut = kv.(\cutoff, 100) + (\keytrack.kr(0) * (base.() - 60)) + modIn.(\mcut);
+        var sig = HPF.ar(In.ar(\in.kr(0), n), kv.(\hpf,10).clip(10, 4000));
+        var cut = kv.(\cutoff, 100) + (kv.(\keytrack, 0) * (base.() - 60)) + modIn.(\mcut);
         var fc = cut.clip(0, 140).midicps.clip(10, 20000);
         var res = (kv.(\res, 0.2) + modIn.(\mres)).clip(0, 1);
-        var driveDb = (\drive.kr(0) + modIn.(\mdrive)).clip(0, 48);
-        var fb = (\fb.kr(0) + modIn.(\mfb)).clip(0, 1);
-        var y = AnalogFilter.ar(sig, fc, res, \mode.kr(3), \type.kr(0), driveDb.dbamp, \sat.kr(0), fb);
+        var driveDb = (kv.(\drive, 0) + modIn.(\mdrive)).clip(0, 48);
+        var fb = (kv.(\fb, 0) + modIn.(\mfb)).clip(0, 1);
+        var y = AnalogFilter.ar(sig, fc, res, \mode.kr(3), \type.kr(0), driveDb.dbamp, kv.(\sat, 0), fb);
         // the window: each voice's cutoff (note) and resonance now (\vis: control, 2 x 16)
         Out.kr(\vis.kr(0), (cut.clip(0, 140).asArray ++ (0 ! (16 - n)) ++ res.asArray) * \vison.kr(1));
-        Out.ar(\out.kr(0), LinXFade2.ar(sig, y, \on.kr(1, 0.03) * 2 - 1) * \level.kr(1, 0.05));
+        Out.ar(\out.kr(0), LinXFade2.ar(sig, y, \on.kr(1, 0.03) * 2 - 1) * Lag.kr(kv.(\level, 1), 0.05));
     }).writeDefFile(dir);
 
     // The VCA: \vca 1 (an envelope routed to Amp): the Amp modulation is the
@@ -102,7 +102,7 @@ File.mkdir(root); File.mkdir(dir);
         // the gate's level (held from its rising edge, 1 while droning); Vel Sens
         // blends in the velocity (\vel = level x Velocity)
         var lev = In.ar(\gate.kr(0), n);
-        var vs = \velsens.kr(0.5).clip(0, 1);
+        var vs = kv.(\velsens, 0.5).clip(0, 1);
         var amp = K2A.ar(Select.kr(\vca.kr(0) > 0.5, [(1 + m).clip(0, 2), m.clip(0, 1)])) *
             ((Gate.ar(lev, lev > 0) * (1 - vs)) + K2A.ar(vel * vs));
         Out.ar(\out.kr(0), Sanitize.ar(LeakDC.ar(sig * amp) * \level.kr(0.8, 0.05)));

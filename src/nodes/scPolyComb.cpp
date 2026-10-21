@@ -427,6 +427,7 @@ void scPolyComb::setup() {
     {
         scModulation::Host h;
         h.node = this;
+        h.voiceParamsChanged = [this](){ forStates([this](ofxSCServer*, ServerState& st){ sendAmpEnv(st); sendPitch(st); sendFm(st); sendAmp(st); for(int o=0;o<NumOsc;++o) sendOsc(st,o); for(int i=0;i<NumIns;++i) sendIns(st,i); }); };
         h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
         h.control = [this](const std::string& k) -> ofAbstractParameter* {
             for(auto& c : controls) if(c.key == k) return c.param;
@@ -447,6 +448,7 @@ void scPolyComb::setup() {
         modulation.maxVoices = MAX_VOICES;
         modulation.unifiedLfoModels = true;
         modulation.setup(h, targets, true, true, true);
+        for(auto* p : {&ampA, &ampD, &ampS, &ampR, &ampCA, &ampCD, &ampCR, &velSens, &glide, &vibRate, &vibRand, &vibAmt, &tremRate, &tremRand, &tremDepth, &oscDustDensity, &fmFb, &combSatLevel, &keyTrack, &postKeyTrack, &combTone, &combGlide, &combVibRate, &combVibRand, &combVibAmt, &ringWidth, &subA, &subD, &subS, &subR, &subCA, &subCD, &subCR}) modulation.addVoiceParam(*p);
         for(int i=1;i<=NUM_LFOS;++i) dropdowns.set("LFO"+ofToString(i)+"_Model", {"Off", "Classic", "Noise", "Random"});
         modulation.lfoCount = 2;
         modulation.envCount = 1;
@@ -562,8 +564,8 @@ void scPolyComb::sendAmpEnv(ServerState& st) {
     s->set("gate", st.gateBus ? st.gateBus->index : 0);
     s->set("out", st.visBlock ? st.visBlock->index + VIS_AMP : 0);
     s->set("aout", st.envBus ? st.envBus->index : 0);
-    s->set("atk", ampA.get()); s->set("dec", ampD.get()); s->set("sus", ampS.get()); s->set("rel", ampR.get());
-    s->set("cA", ampCA.get()); s->set("cD", ampCD.get()); s->set("cR", ampCR.get());
+    s->set("atk", modulation.voiceValues(ampA)); s->set("dec", modulation.voiceValues(ampD)); s->set("sus", modulation.voiceValues(ampS)); s->set("rel", modulation.voiceValues(ampR));
+    s->set("cA", modulation.voiceValues(ampCA)); s->set("cD", modulation.voiceValues(ampCD)); s->set("cR", modulation.voiceValues(ampCR));
 }
 
 
@@ -588,10 +590,10 @@ void scPolyComb::sendPitch(ServerState& st, bool notesOnly) {
         controls.set("pitch_expand", expandPitch.get() ? 1.0f : 0.0f);
         controls.set("transpose", expand(transpose.get(), n()));
         controls.set("detune", expand(detune.get(), n()));
-        controls.set("glide", glide.get());
-        controls.set("vibrate", vibRate.get());
-        controls.set("vibrand", vibRand.get());
-        controls.set("vibamt", vibAmt.get());
+        controls.set("glide", modulation.voiceValues(glide));
+        controls.set("vibrate", modulation.voiceValues(vibRate));
+        controls.set("vibrand", modulation.voiceValues(vibRand));
+        controls.set("vibamt", modulation.voiceValues(vibAmt));
     }
     controls.send();
     if(ringPitchSource.get()==2 && st.ins[IRing].synth)
@@ -613,7 +615,7 @@ void scPolyComb::sendFm(ServerState& st) {
     s->set("mratio", mod(st, 2));
     sendVec(s, "fmamt", fmAmt.get());
     sendVec(s, "fmratio", fmRatio.get());
-    s->set("fmfb", fmFb.get());
+    s->set("fmfb", modulation.voiceValues(fmFb));
 }
 
 namespace {
@@ -638,7 +640,7 @@ void scPolyComb::sendOsc(ServerState& st, int o) {
     sendVec(s, "oscamp", oscAmp.get());
     if(o == OPulse){ sendVec(s, "pw", oscPw.get()); s->set("mpw", mod(st, 11)); }
     if(o == OSSaw) sendVec(s, "ssdetune", oscSSDetune.get());
-    if(o == ODust) s->set("dustoct", oscDustDensity.get());
+    if(o == ODust) s->set("dustoct", modulation.voiceValues(oscDustDensity));
 }
 
 bool scPolyComb::insWanted(int i) const {
@@ -662,7 +664,7 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             if(fType.get()>=4 && filterModel.get()!=1) s->set("slope",float(filterChoice(fType.get()).second));
             sendVec(s, "cutoff", cutoff.get());
             sendVec(s, "res", res.get());
-            s->set("keytrack", keyTrack.get());
+            s->set("keytrack", modulation.voiceValues(keyTrack));
             s->set("mcut", mod(st, 3)); s->set("mres", mod(st, 4));
             break;
         case IPost:
@@ -670,11 +672,11 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             if(postType.get()>=4 && postFilterModel.get()!=1) s->set("slope",float(filterChoice(postType.get()).second));
             sendVec(s, "cutoff", postCut.get());
             sendVec(s, "res", postRes.get());
-            s->set("keytrack", postKeyTrack.get());
+            s->set("keytrack", modulation.voiceValues(postKeyTrack));
             s->set("mcut", mod(st, 9)); s->set("mres", mod(st, ZERO_TARGET));
             break;
         case IComb:
-            s->set("satlevel",combSatLevel.get());
+            s->set("satlevel", modulation.voiceValues(combSatLevel));
             if(combMapped()){              // the resonators' own map: fixed notes
                 s->set("combmode", 1.0f);
                 sendVec(s, "combpitch", resonatorPitches());
@@ -688,12 +690,12 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             }
             sendVec(s, "combtranspose", combTranspose.get());
             sendVec(s, "combdetune", combDetune.get());
-            s->set("combglide", combGlide.get());
-            s->set("combvibrate", combVibRate.get());
-            s->set("combvibrand", combVibRand.get());
-            s->set("combvibamt", combVibAmt.get());
+            s->set("combglide", modulation.voiceValues(combGlide));
+            s->set("combvibrate", modulation.voiceValues(combVibRate));
+            s->set("combvibrand", modulation.voiceValues(combVibRand));
+            s->set("combvibamt", modulation.voiceValues(combVibAmt));
             sendVec(s, "combfeed", combFeed.get());
-            s->set("combtone", combTone.get());
+            s->set("combtone", modulation.voiceValues(combTone));
             sendVec(s, "combmix", combMix.get());
             s->set("mcpitch", mod(st, 5)); s->set("mcfb", mod(st, 6)); s->set("mcmix", mod(st, 7));
             break;
@@ -704,7 +706,7 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             sendVec(s, "ringdetune", ringDetune.get());
             sendVec(s, "ringmix", ringMix.get());
             sendVec(s, "ringratio", ringRatio.get());
-            s->set("ringwidth", ringWidth.get());
+            s->set("ringwidth", modulation.voiceValues(ringWidth));
             s->set("mrmix", mod(st, 8));
             break;
         default:
@@ -722,12 +724,12 @@ void scPolyComb::sendAmp(ServerState& st) {
     s->set("env", st.envBus ? st.envBus->index : 0);
     s->set("gate", st.gateBus ? st.gateBus->index : 0);
     s->set("vel", src(st, SRC_VEL));
-    s->set("velsens", velSens.get());
+    s->set("velsens", modulation.voiceValues(velSens));
     s->set("level", master.get());
     s->set("mamp", mod(st, 12));
-    s->set("tremrate", tremRate.get());
-    s->set("tremrand", tremRand.get());
-    s->set("tremdepth", tremDepth.get());
+    s->set("tremrate", modulation.voiceValues(tremRate));
+    s->set("tremrand", modulation.voiceValues(tremRand));
+    s->set("tremdepth", modulation.voiceValues(tremDepth));
 }
 
 void scPolyComb::sendSub(ServerState& st, bool notesOnly) {
@@ -749,11 +751,11 @@ void scPolyComb::sendSub(ServerState& st, bool notesOnly) {
     controls.set("transpose", subTranspose.get() + subFineTune.get());
     controls.set("vibrate", subVibRate.get()); controls.set("vibamt", subVibAmt.get()); controls.set("vibrand", subVibRand.get());
     controls.set("level", subLevel.get()); controls.set("master", master.get());
-    controls.set("vel", src(st, SRC_VEL)); controls.set("velsens", velSens.get());
+    controls.set("vel", src(st, SRC_VEL)); controls.set("velsens", modulation.voiceValues(velSens));
     controls.set("on", subOn.get() ? 1.0f : 0.0f);
-    controls.set("atk", subA.get()); controls.set("dec", subD.get());
-    controls.set("sus", subS.get()); controls.set("rel", subR.get());
-    controls.set("cA", subCA.get()); controls.set("cD", subCD.get()); controls.set("cR", subCR.get());
+    controls.set("atk", modulation.voiceValues(subA)); controls.set("dec", modulation.voiceValues(subD));
+    controls.set("sus", modulation.voiceValues(subS)); controls.set("rel", modulation.voiceValues(subR));
+    controls.set("cA", modulation.voiceValues(subCA)); controls.set("cD", modulation.voiceValues(subCD)); controls.set("cR", modulation.voiceValues(subCR));
     controls.send();
 }
 

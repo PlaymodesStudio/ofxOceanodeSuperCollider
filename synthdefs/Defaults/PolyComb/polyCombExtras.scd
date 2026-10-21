@@ -97,13 +97,13 @@ File.mkdir(root); File.mkdir(dir);
     SynthDef(("PCCombR" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
         // Smooth pitch targets at audio rate so delay retuning has no GUI/control-block steps; the glide on top.
-        var cnote = Lag.ar(K2A.ar(kv.(\combpitch, 0) + kv.(\combtranspose, 0) + (raw.() * (1 - (\combmode.kr(0) > 0.5)))), \combglide.kr(0).max(0.02)) +
+        var cnote = Lag.ar(K2A.ar(kv.(\combpitch, 0) + kv.(\combtranspose, 0) + (raw.() * (1 - (\combmode.kr(0) > 0.5)))), kv.(\combglide, 0).max(0.02)) +
             K2A.ar((({ Rand(-1, 1) } ! n) * kv.(\combdetune, 0)) + modIn.(\mcpitch));
-        var rate = \combvibrate.kr(5, 0.03) * (1 + (({ Rand(-1, 1) } ! n) * \combvibrand.kr(0, 0.03).clip(0, 1)));
-        var vibrato = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * \combvibamt.kr(0, 0.03);
+        var rate = Lag.kr(kv.(\combvibrate, 5), 0.03) * (1 + (({ Rand(-1, 1) } ! n) * Lag.kr(kv.(\combvibrand, 0), 0.03).clip(0, 1)));
+        var vibrato = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * Lag.kr(kv.(\combvibamt, 0), 0.03);
         var fc = (cnote + K2A.ar(vibrato)).clip(0, 135).midicps.clip(20, 20000);
         var fb = (kv.(\combfeed, 0.7) + modIn.(\mcfb)).clip(-1.2, 1.2);
-        var level = \satlevel.kr(48, 0.03).clip(0, 48).dbamp;
+        var level = Lag.kr(kv.(\satlevel, 48), 0.03).clip(0, 48).dbamp;
         var mix = (kv.(\combmix, 1) + modIn.(\mcmix)).clip(0, 1);
         var wet = Sanitize.ar(ReaktorComb.ar(sig, fc, fb, level, mix, 1));
         Out.ar(\out.kr(0), LinXFade2.ar(sig, wet, \on.kr(1, 0.03) * 2 - 1));
@@ -118,7 +118,7 @@ File.mkdir(root); File.mkdir(dir);
     var base = { In.kr(\note.kr(0) + n, n) };
     SynthDef(("PCFilterR" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
-        var cut = kv.(\cutoff, 100) + (\keytrack.kr(0) * (base.() - 60)) + modIn.(\mcut);
+        var cut = kv.(\cutoff, 100) + (kv.(\keytrack, 0) * (base.() - 60)) + modIn.(\mcut);
         var fc = cut.clip(0, 135).midicps.clip(20, 20000);
         var wet = Sanitize.ar(ReaktorMulti4.ar(sig, fc, (kv.(\res, 0.3) + modIn.(\mres)).clip(0, 1), \type.kr(0)));
         Out.ar(\out.kr(0), LinXFade2.ar(sig, wet, \on.kr(1, 0.03) * 2 - 1));

@@ -388,6 +388,7 @@ void scPhysicalBox::setup() {
     for(auto* p : {&snaps.morphBeatsP, &snaps.morphGlideP}) reg(*p, [](){});
     scModulation::Host h;
     h.node = this;
+    h.voiceParamsChanged = [this](){ if(!restoring) sendAll(); };
     h.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
     h.regI = [this](ofParameter<int>& p, std::function<void()> f){ reg(p, f); };
     h.regB = [this](ofParameter<bool>& p, std::function<void()> f){ reg(p, f); };
@@ -415,6 +416,7 @@ void scPhysicalBox::setup() {
         mod.targetOfKey[panP.getEscapedName()] = Pan;
     }
     mod.changed = [this](){ if(!restoring) sendAll(); };
+    for(const auto& c : soundControls) if(c->voiceInput) mod.addVoiceParam(c->p);
     initial = capture();
     scSnapshots::Host sh;
     sh.folder = "PhysicalBox"; sh.title = "PhysicalBox";
@@ -470,7 +472,7 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
             if(it != sent.end() && it->second == value) return;
             sent[name] = value; v->set(name, value);
         };
-        for(const auto& c : soundControls) if(c->voiceInput) set(c->sc, c->sc == "bmodes" ? std::round(c->p.get()) : c->p.get());
+        for(const auto& c : soundControls) if(c->voiceInput) set(c->sc, c->sc == "bmodes" ? std::round(mod.voiceValue(c->p, i)) : mod.voiceValue(c->p, i));
         set("gatebus", st.gates->index + i);
         set("out", st.audio->index + 2 * i);
         set("in", inBus + (st.in >= 0 ? i % std::max(1, st.inChannels) : 0));

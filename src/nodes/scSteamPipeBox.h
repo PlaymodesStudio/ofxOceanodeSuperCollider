@@ -104,7 +104,14 @@ private:
     ofParameter<bool> steamPipe2, legato;
     ofParameter<float> noiseEnvelopeAmount;
     // Gate Mode Pulse: the automatic gates (scPulseGate); their vis after the spreader's
-    static constexpr int VIS_PULSE=112, VIS_SIZE=VIS_PULSE+scPulseGate::VIS_SIZE;
+    static constexpr int VIS_PULSE=112, VIS_PAN=VIS_PULSE+scPulseGate::VIS_SIZE, VIS_SIZE=VIS_PAN+16;
+    ofParameter<int> placement, speakerLayout;
+    ofParameter<float> spreadWidth, spreadCenter;
+    ofParameter<std::vector<float>> panP;
+    int panDragVoice = -1;
+    std::vector<float> panPositions() const;
+    void drawPanTab(float);
+    void sliderVec(ofParameter<std::vector<float>>&,const char*,float,const char* = "%.2f");
     scPulseGate pulse;
     bool pulsing() const { return gateMode.get()==3; }
     float labelW=70;
