@@ -1968,6 +1968,7 @@ void scPolyComb::envelopeEditor(const char* id, ofParameter<float>& a, ofParamet
 
 void scPolyComb::draw(ofEventArgs&) {
     if(showWindow.get()) drawWindow();
+    keyboardPiano.finishFrame();
 }
 
 void scPolyComb::drawWindow() {
@@ -1981,6 +1982,7 @@ void scPolyComb::drawWindow() {
         return;
     }
     if(!open){ showWindow = false; ImGui::End(); return; }
+    keyboardPiano.draw(pitch, gate, n());
     const float w = ImGui::GetContentRegionAvail().x;
 
     // ── Header: voices, channels, master, gate mode, voices' levels ─────────

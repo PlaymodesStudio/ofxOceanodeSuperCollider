@@ -2,6 +2,30 @@
 
 Addon for interfacing [ofxOceanode](https://github.com/PlaymodesStudio/ofxOceanode) and [Supercollider](https://github.com/supercollider/supercollider) via [ofxSupercollider](https://github.com/PlaymodesStudio/ofxSuperCollider)
 
+## Keyboard piano
+
+Focus the PolyComb, AdditiveBox, SteamPipeBox, PulsarBox, GrainBox, AliasingBox,
+PhysicalBox, SampleBox or AnalogBox editor to play it from the computer keyboard.
+`qwertyuiopasdfghjklñzxcvbnm,.` plays consecutive chromatic semitones, starting
+with **Q = C4 (MIDI 60)**. On keyboards without ñ, use the semicolon key in
+that position. **Up / Down** shifts new notes by one octave; held notes retain
+their original pitch. The current starting octave appears in the editor.
+
+Hold several keys for chords, up to the instrument's configured voice count.
+When voices run out, the newest notes take priority. Releasing a key closes
+its gate; leaving the editor, hiding/collapsing it or entering text releases
+keyboard notes. Ctrl, Cmd, Alt and Shift combinations are reserved for shortcuts.
+GrainBox plays the selected engine's playheads and respects its MIDI/relative
+pitch mode. SampleBox plays the selected pad's channel with last-note priority;
+pads sharing that channel receive the same notes. Its Gate Mode determines
+whether a release stops the sample or a trigger plays the full region.
+
+Keyboard notes write the existing Pitch and Gate (Trigger/Gate in SampleBox)
+parameters. Auto gate mode becomes gated after playing. Explicit Drone mode and
+audio-rate input cables retain their normal precedence over these values.
+
+Run the headless input regression tests with `python3 tools/keyboard_piano_test/run.py`.
+
 ## SynthDef On/Off
 
 SynthDef nodes (`scSynthdef` and legacy `scOldSynthdef`) have an `On`

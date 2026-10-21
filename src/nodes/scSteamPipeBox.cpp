@@ -562,6 +562,7 @@ void scSteamPipeBox::drawWindow() {
         ImGui::End();if(!open) show=false;return;
     }
     if(!open){show=false;ImGui::End();return;}
+    keyboardPiano.draw(pitch, gate, voices.get());
     const float w=ImGui::GetContentRegionAvail().x;
     drawHeader();
     snaps.drawBar(w);
@@ -591,7 +592,10 @@ void scSteamPipeBox::drawWindow() {
     }
     ImGui::End();
 }
-void scSteamPipeBox::draw(ofEventArgs&) { if(show.get()) drawWindow(); }
+void scSteamPipeBox::draw(ofEventArgs&) {
+    if(show.get()) drawWindow();
+    keyboardPiano.finishFrame();
+}
 
 void scSteamPipeBox::sectionHeader(const char* title, float w, ofParameter<bool>* on, ImU32 accent) {
     const float z = zoom();

@@ -32,6 +32,7 @@
 #pragma once
 
 #include "scNode.h"
+#include "scKeyboardPiano.h"
 #include "scTimelineMenu.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
@@ -249,6 +250,7 @@ inline ImU32 layerColor(int g, float alpha = 1.0f){
 } // namespace pulsarbox
 
 class scPulsarBox : public scNode {
+    scKeyboardPiano keyboardPiano;
 public:
     // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
     std::string getWindowTitle() override { return (canvasID == "Canvas" ? "" : canvasID + "/") + "PulsarBox " + ofToString(getNumIdentifier()); }
@@ -457,7 +459,10 @@ public:
         }
     }
 
-    void draw(ofEventArgs&) override { if(showWindow) drawWindow(); }
+    void draw(ofEventArgs&) override {
+        if(showWindow) drawWindow();
+        keyboardPiano.finishFrame();
+    }
 
     // ════════════════════════════════════════════════════════════════════════
     // scNode
@@ -1291,6 +1296,12 @@ private:
         bool open = showWindow.get();
         ImGui::SetNextWindowSize(ImVec2(1180.0f, 860.0f), ImGuiCond_FirstUseEver);
         if(ImGui::Begin(title.c_str(), &open)){
+            if(open) {
+                keyboardPiano.draw(pitchP, gate, voices());
+                // A first keyboard note may equal the untouched Pitch default,
+                // so its parameter need not emit a change to select MIDI pitch.
+                if(keyboardPiano.isPlaying()) pitchTouched = true;
+            }
             ImGui::PushID(this);
             if(view.trainLo[0].empty()) computeView();
             drawHeader();

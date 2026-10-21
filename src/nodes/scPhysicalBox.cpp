@@ -876,6 +876,7 @@ void scPhysicalBox::drawWindow() {
         ImGui::End(); if(!open) show = false; return;
     }
     if(!open) { show = false; ImGui::End(); return; }
+    keyboardPiano.draw(pitch, gate, voices.get());
     const float w = ImGui::GetContentRegionAvail().x;
     drawHeader();
     snaps.drawBar(w);
@@ -902,7 +903,10 @@ void scPhysicalBox::drawWindow() {
     }
     ImGui::End();
 }
-void scPhysicalBox::draw(ofEventArgs&) { if(show.get()) drawWindow(); }
+void scPhysicalBox::draw(ofEventArgs&) {
+    if(show.get()) drawWindow();
+    keyboardPiano.finishFrame();
+}
 
 void scPhysicalBox::drawHeader() {
     const float z = zoom();

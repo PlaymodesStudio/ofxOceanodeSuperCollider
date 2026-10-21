@@ -540,6 +540,7 @@ void scAliasingBox::drawWindow() {
         ImGui::End();if(!open) show=false;return;
     }
     if(!open){show=false;ImGui::End();return;}
+    keyboardPiano.draw(pitch, gate, voices.get());
     const float w=ImGui::GetContentRegionAvail().x;
     drawHeader();
     snaps.drawBar(w);
@@ -567,7 +568,10 @@ void scAliasingBox::drawWindow() {
     }
     ImGui::End();
 }
-void scAliasingBox::draw(ofEventArgs&) { if(show.get()) drawWindow(); }
+void scAliasingBox::draw(ofEventArgs&) {
+    if(show.get()) drawWindow();
+    keyboardPiano.finishFrame();
+}
 
 void scAliasingBox::sectionHeader(const char* title, float w, ofParameter<bool>* on, ImU32 accent) {
     const float z = zoom();

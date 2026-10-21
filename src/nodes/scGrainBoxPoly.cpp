@@ -2880,6 +2880,7 @@ void scGrainBoxPoly::draw(ofEventArgs& /*args*/) {
         drawGrainBoxWindow();
     else
         browser.stopPreview();
+    for(auto& ph : playheads) ph->keyboardPiano.finishFrame();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -4265,6 +4266,10 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
     windowDrawn = true;    // shown and not collapsed: grain replies wanted (see update)
 
     activePlayhead = std::max(0, std::min((int)playheads.size() - 1, activePlayhead));
+    if(!playheads.empty()) {
+        auto& ph = *playheads[activePlayhead];
+        ph.keyboardPiano.draw(ph.pitch, ph.gate, ph.numPlayheads.get(), 0, ph.pitchMode.get() == 1 ? 0 : -60);
+    }
 
     float totalW  = ImGui::GetContentRegionAvail().x;
     float totalH  = ImGui::GetContentRegionAvail().y;

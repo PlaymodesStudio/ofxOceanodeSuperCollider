@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scNode.h"
+#include "scKeyboardPiano.h"
 #include "serverManager.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -22,6 +23,7 @@
 // One synth per voice; sample-level feedback. Around it the
 // shared modular parts: ModGate / Mod sources / routes, spreader, effects.
 class scSteamPipeBox : public scNode {
+    scKeyboardPiano keyboardPiano;
 public:
     explicit scSteamPipeBox(std::vector<serverManager*> servers);
     ~scSteamPipeBox();

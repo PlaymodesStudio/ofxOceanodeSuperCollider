@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scNode.h"
+#include "scKeyboardPiano.h"
 #include "serverManager.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -26,6 +27,7 @@
 // the shared modular parts: ModGate / Mod sources / routes (per voice), the
 // stereo-pickup spreader, the effects (MixerPro's + MiVerb's Space).
 class scPhysicalBox : public scNode {
+    scKeyboardPiano keyboardPiano;
 public:
     explicit scPhysicalBox(std::vector<serverManager*> servers);
     ~scPhysicalBox();

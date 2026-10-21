@@ -1706,6 +1706,7 @@ void scAnalogBox::applyState(const ofJson& a, const ofJson& b, float t, bool sw)
 
 void scAnalogBox::draw(ofEventArgs&) {
     if(showWindow.get()) drawWindow();
+    keyboardPiano.finishFrame();
 }
 
 void scAnalogBox::drawWindow() {
@@ -1719,6 +1720,7 @@ void scAnalogBox::drawWindow() {
         return;
     }
     if(!open){ showWindow = false; ImGui::End(); return; }
+    keyboardPiano.draw(pitch, gate, voices.get());
     const float w = ImGui::GetContentRegionAvail().x;
 
     // ── Header: voices, channels, master, gate mode, voices' levels ─────────

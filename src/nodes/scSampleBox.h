@@ -45,6 +45,7 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "scNode.h"
+#include "scKeyboardPiano.h"
 #include "serverManager.h"
 #include "scTransportSync.h"
 #include "scSampleBrowser.h"
@@ -70,6 +71,7 @@
 #include <vector>
 
 class scSampleBox : public scNode {
+    scKeyboardPiano keyboardPiano;
 public:
     // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
     std::string getWindowTitle() override { return "SampleBox " + ofToString(getNumIdentifier()); }

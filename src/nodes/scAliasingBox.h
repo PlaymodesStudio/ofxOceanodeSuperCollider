@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scNode.h"
+#include "scKeyboardPiano.h"
 #include "serverManager.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -22,6 +23,7 @@
 // One synth per voice (sample-identical to the original), around it the
 // shared modular parts: ModGate / Mod sources / routes, spreader, effects.
 class scAliasingBox : public scNode {
+    scKeyboardPiano keyboardPiano;
 public:
     explicit scAliasingBox(std::vector<serverManager*> servers);
     ~scAliasingBox();

@@ -27,6 +27,7 @@
 #pragma once
 
 #include "scNode.h"
+#include "scKeyboardPiano.h"
 #include "serverManager.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -50,6 +51,7 @@
 #include <vector>
 
 class scPolyComb : public scNode {
+    scKeyboardPiano keyboardPiano;
 public:
     // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
     std::string getWindowTitle() override { return "PolyComb " + ofToString(getNumIdentifier()); }

@@ -35,6 +35,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "ofxOceanodeShared.h"
 #include "scNode.h"
+#include "scKeyboardPiano.h"
 #include "serverManager.h"
 #include "ofxSuperCollider.h"
 #include "ofxSCSynth.h"
@@ -164,6 +165,7 @@ private:
         float maxLife;    // total life = duration
     };
     struct Playhead {
+        scKeyboardPiano keyboardPiano;
         int         index = 0;
         std::string sfx;              // "" for playhead 1, " 2", " 3"...
 
