@@ -33,7 +33,7 @@ constexpr double kTilt0 = 0.64;   // the brightness tilt at the default B Bright
     X(freq, 220) X(gate, 0) X(hold, 0) X(strk, 0) X(atk, 0.08) X(rel, 0.6) \
     X(strike, 1) X(hardness, 0.5) X(mass, 0.3) X(bounce, 0) \
     X(bow, 0) X(bowpress, 0.5) X(bowspeed, 0.5) X(rosin, 0.2) \
-    X(blow, 0) X(breath, 0.75) X(blowtype, 0) X(jetratio, 0.48) X(turb, 0.2) \
+    X(blow, 0) X(breath, 0.75) X(blowtype, 0) X(jetratio, 0.48) X(turb, 0.2) X(air, 0) \
     X(scrape, 0) X(scrapespeed, 0.5) X(rough, 0.5) X(grit, 0.3) X(chatter, 0) \
     X(ext, 0) X(pos, 0.3) X(pick1, 0.2) X(pick2, 0.58) X(posy, 0.37) X(pick1y, 0.23) X(pick2y, 0.71) \
     X(atune, 0) X(adecay, 3) X(abright, 0.7) X(abore, 0) X(astiff, 0) \

@@ -45,6 +45,7 @@ constexpr double kcab = 0.25;       // A -> B coupling
 constexpr double kcba = 0.25;       // B -> A coupling
 constexpr double kcas = 12;         // cascade: low modes into the upper modes
 constexpr double krat = 1.0;        // rattle into the modes
+constexpr double kair = 0.25;       // the mouthpiece's breath noise into the pickups
 
 constexpr int NA = 16384;           // waveguide segments
 constexpr int NJ = 8192;            // jet delay
@@ -90,6 +91,8 @@ struct PhysicalVoice : public Unit {
     double rx1[2], rx2[2], ry1[2][RADMODES], ry2[2][RADMODES], rlp[2], tph;
     double rb0[RADMODES], ra1[RADMODES], ra2[RADMODES], tlen, tg, tnorm;
     int rtype;
+    // Air: the mouthpiece heard (the jet and the breath's turbulence), DC-free and lowpassed
+    double airdc, airlp;
     double lpa, ap[4][2];
     double nutrefl, brefl, ya, sc;
     double envf, enve, prevg;
@@ -140,6 +143,7 @@ static void PhysicalVoice_Ctor(PhysicalVoice* unit) {
     unit->dlt = unit->dlj + NJ;
     unit->wn = unit->wb = unit->wh = unit->wj = unit->wt = 0;
     unit->damped = 0; unit->dmp = 0; unit->tph = 0; unit->rtype = 0;
+    unit->airdc = unit->airlp = 0;
     unit->tlen = 100; unit->tg = 0; unit->tnorm = 1;
     for (int m = 0; m < RADMODES; ++m) unit->rb0[m] = unit->ra1[m] = unit->ra2[m] = 0;
     clearState(unit);
@@ -371,13 +375,14 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
     // the inputs read inside the loop, ramped from the last block's values
     static const int ramped[] = {P_freq, P_tension, P_pos, P_rattle, P_rattleth, P_hardness, P_mass, P_bounce,
         P_strike, P_scrape, P_scrapespeed, P_rough, P_grit, P_chatter, P_ext, P_bow, P_bowspeed, P_bowpress,
-        P_rosin, P_blow, P_breath, P_blowtype, P_jetratio, P_turb, P_cascade, P_pick1, P_pick2, P_listen, P_hold};
+        P_rosin, P_blow, P_breath, P_blowtype, P_jetratio, P_turb, P_cascade, P_pick1, P_pick2, P_listen, P_hold, P_air};
     double v[P_COUNT], dv[P_COUNT];
     for (int p : ramped) { v[p] = u->last[p]; dv[p] = (cur[p] - u->last[p]) * invN; }
     v[P_hold] = cur[P_hold]; dv[P_hold] = 0;
     const double fa0 = u->fa0, lfac = u->lfac, ga = u->ga, bla = u->bla, apc = u->apc, pda = u->pda;
     const double exa = u->exa, exb = u->exb, kia = u->kia, kca = u->kca;
     const double freqBase = std::max(P(P_freq), 1e-6);
+    const double airc = 1 - std::exp(-2 * M_PI * 5000 / sr);
 
     for (int i = 0; i < n; ++i) {
         for (int p : ramped) v[p] += dv[p];
@@ -471,6 +476,12 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         if (++u->wj >= NJ) u->wj = 0;
         const double jd = rdl(u->dlj, NJ, u->wj, clip(lin(exb, sr / fa, sr / u->fb0) * v[P_jetratio], 2, NJ - 4));
         const double fjet = clip(jd * (jd * jd - 1), -1, 1);
+        // what the mouthpiece radiates: the breath's turbulence, swelling with the
+        // jet's swing across the labium (so it fuses with the tone), lowpassed
+        u->airdc += (jd - u->airdc) * 0.003;
+        const double swing = clip(std::fabs(jd - u->airdc), 0, 1.5);
+        u->airlp += (1.5 * v[P_breath] * u->envf * rnd2() * (0.35 + swing) - u->airlp) * airc;
+        const double air = v[P_blow] * v[P_air] * kair * u->airlp;
         const double rr = clip(0.7 - 0.3 * (vr - pb), -1, 1);
         const double freed = (pb - vr) * (1 - rr);
         const double fblow = v[P_blow] * lin(clip(v[P_blowtype], 0, 1), fjet * kjet, freed * kreed);
@@ -509,8 +520,8 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         const double pa1 = u->ya - rdl(u->dlh, NA, u->wh, std::max(lt * pfold(v[P_pick1]), 1.0));
         const double pa2 = u->ya - rdl(u->dlh, NA, u->wh, std::max(lt * pfold(v[P_pick2]), 1.0));
         const double lb = clip(v[P_listen], 0, 1);
-        double x1 = lin(lb, pa1, o1 * u->bnorm);
-        double x2 = lin(lb, pa2, o2 * u->bnorm);
+        double x1 = lin(lb, pa1, o1 * u->bnorm) + air;
+        double x2 = lin(lb, pa2, o2 * u->bnorm) + air;
         u->enve += (std::fabs(x1) - u->enve) * 0.001;
 
         // safety: anything non-finite or runaway clears the voice

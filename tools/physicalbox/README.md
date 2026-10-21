@@ -35,3 +35,16 @@ The measured results are listed in `synthdefs/WIP/PhysicalBox/README.md`.
 Renders every body model (Family / Shape, see `ugens/OceanodePhysical/PhysicalModes.h`)
 struck, the doublets (Split cents, Beat Hz), a near-zero Split against none
 (must match) and bowed cases. Needs OceanodePhysical in the user extensions.
+
+## Factory sounds and the flute reference
+
+- `factory_sounds.py` holds the factory sounds: `cpp` prints the C++ list for
+  `scPhysicalBox.cpp`, `scd` the render cases (`PB_CASES=<file> sclang
+  render_models.scd <dir>`), `levels <dir>` balances Level from those renders
+  (loudest 50 ms to the same RMS; written to `factory_levels.json`),
+  `library <nodeSnapshots/PhysicalBox>` rewrites an app's snapshot library with
+  the factory set followed by the user's own snapshots (backed up first).
+- `render_old_flute.scd` renders the old `Source/PhysicalModelling/flute.scd`
+  voice; `compare_flute.py` measures harmonics, breath noise, tuning and pitch
+  wobble of any renders (MIDI note in the file name, `_<note>`). The factory
+  Flute was matched to it this way (open Bore, Air 1, Breath 0.9, Jet Ratio 0.5).

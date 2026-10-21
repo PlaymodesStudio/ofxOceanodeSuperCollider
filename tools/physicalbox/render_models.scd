@@ -59,6 +59,8 @@ cases = models.collect { |m|
 	["drum_morph", 3, [\bfamily, 4, \bshape, 0.3, \freq, 150, \material, 0.4, \excite, 1, \listen, 1, \pos, 0.7]],
 	["highnote_gong", 3, [\bfamily, 2, \bshape, 1, \freq, 3000, \material, 1, \excite, 1, \listen, 1, \bdecay, 3, \split, 20, \beat, 20]]
 ];
+// PB_CASES=<file>: the cases written in that file instead (factory_sounds.py scd)
+if("PB_CASES".getenv.notNil) { cases = File.readAllString("PB_CASES".getenv).interpret };
 if(filter.notNil and: { filter != "all" }) { cases = cases.select { |c| c[0].contains(filter) } };
 File.mkdir(outDir);
 SynthDef(\pbModel, {
