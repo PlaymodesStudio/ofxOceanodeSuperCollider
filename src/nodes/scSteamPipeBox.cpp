@@ -92,7 +92,7 @@ void scSteamPipeBox::setup() {
         ph.sendAll=[this](){sendAll();};
         ph.bpm=[this](){return bpm;};
         ph.voices=[this](){return voices.get();};
-        ph.section=[this](const char* t,float w){sectionHeader(t,w);};
+        ph.section=[this](const char* t,float w,const char*){sectionHeader(t,w);};
         ph.slider=[this](ofParameter<float>& p,const char* l,float w,const char* f,bool log){slider(p,l,w,f,log);};
         ph.toggle=[this](ofParameter<bool>& p,const char* l){toggle(p,l);};
         ph.mark=[this](const std::string& k){mark(k);};

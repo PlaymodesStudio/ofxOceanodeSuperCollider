@@ -182,7 +182,7 @@ void scPhysicalBox::setup() {
         ph.sendAll = [this](){ sendAll(); };
         ph.bpm = [this](){ return bpm; };
         ph.voices = [this](){ return voices.get(); };
-        ph.section = [this](const char* t, float w){ sectionHeader(t, w, nullptr, pal::pickup); };
+        ph.section = [this](const char* t, float w, const char* help){ sectionHeader(t, w, nullptr, pal::pickup, help); };
         ph.slider = [this](ofParameter<float>& p, const char* l, float w, const char* f, bool log){ slider(p, l, w, f, log); };
         ph.toggle = [this](ofParameter<bool>& p, const char* l){ toggle(p, l); };
         ph.mark = [this](const std::string& k){ mark(k); };
@@ -1206,13 +1206,14 @@ void scPhysicalBox::drawMeters(ImVec2 a, ImVec2 size) {
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Voices: level, gate dot (each voice is its own instrument)");
 }
 
-void scPhysicalBox::sectionHeader(const char* title, float w, ofParameter<bool>* on, ImU32 accent) {
+void scPhysicalBox::sectionHeader(const char* title, float w, ofParameter<bool>* on, ImU32 accent, const char* help, int icon) {
     const float z = zoom();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 cur = ImGui::GetCursorScreenPos();
     const float bh = ImGui::GetFrameHeight() + 6.0f * z;
     dl->AddRectFilled(cur, ImVec2(cur.x + w, cur.y + bh), pal::header, 3.0f * z);
     dl->AddLine(ImVec2(cur.x, cur.y + bh), ImVec2(cur.x + w, cur.y + bh), accent ? accent : pal::accent, 1.5f * z);
+    scSectionHelp(cur, w, bh, help);
     ImGui::SetCursorScreenPos(ImVec2(cur.x + 6.0f * z, cur.y + 3.0f * z));
     if(on){
         bool v = on->get();
@@ -1221,6 +1222,17 @@ void scPhysicalBox::sectionHeader(const char* title, float w, ofParameter<bool>*
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s on / off", title);
         menu(on->getEscapedName());
         ImGui::PopID();
+        ImGui::SameLine(0, 4.0f * z);
+    }
+    if(icon >= 0){   // the section's picture, before its title
+        const float s = ImGui::GetFrameHeight();
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const ImU32 col = accent ? accent : pal::accent;
+        if(icon == BODY_ICON){
+            const auto pl = physical::place(soundParam("bfamily").get(), soundParam("bshape").get());
+            physIcons::drawModel(dl, ImVec2(at.x - 2 * z, at.y), ImVec2(at.x + s * 1.3f, at.y + s), pl.f < 0.5f ? pl.a : pl.b, soundParam("material").get());
+        }else physIcons::drawIcon(dl, ImVec2(at.x + s * 0.5f, at.y + s * 0.5f), s * 0.62f, icon, col);
+        ImGui::Dummy(ImVec2(icon == BODY_ICON ? s * 1.3f : s, s));
         ImGui::SameLine(0, 4.0f * z);
     }
     ImGui::AlignTextToFramePadding();
@@ -1344,52 +1356,133 @@ void scPhysicalBox::soundGroup(const std::string& group, float w) {
 
 void scPhysicalBox::drawSoundTab(float w) {
     const float cw = colW(w, 5);
-    auto note = [&](const char* text) {
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
-        ImGui::TextColored(ImColor(pal::textDim), "%s", text);
-        ImGui::PopTextWrapPos();
-    };
     ImGui::BeginGroup();
     labelW = 78;
-    sectionHeader("Strike", cw, nullptr, pal::exciter); soundGroup("Strike", cw);
+    sectionHeader("Strike", cw, nullptr, pal::exciter,
+        "A hit: a short contact pulse on each new note (the gate's level is how hard).\n\n"
+        "Strike: how much of it reaches the object (blend it with the other exciters).\n"
+        "Hardness: soft mallet (dull, round) to hard (bright, clicky); harder notes also get harder.\n"
+        "Mass: a light stick (short contact) to a heavy mallet (long contact, darker).\n"
+        "Bounce: the mallet bounces back for more, quicker and quieter hits (a drum roll at the end of a stroke).", physIcons::Mallet);
+    soundGroup("Strike", cw);
     ImGui::Spacing();
-    sectionHeader("Bow", cw, nullptr, pal::exciter); soundGroup("Bow", cw);
-    note("Pressure past 1 goes raucous; light pressure whistles.");
+    sectionHeader("Bow", cw, nullptr, pal::exciter,
+        "A bow drawn across the contact while the gate is open: stick-slip friction keeps the object singing.\n\n"
+        "Bow: how much bowing.\nBow Pressure: light pressure whistles (flautando, harmonics), around 1 it sings, "
+        "past 1 it goes raucous and scratchy.\nBow Speed: louder and brighter, and how easily the note speaks.\n"
+        "Rosin: the friction's grip, smooth to gritty.", physIcons::Bow);
+    soundGroup("Bow", cw);
     nextCol();
-    sectionHeader("Blow", cw, nullptr, pal::exciter); soundGroup("Blow", cw);
-    note("Jet (flute) to reed (clarinet). A flute wants an open Bore (1), Position near 0; Air is the breath "
-         "heard at the mouthpiece. For vibrato: an LFO on Breath.");
+    sectionHeader("Blow", cw, nullptr, pal::exciter,
+        "Air into the waveguide, as a flute or a reed, while the gate is open.\n\n"
+        "Blow: how much blowing. Breath: the pressure (overblow it for the upper register).\n"
+        "Jet Reed: 0 a jet across an edge (flute), 1 a reed (clarinet). Jet Ratio: where the jet lands; it picks the register.\n"
+        "Turbulence: noise in the breath. Air: the breath heard at the mouthpiece, around the tone.\n\n"
+        "A flute wants an open Bore (1) and Position near 0. For vibrato, an LFO on Breath.", physIcons::Air);
+    soundGroup("Blow", cw);
     ImGui::Spacing();
-    sectionHeader("Scrape", cw, nullptr, pal::exciter); soundGroup("Scrape", cw);
+    sectionHeader("Scrape", cw, nullptr, pal::exciter,
+        "Something dragged over the surface while the gate is open: a stream of tiny impacts.\n\n"
+        "Scrape Speed: how fast it is dragged. Roughness: how many bumps (sparse to a dense rasp).\n"
+        "Grit: how hard each bump is. Chatter: the object's own motion makes it skip and bounce (squeals, chatter).", physIcons::Rasp);
+    soundGroup("Scrape", cw);
     nextCol();
-    sectionHeader("Contact", cw, nullptr, pal::exciter); soundGroup("Contact", cw);
-    note("Attack / Release shape the sustained exciters (bow, blow, scrape). Hold keeps them on. "
-         "Damper chokes the ring when the gate is released (a hand, a pedal). "
-         "On a drum Position is the radius (centre 0, rim 1) and Y the angle; on a plate X and Y. "
-         "Ext In plays the node's In through the object.");
+    sectionHeader("Contact", cw, nullptr, pal::exciter,
+        "Where and how the exciters touch the object.\n\n"
+        "Position: where it is struck, bowed or blown along the object (0 one end, 1 the other); near an end is thin and "
+        "bright, the middle is full. On a drum it is the radius (centre 0, rim 1) and Position Y the angle; on a plate X and Y.\n"
+        "Ext In: the node's In played through the object (an exciter of its own).\n"
+        "Attack / Release: how the sustained exciters (bow, blow, scrape) start and stop. Hold keeps them on without a gate.\n"
+        "Damper: chokes the ringing when the gate closes (a hand, a pedal); 0 lets it ring.", physIcons::Contact);
+    soundGroup("Contact", cw);
     ImGui::Spacing();
-    sectionHeader("Output", cw); soundGroup("Output", cw);
-    note("Where the voices and their two pickups sit: the Panning tab.");
+    sectionHeader("Output", cw, nullptr, 0, "The voices' level. Where the voices and their two pickups sit on the speakers: the Panning tab.", physIcons::Speaker);
+    soundGroup("Output", cw);
     ImGui::Spacing();
-    sectionHeader("Resonator", cw, nullptr, pal::body); soundGroup("Res", cw);
-    note("After the pickups: Tube under the bar, tuned to the note (Res Tune from it; Tremolo is a "
-         "vibraphone's fan), or a fixed Gourd, Box, Shell or metal Cone (Res Tune from their own pitch).");
+    sectionHeader("Resonator", cw, nullptr, pal::body,
+        "A resonating body after the pickups.\n\n"
+        "Tube: a tube under the bar tuned to the note, as in a marimba or vibraphone (Res Tune from the note; "
+        "Tremolo and Trem Depth are a vibraphone's fan).\n"
+        "Gourd, Box, Shell, Cone: fixed bodies with their own pitch (Res Tune moves it).\n"
+        "Res Mix: how much of the resonator is heard.", physIcons::ResOff + std::clamp(int(std::round(soundParam("radiator").get())), 0, 5));
+    soundGroup("Res", cw);
     nextCol();
     labelW = 70;
-    sectionHeader("A  Waveguide", cw, nullptr, pal::waveguide); soundGroup("A", cw);
-    note("Bore: 0 string, 0.5 closed tube (odd harmonics), 1 open tube.");
+    sectionHeader("A  Waveguide", cw, nullptr, pal::waveguide,
+        "Resonator A: a waveguide, a travelling wave in a string or a tube. Harmonic, singing, it carries the pitch.\n\n"
+        "Tune: from the note. Decay: how long it rings. Brightness: how fast the highs die.\n"
+        "Bore: 0 string, 0.5 closed tube (odd harmonics, a clarinet), 1 open tube (a flute).\n"
+        "Stiffness: a stiff string or wire; the overtones go sharp (piano, bells on wire).\n\n"
+        "Excite and Listen (Material & Coupling) choose how much of A and B is played and heard.", soundParam("abore").get() < 0.25f ? physIcons::String : physIcons::Pipe);
+    soundGroup("A", cw);
     ImGui::Spacing();
-    sectionHeader("B  Body", cw, nullptr, pal::body); soundGroup("B", cw);
+    sectionHeader("B  Body", cw, nullptr, pal::body,
+        "Resonator B: a modal body, a set of resonances (modes) like a bar, a bell, a plate or a drum. "
+        "Inharmonic, metallic or woody.\n\n"
+        "Family and Shape: which kind of object (the display shows its modes). Stretch: the modes squeezed or spread.\n"
+        "Modes: how many resonances (more is richer and costs more). Tune / Decay / Brightness as for A.\n"
+        "Split and Beat: each mode doubled and slightly detuned, the slow beating of real bells and gongs.", BODY_ICON);
+    drawBodyPicture(cw);
+    soundGroup("B", cw);
     nextCol();
     labelW = 78;
-    sectionHeader("Material & Coupling", cw); soundGroup("Couple", cw);
+    sectionHeader("Material & Coupling", cw, nullptr, 0,
+        "What it is made of, and how the two resonators meet.\n\n"
+        "Material: wood (highs die fast, short) to glass to metal (long, bright ring). The square pad above sets it with Excite / Listen.\n"
+        "Excite: where the exciters play, 0 into the waveguide (A), 1 into the body (B). Listen: which one is heard.\n"
+        "Couple: energy passing between A and B (a string on a soundboard, sympathetic ringing). Mutual: both ways or one way.\n"
+        "Pickup 1 / 2: where the two pickups listen (drag them on the display); their Y on drums and plates.", physIcons::Couple);
+    soundGroup("Couple", cw);
     ImGui::Spacing();
-    sectionHeader("Break", cw); soundGroup("Break", cw);
-    note("Tension +: the pitch jumps up with the hit and falls back (drums, big gong); -: starts low and rises.");
+    sectionHeader("Break", cw, nullptr, 0,
+        "Nonlinear behaviour: the object misbehaves when hit hard.\n\n"
+        "Rattle: something loose buzzing against it (a snare, a sitar's bridge) once it moves more than Rattle Threshold.\n"
+        "Tension: +, the pitch jumps up with the hit and falls back (drums, big gongs); -, it starts low and rises.\n"
+        "Cascade: energy spills from low modes into high ones: a gong or a tam-tam blooming after the hit.", physIcons::Rattle);
+    soundGroup("Break", cw);
     ImGui::Spacing();
-    sectionHeader("Life", cw); soundGroup("Life", cw);
+    sectionHeader("Life", cw, nullptr, 0,
+        "Slow movement so long notes don't sound frozen.\n\n"
+        "Drift: the tuning and the modes wander a little (Drift Rate: how fast).\n"
+        "Freeze: the ringing stops decaying and sustains forever (a drone from a single hit).", physIcons::Drift);
+    soundGroup("Life", cw);
     ImGui::EndGroup();
     labelW = 70;
+}
+
+// the body as the object it is (crossfading between the two models Shape is
+// between), tinted by Material; rings spread from it while the voices sound
+void scPhysicalBox::drawBodyPicture(float w) {
+    const float z = zoom(), h = 78 * z;
+    auto* dl = ImGui::GetWindowDrawList();
+    const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + w, a.y + h);
+    dl->AddRectFilledMultiColor(a, b, IM_COL32(22, 24, 30, 255), IM_COL32(22, 24, 30, 255), IM_COL32(10, 11, 13, 255), IM_COL32(10, 11, 13, 255));
+    dl->AddRect(a, b, pal::border, 3 * z);
+    const auto pl = physical::place(soundParam("bfamily").get(), soundParam("bshape").get());
+    const float material = soundParam("material").get();
+    float level = 0;
+    for(int v = 0; v < voices.get(); ++v) { const size_t o = size_t(v * VIS_VOICE); if(o < live.size()) level = std::max(level, live[o]); }
+    level = std::sqrt(ofClamp(level * 4, 0.0f, 1.0f));
+    const ImVec2 pa(a.x + 4 * z, a.y + 4 * z), pb(b.x - 4 * z, b.y - 16 * z);
+    dl->PushClipRect(a, b, true);
+    if(level > 0.01f) {
+        const ImVec2 c((pa.x + pb.x) * 0.5f, (pa.y + pb.y) * 0.5f);
+        const float now = ofGetElapsedTimef(), r0 = (pb.y - pa.y) * 0.45f;
+        for(int k = 0; k < 3; ++k) {
+            const float t = std::fmod(now * 0.8f + k / 3.0f, 1.0f);
+            dl->AddEllipse(c, ImVec2(r0 * (1 + 2.2f * t) * 1.5f, r0 * (1 + 2.2f * t)), mixColor(IM_COL32(222, 170, 105, 0), IM_COL32(255, 220, 160, 110), level * (1 - t)), 0, 48, 1.2f * z);
+        }
+    }
+    if(pl.f < 0.999f) physIcons::drawModel(dl, pa, pb, pl.a, material, 1 - pl.f);
+    if(pl.f > 0.001f) physIcons::drawModel(dl, pa, pb, pl.b, material, pl.f);
+    dl->PopClipRect();
+    std::string name = physical::modelName(pl.a);
+    if(pl.f > 0.04f) name += "  >  " + std::string(physical::modelName(pl.b)) + " " + ofToString(pl.f, 2);
+    const char* mat = material < 0.25f ? "wood" : material < 0.75f ? "glass" : "metal";
+    dl->AddText(ImVec2(a.x + 6 * z, b.y - 15 * z), pal::headerText, name.c_str());
+    dl->AddText(ImVec2(b.x - ImGui::CalcTextSize(mat).x - 6 * z, b.y - 15 * z), pal::textDim, mat);
+    ImGui::InvisibleButton("##bodyPicture", ImVec2(w, h));
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("The body: %s (Family, Shape), in %s (Material)", name.c_str(), mat);
 }
 
 // ── Panning ──────────────────────────────────────────────────────────────────
@@ -1461,7 +1554,12 @@ void scPhysicalBox::drawPanTab(float w) {
     const float width = soundParam("width").get();
     ImGui::BeginGroup();
     labelW = 70;
-    sectionHeader("Placement", cw, nullptr, pal::pickup);
+    sectionHeader("Placement", cw, nullptr, pal::pickup,
+        "Where each voice sits on the speakers. Each voice is heard by two pickups (the small dots), Pickups apart.\n\n"
+        "Spread: evenly across the speakers (Spread: how wide; Center: shifted). Channels: voice 1 on speaker 1, "
+        "voice 2 on speaker 2... Manual: each voice where you put it: drag it in the view (Shift: onto a speaker), or "
+        "set the Pan vector.\nSpeakers (more than 2): around a ring or along a line.\n\n"
+        "To move them, route an LFO (or anything) to Pan in Routing: the filled dots show where each voice is now.", physIcons::Placement);
     combo(placement, "Mode", cw);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Spread: evenly across the speakers\nChannels: voice 1 on speaker 1, voice 2 on speaker 2...\n"
                                                  "Manual: each voice where you put it (drag it, or the Pan vector)");
@@ -1473,16 +1571,12 @@ void scPhysicalBox::drawPanTab(float w) {
     soundSlider("width", "Pickups", cw);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("How far apart each voice's two pickups sit (0: both on the voice)");
     if(c > 2) combo(speakerLayout, "Speakers", cw);
-    ImGui::Spacing();
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
-    ImGui::TextColored(ImColor(pal::textDim), "%d voices on %d speaker%s, each heard by two pickups (the small dots). "
-                       "Drag a voice to place it (Shift: onto a speaker). To move them, route an LFO (or anything) to Pan "
-                       "in Routing: the filled dots show where each voice is now.", nv, c, c == 1 ? "" : "s");
-    ImGui::PopTextWrapPos();
     if(c == 1) ImGui::TextColored(ImColor(pal::exciter), "One channel: nothing to pan.");
     nextCol();
     const float vw = 2 * cw + gapW();
-    sectionHeader("Speakers", vw, nullptr, pal::pickup);
+    sectionHeader("Speakers", vw, nullptr, pal::pickup,
+        "The voices (numbered rings) on the speakers. A ring is where you placed it, the filled dot where it is now "
+        "(with Pan modulation), the small dots its two pickups. Drag a ring to place it (Shift: onto a speaker).", physIcons::Speaker);
     {
         auto* dl = ImGui::GetWindowDrawList();
         const float h = ring ? std::min(vw, 340.0f * z) : std::max(120.0f * z, nv * 18.0f * z + 40 * z);
@@ -1578,7 +1672,8 @@ void scPhysicalBox::drawFxTab(float w) {
     const float z = zoom();
     const float cw = colW(w, 5);
     ImGui::BeginGroup();
-    sectionHeader("Saturation", cw, &satOn);
+    static const std::string satHelp = std::string(scHelp::saturation) + scHelp::chain + " -> Space.";
+    sectionHeader("Saturation", cw, &satOn, 0, satHelp.c_str(), physIcons::Saturate);
     if(!satOn.get()) ImGui::BeginDisabled();
     slider(satDrive, "Drive", cw, "%.1f dB");
     slider(satBias, "Bias", cw, "%.2f");
@@ -1587,7 +1682,7 @@ void scPhysicalBox::drawFxTab(float w) {
     slider(satMix, "Mix", cw, "%.2f");
     if(!satOn.get()) ImGui::EndDisabled();
     ImGui::Spacing();
-    sectionHeader("EQ", cw, &eqOn);
+    sectionHeader("EQ", cw, &eqOn, 0, scHelp::eq, physIcons::Equalizer);
     for(int b = 0; b < 5; b++) eqEditor.bands[b] = {eqFreq[b].get(), eqGain[b].get(), eqShape[b].get()};
     eqEditor.dbRange = 24.0f; eqEditor.gainLimit = 24.0f;
     eqEditor.qMin = 0.1f; eqEditor.qMax = 20.0f; eqEditor.slopeMin = 0.1f; eqEditor.slopeMax = 4.0f;
@@ -1621,7 +1716,7 @@ void scPhysicalBox::drawFxTab(float w) {
     }
     if(!eqOn.get()) ImGui::EndDisabled();
     nextCol();
-    sectionHeader("Echo", cw, &echoOn);
+    sectionHeader("Echo", cw, &echoOn, 0, scHelp::echo, physIcons::Echo);
     if(!echoOn.get()) ImGui::BeginDisabled();
     toggle(echoBeats, "Sync to tempo");
     if(echoBeats.get()){
@@ -1652,7 +1747,7 @@ void scPhysicalBox::drawFxTab(float w) {
     slider(echoMix, "Mix", cw, "%.2f");
     if(!echoOn.get()) ImGui::EndDisabled();
     nextCol();
-    sectionHeader("Reverb", cw, &rvbOn);
+    sectionHeader("Reverb", cw, &rvbOn, 0, scHelp::reverb, physIcons::Reverb);
     if(!rvbOn.get()) ImGui::BeginDisabled();
     slider(rvbMix, "Mix", cw, "%.2f");
     slider(rvbDecay, "Decay", cw, "%.2f s", true);
@@ -1662,7 +1757,7 @@ void scPhysicalBox::drawFxTab(float w) {
     slider(rvbSpread, "Spread", cw, "%+.2f");
     if(!rvbOn.get()) ImGui::EndDisabled();
     nextCol();
-    sectionHeader("Reverb Tone", cw);
+    sectionHeader("Reverb Tone", cw, nullptr, 0, scHelp::reverbTone, physIcons::Reverb);
     if(!rvbOn.get()) ImGui::BeginDisabled();
     slider(rvbLowpass, "Lowpass", cw, "%.0f Hz", true);
     slider(rvbHiDamp, "Hi Damp", cw, "%.1f dB");
@@ -1672,7 +1767,10 @@ void scPhysicalBox::drawFxTab(float w) {
     slider(rvbWander, "Wander", cw, "%.2f");
     if(!rvbOn.get()) ImGui::EndDisabled();
     nextCol();
-    sectionHeader("Space", cw, &spaceOn, pal::pickup);
+    sectionHeader("Space", cw, &spaceOn, pal::pickup,
+        "MiVerb, the reverb of Mutable Instruments' Clouds and Rings: a lush, diffuse space, the last effect, on by default.\n\n"
+        "Mix: dry / space. Time: how long it lasts. Damp: the highs dying in it. Diffusion: smeared (high) or grainy (low).\n"
+        "Low Cut: keeps the lows out of it. Freeze: holds the current space forever (a pad from what is playing).", physIcons::Space);
     if(!spaceOn.get()) ImGui::BeginDisabled();
     slider(spaceMix, "Mix", cw, "%.2f");
     slider(spaceTime, "Time", cw, "%.2f");
@@ -1681,9 +1779,5 @@ void scPhysicalBox::drawFxTab(float w) {
     slider(spaceLowCut, "Low Cut", cw, "%.2f");
     toggle(spaceFreeze, "Freeze");
     if(!spaceOn.get()) ImGui::EndDisabled();
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
-    ImGui::TextColored(ImColor(pal::textDim), "MiVerb: Mutable Instruments' Clouds / Rings reverb.");
-    ImGui::PopTextWrapPos();
     ImGui::EndGroup();
-    ImGui::TextColored(ImColor(pal::textDim), "Voices -> Saturation -> EQ -> Echo -> Reverb -> Space, at speaker count.");
 }

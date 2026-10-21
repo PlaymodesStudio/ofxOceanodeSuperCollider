@@ -42,7 +42,7 @@ public:
         std::function<float()> bpm;
         std::function<int()> voices;
         // the host's own widgets (label widths, publishing, menus)
-        std::function<void(const char*, float)> section;
+        std::function<void(const char*, float, const char*)> section;   // title, width, help (the "?")
         std::function<void(ofParameter<float>&, const char*, float, const char*, bool)> slider;
         std::function<void(ofParameter<bool>&, const char*)> toggle;
         std::function<void(const std::string&)> mark, menu;
@@ -192,7 +192,13 @@ public:
         const float labelW = (host.labelW ? *host.labelW : 66) * z;
         ImGui::Spacing();
         ImGui::BeginGroup();
-        host.section("Pulse", rasterW);
+        host.section("Pulse", rasterW,
+            "The voices play by themselves (Gate Mode Pulse), from a steady clock to a Geiger counter.\n\n"
+            "The view shows the events as they play: a row per voice, newest on the right; each block is a gate "
+            "(its length), as tall and bright as its velocity.\n"
+            "The buttons are characters to start from (they leave Rate alone): Clock, Strum, Phasing, Rain, Geiger, "
+            "Swarm, Bursts. Hover one for what it does.\n\n"
+            "Gate's per-note sources (Velocity, Random) and the envelopes follow the pulses, so each event can sound different.");
         {
             static const char* names[] = {"Clock", "Strum", "Phasing", "Rain", "Geiger", "Swarm", "Bursts"};
             static const char* tips[] = {
@@ -217,7 +223,12 @@ public:
         ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + rows));
         ImGui::Dummy(ImVec2(rasterW, 0));
         nextCol();
-        host.section("Time", cw);
+        host.section("Time", cw,
+            "When the events happen.\n\n"
+            "Rate: events per second per voice on average (Sync to tempo: a note value instead).\n"
+            "Chaos: 0 a clock; 1 random like a Geiger counter (a Poisson process); the average rate stays the same.\n"
+            "Cluster: the events gather into bursts of quick repeats and long silences (same average).\n"
+            "Chance: each event plays or not (thins the pattern).");
         host.toggle(sync, "Sync to tempo");
         tip("Rate from the tempo (a note value) instead of Hz");
         if(sync.get()) {
@@ -248,7 +259,14 @@ public:
         host.slider(chance, "Chance", cw, "%.2f", false);
         tip("The chance each event plays (thins the pattern)");
         nextCol();
-        host.section("Voices", cw);
+        host.section("Voices", cw,
+            "How the voices share the events.\n\n"
+            "Link: 1 every voice plays the same events (one seed for all, simultaneous); 0 each voice its own (its own seed); "
+            "between, each event is shared or a voice's own by chance.\n"
+            "Phasing: each voice's own clock slightly faster or slower: periodic voices drift in and out of phase (Steve Reich). Acts where Link < 1.\n"
+            "Strum: shared events rolled across the voices, ms per voice (negative: downwards).\n"
+            "Seed: 0 a new pattern every start; above 0 the same pattern every time (Reset plays it from the start).\n"
+            "Follow Gate: a voice pulses only while its Gate is held, as loud as the Gate (hold notes to play rolls).");
         host.slider(link, "Link", cw, link.get() >= 0.995f ? "together" : link.get() <= 0.005f ? "independent" : "%.2f", false);
         tip("1: every voice plays the same events (one seed for all)\n0: each voice its own events (its own seed)\n"
             "between: each event is shared or a voice's own by chance");
@@ -276,7 +294,13 @@ public:
         tip("Off: the pulses run by themselves\nOn: a voice pulses only while its Gate is held, as loud as the Gate\n"
             "(hold notes from a keyboard or the timeline to play rolls)");
         nextCol();
-        host.section("Notes", cw);
+        host.section("Notes", cw,
+            "Each event's length and strength.\n\n"
+            "Length: how long the gate stays open, a fraction of the average period (or in seconds). Struck sounds only need "
+            "the start; sustained ones (bow, blow, steam) sound while it is open. Past 1 notes run into the next (legato), "
+            "each event still a new note.\n"
+            "Jitter: a random length per event (up to 4x shorter or longer).\n"
+            "Velocity: how hard each event plays. Vel Jitter: random velocity per event, accents and ghost notes.");
         if(fixed.get()) {
             host.slider(time, "Length", cw, "%.3f s", true);
             tip("How long each gate stays open, in seconds");

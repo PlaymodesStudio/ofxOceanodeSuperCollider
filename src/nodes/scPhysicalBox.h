@@ -13,6 +13,8 @@
 #include "scEQEditor.h"
 #include "scDropdowns.h"
 #include "scPulseGate.h"
+#include "scSectionHelp.h"
+#include "scPhysicalIcons.h"
 #include <array>
 #include <map>
 #include <memory>
@@ -139,7 +141,10 @@ private:
     ofParameter<float>& soundParam(const std::string&);
     SoundControl* sound(const std::string&);
     void drawFxTab(float);
-    void sectionHeader(const char*, float, ofParameter<bool>* = nullptr, ImU32 = 0);
+    // icon: physIcons::Icon, or BODY_ICON for the body's current model
+    static constexpr int BODY_ICON = 1000;
+    void sectionHeader(const char*, float, ofParameter<bool>* = nullptr, ImU32 = 0, const char* help = nullptr, int icon = -1);
+    void drawBodyPicture(float);
     void slider(ofParameter<float>&, const char*, float, const char* = "%.2f", bool = false);
     void toggle(ofParameter<bool>&, const char*);
     void updateStages(ofxSCServer*, State&);
