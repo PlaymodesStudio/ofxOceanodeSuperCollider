@@ -26,7 +26,7 @@ dir=root +/+ "SteamPipeBox";File.mkdir(root);File.mkdir(dir);
 (1..16).do { |n|
     SynthDef(("SteamPipeBoxSpread"++n).asSymbol, {
         var input=In.ar(\in.kr(0),16), voices=\voices.kr(6).clip(1,16);
-        var ring=(\line.kr(1)<0.5)*(n>2);
+        var ring=if(n>2,{\line.kr(1)<0.5},{0});
         var pan=NamedControl.kr(\pan,0.5!16)+In.kr(\mpan.kr(0),16);
         var pans=Select.kr(ring,[pan.clip(0,1),pan.wrap(0,1)]);
         var output=0!n;

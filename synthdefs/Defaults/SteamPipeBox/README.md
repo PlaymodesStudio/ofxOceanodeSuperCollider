@@ -18,6 +18,12 @@ can form a Ring or Line. All controls support right-click publication, timelines
 and snapshots; the Manual Pan vector also routes to the native Pan target.
 **Original** is the default placement mode for recovered and older snapshots,
 using their original Width and Random controls without changing their placement.
+The outlined rings show manual base positions; filled dots show each voice's
+actual position after its corresponding Pan modulation. Run
+`tools/steampipebox/panning_render_test.py` for an offline test of the actual
+panner, telemetry and independently phased LFO indices. The test accepts
+`--synthdefs` to check the app's installed definitions.
+
 
 BPM follows Oceanode transport through the usual `setBpm` path. Snapshot recall
 preserves connected controls; A/B morphing blends continuous values and routes,

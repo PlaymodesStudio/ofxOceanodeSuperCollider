@@ -49,12 +49,17 @@ Additional checks:
 
 ### Validation status (2026-10-22)
 
-The production C++ routing, noise algorithm, LFO publication and SteamPipe
-panning regression checks pass. The SteamPipeBox source passes a syntax check
-using OceanAudio's compiler flags; the 172 original-mode voice renders retain
-their reference hashes.
+The combined OceanAudio Release build and all default SynthDef compilations
+passed. The latest sources and matching compiled definitions are installed in
+OceanAudio. The full audit found no duplicate filenames or missing generic
+metadata/mono/stereo builds across 418 generic source files.
 
-The final combined application build, SynthDef compilation and offline audio
-regression remain pending after an approval-review credit failure. These
-changes have not been installed in OceanAudio. Build and install the matching
-application and SynthDefs together before testing the updated controls.
+`noise_render_test.py` and `tools/steampipebox/panning_render_test.py` pass
+against OceanAudio's installed SynthDefs, including independently phased LFO
+indices, live Pan telemetry, ring wrapping and independent envelope attacks.
+Both render tests accept `--synthdefs /path/to/Supercollider/Synthdefs`.
+
+The production C++ routing, noise algorithm, LFO publication and factory panning
+regression checks also pass. The original-mode SteamPipe kernel reference
+hashes remain unchanged. Restart the application/server to replace any synths
+already running with older definitions.
