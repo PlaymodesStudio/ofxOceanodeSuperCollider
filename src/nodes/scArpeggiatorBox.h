@@ -288,6 +288,10 @@ public:
         st.outputBuses[index] = bus;
         if(st.synth) st.synth->set(busName(index), bus);
     }
+    // Pitch: the voices, then the bass, as PitchOut (16 channels written)
+    int getOutputNumChannels(int index) override {
+        return index == 2 ? std::clamp((int)pitchOut.get().size(), 1, 16) : -1;
+    }
     int getOutputBusIndex(ofxSCServer* server, int index) override {
         auto it = servers.find(server);
         if(it == servers.end()) return -1;

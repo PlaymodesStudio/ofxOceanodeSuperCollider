@@ -109,6 +109,9 @@ public:
     virtual void resetInputBusses(ofxSCServer* server, int targetBus = 0){};
     
     virtual int getOutputBusIndex(ofxSCServer* server, int index){return -1;};
+    // How many of an output's channels carry values (a sequencer's voices; its
+    // bus is wider). -1: not known, the reader assumes as many as it needs.
+    virtual int getOutputNumChannels(int index){return -1;};
 
     // What a channel of an output carries, in a few words ("Kick" for a
     // sequencer's lane): shown by the node it is wired into. "" = nothing to say.

@@ -153,6 +153,8 @@ void scPolyComb::setup() {
     vec(transpose, "Transpose", 0, -48, 48);               reg(transpose, toPitch);
     vec(detune, "Detune", 0, 0, 1);                        reg(detune, toPitch);
     scramble.set("Scramble", false);                       reg(scramble, [this, toPitch]() { updateScramble(); toPitch(); });
+    expandPitch.set("Expand Pitches", false);               reg(expandPitch, toPitch);
+    for(const auto& c : controls) if(c.key == "Expand_Pitches") pitchDefaults[c.key] = c.save();   // older patches: off, as before
     vibRate.set("Vib Rate", 5.0f, 0.0f, 20.0f);            reg(vibRate, toPitch);
     vibRand.set("Vib Rate Random", 0.0f, 0.0f, 1.0f);      reg(vibRand, toPitch);
     vibAmt.set("Vib Amount", 0.0f, 0.0f, 2.0f);            reg(vibAmt, toPitch);
@@ -235,6 +237,8 @@ void scPolyComb::setup() {
     vec(oscWhite, "White", 0, 0, 1);          reg(oscWhite, toOsc(OWhite));
     vec(oscPink, "Pink", 0, 0, 1);            reg(oscPink, toOsc(OPink));
     vec(oscDust, "Dust", 0, 0, 1);            reg(oscDust, toOsc(ODust));
+    oscDustDensity.set("Dust Density", 0.0f, -10.0f, 0.0f); reg(oscDustDensity, toOsc(ODust));
+    for(const auto& c : controls) if(c.key == "Dust_Density") pitchDefaults[c.key] = c.save();   // older patches: as before
     vec(oscImpulse, "Impulse", 0, 0, 1);      reg(oscImpulse, toOsc(OImp));
     vec(oscAmp, "Osc Amp", 0.5f, 0, 1);       reg(oscAmp, toAllOsc);
     fmOn.set("FM On", false);                 reg(fmOn, [this, toParts, toAllOsc]() { toParts(); toAllOsc(); });
@@ -270,6 +274,7 @@ void scPolyComb::setup() {
     reg(combPitch, toIns(IComb));
     vec(combTranspose, "Comb Transpose", 0, -48, 48); reg(combTranspose, toIns(IComb));
     vec(combDetune, "Comb Detune", 0, 0, 1);  reg(combDetune, toIns(IComb));
+    combGlide.set("Comb Glide", 0.0f, 0.0f, 2.0f); reg(combGlide, toIns(IComb));
     combVibRate.set("Comb Vib Rate", 5.0f, 0.0f, 20.0f); reg(combVibRate, toIns(IComb));
     combVibRand.set("Comb Vib Rate Random", 0.0f, 0.0f, 1.0f); reg(combVibRand, toIns(IComb));
     combVibAmt.set("Comb Vib Amount", 0.0f, 0.0f, 2.0f); reg(combVibAmt, toIns(IComb));
@@ -565,6 +570,9 @@ void scPolyComb::sendPitch(ServerState& st, bool notesOnly) {
         const int pb = internalPitch() ? -1 : pitchIn.bus(st.server);
         controls.set("pitch_sel", pb >= 0 ? 1.0f : 0.0f);
         if(pb >= 0) s->mapan("pitch_ar", pb, n());
+        // the cable's own values, spread over the voices as the Oceanode values are
+        controls.set("pitch_k", (float)pitchIn.channels());
+        controls.set("pitch_expand", expandPitch.get() ? 1.0f : 0.0f);
         controls.set("transpose", expand(transpose.get(), n()));
         controls.set("detune", expand(detune.get(), n()));
         controls.set("glide", glide.get());
@@ -617,6 +625,7 @@ void scPolyComb::sendOsc(ServerState& st, int o) {
     sendVec(s, "oscamp", oscAmp.get());
     if(o == OPulse){ sendVec(s, "pw", oscPw.get()); s->set("mpw", mod(st, 11)); }
     if(o == OSSaw) sendVec(s, "ssdetune", oscSSDetune.get());
+    if(o == ODust) s->set("dustoct", oscDustDensity.get());
 }
 
 bool scPolyComb::insWanted(int i) const {
@@ -666,6 +675,7 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             }
             sendVec(s, "combtranspose", combTranspose.get());
             sendVec(s, "combdetune", combDetune.get());
+            s->set("combglide", combGlide.get());
             s->set("combvibrate", combVibRate.get());
             s->set("combvibrand", combVibRand.get());
             s->set("combvibamt", combVibAmt.get());
@@ -844,7 +854,7 @@ void scPolyComb::ensureBuses(ofxSCServer* server, ServerState& st) {
     audio(st.gateBus, W); audio(st.envBus, W); audio(st.fmBus, W); audio(st.oscBus, W); audio(st.voiceBus, W);
     for(auto*& b : st.insBus) audio(b, W);
     audio(st.scratch, W);
-    control(st.noteBus, 2 * W);
+    control(st.noteBus, 3 * W);       // PCPitch: the note, before vibrato, before the glide
     control(st.visBlock, 3 * W + 1);
     if(st.modCreated && st.gateBus != oldGate) modulation.setGateBus(server, st.gateBus ? st.gateBus->index : 0);
 }
@@ -1127,6 +1137,10 @@ void scPolyComb::update(ofEventArgs&) {
         for(const auto& key : snaps.slotKeys()) { auto it = published.find(key); dropdowns.set(key, names, it == published.end() ? nullptr : it->second); }
     }
     sendEnvMode();      // Auto follows Gate's connections
+    if(!internalPitch() && pitchIn.channels() != pitchCableChannels){   // the cable's source changed its voices
+        pitchCableChannels = pitchIn.channels();
+        forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); });
+    }
     if(rebuildAt >= 0.0f && ofGetElapsedTimef() >= rebuildAt){
         rebuildAt = -1.0f;
         fadingIn = true;
@@ -1425,11 +1439,23 @@ std::vector<float> scPolyComb::panPositions() const {
     return p;
 }
 
+// The incoming pitches over the voices: as many as there are; the rest repeat
+// the last, or (Expand) the whole vector again, 12 semitones up each time.
+std::vector<float> scPolyComb::spreadPitch(const std::vector<float>& v) const {
+    const int nv = n();
+    if(v.empty()) return std::vector<float>(nv, 60.0f);
+    std::vector<float> out(nv);
+    const int k = (int)v.size();
+    for(int i = 0; i < nv; i++)
+        out[i] = i < k ? v[i] : expandPitch.get() ? v[i % k] + 12.0f * (i / k) : v.back();
+    return out;
+}
+// ... then scrambled over the voices
 std::vector<float> scPolyComb::processedPitch() const {
-    const auto& v = pitch.get();
-    if(!scramble.get() || v.size() <= 1 || scrambleOrder.empty()) return v;
+    const auto v = spreadPitch(pitch.get());
+    if(!scramble.get() || v.size() <= 1 || scrambleOrder.size() < v.size()) return v;
     std::vector<float> out(v.size());
-    for(size_t i = 0; i < v.size(); i++) out[i] = v[std::min((size_t)scrambleOrder[i % scrambleOrder.size()], v.size() - 1)];
+    for(size_t i = 0; i < v.size(); i++) out[i] = v[std::clamp(scrambleOrder[i], 0, (int)v.size() - 1)];
     return out;
 }
 
@@ -1541,7 +1567,7 @@ std::vector<float> scPolyComb::mapPitches(const MapParams& m) const {
 // Shared map means the same voice order and note choices, with only the
 // resonators' own coarse/fine pitch adjustment applied after that source.
 std::vector<float> scPolyComb::oscillatorPitches() const {
-    return internalPitch()?mapPitches(oscMap):expand(processedPitch(),n(),60.f);
+    return internalPitch()?mapPitches(oscMap):processedPitch();
 }
 std::vector<float> scPolyComb::resonatorPitches() const {
     if(combMapped())return mapPitches(combMap);
@@ -2086,10 +2112,14 @@ void scPolyComb::drawOscTab(float w) {
         ImGui::EndGroup();
         ImGui::PopID();
     }
-    const float half = (mixW - gapW()) * 0.5f;
-    ImGui::BeginGroup(); sliderVec(oscPw, "Pulse W", half, "%.2f"); ImGui::EndGroup();
+    const float third = (mixW - 2 * gapW()) / 3;
+    ImGui::BeginGroup(); sliderVec(oscPw, "Pulse W", third, "%.2f"); ImGui::EndGroup();
     ImGui::SameLine(0, gapW());
-    ImGui::BeginGroup(); sliderVec(oscSSDetune, "SS Detune", half, "%.2f"); ImGui::EndGroup();
+    ImGui::BeginGroup(); sliderVec(oscSSDetune, "SS Detune", third, "%.2f"); ImGui::EndGroup();
+    ImGui::SameLine(0, gapW());
+    ImGui::BeginGroup(); slider(oscDustDensity, "Dust Dens", third, "%+.1f oct");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Dust grains per second: the note's frequency, down this many octaves\n(0: as the note; -10: about a thousand times sparser)");
+    ImGui::EndGroup();
     nextCol();
     labelW = 80.0f;
     sectionHeader("FM", qw, &fmOn);
@@ -2657,6 +2687,11 @@ void scPolyComb::drawPitchTab(float w) {
     toggle(pitchExternal,"Incoming pitches");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("On: use the incoming Pitch values directly. Off: expand a scale with the maps below.");
     ImGui::SameLine(0,12*z);
+    if(!pitchExternal.get())ImGui::BeginDisabled();
+    toggle(expandPitch,"Expand pitches");
+    if(!pitchExternal.get())ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("More voices than incoming pitches: repeat the pitches, 12 semitones higher each time.\nOff: the extra voices take the last pitch. Also for an audio-rate Pitch cable.");
+    ImGui::SameLine(0,12*z);
     toggle(scramble,"Scramble pitches");
     ImGui::SameLine(0,12*z);
     labelW=72;
@@ -2844,7 +2879,7 @@ void scPolyComb::drawMapColumn(MapParams& edits,const char* id,float w,bool comb
     combo(m.quantize,"Note snap",tuning);
     if(disableMap||(!user&&!tones))ImGui::EndDisabled();
     ImGui::Spacing();
-    if(!comb)slider(glide,"Glide",tuning,"%.3f s",true);
+    slider(comb?combGlide:glide,"Glide",tuning,"%.3f s",true);
     // These sound controls stay editable for incoming pitches and inherited maps.
     sliderVec(comb?combDetune:detune,"Detune",tuning,"%.2f st");
     if(ImGui::IsItemHovered())ImGui::SetTooltip("A random offset per voice, up to this many semitones");

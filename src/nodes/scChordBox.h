@@ -255,6 +255,9 @@ public:
         st.outputBuses[index] = bus;
         sendOutputBus(st, index);
     }
+    int getOutputNumChannels(int index) override {
+        return index >= 0 && index < (int)engine.outputs.size() ? std::max(1, engine.outputs[index].outputSize) : -1;
+    }
     int getOutputBusIndex(ofxSCServer* server, int index) override {
         auto it = servers.find(server);
         if(it == servers.end()) return -1;

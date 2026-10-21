@@ -62,6 +62,8 @@ struct scAudioParam {
         return it == buses.end() ? -1 : it->second;
     }
     bool cabled() const { return port->getNodeRef() != nullptr; }
+    // the cable's channels that carry values (-1: no cable, or the source does not say)
+    int channels() const { return cabled() ? port->getNodeRef()->getOutputNumChannels(port->getIndex()) : -1; }
     // a (control) connection, or a cable
     bool connected() const { return cabled() || (handle && handle->hasInConnection()); }
 };

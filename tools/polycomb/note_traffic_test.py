@@ -59,8 +59,8 @@ struct scPolyComb {
     Param<float> glide{0},vibRate{5},vibRand{0},vibAmt{0};
     Param<float> subTranspose{-12},subFineTune{0},subVibRate{5},subVibAmt{0},subVibRand{0},subLevel{.25},master{.8},velSens{.5};
     Param<float> subA{.01},subD{.5},subS{1},subR{.5},subCA{-4},subCD{-4},subCR{-4};
-    Param<bool> subOn{true};Param<int> ringPitchSource{1};
-    struct Input{int cable=-1;int bus(ofxSCServer*){return cable;}} gateIn,pitchIn;
+    Param<bool> subOn{true},expandPitch{false};Param<int> ringPitchSource{1};
+    struct Input{int cable=-1,count=-1;int bus(ofxSCServer*){return cable;}int channels()const{return count;}} gateIn,pitchIn;
     struct Notes{int inEffectNow(){return 0;}}noteInputs;
     int oscMap=0,combMap=1,insSends=0;bool internal=false,mapped=false,drone=false;
     int n()const{return 3;}

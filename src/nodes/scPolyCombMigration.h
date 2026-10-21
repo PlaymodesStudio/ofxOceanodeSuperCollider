@@ -55,6 +55,16 @@ inline Json controls(Json c) {
     // The post filter used to share the pre-filter's model and had no tracking.
     if(!c.contains("Post_Filter_Model")) c["Post_Filter_Model"]=(int)scalar(c,"Filter_Model",0);
     if(!c.contains("Post_Key_Track")) c["Post_Key_Track"]=0.0f;
+    // The resonators used to follow the oscillators' glided note: they keep that glide.
+    if(!c.contains("Comb_Glide")){
+        auto flag=[&](const char* k,bool fallback){
+            if(!c.contains(k)) return fallback;
+            return c[k].is_boolean() ? c[k].get<bool>() : scalar(c,k,fallback?1.f:0.f)>.5f;
+        };
+        const bool internal=!flag("Pitch_External",true);
+        const bool follows=internal ? !flag("Comb_Map_On",false) : (int)scalar(c,"Comb_Mode",0)==0;
+        c["Comb_Glide"]=follows ? scalar(c,"Glide",0) : 0.0f;
+    }
     // Preserve the combined sub tuning when splitting legacy fractional offsets.
     if(c.contains("Sub_Transpose") || c.contains("Sub_Fine_Tune")){
         const float old=scalar(c,"Sub_Transpose",-12.f);

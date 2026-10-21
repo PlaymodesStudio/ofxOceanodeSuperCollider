@@ -15,7 +15,7 @@ struct ServerState{};
 struct scPolyComb{
  enum{IComb};bool own=false,internal=true;P<int>combMode;
  struct Map{P<float>transpose,offset;}combMap;
- P<float>combSatLevel,combTone,combVibRate,combVibRand,combVibAmt;P<std::vector<float>>combPitch,combTranspose,combDetune,combFeed,combMix;
+ P<float>combSatLevel,combTone,combGlide,combVibRate,combVibRand,combVibAmt;P<std::vector<float>>combPitch,combTranspose,combDetune,combFeed,combMix;
  Synth storage;bool combMapped(){return own;}bool internalPitch(){return internal;}
  std::vector<float>resonatorPitches(){return {48.137f,52.137f,55.137f};}
  int mod(ServerState&,int){return 0;}void sendVec(Synth*s,std::string key,const std::vector<float>&v){s->v[key]=v;}
@@ -25,8 +25,9 @@ BRANCH
 };
 int main(){
  scPolyComb n;n.combMode.value=1;n.combPitch.value={72};n.combMap.transpose.value=7;n.combMap.offset.value=.137f;
- n.combVibRate.value=6;n.combVibRand.value=.25f;n.combVibAmt.value=.5f;
+ n.combGlide.value=.75f;n.combVibRate.value=6;n.combVibRand.value=.25f;n.combVibAmt.value=.5f;
  n.send();assert(n.storage.v["combmode"][0]==0);
+ assert(n.storage.v["combglide"][0]==.75f); // the resonators' own glide
  assert(n.storage.v["combvibrate"][0]==6 && n.storage.v["combvibrand"][0]==.25f && n.storage.v["combvibamt"][0]==.5f);
  assert(std::abs(n.storage.v["combpitch"][0]-7.137f)<1e-5); // shared source bus + offsets
  n.own=true;n.send();assert(n.storage.v["combmode"][0]==1 && n.storage.v["combpitch"]==n.resonatorPitches());

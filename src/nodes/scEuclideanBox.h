@@ -317,6 +317,12 @@ public:
         st.outputBuses[index] = bus;
         if(st.synth) st.synth->set(busName(index), bus);
     }
+    // a track's Pitch: its notes (one per voice)
+    int getOutputNumChannels(int index) override {
+        if(index < 1 || (index - 1) % OUTPUTS_PER_TRACK != 2) return -1;
+        const int t = (index - 1) / OUTPUTS_PER_TRACK;
+        return t < MAX_TRACKS ? std::max(1, (int)notes[t].get().size()) : -1;
+    }
     int getOutputBusIndex(ofxSCServer* server, int index) override {
         auto it = servers.find(server);
         if(it == servers.end()) return -1;

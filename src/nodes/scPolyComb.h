@@ -205,6 +205,7 @@ private:
     void requestRebuild();
     void rebuildOutput();
     std::vector<float> processedPitch() const;
+    std::vector<float> spreadPitch(const std::vector<float>& v) const;
     // ── Pitch & Harmony: the internal pitch maps (External off) ──────────────
     struct MapParams {
         ofParameter<int> scaleSelection, shape, mode, quantize, indexSymmetry, indexSeed, indexCycleShift, version;
@@ -278,9 +279,12 @@ private:
     ofJson tremDefaults = ofJson::object();
     ofParameter<std::vector<float>> transpose, detune;
     ofParameter<bool> scramble;
+    ofParameter<bool> expandPitch;        // more voices than pitches: repeat them an octave higher each time (off: the last repeats)
+    int pitchCableChannels = -1;          // the audio Pitch cable's values (sent to PCPitch as \pitch_k)
     // ── Oscillators and FM ───────────────────────────────────────────────────
     ofParameter<std::vector<float>> oscSaw, oscTri, oscPulse, oscPw, oscSine, oscSSaw, oscSSDetune,
                                     oscWhite, oscPink, oscDust, oscImpulse, oscAmp;
+    ofParameter<float> oscDustDensity;    // octaves (0 .. -10) below the note: the dust's grain rate
     ofParameter<std::vector<float>> fmAmt, fmRatio;
     ofParameter<float> fmFb;
     ofParameter<bool> fmSnap;
@@ -302,7 +306,7 @@ private:
     ofParameter<std::vector<float>> combPitch, combTranspose, combDetune, combFeed, combMix, ringPitch, ringTranspose, ringDetune,
                                     ringMix, drive, shaperMix;
     ofParameter<float> combTone;
-    ofParameter<float> combVibRate, combVibRand, combVibAmt;
+    ofParameter<float> combGlide, combVibRate, combVibRand, combVibAmt;
     // parts switched on / off (the oscillators: by their level)
     ofParameter<bool> fmOn, filterOn, combOn, ringOn, postOn, shaperOn;
     // ── Modulation: LFOs, envelopes, external sources, the matrix ──────────

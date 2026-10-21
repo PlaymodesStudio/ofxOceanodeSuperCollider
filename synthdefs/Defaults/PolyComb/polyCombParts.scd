@@ -40,13 +40,25 @@ filter = { |sig, type, note, res|
 
     // The note: glide, transpose, a random detune per voice, vibrato (a rate per voice), modulation
     SynthDef(("PCPitch" ++ n).asSymbol, {
-        var p = Select.kr(\pitch_sel.kr(0) > 0.5, [kv.(\pitch, 60), A2K.kr(\pitch_ar.ar(60 ! n))]);   // or an audio cable
+        // or an audio cable: its \pitch_k values (<= 0: as many as the voices) over the voices,
+        // the rest the last one, or (\pitch_expand) them all again 12 semitones up each time
+        var cable = A2K.kr(\pitch_ar.ar(60 ! n)).asArray;
+        var k = \pitch_k.kr(-1);
+        var kk = Select.kr(k < 1, [k.min(n), n]);
+        var ex = \pitch_expand.kr(0) > 0.5;
+        var spread = n.collect { |i|
+            var idx = Select.kr(ex, [i.min(kk - 1), i.mod(kk)]);
+            Select.kr(idx, cable) + (ex * (i / kk).floor * 12)
+        };
+        var p = Select.kr(\pitch_sel.kr(0) > 0.5, [kv.(\pitch, 60), spread]);
         // A short minimum lag removes GUI/map stepping; longer musical glide still applies.
-        var b = Lag.kr(p, \glide.kr(0).max(0.02)) + Lag.kr(kv.(\transpose, 0), 0.02) + (({ Rand(-1, 1) } ! n) * kv.(\detune, 0));
+        var d = Lag.kr(kv.(\transpose, 0), 0.02) + (({ Rand(-1, 1) } ! n) * kv.(\detune, 0));
+        var b = Lag.kr(p, \glide.kr(0).max(0.02)) + d;
         // each voice its own vibrato rate: Rate * (1 ± a random part up to \vibrand)
         var rate = \vibrate.kr(5) * (1 + (({ Rand(-1, 1) } ! n) * \vibrand.kr(0).clip(0, 1)));
         var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * \vibamt.kr(0);
-        Out.kr(\out.kr(0), (b + v + modIn.(\mpitch)) ++ b);
+        // the note, the note before vibrato / modulation, and that before the glide (the resonators glide on their own)
+        Out.kr(\out.kr(0), (b + v + modIn.(\mpitch)) ++ b ++ (p + d));
     }).writeDefFile(dir);
 
     // FM: a sine modulator (with feedback) at a ratio of the note -> Hz to add
@@ -80,8 +92,9 @@ filter = { |sig, type, note, res|
                 LFSaw.ar(f + (d * k), { Rand(0, 2) } ! n) }.sum * (1 / 7), fr) }],
         [\White, { |f, fr| WhiteNoise.ar(1 ! n) }],
         [\Pink,  { |f, fr| PinkNoise.ar(1 ! n) }],
-        // Dust: a short burst per grain (a single-sample click had almost no energy), ±
-        [\Dust,  { |f, fr| Decay2.ar(Dust2.ar(fr.clip(0.1, 10000)), 0.0002, 0.004) * 3 }],
+        // Dust: a short burst per grain (a single-sample click had almost no energy), ±;
+        // \dustoct: the grain rate this many octaves below the note (0 .. -10)
+        [\Dust,  { |f, fr| Decay2.ar(Dust2.ar((fr * (2 ** \dustoct.kr(0, 0.03).clip(-10, 0))).clip(0.001, 10000)), 0.0002, 0.004) * 3 }],
         [\Imp,   { |f, fr| Impulse.ar(f) }],
     ].do { |o|
         SynthDef(("PCOsc" ++ o[0] ++ n).asSymbol, {

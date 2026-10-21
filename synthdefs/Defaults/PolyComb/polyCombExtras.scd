@@ -82,15 +82,16 @@ File.mkdir(root); File.mkdir(dir);
 // PCCombR<N>: the original PolyComb's comb (ReaktorComb, OceanodeAnalog): the
 // same note as PCComb (follows the note or fixed, + transpose, detune, \mcpitch),
 // feedback up to 1.2 (the loop's saturator at \satlevel dB holds it), mix inside
-// (dry / delayed, then the output saturator). \on: dry.
+// (dry / delayed, then the output saturator). \on: dry. It follows the note
+// before PCPitch's glide (\note + 2n) and glides on its own (\combglide s).
 (1..32).do { |n|
     var kv = { |name, def| NamedControl.kr(name, def ! n) };
     var modIn = { |name| In.kr(NamedControl.kr(name, 0), n) };
-    var base = { In.kr(\note.kr(0) + n, n) };
+    var raw = { In.kr(\note.kr(0) + (2 * n), n) };
     SynthDef(("PCCombR" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
-        // Smooth pitch targets at audio rate so delay retuning has no GUI/control-block steps.
-        var cnote = Lag.ar(K2A.ar(kv.(\combpitch, 0) + kv.(\combtranspose, 0) + (base.() * (1 - (\combmode.kr(0) > 0.5)))), 0.02) +
+        // Smooth pitch targets at audio rate so delay retuning has no GUI/control-block steps; the glide on top.
+        var cnote = Lag.ar(K2A.ar(kv.(\combpitch, 0) + kv.(\combtranspose, 0) + (raw.() * (1 - (\combmode.kr(0) > 0.5)))), \combglide.kr(0).max(0.02)) +
             K2A.ar((({ Rand(-1, 1) } ! n) * kv.(\combdetune, 0)) + modIn.(\mcpitch));
         var rate = \combvibrate.kr(5, 0.03) * (1 + (({ Rand(-1, 1) } ! n) * \combvibrand.kr(0, 0.03).clip(0, 1)));
         var vibrato = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * \combvibamt.kr(0, 0.03);
