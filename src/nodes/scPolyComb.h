@@ -18,7 +18,8 @@
 //    offsets from an indexer, as the original PolyComb), envelopes, velocity,
 //    a random value per note, external inputs and the voice index, routed to
 //    14 targets by a matrix (Routing tab).
-//  • Effects after the voices: MixerPro's EQ, echo and SpaceMaster reverb
+//  • Effects after the voices: MixerPro's EQ, Blur's allpass diffusion smear
+//    (PCBlur<N>), echo and SpaceMaster reverb
 //    (mixerProEQ<N>, mixerProEcho<N>, mixerProRvb<N>), each created the first
 //    time it is switched on and paused once its tail is over.
 //
@@ -68,7 +69,7 @@ public:
     // the node's own source after the shared ones (a matrix row of its own)
     static constexpr int SRC_DELTA = scModulation::NUM_SOURCES, ALL_SOURCES = SRC_DELTA + 1;
     static constexpr int NUM_TARGETS = 14;
-    enum Stage { StComp, StEq, StEcho, StRvb, NumStages };
+    enum Stage { StComp, StEq, StBlur, StEcho, StRvb, NumStages };
 
     explicit scPolyComb(std::vector<serverManager*> servers);
     ~scPolyComb();
@@ -109,7 +110,7 @@ private:
     static constexpr int VIS_SUB = 2 * W + 1;
     static constexpr int ZERO_TARGET = NUM_TARGETS;    // a modulation bus nobody writes
     enum Slot { SlGate, SlSrc, SlRoute, SlPitch, SlFm, SlOsc, SlFilter, SlComb, SlRing, SlPost, SlShaper,
-                SlAmp, SlSub, SlSpread, SlComp, SlEq, SlEcho, SlRvb, NumSlots };
+                SlAmp, SlSub, SlSpread, SlComp, SlEq, SlBlur, SlEcho, SlRvb, NumSlots };
     enum Osc { OSaw, OTri, OPulse, OSine, OSSaw, OWhite, OPink, ODust, OImp, NumOsc };
     enum Ins { IFilter, IComb, IRing, IPost, IShaper, NumIns };
     struct Part { ofxSCSynth* synth = nullptr; bool running = false; float offAt = -1.0f; std::string definition; };
@@ -316,6 +317,7 @@ private:
     ofParameter<float> compThreshold, compRatio, compKnee, compAttack, compRelease,
                        compMakeup, compRms, compHpf, compMix;
     ofJson compDefaults = ofJson::object();
+    ofJson blurDefaults = ofJson::object();   // presets / snapshots from before Blur: off
     ofJson subDefaults = ofJson::object();
     ofParameter<bool> subOn;
     ofParameter<float> subLevel, subTranspose, subFineTune, subVibRate, subVibAmt, subVibRand, subA, subD, subS, subR, subCA, subCD, subCR;
@@ -329,6 +331,8 @@ private:
     // highpass (Hz) in the loop, the lines' L / R time spread
     ofParameter<int> echoModel;
     ofParameter<float> echoHi, echoLo, echoRes, echoSpread;
+    ofParameter<bool> blurOn;
+    ofParameter<float> blurTime, blurAmount, blurDensity, blurSpread, blurLowCut, blurHighCut, blurMix;
     ofParameter<bool> rvbOn;
     ofParameter<float> rvbMix, rvbDecay, rvbSize, rvbPredelay, rvbLate, rvbSpread, rvbLowpass,
                        rvbHiDamp, rvbLoDamp, rvbModRate, rvbSpin, rvbWander;

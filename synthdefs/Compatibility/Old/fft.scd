@@ -14,18 +14,6 @@
 
 d = thisProcess.nowExecutingPath.dirname;
 
-( SynthDef(\fftblur, {
-	arg in, out=0;
-	var sig, chain;
-	var blur=\blur.kr(0!13); //range 0 to 1
-	sig = In.ar(in, 13);
-	chain = FFT(LocalBuf(1024.dup(13), 1), sig);
-	chain = PV_MagSmooth(chain, blur);
-	sig = IFFT(chain);
-	Out.ar(out, sig);
-}).writeDefFile(d);
-)
-
 ( SynthDef(\brickwallfilter, {
 	arg in, out=0;
 	var sig, chain;

@@ -387,6 +387,18 @@ void scPolyComb::setup() {
     dropdowns.set(postType.getEscapedName(), kFilterTypes);
     dropdowns.set(combMode.getEscapedName(), {"Follows the note", "Fixed note"});
     dropdowns.set(echoFilter.getEscapedName(), {"LowPass", "HighPass", "BandPass", "PeakEQ"});
+    // Blur (Effect/Time/Delay/Blur.scd): an eight-stage allpass diffuser, no feedback
+    blurOn.set("Blur On", false);             reg(blurOn, toStages);
+    blurTime.set("Blur Time", 8.0f, 0.1f, 100.0f);
+    blurAmount.set("Blur Amount", 0.75f, 0.0f, 1.0f);
+    blurDensity.set("Blur Density", 0.55f, 0.0f, 1.0f);
+    blurSpread.set("Blur Spread", 1.0f, 0.0f, 1.0f);
+    blurLowCut.set("Blur Low Cut", 20.0f, 20.0f, 20000.0f);
+    blurHighCut.set("Blur High Cut", 20000.0f, 20.0f, 20000.0f);
+    blurMix.set("Blur Mix", 0.5f, 0.0f, 1.0f);
+    for(auto* p : {&blurTime, &blurAmount, &blurDensity, &blurSpread, &blurLowCut, &blurHighCut, &blurMix})
+        reg(*p, [this]() { sendStageAll(StBlur); });
+    for(const auto& c : controls) if(c.key.rfind("Blur_", 0)==0) blurDefaults[c.key]=c.save();
     rvbOn.set("Reverb On", false);            reg(rvbOn, toStages);
     rvbMix.set("Reverb Mix", 0.3f, 0.0f, 1.0f);
     rvbDecay.set("Reverb Decay", 3.0f, 0.05f, 30.0f);
@@ -1193,11 +1205,11 @@ void scPolyComb::update(ofEventArgs&) {
 }
 
 bool scPolyComb::stageOn(int s) const {
-    return s == StComp ? compOn.get() : s == StEq ? eqOn.get() : s == StEcho ? echoOn.get() : rvbOn.get();
+    return s == StComp ? compOn.get() : s == StEq ? eqOn.get() : s == StBlur ? blurOn.get() : s == StEcho ? echoOn.get() : rvbOn.get();
 }
 
 std::string scPolyComb::stageDef(int s) const {
-    static const char* names[NumStages] = {"mixerProComp", "mixerProEQ", "mixerProEcho", "mixerProRvb"};
+    static const char* names[NumStages] = {"mixerProComp", "mixerProEQ", "PCBlur", "mixerProEcho", "mixerProRvb"};
     if(s == StEcho && echoModel.get() == 1) return "PCEchoR" + ofToString(outChannels.get());
     return names[s] + ofToString(outChannels.get());
 }
@@ -1210,6 +1222,11 @@ float scPolyComb::echoDelaySec() const {
 float scPolyComb::stageTail(int s) const {
     if(s == StEq) return 0.0f;
     if(s == StComp) return 0.04f;
+    if(s == StBlur){
+        // the eight allpass tails one after another (stage delays x their decay)
+        const float g = ofLerp(0.25f, 0.72f, ofClamp(blurDensity.get(), 0.0f, 1.0f));
+        return std::min(30.0f, blurTime.get() * 0.001f * 13.43f * std::log(0.001f) / std::log(g) + 0.1f);
+    }
     if(s == StEcho){
         const float feed = ofClamp(echoFeed.get(), 0.0f, 0.98f);
         const float repeats = feed > 0.001f ? std::log(0.001f) / std::log(feed) : 0.0f;
@@ -1239,6 +1256,11 @@ void scPolyComb::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
             if(scEQEditor::isShelf(b)) controls.set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get()));
             else controls.set(k + "rq", 1.0f / std::max(0.01f, eqShape[b].get()));
         }
+    }else if(s == StBlur){
+        controls.set("time", blurTime.get()); controls.set("blur", blurAmount.get());
+        controls.set("density", blurDensity.get()); controls.set("spread", blurSpread.get());
+        controls.set("hipass", blurLowCut.get()); controls.set("lowpass", blurHighCut.get());
+        controls.set("mix", blurMix.get()); controls.set("on", on);
     }else if(s == StEcho && echoModel.get() == 1){
         controls.set("delay", echoDelaySec());
         controls.set("spread", echoSpread.get());
@@ -1313,6 +1335,7 @@ void scPolyComb::presetRecallAfterSettingParameters(ofJson& j) {
     combSatLevel.setWithoutEventNotifications(12.0f);
     restoring=true;
     for(const auto& c : controls) if(compDefaults.contains(c.key)) c.load(compDefaults[c.key]);
+    for(const auto& c : controls) if(blurDefaults.contains(c.key)) c.load(blurDefaults[c.key]);
     for(const auto& c : controls) if(subDefaults.contains(c.key)) c.load(subDefaults[c.key]);
     for(const auto& c : controls) if(tremDefaults.contains(c.key)) c.load(tremDefaults[c.key]);
     for(const auto& c : controls) if(pitchDefaults.contains(c.key)) c.load(pitchDefaults[c.key]);
@@ -2375,7 +2398,7 @@ void scPolyComb::drawResonatorTab(float w) {
 
 void scPolyComb::drawFxTab(float w) {
     const float z = zoom();
-    const float cw = colW(w, 4);
+    const float cw = colW(w, 5);
     ImGui::BeginGroup();
     // EQ: one column
     sectionHeader("EQ", cw, &eqOn);
@@ -2412,6 +2435,20 @@ void scPolyComb::drawFxTab(float w) {
     }
     if(!eqOn.get()) ImGui::EndDisabled();
     ImGui::TextColored(ImColor(pal::textDim), "Drag the bands;\nright-click one for values.");
+    nextCol();
+    sectionHeader("Blur", cw, &blurOn);
+    if(!blurOn.get()) ImGui::BeginDisabled();
+    slider(blurAmount, "Amount", cw, "%.2f");
+    slider(blurTime, "Time", cw, "%.1f ms", true);
+    slider(blurDensity, "Density", cw, "%.2f");
+    slider(blurSpread, "Spread", cw, "%.2f");
+    slider(blurLowCut, "Low Cut", cw, "%.0f Hz", true);
+    slider(blurHighCut, "High Cut", cw, "%.0f Hz", true);
+    slider(blurMix, "Mix", cw, "%.2f");
+    if(!blurOn.get()) ImGui::EndDisabled();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
+    ImGui::TextColored(ImColor(pal::textDim), "Smears attacks through eight allpasses: Amount = how many, Time = the shortest, Density = their tails. No echo, no feedback.");
+    ImGui::PopTextWrapPos();
     nextCol();
     sectionHeader("Echo", cw, &echoOn);
     if(!echoOn.get()) ImGui::BeginDisabled();
@@ -2488,7 +2525,7 @@ void scPolyComb::drawFxTab(float w) {
     ImGui::EndGroup();
     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
     drawCompPanel(w);
-    ImGui::TextColored(ImColor(pal::textDim), "Voices -> Compressor -> EQ -> Echo -> Reverb");
+    ImGui::TextColored(ImColor(pal::textDim), "Voices -> Compressor -> EQ -> Blur -> Echo -> Reverb");
 }
 
 // MixerPro's transfer curve, reduction meter and compressor controls.
@@ -3042,10 +3079,10 @@ void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t, bool sw) 
         const std::string& k = control.key;
         if(snapExcluded(k) || drivenByConnection(k)) continue;
         const bool ha = ca.contains(k), hb = cb.contains(k);
-        const bool option = k==combSaturation.getEscapedName() || k==combSatLevel.getEscapedName() || compDefaults.contains(k) || subDefaults.contains(k)
+        const bool option = k==combSaturation.getEscapedName() || k==combSatLevel.getEscapedName() || compDefaults.contains(k) || blurDefaults.contains(k) || subDefaults.contains(k)
                          || pitchDefaults.contains(k) || deltaDefaults.contains(k) || tremDefaults.contains(k);
         if(option){
-            const ofJson fallback=subDefaults.contains(k) ? subDefaults[k] : compDefaults.contains(k) ? compDefaults[k] : pitchDefaults.contains(k) ? pitchDefaults[k]
+            const ofJson fallback=subDefaults.contains(k) ? subDefaults[k] : compDefaults.contains(k) ? compDefaults[k] : blurDefaults.contains(k) ? blurDefaults[k] : pitchDefaults.contains(k) ? pitchDefaults[k]
                                 : deltaDefaults.contains(k) ? deltaDefaults[k] : tremDefaults.contains(k) ? tremDefaults[k] : k==combSatLevel.getEscapedName() ? ofJson(12.0f) : ofJson(false);
             auto v=blendJson(k,ha?ca[k]:fallback,hb?cb[k]:fallback,t,sw);
             if(v!=control.save()) control.load(v);

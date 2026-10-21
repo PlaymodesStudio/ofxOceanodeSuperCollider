@@ -14,3 +14,9 @@ RHPF4
 # Not used by any node
 polyComb
 RhythmBoxTrack
+
+# Blur cleanup 2026-10-21: no preset used them; Blur (Effect/Time/Delay),
+# FrequencyBlur and EchoBlur stay. (fftblur and blur, old-format, had no
+# metadata: their sources are gone, installed builds were moved by hand.)
+PV_Blur
+TimeBlur

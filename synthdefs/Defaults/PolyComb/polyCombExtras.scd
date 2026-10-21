@@ -9,6 +9,12 @@
 //                    \window ms, |x - x(window ago)|, smoothed by a one-pole
 //                    lowpass at 1000 / \window Hz, x \gain / 4 -> \out
 //                    (control, N): a modulation source, 0 and up.
+//   PCBlur<C>        Blur (Effect/Time/Delay/Blur.scd) as an insert: per
+//                    channel an eight-stage allpass diffuser (stage delays
+//                    \time ms x 1 .. 2.24, coefficient from \density), \blur
+//                    sliding the wet tap from the input through the stages,
+//                    \spread a fixed time offset per channel, \hipass /
+//                    \lowpass on the wet, equal-power \mix. \on: dry.
 (
 var root, dir;
 root = if(thisProcess.nowExecutingPath.notNil,
@@ -137,6 +143,36 @@ File.mkdir(root); File.mkdir(dir);
         var m = (((SinOsc.ar(freq) + 1) * 0.5).max(1.0e-9) ** k * 2) - 1;
         var a = (kv.(\ringmix, 1) + modIn.(\mrmix)).clip(0, 1);
         Out.ar(\out.kr(0), LinXFade2.ar(sig, sig * ((1 - a) + (a * m)), \on.kr(1, 0.03) * 2 - 1));
+    }).writeDefFile(dir);
+};
+// PCBlur<C>: Blur's diffusion smear (Effect/Time/Delay/Blur.scd, the same
+// network and ranges) as PolyComb's insert. No feedback loop and no echo:
+// each allpass has its own tail, so attacks spread out in time.
+(1..16).do { |c|
+    SynthDef(("PCBlur" ++ c).asSymbol, {
+        var maxStageDelay = 0.35;
+        var stageRatios = [1.0, 1.12246205, 1.25992105, 1.41421356, 1.58740105, 1.78179744, 2.0, 2.24492410];
+        var dry = In.ar(\in.kr(0), c).asArray;
+        var time = \time.kr(8, 1/30).clip(0.1, 100);
+        var blur = \blur.kr(0.75, 1/30).clip(0, 1);
+        var coef = \density.kr(0.55, 1/30).clip(0, 1).linlin(0, 1, 0.25, 0.72);
+        var spread = \spread.kr(1, 1/30).clip(0, 1);
+        var hp = \hipass.kr(20, 1/30).clip(20, SampleRate.ir * 0.45);
+        var lp = \lowpass.kr(20000, 1/30).clip(20, SampleRate.ir * 0.45).max(hp + 1);
+        var mix = \mix.kr(0.5, 1/30).clip(0, 1) * \on.kr(1, 0.03);
+        var out = c.collect { |i|
+            var offset = if(c == 1) { 0 } { ((((i * 7) % 17) - 8) * 0.08) * spread };
+            var base = (time * 0.001 * 2.pow(offset / 12)).clip(SampleDur.ir, maxStageDelay / stageRatios.last);
+            var sig = dry[i], taps = [sig], wet;
+            stageRatios.do { |ratio|
+                var delay = (base * ratio).clip(SampleDur.ir, maxStageDelay);
+                sig = AllpassC.ar(sig, maxStageDelay, delay, delay * (0.001.log / coef.clip(0.0001, 0.9999).log) * -1);
+                taps = taps.add(sig);
+            };
+            wet = LPF.ar(HPF.ar(SelectX.ar(blur * (taps.size - 1), taps), hp), lp);
+            (dry[i] * (1 - mix).sqrt) + (wet * mix.sqrt)
+        };
+        Out.ar(\out.kr(0), out);
     }).writeDefFile(dir);
 };
 "PolyComb extras written to ".post; dir.postln;
