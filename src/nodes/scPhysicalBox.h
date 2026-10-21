@@ -79,6 +79,8 @@ private:
         std::array<Fx, NumStages> fx{};
         ofxSCSynth* gate = nullptr;
         ofxSCSynth* spread = nullptr;
+        ofxSCSynth* pulse = nullptr;    // Gate Mode Pulse: the automatic gates
+        ofxSCBus* pulseBus = nullptr;   // its 16 gate levels, ModGate's gate_ar
         std::array<ofxSCSynth*, 16> voices{};
         std::array<std::map<std::string, float>, 16> sent;   // per voice: only changes are sent
         ofxSCBus* gates = nullptr;
@@ -91,7 +93,8 @@ private:
     };
     static constexpr int VIS_VOICE = 4;                // per voice: level, gate, note, -
     static constexpr int VIS_PAN = 16 * VIS_VOICE;     // the spreader's 16 positions
-    static constexpr int VIS_SIZE = VIS_PAN + 16;
+    static constexpr int VIS_PULSE = VIS_PAN + 16;     // per voice: event count, last length, last velocity
+    static constexpr int VIS_SIZE = VIS_PULSE + 48;
 
     // effects
     ofParameter<bool> eqOn;
@@ -107,6 +110,26 @@ private:
     ofParameter<float> satDrive, satBias, satTone, satOutput, satMix;
     ofParameter<bool> spaceOn, spaceFreeze;
     ofParameter<float> spaceMix, spaceTime, spaceDamp, spaceDiff, spaceLowCut;
+
+    // Pulse: the automatic gates (PhysicalBoxPulse), periodic .. Geiger
+    ofParameter<bool> pulseSync, pulseFixed, pulseFollow;
+    ofParameter<float> pulseRate, pulseBeats, pulseChaos, pulseCluster, pulseChance, pulseLink, pulsePhasing,
+                       pulseStrum, pulseLength, pulseTime, pulseJitter, pulseVelocity, pulseVelJitter;
+    ofParameter<int> pulseSeed;
+    bool pulseRestart = false;
+    struct PulseEvent { float t, dur, vel; };
+    std::array<std::vector<PulseEvent>, 16> pulseEvents;   // the raster: the last seconds, read back from the server
+    std::array<float, 16> pulseCounts{};
+    float pulseReadAt = 0;
+    bool pulsing() const { return gateMode.get() == 3; }
+    float pulseHz() const;
+    void sendPulse(ofxSCServer*, State&);
+    void startPulse(ofxSCServer*, State&);
+    void stopPulse(State&);
+    void readPulse();
+    void pulseShape(int);
+    void drawPulse(float);
+    void drawPulseRaster(ImVec2, ImVec2);
 
     float labelW = 70;
     void drawSoundTab(float);

@@ -87,6 +87,7 @@ scPhysicalBox::scPhysicalBox(std::vector<serverManager*> s) : scNode("physicalBo
                   "and a modal body (bar, glass, bell, plate, membrane), coupled, with rattle, tension and "
                   "cascade, heard by two pickups. Every voice is its own instrument, so LFOs and envelopes "
                   "can move each one separately. Gate is a level (the velocity); In feeds the Ext exciter. "
+                  "Gate Mode Pulse plays the voices by itself, from a clock to a Geiger counter, together or each its own. "
                   "Show opens the editor; right-click a control there to publish, modulate or add it to the timeline.";
 }
 scPhysicalBox::~scPhysicalBox() {
@@ -129,10 +130,31 @@ void scPhysicalBox::setup() {
     addParameter(resetLFOs.set("Reset"));
     addInput("In");
     addOutput("Out");
-    // Auto: a drone until Gate is connected, timelined or gets a note
-    gateMode.set("Gate Mode", 0, 0, 2);
+    // Auto: a drone until Gate is connected, timelined or gets a note; Pulse: the automatic gates
+    gateMode.set("Gate Mode", 0, 0, 3);
     reg(gateMode, [this](){ sendAll(); });
-    dropdowns.set(gateMode.getEscapedName(), {"Auto", "Gated", "Drone"});
+    dropdowns.set(gateMode.getEscapedName(), {"Auto", "Gated", "Drone", "Pulse"});
+    {
+        auto toPulse = [this]() { for(auto& [s, st] : states) sendPulse(s, st); };
+        pulseSync.set("Pulse Sync", false);                     reg(pulseSync, toPulse);
+        pulseRate.set("Pulse Rate", 4.0f, 0.05f, 200.0f);       reg(pulseRate, toPulse);
+        pulseBeats.set("Pulse Beats", 0.5f, 0.0625f, 16.0f);    reg(pulseBeats, toPulse);
+        pulseChaos.set("Pulse Chaos", 0.0f, 0.0f, 1.0f);        reg(pulseChaos, toPulse);
+        pulseCluster.set("Pulse Cluster", 0.0f, 0.0f, 1.0f);    reg(pulseCluster, toPulse);
+        pulseChance.set("Pulse Chance", 1.0f, 0.0f, 1.0f);      reg(pulseChance, toPulse);
+        pulseLink.set("Pulse Link", 1.0f, 0.0f, 1.0f);          reg(pulseLink, toPulse);
+        pulsePhasing.set("Pulse Phasing", 0.0f, 0.0f, 1.0f);    reg(pulsePhasing, toPulse);
+        pulseStrum.set("Pulse Strum", 0.0f, -80.0f, 80.0f);     reg(pulseStrum, toPulse);
+        pulseLength.set("Pulse Length", 0.5f, 0.01f, 2.0f);     reg(pulseLength, toPulse);
+        pulseFixed.set("Pulse Fixed Length", false);            reg(pulseFixed, toPulse);
+        pulseTime.set("Pulse Length Time", 0.1f, 0.001f, 8.0f); reg(pulseTime, toPulse);
+        pulseJitter.set("Pulse Length Jitter", 0.0f, 0.0f, 1.0f); reg(pulseJitter, toPulse);
+        pulseVelocity.set("Pulse Velocity", 0.8f, 0.0f, 1.0f);  reg(pulseVelocity, toPulse);
+        pulseVelJitter.set("Pulse Velocity Jitter", 0.0f, 0.0f, 1.0f); reg(pulseVelJitter, toPulse);
+        pulseFollow.set("Pulse Follow Gate", false);            reg(pulseFollow, [this](){ sendAll(); });
+        // a new seed starts the pattern again (0: a fresh one every start)
+        pulseSeed.set("Pulse Seed", 0, 0, 9999);                reg(pulseSeed, [this](){ pulseRestart = true; });
+    }
     scheduled.add(gateIn.handle, gate); scheduled.add(pitchIn.handle, pitch);
     scheduled.enable(this, [this](){ for(auto& [s, st] : states) if(st.created) return true; return false; });
     for(auto* p : {&gate, &pitch}) {
@@ -146,7 +168,7 @@ void scPhysicalBox::setup() {
     listeners.push(voices.newListener([this](int&) { structureDirty = true; }));
     listeners.push(channels.newListener([this](int&) { structureDirty = true; }));
     listeners.push(master.newListener([this](float&) { if(!restoring) sendAll(); }));
-    listeners.push(resetLFOs.newListener([this]() { mod.resetLfos(); }));
+    listeners.push(resetLFOs.newListener([this]() { mod.resetLfos(); pulseRestart = true; }));
 
     // ── Sound: the PhysicalVoice inputs (defaults: PhysicalModes.h) ─────────
     auto d = [](const char* sc) {
@@ -317,8 +339,10 @@ void scPhysicalBox::sendNotes(ofxSCServer* server, State& st) {
     if(!st.gate) return;
     auto now = scheduled.inEffectNow();   // not a scheduled send: the notes as they stand now
     const int n = st.builtVoices;
+    // Pulse: ModGate takes the generator's gates, Gate (Follow Gate) holds its voices
+    const bool pulse = st.pulse && st.pulseBus;
     std::vector<float> g(n), ones(n, 1.0f);
-    for(int i = 0; i < n; ++i) g[i] = first(gate.get(), i, 0);
+    for(int i = 0; i < n; ++i) g[i] = pulse ? 0.0f : first(gate.get(), i, 0);
     st.gate->set("gate", g);
     st.gate->set("velocity", ones);       // the gate's level is the velocity
     st.gate->set("out", st.gates->index);
@@ -327,8 +351,17 @@ void scPhysicalBox::sendNotes(ofxSCServer* server, State& st) {
     st.droneSent = droning() ? 1 : 0;
     st.gate->set("drone", float(st.droneSent));
     const int gbus = gateIn.bus(server);
-    st.gate->set("gate_sel", gbus >= 0 ? 1.0f : 0.0f);
-    if(gbus >= 0) st.gate->mapan("gate_ar", gbus, n);
+    st.gate->set("gate_sel", gbus >= 0 || pulse ? 1.0f : 0.0f);
+    if(pulse) st.gate->mapan("gate_ar", st.pulseBus->index, n);
+    else if(gbus >= 0) st.gate->mapan("gate_ar", gbus, n);
+    if(pulse) {
+        std::vector<float> held(16, 0.0f);
+        for(int i = 0; i < n; ++i) held[i] = first(gate.get(), i, 0);
+        st.pulse->set("enable", held);
+        st.pulse->set("free", pulseFollow.get() ? 0.0f : 1.0f);
+        st.pulse->set("enable_sel", gbus >= 0 ? 1.0f : 0.0f);
+        if(gbus >= 0) st.pulse->mapan("enable_ar", gbus, n);
+    }
     const int bus = pitchIn.bus(server);
     for(int i = 0; i < n; ++i) if(auto* v = st.voices[i]) {
         v->set("pitch", first(pitch.get(), i, 48));
@@ -376,7 +409,94 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
     }
     updateStages(server, st);
 }
-void scPhysicalBox::sendAll() { for(auto& [s, st] : states) { sendNotes(s, st); sendSound(s, st); } }
+void scPhysicalBox::sendAll() { for(auto& [s, st] : states) { sendNotes(s, st); sendSound(s, st); sendPulse(s, st); } }
+
+// ── Pulse: the automatic gates ───────────────────────────────────────────────
+float scPhysicalBox::pulseHz() const {
+    if(pulseSync.get()) return bpm / 60.0f / std::max(0.0625f, pulseBeats.get());
+    return std::max(0.01f, pulseRate.get());
+}
+void scPhysicalBox::sendPulse(ofxSCServer* server, State& st) {
+    if(!st.pulse) return;
+    scSynthControlBatch c(st.pulse, server);
+    c.set("voices", float(st.builtVoices));
+    c.set("rate", pulseHz());
+    c.set("chaos", pulseChaos.get()); c.set("cluster", pulseCluster.get());
+    c.set("chance", pulseChance.get()); c.set("link", pulseLink.get());
+    c.set("phasing", pulsePhasing.get()); c.set("strum", pulseStrum.get() * 0.001f);
+    c.set("length", pulseLength.get()); c.set("lengthsec", pulseTime.get());
+    c.set("fixed", pulseFixed.get() ? 1.0f : 0.0f); c.set("jitter", pulseJitter.get());
+    c.set("velocity", pulseVelocity.get()); c.set("veljitter", pulseVelJitter.get());
+    c.send();
+}
+// a new generator (Seed > 0: its pattern from the start) at the head of the gate
+// group, and a fresh ModGate after it: a level held from Oceanode gate values
+// played before would otherwise floor every pulse's velocity
+void scPhysicalBox::startPulse(ofxSCServer* server, State& st) {
+    if(!st.created || !st.groups[SlGate] || !liveBus(server, st.vis, false)) return;
+    if(!liveBus(server, st.pulseBus, true)) {
+        dropBus(server, st.pulseBus, true);
+        st.pulseBus = new ofxSCBus(RATE_AUDIO, 16, server);
+        if(!liveBus(server, st.pulseBus, true)) { st.pulseBus->free(); delete st.pulseBus; st.pulseBus = nullptr; return; }
+    }
+    stopPulse(st);
+    st.pulse = new ofxSCSynth("PhysicalBoxPulse", server);
+    st.pulse->set("seed", pulseSeed.get() > 0 ? pulseSeed.get() : int(ofRandom(1, 99999)));
+    st.pulse->set("out", st.pulseBus->index);
+    st.pulse->set("vis", st.vis->index + VIS_PULSE);
+    sendPulse(server, st);
+    st.pulse->createAndRun(0, st.groups[SlGate]->nodeID, true);
+    pulseCounts.fill(0);
+    for(auto& events : pulseEvents) events.clear();
+    if(st.gate) {
+        st.gate->free(); delete st.gate;
+        st.gate = new ofxSCSynth("ModGate" + ofToString(st.builtVoices), server);
+        sendNotes(server, st);
+        st.gate->createAndRun(1, st.groups[SlGate]->nodeID, true);
+    }
+}
+void scPhysicalBox::stopPulse(State& st) {
+    if(!st.pulse) return;
+    st.pulse->free(); delete st.pulse; st.pulse = nullptr;
+}
+// the characters: a starting point each (Rate stays the user's)
+void scPhysicalBox::pulseShape(int shape) {
+    struct Shape { float chaos, cluster, chance, link, phasing, strum, length, jitter, veljitter; };
+    static const Shape shapes[] = {
+        {0, 0, 1, 1, 0, 0, 0.5f, 0, 0},              // Clock
+        {0, 0, 1, 1, 0, 30, 0.8f, 0.1f, 0.25f},      // Strum
+        {0, 0, 1, 0, 0.03f, 0, 0.3f, 0, 0.1f},       // Phasing
+        {1, 0, 1, 0, 0, 0, 0.15f, 0.5f, 0.7f},       // Rain
+        {1, 0.6f, 1, 0, 0, 0, 0.05f, 0.3f, 0.3f},    // Geiger
+        {0.6f, 0.2f, 0.85f, 0.35f, 0.2f, 0, 0.4f, 0.6f, 0.5f},   // Swarm
+        {0.15f, 1, 1, 1, 0, 0, 0.3f, 0.2f, 0.35f},   // Bursts
+    };
+    const auto& x = shapes[std::clamp(shape, 0, int(std::size(shapes)) - 1)];
+    restoring = true;
+    pulseChaos = x.chaos; pulseCluster = x.cluster; pulseChance = x.chance; pulseLink = x.link;
+    pulsePhasing = x.phasing; pulseStrum = x.strum; pulseLength = x.length; pulseFixed = false;
+    pulseJitter = x.jitter; pulseVelJitter = x.veljitter;
+    restoring = false;
+    for(auto& [s, st] : states) sendPulse(s, st);
+}
+// the generator's event counts since the last read: new events into the raster
+void scPhysicalBox::readPulse() {
+    const float now = ofGetElapsedTimef(), window = 6.0f;
+    if(live.size() >= size_t(VIS_SIZE)) {
+        const float since = std::clamp(now - pulseReadAt, 0.0f, 0.25f);
+        for(int v = 0; v < 16; ++v) {
+            const float count = live[VIS_PULSE + v];
+            if(count < pulseCounts[v]) pulseCounts[v] = count;      // a new generator
+            const int fresh = std::min(16, int(count - pulseCounts[v]));
+            pulseCounts[v] = count;
+            for(int k = 0; k < fresh; ++k)
+                pulseEvents[v].push_back({now - since * (1 - float(k + 1) / fresh), live[VIS_PULSE + 16 + v], live[VIS_PULSE + 32 + v]});
+        }
+    }
+    pulseReadAt = now;
+    for(auto& events : pulseEvents)
+        events.erase(events.begin(), std::find_if(events.begin(), events.end(), [&](const PulseEvent& e){ return e.t + e.dur > now - window; }));
+}
 
 void scPhysicalBox::buildSynth(ofxSCServer* server) {
     if(!server) return;
@@ -396,6 +516,7 @@ void scPhysicalBox::createSynth(ofxSCServer* server) {
     }
     st.builtVoices = voices.get(); st.builtChannels = channels.get(); st.created = true;
     mod.create(server, st.groups[SlSrc]->nodeID, st.groups[SlRoute]->nodeID, st.gates->index);
+    if(pulsing()) startPulse(server, st);
     st.gate = new ofxSCSynth("ModGate" + ofToString(st.builtVoices), server);
     for(int i = 0; i < st.builtVoices; ++i) st.voices[i] = new ofxSCSynth("PhysicalBoxVoice", server);
     st.spread = new ofxSCSynth("PhysicalBoxSpread" + ofToString(st.builtChannels), server);
@@ -411,6 +532,7 @@ void scPhysicalBox::release(ofxSCServer* server, State& st) {
     if(st.created) mod.free(server, false);
     for(auto& f : st.fx) { delete f.synth; f.synth = nullptr; dropBus(server, f.in, true); f.running = false; f.offAt = -1; }
     delete st.gate; st.gate = nullptr; delete st.spread; st.spread = nullptr;
+    delete st.pulse; st.pulse = nullptr; dropBus(server, st.pulseBus, true);
     for(auto*& v : st.voices) { delete v; v = nullptr; }
     for(auto& cache : st.sent) cache.clear();
     for(auto*& g : st.groups) { delete g; g = nullptr; }
@@ -704,6 +826,13 @@ void scPhysicalBox::update(ofEventArgs&) {
     }
     if(structureDirty) rebuild();
     for(auto& [server, st] : states) if(st.created && st.droneSent != (droning() ? 1 : 0)) sendNotes(server, st);
+    // Pulse on / off / again (a new Seed, Reset)
+    for(auto& [server, st] : states) if(st.created) {
+        const bool want = pulsing();
+        if(want && (!st.pulse || pulseRestart)) startPulse(server, st);
+        else if(!want && st.pulse) { stopPulse(st); sendNotes(server, st); }
+    }
+    pulseRestart = false;
     mod.showing = show.get(); mod.update();
     const float now = ofGetElapsedTimef();
     for(auto& [server, st] : states) if(st.created) {
@@ -715,11 +844,13 @@ void scPhysicalBox::update(ofEventArgs&) {
     if(!show.get()) return;
     for(auto& [s, st] : states) if(st.created && liveBus(s, st.vis, false)) {
         live = st.vis->readValues;
-        if(now >= nextRead) { nextRead = now + 1.0f / 25; s->requestControlValues(st.vis->index, VIS_SIZE); }
+        if(now >= nextRead) { nextRead = now + 1.0f / (pulsing() ? 60 : 25); s->requestControlValues(st.vis->index, VIS_SIZE); }
         break;
     }
+    if(pulsing()) readPulse();
 }
 bool scPhysicalBox::droning() const {
+    if(pulsing()) return false;
     if(gateMode.get() == 2) return true;
     if(gateMode.get() == 1) return false;
     return !(gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined()));
@@ -744,6 +875,7 @@ void scPhysicalBox::drawWindow() {
     drawHeader();
     snaps.drawBar(w);
     drawDisplay(w);
+    if(pulsing()) drawPulse(w);
     ImGui::Spacing();
     if(ImGui::BeginTabBar("##physTabs")) {
         auto tab = [&](const char* name, std::function<void(float)> body) {
@@ -780,15 +912,17 @@ void scPhysicalBox::drawHeader() {
     ImGui::BeginGroup(); slider(master, "Master", 170 * z, "%.2f"); ImGui::EndGroup();
     next(190 * z); labelW = 64;
     ImGui::BeginGroup(); combo(gateMode, "Gate Mode", 190 * z); ImGui::EndGroup();
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: drone until Gate is connected, timelined or receives a note.\nGated: follow Gate. Drone: every voice always plays.");
-    next(ImGui::CalcTextSize("droning").x, 6);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: drone until Gate is connected, timelined or receives a note.\nGated: follow Gate. Drone: every voice always plays.\nPulse: the voices play by themselves (the Pulse panel).");
+    next(ImGui::CalcTextSize("pulsing").x, 6);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(droning() ? ImVec4(.96f, .73f, .45f, 1) : ImVec4(.59f, .65f, 1, 1), droning() ? "droning" : "gated");
+    if(pulsing()) ImGui::TextColored(ImVec4(.42f, .83f, .77f, 1), "pulsing");
+    else ImGui::TextColored(droning() ? ImVec4(.96f, .73f, .45f, 1) : ImVec4(.59f, .65f, 1, 1), droning() ? "droning" : "gated");
     next(ImGui::CalcTextSize("Strike").x + ImGui::GetStyle().FramePadding.x * 2);
     if(ImGui::Button("Strike")) for(auto& [s, st] : states) for(int i = 0; i < st.builtVoices; ++i) if(st.voices[i]) st.voices[i]->set("strk", 1.0f);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Strike every voice now (also while droning or held)");
     next(ImGui::CalcTextSize("Reset LFOs").x + ImGui::GetStyle().FramePadding.x * 2);
-    if(ImGui::Button("Reset LFOs")) resetLFOs.trigger();
+    if(ImGui::Button(pulsing() ? "Reset" : "Reset LFOs")) resetLFOs.trigger();
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip(pulsing() ? "Restart the LFOs and the pulse pattern" : "Restart the LFOs");
     labelW = 70;
 }
 
@@ -1099,6 +1233,170 @@ void scPhysicalBox::soundGroup(const std::string& group, float w) {
         for(const char* strip : {"A ", "B "}) if(label.rfind(strip, 0) == 0 && group.size() == 1) label.erase(0, 2);
         soundSlider(c->sc, label.c_str(), w);
     }
+}
+
+// Pulse (Gate Mode Pulse): the events as they play, a character to start from,
+// then Time / Voices / Notes
+void scPhysicalBox::drawPulse(float w) {
+    const float z = zoom();
+    const float cw = colW(w, 5), rasterW = cw * 2 + gapW();
+    auto tip = [](const char* text) { if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text); };
+    ImGui::Spacing();
+    ImGui::BeginGroup();
+    labelW = 66;
+    sectionHeader("Pulse", rasterW, nullptr, pal::pickup);
+    {
+        static const char* names[] = {"Clock", "Strum", "Phasing", "Rain", "Geiger", "Swarm", "Bursts"};
+        static const char* tips[] = {
+            "Every voice on the same beat",
+            "Together, rolled across the voices like a strummed chord",
+            "Each voice its own clock, slightly apart: they drift in and out of phase",
+            "Each voice its own random drops (Poisson), soft and loud",
+            "Random clicks with bursts and silences, each voice its own counter",
+            "Loose, partly shared, partly free: a flock",
+            "Together, in clusters of quick repeats"};
+        const int count = int(std::size(names));
+        const float gap = 4 * z, bw = (rasterW - gap * (count - 1)) / count;
+        for(int i = 0; i < count; ++i) {
+            if(i) ImGui::SameLine(0, gap);
+            if(ImGui::Button(names[i], ImVec2(bw, 0))) pulseShape(i);
+            tip(tips[i]);
+        }
+    }
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const float rows = 6 * ImGui::GetFrameHeightWithSpacing() - ImGui::GetFrameHeight() - 4 * z;
+    drawPulseRaster(at, ImVec2(rasterW, rows));
+    ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + rows));
+    ImGui::Dummy(ImVec2(rasterW, 0));
+    nextCol();
+    sectionHeader("Time", cw, nullptr, pal::pickup);
+    toggle(pulseSync, "Sync to tempo");
+    tip("Rate from the tempo (a note value) instead of Hz");
+    if(pulseSync.get()) {
+        static const std::vector<std::pair<const char*, float>> notes = {
+            {"1/32", 0.125f}, {"1/16T", 1.0f / 6.0f}, {"1/16", 0.25f}, {"1/8T", 1.0f / 3.0f}, {"1/8", 0.5f},
+            {"1/4T", 2.0f / 3.0f}, {"1/4", 1.0f}, {"1/2", 2.0f}, {"1 bar", 4.0f}, {"2 bars", 8.0f}, {"4 bars", 16.0f}};
+        int k = 0;
+        for(int i = 0; i < (int)notes.size(); i++)
+            if(std::abs(notes[i].second - pulseBeats.get()) < std::abs(notes[k].second - pulseBeats.get())) k = i;
+        const float x0 = ImGui::GetCursorPosX();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Every");
+        mark(pulseBeats.getEscapedName());
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(x0 + labelW * z);
+        ImGui::SetNextItemWidth(cw - labelW * z);
+        if(ImGui::SliderInt("##pulseNote", &k, 0, (int)notes.size() - 1, notes[k].first)) pulseBeats = notes[k].second;
+        tip("The average time between events, in beats");
+        menu(pulseBeats.getEscapedName());
+    } else {
+        slider(pulseRate, "Rate", cw, "%.2f Hz", true);
+        tip("Events per second per voice, on average (whatever Chaos and Cluster are)");
+    }
+    slider(pulseChaos, "Chaos", cw);
+    tip("0: periodic, a clock\n1: random like a Geiger counter (Poisson): same average rate, no pattern");
+    slider(pulseCluster, "Cluster", cw);
+    tip("Gather the events into bursts of quick repeats and long silences (same average rate)");
+    slider(pulseChance, "Chance", cw);
+    tip("The chance each event plays (thins the pattern)");
+    nextCol();
+    sectionHeader("Voices", cw, nullptr, pal::pickup);
+    slider(pulseLink, "Link", cw, pulseLink.get() >= 0.995f ? "together" : pulseLink.get() <= 0.005f ? "independent" : "%.2f");
+    tip("1: every voice plays the same events (one seed for all)\n0: each voice its own events (its own seed)\n"
+        "between: each event is shared or a voice's own by chance");
+    slider(pulsePhasing, "Phasing", cw);
+    tip("Each voice's own clock a little faster or slower (up to an octave):\nperiodic voices drift in and out of phase. Acts where Link < 1");
+    slider(pulseStrum, "Strum", cw, "%+.0f ms");
+    tip("Roll the shared events across the voices, ms per voice (negative: downwards)");
+    {
+        const std::string key = pulseSeed.getEscapedName();
+        ImGui::PushID(key.c_str());
+        const float x0 = ImGui::GetCursorPosX();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Seed");
+        mark(key);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(x0 + labelW * z);
+        ImGui::SetNextItemWidth(std::max(30.0f * z, cw - labelW * z));
+        int v = pulseSeed.get();
+        if(ImGui::DragInt("##v", &v, 0.2f, 0, 9999, v == 0 ? "fresh" : "%d")) pulseSeed = std::clamp(v, 0, 9999);
+        tip("0: a new pattern every start\nabove 0: the same pattern every time (Reset plays it from the start)");
+        menu(key);
+        ImGui::PopID();
+    }
+    toggle(pulseFollow, "Follow Gate");
+    tip("Off: the pulses run by themselves\nOn: a voice pulses only while its Gate is held, as loud as the Gate\n"
+        "(hold notes from a keyboard or the timeline to play rolls)");
+    nextCol();
+    sectionHeader("Notes", cw, nullptr, pal::pickup);
+    if(pulseFixed.get()) {
+        slider(pulseTime, "Length", cw, "%.3f s", true);
+        tip("How long each gate stays open, in seconds");
+    } else {
+        char fmt[48];
+        std::snprintf(fmt, sizeof(fmt), "%%.2f x  (%.0f ms)", pulseLength.get() / pulseHz() * 1000);
+        slider(pulseLength, "Length", cw, fmt);
+        tip("How long each gate stays open, as a fraction of the average period.\n"
+            "Struck sounds only need the start; bow, blow and scrape sound while it is open.\n"
+            "Past 1 notes run into the next: legato, each event a new strike");
+    }
+    toggle(pulseFixed, "Length in seconds");
+    slider(pulseJitter, "Jitter", cw);
+    tip("Random length per event: up to 4x shorter or longer");
+    slider(pulseVelocity, "Velocity", cw);
+    tip("How hard each event plays (the gate level)");
+    slider(pulseVelJitter, "Vel Jitter", cw);
+    tip("Random velocity per event: accents and ghost notes");
+    ImGui::EndGroup();
+    labelW = 70;
+}
+
+// the last seconds of events per voice: a block per gate (its length), as
+// bright and tall as its velocity
+void scPhysicalBox::drawPulseRaster(ImVec2 a, ImVec2 size) {
+    const float z = zoom();
+    auto* dl = ImGui::GetWindowDrawList();
+    const ImVec2 b(a.x + size.x, a.y + size.y);
+    dl->AddRectFilled(a, b, pal::canvas, 3 * z);
+    dl->AddRect(a, b, pal::border, 3 * z);
+    const int n = std::max(1, voices.get());
+    const float hz = pulseHz();
+    const float window = ofClamp(24.0f / hz, 1.5f, 6.0f), now = ofGetElapsedTimef();
+    const float x0 = a.x + 4 * z, x1 = b.x - 4 * z, top = a.y + 4 * z, bottom = b.y - 18 * z;
+    const float rh = (bottom - top) / n;
+    auto xOf = [&](float t) { return ofLerp(x0, x1, ofClamp(1 - (now - t) / window, 0.0f, 1.0f)); };
+    // a line per average period (sync: per beat value)
+    const float period = 1.0f / hz;
+    if(window / period < 64)
+        for(float t = now - std::fmod(now, period); t > now - window; t -= period)
+            dl->AddLine(ImVec2(xOf(t), top), ImVec2(xOf(t), bottom), pal::grid);
+    dl->PushClipRect(ImVec2(x0, top), ImVec2(x1, bottom), true);
+    for(int v = 0; v < n; ++v) {
+        const float y0 = top + v * rh, y1 = y0 + rh;
+        if(v % 2) dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(255, 255, 255, 6));
+        for(const auto& e : pulseEvents[v]) {
+            const float vel = ofClamp(e.vel, 0.0f, 1.0f);
+            const float h = (rh - 2 * z) * (0.3f + 0.7f * vel) * 0.5f, mid = (y0 + y1) * 0.5f;
+            const float ex0 = xOf(e.t), ex1 = std::max(ex0 + 2 * z, xOf(e.t + e.dur));
+            const ImU32 col = mixColor(IM_COL32(106, 212, 196, 70), IM_COL32(220, 255, 245, 230), vel);
+            dl->AddRectFilled(ImVec2(ex0, mid - h), ImVec2(ex1, mid + h), mixColor(IM_COL32(106, 212, 196, 30), IM_COL32(106, 212, 196, 120), vel));
+            dl->AddLine(ImVec2(ex0, mid - h), ImVec2(ex0, mid + h), col, 1.5f * z);
+        }
+    }
+    dl->PopClipRect();
+    // what it is, in words
+    const float chaos = pulseChaos.get(), link = pulseLink.get();
+    std::string text = ofToString(hz, hz < 10 ? 2 : 1) + " /s per voice   " +
+        (chaos < 0.05f ? "periodic" : chaos > 0.95f ? "random (Poisson)" : "loose " + ofToString(int(chaos * 100)) + "%") +
+        (pulseCluster.get() > 0.05f ? ", clustered" : "") + "   " +
+        (link > 0.995f ? "together" : link < 0.005f ? "independent" : ofToString(int(link * 100)) + "% shared") +
+        (pulseFollow.get() ? "   held by Gate" : "");
+    dl->AddText(ImVec2(a.x + 6 * z, b.y - 16 * z), pal::textDim, text.c_str());
+    ImGui::SetCursorScreenPos(a);
+    ImGui::InvisibleButton("##pulseRaster", size);
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("The pulses as they play: a row per voice, newest on the right (%.1f s).\n"
+                          "Each block is a gate, its length and its velocity.", window);
 }
 
 void scPhysicalBox::drawSoundTab(float w) {
