@@ -563,15 +563,7 @@ private:
     // ── Event listeners ───────────────────────────────────────────────────────
     ofEventListeners nodeListeners;
     
-    // ── Project save/load functionality ───────────────────────────────────────
-    std::string currentProjectPath;
-    std::string projectsDirectory;
-    char projectNameBuffer[256];
-    std::vector<std::string> availableProjects;
-    
-    void saveProject(const std::string& projectName);
-    void loadProject(const std::string& projectPath);
-    void applyBoxState(const ofJson& j, bool keepLoaded);   // a project or a snapshot, at runtime
+    void applyBoxState(const ofJson& j, bool keepLoaded);
     // ── Snapshots (the shared system): the whole box ────────────────────────
     scSnapshots snaps;
     ofJson appliedBox;                    // the box a snapshot last loaded
@@ -583,10 +575,7 @@ private:
     void publishSnap(const std::string& key);
     void unpublishSnap(const std::string& key);
     void snapMenu(const std::string& key);
-    void refreshProjectsList();
     void drawGlobalControls();
-    std::string getProjectsDirectory() const;
-    std::string currentProjectLocation(const std::string& path) const;
     
     // ── Track reordering helpers ──────────────────────────────────────────────
     void moveTrackUp(int trackIndex);

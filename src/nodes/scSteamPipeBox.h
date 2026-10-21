@@ -169,5 +169,4 @@ private:
     void apply(const ofJson&, const ofJson&, float, bool);
     std::vector<ofJson> factory() const;
     void drawWindow();
-    void drawDisplay(float);
 };

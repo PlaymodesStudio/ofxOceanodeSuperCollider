@@ -69,12 +69,6 @@ scRhythmBox::scRhythmBox(vector<serverManager*> servers)
     syncNs.assign(MAX_TRACKS, -1);
     hardCounters.assign(MAX_TRACKS, 0.0);
     needHard.assign(MAX_TRACKS, true);
-    
-    // Initialize project functionality
-    projectsDirectory = getProjectsDirectory();
-    memset(projectNameBuffer, 0, sizeof(projectNameBuffer));
-    strcpy(projectNameBuffer, "New Project");
-    refreshProjectsList();
 }
 
 scRhythmBox::~scRhythmBox() {
@@ -5218,10 +5212,6 @@ void scRhythmBox::presetSave(ofJson& j) {
     for(const auto& [k, h] : snapPublished) snapKeys.push_back(k);
     j["rhythmBoxSnapPublished"] = snapKeys;
     j["embedInProject"] = embedInProject.get();
-    // Persist the last-loaded RhythmBox project path so the field is restored
-    // when this Oceanode preset is recalled (data comes from the preset, not re-loaded
-    // from the project file — this just keeps the display name correct).
-    j["lastProjectPath"] = currentProjectPath;
 
     if(embedInProject.get()) {
         std::string presetPath = ofxOceanodeShared::getCurrentPresetPath();
@@ -5271,17 +5261,6 @@ void scRhythmBox::presetRecallAfterSettingParameters(ofJson& j) {
     if(j.contains("rhythmBoxSnapshots")) snaps.loadSettings(j["rhythmBoxSnapshots"]);
     appliedBox = ofJson();
     embedInProject = j.value("embedInProject", true);
-
-    // Restore the last-used RhythmBox project path (display only — data comes from
-    // the Oceanode preset, not by re-loading the project file).
-    if(j.contains("lastProjectPath")) {
-        currentProjectPath = currentProjectLocation(j["lastProjectPath"].get<std::string>());
-        if(!currentProjectPath.empty()) {
-            std::string stem = std::filesystem::path(currentProjectPath).stem().string();
-            strncpy(projectNameBuffer, stem.c_str(), sizeof(projectNameBuffer) - 1);
-            projectNameBuffer[sizeof(projectNameBuffer) - 1] = '\0';
-        }
-    }
 
     deserializeSlots(j);
     pendingTrackEdits.clear();
@@ -5510,162 +5489,8 @@ void scRhythmBox::swapTracks(int trackA, int trackB) {
     }
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// Project Save/Load Implementation
-// ════════════════════════════════════════════════════════════════════════════
-
-// data/Supercollider/RhythmBox/Projects. Builds before 2026-10-13 saved to
-// data/RhythmBoxProjects: its projects are moved here (one that already
-// exists here is kept and the old copy left in place), and the old folder is
-// removed once empty.
-std::string scRhythmBox::getProjectsDirectory() const {
-    namespace fs = std::filesystem;
-    const std::string projectsPath = ofToDataPath("Supercollider/RhythmBox/Projects", true);
-    std::error_code ec;
-    fs::create_directories(projectsPath, ec);
-
-    const fs::path oldDir = ofToDataPath("RhythmBoxProjects", true);
-    if(fs::is_directory(oldDir, ec)) {
-        for(const auto& entry : fs::directory_iterator(oldDir, ec)) {
-            const fs::path target = fs::path(projectsPath) / entry.path().filename();
-            if(entry.is_regular_file(ec) && !fs::exists(target, ec)) {
-                fs::rename(entry.path(), target, ec);
-                if(ec) ofLogWarning("scRhythmBox") << "Could not move " << entry.path() << ": " << ec.message();
-            }
-        }
-        fs::remove(oldDir / ".DS_Store", ec);
-        if(fs::is_empty(oldDir, ec)) fs::remove(oldDir, ec);
-    }
-    return projectsPath;
-}
-
-// A project path saved by an older build (.../RhythmBoxProjects/<name>.json)
-// points to the same project in the current folder
-std::string scRhythmBox::currentProjectLocation(const std::string& path) const {
-    if(path.find("/RhythmBoxProjects/") == std::string::npos) return path;
-    return projectsDirectory + "/" + std::filesystem::path(path).filename().string();
-}
-
-void scRhythmBox::refreshProjectsList() {
-    availableProjects.clear();
-    
-    try {
-        if (std::filesystem::exists(projectsDirectory) && std::filesystem::is_directory(projectsDirectory)) {
-            for (const auto& entry : std::filesystem::directory_iterator(projectsDirectory)) {
-                if (entry.is_regular_file() && entry.path().extension() == ".json") {
-                    availableProjects.push_back(entry.path().stem().string());
-                }
-            }
-        }
-    } catch (const std::exception& e) {
-        ofLogError("scRhythmBox") << "Error refreshing projects list: " << e.what();
-    }
-    
-    // Sort alphabetically
-    std::sort(availableProjects.begin(), availableProjects.end());
-}
-
-void scRhythmBox::saveProject(const std::string& projectName) {
-    if (projectName.empty()) {
-        ofLogError("scRhythmBox") << "Cannot save project with empty name";
-        return;
-    }
-    
-    try {
-        // Create the full path
-        std::string filename = projectName + ".json";
-        std::string fullPath = projectsDirectory + "/" + filename;
-        
-        // Create JSON object with all rhythm box data
-        ofJson projectJson;
-        projectJson["projectName"] = projectName;
-        projectJson["version"] = "1.0";
-        projectJson["timestamp"] = ofGetTimestampString();
-        
-        // Use existing serialization method
-        serializeSlots(projectJson);
-        
-        // Save to file
-        std::ofstream file(fullPath);
-        if (file.is_open()) {
-            file << projectJson.dump(2);  // Pretty print with 2-space indentation
-            file.close();
-            
-            currentProjectPath = fullPath;
-            ofLogNotice("scRhythmBox") << "Project saved: " << fullPath;
-            
-            // Refresh the projects list
-            refreshProjectsList();
-        } else {
-            ofLogError("scRhythmBox") << "Failed to open file for writing: " << fullPath;
-        }
-        
-    } catch (const std::exception& e) {
-        ofLogError("scRhythmBox") << "Error saving project: " << e.what();
-    }
-}
-
-void scRhythmBox::loadProject(const std::string& projectPath) {
-    if (projectPath.empty()) {
-        ofLogError("scRhythmBox") << "Cannot load project with empty path";
-        return;
-    }
-    
-    try {
-        std::string fullPath;
-        if (projectPath.find('/') != std::string::npos) {
-            // Already a full path
-            fullPath = currentProjectLocation(projectPath);
-        } else {
-            // Just a project name, construct full path
-            fullPath = projectsDirectory + "/" + projectPath + ".json";
-        }
-        
-        if (!std::filesystem::exists(fullPath)) {
-            ofLogError("scRhythmBox") << "Project file does not exist: " << fullPath;
-            return;
-        }
-        
-        // Load JSON from file
-        std::ifstream file(fullPath);
-        if (!file.is_open()) {
-            ofLogError("scRhythmBox") << "Failed to open project file: " << fullPath;
-            return;
-        }
-        
-        ofJson projectJson;
-        file >> projectJson;
-        file.close();
-        
-        // Validate project file
-        if (!projectJson.contains("projectName") || !projectJson.contains("version")) {
-            ofLogError("scRhythmBox") << "Invalid project file format (missing projectName or version): " << fullPath;
-            return;
-        }
-
-        ofLogNotice("scRhythmBox::loadProject") << "=== START loading: " << fullPath;
-        ofLogNotice("scRhythmBox::loadProject") << "  current numTracks=" << numTracks
-            << "  project numTracks=" << (projectJson.contains("numTracks") ? projectJson["numTracks"].get<int>() : -1);
-
-        applyBoxState(projectJson, false);
-
-        currentProjectPath = fullPath;
-
-        // Extract project name for the buffer
-        std::string projectName = projectJson["projectName"].get<std::string>();
-        strncpy(projectNameBuffer, projectName.c_str(), sizeof(projectNameBuffer) - 1);
-        projectNameBuffer[sizeof(projectNameBuffer) - 1] = '\0';
-
-        ofLogNotice("scRhythmBox::loadProject") << "=== DONE: numTracks=" << numTracks
-            << "  stepOn[0][0]=" << (slots[0].tracks.size() > 0 ? (int)slots[0].tracks[0].stepOn[0] : -1);
-        
-    } catch (const std::exception& e) {
-        ofLogError("scRhythmBox") << "Error loading project: " << e.what();
-    }
-}
-
-// A whole box (a project, or a snapshot) at runtime: the tracks, their data and
-// samples, the synths again, the slot. keepLoaded: samples that stay are kept.
+// Restore the whole box at runtime: tracks, slot data, samples and synths.
+// keepLoaded retains samples that are already loaded.
 void scRhythmBox::applyBoxState(const ofJson& j, bool keepLoaded) {
     const std::vector<std::string> loadedBefore = samplePaths;
     // 1. Update output port count. Legacy projects without numTracks are

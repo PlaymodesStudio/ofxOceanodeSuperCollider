@@ -559,20 +559,6 @@ void scSteamPipeBox::update(ofEventArgs&) {
     }
     if(pulsing()) pulse.read(live,VIS_PULSE);
 }
-void scSteamPipeBox::drawDisplay(float w) {
-    const float z=zoom();
-    const auto a=ImGui::GetCursorScreenPos();auto* dl=ImGui::GetWindowDrawList();
-    const float h=55*z, cell=w/std::max(1,voices.get());
-    dl->AddRectFilled(a,ImVec2(a.x+w,a.y+h),pal::canvas,4*z);
-    for(int i=0;i<voices.get();++i) {
-        const float amp=i*6+3<int(live.size())?ofClamp(live[i*6+3],0.f,1.f):0;
-        const float hz=i*6<int(live.size())?live[i*6]:0;
-        const float x=a.x+i*cell;
-        dl->AddRectFilled(ImVec2(x+3*z,a.y+h-8*z-amp*32*z),ImVec2(x+cell-3*z,a.y+h-8*z),pal::accent,2*z);
-        dl->AddText(ImVec2(x+5*z,a.y+4*z),pal::headerText,(ofToString(i+1)+"  "+ofToString(hz,1)+" Hz").c_str());
-    }
-    ImGui::InvisibleButton("##pipeMeters",ImVec2(w,h));
-}
 void scSteamPipeBox::drawWindow() {
     const float z=ofxOceanodeShared::getZoomLevel();
     ImGui::SetNextWindowSize(ImVec2(1150*z,850*z),ImGuiCond_FirstUseEver);
@@ -585,7 +571,6 @@ void scSteamPipeBox::drawWindow() {
     const float w=ImGui::GetContentRegionAvail().x;
     drawHeader();
     snaps.drawBar(w);
-    drawDisplay(w);
     if(pulsing()) pulse.drawPanel(w);
     ImGui::Spacing();
     if(ImGui::BeginTabBar("##steamTabs")) {
