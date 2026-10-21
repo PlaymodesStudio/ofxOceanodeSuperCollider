@@ -312,7 +312,7 @@ private:
     scEQEditor eqEditor;
     bool eqCurveDirty = true;
 
-    // ── Snapshots and named presets (data/Supercollider/AdditiveBox/Presets):
+    // ── Snapshots and named presets (data/nodeSnapshots/AdditiveBox/Presets):
     //    scSnapshots; a sound = Voices + every control a preset holds + the modulation ──
     scSnapshots snaps;
     ofJson captureSound() const;

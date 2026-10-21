@@ -8,7 +8,6 @@ app's data folder, at the same path as here:
 |---|---|
 | `nodeSnapshots/<Node>/banks/<bank>.json` | Snapshot banks (Snapshots ▸ Load bank) |
 | `nodeSnapshots/<Node>/Presets/<preset>.json` | Named presets of the shared snapshot bar |
-| `Supercollider/<Node>/Presets/<preset>.json` | Named presets of AdditiveBox and PulsarBox |
 
 Nothing else is synced: the working slots (`nodeSnapshots/<Node>/snapshot_*.json`,
 `library.json`) stay each user's own.
@@ -39,5 +38,6 @@ A file removed from here is removed from apps where it was not changed.
   The translation tools are in `tools/polycomb/`; the raw Reaktor data they
   read was removed after the translation.
 
-AdditiveBox and PulsarBox presets are written by `tools/additivebox_demo_presets.py`
+AdditiveBox and PulsarBox named presets (they lived in `Supercollider/<Node>/Presets`
+until 2026-10-21; the nodes move a user's old ones over on load) are written by `tools/additivebox_demo_presets.py`
 and `tools/pulsarbox_presets.py`.

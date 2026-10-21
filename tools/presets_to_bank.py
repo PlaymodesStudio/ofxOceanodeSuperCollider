@@ -4,7 +4,7 @@
 Each preset becomes a slot, in name order (as the old Preset combo listed them),
 named after its file. The preset files are left as they are.
 
-    python3 tools/presets_to_bank.py presets/Supercollider/AdditiveBox/Presets \\
+    python3 tools/presets_to_bank.py presets/nodeSnapshots/AdditiveBox/Presets \\
         "presets/nodeSnapshots/AdditiveBox/banks/Demo and Astres.json"
 """
 import argparse, json, pathlib, sys

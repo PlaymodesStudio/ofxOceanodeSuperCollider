@@ -371,7 +371,7 @@ void scAdditiveBox::setup(){
         scSnapshots::Host h;
         h.folder = "AdditiveBox";
         h.title = "AdditiveBox";
-        h.presetFolder = "Supercollider/AdditiveBox/Presets";   // the named presets it always had
+        h.legacyPresetFolder = "Supercollider/AdditiveBox/Presets";
         // ... as a bank (tools/presets_to_bank.py): the bar lists slots and banks only
         h.defaultBank = "Demo and Astres.json";
         h.capture = [this](){ return captureSound(); };

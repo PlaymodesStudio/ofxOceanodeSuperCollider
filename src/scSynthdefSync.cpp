@@ -279,7 +279,7 @@ private:
             if(extension == ".scx" || extension == ".sc") return extensions / parts[1] / parts[2];
         }
         // Shared presets, at their path in the data folder:
-        // presets/nodeSnapshots/<Node>/banks|Presets/<x>.json, presets/Supercollider/<Node>/Presets/<x>.json
+        // presets/nodeSnapshots/<Node>/banks|Presets/<x>.json
         if(isPresetPath(path)) return data.parent_path() / path.substr(std::string("presets/").size());
         return {};
     }
@@ -287,8 +287,7 @@ private:
     static bool isPresetPath(const std::string& path){
         const auto parts = ofSplitString(path, "/", true);
         if(parts.size() != 5 || parts[0] != "presets" || fs::path(parts[4]).extension() != ".json") return false;
-        return (parts[1] == "nodeSnapshots" && (parts[3] == "banks" || parts[3] == "Presets"))
-            || (parts[1] == "Supercollider" && parts[3] == "Presets");
+        return parts[1] == "nodeSnapshots" && (parts[3] == "banks" || parts[3] == "Presets");
     }
 
     // Where the repository's version of a preset goes when the user's copy
@@ -1344,11 +1343,11 @@ std::vector<std::string> sharablePresets(const fs::path& data){
             found.push_back(fs::relative(entry.path(), data).generic_string());
         }
     };
-    for(const fs::path& root : {data / "nodeSnapshots", data / "Supercollider"}){
-        if(!fs::exists(root)) continue;
+    const fs::path root = data / "nodeSnapshots";
+    if(fs::exists(root)){
         for(const auto& node : fs::directory_iterator(root)){
             if(!node.is_directory()) continue;
-            if(root.filename() == "nodeSnapshots") add(node.path() / "banks");
+            add(node.path() / "banks");
             add(node.path() / "Presets");
         }
     }

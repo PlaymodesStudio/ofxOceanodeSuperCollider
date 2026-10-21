@@ -26,7 +26,7 @@
 //    group before the synth; targets per voice: Pitch, Formant, Cycles, Level,
 //    Probability, Pan (any other control: right-click it, Modulate with). An
 //    envelope routed to Level replaces the ASR (a VCA, on the Gate).
-//  • Preset bank: data/Supercollider/PulsarBox/Presets.
+//  • Preset bank: data/nodeSnapshots/PulsarBox/Presets.
 //
 
 #pragma once
@@ -366,7 +366,7 @@ public:
             scSnapshots::Host h;
             h.folder = "PulsarBox";
             h.title = "PulsarBox";
-            h.presetFolder = "Supercollider/PulsarBox/Presets";   // the named presets it always had
+            h.legacyPresetFolder = "Supercollider/PulsarBox/Presets";
             // ... as a bank (tools/presets_to_bank.py): the bar lists slots and banks only
             h.defaultBank = "PulsarBox Presets.json";
             h.capture = [this](){ return captureSound(); };
@@ -1237,7 +1237,7 @@ private:
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Snapshots and named presets (data/Supercollider/PulsarBox/Presets): the sound as json
+    // Snapshots and named presets (data/nodeSnapshots/PulsarBox/Presets): the sound as json
     // ════════════════════════════════════════════════════════════════════════
 
     // Played, not part of a sound: a preset leaves them as they are
@@ -1972,7 +1972,7 @@ private:
     scTimelineMenu timeline;              // "Add to Timeline" from the window
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> publishedHandles;
     bool publishedSeparatorAdded = false;
-    // Snapshots and named presets (data/Supercollider/PulsarBox/Presets): scSnapshots
+    // Snapshots and named presets (data/nodeSnapshots/PulsarBox/Presets): scSnapshots
     scSnapshots snaps;
     bool loadingBankPreset = false;   // a whole sound is being set (structure changes wait)
 

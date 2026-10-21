@@ -27,7 +27,7 @@
 //       once every Defaults source has been compiled by a sync, every file
 //       under Synthdefs/Defaults that no Defaults source builds.
 //    Shared presets (addon presets/, laid out like the data folder:
-//    nodeSnapshots/<Node>/banks|Presets, Supercollider/<Node>/Presets) are
+//    nodeSnapshots/<Node>/banks|Presets) are
 //    downloaded with the rest. One the user changed since the last sync is
 //    kept; the repository's version is written next to it as "<name> (repo)".
 //    5. Loads the new SynthDefs into the running servers, or offers to restart

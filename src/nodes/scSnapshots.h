@@ -58,7 +58,9 @@ public:
         std::function<bool()> importLegacy;
         std::function<float()> bpm;                           // Morph Time in beats
         std::function<void(const std::string& key)> paramMenu;   // after a parameter's widget: its menu
-        std::string presetFolder;                             // data-relative; "": nodeSnapshots/<folder>/Presets
+        // data-relative folder that held the named presets before
+        // nodeSnapshots/<folder>/Presets: its files are moved there on setup
+        std::string legacyPresetFolder;
         std::string defaultBank;                              // banks/<file> loaded on the first run (no library yet)
     };
 
@@ -104,6 +106,7 @@ public:
             }
         });
         loadLibrary();
+        moveLegacyPresets();
         scanPresets();
     }
     // The snapshot controls themselves (never captured, never recalled)
@@ -555,10 +558,23 @@ public:
 
     // ── Named presets: <presetDir>/<name>.json ─────────────────────────────
     std::filesystem::path presetDir() const {
-        const std::filesystem::path d = ofToDataPath(host.presetFolder.empty() ? "nodeSnapshots/" + host.folder + "/Presets"
-                                                                                : host.presetFolder, true);
+        const std::filesystem::path d = ofToDataPath("nodeSnapshots/" + host.folder + "/Presets", true);
         try { std::filesystem::create_directories(d); } catch(...) {}
         return d;
+    }
+    // A preset already at the new place wins; the old folder goes once empty
+    void moveLegacyPresets() {
+        if(host.legacyPresetFolder.empty()) return;
+        const std::filesystem::path old = ofToDataPath(host.legacyPresetFolder, true);
+        std::error_code ec;
+        if(!std::filesystem::is_directory(old, ec)) return;
+        const std::filesystem::path d = presetDir();
+        for(const auto& e : std::filesystem::directory_iterator(old, ec)) {
+            if(!e.is_regular_file(ec) || e.path().extension() != ".json") continue;
+            const auto to = d / e.path().filename();
+            if(!std::filesystem::exists(to, ec)) std::filesystem::rename(e.path(), to, ec);
+        }
+        if(std::filesystem::is_empty(old, ec)) std::filesystem::remove(old, ec);
     }
     void scanPresets() {
         presetNames.clear();
