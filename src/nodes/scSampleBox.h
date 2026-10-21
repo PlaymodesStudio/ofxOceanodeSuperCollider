@@ -46,9 +46,7 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "scNode.h"
 #include "serverManager.h"
-#if OFXOCEANODESC_HAS_TRANSPORT
 #include "scTransportSync.h"
-#endif
 #include "scSampleBrowser.h"
 #include "scSlicerBox.h"
 #include "scEQEditor.h"
@@ -278,11 +276,9 @@ private:
     void sendTempo(Pad& p);                  // fitrate, fitbeats, sync
     void updateTempo();                      // per frame: fit rates, anchors, Play With Transport
     static float guessBeats(float seconds, double beatsPerBar);
-#if OFXOCEANODESC_HAS_TRANSPORT
     scTransportSync::Follower follower;
     int anchorIdCounter = 0;
     void sendTransportAnchors();
-#endif
     void requestAnchor();
     void rebuildAll();                       // N Chan: every pad's synths again
     void fire(Pad& p);

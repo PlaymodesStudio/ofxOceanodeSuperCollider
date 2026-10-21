@@ -8,7 +8,6 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 
-#if OFXOCEANODESC_HAS_TIMELINE
 
 #include "ofxOceanodeNodeModel.h"
 #include "ofxOceanodeSuperColliderController.h"
@@ -399,6 +398,5 @@ private:
     bool waitingForRender = false;
 };
 
-#endif // OFXOCEANODESC_HAS_TIMELINE
 
 #endif /* scNRTRecorder_h */

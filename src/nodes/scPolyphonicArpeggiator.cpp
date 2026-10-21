@@ -155,7 +155,6 @@ void scPolyphonicArpeggiator::setup() {
     addInspectorParameter(patternHeight.set("Pattern Height", 100.0f, 50.0f, 200.0f));
     addInspectorParameter(euclideanHeight.set("Euclidean Height", 80.0f, 40.0f, 150.0f));
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     // ── SYNC TO TRANSPORT (inspector; saved with the node like any parameter) ──
     // Off (default): the step clock is the Trig input, as before.
     // On: steps = (transport beat + Beat Offset) * Div; the Trig input and the
@@ -164,7 +163,6 @@ void scPolyphonicArpeggiator::setup() {
     addInspectorParameter(syncDiv.set("Div", 4.0f, 0.125f, 64.0f));
     addInspectorParameter(beatOffset.set("Beat Offset", 0.0f, -64.0f, 64.0f));
     stepClock.setPatternLength(1); // period 2048 steps, see sendTransportAnchors()
-#endif
 
     uiPattern.set("Pattern Display", [this](){ drawPatternDisplay(); });
     addCustomRegion(uiPattern, [this](){ drawPatternDisplay(); });
@@ -177,16 +175,13 @@ void scPolyphonicArpeggiator::setup() {
     // Reset: \reset is a counter on the SC side (Changed.kr), so every press
     // works. Ignored in Sync To Transport mode (the transport owns position).
     listeners.push(reset.newListener([this](void){
-#if OFXOCEANODESC_HAS_TRANSPORT
         if(syncToTransport) return;
-#endif
         resetCounter = resetCounter % (1 << 20) + 1; // always differs from the previous value
         for(auto& pair : synthInstances) {
             if(pair.second) pair.second->set("reset", (float)resetCounter);
         }
     }));
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     listeners.push(syncToTransport.newListener([this](bool& v){ handleSyncToTransportChanged(v); }));
     // A new step scale or offset is a jump: re-anchor from scratch.
     listeners.push(syncDiv.newListener([this](float& v){
@@ -198,7 +193,6 @@ void scPolyphonicArpeggiator::setup() {
         follower.reset();
         stepClock.reset();
     }));
-#endif
 
     // Euclidean gate pattern
     auto rebuildGate = [this](int&){
@@ -317,10 +311,8 @@ void scPolyphonicArpeggiator::setup() {
             auto* s = pair.second;
             s->set("rid",   (float)randomGeneratorId); // \rid is .ir: only effective in /s_new
             s->set("reset", (float)resetCounter);      // same value: no reset
-#if OFXOCEANODESC_HAS_TRANSPORT
             s->set("sync", syncToTransport ? 1.0f : 0.0f);
             s->set("div",  syncDiv.get());
-#endif
             // Resend input bus (trig)
             for(int i = 0; i < (int)inputs.size(); i++) {
                 auto* nodeRef = inputs[i]->getNodeRef();
@@ -353,9 +345,7 @@ void scPolyphonicArpeggiator::setup() {
 
 void scPolyphonicArpeggiator::update(ofEventArgs &e) {
     if(isMorphing) updateMorph();
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(syncToTransport) sendTransportAnchors();
-#endif
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -363,12 +353,9 @@ void scPolyphonicArpeggiator::update(ofEventArgs &e) {
 // ═══════════════════════════════════════════════════════════
 
 void scPolyphonicArpeggiator::requestSyncAnchor() {
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(syncToTransport) follower.requestAnchor();
-#endif
 }
 
-#if OFXOCEANODESC_HAS_TRANSPORT
 void scPolyphonicArpeggiator::handleSyncToTransportChanged(bool enabled) {
     if(enabled) {
         follower.reset();   // first poll: a hard anchor at the current position
@@ -446,7 +433,6 @@ void scPolyphonicArpeggiator::sendTransportAnchors() {
         if(pending) { forceHardAnchor = true; follower.requestAnchor(); }
     }
 }
-#endif
 
 // ═══════════════════════════════════════════════════════════
 // SC NODE — SYNTH LIFECYCLE
@@ -462,14 +448,12 @@ void scPolyphonicArpeggiator::createSynth(ofxSCServer* server) {
     if(synthInstances.count(server) == 0) return;
     // Notify first so all buses and params are queued as init-args in /s_new
     resendParams.notify();
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(syncToTransport) {
         // Start holding; the next update() sends a hard anchor.
         synthInstances[server]->set("run", 0.0f);
         forceHardAnchor = true;
         follower.requestAnchor();
     }
-#endif
     synthInstances[server]->createAndRun(0, 1, getActive());
 }
 
@@ -554,10 +538,8 @@ void scPolyphonicArpeggiator::setOutputBus(ofxSCServer* server, int index, int b
 void scPolyphonicArpeggiator::activate() {
     for(auto& pair : synthInstances)
         if(pair.second) pair.second->run(true);
-#if OFXOCEANODESC_HAS_TRANSPORT
     // The synth was paused: re-position it (without firing the missed steps).
     if(syncToTransport) { forceHardAnchor = true; follower.requestAnchor(); }
-#endif
 }
 
 void scPolyphonicArpeggiator::deactivate() {

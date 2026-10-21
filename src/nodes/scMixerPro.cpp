@@ -5,8 +5,8 @@
 //  See scMixerPro.h for the design.
 //
 
+#include "ofxOceanodeSuperColliderConfig.h"
 #include "scMixerPro.h"
-#include "ofxOceanodeTimeline.h"
 #include "scSynthControlBatch.h"
 #include "ofxOceanodeContainer.h"
 #include "ofxOceanodeNode.h"
@@ -16,7 +16,6 @@
 #include "ofxOceanodeNodeMacro.h"
 #include "imgui_internal.h"
 #include "ofxOceanodeConnection.h"
-#include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxSuperCollider.h"
 #include <algorithm>
 #include <cmath>
@@ -559,7 +558,7 @@ void scMixerPro::syncFaderNames() {
 #if OFXOCEANODESC_HAS_TIMELINE
     // the timeline paths of the Levels in the node, before the rename
     auto* container = getHostContainer();
-    const bool retarget = container && !reorderingTracks && !ofxOceanodeShared::isPresetLoading();
+    const bool retarget = container && container->getAutomationExtension() && !reorderingTracks && !ofxOceanodeShared::isPresetLoading();
     std::map<Track*, std::string> oldPaths;
     if(retarget)
         for(Track* tr : strips) {
@@ -2479,7 +2478,7 @@ void scMixerPro::markPublished(const std::string& key) const {
     auto it = nodeHandles.find(key);
     auto* container = it != nodeHandles.end() && it->second ? getHostContainer() : nullptr;
     ofColor colour;
-    if(container && container->getTimelineManager().getParameterTrackColor(*it->second, colour))
+    if(container && container->getAutomationExtension() && container->getTimelineManager().getParameterTrackColor(*it->second, colour))
         ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, a.y + 1.0f), ImVec2(b.x, a.y + 1.0f),
                                             IM_COL32(colour.r, colour.g, colour.b, 255), 2.0f);
 #endif
@@ -2503,7 +2502,7 @@ bool scMixerPro::isOnTimeline(const std::string& key) const {
     auto it = nodeHandles.find(key);
     if(it == nodeHandles.end() || !it->second) return false;
     auto* container = getHostContainer();
-    return container && container->getTimelineManager().isParameterBound(*it->second);
+    return container && container->getAutomationExtension() && container->getTimelineManager().isParameterBound(*it->second);
 #else
     return false;
 #endif
@@ -2557,7 +2556,7 @@ void scMixerPro::drawTimelineItems(const std::string& key) {
 #if OFXOCEANODESC_HAS_TIMELINE
     auto action = publishActions.find(key);
     auto* container = getHostContainer();
-    if(action == publishActions.end() || action->second.output || !action->second.parameter || !container) return;
+    if(action == publishActions.end() || action->second.output || !action->second.parameter || !container || !container->getAutomationExtension()) return;
     const std::string type = action->second.parameter->valueType();
     if(type != typeid(float).name() && type != typeid(int).name() && type != typeid(bool).name()) return;
     auto& timeline = container->getTimelineManager();

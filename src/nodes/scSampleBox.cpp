@@ -11,10 +11,7 @@
 #include "ofxOceanodeShared.h"
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxSuperCollider.h"
-#if OFXOCEANODESC_HAS_TIMELINE
 #include "ofxOceanodeContainer.h"
-#include "ofxOceanodeTimeline.h"
-#endif
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1141,18 +1138,16 @@ void scSampleBox::resendParametersForNRT() {
 // ════════════════════════════════════════════════════════════════════════════
 
 float scSampleBox::currentBpm() const {
-#if OFXOCEANODESC_HAS_TRANSPORT
     const float b = getFrameTransportState().current.bpm;
     if(b > 0.0f) return b;
-#endif
     return bpm > 0.0f ? bpm : 120.0f;
 }
 
 double scSampleBox::beatsPerBar() const {
-#if OFXOCEANODESC_HAS_TIMELINE
-    if(auto* container = getHostContainer())
-        return std::max(0.25, container->getTimelineManager().getBeatsPerBar());
-#endif
+    if(auto* container = getHostContainer()) {
+        if(auto* extension = container->getAutomationExtension())
+            return std::max(0.25, extension->getBeatsPerBar());
+    }
     return 4.0;
 }
 
@@ -1191,12 +1186,9 @@ void scSampleBox::sendTempo(Pad& p) {
 }
 
 void scSampleBox::requestAnchor() {
-#if OFXOCEANODESC_HAS_TRANSPORT
     follower.requestAnchor();
-#endif
 }
 
-#if OFXOCEANODESC_HAS_TRANSPORT
 // The transport's position for the synced pads: each gets the beat modulo a
 // multiple of its Fit (below 2048 beats, so float32 stays precise; the phase
 // over the region is the same), timetagged at the anchor's instant
@@ -1229,7 +1221,6 @@ void scSampleBox::sendTransportAnchors() {
     }
     if(pending) follower.requestAnchor();
 }
-#endif
 
 void scSampleBox::updateTempo() {
     // the fitted speeds follow the tempo, the region and the sample
@@ -1237,7 +1228,6 @@ void scSampleBox::updateTempo() {
         const float r = fitRateOf(*p);
         if(std::abs(r - p->sentFitRate) > 1e-6f * std::max(1.0f, r)) sendTempo(*p);
     }
-#if OFXOCEANODESC_HAS_TRANSPORT
     sendTransportAnchors();
     // Play With Transport: a note held while the transport plays
     const bool playing = getFrameTransportState().current.isPlaying;
@@ -1254,7 +1244,6 @@ void scSampleBox::updateTempo() {
             sendChannelInputs(p);
         }
     }
-#endif
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2092,7 +2081,6 @@ void scSampleBox::drawSoundTab(Pad& p, float w) {
         ImGui::PopID();
         if(fit > 0.0f && region > 0.0f)
             ImGui::TextColored(ImColor(pal::textDim), "Its tempo %.1f BPM  ->  x%.3f", fit * 60.0f / region, fitRateOf(p));
-#if OFXOCEANODESC_HAS_TRANSPORT
         ImGui::BeginDisabled(fit <= 0.0f);
         toggle(p.sync, "Sync to transport");
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -2106,7 +2094,6 @@ void scSampleBox::drawSoundTab(Pad& p, float w) {
             ImGui::SetTooltip("Plays (looping) whenever the transport plays: no trigger needed");
         ImGui::EndDisabled();
         ImGui::EndDisabled();
-#endif
     }
     endColumn();
 

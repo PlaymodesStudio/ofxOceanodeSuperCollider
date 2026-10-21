@@ -24,12 +24,10 @@ void registerSequencerNodes(ofxOceanode &o){
 
 	o.registerModel<scPitch>("SuperCollider");
 	o.registerModel<scChord>("SuperCollider");
-#if OFXOCEANODESC_HAS_TRANSPORT
 	o.registerModel<scMetroBox>("SuperCollider");
 	o.registerModel<scEuclideanBox>("SuperCollider");
 	o.registerModel<scArpeggiatorBox>("SuperCollider");
 	o.registerModel<scChordBox>("SuperCollider");
-#endif
 	o.registerModel<scRhythmBox>("SuperCollider", controller->getServers());
 	o.registerModel<scDataBox>("SuperCollider", controller->getServers());
 }

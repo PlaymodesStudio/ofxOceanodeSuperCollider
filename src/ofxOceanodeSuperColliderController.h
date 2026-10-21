@@ -16,10 +16,8 @@
 #include <functional>
 #include <string>
 #include <vector>
-#if OFXOCEANODESC_HAS_TIMELINE
 #include <atomic>
 #include <thread>
-#endif // OFXOCEANODESC_HAS_TIMELINE
 
 class scStart;
 class ofxSCServer;
@@ -38,9 +36,7 @@ public:
     }
     
     void setup();
-#if OFXOCEANODESC_HAS_TIMELINE
     void update() override;
-#endif // OFXOCEANODESC_HAS_TIMELINE
     void draw() override;
     // The SynthDef compiler's prompt: it must open whatever window is visible.
     void drawPopups() override;
@@ -48,7 +44,6 @@ public:
     
     void killServers();
 
-#if OFXOCEANODESC_HAS_TIMELINE
     // A capture happens in two stages, because the slow half cannot be done at
     // the moment recording starts.
     //
@@ -136,7 +131,6 @@ public:
     // 0..1 through the timeline while capturing, or -1. Only meaningful when
     // the capture has a fixed duration; an externally stopped one has none.
     float getNRTCaptureProgress() const;
-#endif // OFXOCEANODESC_HAS_TIMELINE
 
     void saveConfig(std::string filepath, scPreferences prefs);
 	void saveControllerConfig(std::string filepath);
@@ -159,7 +153,6 @@ private:
     std::string getAudioInputDeviceNameFromSelection() const;
     int getSampleRateFromSelection() const;
     void applyAudioDeviceToServers(bool restartServers);
-#if OFXOCEANODESC_HAS_TIMELINE
     void startNRTRender();
     void completeNRTCapture(bool cancelled = false, double durationOverride = -1.0);
     void joinFinishedNRTThread();
@@ -183,7 +176,6 @@ private:
     // the file untouched if it is not a format this understands, so an
     // unexpected file is never half-rewritten.
     static bool removeDCOffsetInPlace(const std::string& wavPath, double cornerHz = 3.5);
-#endif // OFXOCEANODESC_HAS_TIMELINE
 
     float volume;
     bool mute;
@@ -211,7 +203,6 @@ private:
     scSynthdefSync synthdefSync;
     scPresetShare presetShare;
 
-#if OFXOCEANODESC_HAS_TIMELINE
     enum class NRTArmState { Disarmed, Settling, Armed };
     NRTArmState nrtArmState = NRTArmState::Disarmed;
     uint64_t nrtSettleDeadline = 0;
@@ -251,7 +242,6 @@ private:
     bool nrtRemoveDC = false;
     std::string nrtCaptureOutputPath;
     int nrtCaptureOutputChannels = 2;
-#endif // OFXOCEANODESC_HAS_TIMELINE
 };
 
 #endif /* ofxOceanodeSuperColliderController_h */

@@ -1,4 +1,3 @@
-#define OFXOCEANODESC_HAS_TRANSPORT 0
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cassert>
@@ -27,10 +26,21 @@ struct Timeline {
         if(j.contains(key)) for(const auto& k:j[key]) hidden.insert(k.get<std::string>());
     }
 };
+template<class T> struct ClockParameter {
+    std::string name;
+    T value;
+    std::string getEscapedName() const { return name; }
+    ClockParameter& operator=(T next) { value = next; return *this; }
+};
 struct scRhythmBox {
     static constexpr int MAX_TRACKS = 8;
     int numTracks = 0;
     bool legacyPublishing = false;
+    ClockParameter<bool> syncToTransportP{"Sync To Transport", true};
+    ClockParameter<float> beatOffsetP{"Beat Offset", 0.0f};
+    template<class T> void deserializeParameter(ofJson& json, ClockParameter<T>& parameter) {
+        parameter.value = json.at(parameter.name).template get<T>();
+    }
     std::vector<std::function<void()>> pendingTrackEdits;
     std::vector<std::string> legacyControlKeys = {"Reset", "Play", "Tracks", "Slot", "Embed", "MasterVol", "Vol", "Prob", "StepProb", "Cut", "Res", "Pan", "Mute", "Solo", "Swing", "Transpose", "GTranspose"};
     std::map<std::string,std::shared_ptr<Handle>> snapPublished;
@@ -48,6 +58,7 @@ int main() {
     ofJson old = {{"Tracks", "2"}, {"Vol", {.2f,.3f}}, {"rhythmBoxSnapPublished", {"Morph"}}};
     box.loadBeforeConnections(old);
     assert(box.numTracks == 2);
+    assert(!box.syncToTransportP.value && box.beatOffsetP.value == 0.0f);
     // Every old wire endpoint exists before the container reconnects it.
     for(const auto& key:box.legacyControlKeys) assert(box.snapPublished.count(key));
     box.snapPublished["Vol"]->connected = true;
@@ -57,7 +68,9 @@ int main() {
     // New presets restore just their chosen ports and timeline visibility.
     box.snapPublished["Vol"]->connected = false;
     ofJson current = {{"numTracks", 3}, {"rhythmBoxPublished", {"MasterVol", "Morph"}}, {"rhythmBoxTimeline", {"MasterVol"}}};
+    current["Sync To Transport"] = true; current["Beat Offset"] = 0.5f;
     box.loadBeforeConnections(current);
+    assert(box.syncToTransportP.value && box.beatOffsetP.value == 0.5f);
     assert(box.numTracks == 3 && box.snapPublished.size() == 2);
     assert(box.timeline.isHidden("MasterVol"));
     current["rhythmBoxTimeline"] = ofJson::array();

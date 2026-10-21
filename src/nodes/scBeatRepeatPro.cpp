@@ -140,7 +140,7 @@ void scBeatRepeatPro::setup() {
     snapshotActivates.set("Recall Activates", false);
     momentary.set("Momentary", false);
 
-    autoClock.set("Auto Clock", OFXOCEANODESC_HAS_TRANSPORT ? 2 : 1, 0, 2);
+    autoClock.set("Auto Clock", 2, 0, 2);
     autoMode.set("Auto Mode", 1, 0, 1);
     autoGrid.set("Auto Grid", 3, 0, (int)brAutoGrids().size() - 1);
     autoInterval.set("Auto Interval", 8, 1, 64);
@@ -865,7 +865,6 @@ void scBeatRepeatPro::updateAutoTrigger() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 
     bool useTransport = false;
-#if OFXOCEANODESC_HAS_TRANSPORT
     const auto frame = getFrameTransportState();
     const int clock = autoClock.get();
     useTransport = clock == 0 || (clock == 2 && frame.current.isPlaying);
@@ -885,7 +884,6 @@ void scBeatRepeatPro::updateAutoTrigger() {
         fill(cur, frame.current);
         fill(prev, frame.previous);
     }
-#endif
     if(useTransport) {
         autoFreeRunning = false;
     } else {
@@ -1426,14 +1424,7 @@ void scBeatRepeatPro::drawAutoCard() {
     int clock = autoClock.get();
     const char* clocks[] = {"Transport", "Free", "Follow"};
     ImGui::SetNextItemWidth(brEditorControlWidth("Clock"));
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(ImGui::Combo("Clock", &clock, clocks, 3)) autoClock.set(clock);
-#else
-    ImGui::BeginDisabled();
-    clock = 1;
-    ImGui::Combo("Clock", &clock, clocks, 3);
-    ImGui::EndDisabled();
-#endif
     drawPublishMenu(autoClock.getEscapedName());
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("Transport: steps follow the timeline; nothing fires while it is stopped.\n"

@@ -20,7 +20,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "ofxOceanodeShared.h"
 #include "scNode.h"
-#include "scTransportSync.h"   // guarded inside by OFXOCEANODESC_HAS_TRANSPORT
+#include "scTransportSync.h"
 #include "serverManager.h"
 #include "ofxSuperCollider.h"
 #include "ofxSCSynth.h"
@@ -514,7 +514,6 @@ private:
     float browserW           = 220.0f; // file browser panel width (resizable)
     int  pendingTrackRemoval = -1;   // deferred until after the current ImGui track loop
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     // ── Sync To Transport (inspector) ─────────────────────────────────────────
     // Each track's step position = (transportBeat + beatOffset) * stepsPerBeat,
     // wrapped to its numSteps. The SC clock is re-anchored with timetagged
@@ -536,7 +535,6 @@ private:
     void handleSyncChanged(bool on);
     void updateTransportSync();
     void sendAnchor(const scTransportSync::Anchor& a);
-#endif
 
     // ── Per-track step-data ofParameters (FM7Drone listener pattern) ─────────
     // Storing step arrays as ofParameters means any .set() call — from preset

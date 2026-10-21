@@ -32,7 +32,6 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 
-#if OFXOCEANODESC_HAS_TRANSPORT
 
 #include "scNode.h"
 #include "scTimelineMenu.h"
@@ -47,10 +46,7 @@
 #include "ofxSCBuffer.h"
 #include "ofxSCBus.h"
 #include "ofxSCServer.h"
-#if OFXOCEANODESC_HAS_TIMELINE
 #include "ofxOceanodeContainer.h"
-#include "ofxOceanodeTimeline.h"
-#endif
 #include "imgui.h"
 #include <algorithm>
 #include <array>
@@ -768,9 +764,10 @@ private:
         }
     }
     double beatsPerBar() const {
-#if OFXOCEANODESC_HAS_TIMELINE
-        if(auto* container = getHostContainer()) return std::max(0.25, container->getTimelineManager().getBeatsPerBar());
-#endif
+        if(auto* container = getHostContainer()) {
+            if(auto* extension = container->getAutomationExtension())
+                return std::max(0.25, extension->getBeatsPerBar());
+        }
         return 4.0;
     }
 
@@ -1758,5 +1755,3 @@ private:
     int selectedTab = 0, selectedStep = 0, viewBeats = 16;
     std::string snapMessage;
 };
-
-#endif // OFXOCEANODESC_HAS_TRANSPORT

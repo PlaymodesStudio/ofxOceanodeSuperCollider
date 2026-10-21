@@ -27,7 +27,7 @@ public:
     }
 
     ~timelineWaveTrack() override {
-        if(getHostContainer() != nullptr)
+        if(getHostContainer() != nullptr && getHostContainer()->getAutomationExtension())
             getHostContainer()->getTimelineManager().setWaveAudioProvider(nullptr);
         for(auto& serverVoices : voices) {
             for(auto& entry : serverVoices.second) freeVoice(entry.second);
@@ -41,7 +41,7 @@ public:
         trackSelectorParameter = addParameterDropdown(trackSelector, "Wave Track", 0, trackOptions);
         addParameter(volume.set("Volume", 1.0f, 0.0f, 4.0f));
         addParameter(playbackRate.set("Playback Rate", 1.0f, 0.1f, 4.0f));
-        if(getHostContainer() != nullptr)
+        if(getHostContainer() != nullptr && getHostContainer()->getAutomationExtension())
             getHostContainer()->getTimelineManager().setWaveAudioProvider(this);
     }
 
@@ -223,7 +223,7 @@ private:
     }
 
     bool selectedTrack(const std::string& trackId) const {
-        if(trackSelector.get() == 0 || getHostContainer() == nullptr) return true;
+        if(trackSelector.get() == 0 || getHostContainer() == nullptr || !getHostContainer()->getAutomationExtension()) return true;
         const auto& timeline = getHostContainer()->getTimelineManager();
         int option = 1;
         for(const auto& track : timeline.getTracks()) {
@@ -235,7 +235,7 @@ private:
 
     void refreshTrackOptions() {
         std::vector<std::string> next{"Mix"};
-        if(getHostContainer() != nullptr) {
+        if(getHostContainer() != nullptr && getHostContainer()->getAutomationExtension()) {
             for(const auto& track : getHostContainer()->getTimelineManager().getTracks())
                 if(track.isWaveTrack) next.push_back(track.name);
         }
@@ -255,7 +255,7 @@ private:
     }
 
     void syncVoicesFromTimeline(ofxSCServer* server) {
-        if(getHostContainer() == nullptr) return;
+        if(getHostContainer() == nullptr || !getHostContainer()->getAutomationExtension()) return;
         for(const auto& track : getHostContainer()->getTimelineManager().getTracks()) {
             if(!track.isWaveTrack) continue;
             for(const auto& clip : track.clips) {

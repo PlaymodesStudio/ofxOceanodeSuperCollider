@@ -17,7 +17,7 @@ bool scTimelineMenu::isOnTimeline(const std::string& key) const {
 #if OFXOCEANODESC_HAS_TIMELINE
     auto* p = parameter(key);
     auto* container = node ? node->getHostContainer() : nullptr;
-    return p && container && container->getTimelineManager().isParameterBound(*p);
+    return p && container && container->getAutomationExtension() && container->getTimelineManager().isParameterBound(*p);
 #else
     (void)key;
     return false;
@@ -27,7 +27,7 @@ bool scTimelineMenu::isOnTimeline(const std::string& key) const {
 void scTimelineMenu::items(const std::string& key, bool separator) {
 #if OFXOCEANODESC_HAS_TIMELINE
     auto* container = node ? node->getHostContainer() : nullptr;
-    if(!container) return;
+    if(!container || !container->getAutomationExtension()) return;
     auto& timeline = container->getTimelineManager();
     auto* existing = parameter(key);
     if(existing && !timeline.isStepLaneCompatible(*existing)) return;
@@ -86,7 +86,7 @@ void scTimelineMenu::mark(const std::string& key) const {
     auto* p = parameter(key);
     auto* container = p && node ? node->getHostContainer() : nullptr;
     ofColor colour;
-    if(!container || !container->getTimelineManager().getParameterTrackColor(*p, colour)) return;
+    if(!container || !container->getAutomationExtension() || !container->getTimelineManager().getParameterTrackColor(*p, colour)) return;
     const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, a.y + 1.0f), ImVec2(b.x, a.y + 1.0f),
                                         IM_COL32(colour.r, colour.g, colour.b, 255), 2.0f);

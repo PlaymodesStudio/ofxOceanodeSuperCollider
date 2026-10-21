@@ -64,13 +64,11 @@ scRhythmBox::scRhythmBox(vector<serverManager*> servers)
     samplePaths.resize(MAX_TRACKS);
     waveformPeaks.resize(MAX_TRACKS);
     currentStep.assign(MAX_TRACKS, 0);
-#if OFXOCEANODESC_HAS_TRANSPORT
     stepClocks.assign(MAX_TRACKS, scTransportSync::StepClock{});
     syncSpb.assign(MAX_TRACKS, -1);
     syncNs.assign(MAX_TRACKS, -1);
     hardCounters.assign(MAX_TRACKS, 0.0);
     needHard.assign(MAX_TRACKS, true);
-#endif
     
     // Initialize project functionality
     projectsDirectory = getProjectsDirectory();
@@ -157,13 +155,11 @@ void scRhythmBox::setup() {
     // Uses MAX_TRACKS as a sentinel index so getOutputBusIndex can distinguish it.
     addOutputParameter(mixOutParam.set("Mix", nodePort(MAX_TRACKS, this)));
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     // Inspector: lock every track's step clock to the global transport.
     // While on, the node's Play / Reset / Stop / BPM are ignored by the synths:
     // transport play/stop and tempo drive them.
     addInspectorParameter(syncToTransportP.set("Sync To Transport", true));
     addInspectorParameter(beatOffsetP.set("Beat Offset", 0.0f, -64.0f, 64.0f));
-#endif
 
     // ── Slot / track data initialisation ─────────────────────────────────────
     initSlots();
@@ -290,7 +286,6 @@ void scRhythmBox::setup() {
         setNumTracks(n);
     }));
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     nodeListeners.push(syncToTransportP.newListener([this](bool& on) {
         handleSyncChanged(on);
     }));
@@ -300,7 +295,6 @@ void scRhythmBox::setup() {
         for(int ti = 0; ti < MAX_TRACKS; ti++) needHard[ti] = true;
         follower.requestAnchor();
     }));
-#endif
 
     nodeListeners.push(currentSlotP.newListener([this](int& /*s*/) {
         reloadCurrentSlot();
@@ -519,9 +513,7 @@ void scRhythmBox::update(ofEventArgs& /*args*/) {
         if(gv != gateOut.get()) gateOut.set(gv);
     }
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(syncToTransportP.get()) updateTransportSync();
-#endif
 }
 
 void scRhythmBox::draw(ofEventArgs& /*args*/) {
@@ -540,9 +532,7 @@ void scRhythmBox::setBpm(float bpm) {
 }
 
 void scRhythmBox::activate() {
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(syncToTransportP.get()) handleSyncChanged(true);
-#endif
     for(auto& [srv, synths] : trackSynths)
         for(auto* s : synths) if(s) s->run(true);
 }
@@ -596,9 +586,7 @@ void scRhythmBox::free(ofxSCServer* srv) {
     privateBuses.erase(srv);
     stepBuses.erase(srv);
     gateBuses.erase(srv);
-#if OFXOCEANODESC_HAS_TRANSPORT
     syncJoined.erase(srv);
-#endif
     if(mixBuses.count(srv)) {
         if(mixBuses[srv]) { mixBuses[srv]->free(); delete mixBuses[srv]; }
         mixBuses.erase(srv);
@@ -688,10 +676,8 @@ void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
 
     auto* s = new ofxSCSynth(rhythmBoxSynthName(tc.type), srv);
     trackSynths[srv][ti] = s;
-#if OFXOCEANODESC_HAS_TRANSPORT
     syncJoined[srv].resize(MAX_TRACKS, false);
     syncJoined[srv][ti] = false;
-#endif
 
     // Set timing and sample parameters
     s->set("bpm",           effectiveBpm());
@@ -708,7 +694,6 @@ void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
     // Current reset counter value: a new synth must not see a change at start.
     s->set("reset",         resetCounter);
     s->set("play",          playSeq.get() ? 1.0f : 0.0f);
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(syncToTransportP.get()) {
         // Hold (run=0) until the next anchor, which positions this track at the
         // current transport position (hard anchor: it joins without a re-reset
@@ -723,7 +708,6 @@ void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
         needHard[ti] = true;
         follower.requestAnchor();
     }
-#endif
     s->set("active",        (getActive() && !tc.muted) ? 1.0f : 0.0f);
     s->set("mono",          tc.monoMode      ? 1.0f : 0.0f);
     s->set("volLatch",      tc.volLatch       ? 1.0f : 0.0f);
@@ -1157,17 +1141,11 @@ void scRhythmBox::sendResetTo(int firstTrack, int endTrack) {
 }
 
 bool scRhythmBox::isSyncing() const {
-#if OFXOCEANODESC_HAS_TRANSPORT
     return syncToTransportP.get();
-#else
-    return false;
-#endif
 }
 
 float scRhythmBox::effectiveBpm() const {
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(syncToTransportP.get()) return syncBpm;
-#endif
     return currentBpm;
 }
 
@@ -5281,14 +5259,12 @@ void scRhythmBox::loadBeforeConnections(ofJson& j) {
     // called AFTER connections are remade, so we must add the ports here instead.
     const int n = inferRhythmBoxTrackCount(j, numTracks);
     if(n != numTracks) setNumTracks(n);
-#if OFXOCEANODESC_HAS_TRANSPORT
     // Restore the clock mode before the synths are (re)built, like the Phasor.
     // Old presets have no key: stays false (free-running, as before).
     if(!j.contains(syncToTransportP.getEscapedName())) syncToTransportP = false;
     else deserializeParameter(j, syncToTransportP);
     if(!j.contains(beatOffsetP.getEscapedName())) beatOffsetP = 0.0f;
     else deserializeParameter(j, beatOffsetP);
-#endif
 }
 
 void scRhythmBox::presetRecallAfterSettingParameters(ofJson& j) {
@@ -5876,9 +5852,7 @@ void scRhythmBox::drawGlobalControls() {
 
     // Play button (green when active)
     bool playing = playSeq.get();
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(transportLocked) playing = getFrameTransportState().current.isPlaying;
-#endif
     if(playing) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.6f, 0.15f, 1.0f));
     if(windowControl("Play", [&](){ return ImGui::Button(playing ? "|| Pause" : "|> Play"); })) {
         playSeq.set(!playing);
@@ -5953,7 +5927,6 @@ void scRhythmBox::drawGlobalControls() {
 // ════════════════════════════════════════════════════════════════════════════
 // Sync To Transport
 // ════════════════════════════════════════════════════════════════════════════
-#if OFXOCEANODESC_HAS_TRANSPORT
 
 void scRhythmBox::handleSyncChanged(bool on) {
     if(on) {
@@ -6080,7 +6053,6 @@ void scRhythmBox::sendAnchor(const scTransportSync::Anchor& a) {
     if(anyPending) follower.requestAnchor();
 }
 
-#endif // OFXOCEANODESC_HAS_TRANSPORT
 
 void scRhythmBox::initializeTrackControls() {
     for(int ti = 0; ti < MAX_TRACKS; ++ti) {

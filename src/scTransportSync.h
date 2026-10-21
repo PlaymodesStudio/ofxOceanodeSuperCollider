@@ -52,7 +52,6 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 
-#if OFXOCEANODESC_HAS_TRANSPORT
 
 #include "ofxOceanodeTransport.h"
 #include "ofxSCServer.h"
@@ -399,5 +398,3 @@ private:
 };
 
 } // namespace scTransportSync
-
-#endif // OFXOCEANODESC_HAS_TRANSPORT

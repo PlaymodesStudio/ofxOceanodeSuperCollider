@@ -397,14 +397,12 @@ void scGrainBoxPoly::setup() {
     revPositionP.set("Rev Position", 0.8f,   0.0f,     1.0f);    // SpaceMaster \position (early -> late)
     revSpreadP.set  ("Rev Spread",   0.15f, -1.0f,     1.0f);    // SpaceMaster \spread
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     // In Sync To Transport mode the auto-trigger grid, the LFOs and TrigDur
     // follow the global transport (all playheads); BPM input and SyncGate are
     // ignored by the synths.
     addInspectorParameter(syncToTransportP.set("Sync To Transport", false));
     addInspectorParameter(beatOffsetP.set("Beat Offset", 0.0f, -64.0f, 64.0f));
     stepClock.setPatternLength(32.0);   // 32-beat grid block -> anchorPos period 2048 beats
-#endif
 
     // Output port
     scNode::addInput("In");     // live input (recorded by Live playheads)
@@ -496,7 +494,6 @@ void scGrainBoxPoly::setup() {
     fxParamListener(revPositionP, FX_REVERB);
     fxParamListener(revSpreadP,   FX_REVERB);
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     nodeListeners.push(syncToTransportP.newListener([this](bool& on) {
         handleSyncChanged(on);
     }));
@@ -506,7 +503,6 @@ void scGrainBoxPoly::setup() {
         for(auto& ph : playheads) ph->needHard = true;
         follower.requestAnchor();
     }));
-#endif
 
     initializePublishableEditorParameters();
     {
@@ -1053,19 +1049,15 @@ void scGrainBoxPoly::replaceCtl(Playhead& ph, ofxSCServer* srv) {
     const int bus = ph.ebus[srv].ctl->index;
     for(auto* v : ph.voices[srv]) if(v) v->set("ctl", bus);
     if(ph.outSynths.count(srv) && ph.outSynths[srv]) ph.outSynths[srv]->set("ctl", bus);
-#if OFXOCEANODESC_HAS_TRANSPORT
     ph.needHard = true;                      // re-anchor the new clock
     if(syncToTransportP.get()) follower.requestAnchor();
-#endif
 }
 
 // GrainBoxPolyV_K_N: K = channels of the engine's sample, N = its speakers
 std::string scGrainBoxPoly::voiceDefFor(const Playhead& ph) const {
     const int k = std::max(1, std::min(MAX_SAMPLE_CHANNELS, sampleOf(ph).numChannels));
     bool sync = false;
-#if OFXOCEANODESC_HAS_TRANSPORT
     sync = syncToTransportP.get();
-#endif
     // the modulation (X): only while something is routed
     const std::string x = ph.modOn ? "X" : "";
     // Live, Grainless: a delay line per playhead
@@ -1714,9 +1706,7 @@ void scGrainBoxPoly::configureSynth(Playhead& ph, ofxSCSynth* s, ofxSCServer* sr
     // the modulation: its header bus, its LFOs' rates and phases
     setCtlModArgs(ph, s, srv);
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     setSyncHoldArgs(ph, s);
-#endif
 }
 
 // buildSynth: create the ofxSCSynth objects and queue all init args.
@@ -2799,9 +2789,7 @@ void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
         updateModulation(ph);
     }
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(syncToTransportP.get()) updateTransportSync();
-#endif
 
     // ── CPU: /grainTrig (and live peak) replies only while the window is
     //    shown (drawn last frame, not collapsed); pause muted playheads ───
@@ -3201,9 +3189,7 @@ std::string scGrainBoxPoly::defNameFor(const Playhead& ph) const {
 }
 
 float scGrainBoxPoly::effectiveBpm() const {
-#if OFXOCEANODESC_HAS_TRANSPORT
     if(syncToTransportP.get()) return syncBpm;
-#endif
     return currentBpm;
 }
 
@@ -3908,9 +3894,7 @@ void scGrainBoxPoly::presetSave(ofJson& j) {
 
 void scGrainBoxPoly::loadBeforeConnections(ofJson& j) {
     loadingPreset = true;    // cleared in presetRecallAfterSettingParameters / presetHasLoaded
-#if OFXOCEANODESC_HAS_TRANSPORT
     deserializeParameter(j, syncToTransportP);
-#endif
     if(j.contains("browseDir") && j["browseDir"].is_string()) {
         std::string d = j["browseDir"].get<std::string>();
         if(std::filesystem::exists(d)) browser.refresh(d);
@@ -4147,7 +4131,6 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
 // ════════════════════════════════════════════════════════════════════════════
 // Sync To Transport
 // ════════════════════════════════════════════════════════════════════════════
-#if OFXOCEANODESC_HAS_TRANSPORT
 
 // A synth created while syncing holds (run=0) until the next anchor, which
 // positions it at the current transport beat (hard for its playhead).
@@ -4254,7 +4237,6 @@ void scGrainBoxPoly::sendAnchor(const scTransportSync::Anchor& a) {
     if(anyPending) follower.requestAnchor();
 }
 
-#endif // OFXOCEANODESC_HAS_TRANSPORT
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -6446,9 +6428,7 @@ void scGrainBoxPoly::updateModulation(Playhead& ph) {
         refreshPlayheadSynths(ph);   // the X variants (or back)
         for(auto& [srv, vs] : ph.voices) for(auto* v : vs) setModArgs(ph, v, srv);
         ph.modDirty = true;
-#if OFXOCEANODESC_HAS_TRANSPORT
         if(syncToTransportP.get()) follower.requestAnchor();
-#endif
     }
     if(ph.modDirty) {
         ph.modDirty = false;

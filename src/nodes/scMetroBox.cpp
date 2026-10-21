@@ -5,16 +5,12 @@
 
 #include "scMetroBox.h"
 
-#if OFXOCEANODESC_HAS_TRANSPORT
 
 #include "scSynthControlBatch.h"
 
 #include "ofxSCServer.h"
 #include "ofxOceanodeShared.h"
-#if OFXOCEANODESC_HAS_TIMELINE
 #include "ofxOceanodeContainer.h"
-#include "ofxOceanodeTimeline.h"
-#endif
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -1338,10 +1334,10 @@ void scMetroBox::presetRecallAfterSettingParameters(ofJson &json) {
 // ════════════════════════════════════════════════════════════════════════════
 
 double scMetroBox::beatsPerBar() const {
-#if OFXOCEANODESC_HAS_TIMELINE
-    if(auto* container = getHostContainer())
-        return std::max(0.25, container->getTimelineManager().getBeatsPerBar());
-#endif
+    if(auto* container = getHostContainer()) {
+        if(auto* extension = container->getAutomationExtension())
+            return std::max(0.25, extension->getBeatsPerBar());
+    }
     return 4.0;
 }
 
@@ -1840,5 +1836,3 @@ void scMetroBox::drawAdvanced(int li) {
     ImGui::Separator();
     ImGui::PopID();
 }
-
-#endif // OFXOCEANODESC_HAS_TRANSPORT

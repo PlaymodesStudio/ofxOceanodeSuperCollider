@@ -17,11 +17,9 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
-#if OFXOCEANODESC_HAS_TIMELINE
 #include "ofxOceanodeTime.h"
 #include <array>
 #include <cstring>
-#endif // OFXOCEANODESC_HAS_TIMELINE
 
 ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOceanodeBaseController("SuperCollider"){
     volume = 1;
@@ -40,13 +38,10 @@ ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOc
 }
 
 ofxOceanodeSuperColliderController::~ofxOceanodeSuperColliderController(){
-#if OFXOCEANODESC_HAS_TIMELINE
     if(nrtCaptureActive) completeNRTCapture(true);
     if(nrtRenderThread.joinable()) nrtRenderThread.join();
-#endif // OFXOCEANODESC_HAS_TIMELINE
 }
 
-#if OFXOCEANODESC_HAS_TIMELINE
 void ofxOceanodeSuperColliderController::update(){
     joinFinishedNRTThread();
     updateNRTArming();
@@ -945,7 +940,6 @@ float ofxOceanodeSuperColliderController::getNRTCaptureProgress() const{
     return ofClamp((float)(now / (double)total), 0.0f, 1.0f);
 }
 
-#endif // OFXOCEANODESC_HAS_TIMELINE
 
 void ofxOceanodeSuperColliderController::createServers(){
     ofDirectory dir;
@@ -1027,7 +1021,6 @@ void ofxOceanodeSuperColliderController::draw(){
     }
     synthdefSync.drawMenuItem();
     presetShare.drawMenuItem();
-#if OFXOCEANODESC_HAS_TIMELINE
     if(ImGui::BeginMenu("NRT Rendering")){
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);
         ImGui::InputFloat("Duration (s)", &nrtDuration, 1.0f, 10.0f, "%.2f");
@@ -1064,7 +1057,6 @@ void ofxOceanodeSuperColliderController::draw(){
         if(!nrtStatus.empty()) ImGui::TextWrapped("%s", nrtStatus.c_str());
         ImGui::EndMenu();
     }
-#endif // OFXOCEANODESC_HAS_TIMELINE
 
     ImGui::Separator();
     ImGui::PushItemWidth(ImGui::GetFontSize() * 12.0f);

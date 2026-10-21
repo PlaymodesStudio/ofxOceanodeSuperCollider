@@ -24,24 +24,27 @@ a crossfade. Custom C++ instrument/effect nodes are unchanged.
 
 Run the routing regression tests with `sh tools/audio_routing_test/run.sh`.
 
-## Optional timeline integration
+## Core transport and optional timeline integration
 
-Some features need ofxOceanode's timeline, its scheduling layer and its
-frame-stepped transport, which currently live on an experimental ofxOceanode
-branch. They are detected automatically (`__has_include` on
-`ofxOceanodeScheduling.h` and `ofxOceanodeTimeline.h`) and compiled out when
-they are missing, so this addon builds against a mainline ofxOceanode.
+This addon requires the current ofxOceanode core. Shared transport, frame
+stepping, timestamped parameter scheduling and instrument metadata are core
+APIs and are always compiled. Transport sequencers, Sync To Transport options,
+NRT WAV rendering and SC NRT Recorder work without the timeline addon.
 
-Compiled out without the timeline:
+Only clip-specific features need **ofxOceanodeTimeline**: Timeline Wave Track,
+parameter publishing menus, track-colour indicators and timeline binding
+retargeting. Add the timeline addon to the application's `addons.make`,
+regenerate the project and call `ofxOceanodeTimeline::setup(oceanode)` after
+`oceanode.setup()`, before loading presets.
 
-- the **Timeline Wave Track** node
-- timestamped, sample-accurate parameter sends driven by timeline lanes
-- non-realtime WAV rendering and the **SC NRT Recorder** node
+The timeline addon exports `OFX_OCEANODE_HAS_TIMELINE=1` for the whole build.
+Header discovery does not enable it. `OFXOCEANODESC_HAS_TIMELINE=0` can disable
+SC's timeline integration explicitly; manually enabling it requires linking
+the timeline addon. Compiled timeline UI also checks runtime attachment.
 
-Everything else, realtime SuperCollider playback included, is unaffected.
-
-To override the detection, define `OFXOCEANODESC_HAS_TIMELINE` as `0` or `1`
-in your project (see `src/ofxOceanodeSuperColliderConfig.h`).
+The backend scheduling adapter always registers targets with core. Timeline
+lanes can produce scheduled events when installed, and other scheduling
+producers can use the same interface without linking timeline code.
 
 ## AliasingBox
 

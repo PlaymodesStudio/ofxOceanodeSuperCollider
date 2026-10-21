@@ -30,7 +30,6 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 
-#if OFXOCEANODESC_HAS_TRANSPORT
 
 #include "scNode.h"
 #include "scTransportSync.h"
@@ -246,5 +245,3 @@ private:
     std::vector<std::string> advancedSummary(int layer) const;   // advanced settings in use
     double beatsPerBar() const;
 };
-
-#endif // OFXOCEANODESC_HAS_TRANSPORT

@@ -184,7 +184,6 @@ private:
     int resetCounter = 0;      // \reset is a counter: every change is one reset
     int randomGeneratorId = 0; // \rid: this node's RandID on the server (1..63)
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     // ── Sync To Transport (inspector) ──
     ofParameter<bool>  syncToTransport;
     ofParameter<float> syncDiv;     // steps per beat
@@ -196,7 +195,6 @@ private:
     bool forceHardAnchor = false;   // next anchor resets the "highest step fired" (new synth)
     void sendTransportAnchors();
     void handleSyncToTransportChanged(bool enabled);
-#endif
     void requestSyncAnchor();       // re-send the pattern bases (no-op when not syncing)
 
     // ── Helpers ──

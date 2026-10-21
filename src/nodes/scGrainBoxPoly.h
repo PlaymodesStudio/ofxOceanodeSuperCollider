@@ -323,10 +323,8 @@ private:
         int   syncGateCount = 0;
         bool  syncGateReset = false;
         bool  triggerReset  = false;   // window Trig button: back to 0 next frame
-#if OFXOCEANODESC_HAS_TRANSPORT
         double hardCounter = 0.0;
         bool   needHard    = true;
-#endif
     };
     std::vector<std::unique_ptr<Playhead>> playheads;
     int  activePlayhead = 0;       // GUI tab
@@ -693,7 +691,6 @@ private:
     void switchPitchMode(Playhead& ph, int mode);   // the window's switch: the values follow (+-60)
     void syncGateCopy(Playhead& ph, ofxSCServer* srv);
 
-#if OFXOCEANODESC_HAS_TRANSPORT
     // ── Sync To Transport ─────────────────────────────────────────────────────
     ofParameter<bool>  syncToTransportP;
     ofParameter<float> beatOffsetP;
@@ -708,7 +705,4 @@ private:
     void sendAnchor(const scTransportSync::Anchor& a);
     void setSyncHoldArgs(Playhead& ph, ofxSCSynth* s);
     bool isSyncing() const { return syncToTransportP.get(); }
-#else
-    bool isSyncing() const { return false; }
-#endif
 };

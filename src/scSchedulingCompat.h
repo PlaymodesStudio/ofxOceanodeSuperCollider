@@ -6,8 +6,6 @@
 #ifndef scSchedulingCompat_h
 #define scSchedulingCompat_h
 
-#include "ofxOceanodeSuperColliderConfig.h"
-
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -15,57 +13,34 @@
 
 class ofxOceanodeAbstractParameter;
 
-#if OFXOCEANODESC_HAS_TIMELINE
-	#include "ofxOceanodeScheduling.h"
-#endif
+#include "ofxOceanodeScheduling.h"
 
-// Thin shim over ofxOceanodeScheduling, which only exists on ofxOceanode's
-// timeline branch. Without it every call here is a no-op and the backend keeps
-// sending on the frame clock, exactly as it did before scheduling existed.
-//
-// The handler takes plain arguments rather than ofxOceanodeScheduledParameterEvent
-// so call sites need no conditional compilation of their own.
+// Adapter for the core scheduling interface. Backends register regardless of
+// whether the optional timeline addon is present. Core scheduling producers
+// can dispatch timestamped parameter events through this same interface.
 namespace scScheduling {
 
 // (dueSteadyTimeUs, text value) -> true when the backend scheduled it.
 using Handler = std::function<bool(uint64_t, const std::string&)>;
 
 inline bool isBackendSendSuppressed(){
-#if OFXOCEANODESC_HAS_TIMELINE
 	return ofxOceanodeScheduling::isBackendSendSuppressed();
-#else
-	return false;
-#endif
 }
 
 inline void registerParameterTarget(const ofxOceanodeAbstractParameter* parameter,
 									const void* owner, Handler handler){
-#if OFXOCEANODESC_HAS_TIMELINE
 	ofxOceanodeScheduling::registerParameterTarget(parameter, owner,
 		[handler = std::move(handler)](const ofxOceanodeScheduledParameterEvent& event){
 			return handler(event.dueSteadyTimeUs, event.value);
 		});
-#else
-	(void)parameter;
-	(void)owner;
-	(void)handler;
-#endif
 }
 
 inline void unregisterParameterTarget(const ofxOceanodeAbstractParameter* parameter){
-#if OFXOCEANODESC_HAS_TIMELINE
 	ofxOceanodeScheduling::unregisterParameterTarget(parameter);
-#else
-	(void)parameter;
-#endif
 }
 
 inline void unregisterOwner(const void* owner){
-#if OFXOCEANODESC_HAS_TIMELINE
 	ofxOceanodeScheduling::unregisterOwner(owner);
-#else
-	(void)owner;
-#endif
 }
 
 }

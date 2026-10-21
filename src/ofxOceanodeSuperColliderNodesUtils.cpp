@@ -26,9 +26,7 @@
 #include "nodes/scBufferBrowser.h"
 #include "nodes/scMultiTrackRecorder.h"
 #include "nodes/scCodeNode.h"
-#if OFXOCEANODESC_HAS_TIMELINE
 #include "nodes/scNRTRecorder.h"
-#endif
 
 namespace ofxOceanodeSuperCollider{
 
@@ -52,9 +50,7 @@ void registerUtilNodes(ofxOceanode &o){
 #endif
 	o.registerModel<scCodeNode>("SuperCollider", controller->getServers());
 	o.registerModel<scMultiTrackRecorder>("SuperCollider", controller->getServers());
-#if OFXOCEANODESC_HAS_TIMELINE
 	o.registerModel<scNRTRecorder>("SuperCollider", controller.get());
-#endif
 }
 
 }
