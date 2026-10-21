@@ -8,6 +8,15 @@ category (or to `Defaults/<Node>/` if it gets a C++ counterpart).
 The on-demand compiler ignores this folder, and
 `tools/deploy_synthdef_compiler.sh` does not copy it into apps.
 
+## PhysicalBox/
+
+Phase 0 of the PhysicalBox node: a physical-modelling voice written in EEL2
+for DynGen. It has strike, bow, blow, scrape and external exciters, a
+waveguide and a modal bank (coupled), rattle, tension and cascade
+nonlinearities, and two pickups. `physicalbox.scd` is the playable prototype
+(window, presets, morph, keyboard, MIDI). See `PhysicalBox/README.md`; the
+offline test matrix is in `tools/physicalbox/`.
+
 ## Voice/
 
 Two speech synthesizers, moved here from `ofxOceanodeTextures/examples`.

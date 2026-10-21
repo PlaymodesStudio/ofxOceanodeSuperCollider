@@ -1,0 +1,537 @@
+// PhysicalBox, Phase 0 voice.
+//
+// One voice of the instrument: exciters -> two coupled resonators -> break
+// (nonlinearities) -> two pickups (out0, out1). Everything that closes a
+// feedback loop (bow, blow, scrape chatter, coupling, rattle, cascade) runs
+// sample by sample here, which LocalIn/LocalOut cannot do (they delay by one
+// block). The structure is meant to port almost line by line to the Phase 1
+// C++ UGen.
+//
+//   Strike -+ impulsive -+                                  +- pick1 -> out0
+//   Scrape -+            +-> A: waveguide (string <> tube) -+
+//   Ext    -+            |        couple / mutual           +- pick2 -> out1
+//   Bow    -+ feedback  -+-> B: modal bank (bar .. membrane) +
+//   Blow   -+ (read the resonators' own motion at the contact)
+//
+// excite: where the exciters touch (0 = A, 1 = B). listen: what the pickups
+// hear (0 = A, 1 = B). material: wood (0) -> glass (0.5) -> metal (1), sets
+// how fast high modes die and how long everything rings.
+
+@param freq: 220
+@param gate: 0, type=step
+@param hold: 0, type=step
+@param strk: 0, type=trig
+@param atk: 0.08
+@param rel: 0.6
+
+@param strike: 1
+@param hardness: 0.5
+@param mass: 0.3
+@param bounce: 0
+
+@param bow: 0
+@param bowpress: 0.5
+@param bowspeed: 0.5
+@param rosin: 0.2
+
+@param blow: 0
+@param breath: 0.75
+@param blowtype: 0
+@param jetratio: 0.48
+@param turb: 0.2
+
+@param scrape: 0
+@param scrapespeed: 0.5
+@param rough: 0.5
+@param grit: 0.3
+@param chatter: 0
+
+@param ext: 0
+
+@param pos: 0.3
+@param pick1: 0.2
+@param pick2: 0.58
+
+@param atune: 0
+@param adecay: 3
+@param abright: 0.7
+@param abore: 0
+@param astiff: 0
+
+@param btune: 0
+@param bdecay: 3
+@param bshape: 1
+@param bstretch: 0
+@param bmodes: 32
+@param bbright: 0.6
+
+@param material: 0.5
+@param excite: 0.5
+@param listen: 0.5
+@param couple: 0
+@param mutual: 0
+
+@param rattle: 0
+@param rattleth: 0.3
+@param tension: 0
+@param cascade: 0
+
+@param drift: 0
+@param driftrate: 0.3
+@param freeze: 0
+
+@init
+// ---------------------------------------------------------------- tuning
+// Gains found by rendering the test matrix (tools/physicalbox/): change them
+// together with the expected levels there.
+kstrikea = 0.1;    // strike into the waveguide, times its period
+kconta = 4;        // scrape / ext into the waveguide (noise-normalised)
+kcontb = 2;        // scrape / ext into the modes (noise-normalised)
+kfba = 1.0;        // bow into the waveguide junction
+kjet = 0.05;       // jet force: small, or the jet sets the pitch instead of the bore
+kreed = 1.0;       // reed force (exact STK reed reflection)
+kfbb = 1.0;        // bow into the modes
+kblowb = 1.0;      // blow into the modes
+kagc = 200;        // blow into the modes backs off as the body gets loud
+kvb = 1.0;         // modal motion seen by the bow / blow
+kcab = 0.25;       // A -> B coupling
+kcba = 0.25;       // B -> A coupling
+kcas = 12;         // cascade: low modes into the upper modes
+krat = 1.0;        // rattle into the modes
+
+// ---------------------------------------------------------------- memory
+maxm = 48;
+nshapes = 6;
+na = 16384;        // waveguide segments (lowest note ~3 Hz at 48 kHz)
+nj = 8192;         // jet delay
+
+dln = 0;                     // A: nut-side segment (round trip)
+dlb = dln + na;              // A: bridge-side segment (round trip)
+dlh = dlb + na;              // A: bridge wave history, for the pickups
+dlj = dlh + na;              // jet delay
+tab = dlj + nj;              // mode ratios, nshapes * maxm
+tq = tab + nshapes * maxm;   // spatial index of each mode
+tph = tq + nshapes * maxm;   // spatial phase of each mode
+cand = tph + nshapes * maxm; // scratch for sorting, 3 * 256
+mstate = cand + 3 * 256;     // start of the per-mode state (cleared on reset)
+my1 = mstate;
+my2 = my1 + maxm;
+mfr = my2 + maxm;            // free response of the current sample
+mdr = mfr + maxm;            // drift random walk
+ma1 = mdr + maxm;
+ma2 = ma1 + maxm;
+mgi = ma2 + maxm;            // impulse input gain: unit-amplitude ring
+mgf = mgi + maxm;            // slow input gain: unit gain at resonance
+mgx = mgf + maxm;            // noise input gain: unit output variance
+mpe = mgx + maxm;            // shape at the excite point
+mp1 = mpe + maxm;            // shape at pickup 1 (with body brightness)
+mp2 = mp1 + maxm;
+mpc = mp2 + maxm;            // shape at the coupling / rattle point
+
+// ---------------------------------------------------------------- helpers
+function sat(x) local(c) (
+    c = clip(x, -3, 3);
+    c * (27 + c * c) / (27 + 9 * c * c);
+);
+
+function dz(x, th) (
+    x - clip(x, -th, th);
+);
+
+function mat3(m, a, b, c) (
+    m < 0.5 ? lin(m * 2, a, b) : lin(m * 2 - 1, b, c);
+);
+
+function rnd2() (
+    rand(2) - 1;
+);
+
+// Cubic read, d samples behind the write position (d >= 3).
+function rdc(base, size, wp, d) local(p, i, fr, i0, i2, i3) (
+    p = wp - d;
+    p < 0 ? p += size;
+    i = floor(p);
+    fr = p - i;
+    i0 = i - 1; i0 < 0 ? i0 += size;
+    i2 = i + 1; i2 >= size ? i2 -= size;
+    i3 = i + 2; i3 >= size ? i3 -= size;
+    cubic(fr, base[i0], base[i], base[i2], base[i3]);
+);
+
+// Linear read, d samples behind the write position (d >= 1).
+function rdl(base, size, wp, d) local(p, i, fr, i2) (
+    p = wp - d;
+    p < 0 ? p += size;
+    i = floor(p);
+    fr = p - i;
+    i2 = i + 1; i2 >= size ? i2 -= size;
+    lin(fr, base[i], base[i2]);
+);
+
+// Phase delays at w (radians/sample), for tuning the waveguide.
+function lppd(b, w) (
+    atan2(b * sin(w), 1 - b * cos(w)) / w;
+);
+
+function appd(a, w) (
+    (atan2(-a * sin(w), 1 + a * cos(w)) - atan2(-sin(w), a + cos(w))) / w;
+);
+
+// Position along the object folded to the half that matters for a comb.
+function pfold(p) (
+    0.02 + 0.96 * min(p, 1 - p);
+);
+
+// ---------------------------------------------------------------- mode tables
+// 0 harmonic (string), 1 bar (free-free beam), 2 glass (ring/shell),
+// 3 bell, 4 plate (rectangular, golden sides), 5 membrane (circular).
+k = 0;
+loop(maxm,
+    tab[k] = k + 1;
+    tq[k] = k + 1;
+    tph[k] = 0;
+
+    beta = k == 0 ? 4.7300 : (k == 1 ? 7.8532 : (k + 1.5) * $pi);
+    tab[maxm + k] = (beta / 4.7300) * (beta / 4.7300);
+    tq[maxm + k] = k + 1.5;
+    tph[maxm + k] = 0;
+
+    n = k + 2;
+    tab[2 * maxm + k] = (n * (n * n - 1) / sqrt(n * n + 1)) / (6 / sqrt(5));
+    tq[2 * maxm + k] = n;
+    tph[2 * maxm + k] = 0.25 * n;
+    k += 1;
+);
+
+// Bell partials (minor-third church bell), relative to the prime.
+bl = tab + 3 * maxm;
+bl[0] = 0.5;   bl[1] = 1.0;   bl[2] = 1.183; bl[3] = 1.506;
+bl[4] = 2.0;   bl[5] = 2.514; bl[6] = 2.662; bl[7] = 3.011;
+bl[8] = 4.166; bl[9] = 4.944; bl[10] = 5.433; bl[11] = 6.796;
+bl[12] = 7.07; bl[13] = 8.215; bl[14] = 9.0;  bl[15] = 9.81;
+bl[16] = 10.53; bl[17] = 11.9;
+k = 18;
+loop(maxm - 18, bl[k] = bl[k - 1] * 1.09; k += 1;);
+k = 0;
+loop(maxm,
+    tq[3 * maxm + k] = k + 1;
+    tph[3 * maxm + k] = 0.37 * k;
+    k += 1;
+);
+
+// Plate: lowest maxm of m^2 + (n * 0.618)^2, m, n = 1..12.
+c = 0;
+m1 = 1;
+loop(12,
+    n1 = 1;
+    loop(12,
+        cand[c] = m1 * m1 + n1 * n1 * 0.381966;
+        cand[256 + c] = m1;
+        cand[512 + c] = n1;
+        c += 1;
+        n1 += 1;
+    );
+    m1 += 1;
+);
+k = 0;
+loop(maxm,
+    best = 0;
+    j = 1;
+    loop(c - 1, cand[j] < cand[best] ? best = j; j += 1;);
+    tab[4 * maxm + k] = cand[best];
+    tq[4 * maxm + k] = cand[256 + best];
+    tph[4 * maxm + k] = 0.9 * cand[512 + best];
+    cand[best] = 1000000;
+    k += 1;
+);
+p0 = tab[4 * maxm];
+k = 0;
+loop(maxm, tab[4 * maxm + k] /= p0; k += 1;);
+
+// Membrane: zeros of the Bessel functions J_m, sorted.
+mb = tab + 5 * maxm;
+mb[0] = 2.4048;  mb[1] = 3.8317;  mb[2] = 5.1356;  mb[3] = 5.5201;
+mb[4] = 6.3802;  mb[5] = 7.0156;  mb[6] = 7.5883;  mb[7] = 8.4172;
+mb[8] = 8.6537;  mb[9] = 8.7715;  mb[10] = 9.7610; mb[11] = 9.9361;
+mb[12] = 10.1735; mb[13] = 11.0647; mb[14] = 11.0864; mb[15] = 11.6198;
+mb[16] = 11.7915; mb[17] = 12.2251; mb[18] = 12.3386; mb[19] = 13.0152;
+mb[20] = 13.3237; mb[21] = 13.3543; mb[22] = 13.5893; mb[23] = 14.3725;
+mb[24] = 14.4755; mb[25] = 14.7960; mb[26] = 14.8213; mb[27] = 14.9309;
+mb[28] = 15.5898; mb[29] = 15.7002; mb[30] = 16.0378; mb[31] = 16.2235;
+mb[32] = 16.4706; mb[33] = 16.6983; mb[34] = 17.0038; mb[35] = 17.2412;
+k = 36;
+loop(maxm - 36, mb[k] = mb[k - 1] + 0.31; k += 1;);
+k = 0;
+loop(maxm,
+    mb[k] /= 2.4048;
+    tq[5 * maxm + k] = 1 + 0.5 * k;
+    tph[5 * maxm + k] = 0.61 * k;
+    k += 1;
+);
+
+// ---------------------------------------------------------------- state
+wn = 0; wb = 0; wh = 0; wj = 0;
+lpa = 0; ap1x = 0; ap1y = 0; ap2x = 0; ap2y = 0; ap3x = 0; ap3y = 0; ap4x = 0; ap4y = 0;
+nutrefl = 0; brefl = 0; ya = 0; sc = 0;
+envf = 0; enve = 0; prevg = 0;
+st = 1000000000; stlen = 1; samp = 0; nextb = 0; gap = 0; nb = 0; hard = 0;
+sclp = 0;
+apc = 0; pda = 1; ga = 0.99; bla = 0; la0 = 100; fa0 = 220; fb0 = 220; mcount = 1;
+beta = 0.3; rn = -1; rbs = -1; lfac = 1; hol = 0; vdc = 0; vrx = 0;
+
+@block
+frz = 1 + pow(_freeze, 3) * 400;
+catk = exp(-1 / (max(_atk, 0.001) * srate));
+crel = exp(-1 / (max(_rel, 0.001) * srate));
+
+// ---- resonator A: a waveguide split at the contact point into a nut-side
+// and a bridge-side segment (STK's bowed string). bore morphs the two end
+// reflections: 0 string (-1, -1), 0.5 closed tube (+1, -1: odd harmonics,
+// so the loop is halved to keep the pitch), 1 open tube (+1, +1). +1 at the
+// nut end puts the contact on an antinode, where a reed or a jet works.
+hol = clip(_abore, 0, 1);
+rn = hol < 0.5 ? -cos($pi * 2 * hol) : 1;
+rbs = hol < 0.5 ? -1 : -cos($pi * (2 * hol - 1));
+lfac = hol < 0.5 ? lin(2 * hol, 1, 0.5) : lin(2 * hol - 1, 0.5, 1);
+fa0 = clip(_freq * pow(2, _atune / 12), 4, srate * 0.3);
+la0 = srate / fa0;
+lt0 = la0 * lfac;
+wa0 = 2 * $pi * fa0 / srate;
+beta = clip(_pos, 0.02, 0.98);
+// Loss: a one-pole lowpass whose cutoff follows the pitch, normalised so the
+// fundamental keeps the decay time; brightness sets how fast partials die.
+abr = clip(_abright * mat3(_material, 0.5, 0.85, 1.0), 0, 1);
+bla = exp(-2 * $pi * min(fa0 * (1 + 60 * abr * abr), srate * 0.45) / srate);
+apc = -0.9 * clip(_astiff, 0, 1);
+pda = lppd(bla, wa0) + 4 * appd(apc, wa0);
+// Stiffness needs delay to spend: thin it out on high notes.
+while(
+    (lt0 - max(beta * lt0, 3) - pda < 3) && (apc < -0.002) ? (
+        apc *= 0.7;
+        pda = lppd(bla, wa0) + 4 * appd(apc, wa0);
+        1;
+    ) : 0;
+);
+tsec = max(_adecay * mat3(_material, 0.4, 1.3, 2.2) * frz, 0.01);
+ga = pow(0.001, lt0 / (srate * tsec));
+ga = min(ga * sqrt(1 - 2 * bla * cos(wa0) + bla * bla) / (1 - bla), 0.99999);
+kia = kstrikea * lt0;
+kca = kconta * sqrt(1 - ga * ga);
+
+// ---- resonator B: modes
+fb0 = max(_freq * pow(2, _btune / 12), 1);
+mcount = clip(floor(_bmodes), 1, maxm);
+tilt = mat3(_material, 1.6, 0.6, 0.15);
+dsc = mat3(_material, 0.3, 1.6, 3.0);
+tens = 1 + _tension * enve * 3;
+shp = clip(_bshape, 0, nshapes - 1);
+s0 = floor(shp);
+sfr = shp - s0;
+s1 = min(s0 + 1, nshapes - 1);
+bexp = lin(clip(_bbright, 0, 1), 1.6, 0);
+k = 0;
+loop(mcount,
+    rt = exp(lin(sfr, log(tab[s0 * maxm + k]), log(tab[s1 * maxm + k])));
+    rt = pow(rt, 1 + 0.25 * _bstretch);
+    mdr[k] = (mdr[k] + rnd2() * _driftrate * 0.05) * 0.995;
+    rt *= 1 + _drift * 0.02 * mdr[k];
+    w = 2 * $pi * fb0 * rt * tens / srate;
+    w < 2.9 && w > 0.0005 ? (
+        tsec = max(_bdecay * dsc * pow(rt, -tilt) * frz, 0.002);
+        r = min(pow(0.001, 1 / (tsec * srate)), 0.999995);
+        ma1[k] = 2 * r * cos(w);
+        ma2[k] = r * r;
+        sw = sin(w);
+        mgi[k] = sw;
+        mgf[k] = 2 * (1 - r) * sw;
+        mgx[k] = sw * sqrt(2 * (1 - r));
+        q = lin(sfr, tq[s0 * maxm + k], tq[s1 * maxm + k]);
+        ph = lin(sfr, tph[s0 * maxm + k], tph[s1 * maxm + k]);
+        amp = pow(rt, -bexp);
+        mpe[k] = sin($pi * q * _pos + ph);
+        mp1[k] = sin($pi * q * _pick1 + ph) * amp;
+        mp2[k] = sin($pi * q * _pick2 + ph) * amp;
+        mpc[k] = sin($pi * q * 0.137 + ph);
+    ) : (
+        ma1[k] = 0; ma2[k] = 0; mgi[k] = 0; mgf[k] = 0; mgx[k] = 0;
+        mpe[k] = 0; mp1[k] = 0; mp2[k] = 0; mpc[k] = 0;
+        my1[k] = 0; my2[k] = 0;
+    );
+    k += 1;
+);
+k = mcount;
+loop(maxm - mcount, my1[k] = 0; my2[k] = 0; k += 1;);
+// Both pickups keep the lowest mode in phase, so the stereo pair never
+// cancels in mono.
+sg1 = mp1[0] < 0 ? -1 : 1;
+sg2 = mp2[0] < 0 ? -1 : 1;
+k = 0;
+loop(mcount, mp1[k] *= sg1; mp2[k] *= sg2; k += 1;);
+bnorm = 1.5 / sqrt(mcount);
+kcut = max(2, floor(mcount / 4));  // modes below drive the cascade, above receive it
+
+// ---- exciter constants
+scgc = exp(-2 * $pi * (200 + 14000 * pow(1 - clip(_grit, 0, 1), 2)) / srate);
+exa = 1 - clip(_excite, 0, 1);
+exb = clip(_excite, 0, 1);
+cab = _couple * kcab;
+cba = _couple * _mutual * kcba;
+lref = lin(exb, la0, srate / fb0);
+
+@sample
+// ---------------------------------------------------------------- gate
+g = _gate;
+lvl = g > 0.0001 ? g : (_hold > 0.5 ? 1 : 0);
+envf = lvl + (lvl > envf ? catk : crel) * (envf - lvl);
+
+// ---------------------------------------------------------------- A: waves arriving at the contact
+fa = fa0 * (1 + _tension * enve * 3);
+lt = srate / fa * lfac;
+dn = max(beta * lt, 3);
+nutrefl = rn * rdc(dln, na, wn, dn);
+s = rdc(dlb, na, wb, max(lt - dn - pda, 3));
+lpa = (1 - bla) * s + bla * lpa;
+s = lpa;
+ap1y = apc * s + ap1x - apc * ap1y; ap1x = s; s = ap1y;
+ap2y = apc * s + ap2x - apc * ap2y; ap2x = s; s = ap2y;
+ap3y = apc * s + ap3x - apc * ap3y; ap3x = s; s = ap3y;
+ap4y = apc * s + ap4x - apc * ap4y; ap4x = s; s = ap4y;
+s -= _rattle * dz(s, _rattleth) * (1 + 0.5 * rnd2());
+brefl = rbs * ga * s;
+va = nutrefl + brefl;
+
+// ---------------------------------------------------------------- B: free response
+se = 0;
+slo = 0;
+k = 0;
+loop(mcount,
+    yf = ma1[k] * my1[k] - ma2[k] * my2[k];
+    mfr[k] = yf;
+    se += yf * mpe[k];
+    k < kcut ? slo += yf * mpc[k];
+    k += 1;
+);
+
+// motion at the contact point
+vr = exa * va + exb * kvb * se;
+
+// ---------------------------------------------------------------- strike
+// Half-sine contact pulse of unit area; harder = shorter = brighter. It is
+// never longer than half a period, so high notes still speak.
+(g > 0.0001 && prevg <= 0.0001) || _strk != 0 ? (
+    samp = g > 0.0001 ? g : 1;
+    hard = clip(_hardness + 0.3 * (samp - 0.5), 0, 1);
+    stlen = (0.00025 + pow(1 - hard, 2) * 0.010) * (0.4 + 1.2 * _mass) * srate;
+    stlen = max(min(stlen, 0.5 * lref), 2);
+    st = 0;
+    nb = 0;
+    gap = stlen * (4 + 30 * _mass);
+);
+prevg = g;
+fstrike = 0;
+st < stlen ? (
+    fstrike = sin($pi * st / stlen) * samp * ($pi / (2 * stlen)) * (1 + hard * hard * 0.6 * rnd2());
+    st += 1;
+    st >= stlen ? (
+        samp *= _bounce;
+        nextb = gap;
+        gap *= 0.7;
+        nb += 1;
+    );
+) : (
+    nextb > 0 && samp > 0.02 && nb < 16 ? (
+        nextb -= 1;
+        nextb <= 0 ? st = 0;
+    );
+);
+
+// ---------------------------------------------------------------- scrape
+// A stream of micro-impacts; chatter lets the object's own motion trigger
+// more of them (it rattles against the scraper).
+sspd = _scrapespeed * envf;
+dens = sspd * (30 + 4000 * _rough);
+prob = dens / srate * (1 + _chatter * abs(vr) * 20);
+imp = rand(1) < prob ? rnd2() * (0.3 + 0.7 * rand(1)) : 0;
+sclp = (1 - scgc) * imp + scgc * sclp;
+fscrape = _scrape * (sclp * (1 + 4 * _grit) + rnd2() * 0.02 * sspd);
+
+fimp = _strike * fstrike;
+fcont = fscrape + _ext * in0;
+
+// ---------------------------------------------------------------- bow
+// Stick-slip friction (STK bow table) against the contact motion.
+vbow = _bowspeed * envf * (1 + _rosin * 0.5 * rnd2());
+dv = vbow - vr;
+slope = max(5 - 4.5 * _bowpress, 0.3);
+fbow = _bow * dv * min(pow(abs(dv * slope) + 0.75, -4), 1);
+
+// ---------------------------------------------------------------- blow
+// Jet (flute) <-> reed (clarinet) on the same breath.
+pb = 1.5 * _breath * envf * (1 + _turb * 0.4 * rnd2());
+// the jet sees the bore without its DC (STK flute)
+vdc = vr - vrx + 0.995 * vdc;
+vrx = vr;
+dlj[wj] = pb - 0.5 * vdc;
+wj += 1; wj >= nj ? wj = 0;
+jd = rdl(dlj, nj, wj, clip(lin(exb, srate / fa, srate / fb0) * _jetratio, 2, nj - 4));
+fjet = clip(jd * (jd * jd - 1), -1, 1);
+rr = clip(0.7 - 0.3 * (vr - pb), -1, 1);
+freed = (pb - vr) * (1 - rr);
+fblow = _blow * lin(clip(_blowtype, 0, 1), fjet * kjet, freed * kreed);
+
+ffb = fbow + fblow;
+
+// ---------------------------------------------------------------- A: junction
+fja = exa * (fimp * kia + fcont * kca + fbow * kfba + fblow) + cba * sc * sqrt(1 - ga * ga);
+dln[wn] = sat(brefl + fja);
+dlb[wb] = sat(nutrefl + fja);
+wn += 1; wn >= na ? wn = 0;
+wb += 1; wb >= na ? wb = 0;
+ya = brefl;
+dlh[wh] = ya;
+wh += 1; wh >= na ? wh = 0;
+
+// ---------------------------------------------------------------- B: update
+// Cascade: the low modes' motion squared drives the upper modes, so energy
+// climbs into the highs as the body rings (gong / tam-tam bloom). Feed
+// forward only: the upper modes never drive it back, so it cannot run away.
+// Rattle: a loose contact that pushes back with noise past a threshold.
+slo *= bnorm;
+fcas = kcas * sat(_cascade * 4 * slo * abs(slo));
+frat = -krat * _rattle * dz(sc, _rattleth) * (1 + 0.5 * rnd2());
+fib = exb * (fimp + fbow * kfbb + fblow * kblowb / (1 + kagc * se * se));
+fxb = exb * fcont * kcontb;
+fcpl = cab * ya;
+o1 = 0; o2 = 0; scn = 0;
+k = 0;
+loop(mcount,
+    y = mfr[k] + mpe[k] * (fib * mgi[k] + fxb * mgx[k])
+        + mpc[k] * ((fcpl + frat + (k >= kcut ? fcas : 0)) * mgx[k]);
+    my2[k] = my1[k];
+    my1[k] = y;
+    o1 += y * mp1[k];
+    o2 += y * mp2[k];
+    scn += y * mpc[k];
+    k += 1;
+);
+sc = scn * bnorm;
+
+// ---------------------------------------------------------------- pickups
+pa1 = ya - rdl(dlh, na, wh, max(lt * pfold(_pick1), 1));
+pa2 = ya - rdl(dlh, na, wh, max(lt * pfold(_pick2), 1));
+lb = clip(_listen, 0, 1);
+x1 = lin(lb, pa1, o1 * bnorm);
+x2 = lin(lb, pa2, o2 * bnorm);
+enve += (abs(x1) - enve) * 0.001;
+
+// Safety: anything non-finite or runaway clears the voice.
+(x1 != x1) || (x2 != x2) || abs(x1) > 1000 || abs(x2) > 1000 ? (
+    memset(dln, 0, 3 * na + nj);
+    memset(mstate, 0, 3 * maxm);
+    lpa = 0; ap1x = 0; ap1y = 0; ap2x = 0; ap2y = 0; ap3x = 0; ap3y = 0; ap4x = 0; ap4y = 0;
+    nutrefl = 0; brefl = 0; ya = 0; sc = 0; sclp = 0; enve = 0;
+    x1 = 0; x2 = 0;
+);
+
+out0 = sat(x1);
+out1 = sat(x2);

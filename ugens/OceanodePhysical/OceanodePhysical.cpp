@@ -1,0 +1,417 @@
+//
+//  OceanodePhysical.cpp — PhysicalBox's voice.
+//
+//  PhysicalVoice.ar(ext, freq, gate, hold, strk, ...): two outputs (the two
+//  pickups). Inputs after ext follow physical::PHYSICAL_PARAMS (PhysicalModes.h),
+//  the same order and meaning as the Phase 0 DynGen script
+//  (synthdefs/WIP/PhysicalBox/physicalbox.eel2), which this ports line by line:
+//
+//    Strike -+ impulsive -+                                  +- pick1 -> out0
+//    Scrape -+            +-> A: waveguide (string <> tube) -+
+//    Ext    -+            |        couple / mutual           +- pick2 -> out1
+//    Bow    -+ feedback  -+-> B: modal bank (bar .. membrane) +
+//    Blow   -+ (they read the resonators' own motion at the contact)
+//
+//  ext, gate and strk are read per sample (audio rate) or per block; the other
+//  inputs once per block, the ones used inside the sample loop ramped across it.
+//  The gate is a level: a strike fires when the gate settles after its edge
+//  (an Oceanode value held at control rate ramps over a block, from the last
+//  note's level), at that level. Every feedback loop runs inside the sample loop, sample-accurate.
+//
+
+#include "SC_PlugIn.h"
+#include "PhysicalModes.h"
+#include <cstring>
+
+static InterfaceTable* ft;
+
+namespace {
+
+using namespace physical;
+
+// ── tuning: the gains of the Phase 0 script (set by rendering its test matrix) ──
+constexpr double kstrikea = 0.1;    // strike into the waveguide, times its period
+constexpr double kconta = 4;        // scrape / ext into the waveguide (noise-normalised)
+constexpr double kcontb = 2;        // scrape / ext into the modes (noise-normalised)
+constexpr double kfba = 1.0;        // bow into the waveguide junction
+constexpr double kjet = 0.05;       // jet force: small, or the jet sets the pitch
+constexpr double kreed = 1.0;       // reed force (exact STK reed reflection)
+constexpr double kfbb = 1.0;        // bow into the modes
+constexpr double kblowb = 1.0;      // blow into the modes
+constexpr double kagc = 200;        // blow into the modes backs off as the body gets loud
+constexpr double kvb = 1.0;         // modal motion seen by the bow / blow
+constexpr double kcab = 0.25;       // A -> B coupling
+constexpr double kcba = 0.25;       // B -> A coupling
+constexpr double kcas = 12;         // cascade: low modes into the upper modes
+constexpr double krat = 1.0;        // rattle into the modes
+
+constexpr int NA = 16384;           // waveguide segments
+constexpr int NJ = 8192;            // jet delay
+
+inline double clip(double x, double lo, double hi) { return x < lo ? lo : (x > hi ? hi : x); }
+inline double sat(double x) { const double c = clip(x, -3, 3); return c * (27 + c * c) / (27 + 9 * c * c); }
+inline double dz(double x, double th) { return x - clip(x, -th, th); }
+inline double pfold(double p) { return 0.02 + 0.96 * std::min(p, 1 - p); }
+inline double lppd(double b, double w) { return std::atan2(b * std::sin(w), 1 - b * std::cos(w)) / w; }
+inline double appd(double a, double w) {
+    return (std::atan2(-a * std::sin(w), 1 + a * std::cos(w)) - std::atan2(-std::sin(w), a + std::cos(w))) / w;
+}
+// d samples behind the write position wp (the slot written next)
+inline double rdc(const float* b, int wp, double d) {
+    double p = wp - d; if (p < 0) p += NA;
+    const int i = int(p); const double x = p - i;
+    const int i0 = (i - 1 + NA) % NA, i2 = (i + 1) % NA, i3 = (i + 2) % NA;
+    const double y0 = b[i0], y1 = b[i], y2 = b[i2], y3 = b[i3];
+    const double c1 = 0.5 * (y2 - y0);
+    const double c2 = y0 - 2.5 * y1 + 2 * y2 - 0.5 * y3;
+    const double c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
+    return ((c3 * x + c2) * x + c1) * x + y1;
+}
+inline double rdl(const float* b, int size, int wp, double d) {
+    double p = wp - d; if (p < 0) p += size;
+    const int i = int(p); const double x = p - i;
+    const int i2 = i + 1 >= size ? i + 1 - size : i + 1;
+    return b[i] + x * (b[i2] - b[i]);
+}
+inline float clean(double v) { return std::fabs(v) < 1e-15 ? 0.f : float(v); }
+
+}  // namespace
+
+struct PhysicalVoice : public Unit {
+    float* mem;                 // dln | dlb | dlh (NA each) | dlj (NJ)
+    float *dln, *dlb, *dlh, *dlj;
+    int wn, wb, wh, wj;
+    double lpa, ap[4][2];
+    double nutrefl, brefl, ya, sc;
+    double envf, enve, prevg;
+    double st, stlen, samp, nextb, gap, hard;
+    int nb, armed, armCount;
+    double armPrev, prevStrk;
+    double sclp, vdc, vrx;
+    double my1[MAXM], my2[MAXM], mfr[MAXM], mdr[MAXM];
+    double ma1[MAXM], ma2[MAXM], mgi[MAXM], mgf[MAXM], mgx[MAXM];
+    double mpe[MAXM], mp1[MAXM], mp2[MAXM], mpc[MAXM];
+    // per block
+    double apc, pda, ga, bla, la0, fa0, fb0, lfac, rn, rbs, kia, kca, catk, crel;
+    double bnorm, scgc, exa, exb, cab, cba, lref, ga2;
+    int mcount, kcut;
+    // ramped across the block: the inputs used per sample
+    double last[P_COUNT];
+    bool first;
+};
+
+static void PhysicalVoice_next(PhysicalVoice* unit, int inNumSamples);
+
+static void clearState(PhysicalVoice* u) {
+    std::memset(u->mem, 0, sizeof(float) * (3 * NA + NJ));
+    for (int k = 0; k < MAXM; ++k) u->my1[k] = u->my2[k] = u->mfr[k] = 0;
+    u->lpa = 0; std::memset(u->ap, 0, sizeof(u->ap));
+    u->nutrefl = u->brefl = u->ya = u->sc = u->sclp = u->enve = 0;
+}
+
+static void PhysicalVoice_Ctor(PhysicalVoice* unit) {
+    unit->mem = (float*)RTAlloc(unit->mWorld, sizeof(float) * (3 * NA + NJ));
+    if (!unit->mem) {
+        Print("PhysicalVoice: could not allocate its delay lines\n");
+        SETCALC(ft->fClearUnitOutputs);
+        ClearUnitOutputs(unit, 1);
+        return;
+    }
+    unit->dln = unit->mem; unit->dlb = unit->dln + NA; unit->dlh = unit->dlb + NA; unit->dlj = unit->dlh + NA;
+    unit->wn = unit->wb = unit->wh = unit->wj = 0;
+    clearState(unit);
+    for (int k = 0; k < MAXM; ++k) {
+        unit->mdr[k] = 0;
+        unit->ma1[k] = unit->ma2[k] = unit->mgi[k] = unit->mgf[k] = unit->mgx[k] = 0;
+        unit->mpe[k] = unit->mp1[k] = unit->mp2[k] = unit->mpc[k] = 0;
+    }
+    unit->envf = unit->prevg = 0;
+    unit->st = 1e9; unit->stlen = 1; unit->samp = unit->nextb = unit->gap = unit->hard = 0;
+    unit->nb = 0; unit->armed = 0; unit->armCount = 0; unit->armPrev = 0; unit->prevStrk = 0;
+    unit->vdc = unit->vrx = 0;
+    unit->apc = 0; unit->pda = 1; unit->ga = 0.99; unit->bla = 0; unit->la0 = 100; unit->fa0 = 220; unit->fb0 = 220;
+    unit->lfac = 1; unit->rn = -1; unit->rbs = -1; unit->mcount = 1; unit->kcut = 2;
+    unit->first = true;
+    SETCALC(PhysicalVoice_next);
+    PhysicalVoice_next(unit, 1);
+    // the first call must not count as time passed
+    unit->wn = unit->wb = unit->wh = unit->wj = 0;
+    clearState(unit);
+    unit->envf = unit->prevg = 0; unit->st = 1e9; unit->armed = 0; unit->armPrev = 0; unit->prevStrk = 0;
+    unit->first = true;
+}
+
+static void PhysicalVoice_Dtor(PhysicalVoice* unit) {
+    if (unit->mem) RTFree(unit->mWorld, unit->mem);
+}
+
+static void PhysicalVoice_next(PhysicalVoice* u, int n) {
+    PhysicalVoice* unit = u;   // the SC macros name it unit
+    const double sr = SAMPLERATE;
+    RGET
+    auto rnd2 = [&]() { return double(frand2(s1, s2, s3)); };
+    auto rnd1 = [&]() { return double(frand(s1, s2, s3)); };
+    auto in = [&](int p) { return double(IN0(p)); };
+
+    // ── block ───────────────────────────────────────────────────────────────
+    double cur[P_COUNT];
+    for (int p = 0; p < P_COUNT; ++p) cur[p] = in(p);
+    if (u->first) { for (int p = 0; p < P_COUNT; ++p) u->last[p] = cur[p]; u->first = false; }
+    auto P = [&](int p) { return cur[p]; };
+
+    const double frz = 1 + std::pow(clip(P(P_freeze), 0, 1), 3) * 400;
+    u->catk = std::exp(-1 / (std::max(P(P_atk), 0.001) * sr));
+    u->crel = std::exp(-1 / (std::max(P(P_rel), 0.001) * sr));
+    const double mat = P(P_material);
+
+    // resonator A: a waveguide split at the contact into a nut-side and a
+    // bridge-side segment. bore: 0 string (-1, -1), 0.5 closed tube (+1, -1,
+    // loop halved), 1 open tube (+1, +1).
+    const double hol = clip(P(P_abore), 0, 1);
+    u->rn = hol < 0.5 ? -std::cos(M_PI * 2 * hol) : 1;
+    u->rbs = hol < 0.5 ? -1 : -std::cos(M_PI * (2 * hol - 1));
+    u->lfac = hol < 0.5 ? lin(2 * hol, 1, 0.5) : lin(2 * hol - 1, 0.5, 1);
+    u->fa0 = clip(P(P_freq) * std::pow(2, P(P_atune) / 12), 4, sr * 0.3);
+    u->la0 = sr / u->fa0;
+    const double lt0 = u->la0 * u->lfac;
+    const double wa0 = 2 * M_PI * u->fa0 / sr;
+    const double beta0 = clip(P(P_pos), 0.02, 0.98);
+    const double abr = clip(P(P_abright) * mat3(mat, 0.5, 0.85, 1.0), 0, 1);
+    u->bla = std::exp(-2 * M_PI * std::min(u->fa0 * (1 + 60 * abr * abr), sr * 0.45) / sr);
+    u->apc = -0.9 * clip(P(P_astiff), 0, 1);
+    u->pda = lppd(u->bla, wa0) + 4 * appd(u->apc, wa0);
+    while ((lt0 - std::max(beta0 * lt0, 3.0) - u->pda < 3) && (u->apc < -0.002)) {
+        u->apc *= 0.7;
+        u->pda = lppd(u->bla, wa0) + 4 * appd(u->apc, wa0);
+    }
+    {
+        const double tsec = std::max(P(P_adecay) * mat3(mat, 0.4, 1.3, 2.2) * frz, 0.01);
+        double ga = std::pow(0.001, lt0 / (sr * tsec));
+        ga = std::min(ga * std::sqrt(1 - 2 * u->bla * std::cos(wa0) + u->bla * u->bla) / (1 - u->bla), 0.99999);
+        u->ga = ga;
+        u->ga2 = std::sqrt(1 - ga * ga);
+    }
+    u->kia = kstrikea * lt0;
+    u->kca = kconta * u->ga2;
+
+    // resonator B: modes
+    const auto& T = tables();
+    u->fb0 = std::max(P(P_freq) * std::pow(2, P(P_btune) / 12), 1.0);
+    const int mc = int(clip(std::floor(P(P_bmodes)), 1, MAXM));
+    const double tilt = mat3(mat, 1.6, 0.6, 0.15);
+    const double dsc = mat3(mat, 0.3, 1.6, 3.0);
+    const double tens = 1 + P(P_tension) * u->enve * 3;
+    const double shp = clip(P(P_bshape), 0, NSHAPES - 1);
+    const int sh0 = int(std::floor(shp));
+    const double sfr = shp - sh0;
+    const int sh1 = std::min(sh0 + 1, NSHAPES - 1);
+    const double bexp = lin(clip(P(P_bbright), 0, 1), 1.6, 0);
+    for (int k = 0; k < mc; ++k) {
+        double rt = std::exp(lin(sfr, std::log(T.ratio[sh0][k]), std::log(T.ratio[sh1][k])));
+        rt = std::pow(rt, 1 + 0.25 * P(P_bstretch));
+        u->mdr[k] = (u->mdr[k] + rnd2() * P(P_driftrate) * 0.05) * 0.995;
+        rt *= 1 + P(P_drift) * 0.02 * u->mdr[k];
+        const double w = 2 * M_PI * u->fb0 * rt * tens / sr;
+        if (w < 2.9 && w > 0.0005) {
+            const double tsec = std::max(P(P_bdecay) * dsc * std::pow(rt, -tilt) * frz, 0.002);
+            const double r = std::min(std::pow(0.001, 1 / (tsec * sr)), 0.999995);
+            u->ma1[k] = 2 * r * std::cos(w);
+            u->ma2[k] = r * r;
+            const double sw = std::sin(w);
+            u->mgi[k] = sw;
+            u->mgf[k] = 2 * (1 - r) * sw;
+            u->mgx[k] = sw * std::sqrt(2 * (1 - r));
+            const double q = lin(sfr, T.q[sh0][k], T.q[sh1][k]);
+            const double ph = lin(sfr, T.ph[sh0][k], T.ph[sh1][k]);
+            const double amp = std::pow(rt, -bexp);
+            u->mpe[k] = std::sin(M_PI * q * P(P_pos) + ph);
+            u->mp1[k] = std::sin(M_PI * q * P(P_pick1) + ph) * amp;
+            u->mp2[k] = std::sin(M_PI * q * P(P_pick2) + ph) * amp;
+            u->mpc[k] = std::sin(M_PI * q * 0.137 + ph);
+            // decayed below anything audible: no denormals
+            if (std::fabs(u->my1[k]) < 1e-25 && std::fabs(u->my2[k]) < 1e-25) u->my1[k] = u->my2[k] = 0;
+        } else {
+            u->ma1[k] = u->ma2[k] = u->mgi[k] = u->mgf[k] = u->mgx[k] = 0;
+            u->mpe[k] = u->mp1[k] = u->mp2[k] = u->mpc[k] = 0;
+            u->my1[k] = u->my2[k] = 0;
+        }
+    }
+    for (int k = mc; k < MAXM; ++k) u->my1[k] = u->my2[k] = 0;
+    // both pickups keep the lowest mode in phase: the pair never cancels in mono
+    const double sg1 = u->mp1[0] < 0 ? -1 : 1, sg2 = u->mp2[0] < 0 ? -1 : 1;
+    for (int k = 0; k < mc; ++k) { u->mp1[k] *= sg1; u->mp2[k] *= sg2; }
+    u->mcount = mc;
+    u->bnorm = 1.5 / std::sqrt(double(mc));
+    u->kcut = std::max(2, mc / 4);
+
+    u->scgc = std::exp(-2 * M_PI * (200 + 14000 * std::pow(1 - clip(P(P_grit), 0, 1), 2)) / sr);
+    u->exa = 1 - clip(P(P_excite), 0, 1);
+    u->exb = clip(P(P_excite), 0, 1);
+    u->cab = P(P_couple) * kcab;
+    u->cba = P(P_couple) * P(P_mutual) * kcba;
+    u->lref = lin(u->exb, u->la0, sr / u->fb0);
+
+    // ── samples ─────────────────────────────────────────────────────────────
+    float* out0 = OUT(0);
+    float* out1 = OUT(1);
+    const bool extAr = INRATE(P_EXT_IN) == calc_FullRate;
+    const bool gateAr = INRATE(P_gate) == calc_FullRate;
+    const bool strkAr = INRATE(P_strk) == calc_FullRate;
+    const double invN = 1.0 / n;
+    // the inputs read inside the loop, ramped from the last block's values
+    static const int ramped[] = {P_freq, P_tension, P_pos, P_rattle, P_rattleth, P_hardness, P_mass, P_bounce,
+        P_strike, P_scrape, P_scrapespeed, P_rough, P_grit, P_chatter, P_ext, P_bow, P_bowspeed, P_bowpress,
+        P_rosin, P_blow, P_breath, P_blowtype, P_jetratio, P_turb, P_cascade, P_pick1, P_pick2, P_listen, P_hold};
+    double v[P_COUNT], dv[P_COUNT];
+    for (int p : ramped) { v[p] = u->last[p]; dv[p] = (cur[p] - u->last[p]) * invN; }
+    v[P_hold] = cur[P_hold]; dv[P_hold] = 0;
+    const double fa0 = u->fa0, lfac = u->lfac, ga = u->ga, bla = u->bla, apc = u->apc, pda = u->pda;
+    const double exa = u->exa, exb = u->exb, kia = u->kia, kca = u->kca;
+    const double freqBase = std::max(P(P_freq), 1e-6);
+
+    for (int i = 0; i < n; ++i) {
+        for (int p : ramped) v[p] += dv[p];
+        const double g = gateAr ? IN(P_gate)[i] : cur[P_gate];
+        const double strk = strkAr ? IN(P_strk)[i] : cur[P_strk];
+        const double ext = extAr ? IN(P_EXT_IN)[i] : cur[P_EXT_IN];
+
+        const double lvl = g > 0.0001 ? g : (v[P_hold] > 0.5 ? 1 : 0);
+        u->envf = lvl + (lvl > u->envf ? u->catk : u->crel) * (u->envf - lvl);
+
+        // A: waves arriving at the contact (the pitch ramped across the block)
+        const double fa = fa0 * (v[P_freq] / freqBase) * (1 + v[P_tension] * u->enve * 3);
+        const double lt = sr / fa * lfac;
+        const double beta = clip(v[P_pos], 0.02, 0.98);
+        const double dn = std::max(beta * lt, 3.0);
+        u->nutrefl = u->rn * rdc(u->dln, u->wn, dn);
+        double s = rdc(u->dlb, u->wb, std::max(lt - dn - pda, 3.0));
+        u->lpa = (1 - bla) * s + bla * u->lpa;
+        s = u->lpa;
+        for (auto& a : u->ap) { a[1] = apc * s + a[0] - apc * a[1]; a[0] = s; s = a[1]; }
+        s -= v[P_rattle] * dz(s, v[P_rattleth]) * (1 + 0.5 * rnd2());
+        u->brefl = u->rbs * ga * s;
+        const double va = u->nutrefl + u->brefl;
+
+        // B: free response
+        double se = 0, slo = 0;
+        const int mc2 = u->mcount, kc = u->kcut;
+        for (int k = 0; k < mc2; ++k) {
+            const double yf = u->ma1[k] * u->my1[k] - u->ma2[k] * u->my2[k];
+            u->mfr[k] = yf;
+            se += yf * u->mpe[k];
+            if (k < kc) slo += yf * u->mpc[k];
+        }
+        const double vr = exa * va + exb * kvb * se;
+
+        // strike: a half-sine contact pulse of unit area, armed on the gate's
+        // rising edge and fired once the gate settles (at its level)
+        if (g > 0.0001 && u->prevg <= 0.0001) { u->armed = 1; u->armCount = 0; }
+        u->prevg = g;
+        bool fire = false;
+        if (u->armed) {
+            // ModGate ramps a held Oceanode level over a block, from the last note's
+            if (std::fabs(g - u->armPrev) > 1e-7 && u->armCount < 128) ++u->armCount;
+            else { fire = g > 0.0001; u->armed = 0; }
+        }
+        u->armPrev = g;
+        if (strk > 0 && u->prevStrk <= 0) fire = true;
+        u->prevStrk = strk;
+        if (fire) {
+            u->samp = g > 0.0001 ? g : 1;
+            u->hard = clip(v[P_hardness] + 0.3 * (u->samp - 0.5), 0, 1);
+            double len = (0.00025 + std::pow(1 - u->hard, 2) * 0.010) * (0.4 + 1.2 * v[P_mass]) * sr;
+            u->stlen = std::max(std::min(len, 0.5 * u->lref), 2.0);
+            u->st = 0; u->nb = 0;
+            u->gap = u->stlen * (4 + 30 * v[P_mass]);
+        }
+        double fstrike = 0;
+        if (u->st < u->stlen) {
+            fstrike = std::sin(M_PI * u->st / u->stlen) * u->samp * (M_PI / (2 * u->stlen)) * (1 + u->hard * u->hard * 0.6 * rnd2());
+            u->st += 1;
+            if (u->st >= u->stlen) { u->samp *= v[P_bounce]; u->nextb = u->gap; u->gap *= 0.7; u->nb += 1; }
+        } else if (u->nextb > 0 && u->samp > 0.02 && u->nb < 16) {
+            u->nextb -= 1;
+            if (u->nextb <= 0) u->st = 0;
+        }
+
+        // scrape: micro-impacts; chatter lets the object's motion trigger more
+        const double sspd = v[P_scrapespeed] * u->envf;
+        const double dens = sspd * (30 + 4000 * v[P_rough]);
+        const double prob = dens / sr * (1 + v[P_chatter] * std::fabs(vr) * 20);
+        const double imp = rnd1() < prob ? rnd2() * (0.3 + 0.7 * rnd1()) : 0;
+        u->sclp = (1 - u->scgc) * imp + u->scgc * u->sclp;
+        const double fscrape = v[P_scrape] * (u->sclp * (1 + 4 * v[P_grit]) + rnd2() * 0.02 * sspd);
+        const double fimp = v[P_strike] * fstrike;
+        const double fcont = fscrape + v[P_ext] * ext;
+
+        // bow: stick-slip friction (STK bow table) against the contact motion
+        const double vbow = v[P_bowspeed] * u->envf * (1 + v[P_rosin] * 0.5 * rnd2());
+        const double dvb = vbow - vr;
+        const double slope = std::max(5 - 4.5 * v[P_bowpress], 0.3);
+        const double fbow = v[P_bow] * dvb * std::min(std::pow(std::fabs(dvb * slope) + 0.75, -4.0), 1.0);
+
+        // blow: jet (flute) <-> reed (clarinet) on the same breath
+        const double pb = 1.5 * v[P_breath] * u->envf * (1 + v[P_turb] * 0.4 * rnd2());
+        u->vdc = vr - u->vrx + 0.995 * u->vdc;
+        u->vrx = vr;
+        u->dlj[u->wj] = clean(pb - 0.5 * u->vdc);
+        if (++u->wj >= NJ) u->wj = 0;
+        const double jd = rdl(u->dlj, NJ, u->wj, clip(lin(exb, sr / fa, sr / u->fb0) * v[P_jetratio], 2, NJ - 4));
+        const double fjet = clip(jd * (jd * jd - 1), -1, 1);
+        const double rr = clip(0.7 - 0.3 * (vr - pb), -1, 1);
+        const double freed = (pb - vr) * (1 - rr);
+        const double fblow = v[P_blow] * lin(clip(v[P_blowtype], 0, 1), fjet * kjet, freed * kreed);
+
+        // A: junction
+        const double fja = exa * (fimp * kia + fcont * kca + fbow * kfba + fblow) + u->cba * u->sc * u->ga2;
+        u->dln[u->wn] = clean(sat(u->brefl + fja));
+        u->dlb[u->wb] = clean(sat(u->nutrefl + fja));
+        if (++u->wn >= NA) u->wn = 0;
+        if (++u->wb >= NA) u->wb = 0;
+        u->ya = u->brefl;
+        u->dlh[u->wh] = clean(u->ya);
+        if (++u->wh >= NA) u->wh = 0;
+
+        // B: update (cascade feeds forward only: it cannot run away)
+        slo *= u->bnorm;
+        const double fcas = kcas * sat(v[P_cascade] * 4 * slo * std::fabs(slo));
+        const double frat = -krat * v[P_rattle] * dz(u->sc, v[P_rattleth]) * (1 + 0.5 * rnd2());
+        const double fib = exb * (fimp + fbow * kfbb + fblow * kblowb / (1 + kagc * se * se));
+        const double fxb = exb * fcont * kcontb;
+        const double fcpl = u->cab * u->ya;
+        double o1 = 0, o2 = 0, scn = 0;
+        for (int k = 0; k < mc2; ++k) {
+            const double y = u->mfr[k] + u->mpe[k] * (fib * u->mgi[k] + fxb * u->mgx[k])
+                + u->mpc[k] * ((fcpl + frat + (k >= kc ? fcas : 0)) * u->mgx[k]);
+            u->my2[k] = u->my1[k];
+            u->my1[k] = y;
+            o1 += y * u->mp1[k];
+            o2 += y * u->mp2[k];
+            scn += y * u->mpc[k];
+        }
+        u->sc = scn * u->bnorm;
+
+        // pickups
+        const double pa1 = u->ya - rdl(u->dlh, NA, u->wh, std::max(lt * pfold(v[P_pick1]), 1.0));
+        const double pa2 = u->ya - rdl(u->dlh, NA, u->wh, std::max(lt * pfold(v[P_pick2]), 1.0));
+        const double lb = clip(v[P_listen], 0, 1);
+        double x1 = lin(lb, pa1, o1 * u->bnorm);
+        double x2 = lin(lb, pa2, o2 * u->bnorm);
+        u->enve += (std::fabs(x1) - u->enve) * 0.001;
+
+        // safety: anything non-finite or runaway clears the voice
+        if (!std::isfinite(x1) || !std::isfinite(x2) || std::fabs(x1) > 1000 || std::fabs(x2) > 1000) {
+            clearState(u);
+            x1 = x2 = 0;
+        }
+        out0[i] = float(sat(x1));
+        out1[i] = float(sat(x2));
+    }
+    for (int p : ramped) u->last[p] = cur[p];
+    RPUT
+}
+
+PluginLoad(OceanodePhysical) {
+    ft = inTable;
+    DefineDtorUnit(PhysicalVoice);
+}

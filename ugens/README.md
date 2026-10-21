@@ -98,6 +98,7 @@ holding its edges; optional per-bin attack / release / hold.
 |---|---|---|
 | `OceanodeAnalog/OceanodeAnalog.scx` | MorphOsc, AnalogFilter | AnalogBox |
 | `OceanodeSpectral/OceanodeSpectral.scx` | PV_MaskFilter | SpectralFilterBox |
+| `OceanodePhysical/OceanodePhysical.scx` | PhysicalVoice | PhysicalBox |
 
 Their binaries are committed (universal arm64 + x86_64, ad-hoc signed), so a
 fresh clone works without a SuperCollider source checkout. Install: copy each
@@ -112,3 +113,22 @@ installed copy by deleting it first, then copying (`rm` then `cp`): writing over
 a loaded binary in place makes macOS kill scsynth when it loads it (exit 137).
 `build.sh` signs the result.
 
+
+### OceanodePhysical (`OceanodePhysical/`)
+
+`PhysicalVoice` is PhysicalBox's whole voice:
+- strike, bow (STK friction), blow (jet / reed), scrape and external exciters;
+- a two-segment waveguide (string, closed tube, open tube) and a modal bank of
+  up to 48 modes with six morphing shape tables, coupled;
+- rattle, tension and a feed-forward cascade;
+- two pickups.
+
+Its inputs are named in `PhysicalModes.h` (`PHYSICAL_PARAMS`, shared with the
+node's display) and in the class file (`PhysicalVoice.ar(ext, [\name, value,
+...])`). It is a line-by-line port of the DynGen prototype in
+`synthdefs/WIP/PhysicalBox/physicalbox.eel2`, measured against it with
+`tools/physicalbox/` (`PB_ENGINE=ugen`).
+
+Build it with `OceanodePhysical/build.sh [SuperCollider source]`. The class
+file is also in `sclang/Extensions/user/OceanodePhysical/` for the bundled
+compiler.
