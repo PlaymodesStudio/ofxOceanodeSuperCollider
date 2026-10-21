@@ -62,7 +62,10 @@ std::string findSynthdefFolder(const std::string& name){
     return found;
 }
 constexpr float twoPi = 6.28318530718f;
-constexpr int displayStride = 2 * scAdditiveBox::DISPLAY_MAX;   // display bus channels per voice
+// display bus channels per voice: D levels, D positions (raw streams), then
+// P.Level's factor and the pan offset (the tail's; applied here)
+constexpr int displayScalars = 2 * scAdditiveBox::DISPLAY_MAX;
+constexpr int displayStride = displayScalars + 2;
 constexpr float curveSpan = 128.0f;                             // filter 1 curve: -128..+128 semitones
 
 // Measured on a 44.1 / 48 kHz scsynth: % CPU per partial, and per partial and
@@ -521,8 +524,10 @@ void scAdditiveBox::update(ofEventArgs&){
             liveData = st.vis->readValues;
             liveValid = liveData.size() >= size_t(numVoicesClamped() * displayStride);
             const int shownChannels = 2 * displaySlots();
-            for(int v = 0; v < numVoicesClamped(); v++)
+            for(int v = 0; v < numVoicesClamped(); v++){
                 server->requestControlValues(st.vis->index + v * displayStride, shownChannels);
+                server->requestControlValues(st.vis->index + v * displayStride + displayScalars, 2);
+            }
             break;
         }
     }
@@ -1066,7 +1071,7 @@ void scAdditiveBox::freeMod(ofxSCServer* server, bool sendFree){
 // ════════════════════════════════════════════════════════════════════════════
 
 std::string scAdditiveBox::coreDefName() const {
-    return "AdditiveBoxV" + ofToString(partialCap()) + "_" + ofToString(numOutputsClamped());
+    return "AdditiveBoxCore" + ofToString(chunkSize()) + "_" + ofToString(numOutputsClamped());
 }
 
 std::string scAdditiveBox::outDefName() const {
@@ -1178,24 +1183,26 @@ void scAdditiveBox::uploadCurves(ofxSCServer* server, bool force){
 // ── Which synth of a voice takes which control ───────────────────────────────
 namespace {
 enum Role : unsigned { RSrc = 1, RMotion = 2, RLane = 4, RFilt = 8, RSweep = 16, RShim = 32, RBlur = 64,
-                       RDrift = 128, RCore = 256, RAll = 511 };
+                       RDrift = 128, RCore = 256, RTail = 512, RAll = 1023 };
 const unsigned kPartRole[scAdditiveBox::NumParts] = {RMotion, RLane, RFilt, RSweep, RShim, RBlur, RDrift};
-const char* kPartDef[scAdditiveBox::NumParts] = {"AdditiveBoxMotion", "AdditiveBoxLane", "AdditiveBoxFilt",
+const char* kPartDef[scAdditiveBox::NumParts] = {"AdditiveBoxMotion", "AdditiveBoxLanes", "AdditiveBoxFilt",
                                                   "AdditiveBoxSweep", "AdditiveBoxShim", "AdditiveBoxBlur",
                                                   "AdditiveBoxDrift"};
 unsigned roleOf(const std::string& n){
     static const std::map<std::string, unsigned> roles = {
         {"pa", RSrc}, {"pd", RSrc}, {"morph", RSrc}, {"maskglide", RSrc}, {"fr", RSrc}, {"pb", RSrc}, {"vca", RCore},
         {"gatebus", RSrc}, {"rndbus", RSrc}, {"velbus", RSrc}, {"pitchoff", RFilt | RCore},
-        {"gate", RSrc | RSweep | RCore},
+        {"gate", RSrc | RSweep | RCore | RTail},
         {"vf", RMotion}, {"vd", RMotion}, {"nr", RMotion}, {"nd", RMotion},
         {"fbuf", RFilt}, {"po", RFilt}, {"cutoff", RFilt}, {"keytrack", RFilt}, {"safe", RFilt},
         {"pitch", RFilt | RCore}, {"glide", RFilt | RCore},
         {"sbuf", RSweep}, {"swamt", RSweep}, {"swrate", RSweep}, {"swphase", RSweep}, {"swretrig", RSweep},
         {"sph", RSweep}, {"sw", RSweep},
         {"shimmer", RShim}, {"shr", RShim}, {"bl", RBlur}, {"drift", RDrift}, {"drr", RDrift},
-        {"vibdepth", RCore}, {"vibrate", RCore}, {"shift", RCore}, {"amp", RCore}, {"width", RCore},
-        {"line", RCore}, {"panoff", RCore}, {"vis", RCore}, {"pauser", RCore}, {"grp", RCore}, {"out", RCore},
+        {"vibdepth", RSrc}, {"vibrate", RSrc}, {"shift", RCore}, {"amp", RCore}, {"width", RCore},
+        {"line", RCore}, {"panoff", RCore}, {"out", RCore}, {"silbus", RCore},
+        {"vis", RTail}, {"pauser", RTail}, {"grp", RTail},
+        {"np", RLane | RCore}, {"first", RLane | RCore},
         {"modbus", RAll}, {"voice", RAll}, {"bus", RAll}};
     if(n.size() >= 2 && n[0] == 'l' && (n[1] == '0' || n[1] == '1')) return RLane;   // l0buf, l1rate...
     auto it = roles.find(n);
@@ -1316,22 +1323,51 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
         if(kPartRole[k] & RSweep) mapTo(vs.parts[k], "gate", gb >= 0 ? gb + v : -1);
         if(kPartRole[k] & RFilt) mapTo(vs.parts[k], "pitch", pb >= 0 ? pb + v : -1);
     }
+    // the chunks: where they sit in the streams, and their share of each phase
+    const int P = partialCap(), C = chunkSize();
+    const int LC = vs.lanes.empty() ? laneChunkSize() : P / (int)vs.lanes.size();   // the chunks running
+    const float junk = st.visJunk ? float(st.visJunk->index) : 0.0f;
+    extra["np"] = float(P);
+    VoiceData scalarsOnly;
+    scalarsOnly.scalars = data.scalars;
+    sendTo(vs, vs.laneClock, RLane, scalarsOnly, extra, force);
+    for(int c = 0; c < (int)vs.lanes.size(); c++){
+        VoiceData d;
+        d.scalars = data.scalars;
+        for(const auto& [name, values] : data.arrays){
+            if(!(roleOf(name) & RLane)) continue;
+            const bool perPartial = name.size() == 4 && name.compare(2, 2, "ph") == 0 && (int)values.size() >= (c + 1) * LC;
+            d.arrays[name] = perPartial ? std::vector<float>(values.begin() + c * LC, values.begin() + (c + 1) * LC) : values;
+        }
+        auto e = extra;
+        e["first"] = float(c * LC);
+        sendTo(vs, vs.lanes[c], RLane, d, e, force);
+    }
     for(int u = 0; u < (int)vs.cores.size(); u++){
         auto e = extra;
         for(const auto& [name, value] : coreScalars(v, u)) e[name] = value;
         if(pb >= 0) e["pitchoff"] = e["pitch"] - rawPitch;   // transpose, unison detune / interval
         e["out"] = st.mix ? float(st.mix->index) : 0.0f;
-        e["vis"] = float(u == 0 && st.vis ? st.vis->index + v * displayStride : (st.visJunk ? st.visJunk->index : 0));
-        e["pauser"] = (u == 0 && gb < 0) ? 1.0f : 0.0f;   // a gate cable: no pausing (nothing here would resume it)
-        e["grp"] = vs.grp ? float(vs.grp->nodeID) : 0.0f;
+        // copy 0's chunks say when the voice is silent (the tail pauses it)
+        e["silbus"] = u == 0 && vs.bus ? float(vs.bus->index + 3 * P) : junk;
         // the copy's own pitch / amp win over the voice's
         VoiceData d;
-        d.arrays = {};
         d.scalars = data.scalars;
         for(const auto& [name, value] : coreScalars(v, u)) d.scalars[name] = value;
-        sendTo(vs, vs.cores[u], RCore, d, e, force);
-        mapTo(vs.cores[u], "gate", gb >= 0 ? gb + v : -1);
-        mapTo(vs.cores[u], "pitch", pb >= 0 ? pb + v : -1);
+        for(int c = 0; c < (int)vs.cores[u].size(); c++){
+            e["first"] = float(c * C);
+            sendTo(vs, vs.cores[u][c], RCore, d, e, force);
+            mapTo(vs.cores[u][c], "gate", gb >= 0 ? gb + v : -1);
+            mapTo(vs.cores[u][c], "pitch", pb >= 0 ? pb + v : -1);
+        }
+    }
+    if(vs.tail){
+        auto e = extra;
+        e["vis"] = st.vis ? float(st.vis->index + v * displayStride) : junk;
+        e["pauser"] = gb < 0 ? 1.0f : 0.0f;   // a gate cable: no pausing (nothing here would resume it)
+        e["grp"] = vs.grp ? float(vs.grp->nodeID) : 0.0f;
+        sendTo(vs, vs.tail, RTail, scalarsOnly, e, force);
+        mapTo(vs.tail, "gate", gb >= 0 ? gb + v : -1);
     }
     skipScalars.clear();
 }
@@ -1361,78 +1397,98 @@ void scAdditiveBox::freeVoice(ofxSCServer* server, VoiceSC& vs, bool sendFree){
     if(sendFree && vs.grp && vs.grp->isCreated()) vs.grp->free();   // its synths with it
     delete vs.src;
     for(auto*& p : vs.parts){ delete p; p = nullptr; }
-    for(auto* c : vs.cores) delete c;
-    vs.cores.clear();
+    delete vs.laneClock;
+    for(auto* l : vs.lanes) delete l;
+    for(auto& copy : vs.cores) for(auto* c : copy) delete c;
+    delete vs.tail;
     delete vs.grp;
     if(vs.bus){ if(controlBusIsLive(server, vs.bus)) vs.bus->free(); delete vs.bus; }
     vs = VoiceSC();
 }
 
 // One voice: its group and stream bus, the source, the parts it needs (in
-// order), one core per unison copy; new synths get every value before they start
+// order; the lanes as a clock and chunks), one core per unison copy and chunk,
+// the tail; new synths get every value before they start
 void scAdditiveBox::syncVoice(ofxSCServer* server, int v, bool force){
     auto& st = states[server];
     if(!st.created || v >= (int)st.voices.size()) return;
     auto& vs = st.voices[v];
-    const int P = partialCap();
+    const int P = partialCap(), C = chunkSize(), chunks = P / C;
     if(!vs.grp){
         vs.grp = new ofxSCGroup(server);
         vs.grp->create(1, st.voicesGroup->nodeID);   // voices in order (a closed one pauses itself once silent)
     }
-    if(vs.bus && (!controlBusIsLive(server, vs.bus) || vs.bus->channels != 3 * P)){
+    if(vs.bus && (!controlBusIsLive(server, vs.bus) || vs.bus->channels != 3 * P + STREAM_EXTRA)){
         if(controlBusIsLive(server, vs.bus)) vs.bus->free();
         delete vs.bus;
         vs.bus = nullptr;
     }
-    if(!vs.bus) vs.bus = new ofxSCBus(RATE_CONTROL, 3 * P, server);
+    if(!vs.bus) vs.bus = new ofxSCBus(RATE_CONTROL, 3 * P + STREAM_EXTRA, server);
     if((int)voiceData.size() <= v) computeAll();
     const VoiceData& data = voiceData[v];
     std::vector<ofxSCSynth*> fresh;
-    if(!vs.src){
-        vs.src = new ofxSCSynth("AdditiveBoxSrc" + ofToString(P), server);
-        fresh.push_back(vs.src);
-    }
+    auto make = [&](ofxSCSynth*& s, const std::string& defName){
+        s = new ofxSCSynth(defName, server);
+        fresh.push_back(s);
+    };
+    auto drop = [&](ofxSCSynth*& s){
+        if(!s) return;
+        // freed only where it changes nothing (its control at 0): no jump
+        s->free();
+        vs.sentA.erase(s); vs.sentS.erase(s);
+        delete s;
+        s = nullptr;
+    };
+    if(!vs.src) make(vs.src, "AdditiveBoxSrc" + ofToString(P));
     for(int k = 0; k < NumParts; k++){
+        if(k == PartLane) continue;
         const bool want = partWanted(k, v);
         auto*& p = vs.parts[k];
-        // the lanes with a noise LFO: the LaneN variant (another def: replace it)
-        const std::string defName = (k == PartLane && lanesHaveNoise() ? std::string("AdditiveBoxLaneN") : std::string(kPartDef[k]))
-                                    + ofToString(P);
-        if(want && p && p->getName() != defName){
-            p->free();
-            vs.sentA.erase(p); vs.sentS.erase(p);
-            delete p;
-            p = nullptr;
+        if(want && !p) make(p, kPartDef[k] + ofToString(P));
+        else if(!want && p) drop(p);
+    }
+    // the lanes: a clock and the chunks; with a noise LFO the LaneN variant
+    // (another def: all of them again, as one synth was before)
+    {
+        const bool want = partWanted(PartLane, v);
+        const int LC = laneChunkSize();
+        const std::string defName = (lanesHaveNoise() ? "AdditiveBoxLanesN" : "AdditiveBoxLanes") + ofToString(LC);
+        if(!want || (!vs.lanes.empty() && vs.lanes[0]->getName() != defName) || ((int)vs.lanes.size() != P / LC && !vs.lanes.empty())){
+            drop(vs.laneClock);
+            for(auto*& l : vs.lanes) drop(l);
+            vs.lanes.clear();
         }
-        if(want && !p){ p = new ofxSCSynth(defName, server); fresh.push_back(p); }
-        else if(!want && p){
-            // freed only where it changes nothing (its control at 0): no jump
-            p->free();
-            vs.sentA.erase(p); vs.sentS.erase(p);
-            delete p;
-            p = nullptr;
+        if(want && vs.lanes.empty()){
+            make(vs.laneClock, "AdditiveBoxLaneClock");
+            vs.lanes.resize(P / LC, nullptr);
+            for(auto*& l : vs.lanes) make(l, defName);
         }
     }
     const int U = unisonClamped();
     while((int)vs.cores.size() > U){
-        auto* c = vs.cores.back();
-        c->free();
-        vs.sentA.erase(c); vs.sentS.erase(c);
-        delete c;
+        for(auto*& c : vs.cores.back()) drop(c);
         vs.cores.pop_back();
     }
     while((int)vs.cores.size() < U){
-        vs.cores.push_back(new ofxSCSynth(coreDefName(), server));
-        fresh.push_back(vs.cores.back());
+        vs.cores.emplace_back(chunks, nullptr);
+        for(auto*& c : vs.cores.back()) make(c, coreDefName());
     }
+    if(!vs.tail) make(vs.tail, "AdditiveBoxTail" + ofToString(P));
     // values (the new synths: all of them, baked into /s_new)
     for(auto* f : fresh){ vs.sentA.erase(f); vs.sentS.erase(f); }
     sendVoice(server, v, data, force);
-    // start the new ones in their place: source first, the parts in order, the cores last
+    // start the new ones in their place: source first, the parts in order (the
+    // lanes at theirs), the cores, the tail last
     std::vector<ofxSCSynth*> order;
     order.push_back(vs.src);
-    for(auto* p : vs.parts) if(p) order.push_back(p);
-    for(auto* c : vs.cores) order.push_back(c);
+    for(int k = 0; k < NumParts; k++){
+        if(k == PartLane){
+            if(vs.laneClock) order.push_back(vs.laneClock);
+            for(auto* l : vs.lanes) order.push_back(l);
+        }else if(vs.parts[k]) order.push_back(vs.parts[k]);
+    }
+    for(auto& copy : vs.cores) for(auto* c : copy) order.push_back(c);
+    order.push_back(vs.tail);
     for(size_t i = 0; i < order.size(); i++){
         auto* s = order[i];
         if(s->isCreated() || std::find(fresh.begin(), fresh.end(), s) == fresh.end()) continue;
@@ -2183,8 +2239,24 @@ int scAdditiveBox::displayPartial(int slot) const { return slot * (partialCap() 
 
 float scAdditiveBox::liveLevel(int voice, int slot) const {
     if(!liveValid) return -1;
-    const size_t i = size_t(voice) * displayStride + slot;
-    return i < liveData.size() && std::isfinite(liveData[i]) ? std::max(0.0f, liveData[i]) : -1;
+    const size_t i = size_t(voice) * displayStride + slot, k = size_t(voice) * displayStride + displayScalars;
+    if(k >= liveData.size() || !std::isfinite(liveData[i]) || !std::isfinite(liveData[k])) return -1;
+    return std::max(0.0f, liveData[i] * liveData[k]);   // x P.Level's factor, as the cores
+}
+
+// A slot's position as the cores pan it: + the pan offset, folded into 0..1 on
+// 2 outputs, and with Line on more (NAN if no data)
+float scAdditiveBox::livePos(int voice, int slot) const {
+    if(!liveValid) return NAN;
+    const size_t i = size_t(voice) * displayStride + displaySlots() + slot, k = size_t(voice) * displayStride + displayScalars + 1;
+    if(k >= liveData.size() || !std::isfinite(liveData[i]) || !std::isfinite(liveData[k])) return NAN;
+    float p = liveData[i] + liveData[k];
+    const int O = numOutputsClamped();
+    if(O == 2 || (O > 2 && speakerLayout.get() > 0)){
+        p -= 2.0f * std::floor(p * 0.5f);   // SuperCollider's fold(0, 1)
+        if(p > 1.0f) p = 2.0f - p;
+    }
+    return p;
 }
 
 void scAdditiveBox::drawWindow(){
@@ -3061,9 +3133,9 @@ void scAdditiveBox::drawSpeakers(ImVec2 size){
             const int i = displayPartial(sl);
             if(i >= partials.get()) break;
             float p, level;
-            const size_t li = size_t(v) * displayStride + slots + sl;
-            if(liveValid && li < liveData.size() && std::isfinite(liveData[li])){
-                p = liveData[li];
+            const float lp = livePos(v, sl);
+            if(std::isfinite(lp)){
+                p = lp;
                 level = std::max(0.0f, liveLevel(v, sl));
             }else{
                 if(it == voiceData[v].arrays.end() || i >= (int)it->second.size()) continue;

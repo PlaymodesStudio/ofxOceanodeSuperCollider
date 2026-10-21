@@ -24,11 +24,14 @@
 //    Morph, Pitch, Level, Sweep, Pan, Noise): the modulation synths write a
 //    bus per target, each voice reads its channel. Per partial targets
 //    (P.Level, P.Pan, P.Pitch): an LFO routed there runs inside the voices,
-//    one phase per partial (a "lane", AdditiveBoxVL, at most 2 LFOs);
+//    one phase per partial (a "lane", AdditiveBoxLanes, at most 2 LFOs);
 //    envelopes and the other sources move every partial alike.
 //  • FX: EQ -> Echo -> Reverb, the same synths and controls as GrainBox.
-//  • Synths: one AdditiveBoxV<P>_<O> per voice and unison copy (P = the
-//    smallest cap >= Partials: 8 .. 256), summing into a private bus, then the
+//  • Synths: per voice a source and the parts in use for P partials (P = the
+//    smallest cap >= Partials: 8 .. 256), the lanes and the sine banks in
+//    chunks of C = min(P, 64) partials (32 for noise lanes; AdditiveBoxLanes<C>, one
+//    AdditiveBoxCore<C>_<O> per unison copy and chunk: small defs compile in
+//    seconds), a tail (display, pause); all summing into a private bus, then the
 //    FX and AdditiveBoxOut<O> (synthdefs/Defaults/AdditiveBox). Everything that
 //    only changes with the controls is computed here and sent as arrays; the
 //    synth runs only what moves. Filter 1's curve is written into a buffer per
@@ -77,11 +80,14 @@ private:
 public:
     static constexpr int MAX_VOICES = 16;
     static constexpr int MAX_UNISON = 8;
-    static constexpr int MAX_OUTPUTS = 16;       // AdditiveBoxV<P>_<O> exists for O = 1..16
+    static constexpr int MAX_OUTPUTS = 16;       // AdditiveBoxCore<C>_<O> exists for O = 1..16
     static constexpr int MAX_PARTIALS = 256;
     static constexpr int DISPLAY_MAX = 64;       // partials per voice on the display bus
     static constexpr int NUM_CAPS = 6;
     static constexpr std::array<int, NUM_CAPS> CAPS = {8, 16, 32, 64, 128, 256};
+    static constexpr int CHUNK = 64;             // lanes and cores: chunks of min(P, CHUNK) partials
+    static constexpr int NOISE_CHUNK = 32;       // ... the noise lanes (LanesN) of min(P, NOISE_CHUNK)
+    static constexpr int STREAM_EXTRA = 9;       // after the 3 x P streams: silence, vibrato (sine, depth), 2 x 3 lane clock
     static constexpr int CURVE_SIZE = 512;       // filter 1 curve: -128..+128 semitones
     static constexpr int TABLE_SIZE = 64;        // drawn harmonics
     static constexpr int SHAPE_POINTS = 33;      // drawn filter curves
@@ -95,7 +101,8 @@ public:
     enum PanMode { PanRandom, PanSpectrum, PanAlternate, PanChannels, NumPanModes };
     enum SweepShape { SweepLobes, SweepTriangle, SweepSawUp, SweepSawDown, SweepPulse, SweepGauss, SweepSteps, SweepDrawn, NumSweepShapes };
     enum FxStage { FX_EQ, FX_ECHO, FX_REVERB, FX_COUNT };
-    // a voice's switchable parts, in their order in the voice (additiveBox.scd)
+    // a voice's switchable parts, in their order in the voice (additiveBox.scd);
+    // the lanes run as a clock and chunks (VoiceSC::laneClock, lanes)
     enum Part { PartMotion, PartLane, PartFilt, PartSweep, PartShim, PartBlur, PartDrift, NumParts };
 
     explicit scAdditiveBox(std::vector<serverManager*> servers);
@@ -153,7 +160,8 @@ private:
     float sampleRate() const;
 
     // ── Synths: the node is a group [modulation, voices, FX..., output]; each
-    //    voice a group [source, parts in order, one core per unison copy] ──
+    //    voice a group [source, parts in order (the lanes: clock, chunks), the
+    //    cores (per unison copy, per chunk), the tail] ──
     // Gate and Pitch (published by default) also take audio cables: then the
     // voices' synths read them (mapped), gates as levels
     scAudioParam gateIn, pitchIn;
@@ -162,10 +170,13 @@ private:
     void resendAllVoices();
     struct VoiceSC {
         ofxSCGroup* grp = nullptr;
-        ofxSCBus* bus = nullptr;                          // the streams: levels, ratios, positions (3 x cap)
+        ofxSCBus* bus = nullptr;                          // the streams: levels, ratios, positions (3 x cap), STREAM_EXTRA
         ofxSCSynth* src = nullptr;                        // AdditiveBoxSrc<P>
-        std::array<ofxSCSynth*, NumParts> parts{};        // the ones in use
-        std::vector<ofxSCSynth*> cores;                   // AdditiveBoxV<P>_<O>, one per unison copy
+        std::array<ofxSCSynth*, NumParts> parts{};        // the ones in use (not PartLane: below)
+        ofxSCSynth* laneClock = nullptr;                  // AdditiveBoxLaneClock, with the lanes
+        std::vector<ofxSCSynth*> lanes;                   // AdditiveBoxLanes(N)<C>, one per chunk
+        std::vector<std::vector<ofxSCSynth*>> cores;      // AdditiveBoxCore<C>_<O>, per unison copy, per chunk
+        ofxSCSynth* tail = nullptr;                       // AdditiveBoxTail<P>: display, pause
         // last values sent to each synth (a re-notified parameter does not resend)
         std::map<ofxSCSynth*, std::map<std::string, std::vector<float>>> sentA;
         std::map<ofxSCSynth*, std::map<std::string, float>> sentS;
@@ -210,6 +221,8 @@ private:
     int numOutputsClamped() const;
     int unisonClamped() const;
     int partialCap() const;
+    int chunkSize() const { return std::min(partialCap(), int(CHUNK)); }
+    int laneChunkSize() const { return std::min(partialCap(), lanesHaveNoise() ? int(NOISE_CHUNK) : int(CHUNK)); }
     std::string coreDefName() const;
     std::string outDefName() const;
     void ensureBuses(ofxSCServer* server);
@@ -331,6 +344,7 @@ private:
     bool checkbox(ofParameter<bool>& parameter);
     void group(const char* title);
     float liveLevel(int voice, int slot) const;        // display slot of a voice, -1 if no data
+    float livePos(int voice, int slot) const;          // its position (0..1 around the outputs), NAN if no data
     int displaySlots() const;
     int displayPartial(int slot) const;                // partial index (0-based) of a display slot
 
