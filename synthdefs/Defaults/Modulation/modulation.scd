@@ -17,6 +17,7 @@
 //                 with InFeedback, so in any order) -> \out (control, N).
 //   ModEnvAr<N>   the same, also at audio rate on \aout (for a VCA).
 //   ModRoute<N>   one route of a modulation matrix: \src (control bus, N)
+//                 (\decor 1: hashed with \salt, each route its own random)
 //                 (* 2 - 1 with \bipolar) * \amount * \scale, added into
 //                 \out (control bus, N). A target bus with no route left is
 //                 zeroed by the node.
@@ -152,6 +153,9 @@ perlin2 = { |x, y, salt = 0|
 
     SynthDef(("ModRoute" ++ n).asSymbol, {
         var src = In.kr(\src.kr(0), n);
+        // \decor 1 (the Random source): this route's own value per note, a hash
+        // of the note's draw salted by \salt (the node's C++ does the same)
+        src = Select.kr(\decor.kr(0) > 0.5, [src, (((src * 91.3458) + \salt.kr(0)).sin * 437.5853).frac * 2 - 1]);
         src = Select.kr(\bipolar.kr(0) > 0.5, [src, (src * 2) - 1]);
         Out.kr(\out.kr(0), src * (\amount.kr(0, 0.05) * \scale.kr(1)));
     }).writeDefFile(dir);

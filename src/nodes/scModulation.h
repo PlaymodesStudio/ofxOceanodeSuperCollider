@@ -241,6 +241,13 @@ private:
     void updateLfoOutputs();
     std::vector<Target> targetList;
     bool perVoice = true, velocity = false, random = false;
+    // Random: each destination its own value per note (a hash of the note's draw),
+    // unless the user wants one value everywhere
+    bool randomShared = false;
+    static float decorrelate(float r, float salt) {
+        const float x = std::sin(r * 91.3458f + salt) * 437.5853f;
+        return (x - std::floor(x)) * 2.0f - 1.0f;
+    }
     std::map<ofxSCServer*, ServerState> states;
     std::vector<float> live;
     float nextLiveRead = 0.0f;
@@ -251,6 +258,7 @@ private:
 
     // parameters
     std::array<ofParameter<bool>, MAX_LFOS> lfoSync, lfoCentered, lfoNorm, lfoNoise;
+    std::array<ofParameter<bool>, MAX_LFOS> lfoRndSame;    // Random: one value for every voice (else each its own)
     // Random type (ModLfoRnd): 0 off (the waveform / noise), 1 stepped, 2 smooth, 3 jumps;
     // Random Smooth: the stepped values' glide (s)
     std::array<ofParameter<int>, MAX_LFOS> lfoRndType, lfoModel;

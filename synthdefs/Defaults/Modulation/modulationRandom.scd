@@ -7,10 +7,9 @@
 //   \rtype 2  Smooth: the cycle's values joined by a cubic (Catmull-Rom) curve
 //   \rtype 3  Jumps: Stepped + Smooth wrapped into 0..1
 //   \steps    the output quantized to that many levels (0: off)
-// The random values are a hash of the cycle number (and \seed): voices on the
-// same phase share them (a mono LFO: one value for all), as the original's
-// mono LFOs; once the voices' phases differ (Spread, Detune) each voice hashes
-// its own index too, as the original's poly LFOs (a random per voice).
+// The random values are a hash of the cycle number (and \seed) and, unless
+// \rshare 1 (one series for every voice, each at its own phase), of the
+// voice's index: each voice its own random.
 (
 var root, dir, perlin2;
 root = if(thisProcess.nowExecutingPath.notNil,
@@ -50,8 +49,8 @@ perlin2 = { |x, y, salt = 0|
         // the random types: per voice, a new value each cycle at the voice's own phase
         var rpos = (sweep * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff;
         var rcycle = rpos.floor, rfrac = rpos - rcycle;
-        var mono = ((phoff.asArray - phoff.asArray[0]).abs.sum < 1.0e-6) * (detune.asArray.abs.sum < 1.0e-6);
-        var rsalt = (\seed.kr(0) * 7.13) + ((0 .. (n - 1)) * 3.7193 * (1 - mono));
+        // \rshare 0: each voice its own values; 1: one series for every voice
+        var rsalt = (\seed.kr(0) * 7.13) + ((0 .. (n - 1)) * 3.7193 * (1 - (\rshare.kr(0) > 0.5)));
         var rhash = { |c| ((((c % 8192) * 12.9898) + rsalt).sin * 43758.5453).frac };
         var v3 = rhash.(rcycle), v2 = rhash.(rcycle - 1), v1 = rhash.(rcycle - 2), v0 = rhash.(rcycle - 3);
         var rstepped = OnePole.kr(v3, exp(-1 / (\rsmooth.kr(0).max(1.0e-4) * ControlRate.ir)) * (\rsmooth.kr(0) > 0));

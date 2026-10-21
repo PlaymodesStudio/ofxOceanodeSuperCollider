@@ -862,7 +862,6 @@ Compatibility/
 ```
 Defaults/
 ├── AdditiveBox/
-│   ├── Presets/
 │   └── additiveBox.scd
 ├── AliasingBox/
 │   └── aliasingBox.scd
@@ -923,15 +922,12 @@ Defaults/
 ├── PolyArpeggiator/
 │   └── scpolyarpeggiator.scd
 ├── PolyComb/
-│   ├── ReaktorSnapshots/
-│   │   └── 2018/
 │   ├── polyCombExtras.scd
 │   ├── polyCombOptions.scd
 │   └── polyCombParts.scd
 ├── PolyMixer/
 │   └── polymixer.scd
 ├── PulsarBox/
-│   ├── Presets/
 │   └── pulsarbox.scd
 ├── Rave/
 │   └── rave.scd

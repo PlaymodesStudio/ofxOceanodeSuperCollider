@@ -150,6 +150,8 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
         auto toRnd = [this, toLfo]() { forStates([this](ofxSCServer* sv, ServerState& st){ updateSources(sv, st); }); toLfo(); };
         lfoRndType[li].set(L + "Random Type" + X, 0, 0, 3);      host.regI(lfoRndType[li], toRnd);
         lfoRndSmooth[li].set(L + "Random Smooth" + X, 0.0f, 0.0f, 10.0f); host.regF(lfoRndSmooth[li], toLfo);
+        // each voice its own random values unless asked for one value for all
+        lfoRndSame[li].set(L + "Random Same" + X, false);        host.regB(lfoRndSame[li], toLfo);
         if(unifiedLfoModels){
             lfoModel[li].set(L + "Model" + X, 1, 0, 3); host.regI(lfoModel[li], toRnd);
             lfoManual[li].set(L + "Value" + X, 0.0f, 0.0f, 1.0f); host.regF(lfoManual[li], toLfo);
@@ -204,7 +206,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
                 &lfoDetune[li], &lfoInit[li], &lfoRound[li], &lfoSkew[li], &lfoPw[li], &lfoCentered[li], &lfoGain[li],
                 &lfoPow[li], &lfoBiPow[li], &lfoNoise[li], &lfoSHGlide[li], &lfoNScale[li], &lfoRegion[li], &lfoSteps[li],
                 &lfoPSpread[li], &lfoPRand[li], &lfoNWaves[li], &lfoNorm[li], &lfoInvert[li], &lfoSym[li], &lfoShuffle[li],
-                &lfoRand[li], &lfoOffset[li], &lfoQuant[li], &lfoComb[li], &lfoModulo[li], &lfoRndType[li], &lfoRndSmooth[li]}) own(*q);
+                &lfoRand[li], &lfoOffset[li], &lfoQuant[li], &lfoComb[li], &lfoModulo[li], &lfoRndType[li], &lfoRndSmooth[li], &lfoRndSame[li]}) own(*q);
         if(unifiedLfoModels){ own(lfoModel[li]); own(lfoManual[li]); }
     }
     for(auto& E : envs) for(auto* q : std::initializer_list<ofAbstractParameter*>{&E.a, &E.d, &E.s, &E.r, &E.ca, &E.cd, &E.cr, &E.vt}) own(*q);
@@ -281,6 +283,7 @@ void scModulation::sendLfo(ServerState& st, int li) {
     s->set("rtype", (float)effectiveRandom(li));     // ModLfoX only
     s->set("steps", (float)lfoSteps[li].get());
     s->set("rsmooth", lfoRndSmooth[li].get());
+    s->set("rshare", perVoice && !lfoRndSame[li].get() ? 0.0f : 1.0f);   // ModLfoX only
     s->set("hold", manualLfo(li) ? 1.0f : 0.0f);
     if(manualLfo(li)){
         const std::vector<float> zero(n(),0.0f), one(n(),1.0f), half(n(),0.5f);
@@ -385,9 +388,14 @@ void scModulation::syncRoutes(ofxSCServer* server, ServerState& st) {
                     r->set("bipolar", s < MAX_LFOS && !targetList[t].unipolar ? 1.0f : 0.0f);
                     r->set("scale", targetList[t].range);
                     r->set("amount", amount);
+                    r->set("decor", s == SRC_RND && !randomShared ? 1.0f : 0.0f);
+                    r->set("salt", t * 7.31f + 1.0f);
                     r->createAndRun(1, st.routeGroup, true);
                     st.routes[idx] = r;
-                }else it->second->set("amount", amount);
+                }else{
+                    it->second->set("amount", amount);
+                    if(s == SRC_RND) it->second->set("decor", randomShared ? 0.0f : 1.0f);
+                }
             }else if(it != st.routes.end()){
                 it->second->free();
                 delete it->second;
@@ -723,6 +731,7 @@ void scModulation::save(ofJson& j, const std::string& prefix) const {
     j[prefix + "Envs"] = envCount;
     j[prefix + "Exts"] = extCount;
     j[prefix + "Params"] = paramsJson();
+    j[prefix + "RandomShared"] = randomShared;
 }
 
 std::vector<float> scModulation::fitMatrix(const std::vector<float>& m, int sources, int targets) {
@@ -749,6 +758,7 @@ void scModulation::load(const ofJson& j, const std::string& prefix) {
         } catch(...) {}
     }
     loadParamsJson(j.contains(prefix + "Params") ? j[prefix + "Params"] : ofJson::array());
+    randomShared = j.value(prefix + "RandomShared", false);
 }
 
 void scModulation::afterLoad() {
@@ -870,7 +880,12 @@ void scModulation::applyParams() {
             const int voice = (int)(i % nv);
             float m = 0.0f;
             for(int s = 0; s < sourceCount(); s++)
-                if(std::abs(pt.amount[s]) > 1e-4f && sourceUsed(s)) m += pt.amount[s] * paramSource(s, voice);
+                if(std::abs(pt.amount[s]) > 1e-4f && sourceUsed(s)){
+                    // Random: this control's own value per note (salted by its key), unless shared
+                    if(s == SRC_RND && !randomShared)
+                        m += pt.amount[s] * 0.5f * decorrelate(liveValue(s, voice), float(std::hash<std::string>{}(pt.key) % 1000) * 0.913f + 50.0f);
+                    else m += pt.amount[s] * paramSource(s, voice);
+                }
             float v = ofClamp(pt.base[std::min(i, pt.base.size() - 1)] + m * span, pt.lo, pt.hi);
             if(pt.kind == 1 || pt.kind == 3) v = std::round(v);
             out[i] = v;
@@ -1062,6 +1077,11 @@ void scModulation::modulateMenu(const std::string& key) {
             }
         }
         ImGui::TextDisabled(any ? "(amounts: the Routing tab)" : "(add LFOs or envelopes first)");
+        if(random && sourceUsed(SRC_RND)){
+            if(ImGui::MenuItem("Random: one value for every control", nullptr, randomShared)){ randomShared = !randomShared; sendMatrix(); }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Off: each control routed to Random gets its own random value per note\n"
+                                                         "On: they all get the same one (they move together)");
+        }
         return;
     }
     // any other control: a target of its own (a column in the Routing tab)
@@ -1083,6 +1103,11 @@ void scModulation::modulateMenu(const std::string& key) {
             pt->amount[s] = std::abs(v) > 1e-4f ? 0.0f : 0.25f;
             notify();
         }
+    }
+    if(random && sourceUsed(SRC_RND)){
+        if(ImGui::MenuItem("Random: one value for every control", nullptr, randomShared)){ randomShared = !randomShared; sendMatrix(); }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Off: each control routed to Random gets its own random value per note\n"
+                                                     "On: they all get the same one (they move together)");
     }
     if(pt && ImGui::MenuItem(("Stop modulating " + name).c_str())){
         for(size_t i = 0; i < params.size(); i++) if(params[i].key == key){ removeParam(i); break; }
@@ -1347,6 +1372,10 @@ void scModulation::drawLfoCard(int li, float w) {
                                                      "at its own phase. Stepped: held (Smooth glides it); Smooth: a curve through\n"
                                                      "the values; Jumps: both added, wrapped (sudden leaps).");
         if(host.publishMenu) host.publishMenu(key);
+        if(perVoice && random){
+            toggle(lfoRndSame[li], "Same for all voices");
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Off: each voice its own random values\nOn: every voice the same values (at its own phase)");
+        }
         if(effectiveRandom(li) == 1){
             slider(lfoRndSmooth[li], "Smooth", half, "%.3f s", true);
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("The stepped values glide (one-pole) over this time (0: they jump)");
@@ -1355,6 +1384,10 @@ void scModulation::drawLfoCard(int li, float w) {
     if(unifiedLfoModels && random){
         slider(lfoRndSmooth[li], "Smooth", half, "%.3f s", true);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("0: held random steps. Increase to glide between random values.");
+        if(perVoice){
+            toggle(lfoRndSame[li], "Same for all voices");
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Off: each voice its own random values\nOn: every voice the same values (at its own phase)");
+        }
     }
     if(random){
     }else if(effectiveNoise(li)){
@@ -1465,6 +1498,13 @@ void scModulation::drawRouting(float w) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImGui::TextColored(ImColor(pal::textDim), "Drag a cell left / right to set how much a source moves a target "
                        "(Shift: fine; double-click: 0; right-click: type it).");
+    if(random && sourceUsed(SRC_RND)){
+        ImGui::SameLine(0, 16 * z);
+        bool shared = randomShared;
+        if(ImGui::Checkbox("Random: one value for every target", &shared)){ randomShared = shared; sendMatrix(); }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Off: each target routed to Random gets its own random value per note\n"
+                                                     "On: they all get the same one (they move together)");
+    }
     const ImVec2 o = ImGui::GetCursorScreenPos();
     for(int t = 0; t < TT; t++){
         const char* name = colName(t).c_str();
