@@ -668,6 +668,7 @@ static void ReaktorComb_next(ReaktorComb* unit, int inNumSamples) {
 // the loop, y1..y4 the stages). type as PolyComb's filter types:
 //   0 LP (4-pole)  1 HP (2-pole)  2 BP (2-pole)  3 notch  4 LP2  5 LP4  6 HP2
 //   7 HP4  8 BP2  9 BP4  10 BL4 (1-pole HP, 3-pole LP)  11 notch
+// type at audio rate switches per sample (the stages are shared by every type).
 struct ReaktorMulti4 : public Unit {
     double s[4];
 };
@@ -682,9 +683,9 @@ static void ReaktorMulti4_next(ReaktorMulti4* unit, int inNumSamples) {
     float* out = OUT(0);
     auto at = [&](int index, int i) -> double { return INRATE(index) == calc_FullRate ? IN(index)[i] : IN0(index); };
     const double sr = SAMPLERATE;
-    const int type = std::clamp((int)IN0(3), 0, 11);
     double* s = unit->s;
     for (int i = 0; i < inNumSamples; ++i) {
+        const int type = std::clamp((int)at(3, i), 0, 11);   // per sample when audio rate
         const double fc = std::clamp(at(1, i), 10.0, sr * 0.45);
         const double k = 4.0 * std::clamp(at(2, i), 0.0, 0.995);
         const double g = std::tan(M_PI * fc / sr), G = g / (1.0 + g);
@@ -715,10 +716,80 @@ static void ReaktorMulti4_next(ReaktorMulti4* unit, int inNumSamples) {
     }
 }
 
+// ReaktorColorComb: one voice of NI's Resonator macro (Reaktor 5 library): per
+// sample y = in + fb * d, d = the loop's line read one period of freq back
+// (cubic), the line holding LP(y). LP: the macro's "Color" Multi 2-Pole, a
+// state-variable low-pass at color Hz with Reaktor's resonance mapping (res
+// clipped to 0..1, damping 2 - 2 res; the macro's negative res is 0 there, so
+// Q 0.5), as a zero-delay (TPT) SVF. The loop's length is the whole period,
+// as in Reaktor (its Single Delay is set one sample short of it, the feedback
+// sample supplying the rest); the filter's phase lowers the pitch slightly, as
+// there. Output: y (the input plus the ringing).
+struct ReaktorColorComb : public Unit {
+    float* line;
+    int mask, writePos;
+    double s1, s2;
+};
+static void ReaktorColorComb_next(ReaktorColorComb* unit, int inNumSamples);
+static void ReaktorColorComb_Ctor(ReaktorColorComb* unit) {
+    int len = 1;
+    while (len < (int)(SAMPLERATE * 0.26) + 8) len <<= 1;   // down to 4 Hz
+    unit->line = (float*)RTAlloc(unit->mWorld, len * sizeof(float));
+    unit->mask = unit->line ? len - 1 : 0;
+    if (unit->line) std::fill(unit->line, unit->line + len, 0.0f);
+    unit->writePos = 0;
+    unit->s1 = unit->s2 = 0.0;
+    SETCALC(ReaktorColorComb_next);
+    OUT0(0) = 0.0f;
+}
+static void ReaktorColorComb_Dtor(ReaktorColorComb* unit) {
+    if (unit->line) RTFree(unit->mWorld, unit->line);
+}
+static void ReaktorColorComb_next(ReaktorColorComb* unit, int inNumSamples) {
+    const float* in = IN(0);
+    float* out = OUT(0);
+    if (!unit->line) { for (int i = 0; i < inNumSamples; ++i) out[i] = in[i]; return; }
+    auto at = [&](int index, int i) -> double { return INRATE(index) == calc_FullRate ? IN(index)[i] : IN0(index); };
+    float* b = unit->line;
+    const int m = unit->mask;
+    int w = unit->writePos;
+    double s1 = unit->s1, s2 = unit->s2;
+    const double sr = SAMPLERATE, maxDelay = (double)(m - 4);
+    for (int i = 0; i < inNumSamples; ++i) {
+        const double fc = std::clamp(at(1, i), 1.0, sr * 0.45);
+        const double fb = at(2, i);
+        const double fl = std::clamp(at(3, i), 10.0, sr * 0.45);
+        const double k = 2.0 - 2.0 * std::clamp(at(4, i), 0.0, 1.0);
+        const double delay = std::clamp(sr / fc, 2.0, maxDelay);
+        const double pos = w - delay;
+        const int n0 = (int)std::floor(pos);
+        const double t = pos - n0;
+        const double y0 = b[(n0 - 1) & m], y1 = b[n0 & m], y2 = b[(n0 + 1) & m], y3 = b[(n0 + 2) & m];
+        const double c1 = 0.5 * (y2 - y0), c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3, c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
+        const double d = ((c3 * t + c2) * t + c1) * t + y1;
+        double y = in[i] + fb * d;
+        if (!std::isfinite(y)) { y = 0.0; s1 = s2 = 0.0; }
+        // Cytomic / Simper SVF, low-pass output
+        const double g = std::tan(M_PI * fl / sr);
+        const double a1 = 1.0 / (1.0 + g * (g + k)), a2 = g * a1, a3 = g * a2;
+        const double v3 = y - s2, v1 = a1 * s1 + a2 * v3, v2 = s2 + a2 * s1 + a3 * v3;
+        s1 = 2.0 * v1 - s1;
+        s2 = 2.0 * v2 - s2;
+        if (std::fabs(s1) < 1e-30) s1 = 0.0;
+        if (std::fabs(s2) < 1e-30) s2 = 0.0;
+        b[w & m] = std::fabs(v2) < 1e-30 ? 0.0f : (float)v2;
+        w = (w + 1) & m;
+        out[i] = (float)y;
+    }
+    unit->writePos = w;
+    unit->s1 = s1; unit->s2 = s2;
+}
+
 PluginLoad(OceanodeAnalog) {
     ft = inTable;
     DefineSimpleUnit(MorphOsc);
     DefineDtorUnit(AnalogFilter);
     DefineDtorUnit(ReaktorComb);
     DefineSimpleUnit(ReaktorMulti4);
+    DefineDtorUnit(ReaktorColorComb);
 }

@@ -1,6 +1,6 @@
 (
 ~synthCreator.value("CrossfadeAB", {|n|
-	var inA, inB, xfade, output;
+	var inA, inB, xfade, output, linear;
 
 	// Get inputs
 	inA = In.ar(OceanodeInput.kr(\ina), n);
@@ -9,8 +9,9 @@
 	// Crossfade parameter with lag for smooth transitions
 	xfade = OceanodeParameterLag.ar(\xfade, 0.5, n, 0, 1, "vf", 1/30, true);
 
-	// Use XFade2 for equal-power crossfading between the inputs
-	output = XFade2.ar(inA, inB, xfade.linlin(0, 1, -1, 1));
+	// Equal power remains the default; linear matches Reaktor dry/wet.
+	linear = OceanodeParameterDropdown.kr(\linear, 0, 1, "Equal Power:Linear");
+	output = Select.ar(linear, [XFade2.ar(inA, inB, xfade.linlin(0, 1, -1, 1)), inA + ((inB - inA) * xfade)]);
 
 	// Apply level control with proper dB scaling
 	output = output * OceanodeParameterLag.ar(\levels, 1, n, 0, 1, "vf", 1/30, true);

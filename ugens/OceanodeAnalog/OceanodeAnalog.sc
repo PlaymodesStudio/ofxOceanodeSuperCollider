@@ -35,3 +35,13 @@ ReaktorMulti4 : UGen {
     }
     checkInputs { ^this.checkValidInputs }
 }
+
+// ReaktorColorComb: one voice of NI's Resonator macro: y = in + fb * delay(LP(y)), one period
+// of freq in the loop, LP the macro's Color filter (2-pole state-variable low-pass at color Hz,
+// res 0..1 as Reaktor's: 0 is Q 0.5). Out: y.
+ReaktorColorComb : UGen {
+    *ar { arg in = 0.0, freq = 440.0, fb = 0.9, color = 4000.0, res = 0.0, mul = 1.0, add = 0.0;
+        ^this.multiNew('audio', in, freq, fb, color, res).madd(mul, add)
+    }
+    checkInputs { ^this.checkValidInputs }
+}
