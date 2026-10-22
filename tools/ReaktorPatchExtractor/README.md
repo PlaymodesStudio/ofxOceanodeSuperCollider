@@ -1,4 +1,4 @@
-# Reaktor Patch Extractor 0.5.5
+# Reaktor Patch Extractor 0.5.6
 
 Aplicació macOS universal (`arm64` i `x86_64`) i executable de terminal per
 inspeccionar qualsevol fitxer binari `NRKT` de Reaktor (`.ism` i `.ens`).
@@ -225,3 +225,27 @@ The `0x0022F200` module revision uses macro trailer version 3. SteamPipe 2
 regression extraction resolves 1,487 Primary modules, all 1,502 wires and all
 11 Core documents. Stored numeric constants use the same float32 field as
 the other supported revisions. Snapshot scope/UUID ordering remains unchanged.
+
+### Core float properties and readable netlists (0.5.6)
+
+Core properties stored with tag `0x03A30B26` are float64 and are exported as
+`value_type: float64` (they were `raw_8_bytes`). The important case is
+`Exp Approx` / `Log Approx`: integer property 1 is the polynomial order, not a
+mode, and float property 2 is the base. NI's library uses base 2^(1/12) in
+P2F, 10^(1/20) in dB2AF and 10^(1/40) in the BiLin shelves (so their `B` input
+is the shelf gain in dB). `parser_revision` is unchanged: Primary output is
+identical.
+
+`core_view.py` turns a report's Core cells into something readable:
+
+```sh
+python3 core_view.py report.json --list                     # cells and their names
+python3 core_view.py report.json --cell 29 --tree --depth 2 # macro hierarchy
+python3 core_view.py report.json --cell 29 --net root/m27   # one structure as a netlist
+```
+
+Macro ports are resolved by property 9 of the inner pin modules (the real
+port index; module order and flavour index differ from it). Used to rebuild NI
+"Micro Space" (Space Master Deluxe) as `synthdefs/Effect/Time/Reverb/microSpace.scd`;
+`../microspace/model_test.py` checks that SynthDef against a sample-by-sample
+model of the decoded graph.

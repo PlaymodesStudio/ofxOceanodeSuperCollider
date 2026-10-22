@@ -35,6 +35,7 @@ private enum CoreTag {
     static let propertyValue: UInt32 = 0x028B9CB0
     static let stringValue: UInt32 = 0x03A30D33
     static let intValue: UInt32 = 0x03A30BA9
+    static let doubleValue: UInt32 = 0x03A30B26
     static let connectionArray: UInt32 = 0x02CEEBE3
     static let connectionCount: UInt32 = 0x03A33BE3
     static let connectionValues: UInt32 = 0x028F3BE3
@@ -192,6 +193,14 @@ final class CoreCellParser {
         } else if cursor.tag == CoreTag.intValue, raw.count == 4, let value = u32(raw, 0) {
             result["value_type"] = "integer"
             result["value"] = i32(value)
+        } else if cursor.tag == CoreTag.doubleValue, raw.count == 8 {
+            // Float properties, e.g. the logarithm base of Exp/Log Approx
+            // (2^(1/12) in P2F, 10^(1/20) in dB2AF).
+            var bits: UInt64 = 0
+            for (i, byte) in raw.enumerated() { bits |= UInt64(byte) << (8 * UInt64(i)) }
+            result["value_type"] = "float64"
+            result["value"] = Double(bitPattern: bits)
+            result["raw_words"] = [u32(raw, 0) ?? 0, u32(raw, 4) ?? 0]
         } else if raw.count == 1 {
             result["value_type"] = "byte"
             result["value"] = raw[0]
