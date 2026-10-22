@@ -17,6 +17,10 @@ Updated UGens offer a server restart after syncing. Up-to-date launches show no
 prompt; connection failures are logged without blocking startup. You can also
 update manually through **SuperCollider → Sync with SynthDefs Git…**.
 
+Startup checks are enabled by default. Toggle **SuperCollider → Check for SynthDef
+updates on startup**, or select **Don't check on future startups** in the update
+prompt. The choice is saved immediately and does not affect manual syncing.
+
 After syncing, choosing an uncompiled **N Chan** count on a `~synthCreator`
 SynthDef opens the **Compile** prompt. The addon builds that exact channel count
 and variable combination from the synced sources, installs it, loads it into

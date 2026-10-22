@@ -66,6 +66,9 @@ public:
     // Once at app setup: compare installed files with GitHub in the background.
     // A difference opens an opt-in update prompt; an offline check only logs.
     void checkForUpdates();
+    void setCheckForUpdatesOnStartup(bool enabled);
+    bool getCheckForUpdatesOnStartup() const { return checkForUpdatesOnStartup; }
+    void setStartupCheckChangedCallback(std::function<void(bool)> callback){ startupCheckChangedCallback = std::move(callback); }
 
     // Inside the SuperCollider menu
     void drawMenuItem();
@@ -112,10 +115,12 @@ private:
 
     std::vector<serverManager*> servers;
     std::function<void()> reloadCallback;
+    std::function<void(bool)> startupCheckChangedCallback;
 
     Stage stage = Stage::Closed;
     bool openRequested = false;
     bool startupCheckStarted = false;
+    bool checkForUpdatesOnStartup = true;
     std::string addonRoot;          // this checkout, "" when not on this machine
     char branch[128] = "";
     bool fromCheckout = false;

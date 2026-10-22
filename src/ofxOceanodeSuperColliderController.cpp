@@ -984,10 +984,23 @@ void ofxOceanodeSuperColliderController::setup(){
         selectedAudioDeviceName = json.value<std::string>("deviceName", selectedAudioDeviceName);
         selectedAudioInputDeviceName = json.value<std::string>("inputDeviceName", selectedAudioInputDeviceName);
         selectedSampleRate = json.value<int>("sampleRate", selectedSampleRate);
+        synthdefSync.setCheckForUpdatesOnStartup(json.value<bool>("checkForSynthdefUpdatesOnStartup", true));
         syncAudioDeviceSelection();
         syncAudioInputDeviceSelection();
         syncSampleRateSelection();
 	}
+    synthdefSync.setStartupCheckChangedCallback([this](bool enabled){
+        const std::string path = "Supercollider/Config/Controller/ControllerPreferences.json";
+        ofJson saved = ofLoadJson(path);
+        if(saved.empty()){
+            // Also populate the required controller fields on a first launch.
+            ofFilePath::createEnclosingDirectory(path);
+            saveControllerConfig(path);
+        }else{
+            saved["checkForSynthdefUpdatesOnStartup"] = enabled;
+            ofSavePrettyJson(path, saved);
+        }
+    });
 	// apply preferences to output servers
     applyAudioDeviceToServers(false);
     for(auto s : outputServers)
@@ -1263,6 +1276,7 @@ void ofxOceanodeSuperColliderController::saveControllerConfig(std::string filepa
     json["deviceName"] = selectedAudioDeviceName;
     json["inputDeviceName"] = selectedAudioInputDeviceName;
     json["sampleRate"] = selectedSampleRate;
+    json["checkForSynthdefUpdatesOnStartup"] = synthdefSync.getCheckForUpdatesOnStartup();
 
 	ofSavePrettyJson(filepath, json);
 }

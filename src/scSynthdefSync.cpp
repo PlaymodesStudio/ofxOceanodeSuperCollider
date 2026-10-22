@@ -1181,9 +1181,15 @@ scSynthdefSync::~scSynthdefSync(){
     }
 }
 
+void scSynthdefSync::setCheckForUpdatesOnStartup(bool enabled){
+    if(checkForUpdatesOnStartup == enabled) return;
+    checkForUpdatesOnStartup = enabled;
+    if(startupCheckChangedCallback) startupCheckChangedCallback(enabled);
+}
+
 void scSynthdefSync::checkForUpdates(){
 #ifdef __APPLE__
-    if(startupCheckStarted || stage != Stage::Closed) return;
+    if(!checkForUpdatesOnStartup || startupCheckStarted || stage != Stage::Closed) return;
     startupCheckStarted = true;
     progress = std::make_shared<Progress>();
     cancelFlag = std::make_shared<std::atomic<bool>>(false);
@@ -1198,6 +1204,10 @@ void scSynthdefSync::checkForUpdates(){
 }
 
 void scSynthdefSync::drawMenuItem(){
+    bool checkOnStartup = checkForUpdatesOnStartup;
+    if(ImGui::MenuItem("Check for SynthDef updates on startup", nullptr, &checkOnStartup)){
+        setCheckForUpdatesOnStartup(checkOnStartup);
+    }
     const bool running = stage == Stage::Running || stage == Stage::Checking;
     if(ImGui::MenuItem("Sync with SynthDefs Git...", nullptr, false, !running)) openRequested = true;
 }
@@ -1251,7 +1261,7 @@ void scSynthdefSync::drawPopup(){
             report = progress->report;
         }
         const bool different = report.pendingFiles > 0 || report.removed > 0 || !report.extensions.empty();
-        stage = report.error.empty() && !report.cancelled && different ? Stage::UpdateAvailable : Stage::Closed;
+        stage = checkForUpdatesOnStartup && report.error.empty() && !report.cancelled && different ? Stage::UpdateAvailable : Stage::Closed;
     }
     if(openRequested){
         openRequested = false;
@@ -1280,6 +1290,12 @@ void scSynthdefSync::drawPopup(){
         if(!report.extensions.empty()) ImGui::BulletText("UGens: %s", ofJoinString(report.extensions, ", ").c_str());
         ImGui::TextUnformatted("Updating downloads the changes and compiles the SynthDefs. Locally edited presets "
                                "are kept, with the repository version saved alongside them as \"(repo)\".");
+        ImGui::Spacing();
+        bool dontCheckOnStartup = !checkForUpdatesOnStartup;
+        if(ImGui::Checkbox("Don't check on future startups", &dontCheckOnStartup)){
+            setCheckForUpdatesOnStartup(!dontCheckOnStartup);
+        }
+        ImGui::TextDisabled("You can re-enable startup checks in the SuperCollider menu.");
         ImGui::Spacing();
         if(ImGui::Button("Update", ImVec2(120, 0))){
             fromCheckout = false;
