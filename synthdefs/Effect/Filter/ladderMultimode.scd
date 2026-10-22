@@ -1,5 +1,5 @@
 (
-~synthCreator.value("ReaktorFilter4", {|n|
+~synthCreator.value("LadderMultimode", {|n|
 	var input, pitch, res, type, drywet;
 
 	/*

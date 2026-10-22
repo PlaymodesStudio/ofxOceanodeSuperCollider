@@ -13,7 +13,10 @@ Presets store a node by its name, with or without the trailing "*":
   modules.json          "SC Pulsar2*": {...}     (older: "SC Pulsar2")
   connections.json      "SC_Pulsar2*_<n>": ...
   SC_Pulsar2*_<n>.json  (the node's own values)
-This script finds every preset folder under the data folders given (or every
+Also renamed 2026-10-22: ReaktorFilter4 -> LadderMultimode and
+ReaktorSaturator -> ParabolicSaturator (DSP unchanged).
+
+This script finds every preset and reusable macro folder under the data folders given (or every
 apps/Playmodes/*/bin/data by default), copies each affected folder to
 <data>/Presets_backup_SynthRenames/<its path> first, then rewrites the names
 and renames the node files. Running it twice is harmless (nothing left to do).
@@ -30,6 +33,8 @@ RENAMES = {
     "CircularBufferFFT2": "CircularBufferFFT_B",
     "RLPF4": "RLPF4Pole",
     "RHPF4": "RHPF4Pole",
+    "ReaktorFilter4": "LadderMultimode",
+    "ReaktorSaturator": "ParabolicSaturator",
 }
 BACKUP = "Presets_backup_SynthRenames"
 
@@ -62,11 +67,9 @@ def affected(folder):
 
 
 def migrate(data, dry):
-    presets = os.path.join(data, "Presets")
-    if not os.path.isdir(presets):
-        return 0
     count = 0
-    for root, dirs, files in os.walk(presets):
+    roots = [os.path.join(data, name) for name in ("Presets", "Macros")]
+    for root, dirs, files in (entry for tree in roots if os.path.isdir(tree) for entry in os.walk(tree)):
         if BACKUP in root or not affected(root):
             continue
         rel = os.path.relpath(root, data)

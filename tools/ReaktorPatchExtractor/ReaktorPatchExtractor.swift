@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 import UniformTypeIdentifiers
 
-private let moduleSignatures: Set<UInt32> = [0x00228D00, 0x0022F300, 0x0022F200]
+private let moduleSignatures: Set<UInt32> = [0x00228D00, 0x0022EF00, 0x0022F300, 0x0022F200]
 private let rootSentinelID: UInt32 = 0x75646F4D
 private let panelControlKinds: Set<UInt32> = [20, 22, 23, 24, 25]
 private let applicationVersion = Bundle.main.object(
@@ -469,7 +469,7 @@ final class NRKTParser {
                 // module record.  Snapshot-isolated controls do not appear in
                 // a snapshot's parameter list, so this state is required to
                 // reconstruct the complete effective preset.
-                let stateOffset = module.offset + 0x112 + linkShift
+                let stateOffset = module.offset + (module.signature == 0x0022EF00 ? 0x10e : 0x112) + linkShift
                 if stateOffset + 4 <= end, let raw = try? u32(stateOffset) {
                     module.savedControlRawU32 = raw
 
@@ -555,7 +555,7 @@ final class NRKTParser {
         do {
             let nameOffset = module.offset + (module.signature == 0x00228D00 ? 0xf0 : 0x104)
                 + (module.kind == 7 && module.signature == 0x00228D00 ? 4 : 0)
-            let trailerVersion: UInt32 = module.signature == 0x00228D00 ? 2 : module.signature == 0x0022F200 ? 3 : 4
+            let trailerVersion: UInt32 = module.signature == 0x00228D00 ? 2 : [0x0022EF00, 0x0022F200].contains(module.signature) ? 3 : 4
             let (name, afterName) = try nrktString(nameOffset)
             let (detail, afterDetail) = try nrktString(afterName)
             let limit = min(data.count, afterDetail + 32)

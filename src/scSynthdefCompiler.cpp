@@ -4,6 +4,7 @@
 //
 
 #include "scSynthdefCompiler.h"
+#include "scClassLibraryConfig.h"
 #include "serverManager.h"
 #include "imgui.h"
 #include <cstring>
@@ -392,50 +393,8 @@ const scSynthdefCompiler::Paths& scSynthdefCompiler::getPaths(){
 
 void scSynthdefCompiler::writeClassLibraryConfig(const Paths& p, const std::string& file,
                                                   const std::vector<std::string>& extraClassFolders){
-    std::ofstream conf(file);
-    conf << "includePaths:\n";
-    if(!p.sclangBundle.empty()){
-        conf << "    -   \"" << (fs::path(p.sclangBundle) / "SCClassLibrary").string() << "\"\n"
-             << "    -   \"" << (fs::path(p.sclangBundle) / "Extensions").string() << "\"\n";
-    }
-    if(!p.sources.empty()) conf << "    -   \"" << (fs::path(p.sources) / "Oceanode").string() << "\"\n";
-    const fs::path installed = ofToDataPath("Supercollider/Extensions", true);
-    std::set<std::string> plugins;
-    if(fs::exists(installed)){
-        // Synced UGen classes must be visible to exact-channel builds too.
-        for(const auto& entry : fs::directory_iterator(installed)){
-            const std::string name = entry.path().filename().string();
-            // Legacy installations also keep Oceanode classes here; the
-            // synced source tree already supplies their current version.
-            if(!entry.is_directory() || name == "Oceanode" || name == "synthdefs") continue;
-            bool hasClasses = false;
-            for(const auto& file : fs::recursive_directory_iterator(entry.path())){
-                if(file.is_regular_file() && file.path().extension() == ".sc"){
-                    hasClasses = true;
-                    break;
-                }
-            }
-            if(!hasClasses) continue; // binary-only folders still need their bundled classes
-            plugins.insert(name);
-            conf << "    -   \"" << entry.path().string() << "\"\n";
-        }
-    }
-    for(const auto& folder : extraClassFolders) conf << "    -   \"" << folder << "\"\n";
-    // As in the sync compiler, the installed plugin wins over a bundled
-    // copy; loading both would fail the entire SC class library.
-    std::vector<fs::path> shadowed;
-    const fs::path bundled = fs::path(p.sclangBundle) / "Extensions";
-    if(!p.sclangBundle.empty() && fs::exists(bundled)){
-        for(auto it = fs::recursive_directory_iterator(bundled); it != fs::recursive_directory_iterator(); ++it){
-            if(it.depth() >= 1) it.disable_recursion_pending();
-            if(it->is_directory() && plugins.count(it->path().filename().string())) shadowed.push_back(it->path());
-        }
-    }
-    conf << "excludePaths:\n";
-    if(shadowed.empty()) conf << "    []\n";
-    for(const auto& folder : shadowed) conf << "    -   \"" << folder.string() << "\"\n";
-    conf << "postInlineWarnings: false\n"
-         << "excludeDefaultPaths: " << (p.sclangBundle.empty() ? "false" : "true") << "\n";
+    oceanodeClassLibrary::write(file, p.sclangBundle, p.sources,
+        ofToDataPath("Supercollider/Extensions", true), extraClassFolders);
 }
 
 void scSynthdefCompiler::refreshPaths(){

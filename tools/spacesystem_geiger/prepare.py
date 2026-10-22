@@ -52,8 +52,8 @@ assert (work / 'tap.scsyndef').exists(), r.stdout + r.stderr
 print('Prepared', len(builds), 'SynthDef variants')
 
 # Discovery metadata and common variants for the five new library nodes.
-new_sources = [('ColorComb', '1,4,24'), ('OnePole', '1,4'), ('ReaktorFilter4', '1,4'),
-               ('RandomMetro', '1,4'), ('TransportPulse', '1'), ('ReaktorSaturator', '1,4'), ('CrossfadeAB', '1,4')]
+new_sources = [('ColorComb', '1,4,24'), ('OnePole', '1,4'), ('LadderMultimode', '1,4'),
+               ('RandomMetro', '1,4'), ('TransportPulse', '1'), ('ParabolicSaturator', '1,4'), ('CrossfadeAB', '1,4')]
 (work / 'metadata').mkdir(exist_ok=True)
 r = subprocess.run([str(ROOT / 'sclang/osx/sclang'), '-l', str(conf),
                     str(ROOT / 'synthdefs/Oceanode/syncCompile.scd'), 'stereo', str(work / 'metadata'),

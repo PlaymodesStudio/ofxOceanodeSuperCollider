@@ -1,5 +1,5 @@
 (
-~synthCreator.value("ReaktorSaturator", {|n|
+~synthCreator.value("ParabolicSaturator", {|n|
     var input = In.ar(OceanodeInput.kr(\in), n);
     // NI mono::AudioSaturator: parabolic saturation, unity slope at zero,
     // zero slope at +/-4, output limited to +/-2.

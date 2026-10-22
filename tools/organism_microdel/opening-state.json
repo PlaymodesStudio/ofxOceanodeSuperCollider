@@ -1,0 +1,396 @@
+{
+  "source": "organism_microdel.ens",
+  "sha256": "f6e3ac62915ddd39f4c14076d95fda66bf4e9da151667406569ce908cb28632a",
+  "scope": "saved opening state only; no snapshots imported",
+  "voices": 1,
+  "bpm": 100,
+  "controls": {
+    "22": {
+      "path": "/Instrument#5/Amp EnV#20/A#22",
+      "value": -20,
+      "normalized": 0
+    },
+    "23": {
+      "path": "/Instrument#5/Amp EnV#20/D#23",
+      "value": 100,
+      "normalized": 1
+    },
+    "26": {
+      "path": "/Instrument#5/Amp EnV#20/Fader#26",
+      "value": 0,
+      "normalized": 0
+    },
+    "27": {
+      "path": "/Instrument#5/Amp EnV#20/Fader#27",
+      "value": 0,
+      "normalized": 0
+    },
+    "33": {
+      "path": "/Instrument#5/Fader#33",
+      "value": 0.007874131202697754,
+      "normalized": 0.5039370656013489
+    },
+    "34": {
+      "path": "/Instrument#5/Fader#34",
+      "value": 0,
+      "normalized": 0.5
+    },
+    "36": {
+      "path": "/Instrument#5/Fader#36",
+      "value": 0,
+      "normalized": 0
+    },
+    "46": {
+      "path": "/Instrument#5/Filter#38/Filter Env#44/A#46",
+      "value": 72.59843111038208,
+      "normalized": 0.7716535925865173
+    },
+    "47": {
+      "path": "/Instrument#5/Filter#38/Filter Env#44/D#47",
+      "value": 66.00000381469727,
+      "normalized": 0.7166666984558105
+    },
+    "50": {
+      "path": "/Instrument#5/Filter#38/Filter Env#44/Fader#50",
+      "value": 0.7244094610214233,
+      "normalized": 0.7244094610214233
+    },
+    "51": {
+      "path": "/Instrument#5/Filter#38/Filter Env#44/Fader#51",
+      "value": 0,
+      "normalized": 0
+    },
+    "56": {
+      "path": "/Instrument#5/Filter#38/Fader#56",
+      "value": 1,
+      "normalized": 1
+    },
+    "2097": {
+      "path": "/Instrument#5/Filter#38/Cascade#2086/Fader#2097",
+      "value": 0.9722834871697614,
+      "normalized": 0.9921259880065918
+    },
+    "2499": {
+      "path": "/Instrument#5/Filter#38/Fader#2499",
+      "value": 1,
+      "normalized": 1
+    },
+    "1111": {
+      "path": "/Instrument#5/FM ENV#1109/A#1111",
+      "value": -20,
+      "normalized": 0
+    },
+    "1112": {
+      "path": "/Instrument#5/FM ENV#1109/D#1112",
+      "value": 75.00000238418579,
+      "normalized": 0.7916666865348816
+    },
+    "1115": {
+      "path": "/Instrument#5/FM ENV#1109/Fader#1115",
+      "value": 0.5826771855354309,
+      "normalized": 0.5826771855354309
+    },
+    "1116": {
+      "path": "/Instrument#5/FM ENV#1109/Fader#1116",
+      "value": 72.44094848632812,
+      "normalized": 0.9055118560791016
+    },
+    "1121": {
+      "path": "/Instrument#5/Fader#1121",
+      "value": 39.370179176330566,
+      "normalized": 0.5196850895881653
+    },
+    "1162": {
+      "path": "/Instrument#5/randomshift#1145/Fader#1162",
+      "value": 8.125,
+      "normalized": 0.25390625
+    },
+    "1183": {
+      "path": "/Instrument#5/randomshift#1145/Button#1183",
+      "value": 1,
+      "normalized": 0.5
+    },
+    "1185": {
+      "path": "/Instrument#5/randomshift#1145/Button#1185",
+      "value": 1,
+      "normalized": 0.5
+    },
+    "1227": {
+      "path": "/Instrument#5/randomshift#1145/Fader#1227",
+      "value": 58.582683086395264,
+      "normalized": 0.5433071255683899
+    },
+    "1245": {
+      "path": "/Instrument#5/randomshift#1145/Fader#1245",
+      "value": 1,
+      "normalized": 1
+    },
+    "1250": {
+      "path": "/Instrument#5/randomshift#1145/Fader#1250",
+      "value": 2.110236406326294,
+      "normalized": 0.5275591015815735
+    },
+    "1252": {
+      "path": "/Instrument#5/randomshift#1145/Fader#1252",
+      "value": 0,
+      "normalized": 0
+    },
+    "1439": {
+      "path": "/Instrument#5/Instrument#1429/Fader#1439",
+      "value": 0,
+      "normalized": 1
+    },
+    "1475": {
+      "path": "/Instrument#5/Instrument#1429/Fader#1475",
+      "value": 82.20472455024719,
+      "normalized": 0.6220472455024719
+    },
+    "1476": {
+      "path": "/Instrument#5/Instrument#1429/Fader#1476",
+      "value": 0.13889764728273946,
+      "normalized": 0.14173229038715363
+    },
+    "1484": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Fader#1484",
+      "value": 945.0000524520874,
+      "normalized": 0.9450000524520874
+    },
+    "1489": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Fader#1489",
+      "value": 8.062993049621582,
+      "normalized": 0.25196853280067444
+    },
+    "1503": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Fader#1503",
+      "value": 0.7086614705622196,
+      "normalized": 0.04724409803748131
+    },
+    "1514": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Time QTZ#1506/Fader#1514",
+      "value": 0,
+      "normalized": 0
+    },
+    "1517": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Time QTZ#1506/Fader#1517",
+      "value": 1.4881890323013067,
+      "normalized": 0.015748033300042152
+    },
+    "1530": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Pitch QTZ#1518/Fader#1530",
+      "value": 0,
+      "normalized": 0
+    },
+    "1532": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Pitch QTZ#1518/Fader#1532",
+      "value": 0.09448957443237305,
+      "normalized": 0.5039370656013489
+    },
+    "1540": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Button#1540",
+      "value": 1,
+      "normalized": 0.5
+    },
+    "1542": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Fader#1542",
+      "value": 8.00000037997961,
+      "normalized": 0.01600000075995922
+    },
+    "1546": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Fader#1546",
+      "value": 2.047244116663933,
+      "normalized": 0.24409449100494385
+    },
+    "1549": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Fader#1549",
+      "value": 0.007874131202697754,
+      "normalized": 0.5039370656013489
+    },
+    "1877": {
+      "path": "/Instrument#5/Instrument#1429/RAMPS#1480/Button#1877",
+      "value": 1,
+      "normalized": 0.5
+    },
+    "1557": {
+      "path": "/Instrument#5/Instrument#1429/#1550/Fader#1557",
+      "value": 0.874015748500824,
+      "normalized": 0.874015748500824
+    },
+    "1558": {
+      "path": "/Instrument#5/Instrument#1429/#1550/Fader#1558",
+      "value": 1,
+      "normalized": 1
+    },
+    "1571": {
+      "path": "/Instrument#5/Instrument#1429/Fader#1571",
+      "value": 1,
+      "normalized": 1
+    },
+    "1857": {
+      "path": "/Instrument#5/Fader#1857",
+      "value": 0,
+      "normalized": 0
+    },
+    "1861": {
+      "path": "/Instrument#5/Button#1861",
+      "value": 0,
+      "normalized": 0
+    },
+    "1888": {
+      "path": "/Instrument#5/BALANCE#1883/Level#1888",
+      "value": 0.07874131202697754,
+      "normalized": 0.834645688533783
+    },
+    "1894": {
+      "path": "/Instrument#5/BALANCE#1883/Button#1894",
+      "value": 1,
+      "normalized": 0
+    },
+    "1905": {
+      "path": "/Instrument#5/BALANCE#1883/Fader#1905",
+      "value": 1,
+      "normalized": 1
+    },
+    "2168": {
+      "path": "/Instrument#5/BALANCE#1883/Width#2147/Fader#2168",
+      "value": 0.16535434126853943,
+      "normalized": 0.16535434126853943
+    },
+    "1949": {
+      "path": "/Instrument#5/Compressor#1946/Att#1949",
+      "value": 2.980232238769531e-07,
+      "normalized": 0.20000000298023224
+    },
+    "1950": {
+      "path": "/Instrument#5/Compressor#1946/Tresh#1950",
+      "value": -37.99999952316284,
+      "normalized": 0.36666667461395264
+    },
+    "1951": {
+      "path": "/Instrument#5/Compressor#1946/Rel#1951",
+      "value": 51.00000500679016,
+      "normalized": 0.5100000500679016
+    },
+    "1952": {
+      "path": "/Instrument#5/Compressor#1946/Ratio#1952",
+      "value": 0.7416666746139526,
+      "normalized": 0.7416666746139526
+    },
+    "1953": {
+      "path": "/Instrument#5/Compressor#1946/Out Gain#1953",
+      "value": 11.200000762939453,
+      "normalized": 0.7333333492279053
+    },
+    "1956": {
+      "path": "/Instrument#5/Compressor#1946/Sat#1956",
+      "value": -6,
+      "normalized": 1
+    },
+    "1963": {
+      "path": "/Instrument#5/Compressor#1946/Knee#1963",
+      "value": 27.00000250339508,
+      "normalized": 0.5531915426254272
+    },
+    "1965": {
+      "path": "/Instrument#5/Compressor#1946/Switch#1965",
+      "value": 1,
+      "normalized": 1
+    },
+    "1966": {
+      "path": "/Instrument#5/Compressor#1946/Switch#1966",
+      "value": 1,
+      "normalized": 1
+    },
+    "1967": {
+      "path": "/Instrument#5/Compressor#1946/Switch#1967",
+      "value": 1,
+      "normalized": 1
+    },
+    "1979": {
+      "path": "/Instrument#5/Compressor#1946/On#1971/Switch#1979",
+      "value": 1,
+      "normalized": 1
+    },
+    "1984": {
+      "path": "/Instrument#5/Compressor#1946/On#1971/Switch#1984",
+      "value": 1,
+      "normalized": 1
+    },
+    "1985": {
+      "path": "/Instrument#5/Compressor#1946/On#1971/Switch#1985",
+      "value": 1,
+      "normalized": 1
+    }
+  },
+  "selected_lists": {
+    "wave": "noise",
+    "delay_filter": "HP",
+    "delay_wave": "RND"
+  },
+  "counts": {
+    "connections": 451,
+    "core_cells": 33,
+    "core_connections": 7295,
+    "core_modules": 6617,
+    "core_structures": 1046,
+    "decoded_core_cells": 33,
+    "input_ports": 470,
+    "macros": 18,
+    "module_kinds": {
+      "4": 18,
+      "5": 36,
+      "6": 35,
+      "9": 2,
+      "11": 1,
+      "12": 1,
+      "20": 51,
+      "22": 6,
+      "23": 3,
+      "24": 8,
+      "30": 4,
+      "31": 4,
+      "50": 1,
+      "52": 1,
+      "62": 2,
+      "100": 39,
+      "110": 6,
+      "111": 24,
+      "112": 1,
+      "113": 3,
+      "114": 8,
+      "115": 1,
+      "117": 1,
+      "120": 1,
+      "122": 2,
+      "126": 1,
+      "134": 5,
+      "154": 9,
+      "156": 2,
+      "162": 3,
+      "207": 1,
+      "241": 3,
+      "260": 1,
+      "272": 3,
+      "300": 7,
+      "402": 1,
+      "414": 3,
+      "415": 9,
+      "417": 7,
+      "418": 1,
+      "442": 11,
+      "443": 6,
+      "446": 10,
+      "452": 1,
+      "453": 1,
+      "455": 3,
+      "524": 33,
+      "536": 2
+    },
+    "modules": 382,
+    "output_ports": 390,
+    "resolved_connections": 451,
+    "snapshot_parameter_records": 160,
+    "snapshots": 8,
+    "special_root_records": 1
+  },
+  "voice_count_evidence": "Reaktor Instrument properties: Voices 1, Min Voices 1, Max Voices 1 (2026-10-22)"
+}
