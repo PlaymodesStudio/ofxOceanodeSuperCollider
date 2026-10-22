@@ -13,6 +13,7 @@
 #include "scOldSynthdef.h"
 #include "scNode.h"
 #include "MacroMixerSCBus.h"
+#include "scAudioBusMixer.h"
 #include "ofxOceanodeSuperColliderController.h"
 #include "ofxSCServer.h"
 #include "nodes/scFeedbackNode.h"   // refreshSynthdefModels
@@ -120,6 +121,7 @@ void registerModels(ofxOceanode &o){
 
 void registerType(ofxOceanode &o){
 	o.registerType<nodePort>("ScBus");
+    registerSCAudioInputs(o.getController<ofxOceanodeSuperColliderController>()->getServers());
     registerMacroMixerSCBus(o.getController<ofxOceanodeSuperColliderController>()->getServers());
 }
 

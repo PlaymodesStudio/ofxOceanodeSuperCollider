@@ -38,7 +38,7 @@ public:
 private:
     int index = -1;
     scNode* nodeRef = nullptr;
-    // Resource ports from MacroMixer keep their private bridge alive across
+    // Resource ports keep their private audio processor alive across
     // ordinary Router/Macro copies. Ordinary SC ports remain non-owning.
     std::shared_ptr<void> owner;
 };
@@ -78,6 +78,8 @@ public:
     virtual void buildSynth(ofxSCServer* server){};
     virtual std::string requiredSynthdefFolder() const { return {}; }
     virtual bool isMacroMixerBridge() const { return false; }
+    // Preserve the existing MacroMixer hook; routing processors opt in here.
+    virtual bool requiresGraphSync() const { return isMacroMixerBridge(); }
     virtual void graphWillRebuild(ofxSCServer* server) {};
     virtual void graphDidRebuild(ofxSCServer* server,bool success) {};
 

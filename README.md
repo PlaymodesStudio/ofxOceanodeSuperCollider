@@ -80,6 +80,15 @@ a crossfade. Custom C++ instrument/effect nodes are unchanged.
 
 Run the routing regression tests with `sh tools/audio_routing_test/run.sh`.
 
+ScBus inputs accept multiple audio cables and sum them channel by channel at
+unity gain, without normalization or an added limiter. Numeric and other port
+types retain their usual behavior. The existing preset format preserves all
+cables. This needs the matching ofxOceanode core changes and a host rebuild.
+The routing implementation is `scAudioBusMixer`, with its own SynthDefs in
+`Defaults/AudioRouting`. It is independent of MacroMixer, which retains its
+original implementation. Tests: `python3 tools/sc_multi_input_test/run.py` and
+`python3 tools/sc_multi_input_test/audio.py` (offline audio, 128 channels).
+
 ## Core transport and optional timeline integration
 
 This addon requires the current ofxOceanode core. Shared transport, frame

@@ -948,7 +948,7 @@ void serverManager::recomputeGraph(){
                 newNodesList.push_back(outputs[i]);
             }
         }
-        const bool audioMixer=std::any_of(newNodesList.begin(),newNodesList.end(),[](const auto* node){return node->isMacroMixerBridge();});
+        const bool audioMixer=std::any_of(newNodesList.begin(),newNodesList.end(),[](const auto* node){return node->requiresGraphSync();});
         if(audioMixer) {
             for(auto* node:newNodesList) requireSynthdefFolder(node->requiredSynthdefFolder());
             if(areRequiredSynthdefsLoading()) {
