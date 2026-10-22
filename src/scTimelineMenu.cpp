@@ -11,6 +11,13 @@
 #if OFXOCEANODESC_HAS_TIMELINE
 #include "ofxOceanodeContainer.h"
 #include "ofxOceanodeTimeline.h"
+#elif defined(__has_include)
+// Not a probe (the flag stays the only switch): a timeline addon on the
+// include path without its define means the project lost the define (it was
+// once an Xcode C-only flag) and every window "Add to Timeline" is gone.
+#if __has_include("ofxOceanodeTimeline.h")
+#warning "ofxOceanodeTimeline is in the project but OFX_OCEANODE_HAS_TIMELINE is not defined for C++: timeline menus compiled out. Regenerate the project."
+#endif
 #endif
 
 bool scTimelineMenu::isOnTimeline(const std::string& key) const {
