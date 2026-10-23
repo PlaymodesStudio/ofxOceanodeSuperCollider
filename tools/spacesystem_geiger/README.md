@@ -6,14 +6,14 @@ three stochastic sources, two banks of six resonators per quad channel,
 MicroSpace, random LFO automation and the original quad output fold.
 The other five Reaktor snapshots are not imported.
 
-Installed preset: `OceanAudio/bin/data/Presets/DEBUG/22--SPACESYSTEM_GEIGER`.
+Installed preset: `OceanAudio/bin/data/Presets/GENERATIVE_MUSIC/196--SPACESYSTEM_GEIGER`.
 Reusable macros: `Macros/AUDIO/REAKTOR/{GEIGER_CLICK,GEIGER_NOISE,GEIGER_SAW,NI_RESONATOR_QUAD}`.
 
 From the addon root, with SuperCollider installed in `/Applications`:
 
 ```sh
 python3 tools/spacesystem_geiger/prepare.py /tmp/spacesystem-geiger
-python3 tools/spacesystem_geiger/render_preset.py /tmp/spacesystem-geiger/data/Presets/DEBUG/22--SPACESYSTEM_GEIGER /tmp/spacesystem-geiger/defs /tmp/spacesystem-geiger/preview.wav 60 48000
+python3 tools/spacesystem_geiger/render_preset.py /tmp/spacesystem-geiger/data/Presets/GENERATIVE_MUSIC/196--SPACESYSTEM_GEIGER /tmp/spacesystem-geiger/defs /tmp/spacesystem-geiger/preview.wav 60 48000
 python3 tools/spacesystem_geiger/validate.py /tmp/spacesystem-geiger
 python3 tools/spacesystem_geiger/check_controls.py /tmp/spacesystem-geiger
 python3 tools/spacesystem_geiger/check_transport.py /tmp/spacesystem-geiger
@@ -42,7 +42,7 @@ use a scratch output directory when rebuilding.
 
 ## Live instrument revision
 
-- ScBus fan-in replaces audio addition nodes, including the six resonator voices
+- AudioMerge explicitly sums audio signals, including the six resonator voices
   and source/output sums. The only Arithmetic nodes calculate LFO power curves.
   Routing uses ChannelDuplicator, with explicit mono-to-quad LFO duplication.
 - Macro controls are numeric `v_f` inputs. Audio LFOs forward through Level and

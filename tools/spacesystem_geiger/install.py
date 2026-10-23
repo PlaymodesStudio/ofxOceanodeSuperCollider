@@ -38,7 +38,7 @@ for base in (work / 'metadata', work / 'defs'):
         copy(p, data / 'Supercollider/Synthdefs' / category / name / p.name)
         copy(source, data / 'Supercollider/SynthdefSources' / source.relative_to(ROOT / 'synthdefs'))
 # Replace complete owned folders: otherwise removed nodes survive a rebuild.
-folders = [pathlib.Path('Presets/DEBUG/22--SPACESYSTEM_GEIGER')]
+folders = [pathlib.Path('Presets/GENERATIVE_MUSIC/196--SPACESYSTEM_GEIGER')]
 folders += [pathlib.Path('Macros/AUDIO/REAKTOR') / name for name in
             ('GEIGER_CLICK', 'GEIGER_NOISE', 'GEIGER_SAW', 'NI_RESONATOR_QUAD')]
 for relative in folders:
@@ -49,9 +49,10 @@ for relative in folders:
         shutil.copytree(dst, saved)
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
-copy(ROOT / 'data/Supercollider/Synthdefs/Defaults/AudioRouting/audioBusMixer.scsyndef',
-     data / 'Supercollider/Synthdefs/Defaults/AudioRouting/audioBusMixer.scsyndef')
+for p in (ROOT / 'data/Supercollider/Synthdefs/Mixing/AudioMerge').iterdir():
+ copy(p, data / 'Supercollider/Synthdefs/Mixing/AudioMerge' / p.name)
+copy(ROOT / 'synthdefs/Mixing/audioMerge.scd', data / 'Supercollider/SynthdefSources/Mixing/audioMerge.scd')
 for filename in ('OceanodeAnalog.sc', 'OceanodeAnalog.scx'):
     copy(ROOT / 'ugens/OceanodeAnalog' / filename, data / 'Supercollider/Extensions/OceanodeAnalog' / filename)
-print('Installed:', data / 'Presets/DEBUG/22--SPACESYSTEM_GEIGER')
+print('Installed:', data / 'Presets/GENERATIVE_MUSIC/196--SPACESYSTEM_GEIGER')
 print('Backup:', backup)

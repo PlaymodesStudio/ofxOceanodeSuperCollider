@@ -26,5 +26,5 @@
 	// Output the result
 	Out.ar(OceanodeOutput.kr(\out), output);
 
-}, description: "Counts impulses with optional modulo functionality", category: "Utilities/Voicing");
+}, description: "Counts impulses with optional modulo functionality", category: "Modulation/Trigger");
 )

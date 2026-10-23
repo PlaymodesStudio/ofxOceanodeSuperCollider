@@ -62,7 +62,7 @@ bash ugens/OceanodePrimitives/build.sh
 python3 tools/organism_microdel/prepare.py /tmp/organism-build
 python3 tools/organism_microdel/check_random.py /tmp/organism-build
 python3 tools/organism_microdel/render_preset.py \
-  /tmp/organism-build/data/Presets/DEBUG/23--ORGANISM_MICRODEL \
+  /tmp/organism-build/data/Presets/GENERATIVE_MUSIC/197--ORGANISM \
   /tmp/organism-build/defs /tmp/organism-build/preview.wav 90 48000
 python3 tools/organism_microdel/install.py \
   /tmp/organism-build /tmp/geiger-generic /path/to/OceanAudio/bin/data

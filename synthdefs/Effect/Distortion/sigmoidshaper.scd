@@ -13,13 +13,21 @@
 
 	// Apply sigmoid shaping function
 	wet = { |ph, steep, inflec|
-		var y = (((inflec * (steep - 1) * ((ph / inflec) - 1)) /
-				((4 * steep) * (ph - inflec).abs - steep - 1)) +
-				((inflec * (steep - 1)) / ((4 * inflec * steep) - steep - 1))) /
-				(((inflec * (steep - 1) * ((1 / inflec) - 1)) /
-				((4 * steep) * (1 - inflec).abs - steep - 1)) +
-				((inflec * (steep - 1)) / ((4 * inflec * steep) - steep - 1)));
-		y.clip(0, 1)  // Ensure output is between 0 and 1
+		var divide, dx, d0, d1, offset, numerator, denominator;
+		// Keep the original operation order at ordinary settings. Protect the
+		// inflection and curve/normalization poles before dividing: clipping
+		// the result alone cannot reliably remove NaNs.
+		divide = { |a, b|
+			a / (b.abs.max(1e-12) * (1 - (2 * (b < 0))));
+		};
+		inflec = inflec.abs.max(1e-6) * (1 - (2 * (inflec < 0)));
+		dx = ((4 * steep) * (ph - inflec).abs) - steep - 1;
+		d0 = ((4 * inflec) * steep) - steep - 1;
+		d1 = ((4 * steep) * (1 - inflec).abs) - steep - 1;
+		offset = divide.(inflec * (steep - 1), d0);
+		numerator = divide.(inflec * (steep - 1) * ((ph / inflec) - 1), dx) + offset;
+		denominator = divide.(inflec * (steep - 1) * ((1 / inflec) - 1), d1) + offset;
+		divide.(numerator, denominator).clip(0, 1);
 	}.value((dry * 0.5 + 0.5).clip(0, 1), steep, inflec);
 	// The curve works on 0..1: audio is mapped -1..1 -> 0..1 above and back here (it used to be
 	// applied to the raw audio and clipped to 0..1, rectifying it with ~0.4 DC on the output)

@@ -13,9 +13,10 @@
 #include "scOldSynthdef.h"
 #include "scNode.h"
 #include "MacroMixerSCBus.h"
-#include "scAudioBusMixer.h"
 #include "ofxOceanodeSuperColliderController.h"
 #include "ofxSCServer.h"
+#include "serverManager.h"
+#include <cmath>
 #include "nodes/scFeedbackNode.h"   // refreshSynthdefModels
 
 namespace ofxOceanodeSuperCollider{
@@ -121,17 +122,37 @@ void registerModels(ofxOceanode &o){
 
 void registerType(ofxOceanode &o){
 	o.registerType<nodePort>("ScBus");
-    registerSCAudioInputs(o.getController<ofxOceanodeSuperColliderController>()->getServers());
     registerMacroMixerSCBus(o.getController<ofxOceanodeSuperColliderController>()->getServers());
 }
 
 void registerScope(ofxOceanode &o){
-//    o.registerScope<std::pair<ofxSCBus*, scSynthdef*>>([](ofxOceanodeAbstractParameter *p, ImVec2 size){
-//        auto pair = p->cast<std::pair<ofxSCBus*, scSynthdef*>>().getParameter().get();
-//        auto size2 = ImGui::GetContentRegionAvail();
-//
-//        ImGui::Text("%i, %s", pair.first->index, pair.second->nodeName().c_str());
-//        });
+    const auto servers = o.getController<ofxOceanodeSuperColliderController>()->getServers();
+    o.registerScope<nodePort>([servers](ofxOceanodeAbstractParameter* parameter, ImVec2 size){
+        const auto pos = ImGui::GetCursorScreenPos();
+        // The folded node can be outside the canvas viewport. Do not even
+        // renew its capture lease unless its display is actually visible.
+        if(!ImGui::IsRectVisible(size)) { ImGui::Dummy(size); return; }
+        const auto port = parameter->cast<nodePort>().getParameter().get();
+        const std::vector<float>* samples = nullptr;
+        for(auto* manager : servers){
+            samples = manager->requestFoldedWaveform(port);
+            if(samples) break;
+        }
+        auto* draw = ImGui::GetWindowDrawList();
+        const float middle = pos.y + size.y * 0.5f;
+        draw->AddLine(ImVec2(pos.x, middle), ImVec2(pos.x + size.x, middle), IM_COL32(100, 110, 120, 70));
+        if(samples && samples->size() > 1){
+            // Fixed small stack buffer: no per-frame vectors, FBOs or textures.
+            ImVec2 points[64];
+            const int count = std::min(64, int(samples->size()));
+            for(int i = 0; i < count; ++i){
+                const float value = std::isfinite((*samples)[i]) ? ofClamp((*samples)[i], -1.0f, 1.0f) : 0;
+                points[i] = ImVec2(pos.x + size.x * i / (count - 1), middle - value * size.y * 0.45f);
+            }
+            draw->AddPolyline(points, count, IM_COL32(100, 220, 175, 255), 0, 1.0f);
+        }
+        ImGui::Dummy(size);
+    });
 }
 
 void registerCollection(ofxOceanode &o){

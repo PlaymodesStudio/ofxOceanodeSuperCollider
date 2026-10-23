@@ -31,7 +31,11 @@
 		BufWr.ar(input[i], circularBufs[i], writePos);
 	};
 	
-	// Calculate amplitudes for each reader
+	// Legacy numreaders is a coherent-copy gain: one FFT stream is repeated
+	// in phase, not independently diffused readers. Retain the parameter and
+	// its exact gain law for saved patches; CircularBufferFFT_B supplies the
+	// independent-reader algorithm.
+	// Calculate amplitudes for each coherent copy
 	// (per channel: numActiveReaders is an n-channel array)
 	readerAmps = n.collect { |chan|
 		maxReaders.collect { |i| (i < numActiveReaders[chan]).lag(0.1) }
@@ -58,5 +62,5 @@
 	
 	Out.ar(OceanodeOutput.kr(\out), output * levels);
 	
-}, description: "Circular buffer with FFT processing for each channel", category: "Effect/Time/Looping");
+}, description: "Circular FFT buffer; numreaders controls coherent-copy gain, not independent readers (use CircularBufferFFT_B for those)", category: "Effect/Time/Looping");
 )

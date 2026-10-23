@@ -42,6 +42,8 @@ public:
     
     void setup() override;
     void update(ofEventArgs &e) override;
+    void loadBeforeConnections(ofJson& json) override;
+    void presetRecallBeforeSettingParameters(ofJson& json) override { loadBeforeConnections(json); }
 
 
     void presetWillBeLoaded() override{
@@ -116,6 +118,7 @@ private:
     // Replace every synth with one of getSynthdefFilename(), parameters and
     // bus wiring included, in place of the old one.
     void replaceSynths();
+    void resizeAudioInputs();
     // N Chan / a variable asks for a definition with no .scsyndef: keep the
     // current synths paused and ask scSynthdefCompiler for it.
     void waitForSynthdef(const std::string& defName);

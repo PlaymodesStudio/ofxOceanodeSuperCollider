@@ -3,7 +3,7 @@
 
     python3 prepare.py <output directory>
 
-Then render with render_preset.py <output>/data/Presets/DEBUG/22--SPACESYSTEM_GEIGER
+Then render with render_preset.py <output>/data/Presets/GENERATIVE_MUSIC/196--SPACESYSTEM_GEIGER
 <output>/defs <output>/preview.wav 60 48000
 """
 import json
@@ -35,7 +35,7 @@ for p in (work / 'data/Presets').rglob('SC_*.json'):
     if p.stem.startswith('SC_Output'): continue
     name = re.sub(r'^SC_|\*_\d+$', '', p.stem)
     v = json.loads(p.read_text())
-    builds.add((name, int(v['N_Chan']), (int(v['NumSpeakers']),) if 'NumSpeakers' in v else ()))
+    builds.add((name, int(v['N_Chan']), tuple(int(v[x]) for x in ('NumSpeakers', 'nInputs') if x in v)))
 for name, n, variables in sorted(builds):
     r = subprocess.run([str(ROOT / 'sclang/osx/sclang'), '-l', str(conf),
                         str(ROOT / 'synthdefs/Oceanode/compileExact.scd'), str(work / 'defs'),

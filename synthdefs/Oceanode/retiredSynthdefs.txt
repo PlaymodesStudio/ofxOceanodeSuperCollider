@@ -24,3 +24,8 @@ TimeBlur
 # Replaced by the dedicated steampipeBox node, 2026-10-21.
 SteamPipe
 steampipe
+
+# Duplicate cleanup 2026-10-23: the "32" generator actually used 64 bands
+# and was identical to MonoBandPassBank64. tools/migrate_synth_renames.py
+# maps saved nodes to that existing 64-band engine without changing controls.
+MonoBandPassBank32

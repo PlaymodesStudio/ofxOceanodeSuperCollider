@@ -28,5 +28,5 @@
 	// Output
 	Out.ar(OceanodeOutput.kr(\out), sig);
 	
-}, description: "Inverts the phase of the input signal", category: "Effect/Time/Phase");
+}, description: "Inverts the phase of the input signal", category: "Routing");
 )

@@ -1,5 +1,5 @@
 """Oceanode macro/preset serialization, following the installed native format."""
-import json, pathlib, shutil
+import json, pathlib, shutil, sys
 
 class Patch:
     def __init__(self):
@@ -87,3 +87,6 @@ class Patch:
         if self.custom_gui:
             (folder / 'custom_guis.json').write_text(json.dumps(self.custom_gui, indent=4) + '\n')
         for key, inner in self.macros.items(): inner.write(folder / key)
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from migrate_audio_merge import migrate
+        migrate(folder, lambda path, value: path.write_text(json.dumps(value, indent=4) + '\n'))

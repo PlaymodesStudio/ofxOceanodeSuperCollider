@@ -115,6 +115,9 @@ public:
     void setOutputChannel(int channel);
     void recomputeGraph();
     void teardownGraphForPresetLoad();
+    // Visible scope renderers renew a lease; all viewers of a bus share one
+    // capture. No polling or synths for folded nodes outside the viewport.
+    const std::vector<float>* requestFoldedWaveform(const nodePort& port);
     
     void addOutput(scOutput* output);
     void removeOutput(scOutput* output);
@@ -179,6 +182,19 @@ private:
     // True for folders under the data SynthDef directory, which the full
     // scan in loadDefs() already covers
     static bool isInsideSynthdefRoot(const std::string& folder);
+    static constexpr int foldedWaveformSamples = 64;
+    struct FoldedWaveform {
+        std::unique_ptr<ofxSCSynth> synth;
+        std::unique_ptr<ofxSCBus> bus;
+        uint64_t lastDrawFrame = 0;
+    };
+    std::map<int, FoldedWaveform> foldedWaveforms;
+    bool foldedWaveformDefAttempted = false;
+    bool foldedWaveformDefLoaded = false;
+    double lastFoldedWaveformPoll = -1;
+    void updateFoldedWaveforms();
+    void clearFoldedWaveforms(bool serverReset = false);
+    bool loadFoldedWaveformDef();
     void loadNRTSynthdefs();
     void prepareNodesForNRTCapture();
     

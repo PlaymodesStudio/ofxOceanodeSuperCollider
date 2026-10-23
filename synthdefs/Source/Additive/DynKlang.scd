@@ -12,5 +12,5 @@
 	flat = Mix.ar(largeSig);
 
 	Out.ar(OceanodeOutput.kr(\out), flat);
-}, description: "Legacy 16-partial per-channel sine bank", category: "Source/FM");
+}, description: "Legacy 16-partial per-channel sine bank", category: "Source/Additive");
 )

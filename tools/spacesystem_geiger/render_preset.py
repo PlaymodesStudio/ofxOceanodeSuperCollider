@@ -95,10 +95,16 @@ def origins(node, out, visited=()):
         return value if isinstance(value, list) else [value]
     if node.split('/')[-1].startswith('Vector_Getter_'):
         values = numeric_input('Input', [0, 0])
-        return [('const', [values[i] for i in nodes[node]['Index'] if i < len(values)])]
+        indices = nodes[node]['Index']
+        if not isinstance(indices, list): indices = [indices]
+        if not isinstance(values, list): values = [values]
+        return [('const', [values[i] for i in indices if i < len(values)])]
     if node.split('/')[-1].startswith('Vector_Operations_'):
-        assert nodes[node]['Op.'] == 6
-        return [('const', [len(numeric_input('Input', [0]))])]
+        operation = int(nodes[node].get('Op.', nodes[node].get('Op_', 6)))
+        values = numeric_input('Input', [0])
+        if not isinstance(values, list): values = [values]
+        assert operation in (0, 6), ('Unsupported Vector Operations', operation)
+        return [('const', [len(values) if operation == 6 else min(values)])]
     if node.split('/')[-1].startswith('Router'):
         ins = incoming.get(node, [])
         if ins: return [o for s, port, _, _ in ins for o in origins(s, port, (*visited, node))]
@@ -110,7 +116,7 @@ def origins(node, out, visited=()):
 sc = {k: v for k, v in nodes.items() if k.split('/')[-1].startswith('SC_') and not k.split('/')[-1].startswith('SC_Output')}
 def defname(key):
     v = nodes[key]; base = re.sub(r'^SC_|\*_\d+$', '', key.split('/')[-1])
-    return base + v['N_Chan'] + ('_' + v['NumSpeakers'] if 'NumSpeakers' in v else '')
+    return base + v['N_Chan'] + ('_' + v['nInputs'] if 'nInputs' in v else '_' + v['NumSpeakers'] if 'NumSpeakers' in v else '')
 nextbus, silent = 256, 32000
 buses = {}
 def allocate():
@@ -132,19 +138,13 @@ def visit(key):
                 if origin[0] == 'bus': visit(origin[1])
     visiting.remove(key); seen.add(key); order.append(key)
 for key in sc: visit(key)
-required = {deffiles[defname(k)] for k in sc} | {deffiles['tap'], ROOT / 'data/Supercollider/Synthdefs/Defaults/AudioRouting/audioBusMixer.scsyndef'}
+required = {deffiles[defname(k)] for k in sc} | {deffiles['tap']}
 score = [bundle(0, [message('/d_load', str(p)) for p in sorted(required)])]
 setup = [message('/g_new', 1, 0, 0)]; nid = 2000; sum_count = 0
 
 def mix_buses(values):
-    global nid, sum_count
-    result = values[0]
-    for value in values[1:]:
-        target = allocate()
-        setup.append(message('/s_new', 'oceanodeAudioBusMixer128', nid, 1, 1,
-            'inA', result, 'inB', value, 'out', target, 'gainA', 1., 'gainB', 1., 'smoothing', 0.))
-        nid += 1; sum_count += 1; result = target
-    return result
+    assert len(values) == 1, 'Multiple audio wires must use AudioMerge'
+    return values[0]
 
 def set_value(node_id, control, value, controls):
     if isinstance(value, str): value = [float(x.strip()) for x in value.split(',')]
@@ -156,11 +156,11 @@ for key in order:
     v = nodes[key]; name = defname(key); ctl = synthdef_controls(deffiles[name])
     args, late = [name, nid, 1, 1], []
     node_id = nid; nid += 1
-    input_names = ('in', 'ina', 'inb', 'in1', 'in2', 'trigin', 'sidechain', 'clock')
+    input_names = ('in', 'ina', 'inb', 'trigin', 'sidechain', 'clock') + tuple('in'+str(i) for i in range(1, 33))
     for c in ctl:
         if c in input_names: args += [c, silent]
     for pk, pv in v.items():
-        if pk in ('N_Chan', 'expanded', 'NumSpeakers'): continue
+        if pk in ('N_Chan', 'expanded', 'NumSpeakers', 'nInputs', 'On'): continue
         c = pk.lower()
         if c in ctl: late.append(set_value(node_id, c, pv, ctl))
     for out in [c for c in ctl if c in ('out', 'trigout', 'grout')]:

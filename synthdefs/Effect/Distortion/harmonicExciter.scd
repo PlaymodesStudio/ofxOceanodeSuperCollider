@@ -41,5 +41,5 @@
 
 	// Send to output
 	Out.ar(OceanodeOutput.kr(\out), finalSig);
-}, description: "Harmonic exciter for enhancing high frequency content", category: "Effect/Eq");
+}, description: "Harmonic exciter for enhancing high frequency content", category: "Effect/Distortion");
 )

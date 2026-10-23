@@ -4,7 +4,7 @@
 #
 #   tools/deploy_synthdef_compiler.sh <app>/bin/data
 #
-#   synthdefs/  -> data/Supercollider/SynthdefSources/  (without WIP/)
+#   synthdefs/  -> data/Supercollider/SynthdefSources/  (without WIP/ or Compatibility/Old/)
 #   sclang/     -> data/Supercollider/Sclang/
 #
 # Compiled binaries are not touched. Re-run after editing any source.
@@ -16,7 +16,10 @@ SC="$DATA/Supercollider"
 
 [ -d "$SC" ] || { echo "No Supercollider folder in $DATA"; exit 1; }
 
-rsync -a --delete --exclude 'CompiledSynthdefs/' --exclude 'WIP/' --exclude '.DS_Store' \
+# Hide the archive on the sender only, so --delete also removes copies left by
+# earlier deployments. A normal --exclude would preserve those deployed copies.
+rsync -a --delete --filter 'H /Compatibility/Old/' \
+    --exclude 'CompiledSynthdefs/' --exclude 'WIP/' --exclude '.DS_Store' \
     "$ADDON/synthdefs/" "$SC/SynthdefSources/"
 rsync -a --delete --exclude 'build_sclang.sh' --exclude '.DS_Store' \
     "$ADDON/sclang/" "$SC/Sclang/"

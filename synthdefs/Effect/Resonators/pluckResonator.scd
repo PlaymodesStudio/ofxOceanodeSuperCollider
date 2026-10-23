@@ -31,5 +31,5 @@
 
 	// Output the signal
 	Out.ar(OceanodeOutput.kr(\out), son * levels * 0.2);
-}, description: "Physical model of a plucked string excited by external audio input", category: "Source/PhysicalModelling");
+}, description: "Physical model of a plucked string excited by external audio input", category: "Effect/Resonators");
 )

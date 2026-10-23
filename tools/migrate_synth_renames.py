@@ -15,6 +15,7 @@ Presets store a node by its name, with or without the trailing "*":
   SC_Pulsar2*_<n>.json  (the node's own values)
 Also renamed 2026-10-22: ReaktorFilter4 -> LadderMultimode and
 ReaktorSaturator -> ParabolicSaturator (DSP unchanged).
+Retired 2026-10-23: MonoBandPassBank32 -> MonoBandPassBank64 (both built 64 bands).
 
 This script finds every preset and reusable macro folder under the data folders given (or every
 apps/Playmodes/*/bin/data by default), copies each affected folder to
@@ -24,6 +25,7 @@ and renames the node files. Running it twice is harmless (nothing left to do).
   tools/migrate_synth_renames.py [data folder ...] [--dry-run]
 """
 import os
+import json
 import re
 import shutil
 import sys
@@ -35,6 +37,8 @@ RENAMES = {
     "RHPF4": "RHPF4Pole",
     "ReaktorFilter4": "LadderMultimode",
     "ReaktorSaturator": "ParabolicSaturator",
+    # The old "32" entry actually built the identical 64-band graph.
+    "MonoBandPassBank32": "MonoBandPassBank64",
 }
 BACKUP = "Presets_backup_SynthRenames"
 
@@ -66,12 +70,54 @@ def affected(folder):
     return False
 
 
+def planned_changes(folder):
+    """Preflight files and merge disjoint old/new model groups without data loss."""
+    contents, renames = {}, {}
+    merged = False
+
+    def unique_pairs(pairs):
+        nonlocal merged
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                previous = result[key]
+                if (isinstance(previous, dict) and isinstance(value, dict)
+                        and not previous.keys() & value.keys()):
+                    previous.update(value)
+                    merged = True
+                else:
+                    raise ValueError("overlapping JSON key after rename: " + key)
+            else:
+                result[key] = value
+        return result
+
+    for filename in sorted(os.listdir(folder)):
+        path = os.path.join(folder, filename)
+        if not filename.endswith(".json") or not os.path.isfile(path):
+            continue
+        target = rewrite(filename)
+        if target != filename:
+            if os.path.exists(os.path.join(folder, target)):
+                raise ValueError("node filename collision: " + target)
+            renames[filename] = target
+        with open(path, encoding="utf-8") as fh:
+            original = fh.read()
+        updated = rewrite(original)
+        if updated != original:
+            merged = False
+            parsed = json.loads(updated, object_pairs_hook=unique_pairs)
+            contents[filename] = json.dumps(parsed, indent=4) + "\n" if merged else updated
+    return contents, renames
+
+
 def migrate(data, dry):
     count = 0
     roots = [os.path.join(data, name) for name in ("Presets", "Macros")]
     for root, dirs, files in (entry for tree in roots if os.path.isdir(tree) for entry in os.walk(tree)):
         if BACKUP in root or not affected(root):
             continue
+        # Validate even in dry-run mode, before backing up or writing anything.
+        contents, renames = planned_changes(root)
         rel = os.path.relpath(root, data)
         backup = os.path.join(data, BACKUP, rel)
         print(("would migrate " if dry else "migrating ") + root)
@@ -81,27 +127,11 @@ def migrate(data, dry):
         if not os.path.exists(backup):
             os.makedirs(os.path.dirname(backup), exist_ok=True)
             shutil.copytree(root, backup, dirs_exist_ok=True)
-        for f in os.listdir(root):
-            path = os.path.join(root, f)
-            if not f.endswith(".json") or not os.path.isfile(path):
-                continue
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    text = fh.read()
-            except (OSError, UnicodeDecodeError):
-                continue
-            new = rewrite(text)
-            if new != text:
-                with open(path, "w", encoding="utf-8") as fh:
-                    fh.write(new)
-        for f in os.listdir(root):
-            renamed = rewrite(f)
-            if f.endswith(".json") and renamed != f:
-                target = os.path.join(root, renamed)
-                if os.path.exists(target):
-                    print("  skipped (exists): " + target)
-                    continue
-                os.rename(os.path.join(root, f), target)
+        for filename, text in contents.items():
+            with open(os.path.join(root, filename), "w", encoding="utf-8") as fh:
+                fh.write(text)
+        for filename, target in renames.items():
+            os.rename(os.path.join(root, filename), os.path.join(root, target))
     return count
 
 

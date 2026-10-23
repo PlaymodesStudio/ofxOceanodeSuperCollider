@@ -30,5 +30,5 @@
 
 	// Output
 	Out.ar(OceanodeOutput.kr(\out), mixSig);
-}, description: "Transient shaper for controlling attack and sustain portions of sounds", category: "Effect/Distortion");
+}, description: "Transient shaper for controlling attack and sustain portions of sounds", category: "Effect/Dynamics");
 )

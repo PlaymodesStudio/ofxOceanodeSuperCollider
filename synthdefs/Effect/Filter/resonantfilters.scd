@@ -52,7 +52,10 @@
 	// Parameter controls with proper lag for smooth transitions
 	pitch = OceanodeParameterLag.ar(\pitch, 60, n, 0, 130, "vf", 1/30, true);
 	freq = pitch.midicps;
-	q = 1-(OceanodeParameterLag.ar(\q, 1, n, 0.005, 1, "vf", 1/30, true));
+	// BPF expects reciprocal Q. The existing default q=1 previously made
+	// both stages zero-bandwidth (NaNs in offline tests); use the same
+	// finite lower bound as BandpassFilter.
+	q = (1 - OceanodeParameterLag.ar(\q, 1, n, 0.005, 1, "vf", 1/30, true)).max(0.005);
 	amp = OceanodeParameterLag.ar(\amp, 1, n, 0, 1, "vf", 1/30, true);
 
 	// Level control with proper dB scaling

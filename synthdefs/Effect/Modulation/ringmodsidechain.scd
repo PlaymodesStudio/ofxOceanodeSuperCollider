@@ -40,5 +40,5 @@
 
 	// Send to output bus
 	Out.ar(OceanodeOutput.kr(\out), wet);
-}, description: "Ring modulation sidechain ducking effect that carves out frequency content at audio rate", category: "Effect/Dynamics");
+}, description: "Ring modulation sidechain ducking effect that carves out frequency content at audio rate", category: "Effect/Modulation");
 )

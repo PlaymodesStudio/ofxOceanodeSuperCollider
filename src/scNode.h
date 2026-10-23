@@ -78,8 +78,6 @@ public:
     virtual void buildSynth(ofxSCServer* server){};
     virtual std::string requiredSynthdefFolder() const { return {}; }
     virtual bool isMacroMixerBridge() const { return false; }
-    // Preserve the existing MacroMixer hook; routing processors opt in here.
-    virtual bool requiresGraphSync() const { return isMacroMixerBridge(); }
     virtual void graphWillRebuild(ofxSCServer* server) {};
     virtual void graphDidRebuild(ofxSCServer* server,bool success) {};
 

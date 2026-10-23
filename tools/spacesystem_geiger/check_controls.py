@@ -12,7 +12,7 @@ sys.path.insert(0, str(HERE.parents[1] / 'tools/aliasingbox'))
 from render_test import read_wav
 
 work = pathlib.Path(sys.argv[1]).resolve()
-preset = work / 'data/Presets/DEBUG/22--SPACESYSTEM_GEIGER'
+preset = work / 'data/Presets/GENERATIVE_MUSIC/196--SPACESYSTEM_GEIGER'
 
 def read(folder, name):
     return json.loads((folder / (name + '.json')).read_text())

@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <filesystem>
 #if !defined(_WIN32)
     #include <cerrno>
     #include <fcntl.h>
@@ -84,6 +85,7 @@ serverManager::serverManager(){
 };
 
 serverManager::~serverManager(){
+    clearFoldedWaveforms();
     serverSampleRates.erase(server);
     for(auto node : nodesList) node->free(server);
     nodesList.clear();
@@ -104,9 +106,11 @@ void serverManager::setup(){
     boot();
     
     listeners.push(ofEvents().update.newListener([this](ofEventArgs&){
-        if(!recomputePending) return;
-        recomputePending = false;
-        recomputeGraph();
+        if(recomputePending){
+            recomputePending = false;
+            recomputeGraph();
+        }
+        updateFoldedWaveforms();
     }));
 
     listeners.push(ofxOceanodeShared::getPresetWillBeLoadedEvent().newListener([this](){
@@ -122,10 +126,13 @@ void serverManager::setup(){
     }));
     
     listeners.push(server->serverBootedEvent.newListener([this](){
+        clearFoldedWaveforms(true);
+        foldedWaveformDefAttempted = foldedWaveformDefLoaded = false;
         initialized = false;
         initialize();
     }));
     listeners.push(server->serverInitializedEvent.newListener([this](){
+        clearFoldedWaveforms(true);
         initialized = true;
         mixerGraphSyncID=-1;
         graphGeneration++;
@@ -310,6 +317,8 @@ void serverManager::initialize(){
 }
 
 void serverManager::kill(){
+    clearFoldedWaveforms();
+    initialized = false;
     if(preferences.local && sc != nullptr){
         ofxOscMessage m;
         m.setAddress("/quit");
@@ -319,6 +328,7 @@ void serverManager::kill(){
 }
 
 void serverManager::prepareForRestart(){
+    clearFoldedWaveforms();
     initialized = false;
     if(preferences.local){
         ofxOscMessage m;
@@ -858,6 +868,89 @@ void serverManager::removeOutput(scOutput *output){
     recomputeGraph();
 }
 
+bool serverManager::loadFoldedWaveformDef(){
+    if(foldedWaveformDefAttempted) return foldedWaveformDefLoaded;
+    foldedWaveformDefAttempted = true;
+    const std::string relative = std::string(SYNTHDEF_DIRECTORY)
+        + "/Defaults/Analysis/foldedWaveform/oceanodeFoldedWaveform.scsyndef";
+    auto path = std::filesystem::path(ofToDataPath(relative, true));
+    if(!std::filesystem::exists(path))
+        path = std::filesystem::path(__FILE__).parent_path().parent_path() / "data" / relative;
+    auto bytes = ofBufferFromFile(path.string(), true);
+    if(bytes.size() == 0){
+        ofLogError("serverManager") << "Missing folded waveform SynthDef: " << relative;
+        return false;
+    }
+    ofxOscMessage message;
+    message.setAddress("/d_recv");
+    message.addBlobArg(bytes);
+    server->sendMsg(message);
+    server->requestNRTSync();
+    foldedWaveformDefLoaded = true;
+    return true;
+}
+
+const std::vector<float>* serverManager::requestFoldedWaveform(const nodePort& port){
+    if(!server || !initialized || server->isNRTCapturing()) return nullptr;
+    // Check membership before dereferencing a forwarded Macro/Router/Portal
+    // port; graph teardown can leave an old value visible for one frame.
+    if(std::find(nodesList.begin(), nodesList.end(), port.getNodeRef()) == nodesList.end()) return nullptr;
+    const int bus = port.getBusIndex(server);
+    if(bus < 0 || !loadFoldedWaveformDef()) return nullptr;
+    auto& capture = foldedWaveforms[bus];
+    capture.lastDrawFrame = ofGetFrameNum();
+    static const std::vector<float> waiting;
+    return capture.bus ? &capture.bus->readValues : &waiting;
+}
+
+void serverManager::clearFoldedWaveforms(bool serverReset){
+    for(auto& entry : foldedWaveforms){
+        auto& capture = entry.second;
+        if(!serverReset){
+            if(capture.synth) capture.synth->free();
+            if(capture.bus) capture.bus->free();
+        }
+        // At reboot the server has already reset its allocators/tables.
+        // Old ranges must not be freed into the new allocator generation.
+    }
+    foldedWaveforms.clear();
+    lastFoldedWaveformPoll = -1;
+}
+
+void serverManager::updateFoldedWaveforms(){
+    if(!server || !initialized || server->isNRTCapturing()){
+        if(!foldedWaveforms.empty()) clearFoldedWaveforms();
+        return;
+    }
+    const uint64_t frame = ofGetFrameNum();
+    // Two-frame grace covers update/draw ordering. Expanding/culling a node
+    // stops both DSP and OSC without a persistent subscription or GUI listener.
+    for(auto it = foldedWaveforms.begin(); it != foldedWaveforms.end();){
+        if(frame > it->second.lastDrawFrame + 2){
+            if(it->second.synth) it->second.synth->free();
+            if(it->second.bus) it->second.bus->free();
+            it = foldedWaveforms.erase(it);
+        }else ++it;
+    }
+    if(foldedWaveforms.empty() || mixerGraphSyncID >= 0 || areRequiredSynthdefsLoading()) return;
+    const double now = ofGetElapsedTimef();
+    if(lastFoldedWaveformPoll >= 0 && now - lastFoldedWaveformPoll < 0.05) return;
+    lastFoldedWaveformPoll = now;
+    for(auto& entry : foldedWaveforms){
+        auto& capture = entry.second;
+        if(!capture.bus){
+            auto bus = std::make_unique<ofxSCBus>(RATE_CONTROL, foldedWaveformSamples, server);
+            if(bus->index < 0) continue;
+            capture.bus = std::move(bus);
+            capture.synth = std::make_unique<ofxSCSynth>("oceanodeFoldedWaveform", server);
+            capture.synth->set("in", entry.first);
+            capture.synth->set("out", capture.bus->index);
+            capture.synth->createAndRun(1, 1, true);
+        }
+        capture.bus->requestValues(); // Existing ofxSuperCollider batching.
+    }
+}
+
 void serverManager::releaseGraphBusses(){
     for(auto& node:busses) for(auto& port:node.second) port.second->free();
     busses.clear(); outputBussesRefToNode.clear();
@@ -876,6 +969,7 @@ void serverManager::watchMixerGraphSync(){
 void serverManager::teardownGraphForPresetLoad(){
     if(server == nullptr) return;
     mixerGraphSyncID=-1;
+    clearFoldedWaveforms();
 
     // Every synth in group 1, including those outside the graph, goes below.
     graphGeneration++;
@@ -920,6 +1014,7 @@ void serverManager::recomputeGraph(){
     if(!initialized) return;
 //    ofLog() << "Recompute Graph";
     if(outputs.size() == 0){
+        clearFoldedWaveforms();
         mixerGraphSyncID=-1;
         for(auto node : nodesList) node->free(server);
         nodesList.clear();
@@ -948,7 +1043,7 @@ void serverManager::recomputeGraph(){
                 newNodesList.push_back(outputs[i]);
             }
         }
-        const bool audioMixer=std::any_of(newNodesList.begin(),newNodesList.end(),[](const auto* node){return node->requiresGraphSync();});
+        const bool audioMixer=std::any_of(newNodesList.begin(),newNodesList.end(),[](const auto* node){return node->isMacroMixerBridge();});
         if(audioMixer) {
             for(auto* node:newNodesList) requireSynthdefFolder(node->requiredSynthdefFolder());
             if(areRequiredSynthdefsLoading()) {
@@ -992,6 +1087,7 @@ void serverManager::recomputeGraph(){
                 toCreateNodes.push_back(node);
             }
         }
+        clearFoldedWaveforms();
         // Reserve all additional buses before touching running synths/routing.
         std::vector<std::pair<scNode*,int>> reserved;
         bool busesAvailable=true;

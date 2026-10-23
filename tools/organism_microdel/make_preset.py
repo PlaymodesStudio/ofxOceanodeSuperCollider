@@ -167,6 +167,6 @@ for i,(node,title,y,items) in enumerate(sections):
 widget('Knob',bpm,'Value','BPM',51,0,7,4)
 widget('Label','','','Delay time is modulated by MOTION. Switch MOTION off for a fixed MIN time.\nRun stops new events; existing voices and feedback tails continue to decay.',1,54,58,3,color=[155,170,190,255],labelFontScale=.8)
 top.custom_gui={'panels':[{'id':'organism-microdel-live','name':'Organism — LIVE','designMode':False,'windowState':{'posX':25,'posY':25,'width':1110,'height':1020,'isOpen':True},'layout':{'columns':60,'rows':58,'cellWidth':18,'cellHeight':16,'zoom':1,'backgroundColor':[16,20,27,255],'widgets':widgets}}]}
-top.write(DATA/'Presets/DEBUG/23--ORGANISM_MICRODEL')
+top.write(DATA/'Presets/GENERATIVE_MUSIC/197--ORGANISM')
 for name,m in [('ORGANISM_EVENTS',ev),('ORGANISM_VOICES',vo),('ORGANISM_DELAY_MOTION',mo),('CORE_MICRODELAY',mi),('ORGANISM_MASTER',ma)]:m.write(DATA/'Macros/AUDIO/REAKTOR'/name)
 print('Generated opening-state preset and five reusable macros')

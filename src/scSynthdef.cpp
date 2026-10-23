@@ -120,6 +120,7 @@ void scSynthdef::setup(){
         if(oldNumChannels != numChannels || variableChanged){
             oldNumChannels = numChannels;
             variableChanged = false;
+            resizeAudioInputs();
             const std::string defName = getSynthdefFilename();
             if(!isSynthdefCompiled(defName)){
                 waitForSynthdef(defName);
@@ -519,6 +520,28 @@ void scSynthdef::setup(){
             scNode::addOutput(paramName);
         }
     }
+    // Creation can request a missing default build too, before any parameter
+    // has changed. Use the same confirmation flow as N Chan / variables.
+    if(!isSynthdefCompiled(getSynthdefFilename())) waitForSynthdef(getSynthdefFilename());
+}
+
+void scSynthdef::loadBeforeConnections(ofJson& json){
+    // Restore compile-time dimensions together, before resolving saved pins.
+    // The normal parameter load happens later and must see these same values.
+    auto restore = [&](ofParameter<int>& parameter){
+        const auto key = parameter.getEscapedName();
+        if(!json.contains(key) || json[key].is_null()) return;
+        const int value = json[key].is_string() ? ofToInt(json[key].get<std::string>()) : json[key].get<int>();
+        parameter.setWithoutEventNotifications(ofClamp(value, parameter.getMin(), parameter.getMax()));
+    };
+    restore(numChannels);
+    for(const auto& variable : synthDescription.variables){
+        auto& parameter = getParameter<int>(variable.first);
+        restore(parameter);
+        lastVariableValues[variable.first] = parameter;
+    }
+    variableChanged = true;
+    numChannels = numChannels;
 }
 
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
@@ -557,6 +580,22 @@ void scSynthdef::update(ofEventArgs &e){
     for(auto& restore : due) restore.resend(true);
 }
 
+void scSynthdef::resizeAudioInputs(){
+    // The visible patch exists independently of the server-side build. In
+    // particular, preset wires must resolve while compilation awaits approval.
+    if(synthdefName != "AudioMerge") return;
+    const int count = getParameter<int>("nInputs");
+    suppressInputRefresh = true;
+    while(inputs.size() > count) removeInput(int(inputs.size()) - 1);
+    while(inputs.size() < count) addInput("In" + ofToString(inputs.size() + 1));
+    suppressInputRefresh = false;
+    std::vector<std::string> order = {"On"};
+    for(int i = 1; i <= count; ++i) order.push_back("In" + ofToString(i));
+    order.insert(order.end(), {"N Chan", "nInputs", "Out"});
+    getParameterGroup().reorder(order);
+    parameterGroupChanged.notify(this);
+}
+
 void scSynthdef::replaceSynths(){
     std::vector<std::pair<ofxSCServer*, ofxSCSynth*>> replaced;
     for(auto &synth : synths){
@@ -576,10 +615,14 @@ void scSynthdef::replaceSynths(){
         }
         const bool wasLatency = server->getBLatency();
         if(!oldSynth->isCreated()) server->setBLatency(true);
-        newSynth->createAndRun(4, oldSynth->nodeID, getActive() && synthOn && !waitingForSynthdef); //replace synth
+        // A missing default may have kept this synth entirely uncreated.
+        const bool hasTarget = oldSynth->isCreated() || oldSynth->nodeID != 0;
+        newSynth->createAndRun(hasTarget ? 4 : 0, hasTarget ? oldSynth->nodeID : 1,
+                              getActive() && synthOn && !waitingForSynthdef);
         server->setBLatency(wasLatency);
         delete oldSynth;
     }
+    if(synthdefName == "AudioMerge") for(auto& output : outputs) output = output;
 }
 
 bool scSynthdef::isSynthdefCompiled(const std::string& defName) const {
@@ -614,6 +657,12 @@ void scSynthdef::waitForSynthdef(const std::string& defName){
 }
 
 void scSynthdef::revertToBuiltSynthdef(){
+    if(!isSynthdefCompiled(builtSynthdef)){
+        // No valid fallback on first creation: keep the node silent after a
+        // declined/failed build instead of immediately prompting again.
+        waitingForSynthdef = true;
+        return;
+    }
     for(auto &[name, value] : builtVariables){
         lastVariableValues[name] = value;
         getParameter<int>(name).setWithoutEventNotifications(value);
@@ -640,6 +689,8 @@ void scSynthdef::applyAudioEnabled(ofxSCServer* server){
 }
 
 void scSynthdef::buildSynth(ofxSCServer* server){
+    if(!waitingForSynthdef && !isSynthdefCompiled(getSynthdefFilename()))
+        waitForSynthdef(getSynthdefFilename());
     // While a definition is being compiled, keep building what exists.
     if(!waitingForSynthdef) builtSynthdef = getSynthdefFilename();
     synths[server] = new ofxSCSynth(builtSynthdef, server);
@@ -647,7 +698,7 @@ void scSynthdef::buildSynth(ofxSCServer* server){
 }
 
 void scSynthdef::createSynth(ofxSCServer* server){
-    if(synths.count(server) == 0) return;
+    if(synths.count(server) == 0 || !isSynthdefCompiled(builtSynthdef)) return;
     resendParams.notify();
     synths[server]->createAndRun(0, 1, getActive() && synthOn && !waitingForSynthdef);
 }

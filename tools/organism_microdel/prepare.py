@@ -14,7 +14,7 @@ for p in (ROOT/'synthdefs').rglob('*.scd'):
 builds=set()
 for p in (work/'data/Presets').rglob('SC_*.json'):
  if p.stem.startswith('SC_Output'):continue
- name=re.sub(r'^SC_|\*_\d+$','',p.stem);v=json.loads(p.read_text());variables=tuple(int(v[x]) for x in ['NumSpeakers','NumOut'] if x in v)
+ name=re.sub(r'^SC_|\*_\d+$','',p.stem);v=json.loads(p.read_text());variables=tuple(int(v[x]) for x in ['NumSpeakers','NumOut','nInputs'] if x in v)
  builds.add((name,int(v['N_Chan']),variables))
 def run(args,marker):
  r=subprocess.run([str(ROOT/'sclang/osx/sclang'),'-l',str(conf),*map(str,args)],capture_output=True,text=True,timeout=180,cwd=work)

@@ -3,7 +3,7 @@
 
     make_preset.py <output bin/data directory>
 
-Uses ScBus fan-in for sums; numeric macro pins remain editable without audio
+Uses explicit AudioMerge nodes for sums; numeric macro pins remain editable without audio
 modulation. The only Arithmetic nodes left implement the LFO power curves.
 """
 import json
@@ -99,6 +99,11 @@ class Patch:
         if self.custom_gui:
             (folder / 'custom_guis.json').write_text(json.dumps(self.custom_gui, indent=4) + '\n')
         for key, inner in self.macros.items(): inner.write(folder / key)
+        # Also covers sums at macro inputs, router pins and modulation pins.
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from migrate_audio_merge import migrate
+        migrate(folder, lambda path, value: path.write_text(json.dumps(value, indent=4) + '\n'))
+
 
 
 DIVISIONS = ['1/64', '1/32', '1/16 T', '1/16', '1/8 T', '1/8', '1/4 T',
@@ -377,7 +382,7 @@ top.custom_gui = {'panels': [{'id': 'spacesystem-geiger-live', 'name': 'SpaceSys
     'layout': {'columns': 60, 'rows': 38, 'cellWidth': 18, 'cellHeight': 18, 'zoom': 1,
                'backgroundColor': [16,20,27,255], 'widgets': widgets}}]}
 
-top.write(DATA / 'Presets/DEBUG/22--SPACESYSTEM_GEIGER')
+top.write(DATA / 'Presets/GENERATIVE_MUSIC/196--SPACESYSTEM_GEIGER')
 for name, m in [('GEIGER_CLICK',clix),('GEIGER_NOISE',noise),('GEIGER_SAW',saw),('NI_RESONATOR_QUAD',b)]:
     m.write(DATA / 'Macros/AUDIO/REAKTOR' / name)
 print('Built preset:', len(top.nodes), 'top-level nodes; only LFO power Arithmetic remains.')

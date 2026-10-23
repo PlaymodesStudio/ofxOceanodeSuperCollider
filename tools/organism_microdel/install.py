@@ -50,7 +50,7 @@ for old,category,filename in [('ClockedNoise','Source/Noise','clockedNoise.scd')
  for p in [data/'Supercollider/Synthdefs'/category/old,data/'Supercollider/SynthdefSources'/category/filename]:
   if not p.exists():continue
   saved=backup/p.relative_to(data);saved.parent.mkdir(parents=True,exist_ok=True);shutil.move(str(p),str(saved));log.append('retired '+str(p.relative_to(data)))
-owned=[pathlib.Path('Presets/DEBUG/23--ORGANISM_MICRODEL')]
+owned=[pathlib.Path('Presets/GENERATIVE_MUSIC/197--ORGANISM')]
 owned += [p.relative_to(work/'data') for p in (work/'data/Macros/AUDIO/REAKTOR').iterdir()]
 for relative in ([] if library_only else owned):
  src,dst=work/'data'/relative,data/relative
@@ -59,6 +59,8 @@ for relative in ([] if library_only else owned):
  dst.parent.mkdir(parents=True,exist_ok=True);shutil.copytree(src,dst);log.append(str(relative))
 for name in ('OceanodePrimitives.sc','OceanodePrimitives.scx'):
  copy(ROOT/'ugens/OceanodePrimitives'/name,data/'Supercollider/Extensions/OceanodePrimitives'/name)
-copy(ROOT/'data/Supercollider/Synthdefs/Defaults/AudioRouting/audioBusMixer.scsyndef',data/'Supercollider/Synthdefs/Defaults/AudioRouting/audioBusMixer.scsyndef')
+for p in (ROOT / 'data/Supercollider/Synthdefs/Mixing/AudioMerge').iterdir():
+ copy(p, data / 'Supercollider/Synthdefs/Mixing/AudioMerge' / p.name)
+copy(ROOT / 'synthdefs/Mixing/audioMerge.scd', data / 'Supercollider/SynthdefSources/Mixing/audioMerge.scd')
 backup.mkdir(parents=True,exist_ok=True);(backup/'install-manifest.json').write_text(json.dumps(log,indent=2)+'\n')
-print('Installed:',data/'Presets/DEBUG/23--ORGANISM_MICRODEL');print('Migrated existing presets/macros; settings preserved.');print('Backup:',backup)
+print('Installed:',data/'Presets/GENERATIVE_MUSIC/197--ORGANISM');print('Migrated existing presets/macros; settings preserved.');print('Backup:',backup)

@@ -18,5 +18,5 @@
 
 	// Output the trigger signal
 	Out.ar(OceanodeOutput.kr(\out), output);
-}, description: "Outputs trigger when input phasor completes a cycle (falling edge)", category: "Utilities/Other");
+}, description: "Outputs trigger when input phasor completes a cycle (falling edge)", category: "Modulation/Trigger");
 )
