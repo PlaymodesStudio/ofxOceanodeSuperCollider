@@ -3094,5 +3094,51 @@ void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t, bool sw) 
 }
 
 
+// ── MacroMixer: a saved sound blends on the running synths ─────────────────
+ofxOceanodeNodeModel::MorphKeys scPolyComb::morphKeys() const {
+    return {{"polyComb", "polyCombParams", "polyCombMatrix", "polyCombLfos", "polyCombEnvs", "polyCombExts"}, {}};
+}
+
+ofxOceanodeNodeModel::MorphHint scPolyComb::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key = p.getEscapedName();
+    if(key == voices.getEscapedName() || key == outChannels.getEscapedName()) return MorphHint::Structural;
+    // the window; a published control blends with the rest of the sound
+    if(key == showWindow.getEscapedName() || published.count(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;
+}
+
+bool scPolyComb::morphCheck(const ofJson& target, std::string& reason) const {
+    if(target.contains("polyComb") && target["polyComb"].is_object()) return true;
+    reason = "no saved polyComb sound";
+    return false;
+}
+
+ofJson scPolyComb::snapshotOf(const ofJson& j) const {
+    ofJson s = ofJson::object();
+    s["controls"] = j.value("polyComb", ofJson::object());
+    s["params"] = j.value("polyCombParams", ofJson::array());
+    if(j.contains("polyCombMatrix")) s["matrix"] = j["polyCombMatrix"];
+    for(const auto& [from, to] : {std::pair<const char*, const char*>{"polyCombLfos", "lfos"}, {"polyCombEnvs", "envs"}, {"polyCombExts", "exts"}})
+        if(j.contains(from) && j[from].is_number()) s[to] = j[from];
+    return s;
+}
+
+bool scPolyComb::morphBegin(const ofJson& target, std::string& reason) {
+    if(!morphCheck(target, reason)) return false;
+    morphFrom = captureSnapshot();       // the sound now (modulated controls: their bases)
+    morphTo = snapshotOf(target);
+    if(morphFrom.contains("voices")) morphTo["voices"] = morphFrom["voices"];   // Structural: the same
+    return true;
+}
+
+void scPolyComb::morphApply(float t, bool switched) {
+    if(morphFrom.is_object()) applyState(morphFrom, morphTo, t, switched);
+}
+
+void scPolyComb::morphEnd(bool completed) {
+    if(!completed && morphFrom.is_object()) applyState(morphFrom, morphFrom, 1.0f, true);
+    morphFrom = morphTo = ofJson();
+}
+
 // ── The bar under the header: a slot menu (recall), store, glide, A/B morph,
 //    banks. Every one of them publishable. ─────────────────────────────────────

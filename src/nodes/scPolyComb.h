@@ -97,6 +97,15 @@ public:
     void presetSave(ofJson& j) override;
     void loadBeforeConnections(ofJson& j) override;
     void presetRecallAfterSettingParameters(ofJson& j) override;
+    // MacroMixer: the sound saved in "polyComb*" blends on the running synths
+    // through the snapshot morph (applyState). Voices and Channels need other
+    // synths and buses, so a change there replaces the node instead.
+    MorphKeys morphKeys() const override;
+    MorphHint morphHint(const ofxOceanodeAbstractParameter& p) const override;
+    bool morphCheck(const ofJson& target, std::string& reason) const override;
+    bool morphBegin(const ofJson& target, std::string& reason) override;
+    void morphApply(float t, bool switched) override;
+    void morphEnd(bool completed) override;
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
     // Gate (its level is the velocity) and Pitch, one note per voice (timeline piano rolls)
     bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override;
@@ -387,4 +396,6 @@ private:
     bool drivenByConnection(const std::string& key) const;
     ofJson captureSnapshot() const;
     void applyState(const ofJson& a, const ofJson& b, float t, bool sw);   // t 0: a, 1: b; sw: switches take b's
+    ofJson snapshotOf(const ofJson& saved) const;   // a saved preset's sound, as a snapshot
+    ofJson morphFrom, morphTo;                      // a MacroMixer morph: the start, the arrival
 };
