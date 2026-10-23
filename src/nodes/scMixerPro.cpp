@@ -7,6 +7,7 @@
 
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "scMixerPro.h"
+#include "scVST.h"
 #include "scSynthControlBatch.h"
 #include "ofxOceanodeContainer.h"
 #include "ofxOceanodeNode.h"
@@ -3155,6 +3156,10 @@ void scMixerPro::viewInCanvas(scNode* node) {
 }
 
 void scMixerPro::goToWindow(scNode* node) {
+    if(auto* vst = dynamic_cast<scVST*>(node)) {
+        vst->showEditor();
+        return;
+    }
     ofParameter<bool>* show = node ? node->getWindowToggle() : nullptr;
     const std::string title = node ? node->getWindowTitle() : "";
     if(!show || title.empty()) return;
@@ -3652,9 +3657,10 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
             if(ImGui::MenuItem("View origin synth in canvas")) viewInCanvas(origin);
             if(ImGui::IsItemHovered())
                 ImGui::SetTooltip("Select it and centre the canvas on it (through the effects that feed this track)");
-            if(origin->getWindowToggle() && !origin->getWindowTitle().empty()) {
+            const bool isVST = dynamic_cast<scVST*>(origin) != nullptr;
+            if(isVST || (origin->getWindowToggle() && !origin->getWindowTitle().empty())) {
                 if(ImGui::MenuItem("Go to origin synth window")) goToWindow(origin);
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Open its window, or bring it to the front of its docked tabs");
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip(isVST ? "Open the VST plugin editor" : "Open its window, or bring it to the front of its docked tabs");
             }
             ImGui::Separator();
         }

@@ -129,6 +129,8 @@ public:
 	}
 	
 	void setup();
+	// Use the same editor action as the node's Editor button.
+	void showEditor() { openEditor.trigger(); }
 	
     void activate() override;
     
