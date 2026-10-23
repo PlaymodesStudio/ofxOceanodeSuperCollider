@@ -58,6 +58,8 @@ struct scPreferences{
 // data/Supercollider/Extensions, plus scsynth's bundled plugins (scsynth does
 // not search its standard locations once -U is given). Empty: no -U (the
 // standard locations, ~/Library/Application Support/SuperCollider/Extensions).
+// macOS uses a temporary symlink view that excludes Supernova plugin variants;
+// installed packages remain unchanged, including across Sync updates.
 std::string scUgenPluginPaths(const std::string& ugensPlugins, const std::string& scsynthPath);
 
 class serverManager{

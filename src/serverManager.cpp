@@ -6,6 +6,7 @@
 //
 
 #include "serverManager.h"
+#include "scSCSynthPluginPaths.h"
 #include "ofxOceanodeSuperCollider.h"
 #include "ofxOceanodeSuperColliderController.h"
 #include "ofxSuperCollider.h"
@@ -64,7 +65,12 @@ std::string scUgenPluginPaths(const std::string& ugensPlugins, const std::string
         const std::string bundled = ofToDataPath("Supercollider/Extensions", true);
         if(ofDirectory::doesDirectoryExist(bundled, false)) custom = bundled;
     }
-    return custom.empty() ? "" : custom + ":" + getScPluginPath(scsynthPath);
+    const std::string paths = custom.empty() ? "" : custom + ":" + getScPluginPath(scsynthPath);
+#ifdef TARGET_OSX
+    return oceanodeScPlugins::forScsynth(paths);
+#else
+    return paths;
+#endif
 }
 
 serverManager::serverManager(){

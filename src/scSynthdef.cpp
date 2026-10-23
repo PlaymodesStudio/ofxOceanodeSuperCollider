@@ -12,6 +12,7 @@
 #include "scSchedulingCompat.h"
 #include "ofxOceanodeShared.h"
 #include "ofxOceanodeConnection.h"
+#include <cstdlib>
 
 namespace {
 // What each synth was last sent for one parameter. Oceanode connections pass
@@ -872,10 +873,22 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     pStringData[ofToInt(arrayId)] = ofSplitString(array, ",");
     
     
+    // Numeric arrays are archive objects too, not key/value dictionaries.
+    // ControlSpec defaults (ChannelMapper/DBAP) can refer to these objects.
+    auto isNumericArray = [](const vector<string>& values){
+        if(values.empty()) return false;
+        for(const auto& value : values){
+            if(value == "nil") continue;
+            char* end = nullptr;
+            std::strtod(value.c_str(), &end);
+            if(end == value.c_str() || *end != '\0') return false;
+        }
+        return true;
+    };
     vector<map<string, string>> pdata;
     pdata.resize(pStringData.size());
     for(int i = 0; i < pStringData.size(); i++){
-        if(pStringData[i].size() == 0) continue;
+        if(pStringData[i].size() == 0 || isNumericArray(pStringData[i])) continue;
         if(ofStringTimesInString(pStringData[i][0], ":")){
             for(auto comb : pStringData[i]){
                 auto split = ofSplitString(comb, ":");
@@ -892,7 +905,7 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
 		else ofLog()<< "readAndCreateSynthdef : Error in file : " << file;
     }
     
-    std::function<string(string)> getStringFromData = [odata, pdata, &getStringFromData](string checkvalue) -> string{
+    std::function<string(string)> getStringFromData = [odata, pdata, pStringData, isNumericArray, &getStringFromData](string checkvalue) -> string{
         if(ofStringTimesInString(checkvalue, "o[")){
             checkvalue.erase(0, 2); //remove o[
             checkvalue.erase(checkvalue.length()-1); //remove ]
@@ -900,7 +913,14 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
         }else if(ofStringTimesInString(checkvalue, "p[")){
             checkvalue.erase(0, 2); //remove o[
             checkvalue.erase(checkvalue.length()-1); //remove ]
-            return "";
+            const int index = ofToInt(checkvalue);
+            if(index < 0 || index >= pStringData.size() || !isNumericArray(pStringData[index])) return "";
+            string values;
+            for(const auto& value : pStringData[index]){
+                if(!values.empty()) values += ",";
+                values += value == "nil" ? "0" : value;
+            }
+            return values;
         }
         return checkvalue;
     };
@@ -929,23 +949,20 @@ synthdefDesc scSynthdef::readAndCreateSynthdef(string file){
     currentDescription.category = getStringFromData(pdata[1]["category"]);
     vector<string> variableNames = ofSplitString(getStringFromData(pdata[1]["variables"]), ":");
     vector<string> variableDimensions = ofSplitString(getStringFromData(pdata[1]["variableDimensions"]), ":");
-    if(variableNames.size() == variableDimensions.size() && variableNames[0] != ""){
+    if(!variableNames.empty() && variableNames.size() == variableDimensions.size() && variableNames[0] != ""){
         currentDescription.variables.resize(variableNames.size());
         for(int i = 0; i < currentDescription.variables.size(); i++){
             currentDescription.variables[i] = std::make_pair(variableNames[i], ofToInt(variableDimensions[i]));
         }
     }
     if(pdata.size() > 5){
-        auto specsPos = pdata[1]["specs"];
-        specsPos.erase(0, 2); //remove o[
-        specsPos.erase(1); //remove ]
-        specsPos = pdata[ofToInt(specsPos)]["array"];
-        specsPos.erase(0, 2); //remove o[
-        specsPos.erase(1); //remove ]
-        auto specsList = pdata[ofToInt(specsPos)];//getMapFromData(pdata[1]["specs"]);
+        const auto specsEvent = getMapFromData(pdata[1]["specs"]);
+        const auto array = specsEvent.find("array");
+        const auto specsList = array == specsEvent.end() ? map<string, string>() : getMapFromData(array->second);
         for(auto spec : specsList){
             currentDescription.params[spec.first] = getMapFromData(spec.second);
-            // replace units for text in odata.
+            // Resolve literal/array defaults as well as units through archive references.
+            currentDescription.params[spec.first]["default"] = getStringFromData(currentDescription.params[spec.first]["default"]);
             currentDescription.params[spec.first]["units"] = getStringFromData(currentDescription.params[spec.first]["units"]);
         }
     }

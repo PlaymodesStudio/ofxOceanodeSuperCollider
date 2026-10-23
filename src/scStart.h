@@ -103,7 +103,13 @@ public:
             }
             args.push_back("-D");
             args.push_back("0"); //Deactivate synthdefs
-            const std::string ugenPaths = scUgenPluginPaths(launchPrefs.ugensPlugins, scPath);
+            std::string ugenPaths;
+            try {
+                ugenPaths = scUgenPluginPaths(launchPrefs.ugensPlugins, scPath);
+            } catch(const std::exception& error) {
+                ofLogError("scStart") << "Cannot prepare scsynth plugin paths: " << error.what();
+                break;
+            }
             if(!ugenPaths.empty()){
                 args.push_back("-U");
                 args.push_back(ugenPaths);
