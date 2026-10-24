@@ -1,6 +1,6 @@
 (
 ~synthCreator.value("Echo", {|n|
-	var filters, fb, del, cut, res, selfilt, sig, mx, dry, feedback, wet, send;
+	var filters, fb, del, cut, res, selfilt, sig, mx, dry, feedback, wet, send, weights;
 
 	// Parameters
 	fb = OceanodeParameter.ar(\feed, 0.5, n, 0, 1, "vf");
@@ -25,7 +25,9 @@
 	];
 
 	// Select filter type
-	wet = Select.ar(selfilt, filters);
+	weights = NamedControl.kr(\filterweights, 0 ! 4).lag(0.03);
+	wet = Select.ar(weights.sum > 0, [Select.ar(selfilt, filters),
+        Mix(filters.collect { |signal, i| signal * weights[i] })]);
 
 	// Feedback loop
 	LocalOut.ar(DelayC.ar(wet, 2, del));

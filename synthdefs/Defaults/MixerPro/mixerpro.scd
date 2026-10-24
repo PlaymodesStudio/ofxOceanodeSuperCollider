@@ -343,7 +343,7 @@ channelCounts.do({|numChannels|
         var drive = \drive.kr(6, 0.05).clip(0, 36).dbamp;
         var bias  = \bias.kr(0, 0.05).clip(0, 1) * 0.5;
         var tb    = bias.tanh;
-        var comp  = Select.kr(\autogain.kr(1) > 0.5, [1, (drive * (1 - tb.squared)).reciprocal]);
+        var comp  = (1 + (\autogain.kr(1, 0.03).clip(0, 1) * ((drive * (1 - tb.squared)).reciprocal - 1)));
         var logcosh = { |v| v.abs + (1 + (-2 * v.abs).exp).log - 2.log };   // overflow-safe
         var wet = sig.collect { |x|
             var u  = ((x * drive) + bias).clip(-40, 40);
