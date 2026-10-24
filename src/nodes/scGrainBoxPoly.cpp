@@ -394,8 +394,8 @@ void scGrainBoxPoly::setup() {
     revPredelayP.set("Rev Predelay",20.0f,   0.0f,  1000.0f);   // ms
     revLowpassP.set ("Rev Lowpass", 10000.0f, 20.0f, 20000.0f);
     revMixP.set     ("Rev Mix",      0.33f,  0.0f,     1.0f);
-    revPositionP.set("Rev Position", 0.8f,   0.0f,     1.0f);    // SpaceMaster \position (early -> late)
-    revSpreadP.set  ("Rev Spread",   0.15f, -1.0f,     1.0f);    // SpaceMaster \spread
+    revPositionP.set("Rev Position", 0.8f,   0.0f,     1.0f);    // MicroSpace adapter \position (early -> late)
+    revSpreadP.set  ("Rev Spread",   0.15f, -1.0f,     1.0f);    // MicroSpace adapter \spread
 
     // In Sync To Transport mode the auto-trigger grid, the LFOs and TrigDur
     // follow the global transport (all playheads); BPM input and SyncGate are
@@ -2530,18 +2530,12 @@ void scGrainBoxPoly::sendMixParams() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Global FX chain: EQ (graphiceqN) → Echo (EchoN) → Reverb (SpaceMasterN)
+// Global FX chain: EQ (graphiceqN) → Echo (EchoN) → Reverb (boxMicroSpaceN)
 // ════════════════════════════════════════════════════════════════════════════
 //
-// The defs are the user's: graphiceq.scd (synthdefs/Defaults/GraphicEQ, like
-// GrainBox's own) and echo.scd / spaceMaster.scd (~synthCreator: def "Echo" ++
-// n / "SpaceMaster" ++ n, controls "in" / "out" and the OceanodeParameterLag
-// vectors). With "Load Synthdefs On Preset" on, serverManager loads only the
-// Defaults folder plus the defs of the preset's own "SC ...*" nodes, so these
-// may be missing: the node then sends /d_loadDir for their folder (found under
-// Supercollider/Synthdefs) and uses a stage only ~1.5 s later (/d_loadDir is
-// asynchronous and its /done is not forwarded to nodes). Until then the chain
-// simply skips that stage.
+// Graphic EQ and Echo use vector controls; boxMicroSpace (compiled with
+// Defaults/MixerPro) adapts the existing scalar reverb controls to the shared
+// MicroSpace DSP. Each effect folder is required before creating its stage.
 
 namespace {
 // Folder that holds "<name>1.scsyndef" under Supercollider/Synthdefs ("" if none).
@@ -2569,7 +2563,7 @@ std::string gbpFindSynthdefFolder(const std::string& name) {
     cache[name] = found;
     return found;
 }
-const char* kFxDefBase[3] = {"graphiceq", "Echo", "SpaceMaster"};
+const char* kFxDefBase[3] = {"graphiceq", "Echo", "boxMicroSpace"};
 
 } // namespace
 
@@ -2591,7 +2585,7 @@ bool scGrainBoxPoly::fxStageReady(int /*stage*/, ofxSCServer* srv) const {
     return true;
 }
 
-// Echo / SpaceMaster (~synthCreator defs, outside Defaults) and graphiceq:
+// Echo, boxMicroSpace and graphiceq:
 // ask every serverManager to load their folders (idempotent).
 void scGrainBoxPoly::requireFxSynthdefs() {
     // GrainBoxPoly's own folder (CompiledSynthdefs/GrainBoxPoly), wherever it
@@ -2670,13 +2664,13 @@ void scGrainBoxPoly::sendFxParams(int stage, ofxSCSynth* s) {
             s->set("resonance",  vec(echoResonanceP.get()));
             break;
         case FX_REVERB:
-            s->set("size",     vec(revSizeP.get()));
-            s->set("decay",    vec(revDecayP.get()));
-            s->set("predelay", vec(revPredelayP.get()));
-            s->set("lowpass",  vec(revLowpassP.get()));
-            s->set("mix",      vec(revMixP.get()));
-            s->set("position", vec(revPositionP.get()));
-            s->set("spread",   vec(revSpreadP.get()));
+            s->set("size",     revSizeP.get());
+            s->set("decay",    revDecayP.get());
+            s->set("predelay", revPredelayP.get());
+            s->set("lowpass",  revLowpassP.get());
+            s->set("mix",      revMixP.get());
+            s->set("position", revPositionP.get());
+            s->set("spread",   revSpreadP.get());
             break;
         default: break;
     }

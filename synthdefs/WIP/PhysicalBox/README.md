@@ -14,7 +14,7 @@ and isn't part of Oceanode yet.
 |---|---|
 | `physicalbox.eel2` | The voice, in EEL2 for DynGen, sample by sample: exciters, two coupled resonators, nonlinearities, two pickups. Meant to port almost line by line to C++. |
 | `physicalbox_core.scd` | Loads the script for DynGen: rewrites every `_param` to `in(k)` (DynGen 0.6.1 crashes scsynth on native parameters, see `src/nodes/scDynGenPolyNode.cpp`) and defines `~pbSpecs`, `~pbDef`, `~pbVoice`. |
-| `physicalbox.scd` | The playable prototype: window, Material pad, presets, A > B morph, computer keyboard, MIDI, MiVerb space. |
+| `physicalbox.scd` | The playable prototype: window, Material pad, presets, A > B morph, computer keyboard, MIDI, MicroSpace. |
 | `reference.scd` | MiElements, DWGBowed, DWGFlute and DWGClarinet3, to compare against. |
 
 To play it, open `physicalbox.scd` in the IDE and evaluate its block. It

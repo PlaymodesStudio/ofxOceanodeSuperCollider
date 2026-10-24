@@ -1003,7 +1003,7 @@ bool scAnalogBox::stageOn(int s) const {
 }
 
 std::string scAnalogBox::stageDef(int s) const {
-    static const char* names[NumStages] = {"ABFxShaper", "mixerProSat", "ABFxRing", "ABFxShift", "ABFxChorus", "mixerProEQ", "mixerProEcho", "mixerProRvb"};
+    static const char* names[NumStages] = {"ABFxShaper", "mixerProSat", "ABFxRing", "ABFxShift", "ABFxChorus", "mixerProEQ", "mixerProEcho", "boxMicroSpace"};
     return names[s] + ofToString(outChannels.get());
 }
 

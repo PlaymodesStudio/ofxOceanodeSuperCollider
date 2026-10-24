@@ -717,7 +717,7 @@ bool scSlicerBox::stageOn(int stage) const {
 }
 
 const char* scSlicerBox::stageDef(int stage){
-    static const char* defs[NumStages] = {"graphiceq2", "SlicerBoxFilter", "mixerProComp2", "mixerProSat2", "mixerProEcho2", "mixerProRvb2"};
+    static const char* defs[NumStages] = {"graphiceq2", "SlicerBoxFilter", "mixerProComp2", "mixerProSat2", "mixerProEcho2", "boxMicroSpace2"};
     return defs[stage];
 }
 

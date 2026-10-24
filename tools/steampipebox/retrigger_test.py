@@ -25,13 +25,13 @@ SynthDef(\\SteamPipeRecallProbe,{
  (a.output/'compile.log').write_text(result.stdout+result.stderr);assert result.returncode==0 and (a.output/'SteamPipeRecallProbe.scsyndef').exists()
  mods=['mpitch','mtune','maptune','mnoise','mnoiseres','mdiffusion','mpush','moffset','mfeedback','mhp','mlp','mmw','mamp']
  def params(p):return sum(([c['sc'],float(p['values'][c['name']])] for c in controls),[])
- init=[*[m('/d_recv',(compiled/(n+'.scsyndef')).read_bytes()) for n in ['SteamPipeBoxVoice','SteamPipeBoxOriginal2','SteamPipeBoxGate1']],m('/d_recv',(a.output/'SteamPipeRecallProbe.scsyndef').read_bytes()),m('/g_new',1,0,0),m('/c_setn',32,16,*([0.]*16))]
+ init=[*[m('/d_recv',(compiled/(n+'.scsyndef')).read_bytes()) for n in ['SteamPipeBoxVoice','SteamPipeBoxSpread2','SteamPipeBoxGate1']],m('/d_recv',(a.output/'SteamPipeRecallProbe.scsyndef').read_bytes()),m('/g_new',1,0,0),m('/c_setn',32,16,*([0.]*16))]
  results=[]
  for block in [1,64,256]:
-  score=b(0,init)+b(.016,[m('/s_new','SteamPipeBoxGate1',1000,0,1,'out',16,'velout',48,'gate',0.,'velocity',1.,'vel',0,'rnd',1),m('/s_new','SteamPipeBoxVoice',1001,1,1,'gatebus',16,'velabus',48,'out',18,'vis',2048,*params(bank[0]),*sum(([name,32] for name in mods),[])),m('/s_new','SteamPipeBoxOriginal2',1002,1,1,'in',18,'out',0,*params(bank[0])),m('/s_new','SteamPipeRecallProbe',1003,1,1)])
+  score=b(0,init)+b(.016,[m('/s_new','SteamPipeBoxGate1',1000,0,1,'out',16,'velout',48,'gate',0.,'velocity',1.,'vel',0,'rnd',1),m('/s_new','SteamPipeBoxVoice',1001,1,1,'gatebus',16,'velabus',48,'out',18,'vis',2048,*params(bank[0]),*sum(([name,32] for name in mods),[])),m('/s_new','SteamPipeBoxSpread2',1002,1,1,'in',18,'out',0,'voices',1,'mpan',32,'vis',2200),m('/s_new','SteamPipeRecallProbe',1003,1,1)])
   cases=[];now=.032
   for preset in [bank[0],byname['tarrega'],byname['pvc'],byname['tarrega'],bank[0],byname['pvc']]:
-   score+=b(now,[m('/n_set',1001,*params(preset)),m('/n_set',1002,*params(preset))]);now+=.016
+   score+=b(now,[m('/n_set',1001,*params(preset))]);now+=.016
    for pitch in [36,60,84]:
     for gate,vel,length in [(1,1,.128),(1,.5,.128),(.25,1,.128),(1,1,.016)]:
      score+=b(now,[m('/n_set',1001,'pitch',float(pitch)),m('/n_set',1000,'gate',float(gate),'velocity',float(vel))]);score+=b(now+length,[m('/n_set',1000,'gate',0.)]);cases.append(dict(name=preset['name'],pitch=pitch,gate=gate,velocity=vel,length=length,start=now));now+=.512
@@ -40,7 +40,7 @@ SynthDef(\\SteamPipeRecallProbe,{
   drags=[]
   for name in ['tarrega','pvc']:
    preset=byname[name]
-   score+=b(now,[m('/n_set',1001,*params(preset),'pitch',60.),m('/n_set',1002,*params(preset)),m('/n_set',1000,'gate',0.,'velocity',1.)]);now+=.016
+   score+=b(now,[m('/n_set',1001,*params(preset),'pitch',60.),m('/n_set',1000,'gate',0.,'velocity',1.)]);now+=.016
    for level in [.015625,.03125,.0625,.125,.25,.5,.75,1.]:
     score+=b(now,[m('/n_set',1000,'gate',level)]);now+=.016
    drags.append(dict(name=name,start=now-.016))

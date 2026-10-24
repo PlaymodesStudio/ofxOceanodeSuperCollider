@@ -26,7 +26,7 @@
 //              clock follows scTransportSync's anchors (\anchorId, \anchorPos
 //              in beats, kept small by C++, \run, \tbpm).
 (
-var root, dir, targetRanges, spaceMaster, modOf;
+var root, dir, targetRanges, modOf;
 root = if(thisProcess.nowExecutingPath.notNil,
     { thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs" },
     { Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs" });
@@ -46,64 +46,6 @@ targetRanges = Dictionary[1 -> 0, 2 -> 1, 3 -> 2, 4 -> 3, 5 -> 4, 6 -> 5, 28 -> 
 // An effect's modulation: the latest note's (its voice is on \latestbus)
 modOf = { |k, base|
     base + Select.kr(In.kr(\latestbus.kr(0)).clip(0, 7), In.kr(\modbus.kr(0) + (k * 16), 8))
-};
-
-// The same R66/SpaceMaster tank used by GrainBox (spaceMaster.scd).
-// One control value is shared by all channels, as in GrainBox's global FX.
-spaceMaster = { |input, n, size, decay, predelay, lowpass, position, spread, mix|
-    var feedback, results, pairMods, tick, p2d, allpass, onePoleLP, damp;
-    var maxPredelay = 2.0, maxEarly = 0.2, maxLate = 0.25;
-    var modfreq = 0.2, spin = 1, wander = 0.25;
-    p2d = { |pitch| pitch.midicps.reciprocal };
-    allpass = { |ugen, signal, seconds, coefficient, maxDelay|
-        var delay = (seconds + SampleDur.ir).clip(SampleDur.ir, maxDelay);
-        var coef = coefficient.clip(0.0001, 0.9999);
-        ugen.ar(signal, maxDelay, delay, delay * (0.001.log / coef.log) * -1)
-    };
-    onePoleLP = { |signal, frequency|
-        OnePole.ar(signal, (-2 * pi * frequency.clip(5, SampleRate.ir * 0.45) / SampleRate.ir).exp)
-    };
-    damp = { |signal| BHiShelf.ar(signal, 96.midicps, 1.0, -6) };
-    tick = Impulse.ar(400);
-    pairMods = Array.fill((n + 1).div(2), {
-        Array.fill(4, { |index|
-            var sine = Latch.ar(SinOsc.ar(modfreq, index * (-pi / 8)), tick) * spin;
-            var random = OnePole.ar(TRand.ar(-1, 1, tick), (-2 * pi * modfreq / SampleRate.ir).exp);
-            sine + (Latch.ar(random, tick) * wander)
-        })
-    });
-    feedback = LocalIn.ar(n).asArray;
-    results = Array.fill(n, { |ch|
-        var left = ch.even, pair = ch.div(2);
-        var partner = if(left) { (ch + 1).min(n - 1) } { ch - 1 };
-        var side = if(partner == ch) { 0 } { if(left) { 1 } { -1 } };
-        var earlyPitch = 65 - size, latePitch = 30 - size;
-        var dffs = (0.5 + (size / 240)).clip(0.0001, 0.999);
-        var early, tank, mods, undivided, physical, late, fbDelay, fbGain, wet;
-        early = DelayN.ar(input[ch], maxPredelay,
-            (predelay * 0.001 * (1 + (spread * side))).clip(0, maxPredelay));
-        (if(left) { [0, -4, -8] } { [-2, -6, -10] }).do { |offset|
-            early = allpass.(AllpassN, early, p2d.(earlyPitch + offset), dffs, maxEarly)
-        };
-        early = onePoleLP.(early, lowpass);
-        tank = damp.(early + feedback[partner]);
-        mods = if(left) { pairMods[pair] } { pairMods[pair].collect { |signal| signal.neg } };
-        undivided = Array.fill(4, { |index|
-            (p2d.(latePitch + (if(left) { [8, 4, 0, -7] } { [10, 6, 2, -5] })[index]) +
-                (mods[index] * 0.001)).max(SampleDur.ir * 5)
-        });
-        physical = undivided / 5;
-        late = tank;
-        3.do { |index| late = allpass.(AllpassC, late, physical[index], dffs, maxLate) };
-        fbDelay = (physical[3] - ControlDur.ir).clip(SampleDur.ir, maxLate);
-        // Match SpaceMaster's feedback gain, including its measured RT60.
-        fbGain = (-60 * undivided[3] / decay).clip(-60, 0).dbamp.clip(0, 0.9999);
-        wet = (early * (1 - position).sqrt) + (late * position.sqrt);
-        [(input[ch] * (1 - mix).sqrt) + (LeakDC.ar(wet, 0.9995) * mix.sqrt),
-         DelayC.ar(late, maxLate, fbDelay) * fbGain]
-    });
-    LocalOut.ar(results.collect { |channel| channel[1] });
-    results.collect { |channel| channel[0] }
 };
 
 // ── The sampler of a pad ────────────────────────────────────────────────────
@@ -335,7 +277,7 @@ spaceMaster = { |input, n, size, decay, predelay, lowpass, position, spread, mix
 
     SynthDef(("SampleBoxReverb_" ++ n).asSymbol, {
         var bus = \bus.kr(0), sig = In.ar(bus, n);
-        ReplaceOut.ar(bus, spaceMaster.(sig.asArray, n,
+        ReplaceOut.ar(bus, OceanodeMicroSpace.box(sig.asArray,
             \revsize.kr(30).clip(0, 60), \revdecay.kr(4).clip(0.05, 60), \revpredelay.kr(20).clip(0, 1000),
             \revlowpass.kr(10000).clip(20, 20000), \revposition.kr(0.8).clip(0, 1), \revspread.kr(0.15).clip(-1, 1),
             modOf.(13, \revmix.kr(0.33)).clip(0, 1)));

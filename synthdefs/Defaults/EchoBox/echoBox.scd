@@ -4,8 +4,8 @@
 //                   tap; they all read the input and add their echoes into
 //                   one wet bus.
 //   EchoBoxMix<N>   input + echoes -> out: dry / wet, ducking, output gain.
-// Between the two, while Reverb is on, MixerPro's SpaceMaster insert
-// (mixerProRvb<N>) puts a reverb on the echoes.
+// Between the two, while Reverb is on, MicroSpace insert
+// (boxMicroSpace<N>) puts a reverb on the echoes.
 //
 // A tap, per channel (based on echo.scd and EchoBlur.scd):
 //

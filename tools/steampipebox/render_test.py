@@ -28,7 +28,7 @@ def render(server,out,score,block=64,channels=2):
 def main():
  ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--server',default='/Applications/SuperCollider.app/Contents/Resources/scsynth');ap.add_argument('--output',type=pathlib.Path,default=pathlib.Path('/tmp/steampipebox-render'));a=ap.parse_args();a.output.mkdir(parents=True,exist_ok=True)
  controls=json.loads((FOLDER/'controls.json').read_text());bank=json.loads((FOLDER/'factory.json').read_text());compiled=FOLDER/'CompiledSynthdefs'
- paths=[compiled/'SteamPipeBox/SteamPipeBoxVoice.scsyndef',compiled/'SteamPipeBox/SteamPipeBoxOriginal2.scsyndef',compiled/'SteamPipeBox/SteamPipeBoxGate1.scsyndef']
+ paths=[compiled/'SteamPipeBox/SteamPipeBoxVoice.scsyndef',compiled/'SteamPipeBox/SteamPipeBoxSpread2.scsyndef',compiled/'SteamPipeBox/SteamPipeBoxGate1.scsyndef']
  init=[*[message('/d_recv',p.read_bytes()) for p in paths],message('/g_new',1,0,0),message('/c_setn',32,16,*([0.0]*16))]
  score=bundle(0,init)
  mods=['mpitch','mtune','maptune','mnoise','mnoiseres','mdiffusion','mpush','moffset','mfeedback','mhp','mlp','mmw','mamp']
@@ -37,7 +37,7 @@ def main():
   for c in controls:params +=[c['sc'],float(preset['values'][c['name']])]
   extra=preset.get('extras',{})
   params += ['steampipe2',float(extra.get('SteamPipe_2',False)),'legato',float(extra.get('Legato',False)),'noise_env',float(extra.get('Noise_Filter_Envelope',0))]
-  return bundle(t,[message('/s_new','SteamPipeBoxGate1',1000,0,1,'out',16,'velout',48,'gate',1.0,'velocity',1.0,'vel',0,'rnd',1),message('/s_new','SteamPipeBoxVoice',1001,1,1,'gatebus',16,'velabus',48,'pitch',60.0,'master',1.0,'normalization',1.0,'vis',2048,'out',18,*params,*sum(([name,32] for name in mods),[])),message('/s_new','SteamPipeBoxOriginal2',1002,1,1,'in',18,'out',0,*params)])
+  return bundle(t,[message('/s_new','SteamPipeBoxGate1',1000,0,1,'out',16,'velout',48,'gate',1.0,'velocity',1.0,'vel',0,'rnd',1),message('/s_new','SteamPipeBoxVoice',1001,1,1,'gatebus',16,'velabus',48,'pitch',60.0,'master',1.0,'normalization',1.0,'vis',2048,'out',18,*params,*sum(([name,32] for name in mods),[])),message('/s_new','SteamPipeBoxSpread2',1002,1,1,'in',18,'out',0,'voices',1,'mpan',32,'vis',2200)])
  for i,preset in enumerate(bank):
   t=i*1.6+.016;score+=notes(preset,t)
   score+=bundle(t+1.024,[message('/n_set',1000,'gate',0.0)])
@@ -60,7 +60,7 @@ def main():
  values={c['sc']:bank[0]['values'][c['name']] for c in controls}
  values.update(pitch=60,gate=1,velocity=1,bpm=120,amp_original=1,amp_curve0=-4,amp_curve1=-4,amp_curve2=-4,steampipe2=1,noise_env=24,legato=1)
  def args(path):return ','.join('DC.ar('+str(values[p[1:]])+')' for p in ordered(path))
- source='Archive.archiveDir="/tmp";\nSynthDef(\\SteamPipeBoxTimingTest,{var sig=SteamPipeVoice.ar(['+args(FOLDER/'steamPipeBox.eel2')+']);Out.ar(0,SteamPipeOriginal.ar(['+args(FOLDER/'originalEffects.eel2')+'],sig[0],sig[0]));}).writeDefFile("'+str(a.output)+'");\n0.exit;\n'
+ source='Archive.archiveDir="/tmp";\nSynthDef(\\SteamPipeBoxTimingTest,{var sig=SteamPipeVoice.ar(['+args(FOLDER/'steamPipeBox.eel2')+']);Out.ar(0,[sig[0],sig[0]]);}).writeDefFile("'+str(a.output)+'");\n0.exit;\n'
  source=source.replace('0.exit;', 'SynthDef(\\SteamPipeBoxCableInput,{var edge=DelayN.ar(Impulse.ar(0),0.01,48/SampleRate.ir);Out.ar(200,Trig1.ar(edge,0.2)*0.25);Out.ar(201,DC.ar(0.8));}).writeDefFile("'+str(a.output)+'");\n0.exit;')
  (a.output/'timing.scd').write_text(source)
  config=a.output/'config.yaml';config.write_text('includePaths:\n    - '+str(ROOT/'sclang/SCClassLibrary')+'\n    - '+str(ROOT/'ugens/OceanodeSteamPipe')+'\nexcludePaths: []\nexcludeDefaultPaths: true\n')
@@ -80,13 +80,13 @@ def main():
  graph_results=[]
  for voices,channels in [(1,1),(6,2),(16,16)]:
   moddir=ROOT/'synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation'
-  paths=[compiled/'SteamPipeBox/SteamPipeBoxVoice.scsyndef',compiled/f'SteamPipeBox/SteamPipeBoxGate{voices}.scsyndef',compiled/f'SteamPipeBox/SteamPipeBoxOriginal{channels}.scsyndef',*[moddir/f'{n}{voices}.scsyndef' for n in ['ModLfo','ModEnv','ModRoute']],compiled/f'SteamPipeBox/SteamPipeBoxSpread{channels}.scsyndef']
+  paths=[compiled/'SteamPipeBox/SteamPipeBoxVoice.scsyndef',compiled/f'SteamPipeBox/SteamPipeBoxGate{voices}.scsyndef',*[moddir/f'{n}{voices}.scsyndef' for n in ['ModLfo','ModEnv','ModRoute']],compiled/f'SteamPipeBox/SteamPipeBoxSpread{channels}.scsyndef']
   start=[message('/d_recv',p.read_bytes()) for p in paths]+[message('/g_new',1,0,0),message('/c_setn',32,16,*([0.0]*16))]
   params=[]
   for c in controls:params +=[c['sc'],float(bank[0]['values'][c['name']])]
   nodes=[message('/s_new',f'SteamPipeBoxGate{voices}',1000,1,1,'out',128,'velout',160,'gate',1.0,'velocity',1.0,'vel',0,'rnd',16),message('/n_setn',1000,'gate',voices,*([1.0]*voices)),message('/s_new',f'ModLfo{voices}',1100,1,1,'out',512,'freq',3.0),message('/s_new',f'ModEnv{voices}',1101,1,1,'out',528,'gate',128,'atk',.01,'dec',.1,'sus',.8,'rel',.1),message('/s_new',f'ModRoute{voices}',1102,1,1,'src',512,'out',560,'amount',.5,'scale',24.0),message('/s_new',f'ModRoute{voices}',1103,1,1,'src',528,'out',576,'amount',1.0,'scale',1.0)]
   for i in range(voices):nodes.append(message('/s_new','SteamPipeBoxVoice',1001+i,1,1,'gatebus',128+i,'velabus',160+i,'pitch',60.0+i*.25,'normalization',1.0,'vis',2048,'voice',i,'out',64+i,*params,*sum(([name,32] for name in mods),[]),'mpitch',560+i,'mamp',576+i,'vca',1.0))
-  nodes +=[message('/s_new',f'SteamPipeBoxSpread{channels}',1200,1,1,'in',64,'out',96,'voices',voices,'mpan',32,'vis',2200),message('/s_new',f'SteamPipeBoxOriginal{channels}',1201,1,1,'in',96,'out',0,*params)]
+  nodes +=[message('/s_new',f'SteamPipeBoxSpread{channels}',1200,1,1,'in',64,'out',0,'voices',voices,'mpan',32,'vis',2200)]
   score=bundle(0,start)+bundle(.016,nodes)+bundle(.528,[message('/n_setn',1000,'gate',voices,*([0.0]*voices))])+bundle(1.04,[message('/g_freeAll',1)])+bundle(1.056,[message('/c_set',32,0.0)])
   audio,ch,sr=render(a.server,a.output/f'graph-{voices}-{channels}.wav',score,channels=channels)
   assert all(math.isfinite(x) for x in audio)

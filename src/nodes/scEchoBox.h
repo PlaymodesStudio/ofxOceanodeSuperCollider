@@ -9,7 +9,7 @@
 //    saturation, shimmer (pitch-shifted repeats), ping-pong / multichannel
 //    bounce, wow / flutter and freeze. One synth per tap (EchoBoxTap<N>,
 //    synthdefs/Defaults/EchoBox): a tap that is not there costs nothing.
-//  • The echoes then go through MixerPro's SpaceMaster reverb (mixerProRvb<N>,
+//  • The echoes then go through MicroSpace reverb (boxMicroSpace<N>,
 //    while Reverb is on) and EchoBoxMix<N>: dry / wet, ducking (the echoes
 //    step back while the input plays), output gain.
 //  • Modulation (the shared scModulation): LFOs with one oscillator per

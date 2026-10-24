@@ -14,7 +14,7 @@ Around the voices are the shared modular parts:
 - ModGate, and the scModulation LFOs, envelopes and routes, per voice;
 - a stereo-pickup spreader;
 - MixerPro's Saturation, EQ, Echo and Reverb;
-- Space (MiVerb).
+- Space (MicroSpace).
 
 The engine was prototyped first in DynGen (`synthdefs/WIP/PhysicalBox/`); the
 UGen ports it line by line and renders the same test matrix (see below).
@@ -25,7 +25,7 @@ UGen ports it line by line and renders the same test matrix (see below).
 |---|---|
 | `PhysicalBoxVoice` | One voice. Reads its gate on `\gatebus`: ModGate's gate × level, and the level is the velocity. Reads Pitch (MIDI, or `\pitch_ar` with `\pitch_sel`), every PhysicalVoice input by name, and the per-voice modulation buses `\mpitch \mmat \mexc \mpos \mhard \mpress \mspeed \mbreath \mscrape \mbright \mdecay \mshape \mcouple \mcascade \mamp`. `\in` feeds the Ext exciter. Writes two channels (the pickups), plus level, gate and note to `\vis` at voice × 4. |
 | `PhysicalBoxSpread<C>` | 16 voices × 2 pickups onto C speakers. Voice *i* sits at `\pan[i]` + `\mpan`, with its pickups `\width` apart. Placement and level compensation are PolyCombSpread's. |
-| `PhysicalBoxSpace<C>` | MiVerb on the C channels (in pairs when C > 2): `\mix \time \damp \hp \diff \freeze`. `\on` crossfades it out, then the node pauses it. |
+| `PhysicalBoxSpace<C>` | MicroSpace on the C channels (in pairs when C > 2): `\mix \time \damp \hp \diff \freeze`. `\on` crossfades it out, then the node pauses it. |
 
 Compile it with SuperCollider. It needs the `PhysicalVoice` class
 (`ugens/OceanodePhysical/OceanodePhysical.sc`) and mi-UGens. It also uses

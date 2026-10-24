@@ -311,6 +311,17 @@ channelCounts.do({|numChannels|
         Out.ar(out, results.collect(_[0]));
     }).writeDefFile(dir);
 
+    // Box nodes use MicroSpace; MixerPro's own reverb remains independent.
+    SynthDef(("boxMicroSpace" ++ numChannels).asSymbol, {
+        var input = In.ar(\in.kr(0), numChannels).asArray;
+        Out.ar(\out.kr(0), OceanodeMicroSpace.box(input,
+            \size.kr(30, 0.05), \decay.kr(4, 0.05).max(0.05),
+            \predelay.kr(20, 0.05), \lowpass.kr(10000, 0.05),
+            \position.kr(0.8, 0.05).clip(0, 1), \spread.kr(0.15, 0.05).clip(-1, 1),
+            \mix.kr(0.33, 0.05).clip(0, 1), \highdamp.kr(6, 0.05), \lowdamp.kr(0, 0.05),
+            \modfreq.kr(0.2, 0.05), \spin.kr(1, 0.05), \wander.kr(0.25, 0.05), \on.kr(1)));
+    }).writeDefFile(dir);
+
     // ---- High-pass insert: 12 or 24 dB/oct Butterworth ----
     SynthDef(("mixerProHP" ++ numChannels).asSymbol, {
         arg in=0, out=0;

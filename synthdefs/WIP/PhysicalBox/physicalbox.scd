@@ -11,7 +11,7 @@
 // A and preset B. The Material pad moves material (x) and excite + listen
 // (y: waveguide at the bottom, modal body at the top).
 //
-// Needs DynGen (EEL2) and mi-UGens (MiVerb) in the user extensions.
+// Needs DynGen (EEL2) and the synthdefs/Oceanode classes in the class library.
 (
 var dir = PathName(thisProcess.nowExecutingPath).pathOnly;
 var guiOnly = "PB_GUI_TEST".getenv.notNil;
@@ -203,7 +203,7 @@ if(guiOnly) {
 		}).add;
 		SynthDef(\pbSpace, {|in, out = 0, mix = 0.25|
 			var sig = In.ar(in, 2);
-			sig = MiVerb.ar(sig, 0.8, mix, 0.5, 0.05, 0, 0.7);
+			sig = OceanodeMicroSpace.ar(sig, 0.8 * (100/1.2), 0.7, -0.6, -6, 0.8, mix);
 			Out.ar(out, Limiter.ar(sig, 0.95));
 		}).add;
 		s.sync;

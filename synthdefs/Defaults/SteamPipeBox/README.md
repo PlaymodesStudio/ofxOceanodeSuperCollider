@@ -8,9 +8,10 @@ audio cables and scheduled timeline notes. Auto/Gated/Drone follows the other bo
 The window supplies the shared snapshot bar and manager, right-click value entry,
 publishing, timelines and modulation, a draggable Steam ADSR, dynamic envelopes,
 LFOs, external modulation inputs, a routing matrix and the optional MixerPro
-saturation/EQ/echo/reverb inserts. Added modulation sources and insert effects
-start disabled. Original tempo delay and R66 controls are in **Original FX**;
-they retain their imported settings independently of the extra box inserts.
+saturation/EQ/echo inserts and MicroSpace reverb. Added modulation sources and insert effects
+start disabled. The original-effects stage (post-mix gain/saturation, tempo
+delay and R66) and its Original FX panel have been removed. Imported delay/R66
+settings are ignored; voice controls and snapshots remain available.
 **Panning** follows the box-series speaker editor: Spread with Center, one voice
 per Channel, or Manual positions (drag a voice; Shift snaps it onto a speaker).
 The view shows base rings and live Pan modulation dots. More than two outputs
@@ -38,7 +39,7 @@ For standalone SuperCollider, install that folder's `.sc` and `.scx` in its
 Extensions folder. The class also ships with the bundled headless compiler.
 
 Evaluate `steampipeBox.scd` after loading the class. It writes `SteamPipeBoxVoice`,
-`SteamPipeBoxGate1..16`, `SteamPipeBoxSpread1..16` and `SteamPipeBoxOriginal1..16` into
+`SteamPipeBoxGate1..16` and `SteamPipeBoxSpread1..16` into
 `CompiledSynthdefs/SteamPipeBox`. Compile the shared Defaults `Modulation`,
 `MixerPro/mixerpro.scd` if needed. Rebuild Oceanode
 for the registered C++ node; manually maintained source lists must include
@@ -49,22 +50,17 @@ for the registered C++ node; manually maintained source lists must include
 Each voice contains its own noise generator, steam envelope, tuned fractional
 delay, optional allpass delay, asymmetric saturation, MW HP/LP filters and
 feedback damping. Its output continues to ring after the steam envelope closes.
-The original gain/saturator is after voice mixing, followed by tempo delay and
-R66. The original effects run independently per speaker pair for multichannel
-output. The separate MixerPro inserts follow them.
+The spreader feeds the optional saturation, EQ, echo and MicroSpace inserts.
+No original-effects synth is created after voice mixing.
 
-Both acoustic feedback loops and the original effects execute **per sample**
-in native C++ UGens. There is no LocalIn/LocalOut or audio-bus feedback inside
-a physical loop, and no DynGen/JIT dependency. Identical direct-kernel renders
-at block sizes 1, 64 and 256 are required by the render test.
+The acoustic feedback loops execute **per sample** in native C++ UGens.
+There is no LocalIn/LocalOut or audio-bus feedback inside a physical loop, and
+no DynGen/JIT dependency. Identical direct-kernel renders at block sizes 1,
+64 and 256 are required by the render test.
 
 This is a structural reconstruction, **not a verified audio-identical clone**.
-The original graph, parameter ranges and snapshot values are retained, including
-reversed ranges, switch input selection, two-frame button states, both axes of
-XY controls, snapshot isolation and R66's independent channel bypass switches.
-The delay LFO feeds pitch before P2D, as wired in the recovered Primary graph.
-The delay step time is `240 / BPM / 16 * steps` seconds. R66 preserves the
-recovered early/late delay pitches, diffuser coefficients and cross-coupling.
+Recovered voice parameter ranges and snapshot values are retained. The pipe's
+internal delay LFO feeds pitch before P2D, as wired in the Primary graph.
 
 The default **Original ADSR** uses Reaktor's linear attack, exponential decay and
 release, velocity peak, continuation on retrigger, and pitch-dependent time
@@ -79,26 +75,21 @@ conversion follows the interpolated exponential table. Delay interpolation is
 linear; Diffuser Delay retains its additional sample of state delay. Feedback
 keytracking is `(pitch - 60) * amount`: the stored -60 Constant was renamed
 "0" in the ensemble, so the numeric field, rather than its display label, must
-be decoded. The feedback time conversion has no 0.1 Hz floor. R66 damping
-uses its stored 112-pitch shelf constant, whose label says 96. Voice
-outputs are summed through a linear distributor before the original gain and
-saturator, with no voice-count normalization.
+be decoded. The feedback time conversion has no 0.1 Hz floor. Voice
+outputs are summed through the speaker distributor with no voice-count normalization.
 
 Gate, velocity, pitch and native parameters use an unsmoothed control-to-audio
 converter. A rising gate therefore latches the requested velocity immediately,
 instead of a small fraction at the start of a K2A ramp. Positive changes of the
 manual gate level deliver a new gate event, so dragging the slider upward does
 not retain the tiny velocity from the first mouse movement. Audio-cable gate
-levels remain latched at onset. Preset updates to the original effects are sent
-as one control message after startup too.
+levels remain latched at onset.
 
 `primary_test.py` checks all 60,000 ADSR samples at pitches 36/60/84 against hashes
 captured from the installed Reaktor 6.5 engine, plus 20 filter coefficient pairs:
 all match exactly. This verifies those primitives and note sequences, not the
-entire SteamPipe output. Full ensemble A/B recordings remain unverified. R66
-shelves/random modulation and the delay Core filter remain approximations;
-panning uses a deterministic per-voice spread rather than Reaktor's randomizer
-state. Delay buffers start empty. The old `Source/PhysicalModelling/steamPipe`
+entire SteamPipe output. Full ensemble A/B recordings remain unverified;
+panning uses a deterministic per-voice spread rather than Reaktor's randomizer state. The old `Source/PhysicalModelling/steamPipe`
 and lowercase compatibility SynthDef are retired; `steampipeBox` is the sole
 SteamPipe instrument.
 
@@ -122,12 +113,12 @@ The additional **Reaktor SteamPipe 2 - Bank 1** contains all 87 native V2
 instrument presets, in original slot order, and enables SteamPipe 2 mode.
 
 These are translations of the supported synthesis controls: Space Master
-Deluxe is approximated with R66, while the source voice modes, glide and arp
+Deluxe settings are retained as import data; the source voice modes, glide and arp
 remain unimplemented. Original Space Master and voice settings are retained
 in `steampipe2-source.json` for future work. V2 noise filters, envelope and
 saturator retain this port's existing implementations; the switch is not a
-complete V2 engine replacement. Imported V2 presets disable the original tempo
-delay, which is absent from that source patch.
+complete V2 engine replacement. The removed original-effects settings remain
+only in the source capture for reference.
 
 ## Snapshots and regeneration
 

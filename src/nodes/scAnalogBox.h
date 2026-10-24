@@ -21,7 +21,7 @@
 //    a random value per note, external inputs and the voice index, routed to
 //    13 targets by a matrix (and any other control: right-click, Modulate).
 //  • Effects after the voices, at the speaker count: sine shaper, saturation,
-//    ring modulator, frequency shifter, chorus, EQ, echo, SpaceMaster reverb (each created the
+//    ring modulator, frequency shifter, chorus, EQ, echo, MicroSpace reverb (each created the
 //    first time it is switched on, paused once its tail is over).
 //  • Snapshots and a factory collection, as PolyComb's.
 //

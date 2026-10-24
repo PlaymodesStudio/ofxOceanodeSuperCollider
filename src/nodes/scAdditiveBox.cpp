@@ -30,7 +30,7 @@ float hash01(int salt, int k){
     h ^= h >> 15; h *= 2246822519u; h ^= h >> 13; h *= 3266489917u; h ^= h >> 16;
     return (h & 0xFFFFFF) / float(0x1000000);
 }
-const char* fxDefBase[3] = {"graphiceq", "Echo", "SpaceMaster"};
+const char* fxDefBase[3] = {"graphiceq", "Echo", "boxMicroSpace"};
 const char* eqBandNames[5] = {"Low", "LoMid", "Mid", "HiMid", "High"};
 
 // Vowel formants (male voice): F1..F3 in Hz, levels in dB, bandwidths in Hz
@@ -1806,13 +1806,13 @@ void scAdditiveBox::sendFxParams(int stage, ofxSCSynth* s){
             s->set("resonance", vec(echoResonance.get()));
             break;
         case FX_REVERB:
-            s->set("size", vec(revSize.get()));
-            s->set("decay", vec(revDecay.get()));
-            s->set("predelay", vec(revPredelay.get()));
-            s->set("lowpass", vec(revLowpass.get()));
-            s->set("mix", vec(revMix.get()));
-            s->set("position", vec(revPosition.get()));
-            s->set("spread", vec(revSpread.get()));
+            s->set("size", revSize.get());
+            s->set("decay", revDecay.get());
+            s->set("predelay", revPredelay.get());
+            s->set("lowpass", revLowpass.get());
+            s->set("mix", revMix.get());
+            s->set("position", revPosition.get());
+            s->set("spread", revSpread.get());
             break;
         default: break;
     }
@@ -3059,7 +3059,7 @@ void scAdditiveBox::drawFxPanel(){
     if(!fxOn[FX_ECHO]) ImGui::EndDisabled();
 
     ImGui::TableNextColumn();
-    header(FX_REVERB, "Reverb (SpaceMaster)");
+    header(FX_REVERB, "Reverb (MicroSpace)");
     if(!fxOn[FX_REVERB]) ImGui::BeginDisabled();
     sliderFloat(revSize, "%.1f");
     sliderFloat(revDecay, "%.2f s", true);

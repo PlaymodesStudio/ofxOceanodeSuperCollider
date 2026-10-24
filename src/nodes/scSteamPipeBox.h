@@ -67,7 +67,7 @@ private:
         std::function<void(const ofJson&)> load;
         bool discrete = false;
     };
-    enum Stage {StOriginal,StSat,StEq,StEcho,StRvb,NumStages};
+    enum Stage {StSat,StEq,StEcho,StRvb,NumStages};
     struct Fx {ofxSCSynth* synth=nullptr;ofxSCBus* in=nullptr;bool running=false;float offAt=-1;};
     // one group per part, in running order; the effects after the spreader
     enum Slot { SlGate, SlSrc, SlRoute, SlVoice, SlSpread, SlFx, NumSlots = SlFx + NumStages };
@@ -117,7 +117,6 @@ private:
     float labelW=70;
     void drawNativeEnvelope(int,float);
     void drawSoundTab(float);
-    void drawOriginalFx(float);
     void drawHeader();
     bool droning() const;
     void sliderInt(ofParameter<int>&,const char*,float);

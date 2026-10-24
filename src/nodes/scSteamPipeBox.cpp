@@ -47,7 +47,7 @@ ofJson blend(const ofJson& a, const ofJson& b, float t, bool sw, bool discrete) 
 
 scSteamPipeBox::scSteamPipeBox(std::vector<serverManager*> s) : scNode("steampipeBox"), servers(std::move(s)) {
     description = "SteamPipe physical modelling: steam exciter, tuned pipe feedback, diffuser, "
-                  "MW filters, original tempo delay and R66. Includes the recovered Reaktor snapshots, "
+                  "MW filters and MicroSpace reverb. Includes the recovered Reaktor snapshots, "
                   "dynamic envelopes, LFOs, routing and box effects. Gate Mode Pulse plays the voices by itself, "
                   "from a clock to a Geiger counter. Right-click controls to publish or automate.";
 }
@@ -117,6 +117,9 @@ void scSteamPipeBox::setup() {
 
     const auto firstSnapshot=ofJson::parse(steamPipeBoxData::factory)[0]["values"];
     for(const auto& item : ofJson::parse(steamPipeBoxData::controls)) {
+        // Imported preset data retains these keys; the removed post-mix
+        // delay/R66 stage no longer registers or publishes their controls.
+        if(item["group"] == "R66" || item["group"] == "Delay" || item["sc"] == "gain") continue;
         auto c = std::make_unique<SoundControl>();
         c->p.set(item["name"].get<std::string>(), firstSnapshot[item["name"].get<std::string>()].get<float>(), item["min"].get<float>(), item["max"].get<float>());
         c->sc = item["sc"].get<std::string>(); c->group = item["group"].get<std::string>();
@@ -608,7 +611,6 @@ void scSteamPipeBox::drawWindow() {
         tab("LFOs",[this](float tw){mod.drawLfos(tw);});
         tab("Routing",[this](float tw){mod.drawRouting(tw);});
         tab("Panning",[this](float tw){drawPanTab(tw);});
-        tab("Original FX",[this](float tw){drawOriginalFx(tw);});
         tab("Effects",[this](float tw){drawFxTab(tw);});
         ImGui::EndTabBar();
     }
@@ -714,13 +716,11 @@ void scSteamPipeBox::routeChain(State& st) {
 }
 
 bool scSteamPipeBox::stageOn(int s) const {
-    if(s==StOriginal) return true;
     return s == StSat ? satOn.get() : s == StEq ? eqOn.get() : s == StEcho ? echoOn.get() : rvbOn.get();
 }
 
 std::string scSteamPipeBox::stageDef(int s) const {
-    if(s==StOriginal) return "SteamPipeBoxOriginal"+ofToString(channels.get());
-    static const char* names[NumStages] = {"SteamPipeBoxOriginal", "mixerProSat", "mixerProEQ", "mixerProEcho", "mixerProRvb"};
+    static const char* names[NumStages] = {"mixerProSat", "mixerProEQ", "mixerProEcho", "boxMicroSpace"};
     return names[s] + ofToString(channels.get());
 }
 
@@ -742,12 +742,6 @@ float scSteamPipeBox::stageTail(int s) const {
 void scSteamPipeBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     if(!x) return;
     scSynthControlBatch controls(x, server);
-    if(s==StOriginal) {
-        controls.set("bpm",bpm);
-        for(const auto& c:sound) if(c->group=="R66" || c->group=="Delay" || c->sc=="gain") controls.set(c->sc,c->p.get());
-        controls.send();
-        return;
-    }
     const float on = stageOn(s) ? 1.0f : 0.0f;
     if(s == StSat){
         controls.set("drive",satDrive.get());controls.set("bias",satBias.get());controls.set("tone",satTone.get());
@@ -903,7 +897,7 @@ void scSteamPipeBox::drawFxTab(float w) {
     slider(rvbWander, "Wander", cw, "%.2f");
     if(!rvbOn.get()) ImGui::EndDisabled();
     ImGui::EndGroup();
-    ImGui::TextColored(ImColor(pal::textDim), "Pipe voices -> original delay / R66 -> Saturation -> EQ -> Echo -> Reverb.");
+    ImGui::TextColored(ImColor(pal::textDim), "Pipe voices -> Saturation -> EQ -> Echo -> Reverb.");
 }
 
 void scSteamPipeBox::drawNativeEnvelope(int e,float w) {
@@ -1179,15 +1173,6 @@ void scSteamPipeBox::drawPanTab(float w) {
             ImGui::SetTooltip("Voice %d at %.2f (now %.2f)\nDrag to place it (Shift: onto a speaker)", hoverVoice + 1, base[hoverVoice], live(hoverVoice));
     }
     ImGui::EndGroup();
-}
-
-void scSteamPipeBox::drawOriginalFx(float w) {
-    const float cw=colW(w,2);ImGui::BeginGroup();
-    for(int i=0;i<2;++i) {
-        if(i) nextCol();sectionHeader(i?"R66 Reverb":"Tempo Delay",cw);labelW=130;
-        for(auto& c:sound) if(c->group==(i?"R66":"Delay")) drawCompactControl(*c,cw,c->p.getName().substr(i?4:6));
-    }
-    ImGui::EndGroup();labelW=70;
 }
 
 void scSteamPipeBox::drawCompactControl(SoundControl& c,float w,const std::string& label) {

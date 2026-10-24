@@ -803,7 +803,7 @@ float scFMBox::stageOn(int s) const {
 }
 
 std::string scFMBox::stageDef(int s) const {
-    static const char* names[NumStages] = {"mixerProSat", "mixerProEQ", "mixerProEcho", "mixerProRvb"};
+    static const char* names[NumStages] = {"mixerProSat", "mixerProEQ", "mixerProEcho", "boxMicroSpace"};
     return names[s] + ofToString(channels.get());
 }
 

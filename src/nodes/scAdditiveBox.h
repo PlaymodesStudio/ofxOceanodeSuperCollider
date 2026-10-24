@@ -297,7 +297,7 @@ private:
     void controlMenuItems(const std::string& key, const char* title = nullptr);
     bool notInPresets(const std::string& key) const;
 
-    // ── FX: EQ -> Echo -> Reverb (graphiceq<O>, Echo<O>, SpaceMaster<O>, the
+    // ── FX: EQ -> Echo -> Reverb (graphiceq<O>, Echo<O>, boxMicroSpace<O>, the
     // same synths and controls as GrainBox) between the voices and the output
     // synth; a stage that is off runs no synth ──────────────────────────────
     std::string fxDefName(int stage) const;

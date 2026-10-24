@@ -9,7 +9,7 @@
 //   from an earlier one) + ABNoise + ABRing -> ABFilter (1..4: in series,
 //   each into the next, or in parallel, summed) -> ABAmp
 //   -> PolyCombSpread<C> -> [ABFxShaper, mixerProSat, ABFxRing, ABFxShift, ABFxChorus,
-//   mixerProEQ, mixerProEcho, mixerProRvb <C>]
+//   mixerProEQ, mixerProEcho, boxMicroSpace <C>]
 //
 // Modulation arrives on control buses, one per target, each 16 channels (N
 // used): \mpitch \mslave \mpw \mskew \mround \mfm \mnoise \mcut \mres \mdrive

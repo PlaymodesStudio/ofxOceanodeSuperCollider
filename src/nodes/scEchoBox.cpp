@@ -80,7 +80,7 @@ std::string beatsLabel(float beats) {
 scEchoBox::scEchoBox(std::vector<serverManager*> s) : scNode("EchoBox"), servers(std::move(s)) {
     description = "Multi-tap echo: each tap with its own time (ms or beats), feedback, filter, diffusion that grows "
                   "with every repeat, saturation, shimmer, ping-pong across the channels, wow and freeze; then "
-                  "SpaceMaster reverb on the echoes and ducking. Show opens the editor with the echo map; "
+                  "MicroSpace reverb on the echoes and ducking. Show opens the editor with the echo map; "
                   "right-click a control there to publish it to the node.";
 }
 
@@ -412,7 +412,7 @@ void scEchoBox::routeWet(ServerState& st) {
 void scEchoBox::updateReverb(ofxSCServer* server, ServerState& st) {
     if(rvbOn.get()){
         if(!st.rvb && st.mix){
-            st.rvb = new ofxSCSynth("mixerProRvb" + ofToString(n()), server);
+            st.rvb = new ofxSCSynth("boxMicroSpace" + ofToString(n()), server);
             sendRvb(st.rvb);
             st.rvb->set("in", st.wetA ? st.wetA->index : 0);
             st.rvb->set("out", st.wetB ? st.wetB->index : 0);
@@ -485,7 +485,7 @@ void scEchoBox::rebuildChannels() {
                 s->set("in", st.inBus); s->set("out", st.wetA ? st.wetA->index : 0);
                 s->set("vis", st.vis ? st.vis->index + t : 0); sendTap(s, t); setModArgs(server, st, s, t);
             }, getActive());
-        replace(st.rvb, "mixerProRvb" + ofToString(n()), [&](ofxSCSynth* s){ sendRvb(s); }, getActive() && st.rvbRunning);
+        replace(st.rvb, "boxMicroSpace" + ofToString(n()), [&](ofxSCSynth* s){ sendRvb(s); }, getActive() && st.rvbRunning);
         replace(st.mix, "EchoBoxMix" + ofToString(n()), [&](ofxSCSynth* s){
             s->set("in", st.inBus); s->set("out", st.outBus); s->set("vis", st.vis ? st.vis->index + MAX_TAPS : 0); sendMix(s);
             setModArgs(server, st, s, 0);

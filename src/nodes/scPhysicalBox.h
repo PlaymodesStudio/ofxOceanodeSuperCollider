@@ -25,7 +25,7 @@
 // into a waveguide (string <> tube) and a modal body (bar .. membrane),
 // coupled, with rattle / tension / cascade and two pickups. Around the voices
 // the shared modular parts: ModGate / Mod sources / routes (per voice), the
-// stereo-pickup spreader, the effects (MixerPro's + MiVerb's Space).
+// stereo-pickup spreader, the effects (MixerPro inserts + MicroSpace's Space).
 class scPhysicalBox : public scNode {
     scKeyboardPiano keyboardPiano;
 public:

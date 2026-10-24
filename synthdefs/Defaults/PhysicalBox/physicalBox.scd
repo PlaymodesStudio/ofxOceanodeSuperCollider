@@ -19,7 +19,7 @@
 //                      i at \pan[i] + \mpan, its pickups \width apart (0..1);
 //                      the PolyCombSpread placement (more than 2: a ring, or
 //                      \line 1 a line) and level compensation.
-//   PhysicalBoxSpace<C>   MiVerb (Mutable Instruments' Clouds / Rings reverb) on
+//   PhysicalBoxSpace<C>   MicroSpace reverb on
 //                      the C channels (pairs for C > 2): \mix \time \damp \hp
 //                      \diff \freeze, \on crossfades it out (the node pauses it).
 (
@@ -100,14 +100,15 @@ SynthDef(\PhysicalBoxVoice, {
         var dry = In.ar(\in.kr(0), c).asArray;
         var on = \on.kr(1).lag(0.05);
         var mix = \mix.kr(0.25).clip(0, 1) * on;
-        var stereo = case
-            { c == 1 } { [dry[0], dry[0]] }
-            { c == 2 } { dry }
-            { [dry.select({ |x, i| i.even }).sum, dry.select({ |x, i| i.odd }).sum] * (2 / c).sqrt };
-        var wet = MiVerb.ar(stereo, \time.kr(0.8).clip(0, 1.2), 1, \damp.kr(0.5).clip(0, 1),
-            \hp.kr(0.05).clip(0, 1), \freeze.kr(0), \diff.kr(0.7).clip(0, 1));
-        var back = c.collect { |i| if(c == 1) { wet.sum * 0.5 } { wet[i % 2] } };
-        Out.ar(\out.kr(0), dry * (1 - mix) + (back * mix));
+        var freeze = \freeze.kr(0).clip(0, 1);
+        var feed = dry * on * (1 - freeze);
+        var wet = OceanodeMicroSpace.ar(feed,
+            (\time.kr(0.8).clip(0, 1.2) * (100/1.2)),
+            \diff.kr(0.7).clip(0, 1),
+            \hp.kr(0.05).clip(0, 1) * -12,
+            \damp.kr(0.5).clip(0, 1) * -12,
+            0.8, 1, nil, freeze);
+        Out.ar(\out.kr(0), dry * (1 - mix) + (wet * mix));
     }).writeDefFile(dir);
 };
 "PhysicalBox SynthDefs written to ".post; dir.postln;

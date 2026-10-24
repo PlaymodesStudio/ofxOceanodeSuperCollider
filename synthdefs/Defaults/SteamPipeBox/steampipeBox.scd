@@ -1,4 +1,4 @@
-// SteamPipeBox: sample-level pipe and original effects in OceanodeSteamPipe, shared box modulation.
+// SteamPipeBox: sample-level pipe in OceanodeSteamPipe, shared box modulation.
 // Evaluate this file; requires the OceanodeSteamPipe extension. No running server needed.
 (
 var here=thisProcess.nowExecutingPath.dirname;
@@ -109,44 +109,5 @@ SynthDef(\SteamPipeBoxVoice, {
     Out.ar(\out.kr(0),Sanitize.ar(sig[0])*amp*\master.kr(1,0.02)*\normalization.kr(1));
     Out.kr(\vis.kr(0)+(voice*6),[A2K.kr(pitch).midicps,0,A2K.kr(sig[1]),Amplitude.kr(sig[0]),0,0]);
 }).writeDefFile(dir);
-(1..16).do { |n|
-    SynthDef(("SteamPipeBoxOriginal"++n).asSymbol, {
-        var input=In.ar(\in.kr(0),n).asArray;
-        var params=[
-            \gain, SteamPipeStep.ar(\gain.kr(-3.3070878982543945)),
-            \bpm, SteamPipeStep.ar(\bpm.kr(120)),
-            \delay_left_steps, SteamPipeStep.ar(\delay_left_steps.kr(4.000000044703484)),
-            \delay_stereo_difference, SteamPipeStep.ar(\delay_stereo_difference.kr(0.0007874015836030479)),
-            \delay_right_steps, SteamPipeStep.ar(\delay_right_steps.kr(3.0000001043081284)),
-            \delay_decay, SteamPipeStep.ar(\delay_decay.kr(84.26771759986877)),
-            \delay_cutoff, SteamPipeStep.ar(\delay_cutoff.kr(120.0)),
-            \delay_resonance, SteamPipeStep.ar(\delay_resonance.kr(0.1531800047528744)),
-            \delay_mix, SteamPipeStep.ar(\delay_mix.kr(0.25590550899505615)),
-            \delay_bypass, SteamPipeStep.ar(\delay_bypass.kr(0)),
-            \r66_predelay, SteamPipeStep.ar(\r66_predelay.kr(7.5590550899505615)),
-            \r66_spread, SteamPipeStep.ar(\r66_spread.kr(0.2799999713897705)),
-            \r66_size, SteamPipeStep.ar(\r66_size.kr(12.75590568780899)),
-            \r66_lp, SteamPipeStep.ar(\r66_lp.kr(144)),
-            \r66_high_damp, SteamPipeStep.ar(\r66_high_damp.kr(3.0708662420511246)),
-            \r66_low_damp, SteamPipeStep.ar(\r66_low_damp.kr(0)),
-            \r66_frequency, SteamPipeStep.ar(\r66_frequency.kr(0.5511810779571533)),
-            \r66_dizzy, SteamPipeStep.ar(\r66_dizzy.kr(0.28346458077430725)),
-            \r66_spin, SteamPipeStep.ar(\r66_spin.kr(0.5511810779571533)),
-            \r66_rt, SteamPipeStep.ar(\r66_rt.kr(25.51181137561798)),
-            \r66_position, SteamPipeStep.ar(\r66_position.kr(0.5039370059967041)),
-            \r66_left_on, SteamPipeStep.ar(\r66_left_on.kr(1)),
-            \r66_right_on, SteamPipeStep.ar(\r66_right_on.kr(1)),
-            \r66_mix, SteamPipeStep.ar(\r66_mix.kr(0.15748031437397003))
-        ];
-        var output=Array.new;
-        ((n+1).div(2)).do { |pair|
-            var left=pair*2, right=(left+1).min(n-1);
-            var result=SteamPipeOriginal.ar(SteamPipeOriginal.parameterNames.collect {|key| params[params.indexOf(key)+1]},input[left],input[right]);
-            output=output.add(Sanitize.ar(result[0]));
-            if(right!=left) {output=output.add(Sanitize.ar(result[1]))};
-        };
-        Out.ar(\out.kr(0),output);
-    }).writeDefFile(dir);
-};
 "SteamPipeBox compiled (OceanodeSteamPipe)".postln;
 )

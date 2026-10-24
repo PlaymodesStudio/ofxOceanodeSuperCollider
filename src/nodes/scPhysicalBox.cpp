@@ -322,7 +322,7 @@ void scPhysicalBox::setup() {
         dropdowns.set(speakerLayout.getEscapedName(), {"Ring", "Line"});
     }
 
-    // ── Effects: MixerPro's inserts, then MiVerb ─────────────────────────────
+    // ── Effects: shared inserts, then MicroSpace ─────────────────────────────
     auto toStages = [this]() { for(auto& [sv, st] : states) if(st.created) updateStages(sv, st); };
     satOn.set("Saturation On", false);                      reg(satOn, toStages);
     satDrive.set("Saturation Drive", 6.0f, 0.0f, 36.0f);    reg(satDrive, [this](){ sendStageAll(StSat); });
@@ -373,7 +373,7 @@ void scPhysicalBox::setup() {
     for(auto* p : {&rvbMix, &rvbDecay, &rvbSize, &rvbPredelay, &rvbLate, &rvbSpread, &rvbLowpass,
                    &rvbHiDamp, &rvbLoDamp, &rvbModRate, &rvbSpin, &rvbWander})
         reg(*p, [this]() { sendStageAll(StRvb); });
-    // Space: MiVerb, on by default (the prototype's room)
+    // Space: MicroSpace, on by default (the prototype's room)
     spaceOn.set("Space On", true);                   reg(spaceOn, toStages);
     spaceMix.set("Space Mix", 0.25f, 0.0f, 1.0f);    reg(spaceMix, [this](){ sendStageAll(StSpace); });
     spaceTime.set("Space Time", 0.8f, 0.0f, 1.2f);   reg(spaceTime, [this](){ sendStageAll(StSpace); });
@@ -654,7 +654,7 @@ bool scPhysicalBox::stageOn(int s) const {
     }
 }
 std::string scPhysicalBox::stageDef(int s) const {
-    static const char* names[NumStages] = {"mixerProSat", "mixerProEQ", "mixerProEcho", "mixerProRvb", "PhysicalBoxSpace"};
+    static const char* names[NumStages] = {"mixerProSat", "mixerProEQ", "mixerProEcho", "boxMicroSpace", "PhysicalBoxSpace"};
     return names[s] + ofToString(channels.get());
 }
 float scPhysicalBox::echoDelaySec() const {
@@ -1815,9 +1815,9 @@ void scPhysicalBox::drawFxTab(float w) {
     if(!rvbOn.get()) ImGui::EndDisabled();
     nextCol();
     sectionHeader("Space", cw, &spaceOn, pal::pickup,
-        "MiVerb, the reverb of Mutable Instruments' Clouds and Rings: a lush, diffuse space, the last effect, on by default.\n\n"
-        "Mix: dry / space. Time: how long it lasts. Damp: the highs dying in it. Diffusion: smeared (high) or grainy (low).\n"
-        "Low Cut: keeps the lows out of it. Freeze: holds the current space forever (a pad from what is playing).", physIcons::Space);
+        "MicroSpace: a diffuse space, the last effect, on by default.\n\n"
+        "Mix: dry / space. Time: how long it lasts. Damp: the highs dying in it. Diffusion: tank modulation depth.\n"
+        "Low Cut: attenuates the low shelf. Freeze: holds the current space forever (a pad from what is playing).", physIcons::Space);
     if(!spaceOn.get()) ImGui::BeginDisabled();
     slider(spaceMix, "Mix", cw, "%.2f");
     slider(spaceTime, "Time", cw, "%.2f");
