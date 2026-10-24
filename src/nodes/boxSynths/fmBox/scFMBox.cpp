@@ -122,7 +122,12 @@ void scFMBox::setup() {
         add(f.name,f.sc,"Global",f.initial,0,f.max,discrete);
     }
     add("FM Amount","mod_scale","Global",1,0,10);
+    add("Matrix Model","matrix_model","Global",0,0,1,true);
+    dropdowns.set(soundParam("matrix_model").getEscapedName(),{"DX7","Raw FM"});
     add("Envelope Time","env_time","Global",1,0.01f,20);
+    add("Envelope Model","env_model","Global",0,0,1,true);
+    add("Envelope Curve","env_curve","Global",-4,-8,8);
+    dropdowns.set(soundParam("env_model").getEscapedName(),{"DX7","Seconds"});
     add("Width","stereo","Global",0,0,1);
     dropdowns.set(soundParam("algorithm").getEscapedName(),[](){std::vector<std::string> n;for(int k=1;k<=32;++k)n.push_back("Algorithm "+ofToString(k));return n;}());
     dropdowns.set(soundParam("lfo_wave").getEscapedName(),{"Triangle","Saw down","Saw up","Square","Sine","Sample & hold"});
@@ -132,6 +137,8 @@ void scFMBox::setup() {
             const std::string field=f.sc;
             add(name+f.name,sc+f.sc,"Operators",f.initial,0,f.max,field=="mode"||field=="left_curve"||field=="right_curve");
         }
+        for(int k=0;k<4;++k)
+            add(name+"Seconds "+ofToString(k+1),sc+"seconds"+ofToString(k),"Operators",0.1f,0.00001f,20);
         dropdowns.set(soundParam(sc+"mode").getEscapedName(),{"Ratio","Fixed Hz"});
         for(const char* side:{"left_curve","right_curve"}) dropdowns.set(soundParam(sc+side).getEscapedName(),{"-Linear","-Exponential","+Exponential","+Linear"});
         add(name+"Mix","mix"+ofToString(op),"Matrix",scDX7::algorithms[0][36+op],0,1);
@@ -1040,8 +1047,11 @@ void scFMBox::drawDX7Global(float w) {
     };
     ImGui::BeginGroup();section("DX7 Engine",0);
     control("algorithm","Algorithm (resets routes)");control("feedback","Feedback");control("transpose","Transpose (24 = no shift)");control("osc_sync","Osc Sync");
+    control("matrix_model","Matrix model");
     slider(soundParam("mod_scale"),"FM Amount",cw,"%.3f");slider(soundParam("env_time"),"Env Time",cw,"%.3fx",true);slider(soundParam("stereo"),"Width",cw,"%.3f");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("0: voices centered (both stereo channels). 1: voices spread across the outputs.\nAt full width, the first keyboard voice plays on channel 1.");
+    control("env_model","Envelope model");
+    if(soundParam("env_model").get()>.5f)slider(soundParam("env_curve"),"EG Curve",cw,"%.2f");
     section("Native DX7 LFO",1);
     control("lfo_wave","Wave");control("lfo_speed","Speed");control("lfo_delay","Delay");control("lfo_sync","Sync");
     control("lfo_pmd","Pitch Depth");control("lfo_pms","Pitch Sens");control("lfo_amd","Amp Depth");
@@ -1054,9 +1064,10 @@ void scFMBox::drawMatrix(float w) {
     const float z=zoom();
     w=std::max(w,1060*z);
     const int algorithm=std::clamp(int(std::round(soundParam("algorithm").get())),0,31);
-    ImGui::Text("Algorithm %d",algorithm+1);
+    const bool raw=soundParam("matrix_model").get()>.5f;
+    ImGui::Text(raw?"Raw FM / diagonal feedback":"Algorithm %d",algorithm+1);
     ImGui::PushTextWrapPos();
-    ImGui::TextDisabled("Send down a column, receive across a row. Drag a junction up/down; double-click to type. Zero removes a route. Amber marks the DX7 feedback route.");
+    ImGui::TextDisabled("Send down a column, receive across a row. Drag a junction up/down; double-click to type. Zero removes a route. Amber marks routes scaled by Feedback.");
     ImGui::PopTextWrapPos();
     slider(soundParam("mod_scale"),"FM Amount",std::min(w,310*z),"%.3f");
     if(w>=650*z)ImGui::SameLine(0,20*z);
@@ -1119,7 +1130,7 @@ void scFMBox::drawMatrix(float w) {
         if(ImGui::DragFloat("##amount",&v,max==1?.005f:.01f,0,max,"%.2f",ImGuiSliderFlags_AlwaysClamp|ImGuiSliderFlags_Vertical))p=v;
         ImGui::PopStyleVar();ImGui::PopStyleColor(2);
         if(feedback)dl->AddRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax(),IM_COL32(245,187,115,200),0,0,1.5f*z);
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%.3f | Drag vertically, double-click to type; 0 disconnects.\nRight-click: publish, modulation and timeline.%s",tooltip,p.get(),feedback?"\nSelected algorithm's feedback route (scaled by Feedback).":"");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%.3f | Drag vertically, double-click to type; 0 disconnects.\nRight-click: publish, modulation and timeline.%s",tooltip,p.get(),feedback?"\nFeedback-scaled route.":"");
         mark(key);menu(key);ImGui::PopID();
     };
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(4*z,3*z));
@@ -1127,7 +1138,7 @@ void scFMBox::drawMatrix(float w) {
         auto center=point(src,dst);
         if(src==dst)center.y+=cell*.39f;
         const auto label="Operator "+ofToString(src+1)+" -> Operator "+ofToString(dst+1)+(src==dst?" (self-feedback)":"");
-        amountCell(soundParam("fm"+ofToString(dst)+"_"+ofToString(src)),center,4,label.c_str(),dst*6+src==scDX7::feedbackCell[algorithm]);
+        amountCell(soundParam("fm"+ofToString(dst)+"_"+ofToString(src)),center,4,label.c_str(),(raw?dst==src:dst*6+src==scDX7::feedbackCell[algorithm]));
     }
     for(int op=0;op<6;++op) {
         const auto label="Operator "+ofToString(op+1)+" -> audio output";
@@ -1151,7 +1162,7 @@ void scFMBox::drawMatrix(float w) {
     ImGui::BeginGroup();ImGui::PushID("sliders");
     const float matrixW=w-extent-gutter;
     sectionHeader("Routing Matrix",matrixW);
-    ImGui::TextDisabled("Columns send to rows; OUT sets the direct mix.");
+    ImGui::TextDisabled(raw?"Raw coefficients; OUT sets the direct mix.":"DX7 units (1 = 4pi); OUT sets the direct mix.");
     if(ImGui::BeginTable("##fmSliders",7,ImGuiTableFlags_Borders|ImGuiTableFlags_SizingStretchSame,ImVec2(matrixW,0))) {
         ImGui::TableSetupColumn("To / From",ImGuiTableColumnFlags_WidthFixed,66*z);
         for(int src=0;src<6;++src)ImGui::TableSetupColumn(ofToString(src+1).c_str());
@@ -1164,13 +1175,13 @@ void scFMBox::drawMatrix(float w) {
                 auto& p=soundParam(dst==6?"mix"+ofToString(src):"fm"+ofToString(dst)+"_"+ofToString(src));
                 const auto key=p.getEscapedName();ImGui::PushID(key.c_str());
                 ImGui::SetNextItemWidth(-1);
-                const bool feedback=dst<6&&dst*6+src==scDX7::feedbackCell[algorithm];
+                const bool feedback=dst<6&&(raw?dst==src:dst*6+src==scDX7::feedbackCell[algorithm]);
                 if(feedback)ImGui::PushStyleColor(ImGuiCol_FrameBg,ImVec4(.22f,.16f,.11f,1));
                 float v=p.get();if(ImGui::SliderFloat("##amount",&v,0,dst==6?1.f:4.f,"%.2f",ImGuiSliderFlags_AlwaysClamp))p=v;
                 if(feedback)ImGui::PopStyleColor();
                 if(ImGui::IsItemHovered()) {
                     if(dst==6)ImGui::SetTooltip("Operator %d -> audio output",src+1);
-                    else ImGui::SetTooltip("Operator %d -> Operator %d%s",src+1,dst+1,feedback?" (DX7 feedback route)":"");
+                    else ImGui::SetTooltip("Operator %d -> Operator %d%s",src+1,dst+1,feedback?" (feedback-scaled route)":"");
                 }
                 mark(key);menu(key);ImGui::PopID();
             }
@@ -1195,9 +1206,10 @@ void scFMBox::drawNativeEnvelope(int op,float w) {
     }
     if(!ImGui::IsMouseDown(0)){draggingPoint=-1;draggingOp=-1;}
     if(draggingOp==op&&draggingPoint>=0&&ImGui::IsItemActive())soundParam(pre+"l"+ofToString(draggingPoint))=ofClamp(99*(1-(ImGui::GetMousePos().y-a.y)/h),0.0f,99.0f);
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("AFX times: 0 fast, 99 slow. L4 starts and ends the envelope; L3 sustains. Drag levels.\nWidths are schematic; actual segment times depend on rates, levels, note and velocity.");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip(soundParam("env_model").get()>.5f?"Times are seconds; Envelope Curve sets every segment. L3 sustains; L4 starts and ends the envelope.":"AFX times: 0 fast, 99 slow. L4 starts and ends the envelope; L3 sustains. Drag levels.\nWidths are schematic; actual segment times depend on rates, levels, note and velocity.");
     labelW=60;
-    for(int k=0;k<4;++k)slider(soundParam(pre+"r"+ofToString(k)),("Time "+ofToString(k+1)).c_str(),w,"%.0f");
+    const bool seconds=soundParam("env_model").get()>.5f;
+    for(int k=0;k<4;++k)slider(soundParam(pre+(seconds?"seconds":"r")+ofToString(k)),("Time "+ofToString(k+1)).c_str(),w,seconds?"%.4f s":"%.0f",seconds);
     for(int k=0;k<4;++k)slider(soundParam(pre+"l"+ofToString(k)),("Level "+ofToString(k+1)).c_str(),w,"%.0f");
     labelW=70;ImGui::EndGroup();ImGui::PopID();
 }

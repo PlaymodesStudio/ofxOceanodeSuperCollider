@@ -58,6 +58,37 @@ The replacement uses `nodeSnapshots/FMBoxDX7` so obsolete snapshots from the
 previous engine are not silently interpreted as DX7 data. Their files remain
 in `nodeSnapshots/FMBox`.
 
+## Migrating SuperFM sounds
+
+The **Matrix Model** selector offers DX7 routing units (the default) and
+**Raw FM** units. Raw FM uses the coefficients directly and applies Feedback
+to all six diagonal cells, preserving SuperFM's matrix semantics.
+**Envelope Model → Seconds** uses explicit per-operator segment times and a
+shared Envelope Curve; the migrated sounds use their original `-4` curve.
+Levels retain the DX7 level scale, with zero representing silence in Seconds
+mode, and velocity scales all operators linearly. Existing DX7 presets retain
+the original envelope and matrix behavior.
+
+`tools/migrate_superfm_to_fmbox.py` converts patch instances and their connected
+controls, creates a shared snapshot bank, and installs the updated FMBox
+SynthDefs. Run it without `--apply` to preview, or with `--stage DIRECTORY` to
+inspect the proposed files. Applying creates a dated backup. The matching test
+renders the original production SynthDefs on the left and FMBox on the right:
+
+```sh
+python3 tools/fmbox/bienal_migration_test.py STAGE --data SHARED_DATA
+```
+
+After applying, use the live data folder as `STAGE`, add `--originals BACKUP`
+and `--report BACKUP/report.json` to compare against the backed-up nodes.
+
+Use the first render's `measurements.json` as the migration's `--calibration`
+argument to match the measured level, then render the staged result again.
+That matches the tested saved input values, rather than promising identical
+output across every possible live carrier mix, pitch or velocity. FMBox has
+DC filtering, native gate alignment and carrier normalization; these can
+produce residual differences. The migration retains all downstream effects.
+
 ## Editor
 
 - **Operators:** ratio/fixed frequency, coarse/fine/detune, operator output,

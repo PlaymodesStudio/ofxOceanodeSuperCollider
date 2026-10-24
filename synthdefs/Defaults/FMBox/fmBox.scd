@@ -103,7 +103,13 @@ SynthDef(\FMBoxVoice, {
             Select.kr(a>b,[rise,decay]).max(0.00001)*timeScale
         });
         var curves=Array.fill(4,{ |k| Select.kr(db.wrapAt(k-1)>db[k],[-3,3]) });
-        var env=EnvGen.kr(Env(([db[3]]++db).neg.dbamp,times,curves,3),A2K.kr(gate>0));
+        var nativeEnv=EnvGen.kr(Env(([db[3]]++db).neg.dbamp,times,curves,3),A2K.kr(gate>0));
+        // Seconds mode keeps explicit stage timing and a uniform curve for
+        // custom FM sounds; DX7 imports continue using their native envelopes.
+        var amplitudes=levels.collect { |level,k| db[k].neg.dbamp*(level>0) };
+        var seconds=Array.fill(4,{ |k| q.("seconds"++k,0.1).max(0.00001)*timeScale });
+        var timedEnv=EnvGen.kr(Env([amplitudes[3]]++amplitudes,seconds,p.(\env_curve,-4),3),A2K.kr(gate>0));
+        var env=Select.kr(p.(\env_model,0)>0.5,[nativeEnv,timedEnv*(vel/127)]);
         var fixed=q.("mode",0)>0.5;
         var coarse=(q.("coarse",1)+m.(("mratio"++op).asSymbol)).clip(0,31);
         var fine=q.("fine",0).clip(0,99);
@@ -120,7 +126,10 @@ SynthDef(\FMBoxVoice, {
     });
     var matrix = Array.fill(6,{ |dst| Array.fill(6,{ |src|
         var amount=p.(("fm"++dst++"_"++src).asSymbol,if((dst==0)and:(src==1),1,0)).clip(0,4);
-        amount*4pi*(p.(\mod_scale,1)+m.(\mscale)).clip(0,10)*Select.kr(((dst*6+src)-fbCell).abs<0.5,[1,fb])
+        var scale=(p.(\mod_scale,1)+m.(\mscale)).clip(0,10);
+        var dx7=amount*4pi*scale*Select.kr(((dst*6+src)-fbCell).abs<0.5,[1,fb]);
+        var raw=amount*scale*if(dst==src,{feedback},{1});
+        Select.kr(p.(\matrix_model,0)>0.5,[dx7,raw])
     }) });
     var carriers=Array.fill(6,{ |op| p.(("mix"++op).asSymbol,if((op==0)or:(op==2),1,0)).clip(0,1) });
     var amp=Select.kr(\vca.kr(0)>0.5,[(1+m.(\mamp)).clip(0,2),m.(\mamp).clip(0,1)]);
