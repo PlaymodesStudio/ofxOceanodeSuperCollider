@@ -1,0 +1,42 @@
+{
+  "format": "polycomb-morph-reference-v1",
+  "description": "Sparse regression states, applied to a fresh default node; not an installed or auditioned demo bank.",
+  "pairs": {
+    "voice_count": {
+      "description": "Same semitone map, four to twelve voices; no additional graph while held at the source.",
+      "from": {"voices": 4, "controls": {"Pitch_External": false, "Osc_Map_Mode": 0, "Osc_Map_Interval": 3.0}},
+      "to": {"voices": 12, "controls": {"Pitch_External": false, "Osc_Map_Mode": 0, "Osc_Map_Interval": 3.0}}
+    },
+    "map_modes_and_inheritance": {
+      "description": "Semitone oscillators with inherited resonators to harmonic oscillators with an independent harmonic resonator map.",
+      "from": {
+        "voices": 4,
+        "controls": {
+          "Pitch_External": false, "Comb_On": true, "Comb_Map_On": false,
+          "Osc_Map_Mode": 0, "Osc_Map_Interval": 3.0, "Osc_Map_Skew": -1.0,
+          "Comb_Map_Transpose": -7.0
+        }
+      },
+      "to": {
+        "voices": 4,
+        "controls": {
+          "Pitch_External": false, "Comb_On": true, "Comb_Map_On": true,
+          "Osc_Map_Mode": 3, "Osc_Map_Interval": 1.0, "Osc_Map_Skew": -1.0,
+          "Osc_Map_Harmonic_Base": 36.0, "Comb_Map_Mode": 3,
+          "Comb_Map_Interval": 1.0, "Comb_Map_Harmonic_Base": 48.0,
+          "Comb_Map_Transpose": 0.0, "Comb_Map_Skew": -1.0
+        }
+      },
+      "quarter": {
+        "root": 60.0,
+        "oscillator": [56.25, 61.5, 65.5048875, 69.0],
+        "resonator": [54.0, 59.25, 63.2548875, 66.75]
+      }
+    },
+    "scale_and_geometry": {
+      "description": "Same User-scale mode with different scale lengths, repeated geometry and voice permutation.",
+      "from": {"voices": 8, "controls": {"Pitch_External": false, "Osc_Map_Mode": 1, "Osc_Map_Interval": 1.0, "Osc_Map_Table": [0.0, 4.0, 7.0], "Osc_Map_Skew": -1.0}},
+      "to": {"voices": 8, "controls": {"Pitch_External": false, "Osc_Map_Mode": 1, "Osc_Map_Interval": 1.0, "Osc_Map_Table": [0.0, 2.0, 3.0, 7.0, 10.0], "Osc_Map_Skew": -1.0, "Osc_Map_Num_Waves": 3.0, "Osc_Map_Invert": true, "Scramble": true}}
+    }
+  }
+}

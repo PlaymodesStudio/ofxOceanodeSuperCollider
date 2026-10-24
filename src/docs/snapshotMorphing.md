@@ -43,7 +43,7 @@ ignore a stored intermediate audio blend.
 
 | Engine | Continuous activation / depth | Parallel mode blending |
 | --- | --- | --- |
-| PolyComb | Temporary voice-count banks; normal idle CPU; see `polyCombVoiceMorphing.md` | Count-dependent voice-bank outputs |
+| PolyComb | Temporary voice-count banks; interpolation of evaluated oscillator/resonator map pitches | Count-dependent voice-bank outputs; inherited/independent resonator tuning |
 | AnalogBox | All insert bypasses, all filter bypasses, sync, frequency-shift sidebands; FM fades from/to zero | FM source signals; echo filter types; free/synced oscillators |
 | PhysicalBox | Saturation, EQ, echo, reverb, space bypasses | Echo filter types |
 | AliasingBox | Shared inserts; internal filter, notch and DC block | Echo filter types |
@@ -56,6 +56,8 @@ ignore a stored intermediate audio blend.
 
 PolyComb snapshot voice counts now use temporary banks, as described in
 `polyCombVoiceMorphing.md`. Other structural counts retain their existing behavior.
+PolyComb pitch-map modes, scales and geometry interpolate their output pitches;
+see `polyCombPitchMorphing.md`. This requires no additional audio bank for maps.
 The shared layer also remains compatible with the other `scSnapshots` hosts.
 Sequencing decisions, sample replacement, voice/oscillator counts, routing,
 retrigger/freeze semantics, AnalogBox filter algorithms/types and other unsupported

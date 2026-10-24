@@ -3,14 +3,18 @@
 Proves the feedback toggle resets off when absent in older snapshots, including
 recall after a saturated patch. Also checks legacy DSP except the intentionally updated Sub/Amp and smoothed pitch/oscillator definitions, covered by render tests.
 """
-import hashlib,json,pathlib,subprocess,tempfile
+import argparse,hashlib,json,pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2];HERE=pathlib.Path(__file__).resolve().parent
 fixture=HERE/'fixtures/MOVING_SAWS.json'
 assert hashlib.sha256(fixture.read_bytes()).hexdigest()=='0650ef23fe5868c2105f059a6b586222e95dc2418da87d6a5cc7176424b25652'
 expected=json.loads((HERE/'fixtures/legacy-definitions.sha256.json').read_text());defs=ROOT/'synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb'
 # Independent sub/vibrato, tremolo and pitch interpolation are covered by audio render tests.
 expected={name:sha for name,sha in expected.items() if not name.startswith(('PCSub','PCAmp','PCPitch','PCFm','PCOsc','PCCombR'))}
-for name,sha in expected.items():assert hashlib.sha256((defs/name).read_bytes()).hexdigest()==sha,name
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--skip-dsp-hashes',action='store_true',help='Test snapshot behavior independently of the local compiled legacy binary cache')
+args=parser.parse_args()
+if not args.skip_dsp_hashes:
+    for name,sha in expected.items():assert hashlib.sha256((defs/name).read_bytes()).hexdigest()==sha,name
 code=(ROOT/'src/nodes/scPolyComb.cpp').read_text()
 helpers=code[code.index('bool logKey('):code.index('void scPolyComb::applyState(')]
 start=code.index('void scPolyComb::applyState(')
@@ -18,6 +22,8 @@ apply=code[start:code.index('\n}\n',start)+3]
 prelude=r'''
 #include <nlohmann/json.hpp>
 #include "scPolyCombMigration.h"
+#include "scVoiceCountMorph.h"
+#include "scPolyCombPitchMorph.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -40,6 +46,8 @@ template<class T>struct Param {
 std::function<void(int)> onVoices;
 template<class T> void Param<T>::set(T v){value=v; if constexpr(std::is_same_v<T,int>) if(onVoices) onVoices(v);}
 struct Handle { bool hasInConnection()const{return false;} };
+struct ofxSCServer{};
+struct ServerState{};
 struct Mod {
     int lfoCount=4,envCount=1,extCount=0;
     std::vector<float> matrix=std::vector<float>(336,0);   // 23 sources + Delta, 14 targets
@@ -51,11 +59,19 @@ class scPolyComb {public:
     static constexpr int NUM_LFOS=8,NUM_ENVS=4,NUM_EXT=8,NUM_SOURCES=23,NUM_TARGETS=14,MAX_VOICES=32;
     Param<int> voices{"Voices",4};
     std::shared_ptr<Handle> voicesHandle=std::make_shared<Handle>();
-    int userVoices=4; bool voicesFromSnapshot=false;
+    int userVoices=4; bool voicesFromSnapshot=false,applyingSnapshot=false,voiceRenderer=false;
+    void prepareVoiceMorph(const ofJson&,const ofJson&,float){} // no running server in this recall test
+    void syncVoiceMorph(){}
     ofJson pitchDefaults=ofJson::object(), deltaDefaults=ofJson::object();
+    scPolyCombPitchMorph pitchMorph;
+    Param<bool> scramble{"Scramble",false};
+    static constexpr int IComb=0;
+    template<class F>void forStates(F){} // no SC server in the recall fixture
+    void sendPitch(ServerState&){} void sendIns(ServerState&,int){}
+    bool combMapped()const{return false;}
     Param<bool> combSaturation{"Comb_Saturation",true};
     Param<float> combSatLevel{"Comb_Sat_Level",0};
-    ofJson compDefaults=ofJson::object(), subDefaults=ofJson::object(), tremDefaults=ofJson::object();
+    ofJson compDefaults=ofJson::object(), subDefaults=ofJson::object(), tremDefaults=ofJson::object(), blurDefaults=ofJson::object();
     Mod modulation;
     struct Control {std::string key;std::function<ofJson()> save;std::function<void(const ofJson&)> load;};
     std::vector<Control> controls;
@@ -127,8 +143,8 @@ int main(int argc,char** argv){
     assert(node.current["Comb_Vib_Amount"]==0.75f);
     assert(node.voices.value==24 && node.current["Pitch_External"]==false && node.modulation.matrix[23*14]==0.5f);
     node.applyState(moving,moving,1,true);check();
-    node.applyState(imported,moving,.5f,false);assert(node.voices.value==24);   // morphing: switches at the switch point
-    node.applyState(imported,moving,.5f,true);assert(node.voices.value==node.userVoices);
+    node.applyState(imported,moving,.5f,false);assert(node.voices.value==24);   // every contributing count is available
+    node.applyState(imported,moving,.5f,true);assert(node.voices.value==24);
     node.applyState(moving,moving,1,true);check();
     auto saturated=moving;
     saturated["controls"]["Comb_Saturation"]=true;
@@ -145,6 +161,11 @@ int main(int argc,char** argv){
     node.applyState(moving,saturated,.25f,false);assert(!node.combSaturation.value);
     node.applyState(moving,saturated,.75f,true);assert(!node.combSaturation.value);
     node.applyState(moving,moving,1,true);check();
+    auto malformed=moving;malformed["lfos"]="invalid count";
+    bool rejected=false;
+    try{node.applyState(malformed,moving,.5f,false);}catch(...){rejected=true;}
+    assert(rejected && !node.applyingSnapshot);
+    node.applyState(moving,moving,1,true);check(); // a failed recall must not latch listener suppression
 }
 '''
 with tempfile.TemporaryDirectory(prefix='polycomb_moving_') as d:
@@ -174,6 +195,7 @@ with tempfile.TemporaryDirectory(prefix='polycomb_moving_') as d:
     main=main.replace('COMP_DEFAULTS',json.dumps(comp)).replace('SUB_DEFAULTS',json.dumps({k:v['default'] for k,v in controls_from_source().items() if k.startswith('Sub_')}))
     src=pathlib.Path(d)/'test.cpp';src.write_text(prelude+helpers+apply+main)
     out=pathlib.Path(d)/'test'
-    subprocess.run(['clang++','-std=c++17','-O2','-I'+str(ROOT.parent.parent/'libs/json/include'),'-I'+str(ROOT/'src/nodes'),str(src),'-o',str(out)],check=True)
+    subprocess.run(['clang++','-std=c++17','-O2','-I'+str(ROOT/'tools/snapshot_morph_test/stubs'),'-I'+str(ROOT.parent.parent/'libs/json/include'),'-I'+str(ROOT/'src/nodes'),str(src),'-o',str(out)],check=True)
     subprocess.run([str(out),str(fixture)],check=True)
-print(f'PASS: MOVING_SAWS values/matrix/counts/voices restore with migrated ring/LFO models after an imported sound (pitch maps, Delta routes, 24 voices), saturation, compression and independent sub; option morphing; {len(expected)} original compiled DSP definitions byte-identical.')
+audit='local compiled DSP hash audit skipped' if args.skip_dsp_hashes else f'{len(expected)} original compiled DSP definitions byte-identical'
+print(f'PASS: MOVING_SAWS values/matrix/counts/voices restore with migrated ring/LFO models after an imported sound (pitch maps, Delta routes, 24 voices), saturation, compression and independent sub; option morphing; {audit}.')

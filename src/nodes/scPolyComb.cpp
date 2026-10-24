@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <utility>
 #include <filesystem>
 #include <numeric>
 #include <random>
@@ -71,7 +72,7 @@ std::pair<int,int> filterChoice(int type) {
 // Setup
 // ════════════════════════════════════════════════════════════════════════════
 
-scPolyComb::scPolyComb(std::vector<serverManager*> s) : scNode("polycombBox"), servers(std::move(s)) {
+scPolyComb::scPolyComb(std::vector<serverManager*> s, bool renderer) : scNode("polycombBox"), servers(std::move(s)), voiceRenderer(renderer) {
     description = "Polyphonic comb-resonator synth. Gate takes Oceanode values and audio-rate gates together. "
                   "Oscillators with FM, filters, comb, ring mod, sine shaper, envelopes, LFOs and a modulation "
                   "matrix, spread over the speakers, then EQ, echo and reverb. Built from small synths: only the "
@@ -79,13 +80,14 @@ scPolyComb::scPolyComb(std::vector<serverManager*> s) : scNode("polycombBox"), s
 }
 
 scPolyComb::~scPolyComb() {
+    voicePeers.clear();
     listeners.unsubscribeAll();
     for(auto& [server, st] : states) freeAll(server, st);
     states.clear();
 }
 
 void scPolyComb::setup() {
-    timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
+    if(!voiceRenderer) timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
                    [this](){ return publishedKeys; });
     auto vec = [](ofParameter<std::vector<float>>& p, const std::string& name, float def, float lo, float hi) {
         p.set(name, {def}, {lo}, {hi});
@@ -93,7 +95,7 @@ void scPolyComb::setup() {
     // what a change resends
     auto toGate = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendGate(st, true); }); };
     auto toAmpEnv = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendAmpEnv(st); }); };
-    auto toPitch = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); }); };
+    auto toPitch = [this]() { if(!applyingSnapshot) forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); }); };
     auto toFm = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendFm(st); }); };
     auto toAmp = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendAmp(st); }); };
     auto toSpread = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendSpread(st); }); };
@@ -124,7 +126,7 @@ void scPolyComb::setup() {
     pitchIn.attach(addParameter(pitch.set("Pitch", {60.0f}, {0.0f}, {127.0f})), availableInputs, [this](){ refreshOutputs(); });
     noteInputs.add(gateIn.handle, gate);
     noteInputs.add(pitchIn.handle, pitch);
-    noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.created && st.gateS) return true; return false; });
+    if(!voiceRenderer) noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.created && st.gateS) return true; return false; });
     combPitch.set("Comb Pitch", {0}, {-48}, {127});
     combPitchHandle = addParameter(combPitch);
     addParameter(master.set("Master", 0.8f, 0.0f, 1.0f));
@@ -166,7 +168,7 @@ void scPolyComb::setup() {
     // ── Pitch & Harmony: internal pitch maps (the original PolyComb's). External
     //    on (the default, and every snapshot without these): the Pitch values as
     //    they are. Older snapshots restore these defaults, as the Sub's. ──────
-    auto toPitchComb = [this]() { syncMapScale(oscMap);syncMapScale(combMap);forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); sendIns(st, IComb); }); };
+    auto toPitchComb = [this]() { syncMapScale(oscMap);syncMapScale(combMap);if(!applyingSnapshot)forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); sendIns(st, IComb); }); };
     pitchExternal.set("Pitch External", true);             reg(pitchExternal, toPitchComb);
     pitchShiftMode.set("Pitch Shift", 0, 0, 1);            reg(pitchShiftMode, toPitchComb);
     combMapOn.set("Comb Map On", false);                   reg(combMapOn, toPitchComb);
@@ -469,12 +471,23 @@ void scPolyComb::setup() {
     // ── Node parameters' listeners ───────────────────────────────────────────
     listeners.push(voices.newListener([this](int& v) {
         if(!voicesFromSnapshot) userVoices = v;
+        if(!voiceMorphWeights.empty()) {
+            if(!voicesFromSnapshot) {
+                voiceMorphWeights.assign(MAX_VOICES,0); voiceMorphWeights[v-1]=1;
+                voiceHandoff=0; voiceEndpointSince=-1;
+                syncVoiceMorph();
+            }
+            return; // the active audio bank keeps its own width
+        }
         updatePitchIndexLimits();
         updateScramble();
         modulation.voicesChanged();   // the LFOs' voice phases, even before anything runs
         requestRebuild();
     }));
-    listeners.push(outChannels.newListener([this](int&) { rebuildOutput(); }));
+    listeners.push(outChannels.newListener([this](int&) {
+        if(!voiceMorphWeights.empty()) { releaseVoiceMorph(); requestRebuild(); }
+        else rebuildOutput();
+    }));
     // The timeline's frame set of a value it already sent timetagged: nothing to do.
     listeners.push(gate.newListener([this, toGate](std::vector<float>& v) {
         if(scScheduling::isBackendSendSuppressed()) return;
@@ -487,12 +500,15 @@ void scPolyComb::setup() {
         forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st, true); });
     }));
     listeners.push(master.newListener([toAmp](float&) { toAmp(); }));
-    listeners.push(resetLFOs.newListener([this]() { modulation.resetLfos(); }));
+    listeners.push(resetLFOs.newListener([this]() {
+        modulation.resetLfos();
+        for(auto& item:voicePeers) item.second.node->modulation.resetLfos();
+    }));
 
     userVoices = voices.get();
     updateScramble();
     requireSynthdefs();
-    {
+    if(!voiceRenderer) {
         scSnapshots::Host h;
         h.folder = "PolyComb";
         h.title = "PolyCombBox";
@@ -515,6 +531,7 @@ void scPolyComb::forStates(const std::function<void(ofxSCServer*, ServerState&)>
     // While a voice rebuild fades out, controls already describe the requested
     // width. Sending those arrays to the old synths overwrites adjacent controls.
     for(auto& [server, st] : states) if(st.created && st.builtVoices == n()) f(server, st);
+    if(!applyingSnapshot) syncVoiceMorph();
 }
 int scPolyComb::src(const ServerState& st, int s) const { return modulation.sourceBus(st.server, s); }
 int scPolyComb::mod(const ServerState& st, int t) const { return modulation.targetBus(st.server, t); }
@@ -601,7 +618,7 @@ void scPolyComb::sendPitch(ServerState& st, bool notesOnly) {
     if(combMapped()){
         // The resonators' mapped notes move with Pitch; their other controls do not.
         if(notesOnly && st.ins[IComb].synth && st.ins[IComb].synth->isCreated())
-            sendVec(st.ins[IComb].synth, "combpitch", resonatorPitches());
+            sendVec(st.ins[IComb].synth, "combpitch", combMapPitches());
         else sendIns(st, IComb);
     }
 }
@@ -677,9 +694,9 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             break;
         case IComb:
             s->set("satlevel", modulation.voiceValues(combSatLevel));
-            if(combMapped()){              // the resonators' own map: fixed notes
-                s->set("combmode", 1.0f);
-                sendVec(s, "combpitch", resonatorPitches());
+            if(combMapped()){              // map contribution plus the remaining live oscillator follow
+                s->set("combmode", combMapAmount());
+                sendVec(s, "combpitch", combMapPitches());
             }else{
                 // Follow the oscillator note bus so glide and live pitch inputs
                 // keep working; the shared-map controls are an added interval.
@@ -921,6 +938,7 @@ void scPolyComb::freeSynths(ServerState& st) {
 
 // Everything, with the groups and buses
 void scPolyComb::freeAll(ofxSCServer* server, ServerState& st) {
+    releaseVoiceMorphServer(server, st);
     if(st.root && st.created) st.root->free();          // frees every synth in it
     auto forget = [](ofxSCSynth*& s){ delete s; s = nullptr; };
     forget(st.gateS); forget(st.ampEnv); forget(st.pitchS); forget(st.amp); forget(st.spread); forget(st.delta);
@@ -1017,7 +1035,8 @@ void scPolyComb::createSynth(ofxSCServer* server) {
     auto it = states.find(server);
     if(it == states.end() || !it->second.root) return;
     auto& st = it->second;
-    st.root->create(0, 1);
+    if(voiceRenderer && rendererBefore.count(server)) st.root->create(2, rendererBefore[server]);
+    else st.root->create(0, 1);
     for(auto*& g : st.groups){
         g = new ofxSCGroup(server);
         g->create(1, st.root->nodeID);       // in slot order
@@ -1032,6 +1051,11 @@ void scPolyComb::free(ofxSCServer* server) {
     if(it == states.end()) return;
     freeAll(server, it->second);
     it->second.outBus = -1;
+    bool any=false; for(const auto& item:states) any|=item.second.created;
+    if(!any && !voiceRenderer) {
+        voicePeers.clear(); voiceMorphWeights.clear(); morphRenderVoices=0; voiceAliasCount=0;
+        voiceHandoff=0; voiceEndpointSince=-1; morphDomainVoices=0;
+    }
 }
 
 void scPolyComb::moveSynthBefore(ofxSCServer* server, int nodeID) {
@@ -1093,6 +1117,7 @@ void scPolyComb::setBpm(float bpm) {
 // ── Effects (EQ / echo / reverb, at the speaker count) ─────────────────────
 
 void scPolyComb::updateStages(ofxSCServer* server, ServerState& st) {
+    if(voiceRenderer) return;
     if(!st.created) return;
     for(int s = 0; s < NumStages; s++){
         auto& f = st.fx[s];
@@ -1135,6 +1160,11 @@ void scPolyComb::routeChain(ServerState& st) {
         if(!f.synth->isCreated()) f.synth->resendStoredArgs();
         next = f.in->index;
     }
+    if(st.voiceMix && st.voiceMixReady>=0 && ofGetElapsedTimef() >= st.voiceMixReady) {
+        st.voiceMix->set("out", next);
+        if(!st.voiceMix->isCreated()) st.voiceMix->resendStoredArgs();
+        next=st.voiceMainBus->index;
+    }
     if(st.spread){
         st.spread->set("out", next);
         if(!st.spread->isCreated()) st.spread->resendStoredArgs();
@@ -1145,8 +1175,8 @@ void scPolyComb::routeChain(ServerState& st) {
 // Update: parts that faded out pause; the window's live values
 // ════════════════════════════════════════════════════════════════════════════
 
-void scPolyComb::update(ofEventArgs&) {
-    timeline.update();
+void scPolyComb::update(ofEventArgs& args) {
+    if(!voiceRenderer) timeline.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
         const auto names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) { auto it = published.find(key); dropdowns.set(key, names, it == published.end() ? nullptr : it->second); }
@@ -1165,7 +1195,8 @@ void scPolyComb::update(ofEventArgs&) {
     modulation.showing = showWindow.get();
     modulation.update();   // the LFO / envelope live values (window)
     // snapshots: a file dialog (outside ImGui), another node's library change, a glide
-    snaps.update();
+    if(!voiceRenderer) snaps.update();
+    updateVoiceMorph(args);
     const float now = ofGetElapsedTimef();
     for(auto& [server, st] : states){
         if(!st.created || st.builtVoices != n()) continue;
@@ -1336,6 +1367,7 @@ void scPolyComb::loadBeforeConnections(ofJson& j) {
 }
 
 void scPolyComb::presetRecallAfterSettingParameters(ofJson& j) {
+    pitchMorph.clear();
     combSaturation.setWithoutEventNotifications(false);
     combSatLevel.setWithoutEventNotifications(12.0f);
     restoring=true;
@@ -1508,14 +1540,16 @@ void scPolyComb::randomizeMapSeedsOnGate(const std::vector<float>& values) {
     };
     const bool oscillators=reseed(oscMap),resonators=reseed(combMap);
     if(!oscillators && !resonators)return;
+    if(oscillators)pitchMorph.reseed("Osc_Map_",oscMap.indexSeed.get());
+    if(resonators)pitchMorph.reseed("Comb_Map_",combMap.indexSeed.get());
     auto inEffect=noteInputs.inEffectNow();
     forStates([&](ofxSCServer*,ServerState& st){
         if(oscillators && internalPitch() && st.pitchS){
             scSynthControlBatch controls(st.pitchS,st.server);
-            controls.set("pitch",mapPitches(oscMap));controls.send();
+            controls.set("pitch",oscillatorPitches());controls.send();
         }
         if(resonators && combMapped() && st.ins[IComb].synth)
-            sendVec(st.ins[IComb].synth,"combpitch",resonatorPitches());
+            sendVec(st.ins[IComb].synth,"combpitch",combMapPitches());
         if((combMapped()?resonators:(oscillators && internalPitch())) && ringPitchSource.get()==2 && st.ins[IRing].synth)
             sendVec(st.ins[IRing].synth,"ringpitch",resonatorPitches());
     });
@@ -1523,7 +1557,7 @@ void scPolyComb::randomizeMapSeedsOnGate(const std::vector<float>& values) {
 
 // The index domain and its published controls follow the active voice count.
 void scPolyComb::updatePitchIndexLimits() {
-    const int count=std::clamp(n(),1,(int)MAX_VOICES);
+    const int count=std::clamp(std::max(n(),morphDomainVoices),1,(int)MAX_VOICES);
     for(auto* m:{&oscMap,&combMap}){
         m->first.setMin(1.f);m->first.setMax((float)count);
         m->first.setWithoutEventNotifications(std::clamp(std::round(m->first.get()),1.f,(float)count));
@@ -1575,29 +1609,41 @@ pcmap::Map scPolyComb::mapOf(const MapParams& m) const {
 // for all voices or one each): added after the map, or before its quantization
 // ("in the scale"). Scrambled as Pitch's own values would be.
 std::vector<float> scPolyComb::mapPitches(const MapParams& m) const {
-    const int nv = n();
     // A map expands one played root into voices. Incoming chord positions must
     // not add a second, unrelated per-voice pitch shape after indexation.
-    std::vector<float> shift(nv, first(pitch.get(),60.0f));
-    for(auto& s : shift) s -= 60.0f;
-    const bool inScale = pitchShiftMode.get() == 1;
-    std::vector<float> v = pcmap::generate(mapOf(m), nv, inScale ? shift : std::vector<float>{});
-    if(!inScale) for(int i = 0; i < nv; i++) v[i] += shift[i];
-    if(scramble.get() && nv > 1 && (int)scrambleOrder.size() >= nv){
-        std::vector<float> out(v.size());
-        for(int i = 0; i < nv; i++) out[i] = v[std::clamp(scrambleOrder[i], 0, nv - 1)];
-        v = out;
-    }
-    for(auto& x : v) x = ofClamp(x, 0.0f, 135.0f);
-    return v;
+    return pcmap::playedPitches(mapOf(m),n(),first(pitch.get(),60.0f),pitchShiftMode.get()==1,
+                               scramble.get() ? scrambleOrder : std::vector<int>{});
 }
 
 // Shared map means the same voice order and note choices, with only the
 // resonators' own coarse/fine pitch adjustment applied after that source.
+ofJson scPolyComb::pitchMorphOverrides() const {
+    ofJson out=ofJson::object();
+    for(const auto& c:controls) if(scPolyCombPitchMorph::control(c.key) && drivenByConnection(c.key)) out[c.key]=c.save();
+    return out;
+}
+float scPolyComb::combMapAmount() const {
+    return pitchMorph.active()?pitchMorph.ownWeight(pitchMorphOverrides()):(combMapOn.get()?1.f:0.f);
+}
+std::vector<float> scPolyComb::combMapPitches() const {
+    if(pitchMorph.active() && internalPitch()) {
+        auto notes=pitchMorph.evaluate(n(),first(pitch.get(),60.f),pitchMorphOverrides());
+        // Retain the live oscillator note bus (including transpose/detune) for
+        // the inherited fraction. The residual makes the resulting pitches the
+        // exact weighted endpoint map pitches, rather than a second map blend.
+        for(int i=0;i<n();++i) notes.resonator[i]-=(1-notes.own)*notes.oscillator[i];
+        return notes.resonator;
+    }
+    return resonatorPitches();
+}
 std::vector<float> scPolyComb::oscillatorPitches() const {
+    if(internalPitch() && pitchMorph.active())
+        return pitchMorph.evaluate(n(),first(pitch.get(),60.f),pitchMorphOverrides()).oscillator;
     return internalPitch()?mapPitches(oscMap):processedPitch();
 }
 std::vector<float> scPolyComb::resonatorPitches() const {
+    if(internalPitch() && pitchMorph.active())
+        return pitchMorph.evaluate(n(),first(pitch.get(),60.f),pitchMorphOverrides()).resonator;
     if(combMapped())return mapPitches(combMap);
     auto notes=oscillatorPitches();
     for(auto& note:notes)note=ofClamp(note+combMap.transpose.get()+combMap.offset.get(),0.f,135.f);
@@ -1730,6 +1776,7 @@ void scPolyComb::requireSynthdefs() {
         return folder;
     };
     for(const auto& [expected, dir] : std::vector<std::pair<std::string, std::string>>{
+            {"PCVoiceMorph2.scsyndef", "synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb"},
             {"PCSub2.scsyndef", "synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb"},
             {"PCAmp2.scsyndef", "synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb"},
             {"ModLfo2.scsyndef", "synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation"},
@@ -1764,6 +1811,8 @@ void scPolyComb::reg(ofParameter<T>& p, std::function<void()> send) {
     listeners.push(p.newListener([this,&p,key=p.getEscapedName(),send](T& value) {
         const auto normalized=pccontrol::normalize(key,value,p.getMin(),p.getMax());
         if(normalized!=value)p.setWithoutEventNotifications(normalized);
+        if(!applyingSnapshot && !drivenByConnection(key) &&
+            (scPolyCombPitchMorph::control(key) || key==pitchExternal.getEscapedName())) pitchMorph.clear();
         if(!restoring)send();
     }));
 }
@@ -2989,12 +3038,16 @@ ofJson scPolyComb::captureSnapshot() const {
     auto& c = s["controls"] = ofJson::object();
     for(const auto& control : controls) if(!snapExcluded(control.key)) c[control.key] = control.save();
     modulation.patchBases(c);
+    pitchMorph.capture(s,pitchMorphOverrides());
     s["params"] = modulation.paramsJson();
     s["matrix"] = modulation.matrix;
     s["lfos"] = modulation.lfoCount;
     s["envs"] = modulation.envCount;
     s["exts"] = modulation.extCount;
-    if(!(voicesHandle && voicesHandle->hasInConnection())) s["voices"] = voices.get();
+    if(!(voicesHandle && voicesHandle->hasInConnection())) {
+        s["voices"] = voices.get();
+        scVoiceCountMorph::capture(s,voiceMorphWeights);
+    }
     return s;
 }
 
@@ -3031,6 +3084,19 @@ ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float
 void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t, bool sw) {
     if(!a.is_object() || !b.is_object()) return;
     t = ofClamp(t, 0.0f, 1.0f);
+    // Restore listener behavior even if malformed saved state throws. The
+    // explicit finish restores it before forwarding the sound to voice peers.
+    struct ApplicationScope {
+        bool& flag;
+        bool previous;
+        explicit ApplicationScope(bool& value):flag(value),previous(value) { flag=true; }
+        ~ApplicationScope() { finish(); }
+        void finish() { flag=previous; }
+    } application(applyingSnapshot);
+    if(!voiceRenderer) prepareVoiceMorph(a,b,t);
+    auto mapDefaults=pitchDefaults;
+    mapDefaults["Scramble"]=scramble.get(); // older snapshots leave this existing control alone
+    pitchMorph.begin(a,b,t,mapDefaults);
     // the counts first (the routes need their sources): while blending, the larger
     auto count = [&](const char* k, int current, int lo, int hi) {
         const int x = a.value(k, current), y = b.value(k, current);
@@ -3041,13 +3107,13 @@ void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t, bool sw) 
               nx = count("exts", M.extCount, 0, NUM_EXT);
     const bool countsChanged = nl != M.lfoCount || ne != M.envCount || nx != M.extCount;
     M.lfoCount = nl; M.envCount = ne; M.extCount = nx;
-    // the voice count: a snapshot's own; one without (every older snapshot)
-    // plays with the patch's own count, whatever a snapshot set before
+    // Expose all contributing voices from the first nonzero morph step. The
+    // audio banks retain their own widths and fade independently of Morph Switch.
+    // Legacy snapshots without a count still use the patch's own count.
     if(!(voicesHandle && voicesHandle->hasInConnection())){
-        const ofJson& vs = (t >= 1.0f || (sw && t > 0.0f)) ? b : a;
-        int v = userVoices > 0 ? userVoices : voices.get();
-        if(vs.contains("voices") && vs["voices"].is_number()) v = vs["voices"].get<int>();
-        v = std::clamp(v, 1, (int)MAX_VOICES);
+        const int fallback = userVoices > 0 ? userVoices : voices.get();
+        const int v = scVoiceCountMorph::activeCount(
+            scVoiceCountMorph::blend(a,b,t,fallback,MAX_VOICES));
         if(v != voices.get()){ voicesFromSnapshot = true; voices.set(v); voicesFromSnapshot = false; }
     }
 
@@ -3091,17 +3157,27 @@ void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t, bool sw) 
     else if(changed) M.sendMatrix();
     // the controls any source moves ("Modulate"): the arrival's
     if(t >= 1.0f) M.loadParamsJson(b.contains("params") ? b["params"] : ofJson::array());
+    // Modes can change in the editor without changing any numeric control.
+    // Always resend the evaluated blend, even on either side of Morph Switch.
+    forStates([this](ofxSCServer*,ServerState& st){
+        sendPitch(st);
+        if(!combMapped()) sendIns(st,IComb);
+    });
+    pitchMorph.finish();
+    application.finish();
+    syncVoiceMorph();
 }
 
 
 // ── MacroMixer: a saved sound blends on the running synths ─────────────────
 ofxOceanodeNodeModel::MorphKeys scPolyComb::morphKeys() const {
-    return {{"polyComb", "polyCombParams", "polyCombMatrix", "polyCombLfos", "polyCombEnvs", "polyCombExts"}, {}};
+    return {{"polyComb", "polyCombParams", "polyCombMatrix", "polyCombLfos", "polyCombEnvs", "polyCombExts", voices.getEscapedName()}, {}};
 }
 
 ofxOceanodeNodeModel::MorphHint scPolyComb::morphHint(const ofxOceanodeAbstractParameter& p) const {
     const std::string key = p.getEscapedName();
-    if(key == voices.getEscapedName() || key == outChannels.getEscapedName()) return MorphHint::Structural;
+    if(key == outChannels.getEscapedName()) return MorphHint::Structural;
+    if(key == voices.getEscapedName()) return MorphHint::Skip; // owned by the sound morph, including temporary banks
     // the window; a published control blends with the rest of the sound
     if(key == showWindow.getEscapedName() || published.count(key)) return MorphHint::Skip;
     return MorphHint::Interpolate;
@@ -3120,25 +3196,28 @@ ofJson scPolyComb::snapshotOf(const ofJson& j) const {
     if(j.contains("polyCombMatrix")) s["matrix"] = j["polyCombMatrix"];
     for(const auto& [from, to] : {std::pair<const char*, const char*>{"polyCombLfos", "lfos"}, {"polyCombEnvs", "envs"}, {"polyCombExts", "exts"}})
         if(j.contains(from) && j[from].is_number()) s[to] = j[from];
+    const auto voiceKey=voices.getEscapedName();
+    if(j.contains(voiceKey) && j[voiceKey].is_number()) s["voices"]=j[voiceKey];
     return s;
 }
 
 bool scPolyComb::morphBegin(const ofJson& target, std::string& reason) {
     if(!morphCheck(target, reason)) return false;
-    morphFrom = captureSnapshot();       // the sound now (modulated controls: their bases)
+    morphFrom = snaps.captureForExternalMorph(); // current bases and effective morph state
     morphTo = snapshotOf(target);
-    if(morphFrom.contains("voices")) morphTo["voices"] = morphFrom["voices"];   // Structural: the same
     return true;
 }
 
 void scPolyComb::morphApply(float t, bool switched) {
-    if(morphFrom.is_object()) applyState(morphFrom, morphTo, t, switched);
+    if(morphFrom.is_object()) snaps.applyExternalMorph(morphFrom, morphTo, t, switched);
 }
 
 void scPolyComb::morphEnd(bool completed) {
-    if(!completed && morphFrom.is_object()) applyState(morphFrom, morphFrom, 1.0f, true);
+    if(!completed && morphFrom.is_object()) snaps.applyExternalMorph(morphFrom, morphFrom, 1.0f, true);
     morphFrom = morphTo = ofJson();
 }
 
 // ── The bar under the header: a slot menu (recall), store, glide, A/B morph,
 //    banks. Every one of them publishable. ─────────────────────────────────────
+
+#include "scPolyCombVoiceMorph.inl"

@@ -2,6 +2,13 @@
 
 Addon for interfacing [ofxOceanode](https://github.com/PlaymodesStudio/ofxOceanode) and [Supercollider](https://github.com/supercollider/supercollider) via [ofxSupercollider](https://github.com/PlaymodesStudio/ofxSuperCollider)
 
+## PolyComb morphing
+
+Local snapshots and MacroMixer share PolyComb's sound-morph engine, including
+temporary voice-count banks and interpolation of generated pitch maps. See the
+[consolidated reference](src/docs/polyCombMorphing.md) for behavior, boundaries,
+build instructions and the quick/audio/native regression commands.
+
 ## Startup updates
 
 On macOS, launching an app with this addon checks the public addon repository

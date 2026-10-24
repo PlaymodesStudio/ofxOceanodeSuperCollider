@@ -36,10 +36,12 @@
 #include "scModulation.h"
 #include "scTimelineMenu.h"
 #include "scSnapshots.h"
+#include "scVoiceCountMorph.h"
 #include "scDropdowns.h"
 #include "scAudioParam.h"
 #include "scScheduledInputs.h"
 #include "scPolyCombPitchMap.h"
+#include "scPolyCombPitchMorph.h"
 #include "scChordBoxEngine.h"
 #include "imgui.h"
 #include <array>
@@ -73,7 +75,7 @@ public:
     static constexpr int NUM_TARGETS = 14;
     enum Stage { StComp, StEq, StBlur, StEcho, StRvb, NumStages };
 
-    explicit scPolyComb(std::vector<serverManager*> servers);
+    explicit scPolyComb(std::vector<serverManager*> servers, bool voiceRenderer = false);
     ~scPolyComb();
 
     void setup() override;
@@ -156,6 +158,13 @@ private:
         ofxSCBus* visBlock = nullptr;                   // control: amp levels, positions (the window)
         int outBus = -1;
         int builtVoices = 0, builtChannels = 0;
+        // Allocated only during a voice-count transition, before shared FX.
+        ofxSCSynth* voiceMix = nullptr;
+        ofxSCBus* voiceMainBus = nullptr;
+        std::array<ofxSCBus*, MAX_VOICES> voicePeerBuses{};
+        float voiceMixReady = 0;
+        std::vector<float> voiceMixInputs, voiceMixWeights;
+
     };
     std::vector<serverManager*> servers;
     std::map<ofxSCServer*, ServerState> states;
@@ -184,7 +193,7 @@ private:
     void publishedUnderline(const std::string& key) const;
 
     // ── Engine ───────────────────────────────────────────────────────────────
-    int n() const { return voices.get(); }
+    int n() const { return morphRenderVoices > 0 ? morphRenderVoices : voices.get(); }
     std::string def(const std::string& name) const { return name + ofToString(n()); }
     int src(const ServerState& st, int s) const;
     int mod(const ServerState& st, int t) const;
@@ -232,8 +241,12 @@ private:
     ofParameter<int> pitchShiftMode;      // External off, Pitch around 60: 0 after the map, 1 in the scale
     ofParameter<bool> combMapOn;          // External off: the resonators follow their own map
     ofJson pitchDefaults = ofJson::object();
+    scPolyCombPitchMorph pitchMorph;
     bool internalPitch() const { return !pitchExternal.get(); }
-    bool combMapped() const { return internalPitch() && combMapOn.get(); }
+    float combMapAmount() const;
+    bool combMapped() const { return internalPitch() && combMapAmount()>0.f; }
+    ofJson pitchMorphOverrides() const;
+    std::vector<float> combMapPitches() const;
     std::vector<float> previousMapGate;
     void randomizeMapSeedsOnGate(const std::vector<float>& values);
     void updatePitchIndexLimits();
@@ -386,8 +399,31 @@ private:
     bool voicesFromSnapshot = false;
     void drawAmpCard(float w);
 
+    // Temporary renderers have their own count-dependent pitch maps, envelopes
+    // and modulation, but no UI/library work or post-spreader effects.
+    bool voiceRenderer = false, applyingSnapshot = false, syncingVoiceMorph = false;
+    int morphRenderVoices = 0, voiceAliasCount = 0, morphDomainVoices = 0;
+    struct VoicePeer {
+        std::unique_ptr<scPolyComb> node;
+        ofJson lastSound;
+        float unusedSince = -1;
+    };
+    std::map<int, VoicePeer> voicePeers;
+    std::map<ofxSCServer*, int> rendererBefore; // peer root belongs before the parent's mixer
+    std::vector<float> voiceMorphWeights;
+    int voiceHandoff = 0; // 0: morph, 2: remove mixer after adopting the endpoint bank
+    float voiceEndpointSince = -1, voiceHandoffAt = -1;
+    void prepareVoiceMorph(const ofJson& a, const ofJson& b, float t);
+    void syncVoiceMorph();
+    void updateVoiceMorph(ofEventArgs&);
+    void releaseVoiceMorphServer(ofxSCServer*, ServerState&);
+    void releaseVoiceMorph();
+    bool adoptVoiceBank(int count);
+    void configureVoiceMix(ServerState&);
+
+
     // ── Snapshots (scSnapshots, shared by the synths): every window control,
-    //    the routing matrix, the LFO / envelope / ext counts; not Voices,
+    //    the routing matrix, the LFO / envelope / ext counts, voice count; not
     //    Channels, Master, the speaker layout, the Ext values, nor controls
     //    driven by a connection. ──
     scSnapshots snaps;

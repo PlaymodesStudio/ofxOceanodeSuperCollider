@@ -1,4 +1,21 @@
-# Pitch editor update
+# PolyComb development and regression tools
+
+For current snapshot/MacroMixer development, start with the
+[consolidated morph reference](../../src/docs/polyCombMorphing.md).
+
+```sh
+python3 tools/polycomb/morph_regression.py                 # quick checks
+python3 tools/polycomb/morph_regression.py --group audio   # compile + offline DSP
+python3 tools/polycomb/morph_regression.py --group native  # fresh OF/MacroMixer build
+python3 tools/polycomb/morph_regression.py --group all
+```
+
+Every run retains logs and a JSON report. Missing prerequisites and failures are
+reported explicitly. Stable input pairs live in `fixtures/morph_reference.json`;
+they are regression states, not an installed demo bank. Collection import and
+earlier migration notes below are separate from the current morph contract.
+
+## Pitch editor update
 
 The pitch tab has oscillator and resonator map panels, each with three columns:
 scale/sequence, index geometry, and tuning/vibrato. The tuning column groups
@@ -126,8 +143,9 @@ existing `tools/deploy_synthdef_compiler.sh` copies those source assets for a
 standalone deployment. A packaged copy can also live under
 `Supercollider/Synthdefs/Defaults/polyComb/ReaktorSnapshots`.
 
-Banks use the existing 128-slot format. Voices, Channels, Pitch, BPM and Master
-remain node settings. Translation assumes **16 voices, MIDI 60 and 120 BPM**;
+Banks use the existing 128-slot format. Translated collections leave Voices,
+Channels, Pitch, BPM and Master under the node's existing settings; native
+snapshots can now retain voice counts. Translation assumes **16 voices, MIDI 60 and 120 BPM**;
 the 32-voice source is sampled into the native 16 voices. Other voice counts use
 the corresponding prefix of each prepared vector. Choose 8 output channels to
 audition the 8ch material spatially. Start with a low Master: the measured
@@ -164,15 +182,19 @@ gain normalization has been inserted.
 All four additions default off or preserve the original selection when an old
 snapshot is recalled. The production recall/morph regression restores the real
 MOVING_SAWS values, matrix, source counts and routes after a saturated,
-compressed sound with the sub enabled. All **272 original compiled PolyComb definitions** remain
-byte-identical to the saved baseline; the live MOVING_SAWS file is untouched.
+compressed sound with the sub enabled. The original migration audit recorded
+**272 compiled PolyComb definitions** byte-identical to its saved baseline.
+Subsequent pitch smoothing and morph DSP changes intentionally update some
+definitions; that historical hash audit is separate from current source checks.
+The live MOVING_SAWS fixture is untouched.
 Its SHA-256 is `0650ef23fe5868c2105f059a6b586222e95dc2418da87d6a5cc7176424b25652`.
 This is state and DSP-identity verification, not a full live-app waveform null.
 
-Compile `../polyCombOptions.scd` with the existing OceanodeAnalog class to
-produce the optional filter, comb and sub SynthDefs. The original `polyCombParts.scd`
-and MixerPro compressor source/binaries have not been rebuilt or changed.
-The optional inserts have already been compiled in this checkout.
+`polyCombOptions.scd` supplies the optional filter/comb definitions. Current
+pitch, sub, resonator and morph processing also uses `polyCombParts.scd` and
+`polyCombExtras.scd`; the audio regression group compiles both before rendering.
+Use the matching OceanodeAnalog class and plugin. These source builds update
+the addon's ignored cache, not the installed application.
 
 ## Fidelity and measurement data
 
@@ -242,5 +264,7 @@ python3 tools/polycomb/resonator_vibrato_render_test.py
 python3 tools/polycomb/post_filter_test.py
 ```
 
-Import writes only the recovery directories. Rendering writes under `/tmp` and
-opens no audio device. Tests never edit the installed app's preset library.
+Import writes only the recovery directories. Temporary rendering files go under
+the system temporary directory and no audio device is opened. Tests that compile
+production sources also update the addon's ignored `CompiledSynthdefs` cache.
+Tests never edit the installed app's preset library.

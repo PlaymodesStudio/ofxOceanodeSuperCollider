@@ -1,4 +1,4 @@
-// PolyComb extras, beside the original parts (polyCombParts.scd stays as it was):
+// PolyComb extras, compiled alongside polyCombParts.scd:
 //
 //   PCSpreadWide<C>  PolyCombSpread<C> for more than 16 voices: the voices
 //                    (\voices of the 32 on \in) onto C speakers, the same
@@ -24,6 +24,15 @@ dir = root +/+ "PolyComb";
 File.mkdir(root); File.mkdir(dir);
 
 (1..16).do { |c|
+    // Allocated only while morphing different voice counts. Each bank already
+    // supplies its own pitch map, spatial placement and count compensation.
+    SynthDef(("PCVoiceMorph" ++ c).asSymbol, {
+        var inputs = NamedControl.kr(\inputs, 0 ! 33);
+        var weights = NamedControl.kr(\weights, [1] ++ (0 ! 32)).lag(0.03);
+        var sum = Mix(Array.fill(33, { |i| In.ar(inputs[i], c) * weights[i] }));
+        Out.ar(\out.kr(0), sum);
+    }).writeDefFile(dir);
+
     SynthDef(("PCSpreadWide" ++ c).asSymbol, {
         var v = \voices.kr(1).clip(1, 32);
         var sig = In.ar(\in.kr(0), 32).asArray;
@@ -97,7 +106,9 @@ File.mkdir(root); File.mkdir(dir);
     SynthDef(("PCCombR" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
         // Smooth pitch targets at audio rate so delay retuning has no GUI/control-block steps; the glide on top.
-        var cnote = Lag.ar(K2A.ar(kv.(\combpitch, 0) + kv.(\combtranspose, 0) + (raw.() * (1 - (\combmode.kr(0) > 0.5)))), kv.(\combglide, 0).max(0.02)) +
+        // Fractional fixed-map contribution preserves live oscillator follow
+        // while morphing between inherited and independent resonator maps.
+        var cnote = Lag.ar(K2A.ar(kv.(\combpitch, 0) + kv.(\combtranspose, 0) + (raw.() * (1 - \combmode.kr(0).clip(0, 1)))), kv.(\combglide, 0).max(0.02)) +
             K2A.ar((({ Rand(-1, 1) } ! n) * kv.(\combdetune, 0)) + modIn.(\mcpitch));
         var rate = Lag.kr(kv.(\combvibrate, 5), 0.03) * (1 + (({ Rand(-1, 1) } ! n) * Lag.kr(kv.(\combvibrand, 0), 0.03).clip(0, 1)));
         var vibrato = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * Lag.kr(kv.(\combvibamt, 0), 0.03);

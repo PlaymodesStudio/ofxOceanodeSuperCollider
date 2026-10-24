@@ -121,6 +121,10 @@ public:
     // an audio bus of N gates the envelopes follow
     void create(ofxSCServer* server, int sourceGroup, int routeGroup, int gateBus);
     void free(ofxSCServer* server, bool sendFree = true);     // the synths and buses
+    // Transfer a running, identically configured voice bank without restarting
+    // its LFOs/envelopes. Frontend parameter bindings remain with this module.
+    bool hasVoiceBank(ofxSCServer* server, int voices) const;
+    bool adoptServerState(scModulation& source, ofxSCServer* server);
     void rebuild(ofxSCServer* server);                        // a new voice count: the synths again
     void setGateBus(ofxSCServer* server, int gateBus);
     int targetBus(ofxSCServer* server, int target) const;     // W wide, N channels used

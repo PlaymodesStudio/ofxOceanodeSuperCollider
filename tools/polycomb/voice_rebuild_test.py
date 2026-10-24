@@ -47,6 +47,7 @@ struct ofxSCServer {
 };
 struct ofxSCBus {int index;void free(){}};
 bool liveAudioBus(ofxSCServer*,ofxSCBus* b){return b!=nullptr;}
+float ofGetElapsedTimef(){return 0;}
 std::string ofToString(int n){return std::to_string(n);}
 std::vector<float> expand(std::vector<float> v,int n,float fallback){v.resize(n,v.empty()?fallback:v.back());return v;}
 template<class T>struct Param {T value;T get()const{return value;}};
@@ -87,6 +88,7 @@ struct ServerState {
  bool created=true;int builtVoices=4,builtChannels=2,spreadLanes=16,outBus=2;
  ofxSCSynth* spread=nullptr;std::array<Fx,4> fx{};Group* groups[1];
  ofxSCBus* voiceBus=nullptr;ofxSCBus* visBlock=nullptr;
+ ofxSCSynth* voiceMix=nullptr;ofxSCBus* voiceMainBus=nullptr;float voiceMixReady=0;
 };
 struct scModulation {
  int voices=4,rebuilds=0;
@@ -97,6 +99,7 @@ struct scModulation {
 };
 struct scPolyComb {
  static constexpr int LEGACY_VOICES=16,W=32,SlSpread=0,NumStages=4,VIS_PAN=32;
+ bool applyingSnapshot=false; void syncVoiceMorph(){}
  int voices=4;Param<int> spreadLayout{0},outChannels{2};scModulation modulation;
  std::map<ofxSCServer*,ServerState> states;
  int n()const{return voices;}

@@ -454,6 +454,26 @@ void scModulation::free(ofxSCServer* server, bool sendFree) {
     states.erase(it);
 }
 
+bool scModulation::hasVoiceBank(ofxSCServer* server,int voices) const {
+    auto it=states.find(server);
+    return it!=states.end() && it->second.created && it->second.builtVoices==voices;
+}
+
+bool scModulation::adoptServerState(scModulation& source, ofxSCServer* server) {
+    if(&source==this || !source.hasVoiceBank(server,n())) return false;
+    auto it=source.states.find(server);
+    free(server);
+    states.emplace(server,std::move(it->second));
+    source.states.erase(it);
+    live=source.live;
+    lfoPhases=source.lfoPhases;
+    for(auto& pt:params) {
+        auto match=std::find_if(source.params.begin(),source.params.end(),[&](const ParamTarget& other){return other.key==pt.key;});
+        if(match!=source.params.end()) pt.voiceWritten=match->voiceWritten;
+    }
+    return true;
+}
+
 void scModulation::rebuild(ofxSCServer* server) {
     auto it = states.find(server);
     if(it == states.end() || !it->second.created) return;

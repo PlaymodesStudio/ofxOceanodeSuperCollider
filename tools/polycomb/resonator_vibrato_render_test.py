@@ -43,6 +43,11 @@ with tempfile.TemporaryDirectory(prefix='polycomb-resonator-vibrato-') as direct
                               'mcpitch',1000,'mcfb',1000,'mcmix',1000,
                               'combvibrate',float(rate),'combvibrand',float(random),'combvibamt',float(amount)),
                       message('/n_setn',101,'combpitch',n,*([69.]*n))]
+            # Current controls are per voice; legacy ones are scalars. A scalar
+            # /s_new argument initializes only the first lane of an array.
+            if name!='LegacyComb':
+                for key,value in [('satlevel',12.),('combvibrate',rate),('combvibrand',random),('combvibamt',amount)]:
+                    settings.append(message('/n_setn',101,key,n,*([float(value)]*n)))
             score+=bundle(i*duration+.01,settings)
             score+=bundle((i+1)*duration-.01,[message('/g_freeAll',1)])
         score+=bundle(len(cases)*duration+.01,[message('/c_set',0,0.)])

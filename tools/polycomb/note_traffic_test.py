@@ -72,11 +72,13 @@ struct scPolyComb {
     std::vector<float> mapPitches(int m){return m==0?std::vector<float>{60,64,67}:std::vector<float>{48,52,55};}
     std::vector<float> oscillatorPitches(){return internal?mapPitches(oscMap):expand(pitch.get(),n());}
     std::vector<float> resonatorPitches(){return mapped?mapPitches(combMap):oscillatorPitches();}
+    std::vector<float> combMapPitches(){return resonatorPitches();}
     std::vector<float> processedPitch(){return pitch.get();}
     void sendIns(ServerState&,int){++insSends;}
     void sendVec(ofxSCSynth* s,std::string key,std::vector<float> v){
         scSynthControlBatch controls(s,&server);controls.set(key,expand(v,n()));controls.send();
     }
+    struct Mod {template<class T>std::vector<float> voiceValues(const Param<T>&p){return std::vector<float>(3,float(p.get()));}} modulation;
     ofxSCServer server;
     void sendGate(ServerState&,bool=false);void sendPitch(ServerState&,bool=false);void sendSub(ServerState&,bool=false);
 };
@@ -129,7 +131,7 @@ int main(){
     node.sendGate(st);node.sendPitch(st);
     assert(gate.mappings==1 && pitch.mappings==1 && sub.mappings==1);
     assert(values(node.server.sent[0],"out")==std::vector<float>({128}));
-    assert(values(node.server.sent[1],"atk")==std::vector<float>({.01f}));
+    assert(values(node.server.sent[1],"atk")==std::vector<float>({.01f,.01f,.01f}));
     // A note arriving before /n_go must retain the full creation arguments.
     gate.created=pitch.created=sub.created=false;node.server.sent.clear();
     node.sendGate(st,true);node.sendPitch(st,true);

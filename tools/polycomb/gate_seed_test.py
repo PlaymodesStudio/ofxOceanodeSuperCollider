@@ -18,12 +18,15 @@ struct ServerState{ofxSCServer*server;ofxSCSynth*pitchS;Part ins[2];};
 struct scPolyComb{
  enum{IComb,IRing};struct MapParams{Param<bool>indexSeedOnGate;Param<int>indexSeed;};
  MapParams oscMap,combMap;std::vector<float>previousMapGate;std::vector<ServerState*> states;
+ struct PitchMorph{void reseed(const std::string&,int){}}pitchMorph;
  Param<int>ringPitchSource;bool internal=true,mapped=true,gateTouched=false;int gateSends=0,messagesBeforeGate=0;
  struct Notes{int inEffectNow(){return 0;}}noteInputs;
  int n(){return 3;}bool internalPitch(){return internal;}bool combMapped(){return mapped;}
  template<class F>void forStates(F fn){for(auto*st:states)fn(st->server,*st);}
  std::vector<float>mapPitches(const MapParams&m){return std::vector<float>(n(),float(m.indexSeed.get()));}
  std::vector<float>resonatorPitches(){return mapped?mapPitches(combMap):mapPitches(oscMap);}
+ std::vector<float>oscillatorPitches(){return mapPitches(oscMap);}
+ std::vector<float>combMapPitches(){return resonatorPitches();}
  void sendVec(ofxSCSynth*s,const char*key,const std::vector<float>&v){
    for(auto*st:states)if(st->ins[0].synth==s || st->ins[1].synth==s){scSynthControlBatch batch(s,st->server);batch.set(key,v);batch.send();return;}
  }

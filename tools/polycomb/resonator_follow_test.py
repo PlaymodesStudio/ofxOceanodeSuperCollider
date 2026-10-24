@@ -10,7 +10,7 @@ code=r'''
 #include <cassert>
 #include <cmath>
 template<class T>struct P{T value{};T get()const{return value;}};
-struct Synth{std::map<std::string,std::vector<float>>v;void set(std::string key,float value){v[key]={value};}};
+struct Synth{std::map<std::string,std::vector<float>>v;void set(std::string key,float value){v[key]={value};}void set(std::string key,const std::vector<float>& value){v[key]=value;}};
 struct ServerState{};
 struct scPolyComb{
  enum{IComb};bool own=false,internal=true;P<int>combMode;
@@ -18,6 +18,9 @@ struct scPolyComb{
  P<float>combSatLevel,combTone,combGlide,combVibRate,combVibRand,combVibAmt;P<std::vector<float>>combPitch,combTranspose,combDetune,combFeed,combMix;
  Synth storage;bool combMapped(){return own;}bool internalPitch(){return internal;}
  std::vector<float>resonatorPitches(){return {48.137f,52.137f,55.137f};}
+ float combMapAmount(){return own?1.f:0.f;}
+ std::vector<float>combMapPitches(){return resonatorPitches();}
+ struct Mod{template<class T>std::vector<float>voiceValues(const P<T>& p){return {float(p.get())};}}modulation;
  int mod(ServerState&,int){return 0;}void sendVec(Synth*s,std::string key,const std::vector<float>&v){s->v[key]=v;}
  void send(){auto*s=&storage;ServerState st;switch(IComb){
 BRANCH

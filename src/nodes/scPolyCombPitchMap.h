@@ -200,4 +200,20 @@ inline std::vector<float> generate(const Map& m, int n, const std::vector<float>
     return out;
 }
 
+// Complete a map with the live played root and optional voice permutation.
+// Playback and endpoint morphing share this final stage so their pitches agree
+// at both ends of a transition, including quantization and range clipping.
+inline std::vector<float> playedPitches(const Map& map, int n, float root, bool inScale,
+                                      const std::vector<int>& order = {}) {
+    const std::vector<float> shift(std::max(0,n),root-60.0f);
+    auto notes=generate(map,n,inScale ? shift : std::vector<float>{});
+    if(!inScale) for(auto& note:notes) note+=root-60.0f;
+    if(n>1 && int(order.size())>=n) {
+        const auto original=notes;
+        for(int i=0;i<n;++i) notes[i]=original[std::clamp(order[i],0,n-1)];
+    }
+    for(auto& note:notes) note=std::clamp(note,0.0f,135.0f);
+    return notes;
+}
+
 } // namespace pcmap

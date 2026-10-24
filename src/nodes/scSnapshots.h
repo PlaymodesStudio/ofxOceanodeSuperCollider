@@ -218,6 +218,17 @@ public:
         if(host.apply) host.apply(state,state,1.0f,true);
         setActive(-1);
     }
+    // MacroMixer and other external controllers share the decorated sound
+    // callbacks used by snapshots, including policy metadata and effective DSP
+    // values. The caller owns progress/curve; a local glide must stop competing.
+    ofJson captureForExternalMorph() {
+        running = false;
+        return host.capture ? host.capture() : ofJson::object();
+    }
+    void applyExternalMorph(const ofJson& a, const ofJson& b, float t, bool switched) {
+        running = false;
+        if(host.apply) host.apply(a,b,ofClamp(t,0.0f,1.0f),switched);
+    }
     // One more snapshot in the first free slot (imports); false when full
     bool appendSnapshot(const ofJson& s) {
         if(!s.is_object()) return false;
