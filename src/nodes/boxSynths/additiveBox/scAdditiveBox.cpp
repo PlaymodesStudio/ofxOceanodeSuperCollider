@@ -366,6 +366,9 @@ void scAdditiveBox::setup(){
         mod.setup(h, {{"Cutoff", 48, "st"}, {"Morph", 1, "", true}, {"Pitch", 12, "st"}, {"Level", 1, "x"}, {"Sweep", 1, ""},
                       {"Pan", 0.5f, "turn"}, {"Noise", 1, "x"}, {"P.Level", 1, "x"}, {"P.Pan", 0.5f, "turn"},
                       {"P.Pitch", 12, "st"}}, true, true, true);   // velocity: the gates' levels
+        // Env 1 -> Level: the default amplitude envelope (the voices' VCA).
+        mod.envCount = 1;
+        mod.matrix[scModulation::SRC_ENV * NUM_TARGETS + 3] = 1.0f;
         mod.targetOfKey = {{cutoff.getEscapedName(), 0}, {morph.getEscapedName(), 1}, {pitch.getEscapedName(), 2},
                            {levels.getEscapedName(), 3}, {sweepAmt.getEscapedName(), 4}, {pan.getEscapedName(), 5},
                            {noise.getEscapedName(), 6}};
