@@ -444,6 +444,16 @@ void scSlicerBox::setup(){
         h.factory = [this](){ return factorySounds(); };
         h.bpm = [this](){ return currentBpm; };
         h.paramMenu = [this](const std::string& k){ controlMenu(k); };
+        for(auto* p : {&eqOn, &filterOn, &compOn, &satOn, &echoOn, &rvbOn}) snaps.morph.bypass(*p);
+        h.morphChanged = [this]() { for(auto& [sv, st] : states) if(st.chainCreated && st.player) updateStages(sv, st); };
+        h.morphBlocked = [this](const std::string& k) {
+            auto it = publishedHandles.find(k); return it != publishedHandles.end() && it->second->hasInConnection();
+        };
+        snaps.morph.mode(echoFilter, 4);
+        snaps.morph.mode(filterType, 3);
+        snaps.morph.mode(filterSlope, 2);
+        snaps.morph.bypass(compAuto);
+        snaps.morph.bypass(satAuto);
         snaps.setup(h);
     }
 
@@ -472,22 +482,22 @@ void scSlicerBox::setup(){
     auto stagesChanged = [this](bool&){
         for(auto& [server, st] : states) if(st.chainCreated && st.player) updateStages(server, st);
     };
-    for(auto* p : {&eqOn, &filterOn, &compOn, &satOn, &echoOn, &rvbOn}) listeners.push(p->newListener(stagesChanged));
+    for(auto* p : {&eqOn, &filterOn, &compOn, &satOn, &echoOn, &rvbOn}) listeners.push(p->newListener([this, p, stagesChanged](bool& v){ snaps.morph.edited(*p); stagesChanged(v); }));
     // A stage's controls
     auto onStage = [this](int stage){
         return [this, stage](float&){ sendStageAll(stage); };
     };
     for(auto* p : {&filterCutoff, &filterResonance}) listeners.push(p->newListener(onStage(StFilter)));
-    for(auto* p : {&filterType, &filterSlope}) listeners.push(p->newListener([this](int&){ sendStageAll(StFilter); }));
+    for(auto* p : {&filterType, &filterSlope}) listeners.push(p->newListener([this, p](int&){ snaps.morph.edited(*p); sendStageAll(StFilter); }));
     for(auto* p : {&compThreshold, &compRatio, &compKnee, &compAttack, &compRelease, &compMakeup, &compRms, &compHpf, &compMix})
         listeners.push(p->newListener(onStage(StComp)));
-    listeners.push(compAuto.newListener([this](bool&){ sendStageAll(StComp); }));
+    listeners.push(compAuto.newListener([this](bool&){ snaps.morph.edited(compAuto); sendStageAll(StComp); }));
     for(auto* p : {&satDrive, &satWarmth, &satTone, &satOutput, &satMix}) listeners.push(p->newListener(onStage(StSat)));
-    listeners.push(satAuto.newListener([this](bool&){ sendStageAll(StSat); }));
+    listeners.push(satAuto.newListener([this](bool&){ snaps.morph.edited(satAuto); sendStageAll(StSat); }));
     for(auto* p : {&echoDelay, &echoBeatVal, &echoFeed, &echoCutoff, &echoResonance, &echoPingPong, &echoMix})
         listeners.push(p->newListener(onStage(StEcho)));
     listeners.push(echoBeats.newListener([this](bool&){ sendStageAll(StEcho); }));
-    listeners.push(echoFilter.newListener([this](int&){ sendStageAll(StEcho); }));
+    listeners.push(echoFilter.newListener([this](int&){ snaps.morph.edited(echoFilter); sendStageAll(StEcho); }));
     for(auto* p : {&rvbMix, &rvbDecay, &rvbSize, &rvbPredelay, &rvbLate, &rvbSpread, &rvbLowpass,
                    &rvbHiDamp, &rvbLoDamp, &rvbModRate, &rvbSpin, &rvbWander})
         listeners.push(p->newListener(onStage(StRvb)));
@@ -705,14 +715,14 @@ void scSlicerBox::ensureSeq(ofxSCServer* server, ServerState& st){
 
 // ── Effects ────────────────────────────────────────────────────────────────
 
-bool scSlicerBox::stageOn(int stage) const {
+float scSlicerBox::stageOn(int stage) const {
     switch(stage){
-        case StEq: return eqOn.get();
-        case StFilter: return filterOn.get();
-        case StComp: return compOn.get();
-        case StSat: return satOn.get();
-        case StEcho: return echoOn.get();
-        case StRvb: return rvbOn.get();
+        case StEq: return snaps.morph.activation(eqOn);
+        case StFilter: return snaps.morph.activation(filterOn);
+        case StComp: return snaps.morph.activation(compOn);
+        case StSat: return snaps.morph.activation(satOn);
+        case StEcho: return snaps.morph.activation(echoOn);
+        case StRvb: return snaps.morph.activation(rvbOn);
     }
     return false;
 }
@@ -758,12 +768,14 @@ void scSlicerBox::sendAmp(ofxSCSynth* s){
 
 void scSlicerBox::sendStage(int stage, ofxSCSynth* s){
     if(!s) return;
-    const float on = stageOn(stage) ? 1.0f : 0.0f;
+    const float on = stageOn(stage);
     switch(stage){
         case StEq:
             sendEq(s);
             break;
         case StFilter:
+            s->set("typeweights", snaps.morph.weights(filterType));
+            s->set("slopeweights", snaps.morph.weights(filterSlope));
             s->set("type", (float)ofClamp(filterType.get(), 0, 2));
             s->set("slope", (float)ofClamp(filterSlope.get(), 0, 1));
             s->set("cutoff", ofClamp(filterCutoff.get(), 20.0f, 20000.0f));
@@ -777,7 +789,7 @@ void scSlicerBox::sendStage(int stage, ofxSCSynth* s){
             s->set("attack", std::max(0.01f, compAttack.get()));
             s->set("release", std::max(1.0f, compRelease.get()));
             s->set("makeup", compMakeup.get());
-            s->set("automakeup", compAuto.get() ? 1.0f : 0.0f);
+            s->set("automakeup", snaps.morph.activation(compAuto));
             s->set("rms", ofClamp(compRms.get(), 0.0f, 1.0f));
             s->set("schpf", ofClamp(compHpf.get(), 10.0f, 2000.0f));
             s->set("mix", ofClamp(compMix.get(), 0.0f, 1.0f));
@@ -789,7 +801,7 @@ void scSlicerBox::sendStage(int stage, ofxSCSynth* s){
             s->set("bias", ofClamp(satWarmth.get(), 0.0f, 1.0f));
             s->set("tone", ofClamp(satTone.get(), 500.0f, 20000.0f));
             s->set("output", ofClamp(satOutput.get(), -24.0f, 24.0f));
-            s->set("autogain", satAuto.get() ? 1.0f : 0.0f);
+            s->set("autogain", snaps.morph.activation(satAuto));
             s->set("mix", ofClamp(satMix.get(), 0.0f, 1.0f));
             s->set("on", on);
             break;
@@ -798,6 +810,7 @@ void scSlicerBox::sendStage(int stage, ofxSCSynth* s){
             s->set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
             s->set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
             s->set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
+            s->set("filterweights", snaps.morph.weights(echoFilter));
             s->set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
             s->set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
             s->set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
@@ -935,7 +948,7 @@ void scSlicerBox::sendEq(ofxSCSynth* s){
         if(scEQEditor::isShelf(b)) s->set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get())));
         else s->set(k + "rq", vec(1.0f / std::max(0.01f, eqShape[b].get())));
     }
-    s->set("mix", (double)eqMix.get());
+    s->set("mix", (double)(eqMix.get() * snaps.morph.activation(eqOn)));
 }
 
 void scSlicerBox::sendEqAll(){

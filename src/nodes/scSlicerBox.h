@@ -156,7 +156,7 @@ private:
     void sendEq(ofxSCSynth* synth);
     void sendEqAll();
     void sendAmp(ofxSCSynth* synth);
-    bool stageOn(int stage) const;
+    float stageOn(int stage) const;
     static const char* stageDef(int stage);
     float stageTail(int stage) const;
     float echoDelaySec() const;

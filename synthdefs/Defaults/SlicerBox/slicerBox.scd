@@ -139,7 +139,12 @@ SynthDef(\SlicerBoxFilter, {
     var lp24 = BLowPass.ar(BLowPass.ar(sig, f, 0.5412.reciprocal), f, res * 1.3066.reciprocal * 2.sqrt);
     var hp24 = BHiPass.ar(BHiPass.ar(sig, f, 0.5412.reciprocal), f, res * 1.3066.reciprocal * 2.sqrt);
     var bp24 = BBandPass.ar(BBandPass.ar(sig, f, bw), f, bw);
-    var y = Select.ar(\type.kr(0).clip(0, 2) + (3 * (\slope.kr(0) > 0.5)), [lp12, hp12, bp12, lp24, hp24, bp24]);
+    var filters = [lp12, hp12, bp12, lp24, hp24, bp24];
+    var types = NamedControl.kr(\typeweights, 0 ! 3).lag(0.03);
+    var slopes = NamedControl.kr(\slopeweights, 0 ! 2).lag(0.03);
+    var y = Select.ar(types.sum > 0, [
+        Select.ar(\type.kr(0).clip(0, 2) + (3 * (\slope.kr(0) > 0.5)), filters),
+        Mix(filters.collect { |signal, i| signal * types[i % 3] * slopes[i.div(3)] })]);
     Out.ar(\out.kr(0), LinXFade2.ar(sig, y, \on.kr(1, 0.03) * 2 - 1));
 }).writeDefFile(d);
 "SlicerBox SynthDefs written to %".format(d).postln;
