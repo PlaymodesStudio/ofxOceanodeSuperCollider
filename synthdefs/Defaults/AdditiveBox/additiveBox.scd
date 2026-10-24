@@ -253,6 +253,9 @@ chunks.do { |nc|
             var vib = In.kr(\bus.kr(0) + (3 * \np.kr(8)) + 1, 2);
             var pitch = Lag.kr(lag.(\pitch, 48) + \pitchoff.kr(0), \glide.kr(0));
             var glev = Gate.kr(\gate.kr(0), \gate.kr(0) > 0);   // the gate's level: a gate at 0.2 plays at 0.2
+            // An amplitude envelope owns note-off/release. Without one, close
+            // the voice with Gate; glev alone holds the last positive velocity.
+            var gateAmp = Select.kr(\vca.kr(0) > 0.5, [Lag.kr((\gate.kr(0) > 0), 0.005), 1]);
             var p = pitch + mod.(2) + mod.(9) + (vib[0] * vib[1]);
             var freqs = (s[1] * p.midicps) + lag.(\shift, 0);
             var levels = s[0] * (1 + mod.(7)).max(0);
@@ -268,7 +271,7 @@ chunks.do { |nc|
                 { Mix(PanAz.ar(no, sigs, Select.kr(line, [pos * 2, pos * 2 * (no - 1) / no]), levels, width, 0)) };
             // Level: an envelope routed there is the voice's VCA (\vca 1: the
             // modulation alone sets the level); else it moves the level around 1
-            sig = sig * (lag.(\amp, 0.5) * Select.kr(\vca.kr(0) > 0.5, [(1 + mod.(3)).max(0), mod.(3).max(0)])) * glev;
+            sig = sig * (lag.(\amp, 0.5) * Select.kr(\vca.kr(0) > 0.5, [(1 + mod.(3)).max(0), mod.(3).max(0)])) * glev * gateAmp;
             Out.ar(\out.kr(0), sig);
             // 1 while sounding, summed over copy 0's chunks for the tail (the
             // other copies: a junk bus)

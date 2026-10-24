@@ -181,10 +181,14 @@ def main():
             old, new, vold, vnew = render(work, defs, case)
             sounding = slice(int(0.05 * SR), int(0.95 * SR))
             peak = np.max(np.abs(old[sounding]))
-            diff = np.max(np.abs(old - new))
+            # The historical core held its last gate level after note-off.
+            # Compare the common held-note behavior; the current core's direct
+            # gate closure is covered by morph_render_test.py.
+            comparable = slice(0, int(1.0 * SR))
+            diff = np.max(np.abs(old[comparable] - new[comparable]))
             # at the first sample of each block, where the probe's K2A ramp holds
             # the last block's value (mid-ramp a fold of a ramp is not a ramp of a fold)
-            vdiff = np.max(np.abs(vold[::64] - vnew[::64]))
+            vdiff = np.max(np.abs(vold[comparable][::64] - vnew[comparable][::64]))
             # the display moves while the voice plays, freezes once it pauses
             moving = np.ptp(vold[int(0.2 * SR):int(0.9 * SR)], axis=0).max()
             frozen = np.ptp(vold[int(1.5 * SR):int(1.9 * SR)], axis=0).max()

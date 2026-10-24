@@ -84,6 +84,7 @@ public:
     // (Partial Spread, Partial Random), for a node that runs its own copies of
     // the LFOs per partial (AdditiveBox) with lfoTable / lfoRate / lfoPhase
     bool partialLfos = false;
+    float defaultEnvSustain = 0.0f; // set before setup; amplitude envelopes normally sustain
     bool unifiedLfoModels = false; // PolyComb: Off / Classic / Noise / Random
     // Set before setup: the most voices the node can have (the indexer ranges; GrainBox: 500)
     int maxVoices = 16;

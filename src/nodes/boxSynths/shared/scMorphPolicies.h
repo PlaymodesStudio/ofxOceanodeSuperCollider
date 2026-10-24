@@ -102,7 +102,12 @@ public:
         if(it==entries.end())return {};
         const auto& e=it->second;
         if(e.count<1)return {};
-        const auto value=hasEffective(p) ? e.effective : modeWeights(ofJson(p.get()),e.count);
+        // Effective mode tables can contain a row for every voice. Reading a
+        // single row must not copy that entire JSON table on every DSP lookup.
+        ofJson current;
+        const ofJson* table=&e.effective;
+        if(!hasEffective(p)){current=modeWeights(ofJson(p.get()),e.count);table=&current;}
+        const auto& value=*table;
         if(!value.is_array() || value.empty())return oneHot(ofJson(0),e.count);
         const auto& row=value.front().is_array() ? value[size_t(std::max(0,voice))%value.size()] : value;
         if(!row.is_array() || int(row.size())!=e.count)return oneHot(ofJson(0),e.count);
@@ -119,7 +124,9 @@ public:
     }
     template<class T,class Evaluate> float evaluate(const ofParameter<T>& p,int voice,int fallback,Evaluate evaluateMode) const {
         if(!hasEffective(p))return evaluateMode(fallback);
-        const auto w=weights(p,voice);
+        return evaluateWeights(weights(p,voice),fallback,evaluateMode);
+    }
+    template<class Evaluate> static float evaluateWeights(const std::vector<float>& w,int fallback,Evaluate evaluateMode) {
         if(w.empty())return evaluateMode(fallback);
         float value=0;
         for(size_t i=0;i<w.size();++i)if(w[i]>0)value+=w[i]*evaluateMode(int(i));

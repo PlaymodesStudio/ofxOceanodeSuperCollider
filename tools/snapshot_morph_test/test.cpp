@@ -96,6 +96,16 @@ int main() {
     near(vectors.evaluate(modes,0,0,[](int mode){return float(mode*mode);}),2.25f);
     auto vc=va;vectors.capture(vc);vectors.begin(vc,vb,0);vectors.end();
     near(vectors.weights(modes,1)[2],.25f);
+    // A render loop can resolve a voice's mode row once and reuse it for all
+    // partials/curve points, including cyclic voice rows and interrupted blends.
+    for(int voice=0;voice<13;++voice){
+        const auto weights=vectors.weights(modes,voice);
+        for(int sample=0;sample<32;++sample){
+            auto evaluate=[&](int mode){return std::sin(float(sample+1)*(mode+1));};
+            near(scMorphPolicies::evaluateWeights(weights,0,evaluate),vectors.evaluate(modes,voice,0,evaluate));
+        }
+    }
+    near(scMorphPolicies::evaluateWeights({},2,[](int mode){return float(mode*3);}),6);
     // A stateful algorithm switches only at its neutral depth, independent
     // of the user's general Start/Middle/End selector switch preference.
     scMorphPolicies neutral;

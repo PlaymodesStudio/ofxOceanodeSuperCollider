@@ -13,7 +13,9 @@
 //    Random, or 64 harmonics drawn by hand) morphed by Morph, with tilt,
 //    stretch / inharmonicity, even / odd and harmonic blur.
 //  • Envelopes: the shared ones (Envelopes tab); one routed to Level is the
-//    voices' VCA, else they drone.
+//    voices' VCA; without one the level follows Gate directly.
+//    Drone (header) holds every gate open and bypasses amplitude envelopes;
+//    their settings and routes are preserved for gated playback.
 //  • Per partial: filter 1 gain (LP / BP / HP / Notch / Comb / drawn curve
 //    around a keytracked, modulated cutoff, the fundamental optionally kept),
 //    filter 2 (vowel formants or a drawn EQ), moving sweep lobes, random mask
@@ -391,6 +393,7 @@ private:
     ofParameter<int> numVoices, numOutputs;
     // Voice
     ofParameter<std::vector<float>> pitch, gate, levels, glide;
+    ofParameter<bool> drone;
     scScheduledInputs noteInputs;    // the timeline's notes, timetagged (Gate, Pitch while published)
     ofParameter<std::vector<int>> trig;
     ofParameter<float> volume;

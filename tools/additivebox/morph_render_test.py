@@ -34,7 +34,18 @@ with tempfile.TemporaryDirectory(prefix='additive-morph-render-') as directory:
         when=.05+j*.25
         events+=bundle(when,[message('/n_set',100+v,'amp',.1*t) for v in range(1,8)])
         cases.append((when,t))
-    events+=bundle(2.4,[message('/g_freeAll',1)])+bundle(2.41,[message('/c_set',0,0.0)])
+    events+=bundle(2.4,[message('/g_freeAll',1)])
+    # Drone-off closes Gate: an unrouted VCA must stop, while a routed
+    # envelope keeps control of its release instead of being cut off.
+    events+=bundle(2.5,[message('/c_set',2000+3*16,1.0)]+[
+        message('/s_new','AdditiveBoxCore8_1',200+v,1,1,'bus',1000,'np',8,
+                'gate',1.0,'pitch',60.0,'amp',.1,'silbus',4096+v,'out',v,
+                'vca',v,'modbus',2000) for v in range(2)])
+    events+=bundle(2.8,[message('/n_set',200+v,'gate',0.0) for v in range(2)])
+    events+=bundle(3.1,[message('/c_set',2000+3*16,0.0)])
+    events+=bundle(3.4,[message('/c_set',2000+3*16,1.0)]+[
+        message('/n_set',200+v,'gate',1.0) for v in range(2)])
+    events+=bundle(3.7,[message('/g_freeAll',1)])+bundle(3.71,[message('/c_set',0,0.0)])
     score=work/'test.osc';score.write_bytes(events);wav=work/'test.wav'
     r=subprocess.run(['/Applications/SuperCollider.app/Contents/Resources/scsynth','-N',str(score),'_',str(wav),'48000','WAV','float','-o','9','-i','0','-z','64','-D','0','-m','131072','-U','/Applications/SuperCollider.app/Contents/Resources/plugins'],capture_output=True,text=True,timeout=30)
     assert r.returncode==0 and 'FAILURE' not in r.stdout+r.stderr,(r.returncode,r.stdout+r.stderr)
@@ -48,4 +59,12 @@ with tempfile.TemporaryDirectory(prefix='additive-morph-render-') as directory:
             expected=1 if v==0 else t
             error=sum((audio[f*channels+v]-expected*audio[f*channels+8])**2 for f in frames)
             assert math.sqrt(error/ref)<2e-5,(t,v,math.sqrt(error/ref))
-    print('PASS: real AdditiveBox core renders count-presence gains at .001 and across .5; common voice unchanged, forward/reverse endpoint gains exact')
+    def rms(channel,start,end):
+        frames=range(round(start*sr),round(end*sr))
+        return math.sqrt(sum(audio[f*channels+channel]**2 for f in frames)/len(frames))
+    assert rms(0,2.6,2.75)>1e-3 and rms(1,2.6,2.75)>1e-3
+    assert rms(0,2.95,3.05)<1e-6, 'Gate off must silence voices without an amplitude envelope'
+    assert rms(1,2.95,3.05)>1e-3, 'Gate off must preserve envelope release'
+    assert rms(1,3.2,3.3)<1e-6, 'Envelope release must reach silence'
+    assert rms(0,3.5,3.6)>1e-3 and rms(1,3.5,3.6)>1e-3
+    print('PASS: real AdditiveBox core count gains; Drone-off silence, envelope release preserved, and restart')

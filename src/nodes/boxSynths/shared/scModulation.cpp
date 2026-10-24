@@ -192,7 +192,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
         auto toEnv = [this, e]() { forStates([this, e](ofxSCServer*, ServerState& st){ sendEnv(st, e); }); };
         E.a.set(L + "Attack" + nameSuffix, 0.01f, 0.001f, 10.0f);          host.regF(E.a, toEnv);
         E.d.set(L + "Decay" + nameSuffix, 0.5f, 0.001f, 10.0f);            host.regF(E.d, toEnv);
-        E.s.set(L + "Sustain" + nameSuffix, 0.0f, 0.0f, 1.0f);             host.regF(E.s, toEnv);
+        E.s.set(L + "Sustain" + nameSuffix, ofClamp(defaultEnvSustain, 0.0f, 1.0f), 0.0f, 1.0f); host.regF(E.s, toEnv);
         E.r.set(L + "Release" + nameSuffix, 0.5f, 0.001f, 20.0f);          host.regF(E.r, toEnv);
         E.ca.set(L + "Attack Curve" + nameSuffix, -4.0f, -12.0f, 12.0f);   host.regF(E.ca, toEnv);
         E.cd.set(L + "Decay Curve" + nameSuffix, -4.0f, -12.0f, 12.0f);    host.regF(E.cd, toEnv);
