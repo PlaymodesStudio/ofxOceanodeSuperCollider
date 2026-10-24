@@ -205,6 +205,7 @@ private:
         // (the mix bus first) and writes fxBuses[i]; the output synth reads
         // the last one
         std::vector<int> fxPlan;
+        int fxChannels = 0;
         ofxSCSynth* fx[FX_COUNT] = {nullptr, nullptr, nullptr};
         std::vector<ofxSCBus*> fxBuses;
         int outIn = -1;

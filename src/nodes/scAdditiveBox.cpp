@@ -381,6 +381,12 @@ void scAdditiveBox::setup(){
         h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySound(a, b, t, sw); };
         h.bpm = [this](){ return currentBpm; };
         h.paramMenu = [this](const std::string& k){ controlMenu(k); };
+        for(auto& p : fxOn) snaps.morph.bypass(p);
+        snaps.morph.mode(echoFilter, 4);
+        h.morphBlocked = [this](const std::string& k) {
+            auto it=publishedHandles.find(k); return it!=publishedHandles.end() && it->second->hasInConnection();
+        };
+        h.morphChanged = [this]() { rebuildFxAll(); };
         snaps.setup(h);
     }
     noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.created) return true; return false; });
@@ -456,14 +462,14 @@ void scAdditiveBox::setup(){
     }
 
     for(int st = 0; st < FX_COUNT; st++)
-        nodeListeners.push(fxOn[st].newListener([this](bool&){ rebuildFxAll(); }));
+        nodeListeners.push(fxOn[st].newListener([this, st](bool&){ snaps.morph.edited(fxOn[st]); if(!snaps.morph.applying()) rebuildFxAll(); }));
     for(int b = 0; b < 5; b++)
         for(auto* p : {&eqGain[b], &eqFreq[b], &eqShape[b]})
             nodeListeners.push(p->newListener([this](float&){ eqCurveDirty = true; sendFxParamsAll(FX_EQ); }));
     nodeListeners.push(eqMix.newListener([this](float&){ sendFxParamsAll(FX_EQ); }));
     for(auto* p : {&echoDelay, &echoFeed, &echoCutoff, &echoMix, &echoResonance})
         nodeListeners.push(p->newListener([this](float&){ sendFxParamsAll(FX_ECHO); }));
-    nodeListeners.push(echoFilter.newListener([this](int&){ sendFxParamsAll(FX_ECHO); }));
+    nodeListeners.push(echoFilter.newListener([this](int&){ snaps.morph.edited(echoFilter); sendFxParamsAll(FX_ECHO); }));
     for(auto* p : {&revSize, &revDecay, &revPredelay, &revLowpass, &revMix, &revPosition, &revSpread})
         nodeListeners.push(p->newListener([this](float&){ sendFxParamsAll(FX_REVERB); }));
     requireFxSynthdefs();
@@ -1748,14 +1754,23 @@ void scAdditiveBox::rebuildFx(ofxSCServer* server){
     auto it = states.find(server);
     if(it == states.end() || !it->second.out || !it->second.mix) return;
     auto& st = it->second;
-    freeFxSynths(server);
-    fxPending = false;
+    std::vector<int> desired;
     const bool ready = fxStageReady(server);
-    for(int stage = 0; stage < FX_COUNT; stage++){
-        if(!fxOn[stage]) continue;
-        if(ready) st.fxPlan.push_back(stage);
-        else fxPending = true;
+    if(!ready) for(const auto& p : fxOn) if(snaps.morph.activation(p)>0) fxPending=true;
+    if(ready) for(int k=0; k<FX_COUNT; ++k)
+        if(snaps.morph.activation(fxOn[k]) > 0) desired.push_back(k);
+    if(desired == st.fxPlan && st.fxChannels == numOutputsClamped()) {
+        for(int k : st.fxPlan) sendFxParams(k, st.fx[k]);
+        return;
     }
+    if(st.fxChannels != numOutputsClamped()) freeFxSynths(server);
+    else for(int k=0; k<FX_COUNT; ++k) {
+        if(st.fx[k] && std::find(desired.begin(), desired.end(), k) == desired.end()) {
+            st.fx[k]->free(); delete st.fx[k]; st.fx[k] = nullptr;
+        }
+    }
+    st.fxChannels = numOutputsClamped();
+    st.fxPlan = desired;
     for(auto*& b : st.fxBuses) if(b && !audioBusIsLive(server, b)){ delete b; b = nullptr; }
     st.fxBuses.erase(std::remove(st.fxBuses.begin(), st.fxBuses.end(), nullptr), st.fxBuses.end());
     while(st.fxBuses.size() < st.fxPlan.size()) st.fxBuses.push_back(new ofxSCBus(RATE_AUDIO, MAX_OUTPUTS, server));
@@ -1763,13 +1778,18 @@ void scAdditiveBox::rebuildFx(ofxSCServer* server){
     int in = st.mix->index;
     for(size_t i = 0; i < st.fxPlan.size(); i++){
         const int stage = st.fxPlan[i];
-        auto* synth = new ofxSCSynth(fxDefName(stage), server);
+        auto* synth = st.fx[stage];
+        const bool fresh = !synth;
+        if(fresh) synth = new ofxSCSynth(fxDefName(stage), server);
         synth->set("in", in);
         synth->set("out", st.fxBuses[i]->index);
         sendFxParams(stage, synth);
         // addBefore out, once the node exists (isCreated() waits for /n_go: a stage
         // switched on right after creation would never start)
-        if(st.created) synth->createAndRun(2, st.out->nodeID, true);
+        if(st.created) {
+            if(fresh) synth->createAndRun(2, st.out->nodeID, true);
+            else synth->moveBefore(st.out->nodeID);
+        }
         st.fx[stage] = synth;
         in = st.fxBuses[i]->index;
     }
@@ -1795,13 +1815,14 @@ void scAdditiveBox::sendFxParams(int stage, ofxSCSynth* s){
                 if(scEQEditor::isShelf(b)) s->set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get())));
                 else s->set(k + "rq", vec(1.0f / std::max(0.01f, eqShape[b].get())));
             }
-            s->set("mix", eqMix.get());
+            s->set("mix", eqMix.get() * snaps.morph.activation(fxOn[stage]));
             break;
         case FX_ECHO:
+            s->set("filterweights", snaps.morph.weights(echoFilter));
             s->set("delay", vec(echoDelay.get()));
             s->set("feed", vec(echoFeed.get()));
             s->set("cutoff", vec(echoCutoff.get()));
-            s->set("mix", vec(echoMix.get()));
+            s->set("mix", vec(echoMix.get() * snaps.morph.activation(fxOn[stage])));
             s->set("filtertype", vec(float(std::clamp(echoFilter.get(), 0, 3))));
             s->set("resonance", vec(echoResonance.get()));
             break;
@@ -1810,7 +1831,7 @@ void scAdditiveBox::sendFxParams(int stage, ofxSCSynth* s){
             s->set("decay", revDecay.get());
             s->set("predelay", revPredelay.get());
             s->set("lowpass", revLowpass.get());
-            s->set("mix", revMix.get());
+            s->set("mix", revMix.get() * snaps.morph.activation(fxOn[stage]));
             s->set("position", revPosition.get());
             s->set("spread", revSpread.get());
             break;
