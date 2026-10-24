@@ -194,6 +194,10 @@ void scSampleBox::setup() {
         h.factory = [this]() { return factorySnapshots(); };
         h.bpm = [this]() { return currentBpm(); };
         h.paramMenu = [this](const std::string& k) { drawPublishedUnderline(k); drawPublishMenu(k); };
+        h.morphBlocked = [this](const std::string& k) {
+            auto it=published.find(k); return it!=published.end() && it->second->hasInConnection();
+        };
+        h.morphChanged = [this]() { for(auto& p : pads) syncPad(*p); };
         snaps.setup(h);
     }
     requireSynthdefs();
@@ -351,10 +355,24 @@ scSampleBox::Control& scSampleBox::registerPadControl(Pad& p, ofParameter<T>& pa
     c.add = [this, &param]() { return addParameter(param); };
     c.save = [&param]() { return param.toString(); };
     c.load = [&param](const std::string& s) { param.fromString(s); };
+    const std::string baseKey = c.base;
+    const int padIndex = p.index;
+    auto readSnapshot = [padIndex, baseKey](const ofJson& j) -> ofJson {
+        if(!j.contains("pads") || !j["pads"].is_array() || j["pads"].empty()) return {};
+        const auto& ps = j["pads"][std::min<size_t>(padIndex, j["pads"].size()-1)];
+        if(!ps.contains("controls") || !ps["controls"].contains(baseKey)) return {};
+        return ps["controls"][baseKey];
+    };
+    if constexpr(std::is_same<T, bool>::value) {
+        if((dest >= DEST_FX && c.scName == "on") || c.scName == "filteron") snaps.morph.bypass(param, readSnapshot);
+    } else if constexpr(std::is_same<T, int>::value) {
+        if(c.scName == "filtertype") snaps.morph.mode(param, 3, readSnapshot);
+    }
     controls.push_back(std::move(c));
     Pad* pp = &p;
     const std::string name = scName ? scName : "";
-    p.listeners.push(param.newListener([this, pp, dest, name](T& value) {
+    p.listeners.push(param.newListener([this, pp, &param, dest, name](T& value) {
+        snaps.morph.edited(param);
         if(restoring) return;
         Pad& pad = *pp;
         if(name == "stretchmode") { for(auto& [srv, s] : pad.sc) replaceEngine(srv, pad); return; }
@@ -370,10 +388,10 @@ scSampleBox::Control& scSampleBox::registerPadControl(Pad& p, ofParameter<T>& pa
         if(name.empty()) return;
         auto send = [&](ofxSCSynth* s) {
             if(!s) return;
-            if constexpr(std::is_same<T, bool>::value) s->set(name, int(value)); else s->set(name, value);
+            if constexpr(std::is_same<T, bool>::value) s->set(name, snaps.morph.activation(param)); else s->set(name, value);
         };
         if(dest == DEST_ENGINE) {
-            if(name=="attack" || name=="release") { for(auto& [srv, s] : pad.sc) sendEngine(srv,pad); }
+            if(name=="attack" || name=="release" || name=="filtertype") { for(auto& [srv, s] : pad.sc) sendEngine(srv,pad); }
             else for(auto& [srv, s] : pad.sc) send(s.engine);
         }
         else if(dest == DEST_STRIP) { for(auto& [srv, s] : pad.sc) send(s.strip); }
@@ -585,6 +603,10 @@ void scSampleBox::removePad(int k) {
     std::vector<std::string> keys;
     for(const auto& c : controls) if(c.pad == idx) keys.push_back(c.key);
     for(const auto& key : keys) if(published.count(key)) unpublish(key, true);
+    for(const auto& c : controls) if(c.pad == idx) {
+        if(c.b) snaps.morph.erase(*c.b);
+        if(c.i) snaps.morph.erase(*c.i);
+    }
     controls.erase(std::remove_if(controls.begin(), controls.end(), [idx](const Control& c) { return c.pad == idx; }), controls.end());
     p.listeners.unsubscribeAll();
     if(p.sample->task.valid()) p.sample->task.wait();
@@ -820,8 +842,9 @@ void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p) {
             else s->set(c.scName, c.f->get());
         }
         else if(c.i) s->set(c.scName, c.i->get());
-        else if(c.b) s->set(c.scName, int(c.b->get()));
+        else if(c.b) s->set(c.scName, snaps.morph.activation(*c.b));
     }
+    s->set("filterweights", snaps.morph.weights(p.filterType));
     const auto bs = p.sample->buffers.find(srv);
     const bool loaded = bs != p.sample->buffers.end() && (int)bs->second.size() >= p.sample->channels;
     s->set("loaded", int(loaded));
@@ -863,6 +886,7 @@ void scSampleBox::sendFx(ofxSCServer* srv, Pad& p, int fx) {
     if(it == p.sc.end() || !it->second.fxSynth[fx]) return;
     PadSC& sc = it->second;
     ofxSCSynth* s = sc.fxSynth[fx];
+    s->set("on", snaps.morph.activation(p.fxOn[fx]));
     if(sc.bus) s->set("bus", sc.bus->index);
     s->set("modbus", p.mod.targetBus(srv, 0));
     if(sc.latest) s->set("latestbus", sc.latest->index);
@@ -871,7 +895,7 @@ void scSampleBox::sendFx(ofxSCServer* srv, Pad& p, int fx) {
         if(c.pad != p.index || c.dest != DEST_FX + fx || c.scName.empty() || c.scName == "on") continue;
         if(c.f) s->set(c.scName, c.f->get());
         else if(c.i) s->set(c.scName, c.i->get());
-        else if(c.b) s->set(c.scName, int(c.b->get()));
+        else if(c.b) s->set(c.scName, snaps.morph.activation(*c.b));
     }
 }
 
@@ -940,7 +964,7 @@ void scSampleBox::syncFx(ofxSCServer* srv, Pad& p) {
     if(it == p.sc.end() || !it->second.created) return;
     PadSC& sc = it->second;
     for(int fx = 0; fx < FX_COUNT; fx++) {
-        const bool want = p.fxOn[fx].get() && (fx != FX_IMAGE || channels.get() > 1);
+        const bool want = snaps.morph.activation(p.fxOn[fx]) > 0 && (fx != FX_IMAGE || channels.get() > 1);
         ofxSCSynth*& s = sc.fxSynth[fx];
         if(want && !s) {
             s = new ofxSCSynth(fxDefs[fx] + ofToString(channels.get()), srv);
@@ -949,6 +973,8 @@ void scSampleBox::syncFx(ofxSCServer* srv, Pad& p) {
             for(int j = fx + 1; j < FX_COUNT && !next; j++) next = sc.fxSynth[j];
             if(next) s->createAndRun(2, next->nodeID, true);           // before the next effect
             else s->createAndRun(1, sc.fx->nodeID, true);              // the chain's tail
+        } else if(want && s) {
+            sendFx(srv, p, fx);
         } else if(!want && s) {
             s->free();
             delete s;

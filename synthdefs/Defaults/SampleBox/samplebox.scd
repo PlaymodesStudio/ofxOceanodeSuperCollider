@@ -209,10 +209,13 @@ modOf = { |k, base|
                 // note); the mixer's effects come after the modulation.
                 f = (\cutoff.kr(16000) * (2 ** fxMod.(7, 0))).clip(20, 20000);
                 q = fxMod.(8, \resonance.kr(0.7)).clip(0.1, 2);
-                filter = Select.ar(\filtertype.kr(0).clip(0, 2),
-                    [RLPF.ar(sig, f, q.reciprocal.clip(0.05, 1)),
+                filter = { var alternatives = [RLPF.ar(sig, f, q.reciprocal.clip(0.05, 1)),
                      RHPF.ar(sig, f, q.reciprocal.clip(0.05, 1)),
-                     BPF.ar(sig, f, q.reciprocal.clip(0.05, 1))]);
+                     BPF.ar(sig, f, q.reciprocal.clip(0.05, 1))];
+                    var weights = NamedControl.kr(\filterweights, 0 ! 3).lag(0.03);
+                    Select.ar(weights.sum > 0, [Select.ar(\filtertype.kr(0).clip(0, 2), alternatives),
+                        Mix(alternatives.collect { |signal, i| signal * weights[i] })])
+                }.value;
                 sig = XFade2.ar(sig, filter, \filteron.kr(0).lag(0.03) * 2 - 1);
                 Out.ar(\out.kr(0), LeakDC.ar(sig));
             }).writeDefFile(dir);
@@ -238,7 +241,7 @@ modOf = { |k, base|
         eq = BPeakEQ.ar(eq, freqs[2], shapes[2].reciprocal, gains[2]);
         eq = BPeakEQ.ar(eq, freqs[3], shapes[3].reciprocal, gains[3]);
         eq = BHiShelf.ar(eq, freqs[4], safeShelf.(shapes[4], gains[4]).reciprocal, gains[4]);
-        ReplaceOut.ar(bus, XFade2.ar(sig, eq, \eqmix.kr(1).clip(0, 1) * 2 - 1));
+        ReplaceOut.ar(bus, LinXFade2.ar(sig, XFade2.ar(sig, eq, \eqmix.kr(1).clip(0, 1) * 2 - 1), \on.kr(1, 0.03) * 2 - 1));
     }).writeDefFile(dir);
 
     SynthDef(("SampleBoxComp_" ++ n).asSymbol, {
@@ -249,14 +252,14 @@ modOf = { |k, base|
         comp = Compander.ar(sig, key, threshold.dbamp, 1, ratio.reciprocal,
             \compattack.kr(10).clip(0.1, 200) * 0.001, \comprelease.kr(150).clip(1, 2000) * 0.001) *
             \compmakeup.kr(0).clip(-12, 24).dbamp;
-        ReplaceOut.ar(bus, comp);
+        ReplaceOut.ar(bus, LinXFade2.ar(sig, comp, \on.kr(1, 0.03) * 2 - 1));
     }).writeDefFile(dir);
 
     SynthDef(("SampleBoxSat_" ++ n).asSymbol, {
         var bus = \bus.kr(0), sig = In.ar(bus, n), drive, sat;
         drive = modOf.(11, \satdrive.kr(6)).clip(0, 36).dbamp;
         sat = (sig * drive).tanh / drive.tanh.max(0.001);
-        ReplaceOut.ar(bus, XFade2.ar(sig, sat, \satmix.kr(1).clip(0, 1) * 2 - 1));
+        ReplaceOut.ar(bus, LinXFade2.ar(sig, XFade2.ar(sig, sat, \satmix.kr(1).clip(0, 1) * 2 - 1), \on.kr(1, 0.03) * 2 - 1));
     }).writeDefFile(dir);
 
     // Echo: Time in beats (\bpm), feedback through a lowpass (Tone); Spread
@@ -272,15 +275,15 @@ modOf = { |k, base|
         wet = LPF.ar(wet, \echotone.kr(6000).clip(200, 20000));
         wet = LeakDC.ar(wet).softclip;
         LocalOut.ar(if(n > 1, { (wet * (1 - spread)) + (wet.rotate(1) * spread) }, { wet }));
-        ReplaceOut.ar(bus, sig + (wet * \echoamount.kr(0.35).clip(0, 1)));
+        ReplaceOut.ar(bus, LinXFade2.ar(sig, sig + (wet * \echoamount.kr(0.35).clip(0, 1)), \on.kr(1, 0.03) * 2 - 1));
     }).writeDefFile(dir);
 
     SynthDef(("SampleBoxReverb_" ++ n).asSymbol, {
         var bus = \bus.kr(0), sig = In.ar(bus, n);
-        ReplaceOut.ar(bus, OceanodeMicroSpace.box(sig.asArray,
+        ReplaceOut.ar(bus, LinXFade2.ar(sig, OceanodeMicroSpace.box(sig.asArray,
             \revsize.kr(30).clip(0, 60), \revdecay.kr(4).clip(0.05, 60), \revpredelay.kr(20).clip(0, 1000),
             \revlowpass.kr(10000).clip(20, 20000), \revposition.kr(0.8).clip(0, 1), \revspread.kr(0.15).clip(-1, 1),
-            modOf.(13, \revmix.kr(0.33)).clip(0, 1)));
+            modOf.(13, \revmix.kr(0.33)).clip(0, 1)), \on.kr(1, 0.03) * 2 - 1));
     }).writeDefFile(dir);
 
     // MixerPro's generalized mid/side: zero-sum difference and zero-sum
@@ -295,9 +298,9 @@ modOf = { |k, base|
             side = side.collect { |channel| channel - (LPF.ar(LPF.ar(channel, bf), bf) * \bassmono.kr(0).clip(0, 1)) };
             dcor = Array.fill(n, { |i| AllpassN.ar(mid - bass, 0.02, 0.002 + (i * 0.0011), 0.02) });
             dcor = dcor - (dcor.sum / n);
-            ReplaceOut.ar(bus, Array.fill(n, { |i|
+            ReplaceOut.ar(bus, LinXFade2.ar(sig, Array.fill(n, { |i|
                 mid + (side[i] * modOf.(14, \width.kr(1)).clip(0, 2)) + (dcor[i] * \diffuse.kr(0).clip(0, 1))
-            }));
+            }), \on.kr(1, 0.03) * 2 - 1));
         }).writeDefFile(dir);
     };
 
