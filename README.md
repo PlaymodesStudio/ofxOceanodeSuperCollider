@@ -61,7 +61,7 @@ standalone compilation into the folder harvested by the installer.
 ## Keyboard piano
 
 Focus the PolyComb, AdditiveBox, SteamPipeBox, PulsarBox, GrainBox, AliasingBox,
-PhysicalBox, SampleBox or AnalogBox editor to play it from the computer keyboard.
+PhysicalBox, SampleBox, FMBox or AnalogBox editor to play it from the computer keyboard.
 `zxcvbnm,.` plays white keys starting with **Z = C4 (MIDI 60)**.
 `qwertyuiop` plays white keys one octave higher, starting with **Q = C5**.
 The matching black keys are `s d` (C♯, D♯), `g h j` (F♯, G♯, A♯),
