@@ -199,7 +199,7 @@ private:
     std::vector<float> panPositions() const;
 
     // ── Effects ──────────────────────────────────────────────────────────────
-    bool stageOn(int s) const;
+    float stageOn(int s) const;
     std::string stageDef(int s) const;
     float stageTail(int s) const;
     float echoDelaySec() const;

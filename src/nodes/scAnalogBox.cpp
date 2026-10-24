@@ -436,6 +436,29 @@ void scAnalogBox::setup() {
         h.factory = [this](){ return factorySnapshots(); };
         h.bpm = [this](){ return currentBpm; };
         h.paramMenu = [this](const std::string& k){ publishedUnderline(k); publishMenu(k); };
+        for(auto* p : {&shaperOn, &satOn, &ringFxOn, &shiftOn, &chorusOn, &eqOn, &echoOn, &rvbOn})
+            snaps.morph.bypass(*p, scMorphPolicies::field(p->getEscapedName(), "controls"));
+        snaps.morph.bypass(shiftBoth, scMorphPolicies::field(shiftBoth.getEscapedName(), "controls"));
+        for(int k = 0; k < MAX_FILTERS; ++k) {
+            auto f = filterRef(k);
+            snaps.morph.bypass(*f.on, scMorphPolicies::field(f.on->getEscapedName(), "controls"));
+        }
+        for(auto& o : osc) {
+            snaps.morph.bypass(o.sync, scMorphPolicies::field(o.sync.getEscapedName(), "controls"));
+            snaps.morph.mode(o.fmFrom, MAX_OSCS + 1, scMorphPolicies::field(o.fmFrom.getEscapedName(), "controls"));
+            snaps.morph.enabledDepth(o.fmFrom, o.fm,
+                scMorphPolicies::field(o.fmFrom.getEscapedName(), "controls"),
+                scMorphPolicies::field(o.fm.getEscapedName(), "controls"));
+        }
+        h.morphChanged = [this]() {
+            forStates([this](ofxSCServer* sv, ServerState& st) {
+                if(st.created) { updateStages(sv, st); sendFilter(st); for(int k=0; k<oscs(); ++k) sendOsc(st,k); }
+            });
+        };
+        h.morphBlocked = [this](const std::string& k) {
+            auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
+        };
+        snaps.morph.mode(echoFilter, 4, scMorphPolicies::field(echoFilter.getEscapedName(), "controls"));
         snaps.setup(h);
     }
 }
@@ -542,14 +565,18 @@ void scAnalogBox::sendOsc(ServerState& st, int k) {
     s->set("drift", modulation.voiceValues(drift));
     s->set("slave", k > 0 ? 1.0f : 0.0f);
     // hard sync: to oscillator 1's frequency
-    s->set("sync", (k > 0 && O.sync.get()) ? 1.0f : 0.0f);
+    s->set("sync", k > 0 ? snaps.morph.activation(O.sync) : 0.0f);
     s->set("syncfreq", st.freq[0] ? st.freq[0]->index : 0);
     // FM: from any oscillator in use (an earlier one this block, a later one / itself a block late)
-    const int from = O.fmFrom.get() - 1;
-    const bool fmOn = from >= 0 && from < oscs() && st.raw[from];
-    s->set("fmsrc", fmOn ? st.raw[from]->index : (st.raw[k] ? st.raw[k]->index : 0));
-    s->set("fmon", fmOn ? 1.0f : 0.0f);
-    sendVec(s, "fmamt", O.fm.get());
+    auto fmWeights = snaps.morph.weights(O.fmFrom);
+    std::vector<float> fmBuses(MAX_OSCS, st.raw[k] ? st.raw[k]->index : 0);
+    for(int j=0; j<MAX_OSCS; ++j) {
+        if(j < oscs() && st.raw[j]) fmBuses[j] = st.raw[j]->index;
+        else fmWeights[j+1] = 0;
+    }
+    s->set("fmsources", fmBuses);
+    s->set("fmweights", fmWeights);
+    sendVec(s, "fmamt", snaps.morph.value(O.fm));
     sendVec(s, "level", O.level.get());
     s->set("mslave", mod(st, TSlave)); s->set("mpw", mod(st, TWidth)); s->set("mskew", mod(st, TSkew));
     s->set("mround", mod(st, TRound)); s->set("mfm", mod(st, TFm));
@@ -597,7 +624,7 @@ void scAnalogBox::sendFilterK(ServerState& st, int k) {
     s->set("out", series && k < nf - 1 ? bus(st.chainBus[k]) : bus(st.filtBus));
     s->set("note", bus(st.noteBus));
     const FilterRef f = filterRef(k);
-    s->set("on", f.on->get() ? 1.0f : 0.0f);
+    s->set("on", snaps.morph.activation(*f.on));
     s->set("mode", (float)f.mode->get());
     s->set("type", (float)f.type->get());
     sendVec(s, "cutoff", f.cutoff->get());
@@ -995,16 +1022,16 @@ void scAnalogBox::update(ofEventArgs&) {
     }
 }
 
-bool scAnalogBox::stageOn(int s) const {
+float scAnalogBox::stageOn(int s) const {
     switch(s){
-        case StShaper: return shaperOn.get();
-        case StSat: return satOn.get();
-        case StRing: return ringFxOn.get();
-        case StShift: return shiftOn.get();
-        case StChorus: return chorusOn.get();
-        case StEq: return eqOn.get();
-        case StEcho: return echoOn.get();
-        default: return rvbOn.get();
+        case StShaper: return snaps.morph.activation(shaperOn);
+        case StSat: return snaps.morph.activation(satOn);
+        case StRing: return snaps.morph.activation(ringFxOn);
+        case StShift: return snaps.morph.activation(shiftOn);
+        case StChorus: return snaps.morph.activation(chorusOn);
+        case StEq: return snaps.morph.activation(eqOn);
+        case StEcho: return snaps.morph.activation(echoOn);
+        default: return snaps.morph.activation(rvbOn);
     }
 }
 
@@ -1037,7 +1064,7 @@ float scAnalogBox::stageTail(int s) const {
 
 void scAnalogBox::sendStage(int s, ofxSCSynth* x) {
     if(!x) return;
-    const float on = stageOn(s) ? 1.0f : 0.0f;
+    const float on = stageOn(s);
     switch(s){
         case StShaper:
             x->set("drive", shaperDrive.get());
@@ -1062,7 +1089,7 @@ void scAnalogBox::sendStage(int s, ofxSCSynth* x) {
         case StShift:
             x->set("shift", shiftHz.get());
             x->set("spread", shiftSpread.get());
-            x->set("both", shiftBoth.get() ? 1.0f : 0.0f);
+            x->set("both", snaps.morph.activation(shiftBoth));
             x->set("fb", shiftFeed.get());
             x->set("delay", shiftDelay.get());
             x->set("tone", shiftTone.get());
@@ -1078,6 +1105,7 @@ void scAnalogBox::sendStage(int s, ofxSCSynth* x) {
             x->set("on", on);
             break;
         case StEq:
+            x->set("on", on);
             for(int b = 0; b < 5; b++){
                 const std::string k = "b" + ofToString(b + 1);
                 x->set(k + "gain", eqGain[b].get());
@@ -1091,6 +1119,7 @@ void scAnalogBox::sendStage(int s, ofxSCSynth* x) {
             x->set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
             x->set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
             x->set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
+            x->set("filterweights", snaps.morph.weights(echoFilter));
             x->set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
             x->set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
             x->set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
@@ -1214,7 +1243,7 @@ void scAnalogBox::reg(ofParameter<T>& p, std::function<void()> send) {
     c.save = [&p]() { return ofJson(p.get()); };
     c.load = [&p](const ofJson& j) { try { p.set(j.get<T>()); } catch(...) {} };
     controls.push_back(std::move(c));
-    listeners.push(p.newListener([this, send](T&) { if(!restoring) send(); }));
+    listeners.push(p.newListener([this, &p, send](T&) { snaps.morph.edited(p); if(!restoring) send(); }));
 }
 
 void scAnalogBox::publish(const std::string& key) {

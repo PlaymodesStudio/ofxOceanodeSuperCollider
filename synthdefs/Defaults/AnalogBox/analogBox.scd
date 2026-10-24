@@ -47,13 +47,19 @@ File.mkdir(root); File.mkdir(dir);
             + (modIn.(\mslave) * \slave.kr(0))
             + (LFNoise2.kr({ Rand(0.08, 0.25) } ! n) * kv.(\drift, 0) * 0.25);
         var freq = (note.clip(-36, 150).midicps * kv.(\ratio, 1)).clip(0.01, 22000);
-        var fm = (kv.(\fmamt, 0) + modIn.(\mfm)).max(0) * \fmon.kr(0);
-        var pm = InFeedback.ar(\fmsrc.kr(0), n) * fm;
+        var weights = NamedControl.kr(\fmweights, [1, 0, 0, 0, 0, 0, 0]).lag(0.03);
+        var sources = NamedControl.kr(\fmsources, 0 ! 6);
+        var activation = weights.copyRange(1, 6).sum;
+        var fm = (kv.(\fmamt, 0).lag(0.03) + (modIn.(\mfm) * activation)).max(0);
+        var pm = Mix(Array.fill(6, { |i| InFeedback.ar(sources[i], n) * weights[i+1] }))
+            * fm / activation.max(0.00001);
         var skew = (kv.(\skew, 0) + modIn.(\mskew)).clip(-1, 1);
         var round = (kv.(\round, 0.5) + modIn.(\mround)).clip(0, 1);
         var pw = (kv.(\pw, 0.5) + modIn.(\mpw)).clip(0.001, 1);
-        var sync = In.kr(\syncfreq.kr(0), n) * \sync.kr(0);
-        var sig = LeakDC.ar(MorphOsc.ar(freq, pm, skew, round, pw, \centered.kr(1), sync))
+        var sync = In.kr(\syncfreq.kr(0), n);
+        var free = MorphOsc.ar(freq, pm, skew, round, pw, \centered.kr(1), 0);
+        var locked = MorphOsc.ar(freq, pm, skew, round, pw, \centered.kr(1), sync);
+        var sig = LeakDC.ar(LinXFade2.ar(free, locked, \sync.kr(0, 0.03)*2-1))
             + (WhiteNoise.ar(1 ! n) * kv.(\noise, 0).clip(0, 1) * 1.5);   // Noise: added to this oscillator
         Out.kr(\freqout.kr(0), freq);
         Out.ar(\raw.kr(0), sig);
