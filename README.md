@@ -55,6 +55,8 @@ The preview SynthDef is bundled in `Defaults/Analysis/foldedWaveform`; existing
 app data folders can load it from this addon checkout without a manual copy.
 Run `python3 tools/folded_waveform_test/audio.py` and
 `python3 tools/folded_waveform_test/lifecycle.py` for regression checks.
+`python3 tools/folded_waveform_test/compile.py` verifies both startup-sync and
+standalone compilation into the folder harvested by the installer.
 
 ## Keyboard piano
 
