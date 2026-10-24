@@ -281,6 +281,10 @@ private:
             const std::string extension = fs::path(parts[2]).extension().string();
             if(extension == ".scx" || extension == ".sc") return extensions / parts[1] / parts[2];
         }
+        // Bundled sample assets are installed alongside the SynthDefs.
+        const std::string wavetablePrefix = "data/Supercollider/Wavetables/";
+        if(path.compare(0, wavetablePrefix.size(), wavetablePrefix) == 0 && fs::path(path).extension() == ".wav")
+            return data / "Wavetables" / path.substr(wavetablePrefix.size());
         // Shared presets, at their path in the data folder:
         // presets/nodeSnapshots/<Node>/banks|Presets/<x>.json
         if(isPresetPath(path)) return data.parent_path() / path.substr(std::string("presets/").size());
@@ -303,7 +307,7 @@ private:
         phase("Reading the repository", fromCheckout ? addonRoot : std::string(repository) + " @ " + branch);
         files.clear();
         if(fromCheckout){
-            for(const std::string top : {"synthdefs", "sclang", "ugens", "presets"}){
+            for(const std::string top : {"synthdefs", "sclang", "ugens", "presets", "data/Supercollider/Wavetables"}){
                 const fs::path root = fs::path(addonRoot) / top;
                 if(!fs::exists(root)) continue;
                 for(auto it = fs::recursive_directory_iterator(root); it != fs::recursive_directory_iterator(); ++it){

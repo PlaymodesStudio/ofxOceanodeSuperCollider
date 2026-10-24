@@ -25,7 +25,7 @@
 //  • Dimensions: Position (frames), Pos Y (rows, when Rows > 1 the table is a
 //    grid), two chained phase warps (Sync, Bend, PWM, Asym, Mirror, Quantize,
 //    PD Sine), FM from B.
-//  • GUI: the node shows only Show / N Chan and whatever is published (Pitch,
+//  • GUI: the node shows Show / Voices / Channels and whatever is published (Pitch,
 //    Levels, Gate, Velocity and Position by default). Everything else is in the dockable
 //    window (Show): the waterfall (frames stacked in depth, every voice's
 //    position traced on them; dragging sets the position), the cycle each
@@ -46,11 +46,13 @@
 #include "../../../ui/scTimelineMenu.h"
 #include "../shared/scSnapshots.h"
 #include "../../../ui/scDropdowns.h"
+#include "../../../ui/scEQEditor.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "imgui.h"
 #include <functional>
 #include <future>
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
@@ -109,7 +111,7 @@ public:
         out.pitch = handle(pitch.getEscapedName());
         out.gate = handle(gate.getEscapedName());
         out.velocity = nullptr;
-        out.voices = numChannels.get();
+        out.voices = voices.get();
         return out.pitch && out.gate;
     }
     bool getMidiKeyboardInstrument(ofxOceanodeTimelineInstrument& out, bool bind = false) override {
@@ -221,6 +223,16 @@ private:
     void drawCycleStrip(ImVec2 size);
     void drawGrid(float side);
     void drawControls();
+    void drawHeader();
+    void setupOutputControls();
+    template<typename T> void registerOutput(ofParameter<T>& p, std::vector<std::string> choices = {});
+    void drawPanning();
+    void drawEffects();
+    void drawLibrary();
+    void scanLibrary();
+    void migrateLegacy(ofJson& json);
+    bool sliderFloat(ofParameter<float>& parameter, const char* format = "%.2f", bool logarithmic = false);
+    bool checkbox(ofParameter<bool>& parameter);
     bool sliderVector(ofParameter<std::vector<float>>& parameter, const char* format = "%.3f");
     bool comboVector(ofParameter<std::vector<int>>& parameter, const std::vector<std::string>& options);
     bool comboInt(ofParameter<int>& parameter, const std::vector<std::string>& options);
@@ -236,7 +248,34 @@ private:
     // ── Parameters ───────────────────────────────────────────────────────────
     // On the node
     ofParameter<bool> showWindow;
-    ofParameter<int> numChannels;
+    ofParameter<int> voices, outChannels;
+    ofParameter<float> master, spreadWidth, spreadCenter;
+    ofParameter<int> placement, speakerLayout;
+    ofParameter<std::vector<float>> pan;
+    enum FxStage { FxComp, FxEq, FxBlur, FxEcho, FxReverb, NumFx };
+    std::array<ofParameter<bool>,NumFx> fxOn;
+    ofParameter<float> compThreshold, compRatio, compAttack, compRelease, compMakeup, compMix;
+    std::array<ofParameter<float>,5> eqGain, eqFreq, eqShape;
+    scEQEditor eqEditor;
+    ofParameter<float> blurTime, blurAmount, blurDensity, blurSpread, blurLowCut, blurHighCut, blurMix;
+    ofParameter<float> echoDelay, echoFeed, echoCutoff, echoResonance, echoPingPong, echoMix, echoBeatVal;
+    ofParameter<int> echoFilter;
+    ofParameter<bool> echoBeats;
+    ofParameter<float> reverbMix, reverbDecay, reverbSize, reverbPredelay, reverbLate, reverbSpread, reverbLowpass;
+    bool fxPending=false;
+    std::string fxDef(int stage) const;
+    void sendEffect(ofxSCSynth* synth,int stage);
+    void updateOutput(ofxSCServer* server);
+    void updateOutputs();
+    void freeOutput(ofxSCServer* server);
+    void requireEffectSynthdefs();
+    std::vector<float> voicePositions() const;
+    struct LibraryEntry { std::string name, category, path; };
+    std::vector<LibraryEntry> library;
+    std::vector<std::string> libraryCategories;
+    std::string libraryRoot;
+    int libraryCategory=0;
+    char librarySearch[128]{};
     ofParameter<int> framesOut;
     // In the window (publishable)
     ofParameter<int> source;                       // 0 File, 1 Live
@@ -260,7 +299,7 @@ private:
     ofParameter<std::vector<int>> trig;
 
     // Shared modulation runs before the oscillator: gates -> sources -> routes -> voice.
-    enum Target { TPitch, TPosition, TPosY, TWarp1, TWarp2, TFM, TRatio, TBPos, TFeedback, TDamp, TAmp, NUM_TARGETS };
+    enum Target { TPitch, TPosition, TPosY, TWarp1, TWarp2, TFM, TRatio, TBPos, TFeedback, TDamp, TAmp, TPan, NUM_TARGETS };
     struct ModState {
         ofxSCGroup* root = nullptr;
         ofxSCGroup* sources = nullptr;
@@ -268,6 +307,14 @@ private:
         ofxSCGroup* voice = nullptr;
         ofxSCBus* gates = nullptr;
         ofxSCSynth* gateSynth = nullptr;
+        ofxSCGroup* processing = nullptr;
+        ofxSCBus* voiceBus = nullptr;
+        ofxSCBus* panBus = nullptr;
+        std::array<ofxSCBus*,NumFx> fxBus{};
+        std::array<ofxSCSynth*,NumFx> effects{};
+        ofxSCSynth* spreadSynth = nullptr;
+        ofxSCSynth* outputSynth = nullptr;
+        int outputChannels=0;
     };
     std::map<ofxSCServer*, ModState> modStates;
     scModulation modulation;
@@ -310,7 +357,7 @@ private:
     std::string pathToSetAfterLoad;
     std::vector<int> lastTrig;
     std::map<std::string, std::vector<float>> lastSent;
-    int builtChannels = 0;
+    int builtVoices = 0;
     bool built2D = false;
     bool builtLive = false;
     int builtOversample = -1;

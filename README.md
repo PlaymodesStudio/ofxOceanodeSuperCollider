@@ -74,13 +74,20 @@ See the [Box synth conventions](src/nodes/boxSynths/CONVENTIONS.md) for editor
 behavior, publishing, snapshots, modulation, effects, keyboard/piano controls
 and timeline integration, including current coverage by node.
 
-`Wavetable` is now **WavetableBox**. Its editor uses the shared Box LFOs,
-envelopes, modulation routing matrix, right-click publish/modulate menus,
-piano footer, snapshot library, banks and morph controls. Gate and Velocity
-are published alongside Pitch, Levels and Position. Env Mode offers Auto,
-Gated and Drone; Auto switches from continuous playback to note gates after
-Gate is used. An envelope routed to Amp controls the note's release.
-Modulation routes and source settings are included in snapshots and morphs.
+`Wavetable` is now **WavetableBox**. Its editor follows PolyComb's layout:
+Voices, output Channels, Master and Drone at the top; shared envelopes, LFOs,
+routing, Panning and Effects tabs; and the keyboard/piano footer. Voices and
+Channels are independent (1–16 each). The output chain is panning, compressor,
+five-band EQ, blur, echo and reverb. Controls can be published, saved and morphed.
+Env1 sustains held notes by default; Drone plays continuously until unchecked.
+Old `N Chan` presets retain their voice count and channel-per-voice placement.
+
+The bundled VITAL_WT library contains 244 tables. Use **Wavetable → Wavetable
+Library** to choose a category, search, or step through tables without a file
+dialog. Library selections use portable paths. **Sync with SynthDefs Git** also
+installs and updates the library under `Supercollider/Wavetables/VITAL_WT`.
+External tables can still be loaded; Embed Table defaults on for project saves.
+Rebuild the app for editor/sync changes, then sync to compile the updated DSP.
 
 The old `nodeSnapshots/Wavetable` library moves to `nodeSnapshots/WavetableBox`
 on first use when the new folder does not exist. To rename saved patch/macro
@@ -89,7 +96,10 @@ node references, run `python3 tools/migrate_synth_renames.py /path/to/data`
 
 Compile `synthdefs/Defaults/WavetableBox/wavetableBox.scd` and the shared
 `Defaults/Modulation/modulation.scd`, then run
-`python3 tools/wavetablebox/render_test.py` to check all 64 variants and note routing.
+`python3 tools/wavetablebox/render_test.py` to check all 64 oscillator variants.
+`tools/wavetablebox/graph_render_test.py` additionally renders the actual C++
+voice/panning/effects graph; see its help for the native test build prerequisite.
+Run `python3 tools/wavetablebox/library_sync_test.py` to verify library sync paths.
 
 ## Keyboard piano
 

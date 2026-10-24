@@ -145,6 +145,53 @@ for folder, cls in hosts.items():
  }
 '''
         continue
+    if folder == 'wavetableBox':
+        cases += r'''
+   assert(box.voices.get()==1 && box.outChannels.get()==2);
+   assert(box.modulation.defaultEnvSustain==1);
+   assert(box.library.size()==244 && box.libraryCategories.size()>1);
+   for(const auto& entry:box.library)assert(std::filesystem::is_regular_file(box.resolvePath(entry.path)));
+   assert(box.library.front().path.rfind("VITAL_WT/",0)==0);
+   auto original=box.captureSound();
+   box.voices=7;box.outChannels=2;box.master=.7f;box.fxOn[box.FxEcho]=true;box.echoFeed=.6f;
+   box.placement=2;box.pan=std::vector<float>{0,1,.5f};
+   auto sound=box.captureSound();
+   box.applySound(original,original,0,false);assert(box.voices.get()==1&&!box.fxOn[box.FxEcho]);
+   box.applySound(sound,sound,0,false);assert(box.voices.get()==7&&box.outChannels.get()==2&&box.fxOn[box.FxEcho]);
+   assert(std::abs(box.master.get()-.7f)<1e-6 && box.voicePositions()[1]==1);
+   ofJson old={{"N_Chan","4"},{"publishedEditorParameters",{"N_Chan","Pitch","Gate"}}};
+   box.migrateLegacy(old);assert(old["Voices"]==4&&old["Channels"]==4&&old["Placement"]==1);
+   auto copy=old;box.migrateLegacy(old);assert(copy==old);
+   box.voices=4;box.outChannels=4;box.placement=0;box.speakerLayout=0;
+   assert(box.voicePositions()[0]==0 && box.voicePositions()[3]==.75f);
+   box.applySound(original,original,0,false);
+   if(const char* score=std::getenv("BOX_WAVETABLE_SCORE")){
+    ofxSCServer server("127.0.0.1",9,0);server.beginNRTCapture(true);
+    server.setNRTTimeProvider([&](){return server.nrtTime;});server.setNRTTimeProviderEnabled(true);
+    // Preserve temp buffers until scsynth has consumed the score.
+    auto* render=new scWavetableBox(servers);render->setup();render->voices=3;render->outChannels=2;
+    render->path=render->library.front().path;render->startDecode();render->applyTable(render->decodeTask.get());
+    ofxOscMessage defs;defs.setAddress("/d_loadDir");defs.addStringArg(std::getenv("BOX_WAVETABLE_DEFS"));server.sendMsg(defs);
+    ofxOscMessage root;root.setAddress("/g_new");root.addIntArg(1);root.addIntArg(0);root.addIntArg(0);server.sendMsg(root);
+    auto ack=[&](){auto nodes=server.nodeFeedbackFunctions;for(auto& e:nodes)if(e.first->nodeID>0&&!e.first->isCreated()&&!e.first->hasEnded()){
+     ofxOscMessage go;go.setAddress("/n_go");go.addIntArg(e.first->nodeID);e.first->feedbackListener(go);
+    }};
+    server.setNRTTime(.1);render->buildSynth(&server);render->setOutputBus(&server,0,0);render->createSynth(&server);ack();
+    server.setNRTTime(.2);render->swapBuffers(&server);ack();
+    auto& graph=render->modStates.at(&server);assert(graph.outputChannels==2&&graph.voiceBus->channels==16);
+    server.setNRTTime(.4);render->gate=std::vector<float>{1};ack();
+    server.setNRTTime(2);render->gate=std::vector<float>{0};
+    server.setNRTTime(4);render->drone=true;
+    server.setNRTTime(5);render->placement=2;render->pan=std::vector<float>{0};
+    server.setNRTTime(6);render->pan=std::vector<float>{1};
+    server.setNRTTime(7);for(auto& on:render->fxOn)on=true;ack();
+    server.setNRTTime(8);render->outChannels=4;render->pan=std::vector<float>{0,.25f,.5f};ack();assert(graph.outputChannels==4&&render->voices.get()==3);
+    server.setNRTTime(9);render->outChannels=2;ack();
+    server.setNRTTime(10);for(auto& on:render->fxOn)on=false;
+    server.setNRTTime(11);render->drone=false;
+    server.endNRTCapture(14);assert(server.writeNRTScore(score,14));
+   }
+'''
     # Older presets: explicit Drone retained; Auto and Gated load gated.
     for mode in ((2,0,1,3) if folder in ('physicalBox','steamPipeBox') else (2,0,1)):
         modekey='Env_Mode' if folder in ('analogBox','polyComb','wavetableBox') else 'Gate_Mode'

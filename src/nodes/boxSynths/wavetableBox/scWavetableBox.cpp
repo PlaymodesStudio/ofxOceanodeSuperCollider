@@ -262,7 +262,8 @@ void scWavetableBox::setup(){
                        [this](){ return publishedKeys; });
     // ── Node ─────────────────────────────────────────────────────────────────
     addParameter(showWindow.set("Show", false));
-    addParameter(numChannels.set("N Chan", 1, 1, MAX_CHANNELS));
+    voices.set("Voices", 1, 1, MAX_CHANNELS);
+    outChannels.set("Channels", 2, 1, MAX_CHANNELS);
     addOutputParameter(framesOut.set("Frames", 0, 0, MAX_FRAMES));
     scNode::addOutput("Out");
 
@@ -277,7 +278,7 @@ void scWavetableBox::setup(){
     maxFrames.set("Max Frames", 256, 1, MAX_FRAMES);
     normalize.set("Normalize", true);
     removeDC.set("Remove DC", true);
-    embedTable.set("Embed Table", false);
+    embedTable.set("Embed Table", true);
     pitch.set("Pitch", {60.0f}, {0.0f}, {127.0f});
     levels.set("Levels", {0.5f}, {0.0f}, {1.0f});
     position.set("Position", {0.0f}, {0.0f}, {1.0f});
@@ -302,7 +303,9 @@ void scWavetableBox::setup(){
     addParameter(resetLFOs.set("Reset LFOs"));
     snaps.setupParameters();   // Snapshot, Morph... (scSnapshots, shared by the synths)
     initializePublishActions();
+    setupOutputControls();
     setupModulation();
+    scanLibrary();
     initial = captureSound();
     {
         scSnapshots::Host h;
@@ -316,7 +319,8 @@ void scWavetableBox::setup(){
         };
         snaps.morph.mode(warp1,9);snaps.morph.mode(warp2,9);
         snaps.morph.neutralDepth(bSource,fm);snaps.morph.neutralDepth(bSource,bFeedback);
-        h.morphChanged=[this](){for(auto& [server,synth]:synths)sendAll(server);};
+        for(auto& on:fxOn)snaps.morph.bypass(on);
+        h.morphChanged=[this](){for(auto& [server,synth]:synths)sendAll(server);updateOutputs();};
         h.paramMenu = [this](const std::string& k){ controlMenu(k); };
         // Preserve the previous node's shared library, banks and named presets.
         const fs::path oldLibrary = ofToDataPath("nodeSnapshots/Wavetable", true);
@@ -327,19 +331,26 @@ void scWavetableBox::setup(){
         snaps.setup(h);
     }
     publishByKey(gate.getEscapedName());
+    publishByKey(voices.getEscapedName());
+    publishByKey(outChannels.getEscapedName());
     publishByKey(pitch.getEscapedName());
     publishByKey(levels.getEscapedName());
     publishByKey(position.getEscapedName());
 
     // ── Listeners ────────────────────────────────────────────────────────────
-    nodeListeners.push(numChannels.newListener([this](int& n){
-        if(n != builtChannels) rebuildGraph();
+    nodeListeners.push(showWindow.newListener([this](bool& open){if(open)scanLibrary();}));
+    nodeListeners.push(voices.newListener([this](int& n){
+        snaps.morph.edited(voices);
+        if(!restoring && n != builtVoices) rebuildGraph();
     }));
+    nodeListeners.push(outChannels.newListener([this](int&){snaps.morph.edited(outChannels);if(!restoring)updateOutputs();}));
     nodeListeners.push(rows.newListener([this](int& r){
+        if(restoring)return;
         if((r > 1) != built2D) rebuildGraph();
         else for(auto& [server, synth] : synths) if(synth) synth->set("rows", r);
     }));
     nodeListeners.push(oversample.newListener([this](int& o){
+        if(restoring)return;
         if(o != builtOversample) rebuildGraph();
     }));
     for(auto* p : {&path}) nodeListeners.push(p->newListener([this](std::string&){ requestDecode(); }));
@@ -390,9 +401,11 @@ void scWavetableBox::setup(){
     }));
     nodeListeners.push(drone.newListener([this](bool&){
         snaps.morph.edited(drone);
+        if(!restoring) modulation.refresh();
         for(auto& [server, state] : modStates) sendModulation(server);
     }));
     nodeListeners.push(resetLFOs.newListener([this](){ modulation.resetLfos(); }));
+    requireEffectSynthdefs();
 
     // Oscillator B's sine: one cycle, written once per node
     std::error_code ec;
@@ -412,6 +425,7 @@ void scWavetableBox::setup(){
 void scWavetableBox::update(ofEventArgs&){
     timeline.update();
     snaps.update();
+    if(fxPending)updateOutputs();
     modulation.showing = showWindow;
     modulation.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
@@ -491,7 +505,12 @@ std::string scWavetableBox::resolvePath(const std::string& p) const {
     if(fs::path(p).is_absolute()) return p;
     const std::string data = ofToDataPath(p, true);
     if(fs::exists(data, ec)) return data;
-    return ofToDataPath("Supercollider/Wavetables/" + p, true);
+    const std::string bundled = ofToDataPath("Supercollider/Wavetables/" + p, true);
+    if(fs::exists(bundled, ec)) return bundled;
+    fs::path addon=fs::path(__FILE__).parent_path();for(int i=0;i<4;++i)addon=addon.parent_path();
+    const auto local=addon/"data/Supercollider/Wavetables"/p;
+    if(fs::exists(local,ec)) return fs::absolute(local).string();
+    return bundled;
 }
 
 void scWavetableBox::requestDecode(){
@@ -869,14 +888,14 @@ void scWavetableBox::releaseLive(ofxSCServer* server){
 
 std::string scWavetableBox::getSynthDefName() const {
     return std::string(isLive() ? "WavetableOscLive" : "WavetableOsc") + (rows > 1 ? "2D" : "")
-        + ofToString(std::clamp(numChannels.get(), 1, MAX_CHANNELS));
+        + ofToString(std::clamp(voices.get(), 1, MAX_CHANNELS));
 }
 
 void scWavetableBox::rebuildGraph(){
-    const bool voiceCountChanged = builtChannels != numChannels.get();
+    const bool voiceCountChanged = builtVoices != voices.get();
     // A new def (N Chan, 1D <-> 2D) or a new init-time value (os): replace
     // each running synth in place (/s_new action 4), every value baked in
-    builtChannels = numChannels;
+    builtVoices = voices;
     built2D = rows > 1;
     builtLive = isLive();
     builtOversample = oversample;
@@ -896,7 +915,7 @@ void scWavetableBox::rebuildGraph(){
         auto& st = modStates.at(server);
         if(voiceCountChanged){
             st.gateSynth->free(); delete st.gateSynth;
-            st.gateSynth = new ofxSCSynth("ModGate" + ofToString(numChannels.get()), server);
+            st.gateSynth = new ofxSCSynth("ModGate" + ofToString(voices.get()), server);
             modulation.rebuild(server);
             sendModulation(server);
             st.gateSynth->createAndRun(0, st.root->nodeID, true);
@@ -907,10 +926,11 @@ void scWavetableBox::rebuildGraph(){
         sendAll(server);
         synth->createAndRun(4, oldNodeID, getActive() && synthReady(server));
     }
+    updateOutputs();
 }
 
 std::vector<float> scWavetableBox::expand(const std::vector<float>& values, float fallback) const {
-    const int n = std::clamp(numChannels.get(), 1, MAX_CHANNELS);
+    const int n = std::clamp(voices.get(), 1, MAX_CHANNELS);
     std::vector<float> out(n);
     for(int i = 0; i < n; i++) out[i] = valueFor(values, i, fallback);
     return out;
@@ -948,7 +968,7 @@ void scWavetableBox::sendAll(ofxSCServer* server){
     for(int stage=0;stage<2;++stage){
         const auto& p=stage==0 ? warp1 : warp2;
         std::vector<float> weights;
-        const int n=std::clamp(numChannels.get(),1,MAX_CHANNELS);
+        const int n=std::clamp(voices.get(),1,MAX_CHANNELS);
         for(int v=0;v<n;++v){const auto w=snaps.morph.weights(p,v);weights.insert(weights.end(),w.begin(),w.end());}
         synth->set(stage==0 ? "w1weights" : "w2weights",weights);
     }
@@ -962,14 +982,15 @@ void scWavetableBox::sendAll(ofxSCServer* server){
     synth->set("rows", rows.get());
     synth->set("os", oversample.get());
     synth->set("xftime", liveXFade.get() / 1000.0f);
-    if(outputBuses.count(server)) synth->set("out", outputBuses[server]);
+    auto state=modStates.find(server);
+    if(state!=modStates.end() && state->second.voiceBus)synth->set("out",state->second.voiceBus->index);
     sendBuffers(server);
     sendModulation(server);
 }
 
 void scWavetableBox::sendTriggers(const std::vector<int>& values){
     // Rising edges only; `trig` is a trigger control, so a 1 fires once
-    const int n = std::clamp(numChannels.get(), 1, MAX_CHANNELS);
+    const int n = std::clamp(voices.get(), 1, MAX_CHANNELS);
     lastTrig.resize(n, 0);
     std::vector<float> out(n, 0.0f);
     bool any = false;
@@ -983,7 +1004,7 @@ void scWavetableBox::sendTriggers(const std::vector<int>& values){
 }
 
 void scWavetableBox::retrigAll(){
-    const std::vector<float> out(std::clamp(numChannels.get(), 1, MAX_CHANNELS), 1.0f);
+    const std::vector<float> out(std::clamp(voices.get(), 1, MAX_CHANNELS), 1.0f);
     for(auto& [server, synth] : synths) if(synth && synth->isCreated()) synth->set("trig", out);
 }
 
@@ -993,7 +1014,7 @@ void scWavetableBox::buildSynth(ofxSCServer* server){
     // Only the wrapper: setOutputBus() comes next, and every value set before
     // createSynth() is baked into /s_new (os is read when the synth starts)
     synths[server] = new ofxSCSynth(getSynthDefName(), server);
-    builtChannels = numChannels;
+    builtVoices = voices;
     built2D = rows > 1;
     builtLive = isLive();
     builtOversample = oversample;
@@ -1039,7 +1060,8 @@ void scWavetableBox::free(ofxSCServer* server){
 void scWavetableBox::setOutputBus(ofxSCServer* server, int index, int bus){
     if(index != 0) return;
     outputBuses[server] = bus;
-    if(synths.count(server) && synths[server]) synths[server]->set("out", bus);
+    auto state=modStates.find(server);
+    if(state!=modStates.end() && state->second.outputSynth)state->second.outputSynth->set("out",bus);
 }
 
 int scWavetableBox::getOutputBusIndex(ofxSCServer* server, int index){
@@ -1071,6 +1093,7 @@ void scWavetableBox::deactivate(){
 
 void scWavetableBox::resendParametersForNRT(){
     modulation.resend();
+    updateOutputs();
     for(auto& [server, synth] : synths) sendAll(server);
 }
 
@@ -1128,6 +1151,8 @@ void scWavetableBox::addPublishAction(ofParameter<T>& parameter, std::vector<std
 
 void scWavetableBox::initializePublishActions(){
     publishActions.clear();
+    addPublishAction(voices);
+    addPublishAction(outChannels);
     addPublishAction(gate);
     addPublishAction(drone);
     addPublishAction(source, sourceNames);
@@ -1183,7 +1208,7 @@ ofJson scWavetableBox::captureSound() const {
 }
 
 void scWavetableBox::applySound(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw){
-    const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
+    auto a = aSaved, b = bSaved; migrateLegacy(a); migrateLegacy(b);
     restoring = true;
     auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);
     scSnapshots::blendActions(publishActions,pinnedA,pinnedB,t,sw,[this](const std::string& k){
@@ -1203,7 +1228,9 @@ void scWavetableBox::applySound(const ofJson& aSaved, const ofJson& bSaved, floa
     modulation.afterLoad();
     modulation.refresh();
     restoring = false;
+    if(voices.get()!=builtVoices || built2D!=(rows.get()>1) || builtOversample!=oversample.get())rebuildGraph();
     for(auto& [server, synth] : synths) sendAll(server);
+    updateOutputs();
 }
 
 // Five starting points over the loaded table (they leave the file alone)
@@ -1251,6 +1278,7 @@ bool scWavetableBox::publishByKey(const std::string& key){
 }
 
 bool scWavetableBox::unpublishByKey(const std::string& key){
+    if(key==voices.getEscapedName() || key==outChannels.getEscapedName())return false;
     auto it = publishedHandles.find(key);
     if(it == publishedHandles.end() || hasPublishedConnection(key)) return false;
     removeParameter(it->second->getEscapedName());
@@ -1330,20 +1358,25 @@ void scWavetableBox::presetSave(ofJson& json){
 }
 
 void scWavetableBox::loadBeforeConnections(ofJson& json){
-    scDroneMode::migrate(json);
+    migrateLegacy(json);
     modulation.loadLfoOutputs(json);
     if(!json.contains("publishedEditorParameters") || !json["publishedEditorParameters"].is_array()) return;
-    try { syncPublished(json["publishedEditorParameters"].get<std::vector<std::string>>()); } catch(...) {}
+    try {
+        auto keys=json["publishedEditorParameters"].get<std::vector<std::string>>();
+        keys.push_back(voices.getEscapedName());keys.push_back(outChannels.getEscapedName());
+        syncPublished(keys);
+    } catch(...) {}
     timeline.load(json, "timelineHiddenEditorParameters");
 }
 
 void scWavetableBox::presetRecallBeforeSettingParameters(ofJson& json){
-    scDroneMode::migrate(json);
+    restoring=true;
+    migrateLegacy(json);
     loadBeforeConnections(json);
 }
 
 void scWavetableBox::presetRecallAfterSettingParameters(ofJson& json){
-    scDroneMode::migrate(json);
+    migrateLegacy(json);
     if(!json.contains(drone.getEscapedName())) drone = false;
     restoring = true;
     if(json.contains("waterfallHeight") && json["waterfallHeight"].is_number())
@@ -1355,7 +1388,9 @@ void scWavetableBox::presetRecallAfterSettingParameters(ofJson& json){
     modulation.load(json, "wavetableMod");
     modulation.afterLoad();
     restoring = false;
+    if(voices.get()!=builtVoices || built2D!=(rows.get()>1) || builtOversample!=oversample.get())rebuildGraph();
     for(auto& [server, synth] : synths) sendAll(server);
+    updateOutputs();
     if(!pathToSetAfterLoad.empty()){
         // The embedded file is the decoded table: 2048-sample frames
         cycleMode = 0;
@@ -1472,11 +1507,14 @@ void scWavetableBox::drawWindow(){
     ImGui::SetNextWindowSize(ImVec2(920.0f, 680.0f), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)){
         ImGui::PushID(this);
+        drawHeader();
         // snapshots, named presets, morph (scSnapshots), then the synth
         snaps.drawBar(std::max(1.0f, ImGui::GetContentRegionAvail().x));
-        keyboardPiano.beginContent(pitch, gate, numChannels.get());
+        keyboardPiano.beginContent(pitch, gate, voices.get());
         if(ImGui::BeginTabBar("##wavetableTabs")) {
             if(ImGui::BeginTabItem("Wavetable")) {
+                ImGui::BeginChild("##wtscroll");
+                drawLibrary();
                 drawFileBar();
 
                 const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -1509,12 +1547,15 @@ void scWavetableBox::drawWindow(){
                     ImGui::GetColorU32(handleHot ? ImGuiCol_Text : ImGuiCol_TextDisabled), 2.0f);
                 ImGui::Spacing();
                 drawControls();
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
             const float modWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
             if(ImGui::BeginTabItem("Envelopes")) { modulation.drawEnvelopes(modWidth); ImGui::EndTabItem(); }
             if(ImGui::BeginTabItem("LFOs")) { modulation.drawLfos(modWidth); ImGui::EndTabItem(); }
             if(ImGui::BeginTabItem("Routing")) { modulation.drawRouting(modWidth); ImGui::EndTabItem(); }
+            if(ImGui::BeginTabItem("Panning")) { drawPanning(); ImGui::EndTabItem(); }
+            if(ImGui::BeginTabItem("Effects")) { ImGui::BeginChild("##fxscroll"); drawEffects(); ImGui::EndChild(); ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         scKeyboardPiano::endContent();
@@ -1648,7 +1689,7 @@ void scWavetableBox::drawWaterfall(ImVec2 size){
     }
 
     // Every voice: the cycle it reads, at its depth
-    const int voices = std::min(std::clamp(numChannels.get(), 1, MAX_CHANNELS), maxDrawnVoices);
+    const int voices = std::min(std::clamp(this->voices.get(), 1, MAX_CHANNELS), maxDrawnVoices);
     for(int v = voices - 1; v >= 0; v--){
         float x0, base;
         geometry(voiceFrame(v), x0, base);
@@ -1675,7 +1716,7 @@ void scWavetableBox::drawCycleStrip(ImVec2 size){
 
     const int points = std::clamp(int(size.x / 2), 32, 512);
     std::vector<ImVec2> pts(points);
-    const int voices = std::min(std::clamp(numChannels.get(), 1, MAX_CHANNELS), maxDrawnVoices);
+    const int voices = std::min(std::clamp(this->voices.get(), 1, MAX_CHANNELS), maxDrawnVoices);
     for(int v = voices - 1; v >= 0; v--){
         const int m1 = valueFor(warp1.get(), v, 0), m2 = valueFor(warp2.get(), v, 0);
         const float a1 = visualValue(warp1Amt, TWarp1, v), a2 = visualValue(warp2Amt, TWarp2, v);
@@ -1709,7 +1750,7 @@ void scWavetableBox::drawGrid(float side){
         const float y = o.y + side * r / rows;
         dl->AddLine(ImVec2(o.x, y), ImVec2(o.x + side, y), line);
     }
-    const int voices = std::min(std::clamp(numChannels.get(), 1, MAX_CHANNELS), maxDrawnVoices);
+    const int voices = std::min(std::clamp(this->voices.get(), 1, MAX_CHANNELS), maxDrawnVoices);
     for(int v = voices - 1; v >= 0; v--){
         const float x = visualValue(position, TPosition, v);
         const float y = visualValue(posY, TPosY, v);
@@ -1808,9 +1849,6 @@ void scWavetableBox::drawControls(){
 
     beginGroup("VOICE", 0);
     sliderVector(gate);
-    bool droneOn = drone.get();
-    if(ImGui::Checkbox("Drone", &droneOn)) drone.set(droneOn);
-    controlMenu(drone.getEscapedName());
     sliderVector(phase);
     if(ImGui::Button("Retrig", ImVec2(-FLT_MIN, 0))) retrigAll();
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Restart every voice at Phase (publish Trig to patch it)");
@@ -1841,17 +1879,19 @@ void scWavetableBox::setupModulation(){
     h.publishedUnderline = [this](const std::string& k){ markControl(k); };
     h.unpublish = [this](const std::string& k){ unpublishByKey(k); };
     h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
-    h.voices = [this](){ return numChannels.get(); };
+    h.voices = [this](){ return voices.get(); };
     h.control = [this](const std::string& k) -> ofAbstractParameter* {
         if(scSnapshots::isOwnKey(k)) return nullptr;
         auto* a = findPublishAction(k);
         return a ? a->parameter : nullptr;
     };
+    modulation.defaultEnvSustain=1.0f;
+    modulation.skipRoute=[this](int source,int target){return drone.get() && target==TAmp && source>=scModulation::SRC_ENV && source<scModulation::SRC_ENV+scModulation::MAX_ENVS;};
     modulation.setup(h, {{"Pitch", 24, "st"}, {"Position", 1, "", true}, {"Pos Y", 1, "", true},
         {"Warp 1 Amt", 1, ""}, {"Warp 2 Amt", 1, ""}, {"FM", 10, ""}, {"FM Ratio", 16, ""},
-        {"B Pos", 1, "", true}, {"B Feedback", 10, ""}, {"FM Damp", 1, ""}, {"Amp", 1, ""}}, true, true, true);
+        {"B Pos", 1, "", true}, {"B Feedback", 10, ""}, {"FM Damp", 1, ""}, {"Amp", 1, ""}, {"Pan", 0.5f, "turn"}}, true, true, true);
     const std::vector<ofAbstractParameter*> targets = {&pitch, &position, &posY, &warp1Amt, &warp2Amt,
-        &fm, &fmRatio, &bPos, &bFeedback, &fmDamp, &levels};
+        &fm, &fmRatio, &bPos, &bFeedback, &fmDamp, &levels, &pan};
     for(int i = 0; i < NUM_TARGETS; ++i) modulation.targetOfKey[targets[i]->getEscapedName()] = i;
     modulation.lfoCount = modulation.extCount = 0;
     modulation.envCount = 1;
@@ -1864,6 +1904,7 @@ void scWavetableBox::setupModulation(){
 void scWavetableBox::setBpm(float bpm){
     currentBpm = bpm;
     modulation.setBpm(bpm);
+    updateOutputs();
 }
 
 void scWavetableBox::createModulation(ofxSCServer* server){
@@ -1873,22 +1914,33 @@ void scWavetableBox::createModulation(ofxSCServer* server){
     st.sources = new ofxSCGroup(server); st.sources->create(1, st.root->nodeID);
     st.routes = new ofxSCGroup(server); st.routes->create(1, st.root->nodeID);
     st.voice = new ofxSCGroup(server); st.voice->create(1, st.root->nodeID);
+    st.processing=new ofxSCGroup(server);st.processing->create(1,st.root->nodeID);
+    st.voiceBus=new ofxSCBus(RATE_AUDIO,MAX_CHANNELS,server);
+    st.panBus=new ofxSCBus(RATE_AUDIO,MAX_CHANNELS,server);
+    for(auto*& bus:st.fxBus)bus=new ofxSCBus(RATE_AUDIO,MAX_CHANNELS,server);
     st.gates = new ofxSCBus(RATE_AUDIO, MAX_CHANNELS, server);
     modulation.create(server, st.sources->nodeID, st.routes->nodeID, st.gates->index);
-    st.gateSynth = new ofxSCSynth("ModGate" + ofToString(numChannels.get()), server);
+    st.gateSynth = new ofxSCSynth("ModGate" + ofToString(voices.get()), server);
     sendModulation(server);
     st.gateSynth->createAndRun(0, st.root->nodeID, true);
     st.root->run(getActive());
+    updateOutput(server);
 }
 
 void scWavetableBox::freeModulation(ofxSCServer* server){
     auto it = modStates.find(server);
     if(it == modStates.end()) return;
     auto& st = it->second;
+    freeOutput(server);
     modulation.free(server);
     st.root->free();
     delete st.gateSynth;
-    delete st.voice; delete st.routes; delete st.sources; delete st.root;
+    delete st.processing;delete st.voice; delete st.routes; delete st.sources; delete st.root;
+    auto releaseBus=[&](ofxSCBus*& bus){
+        if(bus && bus->index>=0 && bus->index<int(server->audioBusses.size()) && server->audioBusses[bus->index]==bus)bus->free();
+        delete bus;bus=nullptr;
+    };
+    releaseBus(st.voiceBus);releaseBus(st.panBus);for(auto*& bus:st.fxBus)releaseBus(bus);
     // Server restarts invalidate the bus allocator's pointers.
     if(st.gates && st.gates->index >= 0 && st.gates->index < int(server->audioBusses.size()) && server->audioBusses[st.gates->index] == st.gates) st.gates->free();
     delete st.gates;
@@ -1919,7 +1971,7 @@ void scWavetableBox::sendModulation(ofxSCServer* server){
         if(std::abs(modulation.matrix[(scModulation::SRC_ENV + e) * NUM_TARGETS + TAmp]) > 0.0001f) vca = true;
     synth->set("vca", vca && !drone ? 1 : 0);
     synth->set("velBus", modulation.sourceBus(server, scModulation::SRC_VEL));
-    for(int t = 0; t < NUM_TARGETS; ++t)
+    for(int t = 0; t < TPan; ++t)
         synth->set("mod" + ofToString(t), modulation.targetBus(server, t));
 }
 
@@ -1930,3 +1982,7 @@ float scWavetableBox::visualValue(const ofParameter<std::vector<float>>& p, int 
     return ofClamp(valueFor(p.get(), voice, 0.0f) + offset,
                    valueFor(p.getMin(), voice, 0.0f), valueFor(p.getMax(), voice, 1.0f));
 }
+
+#include "scWavetableBoxOutput.inl"
+#include "scWavetableBoxEditor.inl"
+#include "scWavetableBoxLibrary.inl"

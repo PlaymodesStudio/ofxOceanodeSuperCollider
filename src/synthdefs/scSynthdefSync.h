@@ -12,7 +12,8 @@
 //
 //    1. Downloads what changed of synthdefs/ (-> data/Supercollider/SynthdefSources),
 //       sclang/ (-> Sclang, the bundled compiler) and our own UGens in ugens/
-//       (-> Extensions/<Plugin>). Files are compared by their git blob hash.
+//       (-> Extensions/<Plugin>), plus bundled data/Supercollider/Wavetables
+//       (-> Wavetables). Files are compared by their git blob hash.
 //    2. Installs third-party UGen folders published as assets of the
 //       repository's "sc-extensions" release (tools/publish_sc_extensions.py),
 //       when the local folder's content hash differs.

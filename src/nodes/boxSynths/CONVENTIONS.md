@@ -388,10 +388,10 @@ LFO/envelope/Routing module; specialized processing may exist independently.
 | ArpeggiatorBox, ChordBox, EuclideanBox, MetroBox, RhythmBox | Yes | No shared module | No shared piano | No instrument descriptor |
 | DataBox, SpectralFilterBox | No shared snapshot manager | No shared module | No | No |
 
-WavetableBox currently has no shared insert-effects chain or
-`scScheduledInputs` integration. These are separate from its modulation,
-piano and parameter automation. Scheduled-note delivery remains work needed
-for full instrument parity.
+WavetableBox uses independent Voices and Channels, panning, and the PolyComb
+compressor/EQ/blur/echo/reverb chain. Its bundled wavetable browser is included
+in SynthDef sync. Scheduled-note delivery through `scScheduledInputs` remains
+work needed for full instrument parity.
 
 ## Implementation and verification reference
 
