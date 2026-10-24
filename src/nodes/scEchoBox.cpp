@@ -1,3 +1,4 @@
+#include "scFxRouting.h"
 //
 //  scEchoBox.cpp
 //  ofxOceanodeSuperCollider
@@ -411,6 +412,7 @@ void scEchoBox::routeWet(ServerState& st) {
 
 void scEchoBox::updateReverb(ofxSCServer* server, ServerState& st) {
     if(rvbOn.get()){
+        if(!st.rvb && !scFxDefinitionsReady(servers, server)) { routeWet(st); return; }
         if(!st.rvb && st.mix){
             st.rvb = new ofxSCSynth("boxMicroSpace" + ofToString(n()), server);
             sendRvb(st.rvb);
@@ -421,7 +423,7 @@ void scEchoBox::updateReverb(ofxSCServer* server, ServerState& st) {
             sendRvb(st.rvb);
             if(!st.rvbRunning && getActive()) st.rvb->run(true);
         }
-        st.rvbRunning = st.rvb != nullptr;
+        st.rvbRunning = scFxCanRoute(st.rvb, server);
         st.rvbOffAt = -1.0f;
     }else if(st.rvb && st.rvbRunning && st.rvbOffAt < 0.0f){
         st.rvb->set("on", 0.0f);                 // the tail rings out, then it pauses
@@ -650,6 +652,9 @@ void scEchoBox::update(ofEventArgs&) {
     modulation.showing = showWindow.get();
     modulation.update();
     for(auto& [server, st] : states){
+        if(st.mix && !st.rvbRunning && rvbOn.get() &&
+           (scFxCanRoute(st.rvb, server) || (!st.rvb && scFxDefinitionsReady(servers, server))))
+            updateReverb(server, st);
         if(st.rvbOffAt >= 0.0f && now >= st.rvbOffAt){
             st.rvbOffAt = -1.0f;
             st.rvbRunning = false;

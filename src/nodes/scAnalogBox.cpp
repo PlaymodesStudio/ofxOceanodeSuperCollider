@@ -1,3 +1,4 @@
+#include "scFxRouting.h"
 //
 //  scAnalogBox.cpp
 //  ofxOceanodeSuperCollider
@@ -908,6 +909,7 @@ void scAnalogBox::updateStages(ofxSCServer* server, ServerState& st) {
     for(int s = 0; s < NumStages; s++){
         auto& f = st.fx[s];
         if(stageOn(s)){
+            if(!f.synth && !scFxDefinitionsReady(servers, server)) continue;
             if(!liveAudioBus(server, f.in)){
                 delete f.in;
                 f.in = new ofxSCBus(RATE_AUDIO, outChannels.get(), server);
@@ -924,7 +926,7 @@ void scAnalogBox::updateStages(ofxSCServer* server, ServerState& st) {
                 sendStage(s, f.synth);
                 if(!f.running) f.synth->run(true);
             }
-            f.running = true;
+            f.running = scFxCanRoute(f.synth, server);
             f.offAt = -1.0f;
         }else if(f.synth && f.running && f.offAt < 0.0f){
             if(s != StEq) f.synth->set("on", 0.0f);
@@ -961,6 +963,10 @@ void scAnalogBox::update(ofEventArgs&) {
     modulation.update();
     snaps.update();
     const float now = ofGetElapsedTimef();
+    for(auto& [server, st] : states) if(st.created &&
+        scFxAwaitingRoute(st.fx, server, [this](int stage){ return stageOn(stage) > 0; },
+                          scFxDefinitionsReady(servers, server)))
+        updateStages(server, st);
     for(auto& [server, st] : states){
         if(!st.created) continue;
         for(auto& f : st.fx){

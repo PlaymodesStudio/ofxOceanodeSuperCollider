@@ -1,3 +1,4 @@
+#include "scFxRouting.h"
 #include "scPhysicalBox.h"
 #include "scTypedValue.h"
 #include "scSynthControlBatch.h"
@@ -608,6 +609,7 @@ void scPhysicalBox::updateStages(ofxSCServer* server, State& st) {
     for(int s = 0; s < NumStages; s++){
         auto& f = st.fx[s];
         if(stageOn(s)){
+            if(!f.synth && !scFxDefinitionsReady(servers, server)) continue;
             if(!liveBus(server, f.in, true)){
                 delete f.in;
                 f.in = new ofxSCBus(RATE_AUDIO, channels.get(), server);
@@ -624,7 +626,7 @@ void scPhysicalBox::updateStages(ofxSCServer* server, State& st) {
                 sendStage(s, f.synth, server);
                 if(!f.running) f.synth->run(true);
             }
-            f.running = true;
+            f.running = scFxCanRoute(f.synth, server);
             f.offAt = -1.0f;
         }else if(f.synth && f.running && f.offAt < 0.0f){
             if(s != StEq) f.synth->set("on", 0.0f);
@@ -869,6 +871,10 @@ void scPhysicalBox::update(ofEventArgs&) {
     pulse.restart = false;
     mod.showing = show.get(); mod.update();
     const float now = ofGetElapsedTimef();
+    for(auto& [server, st] : states) if(st.created &&
+        scFxAwaitingRoute(st.fx, server, [this](int stage){ return stageOn(stage) > 0; },
+                          scFxDefinitionsReady(servers, server)))
+        updateStages(server, st);
     for(auto& [server, st] : states) if(st.created) {
         for(auto& f : st.fx) {
             if(f.offAt < 0 || now < f.offAt) continue;
