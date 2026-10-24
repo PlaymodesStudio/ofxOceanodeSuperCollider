@@ -2280,7 +2280,7 @@ void scAdditiveBox::drawWindow(){
     bool open = showWindow.get();
     ImGui::SetNextWindowSize(ImVec2(1180.0f, 900.0f), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)){
-        if(open) keyboardPiano.draw(pitch, gate, numVoicesClamped());
+        keyboardPiano.beginContent(pitch, gate, numVoicesClamped());
         windowDrawn = true;
         ImGui::PushID(this);
         if((int)voiceData.size() != numVoicesClamped()) dirty = true;
@@ -2346,6 +2346,7 @@ void scAdditiveBox::drawWindow(){
             ImGui::EndTabBar();
         }
         ImGui::PopID();
+        scKeyboardPiano::endContent();
     }
     ImGui::End();
     if(open != showWindow.get()) showWindow = open;

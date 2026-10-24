@@ -1601,13 +1601,14 @@ void scSampleBox::drawWindow() {
         return;
     }
     if(!open) { showWindow = false; windowHovered = false; browser.stopPreview(); ImGui::End(); return; }
-    if(!pads.empty()) keyboardPiano.draw(pitch, trigger, 1, padChannel(*pads[std::clamp(selected, 0, (int)pads.size() - 1)]));
+    if(pads.empty()) { browser.stopPreview(); ImGui::End(); return; }
+    keyboardPiano.beginContent(pitch, trigger, 1, padChannel(*pads[std::clamp(selected, 0, (int)pads.size() - 1)]));
     windowHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows |
                                            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     hoveredPad = -1;
     const float totalW = ImGui::GetContentRegionAvail().x;
     const float totalH = ImGui::GetContentRegionAvail().y;
-    if(totalW < 200.0f * z || totalH < 80.0f * z || pads.empty()) { browser.stopPreview(); ImGui::End(); return; }
+    if(totalW < 200.0f * z || totalH < 80.0f * z || pads.empty()) { browser.stopPreview(); scKeyboardPiano::endContent(); ImGui::End(); return; }
     selected = std::clamp(selected, 0, (int)pads.size() - 1);
     Pad& p = *pads[selected];
 
@@ -1651,7 +1652,7 @@ void scSampleBox::drawWindow() {
     }
     ImGui::EndGroup();
     ImGui::EndChild();
-    ImGui::End();
+    scKeyboardPiano::endContent(); ImGui::End();
 }
 
 // ── The pad list ────────────────────────────────────────────────────────────

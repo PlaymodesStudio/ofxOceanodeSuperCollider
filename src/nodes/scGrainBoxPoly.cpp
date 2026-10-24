@@ -4266,15 +4266,17 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
     windowDrawn = true;    // shown and not collapsed: grain replies wanted (see update)
 
     activePlayhead = std::max(0, std::min((int)playheads.size() - 1, activePlayhead));
-    if(!playheads.empty()) {
+    if(playheads.empty()) { ImGui::End(); return; }
+    {
         auto& ph = *playheads[activePlayhead];
-        ph.keyboardPiano.draw(ph.pitch, ph.gate, ph.numPlayheads.get(), 0, ph.pitchMode.get() == 1 ? 0 : -60);
+        ph.keyboardPiano.beginContent(ph.pitch, ph.gate, ph.numPlayheads.get(), 0, ph.pitchMode.get() == 1 ? 0 : -60);
     }
 
     float totalW  = ImGui::GetContentRegionAvail().x;
     float totalH  = ImGui::GetContentRegionAvail().y;
     if(totalW < 40.0f || totalH < 20.0f) {   // squeezed to nothing: draw nothing (ImGui
         browser.stopPreview();
+        scKeyboardPiano::endContent();
         ImGui::End();                        // asserts on zero-sized items)
         return;
     }
@@ -4304,6 +4306,7 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
     if(!ImGui::BeginChild("##gbpRight", ImVec2(rw, totalH), false,
                       ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
         ImGui::EndChild();
+        scKeyboardPiano::endContent();
         ImGui::End();
         return;
     }
@@ -4380,6 +4383,7 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
     if(globalTab) {
         drawGlobalPanel(rightW);
         ImGui::EndChild();
+        scKeyboardPiano::endContent();
         ImGui::End();
         return;
     }
@@ -4439,6 +4443,7 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
 
     ImGui::PopID();
     ImGui::EndChild();
+    scKeyboardPiano::endContent();
     ImGui::End();
 }
 

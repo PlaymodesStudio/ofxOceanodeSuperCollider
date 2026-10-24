@@ -1302,8 +1302,8 @@ private:
         bool open = showWindow.get();
         ImGui::SetNextWindowSize(ImVec2(1180.0f, 860.0f), ImGuiCond_FirstUseEver);
         if(ImGui::Begin(title.c_str(), &open)){
-            if(open) {
-                keyboardPiano.draw(pitchP, gate, voices());
+            {
+                keyboardPiano.beginContent(pitchP, gate, voices());
                 // A first keyboard note may equal the untouched Pitch default,
                 // so its parameter need not emit a change to select MIDI pitch.
                 if(keyboardPiano.isPlaying()) pitchTouched = true;
@@ -1351,6 +1351,7 @@ private:
             }
             drawTableBrowser();
             ImGui::PopID();
+            scKeyboardPiano::endContent();
         }
         ImGui::End();
         if(open != showWindow.get()) showWindow = open;

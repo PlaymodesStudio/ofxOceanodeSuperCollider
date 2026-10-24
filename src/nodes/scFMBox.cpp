@@ -663,7 +663,7 @@ void scFMBox::drawWindow() {
         ImGui::End();if(!open) show=false;return;
     }
     if(!open){show=false;ImGui::End();return;}
-    keyboardPiano.draw(pitch, gate, voices.get());
+    keyboardPiano.beginContent(pitch, gate, voices.get());
     const float w=ImGui::GetContentRegionAvail().x;
     drawHeader();
     snaps.drawBar(w);
@@ -697,6 +697,7 @@ void scFMBox::drawWindow() {
         tab("Effects",[this](float tw){drawFxTab(tw);});
         ImGui::EndTabBar();
     }
+    scKeyboardPiano::endContent();
     ImGui::End();
 }
 void scFMBox::draw(ofEventArgs&) {

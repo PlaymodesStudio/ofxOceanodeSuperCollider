@@ -15,6 +15,9 @@ int main() {
     ofParameter<std::vector<float>> pitch({60}), gate({1});
     int voices=2, first=0;
     float offset=0;
+    ImVec2 controls, keysMin, keysMax;
+    int highlighted = 0;
+    bool footer = false;
     auto frame = [&](bool show=true, bool focus=true, bool text=false) {
         ImGui::NewFrame();
         if(show) {
@@ -23,7 +26,19 @@ int main() {
             if(focus) ImGui::SetWindowFocus();
             else ImGui::SetWindowFocus(nullptr);
             io.WantTextInput=text;
-            piano.draw(pitch,gate,voices,first,offset);
+            controls = ImGui::GetCursorScreenPos();
+            if(footer) {
+                piano.beginContent(pitch,gate,voices,first,offset);
+                ImGui::TextUnformatted("Scrollable synth controls");
+                scKeyboardPiano::endContent();
+            } else {
+                piano.draw(pitch,gate,voices,first,offset);
+                keysMin = ImGui::GetItemRectMin();
+                keysMax = ImGui::GetItemRectMax();
+            }
+            highlighted = 0;
+            for(const auto& vertex : ImGui::GetWindowDrawList()->VtxBuffer)
+                if(vertex.col == IM_COL32(65,185,220,255)) ++highlighted;
             ImGui::End();
         }
         piano.finishFrame();
@@ -112,6 +127,52 @@ int main() {
         assert(pitch.get()==previousPitch && gate.get()[0]==0 && !piano.isPlaying());
         key(gap,false);
     }
+    // Real mouse events: momentary playing, glissando, black-key hit priority,
+    // latch toggles, focus loss, and hidden-window cleanup.
+    voices=3; first=0; offset=0;
+    pitch.set({60,64,67}); gate.set({1,0,1}); frame();
+    assert(highlighted > 0 && !piano.isPlaying());
+    const int twoLit = highlighted;
+    gate.set({1,1,1}); frame(); assert(highlighted > twoLit);
+    gate.set({0}); frame(); assert(highlighted == 0);
+    auto moveToNote = [&](int midi, bool upper=false) {
+        int whites=0;
+        for(int n=0;n<midi;++n) {
+            int pc=n%12;
+            if(pc!=1 && pc!=3 && pc!=6 && pc!=8 && pc!=10) ++whites;
+        }
+        const int pc=midi%12;
+        const bool black=pc==1 || pc==3 || pc==6 || pc==8 || pc==10;
+        const float ww=(keysMax.x-keysMin.x)/75;
+        io.AddMousePosEvent(keysMin.x+(whites+(black?0:0.5f))*ww,
+                            keysMin.y+(upper?15:65));
+        frame(); // establish hover before pressing
+    };
+    auto mouse = [&](bool down){ io.AddMouseButtonEvent(0,down); frame(); };
+    auto click = [&](){ mouse(true); mouse(false); };
+    moveToNote(60); mouse(true);
+    assert(pitch.get()[0]==60 && gate.get()[0]==1 && highlighted>0);
+    moveToNote(62); assert(pitch.get()[0]==62 && gate.get()[0]==1);
+    mouse(false); assert(!piano.isPlaying() && gate.get()[0]==0);
+    moveToNote(61,true); mouse(true);
+    assert(pitch.get()[0]==61); mouse(false);
+    auto toggleHold = [&](){
+        io.AddMousePosEvent(controls.x+9,controls.y+9); frame(); click();
+    };
+    toggleHold();
+    moveToNote(60); click(); assert(piano.isPlaying() && gate.get()[0]==1);
+    moveToNote(64); click(); assert(gate.get()[0]==1 && gate.get()[1]==1);
+    frame(true,false); assert(gate.get()[0]==1 && gate.get()[1]==1);
+    frame(); moveToNote(60); click();
+    assert(gate.get()[0]==0 && gate.get()[1]==1);
+    toggleHold(); assert(!piano.isPlaying() && gate.get()[1]==0);
+    toggleHold(); moveToNote(67); click(); frame(false);
+    assert(!piano.isPlaying() && gate.get()[0]==0);
+    // Repeated short gate vectors must illuminate every sounding pitch.
+    pitch.set({60,64,67}); gate.set({1}); frame();
+    assert(highlighted > twoLit);
+    // Footer child pairs correctly and keeps a populated parent draw list.
+    footer=true; frame(); assert(highlighted>0);
     ImGui::DestroyContext();
-    std::cout << "PASS: white/black key layout, chords, mono priority, release, focus, typing, modifiers, octaves, ñ, channels and relative pitch\n";
+    std::cout << "PASS: white/black key layout, chords, mono priority, release, focus, typing, modifiers, octaves, ñ, channels, relative pitch, external highlights, mouse notes, glissando, Hold and footer layout\n";
 }

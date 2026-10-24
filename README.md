@@ -61,6 +61,12 @@ On keyboards without ñ, use the semicolon key in that position.
 **Up / Down** shifts new notes by one octave; held notes retain their original
 pitch. The current starting octave appears in the editor.
 
+The pitched Box editors include a piano footer showing active Pitch/Gate notes,
+including external parameter input and computer-keyboard notes. Click a piano key
+to play, or drag across keys. Enable **Hold** to latch clicked notes; click them
+again to switch them off. Disable Hold to release latched notes, or use **Release**
+to stop local notes. Hiding/collapsing the editor also releases them.
+
 Hold several keys for chords, up to the instrument's configured voice count.
 When voices run out, the newest notes take priority. Releasing a key closes
 its gate; leaving the editor, hiding/collapsing it or entering text releases

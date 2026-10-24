@@ -1724,7 +1724,7 @@ void scAnalogBox::drawWindow() {
         return;
     }
     if(!open){ showWindow = false; ImGui::End(); return; }
-    keyboardPiano.draw(pitch, gate, voices.get());
+    keyboardPiano.beginContent(pitch, gate, voices.get());
     const float w = ImGui::GetContentRegionAvail().x;
 
     // ── Header: voices, channels, master, gate mode, voices' levels ─────────
@@ -1777,6 +1777,7 @@ void scAnalogBox::drawWindow() {
         tab("Effects", [this](float tw){ drawFxTab(tw); });
         ImGui::EndTabBar();
     }
+    scKeyboardPiano::endContent();
     ImGui::End();
 }
 
