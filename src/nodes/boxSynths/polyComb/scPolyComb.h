@@ -168,7 +168,7 @@ private:
     };
     std::vector<serverManager*> servers;
     std::map<ofxSCServer*, ServerState> states;
-    // Gate, Pitch, Velocity: Oceanode values or audio cables
+    // Gate, Pitch: Oceanode values or audio cables
     scAudioParam gateIn, pitchIn;
     void refreshOutputs() { for(auto& output : outputs) output = output; }
 

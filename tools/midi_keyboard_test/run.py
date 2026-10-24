@@ -97,6 +97,41 @@ struct ofxOceanodeContainer {
     void drawMidiKeyboardMenu(ofxOceanodeNodeModel&);
 };
 '''
+# Compile the actual Box role descriptors into the MIDI fixture. This catches
+# a leftover Velocity handle that would silently switch MIDI back to binary gates.
+def method_body(source, signature):
+    start = source.index('{', source.index(signature))
+    depth = 1
+    end = start + 1
+    while depth:
+        depth += (source[end] == '{') - (source[end] == '}')
+        end += 1
+    return source[start:end]
+
+box_descriptors = ''
+for folder, name in [('steamPipeBox', 'scSteamPipeBox'), ('analogBox', 'scAnalogBox'),
+                     ('fmBox', 'scFMBox'), ('aliasingBox', 'scAliasingBox'),
+                     ('sampleBox', 'scSampleBox'), ('wavetableBox', 'scWavetableBox')]:
+    path = root / 'src/nodes/boxSynths' / folder / (name + ('.h' if folder == 'wavetableBox' else '.cpp'))
+    signature = 'bool getTimelineInstrument(' if folder == 'wavetableBox' else 'bool ' + name + '::getTimelineInstrument('
+    body = method_body(path.read_text(), signature)
+    locals = r'''
+    static auto gateHandle=std::make_shared<ofxOceanodeAbstractParameter>(std::vector<float>{0});
+    static auto pitchHandle=std::make_shared<ofxOceanodeAbstractParameter>(std::vector<float>{60});
+    struct AudioInput { std::shared_ptr<ofxOceanodeAbstractParameter> handle; };
+    AudioInput gateIn{gateHandle}, pitchIn{pitchHandle};
+    auto triggerHandle=gateHandle;
+    struct Count { int get() const {return 2;} } voices, numChannels;
+    auto nIn=[](){return 2;};
+    struct Named { std::string key; std::string getEscapedName() const {return key;} } pitch{"Pitch"}, gate{"Gate"};
+    std::map<std::string,std::shared_ptr<ofxOceanodeAbstractParameter>> publishedHandles{{"Pitch",pitchHandle},{"Gate",gateHandle}};
+    struct Pad {};
+    std::vector<std::shared_ptr<Pad>> pads{std::make_shared<Pad>(),std::make_shared<Pad>()};
+    auto padChannel=[&](const Pad& pad){return &pad==pads[0].get()?0:1;};
+'''
+    body = body.replace('[this]', '[&]')
+    box_descriptors += 'bool ' + name + 'Descriptor(ofxOceanodeTimelineInstrument& out) {\n' + locals + body[1:-1] + '}\n'
+
 tests = r'''
 int main() {
     using Binding=ofxOceanodeMidiKeyboardBinding;
@@ -111,6 +146,24 @@ int main() {
         for(size_t n=0;n<std::min(ps.size(),gs.size());++n) if(gs[n]>0&&ps[n]==pitch) return true;
         return false;
     };
+    // Each production Box descriptor must make the binding put velocity in Gate.
+    for(auto descriptor : {scSteamPipeBoxDescriptor, scAnalogBoxDescriptor,
+                           scFMBoxDescriptor, scAliasingBoxDescriptor,
+                           scSampleBoxDescriptor, scWavetableBoxDescriptor}) {
+        ofxOceanodeTimelineInstrument box;
+        box.velocity=&v; // A reused descriptor must clear the former role, too.
+        assert(descriptor(box)); assert(box.gate && !box.velocity);
+        Binding b([&]{return box;},"Box");
+        const int note=box.kit?36:60;
+        send(b,MIDI_NOTE_ON,note,32); b.update();
+        assert(box.gate->parameter.get()[0]==32.f/127.f);
+        send(b,MIDI_NOTE_OFF,note); b.update();
+        assert(box.gate->parameter.get()[0]==0);
+        send(b,MIDI_NOTE_ON,note,112); b.update();
+        assert(box.gate->parameter.get()[0]==112.f/127.f);
+        send(b,MIDI_NOTE_ON,note,0); b.update();
+        assert(box.gate->parameter.get()[0]==0);
+    }
     ofJson saved;
     {
         Binding b([&]{return i;},"Synth");
@@ -170,12 +223,12 @@ int main() {
         assert(container.persistentMidiBindings.empty());
         assert(container.midiIns["Keyboard"].removed==2);
     }
-    std::cout<<"PASS: learning, queued writes, polyphony, voice stealing/return, voice resize, velocity, sustain, note-off, panic, filtering, preset restore, teardown, kits and bind/unbind menu isolation\n";
+    std::cout<<"PASS: learning, queued writes, polyphony, voice stealing/return, voice resize, velocity, sustain, note-off, panic, filtering, preset restore, teardown, kits, six production Box gate/velocity descriptors and bind/unbind menu isolation\n";
 }
 '''
 with tempfile.TemporaryDirectory(prefix='midi-keyboard-test-') as directory:
     source=Path(directory)/'test.cpp'
-    source.write_text(fixture+binding+menu_fixture+menu+tests)
+    source.write_text(fixture+binding+menu_fixture+menu+box_descriptors+tests)
     binary=Path(directory)/'test'
     json_include=root.parent.parent/'libs/json/include'
     subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g', '-I'+str(midi),'-I'+str(json_include),str(source),'-o',str(binary)],check=True)

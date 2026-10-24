@@ -11,6 +11,7 @@ See [the instrument documentation](../../synthdefs/Defaults/SteamPipeBox/README.
 - `capture_primary_reference.py`: optional LLDB capture in a new isolated Reaktor
   6.5 arm64 process stopped at main; checks binary SHA before invoking primitives.
 - `retrigger_test.py`: existing-voice preset recall, exact first-sample gate/velocity,
+  fractional gate levels in the Velocity source and shared envelope tracking,
   pitch steps, repeated Tarrega/PVC notes and manual slider drags at 1/64/256 samples.
 - `resonance_test.py`: dry Tarrega/Coolharp plucks; requires sustained tonal tails
   after gate-off, without reverb or post-delay masking the result.

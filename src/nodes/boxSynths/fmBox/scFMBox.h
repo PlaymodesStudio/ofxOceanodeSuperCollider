@@ -46,7 +46,7 @@ public:
     std::string getWindowTitle() override { return "fmBox " + ofToString(getNumIdentifier()); }
     ofParameter<bool>* getWindowToggle() override { return &show; }
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
-    // Gate / Pitch / Velocity, one note per voice (timeline piano rolls)
+    // Gate / Pitch (gate level carries velocity), one note per voice (timeline piano rolls)
     bool getTimelineInstrument(ofxOceanodeTimelineInstrument&) override;
 #endif
 private:
@@ -130,8 +130,8 @@ private:
     ofParameter<int> voices, channels, gateMode;
     bool gateTouched=false;
     ofParameter<float> master;
-    ofParameter<std::vector<float>> gate, pitch, velocity;
-    scAudioParam gateIn, pitchIn, velIn;
+    ofParameter<std::vector<float>> gate, pitch;
+    scAudioParam gateIn, pitchIn;
     scScheduledInputs scheduled;
     scModulation mod;
     scSnapshots snaps;

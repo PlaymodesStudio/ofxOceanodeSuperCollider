@@ -185,13 +185,11 @@ void scAnalogBox::setup() {
     addParameter(showWindow.set("Show", false));
     addParameter(voices.set("Voices", 4, 1, MAX_VOICES));
     addParameter(outChannels.set("Channels", 2, 1, MAX_VOICES));
-    // Gate (levels: a gate rising to 0.2 plays at 0.2), Pitch, Velocity: Oceanode values or audio cables
+    // Gate (levels: a gate rising to 0.2 plays at 0.2), Pitch: Oceanode values or audio cables
     gateIn.attach(addParameter(gate.set("Gate", {0.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
     pitchIn.attach(addParameter(pitch.set("Pitch", {48.0f}, {0.0f}, {127.0f})), availableInputs, [this](){ refreshOutputs(); });
-    velIn.attach(addParameter(velocity.set("Velocity", {1.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
     noteInputs.add(gateIn.handle, gate);
     noteInputs.add(pitchIn.handle, pitch);
-    noteInputs.add(velIn.handle, velocity);
     noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.created && st.gateS) return true; return false; });
     addParameter(master.set("Master", 0.7f, 0.0f, 1.0f));
     addParameter(resetLFOs.set("Reset"));
@@ -413,10 +411,6 @@ void scAnalogBox::setup() {
         for(float x : v) if(x > 0.0f) gateTouched = true;
         toGate();
     }));
-    listeners.push(velocity.newListener([toGate](std::vector<float>&) {
-        if(scScheduling::isBackendSendSuppressed()) return;
-        toGate();
-    }));
     listeners.push(pitch.newListener([this, toPitch](std::vector<float>&) {
         if(scScheduling::isBackendSendSuppressed()) return;
         toPitch();
@@ -481,10 +475,10 @@ void scAnalogBox::sendVec(ofxSCSynth* s, const std::string& name, const std::vec
 
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
 bool scAnalogBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
-    if(!gateIn.handle || !pitchIn.handle || !velIn.handle) return false;
+    if(!gateIn.handle || !pitchIn.handle) return false;
     out.gate = gateIn.handle.get();
     out.pitch = pitchIn.handle.get();
-    out.velocity = velIn.handle.get();
+    out.velocity = nullptr;
     out.voices = nIn();
     return true;
 }
@@ -501,29 +495,28 @@ void scAnalogBox::sendGate(ServerState& st) {
             if(v.size() <= 1) s->setMultiple(name, first(v, def), ni); else s->set(name, expand(v, ni));
         };
         vec("gate", gate.get(), 0.0f);
-        vec("velocity", velocity.get(), 1.0f);
+        vec("velocity", {1.0f}, 1.0f); // Gate carries note velocity.
         vec("pitch", pitch.get(), 48.0f);
         s->set("out", st.gateBus ? st.gateBus->index : 0);
         s->set("pitchout", st.poolPitch ? st.poolPitch->index : 0);
         s->set("vel", src(st, SRC_VEL));
         s->set("rnd", src(st, SRC_RND));
-        const int gb = gateIn.bus(st.server), vb = velIn.bus(st.server), pb = pitchIn.bus(st.server);
+        const int gb = gateIn.bus(st.server), pb = pitchIn.bus(st.server);
         if(gb >= 0){ s->set("gate_sel", 1.0f); s->mapan("gate_ar", gb, ni); } else s->set("gate_sel", 0.0f);
-        if(vb >= 0){ s->set("vel_sel", 1.0f); s->mapan("vel_ar", vb, ni); } else s->set("vel_sel", 0.0f);
+        s->set("vel_sel", 0.0f);
         if(pb >= 0){ s->set("pitch_sel", 1.0f); s->mapan("pitch_ar", pb, ni); } else s->set("pitch_sel", 0.0f);
         return;
     }
     sendVec(s, "gate", gate.get());
-    sendVec(s, "velocity", velocity.get());
+    sendVec(s, "velocity", {1.0f});
     s->set("drone", droning() ? 1.0f : 0.0f);
     s->set("out", st.gateBus ? st.gateBus->index : 0);
     s->set("vel", src(st, SRC_VEL));
     s->set("rnd", src(st, SRC_RND));
-    const int gb = gateIn.bus(st.server), vb = velIn.bus(st.server);
+    const int gb = gateIn.bus(st.server);
     if(gb >= 0){ s->set("gate_sel", 1.0f); s->mapan("gate_ar", gb, n()); }
     else s->set("gate_sel", 0.0f);
-    if(vb >= 0){ s->set("vel_sel", 1.0f); s->mapan("vel_ar", vb, n()); }
-    else s->set("vel_sel", 0.0f);
+    s->set("vel_sel", 0.0f);
 }
 
 
@@ -895,7 +888,7 @@ int scAnalogBox::getOutputBusIndex(ofxSCServer* server, int) {
 
 void scAnalogBox::setInputBus(ofxSCServer* server, scNode* node, int bus) {
     auto& st = states[server];
-    if(gateIn.take(server, node, bus) | velIn.take(server, node, bus)) sendGate(st);
+    if(gateIn.take(server, node, bus)) sendGate(st);
     if(pitchIn.take(server, node, bus)){
         sendPitch(st);
         // with Extra Voices the pitch cable goes into the allocator (ABGateAlloc)
@@ -904,7 +897,7 @@ void scAnalogBox::setInputBus(ofxSCServer* server, scNode* node, int bus) {
 }
 void scAnalogBox::resetInputBusses(ofxSCServer* server, int) {
     auto& st = states[server];
-    gateIn.reset(server); pitchIn.reset(server); velIn.reset(server);
+    gateIn.reset(server); pitchIn.reset(server);
     sendGate(st);
     sendPitch(st);
 }
@@ -1771,7 +1764,7 @@ void scAnalogBox::drawWindow() {
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("Extra Voices: gated, the synth runs up to twice as many voices (16 at most)\n"
                               "and each new note takes a free one, so a note never cuts a release short (no clicks).\n"
-                              "Voices stays the number of Gate / Pitch / Velocity inputs. Now: %d voices.", n());
+                              "Voices stays the number of Gate / Pitch inputs. Now: %d voices.", n());
         ImGui::SameLine(0, 12 * z);
         ImGui::BeginGroup(); sliderInt(outChannels, "Channels", 170 * z); ImGui::EndGroup();
         ImGui::SameLine(0, 12 * z);

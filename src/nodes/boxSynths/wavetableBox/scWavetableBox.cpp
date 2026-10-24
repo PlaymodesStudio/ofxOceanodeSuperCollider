@@ -297,7 +297,6 @@ void scWavetableBox::setup(){
     oversample.set("Oversample", 0, 0, int(oversampleNames.size()) - 1);
 
     gate.set("Gate", {0.0f}, {0.0f}, {1.0f});
-    velocity.set("Velocity", {1.0f}, {0.0f}, {1.0f});
     envMode.set("Env Mode", 0, 0, 2);
     addParameter(resetLFOs.set("Reset LFOs"));
     snaps.setupParameters();   // Snapshot, Morph... (scSnapshots, shared by the synths)
@@ -322,7 +321,6 @@ void scWavetableBox::setup(){
         snaps.setup(h);
     }
     publishByKey(gate.getEscapedName());
-    publishByKey(velocity.getEscapedName());
     publishByKey(pitch.getEscapedName());
     publishByKey(levels.getEscapedName());
     publishByKey(position.getEscapedName());
@@ -378,9 +376,6 @@ void scWavetableBox::setup(){
 
     nodeListeners.push(gate.newListener([this](std::vector<float>&){
         gateTouched = true;
-        for(auto& [server, state] : modStates) sendModulation(server);
-    }));
-    nodeListeners.push(velocity.newListener([this](std::vector<float>&){
         for(auto& [server, state] : modStates) sendModulation(server);
     }));
     nodeListeners.push(envMode.newListener([this](int&){
@@ -1116,7 +1111,6 @@ void scWavetableBox::addPublishAction(ofParameter<T>& parameter, std::vector<std
 void scWavetableBox::initializePublishActions(){
     publishActions.clear();
     addPublishAction(gate);
-    addPublishAction(velocity);
     addPublishAction(envMode, {"Auto", "Gated", "Drone"});
     addPublishAction(source, sourceNames);
     addPublishAction(liveIn);
@@ -1157,7 +1151,7 @@ void scWavetableBox::initializePublishActions(){
 // ── Snapshots: the oscillator and its table (not the notes, nor Live In) ─────
 bool scWavetableBox::notInSound(const std::string& key) const {
     if(scSnapshots::isOwnKey(key)) return true;
-    for(const auto* p : std::initializer_list<const ofAbstractParameter*>{&pitch, &levels, &gate, &velocity, &liveIn, &trig, &embedTable})
+    for(const auto* p : std::initializer_list<const ofAbstractParameter*>{&pitch, &levels, &gate, &liveIn, &trig, &embedTable})
         if(p->getEscapedName() == key) return true;
     return false;
 }
@@ -1793,7 +1787,6 @@ void scWavetableBox::drawControls(){
 
     beginGroup("VOICE", 0);
     sliderVector(gate);
-    sliderVector(velocity);
     comboInt(envMode, {"Auto", "Gated", "Drone"});
     sliderVector(phase);
     if(ImGui::Button("Retrig", ImVec2(-FLT_MIN, 0))) retrigAll();
@@ -1886,7 +1879,8 @@ void scWavetableBox::sendModulation(ofxSCServer* server){
     const bool drone = envMode == 2 || (envMode == 0 && !gateTouched);
     if(st.gateSynth){
         st.gateSynth->set("gate", expand(gate.get(), 0));
-        st.gateSynth->set("velocity", expand(velocity.get(), 1));
+        st.gateSynth->set("velocity", expand({1.0f}, 1)); // Gate carries note velocity.
+        st.gateSynth->set("vel_sel", 0.0f);
         st.gateSynth->set("drone", drone ? 1 : 0);
         st.gateSynth->set("out", st.gates->index);
         st.gateSynth->set("vel", modulation.sourceBus(server, scModulation::SRC_VEL));

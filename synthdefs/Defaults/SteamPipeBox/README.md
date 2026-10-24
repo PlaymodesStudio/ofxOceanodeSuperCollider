@@ -2,8 +2,16 @@
 
 `steampipeBox` is a dedicated Defaults instrument reconstructed from the supplied
 `steampipe_santi.ens` with **Reaktor Patch Extractor**. It starts with **1 Flute**,
-six voices, stereo output and Master 1. Gate, Pitch and Velocity accept vectors,
+six voices, stereo output and Master 1. Gate and Pitch accept vectors,
 audio cables and scheduled timeline notes. Auto/Gated/Drone follows the other boxes.
+
+**Gate is a float vector (0..1)**: 0 releases a voice and a positive level
+carries normalized MIDI velocity. For example, Gate 0.25
+supplies velocity 0.25 to the Steam envelope, noise velocity tracking, the
+Velocity modulation source and shared envelopes' velocity tracking. MIDI
+keyboard bindings write key velocity directly into Gate. There is no separate
+Velocity input. This
+follows the [Box note-input convention](../../../src/nodes/boxSynths/CONVENTIONS.md#note-gates-and-velocity).
 
 The window supplies the shared snapshot bar and manager, right-click value entry,
 publishing, timelines and modulation, a draggable Steam ADSR, dynamic envelopes,

@@ -199,6 +199,32 @@ structural controls remain shared unless explicitly handled otherwise.
 Keep target indices stable: append new targets so saved matrices retain their
 meaning. Save route amounts and bases, then use the shared load/after-load hooks.
 
+## Note gates and velocity
+
+All Box instrument **Gate** inputs (SampleBox calls it **Trigger/Gate**) use
+`ofParameter<std::vector<float>>`, normalized to 0..1, including single-voice
+instruments. Zero releases the note;
+a positive value opens it and carries its normalized MIDI velocity (MIDI
+velocity / 127). Preserve fractional levels through parameter connections,
+scheduled notes, audio cables and DSP sends. Do not round, cast to int or
+replace the level with a boolean before extracting velocity. A binary gate
+of 1 remains a full-velocity note.
+
+Use the gate level for the Velocity modulation source and envelope velocity
+tracking. Do not expose a separate note **Velocity** input. Keep any internal
+DSP velocity multiplier fixed at 1, with its separate cable selector disabled.
+Velocity sensitivity controls, envelope tracking amounts and the Velocity
+modulation source remain available.
+Use a separate `gate > 0` signal for envelope timing and trigger detection.
+Document any engine-specific retrigger/legato behavior for positive level
+changes; preserve release tails after Gate returns to zero.
+
+Older patches may have connected or automated a separate Velocity input.
+Move that source to Gate (combine it with a binary note gate by multiplication
+if needed). Recreate existing timeline note-group bindings that still refer
+to the removed Velocity parameter; sound snapshots retain their sensitivity
+settings.
+
 ## Envelopes
 
 Use the shared ADSR cards: Attack, Decay, Sustain, Release, curve controls and
@@ -297,7 +323,7 @@ and respects MIDI/relative pitch mode. Preserve these specialized mappings.
 With `OFXOCEANODE_USE_MIDI`, the node title's context menu offers
 **Bind MIDI Keyboard (Pitch / Gate)** and **Unbind MIDI Keyboard (Pitch / Gate)**.
 The first played note learns the device and channel. One shared
-`ofxOceanodeMidiKeyboardBinding` drives Pitch, Gate and optional Velocity,
+`ofxOceanodeMidiKeyboardBinding` drives Pitch and the float Gate level,
 with polyphony, sustain, last-note priority and note release on unbinding.
 Other ordinary MIDI mappings remain intact. Keyboard bindings save with the preset.
 
@@ -317,9 +343,10 @@ There are two related entry points:
    voice mapping together.
 
 Implement `getTimelineInstrument()` with valid node parameter handles for
-Gate, Pitch and optional Velocity, plus the input voice count. The descriptor
-supports missing roles; without a Velocity handle, gate levels can carry
-velocity. A kit sets `kit = true`: MIDI key 36 / C1 maps to slot 0, with
+Gate and Pitch, plus the input voice count. Set `out.velocity = nullptr` so
+MIDI keyboard bindings and new timeline instrument tracks send note velocity
+through the float Gate level. A kit sets `kit = true`:
+MIDI key 36 / C1 maps to slot 0, with
 successive keys selecting successive slots.
 
 Keep handles stable while the timeline needs them. Report input note slots,

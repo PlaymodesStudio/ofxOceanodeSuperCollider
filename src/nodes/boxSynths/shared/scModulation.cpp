@@ -1210,7 +1210,7 @@ void scModulation::drawEnvCard(int e, float w) {
     if(velocity){
         slider(E.vt, "Vel", w, "%.2f");
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Velocity tracking: 0 the same every note, 1 scaled by the note's velocity\n"
-                                                     "(the gate's level x Velocity)");
+                                                     "(the Gate level)");
     }
     {
         ofParameter<float>* cs[3] = {&E.ca, &E.cd, &E.cr};

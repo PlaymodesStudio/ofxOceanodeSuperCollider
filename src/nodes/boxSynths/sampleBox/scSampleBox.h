@@ -230,12 +230,12 @@ private:
 
     // ── The node's parameters ───────────────────────────────────────────────
     ofParameter<bool> showWindow;
-    ofParameter<std::vector<float>> trigger, pitch, velocity;   // per channel
+    ofParameter<std::vector<float>> trigger, pitch;   // per channel
     std::shared_ptr<ofxOceanodeAbstractParameter> triggerHandle;
     scScheduledInputs noteInputs;    // the timeline's notes, timetagged
     ofParameter<float> gain;                                    // the mix's (and every Pad output's) level
     ofParameter<int> channels;                                  // N Chan
-    scAudioParam pitchIn, velIn;   // Pitch / Velocity audio cables: channel c for a pad on channel c
+    scAudioParam pitchIn;   // Pitch audio cable: channel c for a pad on channel c
 
     // ── Pads ────────────────────────────────────────────────────────────────
     Pad* addPad();                           // at the end; nullptr when full
@@ -268,7 +268,7 @@ private:
     void sendEngine(ofxSCServer*, Pad& p);
     void sendFx(ofxSCServer*, Pad& p, int fx);
     void sendStrip(ofxSCServer*, Pad& p);
-    void sendChannelInputs(Pad& p);          // trig bus, pitch, velocity, gate (after Channel or the inputs changed)
+    void sendChannelInputs(Pad& p);          // trig bus, pitch, gate/velocity level (after Channel or the inputs changed)
     void sendChokeMasks();
     void sendMutes();
     // Tempo: Fit and Sync

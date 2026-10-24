@@ -108,7 +108,7 @@ public:
         };
         out.pitch = handle(pitch.getEscapedName());
         out.gate = handle(gate.getEscapedName());
-        out.velocity = handle(velocity.getEscapedName());
+        out.velocity = nullptr;
         out.voices = numChannels.get();
         return out.pitch && out.gate;
     }
@@ -116,7 +116,6 @@ public:
         if(bind) {
             publishByKey(pitch.getEscapedName());
             publishByKey(gate.getEscapedName());
-            publishByKey(velocity.getEscapedName());
         }
         getTimelineInstrument(out);
         return true;
@@ -249,7 +248,7 @@ private:
     ofParameter<int> cycleMode, maxFrames, oversample;
     ofParameter<bool> normalize, removeDC, embedTable;
     ofParameter<std::vector<float>> pitch, levels, position, posY;
-    ofParameter<std::vector<float>> gate, velocity;
+    ofParameter<std::vector<float>> gate;
     ofParameter<int> envMode;
     ofParameter<void> resetLFOs;
     ofParameter<int> rows;

@@ -22,7 +22,7 @@ are missing. Rebuild the Oceanode app to include the new C++ node. Normal OF
 addon builds discover the new `.cpp` automatically; manually maintained IDE
 source lists need `src/nodes/boxSynths/aliasingBox/scAliasingBox.cpp` added.
 
-The node exposes Show, Voices (1–16), Channels (1–16), Gate, Pitch, Velocity,
+The node exposes Show, Voices (1–16), Channels (1–16), Gate, Pitch,
 Master and Reset (LFOs), like PolyComb and AnalogBox. Gate Mode
 (Auto/Gated/Drone) is in the window header and can be published from there;
 patches saved with the first version's Drone toggle load it as Gate Mode.
@@ -43,7 +43,7 @@ provided Reaktor views. Display mode is saved with the patch.
 Right-click a window control to enter a value, publish/unpublish it, add it
 to a timeline track or modulate it. The node's title-bar menu exposes the
 standard timeline instrument action when timeline support is compiled in.
-Gate/Pitch/Velocity accept vectors or audio cables and register scheduled
+Gate/Pitch accept vectors or audio cables and register scheduled
 note handlers. Snapshot recall leaves externally driven controls alone.
 The shared snapshot system supplies 128 slots, named presets, factory banks,
 store/recall, timed glide and A/B morphing, with continuous matrix blending.

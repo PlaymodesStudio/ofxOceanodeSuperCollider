@@ -76,10 +76,9 @@ void scAliasingBox::setup() {
     addParameter(show.set("Show", false));
     addParameter(voices.set("Voices", 5, 1, 16));
     addParameter(channels.set("Channels", 2, 1, 16));
-    // Gate (levels: a gate rising to 0.2 plays at 0.2), Pitch, Velocity: Oceanode values or audio cables
+    // Gate (levels: a gate rising to 0.2 plays at 0.2), Pitch: Oceanode values or audio cables
     gateIn.attach(addParameter(gate.set("Gate", {0.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
     pitchIn.attach(addParameter(pitch.set("Pitch", {60.0f}, {0.0f}, {127.0f})), availableInputs, [this](){ refreshOutputs(); });
-    velIn.attach(addParameter(velocity.set("Velocity", {1.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
     addParameter(master.set("Master", 0.6f, 0.0f, 1.0f));
     addParameter(resetLFOs.set("Reset"));
     addOutput("Out");
@@ -87,9 +86,9 @@ void scAliasingBox::setup() {
     gateMode.set("Gate Mode",0,0,2);
     reg(gateMode,[this](){sendAll();});
     dropdowns.set(gateMode.getEscapedName(),{"Auto","Gated","Drone"});
-    scheduled.add(gateIn.handle, gate); scheduled.add(pitchIn.handle, pitch); scheduled.add(velIn.handle, velocity);
+    scheduled.add(gateIn.handle, gate); scheduled.add(pitchIn.handle, pitch);
     scheduled.enable(this, [this](){ for(auto& [s, st] : states) if(st.created) return true; return false; });
-    for(auto* p : {&gate, &pitch, &velocity}) {
+    for(auto* p : {&gate, &pitch}) {
         listeners.push(p->newListener([this,p](std::vector<float>& v) {
             // the timeline's frame set of a value it already sent timetagged: nothing to do
             if(scScheduling::isBackendSendSuppressed()) return;
@@ -234,17 +233,16 @@ void scAliasingBox::sendNotes(ofxSCServer* server, State& st) {
         std::vector<float> out(n); for(int i=0;i<n;++i) out[i] = first(v,i,fallback);
         st.gate->set(name,out);
     };
-    vec("gate",gate.get(),0); vec("velocity",velocity.get(),1);
+    vec("gate",gate.get(),0); vec("velocity",{1.0f},1); // Gate carries note velocity.
     st.gate->set("out", st.gates->index);
     st.gate->set("vel", mod.sourceBus(server,scModulation::SRC_VEL));
     st.gate->set("rnd", mod.sourceBus(server,scModulation::SRC_RND));
     st.droneSent=droning() ? 1 : 0;
     st.gate->set("drone",float(st.droneSent));
-    for(auto [p,name] : {std::make_pair(&gateIn,"gate"),std::make_pair(&velIn,"vel")}) {
-        const int bus = p->bus(server);
-        st.gate->set(std::string(name)+"_sel",bus >= 0 ? 1.0f : 0.0f);
-        if(bus>=0) st.gate->mapan(std::string(name)+"_ar",bus,n);
-    }
+    st.gate->set("vel_sel",0.0f);
+    const int gateBus = gateIn.bus(server);
+    st.gate->set("gate_sel",gateBus >= 0 ? 1.0f : 0.0f);
+    if(gateBus>=0) st.gate->mapan("gate_ar",gateBus,n);
     const int bus = pitchIn.bus(server);
     for(int i=0;i<n;++i) if(auto* v=st.voices[i]) {
         v->set("pitch", first(pitch.get(),i,60));
@@ -329,7 +327,7 @@ void scAliasingBox::release(ofxSCServer* server, State& st) {
 void scAliasingBox::free(ofxSCServer* s) { auto it=states.find(s); if(it!=states.end()) { release(s,it->second); it->second.out=-1; } }
 // A new voice / speaker count: everything again, but in the old root's place.
 // The graph is not recomputed (same topology), so a root at the head of the
-// default group would run before the nodes feeding Gate/Pitch/Velocity by
+// default group would run before the nodes feeding Gate/Pitch by
 // cable, read silent buses and stay quiet until a reconnection.
 void scAliasingBox::rebuild() {
     structureDirty=false; mod.voicesChanged();
@@ -348,16 +346,16 @@ void scAliasingBox::moveSynthBefore(ofxSCServer* s,int id) { auto it=states.find
 int scAliasingBox::getLastSynthID(ofxSCServer* s) { auto it=states.find(s); return it!=states.end()&&it->second.created ? it->second.root->nodeID : -1; }
 void scAliasingBox::setOutputBus(ofxSCServer* s,int,int bus) { auto& st=states[s]; st.out=bus; if(st.created) routeChain(st); }
 int scAliasingBox::getOutputBusIndex(ofxSCServer* s,int) { auto it=states.find(s); return it==states.end() ? -1 : it->second.out; }
-void scAliasingBox::setInputBus(ofxSCServer* s,scNode* node,int bus) { auto& st=states[s]; if(gateIn.take(s,node,bus)|pitchIn.take(s,node,bus)|velIn.take(s,node,bus)) sendNotes(s,st); }
-void scAliasingBox::resetInputBusses(ofxSCServer* s,int) { gateIn.reset(s);pitchIn.reset(s);velIn.reset(s);sendNotes(s,states[s]); }
+void scAliasingBox::setInputBus(ofxSCServer* s,scNode* node,int bus) { auto& st=states[s]; if(gateIn.take(s,node,bus)|pitchIn.take(s,node,bus)) sendNotes(s,st); }
+void scAliasingBox::resetInputBusses(ofxSCServer* s,int) { gateIn.reset(s);pitchIn.reset(s);sendNotes(s,states[s]); }
 void scAliasingBox::activate() { for(auto& [s,st]:states) if(st.created) st.root->run(true); }
 void scAliasingBox::deactivate() { for(auto& [s,st]:states) if(st.created) st.root->run(false); }
 void scAliasingBox::setBpm(float v) { bpm=std::max(1.0f,v);mod.setBpm(bpm);sendAll(); }
 void scAliasingBox::resendParametersForNRT() { for(auto& [s,st]:states) for(auto& cache:st.sent) cache.clear(); mod.resend();sendAll(); }
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
 bool scAliasingBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
-    if(!gateIn.handle || !pitchIn.handle || !velIn.handle) return false;
-    out.gate=gateIn.handle.get();out.pitch=pitchIn.handle.get();out.velocity=velIn.handle.get();out.voices=voices.get();
+    if(!gateIn.handle || !pitchIn.handle) return false;
+    out.gate=gateIn.handle.get();out.pitch=pitchIn.handle.get();out.velocity=nullptr;out.voices=voices.get();
     return true;
 }
 #endif

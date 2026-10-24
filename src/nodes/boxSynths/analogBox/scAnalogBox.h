@@ -4,7 +4,7 @@
 //
 //  AnalogBox: a polyphonic subtractive synth, N voices -> N channels.
 //
-//  • The node shows Show, Voices, Channels, Gate, Pitch, Velocity, Master,
+//  • The node shows Show, Voices, Channels, Gate, Pitch, Master,
 //    Reset and whatever is published. Gate takes Oceanode values and an audio
 //    cable at the same time. The dockable window has everything else, in tabs
 //    laid out in columns; right-click any control there to type a value,
@@ -97,7 +97,7 @@ public:
     void loadBeforeConnections(ofJson& j) override;
     void presetRecallAfterSettingParameters(ofJson& j) override;
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
-    // Gate / Pitch / Velocity, one note per voice (timeline piano rolls)
+    // Gate / Pitch, one note per voice (timeline piano rolls)
     bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override;
 #endif
 
@@ -140,8 +140,8 @@ private:
     };
     std::vector<serverManager*> servers;
     std::map<ofxSCServer*, ServerState> states;
-    // Gate, Pitch, Velocity: Oceanode values or audio cables
-    scAudioParam gateIn, pitchIn, velIn;
+    // Gate, Pitch: Oceanode values or audio cables
+    scAudioParam gateIn, pitchIn;
     void refreshOutputs() { for(auto& output : outputs) output = output; }
 
     // ── Publishable controls (the window's) ──────────────────────────────────
@@ -165,7 +165,7 @@ private:
     void publishedUnderline(const std::string& key) const;
 
     // ── Engine ───────────────────────────────────────────────────────────────
-    // Voices: the gate / pitch / velocity inputs. Gated, with Extra Voices, the
+    // Voices: the gate / pitch inputs (gate level carries velocity). Gated, with Extra Voices, the
     // synth runs a pool of min(16, 2 x Voices) voices (ABGateAlloc hands each
     // new note the next one): a note never restarts a voice still releasing
     int nIn() const { return voices.get(); }
@@ -215,7 +215,7 @@ private:
     ofParameter<int> spreadMode, spreadLayout;
     ofParameter<float> spreadWidth, spreadCenter;
     ofParameter<std::vector<float>> panP;
-    ofParameter<std::vector<float>> gate, pitch, velocity;
+    ofParameter<std::vector<float>> gate, pitch;
     scScheduledInputs noteInputs;    // the timeline's notes, timetagged
     ofParameter<float> master;
     ofParameter<void> resetLFOs;

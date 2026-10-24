@@ -5,8 +5,8 @@ It replaces the earlier SuperFM-derived implementation. The editable routing
 matrix, dockable editor, effects, publishing, timeline and shared Box snapshot
 and modulation workflows remain.
 
-Add **fmBox**, enable **Show**, and play from Gate/Pitch/Velocity or the computer
-keyboard. The node face remains Show, Voices, Channels, Gate, Pitch, Velocity,
+Add **fmBox**, enable **Show**, and play from Gate/Pitch or the computer
+keyboard. The node face remains Show, Voices, Channels, Gate, Pitch,
 Master and Out. Voice count and speaker count are independent (1–16).
 
 ## Presets

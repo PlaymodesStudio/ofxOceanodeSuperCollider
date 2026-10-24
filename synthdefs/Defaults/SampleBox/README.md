@@ -26,9 +26,11 @@ that exists, keeping the order EQ → Comp → Sat → Echo → Reverb → Stere
 
 Every pad reads one channel of the node's `Trig/Gate Audio` input
 (`\trigbus` = the input's bus + the pad's channel), so a MetroBox or EuclideanBox
-`Gates` output plays pad n from lane / track n. The Oceanode `Trigger/Gate`,
-`Pitch` and `Velocity` values are per channel too. A rising edge starts a note;
-a gate is a level (0.2 plays at 0.2). Pitch 60 plays the file at its own pitch.
+`Gates` output plays pad n from lane / track n. The Oceanode `Trigger/Gate`
+and `Pitch` values are per channel too. Trigger/Gate is a float level (0..1)
+that carries note velocity; there is no separate Velocity input. A rising edge
+starts a note; a gate at 0.2 plays at velocity 0.2. Pitch 60 plays the file at
+its own pitch.
 
 - **One-shot** (Loop off, Gate Mode off): plays the In..Out region once. The
   read position stops at the end and the voice fades out over the region's last

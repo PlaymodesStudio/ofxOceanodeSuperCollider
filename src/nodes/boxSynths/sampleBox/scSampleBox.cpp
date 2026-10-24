@@ -129,11 +129,8 @@ void scSampleBox::setup() {
     triggerHandle = addParameter(trigger.set("Trigger/Gate", {0.0f}, {0.0f}, {1.0f}));
     pitchIn.attach(addParameter(pitch.set("Pitch", {60.0f}, {0.0f}, {127.0f})), availableInputs,
                    [this](){ for(auto& o : outputs) o = o; });
-    velIn.attach(addParameter(velocity.set("Velocity", {1.0f}, {0.0f}, {1.0f})), availableInputs,
-                 [this](){ for(auto& o : outputs) o = o; });
     noteInputs.add(triggerHandle, trigger);
     noteInputs.add(pitchIn.handle, pitch);
-    noteInputs.add(velIn.handle, velocity);
     noteInputs.enable(this, [this](){
         for(auto& p : pads) for(auto& [srv, sc] : p->sc) if(sc.engine) return true;
         return false;
@@ -160,10 +157,6 @@ void scSampleBox::setup() {
         }
     }));
     nodeListeners.push(pitch.newListener([this](std::vector<float>&) {
-        if(scScheduling::isBackendSendSuppressed()) return;
-        for(auto& p : pads) sendChannelInputs(*p);
-    }));
-    nodeListeners.push(velocity.newListener([this](std::vector<float>&) {
         if(scScheduling::isBackendSendSuppressed()) return;
         for(auto& p : pads) sendChannelInputs(*p);
     }));
@@ -872,12 +865,12 @@ void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p) {
     if(p.choke.get() > 0)
         for(const auto& q : pads) if(q.get() != &p && q->choke.get() == p.choke.get() && q->index < 16) mask[q->index] = 1.0f;
     s->set("chokemask", mask);
-    // the channel's trigger, pitch, velocity
+    // the channel's trigger/velocity level and pitch
     const int ch = padChannel(p);
     s->set("trigbus", inputBuses.count(srv) && inputBuses[srv] >= 0 ? inputBuses[srv] + ch : -1);
-    const int pb = pitchIn.bus(srv), vb = velIn.bus(srv);
+    const int pb = pitchIn.bus(srv);
     if(pb >= 0) s->mapan("pitch", pb + ch, 1); else s->set("pitch", valueFor(pitch.get(), ch, 60.0f));
-    if(vb >= 0) s->mapan("velocity", vb + ch, 1); else s->set("velocity", valueFor(velocity.get(), ch, 1.0f));
+    s->set("velocity", 1.0f); // Trigger/Gate carries note velocity.
     if(!p.auditionHeld && !p.autoPlaying) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
 }
 
@@ -917,9 +910,9 @@ void scSampleBox::sendStrip(ofxSCServer* srv, Pad& p) {
 
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
 bool scSampleBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
-    if(!triggerHandle || !velIn.handle) return false;
+    if(!triggerHandle) return false;
     out.gate = triggerHandle.get();
-    out.velocity = velIn.handle.get();
+    out.velocity = nullptr;
     out.kit = true;
     out.voices = 1;
     for(const auto& p : pads) out.voices = std::max(out.voices, padChannel(*p) + 1);
@@ -934,9 +927,9 @@ void scSampleBox::sendChannelInputs(Pad& p) {
         const int ch = padChannel(p);
         ofxSCSynth* s = sc.engine;
         s->set("trigbus", inputBuses.count(srv) && inputBuses[srv] >= 0 ? inputBuses[srv] + ch : -1);
-        const int pb = pitchIn.bus(srv), vb = velIn.bus(srv);
+        const int pb = pitchIn.bus(srv);
         if(pb >= 0) s->mapan("pitch", pb + ch, 1); else s->set("pitch", valueFor(pitch.get(), ch, 60.0f));
-        if(vb >= 0) s->mapan("velocity", vb + ch, 1); else s->set("velocity", valueFor(velocity.get(), ch, 1.0f));
+        s->set("velocity", 1.0f); // Trigger/Gate carries note velocity.
         if(!p.auditionHeld && !p.autoPlaying) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
     }
 }
@@ -1132,14 +1125,13 @@ int scSampleBox::getLastSynthID(ofxSCServer* srv) {
     return (it != nodeSC.end() && it->second.created) ? it->second.root->nodeID : -1;
 }
 void scSampleBox::setInputBus(ofxSCServer* srv, scNode* node, int bus) {
-    // a Pitch / Velocity cable (told apart by its source's bus), else the trigger / gate input
-    if(!(pitchIn.take(srv, node, bus) | velIn.take(srv, node, bus))) inputBuses[srv] = bus;
+    // a Pitch cable (told apart by its source's bus), else the trigger / gate input
+    if(!pitchIn.take(srv, node, bus)) inputBuses[srv] = bus;
     for(auto& p : pads) sendChannelInputs(*p);
 }
 void scSampleBox::resetInputBusses(ofxSCServer* srv, int) {
     inputBuses.erase(srv);
     pitchIn.reset(srv);
-    velIn.reset(srv);
     for(auto& p : pads) sendChannelInputs(*p);
 }
 
@@ -2178,7 +2170,7 @@ void scSampleBox::drawSoundTab(Pad& p, float w) {
         }
         combo(p.channel, "Channel", colW, chans);
         if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("The channel of Trig/Gate Audio (and Trigger/Gate, Pitch, Velocity) this pad plays.\n"
+            ImGui::SetTooltip("The channel of Trig/Gate Audio (and Trigger/Gate, Pitch) this pad plays.\n"
                               "Auto: its row, so a sequencer's lane n plays pad n.\n"
                               "Two pads on one channel play together (layers).");
         const std::string source = channelSource(padChannel(p));
