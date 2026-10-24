@@ -365,7 +365,7 @@ void sample() {
 (buf[static_cast<int>((ap_ofs+ap_w))]=f32(ap_write));
 (ap_w+=1);
 ((ap_w>=ap_size) ? (ap_w=0) : 0.0);
-(resonator_signal=((ap_on>=0.5) ? ap_output : pipe_delayed));
+(resonator_signal=((pipe_delayed*((1-clip(ap_on,0,1))))+(ap_output*clip(ap_on,0,1))));
 (positive_limit=(1.0+clip(symmetry,0.0,1.0)));
 (negative_limit=max(0.0001,(1.0-clip(symmetry,0.0,1.0))));
 (saturated=((resonator_signal>=0.0) ? paraSat(resonator_signal,soft_hard,positive_limit) : paraSat(resonator_signal,soft_hard,negative_limit)));
@@ -572,7 +572,8 @@ writeDelay(1,(x_right+(er*pow(10,(((-3)*dr)/max(.001,rt))))));
 (dmix=clip(_delay_mix,0,.5));
 (y_left=((x_left*sqrt((1-dmix)))+(el*sqrt(dmix))));
 (y_right=((x_right*sqrt((1-dmix)))+(er*sqrt(dmix))));
-((_delay_bypass>=.5) ? ([&]() -> double {(y_left=x_left);return (y_right=x_right);}()) : 0.0);
+(y_left=((y_left*((1-clip(_delay_bypass,0,1))))+(x_left*clip(_delay_bypass,0,1))));
+(y_right=((y_right*((1-clip(_delay_bypass,0,1))))+(x_right*clip(_delay_bypass,0,1))));
 (pre=(_r66_predelay*.001));
 (pl=delay(2,y_left,((pre*((1+_r66_spread)))*srate)));
 (pr=delay(3,y_right,((pre*((1-_r66_spread)))*srate)));
@@ -622,8 +623,8 @@ writeDelay(1,(x_right+(er*pow(10,(((-3)*dr)/max(.001,rt))))));
 (wet_left=((lp_left*sqrt((1-pos)))+(tll*sqrt(pos))));
 (wet_right=((lp_right*sqrt((1-pos)))+(trr*sqrt(pos))));
 (mix=clip(_r66_mix,0,1));
-(out0=((_r66_left_on>=.5) ? ((y_left*sqrt((1-mix)))+(wet_left*sqrt(mix))) : y_left));
-(out1=((_r66_right_on>=.5) ? ((y_right*sqrt((1-mix)))+(wet_right*sqrt(mix))) : y_right));
+(out0=((y_left*((1-clip(_r66_left_on,0,1))))+((((y_left*sqrt((1-mix)))+(wet_left*sqrt(mix))))*clip(_r66_left_on,0,1))));
+(out1=((y_right*((1-clip(_r66_right_on,0,1))))+((((y_right*sqrt((1-mix)))+(wet_right*sqrt(mix))))*clip(_r66_right_on,0,1))));
 }
 };
 }

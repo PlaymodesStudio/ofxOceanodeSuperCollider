@@ -82,7 +82,7 @@ SynthDef(\SteamPipeBoxVoice, {
         \allpass_fine, SteamPipeStep.ar(p.(\allpass_fine,0.007874011993408203).clip(-1,1)),
         \allpass_sample_correction, SteamPipeStep.ar(p.(\allpass_sample_correction,0).clip(-5,0)),
         \allpass_mw, SteamPipeStep.ar(p.(\allpass_mw,-0.04724407196044922).clip(-2,2)),
-        \allpass_on, SteamPipeStep.ar(p.(\allpass_on,0.0).clip(0,1)),
+        \allpass_on, SteamPipeStep.ar(p.(\allpass_on,0.0).clip(0,1).lag(0.03)),
         \diffusion, SteamPipeStep.ar((p.(\diffusion,0.007874011993408203)+m.(\mdiffusion)).clip(-1,1)),
         \offset, SteamPipeStep.ar((p.(\offset,0.41732287406921387)+m.(\moffset)).clip(-1,1)),
         \push, SteamPipeStep.ar((p.(\push,1.574803113937378)+m.(\mpush)).clip(0,2)),

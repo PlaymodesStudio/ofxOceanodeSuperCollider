@@ -129,7 +129,7 @@ private:
     void toggle(ofParameter<bool>&,const char*);
     void updateStages(ofxSCServer*,State&);
     void routeChain(State&);
-    bool stageOn(int) const;
+    float stageOn(int) const;
     std::string stageDef(int) const;
     float stageTail(int) const;
     float echoDelaySec() const;

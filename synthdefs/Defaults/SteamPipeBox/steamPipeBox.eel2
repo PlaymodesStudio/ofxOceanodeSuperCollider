@@ -256,7 +256,7 @@ ap_write = f32(pipe_delayed-f32(ap_g*f32(ap_delayed+1e-12)));
 ap_output = f32(ap_delayed+f32(ap_g*ap_write));
 buf[ap_ofs + ap_w] = f32(ap_write);
 ap_w += 1; ap_w >= ap_size ? ap_w = 0;
-resonator_signal = ap_on >= 0.5 ? ap_output : pipe_delayed;
+resonator_signal = pipe_delayed * (1-clip(ap_on,0,1)) + ap_output * clip(ap_on,0,1);
 
 positive_limit = 1.0 + clip(symmetry, 0.0, 1.0);
 negative_limit = max(0.0001, 1.0 - clip(symmetry, 0.0, 1.0));

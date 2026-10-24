@@ -79,7 +79,8 @@ writeDelay(1,x_right+er*pow(10,-3*dr/max(.001,rt)));
 dmix=clip(_delay_mix,0,.5);
 y_left=x_left*sqrt(1-dmix)+el*sqrt(dmix);
 y_right=x_right*sqrt(1-dmix)+er*sqrt(dmix);
-_delay_bypass>=.5 ? (y_left=x_left;y_right=x_right;);
+y_left=y_left*(1-clip(_delay_bypass,0,1))+x_left*clip(_delay_bypass,0,1);
+y_right=y_right*(1-clip(_delay_bypass,0,1))+x_right*clip(_delay_bypass,0,1);
 // R66 pre-delay and early diffuser: recovered Primary offsets, 65-Size.
 pre=_r66_predelay*.001;
 pl=delay(2,y_left,pre*(1+_r66_spread)*srate);
@@ -125,5 +126,5 @@ pos=clip(_r66_position,0,1);
 wet_left=lp_left*sqrt(1-pos)+tll*sqrt(pos);
 wet_right=lp_right*sqrt(1-pos)+trr*sqrt(pos);
 mix=clip(_r66_mix,0,1);
-out0=_r66_left_on >= .5 ? y_left*sqrt(1-mix)+wet_left*sqrt(mix) : y_left;
-out1=_r66_right_on >= .5 ? y_right*sqrt(1-mix)+wet_right*sqrt(mix) : y_right;
+out0=y_left*(1-clip(_r66_left_on,0,1))+(y_left*sqrt(1-mix)+wet_left*sqrt(mix))*clip(_r66_left_on,0,1);
+out1=y_right*(1-clip(_r66_right_on,0,1))+(y_right*sqrt(1-mix)+wet_right*sqrt(mix))*clip(_r66_right_on,0,1);
