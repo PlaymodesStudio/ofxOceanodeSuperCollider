@@ -54,7 +54,7 @@ class scPolyComb : public scNode {
     scKeyboardPiano keyboardPiano;
 public:
     // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
-    std::string getWindowTitle() override { return "PolyComb " + ofToString(getNumIdentifier()); }
+    std::string getWindowTitle() override { return "PolyCombBox " + ofToString(getNumIdentifier()); }
     ofParameter<bool>* getWindowToggle() override { return &showWindow; }
 private:
 public:

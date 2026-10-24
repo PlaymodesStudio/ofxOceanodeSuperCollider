@@ -71,7 +71,7 @@ std::pair<int,int> filterChoice(int type) {
 // Setup
 // ════════════════════════════════════════════════════════════════════════════
 
-scPolyComb::scPolyComb(std::vector<serverManager*> s) : scNode("polyComb"), servers(std::move(s)) {
+scPolyComb::scPolyComb(std::vector<serverManager*> s) : scNode("polycombBox"), servers(std::move(s)) {
     description = "Polyphonic comb-resonator synth. Gate takes Oceanode values and audio-rate gates together. "
                   "Oscillators with FM, filters, comb, ring mod, sine shaper, envelopes, LFOs and a modulation "
                   "matrix, spread over the speakers, then EQ, echo and reverb. Built from small synths: only the "
@@ -495,7 +495,7 @@ void scPolyComb::setup() {
     {
         scSnapshots::Host h;
         h.folder = "PolyComb";
-        h.title = "PolyComb";
+        h.title = "PolyCombBox";
         h.capture = [this](){ return captureSnapshot(); };
         h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applyState(a, b, t, sw); };
         // Shared banks (Santi's, the Reaktor collections) come from the
