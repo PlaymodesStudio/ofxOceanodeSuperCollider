@@ -108,7 +108,7 @@ void scEchoBox::reg(ofParameter<T>& p, std::function<void()> send) {
     c.save = [&p]() { return ofJson(p.get()); };
     c.load = [&p](const ofJson& j) { try { p.set(j.get<T>()); } catch(...) {} };
     controls.push_back(std::move(c));
-    listeners.push(p.newListener([this, send](T&) { if(!restoring) send(); }));
+    listeners.push(p.newListener([this, &p, send](T&) { snaps.morph.edited(p); if(!restoring) send(); }));
 }
 
 void scEchoBox::setup() {
@@ -233,6 +233,11 @@ void scEchoBox::setup() {
         h.factory = [this](){ return factorySnapshots(); };
         h.bpm = [this](){ return currentBpm; };
         h.paramMenu = [this](const std::string& k){ publishedUnderline(k); publishMenu(k); };
+        snaps.morph.bypass(rvbOn);
+        h.morphChanged = [this]() { for(auto& [sv, st] : states) if(st.mix) updateReverb(sv, st); };
+        h.morphBlocked = [this](const std::string& k) {
+            auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
+        };
         snaps.setup(h);
     }
     requireSynthdefs();
@@ -368,7 +373,7 @@ void scEchoBox::sendRvb(ofxSCSynth* x) {
     x->set("modfreq", ofClamp(rvbModRate.get(), 0.001f, 20.0f));
     x->set("spin", ofClamp(rvbSpin.get(), 0.0f, 20.0f));
     x->set("wander", ofClamp(rvbWander.get(), 0.0f, 20.0f));
-    x->set("on", rvbOn.get() ? 1.0f : 0.0f);
+    x->set("on", snaps.morph.activation(rvbOn));
 }
 
 float scEchoBox::reverbTail() const { return std::min(30.0f, rvbDecay.get() + rvbPredelay.get() * 0.001f + 0.3f); }
@@ -411,7 +416,7 @@ void scEchoBox::routeWet(ServerState& st) {
 }
 
 void scEchoBox::updateReverb(ofxSCServer* server, ServerState& st) {
-    if(rvbOn.get()){
+    if(snaps.morph.activation(rvbOn) > 0){
         if(!st.rvb && !scFxDefinitionsReady(servers, server)) { routeWet(st); return; }
         if(!st.rvb && st.mix){
             st.rvb = new ofxSCSynth("boxMicroSpace" + ofToString(n()), server);
@@ -652,7 +657,7 @@ void scEchoBox::update(ofEventArgs&) {
     modulation.showing = showWindow.get();
     modulation.update();
     for(auto& [server, st] : states){
-        if(st.mix && !st.rvbRunning && rvbOn.get() &&
+        if(st.mix && !st.rvbRunning && snaps.morph.activation(rvbOn) > 0 &&
            (scFxCanRoute(st.rvb, server) || (!st.rvb && scFxDefinitionsReady(servers, server))))
             updateReverb(server, st);
         if(st.rvbOffAt >= 0.0f && now >= st.rvbOffAt){
