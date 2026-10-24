@@ -160,7 +160,7 @@ template<class T> void scPhysicalBox::reg(ofParameter<T>& p, std::function<void(
     c.save = [&p]() { return ofJson(p.get()); };
     c.load = [&p](const ofJson& j) { try { p.set(j.get<T>()); } catch(const std::exception&) {} };
     controls.push_back(std::move(c));
-    listeners.push(p.newListener([this, send](T&) { if(!restoring) send(); }));
+    listeners.push(p.newListener([this, &p, send](T&) { snaps.morph.edited(p); if(!restoring) send(); }));
 }
 
 void scPhysicalBox::addSound(const std::string& name, const std::string& sc, float def, float lo, float hi,
@@ -426,6 +426,12 @@ void scPhysicalBox::setup() {
     sh.factory = [this](){ return factory(); };
     sh.bpm = [this](){ return bpm; };
     sh.paramMenu = [this](const std::string& k){ mark(k); menu(k); };
+    for(auto* p : {&satOn, &eqOn, &echoOn, &rvbOn, &spaceOn}) snaps.morph.bypass(*p);
+    sh.morphChanged = toStages;
+    sh.morphBlocked = [this](const std::string& k) {
+        auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
+    };
+    snaps.morph.mode(echoFilter, 4);
     snaps.setup(sh);
     requireSynthdefs();
 }
@@ -646,13 +652,13 @@ void scPhysicalBox::routeChain(State& st) {
     }
     if(st.spread) st.spread->set("out", next);
 }
-bool scPhysicalBox::stageOn(int s) const {
+float scPhysicalBox::stageOn(int s) const {
     switch(s){
-        case StSat: return satOn.get();
-        case StEq: return eqOn.get();
-        case StEcho: return echoOn.get();
-        case StRvb: return rvbOn.get();
-        default: return spaceOn.get();
+        case StSat: return snaps.morph.activation(satOn);
+        case StEq: return snaps.morph.activation(eqOn);
+        case StEcho: return snaps.morph.activation(echoOn);
+        case StRvb: return snaps.morph.activation(rvbOn);
+        default: return snaps.morph.activation(spaceOn);
     }
 }
 std::string scPhysicalBox::stageDef(int s) const {
@@ -676,11 +682,12 @@ float scPhysicalBox::stageTail(int s) const {
 void scPhysicalBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     if(!x) return;
     scSynthControlBatch c(x, server);
-    const float on = stageOn(s) ? 1.0f : 0.0f;
+    const float on = stageOn(s);
     if(s == StSat){
         c.set("drive", satDrive.get()); c.set("bias", satBias.get()); c.set("tone", satTone.get());
         c.set("autogain", 1.0f); c.set("output", satOutput.get()); c.set("mix", satMix.get()); c.set("on", on);
     }else if(s == StEq){
+        c.set("on", on);
         // mixerProEQ: gains dB, freqs Hz, shelves bNslope (= 1/S), peaks bNrq (= 1/Q)
         for(int b = 0; b < 5; b++){
             const std::string k = "b" + ofToString(b + 1);
@@ -694,6 +701,7 @@ void scPhysicalBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
         c.set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
         c.set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
         c.set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
+            c.set("filterweights", snaps.morph.weights(echoFilter));
         c.set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
         c.set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
         c.set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
