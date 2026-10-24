@@ -69,7 +69,7 @@ template<class T> void scAliasingBox::reg(ofParameter<T>& p, std::function<void(
     c.save = [&p]() { return ofJson(p.get()); };
     c.load = [&p](const ofJson& j) { try { p.set(j.get<T>()); } catch(const std::exception&) {} };
     controls.push_back(std::move(c));
-    listeners.push(p.newListener([this, send](T&) { if(!restoring) send(); }));
+    listeners.push(p.newListener([this, &p, send](T&) { snaps.morph.edited(p); if(!restoring) send(); }));
 }
 void scAliasingBox::setup() {
     timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); }, [this](){ return publishedKeys; });
@@ -213,6 +213,14 @@ void scAliasingBox::setup() {
     sh.factory = [this](){ return factory(); };
     sh.bpm = [this](){ return bpm; };
     sh.paramMenu = [this](const std::string& k){ mark(k); menu(k); };
+    for(auto* p : {&satOn, &eqOn, &echoOn, &rvbOn}) snaps.morph.bypass(*p);
+    for(const auto& c : sound)
+        if(c->sc == "filter_on" || c->sc == "notch_on" || c->sc == "dc_block") snaps.morph.bypass(c->p);
+    sh.morphChanged = [this, toStages]() { sendAll(); toStages(); };
+    sh.morphBlocked = [this](const std::string& k) {
+        auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
+    };
+    snaps.morph.mode(echoFilter, 4);
     snaps.setup(sh);
     if(snaps.active<0 && snaps.used[0] && snaps.name(0)=="quak") { snaps.active=0; snaps.snapshotP.setWithoutEventNotifications(1); }
     requireSynthdefs();
@@ -257,7 +265,7 @@ void scAliasingBox::sendSound(ofxSCServer* server, State& st) {
             if(it!=sent.end()&&it->second==value) return;
             sent[name]=value;v->set(name,value);
         };
-        for(const auto& c : sound) if(c->sc!="stereo") set(c->sc,mod.voiceValue(c->p,i));
+        for(const auto& c : sound) if(c->sc!="stereo") set(c->sc, (c->sc=="filter_on" || c->sc=="notch_on" || c->sc=="dc_block") ? snaps.morph.activation(c->p) : mod.voiceValue(c->p,i));
         for(int e=0;e<2;++e) for(int k=0;k<3;++k) set(std::string(e?"filter_curve":"amp_curve")+ofToString(k),mod.voiceValue(envCurves[e][k],i));
         set("gatebus",st.gates->index+i);
         set("velbus",mod.sourceBus(server,scModulation::SRC_VEL)+i);
@@ -676,8 +684,8 @@ void scAliasingBox::routeChain(State& st) {
     if(st.spread) st.spread->set("out", next);
 }
 
-bool scAliasingBox::stageOn(int s) const {
-    return s == StSat ? satOn.get() : s == StEq ? eqOn.get() : s == StEcho ? echoOn.get() : rvbOn.get();
+float scAliasingBox::stageOn(int s) const {
+    return s == StSat ? snaps.morph.activation(satOn) : s == StEq ? snaps.morph.activation(eqOn) : s == StEcho ? snaps.morph.activation(echoOn) : snaps.morph.activation(rvbOn);
 }
 
 std::string scAliasingBox::stageDef(int s) const {
@@ -703,11 +711,12 @@ float scAliasingBox::stageTail(int s) const {
 void scAliasingBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     if(!x) return;
     scSynthControlBatch controls(x, server);
-    const float on = stageOn(s) ? 1.0f : 0.0f;
+    const float on = stageOn(s);
     if(s == StSat){
         controls.set("drive",satDrive.get());controls.set("bias",satBias.get());controls.set("tone",satTone.get());
         controls.set("autogain",1.0f);controls.set("output",satOutput.get());controls.set("mix",satMix.get());controls.set("on",on);
     }else if(s == StEq){
+        controls.set("on", on);
         // mixerProEQ: gains dB, freqs Hz, shelves bNslope (= 1/S), peaks bNrq (= 1/Q)
         for(int b = 0; b < 5; b++){
             const std::string k = "b" + ofToString(b + 1);
@@ -721,6 +730,7 @@ void scAliasingBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
         controls.set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
         controls.set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
         controls.set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
+            controls.set("filterweights", snaps.morph.weights(echoFilter));
         controls.set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
         controls.set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
         controls.set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));

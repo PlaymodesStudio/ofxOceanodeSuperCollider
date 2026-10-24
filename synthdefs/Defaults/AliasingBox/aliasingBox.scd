@@ -66,7 +66,7 @@ SynthDef(\AliasingBoxVoice, {
     raw = (BufRd.ar(1,table,read * tableRange * 1023,0,1) * 2) - 1;
     notch = BPeakEQ.ar(raw,(p.(\notch_pitch,100)+((note-60)*p.(\notch_keytrack,0))).midicps.clip(10,SampleRate.ir*0.45),
         (1-p.(\notch_resonance,0.3)).clip(0.02,1),p.(\notch_gain,-30));
-    raw = Select.ar(p.(\notch_on,0)>0.5,[raw,notch]);
+    raw = LinXFade2.ar(raw, notch, p.(\notch_on,0).lag(0.03)*2-1);
     // Core MultiWave: phase is -0.5..0.5; the screenshot and decoded
     // arithmetic agree on triangle 1-4|phase| and this sine polynomial.
     // The main rate is always tempo * numerator / denominator. The old
@@ -94,9 +94,9 @@ SynthDef(\AliasingBoxVoice, {
     hp = (hp*(p.(\drive,0)+m.(\mdrive)).clip(0,30).dbamp).tanh;
     lp = BLowPass4.ar(hp,(cut.midicps+(raw*(p.(\lp_fm,0)+m.(\mlpfm)))).clip(10,SampleRate.ir*0.45),
         (1-p.(\lp_resonance,0)-m.(\mlpres)).clip(0.02,1));
-    lp = Select.ar(p.(\dc_block,1)>0.5,[lp,LeakDC.ar(lp)]);
+    lp = LinXFade2.ar(lp, LeakDC.ar(lp), p.(\dc_block,1).lag(0.03)*2-1);
     sig = (lp*(p.(\drive,0)+m.(\mdrive)).clip(0,30).dbamp).tanh;
-    sig = Select.ar(p.(\filter_on,1)>0.5,[raw,sig]);
+    sig = LinXFade2.ar(raw, sig, p.(\filter_on,1).lag(0.03)*2-1);
     vel = In.kr(\velbus.kr(0),1);
     amp = Select.kr(\vca.kr(0)>0.5,[(1+m.(\mamp)).clip(0,2),m.(\mamp).clip(0,1)]);
     sig = Sanitize.ar(sig) * ampEnv * amp *
