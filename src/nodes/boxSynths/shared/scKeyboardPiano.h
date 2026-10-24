@@ -20,7 +20,7 @@ public:
         const ImVec2 origin = ImGui::GetCursorPos();
         const float available = ImGui::GetContentRegionAvail().y;
         const float footer = ImGui::GetFrameHeightWithSpacing()
-            + (expanded ? ImGui::GetFrameHeightWithSpacing() + 84.0f : 0.0f);
+            + (expanded ? 2 * ImGui::GetFrameHeightWithSpacing() + 84.0f : 0.0f);
         const float content = std::max(1.0f, available - footer - ImGui::GetStyle().ItemSpacing.y);
         ImGui::SetCursorPos(ImVec2(origin.x, origin.y + content + ImGui::GetStyle().ItemSpacing.y));
         draw(pitch, gate, voices, firstVoice, pitchOffset);
@@ -93,6 +93,8 @@ public:
             if(ImGui::SmallButton("Oct +")) base = std::min(96, base + 12);
             ImGui::SameLine();
             ImGui::TextDisabled("C%d | Up/Down: octave", base / 12 - 1);
+            ImGui::Checkbox("Fill All Voices", &fillAllVoices);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Repeat played notes across all voices. One note plays every voice; chords repeat cyclically.");
 
             pos = ImGui::GetCursorScreenPos();
             ImGui::InvisibleButton("##piano", ImVec2(width, height));
@@ -140,10 +142,18 @@ public:
             // when a newer note is released (also gives mono last-note priority).
             for(int v = 0; v < std::min(count, (int)slots.size()); ++v)
                 for(int k = begin; k < (int)held.size(); ++k)
-                    if(slots[v].key == held[k].key) next[v] = held[k];
+                    if(slots[v].key == held[k].key &&
+                       std::none_of(next.begin(), next.end(), [&](const Note& n){ return n.key == held[k].key; })) next[v] = held[k];
             for(int k = begin; k < (int)held.size(); ++k) {
                 if(std::any_of(next.begin(), next.end(), [&](const Note& n){ return n.key == held[k].key; })) continue;
                 for(auto& n : next) if(n.key == ImGuiKey_None) { n = held[k]; break; }
+            }
+            if(fillAllVoices && begin < (int)held.size()) {
+                int k = begin;
+                for(auto& n : next) if(n.key == ImGuiKey_None) {
+                    n = held[k];
+                    if(++k == (int)held.size()) k = begin;
+                }
             }
             auto p = pitch.get(), g = gate.get();
             const int width = first + count;
@@ -215,7 +225,7 @@ private:
     static constexpr int mouseKey = -1000;
     struct Note { int key; float pitch; };
     int base = 60, first = 0, count = 0;
-    bool serviced = false, hold = false, expanded = true;
+    bool serviced = false, hold = false, expanded = true, fillAllVoices = false;
     Notes* gates = nullptr;
     std::vector<Note> held, slots;
 };

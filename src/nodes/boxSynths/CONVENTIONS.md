@@ -310,6 +310,10 @@ and audio-input precedence.
 The footer highlights actual Pitch/Gate activity, including external parameter
 input. Click to play and drag for glissando. **Hold** latches clicked notes until
 clicked again; disabling Hold releases them. **Release** stops local notes.
+**Fill All Voices** (off by default) repeats played notes into unused voices:
+one note plays every voice, and smaller chords repeat cyclically to fill the
+voice count. It applies to computer keys, mouse playing, and Hold; changing it
+also updates notes already playing. Releasing all notes closes every local gate.
 Folding **Piano** preserves latched notes and computer-keyboard playing while
 reclaiming space. Hiding/collapsing the editor releases its local notes.
 

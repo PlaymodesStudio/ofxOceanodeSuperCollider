@@ -179,6 +179,38 @@ int main() {
     toggleHold(); assert(!piano.isPlaying() && gate.get()[1]==0);
     toggleHold(); moveToNote(67); click(); frame(false);
     assert(!piano.isPlaying() && gate.get()[0]==0);
+    // Fill repeats notes into every voice, including uneven chord/voice counts.
+    frame(); toggleHold(); // back to momentary mouse playing
+    auto toggleFill = [&](){
+        io.AddMousePosEvent(controls.x+9, controls.y+ImGui::GetFrameHeightWithSpacing()+9);
+        frame(); click();
+    };
+    voices=5; pitch.set({60}); gate.set({0});
+    toggleFill();
+    assert(!piano.isPlaying() && gate.get()==std::vector<float>{0});
+    key(ImGuiKey_Z,true);
+    assert((pitch.get()==std::vector<float>{72,72,72,72,72}));
+    assert((gate.get()==std::vector<float>{1,1,1,1,1}));
+    key(ImGuiKey_X,true);
+    assert((pitch.get()==std::vector<float>{72,74,72,74,72}));
+    gateWrites=0; frame(); frame(); assert(gateWrites==0);
+    key(ImGuiKey_Z,false);
+    assert((pitch.get()==std::vector<float>{74,74,74,74,74}));
+    assert((gate.get()==std::vector<float>{1,1,1,1,1}));
+    toggleFill();
+    assert((gate.get()==std::vector<float>{1,0,0,0,0}));
+    toggleFill();
+    assert((gate.get()==std::vector<float>{1,1,1,1,1}));
+    key(ImGuiKey_X,false);
+    assert((gate.get()==std::vector<float>{0,0,0,0,0}));
+    moveToNote(60); mouse(true);
+    assert((pitch.get()==std::vector<float>{60,60,60,60,60}));
+    assert((gate.get()==std::vector<float>{1,1,1,1,1}));
+    mouse(false); assert((gate.get()==std::vector<float>{0,0,0,0,0}));
+    toggleHold(); moveToNote(64); click();
+    assert((pitch.get()==std::vector<float>{64,64,64,64,64}));
+    frame(false); assert((gate.get()==std::vector<float>{0,0,0,0,0}));
+    frame(); toggleFill(); voices=3;
     // Repeated short gate vectors must illuminate every sounding pitch.
     pitch.set({60,64,67}); gate.set({1}); frame();
     assert(highlighted > twoLit);
