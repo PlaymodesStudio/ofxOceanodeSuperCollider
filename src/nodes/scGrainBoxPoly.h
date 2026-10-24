@@ -527,6 +527,7 @@ private:
     ofParameter<float> revSizeP, revDecayP, revPredelayP, revLowpassP, revMixP;
     ofParameter<float> revPositionP, revSpreadP;   // early/late balance, stereo spread
     struct FxState {
+        int channels = 0;
         std::vector<int>       plan;                 // enabled + loaded stages, in order
         ofxSCSynth*            synths[FX_COUNT] = {nullptr, nullptr, nullptr};
         std::vector<ofxSCBus*> buses;                // input bus of each planned stage
@@ -538,7 +539,7 @@ private:
     void requireFxSynthdefs();                          // serverManager loads their folders
     std::vector<int> computeFxPlan(ofxSCServer* srv) const;
     void planFx(ofxSCServer* srv);                       // plan + buses (no synths)
-    void createFxSynths(ofxSCServer* srv);               // after playhead 1's synth
+    void createFxSynths(ofxSCServer* srv, bool reuse = false);               // after playhead 1's synth
     void freeFxSynths(ofxSCServer* srv);
     void freeFx(ofxSCServer* srv);                       // synths + buses + plan
     void rebuildFx(ofxSCServer* srv);                    // runtime: re-plan, re-route, re-create

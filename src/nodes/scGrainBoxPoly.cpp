@@ -458,7 +458,7 @@ void scGrainBoxPoly::setup() {
     // FX chain: an On toggle re-plans the chain; the other controls go to
     // their stage's synth
     for(int st = 0; st < FX_COUNT; st++)
-        nodeListeners.push(fxOnP[st].newListener([this](bool&) { rebuildFxAll(); }));
+        nodeListeners.push(fxOnP[st].newListener([this, st](bool&) { snaps.morph.edited(fxOnP[st]); if(!snaps.morph.applying()) rebuildFxAll(); }));
     auto fxParamListener = [this](ofParameter<float>& p, int stage) {
         nodeListeners.push(p.newListener([this, stage](float&) {
             for(auto& [srv, st] : fx)
@@ -483,6 +483,7 @@ void scGrainBoxPoly::setup() {
     fxParamListener(echoMixP,     FX_ECHO);
     fxParamListener(echoResonanceP, FX_ECHO);
     nodeListeners.push(echoFilterP.newListener([this](int&) {
+        snaps.morph.edited(echoFilterP);
         for(auto& [srv, st] : fx)
             if(st.synths[FX_ECHO]) sendFxParams(FX_ECHO, st.synths[FX_ECHO]);
     }));
@@ -555,6 +556,12 @@ void scGrainBoxPoly::setup() {
         };
         h.bpm = [this](){ return effectiveBpm(); };
         h.paramMenu = [this](const std::string& k){ drawPublishedCurrentItemUnderline(k); drawNodePublishContextMenu(k); };
+        for(auto& p : fxOnP) snaps.morph.bypass(p);
+        snaps.morph.mode(echoFilterP, 4);
+        h.morphBlocked = [this](const std::string& k) {
+            auto it=publishedEditorParameterHandles.find(k); return it!=publishedEditorParameterHandles.end() && it->second->hasInConnection();
+        };
+        h.morphChanged = [this]() { rebuildFxAll(); sendFxParamsAll(); };
         snaps.setup(h);
     }
 }
@@ -2604,7 +2611,7 @@ void scGrainBoxPoly::requireFxSynthdefs() {
 std::vector<int> scGrainBoxPoly::computeFxPlan(ofxSCServer* srv) const {
     std::vector<int> plan;
     for(int st = 0; st < FX_COUNT; st++)
-        if(fxOnP[st].get() && fxStageReady(st, srv)) plan.push_back(st);
+        if(snaps.morph.activation(fxOnP[st]) > 0 && fxStageReady(st, srv)) plan.push_back(st);
     return plan;
 }
 
@@ -2612,8 +2619,9 @@ std::vector<int> scGrainBoxPoly::computeFxPlan(ofxSCServer* srv) const {
 void scGrainBoxPoly::planFx(ofxSCServer* srv) {
     FxState& st = fx[srv];
     st.plan = computeFxPlan(srv);
+    st.channels = numChannelsP.get();
     fxPending = false;
-    for(int s = 0; s < FX_COUNT; s++) if(fxOnP[s].get() && !fxStageReady(s, srv)) fxPending = true;
+    for(int s = 0; s < FX_COUNT; s++) if(snaps.morph.activation(fxOnP[s]) > 0 && !fxStageReady(s, srv)) fxPending = true;
     // stale buses (server reboot): not ours any more
     for(auto*& b : st.buses) if(b && !gbpBusIsLive(srv, b)) { delete b; b = nullptr; }
     st.buses.erase(std::remove(st.buses.begin(), st.buses.end(), nullptr), st.buses.end());
@@ -2651,13 +2659,14 @@ void scGrainBoxPoly::sendFxParams(int stage, ofxSCSynth* s) {
                     s->set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShapeP[b].get(), eqGainP[b].get())));
                 else                       s->set(k + "rq",    vec(1.0f / std::max(0.01f, eqShapeP[b].get())));
             }
-            s->set("mix", eqMixP.get());
+            s->set("mix", eqMixP.get() * snaps.morph.activation(fxOnP[stage]));
             break;
         case FX_ECHO:
+            s->set("filterweights", snaps.morph.weights(echoFilterP));
             s->set("delay",  vec(echoDelaySec()));
             s->set("feed",   vec(echoFeedP.get()));
             s->set("cutoff", vec(echoCutoffP.get()));
-            s->set("mix",    vec(echoMixP.get()));
+            s->set("mix",    vec(echoMixP.get() * snaps.morph.activation(fxOnP[stage])));
             // OceanodeParameterDropdown.ar(\filtertype, ...): a plain "filtertype"
             // control of n values (the item index as a float)
             s->set("filtertype", vec((float)std::max(0, std::min(3, echoFilterP.get()))));
@@ -2668,7 +2677,7 @@ void scGrainBoxPoly::sendFxParams(int stage, ofxSCSynth* s) {
             s->set("decay",    revDecayP.get());
             s->set("predelay", revPredelayP.get());
             s->set("lowpass",  revLowpassP.get());
-            s->set("mix",      revMixP.get());
+            s->set("mix",      revMixP.get() * snaps.morph.activation(fxOnP[stage]));
             s->set("position", revPositionP.get());
             s->set("spread",   revSpreadP.get());
             break;
@@ -2683,19 +2692,24 @@ void scGrainBoxPoly::sendFxParamsAll() {
 
 // Stage i reads bus i and writes bus i+1 (the last one: the output bus); each
 // is added right after the previous one, the first right after playhead 1.
-void scGrainBoxPoly::createFxSynths(ofxSCServer* srv) {
+void scGrainBoxPoly::createFxSynths(ofxSCServer* srv, bool reuse) {
     if(!ph0().synths.count(srv) || !ph0().synths[srv]) return;
     FxState& st = fx[srv];
     ofxSCSynth* prev = engineLast(ph0(), srv);   // after engine 1's output synth
     if(!prev) return;
     for(int i = 0; i < (int)st.plan.size() && i < (int)st.buses.size(); i++) {
         const int stage = st.plan[i];
-        if(st.synths[stage]) { st.synths[stage]->free(); delete st.synths[stage]; }
-        auto* s = new ofxSCSynth(fxDefName(stage), srv);
+        if(st.synths[stage] && !reuse) {
+            st.synths[stage]->free(); delete st.synths[stage]; st.synths[stage] = nullptr;
+        }
+        auto* s = st.synths[stage];
+        const bool fresh = !s;
+        if(fresh) s = new ofxSCSynth(fxDefName(stage), srv);
         s->set("in",  st.buses[i]->index);
         s->set("out", fxOutBus(srv, i));
         sendFxParams(stage, s);
-        s->createAndRun(3, prev->nodeID, getActive());   // addAfter
+        if(fresh) s->createAndRun(3, prev->nodeID, getActive());   // addAfter
+        else s->moveAfter(prev->nodeID);
         st.synths[stage] = s;
         prev = s;
     }
@@ -2716,16 +2730,27 @@ void scGrainBoxPoly::freeFx(ofxSCServer* srv) {
 }
 
 // Runtime change (On toggles, N Chan, defs now loaded): re-route the playheads
-// to the new chain input first, then replace the FX synths.
+// to the new chain input; stages still in the plan retain their DSP state.
 void scGrainBoxPoly::rebuildFx(ofxSCServer* srv) {
     if(!srv) return;
     const bool running = ph0().synths.count(srv) && ph0().synths[srv];
     if(!running) return;                 // planned in buildSynth when the graph is built
+    const auto desired = computeFxPlan(srv);
+    for(int k=0; k<FX_COUNT; ++k)
+        if(snaps.morph.activation(fxOnP[k]) > 0 && !fxStageReady(k, srv)) fxPending = true;
+    if(fx.count(srv) && desired == fx[srv].plan && fx[srv].channels == numChannelsP.get()) return;
+    const bool sameChannels = fx.count(srv) && fx[srv].channels == numChannelsP.get();
     planFx(srv);                         // reuses the existing buses
+    if(!sameChannels) freeFxSynths(srv);
+    else for(int k=0; k<FX_COUNT; ++k) {
+        auto*& s = fx[srv].synths[k];
+        if(s && std::find(desired.begin(), desired.end(), k) == desired.end()) {
+            s->free(); delete s; s = nullptr;
+        }
+    }
     for(auto& ph : playheads)
         if(ph->outSynths.count(srv) && ph->outSynths[srv]) ph->outSynths[srv]->set("out", outBusFor(*ph, srv));
-    freeFxSynths(srv);
-    createFxSynths(srv);
+    createFxSynths(srv, true);
     if(fx.count(srv) && fx[srv].plan.empty()) {
         // no stage: release the private buses (playheads write to the output again)
         for(auto* b : fx[srv].buses) if(b) { if(gbpBusIsLive(srv, b)) b->free(); delete b; }
