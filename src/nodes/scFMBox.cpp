@@ -3,6 +3,7 @@
 #include "scEnvelopeCurve.h"
 #include "scSynthControlBatch.h"
 #include "ofxOceanodeSuperColliderConfig.h"
+#include "imgui_internal.h" // vertical DragFloat interaction for FM junctions
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -560,15 +561,26 @@ void scFMBox::drawPresets(float w) {
             if(query.empty()||scDX7::searchText(label).find(query)!=std::string::npos)matches.push_back(k);
         }
         ImGui::BeginChild("##afxBrowser",ImVec2(w,std::max(160*zoom(),ImGui::GetContentRegionAvail().y-35*zoom())),true);
-        ImGuiListClipper clipper;clipper.Begin(int(matches.size()));
-        while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i) {
-            const int k=matches[i];
-            const auto& name=afxNames[k];
-            const std::string label=name.bank.empty()?"Preset "+ofToString(k+1):(name.name.empty()?"Unnamed":name.name);
-            ImGui::PushID(k);
-            if(ImGui::Selectable(label.c_str(),afxPreset.get()==k+1))afxPreset=k+1;
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s / algorithm %d",scDX7::presetLabel(k,afxNames,true).c_str(),afxBank[k][0]+1);
-            ImGui::PopID();
+        const int columns=std::clamp(int(ImGui::GetContentRegionAvail().x/(180*zoom())),1,4);
+        const int rows=(int(matches.size())+columns-1)/columns;
+        if(ImGui::BeginTable("##afxColumns",columns,ImGuiTableFlags_SizingStretchSame|ImGuiTableFlags_BordersInnerV)) {
+            ImGuiListClipper clipper;clipper.Begin(rows);
+            while(clipper.Step())for(int row=clipper.DisplayStart;row<clipper.DisplayEnd;++row) {
+                ImGui::TableNextRow();
+                for(int col=0;col<columns;++col) {
+                    ImGui::TableSetColumnIndex(col);
+                    // Read down each column, then continue at the next column.
+                    const int i=col*rows+row;if(i>=int(matches.size()))continue;
+                    const int k=matches[i];
+                    const auto& name=afxNames[k];
+                    const std::string label=name.bank.empty()?"Preset "+ofToString(k+1):(name.name.empty()?"Unnamed":name.name);
+                    ImGui::PushID(k);
+                    if(ImGui::Selectable(label.c_str(),afxPreset.get()==k+1))afxPreset=k+1;
+                    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s / algorithm %d",scDX7::presetLabel(k,afxNames,true).c_str(),afxBank[k][0]+1);
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndTable();
         }
         if(matches.empty())ImGui::TextDisabled("No matching presets in this bank.");
         ImGui::EndChild();
@@ -663,9 +675,9 @@ void scFMBox::drawWindow() {
             ImGui::Spacing();
             const float tw=ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ScrollbarSize;
             labelW=70;
-            if(std::string(name)=="Effects" || std::string(name)=="Envelopes" || std::string(name)=="LFOs" || std::string(name)=="Routing" || std::string(name)=="Panning") {
+            if(std::string(name)=="Effects" || std::string(name)=="Envelopes" || std::string(name)=="LFOs" || std::string(name)=="Routing" || std::string(name)=="Panning" || std::string(name)=="FM Matrix") {
                 ImGui::BeginChild("##fxScroll",ImVec2(0,0),false,ImGuiWindowFlags_HorizontalScrollbar);
-                body(std::max(tw,960*z));ImGui::EndChild();
+                body(std::max(tw,std::string(name)=="FM Matrix"?1060*z:960*z));ImGui::EndChild();
             }else body(tw);
             ImGui::EndChild();
             ImGui::EndTabItem();
@@ -1032,69 +1044,135 @@ void scFMBox::drawDX7Global(float w) {
     ImGui::EndGroup();
 }
 void scFMBox::drawMatrix(float w) {
-    ImGui::PushTextWrapPos();
-    ImGui::TextDisabled("DX7 algorithm routes are editable: columns send to rows; 1 = the original 4pi connection. Highlighted cell is the selected algorithm feedback route. Changing Algorithm restores its routes.");
-    ImGui::PopTextWrapPos();
+    const float z=zoom();
+    w=std::max(w,1060*z);
     const int algorithm=std::clamp(int(std::round(soundParam("algorithm").get())),0,31);
-    if(ImGui::BeginTable("##fmMatrix",7,ImGuiTableFlags_Borders|ImGuiTableFlags_SizingStretchSame|ImGuiTableFlags_ScrollX,ImVec2(w,7*ImGui::GetFrameHeightWithSpacing()+ImGui::GetStyle().ScrollbarSize+8*zoom()),std::max(w,660*zoom()))) {
-        ImGui::TableSetupColumn("Destination");
-        for(int src=0;src<6;++src) ImGui::TableSetupColumn(("From "+ofToString(src+1)).c_str());
+    ImGui::Text("Algorithm %d",algorithm+1);
+    ImGui::PushTextWrapPos();
+    ImGui::TextDisabled("Send down a column, receive across a row. Drag a junction up/down; double-click to type. Zero removes a route. Amber marks the DX7 feedback route.");
+    ImGui::PopTextWrapPos();
+    slider(soundParam("mod_scale"),"FM Amount",std::min(w,310*z),"%.3f");
+    if(w>=650*z)ImGui::SameLine(0,20*z);
+    slider(soundParam("feedback"),"Feedback",std::min(w,310*z),"%.3f");
+    ImGui::Spacing();
+    const float gutter=18*z;
+    const float cell=std::min(78*z,(w-480*z-gutter)/7),extent=7*cell;
+    ImGui::BeginGroup();ImGui::PushID("diagram");
+    const ImVec2 origin=ImGui::GetCursorScreenPos();
+    auto point=[&](int col,int row){return ImVec2(origin.x+(col+.5f)*cell,origin.y+(row+.36f)*cell);};
+    auto* dl=ImGui::GetWindowDrawList();
+    const ImVec2 end(origin.x+extent,origin.y+extent);
+    canvas(dl,origin,end);
+    const ImU32 colors[]={IM_COL32(150,165,255,255),IM_COL32(112,209,185,255),IM_COL32(245,187,115,255),
+        IM_COL32(222,148,200,255),IM_COL32(120,193,240,255),IM_COL32(209,207,132,255)};
+    const float boxW=cell*.70f,boxH=cell*.40f,junctionW=cell*.62f,junctionH=ImGui::GetTextLineHeight()+6*z;
+    for(int k=1;k<7;++k) {
+        dl->AddLine(ImVec2(origin.x+k*cell,origin.y),ImVec2(origin.x+k*cell,end.y),pal::grid);
+        dl->AddLine(ImVec2(origin.x,origin.y+k*cell),ImVec2(end.x,origin.y+k*cell),pal::grid);
+    }
+    auto arrow=[&](ImVec2 tip,float direction,ImU32 color) {
+        dl->AddTriangleFilled(tip,ImVec2(tip.x-direction*5*z,tip.y-3*z),ImVec2(tip.x-direction*5*z,tip.y+3*z),color);
+    };
+    // Orthogonal wires connect source -> junction -> destination. The diagonal
+    // operator tiles stay in front of the wires; every route has its own cell.
+    for(int dst=0;dst<6;++dst)for(int src=0;src<6;++src) {
+        const float amount=soundParam("fm"+ofToString(dst)+"_"+ofToString(src)).get();
+        if(amount<0.0001f)continue;
+        const auto source=point(src,src),target=point(dst,dst),junction=point(src,dst);
+        const float thickness=(1+std::min(amount,2.0f)*.45f)*z;
+        if(src!=dst) {
+            const float direction=dst>src?1.f:-1.f;
+            const ImVec2 tip(target.x-direction*(boxW*.5f+2*z),target.y);
+            dl->AddLine(source,junction,colors[src],thickness);
+            dl->AddLine(junction,tip,colors[src],thickness);arrow(tip,direction,colors[src]);
+        }else {
+            const float x=source.x+cell*.43f,y=source.y+cell*.43f;
+            dl->AddLine(source,ImVec2(source.x,y),colors[src],thickness);
+            dl->AddLine(ImVec2(source.x,y),ImVec2(x,y),colors[src],thickness);
+            dl->AddLine(ImVec2(x,y),ImVec2(x,source.y),colors[src],thickness);
+            const ImVec2 tip(source.x+boxW*.5f+2*z,source.y);
+            dl->AddLine(ImVec2(x,source.y),tip,colors[src],thickness);arrow(tip,-1,colors[src]);
+        }
+    }
+    const auto output=point(6,6);
+    for(int op=0;op<6;++op)if(soundParam("mix"+ofToString(op)).get()>.0001f) {
+        const auto source=point(op,op),junction=point(op,6);
+        dl->AddLine(source,junction,colors[op],1.5f*z);
+        dl->AddLine(junction,ImVec2(output.x-boxW*.5f-2*z,output.y),colors[op],1.5f*z);
+    }
+    auto amountCell=[&](ofParameter<float>& p,ImVec2 center,float max,const char* tooltip,bool feedback) {
+        const std::string key=p.getEscapedName();ImGui::PushID(key.c_str());
+        ImGui::SetCursorScreenPos(ImVec2(center.x-junctionW*.5f,center.y-junctionH*.5f));
+        ImGui::SetNextItemWidth(junctionW);
+        const float value=p.get();
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,value>.0001f?ImVec4(.17f,.19f,.25f,1):ImVec4(.055f,.06f,.075f,1));
+        ImGui::PushStyleColor(ImGuiCol_Text,feedback?ImVec4(.96f,.73f,.45f,1):value>.0001f?ImVec4(.88f,.90f,.96f,1):ImVec4(.36f,.39f,.45f,1));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,0);
+        float v=value;
+        if(ImGui::DragFloat("##amount",&v,max==1?.005f:.01f,0,max,"%.2f",ImGuiSliderFlags_AlwaysClamp|ImGuiSliderFlags_Vertical))p=v;
+        ImGui::PopStyleVar();ImGui::PopStyleColor(2);
+        if(feedback)dl->AddRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax(),IM_COL32(245,187,115,200),0,0,1.5f*z);
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%.3f | Drag vertically, double-click to type; 0 disconnects.\nRight-click: publish, modulation and timeline.%s",tooltip,p.get(),feedback?"\nSelected algorithm's feedback route (scaled by Feedback).":"");
+        mark(key);menu(key);ImGui::PopID();
+    };
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(4*z,3*z));
+    for(int dst=0;dst<6;++dst)for(int src=0;src<6;++src) {
+        auto center=point(src,dst);
+        if(src==dst)center.y+=cell*.39f;
+        const auto label="Operator "+ofToString(src+1)+" -> Operator "+ofToString(dst+1)+(src==dst?" (self-feedback)":"");
+        amountCell(soundParam("fm"+ofToString(dst)+"_"+ofToString(src)),center,4,label.c_str(),dst*6+src==scDX7::feedbackCell[algorithm]);
+    }
+    for(int op=0;op<6;++op) {
+        const auto label="Operator "+ofToString(op+1)+" -> audio output";
+        amountCell(soundParam("mix"+ofToString(op)),point(op,6),1,label.c_str(),false);
+    }
+    ImGui::PopStyleVar();
+    for(int op=0;op<6;++op) {
+        const auto center=point(op,op);
+        const ImVec2 a(center.x-boxW*.5f,center.y-boxH*.5f),b(center.x+boxW*.5f,center.y+boxH*.5f);
+        dl->AddRectFilled(a,b,pal::header);dl->AddRect(a,b,colors[op],0,0,1.5f*z);
+        const std::string number="Op "+ofToString(op+1);const auto size=ImGui::CalcTextSize(number.c_str());
+        dl->AddText(ImVec2(center.x-size.x*.5f,center.y-size.y*.5f),colors[op],number.c_str());
+    }
+    const ImVec2 a(output.x-boxW*.5f,output.y-boxH*.5f),b(output.x+boxW*.5f,output.y+boxH*.5f);
+    dl->AddRectFilled(a,b,pal::header);dl->AddRect(a,b,pal::headerText);
+    const auto text=ImGui::CalcTextSize("OUT");dl->AddText(ImVec2(output.x-text.x*.5f,output.y-text.y*.5f),pal::headerText,"OUT");
+    ImGui::SetCursorScreenPos(ImVec2(origin.x,end.y+ImGui::GetStyle().ItemSpacing.y));
+    ImGui::Dummy(ImVec2(extent,0));
+    ImGui::PopID();ImGui::EndGroup();
+    ImGui::SameLine(0,gutter);
+    ImGui::BeginGroup();ImGui::PushID("sliders");
+    const float matrixW=w-extent-gutter;
+    sectionHeader("Routing Matrix",matrixW);
+    ImGui::TextDisabled("Columns send to rows; OUT sets the direct mix.");
+    if(ImGui::BeginTable("##fmSliders",7,ImGuiTableFlags_Borders|ImGuiTableFlags_SizingStretchSame,ImVec2(matrixW,0))) {
+        ImGui::TableSetupColumn("To / From",ImGuiTableColumnFlags_WidthFixed,66*z);
+        for(int src=0;src<6;++src)ImGui::TableSetupColumn(ofToString(src+1).c_str());
         ImGui::TableHeadersRow();
-        for(int dst=0;dst<6;++dst) {
-            ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::Text("To %d",dst+1);
+        for(int dst=0;dst<7;++dst) {
+            ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
+            if(dst==6)ImGui::TextUnformatted("OUT");else ImGui::Text("Op %d",dst+1);
             for(int src=0;src<6;++src) {
                 ImGui::TableSetColumnIndex(src+1);
-                auto& p=soundParam("fm"+ofToString(dst)+"_"+ofToString(src));
-                ImGui::PushID(p.getEscapedName().c_str());ImGui::SetNextItemWidth(-1);
-                if(dst*6+src==scDX7::feedbackCell[algorithm]) ImGui::PushStyleColor(ImGuiCol_FrameBg,ImVec4(.22f,.16f,.11f,1));
-                float v=p.get();if(ImGui::SliderFloat("##cell",&v,0,4,"%.3f")) p=v;
-                if(dst*6+src==scDX7::feedbackCell[algorithm]) ImGui::PopStyleColor();
-                mark(p.getEscapedName());menu(p.getEscapedName());ImGui::PopID();
+                auto& p=soundParam(dst==6?"mix"+ofToString(src):"fm"+ofToString(dst)+"_"+ofToString(src));
+                const auto key=p.getEscapedName();ImGui::PushID(key.c_str());
+                ImGui::SetNextItemWidth(-1);
+                const bool feedback=dst<6&&dst*6+src==scDX7::feedbackCell[algorithm];
+                if(feedback)ImGui::PushStyleColor(ImGuiCol_FrameBg,ImVec4(.22f,.16f,.11f,1));
+                float v=p.get();if(ImGui::SliderFloat("##amount",&v,0,dst==6?1.f:4.f,"%.2f",ImGuiSliderFlags_AlwaysClamp))p=v;
+                if(feedback)ImGui::PopStyleColor();
+                if(ImGui::IsItemHovered()) {
+                    if(dst==6)ImGui::SetTooltip("Operator %d -> audio output",src+1);
+                    else ImGui::SetTooltip("Operator %d -> Operator %d%s",src+1,dst+1,feedback?" (DX7 feedback route)":"");
+                }
+                mark(key);menu(key);ImGui::PopID();
             }
         }
         ImGui::EndTable();
     }
-    slider(soundParam("mod_scale"),"FM Amount",std::min(w,360*zoom()),"%.3f");
-    slider(soundParam("feedback"),"Feedback",std::min(w,360*zoom()),"%.3f");
-    ImGui::TextDisabled("Carriers / direct output mix");
-    for(int op=0;op<6;++op){if(op)ImGui::SameLine();ImGui::PushID(op);ImGui::SetNextItemWidth(std::max(40*zoom(),(w-5*ImGui::GetStyle().ItemSpacing.x)/6));
-        auto& p=soundParam("mix"+ofToString(op));float value=p.get();const std::string fmt="Op "+ofToString(op+1)+" %.2f";
-        if(ImGui::SliderFloat("##mix",&value,0,1,fmt.c_str()))p=value;mark(p.getEscapedName());menu(p.getEscapedName());ImGui::PopID();}
-    ImGui::Spacing();sectionHeader("Signal Flow",w);
-    const float z=zoom(),h=180*z,r=18*z;
-    const ImVec2 origin=ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton("##flow",ImVec2(w,h));
-    auto* dl=ImGui::GetWindowDrawList();dl->AddRectFilled(origin,ImVec2(origin.x+w,origin.y+h),pal::canvas,4*z);
-    ImVec2 pos[6];
-    const ImU32 colors[]={IM_COL32(150,165,255,255),IM_COL32(112,209,185,255),IM_COL32(245,187,115,255),
-        IM_COL32(222,148,200,255),IM_COL32(120,193,240,255),IM_COL32(209,207,132,255)};
-    for(int i=0;i<6;++i) pos[i]=ImVec2(origin.x+w*(i+.5f)/6,origin.y+110*z);
-    for(int dst=0;dst<6;++dst) for(int src=0;src<6;++src) {
-        const float amount=soundParam("fm"+ofToString(dst)+"_"+ofToString(src)).get();
-        if(amount<0.0001f) continue;
-        const float bend=(32+std::abs(dst-src)*9)*z;
-        ImVec2 a(pos[src].x,pos[src].y-r),b(pos[dst].x,pos[dst].y-r);
-        if(src==dst){a.x-=8*z;b.x+=8*z;}
-        const float thickness=ofClamp(amount,0.7f,3.0f)*z;
-        dl->AddBezierCubic(a,ImVec2(a.x-(src==dst?30*z:0),a.y-bend),
-            ImVec2(b.x+(src==dst?30*z:0),b.y-bend),b,colors[src],thickness);
-        dl->AddTriangleFilled(b,ImVec2(b.x-3*z,b.y-7*z),ImVec2(b.x+3*z,b.y-7*z),colors[src]);
-    }
-    for(int i=0;i<6;++i) {
-        dl->AddCircleFilled(pos[i],r,pal::header);dl->AddCircle(pos[i],r,colors[i],0,2*z);
-        const std::string n=ofToString(i+1);const auto size=ImGui::CalcTextSize(n.c_str());
-        dl->AddText(ImVec2(pos[i].x-size.x*.5f,pos[i].y-size.y*.5f),colors[i],n.c_str());
-        const float level=soundParam("mix"+ofToString(i)).get();
-        dl->AddLine(ImVec2(pos[i].x,pos[i].y+r+3*z),ImVec2(pos[i].x,pos[i].y+r+(6+24*level)*z),colors[i],(1+3*level)*z);
-        const std::string pre="op"+ofToString(i)+"_";
-        const float coarse=soundParam(pre+"coarse").get(),fine=soundParam(pre+"fine").get();
-        const bool fixed=soundParam(pre+"mode").get()>0.5f;
-        const float value=fixed?std::pow(10.0f,int(std::round(coarse))%4+fine/100):(coarse==0?0.5f:coarse)*(1+fine/100);
-        const std::string label=ofToString(value,2)+(fixed?"Hz":"x");
-        const auto textSize=ImGui::CalcTextSize(label.c_str());
-        dl->AddText(ImVec2(pos[i].x-textSize.x*.5f,origin.y+h-18*z),pal::textDim,label.c_str());
-    }
+    ImGui::PopID();ImGui::EndGroup();
 }
+
 void scFMBox::drawNativeEnvelope(int op,float w) {
     ImGui::PushID(op);ImGui::BeginGroup();sectionHeader(("Operator "+ofToString(op+1)).c_str(),w);
     const std::string pre="op"+ofToString(op)+"_";

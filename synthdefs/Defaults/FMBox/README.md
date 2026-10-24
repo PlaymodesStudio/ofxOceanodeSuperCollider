@@ -25,6 +25,7 @@ or out-of-range field rejects the new bank and leaves the current bank intact.
 16,251 names and source bank labels from the upstream PDF catalogue, plus 133
 blank names shown as Unnamed. A bank dropdown limits the list to the selected
 bank's presets. Rows show only preset names; hover for numbers and algorithms.
+The list adapts to one to four columns, reading down each column in preset order.
 Search and Previous/Next operate within the selected bank. Selecting a bank
 does not change the sound until a preset is chosen. The selected bank is saved
 with the Oceanode patch. Search is case insensitive.
@@ -67,6 +68,12 @@ in `nodeSnapshots/FMBox`.
   sync, native LFO speed/wave/delay/sync/depth/sensitivity and pitch envelope.
   FM Amount and Envelope Time extend the original engine; 1 preserves its values.
 - **FM Matrix:** imports the algorithm's original connections and carrier mix.
+  An FM7-style diagonal operator grid edits the routing directly: orthogonal
+  wires, vertical-drag amount junctions, self-feedback below each operator,
+  and a bottom row of output levels. Double-click a junction to type a value;
+  zero disconnects it. Right-click uses the usual Box publish/modulation menu.
+  A slider matrix to its right edits the same route and output parameters,
+  keeping both views synchronized. Narrow windows scroll horizontally.
   Columns are sources and rows are destinations; 1 means the original `4pi`
   connection. The highlighted cell is that algorithm's feedback path, including
   the off-diagonal loops of algorithms 4 and 6. All 36 routes and six direct
