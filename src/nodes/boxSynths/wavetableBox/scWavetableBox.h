@@ -249,7 +249,7 @@ private:
     ofParameter<bool> normalize, removeDC, embedTable;
     ofParameter<std::vector<float>> pitch, levels, position, posY;
     ofParameter<std::vector<float>> gate;
-    ofParameter<int> envMode;
+    ofParameter<bool> drone;
     ofParameter<void> resetLFOs;
     ofParameter<int> rows;
     ofParameter<std::vector<int>> warp1, warp2;
@@ -276,7 +276,6 @@ private:
     float nextModulationRead = 0;
     float visualValue(const ofParameter<std::vector<float>>& p, int target, int voice) const;
     float currentBpm = 120;
-    bool gateTouched = false;
     bool restoring = false;
     void setupModulation();
     void createModulation(ofxSCServer* server);

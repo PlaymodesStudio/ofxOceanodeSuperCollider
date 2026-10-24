@@ -65,7 +65,7 @@ File.mkdir(d +/+ "WavetableBox");
 // jumps back to 0 at every reset (a step in the wave: harsh, aliasing). Over
 // the last 5% of the period the phase is steered (smoothstep) to the nearest
 // whole number of cycles, so phase and slope both meet the restart.
-warp = { |p, mode, amt|
+warp = { |p, mode, amt, weights|
     var x = p * 2 - 1;
     var bend = 1 + (amt * 4);
     var kink = 0.5 - (amt * 0.49);
@@ -73,7 +73,7 @@ warp = { |p, mode, amt|
     var k = 1 + (amt * 15);
     var s = ((p - 0.95) / 0.05).clip(0, 1);
     var sync = ((p * k) + ((k.round - k) * s * s * (3 - (2 * s)))).frac;
-    Select.ar(mode.clip(0, 8), [
+    var signals=[
         p,
         sync,
         (x.sign * x.abs.pow(bend)) + 1 * 0.5,
@@ -83,7 +83,10 @@ warp = { |p, mode, amt|
         p + ((1 - x.abs - p) * amt),
         (p * steps).floor / steps,
         (p + (amt * 0.25 * sin(2pi * p))).frac
-    ])
+    ];
+    var fallback=signals.collect{|sig,k| (mode.floor.clip(0,8) |==| k)};
+    var resolved=weights.collect{|weight,k| Select.kr(weights.sum>0,[fallback[k],weight]).lag(0.03)};
+    (signals*resolved).sum
 };
 
 // Everything the variants share: controls, phases, warps. Returns the
@@ -97,6 +100,8 @@ voices = { |n, twoD, live|
         levels: \levels.kr(0 ! n, 1/30, fixedLag: true),
         pos: \pos.kr(0 ! n, 1/30, fixedLag: true),
         w1mode: \w1mode.kr(0 ! n), w1amt: \w1amt.kr(0 ! n, 1/30, fixedLag: true),
+        w1weights: NamedControl.kr(\w1weights,0!(n*9)).clump(9),
+        w2weights: NamedControl.kr(\w2weights,0!(n*9)).clump(9),
         w2mode: \w2mode.kr(0 ! n), w2amt: \w2amt.kr(0 ! n, 1/30, fixedLag: true),
         fm: \fm.kr(0 ! n, 1/30, fixedLag: true),
         ratio: \ratio.kr(1 ! n, 1/30, fixedLag: true),
@@ -106,10 +111,11 @@ voices = { |n, twoD, live|
         phase: \phase.kr(0 ! n),
         trig: \trig.tr(0 ! n)
     );
+    [\pitch,\levels,\pos,\w1mode,\w1amt,\w2mode,\w2amt,\fm,\ratio,\bpos,\fb,\damp,\phase,\trig].do { |key| c[key]=c[key].asArray };
     if(twoD) {
         c[\rows] = \rows.kr(1).max(1);
         c[\cols] = (c[\cycles] / c[\rows]).floor.max(1);
-        c[\posy] = \posy.kr(0 ! n, 1/30, fixedLag: true);
+        c[\posy] = \posy.kr(0 ! n, 1/30, fixedLag: true).asArray;
     };
     if(live) {
         // Second table of the A/B pair, and the crossfade between them:
@@ -119,10 +125,10 @@ voices = { |n, twoD, live|
         c[\xf] = VarLag.kr(\xf.kr(0), \xftime.kr(0.015));
     };
     // Shared Box matrix targets. Source and route groups run before this voice.
-    c[\gate] = In.ar(\gateBus.kr(0), n);
-    c[\velocity] = In.kr(\velBus.kr(0), n);
+    c[\gate] = In.ar(\gateBus.kr(0), n).asArray;
+    c[\velocity] = In.kr(\velBus.kr(0), n).asArray;
     c[\drone] = \drone.kr(1);
-    c[\ampMod] = In.kr(\mod10.kr(0), n);
+    c[\ampMod] = In.kr(\mod10.kr(0), n).asArray;
     c[\vca] = \vca.kr(0);
     [\pitch, \pos, \posy, \w1amt, \w2amt, \fm, \ratio, \bpos, \fb, \damp].do { |key, t|
         if(c[key].notNil) {
@@ -134,8 +140,8 @@ voices = { |n, twoD, live|
     c[\phA] = n.collect { |i|
         var freq = c[\pitch][i].midicps;
         var p = Phasor.ar(c[\trig][i], freq * SampleDur.ir, 0, 1, c[\phase][i]);
-        p = warp.(p, c[\w1mode][i], c[\w1amt][i]);
-        warp.(p, c[\w2mode][i], c[\w2amt][i])
+        p = warp.(p,c[\w1mode][i],c[\w1amt][i],c[\w1weights][i]);
+        warp.(p,c[\w2mode][i],c[\w2amt][i],c[\w2weights][i])
     };
     c[\phB] = n.collect { |i|
         var freq = c[\pitch][i].midicps * c[\ratio][i];

@@ -30,6 +30,7 @@
 //
 
 #pragma once
+#include "../shared/scVoiceCountMorph.h"
 #include <array>
 
 #include "ofxOceanodeNodeModel.h"
@@ -177,11 +178,9 @@ private:
         std::unique_ptr<scModulation> mod;
         ofParameter<vector<float>> gate;          // per playhead: the envelopes' gate
         // The Amp Envelope: each playhead's VCA on its Gate (its whole output,
-        // x the gate's level), while Gate Mode is gated. 0 Auto: gated once the
-        // Gate is used (a value > 0, a cable, the timeline), 1 Gated, 2 Drone
-        ofParameter<int>           gateMode;
+        // x the gate's level), unless Drone is enabled.
+        ofParameter<bool>           drone;
         ofParameter<float>         ampA, ampD, ampS, ampR, ampCA, ampCD, ampCR;
-        bool                       gateTouched = false;
         int                        ampGatedSent = -1;   // what the header says (rewritten when it changes)
         // Gate and Pitch (when published) also take audio cables: the gate copied
         // onto the playheads' gates (GrainBoxGateIn<k>, after the control synth),
@@ -254,6 +253,9 @@ private:
         ofParameter<bool>          mute, solo;
         // Filter: 0 = Off, 1 LPF2, 2 BPF, 3 Notch, 4 HPF2 (output filter in GrainBox_K_N;
         // latchCut is kept only so older presets load; it no longer does anything)
+        std::vector<float> voiceMorphWeights;
+        int voiceMorphCapacity=0;
+        float voiceMorphRetireAt=-1;
         ofParameter<int>           filterType;
         ofParameter<float>         cutoff, filterQ;
         // Latch: Amp (+ modulation + jitter) sampled at each grain's trigger
@@ -358,6 +360,7 @@ private:
     std::vector<int>   expandI(const vector<int>& v, int n) const;
     std::vector<int>   triggerCountsFor(Playhead& ph);
     int  phChannels(const Playhead& ph) const;   // effective speaker count
+    void prepareVoiceMorph(Playhead&,const ofJson&,const ofJson&,float);
     int  phVoices(const Playhead& ph) const;     // playheads (= vector size sent)
     int  ctlCap(const Playhead& ph) const;       // control synth size: 8 / 32 / 128 / 500 playheads
     int  ctlBusSize(const Playhead& ph) const;   // 80 + 15 * ctlCap
@@ -473,7 +476,7 @@ public:
 private:
 #endif
     bool modWanted(const Playhead& ph) const;        // something routed (a used source, a GrainBox target)
-    bool ampGated(const Playhead& ph) const;         // the Amp Envelope is the VCA (Gate Mode)
+    bool ampGated(const Playhead& ph) const;         // the Amp Envelope is the VCA unless Drone is enabled
     // Saved before the Amp Envelope: an envelope routed to Amp was the VCA; it becomes the Amp Envelope
     void migrateAmpEnvelope(Playhead& ph, const ofJson& j);
     void writeGate(Playhead& ph, ofxSCServer* srv);  // the playheads' gates onto the modulation's block

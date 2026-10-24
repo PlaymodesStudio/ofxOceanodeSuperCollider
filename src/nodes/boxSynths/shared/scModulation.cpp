@@ -4,6 +4,7 @@
 //
 
 #include "scModulation.h"
+#include "scMorphPolicies.h"
 #include "ofxOceanodeNodeModel.h"
 #include "../../../audio/scSynthStartup.h"
 #include "../../../ui/scEnvelopeCurve.h"
@@ -859,6 +860,16 @@ scModulation::ParamTarget* scModulation::findParam(const std::string& key) {
 bool scModulation::isParamTarget(const std::string& key) const {
     for(auto& pt : params) if(pt.key == key) return true;
     return false;
+}
+
+float scModulation::morphVoiceValue(const ofParameter<float>& p,int voice,const scMorphPolicies& policies) const {
+    const float current=voiceValue(p,voice);
+    if(!policies.hasEffective(p))return current;
+    float base=p.get();
+    for(const auto& pt:params)if(pt.key==p.getEscapedName() && !pt.base.empty()){
+        base=pt.base[size_t(std::max(0,voice))%pt.base.size()];break;
+    }
+    return policies.value(p)+(current-base)*policies.neutralGain(p);
 }
 
 float scModulation::voiceValue(const ofParameter<float>& p, int voice) const {

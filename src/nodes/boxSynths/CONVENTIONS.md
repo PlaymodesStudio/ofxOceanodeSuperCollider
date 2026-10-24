@@ -236,9 +236,13 @@ Feed envelopes with the instrument's actual note gates. Distinguish modulation
 envelopes from any dedicated amp envelope. An envelope changes the sound only
 when routed, unless the host explicitly initializes a role such as Env 1 → Amp.
 
-Document gate-mode precedence. A common **Auto / Gated / Drone** pattern drones
-until Gate is used, then follows notes; explicit Drone keeps continuous
-playback. Sample trigger/one-shot behavior has its own rules.
+Initialize instruments in **gated** mode. Expose a boolean **Drone** checkbox
+(default off) for continuous playback instead of an Auto / Gated / Drone
+dropdown. Gate connections and timeline notes do not change this choice.
+Instruments with Pulse retain a separate **Pulse** checkbox; Pulse takes
+precedence over Drone. Older presets retain explicit Drone and Pulse choices;
+Auto and Gated both load gated. Sample trigger/one-shot behavior has its own
+rules.
 
 ## LFOs
 
@@ -393,12 +397,12 @@ for full instrument parity.
 
 | Responsibility | Reuse / examples |
 | --- | --- |
-| Control registry and publishing | [AnalogBox](scAnalogBox.cpp), [scDropdowns](../../ui/scDropdowns.h), [scTypedValue](../../ui/scTypedValue.h) |
+| Control registry and publishing | [AnalogBox](analogBox/scAnalogBox.cpp), [scDropdowns](../../ui/scDropdowns.h), [scTypedValue](../../ui/scTypedValue.h) |
 | MIDI/timeline menus and hidden publication | [scTimelineMenu](../../ui/scTimelineMenu.h) and its implementation |
 | Capture, banks, manager and morph | [scSnapshots](shared/scSnapshots.h), [audio policies](../../docs/snapshotMorphing.md) |
 | LFOs, envelopes and routes | [scModulation](shared/scModulation.h) and its implementation |
 | Piano and keyboard lifecycle | [scKeyboardPiano](shared/scKeyboardPiano.h) |
-| Note roles and scheduled sends | [AnalogBox](scAnalogBox.cpp), [SampleBox](scSampleBox.cpp), [scScheduledInputs](../../timing/scScheduledInputs.h) |
+| Note roles and scheduled sends | [AnalogBox](analogBox/scAnalogBox.cpp), [SampleBox](sampleBox/scSampleBox.cpp), [scScheduledInputs](../../timing/scScheduledInputs.h) |
 | EQ and effect routing | [scEQEditor](../../ui/scEQEditor.h), [scFxRouting](../../audio/scFxRouting.h) |
 
 Run relevant checks from the addon root:

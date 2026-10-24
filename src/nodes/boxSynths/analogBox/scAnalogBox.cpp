@@ -1,3 +1,4 @@
+#include "../shared/scDroneMode.h"
 #include "../../../audio/scFxRouting.h"
 //
 //  scAnalogBox.cpp
@@ -203,7 +204,7 @@ void scAnalogBox::setup() {
     spreadLayout.set("Speaker Layout", 0, 0, 1);         reg(spreadLayout, toSpread);
 
     // ── Gate, amp envelope, pitch ────────────────────────────────────────────
-    envMode.set("Env Mode", 0, 0, 2);                      reg(envMode, [this]() { sendEnvMode(true); });
+    drone.set("Drone", false);                      reg(drone, [this]() { sendEnvMode(true); });
     extraVoices.set("Extra Voices", true);                 reg(extraVoices, [](){});   // (update() rebuilds at the new pool size)
     velSens.set("Vel Sens", 0.5f, 0.0f, 1.0f);             reg(velSens, toAmp);
     glide.set("Glide", 0.0f, 0.0f, 2.0f);                  reg(glide, toPitch);
@@ -326,7 +327,7 @@ void scAnalogBox::setup() {
     // the combos' names (published: dropdowns); FM From and the filter types follow the sound (syncDropdowns)
     dropdowns.set(spreadMode.getEscapedName(), {"Spread", "Channels", "Manual"});
     dropdowns.set(spreadLayout.getEscapedName(), {"Ring", "Line"});
-    dropdowns.set(envMode.getEscapedName(), {"Auto", "Gated", "Drone"});
+
     dropdowns.set(filterRouting.getEscapedName(), {"Series", "Parallel"});
     dropdowns.set(echoFilter.getEscapedName(), {"LowPass", "HighPass", "BandPass", "PeakEQ"});
     for(int k = 0; k < MAX_FILTERS; k++) dropdowns.set(filterRef(k).mode->getEscapedName(), kFilterModes);
@@ -408,7 +409,6 @@ void scAnalogBox::setup() {
     // The timeline's frame set of a value it already sent timetagged: nothing to do.
     listeners.push(gate.newListener([this, toGate](std::vector<float>& v) {
         if(scScheduling::isBackendSendSuppressed()) return;
-        for(float x : v) if(x > 0.0f) gateTouched = true;
         toGate();
     }));
     listeners.push(pitch.newListener([this, toPitch](std::vector<float>&) {
@@ -436,6 +436,8 @@ void scAnalogBox::setup() {
         for(int k = 0; k < MAX_FILTERS; ++k) {
             auto f = filterRef(k);
             snaps.morph.bypass(*f.on, scMorphPolicies::field(f.on->getEscapedName(), "controls"));
+            snaps.morph.neutralDepth(*f.mode,*f.on,"controls");
+            snaps.morph.neutralDepth(*f.type,*f.on,"controls");
         }
         for(auto& o : osc) {
             snaps.morph.bypass(o.sync, scMorphPolicies::field(o.sync.getEscapedName(), "controls"));
@@ -446,7 +448,7 @@ void scAnalogBox::setup() {
         }
         h.morphChanged = [this]() {
             forStates([this](ofxSCServer* sv, ServerState& st) {
-                if(st.created) { updateStages(sv, st); sendFilter(st); for(int k=0; k<oscs(); ++k) sendOsc(st,k); }
+                if(st.created) { updateStages(sv, st);updateParts(sv,st);sendFilter(st);for(int k=0;k<oscs();++k)sendOsc(st,k); }
             });
         };
         h.morphBlocked = [this](const std::string& k) {
@@ -546,6 +548,7 @@ void scAnalogBox::sendOsc(ServerState& st, int k) {
     s->set("out", st.mixBus ? st.mixBus->index : 0);
     s->set("raw", st.raw[k] ? st.raw[k]->index : 0);
     s->set("freqout", st.freq[k] ? st.freq[k]->index : 0);
+    s->set("presence",oscillatorPresence(k));
     s->set("oct", (float)O.oct.get());
     s->set("semi", modulation.voiceValues(O.semi));
     s->set("fine", modulation.voiceValues(O.fine));
@@ -983,6 +986,12 @@ void scAnalogBox::update(ofEventArgs&) {
     modulation.update();
     snaps.update();
     const float now = ofGetElapsedTimef();
+    if(oscillatorRetireAt>=0 && now>=oscillatorRetireAt){
+        oscillatorRetireAt=-1;
+        oscillatorCapacity=oscillatorWeights.empty()?0:scVoiceCountMorph::activeCount(oscillatorWeights);
+        forStates([this](ofxSCServer* server,ServerState& st){updateParts(server,st);});
+        if(scVoiceCountMorph::single(oscillatorWeights))oscillatorWeights.clear();
+    }
     for(auto& [server, st] : states) if(st.created &&
         scFxAwaitingRoute(st.fx, server, [this](int stage){ return stageOn(stage) > 0; },
                           scFxDefinitionsReady(servers, server)))
@@ -1161,6 +1170,7 @@ void scAnalogBox::presetSave(ofJson& j) {
 }
 
 void scAnalogBox::loadBeforeConnections(ofJson& j) {
+    scDroneMode::migrate(j);
     modulation.loadLfoOutputs(j);
     if(!j.contains("analogBoxPublished") || !j["analogBoxPublished"].is_array()) return;
     std::vector<std::string> wanted;
@@ -1172,15 +1182,14 @@ void scAnalogBox::loadBeforeConnections(ofJson& j) {
 }
 
 void scAnalogBox::presetRecallAfterSettingParameters(ofJson& j) {
+    scDroneMode::migrate(j);
+    if(!j.contains(drone.getEscapedName())) drone = false;
     if(j.contains("analogBox") && j["analogBox"].is_object()){
         restoring = true;
         for(const auto& control : controls)
             if(j["analogBox"].contains(control.key)) control.load(j["analogBox"][control.key]);
         restoring = false;
     }
-    // a loaded preset starts from Auto's own rule: droning unless Gate is connected
-    // (a value it gets from here on switches it to gated)
-    gateTouched = false;
     sendEnvMode(true);
     modulation.load(j, "analogBoxMod");
     modulation.afterLoad();
@@ -1219,11 +1228,7 @@ void scAnalogBox::requireSynthdefs() {
 }
 
 bool scAnalogBox::droning() const {
-    if(envMode.get() == 2) return true;
-    if(envMode.get() == 1) return false;
-    // a cable, or a timeline track playing the Gate: notes, not a drone
-    if(gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined())) return false;
-    return true;
+    return drone.get();
 }
 
 template<typename T>
@@ -1236,7 +1241,11 @@ void scAnalogBox::reg(ofParameter<T>& p, std::function<void()> send) {
     c.save = [&p]() { return ofJson(p.get()); };
     c.load = [&p](const ofJson& j) { try { p.set(j.get<T>()); } catch(...) {} };
     controls.push_back(std::move(c));
-    listeners.push(p.newListener([this, &p, send](T&) { snaps.morph.edited(p); if(!restoring) send(); }));
+    listeners.push(p.newListener([this, &p, send](T&) { snaps.morph.edited(p);
+        if(p.getEscapedName()==oscCount.getEscapedName() && !snaps.morph.applying()){
+            oscillatorWeights.clear();oscillatorCapacity=0;oscillatorRetireAt=-1;
+        }
+        if(!restoring) send(); }));
 }
 
 void scAnalogBox::publish(const std::string& key) {
@@ -1636,6 +1645,7 @@ ofJson scAnalogBox::captureSnapshot() const {
     s["lfos"] = modulation.lfoCount;
     s["envs"] = modulation.envCount;
     s["exts"] = modulation.extCount;
+    if(!oscillatorWeights.empty() && !scVoiceCountMorph::single(oscillatorWeights))s["_oscillatorCountBlend"]=oscillatorWeights;
     return s;
 }
 
@@ -1669,7 +1679,8 @@ ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float
 }
 }
 
-void scAnalogBox::applyState(const ofJson& a, const ofJson& b, float t, bool sw) {
+void scAnalogBox::applyState(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw) {
+    const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
     if(!a.is_object() || !b.is_object()) return;
     t = ofClamp(t, 0.0f, 1.0f);
     // the counts first (the routes need their sources): while blending, the larger
@@ -1687,6 +1698,17 @@ void scAnalogBox::applyState(const ofJson& a, const ofJson& b, float t, bool sw)
     static const ofJson none = ofJson::object();
     ofJson ca = a.contains("controls") ? a["controls"] : none;
     ofJson cb = b.contains("controls") ? b["controls"] : none;
+    auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);
+    if(pinnedA.contains("controls"))ca=pinnedA["controls"];
+    if(pinnedB.contains("controls"))cb=pinnedB["controls"];
+    if(!drivenByConnection(oscCount.getEscapedName())){
+        auto x=ca,y=cb;
+        if(a.contains("_oscillatorCountBlend"))x[scVoiceCountMorph::key]=a["_oscillatorCountBlend"];
+        if(b.contains("_oscillatorCountBlend"))y[scVoiceCountMorph::key]=b["_oscillatorCountBlend"];
+        oscillatorWeights=scVoiceCountMorph::blend(x,y,t,oscCount.get(),MAX_OSCS,oscCount.getEscapedName().c_str());
+        oscillatorCapacity=std::max(oscs(),scVoiceCountMorph::activeCount(oscillatorWeights));
+        oscillatorRetireAt=ofGetElapsedTimef()+0.35f;
+    }else {oscillatorWeights.clear();oscillatorCapacity=0;oscillatorRetireAt=-1;}
     // snapshots from before the extra filters and the frequency shifter: those at their defaults
     if(defaultSnap.contains("controls")){
         auto isNew = [](std::string k){
@@ -1725,8 +1747,9 @@ void scAnalogBox::applyState(const ofJson& a, const ofJson& b, float t, bool sw)
     }
     if(countsChanged) M.refresh();       // sources created / freed, and the routes
     else if(changed) M.sendMatrix();
-    // the controls any source moves ("Modulate"): the arrival's
-    if(t >= 1.0f) M.loadParamsJson(b.contains("params") ? b["params"] : ofJson::array());
+    M.loadParamsJson(scModulationMorph::parameters(a.value("params",ofJson::array()),
+        b.value("params",ofJson::array()),t,ca,cb,[this](const std::string& key){return drivenByConnection(key);}));
+    M.applyParamBases();
 }
 
 // ── Library (shared files) and banks ─────────────────────────────────────────
@@ -1771,10 +1794,9 @@ void scAnalogBox::drawWindow() {
         ImGui::BeginGroup(); slider(master, "Master", 170 * z, "%.2f"); ImGui::EndGroup();
         ImGui::SameLine(0, 12 * z);
         labelW = 64.0f;
-        ImGui::BeginGroup(); combo(envMode, "Gate Mode", 190 * z); ImGui::EndGroup();
+        toggle(drone, "Drone");
         if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("Auto: a drone while nothing is connected to Gate, gated once something is\n"
-                              "Gated: a voice plays while its gate is high\nDrone: every voice always plays");
+            ImGui::SetTooltip("Drone: every voice plays continuously. Unchecked: follow Gate.");
         ImGui::SameLine(0, 6 * z);
         ImGui::TextColored(ImColor(droning() ? pal::envMod : pal::accent), droning() ? "droning" : "gated");
         ImGui::SameLine(0, 12 * z);

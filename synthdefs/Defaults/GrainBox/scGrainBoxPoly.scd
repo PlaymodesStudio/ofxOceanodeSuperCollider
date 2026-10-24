@@ -438,7 +438,7 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
                     maxGrains:   512,
                     mul:         ampUsed
                 )
-            })) * K2A.ar(vca));   // the Amp Envelope: the whole playhead, grains already sounding too
+            })) * K2A.ar(vca) * \morphgain.kr(1,0.03));   // the Amp Envelope: the whole playhead, grains already sounding too
         }).writeDefFile(subDir);
     });
 });
@@ -502,10 +502,10 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
         // a second, as a short "grain" (same message as the grain voices)
         SendReply.kr(Impulse.kr(20) * g[16], '/grainTrig', [(shown / frames).clip(0, 1), 0.06, amp], idx);
         pan    = Lag.kr(v[4], 0.02);
-        Out.ar(out, case
+        Out.ar(out, (case
             { n == 1 } { sig * amp }
             { n == 2 } { Pan2.ar(sig, (pan + 1).wrap(0, 2) - 1, amp) }
-            { PanAz.ar(n, sig, pan.wrap(0, 2), amp, 2, 0.5) });   // as GrainBuf pans
+            { PanAz.ar(n, sig, pan.wrap(0, 2), amp, 2, 0.5) }) * \morphgain.kr(1,0.03));   // as GrainBuf pans
     }).writeDefFile(subDir);
 });
 });

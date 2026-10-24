@@ -87,6 +87,7 @@ def main():
 // Changes belong in those kernels; regenerate before building. No runtime JIT.
 #include "SC_PlugIn.h"
 #include "PrimaryCompat.h"
+#include "FeedbackMorph.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -116,27 +117,34 @@ SteamPipeStep : PureUGen {
 '''
  for file,kernel,unit,inputs in [('steamPipeBox.eel2','PipeKernel','SteamPipeVoice',0),('originalEffects.eel2','EffectsKernel','SteamPipeOriginal',2)]:
   code,params=translate(FOLDER/file,kernel);pre+=code
-  wrappers+=f'''struct {unit}: Unit {{{kernel} dsp;}};
+  extra='PipeKernel other; bool morphActive=false; int morphMode=0;' if inputs==0 else ''
+  wrappers+=f'''struct {unit}: Unit {{{kernel} dsp;{extra}}};
 void {unit}_next({unit}* unit,int count) {{
  auto& k=unit->dsp;
  for(int i=0;i<count;++i) {{
 '''
   for index,p in enumerate(['in0','in1'][:inputs]+params):
    wrappers+=f'k.{p} = INRATE({index})==calc_FullRate ? IN({index})[i] : IN0({index});\n'
-  wrappers+='k.sample();\nOUT(0)[i]=std::isfinite(k.out0) ? k.out0 : 0;\nOUT(1)[i]=std::isfinite(k.out1) ? k.out1 : 0;\n}\n}\n'
+   if inputs==0 and p!='_allpass_on':
+    wrappers+=f'if(unit->morphActive) unit->other.{p}=k.{p};\n'
+  wrappers+=('sampleAllpassMorph(k,unit->other,unit->morphActive,unit->morphMode,98304);\n' if inputs==0 else 'k.sample();\n')+'OUT(0)[i]=std::isfinite(k.out0) ? k.out0 : 0;\nOUT(1)[i]=std::isfinite(k.out1) ? k.out1 : 0;\n}\n}\n'
   size='98304' if inputs==0 else 'static_cast<size_t>(128+2*(std::ceil(SAMPLERATE*8)+4)+16*(std::ceil(SAMPLERATE*1.5)+4))'
+  morphInit='''unit->other.buf=static_cast<double*>(RTAlloc(unit->mWorld,cells*sizeof(double)));''' if inputs==0 else ''
+  morphFree='if(unit->other.buf) RTFree(unit->mWorld,unit->other.buf);' if inputs==0 else ''
   wrappers+=f'''void {unit}_Ctor({unit}* unit) {{
  new (&unit->dsp) {kernel}();auto& k=unit->dsp;k.srate=SAMPLERATE;
+ {"new (&unit->other) PipeKernel();unit->morphActive=false;unit->morphMode=0;" if inputs==0 else ""}
  if(unit->mNumInputs!={len(params)+inputs} || unit->mNumOutputs!=2) {{
   Print("{unit}: incompatible SynthDef; recompile steampipeBox.scd\\n");
   SETCALC(ClearUnitOutputs);ClearUnitOutputs(unit,1);return;
  }}
  const size_t cells={size};k.buf=static_cast<double*>(RTAlloc(unit->mWorld,cells*sizeof(double)));
  if(!k.buf) {{SETCALC(ClearUnitOutputs);ClearUnitOutputs(unit,1);return;}}
+ {morphInit}
  std::memset(k.buf,0,cells*sizeof(double));k.init();SETCALC({unit}_next);
  ClearUnitOutputs(unit,1);
 }}
-void {unit}_Dtor({unit}* unit) {{if(unit->dsp.buf) RTFree(unit->mWorld,unit->dsp.buf);}}
+void {unit}_Dtor({unit}* unit) {{if(unit->dsp.buf) RTFree(unit->mWorld,unit->dsp.buf);{morphFree}}}
 '''
   args=[p[1:] for p in params]
   # An ordered array API keeps the generated class signature simple and unambiguous.
@@ -149,7 +157,7 @@ void {unit}_Dtor({unit}* unit) {{if(unit->dsp.buf) RTFree(unit->mWorld,unit->dsp
 }}
 '''
  pre+='}\n'+wrappers+'\nPluginLoad(OceanodeSteamPipe) {ft=inTable;DefineSimpleUnit(SteamPipeStep);DefineDtorUnit(SteamPipeVoice);DefineDtorUnit(SteamPipeOriginal);}\n'
- (ROOT/'ugens/OceanodeSteamPipe/OceanodeSteamPipe.cpp').write_text(pre)
+ (ROOT/'ugens/OceanodeSteamPipe/OceanodeSteamPipe.cpp').write_text('\n'.join(line.rstrip() for line in pre.splitlines())+'\n')
  (ROOT/'ugens/OceanodeSteamPipe/OceanodeSteamPipe.sc').write_text(sc)
  bundled=ROOT/'sclang/Extensions/user/OceanodeSteamPipe/OceanodeSteamPipe.sc'
  bundled.parent.mkdir(parents=True,exist_ok=True);bundled.write_text(sc)

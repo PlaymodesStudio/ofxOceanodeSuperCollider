@@ -268,15 +268,11 @@ void scEchoBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw
         const float v = scSnapshots::blendValue(a[mk], b[mk], t, sw).get<float>();
         if(v != mix.get()) mix = v;
     }
-    // the modulation: the arrival's at the switch point
-    const ofJson& src = sw ? b : a;
-    ofJson m = ofJson::object();
-    for(auto it = src.begin(); it != src.end(); ++it) if(it.key().rfind("echoBoxMod", 0) == 0) m[it.key()] = it.value();
-    if(!m.empty() && m != appliedMod) {
-        appliedMod = m;
-        modulation.load(src, "echoBoxMod");
-        modulation.afterLoad();
-    }
+    modulation.loadMorph(a,b,t,sw,"echoBoxMod",[this](const std::string& key){
+        auto it=published.find(key);return it!=published.end() && it->second->hasInConnection();
+    });
+    modulation.afterLoad();
+    modulation.refresh();
 }
 
 // Five starting points (the rest: the defaults)

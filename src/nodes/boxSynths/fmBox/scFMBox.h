@@ -127,8 +127,8 @@ private:
     std::map<ofxSCServer*, State> states;
     ofParameter<bool> show;
     ofParameter<void> resetLFOs;
-    ofParameter<int> voices, channels, gateMode;
-    bool gateTouched=false;
+    ofParameter<int> voices, channels;
+    ofParameter<bool> drone;
     ofParameter<float> master;
     ofParameter<std::vector<float>> gate, pitch;
     scAudioParam gateIn, pitchIn;

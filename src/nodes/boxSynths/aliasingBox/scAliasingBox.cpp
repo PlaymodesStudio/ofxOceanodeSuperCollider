@@ -1,3 +1,4 @@
+#include "../shared/scDroneMode.h"
 #include "../../../audio/scFxRouting.h"
 #include "scAliasingBox.h"
 #include "scAliasingBoxData.h"
@@ -20,6 +21,9 @@ const ImU32 header     = IM_COL32( 30,  32,  38, 255);
 const ImU32 headerText = IM_COL32(205, 205, 215, 255);
 const ImU32 textDim    = IM_COL32(150, 150, 160, 255);
 const ImU32 accent     = IM_COL32(150, 165, 255, 255);   // periwinkle
+}
+int morphModeCount(const std::string& sc) {
+    return sc=="write_quality" ? 3 : sc=="read_quality" ? 2 : sc=="filter_lfo_wave" ? 8 : 0;
 }
 float zoom() { return ofxOceanodeShared::getZoomLevel(); }
 float gapW() { return 12.0f * zoom(); }
@@ -82,17 +86,16 @@ void scAliasingBox::setup() {
     addParameter(master.set("Master", 0.6f, 0.0f, 1.0f));
     addParameter(resetLFOs.set("Reset"));
     addOutput("Out");
-    // Auto: a drone until Gate is connected, timelined or gets a note
-    gateMode.set("Gate Mode",0,0,2);
-    reg(gateMode,[this](){sendAll();});
-    dropdowns.set(gateMode.getEscapedName(),{"Auto","Gated","Drone"});
+
+    drone.set("Drone", false);
+    reg(drone,[this](){sendAll();});
+
     scheduled.add(gateIn.handle, gate); scheduled.add(pitchIn.handle, pitch);
     scheduled.enable(this, [this](){ for(auto& [s, st] : states) if(st.created) return true; return false; });
     for(auto* p : {&gate, &pitch}) {
         listeners.push(p->newListener([this,p](std::vector<float>& v) {
             // the timeline's frame set of a value it already sent timetagged: nothing to do
             if(scScheduling::isBackendSendSuppressed()) return;
-            if(p==&gate) for(float value:v) if(value>0) gateTouched=true;
             for(auto& [s, st] : states) sendNotes(s, st);
         }));
     }
@@ -213,8 +216,11 @@ void scAliasingBox::setup() {
     sh.bpm = [this](){ return bpm; };
     sh.paramMenu = [this](const std::string& k){ mark(k); menu(k); };
     for(auto* p : {&satOn, &eqOn, &echoOn, &rvbOn}) snaps.morph.bypass(*p);
-    for(const auto& c : sound)
-        if(c->sc == "filter_on" || c->sc == "notch_on" || c->sc == "dc_block") snaps.morph.bypass(c->p);
+    for(const auto& c : sound) {
+        if(c->sc == "filter_on" || c->sc == "notch_on" || c->sc == "dc_block" || c->sc == "read_bidirectional")
+            snaps.morph.bypass(c->p);
+        if(const int count=morphModeCount(c->sc)) snaps.morph.mode(c->p,count);
+    }
     sh.morphChanged = [this, toStages]() { sendAll(); toStages(); };
     sh.morphBlocked = [this](const std::string& k) {
         auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
@@ -263,7 +269,16 @@ void scAliasingBox::sendSound(ofxSCServer* server, State& st) {
             if(it!=sent.end()&&it->second==value) return;
             sent[name]=value;v->set(name,value);
         };
-        for(const auto& c : sound) if(c->sc!="stereo") set(c->sc, (c->sc=="filter_on" || c->sc=="notch_on" || c->sc=="dc_block") ? snaps.morph.activation(c->p) : mod.voiceValue(c->p,i));
+        for(const auto& c : sound) if(c->sc!="stereo") {
+            set(c->sc, (c->sc=="filter_on" || c->sc=="notch_on" || c->sc=="dc_block" || c->sc=="read_bidirectional")
+                ? snaps.morph.activation(c->p) : mod.voiceValue(c->p,i));
+            if(morphModeCount(c->sc)) {
+                const auto weights=snaps.morph.weights(c->p);
+                // Scalar weight controls reuse the ordinary send cache: no
+                // extra OSC traffic while a settled preset is running.
+                for(size_t k=0;k<weights.size();++k) set(c->sc+"_w"+ofToString(k),weights[k]);
+            }
+        }
         for(int e=0;e<2;++e) for(int k=0;k<3;++k) set(std::string(e?"filter_curve":"amp_curve")+ofToString(k),mod.voiceValue(envCurves[e][k],i));
         set("gatebus",st.gates->index+i);
         set("velbus",mod.sourceBus(server,scModulation::SRC_VEL)+i);
@@ -399,28 +414,19 @@ ofJson scAliasingBox::capture() const {
     for(const auto& c:controls) if(!scSnapshots::isOwnKey(c.key)) j[c.key]=c.save();
     mod.patchBases(j);mod.save(j,"aliasingMod");return j;
 }
-void scAliasingBox::apply(const ofJson& a,const ofJson& b,float t,bool sw) {
+void scAliasingBox::apply(const ofJson& aSaved, const ofJson& bSaved,float t,bool sw) {
+    const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
     restoring=true;
     for(const auto& c:controls) if(!scSnapshots::isOwnKey(c.key)&&!(published.count(c.key)&&published.at(c.key)->hasInConnection())) {
         const auto& av=a.contains(c.key)?a[c.key]:initial[c.key];
         const auto& bv=b.contains(c.key)?b[c.key]:initial[c.key];
         c.load(blend(av,bv,t,sw,c.discrete));
     }
-    const auto& src=sw?b:a;
-    if(modSource!=&src || t>=1) { modSource=&src; mod.load(src,"aliasingMod");mod.afterLoad(); }
-    auto count = [&](const char* key,int max) {
-        const int av=a.value(key,0),bv=b.value(key,0);
-        return std::clamp(t<=0 ? av : t>=1 ? bv : std::max(av,bv),0,max);
-    };
-    const int nl=count("aliasingModLfos",scModulation::MAX_LFOS),ne=count("aliasingModEnvs",scModulation::MAX_ENVS),nx=count("aliasingModExts",scModulation::MAX_EXT);
-    bool counts=nl!=mod.lfoCount||ne!=mod.envCount||nx!=mod.extCount;
-    mod.lfoCount=nl;mod.envCount=ne;mod.extCount=nx;
-    auto ma=a.value("aliasingModMatrix",std::vector<float>(scModulation::NUM_SOURCES*NUM_TARGETS,0));
-    auto mb=b.value("aliasingModMatrix",std::vector<float>(scModulation::NUM_SOURCES*NUM_TARGETS,0));
-    ma.resize(mod.matrix.size(),0);mb.resize(mod.matrix.size(),0);
-    bool dirty=false;
-    for(size_t i=0;i<mod.matrix.size();++i) {float value=ofLerp(ma[i],mb[i],t);if(value!=mod.matrix[i]){mod.matrix[i]=value;dirty=true;}}
-    if(counts) mod.refresh();else if(dirty) mod.sendMatrix();
+    mod.loadMorph(a,b,t,sw,"aliasingMod",[this](const std::string& key){
+        auto it=published.find(key);return it!=published.end() && it->second->hasInConnection();
+    });
+    mod.afterLoad();
+    mod.refresh();
     restoring=false;sendAll();
 }
 std::vector<ofJson> scAliasingBox::factory() const {
@@ -441,6 +447,7 @@ void scAliasingBox::presetSave(ofJson& j) {
     j["aliasingBoxDisplay"]={{"mode",tableMode}};
 }
 void scAliasingBox::loadBeforeConnections(ofJson& j) {
+    scDroneMode::migrate(j);
     mod.loadLfoOutputs(j);
     std::vector<std::string> wanted;
     if(j.contains("aliasingBoxPublished")&&j["aliasingBoxPublished"].is_array()) for(const auto& k:j["aliasingBoxPublished"]) if(k.is_string()) wanted.push_back(k.get<std::string>());
@@ -448,6 +455,8 @@ void scAliasingBox::loadBeforeConnections(ofJson& j) {
     for(const auto& k:wanted) publish(k);timeline.load(j,"aliasingBoxTimeline");
 }
 void scAliasingBox::presetRecallAfterSettingParameters(ofJson& j) {
+    scDroneMode::migrate(j);
+    if(!j.contains(drone.getEscapedName())) drone = false;
     if(j.contains("aliasingBoxDisplay")) {
         const auto& d=j["aliasingBoxDisplay"];
         tableMode=std::clamp(d.value("mode",0),0,1);
@@ -455,18 +464,15 @@ void scAliasingBox::presetRecallAfterSettingParameters(ofJson& j) {
     }
     if(!j.contains("aliasingBox")) return;
     auto state=j["aliasingBox"];
-    // The first patches had a Drone toggle on the node instead of Gate Mode.
-    if(!state.contains(gateMode.getEscapedName())) {
+    // The first patches stored Drone directly on the node.
+    if(!state.contains(drone.getEscapedName())) {
         bool droneOn=false;
         if(j.contains("Drone")) {
             const auto& d=j["Drone"];
             droneOn=d.is_boolean() ? d.get<bool>() : d.is_number() ? d.get<float>()>0.5f : d.is_string() && (d.get<std::string>()=="1" || d.get<std::string>()=="true");
         }
-        state[gateMode.getEscapedName()]=droneOn?2:1;
+        state[drone.getEscapedName()]=droneOn;
     }
-    // a loaded patch starts from Auto's own rule: droning unless Gate is
-    // connected or timelined (a value it gets from here on switches it to gated)
-    gateTouched=false;
     apply(state,state,1,true);
     restoring=true;for(const auto& c:controls) if(scSnapshots::isOwnKey(c.key)&&state.contains(c.key)) c.load(state[c.key]);restoring=false;
 }
@@ -1052,9 +1058,7 @@ void scAliasingBox::combo(ofParameter<int>& p, const char* label, float w) {
 
 
 bool scAliasingBox::droning() const {
-    if(gateMode.get()==2) return true;
-    if(gateMode.get()==1) return false;
-    return !(gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined()));
+    return drone.get();
 }
 void scAliasingBox::drawHeader() {
     const float z=zoom();
@@ -1071,8 +1075,8 @@ void scAliasingBox::drawHeader() {
     next(170*z);
     ImGui::BeginGroup();slider(master,"Master",170*z,"%.2f");ImGui::EndGroup();
     next(190*z);labelW=64;
-    ImGui::BeginGroup();combo(gateMode,"Gate Mode",190*z);ImGui::EndGroup();
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: drone until Gate is connected, timelined or receives a note.\nGated: follow Gate. Drone: every voice always plays.");
+    toggle(drone,"Drone");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Drone: every voice plays continuously. Unchecked: follow Gate.");
     next(ImGui::CalcTextSize("droning").x,6);
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(droning()?ImVec4(.96f,.73f,.45f,1):ImVec4(.59f,.65f,1,1),droning()?"droning":"gated");

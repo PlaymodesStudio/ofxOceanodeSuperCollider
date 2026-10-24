@@ -13,8 +13,9 @@
 //   AdditiveBoxSrc<P>      always: each partial's level in the spectrum (A..B
 //                          by Morph) -> the level stream; the frequency ratios ->
 //                          the frequency stream; the positions -> the
-//                          position stream; the vibrato. Writes the gate (for
-//                          the envelopes) and a random value per note.
+//                          position stream; the vibrato.
+//   AdditiveBoxNote        one stable writer per note voice, shared across
+//                          partial-cap banks: gate, velocity and random value.
 //   AdditiveBoxMotion<P>   Partial Vib / Noise: frequency stream *= wobble
 //   AdditiveBoxLaneClock   with the lanes: each LFO's run, noise counter and
 //                          S&H trigger, shared by the lane chunks
@@ -106,15 +107,22 @@ valueNoise2 = { |x, y, salt = 0|
     (a + ((b - a) * v)).clip(0, 1)
 };
 
+// Note state belongs to a voice, not to its temporary partial-cap graph.
+// The same running writer supplies both rendering banks during a cap morph.
+SynthDef(\AdditiveBoxNote, {
+    var gate=\gate.kr(0),trig=\trig.tr(0);
+    var envGate=gate*(trig<=0);
+    var gateOn=(HPZ1.kr(gate>0)>0)+(trig>0);
+    Out.ar(\gatebus.kr(0)+\voice.kr(0),K2A.ar(envGate>0));
+    Out.kr(\rndbus.kr(0)+\voice.kr(0),TRand.kr(-1,1,gateOn+Impulse.kr(0)));
+    Out.kr(\velbus.kr(0),Gate.kr(gate,gate>0));
+}).writeDefFile(dir);
+
 caps.do { |np|
     // ── The source: envelopes x spectrum, ratios, positions, the vibrato ────
     part.("AdditiveBoxSrc", np, { |np|
-        var gate = \gate.kr(0), trig = \trig.tr(0);
         var maskGlide = \maskglide.kr(0.05);
         var pa = \pa.kr(0 ! np), pd = \pd.kr(0 ! np), morph = lag.(\morph, 0);
-        // a trig closes the gate for one block: the envelopes re-attack from where they are
-        var envGate = gate * (trig <= 0);
-        var gateOn = (HPZ1.kr(gate > 0) > 0) + (trig > 0);
         var spec = Lag.kr(pa, maskGlide) + (Lag.kr(pd, maskGlide) * (morph + mod.(1)).clip(0, 1));
         var b = \bus.kr(0);
         ReplaceOut.kr(b, spec);
@@ -122,11 +130,6 @@ caps.do { |np|
         ReplaceOut.kr(b + (2 * np), lag.(\pb, 0.5 ! np));
         // the voice's vibrato (st), for every core of every copy
         ReplaceOut.kr(b + (3 * np) + 1, [SinOsc.kr(lag.(\vibrate, 5)), lag.(\vibdepth, 0)]);
-        // the gate for the modulation envelopes, a random value per note
-        Out.ar(\gatebus.kr(0) + \voice.kr(0), K2A.ar(envGate > 0));
-        Out.kr(\rndbus.kr(0) + \voice.kr(0), TRand.kr(-1, 1, gateOn + Impulse.kr(0)));
-        // the note's velocity: the gate's level (held from its rising edge)
-        Out.kr(\velbus.kr(0), Gate.kr(gate, gate > 0));
     });
 
     // ── Partial Vib / Noise: each partial's own wobble and jitter ───────────
@@ -280,5 +283,5 @@ chunks.do { |nc|
         Out.ar(\out.kr(0), Sanitize.ar(sig));
     }).writeDefFile(dir);
 };
-"AdditiveBox: % defs written to %".format((caps.size * 8) + 1 + (chunks.size * (1 + maxOut)) + chunks.count(_ <= noiseChunk) + maxOut, dir).postln;
+"AdditiveBox: % defs written to %".format((caps.size * 8) + 2 + (chunks.size * (1 + maxOut)) + chunks.count(_ <= noiseChunk) + maxOut, dir).postln;
 )

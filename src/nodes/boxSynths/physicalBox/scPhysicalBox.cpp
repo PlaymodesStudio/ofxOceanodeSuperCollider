@@ -1,3 +1,4 @@
+#include "../shared/scDroneMode.h"
 #include "../../../audio/scFxRouting.h"
 #include "scPhysicalBox.h"
 #include "../../../ui/scTypedValue.h"
@@ -115,12 +116,12 @@ const std::vector<Factory>& factorySounds() {
         {"Thunder sheet", {{"excite", 1}, {"listen", 1}, {"bfamily", 5}, {"bshape", 0}, {"material", 1}, {"bdecay", 3}, {"hardness", 0.9f}, {"pos", 0.06f}, {"posy", 0.08f}, {"cascade", 0.5f}, {"rattle", 0.3f}, {"rattleth", 0.1f}, {"bbright", 0.8f}, {"symp", 0.4f}, {"sympset", 7}, {"sympdecay", 3}, {"sympbright", 1}, {"sympshimmer", 25}, {"level", 9.5f}}},
         {"Scraped plate", {{"strike", 0}, {"scrape", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 5}, {"bshape", 0}, {"material", 1}, {"chatter", 0.5f}, {"symp", 0.5f}, {"sympset", 7}, {"sympdecay", 2}, {"sympbright", 1}, {"sympshimmer", 20}, {"level", 2.0f}}},
         {"Harsh scrape", {{"strike", 0}, {"scrape", 1}, {"rough", 0.9f}, {"grit", 0.8f}, {"chatter", 1}, {"cascade", 0.6f}, {"rattle", 0.4f}, {"rattleth", 0.1f}, {"material", 1}, {"bfamily", 5}, {"bshape", 0}, {"excite", 1}, {"listen", 1}, {"level", -7.0f}}},
-        {"Rain on glass", {{"Gate_Mode", 3}, {"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0}, {"material", 0.5f}, {"bdecay", 3}, {"hardness", 0.95f}, {"mass", 0.1f}, {"split", 2}, {"Pulse_Rate", 6}, {"Pulse_Chaos", 1}, {"Pulse_Link", 0}, {"Pulse_Velocity", 0.5f}, {"Pulse_Velocity_Jitter", 0.9f}, {"symp", 0.3f}, {"sympset", 4}, {"sympdecay", 3}, {"sympbright", 0.8f}, {"sympshimmer", 4}, {"level", -0.5f}}},
-        {"Gamelan clock", {{"Gate_Mode", 3}, {"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0.5f}, {"material", 1}, {"bdecay", 4}, {"hardness", 0.7f}, {"beat", 5}, {"damper", 0.4f}, {"Pulse_Sync", 1}, {"Pulse_Beats", 0.5f}, {"Pulse_Chance", 0.7f}, {"Pulse_Link", 0.5f}, {"Pulse_Length", 0.8f}, {"symp", 0.4f}, {"sympset", 1}, {"sympdecay", 4}, {"sympbright", 0.7f}, {"sympshimmer", 8}, {"level", 1.0f}}},
-        {"Bowl circle", {{"Gate_Mode", 3}, {"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0.25f}, {"material", 1}, {"bdecay", 8}, {"hardness", 0.4f}, {"mass", 0.6f}, {"split", 1.5f}, {"drift", 0.3f}, {"Pulse_Rate", 0.4f}, {"Pulse_Chaos", 0.3f}, {"Pulse_Link", 0}, {"Pulse_Phasing", 0.4f}, {"symp", 0.4f}, {"sympset", 1}, {"sympdecay", 8}, {"sympbright", 0.6f}, {"sympshimmer", 3}, {"level", -4.5f}}},
-        {"Taraf rain", {{"Gate_Mode", 3}, {"excite", 0}, {"listen", 0}, {"adecay", 5}, {"hardness", 0.85f}, {"pos", 0.08f}, {"radiator", 2}, {"radmix", 0.5f}, {"material", 1}, {"abright", 0.9f}, {"jawari", 0.8f}, {"symp", 0.8f}, {"sympset", 0}, {"sympdecay", 7}, {"sympbright", 0.7f}, {"sympshimmer", 3}, {"Pulse_Rate", 3}, {"Pulse_Chaos", 0.8f}, {"Pulse_Link", 0}, {"Pulse_Chance", 0.8f}, {"Pulse_Velocity_Jitter", 0.7f}, {"level", -0.5f}}},
-        {"Geiger hats", {{"Gate_Mode", 3}, {"excite", 1}, {"listen", 1}, {"bfamily", 5}, {"bshape", 0}, {"material", 1}, {"bdecay", 0.35f}, {"bmodes", 48}, {"bbright", 1}, {"hardness", 1}, {"mass", 0.05f}, {"split", 30}, {"beat", 12}, {"pos", 0.6f}, {"posy", 0.4f}, {"damper", 0.8f}, {"symp", 0.8f}, {"sympset", 7}, {"sympdecay", 0.3f}, {"sympbright", 1}, {"sympshimmer", 40}, {"Pulse_Rate", 9}, {"Pulse_Chaos", 1}, {"Pulse_Cluster", 0.6f}, {"Pulse_Link", 0}, {"Pulse_Length", 0.1f}, {"Pulse_Velocity_Jitter", 0.8f}, {"level", -1.0f}}},
-        {"Drum circle", {{"Gate_Mode", 3}, {"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 1}, {"material", 0.2f}, {"bdecay", 0.8f}, {"hardness", 0.3f}, {"mass", 0.6f}, {"pos", 0.7f}, {"radiator", 4}, {"radmix", 0.5f}, {"Pulse_Sync", 1}, {"Pulse_Beats", 0.25f}, {"Pulse_Chance", 0.6f}, {"Pulse_Cluster", 0.3f}, {"Pulse_Link", 0.3f}, {"Pulse_Velocity_Jitter", 0.6f}, {"level", 15.5f}}},
+        {"Rain on glass", {{"Pulse", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0}, {"material", 0.5f}, {"bdecay", 3}, {"hardness", 0.95f}, {"mass", 0.1f}, {"split", 2}, {"Pulse_Rate", 6}, {"Pulse_Chaos", 1}, {"Pulse_Link", 0}, {"Pulse_Velocity", 0.5f}, {"Pulse_Velocity_Jitter", 0.9f}, {"symp", 0.3f}, {"sympset", 4}, {"sympdecay", 3}, {"sympbright", 0.8f}, {"sympshimmer", 4}, {"level", -0.5f}}},
+        {"Gamelan clock", {{"Pulse", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 1}, {"bshape", 0.5f}, {"material", 1}, {"bdecay", 4}, {"hardness", 0.7f}, {"beat", 5}, {"damper", 0.4f}, {"Pulse_Sync", 1}, {"Pulse_Beats", 0.5f}, {"Pulse_Chance", 0.7f}, {"Pulse_Link", 0.5f}, {"Pulse_Length", 0.8f}, {"symp", 0.4f}, {"sympset", 1}, {"sympdecay", 4}, {"sympbright", 0.7f}, {"sympshimmer", 8}, {"level", 1.0f}}},
+        {"Bowl circle", {{"Pulse", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 2}, {"bshape", 0.25f}, {"material", 1}, {"bdecay", 8}, {"hardness", 0.4f}, {"mass", 0.6f}, {"split", 1.5f}, {"drift", 0.3f}, {"Pulse_Rate", 0.4f}, {"Pulse_Chaos", 0.3f}, {"Pulse_Link", 0}, {"Pulse_Phasing", 0.4f}, {"symp", 0.4f}, {"sympset", 1}, {"sympdecay", 8}, {"sympbright", 0.6f}, {"sympshimmer", 3}, {"level", -4.5f}}},
+        {"Taraf rain", {{"Pulse", 1}, {"excite", 0}, {"listen", 0}, {"adecay", 5}, {"hardness", 0.85f}, {"pos", 0.08f}, {"radiator", 2}, {"radmix", 0.5f}, {"material", 1}, {"abright", 0.9f}, {"jawari", 0.8f}, {"symp", 0.8f}, {"sympset", 0}, {"sympdecay", 7}, {"sympbright", 0.7f}, {"sympshimmer", 3}, {"Pulse_Rate", 3}, {"Pulse_Chaos", 0.8f}, {"Pulse_Link", 0}, {"Pulse_Chance", 0.8f}, {"Pulse_Velocity_Jitter", 0.7f}, {"level", -0.5f}}},
+        {"Geiger hats", {{"Pulse", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 5}, {"bshape", 0}, {"material", 1}, {"bdecay", 0.35f}, {"bmodes", 48}, {"bbright", 1}, {"hardness", 1}, {"mass", 0.05f}, {"split", 30}, {"beat", 12}, {"pos", 0.6f}, {"posy", 0.4f}, {"damper", 0.8f}, {"symp", 0.8f}, {"sympset", 7}, {"sympdecay", 0.3f}, {"sympbright", 1}, {"sympshimmer", 40}, {"Pulse_Rate", 9}, {"Pulse_Chaos", 1}, {"Pulse_Cluster", 0.6f}, {"Pulse_Link", 0}, {"Pulse_Length", 0.1f}, {"Pulse_Velocity_Jitter", 0.8f}, {"level", -1.0f}}},
+        {"Drum circle", {{"Pulse", 1}, {"excite", 1}, {"listen", 1}, {"bfamily", 4}, {"bshape", 1}, {"material", 0.2f}, {"bdecay", 0.8f}, {"hardness", 0.3f}, {"mass", 0.6f}, {"pos", 0.7f}, {"radiator", 4}, {"radmix", 0.5f}, {"Pulse_Sync", 1}, {"Pulse_Beats", 0.25f}, {"Pulse_Chance", 0.6f}, {"Pulse_Cluster", 0.3f}, {"Pulse_Link", 0.3f}, {"Pulse_Velocity_Jitter", 0.6f}, {"level", 15.5f}}},
     };
     return f;
 }
@@ -143,7 +144,7 @@ scPhysicalBox::scPhysicalBox(std::vector<serverManager*> s) : scNode("physicalBo
                   "and a modal body (bars, glasses, bowls, bells, gongs, handpan, steel pan, drums, plates, blocks), coupled, with rattle, tension and "
                   "cascade, heard by two pickups. Every voice is its own instrument, so LFOs and envelopes "
                   "can move each one separately. Gate is a level (the velocity); In feeds the Ext exciter. "
-                  "Gate Mode Pulse plays the voices by itself, from a clock to a Geiger counter, together or each its own. "
+                  "Pulse plays the voices by itself, from a clock to a Geiger counter, together or each its own. "
                   "Show opens the editor; right-click a control there to publish, modulate or add it to the timeline.";
 }
 scPhysicalBox::~scPhysicalBox() {
@@ -186,10 +187,12 @@ void scPhysicalBox::setup() {
     addParameter(resetLFOs.set("Reset"));
     addInput("In");
     addOutput("Out");
-    // Auto: a drone until Gate is connected, timelined or gets a note; Pulse: the automatic gates
-    gateMode.set("Gate Mode", 2, 0, 3);
-    reg(gateMode, [this](){ sendAll(); });
-    dropdowns.set(gateMode.getEscapedName(), {"Auto", "Gated", "Drone", "Pulse"});
+
+    drone.set("Drone", false);
+    reg(drone, [this](){ sendAll(); });
+    pulseEnabled.set("Pulse", false);
+    reg(pulseEnabled, [this](){ sendAll(); });
+
     {
         scPulseGate::Host ph;
         ph.regF = [this](ofParameter<float>& p, std::function<void()> f){ reg(p, f); };
@@ -212,7 +215,6 @@ void scPhysicalBox::setup() {
         listeners.push(p->newListener([this, p](std::vector<float>& v) {
             // the timeline's frame set of a value it already sent timetagged: nothing to do
             if(scScheduling::isBackendSendSuppressed()) return;
-            if(p == &gate) for(float value : v) if(value > 0) gateTouched = true;
             for(auto& [s, st] : states) sendNotes(s, st);
         }));
     }
@@ -427,7 +429,9 @@ void scPhysicalBox::setup() {
     sh.bpm = [this](){ return bpm; };
     sh.paramMenu = [this](const std::string& k){ mark(k); menu(k); };
     for(auto* p : {&satOn, &eqOn, &echoOn, &rvbOn, &spaceOn}) snaps.morph.bypass(*p);
-    sh.morphChanged = toStages;
+    snaps.morph.neutralDepth(soundParam("radiator"),soundParam("radmix"));
+    snaps.morph.neutralDepth(soundParam("sympset"),soundParam("symp"));
+    sh.morphChanged = [this,toStages](){sendAll();toStages();};
     sh.morphBlocked = [this](const std::string& k) {
         auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
     };
@@ -479,7 +483,7 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
             if(it != sent.end() && it->second == value) return;
             sent[name] = value; v->set(name, value);
         };
-        for(const auto& c : soundControls) if(c->voiceInput) set(c->sc, c->sc == "bmodes" ? std::round(mod.voiceValue(c->p, i)) : mod.voiceValue(c->p, i));
+        for(const auto& c : soundControls) if(c->voiceInput) set(c->sc, mod.morphVoiceValue(c->p,i,snaps.morph));
         set("gatebus", st.gates->index + i);
         set("out", st.audio->index + 2 * i);
         set("in", inBus + (st.in >= 0 ? i % std::max(1, st.inChannels) : 0));
@@ -771,7 +775,8 @@ ofJson scPhysicalBox::capture() const {
     for(const auto& c : controls) if(!scSnapshots::isOwnKey(c.key) && c.key != speakerLayout.getEscapedName()) j[c.key] = c.save();
     mod.patchBases(j); mod.save(j, "physicalMod"); return j;
 }
-void scPhysicalBox::apply(const ofJson& a, const ofJson& b, float t, bool sw) {
+void scPhysicalBox::apply(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw) {
+    const auto a = scDroneMode::migrated(aSaved, true), b = scDroneMode::migrated(bSaved, true);
     restoring = true;
     // a sound saved before the body models had Shape 0..5 (harmonic, bar, glass,
     // bell, plate, membrane) and no Family: the same body in the new scheme
@@ -784,25 +789,15 @@ void scPhysicalBox::apply(const ofJson& a, const ofJson& b, float t, bool sw) {
         }
         return j.contains(key) ? j[key] : initial[key];
     };
+    auto x=a,y=b;snaps.morph.pinSelectors(x,y,t);
     for(const auto& c : controls) if(!scSnapshots::isOwnKey(c.key) && c.key != speakerLayout.getEscapedName()
                                      && !(published.count(c.key) && published.at(c.key)->hasInConnection()))
-        c.load(blend(value(a, c.key), value(b, c.key), t, sw, c.discrete));
-    const auto& src = sw ? b : a;
-    if(modSource != &src || t >= 1) { modSource = &src; mod.load(src, "physicalMod"); mod.afterLoad(); }
-    auto count = [&](const char* key, int max) {
-        const int av = a.value(key, 0), bv = b.value(key, 0);
-        return std::clamp(t <= 0 ? av : t >= 1 ? bv : std::max(av, bv), 0, max);
-    };
-    const int nl = count("physicalModLfos", scModulation::MAX_LFOS), ne = count("physicalModEnvs", scModulation::MAX_ENVS),
-              nx = count("physicalModExts", scModulation::MAX_EXT);
-    const bool counts = nl != mod.lfoCount || ne != mod.envCount || nx != mod.extCount;
-    mod.lfoCount = nl; mod.envCount = ne; mod.extCount = nx;
-    auto ma = a.value("physicalModMatrix", std::vector<float>(scModulation::NUM_SOURCES * NUM_TARGETS, 0));
-    auto mb = b.value("physicalModMatrix", std::vector<float>(scModulation::NUM_SOURCES * NUM_TARGETS, 0));
-    ma.resize(mod.matrix.size(), 0); mb.resize(mod.matrix.size(), 0);
-    bool dirty = false;
-    for(size_t i = 0; i < mod.matrix.size(); ++i) { const float value = ofLerp(ma[i], mb[i], t); if(value != mod.matrix[i]) { mod.matrix[i] = value; dirty = true; } }
-    if(counts) mod.refresh(); else if(dirty) mod.sendMatrix();
+        c.load(blend(value(x, c.key), value(y, c.key), t, sw, c.discrete));
+    mod.loadMorph(a,b,t,sw,"physicalMod",[this](const std::string& key){
+        auto it=published.find(key);return it!=published.end() && it->second->hasInConnection();
+    });
+    mod.afterLoad();
+    mod.refresh();
     restoring = false; sendAll();
 }
 std::vector<ofJson> scPhysicalBox::factory() const {
@@ -812,7 +807,7 @@ std::vector<ofJson> scPhysicalBox::factory() const {
         for(const auto& [sc, value] : f.values) {
             bool found = false;
             for(const auto& c : soundControls) if(c->sc == sc) { j[c->p.getEscapedName()] = value; found = true; }
-            // any other control by its key (Gate_Mode, Pulse_Rate, ...), as its own type
+            // any other control by its key (Drone, Pulse, Pulse_Rate, ...), as its own type
             if(!found && initial.contains(sc)) {
                 const auto& def = initial[sc];
                 j[sc] = def.is_boolean() ? ofJson(value > 0.5f) : def.is_number_integer() ? ofJson(int(std::lround(value))) : ofJson(value);
@@ -831,6 +826,7 @@ void scPhysicalBox::presetSave(ofJson& j) {
     j["physicalBoxPublished"] = publishedKeys; timeline.save(j, "physicalBoxTimeline");
 }
 void scPhysicalBox::loadBeforeConnections(ofJson& j) {
+    scDroneMode::migrate(j, true);
     mod.loadLfoOutputs(j);
     std::vector<std::string> wanted;
     if(j.contains("physicalBoxPublished") && j["physicalBoxPublished"].is_array())
@@ -839,11 +835,13 @@ void scPhysicalBox::loadBeforeConnections(ofJson& j) {
     for(const auto& k : wanted) publish(k); timeline.load(j, "physicalBoxTimeline");
 }
 void scPhysicalBox::presetRecallAfterSettingParameters(ofJson& j) {
+    scDroneMode::migrate(j, true);
+    if(!j.contains(drone.getEscapedName())) drone = false;
+    if(!j.contains(pulseEnabled.getEscapedName())) pulseEnabled = false;
     if(!j.contains("physicalBox")) return;
     auto state = j["physicalBox"];
-    // a loaded patch starts from Auto's own rule: droning unless Gate is
-    // connected or timelined (a value it gets from here on switches it to gated)
-    gateTouched = false;
+
+
     apply(state, state, 1, true);
     restoring = true; for(const auto& c : controls) if(scSnapshots::isOwnKey(c.key) && state.contains(c.key)) c.load(state[c.key]); restoring = false;
     if(state.contains(speakerLayout.getEscapedName())) speakerLayout = state.value(speakerLayout.getEscapedName(), 0);
@@ -898,10 +896,7 @@ void scPhysicalBox::update(ofEventArgs&) {
     if(pulsing()) pulse.read(live, VIS_PULSE);
 }
 bool scPhysicalBox::droning() const {
-    if(pulsing()) return false;
-    if(gateMode.get() == 2) return true;
-    if(gateMode.get() == 1) return false;
-    return !(gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined()));
+    return drone.get() && !pulsing();
 }
 
 // ── Window ───────────────────────────────────────────────────────────────────
@@ -965,8 +960,10 @@ void scPhysicalBox::drawHeader() {
     next(170 * z);
     ImGui::BeginGroup(); slider(master, "Master", 170 * z, "%.2f"); ImGui::EndGroup();
     next(190 * z); labelW = 64;
-    ImGui::BeginGroup(); combo(gateMode, "Gate Mode", 190 * z); ImGui::EndGroup();
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: drone until Gate is connected, timelined or receives a note.\nGated: follow Gate. Drone: every voice always plays.\nPulse: the voices play by themselves (the Pulse panel).");
+    toggle(drone, "Drone");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Drone: every voice plays continuously. Unchecked: follow Gate.");
+    ImGui::SameLine(); toggle(pulseEnabled, "Pulse");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Generate note gates from the Pulse panel. Takes precedence over Drone.");
     next(ImGui::CalcTextSize("pulsing").x, 6);
     ImGui::AlignTextToFramePadding();
     if(pulsing()) ImGui::TextColored(ImVec4(.42f, .83f, .77f, 1), "pulsing");

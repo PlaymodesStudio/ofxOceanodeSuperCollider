@@ -164,7 +164,7 @@ void scAdditiveBox::setup(){
                        [this](){ return publishedKeys; });
     // ── Node ─────────────────────────────────────────────────────────────────
     addParameter(showWindow.set("Show", false));
-    addParameter(numVoices.set("Voices", 1, 1, MAX_VOICES));
+    voiceCountHandle=addParameter(numVoices.set("Voices", 1, 1, MAX_VOICES));
     addParameter(numOutputs.set("Outputs", 2, 1, MAX_OUTPUTS));
     scNode::addOutput("Out");
 
@@ -385,11 +385,16 @@ void scAdditiveBox::setup(){
         h.bpm = [this](){ return currentBpm; };
         h.paramMenu = [this](const std::string& k){ controlMenu(k); };
         for(auto& p : fxOn) snaps.morph.bypass(p);
+        snaps.morph.mode(waveA,NumWaves);snaps.morph.mode(waveB,NumWaves);
+        snaps.morph.mode(filterMode,NumFilterModes);snaps.morph.mode(filter2Mode,NumFilter2Modes);
+        snaps.morph.mode(sweepShape,NumSweepShapes);snaps.morph.mode(sweepMode,2);
+        snaps.morph.mode(panMode,NumPanModes);
+        snaps.morph.neutralDepth(unison,unisonBlend);
         snaps.morph.mode(echoFilter, 4);
         h.morphBlocked = [this](const std::string& k) {
             auto it=publishedHandles.find(k); return it!=publishedHandles.end() && it->second->hasInConnection();
         };
-        h.morphChanged = [this]() { rebuildFxAll(); };
+        h.morphChanged = [this]() { markDirty();rebuildFxAll(); };
         snaps.setup(h);
     }
     noteInputs.enable(this, [this](){ for(auto& [server, st] : states) if(st.created) return true; return false; });
@@ -409,6 +414,8 @@ void scAdditiveBox::setup(){
     // ── Listeners ────────────────────────────────────────────────────────────
     auto structure = [this](){
         if(loadingBankPreset) return;
+        // A manual voice-count/unison edit takes ownership of the live sound.
+        voiceMorphWeights.clear(); voiceMorphCapacity=0; voiceMorphRetireAt=-1;
         // New voices start with the gate they are given (no edge, no reroll)
         for(int v = 0; v < MAX_VOICES; v++) gateOpen[v] = valueFor(gate.get(), v, 0.0f) > 0;
         for(auto& [server, st] : states) syncVoices(server);
@@ -417,13 +424,17 @@ void scAdditiveBox::setup(){
         markDirty();
     };
     nodeListeners.push(numVoices.newListener([structure](int&){ structure(); }));
-    nodeListeners.push(unison.newListener([structure](int&){ structure(); }));
+    nodeListeners.push(unison.newListener([this,structure](int&){ snaps.morph.edited(unison);structure(); }));
     nodeListeners.push(numOutputs.newListener([this](int& o){
         if(loadingBankPreset) return;
         if(o != builtOutputs) rebuildDefs();
     }));
     nodeListeners.push(partials.newListener([this](int&){
-        if(!loadingBankPreset && partialCap() != builtCap) rebuildDefs();
+        if(!loadingBankPreset && !snaps.morph.applying()){
+            partialMorphWeights.clear();partialMorphRetireAt=-1;
+            if(partialBankMode){partialBankMode=false;rebuildDefs();}
+            else if(partialCap()!=builtCap)rebuildDefs();
+        }
         markDirty();
     }));
     nodeListeners.push(volume.newListener([this](float& v){
@@ -446,7 +457,7 @@ void scAdditiveBox::setup(){
     for(auto* p : {&sweepInvert, &sweepRetrig})
         nodeListeners.push(p->newListener([this](bool&){ markDirty(); }));
     for(auto* p : {&transpose, &sweepVoiceOffset, &unisonDetune, &unisonSpread, &unisonInterval, &unisonBlend})
-        nodeListeners.push(p->newListener([this](float&){ markDirty(); }));
+        nodeListeners.push(p->newListener([this,p](float&){ snaps.morph.edited(*p);markDirty(); }));
     nodeListeners.push(speakerLayout.newListener([this](int&){ markDirty(); }));
     for(auto* p : {&levels, &glide, &morph, &harmonicsA, &harmonicsB, &harmBlur,
                    &tilt, &stretch, &inharm, &evenOdd, &detune, &shift,
@@ -458,10 +469,10 @@ void scAdditiveBox::setup(){
                    &vibrato, &vibRate, &partialVib, &partialVibRate, &shimmer, &shimmerRate,
                    &noise, &noiseRate, &noiseTilt, &timeBlur,
                    &pan, &spread, &drift, &driftRate, &width}){
-        nodeListeners.push(p->newListener([this](std::vector<float>&){ markDirty(); }));
+        nodeListeners.push(p->newListener([this,p](std::vector<float>&){ snaps.morph.edited(*p);markDirty(); }));
     }
     for(auto* p : {&waveA, &waveB, &filterMode, &filter2Mode, &sweepMode, &sweepShape, &panMode}){
-        nodeListeners.push(p->newListener([this](std::vector<int>&){ markDirty(); }));
+        nodeListeners.push(p->newListener([this,p](std::vector<int>&){ snaps.morph.edited(*p);markDirty(); }));
     }
 
     for(int st = 0; st < FX_COUNT; st++)
@@ -493,6 +504,8 @@ void scAdditiveBox::update(ofEventArgs&){
         for(const auto& key : snaps.slotKeys()) { auto it = publishedHandles.find(key); if(it != publishedHandles.end()) scDropdowns::setNames(it->second, names); }
     }
     const float now = ofGetElapsedTimef();
+    if(voiceMorphRetireAt>=0 && now>=voiceMorphRetireAt) finishVoiceMorph();
+    if(partialMorphRetireAt>=0 && now>=partialMorphRetireAt)finishPartialMorph();
     mod.update();   // (showing: set below, from the last frame's drawing)
 
     // An FX stage switched on before the server had loaded its SynthDefs
@@ -519,7 +532,7 @@ void scAdditiveBox::update(ofEventArgs&){
         for(auto& [server, st] : states){
             if(!st.created) continue;
             uploadCurves(server, false);
-            for(int v = 0; v < (int)st.voices.size(); v++) syncVoice(server, v, false);
+            forPartialBanks(server,[&](){for(int v=0;v<int(st.voices.size());++v)syncVoice(server,v,false);});
         }
     }
     if(dirty) flushDirty();
@@ -556,7 +569,7 @@ void scAdditiveBox::flushDirty(){
     for(auto& [server, st] : states){
         if(!st.created) continue;
         uploadCurves(server, false);
-        for(int v = 0; v < (int)st.voices.size(); v++) syncVoice(server, v, false);
+        forPartialBanks(server,[&](){for(int v=0;v<int(st.voices.size());++v)syncVoice(server,v,false);});
     }
 }
 
@@ -579,14 +592,151 @@ void scAdditiveBox::draw(ofEventArgs&){
 // Partials
 // ════════════════════════════════════════════════════════════════════════════
 
-int scAdditiveBox::numVoicesClamped() const { return std::clamp(numVoices.get(), 1, MAX_VOICES); }
+int scAdditiveBox::numVoicesClamped() const { return std::clamp(std::max(numVoices.get(),voiceMorphCapacity), 1, MAX_VOICES); }
+bool scAdditiveBox::soundDriven(const std::string& key) const {
+    if(key==numVoices.getEscapedName()) return voiceCountHandle && voiceCountHandle->hasInConnection();
+    auto it=publishedHandles.find(key);
+    return it!=publishedHandles.end() && it->second && it->second->hasInConnection();
+}
+float scAdditiveBox::voiceMorphGain(int voice) const {
+    return voiceMorphWeights.empty() ? 1.0f : scVoiceCountMorph::presence(voiceMorphWeights,voice);
+}
+void scAdditiveBox::finishVoiceMorph(){
+    voiceMorphRetireAt=-1;
+    const int before=numVoicesClamped();
+    voiceMorphCapacity=0;
+    if(before!=numVoicesClamped()){
+        mod.voicesChanged();
+        for(auto& [server,st]:states) if(st.modCreated) mod.rebuild(server);
+        applyStructure();
+    }
+    if(scVoiceCountMorph::single(voiceMorphWeights)) voiceMorphWeights.clear();
+}
 int scAdditiveBox::numOutputsClamped() const { return std::clamp(numOutputs.get(), 1, MAX_OUTPUTS); }
 int scAdditiveBox::unisonClamped() const { return std::clamp(unison.get(), 1, MAX_UNISON); }
 
-int scAdditiveBox::partialCap() const {
-    const int n = std::clamp(partials.get(), 1, MAX_PARTIALS);
+int scAdditiveBox::capForCount(int count){
+    const int n=std::clamp(count,1,MAX_PARTIALS);
     for(int cap : CAPS) if(cap >= n) return cap;
     return MAX_PARTIALS;
+}
+
+int scAdditiveBox::partialCap() const {
+    if(renderPartialCap>0)return renderPartialCap;
+    return partialBankMode && builtCap>0 ? builtCap : capForCount(partials.get());
+}
+float scAdditiveBox::partialPresence(int index) const {
+    return partialCountValue([&](int count){return index<count?1.f:0.f;});
+}
+float scAdditiveBox::partialCountValue(const std::function<float(int)>& evaluate) const {
+    if(partialMorphWeights.empty())return evaluate(std::clamp(partials.get(),1,MAX_PARTIALS));
+    float result=0,total=0;
+    for(size_t i=0;i<partialMorphWeights.size();++i)if(partialMorphWeights[i]>0 &&
+        (renderPartialCap==0 || capForCount(int(i)+1)==renderPartialCap)){
+        result+=partialMorphWeights[i]*evaluate(int(i)+1);total+=partialMorphWeights[i];
+    }
+    // Each cap renders its conditional endpoint spectrum; the output gain
+    // supplies the cap's share exactly once (new partials fade linearly).
+    return total>0?result/total:evaluate(std::clamp(partials.get(),1,renderPartialCap>0?renderPartialCap:MAX_PARTIALS));
+}
+std::map<int,float> scAdditiveBox::partialCapWeights() const {
+    std::map<int,float> out;
+    if(partialMorphWeights.empty())out[capForCount(partials.get())]=1;
+    else for(size_t i=0;i<partialMorphWeights.size();++i)if(partialMorphWeights[i]>0)
+        out[capForCount(int(i)+1)]+=partialMorphWeights[i];
+    return out;
+}
+void scAdditiveBox::preparePartialMorph(const ofJson& a,const ofJson& b,float t){
+    auto endpoint=[&](const ofJson& sound){
+        ofJson out=sound;
+        if(soundDriven(partials.getEscapedName()))return ofJson{{"partials",partials.get()}};
+        out["partials"]=sound.value(partials.getEscapedName(),partials.get());
+        out.erase(scVoiceCountMorph::key); // voice and partial counts have separate distributions
+        if(sound.contains("_partialCountBlend"))out[scVoiceCountMorph::key]=sound["_partialCountBlend"];
+        return out;
+    };
+    partialMorphWeights=scVoiceCountMorph::blend(endpoint(a),endpoint(b),t,partials.get(),MAX_PARTIALS,"partials");
+    const auto wanted=partialCapWeights();
+    bool live=false;for(const auto& e:states)live|=e.second.created;
+    if(!live){
+        if(!wanted.count(builtCap))builtCap=wanted.begin()->first;
+        partialBankMode=wanted.size()>1;
+    }else for(const auto& e:wanted)if(e.first!=builtCap)partialBankMode=true;
+    partialMorphRetireAt=ofGetElapsedTimef()+.35f;
+}
+// The primary bank retains its running synths; additional caps have their own
+// streams, oscillators and envelopes. Only rendering context changes here, never
+// editor parameters, listeners, gate ownership or the shared modulation graph.
+void scAdditiveBox::forPartialBanks(ofxSCServer* server,const std::function<void()>& render){
+    if(renderPartialCap>0 || !partialBankMode){render();return;}
+    auto& st=states[server];
+    for(const auto& e:partialCapWeights())if(e.first!=builtCap)st.partialBanks.try_emplace(e.first);
+    const auto weights=partialCapWeights();
+    auto weight=[&](int cap){auto it=weights.find(cap);return it==weights.end()?0.f:it->second;};
+    renderPartialCap=builtCap;renderPartialGain=weight(builtCap);
+    try{
+        computeAll();render();
+        for(auto& e:st.partialBanks){
+            st.voices.swap(e.second);renderPartialCap=e.first;renderPartialGain=weight(e.first);
+            try{computeAll();render();}catch(...){st.voices.swap(e.second);throw;}
+            st.voices.swap(e.second);
+        }
+    }catch(...){renderPartialCap=0;renderPartialGain=1;computeAll();throw;}
+    renderPartialCap=0;renderPartialGain=1;computeAll();
+}
+void scAdditiveBox::finishPartialMorph(){
+    partialMorphRetireAt=-1;
+    const auto wanted=partialCapWeights();
+    if(partialBankMode){
+        const int next=wanted.count(builtCap)?builtCap:wanted.begin()->first;
+        for(auto& [server,st]:states){
+            if(next!=builtCap){
+                auto& bank=st.partialBanks[next];st.voices.swap(bank);
+                auto old=std::move(bank);st.partialBanks.erase(next);
+                st.partialBanks[builtCap]=std::move(old);
+            }
+            for(auto it=st.partialBanks.begin();it!=st.partialBanks.end();){
+                if(!wanted.count(it->first)){
+                    for(auto& voice:it->second)freeVoice(server,voice,true);
+                    it=st.partialBanks.erase(it);
+                }else ++it;
+            }
+        }
+        builtCap=next;
+        if(wanted.size()==1)partialBankMode=false;
+    }
+    if(scVoiceCountMorph::single(partialMorphWeights))partialMorphWeights.clear();
+    computeAll();markDirty();
+}
+// Stable note writers replace the note-output portion of AdditiveBoxSrc. A
+// partial cap crossfade must neither sum two gates/velocities nor change Random
+// to a newly constructed bank's draw when the outgoing bank is retired.
+void scAdditiveBox::syncNoteWriters(ofxSCServer* server,bool force){
+    auto& st=states[server];
+    if(!st.modCreated || !st.modGroup)return;
+    const int V=numVoicesClamped();
+    while(int(st.noteWriters.size())>V){auto* s=st.noteWriters.back();s->free();delete s;st.noteWriters.pop_back();}
+    while(int(st.noteWriters.size())<V)st.noteWriters.push_back(new ofxSCSynth("AdditiveBoxNote",server));
+    st.noteSent.resize(V);st.noteMapped.resize(V,-2);
+    const int gb=gateIn.bus(server);
+    for(int v=0;v<V;++v){
+        auto* writer=st.noteWriters[v];auto& sent=st.noteSent[v];
+        const bool remap=force || st.noteMapped[v]!=gb;
+        auto set=[&](const std::string& name,float value){
+            auto previous=sent.find(name);
+            if(force || previous==sent.end() || previous->second!=value){writer->set(name,value);sent[name]=value;}
+        };
+        if(gb<0){
+            if(remap)sent.erase("gate");
+            set("gate",std::max(0.f,valueFor(gate.get(),v,0.f)));
+        }else if(remap)writer->mapan("gate",gb+v,1);
+        st.noteMapped[v]=gb;
+        set("voice",float(v));
+        set("gatebus",st.gateBus?float(st.gateBus->index):0.f);
+        set("rndbus",float(mod.sourceBus(server,scModulation::SRC_RND)));
+        set("velbus",float(mod.sourceBus(server,scModulation::SRC_VEL)+v));
+        if(!sent.count("@created")){writer->createAndRun(2,st.modSources->nodeID,true);sent["@created"]=1;}
+    }
 }
 
 float scAdditiveBox::sampleRate() const {
@@ -635,8 +785,10 @@ float scAdditiveBox::waveLevel(int voice, int wave, const std::vector<float>& ta
 }
 
 // Filter 1 at `d` semitones from the cutoff (linear gain)
-float scAdditiveBox::filter1Gain(int voice, float d) const {
-    const int mode = std::clamp(valueFor(filterMode.get(), voice, 0), 0, NumFilterModes - 1);
+float scAdditiveBox::filter1Gain(int voice, float d, int mode) const {
+    if(mode<0)return snaps.morph.evaluate(filterMode,voice,valueFor(filterMode.get(),voice,0),
+        [&](int choice){return filter1Gain(voice,d,choice);});
+    mode=std::clamp(mode,0,NumFilterModes-1);
     if(mode == FilterOff) return 1.0f;
     const float o = d / 12.0f;                                   // octaves from the cutoff
     const float s = valueFor(slope.get(), voice, 24.0f);
@@ -662,8 +814,10 @@ float scAdditiveBox::filter1Gain(int voice, float d) const {
 }
 
 // Filter 2 (formants or a drawn EQ) at an absolute frequency (linear gain)
-float scAdditiveBox::filter2Gain(int voice, float hz) const {
-    const int mode = std::clamp(valueFor(filter2Mode.get(), voice, 0), 0, NumFilter2Modes - 1);
+float scAdditiveBox::filter2Gain(int voice, float hz, int mode) const {
+    if(mode<0)return snaps.morph.evaluate(filter2Mode,voice,valueFor(filter2Mode.get(),voice,0),
+        [&](int choice){return filter2Gain(voice,hz,choice);});
+    mode=std::clamp(mode,0,NumFilter2Modes-1);
     if(mode == Filter2Off) return 1.0f;
     const float mix = valueFor(filter2Mix.get(), voice, 1.0f);
     float g = 1.0f;
@@ -748,27 +902,31 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
     std::vector<float> fr(P), po(P), pa(P, 0.0f), pbs(P, 0.0f), vf(P), vd(P),
                        nr(P), nd(P), shr(P), sph(P), sw(P), bl(P), pos(P), drr(P);
     d.ratio.resize(P);
-    std::vector<float> baseA(P, 0.0f), baseB(P, 0.0f);
-    double sumA = 0, sumB = 0;
-    for(int i = 0; i < P; i++){
-        const int k = i + 1;
-        const float ratio = std::pow(float(k), st) * std::sqrt(1.0f + B * k * k);
-        d.ratio[i] = ratio;
-        fr[i] = ratio * std::pow(2.0f, (random01(v, 0, k) * 2 - 1) * det / 1200.0f);
-        po[i] = 12.0f * std::log2(fr[i]);
-        if(k <= count){
-            const float t = dbToGain(std::log2(ratio) * tl);
-            baseA[i] = waveLevel(v, wA, tableA, k) * t;
-            baseB[i] = waveLevel(v, wB, tableB, k) * t;
-            sumA += double(baseA[i]) * baseA[i];
-            sumB += double(baseB[i]) * baseB[i];
+    // Normalize each endpoint spectrum before blending its partial presence.
+    // Computing through the endpoint's full count keeps both rendering caps on
+    // the same loudness curve, including a small cap's truncated contribution.
+    const int spectrumSize=renderPartialCap>0?P:std::max(P,partialMorphWeights.empty()?count:scVoiceCountMorph::activeCount(partialMorphWeights));
+    std::vector<float> baseA(spectrumSize,0),baseB(spectrumSize,0),normA(P,0),normB(P,0);
+    std::vector<double> sumA(spectrumSize),sumB(spectrumSize);
+    double aTotal=0,bTotal=0;
+    for(int i=0;i<spectrumSize;++i){
+        const int k=i+1;
+        const float ratio=std::pow(float(k),st)*std::sqrt(1.f+B*k*k);
+        const float tiltGain=dbToGain(std::log2(ratio)*tl);
+        baseA[i]=snaps.morph.evaluate(waveA,v,wA,[&](int mode){return waveLevel(v,mode,tableA,k);})*tiltGain;
+        baseB[i]=snaps.morph.evaluate(waveB,v,wB,[&](int mode){return waveLevel(v,mode,tableB,k);})*tiltGain;
+        aTotal+=double(baseA[i])*baseA[i];bTotal+=double(baseB[i])*baseB[i];
+        sumA[i]=aTotal;sumB[i]=bTotal;
+        if(i<P){
+            d.ratio[i]=ratio;
+            fr[i]=ratio*std::pow(2.f,(random01(v,0,k)*2-1)*det/1200.f);
+            po[i]=12.f*std::log2(fr[i]);
         }
     }
-    // Same loudness for any partial count, waveform or tilt; filters, masks
-    // and the envelopes then change the level as they would on a real spectrum
-    const float normA = 0.25f / float(std::sqrt(std::max(sumA, 1e-8)));
-    const float normB = 0.25f / float(std::sqrt(std::max(sumB, 1e-8)));
-    const float logCount = std::max(1.0f, std::log2(float(count)));
+    for(int i=0;i<P;++i){
+        normA[i]=partialCountValue([&](int n){return i<n ? .25f/float(std::sqrt(std::max(sumA[n-1],1e-8))):0.f;});
+        normB[i]=partialCountValue([&](int n){return i<n ? .25f/float(std::sqrt(std::max(sumB[n-1],1e-8))):0.f;});
+    }
     float peak = 1e-9f;
     for(int i = 0; i < P; i++){
         const int k = i + 1;
@@ -779,39 +937,37 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
         const float ra = 1.0f - rAmp * random01(v, 5, k);
         const float nyq = std::clamp((0.47f * sr - af) / (0.03f * sr), 0.0f, 1.0f);
         const float common = eoGain * filter2Gain(v, std::max(af, 1.0f)) * mask * ra * nyq;
-        pa[i] = baseA[i] * normA * common;
-        pbs[i] = baseB[i] * normB * common;
-        peak = std::max(peak, std::max(baseA[i] * normA, baseB[i] * normB));
+        pa[i] = baseA[i] * normA[i] * common;
+        pbs[i] = baseB[i] * normB[i] * common;
+        peak = std::max(peak, std::max(baseA[i] * normA[i], baseB[i] * normB[i]));
 
         vf[i] = pvRate * (0.5f + random01(v, 1, k));   // 0.5 .. 1.5 x Partial Vib Rate
         vd[i] = std::pow(2.0f, pVib * random01(v, 3, k) / 12.0f) - 1.0f;
         shr[i] = shRate * (0.5f + random01(v, 6, k));
         // Noise: up to +-6% frequency jitter; Noise Tilt leans it to the low (-) or high (+) partials
-        const float x = count > 1 ? std::min(1.0f, float(i) / (count - 1)) : 0.0f;
+        const float x=partialCountValue([&](int n){return n>1?std::min(1.f,float(i)/(n-1)):0.f;});
         nr[i] = nRate * (0.5f + random01(v, 12, k));
         nd[i] = nAmt * 0.06f * std::max(0.0f, 1.0f + nTilt * (2.0f * x - 1.0f));
         bl[i] = tBlur * (0.5f + random01(v, 13, k));
 
         // Sweep: each partial's place in the shape's cycle (table points;
         // phase 0: the shape's middle on the fundamental) and depth share
-        const float sx = swMode == 1 ? std::log2(d.ratio[i]) / logCount : float(i) / count;
+        const float sx = snaps.morph.evaluate(sweepMode,v,swMode,[&](int mode){
+            return partialCountValue([&](int n){return mode==1?std::log2(d.ratio[i])/std::max(1.f,std::log2(float(n))):float(i)/n;});
+        });
         const float cyc = -sx * waves;
         sph[i] = (cyc - std::floor(cyc)) * (SWEEP_SIZE - 1);
         sw[i] = sweepRangeWeight(v, sx);
 
-        float order = 0;
-        switch(pMode){
-            case PanRandom:    order = random01(v, 9, k) * 2 - 1; break;
-            case PanSpectrum:  order = (count > 1 ? std::min(1.0f, float(i) / (count - 1)) : 0.5f) * 2 - 1; break;
-            case PanAlternate: order = (k % 2) ? -1.0f : 1.0f; break;
-            default: break;
-        }
-        pos[i] = pn + spr * 0.5f * order;
-        if(pMode == PanChannels){
-            // partial k on output (k - 1) % O, round the ring or along the line
-            const int O = numOutputsClamped(), c = i % O;
-            pos[i] = O == 1 ? 0.5f : O == 2 ? float(c) : speakerLayout.get() == 1 ? float(c) / (O - 1) : float(c) / O;
-        }
+        pos[i]=snaps.morph.evaluate(panMode,v,pMode,[&](int mode){
+            if(mode==PanChannels){
+                const int O=numOutputsClamped(),c=i%O;
+                return O==1 ? 0.5f : O==2 ? float(c) : speakerLayout.get()==1 ? float(c)/(O-1) : float(c)/O;
+            }
+            const float order=mode==PanRandom ? random01(v,9,k)*2-1 : mode==PanSpectrum ?
+                partialCountValue([&](int n){return n>1?std::min(1.f,float(i)/(n-1)):.5f;})*2-1 : mode==PanAlternate ? ((k%2) ? -1.f : 1.f) : 0;
+            return pn+spr*0.5f*order;
+        });
         drr[i] = dRate * (0.5f + random01(v, 10, k));
     }
     // Harmonic blur: each partial's level spread over its neighbours
@@ -822,15 +978,15 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
         for(int j = 0; j <= radius; j++) w[j] = std::exp(-0.5f * (j / sigma) * (j / sigma));
         auto blur = [&](std::vector<float>& a){
             std::vector<float> out(P, 0.0f);
-            for(int i = 0; i < count; i++){
+            for(int i=0;i<P;++i){
                 float s = 0, ws = 0;
                 for(int j = -radius; j <= radius; j++){
                     const int n = i + j;
-                    if(n < 0 || n >= count) continue;
-                    s += a[n] * w[std::abs(j)];
-                    ws += w[std::abs(j)];
+                    if(n<0 || n>=P)continue;
+                    s+=a[n]*w[std::abs(j)];
+                    ws+=w[std::abs(j)]*partialPresence(n);
                 }
-                out[i] = ws > 0 ? s / ws : 0;
+                out[i]=ws>0?s/ws*partialPresence(i):0;
             }
             a = std::move(out);
         };
@@ -845,7 +1001,7 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
     }
 
 
-    const float blend = mod.voiceValue(unisonBlend, v);
+    const float blend = mod.morphVoiceValue(unisonBlend,v,snaps.morph);
     const float uGain = (u == 0 ? 1.0f : blend) / std::sqrt(1.0f + blend * blend * (U - 1));
 
     d.pitch = p;
@@ -857,7 +1013,7 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
     d.scalars = {
         {"pitch", p},
         {"glide", valueFor(glide.get(), v, 0.0f)},
-        {"amp", valueFor(levels.get(), v, 0.5f) * uGain},
+        {"amp", valueFor(levels.get(), v, 0.5f) * uGain * voiceMorphGain(v) * renderPartialGain},
         {"shift", sh},
         {"maskglide", valueFor(maskGlide.get(), v, 0.05f)},
         {"morph", mo},
@@ -899,7 +1055,7 @@ void scAdditiveBox::laneData(int v, VoiceData& d) const {
             rate = mod.lfoRate(li, v);
             const float base = mod.lfoPhase(li, v), spr = mod.lfoPartialSpread(li), rnd = mod.lfoPartialRandom(li);
             for(int i = 0; i < P; i++){
-                const float x = base + spr * float(i) / std::max(1, count) + rnd * hash01(31 + li, i + 1);
+                const float x = base + spr * partialCountValue([&](int n){return float(i)/n;}) + rnd * hash01(31 + li, i + 1);
                 ph[i] = x - std::floor(x);
             }
             for(int j = 0; j < 3; j++) amt[j] = lanes[l].amt[j];
@@ -938,7 +1094,9 @@ void scAdditiveBox::computeLaneTables(){
 // The sweep's shape over one cycle, x = 0..1. Computed on u = x + 0.5, so the
 // shape's middle (the peak of Lobes, Triangle, Pulse, Gauss) sits at x = 0:
 // with Lobes and Skew 0 this is the raised-cosine lobe the sweep always had.
-float scAdditiveBox::sweepShapeAt(int v, float x) const {
+float scAdditiveBox::sweepShapeAt(int v, float x, int mode) const {
+    if(mode<0)return snaps.morph.evaluate(sweepShape,v,valueFor(sweepShape.get(),v,0),
+        [&](int choice){return sweepShapeAt(v,x,choice);});
     float u = x + 0.5f;
     u -= std::floor(u);
     // Skew: the middle moves to k (0.05 .. 0.95), each half stretched to fit
@@ -947,7 +1105,7 @@ float scAdditiveBox::sweepShapeAt(int v, float x) const {
     const float sharp = std::clamp(valueFor(sweepSharp.get(), v, 0.0f), 0.0f, 1.0f);
     const float tri = 1.0f - std::abs(2.0f * u - 1.0f);
     float y = 0;
-    switch(std::clamp(valueFor(sweepShape.get(), v, 0), 0, NumSweepShapes - 1)){
+    switch(std::clamp(mode,0,NumSweepShapes-1)){
         case SweepLobes: {
             // The part of a cosine above `floor`, scaled to 0..1 (Sharp 0: a
             // plain raised cosine, 1: narrow peaks)
@@ -1206,8 +1364,8 @@ const char* kPartDef[scAdditiveBox::NumParts] = {"AdditiveBoxMotion", "AdditiveB
 unsigned roleOf(const std::string& n){
     static const std::map<std::string, unsigned> roles = {
         {"pa", RSrc}, {"pd", RSrc}, {"morph", RSrc}, {"maskglide", RSrc}, {"fr", RSrc}, {"pb", RSrc}, {"vca", RCore},
-        {"gatebus", RSrc}, {"rndbus", RSrc}, {"velbus", RSrc}, {"pitchoff", RFilt | RCore},
-        {"gate", RSrc | RSweep | RCore | RTail},
+        {"pitchoff", RFilt | RCore},
+        {"gate", RSweep | RCore | RTail},
         {"vf", RMotion}, {"vd", RMotion}, {"nr", RMotion}, {"nd", RMotion},
         {"fbuf", RFilt}, {"po", RFilt}, {"cutoff", RFilt}, {"keytrack", RFilt}, {"safe", RFilt},
         {"pitch", RFilt | RCore}, {"glide", RFilt | RCore},
@@ -1237,11 +1395,11 @@ float scAdditiveBox::unisonSide(int u) const {
 std::map<std::string, float> scAdditiveBox::coreScalars(int v, int u) const {
     const int U = unisonClamped();
     const float side = unisonSide(u);
-    const float blend = mod.voiceValue(unisonBlend, v);
+    const float blend = mod.morphVoiceValue(unisonBlend,v,snaps.morph);
     const float uGain = (u == 0 ? 1.0f : blend) / std::sqrt(1.0f + blend * blend * (U - 1));
     return {
         {"pitch", valueFor(pitch.get(), v, 48.0f) + mod.voiceValue(transpose, v) + side * mod.voiceValue(unisonDetune, v) / 200.0f + u * mod.voiceValue(unisonInterval, v)},
-        {"amp", valueFor(levels.get(), v, 0.5f) * uGain},
+        {"amp", valueFor(levels.get(), v, 0.5f) * uGain * voiceMorphGain(v) * renderPartialGain},
         {"panoff", side * mod.voiceValue(unisonSpread, v) * 0.5f},
     };
 }
@@ -1251,7 +1409,8 @@ bool scAdditiveBox::partWanted(int part, int v) const {
     switch(part){
         case PartMotion: return valueFor(partialVib.get(), v, 0.0f) > 0.0f || valueFor(noise.get(), v, 0.0f) > 0.0f;
         case PartLane:   return !activeLanes().empty();
-        case PartFilt:   return valueFor(filterMode.get(), v, 0) != FilterOff;
+        case PartFilt:   return snaps.morph.hasEffective(filterMode)
+            ? snaps.morph.weights(filterMode,v)[FilterOff]<1.0f : valueFor(filterMode.get(), v, 0) != FilterOff;
         case PartSweep: {
             if(valueFor(sweepAmt.get(), v, 0.0f) > 0.0f) return true;
             for(int s = 0; s < scModulation::NUM_SOURCES; s++)   // something routed to Sweep
@@ -1292,6 +1451,7 @@ void scAdditiveBox::sendTo(VoiceSC& vs, ofxSCSynth* s, unsigned role, const Voic
 
 void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data, bool force){
     auto& st = states[server];
+    if(renderPartialCap==0 && partialBankMode){forPartialBanks(server,[&](){if(v<int(voiceData.size()))sendVoice(server,v,voiceData[v],force);});return;}
     if(v >= (int)st.voices.size()) return;
     auto& vs = st.voices[v];
     // per server: buses and buffers
@@ -1332,7 +1492,6 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
         s->mapan(name, bus, 1);
     };
     sendTo(vs, vs.src, RSrc, data, extra, force);
-    mapTo(vs.src, "gate", gb >= 0 ? gb + v : -1);
     for(int k = 0; k < NumParts; k++){
         sendTo(vs, vs.parts[k], kPartRole[k], data, extra, force);
         if(kPartRole[k] & RSweep) mapTo(vs.parts[k], "gate", gb >= 0 ? gb + v : -1);
@@ -1378,7 +1537,7 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
     }
     if(vs.tail){
         auto e = extra;
-        e["vis"] = st.vis ? float(st.vis->index + v * displayStride) : junk;
+        e["vis"] = st.vis && (renderPartialCap==0 || renderPartialCap==builtCap) ? float(st.vis->index+v*displayStride) : junk;
         e["pauser"] = gb < 0 ? 1.0f : 0.0f;   // a gate cable: no pausing (nothing here would resume it)
         e["grp"] = vs.grp ? float(vs.grp->nodeID) : 0.0f;
         sendTo(vs, vs.tail, RTail, scalarsOnly, e, force);
@@ -1390,12 +1549,15 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
 // A cable came or went: every voice resent whole (mapped / set again), resumed
 void scAdditiveBox::resendAllVoices(){
     for(auto& [server, st] : states){
+        syncNoteWriters(server,true);
+        forPartialBanks(server,[&](){
         for(int v = 0; v < (int)st.voices.size() && v < (int)voiceData.size(); v++){
             auto& vs = st.voices[v];
             for(auto& [synth, ss] : vs.sentS){ ss.erase("@gate"); ss.erase("@pitch"); }
             sendVoice(server, v, voiceData[v], true);
             if(getActive() && vs.grp && vs.grp->isCreated()) vs.grp->run(true);
         }
+        });
     }
 }
 
@@ -1409,7 +1571,7 @@ void scAdditiveBox::resetInputBusses(ofxSCServer* server, int){
 }
 
 void scAdditiveBox::freeVoice(ofxSCServer* server, VoiceSC& vs, bool sendFree){
-    if(sendFree && vs.grp && vs.grp->isCreated()) vs.grp->free();   // its synths with it
+    if(sendFree && vs.grp)vs.grp->free();   // its synths with it
     delete vs.src;
     for(auto*& p : vs.parts){ delete p; p = nullptr; }
     delete vs.laneClock;
@@ -1426,6 +1588,7 @@ void scAdditiveBox::freeVoice(ofxSCServer* server, VoiceSC& vs, bool sendFree){
 // the tail; new synths get every value before they start
 void scAdditiveBox::syncVoice(ofxSCServer* server, int v, bool force){
     auto& st = states[server];
+    if(renderPartialCap==0 && partialBankMode){forPartialBanks(server,[&](){syncVoice(server,v,force);});return;}
     if(!st.created || v >= (int)st.voices.size()) return;
     auto& vs = st.voices[v];
     const int P = partialCap(), C = chunkSize(), chunks = P / C;
@@ -1519,6 +1682,10 @@ void scAdditiveBox::syncVoice(ofxSCServer* server, int v, bool force){
 // Voices / unison changed, or a part switched: the voices to match
 void scAdditiveBox::syncVoices(ofxSCServer* server){
     auto& st = states[server];
+    if(renderPartialCap==0){
+        syncNoteWriters(server);
+        if(partialBankMode){forPartialBanks(server,[&](){syncVoices(server);});return;}
+    }
     if(!st.created) return;
     const int V = numVoicesClamped();
     while((int)st.voices.size() > V){ freeVoice(server, st.voices.back(), true); st.voices.pop_back(); }
@@ -1531,6 +1698,7 @@ void scAdditiveBox::syncVoices(ofxSCServer* server){
 
 void scAdditiveBox::sendAll(ofxSCServer* server, bool force){
     auto& st = states[server];
+    syncNoteWriters(server,force);
     computeAll();
     for(int v = 0; v < (int)st.voices.size() && v < (int)voiceData.size(); v++) sendVoice(server, v, voiceData[v], force);
     uploadCurves(server, force);
@@ -1549,6 +1717,10 @@ void scAdditiveBox::freeSynths(ofxSCServer* server, bool sendFree){
     if(groupFree) st.root->free();   // everything in it
     for(auto& vs : st.voices) freeVoice(server, vs, false);
     st.voices.clear();
+    for(auto& bank:st.partialBanks)for(auto& voice:bank.second)freeVoice(server,voice,false);
+    st.partialBanks.clear();
+    for(auto* writer:st.noteWriters)delete writer;
+    st.noteWriters.clear();st.noteSent.clear();st.noteMapped.clear();
     for(auto*& f : st.fx) if(f){ delete f; f = nullptr; }
     st.fxPlan.clear();
     delete st.out; st.out = nullptr;
@@ -1579,6 +1751,8 @@ void scAdditiveBox::rebuildDefs(){
             rebuildFx(server);   // the FX synths have one def per output count too
         }
         for(auto& vs : st.voices) freeVoice(server, vs, true);
+        for(auto& bank:st.partialBanks)for(auto& voice:bank.second)freeVoice(server,voice,true);
+        st.partialBanks.clear();
         syncVoices(server);
     }
 }
@@ -1587,7 +1761,7 @@ void scAdditiveBox::rebuildDefs(){
 // are now
 void scAdditiveBox::applyStructure(){
     for(int v = 0; v < MAX_VOICES; v++) gateOpen[v] = valueFor(gate.get(), v, 0.0f) > 0;
-    if(partialCap() != builtCap || numOutputsClamped() != builtOutputs) rebuildDefs();
+    if((!partialBankMode && partialCap()!=builtCap) || numOutputsClamped()!=builtOutputs)rebuildDefs();
     for(auto& [server, st] : states) syncVoices(server);
     markDirty();
 }
@@ -1603,9 +1777,12 @@ void scAdditiveBox::onGate(const std::vector<float>& values){
             if((int)voiceData.size() > v){ voiceData[v] = computeVoice(v, 0); dataGen++; }
         }
         for(auto& [server, st] : states){
-            if(v >= (int)st.voices.size() || (int)voiceData.size() <= v) continue;
+            syncNoteWriters(server);
+            forPartialBanks(server,[&](){
+            if(v >= (int)st.voices.size() || (int)voiceData.size() <= v) return;
             sendVoice(server, v, voiceData[v], false);   // also the gate
             if(open && getActive() && st.voices[v].grp && st.voices[v].grp->isCreated()) st.voices[v].grp->run(true);
+            });
         }
     }
 }
@@ -1623,12 +1800,15 @@ void scAdditiveBox::onTrig(const std::vector<int>& values){
             if((int)voiceData.size() > v){ voiceData[v] = computeVoice(v, 0); dataGen++; }
         }
         for(auto& [server, st] : states){
-            if(v >= (int)st.voices.size()) continue;
+            syncNoteWriters(server);
+            forPartialBanks(server,[&](){
+            if(v >= (int)st.voices.size()) return;
             auto& vs = st.voices[v];
             if((int)voiceData.size() > v) sendVoice(server, v, voiceData[v], false);
             if(getActive() && vs.grp && vs.grp->isCreated()) vs.grp->run(true);
-            if(vs.src) vs.src->set("trig", 1.0f);
             if(vs.parts[PartSweep]) vs.parts[PartSweep]->set("trig", 1.0f);
+            });
+            if(v<int(st.noteWriters.size()))st.noteWriters[v]->set("trig",1.f);
         }
     }
 }
@@ -1703,7 +1883,7 @@ void scAdditiveBox::activate(){
     for(auto& [server, st] : states){
         if(!st.created) continue;
         st.root->run(true);
-        for(auto& vs : st.voices) if(vs.grp && vs.grp->isCreated()) vs.grp->run(true);
+        forPartialBanks(server,[&](){for(auto& vs:st.voices)if(vs.grp && vs.grp->isCreated())vs.grp->run(true);});
     }
 }
 
@@ -2219,39 +2399,66 @@ ofJson scAdditiveBox::captureSound() const {
         if(action.save && !notInPresets(action.key)) action.save(json);
     mod.patchBases(json);
     mod.save(json, "additiveBoxMod");
+    scVoiceCountMorph::capture(json,voiceMorphWeights);
+    if(!partialMorphWeights.empty() && !scVoiceCountMorph::single(partialMorphWeights))json["_partialCountBlend"]=partialMorphWeights;
     return json;
 }
 
-// Between two sounds: numbers glide, the rest (voices, partials, modes, the
-// routing) switches at the switch point; the end is a whole load
+// Count configurations share common voices; only their presence fades. This
+// keeps running oscillator/envelope state and creates extra voices only in use.
 void scAdditiveBox::applySound(const ofJson& a, const ofJson& b, float t, bool sw){
-    if(t >= 1.0f && sw){ loadSound(b); return; }
-    scSnapshots::blendActions(publishActions, a, b, t, sw, [this](const std::string& k){ return notInPresets(k); });
-    const ofJson& src = sw ? b : a;
-    if(src.contains("Voices") && src["Voices"].is_number_integer() && src["Voices"].get<int>() != numVoices.get())
-        numVoices = src["Voices"].get<int>();
-    if(&src != modSource && src.contains("additiveBoxModMatrix")){
-        modSource = &src;
-        mod.load(src, "additiveBoxMod");
-        mod.afterLoad();
+    struct Guard { bool& flag; bool previous; Guard(bool& f):flag(f),previous(f){flag=true;} ~Guard(){flag=previous;} } guard(applyingVoiceMorph);
+    preparePartialMorph(a,b,t);
+    const int before=numVoicesClamped();
+    voiceMorphWeights=soundDriven("Voices")
+        ? scVoiceCountMorph::endpoint(ofJson{{"Voices",numVoices.get()}},numVoices.get(),MAX_VOICES,"Voices")
+        : scVoiceCountMorph::blend(a,b,t,numVoices.get(),MAX_VOICES,"Voices");
+    const int wanted=scVoiceCountMorph::activeCount(voiceMorphWeights);
+    // Let the DSP's existing amp lag reach zero before freeing outgoing voices.
+    voiceMorphCapacity=std::max(before,wanted);
+    voiceMorphRetireAt=wanted<before ? ofGetElapsedTimef()+0.08f : -1;
+    if(t>=1.0f && sw){ loadSound(b); return; }
+    const bool wasLoading=loadingBankPreset;
+    loadingBankPreset=true;
+    auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);
+    scSnapshots::blendActions(publishActions,pinnedA,pinnedB,t,sw,[this](const std::string& k){return notInPresets(k) || soundDriven(k);});
+    numVoices=wanted;
+    loadingBankPreset=wasLoading;
+    mod.loadMorph(a,b,t,sw,"additiveBoxMod",[this](const std::string& key){return soundDriven(key);});
+    if(before!=numVoicesClamped()){
+        mod.voicesChanged();
+        for(auto& [server,st]:states) if(st.modCreated) mod.rebuild(server);
+    }
+    mod.afterLoad();
+    mod.refresh();
+    applyStructure();
+    if(voiceMorphRetireAt<0 && scVoiceCountMorph::single(voiceMorphWeights)){
+        voiceMorphWeights.clear(); voiceMorphCapacity=0;
     }
 }
 
 void scAdditiveBox::loadSound(const ofJson& json){
     modSource = nullptr;
+    const int renderedBefore=numVoicesClamped();
+    if(!applyingVoiceMorph){
+        preparePartialMorph(json,json,0);
+        voiceMorphWeights=scVoiceCountMorph::endpoint(soundDriven("Voices") ? ofJson{{"Voices",numVoices.get()}} : json,1,MAX_VOICES,"Voices");
+        voiceMorphCapacity=scVoiceCountMorph::activeCount(voiceMorphWeights);
+        voiceMorphRetireAt=-1;
+    }
     // Every control back to its default, then the preset's values; the synths
     // change once afterwards (a voice count, partial cap or output change each
     // replacing every synth on its own made a burst of large /s_new on the
     // server: audio dropouts). Outputs, Gate, Trig and Transpose are not loaded.
     loadingBankPreset = true;
-    const int voicesBefore = numVoicesClamped();
+    const int voicesBefore = renderedBefore;
     for(const auto& action : publishActions)
-        if(action.reset && !notInPresets(action.key)) action.reset();
+        if(action.reset && !notInPresets(action.key) && !soundDriven(action.key)) action.reset();
     std::fill(mod.matrix.begin(), mod.matrix.end(), 0.0f);
     mod.lfoCount = mod.envCount = mod.extCount = 0;
-    numVoices = json.contains("Voices") && json["Voices"].is_number_integer() ? json["Voices"].get<int>() : 1;
+    if(!soundDriven("Voices")) numVoices = json.contains("Voices") && json["Voices"].is_number_integer() ? json["Voices"].get<int>() : 1;
     for(const auto& action : publishActions){
-        if(!action.load || notInPresets(action.key) || !json.contains(action.key)) continue;
+        if(!action.load || notInPresets(action.key) || soundDriven(action.key) || !json.contains(action.key)) continue;
         action.load(json[action.key]);
     }
     mod.load(json, "additiveBoxMod");
@@ -2267,6 +2474,9 @@ void scAdditiveBox::loadSound(const ofJson& json){
     mod.afterLoad();
     loadingBankPreset = false;
     applyStructure();
+    if(voiceMorphRetireAt<0 && scVoiceCountMorph::single(voiceMorphWeights)){
+        voiceMorphWeights.clear(); voiceMorphCapacity=0;
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

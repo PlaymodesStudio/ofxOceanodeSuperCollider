@@ -103,7 +103,7 @@ private:
     ofParameter<bool> originalEnvelope;
     ofParameter<bool> steamPipe2, legato;
     ofParameter<float> noiseEnvelopeAmount;
-    // Gate Mode Pulse: the automatic gates (scPulseGate); their vis after the spreader's
+    // Pulse: the automatic gates (scPulseGate); their vis after the spreader's
     static constexpr int VIS_PULSE=112, VIS_PAN=VIS_PULSE+scPulseGate::VIS_SIZE, VIS_SIZE=VIS_PAN+16;
     ofParameter<int> placement, speakerLayout;
     ofParameter<float> spreadWidth, spreadCenter;
@@ -113,7 +113,7 @@ private:
     void drawPanTab(float);
     void sliderVec(ofParameter<std::vector<float>>&,const char*,float,const char* = "%.2f");
     scPulseGate pulse;
-    bool pulsing() const { return gateMode.get()==3; }
+    bool pulsing() const { return pulseEnabled.get(); }
     float labelW=70;
     void drawNativeEnvelope(int,float);
     void drawSoundTab(float);
@@ -139,8 +139,8 @@ private:
     std::map<ofxSCServer*, State> states;
     ofParameter<bool> show;
     ofParameter<void> resetLFOs;
-    ofParameter<int> voices, channels, gateMode;
-    bool gateTouched=false;
+    ofParameter<int> voices, channels;
+    ofParameter<bool> drone, pulseEnabled;
     ofParameter<float> master;
     ofParameter<std::vector<float>> gate, pitch;
     scAudioParam gateIn, pitchIn;

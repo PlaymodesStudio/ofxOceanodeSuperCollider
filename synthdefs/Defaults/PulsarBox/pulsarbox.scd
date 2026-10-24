@@ -72,6 +72,9 @@ File.mkdir(d);
             var sieve = \sieve.kr(1 ! sieveSize);
             var slen = \slen.kr(1).round.clip(1, sieveSize);
             var pmode = \pmode.kr(0), rot = \rot.kr(0);
+            var pw = \panweights.kr(0!4);
+            var psum = pw.sum;
+            var panweights = (pw + Array.fill(4,{ |i| (pmode.floor.clip(0,3) |==| i) * (psum <= 0) })).lag(0.03);
             var modbus = \mod.kr(-1);
             var mod = { |t| (In.kr(modbus.max(0) + (t * 16), nv) * (modbus >= 0)).asArray };
             var mPitch = mod.(0), mForm = mod.(1), mCyc = mod.(2), mLev = mod.(3), mProb = mod.(4), mPan = mod.(5);
@@ -98,7 +101,7 @@ File.mkdir(d);
                     // the layer's Delay (a share of the period): the trigger delayed
                     // (TDelay: no buffer; one pending pulse is enough below a period)
                     var t = Select.ar(K2A.ar(loff[g*nv+v] > 0), [trig, TDelay.ar(trig, (loff[g*nv+v].min(0.999) / f).clip(0, 20))]);
-                    var hz = Select.kr(lmode[g], [lhz[g*nv+v], f * lrat[g*nv+v]])
+                    var hz = LinXFade2.kr(lhz[g*nv+v], f * lrat[g*nv+v], lmode[g].clip(0,1).lag(0.03)*2-1)
                         * (2 ** ((TRand.ar(-1, 1, t) * fjit + mForm[v]) / 12));
                     var dur, amp, base, pos, pan;
                     hz = hz.clip(1, SampleRate.ir * 0.45);
@@ -106,9 +109,7 @@ File.mkdir(d);
                     amp = lamp[g*nv+v] * (dur * f).max(1).sqrt.reciprocal
                         * Latch.ar(1 - (TRand.ar(0, 1, t) * ajit), t);
                     // The output of this pulse, in channels (fractions crossfade)
-                    base = Select.ar(pmode, [
-                        DC.ar(v), count + v, TIRand.ar(0, no - 1, t), DC.ar(v + g)
-                    ]);
+                    base = ([DC.ar(v), count + v, TIRand.ar(0, no - 1, t), DC.ar(v + g)] * panweights).sum;
                     pos = base + lpan[g*nv+v] + rot + mPan[v] + (TRand.ar(-1, 1, t) * pjit);
                     pan = case
                         { no == 1 } { 0 }
@@ -119,7 +120,7 @@ File.mkdir(d);
                 };
                 sig = sig + (voice.sum * env * lev[v] * levMod);
             };
-            Out.ar(\out.kr(0), Limiter.ar(LeakDC.ar(sig), 0.98));
+            Out.ar(\out.kr(0), Limiter.ar(LeakDC.ar(sig), 0.98) * \morphgain.kr(1,0.03));
         }).writeDefFile(d);
     };
     };

@@ -1,3 +1,4 @@
+#include "../shared/scDroneMode.h"
 #include "../../../audio/scFxRouting.h"
 #include "scSteamPipeBox.h"
 #include "scSteamPipeBoxData.h"
@@ -49,7 +50,7 @@ ofJson blend(const ofJson& a, const ofJson& b, float t, bool sw, bool discrete) 
 scSteamPipeBox::scSteamPipeBox(std::vector<serverManager*> s) : scNode("steampipeBox"), servers(std::move(s)) {
     description = "SteamPipe physical modelling: steam exciter, tuned pipe feedback, diffuser, "
                   "MW filters and MicroSpace reverb. Includes the recovered Reaktor snapshots, "
-                  "dynamic envelopes, LFOs, routing and box effects. Gate Mode Pulse plays the voices by itself, "
+                  "dynamic envelopes, LFOs, routing and box effects. Pulse plays the voices by itself, "
                   "from a clock to a Geiger counter. Right-click controls to publish or automate.";
 }
 scSteamPipeBox::~scSteamPipeBox() {
@@ -79,11 +80,13 @@ void scSteamPipeBox::setup() {
     addParameter(master.set("Master", 1.0f, 0.0f, 1.0f));
     addParameter(resetLFOs.set("Reset"));
     addOutput("Out");
-    // Auto: a drone until Gate is connected, timelined or gets a note
+
     // Pulse: the automatic gates
-    gateMode.set("Gate Mode",0,0,3);
-    reg(gateMode,[this](){sendAll();});
-    dropdowns.set(gateMode.getEscapedName(),{"Auto","Gated","Drone","Pulse"});
+    drone.set("Drone", false);
+    reg(drone,[this](){sendAll();});
+    pulseEnabled.set("Pulse", false);
+    reg(pulseEnabled,[this](){sendAll();});
+
     {
         scPulseGate::Host ph;
         ph.regF=[this](ofParameter<float>& p,std::function<void()> f){reg(p,f);};
@@ -106,7 +109,6 @@ void scSteamPipeBox::setup() {
         listeners.push(p->newListener([this,p](std::vector<float>& v) {
             // the timeline's frame set of a value it already sent timetagged: nothing to do
             if(scScheduling::isBackendSendSuppressed()) return;
-            if(p==&gate) for(float value:v) if(value>0) gateTouched=true;
             for(auto& [s, st] : states) sendNotes(s, st);
         }));
     }
@@ -257,7 +259,8 @@ void scSteamPipeBox::setup() {
     sh.defaultBank="Reaktor SteamPipe 01 - Instrument - Bank 1.json";
     for(auto* p : {&satOn, &eqOn, &echoOn, &rvbOn}) snaps.morph.bypass(*p);
     for(const auto& c : sound)
-        if(c->sc == "allpass_on") snaps.morph.bypass(c->p);
+        if(c->sc == "allpass_on" || c->sc == "noise_one_pole") snaps.morph.bypass(c->p);
+        else if(c->sc == "polarity") snaps.morph.continuous(c->p);
     sh.morphChanged = [this, toStages]() { sendAll(); toStages(); };
     sh.morphBlocked = [this](const std::string& k) {
         auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
@@ -329,7 +332,8 @@ void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
             if(it!=sent.end()&&it->second==value) return;
             sent[name]=value;updates.set(name,value);
         };
-        for(const auto& c : sound) if(c->sc!="stereo") set(c->sc, c->sc=="allpass_on" ? snaps.morph.activation(c->p) : mod.voiceValue(c->p,i));
+        for(const auto& c : sound) if(c->sc!="stereo") set(c->sc, (c->sc=="allpass_on" || c->sc=="noise_one_pole") ? snaps.morph.activation(c->p) :
+            c->sc=="polarity" ? snaps.morph.value(c->p) : mod.voiceValue(c->p,i));
         for(int e=0;e<1;++e) for(int k=0;k<3;++k) set(std::string(e?"filter_curve":"amp_curve")+ofToString(k),mod.voiceValue(envCurves[e][k],i));
         set("gatebus",st.gates->index+i);
         set("velabus",st.velocities->index+i);
@@ -472,7 +476,8 @@ ofJson scSteamPipeBox::capture() const {
     for(const auto& c:controls) if(!scSnapshots::isOwnKey(c.key)) j[c.key]=c.save();
     mod.patchBases(j);mod.save(j,"steamPipeMod");return j;
 }
-void scSteamPipeBox::apply(const ofJson& a,const ofJson& b,float t,bool sw) {
+void scSteamPipeBox::apply(const ofJson& aSaved, const ofJson& bSaved,float t,bool sw) {
+    const auto a = scDroneMode::migrated(aSaved, true), b = scDroneMode::migrated(bSaved, true);
     restoring=true;
     for(const auto& c:controls) if(!scSnapshots::isOwnKey(c.key)&&!(published.count(c.key)&&published.at(c.key)->hasInConnection())) {
         // Older SteamPipe snapshots stored Noise / Random Type separately.
@@ -490,21 +495,11 @@ void scSteamPipeBox::apply(const ofJson& a,const ofJson& b,float t,bool sw) {
         };
         c.load(blend(value(a),value(b),t,sw,c.discrete));
     }
-    const auto& src=sw?b:a;
-    if(modSource!=&src || t>=1) { modSource=&src; mod.load(src,"steamPipeMod");mod.afterLoad(); }
-    auto count = [&](const char* key,int max) {
-        const int av=a.value(key,0),bv=b.value(key,0);
-        return std::clamp(t<=0 ? av : t>=1 ? bv : std::max(av,bv),0,max);
-    };
-    const int nl=count("steamPipeModLfos",scModulation::MAX_LFOS),ne=count("steamPipeModEnvs",scModulation::MAX_ENVS),nx=count("steamPipeModExts",scModulation::MAX_EXT);
-    bool counts=nl!=mod.lfoCount||ne!=mod.envCount||nx!=mod.extCount;
-    mod.lfoCount=nl;mod.envCount=ne;mod.extCount=nx;
-    auto ma=a.value("steamPipeModMatrix",std::vector<float>(scModulation::NUM_SOURCES*NUM_TARGETS,0));
-    auto mb=b.value("steamPipeModMatrix",std::vector<float>(scModulation::NUM_SOURCES*NUM_TARGETS,0));
-    ma.resize(mod.matrix.size(),0);mb.resize(mod.matrix.size(),0);
-    bool dirty=false;
-    for(size_t i=0;i<mod.matrix.size();++i) {float value=ofLerp(ma[i],mb[i],t);if(value!=mod.matrix[i]){mod.matrix[i]=value;dirty=true;}}
-    if(counts) mod.refresh();else if(dirty) mod.sendMatrix();
+    mod.loadMorph(a,b,t,sw,"steamPipeMod",[this](const std::string& key){
+        auto it=published.find(key);return it!=published.end() && it->second->hasInConnection();
+    });
+    mod.afterLoad();
+    mod.refresh();
     restoring=false;sendAll();
 }
 std::vector<ofJson> scSteamPipeBox::factory() const {
@@ -526,6 +521,7 @@ void scSteamPipeBox::presetSave(ofJson& j) {
 
 }
 void scSteamPipeBox::loadBeforeConnections(ofJson& j) {
+    scDroneMode::migrate(j, true);
     mod.loadLfoOutputs(j);
     std::vector<std::string> wanted;
     if(j.contains("steampipeBoxPublished")&&j["steampipeBoxPublished"].is_array()) for(const auto& k:j["steampipeBoxPublished"]) if(k.is_string()) wanted.push_back(k.get<std::string>());
@@ -533,11 +529,11 @@ void scSteamPipeBox::loadBeforeConnections(ofJson& j) {
     for(const auto& k:wanted) publish(k);timeline.load(j,"steampipeBoxTimeline");
 }
 void scSteamPipeBox::presetRecallAfterSettingParameters(ofJson& j) {
+    scDroneMode::migrate(j, true);
+    if(!j.contains(drone.getEscapedName())) drone = false;
+    if(!j.contains(pulseEnabled.getEscapedName())) pulseEnabled = false;
     if(!j.contains("steampipeBox")) return;
     auto state=j["steampipeBox"];
-    // a loaded patch starts from Auto's own rule: droning unless Gate is
-    // connected or timelined (a value it gets from here on switches it to gated)
-    gateTouched=false;
     apply(state,state,1,true);
     restoring=true;for(const auto& c:controls) if(scSnapshots::isOwnKey(c.key)&&state.contains(c.key)) c.load(state[c.key]);restoring=false;
 }
@@ -1244,10 +1240,7 @@ void scSteamPipeBox::combo(ofParameter<int>& p, const char* label, float w) {
 
 
 bool scSteamPipeBox::droning() const {
-    if(pulsing()) return false;
-    if(gateMode.get()==2) return true;
-    if(gateMode.get()==1) return false;
-    return !(gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined()));
+    return drone.get() && !pulsing();
 }
 void scSteamPipeBox::drawHeader() {
     const float z=zoom();
@@ -1264,8 +1257,10 @@ void scSteamPipeBox::drawHeader() {
     next(170*z);
     ImGui::BeginGroup();slider(master,"Master",170*z,"%.2f");ImGui::EndGroup();
     next(190*z);labelW=64;
-    ImGui::BeginGroup();combo(gateMode,"Gate Mode",190*z);ImGui::EndGroup();
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: drone until Gate is connected, timelined or receives a note.\nGated: follow Gate. Drone: every voice always plays.\nPulse: the voices play by themselves (the Pulse panel).");
+    toggle(drone,"Drone");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Drone: every voice plays continuously. Unchecked: follow Gate.");
+    ImGui::SameLine(); toggle(pulseEnabled, "Pulse");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Generate note gates from the Pulse panel. Takes precedence over Drone.");
     next(ImGui::CalcTextSize("pulsing").x,6);
     ImGui::AlignTextToFramePadding();
     if(pulsing()) ImGui::TextColored(ImVec4(.42f,.83f,.77f,1),"pulsing");

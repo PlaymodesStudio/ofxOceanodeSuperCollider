@@ -1,3 +1,4 @@
+#include "../shared/scDroneMode.h"
 //
 //  scPolyComb.cpp
 //  ofxOceanodeSuperCollider
@@ -141,8 +142,7 @@ void scPolyComb::setup() {
     spreadLayout.set("Speaker Layout", 0, 0, 1);         reg(spreadLayout, toSpread);
 
     // ── Gate, amp envelope, pitch ────────────────────────────────────────────
-    // Auto: a drone until something is connected to Gate, then gated
-    envMode.set("Env Mode", 0, 0, 2);                      reg(envMode, [this]() { sendEnvMode(true); });
+    drone.set("Drone", false);                      reg(drone, [this]() { sendEnvMode(true); });
     ampA.set("Amp Attack", 0.01f, 0.001f, 10.0f);          reg(ampA, toAmpEnv);
     ampD.set("Amp Decay", 0.3f, 0.001f, 10.0f);            reg(ampD, toAmpEnv);
     ampS.set("Amp Sustain", 0.8f, 0.0f, 1.0f);             reg(ampS, toAmpEnv);
@@ -384,7 +384,7 @@ void scPolyComb::setup() {
     // the combos' names (published: dropdowns)
     dropdowns.set(spreadMode.getEscapedName(), {"Spread", "Channels", "Manual"});
     dropdowns.set(spreadLayout.getEscapedName(), {"Ring", "Line"});
-    dropdowns.set(envMode.getEscapedName(), {"Auto", "Gated", "Drone"});
+
     dropdowns.set(fType.getEscapedName(), kFilterTypes);
     dropdowns.set(postType.getEscapedName(), kFilterTypes);
     dropdowns.set(combMode.getEscapedName(), {"Follows the note", "Fixed note"});
@@ -491,7 +491,6 @@ void scPolyComb::setup() {
     // The timeline's frame set of a value it already sent timetagged: nothing to do.
     listeners.push(gate.newListener([this, toGate](std::vector<float>& v) {
         if(scScheduling::isBackendSendSuppressed()) return;
-        for(float x : v) if(x > 0.0f) gateTouched = true;
         randomizeMapSeedsOnGate(v);
         toGate();
     }));
@@ -1356,6 +1355,7 @@ void scPolyComb::presetSave(ofJson& j) {
 }
 
 void scPolyComb::loadBeforeConnections(ofJson& j) {
+    scDroneMode::migrate(j);
     modulation.loadLfoOutputs(j);
     if(!j.contains("polyCombPublished") || !j["polyCombPublished"].is_array()) return;
     std::vector<std::string> wanted;
@@ -1367,6 +1367,8 @@ void scPolyComb::loadBeforeConnections(ofJson& j) {
 }
 
 void scPolyComb::presetRecallAfterSettingParameters(ofJson& j) {
+    scDroneMode::migrate(j);
+    if(!j.contains(drone.getEscapedName())) drone = false;
     pitchMorph.clear();
     combSaturation.setWithoutEventNotifications(false);
     combSatLevel.setWithoutEventNotifications(12.0f);
@@ -1412,9 +1414,6 @@ void scPolyComb::presetRecallAfterSettingParameters(ofJson& j) {
     if(j.contains("polyCombLfos") && j["polyCombLfos"].is_number()) modulation.lfoCount = std::clamp(j["polyCombLfos"].get<int>(), 1, NUM_LFOS);
     if(j.contains("polyCombEnvs") && j["polyCombEnvs"].is_number()) modulation.envCount = std::clamp(j["polyCombEnvs"].get<int>(), 0, NUM_ENVS);
     if(j.contains("polyCombExts") && j["polyCombExts"].is_number()) modulation.extCount = std::clamp(j["polyCombExts"].get<int>(), 0, NUM_EXT);
-    // a loaded preset starts from Auto's own rule: droning unless Gate is connected
-    // (a value it gets from here on switches it to gated)
-    gateTouched = false;
     sendEnvMode(true);
     modulation.loadParamsJson(j.contains("polyCombParams") ? j["polyCombParams"] : ofJson::array());
     updateScramble();
@@ -1789,11 +1788,7 @@ void scPolyComb::requireSynthdefs() {
 }
 
 bool scPolyComb::droning() const {
-    if(envMode.get() == 2) return true;
-    if(envMode.get() == 1) return false;
-    // a cable, or a timeline track playing the Gate: notes, not a drone
-    if(gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined())) return false;
-    return true;
+    return drone.get();
 }
 
 template<typename T>
@@ -2047,10 +2042,9 @@ void scPolyComb::drawWindow() {
         ImGui::BeginGroup(); slider(master, "Master", 170 * z, "%.2f"); ImGui::EndGroup();
         ImGui::SameLine(0, 12 * z);
         labelW = 64.0f;
-        ImGui::BeginGroup(); combo(envMode, "Gate Mode", 190 * z); ImGui::EndGroup();
+        toggle(drone, "Drone");
         if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("Auto: a drone while nothing is connected to Gate, gated once something is\n"
-                              "Gated: a voice plays while its gate is high\nDrone: every voice always plays");
+            ImGui::SetTooltip("Drone: every voice plays continuously. Unchecked: follow Gate.");
         ImGui::SameLine(0, 6 * z);
         ImGui::TextColored(ImColor(droning() ? pal::envMod : pal::accent), droning() ? "droning" : "gated");
         ImGui::SameLine(0, 12 * z);
@@ -3082,7 +3076,8 @@ ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float
 }
 }
 
-void scPolyComb::applyState(const ofJson& a, const ofJson& b, float t, bool sw) {
+void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw) {
+    const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
     if(!a.is_object() || !b.is_object()) return;
     t = ofClamp(t, 0.0f, 1.0f);
     // Restore listener behavior even if malformed saved state throws. The

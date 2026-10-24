@@ -1,3 +1,4 @@
+#include "../shared/scDroneMode.h"
 //
 //  scGrainBoxPoly.cpp
 //  ofxOceanodeSuperCollider
@@ -561,7 +562,10 @@ void scGrainBoxPoly::setup() {
         h.morphBlocked = [this](const std::string& k) {
             auto it=publishedEditorParameterHandles.find(k); return it!=publishedEditorParameterHandles.end() && it->second->hasInConnection();
         };
-        h.morphChanged = [this]() { rebuildFxAll(); sendFxParamsAll(); };
+        h.morphChanged = [this]() {
+            rebuildFxAll();sendFxParamsAll();
+            for(auto& ph:playheads)for(auto& [server,synth]:ph->synths)setFilterArgs(*ph,synth);
+        };
         snaps.setup(h);
     }
 }
@@ -627,7 +631,8 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.numPlayheads.set   ("Playheads"    + x, 1, 1, MAX_VOICES);
     ph.mute.set           ("Mute"         + x, false);
     ph.solo.set           ("Solo"         + x, false);
-    ph.filterType.set     ("Filter"       + x, 0, 0, 5);   // 5 LP-HP (DJ)
+    ph.filterType.set     ("Filter"       + x, 0, 0, 5);
+    snaps.morph.mode(ph.filterType,6);   // 5 LP-HP (DJ)
     ph.cutoff.set         ("Cutoff"       + x, 1000.0f, 20.0f, 20000.0f);
     ph.filterQ.set        ("FilterQ"      + x, 0.707f, 0.5f, 20.0f);
     ph.latchAmp.set       ("LatchAmp"     + x, false);
@@ -635,7 +640,7 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
 
     // Modulation: the gate the envelopes follow, the voices' placement
     ph.gate.set           ("Gate"         + x, {0.0f},   {0.0f},   {1.0f});
-    ph.gateMode.set       ("Gate Mode"    + x, 0, 0, 2);
+    ph.drone.set("Drone" + x, false);
     ph.ampA.set           ("Amp Attack"   + x, 0.01f, 0.001f, 10.0f);
     ph.ampD.set           ("Amp Decay"    + x, 0.3f,  0.001f, 10.0f);
     ph.ampS.set           ("Amp Sustain"  + x, 1.0f,  0.0f,   1.0f);
@@ -651,7 +656,7 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     dropdowns.set(ph.scaleRoot.getEscapedName(), {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"});
     dropdowns.set(ph.envShape.getEscapedName(), {"Custom", "Hann", "Gaussian", "Percussive", "Reverse Perc", "Trapezoid", "Rectangular"});
     dropdowns.set(ph.filterType.getEscapedName(), std::vector<const char*>(kFilterNames, kFilterNames + 6));
-    dropdowns.set(ph.gateMode.getEscapedName(), {"Auto", "Gated", "Drone"});
+
     dropdowns.set(ph.placement.getEscapedName(), {"Manual (PanAz)", "Spread", "Channels"});
     ph.spreadWidth.set    ("Spread Width" + x, 1.0f, 0.0f, 1.0f);
     ph.envData.assign(ENV_BUFFER_SIZE, 0.0f);
@@ -1023,7 +1028,7 @@ bool gbpCtlBusIsLive(ofxSCServer* srv, ofxSCBus* b) {
 } // namespace
 
 int scGrainBoxPoly::phVoices(const Playhead& ph) const {
-    return std::max(1, std::min(MAX_VOICES, ph.numPlayheads.get()));
+    return std::clamp(std::max(ph.numPlayheads.get(),ph.voiceMorphCapacity),1,MAX_VOICES);
 }
 
 // The control synth handles every slot of its capacity, so it is sized to the
@@ -1118,6 +1123,7 @@ ofxSCSynth* scGrainBoxPoly::newVoiceSynth(Playhead& ph, ofxSCServer* srv, int i)
     v->set("ctl", b.ctl->index);
     v->set("clk", b.clk->index);
     v->set("idx", i);
+    v->set("morphgain",ph.voiceMorphWeights.empty()?1.0f:scVoiceCountMorph::presence(ph.voiceMorphWeights,i));
     ensureModResources(ph, srv);
     setModArgs(ph, v, srv);
     Playhead* p = &ph;
@@ -1203,6 +1209,7 @@ void scGrainBoxPoly::syncVoiceCount(Playhead& ph, ofxSCServer* srv) {
         else v->createAndRun(3, (vs.empty() ? ph.synths[srv] : vs.back())->nodeID, run);
         vs.push_back(v);
     }
+    for(size_t i=0;i<vs.size();++i)if(vs[i])vs[i]->set("morphgain",ph.voiceMorphWeights.empty()?1.0f:scVoiceCountMorph::presence(ph.voiceMorphWeights,int(i)));
 }
 
 // The engine's latest synth in SC's order: output, else last voice, else control
@@ -1300,6 +1307,7 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     // Filter: an output filter inside the same synth, crossfaded on/off in
     // SC over 20 ms (no synth replacement, so no cut grains / clicks)
     ph.listeners.push(ph.filterType.newListener([this, p](int&) {
+        snaps.morph.edited(p->filterType);
         for(auto& [srv, s] : p->synths) if(s && synthIsFiltered(s)) setFilterArgs(*p, s);
     }));
     ph.listeners.push(ph.cutoff.newListener([p](float& v) {
@@ -1326,6 +1334,7 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     // Playheads: start / free voice synths, then re-send every vector at the
     // new size (playhead i reads index i)
     ph.listeners.push(ph.numPlayheads.newListener([this, p](int&) {
+        if(!loadingPreset && !snaps.morph.applying()){p->voiceMorphWeights.clear();p->voiceMorphCapacity=0;p->voiceMorphRetireAt=-1;}
         for(auto* sm : allServers)
             if(sm && sm->getServer()) {
                 replaceCtl(*p, sm->getServer());       // only when the capacity changes
@@ -1450,15 +1459,14 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     vfListener("levels",           ph.levels);
     // Modulation: the gate, the placement (PanAz per playhead)
     // The gate: straight onto the playheads' gate block (a scheduled one
-    // inside its timetag); its first use turns Auto into gated
+    // inside its timetag)
     ph.listeners.push(ph.gate.newListener([this, p](vector<float>& v) {
         if(scScheduling::isBackendSendSuppressed()) return;
-        if(!p->gateTouched) for(float x : v) if(x > 0.0f) { p->gateTouched = true; break; }
         for(auto& [srv, s] : p->synths) if(s && p->gateIn.bus(srv) < 0) writeGate(*p, srv);
     }));
     for(auto* q : {&ph.ampA, &ph.ampD, &ph.ampS, &ph.ampR, &ph.ampCA, &ph.ampCD, &ph.ampCR})
         ph.listeners.push(q->newListener([p](float&) { p->modDirty = true; }));
-    ph.listeners.push(ph.gateMode.newListener([p](int&) { p->modDirty = true; }));
+    ph.listeners.push(ph.drone.newListener([p](bool&) { p->modDirty = true; }));
     auto toPan = [this, p]() {
         const auto ev = panSend(*p, phVoices(*p));
         for(auto& [srv, s] : p->synths) if(s) s->set("panaz", ev);
@@ -1625,6 +1633,7 @@ bool scGrainBoxPoly::removeLastPlayhead() {
     grainHighlights.erase(std::remove_if(grainHighlights.begin(), grainHighlights.end(),
                                          [idx](const GrainHighlight& g) { return g.playhead == idx; }),
                           grainHighlights.end());
+    snaps.morph.erase(ph.filterType);
     playheads.pop_back();
     if(hadLfoOutputs) parameterGroupChanged.notify(this);
     activePlayhead = std::min(activePlayhead, (int)playheads.size() - 1);
@@ -2492,9 +2501,9 @@ void scGrainBoxPoly::setFilterArgs(Playhead& ph, ofxSCSynth* s) {
     if(!s) return;
     // Filter parameter: 0 Off, 1 LPF2, 2 BPF, 3 Notch, 4 HPF2. Off keeps the
     // last type so the 20 ms fade-out still filters with it.
-    s->set("filteron",   ph.filterType.get() > 0 ? 1 : 0);
-    if(ph.filterType.get() > 0)
-        s->set("filtertype", std::max(0, std::min(4, ph.filterType.get() - 1)));
+    const auto effective=scMorphPolicies::neutralMode(snaps.morph.weights(ph.filterType));
+    s->set("filteron",effective.second);
+    if(effective.first>0)s->set("filtertype",std::clamp(effective.first-1,0,4));
     s->set("cutoff",     ph.cutoff.get());
     s->set("filterq",    ph.filterQ.get());
 }
@@ -2768,6 +2777,13 @@ void scGrainBoxPoly::rebuildFxAll() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
+    for(auto& ph:playheads)if(ph->voiceMorphRetireAt>=0 && ofGetElapsedTimef()>=ph->voiceMorphRetireAt){
+        ph->voiceMorphRetireAt=-1;
+        ph->voiceMorphCapacity=ph->voiceMorphWeights.empty()?0:scVoiceCountMorph::activeCount(ph->voiceMorphWeights);
+        for(auto* sm:allServers)if(sm && sm->getServer()){replaceCtl(*ph,sm->getServer());syncVoiceCount(*ph,sm->getServer());}
+        sendAllParams(*ph);
+        if(scVoiceCountMorph::single(ph->voiceMorphWeights))ph->voiceMorphWeights.clear();
+    }
     timeline.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
         const auto names = snaps.slotNames();
@@ -3600,7 +3616,7 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
         regS (ph, ph.fbTone,           false);
         // Modulation: the gate, the placement, every LFO / envelope / ext control
         regVF(ph, ph.gate,             false);
-        regS (ph, ph.gateMode,         false);
+        regS (ph, ph.drone,         false);
         for(auto* q : {&ph.ampA, &ph.ampD, &ph.ampS, &ph.ampR, &ph.ampCA, &ph.ampCD, &ph.ampCR}) regS(ph, *q, false);
         regS (ph, ph.placement,        false);
         regS (ph, ph.spreadWidth,      false);
@@ -3916,6 +3932,7 @@ void scGrainBoxPoly::presetSave(ofJson& j) {
 }
 
 void scGrainBoxPoly::loadBeforeConnections(ofJson& j) {
+    scDroneMode::migrate(j);
     loadingPreset = true;    // cleared in presetRecallAfterSettingParameters / presetHasLoaded
     deserializeParameter(j, syncToTransportP);
     if(j.contains("browseDir") && j["browseDir"].is_string()) {
@@ -3951,6 +3968,7 @@ void scGrainBoxPoly::loadBeforeConnections(ofJson& j) {
 }
 
 void scGrainBoxPoly::presetRecallBeforeSettingParameters(ofJson& j) {
+    scDroneMode::migrate(j);
     loadingPreset = true;    // values arrive in the preset's time unit (see timeUnitsP)
     int n = 1;
     if(j.contains("numPlayheads") && j["numPlayheads"].is_number()) n = j["numPlayheads"].get<int>();
@@ -3985,6 +4003,7 @@ void scGrainBoxPoly::presetHasLoaded() {
 }
 
 void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
+    scDroneMode::migrate(j);
     embedSamples = j.value("embedSamples", true);
     Playhead& p0 = ph0();
 
@@ -4033,10 +4052,9 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
             rv(ph->autoTrigBeatDiv, defaultInterval(ph->intervalUnit.get()));
             rv(ph->trigPhase, 0.0f); rs(ph->maxGrains, 0);
             rv(ph->gate, 0.0f); rs(ph->placement, 0); rs(ph->spreadWidth, 1.0f);
-            rs(ph->gateMode, 0);
+            rs(ph->drone, false);
             rs(ph->ampA, 0.01f); rs(ph->ampD, 0.3f); rs(ph->ampS, 1.0f); rs(ph->ampR, 0.5f);
             rs(ph->ampCA, -4.0f); rs(ph->ampCD, -4.0f); rs(ph->ampCR, -4.0f);
-            ph->gateTouched = false;   // Auto starts droning again
         }
     }
 
@@ -5209,6 +5227,7 @@ ofJson scGrainBoxPoly::captureSnapshot() const {
     ofJson snap = ofJson::object();
     for(const auto& a : publishableEditorParameters)
         if(a.saveValue && !snapshotExcluded(a.key)) a.saveValue(snap);
+    for(const auto& ph:playheads)if(!ph->voiceMorphWeights.empty() && !scVoiceCountMorph::single(ph->voiceMorphWeights))snap["_grainVoiceBlend"+ph->sfx]=ph->voiceMorphWeights;
     for(const auto& ph : playheads) ph->mod->patchBases(snap);
     for(const auto& ph : playheads) ph->mod->save(snap, "gbpMod" + ph->sfx);   // routing + counts
     return snap;
@@ -5237,9 +5256,11 @@ ofJson scGrainBoxPoly::pitchInCurrentUnits(const ofJson& snap) const {
     return out;
 }
 
-void scGrainBoxPoly::applySnapshot(const ofJson& snapIn) {
+void scGrainBoxPoly::applySnapshot(const ofJson& snapInSaved) {
+    const auto snapIn = scDroneMode::migrated(snapInSaved);
     if(!snapIn.is_object()) return;
     const ofJson snap = pitchInCurrentUnits(snapIn);
+    for(auto& ph : playheads) if(!snap.contains(ph->drone.getEscapedName())) ph->drone = false;
     const bool wasLoading = loadingPreset;
     loadingPreset = true;
     std::vector<std::pair<std::function<void(const ofJson&)>, ofJson>> todo;
@@ -5250,6 +5271,7 @@ void scGrainBoxPoly::applySnapshot(const ofJson& snapIn) {
         try { load(v); } catch(...) {}
     }
     for(auto& ph : playheads) {
+        prepareVoiceMorph(*ph,snap,snap,0);
         const std::string pre = "gbpMod" + ph->sfx;
         if(!snap.contains(pre + "Matrix")) continue;
         ph->mod->load(snap, pre);
@@ -5276,16 +5298,49 @@ void scGrainBoxPoly::applySnapshot(const ofJson& snapIn) {
 // the switch point; a value in a time unit that differs between a and b jumps
 // too (the two numbers are not comparable). As a preset: values arrive in
 // their units (no conversion), one consistent send at the next update.
-void scGrainBoxPoly::applyMorph(const ofJson& aIn, const ofJson& bIn, float t, bool sw) {
+void scGrainBoxPoly::prepareVoiceMorph(Playhead& ph,const ofJson& a,const ofJson& b,float t){
+    const auto key=ph.numPlayheads.getEscapedName(),metadata="_grainVoiceBlend"+ph.sfx;
+    const auto pin=publishedEditorParameterHandles.find(key);
+    if(pin!=publishedEditorParameterHandles.end() && pin->second->hasInConnection()){
+        ph.voiceMorphWeights.clear();ph.voiceMorphCapacity=0;ph.voiceMorphRetireAt=-1;return;
+    }
+    auto endpoint=[&](const ofJson& sound){
+        auto values=sound.contains(key)?scModulationMorph::numbers(sound[key]):std::vector<float>{};
+        ofJson out={{"voices",values.empty()?ph.numPlayheads.get():int(values[0])}};
+        if(sound.contains(metadata))out[scVoiceCountMorph::key]=sound[metadata];return out;
+    };
+    const int before=phVoices(ph);
+    ph.voiceMorphWeights=scVoiceCountMorph::blend(endpoint(a),endpoint(b),t,ph.numPlayheads.get(),MAX_VOICES);
+    const int wanted=scVoiceCountMorph::activeCount(ph.voiceMorphWeights);
+    ph.voiceMorphCapacity=std::max(before,wanted);ph.voiceMorphRetireAt=ofGetElapsedTimef()+.35f;
+    ph.numPlayheads=wanted;
+    for(auto* sm:allServers)if(sm && sm->getServer()){
+        replaceCtl(ph,sm->getServer());syncVoiceCount(ph,sm->getServer());
+    }
+    sendAllParams(ph);
+}
+
+void scGrainBoxPoly::applyMorph(const ofJson& aInSaved, const ofJson& bInSaved, float t, bool sw) {
+    const auto aIn = scDroneMode::migrated(aInSaved), bIn = scDroneMode::migrated(bInSaved);
     if(!aIn.is_object() || !bIn.is_object()) return;
-    const ofJson a = pitchInCurrentUnits(aIn), b = pitchInCurrentUnits(bIn);
+    ofJson a = pitchInCurrentUnits(aIn), b = pitchInCurrentUnits(bIn);
+    for(const auto& ph : playheads) {
+        const auto key = ph->drone.getEscapedName();
+        if(!a.contains(key)) a[key] = false;
+        if(!b.contains(key)) b[key] = false;
+    }
     auto differ = [&](const std::string& k) { return a.contains(k) && b.contains(k) && a[k] != b[k]; };
     const bool tuDiff = differ(timeUnitsP.getEscapedName());
     const bool wasLoading = loadingPreset;
     loadingPreset = true;
+    for(auto& ph:playheads)prepareVoiceMorph(*ph,a,b,t);
     std::vector<std::function<void()>> todo;
     for(const auto& act : publishableEditorParameters) {
-        if(!act.morph || snapshotExcluded(act.key) || !a.contains(act.key) || !b.contains(act.key)) continue;
+        bool count=false;for(const auto& ph:playheads)count|=act.key==ph->numPlayheads.getEscapedName();
+        if(count)continue;
+        if(!act.morph || snapshotExcluded(act.key) ||
+           (publishedEditorParameterHandles.count(act.key) && publishedEditorParameterHandles.at(act.key)->hasInConnection()) ||
+           !a.contains(act.key) || !b.contains(act.key)) continue;
         const bool step = (act.unitClass == 1 && tuDiff) || (act.unitClass == 2 && differ(act.unitKey));
         const auto& x = a[act.key];
         const auto& y = b[act.key];
@@ -5293,17 +5348,19 @@ void scGrainBoxPoly::applyMorph(const ofJson& aIn, const ofJson& bIn, float t, b
         todo.push_back([fn, &x, &y, t, sw, step]() { fn(x, y, t, sw, step); });
     }
     for(auto& f : todo) { try { f(); } catch(...) {} }
-    // routing + counts: switch at the switch point
+    // Shared route/base interpolation; missing routes fade from/to zero.
     const ofJson& r = sw ? b : a;
     for(auto& ph : playheads) {
         const std::string pre = "gbpMod" + ph->sfx;
-        if(!r.contains(pre + "Matrix")) continue;
         auto& m = *ph->mod;
         const auto before = m.matrix;
         const int lc = m.lfoCount, ec = m.envCount, xc = m.extCount;
-        m.load(r, pre);
-        migrateAmpEnvelope(*ph, r);
-        if(m.matrix != before || m.lfoCount != lc || m.envCount != ec || m.extCount != xc) m.afterLoad();
+        m.loadMorph(a,b,t,sw,pre,[this](const std::string& key){
+            auto it=publishedEditorParameterHandles.find(key);return it!=publishedEditorParameterHandles.end() && it->second->hasInConnection();
+        });
+        migrateAmpEnvelope(*ph,r);
+        m.afterLoad();
+        if(m.matrix != before || m.lfoCount != lc || m.envCount != ec || m.extCount != xc) m.refresh();
     }
     loadingPreset = wasLoading;
     timeDirty = true;
@@ -6232,13 +6289,9 @@ bool scGrainBoxPoly::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
 }
 #endif
 
-// The Amp Envelope is the playheads' VCA: Gated, or Auto once the Gate is used
+// The Amp Envelope controls note playback unless Drone is enabled.
 bool scGrainBoxPoly::ampGated(const Playhead& ph) const {
-    const int mode = ph.gateMode.get();
-    if(mode == 2) return false;
-    if(mode == 1) return true;
-    if(ph.gateTouched || ph.gateIn.connected()) return true;
-    return ph.gateIn.handle && ph.gateIn.handle->isTimelined();
+    return !ph.drone.get();
 }
 
 float scGrainBoxPoly::regionSecOf(const Playhead& ph) const {
@@ -6513,7 +6566,7 @@ void scGrainBoxPoly::migrateAmpEnvelope(Playhead& ph, const ofJson& j) {
             const auto E = m.envValues(e);
             ph.ampA.set(E.a); ph.ampD.set(E.d); ph.ampS.set(E.s); ph.ampR.set(E.r);
             ph.ampCA.set(E.ca); ph.ampCD.set(E.cd); ph.ampCR.set(E.cr);
-            ph.gateMode.set(1);
+            ph.drone.set(false);
             found = true;
         }
         cell = 0.0f;   // now a route to Amp sets each grain's level
@@ -6599,16 +6652,11 @@ void scGrainBoxPoly::drawModRow(Playhead& ph, float w, float /*h*/) {
             m.drawEnvelopes(w, [this, &ph, zoom](float cw) {
                 gbpSectionHeader("Amp Envelope", cw, zoom);
                 {
-                    static const char* modes[3] = {"Auto", "Gated", "Drone"};
-                    int gm = std::clamp(ph.gateMode.get(), 0, 2);
-                    ImGui::SetNextItemWidth(cw);
-                    if(ImGui::Combo("##gbpGateMode", &gm, modes, 3)) ph.gateMode.set(gm);
+                    bool enabled = ph.drone.get();
+                    if(ImGui::Checkbox("Drone", &enabled)) ph.drone.set(enabled);
                     if(ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Auto: drones until the Gate is used (a value above 0, a cable,\n"
-                                          "the timeline), then each playhead plays through its Amp Envelope\n"
-                                          "Gated: always through the Amp Envelope (Gate 0: silent)\n"
-                                          "Drone: the Gate opens nothing (the envelopes below still follow it)");
-                    drawNodePublishContextMenu(ph.gateMode.getEscapedName());
+                        ImGui::SetTooltip("Play continuously instead of following Gate through the Amp Envelope");
+                    drawNodePublishContextMenu(ph.drone.getEscapedName());
                 }
                 // the ADSR (drag points, Alt+drag a segment), each playhead's level on the right
                 {
@@ -6664,7 +6712,7 @@ void scGrainBoxPoly::drawModRow(Playhead& ph, float w, float /*h*/) {
                 ImGui::TextDisabled(ampGated(ph)
                     ? "Each playhead plays through its Amp Envelope: the Gate's level is its velocity; "
                       "a release fades the grains already sounding."
-                    : "Droning: the playheads play continuously. Use the Gate (or set Gated) to play notes.");
+                    : "Droning: the playheads play continuously. Disable Drone to play notes with Gate.");
                 ImGui::PopTextWrapPos();
             });
             break;

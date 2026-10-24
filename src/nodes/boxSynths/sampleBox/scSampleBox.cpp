@@ -252,7 +252,7 @@ void scSampleBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool 
         return ps.contains("controls") ? &ps["controls"] : nullptr;
     };
     for(auto& c : controls) {
-        if(!c.f || c.pad < 0) continue;
+        if(!c.f || c.pad < 0 || (published.count(c.key) && published.at(c.key)->hasInConnection())) continue;
         const ofJson* ca = controlsOf(a, c.pad);
         const ofJson* cb = controlsOf(b, c.pad);
         if(!ca || !cb || !ca->contains(c.base) || !cb->contains(c.base)) continue;
@@ -260,6 +260,26 @@ void scSampleBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool 
         const float v = scSnapshots::blendValue(va, vb, t, sw, scSnapshots::logKey(c.base)).get<float>();
         if(std::abs(v - c.f->get()) > 1e-6f) c.f->set(v);
     }
+    auto padOf=[](const ofJson& state,int k)->const ofJson*{
+        if(!state.contains("pads") || !state["pads"].is_array() || state["pads"].empty())return nullptr;
+        return &state["pads"][std::min<size_t>(k,state["pads"].size()-1)];
+    };
+    for(int k=0;k<int(pads.size());++k){
+        const auto* pa=padOf(a,k);const auto* pb=padOf(b,k);
+        if(!pa || !pb)continue;
+        auto ma=pa->value("mod",ofJson::object()),mb=pb->value("mod",ofJson::object());
+        rewriteModKeys(ma,false,k);rewriteModKeys(mb,false,k);
+        const auto* ca=controlsOf(a,k);const auto* cb=controlsOf(b,k);
+        for(const auto& c:controls)if(c.pad==k){
+            if(ca && ca->contains(c.base))ma[c.key]=(*ca)[c.base];
+            if(cb && cb->contains(c.base))mb[c.key]=(*cb)[c.base];
+        }
+        pads[k]->mod.loadMorph(ma,mb,t,sw,"",[this](const std::string& key){
+            auto it=published.find(key);return it!=published.end() && it->second->hasInConnection();
+        });
+        pads[k]->mod.afterLoad();pads[k]->mod.refresh();
+    }
+
 }
 
 // Five pad settings for the whole kit (the samples, channels and pad count stay)

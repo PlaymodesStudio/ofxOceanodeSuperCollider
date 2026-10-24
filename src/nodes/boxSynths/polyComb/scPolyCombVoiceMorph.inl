@@ -90,7 +90,6 @@ void scPolyComb::syncVoiceMorph() {
         node.gateIn.port=gateIn.port; node.pitchIn.port=pitchIn.port;
         node.gateIn.handle=gateIn.handle; node.pitchIn.handle=pitchIn.handle;
         node.gateIn.buses=gateIn.buses; node.pitchIn.buses=pitchIn.buses;
-        node.gateTouched=gateTouched;
         node.spreadLayout.set(spreadLayout.get());
         // Live external modulators are deliberately excluded from snapshots.
         // Forward their current values without recalling any snapshot controls.

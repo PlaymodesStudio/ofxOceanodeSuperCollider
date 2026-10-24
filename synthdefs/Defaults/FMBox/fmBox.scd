@@ -45,10 +45,19 @@ SynthDef(\FMBoxDX7LFO, {
     Out.ar(\out.kr(0),[pitch,amp]);
 }).writeDefFile(dir);
 SynthDef(\FMBoxVoice, {
-    var p = { |name, def| NamedControl.kr(name, def) };
+    // Pack morph weights after the legacy algorithm value: scalar /n_set
+    // still addresses element 0, and the DX7 voice stays below SC's 255 names.
+    var morphControls=NamedControl.kr(\algorithm,0!93);
+    var p = { |name, def| if(name==\algorithm,{morphControls[0]},{NamedControl.kr(name, def)}) };
     var m = { |name| In.kr(NamedControl.kr(name,0),1) };
     var table = { |key, index| Select.kr(index.round.clip(0,data[key].size-1),data[key]) };
     var integer = { |value| value.abs.floor * value.sign };
+    var modeWeights={ |name,mode,count|
+        var offset=if(name=="algorithm",{1},{33+(name.copyRange(2,2).asInteger*8)+if(name.endsWith("right_curve"),4,0)});
+        var weights=morphControls.copyRange(offset,offset+count-1);
+        var total=weights.sum;
+        weights.collect{|w,i| (w+((mode.round.clip(0,count-1) |==| i)*(total<=0))).lag(0.03)}
+    };
     // ModGate latches Oceanode velocity after its audio gate rises. Align the
     // native envelopes with that latch, including sample-accurate audio gates.
     var gate = DelayN.ar(In.ar(\gatebus.kr(0),1),0.1,ControlDur.ir*2);
@@ -59,7 +68,7 @@ SynthDef(\FMBoxVoice, {
     var timeScale = p.(\env_time,1).clip(0.01,20);
     var feedback = (p.(\feedback,0)+m.(\mfeedback)).clip(0,7);
     var fb = table.(\feedbackIndex,feedback)*feedback;
-    var fbCell = table.(\feedbackSel,p.(\algorithm,0));
+    var algorithmWeights=modeWeights.("algorithm",p.(\algorithm,0),32);
     var pitchLevels = Array.fill(4,{ |k| table.(\dx7_voice_pitch_level_to_shift,p.(("pitch_l"++k).asSymbol,50)) });
     var pitchTimes = Array.fill(4,{ |k|
         var prev = pitchLevels.wrapAt(k-1);
@@ -74,14 +83,14 @@ SynthDef(\FMBoxVoice, {
         var q = { |key,def| p.((pre++key).asSymbol,def) };
         var transposed = note+3;
         var breakpt = q.("breakpoint",39);
-        var scaling = { |dummy,curve,depth|
+        var scaling = { |dummy,curve,depth,name|
             var lin = integer.(dummy/45*depth);
             var exp = integer.(((dummy-72)/13.5).exp*depth);
-            Select.kr(curve.round.clip(0,3),[lin.neg,exp.neg,exp,lin])
+            ([lin.neg,exp.neg,exp,lin]*modeWeights.(pre++name,curve,4)).sum
         };
         var output = (q.("output",99)+m.(("mlevel"++op).asSymbol)).clip(0,99);
-        var left = (transposed< (breakpt+21)) * scaling.(breakpt-(integer.((transposed+2)/3)*3)+21,q.("left_curve",0),q.("left_depth",0));
-        var right = (transposed> (breakpt+21)) * scaling.((integer.((transposed+2)/3)*3)-breakpt-21,q.("right_curve",0),q.("right_depth",0));
+        var left = (transposed< (breakpt+21)) * scaling.(breakpt-(integer.((transposed+2)/3)*3)+21,q.("left_curve",0),q.("left_depth",0),"left_curve");
+        var right = (transposed> (breakpt+21)) * scaling.((integer.((transposed+2)/3)*3)-breakpt-21,q.("right_curve",0),q.("right_depth",0),"right_curve");
         var volume = (output+left+right).clip(0,99);
         var velFin = table.(\velTable,vel) * q.("velocity",0);
         var rateScale = integer.((q.("rate_scale",0)*(transposed-21)/105*127/128*6.5)-0.5);
@@ -109,17 +118,24 @@ SynthDef(\FMBoxVoice, {
         var amplitudes=levels.collect { |level,k| db[k].neg.dbamp*(level>0) };
         var seconds=Array.fill(4,{ |k| q.("seconds"++k,0.1).max(0.00001)*timeScale });
         var timedEnv=EnvGen.kr(Env([amplitudes[3]]++amplitudes,seconds,p.(\env_curve,-4),3),A2K.kr(gate>0));
-        var env=Select.kr(p.(\env_model,0)>0.5,[nativeEnv,timedEnv*(vel/127)]);
-        var fixed=q.("mode",0)>0.5;
+        var env=LinXFade2.kr(nativeEnv,timedEnv*(vel/127),p.(\env_model,0).clip(0,1).lag(0.03)*2-1);
+        var fixed=q.("mode",0).clip(0,1).lag(0.03);
         var coarse=(q.("coarse",1)+m.(("mratio"++op).asSymbol)).clip(0,31);
         var fine=q.("fine",0).clip(0,99);
         var ratio=Select.kr(coarse<0.5,[coarse,0.5])*(1+(fine/100));
         // Preserve the source's frequency equations; remove its later duplicate
         // assignments which inadvertently replaced fixed coarse/fine by ratios.
-        var fixedCoarse=Select.kr(coarse.round%4,[1,10,100,1000]);
+        // Snapshot morphs carry evaluated endpoint decades. The repeated
+        // coarse lookup must not walk through unrelated decades between them.
+        // Preserve the legacy scalar path when no evaluated tuning is supplied.
+        var tuningBase=morphControls[81+(op*2)];
+        var tuningHz=morphControls[82+(op*2)];
+        var smoothDecade={|x| SelectX.kr(x.mod(4),[1,10,100,1000,1])};
+        var tuningDelta=smoothDecade.(coarse)-smoothDecade.(tuningBase);
+        var fixedCoarse=Select.kr(tuningHz>0,[Select.kr(coarse.round%4,[1,10,100,1000]),(tuningHz+tuningDelta).max(0.001)]);
         var fixedFine=10**(fine/100);
         var detune=(q.("detune",7)-7+m.(("mdetune"++op).asSymbol))/32;
-        var hz=Select.kr(fixed,[ratio*(freq+detune),fixedCoarse*fixedFine*pitchEnv.midiratio]);
+        var hz=LinXFade2.kr(ratio*(freq+detune),fixedCoarse*fixedFine*pitchEnv.midiratio,fixed*2-1);
         var phase=TRand.kr(0,2pi,(HPZ1.kr(A2K.kr(gate>0))>0)+Impulse.kr(0))*(1-p.(\osc_sync,1));
         envs[op]=env;
         [hz*Lag2.ar(native[0],0.01),phase,env*(Lag2.ar(native[1],0.01)*(q.("amp_sens",0)/3)).dbamp]
@@ -127,9 +143,10 @@ SynthDef(\FMBoxVoice, {
     var matrix = Array.fill(6,{ |dst| Array.fill(6,{ |src|
         var amount=p.(("fm"++dst++"_"++src).asSymbol,if((dst==0)and:(src==1),1,0)).clip(0,4);
         var scale=(p.(\mod_scale,1)+m.(\mscale)).clip(0,10);
-        var dx7=amount*4pi*scale*Select.kr(((dst*6+src)-fbCell).abs<0.5,[1,fb]);
+        var selected=Array.fill(32,{|algorithm| algorithmWeights[algorithm]*if(data[\feedbackSel][algorithm]==(dst*6+src),1,0)}).sum;
+        var dx7=amount*4pi*scale*(1+((fb-1)*selected));
         var raw=amount*scale*if(dst==src,{feedback},{1});
-        Select.kr(p.(\matrix_model,0)>0.5,[dx7,raw])
+        LinXFade2.kr(dx7,raw,p.(\matrix_model,0).clip(0,1).lag(0.03)*2-1)
     }) });
     var carriers=Array.fill(6,{ |op| p.(("mix"++op).asSymbol,if((op==0)or:(op==2),1,0)).clip(0,1) });
     var amp=Select.kr(\vca.kr(0)>0.5,[(1+m.(\mamp)).clip(0,2),m.(\mamp).clip(0,1)]);

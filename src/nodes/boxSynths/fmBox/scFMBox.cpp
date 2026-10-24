@@ -1,3 +1,4 @@
+#include "../shared/scDroneMode.h"
 #include "../../../audio/scFxRouting.h"
 #include "scFMBox.h"
 #include "../../../ui/scTypedValue.h"
@@ -88,17 +89,16 @@ void scFMBox::setup() {
     addParameter(master.set("Master", 0.6f, 0.0f, 1.0f));
     resetLFOs.set("Reset");
     addOutput("Out");
-    // Auto: a drone until Gate is connected, timelined or gets a note
-    gateMode.set("Gate Mode",0,0,2);
-    reg(gateMode,[this](){sendAll();});
-    dropdowns.set(gateMode.getEscapedName(),{"Auto","Gated","Drone"});
+
+    drone.set("Drone", false);
+    reg(drone,[this](){sendAll();});
+
     scheduled.add(gateIn.handle, gate); scheduled.add(pitchIn.handle, pitch);
     scheduled.enable(this, [this](){ for(auto& [s, st] : states) if(st.created) return true; return false; });
     for(auto* p : {&gate, &pitch}) {
         listeners.push(p->newListener([this,p](std::vector<float>& v) {
             // the timeline's frame set of a value it already sent timetagged: nothing to do
             if(scScheduling::isBackendSendSuppressed()) return;
-            if(p==&gate) for(float value:v) if(value>0) gateTouched=true;
             for(auto& [s, st] : states) sendNotes(s, st);
         }));
     }
@@ -253,8 +253,25 @@ void scFMBox::setup() {
         auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
     };
     for(auto* p : {&satOn,&eqOn,&echoOn,&rvbOn}) snaps.morph.bypass(*p);
-    sh.morphChanged=toStages;
+    sh.morphChanged=[this,toStages](){sendAll();toStages();};
     snaps.morph.mode(echoFilter, 4);
+    for(const auto& c : sound){
+        if(c->sc=="algorithm")snaps.morph.mode(c->p,32);
+        if(c->sc.rfind("op",0)==0 && c->sc.substr(4)=="coarse"){
+            const auto key=c->p.getEscapedName();const float fallback=c->p.get();
+            snaps.morph.resolved(c->p,[key,fallback](const ofJson& j){
+                const auto it=j.find(key);const float coarse=std::clamp(it!=j.end()&&it->is_number()?it->get<float>():fallback,0.f,31.f);
+                static const float decades[]={1,10,100,1000};
+                return ofJson::array({coarse,decades[int(std::round(coarse))%4]});
+            });
+        }
+        if(c->sc.size()>10 && (c->sc.substr(4)=="left_curve" || c->sc.substr(4)=="right_curve"))snaps.morph.mode(c->p,4);
+        if(c->sc=="lfo_wave" || c->sc=="lfo_sync")for(const auto& depth:sound)
+            if(depth->sc=="lfo_pmd" || depth->sc=="lfo_amd")snaps.morph.neutralDepth(c->p,depth->p);
+        if(c->sc=="env_model" || c->sc=="matrix_model" || c->sc=="osc_sync" ||
+           (c->sc.rfind("op",0)==0 && c->sc.size()>5 && c->sc.substr(4)=="mode"))
+            snaps.morph.bypass(c->p);
+    }
     snaps.setup(sh);
     if(snaps.active<0&&!afxBank.empty())recallAFX(0);
     requireSynthdefs();
@@ -298,7 +315,54 @@ void scFMBox::sendSound(ofxSCServer* server, State& st) {
             if(it!=sent.end()&&it->second==value) return;
             sent[name]=value;batch.set(name,value);
         };
-        for(const auto& c : sound) if(c->sc!="stereo") set(c->sc,mod.voiceValue(c->p,i));
+        auto setVector=[&](const std::string& name,const std::vector<float>& values){
+            bool changed=false;auto& sent=st.sent[i];
+            for(size_t k=0;k<values.size();++k){
+                const auto key=name+"["+ofToString(k)+"]";
+                auto previous=sent.find(key);
+                if(previous==sent.end() || previous->second!=values[k]){sent[key]=values[k];changed=true;}
+            }
+            if(changed)batch.set(name,values);
+        };
+        std::vector<float> morphControls(93,0);morphControls[0]=mod.voiceValue(soundParam("algorithm"),i);
+        for(const auto& c : sound) if(c->sc!="stereo"){
+            if(c->sc.rfind("op",0)==0 && c->sc.substr(4)=="coarse"){
+                const auto tuning=snaps.morph.resolvedValue(c->p);
+                if(tuning.is_array() && tuning.size()==2 && tuning[0].is_number() && tuning[1].is_number()){
+                    const size_t offset=81+size_t(c->sc[2]-'0')*2;
+                    morphControls[offset]=tuning[0].get<float>();
+                    morphControls[offset+1]=tuning[1].get<float>();
+                }
+            }
+            set(c->sc,(c->sc=="env_model" || c->sc=="matrix_model" || c->sc=="osc_sync" ||
+             (c->sc.rfind("op",0)==0 && c->sc.size()>5 && c->sc.substr(4)=="mode"))
+             ? snaps.morph.activation(c->p) : mod.morphVoiceValue(c->p,i,snaps.morph));
+            if(c->sc=="algorithm" || (c->sc.size()>10 && (c->sc.substr(4)=="left_curve" || c->sc.substr(4)=="right_curve"))){
+                auto weights=snaps.morph.weights(c->p);
+                // Preserve per-voice parameter modulation. During a snapshot
+                // blend it offsets the endpoint weights, rather than replacing
+                // them with the editor's selected side.
+                if(!snaps.morph.hasEffective(c->p)){
+                    std::fill(weights.begin(),weights.end(),0);
+                    weights[std::clamp(int(std::round(mod.voiceValue(c->p,i))),0,int(weights.size())-1)]=1;
+                }else{
+                    const float delta=mod.morphVoiceValue(c->p,i,snaps.morph)-snaps.morph.value(c->p);
+                    if(delta!=0){
+                        auto shifted=weights;std::fill(shifted.begin(),shifted.end(),0);
+                        for(size_t k=0;k<weights.size();++k){
+                            const float position=std::clamp(float(k)+delta,0.f,float(weights.size()-1));
+                            const int left=int(position),right=std::min(left+1,int(weights.size())-1);
+                            const float f=position-left;
+                            shifted[left]+=weights[k]*(1-f);shifted[right]+=weights[k]*f;
+                        }
+                        weights=std::move(shifted);
+                    }
+                }
+                const size_t offset=c->sc=="algorithm"?1:33+size_t(c->sc[2]-'0')*8+(c->sc.substr(4)=="right_curve"?4:0);
+                std::copy(weights.begin(),weights.end(),morphControls.begin()+offset);
+            }
+        }
+        setVector("algorithm",morphControls);
         set("gatebus",st.gates->index+i);
         set("nativebus",st.nativeBus->index);
         set("velbus",mod.sourceBus(server,scModulation::SRC_VEL)+i);
@@ -319,7 +383,7 @@ void scFMBox::sendSound(ofxSCServer* server, State& st) {
     if(st.native) {
         scSynthControlBatch native(st.native,server);
         native.set("gatebus",st.gates->index);native.set("out",st.nativeBus->index);
-        for(const auto& c:sound) if(c->sc.rfind("lfo_",0)==0) native.set(c->sc,c->p.get());
+        for(const auto& c:sound) if(c->sc.rfind("lfo_",0)==0) native.set(c->sc,mod.morphVoiceValue(c->p,0,snaps.morph));
         native.send();
     }
     if(st.spread) {
@@ -451,28 +515,20 @@ ofJson scFMBox::capture() const {
     for(const auto& c:controls) if(!scSnapshots::isOwnKey(c.key)&&c.key!=afxPreset.getEscapedName()) j[c.key]=c.save();
     mod.patchBases(j);mod.save(j,"fmMod");return j;
 }
-void scFMBox::apply(const ofJson& a,const ofJson& b,float t,bool sw) {
+void scFMBox::apply(const ofJson& aSaved, const ofJson& bSaved,float t,bool sw) {
+    const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
     restoring=true;
+    auto x=a,y=b;snaps.morph.pinSelectors(x,y,t);
     for(const auto& c:controls) if(!scSnapshots::isOwnKey(c.key)&&c.key!=afxPreset.getEscapedName()&&!(published.count(c.key)&&published.at(c.key)->hasInConnection())) {
-        const auto& av=a.contains(c.key)?a[c.key]:initial[c.key];
-        const auto& bv=b.contains(c.key)?b[c.key]:initial[c.key];
+        const auto& av=x.contains(c.key)?x[c.key]:initial[c.key];
+        const auto& bv=y.contains(c.key)?y[c.key]:initial[c.key];
         c.load(blend(av,bv,t,sw,c.discrete));
     }
-    const auto& src=sw?b:a;
-    if(modSource!=&src || t>=1) { modSource=&src; mod.load(src,"fmMod");mod.afterLoad(); }
-    auto count = [&](const char* key,int max) {
-        const int av=a.value(key,0),bv=b.value(key,0);
-        return std::clamp(t<=0 ? av : t>=1 ? bv : std::max(av,bv),0,max);
-    };
-    const int nl=count("fmModLfos",scModulation::MAX_LFOS),ne=count("fmModEnvs",scModulation::MAX_ENVS),nx=count("fmModExts",scModulation::MAX_EXT);
-    bool counts=nl!=mod.lfoCount||ne!=mod.envCount||nx!=mod.extCount;
-    mod.lfoCount=nl;mod.envCount=ne;mod.extCount=nx;
-    auto ma=a.value("fmModMatrix",std::vector<float>(scModulation::NUM_SOURCES*NUM_TARGETS,0));
-    auto mb=b.value("fmModMatrix",std::vector<float>(scModulation::NUM_SOURCES*NUM_TARGETS,0));
-    ma.resize(mod.matrix.size(),0);mb.resize(mod.matrix.size(),0);
-    bool dirty=false;
-    for(size_t i=0;i<mod.matrix.size();++i) {float value=ofLerp(ma[i],mb[i],t);if(value!=mod.matrix[i]){mod.matrix[i]=value;dirty=true;}}
-    if(counts) mod.refresh();else if(dirty) mod.sendMatrix();
+    mod.loadMorph(a,b,t,sw,"fmMod",[this](const std::string& key){
+        auto it=published.find(key);return it!=published.end() && it->second->hasInConnection();
+    });
+    mod.afterLoad();
+    mod.refresh();
     restoring=false;sendAll();
 }
 void scFMBox::setAlgorithm(int algorithm) {
@@ -602,6 +658,7 @@ void scFMBox::presetSave(ofJson& j) {
     j["fmBoxPublished"]=publishedKeys;timeline.save(j,"fmBoxTimeline");
 }
 void scFMBox::loadBeforeConnections(ofJson& j) {
+    scDroneMode::migrate(j);
     mod.loadLfoOutputs(j);
     if(j.contains("fmBoxAFX")) {
         const auto& a=j["fmBoxAFX"];const std::string path=a.value("path",std::string());
@@ -615,11 +672,10 @@ void scFMBox::loadBeforeConnections(ofJson& j) {
     for(const auto& k:wanted) publish(k);timeline.load(j,"fmBoxTimeline");
 }
 void scFMBox::presetRecallAfterSettingParameters(ofJson& j) {
+    scDroneMode::migrate(j);
+    if(!j.contains(drone.getEscapedName())) drone = false;
     if(!j.contains("fmBox")) return;
     auto state=j["fmBox"];
-    // a loaded patch starts from Auto's own rule: droning unless Gate is
-    // connected or timelined (a value it gets from here on switches it to gated)
-    gateTouched=false;
     apply(state,state,1,true);
     restoring=true;for(const auto& c:controls) if(scSnapshots::isOwnKey(c.key)&&state.contains(c.key)) c.load(state[c.key]);restoring=false;
 }
@@ -1250,9 +1306,7 @@ void scFMBox::combo(ofParameter<int>& p, const char* label, float w) {
 
 
 bool scFMBox::droning() const {
-    if(gateMode.get()==2) return true;
-    if(gateMode.get()==1) return false;
-    return !(gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined()));
+    return drone.get();
 }
 void scFMBox::drawHeader() {
     const float z=zoom();
@@ -1271,8 +1325,8 @@ void scFMBox::drawHeader() {
     next(170*z);
     ImGui::BeginGroup();slider(master,"Master",170*z,"%.2f");ImGui::EndGroup();
     next(190*z);labelW=64;
-    ImGui::BeginGroup();combo(gateMode,"Gate Mode",190*z);ImGui::EndGroup();
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: drone until Gate is connected, timelined or receives a note.\nGated: follow Gate. Drone: every voice always plays.");
+    toggle(drone,"Drone");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Drone: every voice plays continuously. Unchecked: follow Gate.");
     next(ImGui::CalcTextSize("droning").x,6);
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(droning()?ImVec4(.96f,.73f,.45f,1):ImVec4(.59f,.65f,1,1),droning()?"droning":"gated");

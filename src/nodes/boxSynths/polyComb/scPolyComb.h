@@ -294,10 +294,9 @@ private:
     ofParameter<void> resetLFOs;
 
     // ── Voice ────────────────────────────────────────────────────────────────
-    ofParameter<int> envMode;                                  // 0 Auto, 1 Gated, 2 Drone
+    ofParameter<bool> drone;
     int sentDrone = -1;
-    bool gateTouched = false;          // Auto: gated once Gate has had a value (or a cable)
-    bool droning() const;          // Drone, or Auto with nothing on Gate
+    bool droning() const;          // Whether continuous playback is enabled
     void sendEnvMode(bool force = false);
     ofParameter<float> ampA, ampD, ampS, ampR, ampCA, ampCD, ampCR, velSens, glide, vibRate, vibRand, vibAmt;
     ofParameter<float> tremRate, tremRand, tremDepth;

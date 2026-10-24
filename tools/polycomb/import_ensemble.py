@@ -245,7 +245,7 @@ def main():
             state[key]=checked if typ=='vector' else checked[0]
         def direct(key,sid):put(key,v(sid));mapped.add(sid)
         def route(source,target,amount):matrix[source*14+target]+=amount
-        put('Env_Mode',2);put('Scramble',False)   # Drone: the converted sounds hold (no gate needed);put('Placement',0);put('Spread',1)
+        put('Drone',True);put('Scramble',False)   # Drone: the converted sounds hold (no gate needed);put('Placement',0);put('Spread',1)
         shape=int(round(v(11,1)));shape_names={1:'Saw',2:'SuperSaw',3:'Pulse',4:'Tri',5:'Sine',6:'White',7:'Impulse',8:'Dust'}
         for key in ('Saw','SuperSaw','Pulse','Tri','Sine','White','Pink','Impulse','Dust'):put(key,1.0 if shape_names.get(shape)==key else 0.0)
         if shape in (2,8):issues.append('Two-saw/geiger oscillator approximated by SuperSaw/Dust')

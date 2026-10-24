@@ -28,7 +28,7 @@ def main():
     config=out/'sclang.yaml'
     classes=out/'classes'
     classes.mkdir(exist_ok=True)
-    for path in [ROOT/'synthdefs/Oceanode/oceanodeParameter.sc',ROOT/'ugens/OceanodeSteamPipe/OceanodeSteamPipe.sc',ROOT/'ugens/OceanodeAnalog/OceanodeAnalog.sc']:
+    for path in [ROOT/'synthdefs/Oceanode/oceanodeParameter.sc',ROOT/'synthdefs/Oceanode/oceanodeMicroSpace.sc',ROOT/'ugens/OceanodeSteamPipe/OceanodeSteamPipe.sc',ROOT/'ugens/OceanodeAnalog/OceanodeAnalog.sc']:
         shutil.copyfile(path,classes/path.name)
     includes=[ROOT/'sclang/SCClassLibrary',classes]
     config.write_text('includePaths:\n'+''.join('  - '+json.dumps(str(p))+'\n' for p in includes)+'excludeDefaultPaths: true\n')

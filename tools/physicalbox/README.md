@@ -62,3 +62,10 @@ struck, the doublets (Split cents, Beat Hz), a near-zero Split against none
   blown ones are chaotic (a rounding change gives another realisation, as
   another seed does), so compare their level and spectrum against the
   variation between two seeds instead.
+
+## Snapshot count morph regression
+
+`python3 tools/physicalbox/morph_test.py` renders the current native plugin around
+fractional mode-count and cascade boundaries. It uses the bundled class and
+plugin without installing them. `--baseline-plugin <directory>` also checks
+sample-exact integer endpoints against an earlier plugin build.

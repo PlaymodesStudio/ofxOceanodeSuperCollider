@@ -30,9 +30,11 @@
 //
 
 #pragma once
+#include "../shared/scDroneMode.h"
 
 #include "../../../scNode.h"
 #include "../shared/scKeyboardPiano.h"
+#include "../shared/scConfigurationMorph.h"
 #include "../../../ui/scTimelineMenu.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
@@ -273,7 +275,7 @@ public:
 
     ~scPulsarBox() override {
         for(auto& [server, st] : states){
-            if(st.synth){ st.synth->free(); delete st.synth; }
+            clearBanks(st);
             freeMod(server, st, true);
             if(st.gateBus){
                 if(pulsarbox::audioBusIsLive(server, st.gateBus)) st.gateBus->free();
@@ -292,7 +294,7 @@ public:
         timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                        [this](){ return publishedKeys; });
         addParameter(showWindow.set("Show", false));
-        addParameter(numVoices.set("Voices", 1, 1, MAX_VOICES));
+        voiceCountHandle=addParameter(numVoices.set("Voices", 1, 1, MAX_VOICES));
         addParameter(numOutputs.set("Outputs", 2, 1, MAX_OUTPUTS));
         scNode::addOutput("Out");
         // Gate (levels: a gate rising to 0.2 plays at 0.2) and Pitch (MIDI notes:
@@ -312,7 +314,6 @@ public:
         listeners.push(gate.newListener([this](std::vector<float>& v){
             if(scScheduling::isBackendSendSuppressed()) return;
             viewDirty = true;
-            if(!gateTouched) for(float x : v) if(x > 0.0f) { gateTouched = true; break; }   // Auto: now gated
             if(noteInputs.isSending()) sendNotes(); else controlsDirty = true;
         }));
 
@@ -321,8 +322,8 @@ public:
         transpose.set("Transpose", 0.0f, -48.0f, 48.0f);
         glide.set("Glide", 0.0f, 0.0f, 5.0f);
         levels.set("Levels", {0.5f}, {0.0f}, {1.0f});
-        // the Amp Envelope on each voice's gate (Gate Mode: whether it plays through it)
-        gateMode.set("Gate Mode", 0, 0, 2);
+
+        drone.set("Drone", false);
         attack.set("Attack", 0.005f, 0.0f, 10.0f);
         decay.set("Decay", 0.3f, 0.001f, 10.0f);
         sustain.set("Sustain", 1.0f, 0.0f, 1.0f);
@@ -375,6 +376,19 @@ public:
             h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySound(a, b, t, sw); };
             h.bpm = [this](){ return currentBpm; };
             h.paramMenu = [this](const std::string& k){ controlMenu(k); };
+            h.morphBlocked=[this](const std::string& key){
+                auto it=publishedHandles.find(key);return it!=publishedHandles.end() && it->second->hasInConnection();
+            };
+            snaps.morph.mode(panMode,4);
+            for(auto& p:formantMode)snaps.morph.continuous(p);
+            for(int g=0;g<LAYERS;++g)for(int e=0;e<2;++e){
+                auto& p=e ? envelope[g] : pulsaret[g];
+                const auto key=p.getEscapedName(),fallback=p.get();
+                snaps.morph.resolved(p,[this,key,fallback,e](const ofJson& state)->ofJson{
+                    return tableFor(state.value(key,fallback),e!=0);
+                });
+            }
+            h.morphChanged=[this](){tablesDirty=true;controlsDirty=true;viewDirty=true;};
             snaps.setup(h);
         }
         publishByKey(fundamental.getEscapedName());
@@ -382,25 +396,26 @@ public:
 
         // Listeners
         auto controls = [this](){ controlsDirty = true; viewDirty = true; };
-        listeners.push(numVoices.newListener([this](int&){ if(!loadingBankPreset) structureDirty = true; viewDirty = true; }));
-        listeners.push(numOutputs.newListener([this](int&){ if(!loadingBankPreset) structureDirty = true; viewDirty = true; }));
+        listeners.push(numVoices.newListener([this](int&){ if(!loadingBankPreset){bankWeights.clear();bankRetireAt=-1;structureDirty=true;} viewDirty = true; }));
+        listeners.push(numOutputs.newListener([this](int&){ if(!loadingBankPreset){bankWeights.clear();bankRetireAt=-1;structureDirty=true;} viewDirty = true; }));
         for(auto* p : {&fundamental, &levels})
             listeners.push(p->newListener([controls](std::vector<float>&){ controls(); }));
         for(auto* p : {&transpose, &glide, &attack, &decay, &sustain, &release, &attackCurve, &decayCurve, &releaseCurve,
                        &volume, &rateJitter, &formantShift, &cyclesScale,
                        &formantJitter, &levelJitter, &probability, &rotate, &panJitter})
             listeners.push(p->newListener([controls](float&){ controls(); }));
-        for(auto* p : {&burst, &rest, &panMode, &gateMode})
-            listeners.push(p->newListener([controls](int&){ controls(); }));
+        listeners.push(drone.newListener([this,controls](bool&){snaps.morph.edited(drone);controls();}));
+        for(auto* p : {&burst, &rest, &panMode})
+            listeners.push(p->newListener([this,p,controls](int&){snaps.morph.edited(*p);controls();}));
         // Formants: a synth with that many layers (the others are not built)
-        listeners.push(numLayers.newListener([this, controls](int&){ if(!loadingBankPreset) structureDirty = true; controls(); }));
+        listeners.push(numLayers.newListener([this, controls](int&){ if(!loadingBankPreset){bankWeights.clear();bankRetireAt=-1;structureDirty=true;} controls(); }));
         listeners.push(sieve.newListener([controls](std::vector<int>&){ controls(); }));
         for(int g = 0; g < LAYERS; g++){
-            listeners.push(formantMode[g].newListener([controls](int&){ controls(); }));
+            listeners.push(formantMode[g].newListener([this,g,controls](int&){snaps.morph.edited(formantMode[g]);controls();}));
             for(auto* p : {&formantHz[g], &formantRatio[g], &cycles[g], &layerLevel[g], &layerDelay[g], &layerPan[g]})
                 listeners.push(p->newListener([controls](float&){ controls(); }));
             for(auto* p : {&pulsaret[g], &envelope[g]})
-                listeners.push(p->newListener([this](std::string&){ tablesDirty = true; viewDirty = true; }));
+                listeners.push(p->newListener([this,p](std::string&){ snaps.morph.edited(*p);tablesDirty = true; viewDirty = true; }));
         }
         refreshTables();
     }
@@ -427,6 +442,7 @@ public:
                 (kind ? envelope[g] : pulsaret[g]) = relativeToData(chosen);
             }
         }
+        if(bankRetireAt>=0 && now>=bankRetireAt){bankRetireAt=-1;structureDirty=true;}
         if(structureDirty){ structureDirty = false; applyStructure(); }
         if(const int g = ampGated() ? 1 : 0; g != ampGatedSent){ ampGatedSent = g; controlsDirty = true; }
         if(tablesDirty){
@@ -471,24 +487,33 @@ public:
     void buildSynth(ofxSCServer* server) override {
         if(!server) return;
         auto& st = states[server];
-        if(st.synth){ st.synth->free(); delete st.synth; st.synth = nullptr; }
+        clearBanks(st);
         freeMod(server, st, true);
         ensureBuffers(server);
-        st.synth = new ofxSCSynth(defName(), server);
-        st.builtVoices = voices(); st.builtOutputs = outputs(); st.builtLayers = layers();
+        auto wanted=bankWeights;
+        if(wanted.empty())wanted[std::vector<int>{numVoices.get(),layers()}]=1;
+        bankCapacity=1;
+        for(const auto& entry:wanted){
+            const auto key=std::make_pair(entry.first[0],entry.first[1]);
+            auto& bank=st.banks[key];bank.weight=entry.second;
+            bank.synth=new ofxSCSynth("PulsarBox_"+ofToString(key.first)+"_"+ofToString(outputs())+"_"+ofToString(key.second),server);
+            bankCapacity=std::max(bankCapacity,key.first);
+        }
+        st.synth=st.banks.begin()->second.synth;
+        st.builtVoices=voices();st.builtOutputs=outputs();st.builtLayers=layers();
         st.sent.clear();
-        sendAll(server, true);   // set before /s_new: baked into it
+        sendAll(server,true);   // set before /s_new: baked into it
     }
     void createSynth(ofxSCServer* server) override {
         auto it = states.find(server);
         if(it == states.end() || !it->second.synth) return;
-        if(!it->second.synth->isCreated()) it->second.synth->createAndRun(0, 1, getActive());
+        for(auto& e:it->second.banks)if(!e.second.synth->isCreated())e.second.synth->createAndRun(0,1,getActive());
         createMod(server, it->second);   // the head: before the synth
     }
     void free(ofxSCServer* server) override {
         auto it = states.find(server);
         if(it == states.end()) return;
-        if(it->second.synth){ it->second.synth->free(); delete it->second.synth; it->second.synth = nullptr; }
+        clearBanks(it->second);
         freeMod(server, it->second, true);
         it->second.outBus = -1;
     }
@@ -496,7 +521,7 @@ public:
         if(index != 0) return;
         auto& st = states[server];
         st.outBus = bus;
-        if(st.synth) st.synth->set("out", bus);
+        for(auto& e:st.banks)e.second.synth->set("out",bus);
     }
     int getOutputBusIndex(ofxSCServer* server, int index) override {
         auto it = states.find(server);
@@ -509,7 +534,7 @@ public:
         // The modulation group writes the gate bus read by the main synth.
         // Move both parts as one ordered unit when another graph source is
         // added; moving only the synth can put it ahead of its gate writer.
-        st.synth->moveBefore(nodeID);
+        for(auto& e:st.banks)e.second.synth->moveBefore(nodeID);
         if(st.modGroup) st.modGroup->moveBefore(st.synth->nodeID);
     }
     int getLastSynthID(ofxSCServer* server) override {
@@ -531,10 +556,10 @@ public:
         sendModArgs(server, st);
     }
     void activate() override {
-        for(auto& [s, st] : states){ if(st.synth) st.synth->run(true); if(st.modGroup) st.modGroup->run(true); }
+        for(auto& [s, st] : states){ for(auto& e:st.banks)e.second.synth->run(true); if(st.modGroup) st.modGroup->run(true); }
     }
     void deactivate() override {
-        for(auto& [s, st] : states){ if(st.synth) st.synth->run(false); if(st.modGroup) st.modGroup->run(false); }
+        for(auto& [s, st] : states){ for(auto& e:st.banks)e.second.synth->run(false); if(st.modGroup) st.modGroup->run(false); }
     }
     void resendParametersForNRT() override {
         for(auto& [server, st] : states){ uploadTables(server, true); sendAll(server, true); sendGate(server, st); sendModArgs(server, st); }
@@ -557,6 +582,7 @@ public:
         mod.save(json, "pulsarBoxMod");
     }
     void loadBeforeConnections(ofJson& json) override {
+        scDroneMode::migrate(json);
         mod.loadLfoOutputs(json);
         if(!json.contains("publishedEditorParameters") || !json["publishedEditorParameters"].is_array()) return;
         try { syncPublished(json["publishedEditorParameters"].get<std::vector<std::string>>()); } catch(...) {}
@@ -574,16 +600,16 @@ public:
     }
 #endif
     void presetRecallAfterSettingParameters(ofJson& json) override {
+        scDroneMode::migrate(json);
+        if(!json.contains(drone.getEscapedName())) drone = false;
         if(json.contains("bankPreset") && json["bankPreset"].is_string()) snaps.currentPreset = json["bankPreset"].get<std::string>();
         if(json.contains("viewHeight") && json["viewHeight"].is_number())
             viewHeight = ofClamp(json["viewHeight"].get<float>(), 160.0f, 2000.0f);
-        // Saved before Gate Mode: the gate always went through the envelope
-        if(!json.contains(gateMode.getEscapedName())) gateMode = 1;
+
         for(const auto& a : publishActions){
             if(isPublished(a.key) || !json.contains(a.key) || !a.load) continue;
             a.load(json[a.key]);
         }
-        gateTouched = false;   // Auto drones again until the Gate is used
         loadModulation(json);
     }
 
@@ -592,7 +618,13 @@ private:
     // Synth values
     // ════════════════════════════════════════════════════════════════════════
 
+    struct RenderBank {
+        ofxSCSynth* synth=nullptr;
+        float weight=1;
+        std::map<std::string,std::vector<float>> sent;
+    };
     struct ServerState {
+        std::map<std::pair<int,int>,RenderBank> banks;
         ofxSCSynth* synth = nullptr;
         int outBus = -1;
         int builtVoices = 0, builtOutputs = 0, builtLayers = 0;
@@ -610,18 +642,30 @@ private:
         bool modCreated = false;
     };
 
-    int voices() const { return std::clamp(numVoices.get(), 1, MAX_VOICES); }
+    std::shared_ptr<ofxOceanodeAbstractParameter> voiceCountHandle;
+    bool soundDriven(const std::string& key) const {
+        if(key==numVoices.getEscapedName())return voiceCountHandle && voiceCountHandle->hasInConnection();
+        auto it=publishedHandles.find(key);return it!=publishedHandles.end() && it->second->hasInConnection();
+    }
+    static constexpr const char* bankMetadata="_pulsarConfigurations";
+    scConfigurationMorph::Weights bankWeights;
+    float bankRetireAt=-1;
+    int bankCapacity=0;
+    std::vector<scConfigurationMorph::Field> bankFields() const {
+        return {{"Voices",numVoices.get(),MAX_VOICES},{numLayers.getEscapedName(),numLayers.get(),LAYERS}};
+    }
+    static void clearBanks(ServerState& st) {
+        for(auto& e:st.banks){e.second.synth->free();delete e.second.synth;}
+        st.banks.clear();st.synth=nullptr;
+    }
+    int voices() const { return std::clamp(std::max(numVoices.get(),bankCapacity), 1, MAX_VOICES); }
     int outputs() const { return std::clamp(numOutputs.get(), 1, MAX_OUTPUTS); }
     int layers() const { return std::clamp(numLayers.get(), 1, LAYERS); }
     std::string defName() const {
         return "PulsarBox_" + ofToString(voices()) + "_" + ofToString(outputs()) + "_" + ofToString(layers());
     }
-    // The Amp Envelope is the voices' VCA: Gated, or Auto once the Gate is used
-    bool ampGated() const {
-        if(gateMode.get() == 2) return false;
-        if(gateMode.get() == 1) return true;
-        return gateTouched || gateIn.connected() || (gateIn.handle && gateIn.handle->isTimelined());
-    }
+    // The Amp Envelope controls note playback unless Drone is enabled.
+    bool ampGated() const { return !drone.get(); }
 
     float voiceFund(int v) const {
         if(pitchMode(nullptr) == 1)   // from Pitch (Oceanode values)
@@ -645,9 +689,12 @@ private:
         return sieveStep(j) && (j % (b + r)) < b;
     }
 
-    std::map<std::string, std::vector<float>> synthValues(const ServerState& st) const {
+    template<class P> std::vector<float> bankValues(const P& p,int n) const {
+        std::vector<float> out(n);for(int v=0;v<n;++v)out[v]=mod.voiceValue(p,v);return out;
+    }
+    std::map<std::string, std::vector<float>> synthValues(const ServerState& st,int V) const {
         std::map<std::string, std::vector<float>> c;
-        const int V = voices(), L = layers();
+
         std::vector<float> fund(V), lev(V), gt(V);
         for(int v = 0; v < V; v++){
             fund[v] = voiceFund(v);
@@ -658,14 +705,14 @@ private:
         // the gates' levels from ModGate (Gate values / cable), the pitch cable
         c["gatebus"] = {st.modCreated && st.gateBus ? (float)st.gateBus->index : -1.0f};
         c["tr"] = {transpose.get()};
-        c["glide"] = mod.voiceValues(glide);
-        c["atk"] = mod.voiceValues(attack); c["dec"] = mod.voiceValues(decay); c["sus"] = mod.voiceValues(sustain); c["rel"] = mod.voiceValues(release);
-        c["ca"] = mod.voiceValues(attackCurve); c["cd"] = mod.voiceValues(decayCurve); c["cr"] = mod.voiceValues(releaseCurve);
+        c["glide"] = bankValues(glide,V);
+        c["atk"] = bankValues(attack,V); c["dec"] = bankValues(decay,V); c["sus"] = bankValues(sustain,V); c["rel"] = bankValues(release,V);
+        c["ca"] = bankValues(attackCurve,V); c["cd"] = bankValues(decayCurve,V); c["cr"] = bankValues(releaseCurve,V);
         c["gated"] = {ampGated() ? 1.0f : 0.0f};
         std::vector<float> lmode(LAYERS), lhz(LAYERS*V), lrat(LAYERS*V), lcyc(LAYERS*V), lamp(LAYERS*V),
                            loff(LAYERS*V), lpan(LAYERS*V), pbuf(LAYERS), ebuf(LAYERS);
         for(int g = 0; g < LAYERS; g++){
-            lmode[g] = float(formantMode[g].get());
+            lmode[g] = snaps.morph.activation(formantMode[g]);
             for(int v=0;v<V;++v){
                 const int i=g*V+v;
                 lhz[i]=std::clamp(mod.voiceValue(formantHz[g],v)*shiftFactor(),1.0f,20000.0f);
@@ -680,14 +727,14 @@ private:
         }
         c["lmode"] = lmode; c["lhz"] = lhz; c["lrat"] = lrat; c["lcyc"] = lcyc;
         c["lamp"] = lamp; c["loff"] = loff; c["lpan"] = lpan; c["pbuf"] = pbuf; c["ebuf"] = ebuf;
-        c["rjit"] = mod.voiceValues(rateJitter); c["fjit"] = mod.voiceValues(formantJitter);
-        c["ajit"] = mod.voiceValues(levelJitter); c["pjit"] = mod.voiceValues(panJitter);
+        c["rjit"] = bankValues(rateJitter,V); c["fjit"] = bankValues(formantJitter,V);
+        c["ajit"] = bankValues(levelJitter,V); c["pjit"] = bankValues(panJitter,V);
         c["prob"] = {probability.get()};
         c["burst"] = {float(std::max(1, burst.get()))}; c["rest"] = {float(std::max(0, rest.get()))};
         std::vector<float> sv(SIEVE_MAX, 1.0f);
         for(int i = 0; i < SIEVE_MAX && i < (int)sieve.get().size(); i++) sv[i] = sieve.get()[i] ? 1.0f : 0.0f;
         c["sieve"] = sv; c["slen"] = {float(sieveLength())};
-        c["pmode"] = {float(panMode.get())}; c["rot"] = {rotate.get()};
+        c["pmode"] = {float(panMode.get())}; c["panweights"]=snaps.morph.weights(panMode); c["rot"] = {rotate.get()};
         return c;
     }
 
@@ -695,35 +742,63 @@ private:
         auto it = states.find(server);
         if(it == states.end() || !it->second.synth) return;
         auto& st = it->second;
-        for(const auto& [name, values] : synthValues(st)){
-            auto s = st.sent.find(name);
-            if(!force && s != st.sent.end() && s->second == values) continue;
-            st.sent[name] = values;
-            if(values.size() == 1) st.synth->set(name, double(values[0]));
-            else st.synth->set(name, values);
+        for(auto& entry:st.banks){
+            auto& bank=entry.second;
+            auto controls=synthValues(st,entry.first.first);
+            controls["morphgain"]={bank.weight};
+            for(const auto& [name,values]:controls){
+                auto previous=bank.sent.find(name);
+                if(!force && previous!=bank.sent.end() && previous->second==values)continue;
+                bank.sent[name]=values;
+                if(values.size()==1)bank.synth->set(name,double(values[0]));
+                else bank.synth->set(name,values);
+            }
+            if(st.outBus>=0)bank.synth->set("out",st.outBus);
         }
-        if(force && st.outBus >= 0) st.synth->set("out", st.outBus);
     }
 
-    // Voices / Outputs / Formants changed: the synth replaced in place (/s_new action 4)
+    // Preserve every contributing graph, including during a reversed or stored
+    // morph. A zero-weight graph stays alive until its output lag has settled.
     void applyStructure(){
-        for(auto& [server, st] : states){
-            if(!st.synth || (st.builtVoices == voices() && st.builtOutputs == outputs() && st.builtLayers == layers())) continue;
-            auto* old = st.synth;
-            st.synth = new ofxSCSynth(defName(), server);
-            st.builtVoices = voices(); st.builtOutputs = outputs(); st.builtLayers = layers();
-            st.sent.clear();
-            sendAll(server, true);
-            if(old->isCreated()) st.synth->createAndRun(4, old->nodeID, getActive());
-            delete old;   // no /n_free: action 4 replaced the node
-            if(st.modCreated){   // the modulation's synths at the new voice count
-                if(st.gateS){ st.gateS->free(); delete st.gateS; st.gateS = nullptr; }
-                createGate(server, st);
-                mod.rebuild(server);
-                sendModArgs(server, st);
+        auto wanted=bankWeights;
+        if(wanted.empty())wanted[std::vector<int>{numVoices.get(),layers()}]=1;
+        const bool retire=bankRetireAt<0;
+        int capacity=1;for(const auto& e:wanted)capacity=std::max(capacity,e.first[0]);
+        for(auto& [server,st]:states){
+            if(!st.synth)continue;
+            const bool outputsChanged=st.builtOutputs!=outputs();
+            if(outputsChanged)clearBanks(st);
+            for(auto& e:st.banks)e.second.weight=0;
+            for(const auto& e:wanted){
+                const auto key=std::make_pair(e.first[0],e.first[1]);
+                auto& bank=st.banks[key];bank.weight=e.second;
+                if(!bank.synth)bank.synth=new ofxSCSynth("PulsarBox_"+ofToString(key.first)+"_"+ofToString(outputs())+"_"+ofToString(key.second),server);
             }
+            if(retire)for(auto i=st.banks.begin();i!=st.banks.end();){
+                if(i->second.weight==0){i->second.synth->free();delete i->second.synth;i=st.banks.erase(i);}else ++i;
+            }
+            for(const auto& e:st.banks)capacity=std::max(capacity,e.first.first);
+            st.synth=st.banks.begin()->second.synth;
+            st.builtOutputs=outputs();
+            sendAll(server,false);
+            ofxSCSynth* anchor=nullptr;
+            for(const auto& e:st.banks)if(e.second.synth->isCreated()){anchor=e.second.synth;break;}
+            for(auto& e:st.banks)if(!e.second.synth->isCreated()){
+                if(anchor)e.second.synth->createAndRun(2,anchor->nodeID,getActive());
+                else {e.second.synth->createAndRun(0,1,getActive());anchor=e.second.synth;}
+            }
+            if(st.modGroup)st.modGroup->moveBefore(st.synth->nodeID);
         }
-        mod.voicesChanged();
+        const int oldVoices=voices();bankCapacity=capacity;
+        if(oldVoices!=voices())mod.voicesChanged();
+        for(auto& [server,st]:states)if(st.synth){
+            if(st.modCreated && (oldVoices!=voices() || st.builtVoices!=voices())){
+                if(st.gateS){st.gateS->free();delete st.gateS;st.gateS=nullptr;}
+                createGate(server,st);mod.rebuild(server);
+            }
+            st.builtVoices=voices();st.builtLayers=layers();
+            sendModArgs(server,st);
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -779,16 +854,7 @@ private:
     }
     // A scheduled note (inside its timetag): only what a note changes.
     void sendNotes(){
-        for(auto& [server, st] : states){
-            if(!st.synth) continue;
-            auto values = synthValues(st);
-            for(const char* name : {"fund", "gate"}){
-                const auto& v = values[name];
-                st.sent[name] = v;
-                if(v.size() == 1) st.synth->set(name, double(v[0])); else st.synth->set(name, v);
-            }
-            sendGate(server, st);
-        }
+        for(auto& [server,st]:states){sendAll(server,false);sendGate(server,st);}
     }
     void sendGate(ofxSCServer* server, ServerState& st){
         if(!st.gateS) return;
@@ -838,12 +904,14 @@ private:
         return (pitchTouched || pitchIn.connected()) ? 1 : 0;
     }
     void sendModArgs(ofxSCServer* server, ServerState& st){
-        if(!st.synth) return;
-        const int pb = pitchIn.bus(server);
-        st.synth->set("pitch_sel", pb >= 0 ? 1.0f : 0.0f);
-        if(pb >= 0) st.synth->mapan("pitch_ar", pb, voices());
-        st.synth->set("gatebus", st.modCreated && st.gateBus ? (float)st.gateBus->index : -1.0f);
-        st.synth->set("mod", st.modCreated ? (float)mod.targetBus(server, 0) : -1.0f);
+        const int pb=pitchIn.bus(server);
+        for(auto& e:st.banks){
+            auto* synth=e.second.synth;
+            synth->set("pitch_sel",pb>=0?1.0f:0.0f);
+            if(pb>=0)synth->mapan("pitch_ar",pb,e.first.first);
+            synth->set("gatebus",st.modCreated && st.gateBus?float(st.gateBus->index):-1.0f);
+            synth->set("mod",st.modCreated?float(mod.targetBus(server,0)):-1.0f);
+        }
     }
     void loadModulation(const ofJson& json){
         if(json.contains("pulsarBoxModMatrix")){ mod.load(json, "pulsarBoxMod"); migrateAmpEnvelope(json); }
@@ -869,7 +937,7 @@ private:
                 const auto E = mod.envValues(e);
                 attack = E.a; decay = E.d; sustain = E.s; release = E.r;
                 attackCurve = E.ca; decayCurve = E.cd; releaseCurve = E.cr;
-                gateMode = 1;
+                drone = false;
                 found = true;
             }
             cell = 0.0f;   // now a route to Level adds to it
@@ -909,8 +977,10 @@ private:
     }
     void refreshTables(){
         for(int g = 0; g < LAYERS; g++){
-            tables[g][0] = tableFor(pulsaret[g].get(), false);
-            tables[g][1] = tableFor(envelope[g].get(), true);
+            tables[g][0] = snaps.morph.hasEffective(pulsaret[g])
+                ? snaps.morph.resolvedValue(pulsaret[g]).get<std::vector<float>>() : tableFor(pulsaret[g].get(),false);
+            tables[g][1] = snaps.morph.hasEffective(envelope[g])
+                ? snaps.morph.resolvedValue(envelope[g]).get<std::vector<float>>() : tableFor(envelope[g].get(),true);
         }
     }
 
@@ -1141,7 +1211,7 @@ private:
         addPublishAction(transpose);
         addPublishAction(glide);
         addPublishAction(levels);
-        addPublishAction(gateMode);
+        addPublishAction(drone);
         addPublishAction(attack);
         addPublishAction(decay);
         addPublishAction(sustain);
@@ -1262,6 +1332,7 @@ private:
     ofJson captureSound() const {
         ofJson json;
         json["Voices"] = numVoices.get();
+        scConfigurationMorph::capture(json,bankMetadata,bankWeights);
         for(const auto& a : publishActions) if(a.save && !notInPresets(a.key)) a.save(json);
         mod.patchBases(json);
         mod.save(json, "pulsarBoxMod");
@@ -1269,26 +1340,50 @@ private:
     }
     // Every control back to its default, then the sound's values; the synth
     // is replaced once afterwards if the voice count changed
-    void loadSound(const ofJson& json){
+    void loadSound(const ofJson& jsonSaved){
+        const auto json = scDroneMode::migrated(jsonSaved);
+        bankWeights=scConfigurationMorph::endpoint(json,bankMetadata,bankFields());
+        bankRetireAt=-1;
         loadingBankPreset = true;
-        for(const auto& a : publishActions) if(a.reset && !notInPresets(a.key)) a.reset();
-        numVoices = json.contains("Voices") && json["Voices"].is_number_integer() ? json["Voices"].get<int>() : 1;
+        for(const auto& a : publishActions) if(a.reset && !notInPresets(a.key) && !soundDriven(a.key)) a.reset();
+        if(!soundDriven(numVoices.getEscapedName()))numVoices = json.contains("Voices") && json["Voices"].is_number_integer() ? json["Voices"].get<int>() : 1;
         for(const auto& a : publishActions)
-            if(a.load && !notInPresets(a.key) && json.contains(a.key)) a.load(json[a.key]);
+            if(a.load && !notInPresets(a.key) && !soundDriven(a.key) && json.contains(a.key)) a.load(json[a.key]);
+        scConfigurationMorph::Weights constrained;
+        for(const auto& e:bankWeights){auto c=e.first;
+            if(soundDriven(numVoices.getEscapedName()))c[0]=numVoices.get();
+            if(soundDriven(numLayers.getEscapedName()))c[1]=numLayers.get();
+            constrained[c]+=e.second;
+        }
+        bankWeights=std::move(constrained);
         loadModulation(json);
         loadingBankPreset = false;
         structureDirty = true;
         modSource = nullptr;
     }
-    // Between two sounds: numbers glide, the rest (voices, layers, modes,
-    // tables, the routing) switches at the switch point
-    void applySound(const ofJson& a, const ofJson& b, float t, bool sw){
-        if(t >= 1.0f && sw){ loadSound(b); return; }
-        scSnapshots::blendActions(publishActions, a, b, t, sw, [this](const std::string& k){ return notInPresets(k); });
+    // Numbers and evaluated tables glide; graph configurations use temporary
+    // weighted banks so resizing never replaces a contributing graph.
+    void applySound(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw){
+        const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
+        bankWeights=scConfigurationMorph::blend(a,b,t,bankMetadata,bankFields());
+        bankRetireAt=ofGetElapsedTimef()+0.35f;
+        loadingBankPreset=true;
+        scConfigurationMorph::Weights constrained;
+        for(const auto& e:bankWeights){auto c=e.first;
+            if(soundDriven(numVoices.getEscapedName()))c[0]=numVoices.get();
+            if(soundDriven(numLayers.getEscapedName()))c[1]=numLayers.get();
+            constrained[c]+=e.second;
+        }
+        bankWeights=std::move(constrained);
+        scSnapshots::blendActions(publishActions,a,b,t,sw,[this](const std::string& k){return notInPresets(k)||soundDriven(k);});
         const ofJson& src = sw ? b : a;
-        if(src.contains("Voices") && src["Voices"].is_number_integer() && src["Voices"].get<int>() != numVoices.get())
+        if(!soundDriven(numVoices.getEscapedName()) && src.contains("Voices") && src["Voices"].is_number_integer() && src["Voices"].get<int>() != numVoices.get())
             numVoices = src["Voices"].get<int>();
-        if(&src != modSource && src.contains("pulsarBoxModMatrix")){ modSource = &src; loadModulation(src); }
+        loadingBankPreset=false;
+        structureDirty=true;
+        mod.loadMorph(a,b,t,sw,"pulsarBoxMod",[this](const std::string& key){return soundDriven(key);});
+        migrateAmpEnvelope(src);
+        mod.afterLoad();mod.refresh();modDirty=true;
     }
     const ofJson* modSource = nullptr;   // the routing switched to (a blend's side)
     float currentBpm = 120.0f;
@@ -1684,16 +1779,15 @@ private:
         ImGui::EndTable();
     }
 
-    // The Envelopes tab's lead card: Gate Mode and the Amp Envelope
+    // The Envelopes tab's lead card: Drone and the Amp Envelope
     void drawAmpCard(float cw){
         ImGui::BeginChild("##pbAmpCard", ImVec2(cw, 0), ImGuiChildFlags_AutoResizeY);
         heading("AMP ENVELOPE");
-        combo(gateMode, {"Auto", "Gated", "Drone"});
+        bool droneOn = drone.get();
+        if(ImGui::Checkbox("Drone", &droneOn)) drone.set(droneOn);
+        controlMenu(drone.getEscapedName());
         if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("Auto: drones until the Gate is used (a value set, a cable, the timeline),\n"
-                              "then each voice plays through the Amp Envelope\n"
-                              "Gated: always through the Amp Envelope (Gate 0: silent)\n"
-                              "Drone: the Gate opens nothing");
+            ImGui::SetTooltip("Drone: every voice plays continuously. Unchecked: follow Gate.");
         scEnvCurve::ADSR e{std::max(0.001f, attack.get()), decay.get(), sustain.get(), std::max(0.001f, release.get()),
                            {attackCurve.get(), decayCurve.get(), releaseCurve.get()}};
         if(scEnvCurve::editADSR("##pbAmpEnv", ImVec2(cw, 90), e, pulsarbox::layerColor(0), IM_COL32(13, 16, 24, 255),
@@ -1949,8 +2043,7 @@ private:
     void refreshOutputs() { for(auto& output : scNode::outputs) output = output; }
     ofParameter<float> transpose, glide, attack, release, volume, rateJitter;
     ofParameter<float> decay, sustain, attackCurve, decayCurve, releaseCurve;
-    ofParameter<int> gateMode;            // 0 Auto (gated once the Gate is used), 1 Gated, 2 Drone
-    bool gateTouched = false;
+    ofParameter<bool> drone;
     int ampGatedSent = -1;
     // Formants
     ofParameter<int> numLayers;

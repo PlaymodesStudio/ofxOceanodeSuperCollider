@@ -23,6 +23,7 @@ prelude=r'''
 #include <nlohmann/json.hpp>
 #include "nodes/boxSynths/polyComb/scPolyCombMigration.h"
 #include "nodes/boxSynths/shared/scVoiceCountMorph.h"
+#include "nodes/boxSynths/shared/scDroneMode.h"
 #include "nodes/boxSynths/polyComb/scPolyCombPitchMorph.h"
 #include <algorithm>
 #include <cassert>
@@ -193,9 +194,10 @@ with tempfile.TemporaryDirectory(prefix='polycomb_moving_') as d:
     assert 'Random Type' in (ROOT/'src/nodes/boxSynths/shared/scModulation.cpp').read_text() and '_Random_Type' in code
     main=main.replace('PITCH_DEFAULTS',json.dumps(pitch)).replace('DELTA_DEFAULTS',json.dumps({**delta,**lfo_random}))
     main=main.replace('COMP_DEFAULTS',json.dumps(comp)).replace('SUB_DEFAULTS',json.dumps({k:v['default'] for k,v in controls_from_source().items() if k.startswith('Sub_')}))
+    (pathlib.Path(d)/'ofJson.h').write_text('#pragma once\n#include <nlohmann/json.hpp>\nusing ofJson=nlohmann::json;\n')
     src=pathlib.Path(d)/'test.cpp';src.write_text(prelude+helpers+apply+main)
     out=pathlib.Path(d)/'test'
-    subprocess.run(['clang++','-std=c++17','-O2','-I'+str(ROOT/'tools/snapshot_morph_test/stubs'),'-I'+str(ROOT.parent.parent/'libs/json/include'),'-I'+str(ROOT/'src'),str(src),'-o',str(out)],check=True)
+    subprocess.run(['clang++','-std=c++17','-O2','-I'+d,'-I'+str(ROOT/'tools/snapshot_morph_test/stubs'),'-I'+str(ROOT.parent.parent/'libs/json/include'),'-I'+str(ROOT/'src'),str(src),'-o',str(out)],check=True)
     subprocess.run([str(out),str(fixture)],check=True)
 audit='local compiled DSP hash audit skipped' if args.skip_dsp_hashes else f'{len(expected)} original compiled DSP definitions byte-identical'
 print(f'PASS: MOVING_SAWS values/matrix/counts/voices restore with migrated ring/LFO models after an imported sound (pitch maps, Delta routes, 24 voices), saturation, compression and independent sub; option morphing; {audit}.')

@@ -56,8 +56,18 @@ SynthDef(\AliasingBoxVoice, {
     var wtphase = (wphase+(symmetry*0.5)).wrap(0,1);
     var wtri = Select.ar(wtphase < symmetry, [(1-wtphase)/(1-symmetry), wtphase/symmetry]) * 2 - 1;
     var rtri = 1 - ((((rphase+0.25).wrap(0,1) * 2) - 1).abs);
-    var read = Select.ar(p.(\read_quality,0).round.clip(0,1), [Select.ar(p.(\read_bidirectional,0) > 0.5, [(rphase+0.5).wrap(0,1),rtri]),rphase]);
-    var write = Select.ar(p.(\write_quality,0).round.clip(0,2), [wphase,wtri,read]);
+    // Endpoint weights blend only the selected alternatives, including stored
+    // intermediate sounds. Legacy callers keep their ordinary selector values.
+    var blendMode = { |key, index, signals|
+        var weights=signals.collect { |sig,k| p.((key++"_w"++k).asSymbol,0) };
+        var total=weights.sum;
+        var fallback=signals.collect { |sig,k| (index.round.clip(0,signals.size-1) |==| k) };
+        weights=weights.collect { |weight,k| Select.kr(total>0,[fallback[k],weight]).lag(0.03) };
+        (signals*weights).sum;
+    };
+    var read = blendMode.("read_quality",p.(\read_quality,0),[
+        LinXFade2.ar((rphase+0.5).wrap(0,1),rtri,p.(\read_bidirectional,0).clip(0,1).lag(0.03)*2-1),rphase]);
+    var write = blendMode.("write_quality",p.(\write_quality,0),[wphase,wtri,read]);
     var tableRange = p.(\table_range,1).clip(0,1);
     var table = LocalBuf(1024,1).clear;
     var raw, notch, hp, lp, sig, flfo, frate, cut, vel, amp, cell;
@@ -83,7 +93,7 @@ SynthDef(\AliasingBoxVoice, {
     random = Latch.kr(WhiteNoise.kr,HPZ1.kr(phase)< -0.5);
     smooth = Lag.kr(random,p.(\filter_lfo_smoothing,0).max(0)*0.001);
     cubic = LFDNoise3.kr(frate);
-    flfo = Select.kr(p.(\filter_lfo_wave,5).round.clip(0,7),[saw,saw.neg,pulse,tri,sine,random,smooth,cubic]);
+    flfo = blendMode.("filter_lfo_wave",p.(\filter_lfo_wave,5),[saw,saw.neg,pulse,tri,sine,random,smooth,cubic]);
     exponent = Select.kr(shape<0,[1+(shape*7),1+shape]).max(0.001);
     flfo = ((flfo+1)*0.5).clip(0,1).pow(exponent);
     cut = p.(\lp_pitch,90) + (filterEnv*p.(\filter_env_amount,0)) + (flfo*p.(\filter_lfo_amount,0)) + m.(\mlp);

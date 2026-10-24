@@ -278,11 +278,12 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         const double key[9] = {bd.family, bd.shape, bd.stretch, bd.material, bd.bdecay, bd.freeze, bd.bright, bd.f0, P(P_bmodes)};
         if (!std::equal(key, key + 9, u->bkey)) {
             std::copy(key, key + 9, u->bkey);
-            u->bcount = std::min(int(clip(std::floor(P(P_bmodes)), 1, MAXM)), modeCount(bd));
+            u->bcount = std::min(int(clip(std::ceil(P(P_bmodes)), 1, MAXM)), modeCount(bd));
             for (int k = 0; k < u->bcount; ++k) u->bm[k] = mode(k, bd);
         }
     }
     const int mc = u->bcount;
+    const double effectiveModes = clip(P(P_bmodes), 1, std::max(mc, 1));
     const double tens = glide(P(P_tension), u->enve);
     const double split = clip(P(P_split), 0, 100), beat = clip(P(P_beat), 0, 50);
     const bool pairs = split > 0 || beat > 0;
@@ -324,10 +325,13 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         if (!onB) { u->my1[MAXM + k] = u->my2[MAXM + k] = 0; u->ma1[MAXM + k] = u->ma2[MAXM + k] = 0; }
         if (on) {
             const Weights wt = weights(m, spots);
-            u->mpe[k] = wt.e;
-            u->mp1[k] = wt.p1 * m.amp;
-            u->mp2[k] = wt.p2 * m.amp;
-            u->mpc[k] = wt.c;
+            // Contact and pickup both contribute one square-root presence:
+            // each mode enters continuously without resetting existing state.
+            const double presence = std::sqrt(clip(effectiveModes - k, 0, 1));
+            u->mpe[k] = wt.e * presence;
+            u->mp1[k] = wt.p1 * m.amp * presence;
+            u->mp2[k] = wt.p2 * m.amp * presence;
+            u->mpc[k] = wt.c * presence;
             u->act[na++] = k;
             if (onB) u->act[na++] = MAXM + k;
         } else {
@@ -343,8 +347,14 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         // the partner is heard and touched where its mode is
         u->mpe[MAXM + k] = u->mpe[k]; u->mp1[MAXM + k] = u->mp1[k];
         u->mp2[MAXM + k] = u->mp2[k]; u->mpc[MAXM + k] = u->mpc[k];
-        u->mlo[k] = u->mlo[MAXM + k] = k < u->kcut ? 1 : 0;
-        u->mcs[k] = u->mcs[MAXM + k] = k < u->kcut ? 0 : 1;
+        // The low/high cascade split depends on count too. Interpolate
+        // its two integer results so crossing a multiple of four cannot step.
+        const int low = std::max(2, int(std::floor(effectiveModes)) / 4);
+        const int high = std::max(2, int(std::ceil(effectiveModes)) / 4);
+        const double fraction = effectiveModes - std::floor(effectiveModes);
+        const double lo = (k < low ? 1.0 : 0.0) * (1-fraction) + (k < high ? 1.0 : 0.0) * fraction;
+        u->mlo[k] = u->mlo[MAXM + k] = lo;
+        u->mcs[k] = u->mcs[MAXM + k] = 1-lo;
     }
     u->nact = na;
     for (int i2 = 0; i2 < na; ++i2) {
@@ -357,7 +367,7 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         u->cec[i2] = u->mpc[j] * u->mgx[j]; u->ces[i2] = u->mpc[j] * u->mcs[j] * u->mgx[j];
     }
     u->mcount = std::max(mc, 1);
-    u->bnorm = 1.5 / std::sqrt(double(u->mcount));
+    u->bnorm = 1.5 / std::sqrt(effectiveModes);
 
     u->scgc = std::exp(-2 * M_PI * (200 + 14000 * std::pow(1 - clip(P(P_grit), 0, 1), 2)) / sr);
     u->exa = 1 - clip(P(P_excite), 0, 1);

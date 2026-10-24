@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-// Gate Mode "Pulse" for the Box synths (PhysicalBox, SteamPipeBox): automatic
+// Pulse gates for the Box synths (PhysicalBox, SteamPipeBox): automatic
 // gates from a clock to a Geiger counter, together or each voice its own.
 //
 // The PulseGate synth (synthdefs/Defaults/Modulation/pulseGate.scd) goes at
@@ -193,7 +193,7 @@ public:
         ImGui::Spacing();
         ImGui::BeginGroup();
         host.section("Pulse", rasterW,
-            "The voices play by themselves (Gate Mode Pulse), from a steady clock to a Geiger counter.\n\n"
+            "The voices play by themselves (Pulse enabled), from a steady clock to a Geiger counter.\n\n"
             "The view shows the events as they play: a row per voice, newest on the right; each block is a gate "
             "(its length), as tall and bright as its velocity.\n"
             "The buttons are characters to start from (they leave Rate alone): Clock, Strum, Phasing, Rain, Geiger, "

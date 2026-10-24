@@ -114,9 +114,9 @@ private:
     ofParameter<bool> spaceOn, spaceFreeze;
     ofParameter<float> spaceMix, spaceTime, spaceDamp, spaceDiff, spaceLowCut;
 
-    // Gate Mode Pulse: the automatic gates (scPulseGate)
+    // Pulse: the automatic gates (scPulseGate)
     scPulseGate pulse;
-    bool pulsing() const { return gateMode.get() == 3; }
+    bool pulsing() const { return pulseEnabled.get(); }
     void startPulse(ofxSCServer*, State&);
     // Panning: where each voice (its two pickups) sits on the speakers
     ofParameter<int> placement, speakerLayout;
@@ -162,8 +162,8 @@ private:
     std::map<ofxSCServer*, State> states;
     ofParameter<bool> show;
     ofParameter<void> resetLFOs;
-    ofParameter<int> voices, channels, gateMode;
-    bool gateTouched = false;
+    ofParameter<int> voices, channels;
+    ofParameter<bool> drone, pulseEnabled;
     ofParameter<float> master;
     ofParameter<std::vector<float>> gate, pitch;
     scAudioParam gateIn, pitchIn;

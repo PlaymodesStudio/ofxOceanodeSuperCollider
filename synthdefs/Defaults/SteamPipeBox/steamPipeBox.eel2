@@ -223,7 +223,9 @@ noise_damping=niFilterD(noise_pitch,noise_res,srate);
 noise_hp=f32(noise_input-f32(noise_lp2+f32(noise_bp*noise_damping)));
 noise_bp=f32(noise_bp+f32(noise_a2*noise_hp));
 noise_lp2=f32(noise_lp2+f32(f32(noise_a2*noise_bp)+1e-12));
-filtered_noise = noise_one_pole >= 0.5 ? noise_lp : noise_lp2;
+// Both filter states are already running. Retain exact endpoint arithmetic.
+noise_mix = clip(noise_one_pole,0,1);
+filtered_noise = noise_mix<=0 ? noise_lp2 : noise_mix>=1 ? noise_lp : noise_lp2*(1-noise_mix)+noise_lp*noise_mix;
 steam = env * (1.0 - clip(dc_noise, 0.0, 1.0)) + filtered_noise * clip(dc_noise, 0.0, 1.0);
 
 vib_phase += 6.28318530 * max(0.0, vib_freq) / srate;

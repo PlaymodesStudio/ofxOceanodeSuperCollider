@@ -25,6 +25,7 @@
 #pragma once
 
 #include "ofMain.h"
+#include "scModulationMorph.h"
 #include "ofxOceanodeShared.h"
 #include "ofxSCServer.h"
 #include "ofxSCSynth.h"
@@ -39,6 +40,7 @@
 #include <string>
 #include <vector>
 
+class scMorphPolicies;
 class ofxOceanodeNodeModel;
 class ofxOceanodeAbstractParameter;
 
@@ -188,6 +190,7 @@ public:
     // transport and structural settings remain shared unless explicitly added.
     void addVoiceParam(const ofAbstractParameter& p) { voiceParamKeys.insert(p.getEscapedName()); }
     float voiceValue(const ofParameter<float>& p, int voice) const;
+    float morphVoiceValue(const ofParameter<float>& p,int voice,const scMorphPolicies& policies) const;
     std::vector<float> voiceValues(const ofParameter<float>& p) const;
     void patchBases(ofJson& controls) const;                   // modulated keys in it -> their base
     ofJson paramsJson() const;                                 // the targets, amounts, bases
@@ -195,6 +198,15 @@ public:
     void applyParamBases();
     void save(ofJson& j, const std::string& prefix) const;
     void load(const ofJson& j, const std::string& prefix);
+    void loadMorph(const ofJson& a,const ofJson& b,float t,bool switched,const std::string& prefix,
+                   const scModulationMorph::Blocked& blocked={}) {
+        auto x=a,y=b;
+        for(auto* state:{&x,&y}) {
+            const auto key=prefix+"Matrix";
+            if(state->contains(key)) (*state)[key]=fitMatrix(scModulationMorph::numbers((*state)[key]),sourceCount(),T());
+        }
+        load(scModulationMorph::state(x,y,t,switched,prefix,blocked),prefix);
+    }
     void afterLoad();                                          // after the node's controls are back
 
 private:

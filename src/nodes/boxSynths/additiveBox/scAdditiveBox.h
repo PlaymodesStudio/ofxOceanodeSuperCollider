@@ -60,6 +60,7 @@
 #include "../shared/scAudioParam.h"
 #include "../../../timing/scScheduledInputs.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scVoiceCountMorph.h"
 #include "../../../ui/scDropdowns.h"
 #include "ofxSCGroup.h"
 #include "imgui.h"
@@ -160,11 +161,11 @@ private:
     VoiceData computeVoice(int voice, int copy) const;
     float random01(int voice, int salt, int partial) const;
     float waveLevel(int voice, int wave, const std::vector<float>& table, int k) const;
-    float filter1Gain(int voice, float semitonesFromCutoff) const;
-    float filter2Gain(int voice, float hz) const;
+    float filter1Gain(int voice, float semitonesFromCutoff, int mode = -1) const;
+    float filter2Gain(int voice, float hz, int mode = -1) const;
     std::vector<float> filter1Curve(int voice) const;
     float voiceCutoff(int voice) const;                      // filter 1 cutoff, keytracked (MIDI)
-    float sweepShapeAt(int voice, float x) const;            // the sweep shape, x = 0..1 (one cycle)
+    float sweepShapeAt(int voice, float x, int mode = -1) const;            // the sweep shape, x = 0..1 (one cycle)
     std::vector<float> sweepTable(int voice) const;
     float sweepRangeWeight(int voice, float x) const;        // share of the depth at x = 0..1 along the sweep
     float sampleRate() const;
@@ -196,6 +197,10 @@ private:
         ofxSCGroup* voicesGroup = nullptr;
         bool created = false;
         std::vector<VoiceSC> voices;
+        std::map<int,std::vector<VoiceSC>> partialBanks;
+        std::vector<ofxSCSynth*> noteWriters;
+        std::vector<std::map<std::string,float>> noteSent;
+        std::vector<int> noteMapped;
         ofxSCSynth* out = nullptr;
         ofxSCBus* mix = nullptr;          // audio, MAX_OUTPUTS channels, the voices sum here
         ofxSCBus* vis = nullptr;          // control, voices * 2 * DISPLAY_MAX
@@ -232,6 +237,19 @@ private:
     int numOutputsClamped() const;
     int unisonClamped() const;
     int partialCap() const;
+    static int capForCount(int count);
+    std::vector<float> partialMorphWeights;
+    float partialMorphRetireAt=-1;
+    bool partialBankMode=false;
+    int renderPartialCap=0;
+    float renderPartialGain=1;
+    std::map<int,float> partialCapWeights() const;
+    void preparePartialMorph(const ofJson&,const ofJson&,float);
+    void finishPartialMorph();
+    void forPartialBanks(ofxSCServer*,const std::function<void()>&);
+    void syncNoteWriters(ofxSCServer*,bool force=false);
+    float partialPresence(int index) const;
+    float partialCountValue(const std::function<float(int)>&) const;
     int chunkSize() const { return std::min(partialCap(), int(CHUNK)); }
     int laneChunkSize() const { return std::min(partialCap(), lanesHaveNoise() ? int(NOISE_CHUNK) : int(CHUNK)); }
     std::string coreDefName() const;
@@ -326,6 +344,14 @@ private:
     // ── Snapshots and named presets (data/nodeSnapshots/AdditiveBox/Presets):
     //    scSnapshots; a sound = Voices + every control a preset holds + the modulation ──
     scSnapshots snaps;
+    std::shared_ptr<ofxOceanodeAbstractParameter> voiceCountHandle;
+    bool soundDriven(const std::string& key) const;
+    std::vector<float> voiceMorphWeights;
+    int voiceMorphCapacity = 0;
+    float voiceMorphRetireAt = -1;
+    bool applyingVoiceMorph = false;
+    float voiceMorphGain(int voice) const;
+    void finishVoiceMorph();
     ofJson captureSound() const;
     void loadSound(const ofJson& json);                                     // a whole sound
     void applySound(const ofJson& a, const ofJson& b, float t, bool sw);    // a blend

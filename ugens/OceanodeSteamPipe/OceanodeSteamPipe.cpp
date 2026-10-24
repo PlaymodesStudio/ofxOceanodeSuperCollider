@@ -2,6 +2,7 @@
 // Changes belong in those kernels; regenerate before building. No runtime JIT.
 #include "SC_PlugIn.h"
 #include "PrimaryCompat.h"
+#include "FeedbackMorph.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -151,6 +152,7 @@ struct PipeKernel {
  double noise_key_track=0;
  double noise_lp=0;
  double noise_lp2=0;
+ double noise_mix=0;
  double noise_one_pole=0;
  double noise_pitch=0;
  double noise_res=0;
@@ -345,7 +347,8 @@ void sample() {
 (noise_hp=f32((noise_input-f32((noise_lp2+f32((noise_bp*noise_damping)))))));
 (noise_bp=f32((noise_bp+f32((noise_a2*noise_hp)))));
 (noise_lp2=f32((noise_lp2+f32((f32((noise_a2*noise_bp))+1e-12)))));
-(filtered_noise=((noise_one_pole>=0.5) ? noise_lp : noise_lp2));
+(noise_mix=clip(noise_one_pole,0,1));
+(filtered_noise=((noise_mix<=0) ? noise_lp2 : ((noise_mix>=1) ? noise_lp : ((noise_lp2*((1-noise_mix)))+(noise_lp*noise_mix)))));
 (steam=((env*((1.0-clip(dc_noise,0.0,1.0))))+(filtered_noise*clip(dc_noise,0.0,1.0))));
 (vib_phase+=((6.28318530*max(0.0,vib_freq))/srate));
 ((vib_phase>=6.28318530) ? (vib_phase-=6.28318530) : 0.0);
@@ -636,78 +639,130 @@ void SteamPipeStep_next(SteamPipeStep* unit,int count) {
  else {const float value=IN0(0);for(int i=0;i<count;++i)output[i]=value;}
 }
 void SteamPipeStep_Ctor(SteamPipeStep* unit) {SETCALC(SteamPipeStep_next);SteamPipeStep_next(unit,1);}
-struct SteamPipeVoice: Unit {PipeKernel dsp;};
+struct SteamPipeVoice: Unit {PipeKernel dsp;PipeKernel other; bool morphActive=false; int morphMode=0;};
 void SteamPipeVoice_next(SteamPipeVoice* unit,int count) {
  auto& k=unit->dsp;
  for(int i=0;i<count;++i) {
 k._allpass_fine = INRATE(0)==calc_FullRate ? IN(0)[i] : IN0(0);
+if(unit->morphActive) unit->other._allpass_fine=k._allpass_fine;
 k._allpass_mw = INRATE(1)==calc_FullRate ? IN(1)[i] : IN0(1);
+if(unit->morphActive) unit->other._allpass_mw=k._allpass_mw;
 k._allpass_on = INRATE(2)==calc_FullRate ? IN(2)[i] : IN0(2);
 k._allpass_sample_correction = INRATE(3)==calc_FullRate ? IN(3)[i] : IN0(3);
+if(unit->morphActive) unit->other._allpass_sample_correction=k._allpass_sample_correction;
 k._allpass_tune = INRATE(4)==calc_FullRate ? IN(4)[i] : IN0(4);
+if(unit->morphActive) unit->other._allpass_tune=k._allpass_tune;
 k._amp_curve0 = INRATE(5)==calc_FullRate ? IN(5)[i] : IN0(5);
+if(unit->morphActive) unit->other._amp_curve0=k._amp_curve0;
 k._amp_curve1 = INRATE(6)==calc_FullRate ? IN(6)[i] : IN0(6);
+if(unit->morphActive) unit->other._amp_curve1=k._amp_curve1;
 k._amp_curve2 = INRATE(7)==calc_FullRate ? IN(7)[i] : IN0(7);
+if(unit->morphActive) unit->other._amp_curve2=k._amp_curve2;
 k._amp_original = INRATE(8)==calc_FullRate ? IN(8)[i] : IN0(8);
+if(unit->morphActive) unit->other._amp_original=k._amp_original;
 k._attack = INRATE(9)==calc_FullRate ? IN(9)[i] : IN0(9);
+if(unit->morphActive) unit->other._attack=k._attack;
 k._bend = INRATE(10)==calc_FullRate ? IN(10)[i] : IN0(10);
+if(unit->morphActive) unit->other._bend=k._bend;
 k._dc_noise = INRATE(11)==calc_FullRate ? IN(11)[i] : IN0(11);
+if(unit->morphActive) unit->other._dc_noise=k._dc_noise;
 k._decay = INRATE(12)==calc_FullRate ? IN(12)[i] : IN0(12);
+if(unit->morphActive) unit->other._decay=k._decay;
 k._diffusion = INRATE(13)==calc_FullRate ? IN(13)[i] : IN0(13);
+if(unit->morphActive) unit->other._diffusion=k._diffusion;
 k._env_key_scaling = INRATE(14)==calc_FullRate ? IN(14)[i] : IN0(14);
+if(unit->morphActive) unit->other._env_key_scaling=k._env_key_scaling;
 k._feedback_key_track = INRATE(15)==calc_FullRate ? IN(15)[i] : IN0(15);
+if(unit->morphActive) unit->other._feedback_key_track=k._feedback_key_track;
 k._feedback_rt = INRATE(16)==calc_FullRate ? IN(16)[i] : IN0(16);
+if(unit->morphActive) unit->other._feedback_rt=k._feedback_rt;
 k._fine = INRATE(17)==calc_FullRate ? IN(17)[i] : IN0(17);
+if(unit->morphActive) unit->other._fine=k._fine;
 k._gain = INRATE(18)==calc_FullRate ? IN(18)[i] : IN0(18);
+if(unit->morphActive) unit->other._gain=k._gain;
 k._gate = INRATE(19)==calc_FullRate ? IN(19)[i] : IN0(19);
+if(unit->morphActive) unit->other._gate=k._gate;
 k._hp0 = INRATE(20)==calc_FullRate ? IN(20)[i] : IN0(20);
+if(unit->morphActive) unit->other._hp0=k._hp0;
 k._hp1 = INRATE(21)==calc_FullRate ? IN(21)[i] : IN0(21);
+if(unit->morphActive) unit->other._hp1=k._hp1;
 k._hp_key_track = INRATE(22)==calc_FullRate ? IN(22)[i] : IN0(22);
+if(unit->morphActive) unit->other._hp_key_track=k._hp_key_track;
 k._legato = INRATE(23)==calc_FullRate ? IN(23)[i] : IN0(23);
+if(unit->morphActive) unit->other._legato=k._legato;
 k._lp0 = INRATE(24)==calc_FullRate ? IN(24)[i] : IN0(24);
+if(unit->morphActive) unit->other._lp0=k._lp0;
 k._lp1 = INRATE(25)==calc_FullRate ? IN(25)[i] : IN0(25);
+if(unit->morphActive) unit->other._lp1=k._lp1;
 k._lp_key_track = INRATE(26)==calc_FullRate ? IN(26)[i] : IN0(26);
+if(unit->morphActive) unit->other._lp_key_track=k._lp_key_track;
 k._mod_wheel = INRATE(27)==calc_FullRate ? IN(27)[i] : IN0(27);
+if(unit->morphActive) unit->other._mod_wheel=k._mod_wheel;
 k._noise_cut = INRATE(28)==calc_FullRate ? IN(28)[i] : IN0(28);
+if(unit->morphActive) unit->other._noise_cut=k._noise_cut;
 k._noise_env = INRATE(29)==calc_FullRate ? IN(29)[i] : IN0(29);
+if(unit->morphActive) unit->other._noise_env=k._noise_env;
 k._noise_key_track = INRATE(30)==calc_FullRate ? IN(30)[i] : IN0(30);
+if(unit->morphActive) unit->other._noise_key_track=k._noise_key_track;
 k._noise_one_pole = INRATE(31)==calc_FullRate ? IN(31)[i] : IN0(31);
+if(unit->morphActive) unit->other._noise_one_pole=k._noise_one_pole;
 k._noise_resonance = INRATE(32)==calc_FullRate ? IN(32)[i] : IN0(32);
+if(unit->morphActive) unit->other._noise_resonance=k._noise_resonance;
 k._noise_velocity_track = INRATE(33)==calc_FullRate ? IN(33)[i] : IN0(33);
+if(unit->morphActive) unit->other._noise_velocity_track=k._noise_velocity_track;
 k._offset = INRATE(34)==calc_FullRate ? IN(34)[i] : IN0(34);
+if(unit->morphActive) unit->other._offset=k._offset;
 k._pitch = INRATE(35)==calc_FullRate ? IN(35)[i] : IN0(35);
+if(unit->morphActive) unit->other._pitch=k._pitch;
 k._polarity = INRATE(36)==calc_FullRate ? IN(36)[i] : IN0(36);
+if(unit->morphActive) unit->other._polarity=k._polarity;
 k._push = INRATE(37)==calc_FullRate ? IN(37)[i] : IN0(37);
+if(unit->morphActive) unit->other._push=k._push;
 k._release = INRATE(38)==calc_FullRate ? IN(38)[i] : IN0(38);
+if(unit->morphActive) unit->other._release=k._release;
 k._release_damp = INRATE(39)==calc_FullRate ? IN(39)[i] : IN0(39);
+if(unit->morphActive) unit->other._release_damp=k._release_damp;
 k._sample_correction = INRATE(40)==calc_FullRate ? IN(40)[i] : IN0(40);
+if(unit->morphActive) unit->other._sample_correction=k._sample_correction;
 k._soft_hard = INRATE(41)==calc_FullRate ? IN(41)[i] : IN0(41);
+if(unit->morphActive) unit->other._soft_hard=k._soft_hard;
 k._steampipe2 = INRATE(42)==calc_FullRate ? IN(42)[i] : IN0(42);
+if(unit->morphActive) unit->other._steampipe2=k._steampipe2;
 k._sustain = INRATE(43)==calc_FullRate ? IN(43)[i] : IN0(43);
+if(unit->morphActive) unit->other._sustain=k._sustain;
 k._symmetry = INRATE(44)==calc_FullRate ? IN(44)[i] : IN0(44);
+if(unit->morphActive) unit->other._symmetry=k._symmetry;
 k._tune = INRATE(45)==calc_FullRate ? IN(45)[i] : IN0(45);
+if(unit->morphActive) unit->other._tune=k._tune;
 k._tune_mw = INRATE(46)==calc_FullRate ? IN(46)[i] : IN0(46);
+if(unit->morphActive) unit->other._tune_mw=k._tune_mw;
 k._velocity = INRATE(47)==calc_FullRate ? IN(47)[i] : IN0(47);
+if(unit->morphActive) unit->other._velocity=k._velocity;
 k._velocity_amount = INRATE(48)==calc_FullRate ? IN(48)[i] : IN0(48);
+if(unit->morphActive) unit->other._velocity_amount=k._velocity_amount;
 k._vibrato_amount = INRATE(49)==calc_FullRate ? IN(49)[i] : IN0(49);
+if(unit->morphActive) unit->other._vibrato_amount=k._vibrato_amount;
 k._vibrato_frequency = INRATE(50)==calc_FullRate ? IN(50)[i] : IN0(50);
-k.sample();
+if(unit->morphActive) unit->other._vibrato_frequency=k._vibrato_frequency;
+sampleAllpassMorph(k,unit->other,unit->morphActive,unit->morphMode,98304);
 OUT(0)[i]=std::isfinite(k.out0) ? k.out0 : 0;
 OUT(1)[i]=std::isfinite(k.out1) ? k.out1 : 0;
 }
 }
 void SteamPipeVoice_Ctor(SteamPipeVoice* unit) {
  new (&unit->dsp) PipeKernel();auto& k=unit->dsp;k.srate=SAMPLERATE;
+ new (&unit->other) PipeKernel();unit->morphActive=false;unit->morphMode=0;
  if(unit->mNumInputs!=51 || unit->mNumOutputs!=2) {
   Print("SteamPipeVoice: incompatible SynthDef; recompile steampipeBox.scd\n");
   SETCALC(ClearUnitOutputs);ClearUnitOutputs(unit,1);return;
  }
  const size_t cells=98304;k.buf=static_cast<double*>(RTAlloc(unit->mWorld,cells*sizeof(double)));
  if(!k.buf) {SETCALC(ClearUnitOutputs);ClearUnitOutputs(unit,1);return;}
+ unit->other.buf=static_cast<double*>(RTAlloc(unit->mWorld,cells*sizeof(double)));
  std::memset(k.buf,0,cells*sizeof(double));k.init();SETCALC(SteamPipeVoice_next);
  ClearUnitOutputs(unit,1);
 }
-void SteamPipeVoice_Dtor(SteamPipeVoice* unit) {if(unit->dsp.buf) RTFree(unit->mWorld,unit->dsp.buf);}
+void SteamPipeVoice_Dtor(SteamPipeVoice* unit) {if(unit->dsp.buf) RTFree(unit->mWorld,unit->dsp.buf);if(unit->other.buf) RTFree(unit->mWorld,unit->other.buf);}
 struct SteamPipeOriginal: Unit {EffectsKernel dsp;};
 void SteamPipeOriginal_next(SteamPipeOriginal* unit,int count) {
  auto& k=unit->dsp;
@@ -745,12 +800,14 @@ OUT(1)[i]=std::isfinite(k.out1) ? k.out1 : 0;
 }
 void SteamPipeOriginal_Ctor(SteamPipeOriginal* unit) {
  new (&unit->dsp) EffectsKernel();auto& k=unit->dsp;k.srate=SAMPLERATE;
+
  if(unit->mNumInputs!=26 || unit->mNumOutputs!=2) {
   Print("SteamPipeOriginal: incompatible SynthDef; recompile steampipeBox.scd\n");
   SETCALC(ClearUnitOutputs);ClearUnitOutputs(unit,1);return;
  }
  const size_t cells=static_cast<size_t>(128+2*(std::ceil(SAMPLERATE*8)+4)+16*(std::ceil(SAMPLERATE*1.5)+4));k.buf=static_cast<double*>(RTAlloc(unit->mWorld,cells*sizeof(double)));
  if(!k.buf) {SETCALC(ClearUnitOutputs);ClearUnitOutputs(unit,1);return;}
+
  std::memset(k.buf,0,cells*sizeof(double));k.init();SETCALC(SteamPipeOriginal_next);
  ClearUnitOutputs(unit,1);
 }

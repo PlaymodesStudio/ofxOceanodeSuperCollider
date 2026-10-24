@@ -27,6 +27,7 @@
 //
 
 #pragma once
+#include "../shared/scVoiceCountMorph.h"
 
 #include "../../../scNode.h"
 #include "../shared/scKeyboardPiano.h"
@@ -171,7 +172,13 @@ private:
     int nIn() const { return voices.get(); }
     bool allocating() const { return extraVoices.get() && !droning() && voices.get() < MAX_VOICES; }
     int n() const { return allocating() ? std::min(MAX_VOICES, 2 * voices.get()) : voices.get(); }
-    int oscs() const { return std::clamp(oscCount.get(), 1, MAX_OSCS); }
+    std::vector<float> oscillatorWeights;
+    int oscillatorCapacity=0;
+    float oscillatorRetireAt=-1;
+    int oscs() const { return std::clamp(std::max(oscCount.get(),oscillatorCapacity), 1, MAX_OSCS); }
+    float oscillatorPresence(int index) const {
+        return oscillatorWeights.empty()?1.0f:scVoiceCountMorph::presence(oscillatorWeights,index);
+    }
     std::string def(const std::string& name) const { return name + ofToString(n()); }
     int src(const ServerState& st, int s) const;
     int mod(const ServerState& st, int t) const;
@@ -221,7 +228,7 @@ private:
     ofParameter<void> resetLFOs;
 
     // ── Voice ────────────────────────────────────────────────────────────────
-    ofParameter<int> envMode;                                  // 0 Auto, 1 Gated, 2 Drone
+    ofParameter<bool> drone;
     ofParameter<bool> extraVoices;
     int sentDrone = -1;
     bool droning() const;
@@ -229,7 +236,6 @@ private:
     // no amp envelope of its own: an envelope routed to Amp is the VCA (else it drones)
     bool vcaOn() const;
     bool ampDirty = false;
-    bool gateTouched = false;          // Auto: gated once Gate has had a value (or a cable)
     ofParameter<float> velSens, glide, vibRate, vibRand, vibAmt, drift;
     ofParameter<std::vector<float>> transpose, detune;
     // ── Oscillators ──────────────────────────────────────────────────────────

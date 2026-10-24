@@ -8,7 +8,7 @@
 // intermediate sound may contain several configurations after interrupted glides.
 struct scVoiceCountMorph {
     static constexpr const char* key = "_voiceCountBlend";
-    static std::vector<float> endpoint(const ofJson& sound, int fallback, int maximum) {
+    static std::vector<float> endpoint(const ofJson& sound, int fallback, int maximum, const char* field = "voices") {
         if(sound.contains(key) && sound[key].is_array() && int(sound[key].size()) == maximum) {
             std::vector<float> out(maximum); float sum=0;
             bool valid=true;
@@ -21,12 +21,12 @@ struct scVoiceCountMorph {
             if(valid && std::isfinite(sum) && sum>0) { for(auto& v:out) v/=sum; return out; }
         }
         int count=fallback;
-        if(sound.contains("voices") && sound["voices"].is_number()) count=sound["voices"].get<int>();
+        if(sound.contains(field) && sound[field].is_number()) count=sound[field].get<int>();
         std::vector<float> out(maximum,0); out[std::clamp(count,1,maximum)-1]=1;
         return out;
     }
-    static std::vector<float> blend(const ofJson& a,const ofJson& b,float t,int fallback,int maximum) {
-        auto x=endpoint(a,fallback,maximum), y=endpoint(b,fallback,maximum);
+    static std::vector<float> blend(const ofJson& a,const ofJson& b,float t,int fallback,int maximum,const char* field = "voices") {
+        auto x=endpoint(a,fallback,maximum,field), y=endpoint(b,fallback,maximum,field);
         t=std::clamp(t,0.0f,1.0f);
         for(int i=0;i<maximum;++i) x[i]=(1-t)*x[i]+t*y[i];
         return x;
@@ -44,6 +44,13 @@ struct scVoiceCountMorph {
         // Gain is handled by the bank mixer, never by the discrete switch point.
         for(size_t i=weights.size();i>0;--i) if(weights[i-1]>0) return int(i);
         return 1;
+    }
+    // Engines with count-independent voices can share their common voices.
+    // Each voice's gain is the total weight of configurations containing it.
+    static float presence(const std::vector<float>& weights, int voice) {
+        float gain=0;
+        for(size_t i=std::max(0,voice);i<weights.size();++i) gain+=weights[i];
+        return gain;
     }
     static void capture(ofJson& sound,const std::vector<float>& weights) {
         if(!weights.empty() && !single(weights)) sound[key]=weights;

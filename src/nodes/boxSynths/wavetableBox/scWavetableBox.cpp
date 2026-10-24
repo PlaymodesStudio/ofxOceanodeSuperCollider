@@ -1,3 +1,4 @@
+#include "../shared/scDroneMode.h"
 //
 //  scWavetableBox.cpp
 //  ofxOceanodeSuperCollider
@@ -297,7 +298,7 @@ void scWavetableBox::setup(){
     oversample.set("Oversample", 0, 0, int(oversampleNames.size()) - 1);
 
     gate.set("Gate", {0.0f}, {0.0f}, {1.0f});
-    envMode.set("Env Mode", 0, 0, 2);
+    drone.set("Drone", false);
     addParameter(resetLFOs.set("Reset LFOs"));
     snaps.setupParameters();   // Snapshot, Morph... (scSnapshots, shared by the synths)
     initializePublishActions();
@@ -310,7 +311,12 @@ void scWavetableBox::setup(){
         h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw){ applySound(a, b, t, sw); };
         h.factory = [this](){ return factorySounds(); };
         h.bpm = [this](){ return currentBpm; };
-        h.morphBlocked = [this](const std::string& k){ return hasPublishedConnection(k); };
+        h.morphBlocked = [this](const std::string& k){
+            auto it=publishedHandles.find(k);return it!=publishedHandles.end() && it->second->hasInConnection();
+        };
+        snaps.morph.mode(warp1,9);snaps.morph.mode(warp2,9);
+        snaps.morph.neutralDepth(bSource,fm);snaps.morph.neutralDepth(bSource,bFeedback);
+        h.morphChanged=[this](){for(auto& [server,synth]:synths)sendAll(server);};
         h.paramMenu = [this](const std::string& k){ controlMenu(k); };
         // Preserve the previous node's shared library, banks and named presets.
         const fs::path oldLibrary = ofToDataPath("nodeSnapshots/Wavetable", true);
@@ -348,7 +354,9 @@ void scWavetableBox::setup(){
     for(auto* p : {&normalize, &removeDC}) nodeListeners.push(p->newListener([this](bool&){ requestDecode(); liveDirty = true; }));
 
     auto bindFloat = [this](ofParameter<std::vector<float>>& p, std::string control, float fallback){
-        nodeListeners.push(p.newListener([this, control, fallback](std::vector<float>& v){ sendVector(control, v, fallback); }));
+        nodeListeners.push(p.newListener([this,control,fallback,&p](std::vector<float>&){
+            snaps.morph.edited(p);sendVector(control,snaps.morph.value(p),fallback);
+        }));
     };
     bindFloat(pitch, "pitch", 60);
     bindFloat(levels, "levels", 0);
@@ -363,22 +371,25 @@ void scWavetableBox::setup(){
     bindFloat(fmDamp, "damp", 1);
     bindFloat(phase, "phase", 0);
     auto bindInt = [this](ofParameter<std::vector<int>>& p, std::string control){
-        nodeListeners.push(p.newListener([this, control](std::vector<int>& v){
+        nodeListeners.push(p.newListener([this, control,&p](std::vector<int>& v){
+            snaps.morph.edited(p);
             sendVector(control, std::vector<float>(v.begin(), v.end()), 0);
+            for(auto& [server,synth]:synths)sendAll(server);
         }));
     };
     bindInt(warp1, "w1mode");
     bindInt(warp2, "w2mode");
     nodeListeners.push(bSource.newListener([this](int&){
+        snaps.morph.edited(bSource);
         for(auto& [server, synth] : synths) sendBuffers(server);
     }));
     nodeListeners.push(trig.newListener([this](std::vector<int>& v){ sendTriggers(v); }));
 
     nodeListeners.push(gate.newListener([this](std::vector<float>&){
-        gateTouched = true;
         for(auto& [server, state] : modStates) sendModulation(server);
     }));
-    nodeListeners.push(envMode.newListener([this](int&){
+    nodeListeners.push(drone.newListener([this](bool&){
+        snaps.morph.edited(drone);
         for(auto& [server, state] : modStates) sendModulation(server);
     }));
     nodeListeners.push(resetLFOs.newListener([this](){ modulation.resetLfos(); }));
@@ -934,11 +945,18 @@ void scWavetableBox::sendAll(ofxSCServer* server){
     setI("w1mode", warp1);
     setF("w1amt", warp1Amt, 0);
     setI("w2mode", warp2);
+    for(int stage=0;stage<2;++stage){
+        const auto& p=stage==0 ? warp1 : warp2;
+        std::vector<float> weights;
+        const int n=std::clamp(numChannels.get(),1,MAX_CHANNELS);
+        for(int v=0;v<n;++v){const auto w=snaps.morph.weights(p,v);weights.insert(weights.end(),w.begin(),w.end());}
+        synth->set(stage==0 ? "w1weights" : "w2weights",weights);
+    }
     setF("w2amt", warp2Amt, 0);
-    setF("fm", fm, 0);
+    setF("fm",snaps.morph.value(fm),0);
     setF("ratio", fmRatio, 1);
     setF("bpos", bPos, 0);
-    setF("fb", bFeedback, 0);
+    setF("fb",snaps.morph.value(bFeedback),0);
     setF("damp", fmDamp, 1);
     setF("phase", phase, 0);
     synth->set("rows", rows.get());
@@ -1111,7 +1129,7 @@ void scWavetableBox::addPublishAction(ofParameter<T>& parameter, std::vector<std
 void scWavetableBox::initializePublishActions(){
     publishActions.clear();
     addPublishAction(gate);
-    addPublishAction(envMode, {"Auto", "Gated", "Drone"});
+    addPublishAction(drone);
     addPublishAction(source, sourceNames);
     addPublishAction(liveIn);
     addPublishAction(liveFrames);
@@ -1164,25 +1182,26 @@ ofJson scWavetableBox::captureSound() const {
     return json;
 }
 
-void scWavetableBox::applySound(const ofJson& a, const ofJson& b, float t, bool sw){
+void scWavetableBox::applySound(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw){
+    const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
     restoring = true;
-    scSnapshots::blendActions(publishActions, a, b, t, sw, [this](const std::string& k){
-        return notInSound(k) || hasPublishedConnection(k);   // a connection drives it
+    auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);
+    scSnapshots::blendActions(publishActions,pinnedA,pinnedB,t,sw,[this](const std::string& k){
+        auto it=publishedHandles.find(k);
+        return notInSound(k) || (it!=publishedHandles.end() && it->second->hasInConnection());
     });
-    modulation.load(sw ? b : a, "wavetableMod");
-    auto count = [&](const char* suffix, int limit) {
-        const std::string key = std::string("wavetableMod") + suffix;
-        const int av = a.value(key, 0), bv = b.value(key, 0);
-        return std::clamp(t <= 0 ? av : t >= 1 ? bv : std::max(av, bv), 0, limit);
-    };
-    modulation.lfoCount = count("Lfos", scModulation::MAX_LFOS);
-    modulation.envCount = count("Envs", scModulation::MAX_ENVS);
-    modulation.extCount = count("Exts", scModulation::MAX_EXT);
-    auto ma = a.value("wavetableModMatrix", std::vector<float>{});
-    auto mb = b.value("wavetableModMatrix", std::vector<float>{});
-    ma.resize(modulation.matrix.size(), 0); mb.resize(modulation.matrix.size(), 0);
-    for(size_t i = 0; i < ma.size(); ++i) modulation.matrix[i] = ofLerp(ma[i], mb[i], t);
+    modulation.loadMorph(a,b,t,sw,"wavetableMod",[this](const std::string& key){
+        const auto* action=findPublishAction(key);
+        return action && hasPublishedConnection(key);
+    });
+    // Neutralize routed FM too: a nonzero modulation bus must not keep B
+    // audible while its waveform source changes at the neutral point.
+    for(int source=0;source<modulation.sourceCount();++source){
+        modulation.matrix[source*NUM_TARGETS+TFM]*=snaps.morph.neutralGain(fm);
+        modulation.matrix[source*NUM_TARGETS+TFeedback]*=snaps.morph.neutralGain(bFeedback);
+    }
     modulation.afterLoad();
+    modulation.refresh();
     restoring = false;
     for(auto& [server, synth] : synths) sendAll(server);
 }
@@ -1301,7 +1320,6 @@ void scWavetableBox::controlMenu(const std::string& key){
 void scWavetableBox::presetSave(ofJson& json){
     modulation.save(json, "wavetableMod");
     modulation.saveLfoOutputs(json);
-    json["gateTouched"] = gateTouched;
     json["publishedEditorParameters"] = publishedKeys;
     timeline.save(json, "timelineHiddenEditorParameters");
     json["waterfallHeight"] = waterfallHeight;
@@ -1312,6 +1330,7 @@ void scWavetableBox::presetSave(ofJson& json){
 }
 
 void scWavetableBox::loadBeforeConnections(ofJson& json){
+    scDroneMode::migrate(json);
     modulation.loadLfoOutputs(json);
     if(!json.contains("publishedEditorParameters") || !json["publishedEditorParameters"].is_array()) return;
     try { syncPublished(json["publishedEditorParameters"].get<std::vector<std::string>>()); } catch(...) {}
@@ -1319,10 +1338,13 @@ void scWavetableBox::loadBeforeConnections(ofJson& json){
 }
 
 void scWavetableBox::presetRecallBeforeSettingParameters(ofJson& json){
+    scDroneMode::migrate(json);
     loadBeforeConnections(json);
 }
 
 void scWavetableBox::presetRecallAfterSettingParameters(ofJson& json){
+    scDroneMode::migrate(json);
+    if(!json.contains(drone.getEscapedName())) drone = false;
     restoring = true;
     if(json.contains("waterfallHeight") && json["waterfallHeight"].is_number())
         waterfallHeight = ofClamp(json["waterfallHeight"].get<float>(), 120.0f, 2000.0f);
@@ -1330,7 +1352,6 @@ void scWavetableBox::presetRecallAfterSettingParameters(ofJson& json){
         if(isPublished(action.key) || !json.contains(action.key) || !action.load) continue;
         action.load(json[action.key]);
     }
-    gateTouched = json.value("gateTouched", false);
     modulation.load(json, "wavetableMod");
     modulation.afterLoad();
     restoring = false;
@@ -1787,7 +1808,9 @@ void scWavetableBox::drawControls(){
 
     beginGroup("VOICE", 0);
     sliderVector(gate);
-    comboInt(envMode, {"Auto", "Gated", "Drone"});
+    bool droneOn = drone.get();
+    if(ImGui::Checkbox("Drone", &droneOn)) drone.set(droneOn);
+    controlMenu(drone.getEscapedName());
     sliderVector(phase);
     if(ImGui::Button("Retrig", ImVec2(-FLT_MIN, 0))) retrigAll();
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Restart every voice at Phase (publish Trig to patch it)");
@@ -1876,12 +1899,12 @@ void scWavetableBox::sendModulation(ofxSCServer* server){
     auto it = modStates.find(server);
     if(it == modStates.end()) return;
     auto& st = it->second;
-    const bool drone = envMode == 2 || (envMode == 0 && !gateTouched);
+    const bool droneOn = drone.get();
     if(st.gateSynth){
         st.gateSynth->set("gate", expand(gate.get(), 0));
         st.gateSynth->set("velocity", expand({1.0f}, 1)); // Gate carries note velocity.
         st.gateSynth->set("vel_sel", 0.0f);
-        st.gateSynth->set("drone", drone ? 1 : 0);
+        st.gateSynth->set("drone", droneOn ? 1 : 0);
         st.gateSynth->set("out", st.gates->index);
         st.gateSynth->set("vel", modulation.sourceBus(server, scModulation::SRC_VEL));
         st.gateSynth->set("rnd", modulation.sourceBus(server, scModulation::SRC_RND));

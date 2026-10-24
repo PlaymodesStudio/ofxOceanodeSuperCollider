@@ -62,8 +62,8 @@ File.mkdir(root); File.mkdir(dir);
         var sig = LeakDC.ar(LinXFade2.ar(free, locked, \sync.kr(0, 0.03)*2-1))
             + (WhiteNoise.ar(1 ! n) * kv.(\noise, 0).clip(0, 1) * 1.5);   // Noise: added to this oscillator
         Out.kr(\freqout.kr(0), freq);
-        Out.ar(\raw.kr(0), sig);
-        Out.ar(\out.kr(0), sig * kv.(\level, 0.5));
+        Out.ar(\raw.kr(0), sig * \presence.kr(1,0.03));
+        Out.ar(\out.kr(0), sig * kv.(\level, 0.5) * \presence.kr(1,0.03));
     }).writeDefFile(dir);
 
     // Noise: color -1 (dark) .. 0 (white) .. 1 (bright)
