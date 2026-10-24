@@ -1,4 +1,4 @@
-#include "scClassLibraryConfig.h"
+#include "synthdefs/scClassLibraryConfig.h"
 #include <cassert>
 #include <chrono>
 #include <iostream>

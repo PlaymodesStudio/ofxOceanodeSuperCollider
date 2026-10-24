@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-source = (ROOT / 'src/nodes/scModulation.cpp').read_text()
+source = (ROOT / 'src/nodes/boxSynths/shared/scModulation.cpp').read_text()
 names = ['update', '~scModulation', 'hasLfoOutputs', 'publishLfoOutput',
          'updateLfoOutputs', 'saveLfoOutputs', 'loadLfoOutputs', 'liveValue']
 methods = []
@@ -108,8 +108,8 @@ with tempfile.TemporaryDirectory() as folder:
 # Every shared editor exposes and restores pins before cable restoration.
 for name in ['scSteamPipeBox.cpp', 'scPolyComb.cpp', 'scAdditiveBox.cpp', 'scAnalogBox.cpp',
              'scAliasingBox.cpp', 'scPhysicalBox.cpp', 'scEchoBox.cpp', 'scPulsarBox.h',
-             'scSampleBox.cpp', 'scGrainBoxPoly.cpp']:
-    text = (ROOT / 'src/nodes' / name).read_text()
+             'scSampleBox.cpp', 'scGrainBoxPoly.cpp', 'scWavetableBox.cpp']:
+    text = (ROOT / 'src/nodes/boxSynths' / ('fmBox' if name.startswith('scFMBox') else name[2].lower() + name[3:].split('.')[0]) / name).read_text()
     assert 'h.node = this;' in text, name
     assert 'saveLfoOutputs(' in text and 'loadLfoOutputs(' in text, name
-print('PASS: all ten shared modulation hosts support output publication and persistence')
+print('PASS: all eleven shared modulation hosts support output publication and persistence')

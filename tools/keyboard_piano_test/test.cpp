@@ -1,4 +1,4 @@
-#include "scKeyboardPiano.h"
+#include "nodes/boxSynths/shared/scKeyboardPiano.h"
 #include <cassert>
 #include <iostream>
 

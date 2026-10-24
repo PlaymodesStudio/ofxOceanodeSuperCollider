@@ -1,6 +1,6 @@
 // PulseGate: automatic gates for the Box synths (Gate Mode Pulse), from a
 // clock to a Geiger counter. Used by PhysicalBox and SteamPipeBox through
-// src/nodes/scPulseGate.h.
+// src/nodes/boxSynths/shared/scPulseGate.h.
 //
 //   PulseGate   the automatic gates (Gate Mode Pulse): 16 gate levels on
 //               \out (audio, 16), read by the node's gate synth (ModGate,

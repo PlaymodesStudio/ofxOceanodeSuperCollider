@@ -1,4 +1,4 @@
-// pulsarbox.scd — SynthDefs for the SC PulsarBox node (src/nodes/scPulsarBox.h).
+// pulsarbox.scd — SynthDefs for the SC PulsarBox node (src/nodes/boxSynths/pulsarBox/scPulsarBox.h).
 //
 // Pulsar synthesis (Roads): every voice emits pulses at its fundamental; each
 // pulse is a pulsaret (a table read at the formant frequency) shaped by an

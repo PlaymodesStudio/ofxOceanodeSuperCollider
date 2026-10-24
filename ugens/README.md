@@ -77,7 +77,7 @@ counterpart in `ofxOceanodeOnlineRadio/sc/`.
 ### OceanodeSpectral (`OceanodeSpectral/`)
 
 `PV_MaskFilter` (October 2026): a spectral filter drawn by an array of gains,
-for the SC Spectral Filter Box node (`src/nodes/scSpectralFilterBox.*`,
+for the SC Spectral Filter Box node (`src/nodes/boxSynths/spectralFilterBox/scSpectralFilterBox.*`,
 SynthDefs in `synthdefs/Defaults/SpectralFilterBox/`). Every FFT frame each bin
 is scaled by the mask (its last K inputs) read on a log-frequency axis between
 `lowFreq` and `highFreq`, moved by `transpose` semitones, wrapping round or

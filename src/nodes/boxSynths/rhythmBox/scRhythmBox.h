@@ -1,0 +1,584 @@
+//
+//  scRhythmBox.h
+//  ofxOceanodeSuperCollider
+//
+//  Fruity-Loops-style multitrack step sequencer with integrated file browser.
+//  Phase 1: sample browser, dynamic track count, VOL and PROB parameter tabs,
+//           slot system, BPM awareness, per-track stereo audio outputs.
+//
+//  Architecture:
+//    • Inherits scNode for proper SC signal-graph integration.
+//    • Adds/removes output ports with the active typed tracks.
+//    • One type-specific RhythmBox synth instance per track per SC server.
+//    • One sample buffer per sample/slice track per server.
+//    • Slot system: MAX_SLOTS independent snapshots of all per-track data.
+//    • Floating ImGui window: left = file browser, right = scrollable track rows.
+//
+
+#pragma once
+
+#include "ofxOceanodeNodeModel.h"
+#include "ofxOceanodeShared.h"
+#include "../../../scNode.h"
+#include "../../../timing/scTransportSync.h"
+#include "../../../serverManager.h"
+#include "ofxSuperCollider.h"
+#include "ofxSCSynth.h"
+#include "ofxSCBuffer.h"
+#include "ofxSCBus.h"
+#include "imgui.h"
+#include "../../../samples/scSampleBrowser.h"
+#include "../shared/scSnapshots.h"
+#include "../../../ui/scTimelineMenu.h"
+#include "../../../ui/scDropdowns.h"
+#include <cctype>
+#include <array>
+#include <memory>
+#include <functional>
+#include <type_traits>
+#include <vector>
+#include <string>
+#include <map>
+#include <filesystem>
+#include <fstream>
+#include <cstring>
+
+class scRhythmBox : public scNode {
+public:
+    // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
+    std::string getWindowTitle() override { return "Step Sequencer " + ofToString(getNumIdentifier()); }
+    ofParameter<bool>* getWindowToggle() override { return &showWindow; }
+private:
+public:
+    enum class TrackType : int { Sample, Slice, Kick, Noise, Snare, Click };
+    // ── Constants ─────────────────────────────────────────────────────────────
+    static constexpr int   MAX_TRACKS  = 8;
+    static constexpr int   MAX_STEPS   = 64;
+    static constexpr int   MAX_SLOTS   = 8;
+    static constexpr float BEAT_W      = 128.0f; // pixels per beat → square steps at stepsPerBeat=4
+    static constexpr float STEP_H      = 32.0f;  // step button height
+    static constexpr float PARAM_H     = 64.0f;  // VOL/PROB slider height
+    static constexpr float STEP_ROUND  = 4.0f;   // step button corner radius
+    static constexpr float STEP_GAP    = 2.0f;   // uniform gap between every step button
+
+    // ── Data types ────────────────────────────────────────────────────────────
+
+    /// Per-track global configuration — identical across all slots for a given track.
+    struct TrackConfig {
+        std::string name          = "Track";
+        TrackType   type          = TrackType::Sample;
+        bool        minimized     = false;
+        int         numBeats      = 4;
+        int         stepsPerBeat  = 4;
+
+        bool        monoMode      = true;   // true=mono (restart), false=poly (8 voices)
+        bool        volLatch       = true;   // true=latch per-step values at trigger
+
+        // WAV tab: playback region and duration control
+        float       inPoint        = 0.0f;
+        float       outPoint       = 1.0f;
+        bool        loopEnabled    = false;
+        bool        fixDuration    = false;
+        float       durationBeats  = 1.0f;
+        int         wavGrid        = 0;     // 0=off, N>0: grid snap divisions
+
+        // ENV tab: global amplitude envelope
+        bool        envEnabled     = false;
+        float       envAttack      = 0.0f;
+        int         envHoldSteps   = 0;    // tempo-synced hold length (0..64 sequencer steps)
+        float       envDecay       = 0.3f;
+        float       envCurveA      = 0.0f;
+        float       envCurveD      = 0.0f;
+        // Noise uses the same envelope editor as samples, extended to ADSR.
+        float       envSustain     = 1.0f;
+        float       envRelease     = 0.2f;
+
+        // Filter mode for every track: legacy bipolar CUT, fixed LP/HP/BP, or 4-pole LP/HP.
+        int         filterMode     = 0;     // 0=legacy CUT, 1=LP, 2=HP, 3=BP, 4=LPHP4
+        bool        filterRandom   = false;
+        float       filterRandomRange = 0.0f; // multiplicative CUT deviation per loop
+
+        // Kick synth: fast, curved pitch AD and waveform/PM controls.
+        int         kickWaveType   = 0;     // 0=PM sine, 1=pulse
+        float       kickStartNote  = 105.0f;
+        float       kickEndNote    = 36.0f;
+        float       kickPitchAttack = 0.0001f;
+        float       kickPitchDecay  = 0.18f;
+        float       kickPitchCurve  = -12.0f;
+        float       kickPMPitch     = 0.0f;
+        float       kickPMIndex     = 0.0f;
+
+        // Noise synth.
+        int         noiseType      = 0;     // white, pink, crackle, dust
+        float       noiseDensity   = 0.5f;
+
+        // Minimal 909-style snare controls. hiRel is per-step in TrackData.
+        float       snareToneNote  = 58.0f;
+        float       snareToneDecay = 0.11f;
+        float       snareToneLevel = 0.7f;
+        float       snareNoiseFreq = 2810.0f;
+        float       snareNoiseLevel = 1.0f;
+
+        // Click comb global pitch octave. Per-step comb pitch is 0..12 semitones.
+        int         clickCombOctave = 3;
+
+        // EQ tab: 3-band insert EQ (HP → Peak → LP)
+        bool        eqEnabled      = false;
+        float       eqHPFreq       = 80.0f;    // HP cutoff Hz
+        float       eqHPQ          = 0.71f;    // HP Q (sends 1/Q to SC)
+        float       eqPeakFreq     = 1000.0f;  // Peak center Hz
+        float       eqPeakGain     = 0.0f;     // Peak gain dB  (-24..+24)
+        float       eqPeakQ        = 1.0f;     // Peak Q (sends 1/Q to SC)
+        float       eqLPFreq       = 12000.0f; // LP cutoff Hz
+        float       eqLPQ          = 0.71f;    // LP Q (sends 1/Q to SC)
+
+        // EUC tab: euclidean tool settings (not per-slot data)
+        int         euclPulses     = 4;
+        int         euclSteps      = 16;  // pattern length for euclidean fill (cut/repeat to fit ns)
+        int         euclOffset     = 0;
+        int         accentPulses   = 4;
+        int         accentSteps    = 16;  // pattern length for euclidean accents (cut/repeat to fit ns)
+        int         accentOffset   = 0;   // rotation offset for euclidean accent pattern
+        float       accentHi       = 1.0f;
+        float       accentLo       = 0.5f;
+        float       accentBeatVar  = 0.05f;
+
+        // Volume / probability / transpose (mirrors node vector params)
+        float       trackPitch     = 0.0f;
+        float       globalVol      = 1.0f;
+        float       globalProb     = 1.0f;
+        float       sequenceProb   = 1.0f;  // probability that entire sequence plays (0..1)
+        float       globalStepProbSub = 1.0f; // global step-prob multiplier (0..1, 1=full prob)
+        float       globalCut      = 0.0f;  // global cut offset (-1..1, additive to per-step cut)
+        float       globalPanOffset = 0.0f; // global pan offset (-1..1, additive to per-step pan)
+        float       globalRes      = 0.0f;  // global resonance additive (0..1)
+
+        // AMP tab: beat-synced amplitude LFO
+        bool        lfoEnabled     = false;
+        float       lfoRate        = 1.0f;   // beats per LFO cycle (1=one cycle/beat)
+        float       lfoDepth       = 0.5f;   // 0..1 amplitude modulation depth
+        int         lfoShape       = 0;      // 0=sin, 1=square, 2=saw, 3=invsaw
+        float       lfoPhase       = 0.0f;   // initial/retrigger phase 0..1
+        float       lfoPulseWidth  = 0.5f;   // square wave pulse width 0..1
+
+        // AMP tab: per-step envelope decay offset
+        float       decayRange     = 1.0f;   // max seconds of decay offset (±decayRange)
+
+        // Slice-track settings. slicerMode is only a legacy preset/wire mirror;
+        // TrackType::Slice is authoritative and the UI cannot switch types in place.
+        bool        slicerMode     = false;
+        bool        sliceFit       = false;  // stretch each slice to exactly one step duration
+        int         sliceGrid      = 0;      // 0=off, N>0: grid snap divisions for slice boundaries
+        std::vector<float> slicePoints;      // ns+1 boundary positions [0..1] (lazy-inited)
+
+        bool        muted          = false;  // per-track mute (mirrors muteP node param)
+        bool        solo           = false;  // per-track solo (isolates this track)
+
+        int getNumSteps() const { return std::min(numBeats * stepsPerBeat, MAX_STEPS); }
+    };
+
+    /// Per-track per-slot data — shift, step patterns and arpeggiator settings.
+    struct TrackData {
+        int                shift     = 0;
+        int                activeTab = -1;  // -1=none  0=VOL … 8=ENV
+
+        // ARP: simple arpeggiation — per-slot
+        bool  arpEnabled      = false;
+        float arpInterval     = 7.0f;   // semitones per arp step (±24)
+        int   arpModulo       = 4;      // steps before arp restarts (1..16)
+        float arpGateWidth    = 1.0f;   // gate width fraction (0..1); 1=full, only in mono+arp mode
+        int   arpSpeedMode    = 0;      // 0=divisions/beat, 1=MIDI pitch→Hz
+        bool  globalArpEnabled = false; // override: all steps use arp with globalArpSpeed
+        float globalArpSpeed   = 4.0f;  // global arp speed (div/beat or MIDI note)
+        std::vector<bool>  stepOn;
+        std::vector<float> stepVol;
+        std::vector<float> stepProb;
+        std::vector<int>   stepProbGroup;    // probability group index (0=individual, >0=group)
+        std::vector<float> stepPan;     // -1..1 stereo balance
+        std::vector<float> stepCut;     // -1..0 LP, 0..1 HP
+        std::vector<float> stepRes;     // 0..1 resonance
+        std::vector<int>   stepPitch;   // -12..12 semitones per step
+        std::vector<bool>  stepReverse; // true = play sample backwards for this step
+        std::vector<bool>  stepArp;      // true = arp enabled for this step
+        std::vector<float> stepArpSpeed; // arp retrigger speed per step (divisions/beat)
+        std::vector<int>   stepSlice;         // which slice index plays at each step (slicer mode)
+        std::vector<bool>  stepSliceOn;       // per-step silence flag for slicer mode (true=play, false=silence)
+        std::vector<float> stepDecayOffset;   // per-step decay time offset (-1..1, scaled by decayRange)
+        std::vector<float> stepShape;         // kick tanh drive amount (0=bypass)
+        std::vector<float> stepHiRel;         // snare noise release (seconds)
+        std::vector<float> stepCombPitch;     // click comb pitch class (0..12 semitones)
+        std::vector<float> stepCombDecay;     // click comb decay time (seconds)
+
+        void resizeSteps() {
+            // Always grow to MAX_STEPS — never shrink.
+            stepOn      .resize(MAX_STEPS, false);
+            stepVol     .resize(MAX_STEPS, 1.0f);
+            stepProb    .resize(MAX_STEPS, 1.0f);
+            stepProbGroup.resize(MAX_STEPS, 0);
+            stepPan     .resize(MAX_STEPS, 0.0f);
+            stepCut     .resize(MAX_STEPS, 0.0f);
+            stepRes     .resize(MAX_STEPS, 0.0f);
+            stepPitch   .resize(MAX_STEPS, 0);
+            stepReverse .resize(MAX_STEPS, false);
+            stepArp      .resize(MAX_STEPS, false);
+            stepArpSpeed .resize(MAX_STEPS, 4.0f);
+            // Preserve authored slice mappings when Beats or Steps/Beat changes.
+            // Only genuinely new entries receive the identity mapping.
+            const size_t oldSliceSize = stepSlice.size();
+            stepSlice.resize(MAX_STEPS, 0);
+            for(size_t i = oldSliceSize; i < stepSlice.size(); ++i)
+                stepSlice[i] = (int)i;
+            stepSliceOn     .resize(MAX_STEPS, true);
+            stepDecayOffset .resize(MAX_STEPS, 0.0f);
+            stepShape       .resize(MAX_STEPS, 0.0f);
+            stepHiRel       .resize(MAX_STEPS, 0.725f);
+            stepCombPitch   .resize(MAX_STEPS, 0.0f);
+            stepCombDecay   .resize(MAX_STEPS, 0.0f);
+        }
+    };
+
+    /// One slot holds per-slot step/shift data for all tracks.
+    struct SlotData {
+        std::vector<TrackData> tracks; // size == numTracks at time of use
+    };
+
+    // ── Constructor / Destructor ──────────────────────────────────────────────
+    scRhythmBox(vector<serverManager*> servers);
+    ~scRhythmBox();
+
+    // ── ofxOceanodeNodeModel overrides ────────────────────────────────────────
+    void setup()              override;
+    void update(ofEventArgs&) override;
+    void draw(ofEventArgs&)   override;
+    void setBpm(float bpm)    override;
+    void activate()           override;
+    void deactivate()         override;
+
+    // ── scNode interface ──────────────────────────────────────────────────────
+    void buildSynth(ofxSCServer* s)                     override;
+    void createSynth(ofxSCServer* s)                    override;
+    void free(ofxSCServer* s)                           override;
+    void setOutputBus(ofxSCServer* s, int idx, int bus) override;
+    int  getOutputBusIndex(ofxSCServer* s, int idx)     override;
+    void moveSynthBefore(ofxSCServer* s, int nodeID)    override;
+    int  getLastSynthID(ofxSCServer* s)                 override;
+    // No audio input:
+    void setInputBus(ofxSCServer*, scNode*, int)        override {}
+    void resetInputBusses(ofxSCServer*, int)            override {}
+
+    // ── Preset serialization ──────────────────────────────────────────────────
+    void presetSave(ofJson& j)                         override;
+    void presetRecallAfterSettingParameters(ofJson& j) override;
+    void loadBeforeConnections(ofJson& j)              override;
+    void macroSave(ofJson& j, string path)             override;
+    void macroLoad(ofJson& j, string path)             override;
+
+private:
+    // ── Servers ───────────────────────────────────────────────────────────────
+    vector<serverManager*> allServers;
+
+    // ── BPM (pushed by framework via setBpm()) ────────────────────────────────
+    float currentBpm = 120.0f;
+
+    // ── Node-GUI parameters ───────────────────────────────────────────────────
+    ofParameter<bool>          showWindow;
+    ofParameter<int>           resetSeq;      // 0/1 — trigger fires on rising edge 0→1
+    ofParameter<bool>          playSeq;       // play/stop toggle — rising edge resets phasor
+    ofParameter<int>           numTracksP;   // 0..MAX_TRACKS — number of active tracks
+    ofParameter<vector<float>> transposeP;   // per-track transpose in semitones (-24..24)
+    ofParameter<float>         masterVolP;   // master output volume multiplier (0..2)
+    ofParameter<vector<float>> globalVolP;          // per-track output volume (0..1)
+    ofParameter<vector<float>> globalProbP;         // per-track probability multiplier (0..1)
+    ofParameter<vector<float>> globalStepProbSubP;  // per-track global step-prob reduction (0..1)
+    ofParameter<vector<float>> globalCutP;          // per-track global cut offset (-1..1)
+    ofParameter<vector<float>> globalPanOffsetP;    // per-track global pan offset (-1..1)
+    ofParameter<vector<float>> globalResP;          // per-track global resonance additive (0..1)
+    ofParameter<vector<int>>   muteP;        // per-track mute state: 0=unmuted, 1=muted
+    ofParameter<vector<int>>   soloP;        // per-track solo state: 0=off, 1=soloed
+    ofParameter<float>         swingP;       // global swing for all tracks (0=straight, 0.5=max)
+    ofParameter<float>         globalTransposeP; // global semitone offset added to all track transposes
+    ofParameter<int>           currentSlotP; // 0..MAX_SLOTS-1
+    ofParameter<bool>          embedInProject;
+    ofParameter<vector<int>>   gateOut;      // per-track gate state (0 or 1)
+
+    // ── Multitrack ────────────────────────────────────────────────────────────
+    int numTracks = 0;  // current active track count (driven by numTracksP)
+    void setNumTracks(int n, TrackType newTrackType = TrackType::Sample);  // handles all add/remove logic for tracks
+    void addTrack(TrackType type);
+    void removeTrack(int trackIndex);
+
+    // ── Track config (global per-track, shared across all slots) ─────────────
+    std::vector<TrackConfig> trackConfigs;  // size MAX_TRACKS
+
+    TrackConfig&       trackConfig(int ti);
+    const TrackConfig& trackConfig(int ti) const;
+
+    // ── Slot / track data (per-slot: shift + step patterns) ──────────────────
+    std::vector<SlotData> slots;           // fixed size MAX_SLOTS
+
+    TrackData&       track(int ti);
+    const TrackData& track(int ti) const;
+    void initSlots();                      // allocate slots for the active tracks
+    void reloadCurrentSlot();             // update step/timing params on running synth (no sample reload)
+
+    // ── SC synth resources ────────────────────────────────────────────────────
+    // trackSynths[server][ti] → synth (nullptr = not created)
+    std::map<ofxSCServer*, std::vector<ofxSCSynth*>> trackSynths;
+    // outputBuses[server][ti] → audio bus index assigned by graph manager
+    std::map<ofxSCServer*, std::map<int, int>>       outputBuses;
+
+    // ── Audio bus resources ───────────────────────────────────────────────────
+    // privateBuses[server][ti]: internal audio bus used as default out (freed when
+    //   setOutputBus() is called with a real graph-allocated bus)
+    std::map<ofxSCServer*, std::vector<ofxSCBus*>> privateBuses;
+    // stepBuses[server][ti]: 1-channel KR bus; synth writes current step index
+    std::map<ofxSCServer*, std::vector<ofxSCBus*>> stepBuses;
+    // gateBuses[server][ti]: 1-channel KR bus; synth writes current gate (0 or 1)
+    std::map<ofxSCServer*, std::vector<ofxSCBus*>> gateBuses;
+    // mixBus[server]: single stereo audio bus that ALL track synths also write to.
+    // Exposed as the "Mix" output port; the OS graph system sums all writers per cycle.
+    std::map<ofxSCServer*, ofxSCBus*> mixBuses;
+    ofParameter<nodePort> mixOutParam;
+    // currentStep[ti]: last step index read back from SC (for playhead drawing)
+    std::vector<int> currentStep;
+
+    // ── Sample buffer resources ───────────────────────────────────────────────
+    // Each track has its own sample (not per-slot — same sample across all slots for that track).
+    // trackBufs[ti][server] → the sample buffer for track ti.
+    std::vector<std::map<ofxSCServer*, ofxSCBuffer*>> trackBufs; // size MAX_TRACKS
+    std::vector<std::string> samplePaths;  // per-track sample path (not per-slot)
+
+    int  getBufnum(int ti, ofxSCServer* srv) const;
+    void loadSampleForTrack(int ti, const std::string& path);
+    void reloadSamplesForServer(ofxSCServer* srv);
+    void freeSampleForTrack(int ti);
+    void freeAllSamples();
+
+    // ── Synth helpers ─────────────────────────────────────────────────────────
+    void createTrackSynth(ofxSCServer* srv, int ti);
+    void freeServerSynths(ofxSCServer* srv);
+    void sendStepData(ofxSCSynth* s, const TrackData& td);
+    void sendStepDataDirect(ofxSCSynth* s, const TrackData& td, ofxSCServer* srv);
+    void sendStepDataToAll(int ti);
+    void fireStepParams(int ti);
+    void sendTypedConfigToAll(int ti);
+    void sendBpmToAll();
+    void updateActiveStates(); // recompute SC 'active' for all tracks (mute + solo)
+
+    // ── File browser + preview (shared component, see scSampleBrowser.h) ─────
+    scSampleBrowser browser{"scRhythmBox"};
+    void refreshBrowse(const std::string& dir) { browser.refresh(dir); }
+    void stopPreview()                         { browser.stopPreview(); }
+
+    // Server used for the browser preview and the slice previews
+    ofxSCServer* previewServer = nullptr;
+
+    // ── Slice preview (per-track; plays a single slice on demand) ─────────────
+    ofxSCSynth*  slicePreviewSynths[MAX_TRACKS];   // one-shot preview synth per track
+    int          slicePreviewIdx   [MAX_TRACKS];   // slice index being previewed (-1 = none)
+
+    void triggerSlicePreview(int ti, int sliceIdx);
+    void stopSlicePreview(int ti);
+
+    // ── ImGui window rendering ────────────────────────────────────────────────
+    void drawSequencerWindow();
+    void drawBrowser(float w, float h);
+    void drawTrack(int ti);
+
+    // ImGui InputText edit buffers (rebuilt from TrackData names, not serialized)
+    char nameEditBuf[MAX_TRACKS][64];
+
+    // ── Preset helpers ────────────────────────────────────────────────────────
+    void serializeSlots(ofJson& j) const;
+    void deserializeSlots(const ofJson& j);
+
+    scTimelineMenu timeline;
+    std::map<std::string, ofAbstractParameter*> controlValues;
+    std::map<ofxSCServer*, ofxSCBuffer*> silentBuffers;
+    std::vector<ofAbstractParameter*> storedControls;
+    std::vector<std::function<void(ofJson&)>> controlSavers;
+    std::vector<std::string> legacyControlKeys;
+    std::array<std::map<std::string, std::string>, MAX_TRACKS> trackControlKeys;
+    std::vector<std::function<void()>> trackControlPulls;
+    bool trackControlsDirty = false, legacyPublishing = false;
+    void initializeTrackControls();
+    std::vector<ofxSCServer*> activeGraphServers() const;
+    void controlMenuItems(const std::string& key, bool withValue = true);
+    void stepMenu(int ti, const std::string& field, int step);
+    void flushTrackControls();
+    std::vector<std::function<void()>> pendingTrackEdits;
+    void presetHasLoaded() override;
+    void presetRecallBeforeSettingParameters(ofJson& j) override { loadBeforeConnections(j); }
+    std::string trackControlKey(int ti, const std::string& field) const {
+        const auto it = trackControlKeys[ti].find(field);
+        return it == trackControlKeys[ti].end() ? std::string() : it->second;
+    }
+    template<typename Draw> bool windowControl(const std::string& key, Draw draw) {
+        const bool changed = draw();
+        if(!key.empty()) snapMenu(key);
+        return changed;
+    }
+    template<typename T> void registerControl(ofParameter<T>& parameter, bool legacy = true, bool stored = true) {
+        const auto key = parameter.getEscapedName();
+        snapParams[key] = [this, &parameter](){ return addParameter(parameter); };
+        controlValues[key] = &parameter;
+        if(legacy) legacyControlKeys.push_back(key);
+        if(stored) {
+            storedControls.push_back(&parameter);
+            controlSavers.push_back([this, &parameter, key](ofJson& j){
+                if(!snapPublished.count(key)) j[key] = parameter.get();
+            });
+        }
+    }
+    template<typename T, typename Get, typename Set>
+    void bindTrackControl(int ti, const std::string& field, T lo, T hi, Get get, Set set) {
+        auto p = std::make_shared<ofParameter<T>>();
+        std::string label;
+        for(char c : field) {
+            if(!label.empty() && std::isupper(static_cast<unsigned char>(c))) label += ' ';
+            label += label.empty() ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c;
+        }
+        p->set(label + " " + ofToString(ti + 1), ti < numTracks ? get() : T{}, lo, hi);
+        registerControl(*p, false, false);
+        trackControlKeys[ti][field] = p->getEscapedName();
+        nodeListeners.push(p->newListener([this, ti, set, lo, hi](T& value){
+            if(ti >= numTracks) return;
+            T sanitized = value;
+            if constexpr(std::is_same_v<T, std::vector<float>> || std::is_same_v<T, std::vector<int>>) {
+                if(sanitized.size() == 1) sanitized.resize(MAX_STEPS, sanitized.front());
+                for(auto& v : sanitized) v = std::max(lo.front(), std::min(v, hi.front()));
+            }
+            pendingTrackEdits.push_back([this, ti, set, sanitized](){
+                if(ti < numTracks) { set(sanitized); trackControlsDirty = true; }
+            });
+        }));
+        trackControlPulls.push_back([this, ti, p, get](){
+            if(ti < numTracks) p->setWithoutEventNotifications(get());
+        });
+    }
+
+    // ── Sample embed helpers (mirrors scBuffer pattern) ───────────────────────
+    // Copy all slot samples into <folderRootAbs>/samples/ and rewrite the JSON paths.
+    void        embedSamplesIntoJson(ofJson& j, const std::string& folderRootAbs);
+    std::string resolveToAbsolutePath(const std::string& inputPath) const;
+
+    // ── Waveform display ─────────────────────────────────────────────────────
+    // 8192 bins gives ~1px resolution per bin at 16x zoom with a ~512px display.
+    static constexpr int WAVEFORM_BINS = 8192;
+    std::vector<std::vector<float>> waveformPeaks;  // [track][bin] peak (0..1)
+    void                 loadWaveformData(int ti, const std::string& path);
+
+    // Per-track waveform zoom (1..64) and scroll (0..1) — shared by WAV and SLICE tabs.
+    float waveZoom  [MAX_TRACKS];   // 1 = full sample visible; 64 = 1/64 visible
+    float waveScroll[MAX_TRACKS];   // 0 = left edge, 1 = right edge
+
+    // WAV tab drag state
+    enum class WavDrag { None, In, Out };
+    WavDrag wavDragMode = WavDrag::None;
+
+    // SLICE tab drag state (interior slice boundary drag)
+    int  sliceDragTrack = -1;
+    int  sliceDragIdx   = 0;   // 0=none, ≥1=interior boundary k, -2=inPoint, -3=outPoint
+
+    // Slicer matrix paint state (drag assigns the same slice row across columns)
+
+    // ── Slicer helpers ────────────────────────────────────────────────────────
+    /// Initialize (or reinitialize) slicePoints to uniform spacing between inPoint..outPoint.
+    void initSlicePoints(int ti);
+    /// Compute per-step slice start/end arrays from slicePoints + stepSlice assignment.
+    void computeSliceArrays(int ti, std::vector<float>& starts, std::vector<float>& ends) const;
+
+    // ── Euclidean rhythm helper ───────────────────────────────────────────────
+    /// Returns a boolean pattern of length n with k evenly-distributed pulses.
+    static std::vector<bool> euclideanRhythm(int k, int n);
+
+    // ── Internal flags ────────────────────────────────────────────────────────
+    int      lastResetVal    = 0;   // previous value of resetSeq — detect rising edge 0→1
+    // Reset requests go to SC as an ever-increasing counter on the 'reset'
+    // control (the SynthDef fires on every increment). A 1-then-0 pulse is
+    // lost when both /n_set land in the same control block.
+    double   resetCounter    = 0.0;
+    void     sendResetTo(int firstTrack, int endTrack); // bump counter, send to tracks [first, end)
+    bool     isSyncing() const;   // Sync To Transport active (false without transport support)
+    float    effectiveBpm() const; // bpm the synths should run at (transport bpm when syncing)
+    bool     lastPlayVal     = false; // previous value of playSeq — detect rising edge false→true
+    int  sliderPaintTrack    = -1;   // track index owning current slider paint gesture (-1 = none)
+    int  cutPaintTrack       = -1;   // track index owning current CUT slider paint gesture (-1 = none)
+    int  resPaintTrack       = -1;   // track index owning current RES slider paint gesture (-1 = none)
+    int  stepPaintTrack      = -1;   // track index owning current step-on paint gesture (-1 = none)
+    bool stepPaintValue      = false; // value being stamped during a step-on paint gesture
+    int  revPaintTrack       = -1;   // track index owning current reverse paint gesture (-1 = none)
+    bool revPaintValue       = false; // value being stamped during a reverse paint gesture
+    int  arpPaintTrack       = -1;   // track index owning current ARP step paint gesture (-1 = none)
+    bool arpPaintValue       = false; // value being stamped during an ARP step paint gesture
+    float browserW           = 220.0f; // file browser panel width (resizable)
+    int  pendingTrackRemoval = -1;   // deferred until after the current ImGui track loop
+
+    // ── Sync To Transport (inspector) ─────────────────────────────────────────
+    // Each track's step position = (transportBeat + beatOffset) * stepsPerBeat,
+    // wrapped to its numSteps. The SC clock is re-anchored with timetagged
+    // anchors (see scTransportSync.h). Play/Reset/Stop/BPM of the node are
+    // ignored by the synths while syncing (the transport drives them).
+    ofParameter<bool>  syncToTransportP;
+    ofParameter<float> beatOffsetP;
+    scTransportSync::Follower                follower;
+    std::vector<scTransportSync::StepClock>  stepClocks;   // [MAX_TRACKS]
+    std::vector<int>    syncSpb;        // stepsPerBeat last anchored per track (-1 = unknown)
+    std::vector<int>    syncNs;         // numSteps last anchored per track (-1 = unknown)
+    std::map<ofxSCServer*, std::vector<bool>> syncJoined;
+    std::vector<double> hardCounters;   // per-track "anchorHard" counter (only increases)
+    std::vector<bool>   needHard;       // next anchor for this track must be hard (new synth, geometry change)
+    double anchorIdCounter = 0.0;       // "anchorId" counter shared by all tracks (only increases)
+    float  syncBpm = 120.0f;            // tempo of the last anchor
+    uint64_t lastAnchorUs = 0;          // steady time of the latest anchor sent (ordering of the sync-off message)
+    uint64_t lastAnchorTimetag = 0;    // exact queued OSC deadline for sync-off ordering
+    void handleSyncChanged(bool on);
+    void updateTransportSync();
+    void sendAnchor(const scTransportSync::Anchor& a);
+
+    // ── Per-track step-data ofParameters (FM7Drone listener pattern) ─────────
+    // Storing step arrays as ofParameters means any .set() call — from preset
+    // load, slot change, or UI edit — fires a listener that calls synth->set(),
+    // which sends /n_setn immediately when the synth is confirmed live.
+    std::vector<ofParameter<vector<float>>> pStepOn;    // size MAX_TRACKS
+    std::vector<ofParameter<vector<float>>> pStepVol;
+    std::vector<ofParameter<vector<float>>> pStepProb;
+    std::vector<ofParameter<vector<int>>>   pStepProbGroup; // probability group indices (0=individual, >0=group)
+    std::vector<ofParameter<vector<float>>> pStepPan;
+    std::vector<ofParameter<vector<float>>> pStepCut;
+    std::vector<ofParameter<vector<float>>> pStepRes;
+    std::vector<ofParameter<vector<int>>>   pStepPitch;
+    std::vector<ofParameter<vector<float>>> pStepReverse;
+    std::vector<ofParameter<vector<float>>> pStepArp;
+    std::vector<ofParameter<vector<float>>> pStepArpSpeed;
+    std::vector<ofParameter<vector<float>>> pStepSliceStart;    // [MAX_TRACKS] slice start (0..1) per step
+    std::vector<ofParameter<vector<float>>> pStepSliceEnd;      // [MAX_TRACKS] slice end   (0..1) per step
+    std::vector<ofParameter<vector<float>>> pStepSliceOn;       // [MAX_TRACKS] per-step silence flag (1=play)
+    std::vector<ofParameter<vector<float>>> pStepDecayOffset;   // [MAX_TRACKS] per-step decay offset (-1..1)
+    std::vector<ofParameter<vector<float>>> pStepShape;
+    std::vector<ofParameter<vector<float>>> pStepHiRel;
+    std::vector<ofParameter<vector<float>>> pStepCombPitch;
+    std::vector<ofParameter<vector<float>>> pStepCombDecay;
+
+    // ── Event listeners ───────────────────────────────────────────────────────
+    ofEventListeners nodeListeners;
+    
+    void applyBoxState(const ofJson& j, bool keepLoaded);
+    // ── Snapshots (the shared system): the whole box ────────────────────────
+    scSnapshots snaps;
+    ofJson appliedBox;                    // the box a snapshot last loaded
+    std::map<std::string, std::function<std::shared_ptr<ofxOceanodeAbstractParameter>()>> snapParams;
+    std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> snapPublished;
+    ofJson captureSnapshot() const;
+    void applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw);
+    std::vector<ofJson> factorySnapshots() const;
+    void publishSnap(const std::string& key);
+    void unpublishSnap(const std::string& key);
+    void snapMenu(const std::string& key);
+    void drawGlobalControls();
+    
+    // ── Track reordering helpers ──────────────────────────────────────────────
+    void moveTrackUp(int trackIndex);
+    void moveTrackDown(int trackIndex);
+    void swapTracks(int trackA, int trackB);
+};

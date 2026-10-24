@@ -4,7 +4,7 @@ import pathlib,subprocess,tempfile,random,math
 import pitchmap
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 source=r'''
-#include "scPolyCombPitchMap.h"
+#include "nodes/boxSynths/polyComb/scPolyCombPitchMap.h"
 #include <cassert>
 #include <cstdio>
 #include <cmath>
@@ -86,7 +86,7 @@ for _ in range(400):
  cases.append((rng.choice([1,2,7,16,32]),m))
 with tempfile.TemporaryDirectory()as d:
  c=pathlib.Path(d)/'test.cpp';c.write_text(source);exe=c.with_suffix('')
- subprocess.run(['clang++','-std=c++17','-I'+str(ROOT/'src/nodes'),str(c),'-o',str(exe)],check=True)
+ subprocess.run(['clang++','-std=c++17','-I'+str(ROOT/'src'),str(c),'-o',str(exe)],check=True)
  lines=[' '.join(map(str,[n]+[m[k]for k in ('waves','skew','roundness','pulse_width','pow','first','invert','symmetry','comb','index_quantize','index_random','seed','cycle_shift')]))for n,m in cases]
  result=subprocess.run([str(exe)],input='\n'.join(lines)+'\n',capture_output=True,text=True,check=True)
  for (n,m),line in zip(cases,result.stdout.splitlines()):

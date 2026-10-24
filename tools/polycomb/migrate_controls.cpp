@@ -1,4 +1,4 @@
-#include "scPolyCombMigration.h"
+#include "nodes/boxSynths/polyComb/scPolyCombMigration.h"
 #include <iostream>
 int main(){
     pcmigration::Json input; std::cin>>input;

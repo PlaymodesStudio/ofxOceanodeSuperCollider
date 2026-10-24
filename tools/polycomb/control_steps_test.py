@@ -2,9 +2,9 @@
 """Exercise production parameter registration for edits, published inputs and recall."""
 import pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-s=(ROOT/'src/nodes/scPolyComb.cpp').read_text();a=s.index('template<typename T>\nvoid scPolyComb::reg(');b=s.index('\n}\n',a)+3
+s=(ROOT/'src/nodes/boxSynths/polyComb/scPolyComb.cpp').read_text();a=s.index('template<typename T>\nvoid scPolyComb::reg(');b=s.index('\n}\n',a)+3
 source=r'''
-#include "scPolyCombControlSteps.h"
+#include "nodes/boxSynths/polyComb/scPolyCombControlSteps.h"
 #include <nlohmann/json.hpp>
 #include <functional>
 #include <cassert>
@@ -61,6 +61,6 @@ int main(){
 '''
 with tempfile.TemporaryDirectory()as d:
  c=pathlib.Path(d)/'test.cpp';c.write_text(source);exe=c.with_suffix('')
- subprocess.run(['clang++','-std=c++17','-I'+str(ROOT/'src/nodes'),'-I'+str(ROOT.parent.parent/'libs/json/include'),str(c),'-o',str(exe)],check=True)
+ subprocess.run(['clang++','-std=c++17','-I'+str(ROOT/'src'),'-I'+str(ROOT.parent.parent/'libs/json/include'),str(c),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True)
 print('PASS: production control listeners snap edits/connections, recall and vector transposes; no duplicate sends; Start obeys active range.')

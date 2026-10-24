@@ -31,7 +31,7 @@ in the main catalog come from metadata. Raw/support descriptions use metadata
 matches and static inference from names/UGen calls; inspect source contracts
 before changing them. Class calls without `.ar/.kr/.ir/.new` may not appear in
 the extracted core signature. Compiler eligibility is modeled from
-`src/scSynthdefSync.cpp`, not tested by compiling all sources.
+`src/synthdefs/scSynthdefSync.cpp`, not tested by compiling all sources.
 
 The PDF embeds macOS Arial fonts from `/System/Library/Fonts/Supplemental`.
 Adapt those paths if generating on another platform. Render the result with

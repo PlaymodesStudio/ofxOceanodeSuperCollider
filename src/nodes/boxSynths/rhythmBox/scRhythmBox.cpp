@@ -1,0 +1,6140 @@
+//
+//  fullStepSequencer.cpp
+//  ofxOceanodeSuperCollider
+//
+
+#include "scRhythmBox.h"
+#include "../../../samples/scSampleEmbedding.h"
+#include "../../../ui/scTypedValue.h"
+#include "../../../audio/scSynthControlBatch.h"
+#include "ofxSuperCollider.h"
+#include <algorithm>
+#include <cmath>
+
+static const char* rhythmBoxSynthName(scRhythmBox::TrackType type) {
+    switch(type) {
+        case scRhythmBox::TrackType::Slice: return "RhythmBoxSliceTrack";
+        case scRhythmBox::TrackType::Kick:  return "RhythmBoxKickTrack";
+        case scRhythmBox::TrackType::Noise: return "RhythmBoxNoiseTrack";
+        case scRhythmBox::TrackType::Snare: return "RhythmBoxSnareTrack";
+        case scRhythmBox::TrackType::Click: return "RhythmBoxClickTrack";
+        case scRhythmBox::TrackType::Sample:
+        default: return "RhythmBoxSampleTrack";
+    }
+}
+
+static const char* rhythmBoxTrackTypeName(scRhythmBox::TrackType type) {
+    switch(type) {
+        case scRhythmBox::TrackType::Slice: return "Slice";
+        case scRhythmBox::TrackType::Kick:  return "Synth Kick";
+        case scRhythmBox::TrackType::Noise: return "Noise";
+        case scRhythmBox::TrackType::Snare: return "Synth Snare";
+        case scRhythmBox::TrackType::Click: return "Click";
+        case scRhythmBox::TrackType::Sample:
+        default: return "Sample";
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Constructor / Destructor
+// ════════════════════════════════════════════════════════════════════════════
+
+scRhythmBox::scRhythmBox(vector<serverManager*> servers)
+    : scNode("Rhythm Box"), allServers(servers)
+{
+    memset(nameEditBuf, 0, sizeof(nameEditBuf));
+
+    for(int i = 0; i < MAX_TRACKS; i++) {
+        waveZoom[i] = 1.0f; waveScroll[i] = 0.0f;
+        slicePreviewSynths[i] = nullptr;
+        slicePreviewIdx[i]    = -1;
+    }
+
+    // Cache the first available server for preview playback
+    for(auto* sm : allServers) {
+        if(sm && sm->getServer()) {
+            previewServer = sm->getServer();
+            break;
+        }
+    }
+    browser.setPreviewServer(previewServer);
+
+    // Pre-allocate per-track storage (active tracks are 0..numTracks-1)
+    trackBufs.resize(MAX_TRACKS);
+    samplePaths.resize(MAX_TRACKS);
+    waveformPeaks.resize(MAX_TRACKS);
+    currentStep.assign(MAX_TRACKS, 0);
+    stepClocks.assign(MAX_TRACKS, scTransportSync::StepClock{});
+    syncSpb.assign(MAX_TRACKS, -1);
+    syncNs.assign(MAX_TRACKS, -1);
+    hardCounters.assign(MAX_TRACKS, 0.0);
+    needHard.assign(MAX_TRACKS, true);
+}
+
+scRhythmBox::~scRhythmBox() {
+    try {
+        nodeListeners.unsubscribeAll();
+        stopPreview();
+        for(int i = 0; i < MAX_TRACKS; i++) stopSlicePreview(i);
+        freeAllSamples();
+
+        for(auto& [srv, synths] : trackSynths) {
+            for(auto* s : synths) {
+                if(s) { s->free(); delete s; }
+            }
+        }
+        trackSynths.clear();
+
+        for(auto& [srv, buses] : privateBuses) {
+            for(auto* b : buses) { if(b) { b->free(); delete b; } }
+        }
+        privateBuses.clear();
+
+        for(auto& [srv, buses] : stepBuses) {
+            for(auto* b : buses) { if(b) { b->free(); delete b; } }
+        }
+        stepBuses.clear();
+
+        for(auto& [srv, buses] : gateBuses) {
+            for(auto* b : buses) { if(b) { b->free(); delete b; } }
+        }
+        gateBuses.clear();
+
+        for(auto& [srv, mb] : mixBuses) { if(mb) { mb->free(); delete mb; } }
+        mixBuses.clear();
+        for(auto& item : silentBuffers) if(item.second) { item.second->free(); delete item.second; }
+        silentBuffers.clear();
+    } catch(const std::exception& e) {
+        ofLogError("scRhythmBox") << "Destructor: " << e.what();
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Setup
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::setup() {
+    // Minimal node: Show and outputs; window controls publish on demand.
+    addParameter(showWindow.set("Show",  false));
+    registerControl(resetSeq.set("Reset", 0, 0, 1));
+    registerControl(playSeq.set("Play", false));
+    registerControl(numTracksP.set("Tracks", 0, 0, MAX_TRACKS));
+    registerControl(currentSlotP.set("Slot", 0, 0, MAX_SLOTS - 1));
+    // Keep the legacy name so an old preset's Embed connection still resolves.
+    addInspectorParameter(embedInProject.set("Embed", true));
+    registerControl(embedInProject, true, false);
+
+    registerControl(masterVolP.set("MasterVol", 1.0f, 0.0f, 2.0f));
+    registerControl(globalVolP .set("Vol",        vector<float>{},  {0.0f},   {1.0f}));
+
+    registerControl(globalProbP.set("Prob",       vector<float>{},  {0.0f},   {1.0f}));
+    registerControl(globalStepProbSubP.set("StepProb", vector<float>{}, {0.0f}, {1.0f}));
+
+    registerControl(globalCutP.set("Cut",        vector<float>{},  {-1.0f},  {1.0f}));
+    registerControl(globalResP .set("Res",        vector<float>{},  {0.0f},   {1.0f}));
+
+    registerControl(globalPanOffsetP.set("Pan",  vector<float>{},  {-1.0f},  {1.0f}));
+
+    registerControl(muteP.set("Mute",   vector<int>{}, {0}, {1}));
+    registerControl(soloP.set("Solo",   vector<int>{}, {0}, {1}));
+
+    registerControl(swingP.set("Swing", 0.0f, 0.0f, 0.5f));
+
+    registerControl(transposeP .set("Transpose",  vector<float>{},  {-24.0f}, {24.0f}));
+    registerControl(globalTransposeP.set("GTranspose", 0.0f, -24.0f, 24.0f));
+
+    addSeparator("Output");
+    addOutputParameter(gateOut.set("Gate", vector<int>{}, {0}, {1}));
+    // Mix output: a single stereo bus that receives the sum of all tracks.
+    // Uses MAX_TRACKS as a sentinel index so getOutputBusIndex can distinguish it.
+    addOutputParameter(mixOutParam.set("Mix", nodePort(MAX_TRACKS, this)));
+
+    // Inspector: lock every track's step clock to the global transport.
+    // While on, the node's Play / Reset / Stop / BPM are ignored by the synths:
+    // transport play/stop and tempo drive them.
+    addInspectorParameter(syncToTransportP.set("Sync To Transport", true));
+    addInspectorParameter(beatOffsetP.set("Beat Offset", 0.0f, -64.0f, 64.0f));
+
+    // ── Slot / track data initialisation ─────────────────────────────────────
+    initSlots();
+
+    // ── File browser default location ─────────────────────────────────────────
+    {
+        std::string dir = ofToDataPath("Supercollider/Samples", true);
+        if(!std::filesystem::exists(dir))
+            dir = ofFilePath::getUserHomeDir();
+        refreshBrowse(dir);
+    }
+
+    // ── Parameter listeners ───────────────────────────────────────────────────
+    nodeListeners.push(resetSeq.newListener([this](int& v) {
+        // A 0→1 rising edge of resetSeq requests a reset. It is sent to SC as an
+        // ever-increasing counter on the 'reset' control (HPZ1.kr(reset) > 0 fires
+        // on every increment). The old 1-then-0 mirror lost resets whenever both
+        // /n_set messages reached scsynth within the same control block.
+        // (In Sync To Transport mode the synths ignore it: the transport drives them.)
+        const bool rising = (v > 0 && lastResetVal <= 0);
+        lastResetVal = v;
+        if(rising) sendResetTo(0, numTracks);
+    }));
+
+    nodeListeners.push(playSeq.newListener([this](bool& v) {
+        // Mirror the playSeq value (false/true) to the SC 'play' arg on every change.
+        // The SynthDef uses HPZ1.kr(play) to detect the false→true rising edge and fires
+        // a one-shot playTrig that resets the phasor to beginning when starting playback.
+        // When play=false, the sequencer stops; when play=true, it starts from step 0.
+        lastPlayVal = v;
+        for(auto& [srv, synths] : trackSynths)
+            for(auto* s : synths) if(s) s->set("play", v ? 1.0f : 0.0f);
+    }));
+
+    nodeListeners.push(transposeP.newListener([this](vector<float>& v) {
+        float gt = globalTransposeP.get();
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].trackPitch = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalPitch", v[ti] + gt);
+        }
+    }));
+    nodeListeners.push(globalVolP.newListener([this](vector<float>& v) {
+        float mv = masterVolP.get();
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalVol = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalVol", v[ti] * mv);
+        }
+    }));
+    nodeListeners.push(masterVolP.newListener([this](float& mv) {
+        for(int ti = 0; ti < numTracks; ti++)
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalVol", trackConfigs[ti].globalVol * mv);
+    }));
+    nodeListeners.push(globalProbP.newListener([this](vector<float>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalProb = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalProb", v[ti]);
+        }
+    }));
+    nodeListeners.push(muteP.newListener([this](vector<int>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++)
+            trackConfigs[ti].muted = (v[ti] != 0);
+        updateActiveStates();  // also accounts for solo
+    }));
+    nodeListeners.push(soloP.newListener([this](vector<int>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++)
+            trackConfigs[ti].solo = (v[ti] != 0);
+        updateActiveStates();
+    }));
+    nodeListeners.push(globalTransposeP.newListener([this](float& v) {
+        for(int ti = 0; ti < numTracks; ti++) {
+            float pitch = trackConfigs[ti].trackPitch + v;
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalPitch", pitch);
+        }
+    }));
+    nodeListeners.push(swingP.newListener([this](float& v) {
+        for(auto& [srv, synths] : trackSynths)
+            for(auto* s : synths) if(s) s->set("swing", v);
+    }));
+
+    nodeListeners.push(globalStepProbSubP.newListener([this](vector<float>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalStepProbSub = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalStepProbSub", v[ti]);
+        }
+    }));
+    nodeListeners.push(globalCutP.newListener([this](vector<float>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalCut = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalCut", v[ti]);
+        }
+    }));
+    nodeListeners.push(globalPanOffsetP.newListener([this](vector<float>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalPanOffset = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalPanOffset", v[ti]);
+        }
+    }));
+    nodeListeners.push(globalResP.newListener([this](vector<float>& v) {
+        for(int ti = 0; ti < numTracks && ti < (int)v.size(); ti++) {
+            trackConfigs[ti].globalRes = v[ti];
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("globalRes", v[ti]);
+        }
+    }));
+
+    nodeListeners.push(numTracksP.newListener([this](int& n) {
+        setNumTracks(n);
+    }));
+
+    nodeListeners.push(syncToTransportP.newListener([this](bool& on) {
+        handleSyncChanged(on);
+    }));
+    nodeListeners.push(beatOffsetP.newListener([this](float& /*v*/) {
+        if(!syncToTransportP.get()) return;
+        // The position jumps: re-anchor every track hard.
+        for(int ti = 0; ti < MAX_TRACKS; ti++) needHard[ti] = true;
+        follower.requestAnchor();
+    }));
+
+    nodeListeners.push(currentSlotP.newListener([this](int& /*s*/) {
+        reloadCurrentSlot();
+    }));
+
+    // ── Per-track step-data parameters with auto-send listeners (FM7Drone pattern) ─
+    pStepOn      .resize(MAX_TRACKS);
+    pStepVol     .resize(MAX_TRACKS);
+    pStepProb    .resize(MAX_TRACKS);
+    pStepProbGroup.resize(MAX_TRACKS);
+    pStepPan     .resize(MAX_TRACKS);
+    pStepCut     .resize(MAX_TRACKS);
+    pStepRes     .resize(MAX_TRACKS);
+    pStepPitch   .resize(MAX_TRACKS);
+    pStepReverse .resize(MAX_TRACKS);
+    pStepArp     .resize(MAX_TRACKS);
+    pStepArpSpeed.resize(MAX_TRACKS);
+    pStepSliceStart   .resize(MAX_TRACKS);
+    pStepSliceEnd     .resize(MAX_TRACKS);
+    pStepSliceOn      .resize(MAX_TRACKS);
+    pStepDecayOffset  .resize(MAX_TRACKS);
+    pStepShape        .resize(MAX_TRACKS);
+    pStepHiRel        .resize(MAX_TRACKS);
+    pStepCombPitch    .resize(MAX_TRACKS);
+    pStepCombDecay    .resize(MAX_TRACKS);
+
+    for(int ti = 0; ti < MAX_TRACKS; ti++) {
+        vector<float> zeros(MAX_STEPS, 0.0f);
+        vector<float> ones (MAX_STEPS, 1.0f);
+        vector<int>   izeros(MAX_STEPS, 0);
+        pStepOn     [ti].set("stepOn_"     +ofToString(ti), zeros,  zeros,  ones );
+        pStepVol    [ti].set("stepVol_"    +ofToString(ti), ones,   zeros,  ones );
+        pStepProb   [ti].set("stepProb_"   +ofToString(ti), ones,   zeros,  ones );
+        pStepProbGroup[ti].set("stepProbGroup_"+ofToString(ti), izeros, izeros, vector<int>(MAX_STEPS, 99));
+        pStepPan    [ti].set("stepPan_"    +ofToString(ti), zeros,  vector<float>(MAX_STEPS,-1.f), ones);
+        pStepCut    [ti].set("stepCut_"    +ofToString(ti), zeros,  vector<float>(MAX_STEPS,-1.f), ones);
+        pStepRes    [ti].set("stepRes_"    +ofToString(ti), zeros,  zeros,  ones );
+        pStepPitch  [ti].set("stepPitch_"  +ofToString(ti), izeros, vector<int>(MAX_STEPS,-12), vector<int>(MAX_STEPS,12));
+        pStepReverse [ti].set("stepReverse_" +ofToString(ti), zeros, zeros, ones );
+        pStepArp     [ti].set("stepArp_"     +ofToString(ti), zeros, zeros, ones );
+        {
+            vector<float> fours(MAX_STEPS, 4.0f);
+            vector<float> lo(MAX_STEPS, 0.0f);
+            vector<float> hi(MAX_STEPS, 127.0f);
+            pStepArpSpeed[ti].set("stepArpSpeed_"+ofToString(ti), fours, lo, hi);
+        }
+        // stepSliceStart / stepSliceEnd / stepSliceOn — slicer mode arrays
+        {
+            vector<float> lo(MAX_STEPS, 0.0f), hi(MAX_STEPS, 1.0f);
+            vector<float> defStart(MAX_STEPS, 0.0f), defEnd(MAX_STEPS, 1.0f);
+            vector<float> defOn(MAX_STEPS, 1.0f);
+            pStepSliceStart[ti].set("stepSliceStart_"+ofToString(ti), defStart, lo, hi);
+            pStepSliceEnd  [ti].set("stepSliceEnd_"  +ofToString(ti), defEnd,   lo, hi);
+            pStepSliceOn   [ti].set("stepSliceOn_"   +ofToString(ti), defOn,    lo, hi);
+        }
+        // stepDecayOffset — per-step envelope decay time offset (-1..1)
+        {
+            vector<float> lo(MAX_STEPS, -1.0f), hi(MAX_STEPS, 1.0f);
+            pStepDecayOffset[ti].set("stepDecayOffset_"+ofToString(ti), zeros, lo, hi);
+        }
+        pStepShape[ti].set("stepShape_" + ofToString(ti), zeros, zeros,
+                           vector<float>(MAX_STEPS, 20.0f));
+        pStepHiRel[ti].set("stepHiRel_" + ofToString(ti), vector<float>(MAX_STEPS, 0.725f),
+                           vector<float>(MAX_STEPS, 0.01f), vector<float>(MAX_STEPS, 2.0f));
+        pStepCombPitch[ti].set("stepCombPitch_" + ofToString(ti), zeros,
+                               zeros, vector<float>(MAX_STEPS, 12.0f));
+        pStepCombDecay[ti].set("stepCombDecay_" + ofToString(ti), zeros,
+                               zeros, vector<float>(MAX_STEPS, 10.0f));
+
+        // Listeners: fire synth->set() for every server's synth when value changes.
+        // If synth->created==true  → ofxSCSynth::set() sends /n_setn immediately.
+        // If synth->created==false → goes to vecArgs → resendStoredArgs on /n_go.
+        nodeListeners.push(pStepOn[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepOn", v);
+        }));
+        nodeListeners.push(pStepVol[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepVol", v);
+        }));
+        nodeListeners.push(pStepProb[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepProb", v);
+        }));
+        nodeListeners.push(pStepProbGroup[ti].newListener([this, ti](vector<int>& v){
+            vector<float> fv(v.begin(), v.end());
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepProbGroup", fv);
+        }));
+        nodeListeners.push(pStepPan[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepPan", v);
+        }));
+        nodeListeners.push(pStepCut[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepCut", v);
+        }));
+        nodeListeners.push(pStepRes[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepRes", v);
+        }));
+        nodeListeners.push(pStepPitch[ti].newListener([this, ti](vector<int>& v){
+            vector<float> fv(v.begin(), v.end());
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepPitch", fv);
+        }));
+        nodeListeners.push(pStepReverse[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepReverse", v);
+        }));
+        nodeListeners.push(pStepArp[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepArp", v);
+        }));
+        nodeListeners.push(pStepArpSpeed[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepArpSpeed", v);
+        }));
+        nodeListeners.push(pStepSliceStart[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepSliceStart", v);
+        }));
+        nodeListeners.push(pStepSliceEnd[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepSliceEnd", v);
+        }));
+        nodeListeners.push(pStepSliceOn[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepSliceOn", v);
+        }));
+        nodeListeners.push(pStepDecayOffset[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepDecayOffset", v);
+        }));
+        nodeListeners.push(pStepShape[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepShape", v);
+        }));
+        nodeListeners.push(pStepHiRel[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepHiRel", v);
+        }));
+        nodeListeners.push(pStepCombPitch[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepCombPitch", v);
+        }));
+        nodeListeners.push(pStepCombDecay[ti].newListener([this, ti](vector<float>& v){
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti]) synths[ti]->set("stepCombDecay", v);
+        }));
+    }
+    // Snapshots (the shared system): the whole box (tracks, samples, the 8 slots)
+    snaps.setupParameters();
+    auto snapParam = [this](auto& p) { registerControl(p, false); };
+    snapParam(snaps.snapshotP); snapParam(snaps.morphP); snapParam(snaps.morphAP); snapParam(snaps.morphBP);
+    snapParam(snaps.morphTimeP); snapParam(snaps.morphBeatsP); snapParam(snaps.morphGlideP);
+    snapParam(snaps.morphCurveP); snapParam(snaps.morphSwitchP);
+    scSnapshots::Host h;
+    h.folder = "RhythmBox"; h.title = "RhythmBox";
+    h.capture = [this]() { return captureSnapshot(); };
+    h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw) { applySnapshot(a, b, t, sw); };
+    h.factory = [this]() { return factorySnapshots(); };
+    h.bpm = [this]() { return effectiveBpm(); };
+    h.paramMenu = [this](const std::string& k) { snapMenu(k); };
+    snaps.setup(h);
+    initializeTrackControls();
+    timeline.setup(this, [this](const std::string& k){ publishSnap(k); },
+        [this](const std::string& k){ unpublishSnap(k); }, [this](){
+            std::vector<std::string> keys;
+            for(const auto& item : snapPublished) keys.push_back(item.first);
+            return keys;
+        });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// update / draw
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::update(ofEventArgs& /*args*/) {
+    timeline.update();
+    flushTrackControls();
+    if(trackControlsDirty) {
+        trackControlsDirty = false;
+        reloadCurrentSlot();
+        for(int ti = 0; ti < numTracks; ++ti) sendTypedConfigToAll(ti);
+    }
+    for(auto& pull : trackControlPulls) pull();
+    snaps.update();
+    {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
+        const auto names = snaps.slotNames();
+        for(const auto& key : snaps.slotKeys()) { auto it = snapPublished.find(key); if(it != snapPublished.end()) scDropdowns::setNames(it->second, names); }
+    }
+    // Poll KR buses on the primary server for playhead and gate readback.
+    if(!stepBuses.empty()) {
+        auto& busList = stepBuses.begin()->second;
+        for(int ti = 0; ti < numTracks && ti < (int)busList.size(); ti++) {
+            if(!busList[ti]) continue;
+            if(!busList[ti]->readValues.empty())
+                currentStep[ti] = (int)std::round(busList[ti]->readValues[0]);
+            busList[ti]->requestValues();
+        }
+    }
+    if(!gateBuses.empty()) {
+        auto& busList = gateBuses.begin()->second;
+        auto gv = gateOut.get();
+        gv.resize(numTracks, 0);
+        for(int ti = 0; ti < numTracks && ti < (int)busList.size(); ti++) {
+            if(!busList[ti]) continue;
+            if(!busList[ti]->readValues.empty())
+                gv[ti] = (int)std::round(busList[ti]->readValues[0]);
+            busList[ti]->requestValues();
+        }
+        // Only on change, as SC BeatTracker does: every set is passed on to
+        // each connected node, which used to re-evaluate (and re-send) it
+        // every frame even while no gate moved.
+        if(gv != gateOut.get()) gateOut.set(gv);
+    }
+
+    if(syncToTransportP.get()) updateTransportSync();
+}
+
+void scRhythmBox::draw(ofEventArgs& /*args*/) {
+    if(showWindow) drawSequencerWindow();
+    else browser.stopPreview();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// BPM / activate / deactivate
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::setBpm(float bpm) {
+    currentBpm = bpm;
+    // In Sync To Transport mode the tempo arrives with the anchors instead.
+    if(!isSyncing()) sendBpmToAll();
+}
+
+void scRhythmBox::activate() {
+    if(syncToTransportP.get()) handleSyncChanged(true);
+    for(auto& [srv, synths] : trackSynths)
+        for(auto* s : synths) if(s) s->run(true);
+}
+
+void scRhythmBox::deactivate() {
+    for(auto& [srv, synths] : trackSynths)
+        for(auto* s : synths) if(s) s->run(false);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// scNode interface
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::buildSynth(ofxSCServer* srv) {
+    if(!srv) return;
+    // Keep the bus stable for the lifetime of this server's graph membership.
+    // Reallocating it while voices still write to it can feed a reused bus.
+    if(!mixBuses.count(srv) || !mixBuses.at(srv))
+        mixBuses[srv] = new ofxSCBus(RATE_AUDIO, 2, srv);
+    if(!silentBuffers.count(srv)) {
+        auto* silence = new ofxSCBuffer(64, 2, srv);
+        if(silence->index >= 0) { silence->alloc(); silentBuffers[srv] = silence; }
+        else delete silence;
+    }
+}
+
+void scRhythmBox::createSynth(ofxSCServer* srv) {
+    // Only the graph's buildSynth may establish membership. UI/preset changes
+    // must never start voices on an unconnected server (mixOut would be bus 0).
+    if(!srv || !mixBuses.count(srv) || !mixBuses.at(srv)) return;
+    reloadSamplesForServer(srv);
+
+    // Full rebuild — pre-size all per-server vectors then delegate per track.
+    freeServerSynths(srv);
+    trackSynths [srv].assign(numTracks, nullptr);
+    privateBuses[srv].assign(numTracks, nullptr);
+    stepBuses   [srv].assign(numTracks, nullptr);
+    gateBuses   [srv].assign(numTracks, nullptr);
+
+    for(int ti = 0; ti < numTracks; ti++)
+        createTrackSynth(srv, ti);
+}
+
+void scRhythmBox::free(ofxSCServer* srv) {
+    freeServerSynths(srv);
+    if(silentBuffers.count(srv)) {
+        silentBuffers[srv]->free(); delete silentBuffers[srv]; silentBuffers.erase(srv);
+    }
+    outputBuses.erase(srv);
+    trackSynths.erase(srv);
+    privateBuses.erase(srv);
+    stepBuses.erase(srv);
+    gateBuses.erase(srv);
+    syncJoined.erase(srv);
+    if(mixBuses.count(srv)) {
+        if(mixBuses[srv]) { mixBuses[srv]->free(); delete mixBuses[srv]; }
+        mixBuses.erase(srv);
+    }
+}
+
+void scRhythmBox::setOutputBus(ofxSCServer* srv, int idx, int bus) {
+    if(!srv || idx < 0 || idx >= numTracks || bus < 0) return;
+    // Free private placeholder bus for this track if it exists
+    if(privateBuses.count(srv) && idx < (int)privateBuses[srv].size()
+       && privateBuses[srv][idx]) {
+        privateBuses[srv][idx]->free();
+        delete privateBuses[srv][idx];
+        privateBuses[srv][idx] = nullptr;
+    }
+    outputBuses[srv][idx] = bus;
+    if(trackSynths.count(srv) && idx < (int)trackSynths[srv].size()) {
+        if(trackSynths[srv][idx])
+            trackSynths[srv][idx]->set("out", bus);
+    }
+}
+
+int scRhythmBox::getOutputBusIndex(ofxSCServer* srv, int idx) {
+    if(idx == MAX_TRACKS) {
+        if(mixBuses.count(srv) && mixBuses.at(srv))
+            return mixBuses.at(srv)->index;
+        return -1;
+    }
+    if(outputBuses.count(srv) && outputBuses[srv].count(idx))
+        return outputBuses[srv][idx];
+    return -1;
+}
+
+void scRhythmBox::moveSynthBefore(ofxSCServer* srv, int nodeID) {
+    if(!trackSynths.count(srv)) return;
+    auto& synths = trackSynths[srv];
+    for(int ti = 0; ti < (int)synths.size(); ti++) {
+        auto* s = synths[ti];
+        if(!s) continue;
+        // Track parameters, step arrays and buffers reach the synths as they
+        // change (and on slot / preset recall): only the bus wiring is sent
+        // again (see scBusResend.h). This used to resend ~45 controls and
+        // every step array per track for each cable change in the patch.
+        if(ti < numTracks && mixBuses.count(srv) && mixBuses.at(srv))
+            s->set("mixOut", (float)mixBuses.at(srv)->index);
+        s->moveBefore(nodeID);
+    }
+}
+
+int scRhythmBox::getLastSynthID(ofxSCServer* srv) {
+    if(!trackSynths.count(srv)) return -1;
+    // Return the last active track's synth ID (tail of the chain)
+    for(int ti = numTracks - 1; ti >= 0; ti--)
+        if(ti < (int)trackSynths[srv].size() && trackSynths[srv][ti])
+            return trackSynths[srv][ti]->nodeID;
+    return -1;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Synth helpers
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
+    if(!srv || ti < 0 || ti >= numTracks || !mixBuses.count(srv) || !mixBuses.at(srv)) return;
+
+    // Ensure per-server vectors are large enough for this track index
+    auto ensureSize = [&](auto& m, auto* nullVal) {
+        if(!m.count(srv)) m[srv].assign(ti + 1, nullVal);
+        else if(ti >= (int)m[srv].size()) m[srv].resize(ti + 1, nullVal);
+    };
+    ensureSize(trackSynths,  (ofxSCSynth*)nullptr);
+    ensureSize(privateBuses, (ofxSCBus*)nullptr);
+    ensureSize(stepBuses,    (ofxSCBus*)nullptr);
+    ensureSize(gateBuses,    (ofxSCBus*)nullptr);
+
+    // Free any existing synth at this slot
+    if(trackSynths[srv][ti]) {
+        trackSynths[srv][ti]->free();
+        delete trackSynths[srv][ti];
+        trackSynths[srv][ti] = nullptr;
+    }
+
+    const TrackData&   td = track(ti);
+    const TrackConfig& tc = trackConfig(ti);
+    int bufnum = getBufnum(ti, srv);
+    if(bufnum < 0 && (tc.type == TrackType::Sample || tc.type == TrackType::Slice)) return;
+
+    auto* s = new ofxSCSynth(rhythmBoxSynthName(tc.type), srv);
+    trackSynths[srv][ti] = s;
+    syncJoined[srv].resize(MAX_TRACKS, false);
+    syncJoined[srv][ti] = false;
+
+    // Set timing and sample parameters
+    s->set("bpm",           effectiveBpm());
+    s->set("numBeats",      (float)tc.numBeats);
+    s->set("stepsPerBeat",  (float)tc.stepsPerBeat);
+    s->set("shift",         (float)td.shift);
+    s->set("swing",         swingP.get());
+    s->set("numSteps",      (float)tc.getNumSteps());
+    s->set("globalPitch",   tc.trackPitch + globalTransposeP.get());
+    s->set("globalVol",     tc.globalVol * masterVolP.get());
+    s->set("globalProb",    tc.globalProb);
+    s->set("sequenceProb",  tc.sequenceProb);
+    s->set("bufnum",        bufnum);
+    // Current reset counter value: a new synth must not see a change at start.
+    s->set("reset",         resetCounter);
+    s->set("play",          playSeq.get() ? 1.0f : 0.0f);
+    if(syncToTransportP.get()) {
+        // Hold (run=0) until the next anchor, which positions this track at the
+        // current transport position (hard anchor: it joins without a re-reset
+        // of the other tracks).
+        s->set("sync",       1.0f);
+        s->set("run",        0.0f);
+        s->set("anchorId",   0.0f);
+        s->set("anchorHard", 0.0f);
+        s->set("anchorPos",  0.0f);
+        s->set("anchorFire", 0.0f);
+        stepClocks[ti].reset();
+        needHard[ti] = true;
+        follower.requestAnchor();
+    }
+    s->set("active",        (getActive() && !tc.muted) ? 1.0f : 0.0f);
+    s->set("mono",          tc.monoMode      ? 1.0f : 0.0f);
+    s->set("volLatch",      tc.volLatch       ? 1.0f : 0.0f);
+    s->set("inPoint",       tc.inPoint);
+    s->set("outPoint",      tc.outPoint);
+    s->set("loopSample",    tc.loopEnabled   ? 1.0f : 0.0f);
+    s->set("fixDuration",   tc.fixDuration   ? 1.0f : 0.0f);
+    s->set("durationBeats", tc.durationBeats);
+    s->set("envEnabled",    tc.envEnabled    ? 1.0f : 0.0f);
+    s->set("envAttack",     tc.envAttack);
+    s->set("envHoldSteps",  (float)tc.envHoldSteps);
+    s->set("envDecay",      tc.envDecay);
+    s->set("envSustain",    tc.envSustain);
+    s->set("envRelease",    tc.envRelease);
+    s->set("envCurveA",     tc.envCurveA);
+    s->set("envCurveD",     tc.envCurveD);
+    s->set("decayRange",    tc.decayRange);
+    s->set("lfoEnabled",    tc.lfoEnabled    ? 1.0f : 0.0f);
+    s->set("lfoRate",       tc.lfoRate);
+    s->set("lfoDepth",      tc.lfoDepth);
+    s->set("lfoShape",      (float)tc.lfoShape);
+    s->set("lfoPhase",      tc.lfoPhase);
+    s->set("lfoPulseWidth", tc.lfoPulseWidth);
+    s->set("slicerMode",    tc.type == TrackType::Slice ? 1.0f : 0.0f);
+    s->set("sliceFit",      tc.sliceFit     ? 1.0f : 0.0f);
+    s->set("eqEnabled",     tc.eqEnabled   ? 1.0f : 0.0f);
+    s->set("eqHPFreq",      tc.eqHPFreq);
+    s->set("eqHPRq",        1.0f / std::max(tc.eqHPQ,    0.01f));
+    s->set("eqPeakFreq",    tc.eqPeakFreq);
+    s->set("eqPeakGain",    tc.eqPeakGain);
+    s->set("eqPeakRq",      1.0f / std::max(tc.eqPeakQ,  0.01f));
+    s->set("eqLPFreq",      tc.eqLPFreq);
+    s->set("eqLPRq",        1.0f / std::max(tc.eqLPQ,    0.01f));
+    s->set("arpEnabled",       td.arpEnabled       ? 1.0f : 0.0f);
+    s->set("arpInterval",      td.arpInterval);
+    s->set("arpModulo",        (float)td.arpModulo);
+    s->set("arpGateWidth",     td.arpGateWidth);
+    s->set("arpSpeedMode",     (float)td.arpSpeedMode);
+    s->set("globalArpEnabled", td.globalArpEnabled ? 1.0f : 0.0f);
+    s->set("globalArpSpeed",   td.globalArpSpeed);
+    s->set("globalStepProbSub", tc.globalStepProbSub);
+    s->set("globalCut",         tc.globalCut);
+    s->set("globalPanOffset",   tc.globalPanOffset);
+    s->set("globalRes",         tc.globalRes);
+    s->set("clickCombOctave",   (float)tc.clickCombOctave);
+    s->set("filterMode",        (float)tc.filterMode);
+    s->set("filterRandom",      tc.filterRandom ? 1.0f : 0.0f);
+    s->set("filterRandomRange", tc.filterRandomRange);
+    s->set("kickWaveType",      (float)tc.kickWaveType);
+    s->set("kickStartNote",     tc.kickStartNote);
+    s->set("kickEndNote",       tc.kickEndNote);
+    s->set("kickPitchAttack",   tc.kickPitchAttack);
+    s->set("kickPitchDecay",    tc.kickPitchDecay);
+    s->set("kickPitchCurve",    tc.kickPitchCurve);
+    s->set("kickPMPitch",       tc.kickPMPitch);
+    s->set("kickPMIndex",       tc.kickPMIndex);
+    s->set("noiseType",         (float)tc.noiseType);
+    s->set("noiseDensity",      tc.noiseDensity);
+    s->set("snareToneNote",     tc.snareToneNote);
+    s->set("snareToneDecay",    tc.snareToneDecay);
+    s->set("snareToneLevel",    tc.snareToneLevel);
+    s->set("snareNoiseFreq",    tc.snareNoiseFreq);
+    s->set("snareNoiseLevel",   tc.snareNoiseLevel);
+
+    // ── Audio output bus ────────────────────────────────────────────────────
+    // If the graph manager has already assigned a bus (setOutputBus was called
+    // before createSynth for this track), use it directly.
+    // Otherwise allocate a private internal audio bus so audio NEVER leaks to
+    // hardware bus 0 while the output port is unconnected.
+    if(outputBuses.count(srv) && outputBuses[srv].count(ti)) {
+        s->set("out", outputBuses[srv].at(ti));
+    } else {
+        // Free any stale private bus for this slot
+        if(privateBuses.count(srv) && ti < (int)privateBuses[srv].size()
+           && privateBuses[srv][ti]) {
+            privateBuses[srv][ti]->free();
+            delete privateBuses[srv][ti];
+            privateBuses[srv][ti] = nullptr;
+        }
+        auto* pb = new ofxSCBus(RATE_AUDIO, 2, srv);
+        if(!privateBuses.count(srv)) privateBuses[srv].assign(1, nullptr);
+        privateBuses[srv][ti] = pb;
+        s->set("out", pb->index);
+    }
+
+    // ── Mix output bus (shared across all tracks on this server) ───────────
+    if(mixBuses.count(srv) && mixBuses.at(srv))
+        s->set("mixOut", (float)mixBuses.at(srv)->index);
+
+    // ── KR step-readback bus (for playhead indicator) ───────────────────────
+    if(stepBuses.count(srv) && ti < (int)stepBuses[srv].size() && stepBuses[srv][ti]) {
+        stepBuses[srv][ti]->free();
+        delete stepBuses[srv][ti];
+    }
+    if(!stepBuses.count(srv)) stepBuses[srv].assign(1, nullptr);
+    auto* sb = new ofxSCBus(RATE_CONTROL, 1, srv);
+    stepBuses[srv][ti] = sb;
+    s->set("stepBus", sb->index);
+
+    if(gateBuses.count(srv) && ti < (int)gateBuses[srv].size() && gateBuses[srv][ti]) {
+        gateBuses[srv][ti]->free();
+        delete gateBuses[srv][ti];
+    }
+    if(!gateBuses.count(srv)) gateBuses[srv].assign(1, nullptr);
+    auto* gb = new ofxSCBus(RATE_CONTROL, 1, srv);
+    gateBuses[srv][ti] = gb;
+    s->set("gateBus", gb->index);
+
+    // Add to head of default group so reverse-iteration ordering is correct
+    // (same as scFM7Drone — serverManager iterates newNodesList in reverse
+    // and relies on addToHead so sources end up before outputs in SC).
+    s->createAndRun(0, 1, getActive());
+
+    // Queue step arrays via the pStep* ofParameter listeners.
+    // At this point s->created is still false (/n_go hasn't arrived yet), so
+    // the synth->set(name, vector) calls inside the listeners land in vecArgs
+    // rather than firing /n_setn immediately.  When SC confirms the node (/n_go),
+    // ofxSCNode::feedbackListener sets created=true and calls resendStoredArgs(),
+    // which sends a single /n_set message containing all the queued arrays — the
+    // same mechanism scPolyMixer and scFM7Drone rely on.
+    fireStepParams(ti);
+}
+
+void scRhythmBox::sendTypedConfigToAll(int ti) {
+    if(ti < 0 || ti >= numTracks) return;
+    const TrackConfig& tc = trackConfig(ti);
+    for(auto& [srv, synths] : trackSynths) {
+        if(ti >= (int)synths.size() || !synths[ti]) continue;
+        auto* s = synths[ti];
+        s->set("envSustain", tc.envSustain); s->set("envRelease", tc.envRelease);
+        s->set("filterMode", (float)tc.filterMode);
+        s->set("filterRandom", tc.filterRandom ? 1.0f : 0.0f);
+        s->set("filterRandomRange", tc.filterRandomRange);
+        s->set("kickWaveType", (float)tc.kickWaveType);
+        s->set("kickStartNote", tc.kickStartNote); s->set("kickEndNote", tc.kickEndNote);
+        s->set("kickPitchAttack", tc.kickPitchAttack); s->set("kickPitchDecay", tc.kickPitchDecay);
+        s->set("kickPitchCurve", tc.kickPitchCurve); s->set("kickPMPitch", tc.kickPMPitch);
+        s->set("kickPMIndex", tc.kickPMIndex);
+        s->set("noiseType", (float)tc.noiseType); s->set("noiseDensity", tc.noiseDensity);
+        s->set("snareToneNote", tc.snareToneNote); s->set("snareToneDecay", tc.snareToneDecay);
+        s->set("snareToneLevel", tc.snareToneLevel); s->set("snareNoiseFreq", tc.snareNoiseFreq);
+        s->set("snareNoiseLevel", tc.snareNoiseLevel);
+        s->set("clickCombOctave", (float)tc.clickCombOctave);
+    }
+}
+
+void scRhythmBox::freeServerSynths(ofxSCServer* srv) {
+    // Free synths
+    if(trackSynths.count(srv)) {
+        for(auto* s : trackSynths[srv]) { if(s) { s->free(); delete s; } }
+        trackSynths[srv].clear();
+    }
+    // Free private audio buses
+    if(privateBuses.count(srv)) {
+        for(auto* b : privateBuses[srv]) { if(b) { b->free(); delete b; } }
+        privateBuses[srv].clear();
+    }
+    if(stepBuses.count(srv)) {
+        for(auto* b : stepBuses[srv]) { if(b) { b->free(); delete b; } }
+        stepBuses[srv].clear();
+    }
+    if(gateBuses.count(srv)) {
+        for(auto* b : gateBuses[srv]) { if(b) { b->free(); delete b; } }
+        gateBuses[srv].clear();
+    }
+}
+
+void scRhythmBox::sendStepData(ofxSCSynth* /*s*/, const TrackData& /*td*/) {
+    // No-op: step data is now sent via pStep* ofParameter listeners.
+    // Call fireStepParams(ti) instead.
+}
+
+void scRhythmBox::sendStepDataToAll(int ti) {
+    fireStepParams(ti);
+}
+
+void scRhythmBox::fireStepParams(int ti) {
+    if(ti >= MAX_TRACKS) return;
+    const TrackData&   td = track(ti);
+    const TrackConfig& tc = trackConfig(ti);
+    int n = tc.getNumSteps();
+
+    vector<float> on      (MAX_STEPS, 0.f), vol     (MAX_STEPS, 1.f),
+                  prob    (MAX_STEPS, 1.f), probGroup(MAX_STEPS, 0.f), pan     (MAX_STEPS, 0.f),
+                  cut     (MAX_STEPS, 0.f), res     (MAX_STEPS, 0.f),
+                  rev     (MAX_STEPS, 0.f),
+                  arp      (MAX_STEPS, 0.f), arpSpeed (MAX_STEPS, 4.0f),
+                  shape    (MAX_STEPS, 0.f), hiRel(MAX_STEPS, 0.725f),
+                  combPitch(MAX_STEPS, 0.f), combDecay(MAX_STEPS, 0.f);
+    vector<int>   pitch(MAX_STEPS, 0);
+
+    for(int i = 0; i < n; i++) {
+        on      [i] = (i < (int)td.stepOn.size()      && td.stepOn[i])      ? 1.f : 0.f;
+        vol     [i] = (i < (int)td.stepVol.size())     ? td.stepVol[i]     : 1.f;
+        prob    [i] = (i < (int)td.stepProb.size())    ? td.stepProb[i]    : 1.f;
+        probGroup[i]= (i < (int)td.stepProbGroup.size()) ? (float)td.stepProbGroup[i] : 0.f;
+        pan     [i] = (i < (int)td.stepPan.size())     ? td.stepPan[i]     : 0.f;
+        cut     [i] = (i < (int)td.stepCut.size())     ? td.stepCut[i]     : 0.f;
+        res     [i] = (i < (int)td.stepRes.size())     ? td.stepRes[i]     : 0.f;
+        pitch   [i] = (i < (int)td.stepPitch.size())   ? td.stepPitch[i]   : 0;
+        rev     [i] = (i < (int)td.stepReverse.size()  && td.stepReverse[i])  ? 1.f : 0.f;
+        arp     [i] = (i < (int)td.stepArp.size()       && td.stepArp[i])    ? 1.f : 0.f;
+        arpSpeed[i] = (i < (int)td.stepArpSpeed.size())  ? td.stepArpSpeed[i] : 4.0f;
+        shape[i]   = (i < (int)td.stepShape.size()) ? td.stepShape[i] : 0.0f;
+        hiRel[i]   = (i < (int)td.stepHiRel.size()) ? td.stepHiRel[i] : 0.725f;
+        combPitch[i] = (i < (int)td.stepCombPitch.size()) ? td.stepCombPitch[i] : 0.0f;
+        combDecay[i] = (i < (int)td.stepCombDecay.size()) ? td.stepCombDecay[i] : 0.0f;
+    }
+
+    pStepOn      [ti].set(on);
+    pStepVol     [ti].set(vol);
+    pStepProb    [ti].set(prob);
+    pStepProbGroup[ti].set(vector<int>(probGroup.begin(), probGroup.end()));
+    pStepPan     [ti].set(pan);
+    pStepCut     [ti].set(cut);
+    pStepRes     [ti].set(res);
+    pStepPitch   [ti].set(pitch);
+    pStepReverse [ti].set(rev);
+    pStepArp     [ti].set(arp);
+    pStepArpSpeed[ti].set(arpSpeed);
+    pStepShape[ti].set(shape);
+    pStepHiRel[ti].set(hiRel);
+    pStepCombPitch[ti].set(combPitch);
+    pStepCombDecay[ti].set(combDecay);
+
+    // Decay offset array (per-step envelope decay time modulation)
+    std::vector<float> decayOffset(MAX_STEPS, 0.0f);
+    for(int i = 0; i < n; i++) {
+        decayOffset[i] = (i < (int)td.stepDecayOffset.size()) ? td.stepDecayOffset[i] : 0.0f;
+    }
+    pStepDecayOffset[ti].set(decayOffset);
+
+    // Slice arrays (slicer mode: which slice start/end normalised 0..1 plays at each step)
+    if(tc.type == TrackType::Slice) {
+        std::vector<float> sliceStarts, sliceEnds;
+        computeSliceArrays(ti, sliceStarts, sliceEnds);
+        pStepSliceStart[ti].set(sliceStarts);
+        pStepSliceEnd  [ti].set(sliceEnds);
+        // stepSliceOn — per-step silence flag (1=play, 0=silence), independent of stepOn
+        std::vector<float> sliceOn(MAX_STEPS, 1.0f);
+        for(int i = 0; i < n && i < (int)td.stepSliceOn.size(); i++)
+            sliceOn[i] = td.stepSliceOn[i] ? 1.0f : 0.0f;
+        pStepSliceOn[ti].set(sliceOn);
+    }
+}
+
+void scRhythmBox::sendStepDataDirect(ofxSCSynth* s, const TrackData& td, ofxSCServer* srv) {
+    // Send step arrays via /n_setn directly, bypassing the ofxSCSynth created-flag check.
+    // Called immediately after createAndRun so SC has the correct data from the first step.
+    if(!s || s->nodeID == 0 || !srv) return;
+
+    // Note: getNumSteps() now lives on TrackConfig; use MAX_STEPS as a safe upper bound here
+    // since we don't have a ti index. This function is currently unused (fireStepParams handles it).
+    int n = MAX_STEPS;
+    std::vector<float> on   (MAX_STEPS, 0.0f);
+    std::vector<float> vol  (MAX_STEPS, 1.0f);
+    std::vector<float> prob (MAX_STEPS, 1.0f);
+    std::vector<float> pan  (MAX_STEPS, 0.0f);
+    std::vector<float> cut  (MAX_STEPS, 0.0f);
+    std::vector<float> res  (MAX_STEPS, 0.0f);
+    std::vector<float> pitch(MAX_STEPS, 0.0f);
+    for(int i = 0; i < n; i++) {
+        on[i]    = (i < (int)td.stepOn.size()    && td.stepOn[i])    ? 1.0f : 0.0f;
+        vol[i]   = (i < (int)td.stepVol.size())   ? td.stepVol[i]   : 1.0f;
+        prob[i]  = (i < (int)td.stepProb.size())  ? td.stepProb[i]  : 1.0f;
+        pan[i]   = (i < (int)td.stepPan.size())   ? td.stepPan[i]   : 0.0f;
+        cut[i]   = (i < (int)td.stepCut.size())   ? td.stepCut[i]   : 0.0f;
+        res[i]   = (i < (int)td.stepRes.size())   ? td.stepRes[i]   : 0.0f;
+        pitch[i] = (i < (int)td.stepPitch.size()) ? (float)td.stepPitch[i] : 0.0f;
+    }
+
+    auto setn = [&](const std::string& key, const std::vector<float>& vals) {
+        ofxOscMessage m;
+        m.setAddress("/n_setn");
+        m.addIntArg(s->nodeID);
+        m.addStringArg(key);
+        m.addIntArg((int)vals.size());
+        for(float v : vals) m.addFloatArg(v);
+        srv->sendMsg(m);
+    };
+    setn("stepOn",    on);
+    setn("stepVol",   vol);
+    setn("stepProb",  prob);
+    setn("stepPan",   pan);
+    setn("stepCut",   cut);
+    setn("stepRes",   res);
+    setn("stepPitch", pitch);
+}
+
+void scRhythmBox::setNumTracks(int n, TrackType newTrackType) {
+    n = ofClamp(n, 0, MAX_TRACKS);
+    int old = numTracks;
+    if(n == old) return;
+    numTracks = n;
+
+    // ── Resize slot track arrays (all slots) ─────────────────────────────────
+    for(auto& slot : slots) {
+        int oldSize = (int)slot.tracks.size();
+        slot.tracks.resize(n);
+        for(int ti = oldSize; ti < n; ti++)
+            slot.tracks[ti].resizeSteps();
+    }
+    // ── Resize track configs ──────────────────────────────────────────────────
+    trackConfigs.resize(n);
+    if(n > old) {
+        for(int ti = old; ti < n; ti++) {
+            trackConfigs[ti] = TrackConfig{};
+            trackConfigs[ti].type = newTrackType;
+            trackConfigs[ti].slicerMode = (newTrackType == TrackType::Slice);
+            trackConfigs[ti].name = "Track " + ofToString(ti + 1);
+        }
+    }
+    currentStep.resize(n, 0);
+
+    // ── Resize vector parameters ─────────────────────────────────────────────
+    {
+        auto tv  = transposeP        .get(); tv .resize(n, 0.0f); transposeP        .set(tv);
+        auto vv  = globalVolP        .get(); vv .resize(n, 1.0f); globalVolP        .set(vv);
+        auto pv  = globalProbP       .get(); pv .resize(n, 1.0f); globalProbP       .set(pv);
+        auto mv  = muteP             .get(); mv .resize(n, 0);    muteP             .set(mv);
+        auto sv  = soloP             .get(); sv .resize(n, 0);    soloP             .set(sv);
+        auto sps = globalStepProbSubP.get(); sps.resize(n, 1.0f); globalStepProbSubP.set(sps);
+        auto gc  = globalCutP        .get(); gc .resize(n, 0.0f); globalCutP        .set(gc);
+        auto gp  = globalPanOffsetP  .get(); gp .resize(n, 0.0f); globalPanOffsetP  .set(gp);
+        auto grp = globalResP        .get(); grp.resize(n, 0.0f); globalResP        .set(grp);
+    }
+
+    // ── Output port management ────────────────────────────────────────────────
+    if(n > old) {
+        for(int ti = old; ti < n; ti++)
+            scNode::addOutput("Out " + ofToString(ti + 1));
+    } else {
+        for(int ti = old - 1; ti >= n; ti--)
+            scNode::removeOutput(ti);
+
+        // A removed output may have had a graph-assigned bus. Do not reuse that
+        // stale route if a new track is later added at the same index.
+        for(auto& [srv, buses] : outputBuses)
+            for(int ti = n; ti < old; ++ti)
+                buses.erase(ti);
+    }
+
+    // ── Synth management (skip during preset loading) ─────────────────────────
+    if(!ofxOceanodeShared::isPresetLoading()) {
+        if(n > old) {
+            for(int ti = old; ti < n; ti++)
+                snprintf(nameEditBuf[ti], 64, "%s", trackConfigs[ti].name.c_str());
+
+            // Create only the new track synths.  Each new synth's Phasor.kr clock
+            // starts at phase 0 (resetPos=0 in the SynthDef).  To align the already-
+            // running synths with this phase, fire a reset pulse on them: their Phasors
+            // jump back to 0 in the same SC bundle, so all tracks step together.
+            // (We intentionally skip the new synths here: they haven't received /n_go
+            // yet so set() would land in vecArgs as a scalar, potentially overwriting
+            // the default reset=0 and silencing the HPZ1 rising-edge on startup.)
+            for(auto* srv : activeGraphServers())
+                for(int ti = old; ti < n; ti++) createTrackSynth(srv, ti);
+            // Reset already-running synths so their Phasors align to 0.
+            // Only touches ti < old — those synths have been live long enough
+            // to have received /n_go, so set() sends /n_setn immediately.
+            // In Sync To Transport mode nothing is reset: the new tracks join at
+            // the current transport position (createTrackSynth asked for an anchor).
+            if(!isSyncing())
+                sendResetTo(0, old);
+        } else {
+            for(int ti = old - 1; ti >= n; ti--) {
+                // Free synths
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti]) {
+                        synths[ti]->free(); delete synths[ti]; synths[ti] = nullptr;
+                    }
+                // Free KR buses
+                for(auto& [srv, buses] : stepBuses)
+                    if(ti < (int)buses.size() && buses[ti])
+                        { buses[ti]->free(); delete buses[ti]; buses[ti] = nullptr; }
+                for(auto& [srv, buses] : gateBuses)
+                    if(ti < (int)buses.size() && buses[ti])
+                        { buses[ti]->free(); delete buses[ti]; buses[ti] = nullptr; }
+                for(auto& [srv, buses] : privateBuses)
+                    if(ti < (int)buses.size() && buses[ti])
+                        { buses[ti]->free(); delete buses[ti]; buses[ti] = nullptr; }
+                freeSampleForTrack(ti);
+            }
+        }
+    }
+}
+
+void scRhythmBox::addTrack(TrackType type) {
+    if(numTracks >= MAX_TRACKS) return;
+    const int ti = numTracks;
+    setNumTracks(numTracks + 1, type);
+    TrackConfig& tc = trackConfig(ti);
+    tc.name = std::string(rhythmBoxTrackTypeName(type)) + " " + ofToString(ti + 1);
+    snprintf(nameEditBuf[ti], sizeof(nameEditBuf[ti]), "%s", tc.name.c_str());
+    if(type == TrackType::Slice) initSlicePoints(ti);
+    numTracksP.set(numTracks);
+}
+
+void scRhythmBox::removeTrack(int trackIndex) {
+    if(trackIndex < 0 || trackIndex >= numTracks) return;
+
+    // Preview synths are indexed by track position and cannot be moved safely.
+    // Stop affected previews before compacting the track arrays.
+    for(int i = trackIndex; i < numTracks; ++i)
+        stopSlicePreview(i);
+
+    // Move the selected track to the tail so the existing shrink path can free
+    // its synth, buses, sample and output port without leaving index holes.
+    for(int i = trackIndex; i < numTracks - 1; ++i)
+        swapTracks(i, i + 1);
+
+    setNumTracks(numTracks - 1);
+    numTracksP.set(numTracks);
+    reloadCurrentSlot();
+}
+
+void scRhythmBox::sendBpmToAll() {
+    const float bpm = effectiveBpm();
+    for(auto& [srv, synths] : trackSynths)
+        for(auto* s : synths)
+            if(s) s->set("bpm", bpm);
+}
+
+void scRhythmBox::sendResetTo(int firstTrack, int endTrack) {
+    // One increment per reset request; the SynthDef fires on every increment,
+    // so two requests landing in the same control block still reset (once).
+    resetCounter += 1.0;
+    for(auto& [srv, synths] : trackSynths)
+        for(int ti = std::max(0, firstTrack); ti < endTrack && ti < (int)synths.size(); ti++)
+            if(synths[ti]) synths[ti]->set("reset", resetCounter);
+}
+
+bool scRhythmBox::isSyncing() const {
+    return syncToTransportP.get();
+}
+
+float scRhythmBox::effectiveBpm() const {
+    if(syncToTransportP.get()) return syncBpm;
+    return currentBpm;
+}
+
+void scRhythmBox::updateActiveStates() {
+    bool anySolo = false;
+    for(int j = 0; j < numTracks; j++)
+        if(trackConfigs[j].solo) { anySolo = true; break; }
+    for(int j = 0; j < numTracks; j++) {
+        bool active = getActive()
+                      && !trackConfigs[j].muted
+                      && !(anySolo && !trackConfigs[j].solo);
+        for(auto& [srv, synths] : trackSynths)
+            if(j < (int)synths.size() && synths[j])
+                synths[j]->set("active", active ? 1.0f : 0.0f);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Track / slot data management
+// ════════════════════════════════════════════════════════════════════════════
+
+scRhythmBox::TrackData& scRhythmBox::track(int ti) {
+    int slot = currentSlotP.get();
+    return slots[slot].tracks[ti];
+}
+
+const scRhythmBox::TrackData& scRhythmBox::track(int ti) const {
+    int slot = currentSlotP.get();
+    return slots[slot].tracks[ti];
+}
+
+scRhythmBox::TrackConfig& scRhythmBox::trackConfig(int ti) {
+    return trackConfigs[ti];
+}
+
+const scRhythmBox::TrackConfig& scRhythmBox::trackConfig(int ti) const {
+    return trackConfigs[ti];
+}
+
+void scRhythmBox::initSlicePoints(int ti) {
+    TrackConfig& tc = trackConfigs[ti];
+    int ns = tc.getNumSteps();
+    tc.slicePoints.resize(ns + 1);
+    float span = tc.outPoint - tc.inPoint;
+    for(int k = 0; k <= ns; k++)
+        tc.slicePoints[k] = tc.inPoint + span * (float)k / (float)std::max(ns, 1);
+}
+
+void scRhythmBox::computeSliceArrays(int ti,
+                                           std::vector<float>& starts,
+                                           std::vector<float>& ends) const {
+    const TrackConfig& tc = trackConfig(ti);
+    const TrackData&   td = track(ti);
+    int ns = tc.getNumSteps();
+    starts.assign(MAX_STEPS, 0.0f);
+    ends.assign(MAX_STEPS, 1.0f);
+
+    if((int)tc.slicePoints.size() != ns + 1) {
+        // Fallback uniform (slicePoints not yet initialized)
+        float span = tc.outPoint - tc.inPoint;
+        for(int si = 0; si < ns; si++) {
+            starts[si] = tc.inPoint + span * (float)si       / (float)std::max(ns, 1);
+            ends[si]   = tc.inPoint + span * (float)(si + 1) / (float)std::max(ns, 1);
+        }
+        return;
+    }
+
+    for(int si = 0; si < ns; si++) {
+        int sliceIdx = (si < (int)td.stepSlice.size()) ? td.stepSlice[si] : si;
+        sliceIdx = std::max(0, std::min(sliceIdx, ns - 1));
+        starts[si] = tc.slicePoints[sliceIdx];
+        ends[si]   = tc.slicePoints[sliceIdx + 1];
+    }
+}
+
+void scRhythmBox::initSlots() {
+    // Start from genuinely fresh defaults. resize() alone retained values in
+    // existing elements, so fields absent from an older preset could leak in
+    // from the preset/typed track that happened to be loaded before it.
+    trackConfigs.assign(MAX_TRACKS, TrackConfig{});
+    for(int ti = 0; ti < MAX_TRACKS; ti++)
+        trackConfigs[ti].name = "Track " + ofToString(ti + 1);
+
+    // Initialise per-slot step/shift data
+    slots.assign(MAX_SLOTS, SlotData{});
+    for(int s = 0; s < MAX_SLOTS; s++) {
+        slots[s].tracks.resize(numTracks);
+        for(int ti = 0; ti < numTracks; ti++)
+            slots[s].tracks[ti].resizeSteps();
+    }
+}
+
+void scRhythmBox::reloadCurrentSlot() {
+    // Sync node-GUI name buffers from global TrackConfig (name is per-track, not per-slot).
+    for(int ti = 0; ti < numTracks; ti++)
+        snprintf(nameEditBuf[ti], 64, "%s", trackConfigs[ti].name.c_str());
+
+    // Rebuild vector parameters from global track config (fires listeners → SC synths)
+    {
+        auto tv  = transposeP        .get(); auto vv  = globalVolP        .get();
+        auto pv  = globalProbP       .get(); auto mv  = muteP             .get();
+        auto sv  = soloP             .get(); auto sps = globalStepProbSubP.get();
+        auto gc  = globalCutP        .get(); auto gp  = globalPanOffsetP  .get();
+        auto grp = globalResP        .get();
+        tv .resize(numTracks, 0.0f);  vv .resize(numTracks, 1.0f);
+        pv .resize(numTracks, 1.0f);  mv .resize(numTracks, 0);
+        sv .resize(numTracks, 0);     sps.resize(numTracks, 0.0f);
+        gc .resize(numTracks, 0.0f);  gp .resize(numTracks, 0.0f);
+        grp.resize(numTracks, 0.0f);
+        for(int ti = 0; ti < numTracks; ti++) {
+            tv [ti] = trackConfigs[ti].trackPitch;
+            vv [ti] = trackConfigs[ti].globalVol;
+            pv [ti] = trackConfigs[ti].globalProb;
+            mv [ti] = trackConfigs[ti].muted ? 1 : 0;
+            sv [ti] = trackConfigs[ti].solo  ? 1 : 0;
+            sps[ti] = trackConfigs[ti].globalStepProbSub;
+            gc [ti] = trackConfigs[ti].globalCut;
+            gp [ti] = trackConfigs[ti].globalPanOffset;
+            grp[ti] = trackConfigs[ti].globalRes;
+        }
+        transposeP        .set(tv);
+        globalVolP        .set(vv);
+        globalProbP       .set(pv);
+        muteP             .set(mv);   // fires listener → sets active on SC synths
+        soloP             .set(sv);   // fires listener → updateActiveStates
+        globalStepProbSubP.set(sps);
+        globalCutP        .set(gc);
+        globalPanOffsetP  .set(gp);
+        globalResP        .set(grp);
+    }
+
+    // Push slot-specific (shift) and config params to running synths.
+    // Config params don't change between slots, but synths may have been recreated.
+    for(auto& [srv, synths] : trackSynths) {
+        for(int ti = 0; ti < numTracks && ti < (int)synths.size(); ti++) {
+            auto* s = synths[ti];
+            if(!s) continue;
+            const TrackData&   tdi = track(ti);
+            const TrackConfig& tci = trackConfigs[ti];
+            s->set("shift",         (float)tdi.shift);
+            s->set("numBeats",      (float)tci.numBeats);
+            s->set("stepsPerBeat",  (float)tci.stepsPerBeat);
+            s->set("numSteps",      (float)tci.getNumSteps());
+            s->set("swing",         swingP.get());
+            s->set("mono",          tci.monoMode      ? 1.0f : 0.0f);
+            s->set("volLatch",      tci.volLatch       ? 1.0f : 0.0f);
+            s->set("inPoint",       tci.inPoint);
+            s->set("outPoint",      tci.outPoint);
+            s->set("loopSample",    tci.loopEnabled   ? 1.0f : 0.0f);
+            s->set("fixDuration",   tci.fixDuration   ? 1.0f : 0.0f);
+            s->set("durationBeats", tci.durationBeats);
+            s->set("envEnabled",    tci.envEnabled    ? 1.0f : 0.0f);
+            s->set("envAttack",     tci.envAttack);
+            s->set("envHoldSteps",  (float)tci.envHoldSteps);
+            s->set("envDecay",      tci.envDecay);
+            s->set("envSustain",    tci.envSustain);
+            s->set("envRelease",    tci.envRelease);
+            s->set("envCurveA",     tci.envCurveA);
+            s->set("envCurveD",     tci.envCurveD);
+            s->set("lfoEnabled",    tci.lfoEnabled    ? 1.0f : 0.0f);
+            s->set("lfoRate",       tci.lfoRate);
+            s->set("lfoDepth",      tci.lfoDepth);
+            s->set("lfoShape",      (float)tci.lfoShape);
+            s->set("lfoPhase",      tci.lfoPhase);
+            s->set("lfoPulseWidth", tci.lfoPulseWidth);
+            s->set("slicerMode",    tci.type == TrackType::Slice ? 1.0f : 0.0f);
+            s->set("sliceFit",      tci.sliceFit     ? 1.0f : 0.0f);
+            s->set("eqEnabled",     tci.eqEnabled   ? 1.0f : 0.0f);
+            s->set("eqHPFreq",      tci.eqHPFreq);
+            s->set("eqHPRq",        1.0f / std::max(tci.eqHPQ,   0.01f));
+            s->set("eqPeakFreq",    tci.eqPeakFreq);
+            s->set("eqPeakGain",    tci.eqPeakGain);
+            s->set("eqPeakRq",      1.0f / std::max(tci.eqPeakQ, 0.01f));
+            s->set("eqLPFreq",      tci.eqLPFreq);
+            s->set("eqLPRq",        1.0f / std::max(tci.eqLPQ,   0.01f));
+            s->set("arpEnabled",       tdi.arpEnabled       ? 1.0f : 0.0f);
+            s->set("arpInterval",      tdi.arpInterval);
+            s->set("arpModulo",        (float)tdi.arpModulo);
+            s->set("arpGateWidth",     tdi.arpGateWidth);
+            s->set("arpSpeedMode",     (float)tdi.arpSpeedMode);
+            s->set("globalArpEnabled", tdi.globalArpEnabled ? 1.0f : 0.0f);
+            s->set("globalArpSpeed",   tdi.globalArpSpeed);
+            s->set("bufnum",           (float)getBufnum(ti, srv));
+            s->set("globalStepProbSub", tci.globalStepProbSub);
+            s->set("globalCut",         tci.globalCut);
+            s->set("globalPanOffset",   tci.globalPanOffset);
+            s->set("globalRes",         tci.globalRes);
+            s->set("clickCombOctave",   (float)tci.clickCombOctave);
+            s->set("filterMode",        (float)tci.filterMode);
+            s->set("filterRandom",      tci.filterRandom ? 1.0f : 0.0f);
+            s->set("filterRandomRange", tci.filterRandomRange);
+        }
+    }
+    // Fire step params — one call per track covers all servers via the pStep* listener.
+    for(int ti = 0; ti < numTracks; ti++)
+        fireStepParams(ti);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Sample buffer management
+// ════════════════════════════════════════════════════════════════════════════
+
+int scRhythmBox::getBufnum(int ti, ofxSCServer* srv) const {
+    if(ti >= 0 && ti < (int)trackBufs.size()) {
+        const auto it = trackBufs[ti].find(srv);
+        if(it != trackBufs[ti].end() && it->second) return it->second->index;
+    }
+    // Buffer 0 can belong to any other sampler: it is NOT a silent fallback.
+    const auto silent = silentBuffers.find(srv);
+    return silent != silentBuffers.end() && silent->second ? silent->second->index : -1;
+}
+
+void scRhythmBox::loadSampleForTrack(int ti, const std::string& path) {
+    if(ti >= MAX_TRACKS || path.empty()) return;
+
+    freeSampleForTrack(ti);  // frees old buffer + clears samplePaths[ti]
+
+    ofxSCServer* primarySrv = nullptr;
+    for(auto* sm : allServers) {
+        if(sm && sm->getServer()) { primarySrv = sm->getServer(); break; }
+    }
+    if(!primarySrv) return;
+
+    loadWaveformData(ti, path);   // pre-compute peak display data for WAV tab
+
+    try {
+        auto* buf = new ofxSCBuffer(0, 0, primarySrv);
+        buf->read(path);  // load all channels (stereo/mono as-is)
+        trackBufs[ti][primarySrv] = buf;
+        ofLogNotice("scRhythmBox") << "Loaded track " << ti << " : " << path
+                                          << " bufnum=" << buf->index;
+    } catch(const std::exception& e) {
+        ofLogError("scRhythmBox") << "loadSampleForTrack ti=" << ti << " : " << e.what();
+        return;
+    }
+
+    // Mirror to additional servers
+    for(size_t j = 1; j < allServers.size(); j++) {
+        if(!allServers[j] || !allServers[j]->getServer()) continue;
+        ofxSCServer* srv = allServers[j]->getServer();
+        try {
+            auto* buf = new ofxSCBuffer(0, 0, srv);
+            buf->read(path);
+            trackBufs[ti][srv] = buf;
+        } catch(const std::exception& e) {
+            ofLogError("scRhythmBox") << "mirror ti=" << ti << " srv" << j << ": " << e.what();
+        }
+    }
+
+    // Store path AFTER freeSampleForTrack (which cleared it) so display and
+    // preset serialisation have the correct value.
+    samplePaths[ti] = path;
+}
+
+void scRhythmBox::reloadSamplesForServer(ofxSCServer* srv) {
+    if(!srv) return;
+
+    for(int ti = 0; ti < MAX_TRACKS && ti < (int)samplePaths.size(); ti++) {
+        if(trackBufs[ti].count(srv)) {
+            if(trackBufs[ti][srv]) {
+                trackBufs[ti][srv]->free();
+                delete trackBufs[ti][srv];
+            }
+            trackBufs[ti].erase(srv);
+        }
+
+        if(samplePaths[ti].empty()) continue;
+
+        const std::string absPath = resolveToAbsolutePath(samplePaths[ti]);
+        if(!std::filesystem::exists(absPath)) {
+            ofLogWarning("scRhythmBox") << "Cannot reload sample for track " << ti
+                                        << " after server rebuild: " << absPath;
+            continue;
+        }
+
+        try {
+            auto* buf = new ofxSCBuffer(0, 0, srv);
+            buf->read(absPath);
+            trackBufs[ti][srv] = buf;
+            samplePaths[ti] = absPath;
+            if(ti < (int)waveformPeaks.size() && waveformPeaks[ti].empty()) {
+                loadWaveformData(ti, absPath);
+            }
+            ofLogNotice("scRhythmBox") << "Reloaded track " << ti
+                                       << " sample for rebuilt server: " << absPath
+                                       << " bufnum=" << buf->index;
+        } catch(const std::exception& e) {
+            ofLogError("scRhythmBox") << "reloadSamplesForServer ti=" << ti
+                                      << " : " << e.what();
+        }
+    }
+}
+
+void scRhythmBox::freeSampleForTrack(int ti) {
+    if(ti < 0 || ti >= (int)trackBufs.size()) return;
+    stopSlicePreview(ti);
+    for(auto& [srv, buf] : trackBufs[ti]) {
+        if(buf) { buf->free(); delete buf; }
+    }
+    trackBufs[ti].clear();
+    if(ti < (int)waveformPeaks.size()) waveformPeaks[ti].clear();
+    if(ti < (int)samplePaths.size()) samplePaths[ti].clear();
+}
+
+void scRhythmBox::freeAllSamples() {
+    for(int i = 0; i < MAX_TRACKS; i++)
+        freeSampleForTrack(i);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// Waveform peak extraction  (handles 16-bit, 24-bit, 32-bit float PCM WAV)
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::loadWaveformData(int ti, const std::string& path) {
+    if(ti < 0 || ti >= MAX_TRACKS) return;
+    waveformPeaks[ti].clear();
+
+    std::string ext = ofToLower(std::filesystem::path(path).extension().string());
+    if(ext != ".wav") {
+        // Non-WAV (AIFF etc.): show a flat half-amplitude placeholder
+        waveformPeaks[ti].assign(WAVEFORM_BINS, 0.45f);
+        return;
+    }
+
+    std::ifstream file(path, std::ios::binary);
+    if(!file.is_open()) return;
+
+    // ── Parse RIFF/WAVE header ───────────────────────────────────────────────
+    char tag[4];
+    uint32_t chunkSize;
+    file.read(tag, 4);
+    if(std::strncmp(tag, "RIFF", 4) != 0) return;
+    file.read((char*)&chunkSize, 4);
+    file.read(tag, 4);
+    if(std::strncmp(tag, "WAVE", 4) != 0) return;
+
+    uint16_t numChannels = 1, bitsPerSample = 16, audioFormat = 1;
+    uint32_t numFrames = 0;
+    std::streampos dataStart = 0;
+
+    while(file.good()) {
+        char chunkID[4];
+        uint32_t cSize;
+        file.read(chunkID, 4);
+        file.read((char*)&cSize, 4);
+        if(!file.good()) break;
+
+        if(std::strncmp(chunkID, "fmt ", 4) == 0) {
+            uint16_t nCh, blockAlign, bps;
+            uint32_t sampleRate, byteRate;
+            file.read((char*)&audioFormat, 2);
+            file.read((char*)&nCh,         2);
+            file.read((char*)&sampleRate,  4);
+            file.read((char*)&byteRate,    4);
+            file.read((char*)&blockAlign,  2);
+            file.read((char*)&bps,         2);
+            numChannels   = nCh;
+            bitsPerSample = bps;
+            int remaining = (int)cSize - 16;
+            if(remaining > 0) file.seekg(remaining, std::ios::cur);
+        } else if(std::strncmp(chunkID, "data", 4) == 0) {
+            dataStart = file.tellg();
+            uint32_t bytesPerFrame = numChannels * (bitsPerSample / 8);
+            numFrames = (bytesPerFrame > 0) ? cSize / bytesPerFrame : 0;
+            break;
+        } else {
+            file.seekg(cSize + (cSize & 1), std::ios::cur);
+        }
+    }
+
+    if(numFrames == 0 || dataStart == 0) return;
+
+    // ── Read all PCM samples into a float buffer ─────────────────────────────
+    int bytesPerSample = bitsPerSample / 8;
+    long long totalSamples = (long long)numFrames * numChannels;
+    std::vector<float> samples;
+    samples.reserve((size_t)totalSamples);
+
+    file.seekg(dataStart);
+
+    for(long long i = 0; i < totalSamples && file.good(); i++) {
+        float s = 0.0f;
+        if(bitsPerSample == 16) {
+            int16_t raw;
+            file.read((char*)&raw, 2);
+            s = raw / 32768.0f;
+        } else if(bitsPerSample == 24) {
+            uint8_t bytes[3];
+            file.read((char*)bytes, 3);
+            int32_t raw = (int32_t)((uint32_t)bytes[2] << 24 |
+                                    (uint32_t)bytes[1] << 16 |
+                                    (uint32_t)bytes[0] << 8) >> 8;
+            s = raw / 8388608.0f;
+        } else if(bitsPerSample == 32) {
+            // Could be float (audioFormat==3) or int32
+            if(audioFormat == 3) {
+                file.read((char*)&s, 4);
+            } else {
+                int32_t raw;
+                file.read((char*)&raw, 4);
+                s = raw / 2147483648.0f;
+            }
+        } else {
+            break;  // unsupported bit depth — leave peaks empty
+        }
+        samples.push_back(s);
+    }
+
+    if(samples.empty()) return;
+    long long actualFrames = (long long)samples.size() / numChannels;
+
+    // ── Compute per-bin peak ─────────────────────────────────────────────────
+    waveformPeaks[ti].resize(WAVEFORM_BINS, 0.0f);
+    for(int b = 0; b < WAVEFORM_BINS; b++) {
+        long long startF = (long long)b * actualFrames / WAVEFORM_BINS;
+        long long endF   = (long long)(b + 1) * actualFrames / WAVEFORM_BINS;
+        float peak = 0.0f;
+        for(long long f = startF; f < endF; f++) {
+            for(int c = 0; c < numChannels; c++) {
+                long long idx = f * numChannels + c;
+                if(idx < (long long)samples.size())
+                    peak = std::max(peak, std::abs(samples[(size_t)idx]));
+            }
+        }
+        waveformPeaks[ti][b] = peak;
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Euclidean rhythm helper
+// ════════════════════════════════════════════════════════════════════════════
+
+std::vector<bool> scRhythmBox::euclideanRhythm(int k, int n) {
+    std::vector<bool> pattern(n, false);
+    if(k <= 0 || n <= 0) return pattern;
+    k = std::min(k, n);
+    // Bresenham / equal-distribution: place k pulses as evenly as possible in n steps.
+    for(int i = 0; i < k; i++)
+        pattern[((long long)i * n) / k] = true;
+    return pattern;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// File browser
+// ════════════════════════════════════════════════════════════════════════════
+
+// refreshBrowse / triggerPreview / stopPreview: see scSampleBrowser.h
+
+void scRhythmBox::stopSlicePreview(int ti) {
+    if(ti < 0 || ti >= MAX_TRACKS) return;
+    if(slicePreviewSynths[ti]) {
+        slicePreviewSynths[ti]->free();
+        delete slicePreviewSynths[ti];
+        slicePreviewSynths[ti] = nullptr;
+    }
+    slicePreviewIdx[ti] = -1;
+}
+
+void scRhythmBox::triggerSlicePreview(int ti, int sliceIdx) {
+    stopSlicePreview(ti);
+    if(!previewServer) return;
+
+    const TrackConfig& tc = trackConfig(ti);
+    int ns = tc.getNumSteps();
+    if((int)tc.slicePoints.size() != ns + 1) return;
+
+    sliceIdx = std::max(0, std::min(sliceIdx, ns - 1));
+    float startPos = tc.slicePoints[sliceIdx];
+    float endPos   = tc.slicePoints[sliceIdx + 1];
+    if(endPos <= startPos) return;
+
+    int bufnum = getBufnum(ti, previewServer);
+
+    try {
+        slicePreviewSynths[ti] = new ofxSCSynth("SlicePreview", previewServer);
+        slicePreviewSynths[ti]->set("bufnum",   (float)bufnum);
+        slicePreviewSynths[ti]->set("startPos", startPos);
+        slicePreviewSynths[ti]->set("endPos",   endPos);
+        slicePreviewSynths[ti]->set("out",      0.0f);
+        slicePreviewSynths[ti]->set("gain",     0.7f);
+        slicePreviewSynths[ti]->addToTail();
+        slicePreviewIdx[ti] = sliceIdx;
+    } catch(const std::exception& e) {
+        ofLogError("scRhythmBox") << "triggerSlicePreview: " << e.what();
+        stopSlicePreview(ti);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ImGui – Sequencer window
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::drawSequencerWindow() {
+    float zoom = ofxOceanodeShared::getZoomLevel();
+    string title = getWindowTitle();
+    ImGui::SetNextWindowSize(ImVec2(1100 * zoom, 660 * zoom), ImGuiCond_FirstUseEver);
+
+    bool open = showWindow.get();
+    if(ImGui::Begin(title.c_str(), &open,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        if(!open) { showWindow = false; browser.stopPreview(); ImGui::End(); return; }
+
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        if(avail.x < 320.0f * zoom || avail.y < 80.0f * zoom) {
+            browser.stopPreview();
+            ImGui::End();
+            return;
+        }
+        const float splitterW  = 6.0f * zoom;
+        const float marginW    = 10.0f * zoom;
+        browserW = ofClamp(browserW,  80.0f * zoom, avail.x - 300.0f * zoom);
+        const float tracksW = avail.x - browserW - splitterW - marginW;
+
+        // ── Left: file browser ────────────────────────────────────────────────
+        ImGui::BeginChild("##browser", ImVec2(browserW, avail.y), false);
+        drawBrowser(browserW, avail.y);
+        ImGui::EndChild();
+
+        // ── Drag splitter ─────────────────────────────────────────────────────
+        ImGui::SameLine(0, 0);
+        ImGui::InvisibleButton("##splitter", ImVec2(splitterW, avail.y));
+        if(ImGui::IsItemHovered() || ImGui::IsItemActive())
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        if(ImGui::IsItemActive())
+            browserW = ofClamp(browserW + ImGui::GetIO().MouseDelta.x, 80.0f * zoom, avail.x - 120.0f * zoom);
+        // Draw a subtle separator line in the middle of the splitter area
+        {
+            ImVec2 p = ImGui::GetItemRectMin();
+            ImVec2 q = ImGui::GetItemRectMax();
+            float cx = (p.x + q.x) * 0.5f;
+            bool active = ImGui::IsItemHovered() || ImGui::IsItemActive();
+            ImU32 col = active ? IM_COL32(180,180,180,200) : IM_COL32(90,90,90,150);
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(cx, p.y), ImVec2(cx, q.y), col, 1.5f * zoom);
+        }
+        ImGui::SameLine(0, marginW);    // gap appears LEFT of tracks (i.e. left of scrollbar)
+
+        // ── Right: scrollable tracks area ─────────────────────────────────────
+        ImGui::BeginChild("##tracks", ImVec2(tracksW, avail.y), false,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+
+        // ── Snapshots, named presets, morph (scSnapshots), then the box ────────
+        snaps.drawBar(std::max(1.0f, ImGui::GetContentRegionAvail().x));
+
+        // ── Transport and global sound controls ───────────────────────────────
+        drawGlobalControls();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        for(int ti = 0; ti < numTracks; ti++) {
+            ImGui::PushID(ti);
+            drawTrack(ti);
+            ImGui::PopID();
+        }
+
+        // Defer removal until every card has finished drawing: drawTrack holds
+        // references into vectors which removal may resize/reorder.
+        if(pendingTrackRemoval >= 0) {
+            const int trackIndex = pendingTrackRemoval;
+            pendingTrackRemoval = -1;
+            removeTrack(trackIndex);
+        }
+
+        auto drawAddTrackMenu = [&]() {
+            if(numTracks < MAX_TRACKS) {
+                ImGui::TextDisabled("Add track");
+                ImGui::Separator();
+                if(ImGui::MenuItem("Sample"))     addTrack(TrackType::Sample);
+                if(ImGui::MenuItem("Slice"))      addTrack(TrackType::Slice);
+                if(ImGui::MenuItem("Synth Kick")) addTrack(TrackType::Kick);
+                if(ImGui::MenuItem("Noise"))      addTrack(TrackType::Noise);
+                if(ImGui::MenuItem("Synth Snare"))addTrack(TrackType::Snare);
+                if(ImGui::MenuItem("Click"))      addTrack(TrackType::Click);
+            } else {
+                ImGui::TextDisabled("Maximum of %d tracks", MAX_TRACKS);
+            }
+        };
+
+        // Keep a dependable right-click target after the final track. It fills
+        // any unused viewport height and remains at least this tall when the
+        // track list is scrollable, so users never need to hunt for a tiny gap.
+        const float addSpaceMinH = 104.0f * zoom;
+        const float addSpaceH = std::max(addSpaceMinH, ImGui::GetContentRegionAvail().y);
+        const float addSpaceW = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+        const ImVec2 addSpacePos = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##addtrackspace", ImVec2(addSpaceW, addSpaceH));
+        const bool addSpaceHovered = ImGui::IsItemHovered();
+        ImDrawList* tracksDrawList = ImGui::GetWindowDrawList();
+        if(addSpaceHovered) {
+            tracksDrawList->AddRectFilled(addSpacePos,
+                ImVec2(addSpacePos.x + addSpaceW, addSpacePos.y + addSpaceH),
+                IM_COL32(255, 255, 255, 5), 5.0f * zoom);
+        }
+        tracksDrawList->AddText(
+            ImVec2(addSpacePos.x + 10.0f * zoom, addSpacePos.y + 12.0f * zoom),
+            addSpaceHovered ? IM_COL32(150, 155, 170, 150)
+                            : IM_COL32(115, 120, 135, 85),
+            "Right-click to add track");
+
+        if(ImGui::BeginPopupContextItem("##addtrack_footer",
+                                        ImGuiPopupFlags_MouseButtonRight)) {
+            drawAddTrackMenu();
+            ImGui::EndPopup();
+        }
+
+        // Other genuinely empty parts of the track window remain valid too.
+        if(ImGui::BeginPopupContextWindow("##addtrack", ImGuiPopupFlags_MouseButtonRight |
+                                                        ImGuiPopupFlags_NoOpenOverItems)) {
+            drawAddTrackMenu();
+            ImGui::EndPopup();
+        }
+
+        ImGui::EndChild();
+
+    } else {
+        browser.stopPreview();
+        if(!open) showWindow = false;
+    }
+    ImGui::End();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ImGui – File browser panel
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::drawBrowser(float w, float h) {
+    // The shared browser component (the former body of this function):
+    // click / arrow keys preview a file, drag it onto a track to assign it.
+    browser.draw(w, h);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ImGui – Single track row
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::drawTrack(int ti) {
+    float zoom = ofxOceanodeShared::getZoomLevel();
+    TrackData&   td = track(ti);
+    TrackConfig& tc = trackConfig(ti);
+    const bool isSampleTrack = tc.type == TrackType::Sample || tc.type == TrackType::Slice;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // ── Per-track accent color ─────────────────────────────────────────────────
+    static constexpr ImVec4 accentPalette[MAX_TRACKS] = {
+        {0.27f, 0.53f, 0.95f, 1.f},  // 0 blue
+        {0.28f, 0.82f, 0.48f, 1.f},  // 1 green
+        {0.95f, 0.60f, 0.18f, 1.f},  // 2 orange
+        {0.72f, 0.38f, 0.92f, 1.f},  // 3 purple
+        {0.20f, 0.84f, 0.90f, 1.f},  // 4 cyan
+        {0.95f, 0.28f, 0.30f, 1.f},  // 5 red
+        {0.94f, 0.88f, 0.20f, 1.f},  // 6 yellow
+        {0.80f, 0.32f, 0.70f, 1.f},  // 7 violet
+    };
+    // Determine whether any track is soloed so non-soloed tracks can be greyed.
+    bool anySolo = false;
+    for(int j = 0; j < numTracks; j++) if(trackConfigs[j].solo) { anySolo = true; break; }
+    const bool   isGreyed = tc.muted || (anySolo && !tc.solo);
+    const ImVec4 trueAcc  = accentPalette[ti % MAX_TRACKS];
+    static constexpr ImVec4 greyAcc = {0.30f, 0.31f, 0.35f, 1.f};
+    const ImVec4 acc    = isGreyed ? greyAcc : trueAcc;
+    const ImU32  accU32 = ImGui::ColorConvertFloat4ToU32(acc);
+
+    // ── Card setup (splitter: ch0 = BG drawn behind, ch1 = content) ───────────
+    const float accentBarW = 5.0f * zoom;
+    const float cardPadX   = 10.0f * zoom;
+    const float cardPadTop = 7.0f * zoom;
+    const float cardPadBot = 9.0f * zoom;
+
+    ImVec2 cardMin = ImGui::GetCursorScreenPos();
+    float  cardW   = ImGui::GetContentRegionAvail().x - 4.0f * zoom;
+
+    // 3-channel splitter: ch0=card bg, ch1=section sub-bg patches, ch2=content
+    ImDrawListSplitter splitter;
+    splitter.Split(dl, 3);
+    splitter.SetCurrentChannel(dl, 2);  // content goes to ch2
+
+    ImGui::Dummy({0.f, cardPadTop});
+    ImGui::Indent(accentBarW + cardPadX);
+
+    // Positions captured during content rendering for section sub-backgrounds
+    float sectionL  = cardMin.x + accentBarW + 3.0f * zoom;
+    float sectionR  = cardMin.x + cardW - 3.0f * zoom;
+    float hdrMinY   = ImGui::GetCursorScreenPos().y;
+    float hdrMaxY   = hdrMinY;
+    float stepsMinY = hdrMinY, stepsMaxY = hdrMinY;
+    float tabMinY   = hdrMinY, tabMaxY   = hdrMinY;
+
+    auto finishCard = [&](bool allowSampleDrop) {
+        ImGui::Unindent(accentBarW + cardPadX);
+        ImGui::Dummy({0.f, cardPadBot});
+        ImVec2 cardMax = {cardMin.x + cardW, ImGui::GetCursorScreenPos().y};
+
+        splitter.SetCurrentChannel(dl, 1);
+        const float secR  = 5.0f;
+        if(hdrMaxY > hdrMinY + 1.0f) {
+            const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+            ImU32 hdrBg = IM_COL32(
+                (int)(trackColor.x * 255 * 0.15f),
+                (int)(trackColor.y * 255 * 0.16f),
+                (int)(trackColor.z * 255 * 0.22f),
+                220
+            );
+            dl->AddRectFilled({sectionL, hdrMinY - 2.0f}, {sectionR, hdrMaxY + 2.0f}, hdrBg, secR);
+        }
+        if(stepsMaxY > stepsMinY + 1.0f) {
+            const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+            ImU32 stepsBg = IM_COL32(
+                (int)(trackColor.x * 255 * 0.08f),
+                (int)(trackColor.y * 255 * 0.09f),
+                (int)(trackColor.z * 255 * 0.13f),
+                210
+            );
+            dl->AddRectFilled({sectionL, stepsMinY - 2.0f}, {sectionR, stepsMaxY + 2.0f}, stepsBg, secR);
+        }
+        if(tabMaxY > tabMinY + 1.0f) {
+            const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+            ImU32 tabBg = IM_COL32(
+                (int)(trackColor.x * 255 * 0.10f),
+                (int)(trackColor.y * 255 * 0.11f),
+                (int)(trackColor.z * 255 * 0.16f),
+                210
+            );
+            dl->AddRectFilled({sectionL, tabMinY - 2.0f}, {sectionR, tabMaxY + 2.0f}, tabBg, secR);
+        }
+
+        splitter.SetCurrentChannel(dl, 0);
+        const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+        ImU32 darkTrackBg = IM_COL32(
+            (int)(trackColor.x * 255 * 0.12f),
+            (int)(trackColor.y * 255 * 0.12f),
+            (int)(trackColor.z * 255 * 0.12f),
+            255
+        );
+        dl->AddRectFilled(cardMin, cardMax, darkTrackBg, 8.0f);
+        dl->AddRectFilled(cardMin, {cardMin.x + accentBarW, cardMax.y}, accU32, 8.0f);
+        dl->AddRect(cardMin, cardMax, IM_COL32(46, 50, 64, 200), 8.0f, 0, 1.0f);
+        splitter.Merge(dl);
+
+        ImVec2 trackAreaMin = {cardMin.x + accentBarW, cardMin.y};
+        ImVec2 trackAreaMax = {cardMax.x, cardMax.y};
+        ImGui::SetCursorScreenPos(trackAreaMin);
+        ImGui::InvisibleButton(("##trackarea" + std::to_string(ti)).c_str(),
+                              ImVec2(trackAreaMax.x - trackAreaMin.x, trackAreaMax.y - trackAreaMin.y));
+
+        if(allowSampleDrop && ImGui::BeginDragDropTarget()) {
+            if(const ImGuiPayload* p = ImGui::AcceptDragDropPayload("FSS_SAMPLE")) {
+                std::string path(static_cast<const char*>(p->Data), p->DataSize - 1);
+                samplePaths[ti] = path;
+                loadSampleForTrack(ti, path);
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("bufnum", (float)getBufnum(ti, srv));
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        if(allowSampleDrop && ImGui::IsItemHovered() && ImGui::GetDragDropPayload() &&
+           strcmp(ImGui::GetDragDropPayload()->DataType, "FSS_SAMPLE") == 0) {
+            dl->AddRectFilled(trackAreaMin, trackAreaMax,
+                             ImGui::ColorConvertFloat4ToU32(ImVec4(acc.x, acc.y, acc.z, 0.2f)), 8.0f);
+            dl->AddRect(trackAreaMin, trackAreaMax,
+                       ImGui::ColorConvertFloat4ToU32(ImVec4(acc.x, acc.y, acc.z, 0.8f)), 8.0f, 0, 2.0f);
+        }
+
+        ImGui::Spacing();
+        ImGui::Spacing();
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Header row 1: [N] | name | [sample] | MUTE
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Track reordering arrows
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.17f, 0.22f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.28f, 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.38f, 0.45f, 1.0f));
+
+    if(ImGui::Button(tc.minimized ? ">##min" : "v##min", {22.f * zoom, 20.f * zoom}))
+        tc.minimized = !tc.minimized;
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip(tc.minimized ? "Expand track" : "Minimize track");
+    if(!tc.minimized) {
+        ImGui::SameLine(0, 2);
+
+        // Up arrow
+        bool canMoveUp = (ti > 0);
+        if (!canMoveUp) ImGui::BeginDisabled();
+        if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
+            moveTrackUp(ti);
+        }
+        if (!canMoveUp) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && canMoveUp) {
+            ImGui::SetTooltip("Move track up");
+        }
+
+        ImGui::SameLine(0, 2);
+
+        // Down arrow
+        bool canMoveDown = (ti < numTracks - 1);
+        if (!canMoveDown) ImGui::BeginDisabled();
+        if (ImGui::ArrowButton("##down", ImGuiDir_Down)) {
+            moveTrackDown(ti);
+        }
+        if (!canMoveDown) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && canMoveDown) {
+            ImGui::SetTooltip("Move track down");
+        }
+
+        ImGui::SameLine(0, 8 * zoom);
+    } else {
+        ImGui::SameLine(0, 6 * zoom);
+    }
+    
+    ImGui::PopStyleColor(3);
+
+    ImGui::TextColored(acc, "[%d]", ti + 1);
+    if(ImGui::BeginPopupContextItem("##trackParameters")) {
+        for(const auto& item : trackControlKeys[ti]) {
+            if(ImGui::BeginMenu(item.first.c_str())) {
+                controlMenuItems(item.second);
+                ImGui::EndMenu();
+            }
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::SameLine(0, 6 * zoom);
+
+    // Enhanced track title field with stronger highlighting
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(acc.x * 0.15f, acc.y * 0.15f, acc.z * 0.15f, 0.8f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(acc.x * 0.25f, acc.y * 0.25f, acc.z * 0.25f, 0.9f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(acc.x * 0.35f, acc.y * 0.35f, acc.z * 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+    ImGui::SetNextItemWidth(90.0f * zoom);
+    if(ImGui::InputText("##name", nameEditBuf[ti], 64))
+        tc.name = nameEditBuf[ti];
+    ImGui::PopStyleColor(4);
+
+    if(tc.minimized) {
+        hdrMaxY = ImGui::GetCursorScreenPos().y;
+        finishCard(false);
+        return;
+    }
+
+    if(isSampleTrack && ImGui::BeginDragDropTarget()) {
+        if(const ImGuiPayload* p = ImGui::AcceptDragDropPayload("FSS_SAMPLE")) {
+            std::string path(static_cast<const char*>(p->Data), p->DataSize - 1);
+            samplePaths[ti] = path;
+            loadSampleForTrack(ti, path);
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("bufnum", (float)getBufnum(ti, srv));
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    ImGui::SameLine(0, 8 * zoom);
+    if(isSampleTrack) {
+        const char* typeName = tc.type == TrackType::Slice ? "Slice" : "Sample";
+        if(!samplePaths[ti].empty())
+            ImGui::TextDisabled("[%s: %s]", typeName,
+                std::filesystem::path(samplePaths[ti]).filename().string().c_str());
+        else
+            ImGui::TextDisabled("[%s: no sample]", typeName);
+    } else {
+        ImGui::TextDisabled("[%s]", rhythmBoxTrackTypeName(tc.type));
+    }
+
+    // MUTE button
+    ImGui::SameLine(0, 14 * zoom);
+    {
+        bool m = tc.muted;
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            m ? ImVec4(0.72f, 0.15f, 0.15f, 1.f) : ImVec4(0.20f, 0.22f, 0.28f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+            m ? ImVec4(0.82f, 0.22f, 0.22f, 1.f) : ImVec4(0.28f, 0.32f, 0.40f, 1.f));
+        if(windowControl(trackControlKey(ti, "muted"), [&](){ return ImGui::Button(m ? "MUTED##mt" : "MUTE##mt", {58.f * zoom, 20.f * zoom}); })) {
+            tc.muted = !tc.muted;
+            auto mv = muteP.get();
+            if(ti < (int)mv.size()) mv[ti] = tc.muted ? 1 : 0;
+            muteP.set(mv);
+        }
+        ImGui::PopStyleColor(2);
+    }
+
+    // SOLO button
+    ImGui::SameLine(0, 5 * zoom);
+    {
+        bool s = tc.solo;
+        // Soloed: golden; non-soloed but some other track is soloed: dimmed red hint
+        ImVec4 soloBtnCol = s ? ImVec4(0.82f, 0.64f, 0.06f, 1.f)
+                              : (anySolo ? ImVec4(0.30f, 0.18f, 0.08f, 1.f)
+                                         : ImVec4(0.20f, 0.22f, 0.28f, 1.f));
+        ImVec4 soloBtnHov = s ? ImVec4(0.92f, 0.76f, 0.14f, 1.f)
+                              : ImVec4(0.28f, 0.32f, 0.40f, 1.f);
+        ImGui::PushStyleColor(ImGuiCol_Button,        soloBtnCol);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, soloBtnHov);
+        if(windowControl(trackControlKey(ti, "solo"), [&](){ return ImGui::Button(s ? "SOLO##sl" : "SOLO##sl", {48.f * zoom, 20.f * zoom}); })) {
+            tc.solo = !tc.solo;
+            auto sv = soloP.get();
+            if(ti < (int)sv.size()) sv[ti] = tc.solo ? 1 : 0;
+            soloP.set(sv);  // listener fires → updateActiveStates()
+        }
+        ImGui::PopStyleColor(2);
+    }
+
+    // Delete button. Actual removal is deferred until the track draw loop ends.
+    ImGui::SameLine(0, 5 * zoom);
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.28f, 0.11f, 0.12f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.16f, 0.18f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.88f, 0.22f, 0.24f, 1.f));
+    if(ImGui::Button("X##remove", {24.f * zoom, 20.f * zoom}))
+        pendingTrackRemoval = ti;
+    ImGui::PopStyleColor(3);
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Delete this track");
+
+    // Vol (track volume) inline with header — was in VOL tab
+    ImGui::SameLine(0, 14 * zoom);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.62f, 0.70f, 1.f));
+    ImGui::TextUnformatted("Vol:");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0, 4 * zoom);
+    ImGui::SetNextItemWidth(80.0f * zoom);
+    {
+        float gv = tc.globalVol;
+        if(windowControl(trackControlKey(ti, "globalVol"), [&](){ return ImGui::SliderFloat("##hgvol", &gv, 0.0f, 1.0f, "%.2f"); })) {
+            tc.globalVol = gv;
+            auto v = globalVolP.get(); v.resize(numTracks, 1.0f);
+            v[ti] = gv; globalVolP.set(v);
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Track output volume (0..1)");
+    }
+
+    // SeqProb (sequence probability) inline with header — was in PROB tab
+    ImGui::SameLine(0, 10);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.62f, 0.70f, 1.f));
+    ImGui::TextUnformatted("SeqProb:");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(80.0f);
+    {
+        float sp = tc.sequenceProb;
+        if(windowControl(trackControlKey(ti, "sequenceProb"), [&](){ return ImGui::SliderFloat("##hseqprob", &sp, 0.0f, 1.0f, "%.2f"); })) {
+            tc.sequenceProb = sp;
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("sequenceProb", sp);
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Sequence probability (0..1)\nProbability that the entire sequence plays.");
+    }
+
+    // StepProb (general probability) inline with header — moved from PROB tab
+    ImGui::SameLine(0, 10);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.62f, 0.70f, 1.f));
+    ImGui::TextUnformatted("StepProb:");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(80.0f);
+    {
+        float gp = tc.globalProb;
+        if(windowControl(trackControlKey(ti, "globalProb"), [&](){ return ImGui::SliderFloat("##hstepprob", &gp, 0.0f, 1.0f, "%.2f"); })) {
+            tc.globalProb = gp;
+            auto v = globalProbP.get(); v.resize(numTracks, 1.0f);
+            v[ti] = gp; globalProbP.set(v);  // fires listener → SC
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Track probability multiplier (0..1)\nMultiplies all per-step probabilities.\nAlso editable via the Prob node parameter.");
+    }
+
+    // Transpose control inline with header — moved from PITCH tab
+    ImGui::SameLine(0, 10);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.62f, 0.70f, 1.f));
+    ImGui::TextUnformatted("Transpose:");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(80.0f);
+    {
+        float tp = tc.trackPitch;
+        if(windowControl(trackControlKey(ti, "trackPitch"), [&](){ return ImGui::DragFloat("##htpose", &tp, 0.1f, -24.0f, 24.0f, "%.1f st"); })) {
+            auto v = transposeP.get(); v.resize(numTracks, 0.0f);
+            v[ti] = tp; transposeP.set(v);  // fires listener → updates TrackConfig + SC
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Track transpose (-24..+24 semitones)\nMirrors the Transpose node parameter.\nPer-step pitch offsets stack on top of this.");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Header row 2: Beats | Steps/Beat | Shift | MONO | LATCH
+    // ═══════════════════════════════════════════════════════════════════════════
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.62f, 0.70f, 1.f));
+    ImGui::TextUnformatted("Beats");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(38.0f);
+    int nb = tc.numBeats;
+    if(windowControl(trackControlKey(ti, "numBeats"), [&](){ return ImGui::InputInt("##nb", &nb, 0, 0); })) {
+        nb = ofClamp(nb, 1, 16);
+        if(nb != tc.numBeats) {
+            tc.numBeats = nb;
+            for(auto& slot : slots) if(ti < (int)slot.tracks.size()) slot.tracks[ti].resizeSteps();
+            for(auto& [srv, synths] : trackSynths) {
+                if(ti < (int)synths.size() && synths[ti]) {
+                    synths[ti]->set("numBeats",  (float)tc.numBeats);
+                    synths[ti]->set("numSteps",  (float)tc.getNumSteps());
+                }
+            }
+            fireStepParams(ti);
+        }
+    }
+
+    ImGui::SameLine(0, 12);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.62f, 0.70f, 1.f));
+    ImGui::TextUnformatted("Steps/Beat");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(38.0f);
+    int spb = tc.stepsPerBeat;
+    if(windowControl(trackControlKey(ti, "stepsPerBeat"), [&](){ return ImGui::InputInt("##spb", &spb, 0, 0); })) {
+        spb = ofClamp(spb, 1, 16);
+        if(spb != tc.stepsPerBeat) {
+            tc.stepsPerBeat = spb;
+            for(auto& slot : slots) if(ti < (int)slot.tracks.size()) slot.tracks[ti].resizeSteps();
+            for(auto& [srv, synths] : trackSynths) {
+                if(ti < (int)synths.size() && synths[ti]) {
+                    synths[ti]->set("stepsPerBeat", (float)tc.stepsPerBeat);
+                    synths[ti]->set("numSteps",     (float)tc.getNumSteps());
+                }
+            }
+            fireStepParams(ti);
+        }
+    }
+
+    ImGui::SameLine(0, 12);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.62f, 0.70f, 1.f));
+    ImGui::TextUnformatted("Shift");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0, 4);
+    if(windowControl(trackControlKey(ti, "shift"), [&](){ return ImGui::ArrowButton("##shL", ImGuiDir_Left); })) {
+        td.shift--;
+        for(auto& [srv, synths] : trackSynths)
+            if(ti < (int)synths.size() && synths[ti])
+                synths[ti]->set("shift", (float)td.shift);
+    }
+    ImGui::SameLine(0, 3);
+    ImGui::Text("%d", td.shift);
+    ImGui::SameLine(0, 3);
+    if(windowControl(trackControlKey(ti, "shift"), [&](){ return ImGui::ArrowButton("##shR", ImGuiDir_Right); })) {
+        td.shift++;
+        for(auto& [srv, synths] : trackSynths)
+            if(ti < (int)synths.size() && synths[ti])
+                synths[ti]->set("shift", (float)td.shift);
+    }
+
+    // MONO button
+    ImGui::SameLine(0, 14);
+    {
+        bool isMono = tc.monoMode;
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            isMono ? ImVec4(acc.x*0.50f, acc.y*0.50f, acc.z*0.50f, 0.90f)
+                   : ImVec4(0.18f, 0.20f, 0.26f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+            isMono ? ImVec4(acc.x*0.65f, acc.y*0.65f, acc.z*0.65f, 1.f)
+                   : ImVec4(0.25f, 0.28f, 0.36f, 1.f));
+        if(windowControl(trackControlKey(ti, "monoMode"), [&](){ return ImGui::Button(isMono ? "MONO##mn" : "POLY##mn", {52.f, 20.f}); })) {
+            tc.monoMode = !tc.monoMode;
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("mono", tc.monoMode ? 1.0f : 0.0f);
+        }
+        ImGui::PopStyleColor(2);
+    }
+
+    // LATCH button
+    ImGui::SameLine(0, 5);
+    {
+        bool latch = tc.volLatch;
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            latch ? ImVec4(acc.x*0.40f, acc.y*0.40f, acc.z*0.40f, 0.85f)
+                  : ImVec4(0.18f, 0.20f, 0.26f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+            latch ? ImVec4(acc.x*0.56f, acc.y*0.56f, acc.z*0.56f, 1.f)
+                  : ImVec4(0.25f, 0.28f, 0.36f, 1.f));
+        if(windowControl(trackControlKey(ti, "volLatch"), [&](){ return ImGui::Button(latch ? "LATCH##lt" : "CONT##lt", {58.f, 20.f}); })) {
+            tc.volLatch = !tc.volLatch;
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("volLatch", tc.volLatch ? 1.0f : 0.0f);
+        }
+        ImGui::PopStyleColor(2);
+    }
+
+    hdrMaxY = ImGui::GetCursorScreenPos().y;
+
+    // Dim separator line under the header section
+    {
+        float sepY = ImGui::GetCursorScreenPos().y + 2.0f;
+        dl->AddLine({sectionL + 4.0f, sepY}, {sectionR - 4.0f, sepY},
+                    IM_COL32(60, 64, 82, 180), 1.0f);
+    }
+    ImGui::Dummy({0.f, 4.0f});
+
+    // ── Disable step/tab content when muted ──────────────────────────────────
+    if(tc.muted) ImGui::BeginDisabled(true);
+
+    // ── Step row ──────────────────────────────────────────────────────────────
+    int ns = tc.getNumSteps();
+
+    // Step width: the track with the most steps fills the full content width;
+    // all tracks use the same sw so steps are always the same visual size.
+    float contentW = cardW - accentBarW - cardPadX;
+    int maxStepsGlobal = 1;
+    for(int i = 0; i < numTracks; i++)
+        maxStepsGlobal = std::max(maxStepsGlobal, trackConfigs[i].getNumSteps());
+    float sw = std::max(4.0f, (contentW - (float)(maxStepsGlobal - 1) * STEP_GAP) / (float)maxStepsGlobal);
+
+    ImGui::Spacing();
+    stepsMinY = ImGui::GetCursorScreenPos().y;
+
+    // Beat-group palette derived from the per-track accent color.
+    // Even beat: full accent; Odd beat: accent lightened toward white.
+    // Off states: near-black with a subtle accent hue for grouping clarity.
+    auto mixColF = [](ImVec4 a, ImVec4 b, float t) -> ImVec4 {
+        return {a.x*(1-t)+b.x*t, a.y*(1-t)+b.y*t, a.z*(1-t)+b.z*t, 1.f};
+    };
+    // Create dark base colors from the track's accent color instead of fixed blue
+    const ImVec4 baseDark0 = {acc.x * 0.09f, acc.y * 0.10f, acc.z * 0.13f, 1.f};
+    const ImVec4 baseDark1 = {acc.x * 0.14f, acc.y * 0.16f, acc.z * 0.20f, 1.f};
+    const ImVec4 accLight  = mixColF(acc, {1.f, 1.f, 1.f, 1.f}, 0.22f);
+    struct BeatColors { ImVec4 off, on; };
+    const BeatColors beatPalette[2] = {
+        { mixColF(baseDark0, acc, 0.11f), acc       },  // even beat
+        { mixColF(baseDark1, acc, 0.17f), accLight  },  // odd beat (lighter)
+    };
+    const ImVec4 playheadCol = {0.94f, 0.78f, 0.12f, 1.f};
+
+    // Raw current SC step index = visual playhead position
+    int visualPlayhead = (ti < (int)currentStep.size())
+                         ? std::max(0, std::min(currentStep[ti], ns - 1))
+                         : 0;
+
+    if(tc.type != TrackType::Slice) {
+        // ── Normal step buttons — click+drag paints on/off ───────────────────
+        bool mouseDown  = ImGui::IsMouseDown(0);
+        bool stepChanged = false;
+
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+
+            int ai = ((si - td.shift) % ns + ns) % ns;
+            bool isOn       = (ai < (int)td.stepOn.size()) ? td.stepOn[ai] : false;
+            bool isPlayhead = (si == visualPlayhead);
+            int  beatGroup  = (si / tc.stepsPerBeat) % 2;
+
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            std::string bid = "##s" + std::to_string(si);
+            ImGui::InvisibleButton(bid.c_str(), ImVec2(sw, STEP_H));
+            stepMenu(ti, "stepOn", ai);
+
+            if(ImGui::IsItemActive() && stepPaintTrack == -1) {
+                stepPaintTrack = ti;
+                stepPaintValue = !isOn;
+            }
+            if(stepPaintTrack == ti && mouseDown) {
+                float mouseX = ImGui::GetIO().MousePos.x;
+                if(mouseX >= pos.x && mouseX < pos.x + sw) {
+                    if(ai < (int)td.stepOn.size() && td.stepOn[ai] != stepPaintValue) {
+                        td.stepOn[ai] = stepPaintValue;
+                        stepChanged = true;
+                    }
+                }
+            }
+            isOn = (ai < (int)td.stepOn.size()) ? td.stepOn[ai] : false;
+
+            bool hovered  = ImGui::IsItemHovered();
+            ImVec4 btnCol = isOn ? beatPalette[beatGroup].on : beatPalette[beatGroup].off;
+            if(isPlayhead) btnCol = playheadCol;
+            if(hovered) {
+                btnCol.x = std::min(1.0f, btnCol.x + 0.08f);
+                btnCol.y = std::min(1.0f, btnCol.y + 0.08f);
+                btnCol.z = std::min(1.0f, btnCol.z + 0.08f);
+            }
+            ImU32  fillCol = ImGui::ColorConvertFloat4ToU32(btnCol);
+            ImVec2 bmax    = ImVec2(pos.x + sw, pos.y + STEP_H);
+            dl->AddRectFilled(pos, bmax, fillCol, STEP_ROUND);
+            if(isPlayhead)
+                dl->AddRectFilled(pos, ImVec2(bmax.x, pos.y + 3.0f),
+                    IM_COL32(255, 255, 255, 220), STEP_ROUND);
+        }
+
+        if(!mouseDown && stepPaintTrack == ti) stepPaintTrack = -1;
+        if(stepChanged) sendStepDataToAll(ti);
+    } else {
+        // ── Slicer matrix: ns columns × ns rows ─────────────────────────────
+        // Row layout: row 0 = TOP = slice ns-1 (last slice)
+        //             row ns-1 = BOTTOM = slice 0 (first slice)
+        // So the bottom cell always corresponds to the first slice of the sample.
+        td.stepSlice  .resize(MAX_STEPS, 0);
+        td.stepSliceOn.resize(MAX_STEPS, true);
+
+        // Fixed cell height so each row is always the same size;
+        // total column height grows/shrinks with the number of steps.
+        const float cellH     = 14.0f;
+        const float matrixH   = cellH * (float)ns;
+        const float colStep   = sw + STEP_GAP;
+        const float totalMatW = ns * sw + (ns > 1 ? (ns - 1) * STEP_GAP : 0.0f);
+
+        // Single InvisibleButton covering the whole matrix for unified gesture handling.
+        // IsItemActive() stays true while the mouse button is held even if the pointer
+        // drifts outside, which is exactly the drag-paint semantic we want.
+        ImVec2 matPos = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##slicermat", ImVec2(totalMatW, matrixH));
+        bool matActive  = ImGui::IsItemActive();
+        bool matHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        bool rClicked   = ImGui::IsMouseClicked(1) && matHovered;
+
+        ImVec2 mp = ImGui::GetIO().MousePos;
+        // Column under mouse (raw visual column index 0..ns-1)
+        int mouseCol = -1;
+        if(mp.x >= matPos.x && mp.x < matPos.x + totalMatW)
+            mouseCol = std::max(0, std::min(ns - 1, (int)((mp.x - matPos.x) / colStep)));
+        // Row under mouse (0 = top visual row = last slice)
+        int mouseRow = (mp.y >= matPos.y && mp.y < matPos.y + matrixH)
+                       ? std::max(0, std::min(ns - 1, (int)((mp.y - matPos.y) / cellH)))
+                       : -1;
+        // Convert visual row to slice index: top row = slice ns-1, bottom row = slice 0
+        auto rowToSlice = [&](int row) { return (ns - 1) - row; };
+
+        bool sliceChanged = false, silenceChanged = false;
+
+        // Left click: trigger slice preview for the column under the cursor
+        if(ImGui::IsItemActivated() && mouseCol >= 0) {
+            int ai       = ((mouseCol - td.shift) % ns + ns) % ns;
+            int sliceIdx = (ai < (int)td.stepSlice.size()) ? td.stepSlice[ai] : (ai % ns);
+            triggerSlicePreview(ti, sliceIdx);
+        }
+
+        // Left drag (active = button held after click inside button): paint slice
+        if(matActive && mouseCol >= 0 && mouseRow >= 0) {
+            int ai       = ((mouseCol - td.shift) % ns + ns) % ns;
+            int sliceIdx = rowToSlice(mouseRow);
+            if(ai < (int)td.stepSlice.size() && td.stepSlice[ai] != sliceIdx) {
+                td.stepSlice[ai] = sliceIdx;
+                sliceChanged = true;
+            }
+        }
+
+        static int contextStep[MAX_TRACKS] = {};
+        if(rClicked && mouseCol >= 0) contextStep[ti] = ((mouseCol - td.shift) % ns + ns) % ns;
+        stepMenu(ti, "stepSlice", contextStep[ti]);
+
+        // Draw all cells
+        const ImVec4 cellOffCol = {0.12f, 0.13f, 0.17f, 1.f};
+        const ImVec4 silenceCol = {0.28f, 0.10f, 0.10f, 1.f};
+        for(int si = 0; si < ns; si++) {
+            int   ai          = ((si - td.shift) % ns + ns) % ns;
+            int   activeSlice = (ai < (int)td.stepSlice.size()) ? td.stepSlice[ai] : (ai % ns);
+            // Convert slice index back to visual row (inverted)
+            int   activeVisRow = (ns - 1) - activeSlice;
+            bool  isSilenced  = (ai < (int)td.stepSliceOn.size()) ? !td.stepSliceOn[ai] : false;
+            bool  isPlayhead  = (si == visualPlayhead);
+            float cx          = matPos.x + si * colStep;
+
+            for(int row = 0; row < ns; row++) {
+                float  cy   = matPos.y + row * cellH;
+                ImVec2 cmin = {cx,      cy};
+                ImVec2 cmax = {cx + sw, cy + cellH - 1.0f};
+                bool   isActive = (row == activeVisRow);
+                ImVec4 col;
+                if(isSilenced)      col = isActive ? silenceCol : cellOffCol;
+                else if(isActive)   col = isPlayhead ? playheadCol : acc;
+                else                col = cellOffCol;
+                dl->AddRectFilled(cmin, cmax, ImGui::ColorConvertFloat4ToU32(col));
+            }
+            // Column border
+            dl->AddRect({cx, matPos.y}, {cx + sw, matPos.y + matrixH}, IM_COL32(50,50,60,150));
+            // Playhead top bar
+            if(isPlayhead)
+                dl->AddRectFilled({cx, matPos.y}, {cx + sw, matPos.y + 3.0f},
+                    IM_COL32(255, 255, 255, 200));
+        }
+        if(matHovered && mouseCol >= 0)
+            ImGui::SetTooltip("Left-drag: assign slice\nRight-click: silence/unsilence step");
+
+        if(sliceChanged) {
+            std::vector<float> starts, ends;
+            computeSliceArrays(ti, starts, ends);
+            pStepSliceStart[ti].set(starts);
+            pStepSliceEnd  [ti].set(ends);
+        }
+        if(silenceChanged) {
+            std::vector<float> sliceOn(MAX_STEPS, 1.0f);
+            for(int i = 0; i < ns && i < (int)td.stepSliceOn.size(); i++)
+                sliceOn[i] = td.stepSliceOn[i] ? 1.0f : 0.0f;
+            pStepSliceOn[ti].set(sliceOn);
+        }
+
+        // FILL button: reset to the default diagonal pattern (step i plays slice i)
+        ImGui::Spacing();
+        if(ImGui::SmallButton("FILL")) {
+            for(int i = 0; i < ns; i++) td.stepSlice[i] = i;
+            std::vector<float> starts, ends;
+            computeSliceArrays(ti, starts, ends);
+            pStepSliceStart[ti].set(starts);
+            pStepSliceEnd  [ti].set(ends);
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Reset to default: step i plays slice i");
+    }
+
+    stepsMaxY = ImGui::GetCursorScreenPos().y;
+    ImGui::Spacing();
+    tabMinY = ImGui::GetCursorScreenPos().y;
+
+    // ── Tab row ───────────────────────────────────────────────────────────────
+    // 0:VOL  1:PROB  2:PAN  3:FLT  4:PITCH  5:WAV/SLICE/SYNTH/COMB
+    // 6:AMP  7:EQ  8:EUC  9:REV(reverse)  11:ARP  13:SHAPER
+    const char* sourceTab = isSampleTrack ? (tc.type == TrackType::Slice ? "SLICE" : "WAV")
+                          : (tc.type == TrackType::Click ? "COMB" : "SYNTH");
+    const char* tabLabels[] = { "VOL","PROB","PAN","FLT","PITCH", sourceTab,
+                                 "AMP","EQ","EUC","REV","","ARP","","SHAPER" };
+    auto tabVisible = [&](int t) {
+        if(t == 9 && !isSampleTrack) return false;
+        if(t == 10) return false;
+        if(t == 12) return false;
+        if(t == 13 && tc.type != TrackType::Kick && tc.type != TrackType::Sample) return false;
+        if(t == 6 && tc.type == TrackType::Click) return false;
+        return true;
+    };
+    if(td.activeTab >= 0 && !tabVisible(td.activeTab))
+        td.activeTab = -1;
+    const int nTabs = 14;
+    const ImVec2 tabSz = {44.f, 23.f};
+    for(int t = 0; t < nTabs; t++) {
+        if(!tabVisible(t)) continue;
+        if(t > 0) ImGui::SameLine(0, 3);
+        bool isActive = (td.activeTab == t);
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            isActive ? ImVec4(acc.x*0.38f, acc.y*0.38f, acc.z*0.38f, 0.95f)
+                     : ImVec4(0.16f, 0.18f, 0.23f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+            isActive ? ImVec4(acc.x*0.52f, acc.y*0.52f, acc.z*0.52f, 1.f)
+                     : ImVec4(0.23f, 0.26f, 0.34f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+            ImVec4(acc.x*0.62f, acc.y*0.62f, acc.z*0.62f, 1.f));
+        bool clicked = ImGui::Button(tabLabels[t], tabSz);
+        static const char* lanes[] = {"stepVol", "stepProb", "stepPan", "stepCut", "stepPitch", "slicePoints", "envDecay", "eqEnabled", "euclPulses", "stepReverse", "stepSlice", "arpEnabled", "stepHiRel", "stepShape"};
+        snapMenu(trackControlKey(ti, lanes[t]));
+        // Active tab: accent-coloured underline at bottom of button
+        if(isActive) {
+            ImVec2 bmin = ImGui::GetItemRectMin();
+            ImVec2 bmax = ImGui::GetItemRectMax();
+            dl->AddRectFilled({bmin.x + 4.f, bmax.y - 3.f}, {bmax.x - 4.f, bmax.y - 1.f}, accU32);
+        }
+        ImGui::PopStyleColor(3);
+        if(clicked) {
+            if(td.activeTab == t) td.activeTab = -1;
+            else                  td.activeTab = t;
+        }
+    }
+
+    // ── Parameter slider rows (tabs 0-2: VOL PROB PAN) ─────────────────
+    if(td.activeTab >= 0 && td.activeTab <= 2) {
+        struct SliderCfg { std::vector<float>* vec; float mn, mx, def; bool bipolar; };
+        td.stepVol  .resize(ns, 1.0f);
+        td.stepProb .resize(ns, 1.0f);
+        td.stepPan  .resize(ns, 0.0f);
+
+        SliderCfg cfgs[3] = {
+            { &td.stepVol,  0.0f, 1.0f, 1.0f, false },
+            { &td.stepProb, 0.0f, 1.0f, 1.0f, false },
+            { &td.stepPan, -1.0f, 1.0f, 0.0f, true  },
+        };
+        auto& cfg = cfgs[td.activeTab];
+
+        // ── Global control row (VOL tab = euclidean accents, PROB tab = track prob) ──
+        if(td.activeTab == 0) {
+            ImGui::Spacing();
+            // ── Euclidean Accents ────────────────────────────────────────────
+            ImGui::SameLine(0, 16);
+            ImGui::TextUnformatted("Accents:");
+            ImGui::SameLine(0, 4); ImGui::TextUnformatted("Steps:");
+            ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(40.0f);
+            if(windowControl(trackControlKey(ti, "accentSteps"), [&](){ return ImGui::DragInt("##as", &tc.accentSteps, 0.2f, 1, MAX_STEPS); }))
+                tc.accentSteps = ofClamp(tc.accentSteps, 1, MAX_STEPS);
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Pattern length. Cut or repeated to fill sequence steps.");
+            ImGui::SameLine(0, 8); ImGui::TextUnformatted("Offset:");
+            ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(40.0f);
+            if(windowControl(trackControlKey(ti, "accentOffset"), [&](){ return ImGui::DragInt("##ao", &tc.accentOffset, 0.2f, 0, std::max(tc.accentSteps - 1, 0)); }))
+                tc.accentOffset = ofClamp(tc.accentOffset, 0, std::max(tc.accentSteps - 1, 0));
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Rotation offset applied to the accent pattern before filling.");
+            ImGui::SameLine(0, 8); ImGui::TextUnformatted("Accents:");
+            ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(40.0f);
+            if(windowControl(trackControlKey(ti, "accentPulses"), [&](){ return ImGui::DragInt("##ak", &tc.accentPulses, 0.2f, 0, std::max(tc.accentSteps, 1)); }))
+                tc.accentPulses = ofClamp(tc.accentPulses, 0, std::max(tc.accentSteps, 1));
+            ImGui::SameLine(0, 8); ImGui::TextUnformatted("Hi:");
+            ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(50.0f);
+            windowControl(trackControlKey(ti, "accentHi"), [&](){ return ImGui::DragFloat("##ahi", &tc.accentHi, 0.01f, 0.0f, 1.0f, "%.2f"); });
+            ImGui::SameLine(0, 8); ImGui::TextUnformatted("Lo:");
+            ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(50.0f);
+            windowControl(trackControlKey(ti, "accentLo"), [&](){ return ImGui::DragFloat("##alo", &tc.accentLo, 0.01f, 0.0f, 1.0f, "%.2f"); });
+            ImGui::SameLine(0, 8); ImGui::TextUnformatted("BeatVar:");
+            ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(50.0f);
+            windowControl(trackControlKey(ti, "accentBeatVar"), [&](){ return ImGui::DragFloat("##abv", &tc.accentBeatVar, 0.005f, 0.0f, 0.3f, "%.3f"); });
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("+BeatVar on downbeat, -BeatVar on last subdivision.");
+            ImGui::SameLine(0, 8);
+            if(ImGui::SmallButton("Fill Accents")) {
+                int patLen = std::max(tc.accentSteps, 1);
+                auto accented = euclideanRhythm(tc.accentPulses, patLen);
+                td.stepVol.resize(ns, 1.0f);
+                int spb = std::max(tc.stepsPerBeat, 1);
+                for(int si = 0; si < ns; si++) {
+                    int pi = ((si - tc.accentOffset) % patLen + patLen) % patLen;
+                    float base = accented[pi] ? tc.accentHi : tc.accentLo;
+                    float posInBeat = (float)(si % spb);
+                    float beatMod = (spb > 1) ? tc.accentBeatVar * (1.0f - 2.0f * posInBeat / (float)(spb - 1)) : 0.0f;
+                    td.stepVol[si] = ofClamp(base + beatMod, 0.0f, 1.0f);
+                }
+                sendStepDataToAll(ti);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Fill VOL sliders with euclidean accent pattern + beat gradient.");
+        }
+        if(td.activeTab == 1) {
+            // General probability slider moved to header next to seqProb
+            ImGui::Spacing();
+        }
+        if(td.activeTab == 2) {
+            ImGui::Spacing();
+            ImGui::TextUnformatted("Global Pan:");
+            ImGui::SameLine(0, 4);
+            ImGui::SetNextItemWidth(140.0f);
+            float gpo = tc.globalPanOffset;
+            if(windowControl(trackControlKey(ti, "globalPanOffset"), [&](){ return ImGui::SliderFloat("##gpanoffset", &gpo, -1.0f, 1.0f, "%.2f"); })) {
+                tc.globalPanOffset = gpo;
+                auto v = globalPanOffsetP.get(); v.resize(numTracks, 0.0f);
+                v[ti] = gpo; globalPanOffsetP.set(v);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Global pan offset (-1..1)\nAdded to per-step pan, clipped to -1..1.");
+        }
+        if(td.activeTab == 3) {
+            // FLT tab: show both Global Cut and Global Res
+            ImGui::Spacing();
+            ImGui::TextUnformatted("Global Cut:");
+            ImGui::SameLine(0, 4);
+            ImGui::SetNextItemWidth(140.0f);
+            float gco = tc.globalCut;
+            if(windowControl(trackControlKey(ti, "globalCut"), [&](){ return ImGui::SliderFloat("##gcutoffset", &gco, -1.0f, 1.0f, "%.2f"); })) {
+                tc.globalCut = gco;
+                auto v = globalCutP.get(); v.resize(numTracks, 0.0f);
+                v[ti] = gco; globalCutP.set(v);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Global cut offset (-1..1)\nAdded to per-step cut, clipped to -1..1.\n-1..0 = LP region, 0..1 = HP region.");
+            
+            ImGui::SameLine(0, 20);
+            ImGui::TextUnformatted("Global Res:");
+            ImGui::SameLine(0, 4);
+            ImGui::SetNextItemWidth(140.0f);
+            float gro = tc.globalRes;
+            if(windowControl(trackControlKey(ti, "globalRes"), [&](){ return ImGui::SliderFloat("##gresoffset", &gro, 0.0f, 1.0f, "%.2f"); })) {
+                tc.globalRes = gro;
+                auto v = globalResP.get(); v.resize(numTracks, 0.0f);
+                v[ti] = gro; globalResP.set(v);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Global resonance offset (0..1)\nAdded to per-step resonance, clipped to 0..1.");
+        }
+
+        bool sliderChanged = false;
+        ImGui::Spacing();
+
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+            int pai = ((si - td.shift) % ns + ns) % ns;
+            float& val = (*cfg.vec)[pai];
+
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            std::string sid = "##sl" + std::to_string(si);
+            ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
+            stepMenu(ti, td.activeTab == 0 ? "stepVol" : td.activeTab == 1 ? "stepProb" : "stepPan", pai);
+
+            // Click+drag to set value — paints any column the mouse X overlaps.
+            // sliderPaintTrack ensures only the track that owns the gesture is painted.
+            bool mouseDown = ImGui::IsMouseDown(0);
+            if(ImGui::IsItemActive() && sliderPaintTrack == -1)
+                sliderPaintTrack = ti;
+            if(sliderPaintTrack == ti && mouseDown) {
+                float mouseX = ImGui::GetIO().MousePos.x;
+                float mouseY = ImGui::GetIO().MousePos.y;
+                if(mouseX >= pos.x && mouseX < pos.x + sw) {
+                    float t = 1.0f - ofClamp((mouseY - pos.y) / PARAM_H, 0.0f, 1.0f);
+                    val = cfg.mn + t * (cfg.mx - cfg.mn);
+                    sliderChanged = true;
+                }
+            }
+
+
+            // ── Probability Group Color Logic (PROB tab only) ─────────────────────
+            ImVec4 bgCol4, barCol4;
+            int slBeatGroup = (si / tc.stepsPerBeat) % 2;
+            bool slIsPlayhead = (si == visualPlayhead);
+            
+            if(td.activeTab == 1) { // PROB tab - use group colors
+                // Ensure stepProbGroup is properly sized
+                td.stepProbGroup.resize(ns, 0);
+                int groupVal = (pai < (int)td.stepProbGroup.size()) ? td.stepProbGroup[pai] : 0;
+                
+                // Group color palette (different hues for each group)
+                static constexpr ImVec4 groupColors[10] = {
+                    {0.27f, 0.53f, 0.95f, 1.f},  // Blue (individual)
+                    {0.95f, 0.28f, 0.30f, 1.f},  // Red (group 1)
+                    {0.28f, 0.82f, 0.48f, 1.f},  // Green (group 2)
+                    {0.95f, 0.60f, 0.18f, 1.f},  // Orange (group 3)
+                    {0.72f, 0.38f, 0.92f, 1.f},  // Purple (group 4)
+                    {0.20f, 0.84f, 0.90f, 1.f},  // Cyan (group 5)
+                    {0.94f, 0.88f, 0.20f, 1.f},  // Yellow (group 6)
+                    {0.80f, 0.32f, 0.70f, 1.f},  // Magenta (group 7)
+                    {0.45f, 0.75f, 0.35f, 1.f},  // Lime (group 8)
+                    {0.85f, 0.45f, 0.65f, 1.f},  // Pink (group 9)
+                };
+                
+                // Determine if this step is a group leader
+                bool isGroupLeader = true;
+                if(groupVal > 0) {
+                    for(int j = 0; j < ns; j++) {
+                        int paj = ((j - td.shift) % ns + ns) % ns;
+                        if(paj < (int)td.stepProbGroup.size() &&
+                           td.stepProbGroup[paj] == groupVal && j < si) {
+                            isGroupLeader = false;
+                            break;
+                        }
+                    }
+                }
+                
+                // Select base color for this group
+                ImVec4 baseColor = groupColors[groupVal % 10];
+                
+                if(slIsPlayhead) {
+                    bgCol4 = playheadCol;
+                    barCol4 = {1.0f, 1.0f, 1.0f, 1.0f};
+                } else if(isGroupLeader || groupVal == 0) {
+                    // Group leader or individual: full saturation
+                    bgCol4 = {baseColor.x * 0.15f, baseColor.y * 0.15f, baseColor.z * 0.15f, 1.0f};
+                    barCol4 = baseColor;
+                } else {
+                    // Group member: desaturated version
+                    float desatFactor = 0.3f;
+                    ImVec4 desaturated = {
+                        baseColor.x * desatFactor + 0.4f * (1.0f - desatFactor),
+                        baseColor.y * desatFactor + 0.4f * (1.0f - desatFactor),
+                        baseColor.z * desatFactor + 0.4f * (1.0f - desatFactor),
+                        1.0f
+                    };
+                    bgCol4 = {desaturated.x * 0.15f, desaturated.y * 0.15f, desaturated.z * 0.15f, 1.0f};
+                    barCol4 = desaturated;
+                }
+            } else {
+                // Other tabs: use original beat-group colors
+                bgCol4 = slIsPlayhead ? playheadCol : beatPalette[slBeatGroup].off;
+                barCol4 = slIsPlayhead ? ImVec4{1.0f, 1.0f, 1.0f, 1.0f} : beatPalette[slBeatGroup].on;
+            }
+            
+            ImU32 bgCol = ImGui::ColorConvertFloat4ToU32(bgCol4);
+            ImVec2 bmax = ImVec2(pos.x + sw, pos.y + PARAM_H);
+            dl->AddRectFilled(pos, bmax, bgCol, STEP_ROUND);
+            
+            // White top bar on playhead column (same as step buttons)
+            if(slIsPlayhead)
+                dl->AddRectFilled(pos, ImVec2(bmax.x, pos.y + 3.0f),
+                                  IM_COL32(255, 255, 255, 220), STEP_ROUND);
+
+            // Draw bar (no outline)
+            float t = (val - cfg.mn) / (cfg.mx - cfg.mn);
+            ImU32 barCol = ImGui::ColorConvertFloat4ToU32(barCol4);
+            if(cfg.bipolar) {
+                float midY  = pos.y + PARAM_H * 0.5f;
+                float valY  = pos.y + PARAM_H * (1.0f - t);
+                float top   = std::min(valY, midY);
+                float bot   = std::max(valY, midY);
+                if(bot > top + 0.5f)
+                    dl->AddRectFilled(ImVec2(pos.x + 1, top),
+                                      ImVec2(pos.x + sw - 1, bot), barCol);
+                // Center line
+                dl->AddLine(ImVec2(pos.x, midY), ImVec2(pos.x + sw, midY),
+                            IM_COL32(100, 100, 100, 120));
+            } else {
+                float barH = PARAM_H * t;
+                if(barH > 0.5f) {
+                    // Check if we need to modify bar transparency for group visualization
+                    ImU32 finalBarCol = barCol;
+                    if(td.activeTab == 1 && cfg.vec == &td.stepProb) { // Only for probability sliders
+                        td.stepProbGroup.resize(ns, 0);
+                        int groupVal = (pai < (int)td.stepProbGroup.size()) ? td.stepProbGroup[pai] : 0;
+                        if(groupVal > 0) {
+                            // This step is in a group - make the individual bar semi-transparent
+                            ImVec4 transparentColor = barCol4;
+                            transparentColor.w = 0.7f; // 70% opacity for individual step probability
+                            finalBarCol = ImGui::ColorConvertFloat4ToU32(transparentColor);
+                        }
+                    }
+                    
+                    dl->AddRectFilled(
+                        ImVec2(pos.x + 1, pos.y + PARAM_H - barH),
+                        ImVec2(pos.x + sw - 1, pos.y + PARAM_H),
+                        finalBarCol);
+                }
+                
+                // ── Dual Probability Visualization (PROB tab only) ──────────────────
+                if(td.activeTab == 1 && cfg.vec == &td.stepProb) { // Only for probability sliders
+                    td.stepProbGroup.resize(ns, 0);
+                    int groupVal = (pai < (int)td.stepProbGroup.size()) ? td.stepProbGroup[pai] : 0;
+                    
+                    if(groupVal > 0) {
+                        // Find the group leader (first step in this group) and get its probability
+                        float groupProb = val; // Default to current step's probability
+                        int groupLeaderIdx = -1;
+                        
+                        // Find the first step in the sequence that has this group value
+                        for(int j = 0; j < ns; j++) {
+                            int paj = ((j - td.shift) % ns + ns) % ns;
+                            if(paj < (int)td.stepProbGroup.size() &&
+                               td.stepProbGroup[paj] == groupVal) {
+                                groupLeaderIdx = j;
+                                if(paj < (int)td.stepProb.size()) {
+                                    groupProb = td.stepProb[paj];
+                                }
+                                break;
+                            }
+                        }
+                        
+                        // Draw group probability as background for ALL group members
+                        if(groupLeaderIdx >= 0) {
+                            float groupT = (groupProb - cfg.mn) / (cfg.mx - cfg.mn);
+                            float groupBarH = PARAM_H * groupT;
+                            
+                            // Draw the group probability as background with lower opacity
+                            if(groupBarH > 0.5f) {
+                                ImVec4 groupColor = barCol4;
+                                groupColor.w = 0.4f; // 40% transparency for group probability background
+                                ImU32 groupBarCol = ImGui::ColorConvertFloat4ToU32(groupColor);
+                                
+                                dl->AddRectFilled(
+                                    ImVec2(pos.x + 1, pos.y + PARAM_H - groupBarH),
+                                    ImVec2(pos.x + sw - 1, pos.y + PARAM_H),
+                                    groupBarCol);
+                            }
+                        }
+                    }
+                }
+           }
+       }
+
+       // ── Probability Groups (PROB tab only) ──────────────────────────────────
+       if(td.activeTab == 1) {
+           ImGui::Spacing();
+           ImGui::TextDisabled("Probability Groups (0=individual, >0=group):");
+           ImGui::Spacing();
+           
+           // Ensure stepProbGroup is properly sized
+           td.stepProbGroup.resize(ns, 0);
+           
+           bool groupChanged = false;
+           const float groupCellH = ImGui::GetFrameHeight() + 16.0f;
+           const float groupInputPadX = 2.0f;
+           const ImVec2 groupRowStart = ImGui::GetCursorScreenPos();
+           static constexpr ImVec4 groupInputColors[10] = {
+               {0.27f, 0.53f, 0.95f, 1.f},
+               {0.95f, 0.28f, 0.30f, 1.f},
+               {0.28f, 0.82f, 0.48f, 1.f},
+               {0.95f, 0.60f, 0.18f, 1.f},
+               {0.72f, 0.38f, 0.92f, 1.f},
+               {0.20f, 0.84f, 0.90f, 1.f},
+               {0.94f, 0.88f, 0.20f, 1.f},
+               {0.80f, 0.32f, 0.70f, 1.f},
+               {0.45f, 0.75f, 0.35f, 1.f},
+               {0.85f, 0.45f, 0.65f, 1.f},
+           };
+           for(int si = 0; si < ns; si++) {
+               int pai = ((si - td.shift) % ns + ns) % ns;
+               int& groupVal = td.stepProbGroup[pai];
+               ImVec2 pos(groupRowStart.x + si * (sw + STEP_GAP), groupRowStart.y);
+               ImVec2 bmax(pos.x + sw, pos.y + groupCellH);
+               
+               // Determine if this step should be greyed out
+               bool isGreyedOut = false;
+               if(groupVal > 0) {
+                   // Check if this is the first occurrence of this group
+                   bool isFirstInGroup = true;
+                   for(int j = 0; j < ns; j++) {
+                       int paj = ((j - td.shift) % ns + ns) % ns;
+                       if(td.stepProbGroup[paj] == groupVal && j < si) {
+                           isFirstInGroup = false;
+                           break;
+                       }
+                   }
+                   isGreyedOut = !isFirstInGroup;
+               }
+
+               ImVec4 baseColor = groupInputColors[groupVal % 10];
+               ImVec4 cellColor = groupVal == 0
+                   ? beatPalette[(si / tc.stepsPerBeat) % 2].off
+                   : ImVec4(baseColor.x * 0.18f, baseColor.y * 0.18f, baseColor.z * 0.18f, 1.0f);
+               ImVec4 frameColor = groupVal == 0
+                   ? ImVec4(0.10f, 0.11f, 0.13f, 1.0f)
+                   : ImVec4(baseColor.x * 0.28f, baseColor.y * 0.28f, baseColor.z * 0.28f, 1.0f);
+               ImVec4 textColor = isGreyedOut
+                   ? ImVec4(0.55f, 0.55f, 0.55f, 1.0f)
+                   : ImVec4(0.92f, 0.94f, 0.96f, 1.0f);
+               if(si == visualPlayhead) {
+                   cellColor = playheadCol;
+                   frameColor = ImVec4(0.72f, 0.58f, 0.10f, 1.0f);
+                   textColor = ImVec4(0.08f, 0.07f, 0.03f, 1.0f);
+               } else if(isGreyedOut) {
+                   cellColor = ImVec4(cellColor.x * 0.55f, cellColor.y * 0.55f, cellColor.z * 0.55f, 1.0f);
+                   frameColor = ImVec4(frameColor.x * 0.55f, frameColor.y * 0.55f, frameColor.z * 0.55f, 1.0f);
+               }
+
+               dl->AddRectFilled(pos, bmax, ImGui::ColorConvertFloat4ToU32(cellColor), STEP_ROUND);
+               dl->AddRect(pos, bmax, ImGui::ColorConvertFloat4ToU32(frameColor), STEP_ROUND);
+
+               std::string stepLabel = ofToString(si + 1);
+               ImVec2 labelSize = ImGui::CalcTextSize(stepLabel.c_str());
+               dl->AddText(ImVec2(pos.x + std::max(0.0f, (sw - labelSize.x) * 0.5f), pos.y + 2.0f),
+                           ImGui::ColorConvertFloat4ToU32(textColor),
+                           stepLabel.c_str());
+               
+               ImGui::SetCursorScreenPos(ImVec2(pos.x + groupInputPadX, pos.y + 14.0f));
+               ImGui::SetNextItemWidth(std::max(1.0f, sw - groupInputPadX * 2.0f));
+               ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1.0f, 1.0f));
+               ImGui::PushStyleColor(ImGuiCol_FrameBg, frameColor);
+               ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(std::min(frameColor.x + 0.10f, 1.0f),
+                                                                      std::min(frameColor.y + 0.10f, 1.0f),
+                                                                      std::min(frameColor.z + 0.10f, 1.0f),
+                                                                      1.0f));
+               ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(std::min(frameColor.x + 0.18f, 1.0f),
+                                                                     std::min(frameColor.y + 0.18f, 1.0f),
+                                                                     std::min(frameColor.z + 0.18f, 1.0f),
+                                                                     1.0f));
+               ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+               
+               std::string gid = "##grp" + std::to_string(si);
+               if(ImGui::DragInt(gid.c_str(), &groupVal, 0.05f, 0, 99, "%d")) {
+                   groupVal = ofClamp(groupVal, 0, 99); // Limit to reasonable range
+                   groupChanged = true;
+               }
+
+
+               stepMenu(ti, "stepProbGroup", pai);
+               ImGui::PopStyleColor(4);
+               ImGui::PopStyleVar();
+               
+               // Tooltip
+               if(ImGui::IsItemHovered()) {
+                   if(groupVal == 0) {
+                       ImGui::SetTooltip("Step %d: individual probability (independent coin flip).\nDrag to assign a group; right-click: value / publish / timeline.", si + 1);
+                   } else if(isGreyedOut) {
+                       ImGui::SetTooltip("Step %d: group %d member (follows first step in group).\nRight-click: value / publish / timeline.", si + 1, groupVal);
+                   } else {
+                       ImGui::SetTooltip("Step %d: group %d leader (determines group probability).\nRight-click: value / publish / timeline.", si + 1, groupVal);
+                   }
+               }
+           }
+           ImGui::SetCursorScreenPos(ImVec2(groupRowStart.x, groupRowStart.y + groupCellH));
+           
+           if(groupChanged) {
+               // Update the probability logic when groups change
+               sendStepDataToAll(ti);
+           }
+       }
+
+       if(sliderChanged) sendStepDataToAll(ti);
+   }
+
+   // ── FLT tab (tab 3): Combined CUT and RES sliders ──────────────────────────
+   if(td.activeTab == 3) {
+       td.stepCut.resize(ns, 0.0f);
+       td.stepRes.resize(ns, 0.0f);
+       
+       ImGui::Spacing();
+       {
+           const char* modes[] = { "CUT (LP/HP)", "LP", "HP", "BP", "LPHP 4P" };
+           ImGui::TextUnformatted("Mode:"); ImGui::SameLine(0, 6);
+           ImGui::SetNextItemWidth(132.0f);
+           bool typedChanged = windowControl(trackControlKey(ti, "filterMode"), [&](){ return ImGui::Combo("##filtermode", &tc.filterMode, modes, 5); });
+           if(tc.type == TrackType::Noise || tc.type == TrackType::Click) {
+               ImGui::SameLine(0, 12);
+               if(windowControl(trackControlKey(ti, "filterRandom"), [&](){ return ImGui::Button(tc.filterRandom ? "RANDOM ON" : "RANDOM"); })) {
+                   tc.filterRandom = !tc.filterRandom; typedChanged = true;
+               }
+               ImGui::SameLine(0, 6); ImGui::TextUnformatted("Range:"); ImGui::SameLine(0, 4);
+               ImGui::SetNextItemWidth(70.0f);
+               if(windowControl(trackControlKey(ti, "filterRandomRange"), [&](){ return ImGui::DragFloat("##filterrandrange", &tc.filterRandomRange, 0.01f, 0.0f, 1.0f, "%.2f"); }))
+                   typedChanged = true;
+               if(ImGui::IsItemHovered())
+                   ImGui::SetTooltip("At each loop restart, randomizes every non-zero CUT step within this range.");
+           }
+           if(typedChanged) sendTypedConfigToAll(ti);
+           ImGui::Separator();
+       }
+       ImGui::TextDisabled("Filter: CUT (top row) + RES (bottom row)");
+       ImGui::Spacing();
+       
+       // CUT sliders (top row)
+       for(int si = 0; si < ns; si++) {
+           if(si > 0) ImGui::SameLine(0, STEP_GAP);
+           int pai = ((si - td.shift) % ns + ns) % ns;
+           float& cutVal = td.stepCut[pai];
+           
+           ImVec2 pos = ImGui::GetCursorScreenPos();
+           std::string sid = "##cut" + std::to_string(si);
+           ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
+            stepMenu(ti, "stepCut", pai);
+           
+           // Mouse interaction for CUT
+           bool mouseDown = ImGui::IsMouseDown(0);
+           if(ImGui::IsItemActive() && cutPaintTrack == -1)
+               cutPaintTrack = ti;
+           if(cutPaintTrack == ti && mouseDown) {
+               float mouseX = ImGui::GetIO().MousePos.x;
+               float mouseY = ImGui::GetIO().MousePos.y;
+               if(mouseX >= pos.x && mouseX < pos.x + sw) {
+                   float t = 1.0f - ofClamp((mouseY - pos.y) / PARAM_H, 0.0f, 1.0f);
+                   cutVal = -1.0f + t * 2.0f; // -1 to 1 range
+                   sendStepDataToAll(ti);
+               }
+           }
+
+           
+           // Render CUT slider
+           ImU32 bgCol = ImGui::ColorConvertFloat4ToU32(beatPalette[(si / tc.stepsPerBeat) % 2].off);
+           ImU32 barCol = ImGui::ColorConvertFloat4ToU32(beatPalette[(si / tc.stepsPerBeat) % 2].on);
+           ImVec2 bmax = ImVec2(pos.x + sw, pos.y + PARAM_H);
+           dl->AddRectFilled(pos, bmax, bgCol, STEP_ROUND);
+           
+           float t = (cutVal + 1.0f) / 2.0f; // normalize to 0-1
+           float midY = pos.y + PARAM_H * 0.5f;
+           float valY = pos.y + PARAM_H * (1.0f - t);
+           float top = std::min(valY, midY);
+           float bot = std::max(valY, midY);
+           if(bot > top + 0.5f)
+               dl->AddRectFilled(ImVec2(pos.x + 1, top), ImVec2(pos.x + sw - 1, bot), barCol);
+           // Center line
+           dl->AddLine(ImVec2(pos.x, midY), ImVec2(pos.x + sw, midY), IM_COL32(100, 100, 100, 120));
+       }
+       
+       ImGui::Spacing();
+       
+       // RES sliders (bottom row)
+       for(int si = 0; si < ns; si++) {
+           if(si > 0) ImGui::SameLine(0, STEP_GAP);
+           int pai = ((si - td.shift) % ns + ns) % ns;
+           float& resVal = td.stepRes[pai];
+           
+           ImVec2 pos = ImGui::GetCursorScreenPos();
+           std::string sid = "##res" + std::to_string(si);
+           ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
+            stepMenu(ti, "stepRes", pai);
+           
+           // Mouse interaction for RES
+           bool mouseDown = ImGui::IsMouseDown(0);
+           if(ImGui::IsItemActive() && resPaintTrack == -1)
+               resPaintTrack = ti;
+           if(resPaintTrack == ti && mouseDown) {
+               float mouseX = ImGui::GetIO().MousePos.x;
+               float mouseY = ImGui::GetIO().MousePos.y;
+               if(mouseX >= pos.x && mouseX < pos.x + sw) {
+                   float t = 1.0f - ofClamp((mouseY - pos.y) / PARAM_H, 0.0f, 1.0f);
+                   resVal = t; // 0 to 1 range
+                   sendStepDataToAll(ti);
+               }
+           }
+
+           
+           // Render RES slider
+           ImU32 bgCol = ImGui::ColorConvertFloat4ToU32(beatPalette[(si / tc.stepsPerBeat) % 2].off);
+           ImU32 barCol = ImGui::ColorConvertFloat4ToU32(beatPalette[(si / tc.stepsPerBeat) % 2].on);
+           ImVec2 bmax = ImVec2(pos.x + sw, pos.y + PARAM_H);
+           dl->AddRectFilled(pos, bmax, bgCol, STEP_ROUND);
+           
+           float barH = PARAM_H * resVal;
+           if(barH > 0.5f)
+               dl->AddRectFilled(
+                   ImVec2(pos.x + 1, pos.y + PARAM_H - barH),
+                   ImVec2(pos.x + sw - 1, pos.y + PARAM_H),
+                   barCol);
+       }
+   }
+
+   // ── PITCH tab (tab 4) ────────────────────────────────────────────────────
+   if(td.activeTab == 4) {
+        td.stepPitch.resize(ns, 0);
+
+        ImGui::Spacing();
+
+        ImGui::SameLine(0, 12);
+        ImGui::TextDisabled("Per-step: right-click: value / publish / timeline");
+
+        ImGui::Spacing();
+
+        bool pitchChanged = false;
+
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+            int pai = ((si - td.shift) % ns + ns) % ns;
+            int& val = td.stepPitch[pai];
+
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            std::string sid = "##sp" + std::to_string(si);
+            ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
+            stepMenu(ti, "stepPitch", pai);
+
+            // Click+drag: map Y to semitone integer
+            bool mouseDown = ImGui::IsMouseDown(0);
+            if(ImGui::IsItemActive() && sliderPaintTrack == -1)
+                sliderPaintTrack = ti;
+            if(sliderPaintTrack == ti && mouseDown) {
+                float mouseX = ImGui::GetIO().MousePos.x;
+                float mouseY = ImGui::GetIO().MousePos.y;
+                if(mouseX >= pos.x && mouseX < pos.x + sw) {
+                    float t    = 1.0f - ofClamp((mouseY - pos.y) / PARAM_H, 0.0f, 1.0f);
+                    int newVal = (int)std::round(-12.0f + t * 24.0f);
+                    newVal     = ofClamp(newVal, -12, 12);
+                    if(newVal != val) { val = newVal; pitchChanged = true; }
+                }
+            }
+
+
+            // Background: beat-group off-color; playhead column = golden yellow
+            int  ptBeatGroup = (si / tc.stepsPerBeat) % 2;
+            bool ptIsPlayhead = (si == visualPlayhead);
+            ImVec4 ptBgCol4 = ptIsPlayhead ? playheadCol : beatPalette[ptBeatGroup].off;
+            ImU32  ptBgCol  = ImGui::ColorConvertFloat4ToU32(ptBgCol4);
+            ImVec2 ptBmax   = ImVec2(pos.x + sw, pos.y + PARAM_H);
+            dl->AddRectFilled(pos, ptBmax, ptBgCol, STEP_ROUND);
+            if(ptIsPlayhead)
+                dl->AddRectFilled(pos, ImVec2(ptBmax.x, pos.y + 3.0f),
+                                  IM_COL32(255, 255, 255, 220), STEP_ROUND);
+
+            // Center line (= semitone 0)
+            float midY = pos.y + PARAM_H * 0.5f;
+            dl->AddLine(ImVec2(pos.x, midY), ImVec2(pos.x + sw, midY),
+                        IM_COL32(100, 100, 100, 120));
+
+            // Bar from center to value (no outline)
+            if(val != 0) {
+                float t    = (float)(val + 12) / 24.0f;
+                float valY = pos.y + PARAM_H * (1.0f - t);
+                float top  = std::min(valY, midY);
+                float bot  = std::max(valY, midY);
+                ImU32 barCol = ptIsPlayhead
+                               ? IM_COL32(255, 255, 255, 200)
+                               : ImGui::ColorConvertFloat4ToU32(beatPalette[ptBeatGroup].on);
+                if(bot > top + 0.5f)
+                    dl->AddRectFilled(ImVec2(pos.x + 1, top),
+                                      ImVec2(pos.x + sw - 1, bot), barCol);
+            }
+
+            // Value label centred in bar (only when wide enough)
+            if(sw >= 14.0f && val != 0) {
+                char lbl[8];
+                snprintf(lbl, sizeof(lbl), "%+d", val);
+                ImVec2 ts = ImGui::CalcTextSize(lbl);
+                if(ts.x < sw - 2.0f) {
+                    dl->AddText(ImVec2(pos.x + (sw - ts.x) * 0.5f,
+                                       midY - ts.y * 0.5f),
+                                IM_COL32(230, 230, 230, 220), lbl);
+                }
+            }
+        }
+
+        if(pitchChanged) sendStepDataToAll(ti);
+
+        ImGui::Spacing();
+    }
+
+    // ── WAV / SLICE tab (tab 5) ──────────────────────────────────────────────
+    if(td.activeTab == 5 && tc.type == TrackType::Slice) {
+        // ── SLICE tab: zoomable waveform with draggable in/out and slice boundaries
+        ImGui::Spacing();
+
+        float wavW = ImGui::GetContentRegionAvail().x - 4.0f;
+        wavW = std::max(wavW, 120.0f);
+        const float wavH = 80.0f;
+        const float sbH  = 7.0f;
+
+        // Ensure slicePoints is initialised
+        if((int)tc.slicePoints.size() != ns + 1) initSlicePoints(ti);
+
+        float& zoom   = waveZoom[ti];
+        float& scroll = waveScroll[ti];
+        float viewW    = 1.0f / zoom;
+        float visStart = scroll * (1.0f - viewW);
+        float visEnd   = visStart + viewW;
+
+        ImVec2 wavPos = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##slicewav", ImVec2(wavW, wavH));
+        if(ImGui::BeginPopupContextItem("##regionParameters")) {
+            for(const char* field : {"inPoint", "outPoint", "slicePoints"}) {
+                if(ImGui::BeginMenu(field)) {
+                    controlMenuItems(trackControlKey(ti, field));
+                    ImGui::EndMenu();
+                }
+            }
+            ImGui::EndPopup();
+        }
+        bool wavActive  = ImGui::IsItemActive();
+        bool wavHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
+        // Helpers
+        auto smpToX = [&](float s) {
+            return wavPos.x + (s - visStart) / (visEnd - visStart) * wavW;
+        };
+        auto xToSmp = [&](float x) {
+            return std::min(std::max(visStart + (x - wavPos.x) / wavW * (visEnd - visStart), 0.0f), 1.0f);
+        };
+        auto applyZoomS = [&](float factor, float centreNorm) {
+            float sampleAt = visStart + centreNorm * viewW;
+            zoom = std::max(1.0f, std::min(64.0f, zoom * factor));
+            float newViewW = 1.0f / zoom;
+            if(zoom > 1.0f) {
+                float newStart = sampleAt - centreNorm * newViewW;
+                scroll = newStart / (1.0f - newViewW);
+            } else { scroll = 0.0f; }
+            scroll   = std::max(0.0f, std::min(1.0f, scroll));
+            viewW    = 1.0f / zoom;
+            visStart = scroll * (1.0f - viewW);
+            visEnd   = visStart + viewW;
+        };
+
+        // Determine active slices for highlighting (computed once, used twice below)
+        int playheadSlice = -1;
+        if(visualPlayhead >= 0 && visualPlayhead < ns) {
+            int ai = ((visualPlayhead - td.shift) % ns + ns) % ns;
+            if(ai < (int)td.stepSlice.size())
+                playheadSlice = td.stepSlice[ai];
+        }
+        int previewSlice = slicePreviewIdx[ti];
+
+        // Helper: clip a normalized sample range to visible range and convert to pixel x
+        auto slicePixelRange = [&](int sliceIdx, float& hx0, float& hx1) -> bool {
+            if(sliceIdx < 0 || sliceIdx >= ns) return false;
+            if((int)tc.slicePoints.size() != ns + 1) return false;
+            float sL = tc.slicePoints[sliceIdx];
+            float sR = tc.slicePoints[sliceIdx + 1];
+            float cL = std::max(sL, visStart);
+            float cR = std::min(sR, visEnd);
+            if(cR <= cL) return false;
+            hx0 = smpToX(cL); hx1 = smpToX(cR);
+            return true;
+        };
+
+        // Background
+        dl->AddRectFilled(wavPos, {wavPos.x + wavW, wavPos.y + wavH}, IM_COL32(18, 18, 22, 255));
+
+        // ── Playhead slice tint — drawn BEFORE waveform so waveform shows through ──
+        {
+            float hx0, hx1;
+            if(slicePixelRange(playheadSlice, hx0, hx1))
+                dl->AddRectFilled({hx0, wavPos.y}, {hx1, wavPos.y + wavH}, IM_COL32(240,190,30,80));
+        }
+
+        // Waveform
+        if(!waveformPeaks[ti].empty()) {
+            int   bins = (int)waveformPeaks[ti].size();
+            float midY = wavPos.y + wavH * 0.5f;
+            for(int px = 0; px < (int)wavW; px++) {
+                float frac = visStart + (float)px / wavW * (visEnd - visStart);
+                int bidx   = std::min(std::max((int)(frac * (float)bins), 0), bins - 1);
+                float hh   = waveformPeaks[ti][bidx] * wavH * 0.5f;
+                if(hh < 0.5f) continue;
+                // Use light tone of track accent color for waveform
+                const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+                ImU32 waveformColor = IM_COL32(
+                    (int)(trackColor.x * 255 * 0.7f),  // Light tone of track color
+                    (int)(trackColor.y * 255 * 0.8f),
+                    (int)(trackColor.z * 255 * 0.9f),
+                    200
+                );
+                dl->AddLine({wavPos.x + px, midY - hh}, {wavPos.x + px, midY + hh}, waveformColor);
+            }
+        } else {
+            float midY = wavPos.y + wavH * 0.5f;
+            dl->AddLine({wavPos.x, midY}, {wavPos.x + wavW, midY}, IM_COL32(80, 80, 80, 180));
+            dl->AddText({wavPos.x + wavW * 0.5f - 28, midY - 7},
+                        IM_COL32(110, 110, 110, 255), "no sample");
+        }
+
+        // ── Active slice edge lines — drawn AFTER waveform so they're crisp on top ──
+        {
+            float hx0, hx1;
+            // Playhead: bright gold edges
+            if(slicePixelRange(playheadSlice, hx0, hx1)) {
+                if(tc.slicePoints[playheadSlice]     >= visStart)
+                    dl->AddLine({hx0, wavPos.y}, {hx0, wavPos.y + wavH}, IM_COL32(240,200,40,235), 2.0f);
+                if(tc.slicePoints[playheadSlice + 1] <= visEnd)
+                    dl->AddLine({hx1, wavPos.y}, {hx1, wavPos.y + wavH}, IM_COL32(240,200,40,235), 2.0f);
+                // Top and bottom bars for clear framing
+                dl->AddLine({hx0, wavPos.y + 1},       {hx1, wavPos.y + 1},       IM_COL32(240,200,40,180), 2.0f);
+                dl->AddLine({hx0, wavPos.y + wavH - 2},{hx1, wavPos.y + wavH - 2},IM_COL32(240,200,40,180), 2.0f);
+            }
+            // Preview slice: cyan overlay + edges
+            if(previewSlice != playheadSlice && slicePixelRange(previewSlice, hx0, hx1)) {
+                dl->AddRectFilled({hx0, wavPos.y}, {hx1, wavPos.y + wavH}, IM_COL32(60,220,200,55));
+                if(tc.slicePoints[previewSlice]     >= visStart)
+                    dl->AddLine({hx0, wavPos.y}, {hx0, wavPos.y + wavH}, IM_COL32(60,220,200,220), 2.0f);
+                if(tc.slicePoints[previewSlice + 1] <= visEnd)
+                    dl->AddLine({hx1, wavPos.y}, {hx1, wavPos.y + wavH}, IM_COL32(60,220,200,220), 2.0f);
+            } else if(previewSlice >= 0 && previewSlice == playheadSlice && slicePixelRange(previewSlice, hx0, hx1)) {
+                // Same region: boost the edges to show both playhead + preview
+                if(tc.slicePoints[previewSlice]     >= visStart)
+                    dl->AddLine({hx0, wavPos.y}, {hx0, wavPos.y + wavH}, IM_COL32(100,240,180,255), 2.5f);
+                if(tc.slicePoints[previewSlice + 1] <= visEnd)
+                    dl->AddLine({hx1, wavPos.y}, {hx1, wavPos.y + wavH}, IM_COL32(100,240,180,255), 2.5f);
+            }
+        }
+
+        // Grid lines (clipped to visible range)
+        if(tc.sliceGrid > 0) {
+            for(int g = 1; g < tc.sliceGrid; g++) {
+                float gs = (float)g / (float)tc.sliceGrid;
+                if(gs < visStart || gs > visEnd) continue;
+                float gx = smpToX(gs);
+                dl->AddLine({gx, wavPos.y}, {gx, wavPos.y + wavH}, IM_COL32(160,160,160,80));
+            }
+        }
+
+        // Darken region outside in..out
+        {
+            if(tc.inPoint > visStart)
+                dl->AddRectFilled(wavPos, {smpToX(tc.inPoint), wavPos.y + wavH}, IM_COL32(0,0,0,110));
+            if(tc.outPoint < visEnd)
+                dl->AddRectFilled({smpToX(tc.outPoint), wavPos.y}, {wavPos.x+wavW, wavPos.y+wavH}, IM_COL32(0,0,0,110));
+        }
+
+        // Interior slice boundary lines (clipped to visible range)
+        for(int k = 1; k < ns; k++) {
+            if(tc.slicePoints[k] < visStart || tc.slicePoints[k] > visEnd) continue;
+            float bx = smpToX(tc.slicePoints[k]);
+            bool isDragging = (sliceDragTrack == ti && sliceDragIdx == k);
+            ImU32 lineCol = isDragging ? IM_COL32(255,220,60,255) : IM_COL32(180,180,255,200);
+            dl->AddLine({bx, wavPos.y}, {bx, wavPos.y + wavH}, lineCol, isDragging ? 2.0f : 1.0f);
+            dl->AddRectFilled({bx - 4, wavPos.y}, {bx + 4, wavPos.y + 8}, lineCol);
+        }
+
+        // In / Out markers
+        float inX  = smpToX(tc.inPoint);
+        float outX = smpToX(tc.outPoint);
+        if(tc.inPoint >= visStart - 0.01f && tc.inPoint <= visEnd + 0.01f) {
+            dl->AddLine({inX, wavPos.y}, {inX, wavPos.y+wavH}, IM_COL32(80,220,100,255), 2.0f);
+            dl->AddTriangleFilled({inX-5,wavPos.y},{inX+5,wavPos.y},{inX,wavPos.y+10},
+                                  IM_COL32(80,220,100,255));
+        }
+        if(tc.outPoint >= visStart - 0.01f && tc.outPoint <= visEnd + 0.01f) {
+            dl->AddLine({outX, wavPos.y}, {outX, wavPos.y+wavH}, IM_COL32(220,140,60,255), 2.0f);
+            dl->AddTriangleFilled({outX-5,wavPos.y},{outX+5,wavPos.y},{outX,wavPos.y+10},
+                                  IM_COL32(220,140,60,255));
+        }
+
+        // ── Unified drag interaction ──────────────────────────────────────────
+        // sliceDragIdx: ≥1 = slice boundary k, -2 = inPoint, -3 = outPoint
+        const float snapPx = 8.0f;
+        if(wavActive) {
+            float norm = xToSmp(ImGui::GetIO().MousePos.x);
+
+            // On first frame of drag: pick nearest target (in screen pixels)
+            if(sliceDragTrack != ti || sliceDragIdx == 0) {
+                float bestPx = snapPx;
+                int   best   = 0;
+                auto checkPx = [&](float sx, int idx) {
+                    float d = std::abs(smpToX(sx) - ImGui::GetIO().MousePos.x);
+                    if(d < bestPx) { bestPx = d; best = idx; }
+                };
+                checkPx(tc.inPoint,  -2);
+                checkPx(tc.outPoint, -3);
+                for(int k = 1; k < ns; k++) checkPx(tc.slicePoints[k], k);
+                sliceDragTrack = ti;
+                sliceDragIdx   = best;
+
+                // First press not on any boundary: play the clicked slice region
+                if(ImGui::IsItemActivated() && best == 0) {
+                    for(int k = 0; k < ns; k++) {
+                        if(norm >= tc.slicePoints[k] && norm < tc.slicePoints[k + 1]) {
+                            triggerSlicePreview(ti, k);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Grid snap in sample space
+            auto snapToGrid = [&](float v) -> float {
+                if(tc.sliceGrid <= 0) return v;
+                float best = v, bd = 1e9f;
+                for(int g = 0; g <= tc.sliceGrid; g++) {
+                    float gn = (float)g / (float)tc.sliceGrid;
+                    float d  = std::abs(v - gn);
+                    if(d < bd) { bd = d; best = gn; }
+                }
+                return best;
+            };
+
+            bool wavChanged = false;
+            if(sliceDragIdx == -2) {
+                float newIn = std::min(snapToGrid(norm), tc.outPoint - 0.01f);
+                newIn = std::max(newIn, 0.0f);
+                if(newIn != tc.inPoint) {
+                    tc.inPoint = newIn; initSlicePoints(ti); wavChanged = true;
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti])
+                            synths[ti]->set("inPoint", tc.inPoint);
+                }
+            } else if(sliceDragIdx == -3) {
+                float newOut = std::max(snapToGrid(norm), tc.inPoint + 0.01f);
+                newOut = std::min(newOut, 1.0f);
+                if(newOut != tc.outPoint) {
+                    tc.outPoint = newOut; initSlicePoints(ti); wavChanged = true;
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti])
+                            synths[ti]->set("outPoint", tc.outPoint);
+                }
+            } else if(sliceDragIdx >= 1 && sliceDragIdx < ns) {
+                float lo     = tc.slicePoints[sliceDragIdx - 1] + 0.002f;
+                float hi     = tc.slicePoints[sliceDragIdx + 1] - 0.002f;
+                float newPos = std::min(std::max(snapToGrid(norm), lo), hi);
+                if(newPos != tc.slicePoints[sliceDragIdx]) {
+                    tc.slicePoints[sliceDragIdx] = newPos; wavChanged = true;
+                }
+            }
+            if(wavChanged) {
+                std::vector<float> starts, ends;
+                computeSliceArrays(ti, starts, ends);
+                pStepSliceStart[ti].set(starts);
+                pStepSliceEnd  [ti].set(ends);
+            }
+        } else {
+            if(sliceDragTrack == ti) { sliceDragTrack = -1; sliceDragIdx = 0; }
+        }
+
+        if(wavHovered)
+            ImGui::SetTooltip("In: %.4f  Out: %.4f", tc.inPoint, tc.outPoint);
+
+        // ── Zoom buttons + scrollbar ──────────────────────────────────────────
+        {
+            // – / + buttons
+            if(windowControl(trackControlKey(ti, "solo"), [&](){ return ImGui::SmallButton("-##slicezm"); })) applyZoomS(0.5f, 0.5f);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom out");
+            ImGui::SameLine(0, 2);
+            if(windowControl(trackControlKey(ti, "solo"), [&](){ return ImGui::SmallButton("+##slicezm"); })) applyZoomS(2.0f, 0.5f);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom in");
+            ImGui::SameLine(0, 4);
+            // Zoom level label
+            char zoomLbl[16]; snprintf(zoomLbl, sizeof(zoomLbl), "x%.0f", zoom);
+            ImGui::TextDisabled("%s", zoomLbl);
+
+            // Scrollbar (only when zoomed), fills remaining width
+            if(zoom > 1.0f) {
+                ImGui::SameLine(0, 6);
+                float usedX  = ImGui::GetCursorScreenPos().x - (wavPos.x);
+                float scrollW = std::max(20.0f, wavW - usedX);
+                ImVec2 sbPos = ImGui::GetCursorScreenPos();
+                ImGui::InvisibleButton("##slicescroll", {scrollW, sbH});
+                if(ImGui::IsItemActive()) {
+                    scroll += ImGui::GetIO().MouseDelta.x / scrollW;
+                    scroll = std::max(0.0f, std::min(1.0f, scroll));
+                }
+                dl->AddRectFilled(sbPos, {sbPos.x + scrollW, sbPos.y + sbH},
+                                  IM_COL32(22, 22, 28, 220), 3.0f);
+                float thumbW = std::max(16.0f, scrollW / zoom);
+                float thumbX = sbPos.x + scroll * (scrollW - thumbW);
+                dl->AddRectFilled({thumbX, sbPos.y + 1}, {thumbX + thumbW, sbPos.y + sbH - 1},
+                                  IM_COL32(90, 95, 120, 220), 3.0f);
+            }
+        }
+
+        // ── Controls row ─────────────────────────────────────────────────────
+        ImGui::Spacing();
+
+        // sliceFit toggle
+        {
+            bool fit = tc.sliceFit;
+            if(fit) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.30f, 0.18f, 0.65f, 1.0f));
+            if(windowControl(trackControlKey(ti, "sliceFit"), [&](){ return ImGui::SmallButton(fit ? "SLICEFIT ON" : "SLICEFIT"); })) {
+                tc.sliceFit = !tc.sliceFit;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("sliceFit", tc.sliceFit ? 1.0f : 0.0f);
+            }
+            if(fit) ImGui::PopStyleColor();
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Stretch each slice to exactly one step duration");
+        }
+
+        // Reset to uniform button
+        ImGui::SameLine(0, 10);
+        if(windowControl(trackControlKey(ti, "solo"), [&](){ return ImGui::SmallButton("Reset##slicereset"); })) {
+            initSlicePoints(ti);
+            std::vector<float> starts, ends;
+            computeSliceArrays(ti, starts, ends);
+            pStepSliceStart[ti].set(starts);
+            pStepSliceEnd  [ti].set(ends);
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Reset to uniform slice spacing");
+
+        // Grid snap DragInt
+        ImGui::SameLine(0, 14);
+        ImGui::TextUnformatted("Grid:");
+        ImGui::SameLine(0, 4);
+        ImGui::SetNextItemWidth(48.0f);
+        int sg = tc.sliceGrid;
+        if(windowControl(trackControlKey(ti, "sliceGrid"), [&](){ return ImGui::DragInt("##slicegrid", &sg, 0.1f, 0, 128, sg == 0 ? "off" : "%d"); }))
+            tc.sliceGrid = std::max(sg, 0);
+
+        ImGui::Spacing();
+    }
+
+    if(td.activeTab == 5 && tc.type == TrackType::Sample) {
+        // ── WAV tab: full-width zoomable waveform with in/out markers ────────
+        float wavW = ImGui::GetContentRegionAvail().x - 4.0f;
+        wavW = std::max(wavW, 120.0f);
+        const float wavH  = 80.0f;
+        const float sbH   = 7.0f;  // scrollbar height
+
+        float& zoom   = waveZoom[ti];
+        float& scroll = waveScroll[ti];
+        // Visible sample range (normalized 0..1)
+        float viewW    = 1.0f / zoom;
+        float visStart = scroll * (1.0f - viewW);
+        float visEnd   = visStart + viewW;
+
+        ImGui::Spacing();
+        ImVec2 wavPos = ImGui::GetCursorScreenPos();
+
+        // ── InvisibleButton captures mouse ───────────────────────────────────
+        ImGui::InvisibleButton("##wav", ImVec2(wavW, wavH));
+        if(ImGui::BeginPopupContextItem("##regionParameters")) {
+            for(const char* field : {"inPoint", "outPoint", "slicePoints"}) {
+                if(ImGui::BeginMenu(field)) {
+                    controlMenuItems(trackControlKey(ti, field));
+                    ImGui::EndMenu();
+                }
+            }
+            ImGui::EndPopup();
+        }
+        bool wavActive  = ImGui::IsItemActive();
+        bool wavHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
+        // Helper: sample fraction → screen X
+        auto smpToX = [&](float s) {
+            return wavPos.x + (s - visStart) / (visEnd - visStart) * wavW;
+        };
+        // Helper: screen X → sample fraction (clamped 0..1)
+        auto xToSmp = [&](float x) {
+            return std::min(std::max(visStart + (x - wavPos.x) / wavW * (visEnd - visStart), 0.0f), 1.0f);
+        };
+        // Zoom helper (centred on a normalised sample position)
+        auto applyZoom = [&](float factor, float centreNorm) {
+            float sampleAt = visStart + centreNorm * viewW;
+            zoom = std::max(1.0f, std::min(64.0f, zoom * factor));
+            float newViewW = 1.0f / zoom;
+            if(zoom > 1.0f) {
+                float newStart = sampleAt - centreNorm * newViewW;
+                scroll = newStart / (1.0f - newViewW);
+            } else { scroll = 0.0f; }
+            scroll   = std::max(0.0f, std::min(1.0f, scroll));
+            viewW    = 1.0f / zoom;
+            visStart = scroll * (1.0f - viewW);
+            visEnd   = visStart + viewW;
+        };
+
+        // Background
+        dl->AddRectFilled(wavPos, ImVec2(wavPos.x + wavW, wavPos.y + wavH),
+                          IM_COL32(18, 18, 22, 255));
+
+        // Waveform bars — map each screen pixel to the correct peak bin
+        if(!waveformPeaks[ti].empty()) {
+            int   bins = (int)waveformPeaks[ti].size();
+            float midY = wavPos.y + wavH * 0.5f;
+            for(int px = 0; px < (int)wavW; px++) {
+                float frac = visStart + (float)px / wavW * (visEnd - visStart);
+                int bidx   = std::min(std::max((int)(frac * (float)bins), 0), bins - 1);
+                float hh   = waveformPeaks[ti][bidx] * wavH * 0.5f;
+                if(hh < 0.5f) continue;
+                // Use light tone of track accent color for waveform
+                const ImVec4& trackColor = accentPalette[ti % MAX_TRACKS];
+                ImU32 waveformColor = IM_COL32(
+                    (int)(trackColor.x * 255 * 0.7f),  // Light tone of track color
+                    (int)(trackColor.y * 255 * 0.8f),
+                    (int)(trackColor.z * 255 * 0.9f),
+                    200
+                );
+                dl->AddLine({wavPos.x + px, midY - hh}, {wavPos.x + px, midY + hh}, waveformColor);
+            }
+        } else {
+            float midY = wavPos.y + wavH * 0.5f;
+            dl->AddLine({wavPos.x, midY}, {wavPos.x + wavW, midY}, IM_COL32(80, 80, 80, 180));
+            dl->AddText({wavPos.x + wavW * 0.5f - 28, midY - 7},
+                        IM_COL32(110, 110, 110, 255), "no sample");
+        }
+
+        // Grid lines (at 0..1 divisions in sample space, clipped to visible range)
+        if(tc.wavGrid > 0) {
+            for(int g = 1; g < tc.wavGrid; g++) {
+                float gs = (float)g / (float)tc.wavGrid;
+                if(gs < visStart || gs > visEnd) continue;
+                float gx = smpToX(gs);
+                dl->AddLine({gx, wavPos.y}, {gx, wavPos.y + wavH}, IM_COL32(160, 160, 160, 80));
+            }
+        }
+
+        // Darken region outside in..out (clipped to visible range)
+        {
+            float inS  = std::max(tc.inPoint,  visStart);
+            float outS = std::min(tc.outPoint, visEnd);
+            if(tc.inPoint > visStart)
+                dl->AddRectFilled(wavPos, {smpToX(inS), wavPos.y + wavH}, IM_COL32(0,0,0,110));
+            if(tc.outPoint < visEnd)
+                dl->AddRectFilled({smpToX(outS), wavPos.y}, {wavPos.x + wavW, wavPos.y + wavH}, IM_COL32(0,0,0,110));
+        }
+
+        float inX  = smpToX(tc.inPoint);
+        float outX = smpToX(tc.outPoint);
+
+        // In marker (green) — only draw if visible
+        if(tc.inPoint >= visStart - 0.01f && tc.inPoint <= visEnd + 0.01f) {
+            dl->AddLine({inX, wavPos.y}, {inX, wavPos.y + wavH}, IM_COL32(80, 220, 100, 255), 2.0f);
+            dl->AddTriangleFilled({inX-5, wavPos.y}, {inX+5, wavPos.y}, {inX, wavPos.y+10},
+                                  IM_COL32(80, 220, 100, 255));
+        }
+        // Out marker (orange) — only draw if visible
+        if(tc.outPoint >= visStart - 0.01f && tc.outPoint <= visEnd + 0.01f) {
+            dl->AddLine({outX, wavPos.y}, {outX, wavPos.y + wavH}, IM_COL32(220, 140, 60, 255), 2.0f);
+            dl->AddTriangleFilled({outX-5, wavPos.y}, {outX+5, wavPos.y}, {outX, wavPos.y+10},
+                                  IM_COL32(220, 140, 60, 255));
+        }
+
+        // ── Drag interaction ─────────────────────────────────────────────────
+        if(wavActive) {
+            float norm = xToSmp(ImGui::GetIO().MousePos.x);
+
+            // Snap to grid (in sample space)
+            if(tc.wavGrid > 0) {
+                float bestDist = 1e9f;
+                for(int g = 0; g <= tc.wavGrid; g++) {
+                    float gn = (float)g / (float)tc.wavGrid;
+                    float d  = std::abs(norm - gn);
+                    if(d < bestDist) { bestDist = d; norm = gn; }
+                }
+            }
+
+            if(wavDragMode == WavDrag::None) {
+                float distIn  = std::abs(inX  - ImGui::GetIO().MousePos.x);
+                float distOut = std::abs(outX - ImGui::GetIO().MousePos.x);
+                wavDragMode   = (distIn <= distOut) ? WavDrag::In : WavDrag::Out;
+            }
+
+            bool changed = false;
+            if(wavDragMode == WavDrag::In) {
+                float newIn = std::min(norm, tc.outPoint - 0.01f);
+                if(newIn != tc.inPoint) { tc.inPoint = newIn; changed = true; }
+            } else {
+                float newOut = std::max(norm, tc.inPoint + 0.01f);
+                if(newOut != tc.outPoint) { tc.outPoint = newOut; changed = true; }
+            }
+            if(changed) {
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti]) {
+                        synths[ti]->set("inPoint",  tc.inPoint);
+                        synths[ti]->set("outPoint", tc.outPoint);
+                    }
+            }
+        } else {
+            wavDragMode = WavDrag::None;
+        }
+
+        if(wavHovered)
+            ImGui::SetTooltip("In: %.4f  Out: %.4f", tc.inPoint, tc.outPoint);
+
+        // ── Zoom buttons + scrollbar ──────────────────────────────────────────
+        {
+            if(ImGui::SmallButton("-##wavzm")) applyZoom(0.5f, 0.5f);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom out");
+            ImGui::SameLine(0, 2);
+            if(ImGui::SmallButton("+##wavzm")) applyZoom(2.0f, 0.5f);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom in");
+            ImGui::SameLine(0, 4);
+            char zoomLbl[16]; snprintf(zoomLbl, sizeof(zoomLbl), "x%.0f", zoom);
+            ImGui::TextDisabled("%s", zoomLbl);
+
+            if(zoom > 1.0f) {
+                ImGui::SameLine(0, 6);
+                float usedX  = ImGui::GetCursorScreenPos().x - wavPos.x;
+                float scrollW = std::max(20.0f, wavW - usedX);
+                ImVec2 sbPos = ImGui::GetCursorScreenPos();
+                ImGui::InvisibleButton("##wavscroll", {scrollW, sbH});
+                if(ImGui::IsItemActive()) {
+                    scroll += ImGui::GetIO().MouseDelta.x / scrollW;
+                    scroll = std::max(0.0f, std::min(1.0f, scroll));
+                }
+                dl->AddRectFilled(sbPos, {sbPos.x + scrollW, sbPos.y + sbH},
+                                  IM_COL32(22, 22, 28, 220), 3.0f);
+                float thumbW = std::max(16.0f, scrollW / zoom);
+                float thumbX = sbPos.x + scroll * (scrollW - thumbW);
+                dl->AddRectFilled({thumbX, sbPos.y + 1}, {thumbX + thumbW, sbPos.y + sbH - 1},
+                                  IM_COL32(90, 95, 120, 220), 3.0f);
+            }
+        }
+
+        // ── Controls row ─────────────────────────────────────────────────────
+        ImGui::Spacing();
+
+        // LOOP toggle
+        {
+            bool loop = tc.loopEnabled;
+            if(loop) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.55f, 0.25f, 1.0f));
+            if(windowControl(trackControlKey(ti, "loopEnabled"), [&](){ return ImGui::SmallButton(loop ? "LOOP ON" : "LOOP"); })) {
+                tc.loopEnabled = !tc.loopEnabled;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("loopSample", tc.loopEnabled ? 1.0f : 0.0f);
+            }
+            if(loop) ImGui::PopStyleColor();
+        }
+
+        // FIXDUR toggle
+        ImGui::SameLine(0, 8);
+        {
+            bool fix = tc.fixDuration;
+            if(fix) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.30f, 0.55f, 1.0f));
+            if(windowControl(trackControlKey(ti, "fixDuration"), [&](){ return ImGui::SmallButton(fix ? "FIXDUR ON" : "FIXDUR"); })) {
+                tc.fixDuration = !tc.fixDuration;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("fixDuration", tc.fixDuration ? 1.0f : 0.0f);
+            }
+            if(fix) ImGui::PopStyleColor();
+        }
+
+        // Beats DragFloat
+        ImGui::SameLine(0, 8);
+        ImGui::TextUnformatted("Beats:");
+        ImGui::SameLine(0, 4);
+        ImGui::SetNextItemWidth(64.0f);
+        float beats = tc.durationBeats;
+        if(windowControl(trackControlKey(ti, "durationBeats"), [&](){ return ImGui::DragFloat("##beats", &beats, 0.01f, 0.125f, 64.0f, "%.3f"); })) {
+            tc.durationBeats = std::max(beats, 0.125f);
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("durationBeats", tc.durationBeats);
+        }
+
+        // Grid DragInt
+        ImGui::SameLine(0, 8);
+        ImGui::TextUnformatted("Grid:");
+        ImGui::SameLine(0, 4);
+        ImGui::SetNextItemWidth(48.0f);
+        int wg = tc.wavGrid;
+        if(windowControl(trackControlKey(ti, "wavGrid"), [&](){ return ImGui::DragInt("##wavgrid", &wg, 0.1f, 0, 64, wg == 0 ? "off" : "%d"); }))
+            tc.wavGrid = std::max(wg, 0);
+
+        ImGui::Spacing();
+    }
+
+    // ── AMP tab (tab 6): ENV (left) | LFO (right) in a two-column layout ──────
+    // ── Typed source tab (replaces WAV for synth tracks, COMB for click) ────
+    if(td.activeTab == 5 && !isSampleTrack) {
+        ImGui::Spacing();
+        if(tc.type == TrackType::Kick) {
+            const float plotW = std::max(180.0f, ImGui::GetContentRegionAvail().x);
+            const float plotH = 82.0f;
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##kickenvplot", {plotW, plotH});
+            dl->AddRectFilled(p, {p.x + plotW, p.y + plotH}, IM_COL32(20,22,28,255), 4.f);
+            auto px = [&](float t) { return p.x + 8.f + t * (plotW - 16.f); };
+            auto py = [&](float note) { return p.y + plotH - 8.f - ofClamp((note - 12.f) / 115.f, 0.f, 1.f) * (plotH - 16.f); };
+            auto evalKickCurve = [](float t, float curve) {
+                if(std::fabs(curve) < 0.001f) return t;
+                return (float)(std::expm1((double)curve * t) / std::expm1((double)curve));
+            };
+            const float total = std::max(0.0002f, tc.kickPitchAttack + tc.kickPitchDecay);
+            const float attackPart = tc.kickPitchAttack / total;
+            constexpr int KICK_CURVE_POINTS = 48;
+            std::vector<ImVec2> pitchCurve;
+            pitchCurve.reserve(KICK_CURVE_POINTS * 2 - 1);
+            for(int i = 0; i < KICK_CURVE_POINTS; ++i) {
+                const float t = (float)i / (float)(KICK_CURVE_POINTS - 1);
+                const float shaped = evalKickCurve(t, tc.kickPitchCurve * -1.0f);
+                const float note = tc.kickEndNote
+                                 + (tc.kickStartNote - tc.kickEndNote) * shaped;
+                pitchCurve.push_back({px(t * attackPart), py(note)});
+            }
+            for(int i = 1; i < KICK_CURVE_POINTS; ++i) {
+                const float t = (float)i / (float)(KICK_CURVE_POINTS - 1);
+                const float shaped = evalKickCurve(t, tc.kickPitchCurve);
+                const float note = tc.kickStartNote
+                                 + (tc.kickEndNote - tc.kickStartNote) * shaped;
+                pitchCurve.push_back({px(attackPart + t * (1.0f - attackPart)), py(note)});
+            }
+            dl->AddPolyline(pitchCurve.data(), (int)pitchCurve.size(),
+                            IM_COL32(240,130,50,255), false, 2.f);
+            const ImVec2 peakPoint = {px(attackPart), py(tc.kickStartNote)};
+            dl->AddCircleFilled(peakPoint, 4.f, IM_COL32(255,220,150,255));
+            dl->AddText({p.x + 6, p.y + 5}, IM_COL32(170,175,185,255), "Pitch AD (steep curves are allowed)");
+            bool changed = false;
+            ImGui::TextUnformatted("Peak"); ImGui::SameLine(0,4); ImGui::SetNextItemWidth(72);
+            changed |= windowControl(trackControlKey(ti, "kickStartNote"), [&](){ return ImGui::DragFloat("##khi", &tc.kickStartNote, 1.f, 12.f, 127.f, "%.0f MIDI"); });
+            ImGui::SameLine(0,10); ImGui::TextUnformatted("End"); ImGui::SameLine(0,4); ImGui::SetNextItemWidth(72);
+            changed |= windowControl(trackControlKey(ti, "kickEndNote"), [&](){ return ImGui::DragFloat("##klo", &tc.kickEndNote, 1.f, 12.f, 127.f, "%.0f MIDI"); });
+            ImGui::SameLine(0,10); ImGui::TextUnformatted("A"); ImGui::SameLine(0,4); ImGui::SetNextItemWidth(70);
+            changed |= windowControl(trackControlKey(ti, "kickPitchAttack"), [&](){ return ImGui::DragFloat("##kat", &tc.kickPitchAttack, 0.0001f, 0.0001f, 1.f, "%.4fs"); });
+            ImGui::SameLine(0,10); ImGui::TextUnformatted("D"); ImGui::SameLine(0,4); ImGui::SetNextItemWidth(70);
+            changed |= windowControl(trackControlKey(ti, "kickPitchDecay"), [&](){ return ImGui::DragFloat("##kdec", &tc.kickPitchDecay, 0.001f, 0.0001f, 4.f, "%.3fs"); });
+            ImGui::SameLine(0,10); ImGui::TextUnformatted("Curve"); ImGui::SameLine(0,4); ImGui::SetNextItemWidth(70);
+            changed |= windowControl(trackControlKey(ti, "kickPitchCurve"), [&](){ return ImGui::DragFloat("##kcurve", &tc.kickPitchCurve, 0.25f, -40.f, 40.f, "%.1f"); });
+            const char* waveNames[] = { "PM sine", "Pulse" };
+            changed |= windowControl(trackControlKey(ti, "kickWaveType"), [&](){ return ImGui::Combo("Wave##kwave", &tc.kickWaveType, waveNames, 2); });
+            ImGui::SameLine(0,10); ImGui::TextUnformatted("PM index"); ImGui::SameLine(0,4); ImGui::SetNextItemWidth(80);
+            changed |= windowControl(trackControlKey(ti, "kickPMIndex"), [&](){ return ImGui::DragFloat("##kpmi", &tc.kickPMIndex, 0.1f, 0.f, 64.f, "%.2f"); });
+            if(changed) sendTypedConfigToAll(ti);
+        } else if(tc.type == TrackType::Noise) {
+            const char* noiseNames[] = { "White", "Pink", "Crackle", "Dust" };
+            bool changed = windowControl(trackControlKey(ti, "noiseType"), [&](){ return ImGui::Combo("Noise", &tc.noiseType, noiseNames, 4); });
+            ImGui::SameLine(0, 12); ImGui::TextUnformatted("Density"); ImGui::SameLine(0,4); ImGui::SetNextItemWidth(130);
+            changed |= windowControl(trackControlKey(ti, "noiseDensity"), [&](){ return ImGui::SliderFloat("##noisedensity", &tc.noiseDensity, 0.f, 1.f, "%.2f"); });
+            ImGui::TextDisabled("Use AMP for the ADSR envelope and FLT for LP/HP/BP + loop randomization.");
+            if(changed) sendTypedConfigToAll(ti);
+        } else if(tc.type == TrackType::Snare) {
+            bool changed = false;
+            ImGui::TextUnformatted("Tone"); ImGui::SameLine(0,4); ImGui::SetNextItemWidth(80);
+            changed |= windowControl(trackControlKey(ti, "snareToneNote"), [&](){ return ImGui::DragFloat("##sntone", &tc.snareToneNote, 1.f, 24.f, 96.f, "%.0f MIDI"); });
+            ImGui::SameLine(0,10); ImGui::TextUnformatted("Tone rel"); ImGui::SameLine(0,4); ImGui::SetNextItemWidth(75);
+            changed |= windowControl(trackControlKey(ti, "snareToneDecay"), [&](){ return ImGui::DragFloat("##sntrel", &tc.snareToneDecay, .005f, .01f, 2.f, "%.3fs"); });
+            ImGui::SameLine(0,10); ImGui::TextUnformatted("Noise Hz"); ImGui::SameLine(0,4); ImGui::SetNextItemWidth(80);
+            changed |= windowControl(trackControlKey(ti, "snareNoiseFreq"), [&](){ return ImGui::DragFloat("##snnfreq", &tc.snareNoiseFreq, 10.f, 100.f, 10000.f, "%.0f"); });
+            // Keep both level controls inside the card even when the tracks
+            // pane is narrow. Visible labels sit above full-cell sliders so
+            // their text cannot extend the second slider past the panel edge.
+            if(ImGui::BeginTable("##snarelevels", 2, ImGuiTableFlags_None)) {
+                ImGui::TableSetupColumn("##snaretonelevelcol", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                ImGui::TableSetupColumn("##snarenoiselevelcol", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("Tone level");
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                changed |= windowControl(trackControlKey(ti, "snareToneLevel"), [&](){ return ImGui::SliderFloat("##sntonelevel", &tc.snareToneLevel, 0.f, 1.f); });
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted("Noise level");
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                changed |= windowControl(trackControlKey(ti, "snareNoiseLevel"), [&](){ return ImGui::SliderFloat("##snnoiselevel", &tc.snareNoiseLevel, 0.f, 2.f); });
+                ImGui::EndTable();
+            }
+            if(changed) sendTypedConfigToAll(ti);
+            td.stepHiRel.resize(MAX_STEPS, .725f);
+            ImGui::TextDisabled("HI REL per step");
+            bool stepsChanged = false;
+            for(int si = 0; si < ns; ++si) { if(si) ImGui::SameLine(0, STEP_GAP); int i = ((si - td.shift) % ns + ns) % ns;
+                ImGui::PushID(si); stepsChanged |= ImGui::VSliderFloat("##hirel", {sw, PARAM_H}, &td.stepHiRel[i], .01f, 2.f, ""); stepMenu(ti, "stepHiRel", i); ImGui::PopID(); }
+            if(stepsChanged) fireStepParams(ti);
+        } else if(tc.type == TrackType::Click) {
+            td.stepCombPitch.resize(MAX_STEPS, 0.f);
+            td.stepCombDecay.resize(MAX_STEPS, 0.f);
+            ImGui::TextDisabled("COMB is before the filter. Decay 0 bypasses it.");
+            bool changed = false;
+            bool configChanged = false;
+            ImGui::TextUnformatted("Octave");
+            ImGui::SameLine(0, 4);
+            ImGui::SetNextItemWidth(64.0f);
+            if(windowControl(trackControlKey(ti, "clickCombOctave"), [&](){ return ImGui::DragInt("##comboct", &tc.clickCombOctave, 0.1f, 0, 10, "%d"); })) {
+                tc.clickCombOctave = ofClamp(tc.clickCombOctave, 0, 10);
+                configChanged = true;
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Global comb register. Final pitch is octave * 12 + step semitone.");
+            ImGui::Spacing();
+            auto row = [&](const char* label, std::vector<float>& values, float lo, float hi, bool integer) {
+                ImGui::TextUnformatted(label);
+                for(int si = 0; si < ns; ++si) { if(si) ImGui::SameLine(0, STEP_GAP); int i = ((si - td.shift) % ns + ns) % ns;
+                    ImGui::PushID((int)label[0] * 100 + si);
+                    if(ImGui::VSliderFloat("##comb", {sw, PARAM_H}, &values[i], lo, hi, "")) { if(integer) values[i] = std::round(values[i]); changed = true; }
+                    stepMenu(ti, integer ? "stepCombPitch" : "stepCombDecay", i);
+                    if(integer) {
+                        values[i] = ofClamp(std::round(values[i]), lo, hi);
+                        char valueLabel[8];
+                        snprintf(valueLabel, sizeof(valueLabel), "%.0f", values[i]);
+                        ImVec2 rmin = ImGui::GetItemRectMin();
+                        ImVec2 rmax = ImGui::GetItemRectMax();
+                        ImVec2 ts = ImGui::CalcTextSize(valueLabel);
+                        dl->AddText({rmin.x + (rmax.x - rmin.x - ts.x) * 0.5f,
+                                     rmin.y + (rmax.y - rmin.y - ts.y) * 0.5f},
+                                    IM_COL32(245, 245, 245, 230), valueLabel);
+                    }
+                    ImGui::PopID(); }
+                ImGui::Spacing();
+            };
+            row("PITCH", td.stepCombPitch, 0.f, 12.f, true);
+            row("DECAY", td.stepCombDecay, 0.f, 10.f, false);
+            if(configChanged) sendTypedConfigToAll(ti);
+            if(changed) fireStepParams(ti);
+        }
+        ImGui::Spacing();
+    }
+
+    if(td.activeTab == 6 && tc.type != TrackType::Click) {
+        ImGui::Spacing();
+
+        const float colGap  = 10.0f;
+        const float totalW  = ImGui::GetContentRegionAvail().x;
+        const float halfW   = (totalW - colGap) * 0.5f;
+        const float panelH  = 64.0f;
+        const float drgW    = std::max((halfW - 3*(ImGui::CalcTextSize("A").x + 4.0f) - 2*8.0f) / 3.0f, 34.0f);
+
+        // SC-compatible curve interpolation: (exp(c*t)-1)/(exp(c)-1), fallback linear
+        auto evalCurve = [](float t, float c) -> float {
+            if(std::fabs(c) < 0.001f) return t;
+            return (std::exp(c * t) - 1.0f) / (std::exp(c) - 1.0f);
+        };
+
+        if(ImGui::BeginTable("##ampcols", 2, ImGuiTableFlags_None, ImVec2(totalW, 0))) {
+            ImGui::TableSetupColumn("##envcol", ImGuiTableColumnFlags_WidthFixed, halfW);
+            ImGui::TableSetupColumn("##lfocol",  ImGuiTableColumnFlags_WidthFixed, halfW);
+
+            // ── Row 1: toggles ────────────────────────────────────────────────
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            {
+                bool en = tc.envEnabled;
+                if(en) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.45f, 0.15f, 1.0f));
+                if(windowControl(trackControlKey(ti, "envEnabled"), [&](){ return ImGui::SmallButton(en ? "ENV ON##amp" : "ENV OFF##amp"); })) {
+                    tc.envEnabled = !tc.envEnabled;
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti])
+                            synths[ti]->set("envEnabled", tc.envEnabled ? 1.0f : 0.0f);
+                }
+                if(en) ImGui::PopStyleColor();
+            }
+            ImGui::TableSetColumnIndex(1);
+            {
+                bool le = tc.lfoEnabled;
+                if(le) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.45f, 0.65f, 1.0f));
+                if(windowControl(trackControlKey(ti, "lfoEnabled"), [&](){ return ImGui::SmallButton(le ? "LFO ON##amp" : "LFO OFF##amp"); })) {
+                    tc.lfoEnabled = !tc.lfoEnabled;
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti])
+                            synths[ti]->set("lfoEnabled", tc.lfoEnabled ? 1.0f : 0.0f);
+                }
+                if(le) ImGui::PopStyleColor();
+            }
+
+            // ── Row 2: canvases ───────────────────────────────────────────────
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            {
+                ImVec2 ep = ImGui::GetCursorScreenPos();
+                ImGui::Dummy(ImVec2(halfW, panelH));
+                dl->AddRectFilled(ep, {ep.x + halfW, ep.y + panelH}, IM_COL32(28, 28, 28, 255));
+
+                float tH = tc.envHoldSteps * (60.0f / std::max(currentBpm, 0.001f)
+                                              / std::max(tc.stepsPerBeat, 1));
+                float yT = ep.y + 6.0f, yB = ep.y + panelH - 6.0f;
+
+                ImU32 envFill = tc.envEnabled ? IM_COL32(180,130,50,55) : IM_COL32(80,80,80,35);
+                ImU32 envLine = tc.envEnabled ? IM_COL32(220,170,70,230) : IM_COL32(110,110,110,160);
+                constexpr int CN = 20;
+                std::vector<ImVec2> outline;
+                auto drawLbl = [&](float xa, float xb, const char* l) {
+                    float cx = (xa+xb)*0.5f; ImVec2 ts = ImGui::CalcTextSize(l);
+                    if(xb-xa > ts.x+4) dl->AddText({cx-ts.x*0.5f, ep.y+4}, IM_COL32(180,180,180,200), l);
+                };
+
+                if(tc.type == TrackType::Noise) {
+                    const float totalEnv = std::max(tc.envAttack + tc.envDecay + tH
+                                                    + tc.envRelease, 0.001f);
+                    const float x0 = ep.x;
+                    const float x1 = x0 + (tc.envAttack / totalEnv) * halfW;
+                    const float x2 = x1 + (tc.envDecay / totalEnv) * halfW;
+                    const float x3 = x2 + (tH / totalEnv) * halfW;
+                    const float x4 = ep.x + halfW;
+                    const float yS = yB + (yT - yB) * tc.envSustain;
+                    for(int i = 0; i < CN; ++i) {
+                        const float t = (float)i / (float)(CN - 1);
+                        const float ct = evalCurve(t, tc.envCurveA);
+                        outline.push_back({x0 + (x1 - x0) * t, yB + (yT - yB) * ct});
+                    }
+                    for(int i = 1; i < CN; ++i) {
+                        const float t = (float)i / (float)(CN - 1);
+                        const float ct = evalCurve(t, tc.envCurveD);
+                        outline.push_back({x1 + (x2 - x1) * t, yT + (yS - yT) * ct});
+                    }
+                    outline.push_back({x3, yS});
+                    for(int i = 1; i < CN; ++i) {
+                        const float t = (float)i / (float)(CN - 1);
+                        const float ct = evalCurve(t, tc.envCurveD);
+                        outline.push_back({x3 + (x4 - x3) * t, yS + (yB - yS) * ct});
+                    }
+                    for(float marker : {x1, x2, x3})
+                        dl->AddLine({marker, ep.y}, {marker, ep.y + panelH}, IM_COL32(90,90,90,100));
+                    drawLbl(x0,x1,"A"); drawLbl(x1,x2,"D");
+                    drawLbl(x2,x3,"H"); drawLbl(x3,x4,"R");
+                } else {
+                    const float totalEnv = std::max(tc.envAttack + tH + tc.envDecay, 0.001f);
+                    const float x0 = ep.x;
+                    const float x1 = x0 + (tc.envAttack / totalEnv) * halfW;
+                    const float x2 = x1 + (tH / totalEnv) * halfW;
+                    const float x3 = ep.x + halfW;
+                    for(int i = 0; i < CN; ++i) {
+                        const float t = (float)i / (float)(CN - 1);
+                        const float ct = evalCurve(t, tc.envCurveA);
+                        outline.push_back({x0 + (x1 - x0) * t, yB + (yT - yB) * ct});
+                    }
+                    outline.push_back({x2, yT});
+                    for(int i = 1; i < CN; ++i) {
+                        const float t = (float)i / (float)(CN - 1);
+                        const float ct = evalCurve(t, tc.envCurveD);
+                        outline.push_back({x2 + (x3 - x2) * t, yT + (yB - yT) * ct});
+                    }
+                    std::vector<ImVec2> fillPoints = outline;
+                    fillPoints.push_back({x0, yB});
+                    dl->AddConvexPolyFilled(fillPoints.data(), (int)fillPoints.size(), envFill);
+                    for(float marker : {x1, x2})
+                        dl->AddLine({marker, ep.y}, {marker, ep.y + panelH}, IM_COL32(90,90,90,100));
+                    drawLbl(x0,x1,"A"); drawLbl(x1,x2,"H"); drawLbl(x2,x3,"D");
+                }
+                dl->AddPolyline(outline.data(), (int)outline.size(), envLine, false, 2.0f);
+                dl->AddRect(ep, {ep.x+halfW, ep.y+panelH}, IM_COL32(70,70,70,200));
+            }
+            ImGui::TableSetColumnIndex(1);
+            {
+                ImVec2 lp = ImGui::GetCursorScreenPos();
+                ImGui::Dummy(ImVec2(halfW, panelH));
+                dl->AddRectFilled(lp, {lp.x+halfW, lp.y+panelH}, IM_COL32(22, 22, 22, 255));
+
+                ImU32 lfoLine = tc.lfoEnabled ? IM_COL32(60,160,230,230) : IM_COL32(90,90,90,160);
+                ImU32 lfoFill = tc.lfoEnabled ? IM_COL32(40,110,180,50)  : IM_COL32(60,60,60,30);
+
+                constexpr int LFO_PTS = 128;
+                std::vector<ImVec2> lfopts; lfopts.reserve(LFO_PTS);
+                float yT = lp.y+4.0f, yB = lp.y+panelH-4.0f;
+                for(int i = 0; i < LFO_PTS; i++) {
+                    float t = float(i)/float(LFO_PTS-1), y01;
+                    switch(tc.lfoShape) {
+                        case 1:  y01 = (t < tc.lfoPulseWidth) ? 1.0f : 0.0f; break;
+                        case 2:  y01 = t; break;
+                        case 3:  y01 = 1.0f - t; break;
+                        default: y01 = std::sin(t*2.0f*float(M_PI))*0.5f+0.5f; break;
+                    }
+                    lfopts.push_back({lp.x + t*halfW, yB+(yT-yB)*y01});
+                }
+                std::vector<ImVec2> lf = lfopts;
+                lf.insert(lf.begin(), {lp.x, yB}); lf.push_back({lp.x+halfW, yB});
+                dl->AddConvexPolyFilled(lf.data(), (int)lf.size(), lfoFill);
+                dl->AddPolyline(lfopts.data(), (int)lfopts.size(), lfoLine, false, 1.5f);
+                float phX = lp.x + tc.lfoPhase * halfW;
+                dl->AddLine({phX, lp.y}, {phX, lp.y+panelH}, IM_COL32(255,220,60,180), 1.0f);
+                dl->AddRect(lp, {lp.x+halfW, lp.y+panelH}, IM_COL32(60,60,60,200));
+            }
+
+            // ── Row 3: controls ───────────────────────────────────────────────
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            {
+                // A / H (tempo-synced steps) / D
+                bool envChanged = false;
+                ImGui::TextUnformatted("A"); ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(drgW);
+                envChanged |= windowControl(trackControlKey(ti, "envAttack"), [&](){ return ImGui::DragFloat("##envA", &tc.envAttack,
+                                                0.001f, 0.0f, 8.0f, "%.3fs"); });
+                ImGui::SameLine(0, 8);
+                ImGui::TextUnformatted("H"); ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(drgW);
+                envChanged |= windowControl(trackControlKey(ti, "envHoldSteps"), [&](){ return ImGui::DragInt("##envHsteps", &tc.envHoldSteps,
+                                              0.25f, 0, MAX_STEPS, "%d st"); });
+                ImGui::SameLine(0, 8);
+                ImGui::TextUnformatted("D"); ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(drgW);
+                envChanged |= windowControl(trackControlKey(ti, "envDecay"), [&](){ return ImGui::DragFloat("##envD", &tc.envDecay,
+                                                0.001f, 0.001f, 8.0f, "%.2fs"); });
+                if(envChanged) {
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti]) {
+                            synths[ti]->set("envAttack", tc.envAttack);
+                            synths[ti]->set("envHoldSteps", (float)tc.envHoldSteps);
+                            synths[ti]->set("envDecay",  tc.envDecay);
+                        }
+                }
+                ImGui::Spacing();
+                // ~A / ~D curve tension
+                bool curveChanged = false;
+                ImGui::TextUnformatted("~A"); ImGui::SameLine(0,4);
+                ImGui::SetNextItemWidth(drgW);
+                if(windowControl(trackControlKey(ti, "envCurveA"), [&](){ return ImGui::DragFloat("##crvA", &tc.envCurveA, 0.05f, -8.0f, 8.0f, "%.2f"); })) curveChanged = true;
+                ImGui::SameLine(0, 8);
+                ImGui::TextUnformatted("~D"); ImGui::SameLine(0,4);
+                ImGui::SetNextItemWidth(drgW);
+                if(windowControl(trackControlKey(ti, "envCurveD"), [&](){ return ImGui::DragFloat("##crvD", &tc.envCurveD, 0.05f, -8.0f, 8.0f, "%.2f"); })) curveChanged = true;
+                if(curveChanged) {
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti]) {
+                            synths[ti]->set("envCurveA", tc.envCurveA);
+                            synths[ti]->set("envCurveD", tc.envCurveD);
+                        }
+                }
+            }
+            ImGui::TableSetColumnIndex(1);
+            {
+                // Shape + optional PW
+                {
+                    const char* shapes[] = { "Sin", "Square", "Saw", "InvSaw" };
+                    int sh = tc.lfoShape;
+                    ImGui::SetNextItemWidth(halfW * 0.45f);
+                    if(windowControl(trackControlKey(ti, "lfoShape"), [&](){ return ImGui::Combo("##lfoshape", &sh, shapes, 4); })) {
+                        tc.lfoShape = sh;
+                        for(auto& [srv, synths] : trackSynths)
+                            if(ti < (int)synths.size() && synths[ti])
+                                synths[ti]->set("lfoShape", (float)tc.lfoShape);
+                    }
+                }
+                if(tc.lfoShape == 1) {
+                    ImGui::SameLine(0, 6);
+                    ImGui::TextUnformatted("PW"); ImGui::SameLine(0,4);
+                    ImGui::SetNextItemWidth(drgW);
+                    if(windowControl(trackControlKey(ti, "lfoPulseWidth"), [&](){ return ImGui::DragFloat("##lfopw", &tc.lfoPulseWidth, 0.01f, 0.01f, 0.99f, "%.2f"); })) {
+                        for(auto& [srv, synths] : trackSynths)
+                            if(ti < (int)synths.size() && synths[ti])
+                                synths[ti]->set("lfoPulseWidth", tc.lfoPulseWidth);
+                    }
+                }
+                ImGui::Spacing();
+                // Rate / Depth / Phase
+                bool lfoChanged = false;
+                ImGui::TextUnformatted("Rt"); ImGui::SameLine(0,4);
+                ImGui::SetNextItemWidth(drgW);
+                if(windowControl(trackControlKey(ti, "lfoRate"), [&](){ return ImGui::DragFloat("##lforate",  &tc.lfoRate,  0.01f, 0.0625f, 64.0f, "%.2fbt"); })) lfoChanged = true;
+                ImGui::SameLine(0,8);
+                ImGui::TextUnformatted("Dp"); ImGui::SameLine(0,4);
+                ImGui::SetNextItemWidth(drgW);
+                if(windowControl(trackControlKey(ti, "lfoDepth"), [&](){ return ImGui::DragFloat("##lfodepth", &tc.lfoDepth, 0.01f, 0.0f,   1.0f,  "%.2f"); }))   lfoChanged = true;
+                ImGui::SameLine(0,8);
+                ImGui::TextUnformatted("Ph"); ImGui::SameLine(0,4);
+                ImGui::SetNextItemWidth(drgW);
+                if(windowControl(trackControlKey(ti, "lfoPhase"), [&](){ return ImGui::DragFloat("##lfophase", &tc.lfoPhase, 0.01f, 0.0f,   1.0f,  "%.2f"); }))   lfoChanged = true;
+                if(lfoChanged) {
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti]) {
+                            synths[ti]->set("lfoRate",  tc.lfoRate);
+                            synths[ti]->set("lfoDepth", tc.lfoDepth);
+                            synths[ti]->set("lfoPhase", tc.lfoPhase);
+                        }
+                }
+            }
+
+            ImGui::EndTable();
+        }
+
+        if(tc.type == TrackType::Noise) {
+            bool adsrChanged = false;
+            ImGui::TextUnformatted("ADSR:"); ImGui::SameLine(0, 6);
+            ImGui::TextUnformatted("S"); ImGui::SameLine(0, 3); ImGui::SetNextItemWidth(72);
+            adsrChanged |= windowControl(trackControlKey(ti, "envSustain"), [&](){ return ImGui::DragFloat("##noiseS", &tc.envSustain, .01f, 0.f, 1.f, "%.2f"); });
+            ImGui::SameLine(0, 10); ImGui::TextUnformatted("R"); ImGui::SameLine(0, 3); ImGui::SetNextItemWidth(80);
+            adsrChanged |= windowControl(trackControlKey(ti, "envRelease"), [&](){ return ImGui::DragFloat("##noiseR", &tc.envRelease, .005f, .0001f, 8.f, "%.3fs"); });
+            if(adsrChanged) sendTypedConfigToAll(ti);
+        }
+        
+        // ── Decay Time Slider Sequencer ──────────────────────────────────────────
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Ensure stepDecayOffset is properly sized
+        td.stepDecayOffset.resize(ns, 0.0f);
+        
+        // Header with decayRange parameter
+        ImGui::TextUnformatted("Decay Time Modulation");
+        ImGui::SameLine(0, 16);
+        ImGui::TextUnformatted("Range:");
+        ImGui::SameLine(0, 4);
+        ImGui::SetNextItemWidth(80.0f);
+        bool decayRangeChanged = false;
+        if(windowControl(trackControlKey(ti, "decayRange"), [&](){ return ImGui::DragFloat("##decayRange", &tc.decayRange, 0.01f, 0.0f, 5.0f, "%.2fs"); })) {
+            tc.decayRange = std::max(tc.decayRange, 0.0f);
+            decayRangeChanged = true;
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Maximum decay time offset range (±%.2fs)\n-1 = decay - %.2fs, +1 = decay + %.2fs",
+                              tc.decayRange, tc.decayRange, tc.decayRange);
+        
+        if(decayRangeChanged) {
+            for(auto& [srv, synths] : trackSynths)
+                if(ti < (int)synths.size() && synths[ti])
+                    synths[ti]->set("decayRange", tc.decayRange);
+        }
+        
+        ImGui::Spacing();
+        
+        // Per-step decay offset sliders (similar to CUT tab implementation)
+        bool decaySliderChanged = false;
+        
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+            int pai = ((si - td.shift) % ns + ns) % ns;
+            float& val = td.stepDecayOffset[pai];
+            
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            std::string sid = "##decay" + std::to_string(si);
+            ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, PARAM_H));
+            stepMenu(ti, "stepDecayOffset", pai);
+            
+            // Click+drag to set value — paints any column the mouse X overlaps.
+            bool mouseDown = ImGui::IsMouseDown(0);
+            if(ImGui::IsItemActive() && sliderPaintTrack == -1)
+                sliderPaintTrack = ti;
+            if(sliderPaintTrack == ti && mouseDown) {
+                float mouseX = ImGui::GetIO().MousePos.x;
+                float mouseY = ImGui::GetIO().MousePos.y;
+                if(mouseX >= pos.x && mouseX < pos.x + sw) {
+                    float t = 1.0f - ofClamp((mouseY - pos.y) / PARAM_H, 0.0f, 1.0f);
+                    val = -1.0f + t * 2.0f; // Map to -1..1 range
+                    decaySliderChanged = true;
+                }
+            }
+
+            
+            // Background: beat-group off-color; playhead column = golden yellow
+            int  slBeatGroup = (si / tc.stepsPerBeat) % 2;
+            bool slIsPlayhead = (si == visualPlayhead);
+            ImVec4 bgCol4 = slIsPlayhead ? playheadCol : beatPalette[slBeatGroup].off;
+            ImU32  bgCol  = ImGui::ColorConvertFloat4ToU32(bgCol4);
+            ImVec2 bmax   = ImVec2(pos.x + sw, pos.y + PARAM_H);
+            dl->AddRectFilled(pos, bmax, bgCol, STEP_ROUND);
+            // White top bar on playhead column (same as step buttons)
+            if(slIsPlayhead)
+                dl->AddRectFilled(pos, ImVec2(bmax.x, pos.y + 3.0f),
+                                  IM_COL32(255, 255, 255, 220), STEP_ROUND);
+            
+            // Draw bar (bipolar, centered at 0)
+            float t = (val + 1.0f) * 0.5f; // Convert -1..1 to 0..1
+            ImU32 barCol = slIsPlayhead
+                           ? IM_COL32(255, 255, 255, 180)   // white bar on playhead
+                           : ImGui::ColorConvertFloat4ToU32(beatPalette[slBeatGroup].on);
+            
+            // Bipolar bar drawing (centered at middle)
+            float midY  = pos.y + PARAM_H * 0.5f;
+            float valY  = pos.y + PARAM_H * (1.0f - t);
+            float top   = std::min(valY, midY);
+            float bot   = std::max(valY, midY);
+            if(bot > top + 0.5f)
+                dl->AddRectFilled(ImVec2(pos.x + 1, top),
+                                  ImVec2(pos.x + sw - 1, bot), barCol);
+            // Center line (= 0 offset)
+            dl->AddLine(ImVec2(pos.x, midY), ImVec2(pos.x + sw, midY),
+                        IM_COL32(100, 100, 100, 120));
+        }
+        
+        if(decaySliderChanged) sendStepDataToAll(ti);
+        
+        ImGui::Spacing();
+    }
+
+    // ── EQ tab (tab 7) ───────────────────────────────────────────────────────
+    if(td.activeTab == 7) {
+        ImGui::Spacing();
+
+        // Enable toggle
+        {
+            bool en = tc.eqEnabled;
+            if(en) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.55f, 0.30f, 1.0f));
+            if(windowControl(trackControlKey(ti, "eqEnabled"), [&](){ return ImGui::SmallButton(en ? "EQ ON" : "EQ OFF"); })) {
+                tc.eqEnabled = !tc.eqEnabled;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("eqEnabled", tc.eqEnabled ? 1.0f : 0.0f);
+            }
+            if(en) ImGui::PopStyleColor();
+        }
+
+        // ── Frequency response curve ─────────────────────────────────────────
+        ImGui::Spacing();
+        float eqW = std::max(ImGui::GetContentRegionAvail().x, 180.0f);
+        const float eqH = 64.0f;
+        ImVec2 eqPos = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(ImVec2(eqW, eqH));
+
+        dl->AddRectFilled(eqPos, ImVec2(eqPos.x + eqW, eqPos.y + eqH),
+                          IM_COL32(22, 22, 22, 255));
+
+        // Biquad helpers — all as lambdas
+        struct Bq { float b0, b1, b2, a1, a2; };
+        auto evalBq = [](const Bq& q, float f, float SR) -> float {
+            float w  = 2.0f * (float)M_PI * f / SR;
+            float cw = cosf(w), c2w = cosf(2*w);
+            float sw = sinf(w), s2w = sinf(2*w);
+            float nr = q.b0 + q.b1*cw + q.b2*c2w;
+            float ni = q.b1*sw + q.b2*s2w;
+            float dr = 1.0f + q.a1*cw + q.a2*c2w;
+            float di = q.a1*sw + q.a2*s2w;
+            return sqrtf(std::max((nr*nr + ni*ni) / std::max(dr*dr + di*di, 1e-20f), 1e-20f));
+        };
+        float eqSampleRate = (float)scPreferences().hardwareSampleRate;
+        if(!allServers.empty() && allServers.front() != nullptr) {
+            eqSampleRate = (float)allServers.front()->getSampleRate();
+        }
+        float hpFreq = std::max(tc.eqHPFreq, 20.0f);
+        float hpQ    = std::max(tc.eqHPQ,    0.01f);
+        {
+            float w0 = 2.0f*(float)M_PI*hpFreq/eqSampleRate, cw = cosf(w0), sw_ = sinf(w0);
+            float alpha = sw_ / (2.0f * hpQ), a0 = 1.0f + alpha;
+            Bq hpBq = {(1+cw)*0.5f/a0, -(1+cw)/a0, (1+cw)*0.5f/a0, -2*cw/a0, (1-alpha)/a0};
+
+            float pkFreq = std::max(tc.eqPeakFreq, 20.0f);
+            float pkQ    = std::max(tc.eqPeakQ,    0.1f);
+            float A = powf(10.0f, tc.eqPeakGain / 40.0f);
+            float w0p = 2.0f*(float)M_PI*pkFreq/eqSampleRate, cwp = cosf(w0p), swp = sinf(w0p);
+            float alphap = swp / (2.0f * pkQ), a0p = 1.0f + alphap / A;
+            Bq pkBq = {(1+alphap*A)/a0p, -2*cwp/a0p, (1-alphap*A)/a0p, -2*cwp/a0p, (1-alphap/A)/a0p};
+
+            float lpFreq = std::max(tc.eqLPFreq, 20.0f);
+            float lpQ    = std::max(tc.eqLPQ,    0.01f);
+            float w0l = 2.0f*(float)M_PI*lpFreq/eqSampleRate, cwl = cosf(w0l), swl = sinf(w0l);
+            float alphal = swl / (2.0f * lpQ), a0l = 1.0f + alphal;
+            Bq lpBq = {(1-cwl)*0.5f/a0l, (1-cwl)/a0l, (1-cwl)*0.5f/a0l, -2*cwl/a0l, (1-alphal)/a0l};
+
+            constexpr int EQ_PTS  = 200;
+            constexpr float FMIN  = 20.0f, FMAX = 20000.0f;
+            constexpr float DB_RANGE = 18.0f;
+            float midY = eqPos.y + eqH * 0.5f;
+
+            // 0 dB grid line
+            dl->AddLine(ImVec2(eqPos.x, midY), ImVec2(eqPos.x + eqW, midY),
+                        IM_COL32(60, 60, 60, 150));
+
+            // Frequency grid lines at 100, 1k, 10kHz
+            for(float fg : {100.0f, 1000.0f, 10000.0f}) {
+                float gx = eqPos.x + logf(fg/FMIN) / logf(FMAX/FMIN) * eqW;
+                dl->AddLine(ImVec2(gx, eqPos.y), ImVec2(gx, eqPos.y + eqH),
+                            IM_COL32(50, 50, 50, 120));
+            }
+
+            // Draw curve
+            std::vector<ImVec2> pts;
+            pts.reserve(EQ_PTS);
+            for(int pi = 0; pi < EQ_PTS; pi++) {
+                float t  = (float)pi / (EQ_PTS - 1);
+                float f  = FMIN * powf(FMAX / FMIN, t);
+                float db = 20.0f * log10f(
+                    std::max(evalBq(hpBq, f, eqSampleRate) * evalBq(pkBq, f, eqSampleRate) * evalBq(lpBq, f, eqSampleRate),
+                             1e-6f));
+                db = ofClamp(db, -DB_RANGE, DB_RANGE);
+                float x = eqPos.x + t * eqW;
+                float y = midY - (db / DB_RANGE) * (eqH * 0.5f - 4.0f);
+                pts.push_back({x, y});
+            }
+            ImU32 curveCol = tc.eqEnabled
+                             ? IM_COL32(100, 210, 120, 230)
+                             : IM_COL32(100, 100, 100, 150);
+            dl->AddPolyline(pts.data(), (int)pts.size(), curveCol, false, 2.0f);
+        }
+        dl->AddRect(eqPos, ImVec2(eqPos.x + eqW, eqPos.y + eqH),
+                    IM_COL32(70, 70, 70, 200));
+
+        // ── Controls ─────────────────────────────────────────────────────────
+        ImGui::Spacing();
+        bool eqChanged = false;
+
+        // HP band
+        ImGui::TextUnformatted("HP:");
+        ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(80.0f);
+        if(windowControl(trackControlKey(ti, "eqHPFreq"), [&](){ return ImGui::DragFloat("##hpf", &tc.eqHPFreq, 5.0f, 20.0f, 18000.0f, "%.0f Hz"); })) eqChanged = true;
+        ImGui::SameLine(0, 8); ImGui::TextUnformatted("Q:");
+        ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(60.0f);
+        if(windowControl(trackControlKey(ti, "eqHPQ"), [&](){ return ImGui::DragFloat("##hpq", &tc.eqHPQ, 0.01f, 0.1f, 4.0f, "%.2f"); })) eqChanged = true;
+
+        // Peak band
+        ImGui::SameLine(0, 16); ImGui::TextUnformatted("PK:");
+        ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(80.0f);
+        if(windowControl(trackControlKey(ti, "eqPeakFreq"), [&](){ return ImGui::DragFloat("##pkf", &tc.eqPeakFreq, 5.0f, 20.0f, 20000.0f, "%.0f Hz"); })) eqChanged = true;
+        ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(60.0f);
+        if(windowControl(trackControlKey(ti, "eqPeakGain"), [&](){ return ImGui::DragFloat("##pkg", &tc.eqPeakGain, 0.2f, -24.0f, 24.0f, "%.1f dB"); })) eqChanged = true;
+        ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(60.0f);
+        if(windowControl(trackControlKey(ti, "eqPeakQ"), [&](){ return ImGui::DragFloat("##pkq", &tc.eqPeakQ, 0.05f, 0.1f, 8.0f, "Q%.2f"); })) eqChanged = true;
+
+        // LP band
+        ImGui::SameLine(0, 16); ImGui::TextUnformatted("LP:");
+        ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(80.0f);
+        if(windowControl(trackControlKey(ti, "eqLPFreq"), [&](){ return ImGui::DragFloat("##lpf", &tc.eqLPFreq, 20.0f, 200.0f, 20000.0f, "%.0f Hz"); })) eqChanged = true;
+        ImGui::SameLine(0, 8); ImGui::TextUnformatted("Q:");
+        ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(60.0f);
+        if(windowControl(trackControlKey(ti, "eqLPQ"), [&](){ return ImGui::DragFloat("##lpq", &tc.eqLPQ, 0.01f, 0.1f, 4.0f, "%.2f"); })) eqChanged = true;
+
+        if(eqChanged) {
+            for(auto& [srv, synths] : trackSynths) {
+                if(ti < (int)synths.size() && synths[ti]) {
+                    synths[ti]->set("eqEnabled",  tc.eqEnabled  ? 1.0f : 0.0f);
+                    synths[ti]->set("eqHPFreq",   tc.eqHPFreq);
+                    synths[ti]->set("eqHPRq",     1.0f / std::max(tc.eqHPQ,   0.01f));
+                    synths[ti]->set("eqPeakFreq", tc.eqPeakFreq);
+                    synths[ti]->set("eqPeakGain", tc.eqPeakGain);
+                    synths[ti]->set("eqPeakRq",   1.0f / std::max(tc.eqPeakQ, 0.01f));
+                    synths[ti]->set("eqLPFreq",   tc.eqLPFreq);
+                    synths[ti]->set("eqLPRq",     1.0f / std::max(tc.eqLPQ,   0.01f));
+                }
+            }
+        }
+
+        ImGui::Spacing();
+    }
+
+    // ── EUC tab (tab 8) ──────────────────────────────────────────────────────
+    if(td.activeTab == 8) {
+        ImGui::Spacing();
+
+        // Clamp euclSteps to a sensible range
+        if(tc.euclSteps < 1) tc.euclSteps = ns;
+
+        ImGui::TextUnformatted("Fills:");
+        ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(50.0f);
+        if(windowControl(trackControlKey(ti, "euclPulses"), [&](){ return ImGui::DragInt("##ek", &tc.euclPulses, 0.2f, 0, std::max(tc.euclSteps, 1)); }))
+            tc.euclPulses = ofClamp(tc.euclPulses, 0, std::max(tc.euclSteps, 1));
+
+        ImGui::SameLine(0, 10); ImGui::TextUnformatted("Steps:");
+        ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(50.0f);
+        if(windowControl(trackControlKey(ti, "euclSteps"), [&](){ return ImGui::DragInt("##es", &tc.euclSteps, 0.2f, 1, MAX_STEPS); }))
+            tc.euclSteps = ofClamp(tc.euclSteps, 1, MAX_STEPS);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Length of the euclidean pattern.\nIf different from sequence steps, the pattern is cut or repeated.");
+
+        ImGui::SameLine(0, 10); ImGui::TextUnformatted("Offset:");
+        ImGui::SameLine(0, 4); ImGui::SetNextItemWidth(50.0f);
+        if(windowControl(trackControlKey(ti, "euclOffset"), [&](){ return ImGui::DragInt("##eo", &tc.euclOffset, 0.2f, 0, std::max(tc.euclSteps - 1, 0)); }))
+            tc.euclOffset = ofClamp(tc.euclOffset, 0, std::max(tc.euclSteps - 1, 0));
+
+        ImGui::SameLine(0, 12);
+        if(ImGui::SmallButton("Fill Steps")) {
+            int patLen = std::max(tc.euclSteps, 1);
+            auto pattern = euclideanRhythm(tc.euclPulses, patLen);
+            td.stepOn.resize(ns, false);
+            for(int si = 0; si < ns; si++) {
+                // Apply offset rotation within the pattern, then cut/repeat to fill ns
+                int pi = ((si - tc.euclOffset) % patLen + patLen) % patLen;
+                td.stepOn[si] = pattern[pi];
+            }
+            sendStepDataToAll(ti);
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Distribute %d pulses in a %d-step euclidean pattern,\nthen cut/repeat to fill %d sequence steps.",
+                              tc.euclPulses, std::max(tc.euclSteps, 1), ns);
+
+        ImGui::Spacing();
+    }
+
+    // ── REV tab (tab 9) ─────────────────────────────────────────────────────
+    if(td.activeTab == 9) {
+        td.stepReverse.resize(ns, false);
+
+        bool revChanged = false;
+        ImGui::Spacing();
+
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);  // same uniform gap as step buttons
+
+            // Apply shift correction — same as all other tabs so that button at screen
+            // position si controls the same data slot that SC reads when stepIdx == si.
+            int  ri         = ((si - td.shift) % ns + ns) % ns;
+            int  beatGroup  = (si / tc.stepsPerBeat) % 2;
+            bool isPlayhead = (si == visualPlayhead);
+            bool isRev      = (ri < (int)td.stepReverse.size()) && td.stepReverse[ri];
+
+            ImVec2 pos  = ImGui::GetCursorScreenPos();
+            std::string sid = "##rev" + std::to_string(si);
+            ImGui::InvisibleButton(sid.c_str(), ImVec2(sw, STEP_H));
+            stepMenu(ti, "stepReverse", ri);
+
+            // Paint gesture: latch value on first press, then apply across any
+            // column the mouse passes over (same IsItemActive drag pattern as step buttons).
+            bool mouseDown = ImGui::IsMouseDown(0);
+            if(ImGui::IsItemActivated() && revPaintTrack == -1) {
+                revPaintTrack = ti;
+                revPaintValue = !isRev;
+            }
+            if(revPaintTrack == ti && mouseDown) {
+                float mx = ImGui::GetIO().MousePos.x;
+                if(mx >= pos.x && mx < pos.x + sw) {
+                    if(ri < (int)td.stepReverse.size() && (bool)td.stepReverse[ri] != revPaintValue) {
+                        td.stepReverse[ri] = revPaintValue;
+                        revChanged = true;
+                    }
+                }
+            }
+
+
+            // Draw button
+            ImU32 bgCol, textCol;
+            if(isRev) {
+                bgCol   = IM_COL32(180, 50, 50, 255);   // red when reversed
+                textCol = IM_COL32(255, 255, 255, 255);
+            } else {
+                ImVec4 bg4 = isPlayhead ? playheadCol : beatPalette[beatGroup].off;
+                bgCol   = ImGui::ColorConvertFloat4ToU32(bg4);
+                textCol = IM_COL32(100, 100, 100, 180);
+            }
+            ImVec2 bmax = ImVec2(pos.x + sw, pos.y + STEP_H);
+            dl->AddRectFilled(pos, bmax, bgCol, STEP_ROUND);
+            if(isPlayhead && !isRev)
+                dl->AddRectFilled(pos, ImVec2(bmax.x, pos.y + 3.0f),
+                                  IM_COL32(255, 255, 255, 220), STEP_ROUND);
+
+            // "R" label in center
+            ImVec2 tpos = ImVec2(pos.x + sw * 0.5f - 4.0f, pos.y + STEP_H * 0.5f - 7.0f);
+            dl->AddText(tpos, textCol, "R");
+        }
+
+        if(!ImGui::IsMouseDown(0) && revPaintTrack == ti) revPaintTrack = -1;
+        if(revChanged) sendStepDataToAll(ti);
+
+        ImGui::Spacing();
+    }
+
+    // ── ARP tab (tab 11) ─────────────────────────────────────────────────────
+    if(td.activeTab == 11) {
+        td.stepArp     .resize(ns, false);
+        td.stepArpSpeed.resize(ns, 4.0f);
+
+        bool arpChanged = false;
+        ImGui::Spacing();
+
+        // ── Row 1: per-step arp enable toggles ────────────────────────────────
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+            int  ri         = ((si - td.shift) % ns + ns) % ns;
+            int  beatGroup  = (si / tc.stepsPerBeat) % 2;
+            bool isPlayhead = (si == visualPlayhead);
+            bool isArp      = (ri < (int)td.stepArp.size()) && td.stepArp[ri];
+
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton(("##arpstep" + std::to_string(si)).c_str(), ImVec2(sw, STEP_H));
+            stepMenu(ti, "stepArp", ri);
+
+            bool mouseDown = ImGui::IsMouseDown(0);
+            if(ImGui::IsItemActivated() && arpPaintTrack == -1) {
+                arpPaintTrack = ti;
+                arpPaintValue = !isArp;
+            }
+            if(arpPaintTrack == ti && mouseDown) {
+                float mx = ImGui::GetIO().MousePos.x;
+                if(mx >= pos.x && mx < pos.x + sw) {
+                    if(ri < (int)td.stepArp.size() && td.stepArp[ri] != arpPaintValue) {
+                        td.stepArp[ri] = arpPaintValue;
+                        arpChanged = true;
+                    }
+                }
+            }
+
+
+            ImU32 bgCol = isArp ? IM_COL32(40, 160, 80, 255)
+                                : ImGui::ColorConvertFloat4ToU32(isPlayhead ? playheadCol : beatPalette[beatGroup].off);
+            ImU32 textCol = isArp ? IM_COL32(255,255,255,255) : IM_COL32(100,100,100,180);
+            ImVec2 bmax = {pos.x + sw, pos.y + STEP_H};
+            dl->AddRectFilled(pos, bmax, bgCol, STEP_ROUND);
+            if(isPlayhead && !isArp)
+                dl->AddRectFilled(pos, {bmax.x, pos.y + 3.f}, IM_COL32(255,255,255,220), STEP_ROUND);
+            dl->AddText({pos.x + sw*0.5f - 4.f, pos.y + STEP_H*0.5f - 7.f}, textCol, "A");
+        }
+        if(!ImGui::IsMouseDown(0) && arpPaintTrack == ti) arpPaintTrack = -1;
+
+        // ── Row 2: per-step arp speed (DragFloat, only interactive when arp on) ─
+        ImGui::Spacing();
+        for(int si = 0; si < ns; si++) {
+            if(si > 0) ImGui::SameLine(0, STEP_GAP);
+            int ri     = ((si - td.shift) % ns + ns) % ns;
+            bool isArp = (ri < (int)td.stepArp.size()) && td.stepArp[ri];
+            float& spd = (ri < (int)td.stepArpSpeed.size()) ? td.stepArpSpeed[ri]
+                                                             : td.stepArpSpeed[0];
+            ImGui::PushID(si + 1000);
+            if(!isArp) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(sw);
+            if(td.arpSpeedMode == 0) {
+                // DIV mode: divisions per beat
+                if(ImGui::DragFloat("##as", &spd, 0.25f, 0.25f, 64.0f, "%.2g")) {
+                    spd = std::max(0.25f, spd);
+                    arpChanged = true;
+                }
+                if(ImGui::IsItemHovered()) {
+                    const char* n = (spd <= 0.26f) ? "whole" : (spd <= 0.51f) ? "half" :
+                                    (spd <= 1.01f) ? "quarter" : (spd <= 2.01f) ? "8th" :
+                                    (spd <= 4.01f) ? "16th"    : (spd <= 8.01f) ? "32nd" : "fast";
+                    ImGui::SetTooltip("%.2f div/beat (%s)", spd, n);
+                }
+            } else {
+                // MIDI mode: note number → Hz (tonal retriggering)
+                if(ImGui::DragFloat("##as", &spd, 1.0f, 0.0f, 127.0f, "%.0f")) {
+                    spd = ofClamp(std::round(spd), 0.0f, 127.0f);
+                    arpChanged = true;
+                }
+                if(ImGui::IsItemHovered()) {
+                    // MIDI note name helper
+                    static const char* noteNames[] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+                    int note = (int)spd;
+                    float hz = 440.0f * std::pow(2.0f, (note - 69) / 12.0f);
+                    ImGui::SetTooltip("MIDI %d (%s%d) = %.1f Hz", note,
+                        noteNames[note % 12], note / 12 - 1, hz);
+                }
+            }
+            if(!isArp) ImGui::EndDisabled();
+            stepMenu(ti, "stepArpSpeed", ri);
+            ImGui::PopID();
+        }
+
+        if(arpChanged) sendStepDataToAll(ti);
+
+        // ── Fill all steps ────────────────────────────────────────────────────
+        {
+            static float arpFillDiv  = 4.0f;
+            static int   arpFillMidi = 60;
+            ImGui::Spacing();
+            if(td.arpSpeedMode == 0) {
+                ImGui::SetNextItemWidth(60.0f);
+                ImGui::DragFloat("##arpfillval", &arpFillDiv, 0.25f, 0.25f, 64.0f, "%.2g");
+            } else {
+                ImGui::SetNextItemWidth(60.0f);
+                ImGui::DragInt("##arpfillval", &arpFillMidi, 1, 0, 127);
+            }
+            ImGui::SameLine(0, 6);
+            if(ImGui::Button("Fill All##arpfill")) {
+                td.stepArpSpeed.resize(ns, 4.0f);
+                float v = (td.arpSpeedMode == 0) ? arpFillDiv : (float)arpFillMidi;
+                for(int si = 0; si < ns; si++) td.stepArpSpeed[si] = v;
+                sendStepDataToAll(ti);
+            }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Set all steps to this value");
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Row 1: ARP ON (big) | DIV/MIDI | GLOB | Global speed ─────────────
+        // ARP ON/OFF — large prominent button
+        {
+            bool arpEn = td.arpEnabled;
+            ImVec4 enCol = arpEn ? ImVec4(0.18f, 0.65f, 0.32f, 1.f) : ImVec4(0.18f, 0.20f, 0.25f, 1.f);
+            ImVec4 enHov = arpEn ? ImVec4(0.24f, 0.78f, 0.42f, 1.f) : ImVec4(0.26f, 0.30f, 0.38f, 1.f);
+            ImVec4 enAct = arpEn ? ImVec4(0.14f, 0.55f, 0.26f, 1.f) : ImVec4(0.30f, 0.35f, 0.45f, 1.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,        enCol);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, enHov);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  enAct);
+            if(windowControl(trackControlKey(ti, "arpEnabled"), [&](){ return ImGui::Button(arpEn ? "ARP  ON##arpon" : "ARP OFF##arpon", {88.f, 26.f}); })) {
+                td.arpEnabled = !td.arpEnabled;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("arpEnabled", td.arpEnabled ? 1.0f : 0.0f);
+            }
+            ImGui::PopStyleColor(3);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Enable step arpeggiation.\nEach arp trigger restarts the sample\nat the next pitch step.");
+        }
+        ImGui::SameLine(0, 6);
+        // DIV/MIDI speed mode toggle
+        {
+            bool isMidi = (td.arpSpeedMode == 1);
+            ImVec4 mCol = isMidi ? ImVec4(0.44f, 0.30f, 0.68f, 1.f) : ImVec4(0.18f, 0.20f, 0.25f, 1.f);
+            ImVec4 mHov = isMidi ? ImVec4(0.54f, 0.40f, 0.78f, 1.f) : ImVec4(0.26f, 0.30f, 0.38f, 1.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,        mCol);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, mHov);
+            if(windowControl(trackControlKey(ti, "arpSpeedMode"), [&](){ return ImGui::Button(isMidi ? "MIDI##arpmode" : " DIV##arpmode", {48.f, 26.f}); })) {
+                td.arpSpeedMode = 1 - td.arpSpeedMode;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("arpSpeedMode", (float)td.arpSpeedMode);
+            }
+            ImGui::PopStyleColor(2);
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("DIV: step speed = divisions/beat (BPM-synced)\nMIDI: step speed = MIDI note → Hz (free)");
+        }
+        ImGui::SameLine(0, 14);
+        // GLOB ON/OFF
+        {
+            bool gArp = td.globalArpEnabled;
+            ImVec4 gc = gArp ? ImVec4(0.64f, 0.44f, 0.08f, 1.f) : ImVec4(0.18f, 0.20f, 0.25f, 1.f);
+            ImVec4 gh = gArp ? ImVec4(0.76f, 0.54f, 0.16f, 1.f) : ImVec4(0.26f, 0.30f, 0.38f, 1.f);
+            ImGui::PushStyleColor(ImGuiCol_Button, gc);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, gh);
+            if(windowControl(trackControlKey(ti, "globalArpEnabled"), [&](){ return ImGui::Button("GLOB##garp", {50.f, 26.f}); })) {
+                td.globalArpEnabled = !td.globalArpEnabled;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("globalArpEnabled", td.globalArpEnabled ? 1.0f : 0.0f);
+            }
+            ImGui::PopStyleColor(2);
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("GLOB: ignore per-step speed, use global speed for all steps.\nRequires ARP ON.");
+        }
+        ImGui::SameLine(0, 4);
+        // Global speed field (disabled when GLOB OFF)
+        {
+            float gs = td.globalArpSpeed;
+            bool inMidi = (td.arpSpeedMode == 1);
+            if(!td.globalArpEnabled) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(54.0f);
+            if(inMidi) {
+                if(windowControl(trackControlKey(ti, "globalArpSpeed"), [&](){ return ImGui::DragFloat("##garpspd", &gs, 1.0f, 0.0f, 127.0f, "%.0f"); })) {
+                    gs = ofClamp(std::round(gs), 0.0f, 127.0f);
+                    td.globalArpSpeed = gs;
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti])
+                            synths[ti]->set("globalArpSpeed", gs);
+                }
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Global arp speed (MIDI note → Hz)");
+            } else {
+                if(windowControl(trackControlKey(ti, "globalArpSpeed"), [&](){ return ImGui::DragFloat("##garpspd", &gs, 0.25f, 0.25f, 64.0f, "%.2g"); })) {
+                    gs = std::max(0.25f, gs);
+                    td.globalArpSpeed = gs;
+                    for(auto& [srv, synths] : trackSynths)
+                        if(ti < (int)synths.size() && synths[ti])
+                            synths[ti]->set("globalArpSpeed", gs);
+                }
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Global arp speed (div/beat)");
+            }
+            if(!td.globalArpEnabled) ImGui::EndDisabled();
+        }
+
+        ImGui::Spacing();
+        // ── Row 2: Intv / Mod / Gate (dimmed when ARP OFF) ────────────────────
+        if(!td.arpEnabled) ImGui::BeginDisabled();
+        ImGui::TextUnformatted("Intv");
+        ImGui::SameLine(0, 4);
+        {
+            float intv = td.arpInterval;
+            ImGui::SetNextItemWidth(52.0f);
+            if(windowControl(trackControlKey(ti, "arpInterval"), [&](){ return ImGui::DragFloat("##arpinterval", &intv, 1.0f, -24.0f, 24.0f, "%.0f"); })) {
+                intv = std::round(ofClamp(intv, -24.0f, 24.0f));
+                td.arpInterval = intv;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("arpInterval", td.arpInterval);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Semitones per arp step.\nEach successive trigger transposes by this amount.");
+        }
+        ImGui::SameLine(0, 10);
+        ImGui::TextUnformatted("Mod");
+        ImGui::SameLine(0, 4);
+        {
+            int modulo = td.arpModulo;
+            ImGui::SetNextItemWidth(44.0f);
+            if(windowControl(trackControlKey(ti, "arpModulo"), [&](){ return ImGui::DragInt("##arpmodulo", &modulo, 1, 1, 16); })) {
+                modulo = ofClamp(modulo, 1, 16);
+                td.arpModulo = modulo;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("arpModulo", (float)td.arpModulo);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Wrap arp counter after N steps\n(e.g. Mod=4 → 4 pitch steps then repeat)");
+        }
+        ImGui::SameLine(0, 10);
+        ImGui::TextUnformatted("Gate");
+        ImGui::SameLine(0, 4);
+        {
+            float gw = td.arpGateWidth;
+            ImGui::SetNextItemWidth(52.0f);
+            if(windowControl(trackControlKey(ti, "arpGateWidth"), [&](){ return ImGui::DragFloat("##arpgatewidth", &gw, 0.01f, 0.0f, 1.0f, "%.2f"); })) {
+                gw = ofClamp(gw, 0.0f, 1.0f);
+                td.arpGateWidth = gw;
+                for(auto& [srv, synths] : trackSynths)
+                    if(ti < (int)synths.size() && synths[ti])
+                        synths[ti]->set("arpGateWidth", td.arpGateWidth);
+            }
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Gate width fraction (0=short, 1=full)\nOnly active in mono+arp mode.");
+        }
+        if(!td.arpEnabled) ImGui::EndDisabled();
+        ImGui::Spacing();
+    }
+
+    if(td.activeTab == 13 && (tc.type == TrackType::Kick || tc.type == TrackType::Sample)) {
+        td.stepShape.resize(MAX_STEPS, 0.0f);
+        ImGui::TextDisabled("Tanh clipper drive per step: 0 = clean, higher values = more distortion.");
+        bool changed = false;
+        for(int si = 0; si < ns; ++si) {
+            if(si) ImGui::SameLine(0, STEP_GAP);
+            const int i = ((si - td.shift) % ns + ns) % ns;
+            ImGui::PushID(si);
+            changed |= ImGui::VSliderFloat("##shape", {sw, PARAM_H}, &td.stepShape[i], 0.f, 20.f, "");
+            stepMenu(ti, "stepShape", i);
+
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("Tanh clipper drive: %.2f\nRight-click: value / publish / timeline", td.stepShape[i]);
+            ImGui::PopID();
+        }
+        if(changed) fireStepParams(ti);
+        ImGui::Spacing();
+    }
+
+    // Release slider paint gesture when mouse is released on this track
+    if(!ImGui::IsMouseDown(0) && sliderPaintTrack == ti) sliderPaintTrack = -1;
+    if(!ImGui::IsMouseDown(0) && cutPaintTrack == ti) cutPaintTrack = -1;
+    if(!ImGui::IsMouseDown(0) && resPaintTrack == ti) resPaintTrack = -1;
+
+    if(tc.muted) ImGui::EndDisabled();
+
+    tabMaxY = ImGui::GetCursorScreenPos().y;
+    finishCard(isSampleTrack);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Preset serialization
+// ════════════════════════════════════════════════════════════════════════════
+
+// Serialize/deserialize per-track global config (not per-slot)
+static ofJson serializeTrackConfig(const scRhythmBox::TrackConfig& tc) {
+    ofJson j;
+    j["name"]          = tc.name;
+    j["type"]          = static_cast<int>(tc.type);
+    j["minimized"]     = tc.minimized;
+    j["numBeats"]      = tc.numBeats;
+    j["stepsPerBeat"]  = tc.stepsPerBeat;
+    j["monoMode"]      = tc.monoMode;
+    j["volLatch"]      = tc.volLatch;
+    j["inPoint"]       = tc.inPoint;
+    j["outPoint"]      = tc.outPoint;
+    j["wavGrid"]       = tc.wavGrid;
+    j["loopEnabled"]   = tc.loopEnabled;
+    j["fixDuration"]   = tc.fixDuration;
+    j["durationBeats"] = tc.durationBeats;
+    j["envEnabled"]    = tc.envEnabled;
+    j["envAttack"]     = tc.envAttack;
+    j["envHoldSteps"]  = tc.envHoldSteps;
+    j["envDecay"]      = tc.envDecay;
+    j["envCurveA"]     = tc.envCurveA;
+    j["envCurveD"]     = tc.envCurveD;
+    j["envSustain"]    = tc.envSustain;
+    j["envRelease"]    = tc.envRelease;
+    j["decayRange"]    = tc.decayRange;
+    j["filterMode"]    = tc.filterMode;
+    j["filterRandom"]  = tc.filterRandom;
+    j["filterRandomRange"] = tc.filterRandomRange;
+    j["kickWaveType"] = tc.kickWaveType;
+    j["kickStartNote"] = tc.kickStartNote;
+    j["kickEndNote"] = tc.kickEndNote;
+    j["kickPitchAttack"] = tc.kickPitchAttack;
+    j["kickPitchDecay"] = tc.kickPitchDecay;
+    j["kickPitchCurve"] = tc.kickPitchCurve;
+    j["kickPMPitch"] = tc.kickPMPitch;
+    j["kickPMIndex"] = tc.kickPMIndex;
+    j["noiseType"] = tc.noiseType;
+    j["noiseDensity"] = tc.noiseDensity;
+    j["snareToneNote"] = tc.snareToneNote;
+    j["snareToneDecay"] = tc.snareToneDecay;
+    j["snareToneLevel"] = tc.snareToneLevel;
+    j["snareNoiseFreq"] = tc.snareNoiseFreq;
+    j["snareNoiseLevel"] = tc.snareNoiseLevel;
+    j["clickCombOctave"] = tc.clickCombOctave;
+    j["lfoEnabled"]    = tc.lfoEnabled;
+    j["lfoRate"]       = tc.lfoRate;
+    j["lfoDepth"]      = tc.lfoDepth;
+    j["lfoShape"]      = tc.lfoShape;
+    j["lfoPhase"]      = tc.lfoPhase;
+    j["lfoPulseWidth"] = tc.lfoPulseWidth;
+    j["eqEnabled"]     = tc.eqEnabled;
+    j["eqHPFreq"]      = tc.eqHPFreq;
+    j["eqHPQ"]         = tc.eqHPQ;
+    j["eqPeakFreq"]    = tc.eqPeakFreq;
+    j["eqPeakGain"]    = tc.eqPeakGain;
+    j["eqPeakQ"]       = tc.eqPeakQ;
+    j["eqLPFreq"]      = tc.eqLPFreq;
+    j["eqLPQ"]         = tc.eqLPQ;
+    j["euclPulses"]    = tc.euclPulses;
+    j["euclSteps"]     = tc.euclSteps;
+    j["euclOffset"]    = tc.euclOffset;
+    j["accentPulses"]  = tc.accentPulses;
+    j["accentSteps"]   = tc.accentSteps;
+    j["accentOffset"]  = tc.accentOffset;
+    j["accentHi"]      = tc.accentHi;
+    j["accentLo"]      = tc.accentLo;
+    j["accentBeatVar"] = tc.accentBeatVar;
+    j["trackPitch"]         = tc.trackPitch;
+    j["globalVol"]          = tc.globalVol;
+    j["globalProb"]         = tc.globalProb;
+    j["sequenceProb"]       = tc.sequenceProb;
+    j["globalStepProbSub"]  = tc.globalStepProbSub;
+    j["globalCut"]          = tc.globalCut;
+    j["globalPanOffset"]    = tc.globalPanOffset;
+    j["globalRes"]          = tc.globalRes;
+    j["muted"]              = tc.muted;
+    j["solo"]          = tc.solo;
+    // Keep writing this legacy field so older builds can still open new presets,
+    // but derive it from the immutable track type rather than UI state.
+    j["slicerMode"]    = (tc.type == scRhythmBox::TrackType::Slice);
+    j["sliceFit"]      = tc.sliceFit;
+    j["sliceGrid"]     = tc.sliceGrid;
+    ofJson spArr = ofJson::array();
+    for(float v : tc.slicePoints) spArr.push_back(v);
+    j["slicePoints"]   = spArr;
+    return j;
+}
+
+static void deserializeTrackConfig(const ofJson& j, scRhythmBox::TrackConfig& tc) {
+    if(j.contains("name"))          tc.name          = j["name"].get<std::string>();
+    if(j.contains("type"))          tc.type = static_cast<scRhythmBox::TrackType>(ofClamp(j["type"].get<int>(), 0, 5));
+    if(j.contains("minimized"))     tc.minimized     = j["minimized"].get<bool>();
+    if(j.contains("numBeats"))      tc.numBeats      = j["numBeats"].get<int>();
+    if(j.contains("stepsPerBeat"))  tc.stepsPerBeat  = j["stepsPerBeat"].get<int>();
+    if(j.contains("monoMode"))      tc.monoMode      = j["monoMode"].get<bool>();
+    if(j.contains("volLatch"))      tc.volLatch       = j["volLatch"].get<bool>();
+    if(j.contains("inPoint"))       tc.inPoint        = j["inPoint"].get<float>();
+    if(j.contains("outPoint"))      tc.outPoint       = j["outPoint"].get<float>();
+    if(j.contains("wavGrid"))       tc.wavGrid        = j["wavGrid"].get<int>();
+    if(j.contains("loopEnabled"))   tc.loopEnabled    = j["loopEnabled"].get<bool>();
+    if(j.contains("fixDuration"))   tc.fixDuration    = j["fixDuration"].get<bool>();
+    if(j.contains("durationBeats")) tc.durationBeats  = j["durationBeats"].get<float>();
+    if(j.contains("envEnabled"))    tc.envEnabled     = j["envEnabled"].get<bool>();
+    if(j.contains("envAttack"))     tc.envAttack      = j["envAttack"].get<float>();
+    if(j.contains("envHoldSteps"))  tc.envHoldSteps   = j["envHoldSteps"].get<int>();
+    else if(j.contains("envHold"))  tc.envHoldSteps   = std::max(0, (int)std::round(j["envHold"].get<float>()));
+    if(j.contains("envDecay"))      tc.envDecay       = j["envDecay"].get<float>();
+    if(j.contains("envCurveA"))     tc.envCurveA      = j["envCurveA"].get<float>();
+    if(j.contains("envCurveD"))     tc.envCurveD      = j["envCurveD"].get<float>();
+    if(j.contains("envSustain"))    tc.envSustain     = j["envSustain"].get<float>();
+    if(j.contains("envRelease"))    tc.envRelease     = j["envRelease"].get<float>();
+    if(j.contains("decayRange"))    tc.decayRange     = j["decayRange"].get<float>();
+    if(j.contains("filterMode"))    tc.filterMode     = ofClamp(j["filterMode"].get<int>(), 0, 4);
+    if(j.contains("filterRandom"))  tc.filterRandom   = j["filterRandom"].get<bool>();
+    if(j.contains("filterRandomRange")) tc.filterRandomRange = j["filterRandomRange"].get<float>();
+    if(j.contains("kickWaveType")) tc.kickWaveType = j["kickWaveType"].get<int>();
+    if(j.contains("kickStartNote")) tc.kickStartNote = j["kickStartNote"].get<float>();
+    if(j.contains("kickEndNote")) tc.kickEndNote = j["kickEndNote"].get<float>();
+    if(j.contains("kickPitchAttack")) tc.kickPitchAttack = j["kickPitchAttack"].get<float>();
+    if(j.contains("kickPitchDecay")) tc.kickPitchDecay = j["kickPitchDecay"].get<float>();
+    if(j.contains("kickPitchCurve")) tc.kickPitchCurve = j["kickPitchCurve"].get<float>();
+    if(j.contains("kickPMPitch")) tc.kickPMPitch = j["kickPMPitch"].get<float>();
+    if(j.contains("kickPMIndex")) tc.kickPMIndex = j["kickPMIndex"].get<float>();
+    if(j.contains("noiseType")) tc.noiseType = j["noiseType"].get<int>();
+    if(j.contains("noiseDensity")) tc.noiseDensity = j["noiseDensity"].get<float>();
+    if(j.contains("snareToneNote")) tc.snareToneNote = j["snareToneNote"].get<float>();
+    if(j.contains("snareToneDecay")) tc.snareToneDecay = j["snareToneDecay"].get<float>();
+    if(j.contains("snareToneLevel")) tc.snareToneLevel = j["snareToneLevel"].get<float>();
+    if(j.contains("snareNoiseFreq")) tc.snareNoiseFreq = j["snareNoiseFreq"].get<float>();
+    if(j.contains("snareNoiseLevel")) tc.snareNoiseLevel = j["snareNoiseLevel"].get<float>();
+    if(j.contains("clickCombOctave")) tc.clickCombOctave = j["clickCombOctave"].get<int>();
+    if(j.contains("lfoEnabled"))    tc.lfoEnabled     = j["lfoEnabled"].get<bool>();
+    if(j.contains("lfoRate"))       tc.lfoRate        = j["lfoRate"].get<float>();
+    if(j.contains("lfoDepth"))      tc.lfoDepth       = j["lfoDepth"].get<float>();
+    if(j.contains("lfoShape"))      tc.lfoShape       = j["lfoShape"].get<int>();
+    if(j.contains("lfoPhase"))      tc.lfoPhase       = j["lfoPhase"].get<float>();
+    if(j.contains("lfoPulseWidth")) tc.lfoPulseWidth  = j["lfoPulseWidth"].get<float>();
+    if(j.contains("eqEnabled"))     tc.eqEnabled      = j["eqEnabled"].get<bool>();
+    if(j.contains("eqHPFreq"))      tc.eqHPFreq       = j["eqHPFreq"].get<float>();
+    if(j.contains("eqHPQ"))         tc.eqHPQ          = j["eqHPQ"].get<float>();
+    if(j.contains("eqPeakFreq"))    tc.eqPeakFreq     = j["eqPeakFreq"].get<float>();
+    if(j.contains("eqPeakGain"))    tc.eqPeakGain     = j["eqPeakGain"].get<float>();
+    if(j.contains("eqPeakQ"))       tc.eqPeakQ        = j["eqPeakQ"].get<float>();
+    if(j.contains("eqLPFreq"))      tc.eqLPFreq       = j["eqLPFreq"].get<float>();
+    if(j.contains("eqLPQ"))         tc.eqLPQ          = j["eqLPQ"].get<float>();
+    if(j.contains("euclPulses"))    tc.euclPulses     = j["euclPulses"].get<int>();
+    if(j.contains("euclSteps"))     tc.euclSteps      = j["euclSteps"].get<int>();
+    if(j.contains("euclOffset"))    tc.euclOffset     = j["euclOffset"].get<int>();
+    if(j.contains("accentPulses"))  tc.accentPulses   = j["accentPulses"].get<int>();
+    if(j.contains("accentSteps"))   tc.accentSteps    = j["accentSteps"].get<int>();
+    if(j.contains("accentOffset"))  tc.accentOffset   = j["accentOffset"].get<int>();
+    if(j.contains("accentHi"))      tc.accentHi       = j["accentHi"].get<float>();
+    if(j.contains("accentLo"))      tc.accentLo       = j["accentLo"].get<float>();
+    if(j.contains("accentBeatVar")) tc.accentBeatVar  = j["accentBeatVar"].get<float>();
+    if(j.contains("trackPitch"))        tc.trackPitch        = j["trackPitch"].get<float>();
+    if(j.contains("globalVol"))         tc.globalVol         = j["globalVol"].get<float>();
+    if(j.contains("globalProb"))        tc.globalProb        = j["globalProb"].get<float>();
+    if(j.contains("sequenceProb"))      tc.sequenceProb      = j["sequenceProb"].get<float>();
+    if(j.contains("globalStepProbSub")) tc.globalStepProbSub = j["globalStepProbSub"].get<float>();
+    if(j.contains("globalCut"))         tc.globalCut         = j["globalCut"].get<float>();
+    if(j.contains("globalPanOffset"))   tc.globalPanOffset   = j["globalPanOffset"].get<float>();
+    if(j.contains("globalRes"))         tc.globalRes         = j["globalRes"].get<float>();
+    if(j.contains("muted"))             tc.muted             = j["muted"].get<bool>();
+    if(j.contains("solo"))          tc.solo           = j["solo"].get<bool>();
+    if(j.contains("slicerMode"))    tc.slicerMode     = j["slicerMode"].get<bool>();
+    if(j.contains("sliceFit"))      tc.sliceFit       = j["sliceFit"].get<bool>();
+    if(j.contains("sliceGrid"))     tc.sliceGrid      = j["sliceGrid"].get<int>();
+    if(j.contains("slicePoints")) {
+        tc.slicePoints.clear();
+        for(auto& v : j["slicePoints"]) tc.slicePoints.push_back(v.get<float>());
+    }
+
+    // Presets written before typed tracks existed have no `type` field. Their
+    // former STEP/SLICER switch is enough to migrate them without changing the
+    // saved pattern or sample data.
+    if(!j.contains("type"))
+        tc.type = tc.slicerMode ? scRhythmBox::TrackType::Slice
+                                : scRhythmBox::TrackType::Sample;
+    // In typed presets the type is authoritative. `slicerMode` survives only as
+    // a wire/preset compatibility field for the legacy RhythmBoxTrack SynthDef.
+    tc.slicerMode = (tc.type == scRhythmBox::TrackType::Slice);
+}
+
+// Serialize/deserialize per-slot step/shift data only
+static ofJson serializeTrackData(const scRhythmBox::TrackData& td) {
+    ofJson j;
+    j["shift"]     = td.shift;
+    j["activeTab"] = td.activeTab;
+
+    ofJson on = ofJson::array(), vol = ofJson::array(), prob  = ofJson::array();
+    ofJson probGroup = ofJson::array();
+    ofJson pan = ofJson::array(), cut = ofJson::array(), res   = ofJson::array();
+    ofJson spitch = ofJson::array(), srev = ofJson::array();
+    ofJson sarpStep = ofJson::array(), decayOffset = ofJson::array();
+    for(bool  v : td.stepOn)       on       .push_back(v);
+    for(float v : td.stepVol)      vol      .push_back(v);
+    for(float v : td.stepProb)     prob     .push_back(v);
+    for(int   v : td.stepProbGroup) probGroup.push_back(v);
+    for(float v : td.stepPan)      pan      .push_back(v);
+    for(float v : td.stepCut)      cut      .push_back(v);
+    for(float v : td.stepRes)      res      .push_back(v);
+    for(int   v : td.stepPitch)    spitch   .push_back(v);
+    for(bool  v : td.stepReverse)  srev     .push_back(v);
+    for(bool  v : td.stepArp)      sarpStep .push_back(v);
+    for(float v : td.stepDecayOffset) decayOffset.push_back(v);
+    ofJson sarpSpeed = ofJson::array();
+    for(float v : td.stepArpSpeed) sarpSpeed.push_back(v);
+    j["stepOn"]       = on;
+    j["stepVol"]      = vol;
+    j["stepProb"]     = prob;
+    j["stepProbGroup"] = probGroup;
+    j["stepPan"]      = pan;
+    j["stepCut"]      = cut;
+    j["stepRes"]      = res;
+    j["stepPitch"]    = spitch;
+    j["stepReverse"]  = srev;
+    j["stepArp"]      = sarpStep;
+    j["stepArpSpeed"] = sarpSpeed;
+    j["stepDecayOffset"] = decayOffset;
+    // ARP params — per-slot
+    j["arpEnabled"]       = td.arpEnabled;
+    j["arpInterval"]      = td.arpInterval;
+    j["arpModulo"]        = td.arpModulo;
+    j["arpGateWidth"]     = td.arpGateWidth;
+    j["arpSpeedMode"]     = td.arpSpeedMode;
+    j["globalArpEnabled"] = td.globalArpEnabled;
+    j["globalArpSpeed"]   = td.globalArpSpeed;
+    ofJson shape = ofJson::array(), hiRel = ofJson::array(), combPitch = ofJson::array();
+    ofJson combDecay = ofJson::array();
+    for(float v : td.stepShape) shape.push_back(v);
+    for(float v : td.stepHiRel) hiRel.push_back(v);
+    for(float v : td.stepCombPitch) combPitch.push_back(v);
+    for(float v : td.stepCombDecay) combDecay.push_back(v);
+    j["stepShape"] = shape; j["stepHiRel"] = hiRel;
+    j["stepCombPitch"] = combPitch;
+    j["stepCombDecay"] = combDecay;
+    ofJson sSlice = ofJson::array(), sSliceOn = ofJson::array();
+    for(int  v : td.stepSlice)   sSlice  .push_back(v);
+    for(bool v : td.stepSliceOn) sSliceOn.push_back(v);
+    j["stepSlice"]   = sSlice;
+    j["stepSliceOn"] = sSliceOn;
+    return j;
+}
+
+static void deserializeTrackData(const ofJson& j, scRhythmBox::TrackData& td,
+                                 const scRhythmBox::TrackConfig& tc) {
+    if(j.contains("shift"))    td.shift    = j["shift"].get<int>();
+    if(j.contains("activeTab"))td.activeTab= j["activeTab"].get<int>();
+    if(td.activeTab == 12) td.activeTab = -1; // Removed tab index; old presets open with no tab.
+
+    td.resizeSteps();
+    int n = tc.getNumSteps();
+
+    auto loadArr = [&](const char* key, std::vector<float>& vec) {
+        if(j.contains(key)) {
+            auto& arr = j[key];
+            for(int i = 0; i < n && i < (int)arr.size(); i++)
+                vec[i] = arr[i].get<float>();
+        }
+    };
+    if(j.contains("stepOn")) {
+        auto& arr = j["stepOn"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepOn[i] = arr[i].get<bool>();
+    }
+    loadArr("stepVol",  td.stepVol);
+    loadArr("stepProb", td.stepProb);
+    if(j.contains("stepProbGroup")) {
+        auto& arr = j["stepProbGroup"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepProbGroup[i] = arr[i].get<int>();
+    }
+    loadArr("stepPan",  td.stepPan);
+    loadArr("stepCut",  td.stepCut);
+    loadArr("stepRes",  td.stepRes);
+    if(j.contains("stepPitch")) {
+        auto& arr = j["stepPitch"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepPitch[i] = arr[i].get<int>();
+    }
+    if(j.contains("stepReverse")) {
+        auto& arr = j["stepReverse"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepReverse[i] = arr[i].get<bool>();
+    }
+    if(j.contains("stepArp")) {
+        auto& arr = j["stepArp"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepArp[i] = arr[i].get<bool>();
+    }
+    if(j.contains("stepArpSpeed")) {
+        auto& arr = j["stepArpSpeed"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepArpSpeed[i] = arr[i].get<float>();
+    }
+    loadArr("stepDecayOffset", td.stepDecayOffset);
+    // ARP params — per-slot (new; missing in old presets → defaults from struct)
+    if(j.contains("arpEnabled"))   td.arpEnabled   = j["arpEnabled"].get<bool>();
+    if(j.contains("arpInterval"))  td.arpInterval  = j["arpInterval"].get<float>();
+    if(j.contains("arpModulo"))    td.arpModulo    = j["arpModulo"].get<int>();
+    if(j.contains("arpGateWidth"))     td.arpGateWidth     = j["arpGateWidth"].get<float>();
+    if(j.contains("arpSpeedMode"))     td.arpSpeedMode     = j["arpSpeedMode"].get<int>();
+    if(j.contains("globalArpEnabled")) td.globalArpEnabled = j["globalArpEnabled"].get<bool>();
+    if(j.contains("globalArpSpeed"))   td.globalArpSpeed   = j["globalArpSpeed"].get<float>();
+    loadArr("stepShape", td.stepShape);
+    loadArr("stepHiRel", td.stepHiRel);
+    loadArr("stepCombPitch", td.stepCombPitch);
+    if(tc.type == scRhythmBox::TrackType::Click) {
+        for(float& v : td.stepCombPitch) {
+            if(v > 12.0f) v = std::fmod(v, 12.0f);
+            v = ofClamp(std::round(v), 0.0f, 12.0f);
+        }
+    }
+    loadArr("stepCombDecay", td.stepCombDecay);
+    if(j.contains("stepSlice")) {
+        auto& arr = j["stepSlice"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepSlice[i] = arr[i].get<int>();
+    }
+    if(j.contains("stepSliceOn")) {
+        auto& arr = j["stepSliceOn"];
+        for(int i = 0; i < n && i < (int)arr.size(); i++)
+            td.stepSliceOn[i] = arr[i].get<bool>();
+    }
+}
+
+// Older RhythmBox saves may predate the dedicated numTracks field. Infer the
+// count from their strongest available structural signal so zero-track startup
+// does not accidentally turn those presets into empty RhythmBoxes.
+static int inferRhythmBoxTrackCount(const ofJson& j, int fallback) {
+    if(j.contains("numTracks"))
+        return ofClamp(j["numTracks"].get<int>(), 0, scRhythmBox::MAX_TRACKS);
+
+    if(j.contains("Tracks")) {
+        try {
+            const int n = j["Tracks"].is_string()
+                        ? ofToInt(j["Tracks"].get<std::string>())
+                        : j["Tracks"].get<int>();
+            return ofClamp(n, 0, scRhythmBox::MAX_TRACKS);
+        } catch(...) {
+            // Continue with structural inference below.
+        }
+    }
+
+    if(j.contains("trackConfigs") && j["trackConfigs"].is_array())
+        return ofClamp((int)j["trackConfigs"].size(), 0, scRhythmBox::MAX_TRACKS);
+
+    if(j.contains("slots") && j["slots"].is_array() && !j["slots"].empty()
+       && j["slots"][0].is_array())
+        return ofClamp((int)j["slots"][0].size(), 0, scRhythmBox::MAX_TRACKS);
+
+    if(j.contains("samplePath")) return 1;
+    return ofClamp(fallback, 0, scRhythmBox::MAX_TRACKS);
+}
+
+void scRhythmBox::serializeSlots(ofJson& j) const {
+    j["browseDir"]   = browser.getDir();
+    j["currentSlot"] = currentSlotP.get();
+    j["numTracks"]   = numTracks;
+    j["swingAmount"] = swingP.get();
+
+    // Per-track global config (shared across all slots)
+    ofJson cfgArr = ofJson::array();
+    for(int ti = 0; ti < numTracks; ti++)
+        cfgArr.push_back(serializeTrackConfig(trackConfigs[ti]));
+    j["trackConfigs"] = cfgArr;
+
+    // Per-track sample paths (node-global)
+    ofJson pathsArr = ofJson::array();
+    for(int ti = 0; ti < MAX_TRACKS; ti++)
+        pathsArr.push_back(samplePaths[ti]);
+    j["samplePaths"] = pathsArr;
+
+    // Per-slot step/shift data only
+    ofJson slotsArr = ofJson::array();
+    for(int s = 0; s < MAX_SLOTS; s++) {
+        ofJson slotJ = ofJson::array();
+        const auto& slot = slots[s];
+        for(int ti = 0; ti < (int)slot.tracks.size(); ti++)
+            slotJ.push_back(serializeTrackData(slot.tracks[ti]));
+        slotsArr.push_back(slotJ);
+    }
+    j["slots"] = slotsArr;
+}
+
+void scRhythmBox::deserializeSlots(const ofJson& j) {
+    if(j.contains("browseDir")) {
+        std::string d = j["browseDir"].get<std::string>();
+        if(std::filesystem::exists(d)) refreshBrowse(d);
+    }
+
+    const int savedTrackCount = inferRhythmBoxTrackCount(j, numTracks);
+    if(savedTrackCount != numTracks)
+        setNumTracks(savedTrackCount);
+    if(numTracksP.get() != savedTrackCount)
+        numTracksP.set(savedTrackCount);
+
+    // Loading a preset/project replaces the complete sample assignment. Clear
+    // entries first so a shorter legacy array cannot leave samples from the
+    // previously loaded RhythmBox attached to newly added tracks.
+    std::fill(samplePaths.begin(), samplePaths.end(), std::string{});
+
+    // Load per-track sample paths
+    if(j.contains("samplePaths")) {
+        const auto& arr = j["samplePaths"];
+        for(int ti = 0; ti < MAX_TRACKS && ti < (int)arr.size(); ti++)
+            samplePaths[ti] = arr[ti].get<std::string>();
+    } else if(j.contains("samplePath")) {
+        samplePaths[0] = j["samplePath"].get<std::string>();
+    } else if(j.contains("slots") && !j["slots"].empty() && j["slots"][0].is_array()) {
+        // Earliest multitrack format kept each path inside slot zero.
+        const auto& slot0 = j["slots"][0];
+        for(int ti = 0; ti < MAX_TRACKS && ti < (int)slot0.size(); ++ti)
+            if(slot0[ti].contains("samplePath"))
+                samplePaths[ti] = slot0[ti]["samplePath"].get<std::string>();
+    }
+
+    initSlots();  // resets trackConfigs and slots to defaults
+
+    // ── Load global swing ─────────────────────────────────────────────────────
+    if(j.contains("swingAmount"))
+        swingP.set(ofClamp(j["swingAmount"].get<float>(), 0.0f, 0.5f));
+
+    // ── Load per-track global config ──────────────────────────────────────────
+    if(j.contains("trackConfigs")) {
+        const auto& cfgArr = j["trackConfigs"];
+        for(int ti = 0; ti < numTracks && ti < (int)cfgArr.size(); ti++)
+            deserializeTrackConfig(cfgArr[ti], trackConfigs[ti]);
+    } else if(j.contains("slots") && !j["slots"].empty()) {
+        // Backward compatibility: old format stored config inside slot[0] TrackData
+        const auto& slot0 = j["slots"][0];
+        for(int ti = 0; ti < numTracks && ti < (int)slot0.size(); ti++)
+            deserializeTrackConfig(slot0[ti], trackConfigs[ti]);
+        // Also migrate swingAmount from old TrackData
+        if(numTracks > 0 && slot0.size() > 0 && slot0[0].contains("swingAmount"))
+            swingP.set(ofClamp(slot0[0]["swingAmount"].get<float>(), 0.0f, 0.5f));
+    }
+
+    // ── Load per-slot step/shift data ─────────────────────────────────────────
+    if(j.contains("slots")) {
+        const auto& slotsArr = j["slots"];
+        for(int s = 0; s < MAX_SLOTS && s < (int)slotsArr.size(); s++) {
+            const auto& slotJ = slotsArr[s];
+            for(int ti = 0; ti < (int)slotJ.size() && ti < (int)slots[s].tracks.size(); ti++)
+                deserializeTrackData(slotJ[ti], slots[s].tracks[ti], trackConfigs[ti]);
+        }
+    }
+
+    int slot = j.contains("currentSlot") ? j["currentSlot"].get<int>() : 0;
+    slot = ofClamp(slot, 0, MAX_SLOTS - 1);
+    for(int ti = 0; ti < numTracks; ti++)
+        snprintf(nameEditBuf[ti], 64, "%s", trackConfigs[ti].name.c_str());
+}
+
+void scRhythmBox::presetSave(ofJson& j) {
+    flushTrackControls();
+    if(trackControlsDirty) { reloadCurrentSlot(); trackControlsDirty = false; }
+    for(auto& pull : trackControlPulls) pull();
+    serializeSlots(j);
+    for(const auto& save : controlSavers) save(j);
+    timeline.save(j, "rhythmBoxTimeline");
+    j["rhythmBoxPublished"] = ofJson::array();
+    for(const auto& item : snapPublished) j["rhythmBoxPublished"].push_back(item.first);
+    j["rhythmBoxSnapshots"] = snaps.settingsJson();
+    std::vector<std::string> snapKeys;
+    for(const auto& [k, h] : snapPublished) snapKeys.push_back(k);
+    j["rhythmBoxSnapPublished"] = snapKeys;
+    j["embedInProject"] = embedInProject.get();
+
+    if(embedInProject.get()) {
+        std::string presetPath = ofxOceanodeShared::getCurrentPresetPath();
+        if(!presetPath.empty()) {
+            std::string absRoot = ofToDataPath(presetPath, true);
+            embedSamplesIntoJson(j, absRoot);
+        }
+    }
+}
+
+void scRhythmBox::loadBeforeConnections(ofJson& j) {
+    pendingTrackEdits.clear();
+    if(j.contains("rhythmBoxPublished") && j["rhythmBoxPublished"].is_array()) {
+        const auto previous = snapPublished;
+        for(const auto& item : previous)
+            if(std::find(j["rhythmBoxPublished"].begin(), j["rhythmBoxPublished"].end(), item.first) == j["rhythmBoxPublished"].end())
+                unpublishSnap(item.first);
+        for(const auto& key : j["rhythmBoxPublished"]) if(key.is_string()) publishSnap(key.get<std::string>());
+    } else {
+        // Old presets could connect to any of these always-published ports.
+        // Keep them alive until all connections have been restored.
+        for(const auto& key : legacyControlKeys) publishSnap(key);
+        legacyPublishing = true;
+    }
+    for(const auto& item : snapPublished) if(timeline.isHidden(item.first)) timeline.reveal(item.first);
+    timeline.load(j, "rhythmBoxTimeline");
+    if(j.contains("rhythmBoxSnapPublished") && j["rhythmBoxSnapPublished"].is_array())
+        for(const auto& k : j["rhythmBoxSnapPublished"]) if(k.is_string()) publishSnap(k.get<std::string>());
+    if(j.contains("browseDir")) {
+        std::string d = j["browseDir"].get<std::string>();
+        if(std::filesystem::exists(d)) refreshBrowse(d);
+    }
+    // Output ports (Out 1..N) must exist before Oceanode reconstructs connections.
+    // numTracksP listener fires during presetRecallAfterSettingParameters which is
+    // called AFTER connections are remade, so we must add the ports here instead.
+    const int n = inferRhythmBoxTrackCount(j, numTracks);
+    if(n != numTracks) setNumTracks(n);
+    // Restore the clock mode before the synths are (re)built, like the Phasor.
+    // Old presets have no key: stays false (free-running, as before).
+    if(!j.contains(syncToTransportP.getEscapedName())) syncToTransportP = false;
+    else deserializeParameter(j, syncToTransportP);
+    if(!j.contains(beatOffsetP.getEscapedName())) beatOffsetP = 0.0f;
+    else deserializeParameter(j, beatOffsetP);
+}
+
+void scRhythmBox::presetRecallAfterSettingParameters(ofJson& j) {
+    if(j.contains("rhythmBoxSnapshots")) snaps.loadSettings(j["rhythmBoxSnapshots"]);
+    appliedBox = ofJson();
+    embedInProject = j.value("embedInProject", true);
+
+    deserializeSlots(j);
+    pendingTrackEdits.clear();
+    for(auto* parameter : storedControls) deserializeParameter(j, *parameter);
+    for(auto& pull : trackControlPulls) pull();
+    trackControlsDirty = false;
+
+    // ── 1. Load samples FIRST so getBufnum() is valid for everything below ──
+    // IMPORTANT: freeAllSamples() → freeSampleForTrack() clears samplePaths[ti].
+    // Snapshot paths before freeing so the reload loop still knows what to load.
+    {
+        std::vector<std::string> pathsToLoad = samplePaths;
+        freeAllSamples();
+        for(int ti = 0; ti < MAX_TRACKS; ti++) {
+            if(pathsToLoad[ti].empty()) continue;
+            std::string absPath = resolveToAbsolutePath(pathsToLoad[ti]);
+            if(!std::filesystem::exists(absPath)) {
+                // Keep the unresolved value visible/serializable instead of
+                // losing it when freeAllSamples() clears samplePaths.
+                samplePaths[ti] = pathsToLoad[ti];
+                ofLogWarning("scRhythmBox") << "Missing sample for track " << ti
+                                             << ": " << absPath;
+                continue;
+            }
+            loadSampleForTrack(ti, absPath);   // sets samplePaths[ti] = absPath at end
+        }
+    }
+
+    // ── 2. Fully rebuild existing server voices. This also frees surplus
+    // voices when a recalled preset has fewer tracks—or zero tracks.
+    std::vector<ofxSCServer*> serversToRebuild;
+    serversToRebuild.reserve(trackSynths.size());
+    for(const auto& [srv, synths] : trackSynths)
+        serversToRebuild.push_back(srv);
+    for(auto* srv : serversToRebuild)
+        createSynth(srv);
+
+    // ── 3. Push all params (including correct bufnum) to already-running synths
+    // reloadCurrentSlot sends timing, step arrays (/n_setn — correct regardless
+    // of addCharArg vs addStringArg), env params, and bufnum to every running
+    // synth.  This handles the toUpdateNodes case — nodes that were already
+    // connected before this preset load and whose synths serverManager will NOT
+    // recreate (it only calls createSynth for toCreateNodes).
+    //
+    // Bus routing is intentionally NOT touched here.  serverManager owns the
+    // output-bus assignment.  After presetHasLoaded it runs recomputeGraph which:
+    //   • toUpdateNodes: calls setOutputBus → sends /n_set out <correctBus> ✓
+    //   • toCreateNodes: calls setOutputBus then createSynth with correct buses
+    //     and correct getBufnum (samples already loaded above) ✓
+    //   • disconnected nodes: calls free(server) → synths freed → no hardware leak ✓
+    reloadCurrentSlot();
+    for(int ti = 0; ti < numTracks; ++ti) sendTypedConfigToAll(ti);
+}
+
+void scRhythmBox::macroSave(ofJson& j, string path) {
+    presetSave(j);
+    j["embedInProject"] = embedInProject.get();
+
+    if(embedInProject.get()) {
+        // Local macro (under Presets/): anchor to the shared preset root so the
+        // samples path survives macro duplication. Global macro: use path directly.
+        std::string absFolderPath      = ofToDataPath(path, true);
+        std::string sharedPresetPath   = ofxOceanodeShared::getCurrentPresetPath();
+        std::string absSharedPreset    = sharedPresetPath.empty() ? ""
+                                         : ofToDataPath(sharedPresetPath, true);
+
+        std::string absRoot;
+        if(!absSharedPreset.empty() && absFolderPath.find("/Presets/") != std::string::npos)
+            absRoot = absSharedPreset;
+        else
+            absRoot = absFolderPath;
+
+        embedSamplesIntoJson(j, absRoot);
+    }
+}
+
+void scRhythmBox::macroLoad(ofJson& j, string /*path*/) {
+    embedInProject = j.value("embedInProject", true);
+    loadBeforeConnections(j);
+    presetRecallAfterSettingParameters(j);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Sample embed helpers
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::embedSamplesIntoJson(ofJson& j, const std::string& folderRootAbs) {
+    if(!j.contains("samplePaths") || !j["samplePaths"].is_array()) return;
+    for(auto& path : j["samplePaths"]) {
+        if(!path.is_string() || path.get<std::string>().empty()) continue;
+        path = scSampleEmbedding::embed(resolveToAbsolutePath(path.get<std::string>()), folderRootAbs);
+    }
+}
+
+std::string scRhythmBox::resolveToAbsolutePath(const std::string& inputPath) const {
+    if(inputPath.rfind("samples/", 0) == 0) return scSampleEmbedding::resolve(inputPath);
+    std::string s = inputPath;
+    if(s.size() >= 2 && s[0] == '.' && s[1] == '/') s = s.substr(2);
+
+    if(!s.empty() && s[0] == '/') return s;  // already absolute
+
+    // Embedded preset samples belong to the preset being loaded, not to the
+    // preset name stored when they were saved.  This keeps duplicated, moved
+    // and renamed presets self-contained and also prevents a stale path from
+    // loading a same-named sample from another preset that still exists.
+    if(s.rfind("Presets/", 0) == 0) {
+        const std::string currentPresetPath = ofxOceanodeShared::getCurrentPresetPath();
+        if(!currentPresetPath.empty()) {
+            const std::filesystem::path localSample =
+                std::filesystem::path(ofToDataPath(currentPresetPath, true)) /
+                "samples" /
+                std::filesystem::path(s).filename();
+            if(std::filesystem::exists(localSample))
+                return localSample.string();
+        }
+    }
+
+    bool isKnownRelative = (s.rfind("Macros/", 0) == 0) ||
+                           (s.rfind("Presets/", 0) == 0) ||
+                           (s.rfind("Supercollider/", 0) == 0);
+    if(isKnownRelative) return ofToDataPath(s, true);
+
+    std::string dataRel = ofToDataPath(s, true);
+    if(std::filesystem::exists(dataRel)) return dataRel;
+
+    return ofToDataPath("Supercollider/Samples/" + s, true);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// Track reordering helpers
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::moveTrackUp(int trackIndex) {
+    if (trackIndex <= 0 || trackIndex >= numTracks) return;
+    swapTracks(trackIndex, trackIndex - 1);
+}
+
+void scRhythmBox::moveTrackDown(int trackIndex) {
+    if (trackIndex < 0 || trackIndex >= numTracks - 1) return;
+    swapTracks(trackIndex, trackIndex + 1);
+}
+
+void scRhythmBox::swapTracks(int trackA, int trackB) {
+    if (trackA < 0 || trackA >= numTracks || trackB < 0 || trackB >= numTracks || trackA == trackB) return;
+    
+    // Swap track configs
+    std::swap(trackConfigs[trackA], trackConfigs[trackB]);
+    
+    // Swap sample paths
+    std::swap(samplePaths[trackA], samplePaths[trackB]);
+    
+    // Swap waveform peaks
+    std::swap(waveformPeaks[trackA], waveformPeaks[trackB]);
+    std::swap(waveZoom[trackA], waveZoom[trackB]);
+    std::swap(waveScroll[trackA], waveScroll[trackB]);
+    if(trackA < (int)currentStep.size() && trackB < (int)currentStep.size())
+        std::swap(currentStep[trackA], currentStep[trackB]);
+    
+    // Swap name edit buffers
+    char tempName[64];
+    strcpy(tempName, nameEditBuf[trackA]);
+    strcpy(nameEditBuf[trackA], nameEditBuf[trackB]);
+    strcpy(nameEditBuf[trackB], tempName);
+    
+    // Swap track data in all slots
+    for (auto& slot : slots) {
+        if (trackA < (int)slot.tracks.size() && trackB < (int)slot.tracks.size()) {
+            std::swap(slot.tracks[trackA], slot.tracks[trackB]);
+        }
+    }
+    
+    // Swap sample buffers
+    std::swap(trackBufs[trackA], trackBufs[trackB]);
+    
+    // Update node parameters
+    auto tv = transposeP.get();
+    auto vv = globalVolP.get();
+    auto pv = globalProbP.get();
+    auto mv = muteP.get();
+    auto sv = soloP.get();
+    auto sps = globalStepProbSubP.get();
+    auto gc = globalCutP.get();
+    auto gp = globalPanOffsetP.get();
+    auto grp = globalResP.get();
+    
+    if (trackA < (int)tv.size() && trackB < (int)tv.size()) {
+        std::swap(tv[trackA], tv[trackB]);
+        std::swap(vv[trackA], vv[trackB]);
+        std::swap(pv[trackA], pv[trackB]);
+        std::swap(mv[trackA], mv[trackB]);
+        std::swap(sv[trackA], sv[trackB]);
+        if(trackB < (int)sps.size()) std::swap(sps[trackA], sps[trackB]);
+        if(trackB < (int)gc.size())  std::swap(gc[trackA], gc[trackB]);
+        if(trackB < (int)gp.size())  std::swap(gp[trackA], gp[trackB]);
+        if(trackB < (int)grp.size()) std::swap(grp[trackA], grp[trackB]);
+        
+        transposeP.set(tv);
+        globalVolP.set(vv);
+        globalProbP.set(pv);
+        muteP.set(mv);
+        soloP.set(sv);
+        globalStepProbSubP.set(sps);
+        globalCutP.set(gc);
+        globalPanOffsetP.set(gp);
+        globalResP.set(grp);
+    }
+    
+    // Recreate synths for both tracks to ensure proper bus routing
+    for(auto* srv : activeGraphServers()) {
+        
+        // Free and recreate synths for both tracks
+        if (trackSynths.count(srv) && trackA < (int)trackSynths[srv].size() && trackSynths[srv][trackA]) {
+            trackSynths[srv][trackA]->free();
+            delete trackSynths[srv][trackA];
+            trackSynths[srv][trackA] = nullptr;
+        }
+        if (trackSynths.count(srv) && trackB < (int)trackSynths[srv].size() && trackSynths[srv][trackB]) {
+            trackSynths[srv][trackB]->free();
+            delete trackSynths[srv][trackB];
+            trackSynths[srv][trackB] = nullptr;
+        }
+        
+        createTrackSynth(srv, trackA);
+        createTrackSynth(srv, trackB);
+    }
+}
+
+// Restore the whole box at runtime: tracks, slot data, samples and synths.
+// keepLoaded retains samples that are already loaded.
+void scRhythmBox::applyBoxState(const ofJson& j, bool keepLoaded) {
+    const std::vector<std::string> loadedBefore = samplePaths;
+    // 1. Update output port count. Legacy projects without numTracks are
+    // inferred from Tracks, trackConfigs, or the first slot.
+    const int projectTrackCount = inferRhythmBoxTrackCount(j, numTracks);
+    if(projectTrackCount != numTracks) {
+        ofLogVerbose("scRhythmBox::applyBoxState") << "  setNumTracks(" << projectTrackCount << ")";
+        setNumTracks(projectTrackCount);
+        numTracksP.set(projectTrackCount);
+    }
+
+    // 2. Load all data into memory (trackConfigs, slots, samplePaths, swing)
+    ofLogVerbose("scRhythmBox::applyBoxState") << "  deserializeSlots...";
+    deserializeSlots(j);
+    ofLogVerbose("scRhythmBox::applyBoxState") << "  after deserialize: numTracks=" << numTracks
+        << "  slots[0].tracks.size()=" << slots[0].tracks.size();
+
+    // 3. Load samples so getBufnum() is valid when synths are created
+    ofLogVerbose("scRhythmBox::applyBoxState") << "  loading samples...";
+    {
+        // a snapshot keeps the samples that stay (no gap): only the changed ones load
+        std::vector<std::string> pathsToLoad = samplePaths;
+        if(!keepLoaded) freeAllSamples();
+        int loaded = 0;
+        for(int ti = 0; ti < MAX_TRACKS; ti++) {
+            if(keepLoaded) {
+                const bool same = pathsToLoad[ti].empty() ? loadedBefore[ti].empty()
+                                : resolveToAbsolutePath(pathsToLoad[ti]) == loadedBefore[ti];
+                if(same) { samplePaths[ti] = loadedBefore[ti]; continue; }
+                if(!loadedBefore[ti].empty()) freeSampleForTrack(ti);
+            }
+            if(pathsToLoad[ti].empty()) continue;
+            std::string absPath = resolveToAbsolutePath(pathsToLoad[ti]);
+            if(!std::filesystem::exists(absPath)) {
+                samplePaths[ti] = pathsToLoad[ti];
+                continue;
+            }
+            loadSampleForTrack(ti, absPath);
+            loaded++;
+        }
+        ofLogVerbose("scRhythmBox::applyBoxState") << "  loaded " << loaded << " samples";
+    }
+
+    // 4. Recreate all SC synths from scratch with the loaded data.
+    ofLogVerbose("scRhythmBox::applyBoxState") << "  recreating synths for " << activeGraphServers().size() << " server(s)...";
+    for(auto* srv : activeGraphServers()) createSynth(srv);
+
+    // 5. Apply saved slot index
+    if(j.contains("currentSlot")) {
+        int slot = ofClamp(j["currentSlot"].get<int>(), 0, MAX_SLOTS - 1);
+        ofLogVerbose("scRhythmBox::applyBoxState") << "  setting currentSlot=" << slot;
+        currentSlotP.set(slot);
+    }
+    reloadCurrentSlot();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Snapshots
+// ════════════════════════════════════════════════════════════════════════════
+
+ofJson scRhythmBox::captureSnapshot() const {
+    ofJson j;
+    serializeSlots(j);
+    j[masterVolP.getEscapedName()] = masterVolP.get();
+    j.erase("browseDir");   // the browser's folder is not the sound
+    return j;
+}
+
+// The arrival's box at the switch point (whole: tracks, samples, slots);
+// Swing glides
+void scRhythmBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw) {
+    if(!a.is_object() || !b.is_object()) return;
+    const ofJson& side = sw ? b : a;
+    if(side != appliedBox) {
+        appliedBox = side;
+        if(side != captureSnapshot()) applyBoxState(side, true);   // (a glide starts from here)
+    }
+    const auto masterKey = masterVolP.getEscapedName();
+    if(a.contains(masterKey) && b.contains(masterKey))
+        masterVolP = scSnapshots::blendValue(a[masterKey], b[masterKey], t, sw).get<float>();
+    if(t > 0.0f && t < 1.0f && a.contains("swingAmount") && b.contains("swingAmount")) {
+        const float v = ofLerp(a["swingAmount"].get<float>(), b["swingAmount"].get<float>(), t);
+        if(std::abs(v - swingP.get()) > 1e-5f) swingP.set(v);
+    }
+}
+
+// Five grooves on the built-in drums (no samples needed)
+std::vector<ofJson> scRhythmBox::factorySnapshots() const {
+    static const char* src = R"JSON([
+ {"name": "Init", "swing": 0.0, "tracks": [["Kick", 2, ""], ["Snare", 4, ""], ["Hat", 5, ""], ["Noise", 3, ""]]},
+ {"name": "Four on the Floor", "swing": 0.0, "tracks": [
+   ["Kick", 2, "x...x...x...x..."], ["Snare", 4, "....x.......x..."], ["Hat", 5, "..x...x...x...x."], ["Noise", 3, ""]]},
+ {"name": "Breakbeat", "swing": 0.08, "tracks": [
+   ["Kick", 2, "x.....x...x....."], ["Snare", 4, "....x.......x..x"], ["Hat", 5, "x.x.x.x.x.x.x.x."], ["Noise", 3, "..............x."]]},
+ {"name": "Half-time", "swing": 0.2, "tracks": [
+   ["Kick", 2, "x.........x....."], ["Snare", 4, "........x......."], ["Hat", 5, "x.x.x.x.x.x.x.x."], ["Noise", 3, ""]]},
+ {"name": "Shuffle", "swing": 0.35, "tracks": [
+   ["Kick", 2, "x.....x.x......."], ["Snare", 4, "....x.......x..."], ["Hat", 5, "xxxxxxxxxxxxxxxx"], ["Noise", 3, "......x.......x."]]}
+])JSON";
+    std::vector<ofJson> out;
+    for(const auto& p : ofJson::parse(src)) {
+        const auto& tracks = p["tracks"];
+        ofJson j;
+        j["name"] = p["name"];
+        j["numTracks"] = (int)tracks.size();
+        j["currentSlot"] = 0;
+        j["swingAmount"] = p["swing"];
+        j["samplePaths"] = std::vector<std::string>(MAX_TRACKS, "");
+        ofJson cfg = ofJson::array(), slot = ofJson::array();
+        for(const auto& tr : tracks) {
+            cfg.push_back({{"name", tr[0]}, {"type", tr[1]}, {"numBeats", 4}, {"stepsPerBeat", 4}});
+            std::vector<bool> on;
+            for(char c : tr[2].get<std::string>()) on.push_back(c == 'x');
+            on.resize(16, false);
+            slot.push_back({{"stepOn", on}});
+        }
+        j["trackConfigs"] = cfg;
+        j["slots"] = ofJson::array({slot});
+        out.push_back(j);
+    }
+    return out;
+}
+
+// Snapshot / Morph...: published to the node from their right-click menu
+void scRhythmBox::publishSnap(const std::string& key) {
+    for(auto& pull : trackControlPulls) pull();
+    auto it = snapParams.find(key);
+    if(it == snapParams.end() || snapPublished.count(key)) return;
+    if(getParameterGroup().contains(key)) return;
+    snapPublished[key] = it->second();
+    parameterGroupChanged.notify(this);
+}
+
+void scRhythmBox::unpublishSnap(const std::string& key) {
+    auto it = snapPublished.find(key);
+    if(it == snapPublished.end() || it->second->hasInConnection() || it->second->hasOutConnections()) return;
+    removeParameter(it->second->getEscapedName());
+    snapPublished.erase(it);
+    parameterGroupChanged.notify(this);
+}
+
+void scRhythmBox::controlMenuItems(const std::string& key, bool withValue) {
+    for(auto& pull : trackControlPulls) pull();
+    auto value = controlValues.find(key);
+    if(withValue && value != controlValues.end()) {
+        auto* p = value->second;
+        scTyped::field(key, [p](){ return p->toString(); }, [p](const std::string& text){ p->fromString(ofTrim(text)); }, false);
+    }
+    auto it = snapPublished.find(key);
+    if(timeline.isHidden(key)) { if(ImGui::MenuItem("Publish to Node GUI")) timeline.reveal(key); }
+    else if(it == snapPublished.end()) { if(ImGui::MenuItem("Publish to Node GUI")) publishSnap(key); }
+    else if(it->second->hasInConnection() || it->second->hasOutConnections()) ImGui::TextDisabled("Disconnect it to unpublish");
+    else if(ImGui::MenuItem("Unpublish from Node")) timeline.unpublish(key);
+    timeline.menuItems(key);
+}
+
+void scRhythmBox::snapMenu(const std::string& key) {
+    timeline.mark(key);
+    if(snapPublished.count(key)) {
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y - 1.0f), ImVec2(b.x, b.y - 1.0f), ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
+    }
+    if(!ImGui::BeginPopupContextItem(("##rbSnap" + key).c_str())) return;
+    controlMenuItems(key);
+    ImGui::EndPopup();
+}
+
+void scRhythmBox::drawGlobalControls() {
+    float zoom = ofxOceanodeShared::getZoomLevel();
+    if(ImGui::Button("Parameters")) ImGui::OpenPopup("##rhythmControls");
+    if(ImGui::BeginPopup("##rhythmControls")) {
+        for(const auto& key : legacyControlKeys) if(ImGui::BeginMenu(key.c_str())) {
+            controlMenuItems(key);
+            ImGui::EndMenu();
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::SameLine(0, 14 * zoom);
+
+    // In Sync To Transport mode the global transport drives play/stop/position:
+    // the node's own Play / Stop / Reset are disabled (the synths ignore them).
+    const bool transportLocked = isSyncing();
+    if(transportLocked) ImGui::BeginDisabled();
+
+    // Play button (green when active)
+    bool playing = playSeq.get();
+    if(transportLocked) playing = getFrameTransportState().current.isPlaying;
+    if(playing) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.6f, 0.15f, 1.0f));
+    if(windowControl("Play", [&](){ return ImGui::Button(playing ? "|| Pause" : "|> Play"); })) {
+        playSeq.set(!playing);
+    }
+    if(playing) ImGui::PopStyleColor();
+
+    ImGui::SameLine(0, 6 * zoom);
+
+    // Stop button
+    if(ImGui::Button("[] Stop")) {
+        playSeq.set(false);
+        // Also send reset so playhead returns to step 0
+        resetSeq.set(1);
+        resetSeq.set(0);
+    }
+
+    ImGui::SameLine(0, 6);
+
+    // Reset button — pulses resetSeq 0→1→0 (one reset-counter increment in SC)
+    if(windowControl("Reset", [&](){ return ImGui::Button("Reset"); })) {
+        resetSeq.set(1);
+        resetSeq.set(0);
+    }
+    if(transportLocked) {
+        ImGui::EndDisabled();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Synced to the global transport (inspector: Sync To Transport).\n"
+                              "Play / Stop / Reset follow the transport.");
+    }
+
+    ImGui::SameLine(0, 20);
+
+    // Master volume slider
+    ImGui::TextUnformatted("Vol:");
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(100.0f);
+    float mv = masterVolP.get();
+    if(windowControl("MasterVol", [&](){ return ImGui::SliderFloat("##mastervol", &mv, 0.0f, 2.0f, "%.2f"); })) {
+        masterVolP.set(mv);
+    }
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Master output volume (all tracks)\n0..1 = attenuate, 1..2 = boost");
+
+    ImGui::SameLine(0, 14);
+    ImGui::TextUnformatted("Transpose:");
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(100.0f);
+    float gt = globalTransposeP.get();
+    if(windowControl("GTranspose", [&](){ return ImGui::SliderFloat("##gtranspose", &gt, -24.0f, 24.0f, "%.1f st"); })) {
+        globalTransposeP.set(gt);
+    }
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Global semitone offset added to all track transposes");
+
+    ImGui::SameLine(0, 14);
+    ImGui::TextUnformatted("StepProb:");
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(100.0f);
+    // StepProb: show the first track's value as representative; editing sets all tracks
+    {
+        auto spv = globalStepProbSubP.get();
+        float spFirst = spv.empty() ? 0.0f : spv[0];
+        if(windowControl("StepProb", [&](){ return ImGui::SliderFloat("##gstepprob", &spFirst, 0.0f, 1.0f, "%.2f"); })) {
+            spv.assign(numTracks, spFirst);
+            globalStepProbSubP.set(spv);
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Global step-probability reduction (subtracts from per-step prob before gate)\n0 = no reduction, 1 = all steps silenced");
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Sync To Transport
+// ════════════════════════════════════════════════════════════════════════════
+
+void scRhythmBox::handleSyncChanged(bool on) {
+    if(on) {
+        // Start from scratch: the first poll anchors every track (hard) at the
+        // current transport position. "sync"=1 is sent with that anchor (same
+        // timetag), so the synths switch clocks exactly at the anchor instant.
+        follower.reset();
+        for(auto& item : syncJoined) std::fill(item.second.begin(), item.second.end(), false);
+        for(int ti = 0; ti < MAX_TRACKS; ti++) {
+            stepClocks[ti].reset();
+            syncSpb[ti] = -1;
+            syncNs[ti]  = -1;
+            needHard[ti] = true;
+        }
+        syncBpm = getFrameTransportState().current.bpm;
+    } else {
+        // Back to the free clock. It kept running in the background with the
+        // node's own Play state (Play/Reset are still forwarded to SC while
+        // syncing, the synths just ignore them), so it simply resumes from
+        // wherever it is, at the node's BPM.
+        // Timetag it no earlier than the last anchor sent: anchors go out ahead
+        // of time (server latency, pre-sent loop wraps), and an untimed sync=0
+        // could otherwise be overridden by one of them landing afterwards.
+        scTransportSync::Anchor off;
+        off.steadyTimeUs = std::max(getFrameTransportState().current.steadyTimeUs, lastAnchorUs);
+        if(off.steadyTimeUs == lastAnchorUs) off.oscTimetag = lastAnchorTimetag;
+        scTransportSync::AnchorScope scope(off);
+        for(auto& [srv, synths] : trackSynths)
+            for(auto* s : synths)
+                if(s) {
+                    scSynthControlBatch controls(s, srv);
+                    controls.set("sync", 0.0f);
+                    controls.set("run",  0.0f);
+                    controls.set("bpm",  currentBpm);
+                    controls.send();
+                }
+    }
+}
+
+void scRhythmBox::updateTransportSync() {
+    const auto frame = getFrameTransportState();
+    const double offset = beatOffsetP.get();
+
+    // Pattern geometry (Steps/Beat, Beats) may change from the GUI, a slot
+    // switch, a preset or a track swap: re-anchor that track, hard.
+    for(int ti = 0; ti < numTracks && ti < MAX_TRACKS; ti++) {
+        const TrackConfig& tc = trackConfigs[ti];
+        const int spb = std::max(1, tc.stepsPerBeat);
+        const int ns  = std::max(1, tc.getNumSteps());
+        if(syncSpb[ti] != spb || syncNs[ti] != ns) {
+            syncSpb[ti] = spb;
+            syncNs[ti]  = ns;
+            stepClocks[ti].setPatternLength((double)ns);
+            needHard[ti] = true;
+            follower.requestAnchor();
+        }
+    }
+
+    for(const auto& a : follower.poll(frame))
+        sendAnchor(a);
+
+    // Playhead: computed from the transport beat (no SC read-back lag).
+    const double beat = frame.current.beatPosition;
+    for(int ti = 0; ti < numTracks && ti < (int)currentStep.size(); ti++) {
+        const double pos = (beat + offset) * std::max(1, syncSpb[ti]);
+        const double ns  = std::max(1, syncNs[ti]);
+        currentStep[ti] = (int)std::floor(scTransportSync::positiveMod(std::floor(pos), ns));
+    }
+}
+
+void scRhythmBox::sendAnchor(const scTransportSync::Anchor& a) {
+    const double offset = beatOffsetP.get();
+    syncBpm = a.bpm;
+    if(a.steadyTimeUs >= lastAnchorUs) {
+        lastAnchorUs = a.steadyTimeUs;
+        lastAnchorTimetag = a.oscTimetag;
+    }
+    anchorIdCounter += 1.0;
+
+    // A synth not confirmed by /n_go yet would store these sets and flush them
+    // later WITHOUT the timetag: skip it and anchor it (hard) next frame.
+    std::vector<bool> trackPending(numTracks, false);
+    for(auto& [srv, synths] : trackSynths)
+        for(int ti = 0; ti < numTracks && ti < (int)synths.size(); ti++)
+            if(synths[ti] && !synths[ti]->isCreated()) trackPending[ti] = true;
+
+    std::vector<scTransportSync::StepAnchor> anchors(numTracks);
+    std::vector<bool> fire(numTracks, false);
+    bool anyPending = false;
+    for(int ti = 0; ti < numTracks && ti < MAX_TRACKS; ti++) {
+        const double stepPos = (a.beat + offset) * std::max(1, syncSpb[ti]);
+        anchors[ti] = stepClocks[ti].make(stepPos, a.discontinuity || needHard[ti], a.playing);
+        const bool hard = anchors[ti].hard || needHard[ti];
+        if(hard) hardCounters[ti] += 1.0;
+        fire[ti] = hard && anchors[ti].fire;
+        needHard[ti] = false;
+        anyPending = anyPending || trackPending[ti];
+    }
+
+    {
+        scTransportSync::AnchorScope scope(a);
+        for(auto& [srv, synths] : trackSynths) {
+            for(int ti = 0; ti < numTracks && ti < (int)synths.size(); ti++) {
+                auto* s = synths[ti];
+                if(!s || !s->isCreated()) continue;
+                scSynthControlBatch controls(s, srv);
+                controls.set("sync",       1.0f);
+                controls.set("bpm",        a.bpm);
+                controls.set("run",        a.playing ? 1.0f : 0.0f);
+                controls.set("anchorPos",  anchors[ti].pos);
+                auto& joined = syncJoined[srv];
+                joined.resize(MAX_TRACKS, false);
+                const double stepPos = (a.beat + offset) * std::max(1, syncSpb[ti]);
+                const double frac = stepPos - std::floor(stepPos);
+                const bool joinFire = !joined[ti] && a.playing && (frac < 1e-4 || frac > 1.0 - 1e-4);
+                controls.set("anchorFire", (fire[ti] || joinFire) ? 1.0f : 0.0f);
+                controls.set("anchorHard", hardCounters[ti]);
+                controls.set("anchorId",   anchorIdCounter);   // last: starts the new anchor
+                controls.send();
+                joined[ti] = true;
+            }
+        }
+    }
+    if(anyPending) follower.requestAnchor();
+}
+
+
+void scRhythmBox::initializeTrackControls() {
+    for(int ti = 0; ti < MAX_TRACKS; ++ti) {
+        bindTrackControl(ti, "numBeats", 1, 16,
+            [this, ti](){ return trackConfigs[ti].numBeats; }, [this, ti](const auto& v){ trackConfigs[ti].numBeats = v; });
+        bindTrackControl(ti, "stepsPerBeat", 1, 16,
+            [this, ti](){ return trackConfigs[ti].stepsPerBeat; }, [this, ti](const auto& v){ trackConfigs[ti].stepsPerBeat = v; });
+        bindTrackControl(ti, "monoMode", false, true,
+            [this, ti](){ return trackConfigs[ti].monoMode; }, [this, ti](const auto& v){ trackConfigs[ti].monoMode = v; });
+        bindTrackControl(ti, "volLatch", false, true,
+            [this, ti](){ return trackConfigs[ti].volLatch; }, [this, ti](const auto& v){ trackConfigs[ti].volLatch = v; });
+        bindTrackControl(ti, "inPoint", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].inPoint; }, [this, ti](const auto& v){ trackConfigs[ti].inPoint = v; });
+        bindTrackControl(ti, "outPoint", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].outPoint; }, [this, ti](const auto& v){ trackConfigs[ti].outPoint = v; });
+        bindTrackControl(ti, "loopEnabled", false, true,
+            [this, ti](){ return trackConfigs[ti].loopEnabled; }, [this, ti](const auto& v){ trackConfigs[ti].loopEnabled = v; });
+        bindTrackControl(ti, "fixDuration", false, true,
+            [this, ti](){ return trackConfigs[ti].fixDuration; }, [this, ti](const auto& v){ trackConfigs[ti].fixDuration = v; });
+        bindTrackControl(ti, "durationBeats", 0.125f, 64.0f,
+            [this, ti](){ return trackConfigs[ti].durationBeats; }, [this, ti](const auto& v){ trackConfigs[ti].durationBeats = v; });
+        bindTrackControl(ti, "wavGrid", 0, 64,
+            [this, ti](){ return trackConfigs[ti].wavGrid; }, [this, ti](const auto& v){ trackConfigs[ti].wavGrid = v; });
+        bindTrackControl(ti, "envEnabled", false, true,
+            [this, ti](){ return trackConfigs[ti].envEnabled; }, [this, ti](const auto& v){ trackConfigs[ti].envEnabled = v; });
+        bindTrackControl(ti, "envAttack", 0.0f, 8.0f,
+            [this, ti](){ return trackConfigs[ti].envAttack; }, [this, ti](const auto& v){ trackConfigs[ti].envAttack = v; });
+        bindTrackControl(ti, "envHoldSteps", 0, 64,
+            [this, ti](){ return trackConfigs[ti].envHoldSteps; }, [this, ti](const auto& v){ trackConfigs[ti].envHoldSteps = v; });
+        bindTrackControl(ti, "envDecay", 0.0001f, 8.0f,
+            [this, ti](){ return trackConfigs[ti].envDecay; }, [this, ti](const auto& v){ trackConfigs[ti].envDecay = v; });
+        bindTrackControl(ti, "envCurveA", -8.0f, 8.0f,
+            [this, ti](){ return trackConfigs[ti].envCurveA; }, [this, ti](const auto& v){ trackConfigs[ti].envCurveA = v; });
+        bindTrackControl(ti, "envCurveD", -8.0f, 8.0f,
+            [this, ti](){ return trackConfigs[ti].envCurveD; }, [this, ti](const auto& v){ trackConfigs[ti].envCurveD = v; });
+        bindTrackControl(ti, "envSustain", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].envSustain; }, [this, ti](const auto& v){ trackConfigs[ti].envSustain = v; });
+        bindTrackControl(ti, "envRelease", 0.0001f, 8.0f,
+            [this, ti](){ return trackConfigs[ti].envRelease; }, [this, ti](const auto& v){ trackConfigs[ti].envRelease = v; });
+        bindTrackControl(ti, "filterMode", 0, 4,
+            [this, ti](){ return trackConfigs[ti].filterMode; }, [this, ti](const auto& v){ trackConfigs[ti].filterMode = v; });
+        bindTrackControl(ti, "filterRandom", false, true,
+            [this, ti](){ return trackConfigs[ti].filterRandom; }, [this, ti](const auto& v){ trackConfigs[ti].filterRandom = v; });
+        bindTrackControl(ti, "filterRandomRange", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].filterRandomRange; }, [this, ti](const auto& v){ trackConfigs[ti].filterRandomRange = v; });
+        bindTrackControl(ti, "kickWaveType", 0, 1,
+            [this, ti](){ return trackConfigs[ti].kickWaveType; }, [this, ti](const auto& v){ trackConfigs[ti].kickWaveType = v; });
+        bindTrackControl(ti, "kickStartNote", 12.0f, 127.0f,
+            [this, ti](){ return trackConfigs[ti].kickStartNote; }, [this, ti](const auto& v){ trackConfigs[ti].kickStartNote = v; });
+        bindTrackControl(ti, "kickEndNote", 12.0f, 127.0f,
+            [this, ti](){ return trackConfigs[ti].kickEndNote; }, [this, ti](const auto& v){ trackConfigs[ti].kickEndNote = v; });
+        bindTrackControl(ti, "kickPitchAttack", 0.0001f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].kickPitchAttack; }, [this, ti](const auto& v){ trackConfigs[ti].kickPitchAttack = v; });
+        bindTrackControl(ti, "kickPitchDecay", 0.0001f, 4.0f,
+            [this, ti](){ return trackConfigs[ti].kickPitchDecay; }, [this, ti](const auto& v){ trackConfigs[ti].kickPitchDecay = v; });
+        bindTrackControl(ti, "kickPitchCurve", -40.0f, 40.0f,
+            [this, ti](){ return trackConfigs[ti].kickPitchCurve; }, [this, ti](const auto& v){ trackConfigs[ti].kickPitchCurve = v; });
+        bindTrackControl(ti, "kickPMPitch", -48.0f, 48.0f,
+            [this, ti](){ return trackConfigs[ti].kickPMPitch; }, [this, ti](const auto& v){ trackConfigs[ti].kickPMPitch = v; });
+        bindTrackControl(ti, "kickPMIndex", 0.0f, 64.0f,
+            [this, ti](){ return trackConfigs[ti].kickPMIndex; }, [this, ti](const auto& v){ trackConfigs[ti].kickPMIndex = v; });
+        bindTrackControl(ti, "noiseType", 0, 3,
+            [this, ti](){ return trackConfigs[ti].noiseType; }, [this, ti](const auto& v){ trackConfigs[ti].noiseType = v; });
+        bindTrackControl(ti, "noiseDensity", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].noiseDensity; }, [this, ti](const auto& v){ trackConfigs[ti].noiseDensity = v; });
+        bindTrackControl(ti, "snareToneNote", 24.0f, 96.0f,
+            [this, ti](){ return trackConfigs[ti].snareToneNote; }, [this, ti](const auto& v){ trackConfigs[ti].snareToneNote = v; });
+        bindTrackControl(ti, "snareToneDecay", 0.01f, 2.0f,
+            [this, ti](){ return trackConfigs[ti].snareToneDecay; }, [this, ti](const auto& v){ trackConfigs[ti].snareToneDecay = v; });
+        bindTrackControl(ti, "snareToneLevel", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].snareToneLevel; }, [this, ti](const auto& v){ trackConfigs[ti].snareToneLevel = v; });
+        bindTrackControl(ti, "snareNoiseFreq", 100.0f, 10000.0f,
+            [this, ti](){ return trackConfigs[ti].snareNoiseFreq; }, [this, ti](const auto& v){ trackConfigs[ti].snareNoiseFreq = v; });
+        bindTrackControl(ti, "snareNoiseLevel", 0.0f, 2.0f,
+            [this, ti](){ return trackConfigs[ti].snareNoiseLevel; }, [this, ti](const auto& v){ trackConfigs[ti].snareNoiseLevel = v; });
+        bindTrackControl(ti, "clickCombOctave", 0, 10,
+            [this, ti](){ return trackConfigs[ti].clickCombOctave; }, [this, ti](const auto& v){ trackConfigs[ti].clickCombOctave = v; });
+        bindTrackControl(ti, "eqEnabled", false, true,
+            [this, ti](){ return trackConfigs[ti].eqEnabled; }, [this, ti](const auto& v){ trackConfigs[ti].eqEnabled = v; });
+        bindTrackControl(ti, "eqHPFreq", 20.0f, 18000.0f,
+            [this, ti](){ return trackConfigs[ti].eqHPFreq; }, [this, ti](const auto& v){ trackConfigs[ti].eqHPFreq = v; });
+        bindTrackControl(ti, "eqHPQ", 0.1f, 4.0f,
+            [this, ti](){ return trackConfigs[ti].eqHPQ; }, [this, ti](const auto& v){ trackConfigs[ti].eqHPQ = v; });
+        bindTrackControl(ti, "eqPeakFreq", 20.0f, 20000.0f,
+            [this, ti](){ return trackConfigs[ti].eqPeakFreq; }, [this, ti](const auto& v){ trackConfigs[ti].eqPeakFreq = v; });
+        bindTrackControl(ti, "eqPeakGain", -24.0f, 24.0f,
+            [this, ti](){ return trackConfigs[ti].eqPeakGain; }, [this, ti](const auto& v){ trackConfigs[ti].eqPeakGain = v; });
+        bindTrackControl(ti, "eqPeakQ", 0.1f, 8.0f,
+            [this, ti](){ return trackConfigs[ti].eqPeakQ; }, [this, ti](const auto& v){ trackConfigs[ti].eqPeakQ = v; });
+        bindTrackControl(ti, "eqLPFreq", 200.0f, 20000.0f,
+            [this, ti](){ return trackConfigs[ti].eqLPFreq; }, [this, ti](const auto& v){ trackConfigs[ti].eqLPFreq = v; });
+        bindTrackControl(ti, "eqLPQ", 0.1f, 4.0f,
+            [this, ti](){ return trackConfigs[ti].eqLPQ; }, [this, ti](const auto& v){ trackConfigs[ti].eqLPQ = v; });
+        bindTrackControl(ti, "euclPulses", 0, 64,
+            [this, ti](){ return trackConfigs[ti].euclPulses; }, [this, ti](const auto& v){ trackConfigs[ti].euclPulses = v; });
+        bindTrackControl(ti, "euclSteps", 1, 64,
+            [this, ti](){ return trackConfigs[ti].euclSteps; }, [this, ti](const auto& v){ trackConfigs[ti].euclSteps = v; });
+        bindTrackControl(ti, "euclOffset", 0, 63,
+            [this, ti](){ return trackConfigs[ti].euclOffset; }, [this, ti](const auto& v){ trackConfigs[ti].euclOffset = v; });
+        bindTrackControl(ti, "accentPulses", 0, 64,
+            [this, ti](){ return trackConfigs[ti].accentPulses; }, [this, ti](const auto& v){ trackConfigs[ti].accentPulses = v; });
+        bindTrackControl(ti, "accentSteps", 1, 64,
+            [this, ti](){ return trackConfigs[ti].accentSteps; }, [this, ti](const auto& v){ trackConfigs[ti].accentSteps = v; });
+        bindTrackControl(ti, "accentOffset", 0, 63,
+            [this, ti](){ return trackConfigs[ti].accentOffset; }, [this, ti](const auto& v){ trackConfigs[ti].accentOffset = v; });
+        bindTrackControl(ti, "accentHi", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].accentHi; }, [this, ti](const auto& v){ trackConfigs[ti].accentHi = v; });
+        bindTrackControl(ti, "accentLo", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].accentLo; }, [this, ti](const auto& v){ trackConfigs[ti].accentLo = v; });
+        bindTrackControl(ti, "accentBeatVar", 0.0f, 0.3f,
+            [this, ti](){ return trackConfigs[ti].accentBeatVar; }, [this, ti](const auto& v){ trackConfigs[ti].accentBeatVar = v; });
+        bindTrackControl(ti, "trackPitch", -24.0f, 24.0f,
+            [this, ti](){ return trackConfigs[ti].trackPitch; }, [this, ti](const auto& v){ trackConfigs[ti].trackPitch = v; });
+        bindTrackControl(ti, "globalVol", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].globalVol; }, [this, ti](const auto& v){ trackConfigs[ti].globalVol = v; });
+        bindTrackControl(ti, "globalProb", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].globalProb; }, [this, ti](const auto& v){ trackConfigs[ti].globalProb = v; });
+        bindTrackControl(ti, "sequenceProb", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].sequenceProb; }, [this, ti](const auto& v){ trackConfigs[ti].sequenceProb = v; });
+        bindTrackControl(ti, "globalStepProbSub", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].globalStepProbSub; }, [this, ti](const auto& v){ trackConfigs[ti].globalStepProbSub = v; });
+        bindTrackControl(ti, "globalCut", -1.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].globalCut; }, [this, ti](const auto& v){ trackConfigs[ti].globalCut = v; });
+        bindTrackControl(ti, "globalPanOffset", -1.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].globalPanOffset; }, [this, ti](const auto& v){ trackConfigs[ti].globalPanOffset = v; });
+        bindTrackControl(ti, "globalRes", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].globalRes; }, [this, ti](const auto& v){ trackConfigs[ti].globalRes = v; });
+        bindTrackControl(ti, "lfoEnabled", false, true,
+            [this, ti](){ return trackConfigs[ti].lfoEnabled; }, [this, ti](const auto& v){ trackConfigs[ti].lfoEnabled = v; });
+        bindTrackControl(ti, "lfoRate", 0.0625f, 64.0f,
+            [this, ti](){ return trackConfigs[ti].lfoRate; }, [this, ti](const auto& v){ trackConfigs[ti].lfoRate = v; });
+        bindTrackControl(ti, "lfoDepth", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].lfoDepth; }, [this, ti](const auto& v){ trackConfigs[ti].lfoDepth = v; });
+        bindTrackControl(ti, "lfoShape", 0, 3,
+            [this, ti](){ return trackConfigs[ti].lfoShape; }, [this, ti](const auto& v){ trackConfigs[ti].lfoShape = v; });
+        bindTrackControl(ti, "lfoPhase", 0.0f, 1.0f,
+            [this, ti](){ return trackConfigs[ti].lfoPhase; }, [this, ti](const auto& v){ trackConfigs[ti].lfoPhase = v; });
+        bindTrackControl(ti, "lfoPulseWidth", 0.01f, 0.99f,
+            [this, ti](){ return trackConfigs[ti].lfoPulseWidth; }, [this, ti](const auto& v){ trackConfigs[ti].lfoPulseWidth = v; });
+        bindTrackControl(ti, "decayRange", 0.0f, 5.0f,
+            [this, ti](){ return trackConfigs[ti].decayRange; }, [this, ti](const auto& v){ trackConfigs[ti].decayRange = v; });
+        bindTrackControl(ti, "sliceFit", false, true,
+            [this, ti](){ return trackConfigs[ti].sliceFit; }, [this, ti](const auto& v){ trackConfigs[ti].sliceFit = v; });
+        bindTrackControl(ti, "sliceGrid", 0, 128,
+            [this, ti](){ return trackConfigs[ti].sliceGrid; }, [this, ti](const auto& v){ trackConfigs[ti].sliceGrid = v; });
+        bindTrackControl(ti, "slicePoints", std::vector<float> {0.0f}, std::vector<float> {1.0f},
+            [this, ti](){ return trackConfigs[ti].slicePoints; }, [this, ti](const auto& v){ trackConfigs[ti].slicePoints = v; });
+        bindTrackControl(ti, "muted", false, true,
+            [this, ti](){ return trackConfigs[ti].muted; }, [this, ti](const auto& v){ trackConfigs[ti].muted = v; });
+        bindTrackControl(ti, "solo", false, true,
+            [this, ti](){ return trackConfigs[ti].solo; }, [this, ti](const auto& v){ trackConfigs[ti].solo = v; });
+        bindTrackControl(ti, "shift", -63, 63,
+            [this, ti](){ return track(ti).shift; }, [this, ti](const auto& v){ track(ti).shift = v; });
+        bindTrackControl(ti, "arpEnabled", false, true,
+            [this, ti](){ return track(ti).arpEnabled; }, [this, ti](const auto& v){ track(ti).arpEnabled = v; });
+        bindTrackControl(ti, "arpInterval", -24.0f, 24.0f,
+            [this, ti](){ return track(ti).arpInterval; }, [this, ti](const auto& v){ track(ti).arpInterval = v; });
+        bindTrackControl(ti, "arpModulo", 1, 16,
+            [this, ti](){ return track(ti).arpModulo; }, [this, ti](const auto& v){ track(ti).arpModulo = v; });
+        bindTrackControl(ti, "arpGateWidth", 0.0f, 1.0f,
+            [this, ti](){ return track(ti).arpGateWidth; }, [this, ti](const auto& v){ track(ti).arpGateWidth = v; });
+        bindTrackControl(ti, "arpSpeedMode", 0, 1,
+            [this, ti](){ return track(ti).arpSpeedMode; }, [this, ti](const auto& v){ track(ti).arpSpeedMode = v; });
+        bindTrackControl(ti, "globalArpEnabled", false, true,
+            [this, ti](){ return track(ti).globalArpEnabled; }, [this, ti](const auto& v){ track(ti).globalArpEnabled = v; });
+        bindTrackControl(ti, "globalArpSpeed", 0.0f, 127.0f,
+            [this, ti](){ return track(ti).globalArpSpeed; }, [this, ti](const auto& v){ track(ti).globalArpSpeed = v; });
+        bindTrackControl(ti, "stepOn", std::vector<int> {0}, std::vector<int> {1},
+            [this, ti](){ return std::vector<int>(track(ti).stepOn.begin(), track(ti).stepOn.end()); }, [this, ti](const auto& v){ track(ti).stepOn.assign(v.begin(), v.end()); track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepVol", std::vector<float> {0.0f}, std::vector<float> {1.0f},
+            [this, ti](){ return track(ti).stepVol; }, [this, ti](const auto& v){ track(ti).stepVol = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepProb", std::vector<float> {0.0f}, std::vector<float> {1.0f},
+            [this, ti](){ return track(ti).stepProb; }, [this, ti](const auto& v){ track(ti).stepProb = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepProbGroup", std::vector<int> {0}, std::vector<int> {99},
+            [this, ti](){ return track(ti).stepProbGroup; }, [this, ti](const auto& v){ track(ti).stepProbGroup = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepPan", std::vector<float> {-1.0f}, std::vector<float> {1.0f},
+            [this, ti](){ return track(ti).stepPan; }, [this, ti](const auto& v){ track(ti).stepPan = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepCut", std::vector<float> {-1.0f}, std::vector<float> {1.0f},
+            [this, ti](){ return track(ti).stepCut; }, [this, ti](const auto& v){ track(ti).stepCut = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepRes", std::vector<float> {0.0f}, std::vector<float> {1.0f},
+            [this, ti](){ return track(ti).stepRes; }, [this, ti](const auto& v){ track(ti).stepRes = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepPitch", std::vector<int> {-12}, std::vector<int> {12},
+            [this, ti](){ return track(ti).stepPitch; }, [this, ti](const auto& v){ track(ti).stepPitch = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepReverse", std::vector<int> {0}, std::vector<int> {1},
+            [this, ti](){ return std::vector<int>(track(ti).stepReverse.begin(), track(ti).stepReverse.end()); }, [this, ti](const auto& v){ track(ti).stepReverse.assign(v.begin(), v.end()); track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepArp", std::vector<int> {0}, std::vector<int> {1},
+            [this, ti](){ return std::vector<int>(track(ti).stepArp.begin(), track(ti).stepArp.end()); }, [this, ti](const auto& v){ track(ti).stepArp.assign(v.begin(), v.end()); track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepArpSpeed", std::vector<float> {0.0f}, std::vector<float> {127.0f},
+            [this, ti](){ return track(ti).stepArpSpeed; }, [this, ti](const auto& v){ track(ti).stepArpSpeed = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepSlice", std::vector<int> {0}, std::vector<int> {63},
+            [this, ti](){ return track(ti).stepSlice; }, [this, ti](const auto& v){ track(ti).stepSlice = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepSliceOn", std::vector<int> {0}, std::vector<int> {1},
+            [this, ti](){ return std::vector<int>(track(ti).stepSliceOn.begin(), track(ti).stepSliceOn.end()); }, [this, ti](const auto& v){ track(ti).stepSliceOn.assign(v.begin(), v.end()); track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepDecayOffset", std::vector<float> {-1.0f}, std::vector<float> {1.0f},
+            [this, ti](){ return track(ti).stepDecayOffset; }, [this, ti](const auto& v){ track(ti).stepDecayOffset = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepShape", std::vector<float> {0.0f}, std::vector<float> {20.0f},
+            [this, ti](){ return track(ti).stepShape; }, [this, ti](const auto& v){ track(ti).stepShape = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepHiRel", std::vector<float> {0.01f}, std::vector<float> {2.0f},
+            [this, ti](){ return track(ti).stepHiRel; }, [this, ti](const auto& v){ track(ti).stepHiRel = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepCombPitch", std::vector<float> {0.0f}, std::vector<float> {12.0f},
+            [this, ti](){ return track(ti).stepCombPitch; }, [this, ti](const auto& v){ track(ti).stepCombPitch = v; track(ti).resizeSteps(); });
+        bindTrackControl(ti, "stepCombDecay", std::vector<float> {0.0f}, std::vector<float> {8.0f},
+            [this, ti](){ return track(ti).stepCombDecay; }, [this, ti](const auto& v){ track(ti).stepCombDecay = v; track(ti).resizeSteps(); });
+    }
+}
+
+void scRhythmBox::presetHasLoaded() {
+    if(!legacyPublishing) return;
+    legacyPublishing = false;
+    for(const auto& key : legacyControlKeys) {
+        auto it = snapPublished.find(key);
+        if(it != snapPublished.end() && !it->second->hasInConnection() && !it->second->hasOutConnections())
+            unpublishSnap(key);
+    }
+}
+
+void scRhythmBox::flushTrackControls() {
+    auto edits = std::move(pendingTrackEdits);
+    pendingTrackEdits.clear();
+    for(auto& edit : edits) edit();
+}
+
+void scRhythmBox::stepMenu(int ti, const std::string& field, int step) {
+    const auto key = trackControlKey(ti, field);
+    if(key.empty() || step < 0 || step >= MAX_STEPS) return;
+    timeline.mark(key);
+    const auto it = controlValues.find(key);
+    if(it == controlValues.end()) return;
+    const std::string popup = "##rbStep" + key + ofToString(step);
+    if(!ImGui::BeginPopupContextItem(popup.c_str())) return;
+    for(auto& pull : trackControlPulls) pull();
+    auto* parameter = it->second;
+    auto edit = [&](auto& p) {
+        using Vec = std::decay_t<decltype(p.get())>;
+        using T = typename Vec::value_type;
+        scTyped::field(popup, [&](){
+            const auto& v = p.get();
+            return ofToString(step < (int)v.size() ? v[step] : T{});
+        }, [&](const std::string& text){
+            auto v = p.get();
+            v.resize(MAX_STEPS, T{});
+            v[step] = static_cast<T>(ofToFloat(text));
+            p.set(v);
+        }, false);
+    };
+    if(parameter->valueType() == typeid(std::vector<float>).name()) edit(parameter->cast<std::vector<float>>());
+    else if(parameter->valueType() == typeid(std::vector<int>).name()) edit(parameter->cast<std::vector<int>>());
+    controlMenuItems(key, false);
+    if(field == "stepSlice" && ImGui::BeginMenu("Slice enabled")) {
+        controlMenuItems(trackControlKey(ti, "stepSliceOn"));
+        ImGui::EndMenu();
+    }
+    ImGui::EndPopup();
+}
+
+std::vector<ofxSCServer*> scRhythmBox::activeGraphServers() const {
+    std::vector<ofxSCServer*> servers;
+    for(const auto& item : mixBuses) if(item.first && item.second) servers.push_back(item.first);
+    return servers;
+}

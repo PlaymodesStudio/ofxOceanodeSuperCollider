@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Demo presets for the SC PulsarBox node (src/nodes/scPulsarBox.h).
+"""Demo presets for the SC PulsarBox node (src/nodes/boxSynths/pulsarBox/scPulsarBox.h).
 
 Writes <name>.json into presets/nodeSnapshots/PulsarBox/Presets (the source) and,
 if it exists, the OceanAudio app's data/nodeSnapshots/PulsarBox/Presets. Keys

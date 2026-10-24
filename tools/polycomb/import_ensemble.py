@@ -101,7 +101,7 @@ def closest_chord(pcs):
 USER_CHORD_2018={'xespills'}
 def controls_from_source():
     """Literal defaults/ranges from the current production sources, no app execution."""
-    cpp=(ROOT/'src/nodes/scPolyComb.cpp').read_text();header=(ROOT/'src/nodes/scPolyComb.h').read_text()
+    cpp=(ROOT/'src/nodes/boxSynths/polyComb/scPolyComb.cpp').read_text();header=(ROOT/'src/nodes/boxSynths/polyComb/scPolyComb.h').read_text()
     types={}
     for typ,names in re.findall(r'ofParameter<([^<>]+)>\s+([^;]+);',header):
         for name in names.split(','):
@@ -134,7 +134,7 @@ def controls_from_source():
     for b,f in zip(('Low','Lo_Mid','Mid','Hi_Mid','High'),(80,250,1000,4000,12000)):
         for suffix,d,lo,hi in (('',0,-24,24),('_Freq',f,20,20000),('_Slope' if b in ('Low','High') else '_Q',1,.1,4 if b in ('Low','High') else 20)):
             key='EQ_'+b+suffix;out[key]=dict(name=key.replace('_',' '),default=float(d),min=lo,max=hi,type='float')
-    mod=(ROOT/'src/nodes/scModulation.cpp').read_text()
+    mod=(ROOT/'src/nodes/boxSynths/shared/scModulation.cpp').read_text()
     # Defaults are the shared source setup's literal values, repeated per source.
     vectors={'Beats':(1,.125,512),'Hz':(1,0,50),'S&H':(0,0,32),'Detune':(0,0,8),'Round':(.5,0,1),'Skew':(0,-1,1),'Width':(.5,0,1),'Gain':(1,1,16),'Pow':(0,-1,1),'BiPow':(0,-1,1)}
     scalars={'Phase':(0,0,1),'S&H_Glide':(0,0,10),'Noise_Scale':(1,0,10),'Spread':(1,0,16),'Invert':(0,0,1),'Shuffle':(0,0,1),'Random':(0,0,1),'Offset':(0,-8,8),'Combination':(0,0,1)}

@@ -69,7 +69,7 @@ print('PASS: 5 native banks, UUID slot order, Flute #1 / Tarrega #55, 65 unchang
 
 # Exercise the actual migration block against real temporary files. A failed
 # bank load must retain the old files; either path must preserve byte-exact edits.
-node = (ROOT / 'src/nodes/scSteamPipeBox.cpp').read_text()
+node = (ROOT / 'src/nodes/boxSynths/steamPipeBox/scSteamPipeBox.cpp').read_text()
 start = node.index('    const std::vector<std::string> legacyBanks=')
 end = node.index('    if(snaps.active<0', start)
 cpp = r'''

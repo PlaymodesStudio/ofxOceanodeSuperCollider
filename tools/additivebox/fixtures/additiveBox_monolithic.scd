@@ -1,6 +1,6 @@
 // Reference: AdditiveBox's voice before the lanes and cores were split into
 // chunks (2026-10-21), for tools/additivebox/chunk_null_test.py. Test-only.
-// additiveBox.scd — SynthDefs for the AdditiveBox C++ node (src/nodes/scAdditiveBox.*)
+// additiveBox.scd — SynthDefs for the AdditiveBox C++ node (src/nodes/boxSynths/additiveBox/scAdditiveBox.*)
 //
 // A polyphonic additive synth in the Harmor / Razor family: every partial of
 // every voice has its own envelope, level, filter gain, sweep, vibrato, noise,

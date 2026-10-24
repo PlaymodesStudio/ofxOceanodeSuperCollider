@@ -1,4 +1,4 @@
-// additiveBox.scd — SynthDefs for the AdditiveBox C++ node (src/nodes/scAdditiveBox.*)
+// additiveBox.scd — SynthDefs for the AdditiveBox C++ node (src/nodes/boxSynths/additiveBox/scAdditiveBox.*)
 //
 // A polyphonic additive synth in the Harmor / Razor family: every partial of
 // every voice has its own envelope, level, filter gain, sweep, vibrato, noise,

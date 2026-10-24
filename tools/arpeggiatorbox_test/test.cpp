@@ -1,5 +1,5 @@
 // ArpeggiatorBox engine tests: tools/arpeggiatorbox_test/run.sh
-#include "../../src/nodes/scArpeggiatorBoxEngine.h"
+#include "../../src/nodes/boxSynths/arpeggiatorBox/scArpeggiatorBoxEngine.h"
 #include <cstdio>
 #include <cstdlib>
 #include <string>

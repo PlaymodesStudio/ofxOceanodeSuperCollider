@@ -2,7 +2,7 @@
 """Check production noise for collective crossings, continuity and voice spacing."""
 import pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-s=(ROOT/'src/nodes/scModulation.cpp').read_text();a=s.index('float scModulation::noise2(');b=s.index('\n}',a)+2;method=s[a:b]
+s=(ROOT/'src/nodes/boxSynths/shared/scModulation.cpp').read_text();a=s.index('float scModulation::noise2(');b=s.index('\n}',a)+2;method=s[a:b]
 # All server-backed noise paths must use exactly the same algorithm.
 bodies=[]
 for f in ['Modulation/modulation.scd','Modulation/modulationRandom.scd','AdditiveBox/additiveBox.scd','GrainBox/scGrainBoxPoly.scd']:

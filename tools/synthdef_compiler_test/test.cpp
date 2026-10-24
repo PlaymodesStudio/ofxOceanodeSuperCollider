@@ -4,7 +4,7 @@
 #include <cassert>
 // Inspect the actual compiler's queue without driving the confirmation UI.
 #define private public
-#include "scSynthdefCompiler.h"
+#include "synthdefs/scSynthdefCompiler.h"
 #undef private
 #include "serverManager.h"
 namespace fs = std::filesystem;

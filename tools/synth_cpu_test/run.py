@@ -55,12 +55,12 @@ template<class A,class B> void equal(const A& a,const B& b) {
 }
 '''
 
-eq = (ROOT / "src/nodes/scEQEditor.h").read_text()
+eq = (ROOT / "src/ui/scEQEditor.h").read_text()
 eq = eq[eq.index("class scEQEditor {"):eq.index("    static float logFreqToX")]
 eq += "};\n"
 
-mod = (ROOT / "src/nodes/scModulation.cpp").read_text()
-mod_header = (ROOT / "src/nodes/scModulation.h").read_text()
+mod = (ROOT / "src/nodes/boxSynths/shared/scModulation.cpp").read_text()
+mod_header = (ROOT / "src/nodes/boxSynths/shared/scModulation.h").read_text()
 helpers = mod[mod.index("float reflectUnit("):mod.index("// 2D Perlin noise")]
 helpers = helpers[:helpers.rfind("}")]  # remove anonymous namespace's closing brace
 cache = mod_header[mod_header.index("    struct TableCache"):mod_header.index("    struct ParamTarget")]
@@ -95,7 +95,7 @@ formula_path = ROOT.parent / "ofxSantiNodes/src/formula.h"
 formula = formula_class(formula_path.read_text(), "Formula")
 baseline = formula_class(args.formula_baseline.read_text(), "Baseline") if args.formula_baseline else ""
 
-polycomb = (ROOT / "src/nodes/scPolyComb.cpp").read_text()
+polycomb = (ROOT / "src/nodes/boxSynths/polyComb/scPolyComb.cpp").read_text()
 osc_listener = polycomb[polycomb.index("    auto toOsc ="):polycomb.index("    auto toAllOsc =")]
 transition_test = r'''
 class OscillatorTransitions { public:
@@ -131,7 +131,7 @@ void testTransitions() {
 }
 '''
 
-batch = (ROOT / "src/scSynthControlBatch.h").read_text()
+batch = (ROOT / "src/audio/scSynthControlBatch.h").read_text()
 batch = batch[batch.index("class scSynthControlBatch"):]
 batch_test = r'''
 struct OscArg { char type; std::string text; float f=0; int i=0; };

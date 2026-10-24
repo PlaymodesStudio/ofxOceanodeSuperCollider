@@ -1,7 +1,7 @@
 # PulsarBox
 
 Pulsar synthesis (Curtis Roads) for OceanAudio: the node is
-`src/nodes/scPulsarBox.h`, the synths are `pulsarbox.scd` here.
+`src/nodes/boxSynths/pulsarBox/scPulsarBox.h`, the synths are `pulsarbox.scd` here.
 
 Every voice emits pulses at its Fundamental: below about 20 Hz you hear a
 rhythm, above it a pitch. Each pulse holds 1 to 4 formant layers. A layer is a

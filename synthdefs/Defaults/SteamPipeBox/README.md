@@ -43,7 +43,7 @@ Evaluate `steampipeBox.scd` after loading the class. It writes `SteamPipeBoxVoic
 `CompiledSynthdefs/SteamPipeBox`. Compile the shared Defaults `Modulation`,
 `MixerPro/mixerpro.scd` if needed. Rebuild Oceanode
 for the registered C++ node; manually maintained source lists must include
-`src/nodes/scSteamPipeBox.cpp`.
+`src/nodes/boxSynths/steamPipeBox/scSteamPipeBox.cpp`.
 
 ## DSP and fidelity
 

@@ -2,7 +2,7 @@
 //
 //  PhysicalModes.h — PhysicalBox's body models and parameter list, shared by the
 //  PhysicalVoice UGen (OceanodePhysical.cpp) and the node's display
-//  (src/nodes/scPhysicalBox.cpp), so what the window draws is what plays.
+//  (src/nodes/boxSynths/physicalBox/scPhysicalBox.cpp), so what the window draws is what plays.
 //
 //  The body B is a model from a family (bfamily); Shape (bshape, 0..1) morphs
 //  through the models of that family. A model holds its modes' frequency

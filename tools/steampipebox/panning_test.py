@@ -2,7 +2,7 @@
 """Check real placement math and preserve all factory presets' legacy panning."""
 import json,pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-s=(ROOT/'src/nodes/scSteamPipeBox.cpp').read_text();a=s.index('std::vector<float> scSteamPipeBox::panPositions()');b=s.index('\n}',a)+2;method=s[a:b]
+s=(ROOT/'src/nodes/boxSynths/steamPipeBox/scSteamPipeBox.cpp').read_text();a=s.index('std::vector<float> scSteamPipeBox::panPositions()');b=s.index('\n}',a)+2;method=s[a:b]
 old=subprocess.check_output(['git','show','d6d1cc5:src/nodes/scSteamPipeBox.cpp'],cwd=ROOT,text=True)
 a=old.index('        float width=1;',old.index('void scSteamPipeBox::sendSound'));b=old.index('        st.spread->set("pan"',a);legacy=old[a:b]
 controls=json.loads((ROOT/'synthdefs/Defaults/SteamPipeBox/controls.json').read_text());keys={c['sc']:c['name']for c in controls}

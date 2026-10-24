@@ -47,7 +47,7 @@ int main(int argc,char** argv){
 }
 '''
 def main():
- source=Path(sys.argv[1]) if len(sys.argv)>1 else ROOT/'src/scSynthdef.cpp'
+ source=Path(sys.argv[1]) if len(sys.argv)>1 else ROOT/'src/nodes/synthdefs/scSynthdef.cpp'
  fixtures=Path(sys.argv[2]) if len(sys.argv)>2 else Path(__file__).with_name('fixtures')
  text=source.read_text(); body=text[text.index('synthdefDesc scSynthdef::readAndCreateSynthdef('):text.index('\nstring scSynthdef::getSynthdefFilename()')]
  with tempfile.TemporaryDirectory(prefix='sc-metadata-') as folder:

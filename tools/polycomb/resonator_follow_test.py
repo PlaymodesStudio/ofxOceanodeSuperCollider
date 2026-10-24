@@ -2,7 +2,7 @@
 """Production comb controls: shared oscillator map + coarse/fine offsets."""
 import pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-s=(ROOT/'src/nodes/scPolyComb.cpp').read_text();a=s.index('        case IComb:',s.index('void scPolyComb::sendIns'));b=s.index('        case IRing:',a);branch=s[a:b]
+s=(ROOT/'src/nodes/boxSynths/polyComb/scPolyComb.cpp').read_text();a=s.index('        case IComb:',s.index('void scPolyComb::sendIns'));b=s.index('        case IRing:',a);branch=s[a:b]
 code=r'''
 #include <vector>
 #include <map>

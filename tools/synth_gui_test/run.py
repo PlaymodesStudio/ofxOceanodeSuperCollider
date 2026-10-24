@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(prefix="synth_gui_test_") as directory:
     pathlib.Path(directory, "imconfig.h").write_text("#pragma once\n")
     # Exercise the production ring-to-display update as well: no incoming
     # data must preserve the revision; every dirty update must keep age order.
-    source = (root / "src/nodes/scGrainBoxPoly.cpp").read_text()
+    source = (root / "src/nodes/boxSynths/grainBoxPoly/scGrainBoxPoly.cpp").read_text()
     start = source.index("void scGrainBoxPoly::updateLivePeaks(")
     end = source.index("\n}\n", start) + 2
     live_test = r'''

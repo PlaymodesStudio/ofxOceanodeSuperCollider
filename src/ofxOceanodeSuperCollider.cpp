@@ -9,15 +9,15 @@
 #include "ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanode.h"
 #include "scStart.h"
-#include "scSynthdef.h"
-#include "scOldSynthdef.h"
+#include "nodes/synthdefs/scSynthdef.h"
+#include "nodes/synthdefs/scOldSynthdef.h"
 #include "scNode.h"
-#include "MacroMixerSCBus.h"
+#include "integration/MacroMixerSCBus.h"
 #include "ofxOceanodeSuperColliderController.h"
 #include "ofxSCServer.h"
 #include "serverManager.h"
 #include <cmath>
-#include "nodes/scFeedbackNode.h"   // refreshSynthdefModels
+#include "nodes/routing/scFeedbackNode.h"   // refreshSynthdefModels
 
 namespace ofxOceanodeSuperCollider{
 
@@ -58,7 +58,7 @@ void refreshSynthdefModels(ofxOceanode &o){
 						const std::string category = desc.category.empty() ? "SuperCollider" : "SuperCollider/" + desc.category;
 						const std::string nodeName = "SC " + desc.name + "*";
 						if(desc.name == "FeedbackNode"){
-							o.refreshModelNamed<scFeedbackNode>(nodeName, category, desc);
+							o.refreshModelNamed<scFeedbackNode>(nodeName, "SuperCollider/Routing", desc);
 						}else{
 							o.refreshModelNamed<scSynthdef>(nodeName, category, desc);
 						}

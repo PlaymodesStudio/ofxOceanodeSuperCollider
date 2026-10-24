@@ -20,7 +20,7 @@ uses the existing `Defaults/Modulation/modulation.scd` and
 `Defaults/MixerPro/mixerpro.scd`; compile these if their compiled folders
 are missing. Rebuild the Oceanode app to include the new C++ node. Normal OF
 addon builds discover the new `.cpp` automatically; manually maintained IDE
-source lists need `src/nodes/scAliasingBox.cpp` added.
+source lists need `src/nodes/boxSynths/aliasingBox/scAliasingBox.cpp` added.
 
 The node exposes Show, Voices (1–16), Channels (1–16), Gate, Pitch, Velocity,
 Master and Reset (LFOs), like PolyComb and AnalogBox. Gate Mode

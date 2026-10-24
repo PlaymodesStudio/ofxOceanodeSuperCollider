@@ -2,7 +2,7 @@
 """New bank + Store workflow, persistence, backup and failed-write safety."""
 import pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-s=(ROOT/'src/nodes/scSnapshots.h').read_text()
+s=(ROOT/'src/nodes/boxSynths/shared/scSnapshots.h').read_text()
 store=s[s.index('    std::string name(int k) const'):s.index('    void recall(int slot)')]
 methods=s[s.index('    void saveLibrary()'):s.index('    // ── Named presets:')]
 pre=r'''

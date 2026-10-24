@@ -1,5 +1,5 @@
 // spectralFilterBox.scd — SynthDefs for the SC Spectral Filter Box node
-// (src/nodes/scSpectralFilterBox.*).
+// (src/nodes/boxSynths/spectralFilterBox/scSpectralFilterBox.*).
 //
 // A spectral filter drawn by a vector: per channel FFT -> PV_MaskFilter ->
 // IFFT (sine windows, 50% overlap: unity gain), the dry signal delayed to line

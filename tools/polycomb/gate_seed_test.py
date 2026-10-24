@@ -2,14 +2,14 @@
 """Production Gate listener / reseeding path, recording OSC for two servers."""
 import ast,pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-s=(ROOT/'src/nodes/scPolyComb.cpp').read_text();a=s.index('void scPolyComb::randomizeMapSeedsOnGate(');b=s.index('\n}\n',a)+3
+s=(ROOT/'src/nodes/boxSynths/polyComb/scPolyComb.cpp').read_text();a=s.index('void scPolyComb::randomizeMapSeedsOnGate(');b=s.index('\n}\n',a)+3
 fn=s[a:b]
 a=s.index('listeners.push(gate.newListener(');a=s.index('std::vector<float>& v) {',a)+len('std::vector<float>& v) {');b=s.index('\n    }));',a);listener=s[a:b]
 adapter=ast.parse((ROOT/'tools/polycomb/note_traffic_test.py').read_text())
 stub=next(ast.literal_eval(n.value)for n in adapter.body if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='stub'for t in n.targets))
 code=r'''
 #include <algorithm>
-#include "scSynthControlBatch.h"
+#include "audio/scSynthControlBatch.h"
 namespace scScheduling{bool suppressed=false;bool isBackendSendSuppressed(){return suppressed;}}
 int randomCalls=0;float ofRandom(float){++randomCalls;return 100.f;}
 template<class T>struct Param{T v{};T get()const{return v;}void setWithoutEventNotifications(T value){v=value;}};

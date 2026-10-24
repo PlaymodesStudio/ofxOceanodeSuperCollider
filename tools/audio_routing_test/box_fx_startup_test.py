@@ -7,7 +7,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 MOCK = r'''
-#include "scFxRouting.h"
+#include "audio/scFxRouting.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -116,7 +116,8 @@ int main() {
 
 with tempfile.TemporaryDirectory(prefix='box-fx-startup-') as tmp:
     for name in ('SteamPipe', 'FM', 'Aliasing', 'Physical', 'Analog', 'Slicer'):
-        text = (ROOT / f'src/nodes/sc{name}Box.cpp').read_text()
+        directory = 'fmBox' if name == 'FM' else name[0].lower() + name[1:] + 'Box'
+        text = (ROOT / f'src/nodes/boxSynths/{directory}/sc{name}Box.cpp').read_text()
         methods = []
         for method in ('updateStages', 'routeChain'):
             start = text.index(f'void sc{name}Box::{method}(')
@@ -134,7 +135,7 @@ with tempfile.TemporaryDirectory(prefix='box-fx-startup-') as tmp:
         subprocess.run([str(exe)], check=True)
 
 # EchoBox inserts only on its wet branch; dry/wet selection must also wait.
-text = (ROOT / 'src/nodes/scEchoBox.cpp').read_text()
+text = (ROOT / 'src/nodes/boxSynths/echoBox/scEchoBox.cpp').read_text()
 methods = []
 for method in ('routeWet', 'updateReverb'):
     start = text.index(f'void scEchoBox::{method}(')

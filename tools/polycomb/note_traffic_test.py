@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-source = (ROOT / 'src/nodes/scPolyComb.cpp').read_text()
+source = (ROOT / 'src/nodes/boxSynths/polyComb/scPolyComb.cpp').read_text()
 functions = []
 for name in ('sendGate', 'sendPitch', 'sendSub'):
     start = source.index(f'void scPolyComb::{name}(')
@@ -40,7 +40,7 @@ struct ofxSCSynth {
 test = r'''
 #include <algorithm>
 #include <iostream>
-#include "scSynthControlBatch.h"
+#include "audio/scSynthControlBatch.h"
 template<class T> struct Param { T value; T get()const{return value;} };
 std::vector<float> expand(const std::vector<float>& v,int n,float fallback=0){
     if(v.empty())return std::vector<float>(n,fallback);

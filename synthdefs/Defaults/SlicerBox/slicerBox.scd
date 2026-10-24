@@ -1,4 +1,4 @@
-// slicerBox.scd — SynthDefs for the SlicerBox C++ node (src/nodes/scSlicerBox.*)
+// slicerBox.scd — SynthDefs for the SlicerBox C++ node (src/nodes/boxSynths/slicerBox/scSlicerBox.*)
 //
 // One persistent synth plays every slice of one buffer: a voice per slice,
 // each triggered by its own lane of the gate vector.

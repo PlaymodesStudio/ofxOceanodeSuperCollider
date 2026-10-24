@@ -44,7 +44,7 @@ for t,f in [(-12.25,0),(3.75,0),(-12.,.137),(12.75,.5)]:
  assert abs(converted['Sub_Transpose']+converted['Sub_Fine_Tune']-t-f)<1e-5
  assert migrate([converted])[0]==converted
 src=r'''
-#include "scPolyCombPitchMap.h"
+#include "nodes/boxSynths/polyComb/scPolyCombPitchMap.h"
 #include <cassert>
 #include <cmath>
 using namespace pcmap;
@@ -111,6 +111,6 @@ int main(){
 '''
 with tempfile.TemporaryDirectory() as d:
  source=pathlib.Path(d)/'test.cpp';source.write_text(src);exe=pathlib.Path(d)/'test'
- subprocess.run(['c++','-std=c++17','-I'+str(ROOT/'src/nodes'),str(source),'-o',str(exe)],check=True)
+ subprocess.run(['c++','-std=c++17','-I'+str(ROOT/'src'),str(source),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True)
 print('PASS: N-note octave expansion to 32 voices, negative indices, harmonics, shared index shaping, ring conversion, unified LFO migration and idempotent recalls.')

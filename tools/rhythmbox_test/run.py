@@ -39,7 +39,7 @@ struct ofxSCServer {
  struct ScopedNRTOffset{ScopedNRTOffset(double){}};
 };
 ''')
-    source = (ROOT / 'src/nodes/scRhythmBox.cpp').read_text()
+    source = (ROOT / 'src/nodes/boxSynths/rhythmBox/scRhythmBox.cpp').read_text()
     signatures = ['void scRhythmBox::' + name for name in
                   ['buildSynth(', 'createSynth(', 'free(', 'setOutputBus(', 'sendAnchor(']]
     signatures += ['int scRhythmBox::getBufnum(', 'int scRhythmBox::getOutputBusIndex(',

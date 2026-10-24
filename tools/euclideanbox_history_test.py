@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-header = Path(os.environ.get('EUCLIDEANBOX_HEADER', ROOT / 'src/nodes/scEuclideanBox.h')).read_text()
+header = Path(os.environ.get('EUCLIDEANBOX_HEADER', ROOT / 'src/nodes/boxSynths/euclideanBox/scEuclideanBox.h')).read_text()
 
 def method(signature):
     start = header.index(signature)

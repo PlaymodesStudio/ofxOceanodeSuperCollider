@@ -2,7 +2,7 @@
 """Exercise production filter selection/control branches and legacy migration."""
 import pathlib, subprocess, tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-s=(ROOT/'src/nodes/scPolyComb.cpp').read_text()
+s=(ROOT/'src/nodes/boxSynths/polyComb/scPolyComb.cpp').read_text()
 a=s.index('        case IFilter:',s.index('void scPolyComb::sendIns'));b=s.index('        case IComb:',a)
 branches=s[a:b]
 a=s.index('        const char* name=insDefs[i];');b=s.index('        bring(st.ins[i]',a)
@@ -10,7 +10,7 @@ selection=s[a:b]
 a=s.index('std::pair<int,int> filterChoice(');b=s.index('\n}',a)+2
 choice=s[a:b]
 code=r'''
-#include "scPolyCombMigration.h"
+#include "nodes/boxSynths/polyComb/scPolyCombMigration.h"
 #include <cassert>
 #include <map>
 #include <string>
@@ -63,6 +63,6 @@ int main(){
 '''.replace('CHOICE',choice).replace('BRANCHES',branches).replace('SELECTION',selection)
 with tempfile.TemporaryDirectory(prefix='polycomb-post-filter-')as d:
  p=pathlib.Path(d);(p/'test.cpp').write_text(code)
- subprocess.run(['clang++','-std=c++17','-I'+str(ROOT/'src/nodes'),'-I'+str(ROOT.parent.parent/'libs/json/include'),str(p/'test.cpp'),'-o',str(p/'test')],check=True)
+ subprocess.run(['clang++','-std=c++17','-I'+str(ROOT/'src'),'-I'+str(ROOT.parent.parent/'libs/json/include'),str(p/'test.cpp'),'-o',str(p/'test')],check=True)
  subprocess.run([str(p/'test')],check=True)
 print('PASS: independent pre/post models for all 12 types, key tracking, cutoff/resonance, modulation buses and legacy/idempotent migration.')

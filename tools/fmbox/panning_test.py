@@ -2,7 +2,7 @@
 """Check fmBox's production speaker placement equations without an audio device."""
 import pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-s=(ROOT/'src/nodes/scFMBox.cpp').read_text()
+s=(ROOT/'src/nodes/boxSynths/fmBox/scFMBox.cpp').read_text()
 a=s.index('std::vector<float> expandPan(');b=s.index('\n}',a)+2;expand=s[a:b]
 a=s.index('std::vector<float> scFMBox::panPositions() const');b=s.index('\n}',a)+2;positions=s[a:b]
 cpp=r'''

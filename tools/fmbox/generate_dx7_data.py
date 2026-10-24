@@ -31,7 +31,7 @@ for name,data in [('globalFields',fields),('operatorFields',ops)]:
     header+=''.join('    {"%s","%s",%d,%d},\n'%tuple(row) for row in data)+'}};\n'
 header+='inline constexpr int algorithms[32][42] = {\n'+''.join('    {'+','.join(map(str,alg[i*42:(i+1)*42]))+'},\n'for i in range(32))+'};\n'
 header+='inline constexpr int feedbackCell[32] = {'+','.join(map(str,array('feedbackSel')))+'};\n}\n'
-(ROOT/'src/nodes/scDX7Data.h').write_text(header)
+(ROOT/'src/nodes/boxSynths/fmBox/scDX7Data.h').write_text(header)
 data={n:array(n) for n in ['voice_eg_rate_rise_duration','dx7_voice_eg_rate_rise_percent','velTable','dx7_voice_lfo_frequency','dx7_voice_pms_to_semitones','dx7_voice_amd_to_ol_adjustment','dx7_voice_pitch_level_to_shift','feedbackIndex','outOscVol']}
 data['feedbackSel']=array('feedbackSel')
 # An include, not another Defaults script: startup sync must only build fmBox.scd.

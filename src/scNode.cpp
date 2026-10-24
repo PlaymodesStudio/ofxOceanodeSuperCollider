@@ -7,7 +7,7 @@
 
 #include "scNode.h"
 #include "ofxSuperCollider.h"
-#include "scAudioRouting.h"
+#include "audio/scAudioRouting.h"
 
 ofxSCServer* scNode::graphTraversalServer = nullptr;
 

@@ -1,6 +1,6 @@
-#include "scAliasingTableView.h"
-#include "scAliasingFilterView.h"
-#include "scEnvelopeCurve.h"
+#include "../../src/nodes/boxSynths/aliasingBox/scAliasingTableView.h"
+#include "../../src/nodes/boxSynths/aliasingBox/scAliasingFilterView.h"
+#include "ui/scEnvelopeCurve.h"
 #include <cassert>
 #include <iostream>
 #include <limits>

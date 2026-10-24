@@ -10,8 +10,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools/aliasingbox'))
 from render_test import message, bundle, read_wav
 
-source = (ROOT / 'src/nodes/scPolyComb.cpp').read_text()
-modulation = (ROOT / 'src/nodes/scModulation.cpp').read_text()
+source = (ROOT / 'src/nodes/boxSynths/polyComb/scPolyComb.cpp').read_text()
+modulation = (ROOT / 'src/nodes/boxSynths/shared/scModulation.cpp').read_text()
 
 def function(code, signature):
     start = code.index(signature)
@@ -22,7 +22,7 @@ methods = '\n'.join(function(source, 'void scPolyComb::' + name + '(')
 methods += function(modulation, 'void scModulation::forStates(')
 
 stub = r'''
-#include "scSynthStartup.h"
+#include "audio/scSynthStartup.h"
 #include "nlohmann/json.hpp"
 #include <algorithm>
 #include <array>

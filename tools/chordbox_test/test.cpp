@@ -1,5 +1,5 @@
 // ChordBox engine tests: tools/chordbox_test/run.sh [a preset's Chord_Sequence_N.json]
-#include "../../src/nodes/scChordBoxEngine.h"
+#include "../../src/nodes/boxSynths/chordBox/scChordBoxEngine.h"
 #include <cstdio>
 using namespace chordbox;
 static int failures = 0;

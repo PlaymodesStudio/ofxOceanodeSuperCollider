@@ -1,4 +1,4 @@
-// DataBox: one playhead of the SC DataBox node (src/nodes/scDataBox.*).
+// DataBox: one playhead of the SC DataBox node (src/nodes/boxSynths/dataBox/scDataBox.*).
 //
 // Any file is decoded in C++ into mono float buffers (one per data channel).
 // The node creates one DataBoxVoice per output channel; each loops a window

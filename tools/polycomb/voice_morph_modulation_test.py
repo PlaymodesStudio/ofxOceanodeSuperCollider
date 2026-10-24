@@ -3,7 +3,7 @@
 from pathlib import Path
 import subprocess,tempfile
 ROOT=Path(__file__).resolve().parents[2]
-code=(ROOT/'src/nodes/scModulation.cpp').read_text()
+code=(ROOT/'src/nodes/boxSynths/shared/scModulation.cpp').read_text()
 def method(signature):
     a=code.index(signature);return code[a:code.index('\n}\n',a)+3]
 methods=method('void scModulation::free(')+method('bool scModulation::hasVoiceBank(')+method('bool scModulation::adoptServerState(')

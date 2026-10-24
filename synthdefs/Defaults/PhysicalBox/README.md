@@ -1,6 +1,6 @@
 # PhysicalBox
 
-A physical-modelling synth node (`src/nodes/scPhysicalBox.*`). Each voice is
+A physical-modelling synth node (`src/nodes/boxSynths/physicalBox/scPhysicalBox.*`). Each voice is
 one `PhysicalVoice` UGen (`ugens/OceanodePhysical/`) with:
 
 - strike, bow, blow, scrape and external exciters;

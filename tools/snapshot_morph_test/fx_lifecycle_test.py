@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[2]
-source=(ROOT/'src/nodes/scAdditiveBox.cpp').read_text()
+source=(ROOT/'src/nodes/boxSynths/additiveBox/scAdditiveBox.cpp').read_text()
 a=source.index('void scAdditiveBox::rebuildFx(ofxSCServer* server)')
 b=source.index('\nvoid scAdditiveBox::rebuildFxAll',a)
 method=source[a:b]

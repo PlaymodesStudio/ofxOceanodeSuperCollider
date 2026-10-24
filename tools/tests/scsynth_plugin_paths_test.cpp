@@ -1,4 +1,4 @@
-#include "scSCSynthPluginPaths.h"
+#include "synthdefs/scSCSynthPluginPaths.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>

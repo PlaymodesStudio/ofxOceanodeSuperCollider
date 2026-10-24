@@ -6,13 +6,13 @@
 //
 
 #include "serverManager.h"
-#include "scSCSynthPluginPaths.h"
+#include "synthdefs/scSCSynthPluginPaths.h"
 #include "ofxOceanodeSuperCollider.h"
 #include "ofxOceanodeSuperColliderController.h"
 #include "ofxSuperCollider.h"
 #include "scNode.h"
 #include "scStart.h"
-#include "scOutput.h"
+#include "nodes/routing/scOutput.h"
 #include "ofxOceanodeShared.h"
 #include "ofxOceanodeContainer.h"
 #include <algorithm>

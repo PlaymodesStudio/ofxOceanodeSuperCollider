@@ -1,4 +1,4 @@
-#include "scSampleEmbedding.h"
+#include "samples/scSampleEmbedding.h"
 #include <cassert>
 #include <iostream>
 

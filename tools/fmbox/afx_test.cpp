@@ -1,4 +1,4 @@
-#include "scDX7Afx.h"
+#include "../../src/nodes/boxSynths/fmBox/scDX7Afx.h"
 #include <cassert>
 #include <iostream>
 #include <sstream>

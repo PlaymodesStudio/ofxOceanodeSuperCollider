@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess,tempfile
 ROOT=Path(__file__).resolve().parents[2]
 TEST=r'''
-#include "scPolyCombPitchMorph.h"
+#include "nodes/boxSynths/polyComb/scPolyCombPitchMorph.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -92,6 +92,6 @@ int main(int argc,char** argv){
 with tempfile.TemporaryDirectory(prefix='polycomb-pitch-map-morph-') as work:
     work=Path(work);(work/'test.cpp').write_text(TEST)
     subprocess.run(['clang++','-std=c++20','-O1','-g','-fsanitize=address,undefined',
-        '-I'+str(ROOT/'tools/snapshot_morph_test/stubs'),'-I'+str(ROOT/'src/nodes'),
+        '-I'+str(ROOT/'tools/snapshot_morph_test/stubs'),'-I'+str(ROOT/'src'),
         '-I'+str(ROOT.parents[1]/'libs/json/include'),str(work/'test.cpp'),'-o',str(work/'test')],check=True)
     subprocess.run([str(work/'test'),str(ROOT/'tools/polycomb/fixtures/morph_reference.json')],check=True)

@@ -49,7 +49,7 @@ whose shipped binaries came from a lost source).
 
 ## Syncing an app ("Sync with SynthDefs Git")
 
-The SuperCollider menu's **Sync with SynthDefs Git...** (`src/scSynthdefSync.*`)
+The SuperCollider menu's **Sync with SynthDefs Git...** (`src/synthdefs/scSynthdefSync.*`)
 brings an app's `data/Supercollider/` up to date with a branch of this
 repository on GitHub, or with this checkout. No git or GitHub account is needed.
 It downloads what changed of `synthdefs/` (into `SynthdefSources/`), `sclang/`

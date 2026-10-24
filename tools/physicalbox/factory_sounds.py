@@ -174,7 +174,7 @@ if sys.argv[1] == "library":
     root = pathlib.Path(__file__).resolve().parents[2]
     lib = pathlib.Path(sys.argv[2])
     shutil.copytree(lib, lib.with_name(lib.name + "_backup_" + time.strftime("%Y%m%d-%H%M%S")))
-    src = (root / "src/nodes/scPhysicalBox.cpp").read_text()
+    src = (root / "src/nodes/boxSynths/physicalBox/scPhysicalBox.cpp").read_text()
     def esc(s):
         for ch in " <>{}[],()/\\.#": s = s.replace(ch, "_")
         return s

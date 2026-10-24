@@ -291,10 +291,10 @@ The critical bug in the current C++ node — where `outputIndex = (baseIndex + v
 
 | File | Description |
 |---|---|
-| `/Users/santiagovilanova/Documents/OF/of_playmodes/openFrameworks/addons/ofxOceanodeSuperCollider/src/scSynthdef.h` | Base class for all dynamic SC nodes — how params are parsed, synth created, buses mapped |
+| `/Users/santiagovilanova/Documents/OF/of_playmodes/openFrameworks/addons/ofxOceanodeSuperCollider/src/nodes/synthdefs/scSynthdef.h` | Base class for all dynamic SC nodes — how params are parsed, synth created, buses mapped |
 | `/Users/santiagovilanova/Documents/OF/of_playmodes/openFrameworks/addons/ofxOceanodeSuperCollider/src/scNode.h` | nodePort system, bus allocation, graph ordering |
 | `/Users/santiagovilanova/Documents/OF/of_playmodes/openFrameworks/addons/ofxOceanodeSuperCollider/src/serverManager.h` | Graph topology, bus allocation (MAX_NODE_CHANNELS=128), topological sort |
-| `/Users/santiagovilanova/Documents/OF/of_playmodes/openFrameworks/addons/ofxOceanodeSuperCollider/src/scA2k.h` | A2K bridge (audio bus → C++ float vector, for reference) |
+| `/Users/santiagovilanova/Documents/OF/of_playmodes/openFrameworks/addons/ofxOceanodeSuperCollider/src/nodes/analysis/scA2K.h` | A2K bridge (audio bus → C++ float vector, for reference) |
 
 ### SC framework — SynthDef side (key reference patterns)
 

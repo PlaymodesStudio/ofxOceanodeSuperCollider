@@ -1,7 +1,7 @@
 # PhysicalBox, Phase 0
 
 **Status (2026-10-21):** Phases 1 and 2 are built. The C++ UGen is
-`ugens/OceanodePhysical/` and the node is `src/nodes/scPhysicalBox.*`, with
+`ugens/OceanodePhysical/` and the node is `src/nodes/boxSynths/physicalBox/scPhysicalBox.*`, with
 its SynthDefs in `synthdefs/Defaults/PhysicalBox/`. This folder stays as the
 reference prototype: the UGen renders the same test matrix to the same
 results.
@@ -13,7 +13,7 @@ and isn't part of Oceanode yet.
 | File | What it is |
 |---|---|
 | `physicalbox.eel2` | The voice, in EEL2 for DynGen, sample by sample: exciters, two coupled resonators, nonlinearities, two pickups. Meant to port almost line by line to C++. |
-| `physicalbox_core.scd` | Loads the script for DynGen: rewrites every `_param` to `in(k)` (DynGen 0.6.1 crashes scsynth on native parameters, see `src/nodes/scDynGenPolyNode.cpp`) and defines `~pbSpecs`, `~pbDef`, `~pbVoice`. |
+| `physicalbox_core.scd` | Loads the script for DynGen: rewrites every `_param` to `in(k)` (DynGen 0.6.1 crashes scsynth on native parameters, see `src/nodes/generators/scDynGenPolyNode.cpp`) and defines `~pbSpecs`, `~pbDef`, `~pbVoice`. |
 | `physicalbox.scd` | The playable prototype: window, Material pad, presets, A > B morph, computer keyboard, MIDI, MicroSpace. |
 | `reference.scd` | MiElements, DWGBowed, DWGFlute and DWGClarinet3, to compare against. |
 

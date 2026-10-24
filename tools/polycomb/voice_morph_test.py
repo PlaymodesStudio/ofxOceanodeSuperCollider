@@ -4,8 +4,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[2]
-source=(ROOT/'src/nodes/scPolyCombVoiceMorph.inl').read_text()
-polycomb=(ROOT/'src/nodes/scPolyComb.cpp').read_text()
+source=(ROOT/'src/nodes/boxSynths/polyComb/scPolyCombVoiceMorph.inl').read_text()
+polycomb=(ROOT/'src/nodes/boxSynths/polyComb/scPolyComb.cpp').read_text()
 apply_state=polycomb.split('void scPolyComb::applyState(',1)[1]
 voice_count=apply_state.split('    if(!(voicesHandle && voicesHandle->hasInConnection())){',1)[1].split('\n\n    // the controls:',1)[0]
 voice_count='    if(!(voicesHandle && voicesHandle->hasInConnection())){'+voice_count
@@ -18,13 +18,13 @@ def function(text, signature):
         depth+=(text[end]=='{')-(text[end]=='}')
         end+=1
     return text[start:end]
-snapshots=(ROOT/'src/nodes/scSnapshots.h').read_text()
+snapshots=(ROOT/'src/nodes/boxSynths/shared/scSnapshots.h').read_text()
 snapshot_setup=snapshots.split('        host = std::move(h);',1)[1].split('        manager.bindSlots',1)[0]
 snapshot_methods='\n'.join(function(snapshots,s) for s in ('ofJson captureForExternalMorph()', 'void applyExternalMorph('))
 macro_methods='\n'.join(function(polycomb,s) for s in ('bool scPolyComb::morphCheck(', 'ofJson scPolyComb::snapshotOf(', 'bool scPolyComb::morphBegin(', 'void scPolyComb::morphApply(', 'void scPolyComb::morphEnd('))
 header=r'''
-#include "scVoiceCountMorph.h"
-#include "scMorphPolicies.h"
+#include "nodes/boxSynths/shared/scVoiceCountMorph.h"
+#include "nodes/boxSynths/shared/scMorphPolicies.h"
 #include <array>
 #include <cassert>
 #include <functional>
@@ -341,6 +341,6 @@ with tempfile.TemporaryDirectory(prefix='polycomb-voice-morph-') as directory:
     out=Path(directory)
     (out/'test.cpp').write_text(header+source+test)
     subprocess.run(['clang++','-std=c++20','-O1','-g','-fsanitize=address,undefined',
-        '-I'+str(ROOT/'tools/snapshot_morph_test/stubs'),'-I'+str(ROOT/'src/nodes'),
+        '-I'+str(ROOT/'tools/snapshot_morph_test/stubs'),'-I'+str(ROOT/'src'),
         '-I'+str(ROOT.parents[1]/'libs/json/include'),str(out/'test.cpp'),'-o',str(out/'test')],check=True)
     subprocess.run([str(out/'test')],check=True)

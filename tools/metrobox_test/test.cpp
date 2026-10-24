@@ -1,7 +1,7 @@
-// Tests for MetroBox's rhythm engine (src/nodes/scMetroBoxEngine.*).
+// Tests for MetroBox's rhythm engine (src/nodes/boxSynths/metroBox/scMetroBoxEngine.*).
 // Build and run:  tools/metrobox_test/run.sh
 
-#include "../../src/nodes/scMetroBoxEngine.h"
+#include "../../src/nodes/boxSynths/metroBox/scMetroBoxEngine.h"
 
 #include <algorithm>
 #include <chrono>

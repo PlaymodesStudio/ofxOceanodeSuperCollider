@@ -9,7 +9,7 @@
 #include "ofxSCServer.h"
 #include "imgui.h"
 #include "serverManager.h"
-#include "scSynthdefCompiler.h"
+#include "synthdefs/scSynthdefCompiler.h"
 #include "ofxOceanodeSuperColliderConfig.h"
 #include <algorithm>
 #include <cmath>

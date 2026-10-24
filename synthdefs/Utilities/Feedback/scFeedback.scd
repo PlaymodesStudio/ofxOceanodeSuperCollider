@@ -6,5 +6,5 @@
     input = InFeedback.ar(OceanodeInput.kr(\in), n);
 
     Out.ar(OceanodeOutput.kr(\out), input * gain);
-}, description: "Explicit block-delayed bridge for modular feedback loops between SynthDefs", category: "Utilities/Feedback");
+}, description: "Explicit block-delayed bridge for modular feedback loops between SynthDefs", category: "Routing");
 )

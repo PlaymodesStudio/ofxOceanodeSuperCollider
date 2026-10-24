@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Migrate Oceanode presets to renamed ~synthCreator synths.
 
+Renamed 2026-10-24: Wavetable -> WavetableBox.
+
 Renamed 2026-10-20, because their builds clashed with another synth's
 (Pulsar's stereo build was Pulsar2.scsyndef):
 
@@ -31,6 +33,7 @@ import shutil
 import sys
 
 RENAMES = {
+    "Wavetable": "WavetableBox",
     "Pulsar2": "Pulsar_B",
     "CircularBufferFFT2": "CircularBufferFFT_B",
     "RLPF4": "RLPF4Pole",

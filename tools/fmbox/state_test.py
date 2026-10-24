@@ -2,14 +2,14 @@
 """Exercise production AFX import/recall and shared external-snapshot application."""
 import pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-s=(ROOT/'src/nodes/scFMBox.cpp').read_text()
+s=(ROOT/'src/nodes/boxSynths/fmBox/scFMBox.cpp').read_text()
 harness=(ROOT/'tools/fmbox/render_test.py').read_text().split("    cpp=r'''",1)[1].split("'''.replace('CONTROLS'",1)[0]
 a=s.index('    auto add = [this]');b=s.index('    // ── Effects',a)
 controls=s[a:b]
 a=s.index('ofJson scFMBox::dx7Snapshot');b=s.index('std::vector<ofJson> scFMBox::factory()',a)
 methods=s[a:b]
 find=s[s.index('ofParameter<float>& scFMBox::soundParam'):s.index('void scFMBox::drawSoundTab')]
-snapshot=(ROOT/'src/nodes/scSnapshots.h').read_text();a=snapshot.index('    void applyExternal(');b=snapshot.index('\n    }',a)+6
+snapshot=(ROOT/'src/nodes/boxSynths/shared/scSnapshots.h').read_text();a=snapshot.index('    void applyExternal(');b=snapshot.index('\n    }',a)+6
 external=snapshot[a:b]
 harness=harness[:harness.index('int main(')]
 harness=harness.replace('#include <vector>','#include <vector>\n#include <fstream>\n#include <filesystem>\n#include <functional>\n#include <cassert>')
@@ -63,5 +63,5 @@ int main(int argc,char**argv){
 '''
 with tempfile.TemporaryDirectory(prefix='fmbox-state-')as folder:
     work=pathlib.Path(folder);src=work/'state.cpp';src.write_text(harness)
-    subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-I'+str(ROOT/'src/nodes'),'-I'+str(ROOT.parent.parent/'libs/json/include'),str(src),'-o',str(work/'state')],check=True)
+    subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-I'+str(ROOT/'src'),'-I'+str(ROOT.parent.parent/'libs/json/include'),str(src),'-o',str(work/'state')],check=True)
     subprocess.run([str(work/'state'),str(ROOT/'data/Supercollider/Presets/FMBox/DX7.afx'),str(work)],check=True)

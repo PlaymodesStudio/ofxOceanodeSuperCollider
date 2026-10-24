@@ -2,7 +2,7 @@
 """Exercise production bank loading/backup code without touching app data."""
 import pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-code=(ROOT/'src/nodes/scSnapshots.h').read_text()
+code=(ROOT/'src/nodes/boxSynths/shared/scSnapshots.h').read_text()
 methods=code[code.index('    bool saveBank('):code.index('    // ── Named presets:')]
 prelude=r'''
 #include <nlohmann/json.hpp>

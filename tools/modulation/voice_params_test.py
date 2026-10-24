@@ -2,7 +2,7 @@
 """Exercise production scalar/vector routing, base preservation and voice updates."""
 import pathlib, subprocess, tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-s=(ROOT/'src/nodes/scModulation.cpp').read_text()
+s=(ROOT/'src/nodes/boxSynths/shared/scModulation.cpp').read_text()
 names=['readParam','writeParam','voiceValue','voiceValues','paramSource','applyParams','removeParam','patchBases']
 methods=[]
 for name in names:

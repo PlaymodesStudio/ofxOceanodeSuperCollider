@@ -5,12 +5,12 @@ Usage: python3 tools/polycomb/pitch_ui_preview.py [width] [height]
 """
 import subprocess,sys
 from pathlib import Path
-root=Path(__file__).resolve().parents[2];s=(root/'src/nodes/scPolyComb.cpp').read_text();out=Path('/tmp/polycomb-pitch-ui');out.mkdir(exist_ok=True)
+root=Path(__file__).resolve().parents[2];s=(root/'src/nodes/boxSynths/polyComb/scPolyComb.cpp').read_text();out=Path('/tmp/polycomb-pitch-ui');out.mkdir(exist_ok=True)
 pre=r'''
-#include "scPitchMapView.h"
-#include "scQuantizedSlider.h"
-#include "scPolyCombControlSteps.h"
-#include "scPolyCombPitchMap.h"
+#include "nodes/boxSynths/polyComb/scPitchMapView.h"
+#include "ui/scQuantizedSlider.h"
+#include "nodes/boxSynths/polyComb/scPolyCombControlSteps.h"
+#include "nodes/boxSynths/polyComb/scPolyCombPitchMap.h"
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -161,7 +161,7 @@ pre=pre.replace('const char*="','const char* ="')
 (out/'imconfig.h').write_text('#pragma once\n')
 
 imgui=root.parent/'ofxImGui/libs/imgui/src'
-subprocess.run(['c++','-std=c++17','-O1','-I'+str(out),'-I'+str(root/'src'),'-I'+str(root/'src/nodes'),'-I'+str(imgui),str(out/'preview.cpp')]+[str(imgui/f) for f in ('imgui.cpp','imgui_draw.cpp','imgui_widgets.cpp','imgui_tables.cpp')]+['-o',str(out/'preview')],check=True)
+subprocess.run(['c++','-std=c++17','-O1','-I'+str(out),'-I'+str(root/'src'),'-I'+str(root/'src'),'-I'+str(imgui),str(out/'preview.cpp')]+[str(imgui/f) for f in ('imgui.cpp','imgui_draw.cpp','imgui_widgets.cpp','imgui_tables.cpp')]+['-o',str(out/'preview')],check=True)
 subprocess.run([str(out/'preview'),sys.argv[1] if len(sys.argv)>1 else '1150',sys.argv[2] if len(sys.argv)>2 else '850']+sys.argv[3:],check=True)
 subprocess.run(['sips','-s','format','png',str(out/'preview.ppm'),'--out',str(out/'preview.png')],check=True,stdout=subprocess.DEVNULL)
 print(out/'preview.png')

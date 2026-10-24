@@ -1,4 +1,4 @@
-// echoBox.scd — SynthDefs for the EchoBox C++ node (src/nodes/scEchoBox.*)
+// echoBox.scd — SynthDefs for the EchoBox C++ node (src/nodes/boxSynths/echoBox/scEchoBox.*)
 //
 //   EchoBoxTap<N>   one echo tap, N channels (1..16). The node runs one per
 //                   tap; they all read the input and add their echoes into

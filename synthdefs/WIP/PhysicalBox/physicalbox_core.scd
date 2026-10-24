@@ -1,7 +1,7 @@
 // PhysicalBox Phase 0: loads physicalbox.eel2 for DynGen.
 //
 // DynGen 0.6.1 crashes scsynth when a script registers native _parameters
-// (see src/nodes/scDynGenPolyNode.cpp), so the readable script is rewritten
+// (see src/nodes/generators/scDynGenPolyNode.cpp), so the readable script is rewritten
 // before it is sent: every _name becomes in(k) and its @param line is dropped.
 // in(0) stays the external audio input. Defines:
 //   ~pbSpecs   [[name, default, type], ...] from the @param lines

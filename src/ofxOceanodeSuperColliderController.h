@@ -10,7 +10,7 @@
 
 #include "ofxOceanodeBaseController.h"
 #include "ofxOceanodeSuperColliderConfig.h"
-#include "scSynthdefSync.h"
+#include "synthdefs/scSynthdefSync.h"
 #include <cstddef>
 #include <cstdint>
 #include <functional>

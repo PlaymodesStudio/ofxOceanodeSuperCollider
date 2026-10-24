@@ -12,7 +12,7 @@ for k in range(400):
     n=rng.choice([1,4,16,24,32]);shift=[round(rng.uniform(-12,12))] if rng.random()<.5 else []
     cases.append((m,n,shift))
 src=r'''
-#include "scPolyCombPitchMap.h"
+#include "nodes/boxSynths/polyComb/scPolyCombPitchMap.h"
 #include <cstdio>
 #include <vector>
 int main(){ int k; while(std::scanf("%d",&k)==1){
@@ -26,7 +26,7 @@ int main(){ int k; while(std::scanf("%d",&k)==1){
 '''
 with tempfile.TemporaryDirectory() as d:
     c=pathlib.Path(d)/'t.cpp';c.write_text(src);exe=pathlib.Path(d)/'t'
-    subprocess.run(['clang++','-std=c++17','-I'+str(ROOT/'src/nodes'),str(c),'-o',str(exe)],check=True)
+    subprocess.run(['clang++','-std=c++17','-I'+str(ROOT/'src'),str(c),'-o',str(exe)],check=True)
     lines=[]
     for k,(m,n,s) in enumerate(cases):
         lines.append(f"{k} {m['shape']} {m['first']} {m['interval']} {m['transpose']} {m['bend']} {m['offset']} {m['mode']} {m['quantize']} {m['root']} {m['harmonic_base']} {m['span']} {m['octave_jump']} {len(m['tones'])} {' '.join(map(str,m['tones']))} {' '.join(map(str,m['table']))} {n} {len(s)} {' '.join(map(str,s))}")

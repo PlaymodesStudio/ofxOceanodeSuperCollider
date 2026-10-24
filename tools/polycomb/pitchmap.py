@@ -1,4 +1,4 @@
-"""Python twin of src/nodes/scPolyCombPitchMap.h (PolyComb's internal pitch maps).
+"""Python twin of src/nodes/boxSynths/polyComb/scPolyCombPitchMap.h (PolyComb's internal pitch maps).
 The importer uses it for what depends on the played notes (FM depth in Hz, ring
 pitch, audit); pitchmap_test.py checks it against the C++ engine."""
 import math

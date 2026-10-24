@@ -58,10 +58,43 @@ Run `python3 tools/folded_waveform_test/audio.py` and
 `python3 tools/folded_waveform_test/compile.py` verifies both startup-sync and
 standalone compilation into the folder harvested by the installer.
 
+## Source layout
+
+See the [source organization guide](src/README.md) for node categories, shared
+helpers and approved retirements. After these source moves, update consuming
+projects with openFrameworks Project Generator and rebuild.
+
+## Box synths
+
+Box nodes live in **SuperCollider → boxSynths** in the node browser. Their C++
+implementations and engine helpers are grouped under `src/nodes/boxSynths`,
+with one folder per synth and common components in `shared/`.
+
+See the [Box synth conventions](src/nodes/boxSynths/CONVENTIONS.md) for editor
+behavior, publishing, snapshots, modulation, effects, keyboard/piano controls
+and timeline integration, including current coverage by node.
+
+`Wavetable` is now **WavetableBox**. Its editor uses the shared Box LFOs,
+envelopes, modulation routing matrix, right-click publish/modulate menus,
+piano footer, snapshot library, banks and morph controls. Gate and Velocity
+are published alongside Pitch, Levels and Position. Env Mode offers Auto,
+Gated and Drone; Auto switches from continuous playback to note gates after
+Gate is used. An envelope routed to Amp controls the note's release.
+Modulation routes and source settings are included in snapshots and morphs.
+
+The old `nodeSnapshots/Wavetable` library moves to `nodeSnapshots/WavetableBox`
+on first use when the new folder does not exist. To rename saved patch/macro
+node references, run `python3 tools/migrate_synth_renames.py /path/to/data`
+(the script backs up changed folders; `--dry-run` previews changes).
+
+Compile `synthdefs/Defaults/WavetableBox/wavetableBox.scd` and the shared
+`Defaults/Modulation/modulation.scd`, then run
+`python3 tools/wavetablebox/render_test.py` to check all 64 variants and note routing.
+
 ## Keyboard piano
 
 Focus the PolyComb, AdditiveBox, SteamPipeBox, PulsarBox, GrainBox, AliasingBox,
-PhysicalBox, SampleBox, FMBox or AnalogBox editor to play it from the computer keyboard.
+PhysicalBox, SampleBox, FMBox, AnalogBox or WavetableBox editor to play it from the computer keyboard.
 `zxcvbnm,.` plays white keys starting with **Z = C4 (MIDI 60)**.
 `qwertyuiop` plays white keys one octave higher, starting with **Q = C5**.
 The matching black keys are `s d` (C♯, D♯), `g h j` (F♯, G♯, A♯),
@@ -71,6 +104,13 @@ Above `qwertyuiop`, use `2 3` (C♯, D♯), `5 6 7` (F♯, G♯, A♯),
 and `9 0` (the next C♯, D♯); `1 4 8` are silent gaps.
 **Up / Down** shifts new notes by one octave; held notes retain their original
 pitch. The current starting octave appears in the editor.
+
+With MIDI support enabled, right-click an instrument node's title and choose
+**Bind MIDI Keyboard (Pitch / Gate)**, then play a note to learn the device and
+channel. Pitch, Gate and Velocity (when available) share one polyphonic binding,
+including sustain-pedal support. The binding saves with the preset; choose
+**Unbind MIDI Keyboard (Pitch / Gate)** to release its notes and remove it.
+This uses the shared MIDI binding in `ofxOceanodeMidi` and node menu in `ofxOceanode`.
 
 The pitched Box editors and PolyComb include a piano footer showing active Pitch/Gate notes,
 including external parameter input and computer-keyboard notes. Click a piano key
@@ -740,7 +780,7 @@ Source/
 ├── Vector/
 │   ├── VectorSynth — Vector synthesis oscillator with phase modulation
 │   └── VectorSynthB — Advanced vector synthesis with formants and antialiasing
-└── Wavetable/
+└── WavetableBox/
     └── WTSynth — Advanced wavetable oscillator with 8 buffer interpolation
 ```
 
@@ -1089,8 +1129,8 @@ Defaults/
 ├── VST/
 │   ├── vst.scd
 │   └── VSTPluginController.sc
-├── Wavetable/
-│   └── wavetable.scd
+├── WavetableBox/
+│   └── wavetableBox.scd
 └── WaveTrack/
     └── waveTrackPlayer.scd
 ```

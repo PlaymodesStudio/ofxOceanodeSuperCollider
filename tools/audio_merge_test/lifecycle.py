@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-source = (ROOT / 'src/scSynthdef.cpp').read_text()
+source = (ROOT / 'src/nodes/synthdefs/scSynthdef.cpp').read_text()
 def block(start):
     begin = source.index(start)
     opening = source.index('{', begin)

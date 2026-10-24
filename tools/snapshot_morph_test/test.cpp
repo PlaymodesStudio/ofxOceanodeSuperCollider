@@ -1,4 +1,4 @@
-#include "scMorphPolicies.h"
+#include "nodes/boxSynths/shared/scMorphPolicies.h"
 #include <cassert>
 #include <cmath>
 #include <iostream>

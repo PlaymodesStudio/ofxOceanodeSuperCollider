@@ -35,7 +35,7 @@ the bottom of the file one at a time.
 
 `rawDataAudio.scd`: the first experiment playing any file's bytes as audio
 (read in sclang as int8, uint8 or int16 and played with `PlayBuf`). It became
-the **SC DataBox** node (`src/nodes/scDataBox.*`, synth in
+the **SC DataBox** node (`src/nodes/boxSynths/dataBox/scDataBox.*`, synth in
 `Defaults/DataBox/databox.scd`); kept here as the original sketch.
 
 ## Core/

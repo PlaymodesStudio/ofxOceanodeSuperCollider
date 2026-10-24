@@ -7,12 +7,12 @@ from render_test import message,bundle,read_wav
 BANK=ROOT/'data/Supercollider/Presets/FMBox/DX7.afx'
 
 def production_patches(work):
-    s=(ROOT/'src/nodes/scFMBox.cpp').read_text()
+    s=(ROOT/'src/nodes/boxSynths/fmBox/scFMBox.cpp').read_text()
     controls=s[s.index('    auto add = [this]'):s.index('    // ── Effects')]
     methods=s[s.index('ofJson scFMBox::dx7Snapshot'):s.index('bool scFMBox::loadAFX')]
     find=s[s.index('ofParameter<float>& scFMBox::soundParam'):s.index('void scFMBox::drawSoundTab')]
     cpp=r'''
-#include "scDX7Afx.h"
+#include "nodes/boxSynths/fmBox/scDX7Afx.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -62,7 +62,7 @@ int main(int argc,char**argv){
 }
 '''.replace('CONTROLS',controls).replace('FIND',find).replace('METHODS',methods)
     src=work/'patches.cpp';src.write_text(cpp)
-    subprocess.run(['clang++','-std=c++17','-I'+str(ROOT/'src/nodes'),'-I'+str(ROOT.parent.parent/'libs/json/include'),str(src),'-o',str(work/'patches')],check=True)
+    subprocess.run(['clang++','-std=c++17','-I'+str(ROOT/'src'),'-I'+str(ROOT.parent.parent/'libs/json/include'),str(src),'-o',str(work/'patches')],check=True)
     return json.loads(subprocess.check_output([str(work/'patches'),str(BANK)],text=True))
 
 def compile_voice(work):
@@ -78,7 +78,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--server',default='/Applications/SuperCollider.app/Contents/Resources/scsynth');p.add_argument('--output',type=pathlib.Path,default=pathlib.Path('/tmp/fmbox-dx7-render'));a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='fmbox-dx7-')as folder:
         work=pathlib.Path(folder);compile_voice(work);patches=production_patches(work)
-        subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-I'+str(ROOT/'src/nodes'),str(ROOT/'tools/fmbox/afx_test.cpp'),'-o',str(work/'afx_test')],check=True)
+        subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-I'+str(ROOT/'src'),str(ROOT/'tools/fmbox/afx_test.cpp'),'-o',str(work/'afx_test')],check=True)
         subprocess.run([str(work/'afx_test'),str(BANK)],check=True)
     (a.output/'patches.json').write_text(json.dumps(patches,indent=2))
     defs=ROOT/'synthdefs/Defaults/FMBox/CompiledSynthdefs/FMBox';mod=ROOT/'synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation';spread=ROOT/'synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb';mixer=ROOT/'synthdefs/Defaults/MixerPro/CompiledSynthdefs/mixerpro'
