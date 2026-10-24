@@ -65,6 +65,8 @@ PhysicalBox, SampleBox or AnalogBox editor to play it from the computer keyboard
 The matching black keys are `s d` (C♯, D♯), `g h j` (F♯, G♯, A♯),
 and `l ñ` (the next C♯, D♯); `a f k` are silent gaps.
 On keyboards without ñ, use the semicolon key in that position.
+Above `qwertyuiop`, use `2 3` (C♯, D♯), `5 6 7` (F♯, G♯, A♯),
+and `9 0` (the next C♯, D♯); `1 4 8` are silent gaps.
 **Up / Down** shifts new notes by one octave; held notes retain their original
 pitch. The current starting octave appears in the editor.
 

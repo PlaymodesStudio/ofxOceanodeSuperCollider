@@ -44,10 +44,10 @@ public:
         if(enabled && ImGui::IsKeyPressed(ImGuiKey_DownArrow, false)) base = std::max(0, base - 12);
 
         // Piano layout: white keys on the bottom/top rows, matching black
-        // keys between the bottom-row whites. A/F/K are the gaps at B-C/E-F.
+        // keys on the rows above them. A/F/K and 1/4/8 are the gaps at B-C/E-F.
         // Semicolon is the physical key occupied by ñ on a Spanish keyboard.
         struct KeyPitch { ImGuiKey key; int semitones; };
-        static constexpr std::array<KeyPitch, 26> keys = {{
+        static constexpr std::array<KeyPitch, 33> keys = {{
             {ImGuiKey_Z, 0}, {ImGuiKey_X, 2}, {ImGuiKey_C, 4},
             {ImGuiKey_V, 5}, {ImGuiKey_B, 7}, {ImGuiKey_N, 9},
             {ImGuiKey_M, 11}, {ImGuiKey_Comma, 12}, {ImGuiKey_Period, 14},
@@ -57,7 +57,10 @@ public:
             {ImGuiKey_Q, 12}, {ImGuiKey_W, 14}, {ImGuiKey_E, 16},
             {ImGuiKey_R, 17}, {ImGuiKey_T, 19}, {ImGuiKey_Y, 21},
             {ImGuiKey_U, 23}, {ImGuiKey_I, 24}, {ImGuiKey_O, 26},
-            {ImGuiKey_P, 28}
+            {ImGuiKey_P, 28},
+            {ImGuiKey_2, 13}, {ImGuiKey_3, 15}, {ImGuiKey_5, 18},
+            {ImGuiKey_6, 20}, {ImGuiKey_7, 22}, {ImGuiKey_9, 25},
+            {ImGuiKey_0, 27}
         }};
         held.erase(std::remove_if(held.begin(), held.end(), [](const Note& n){
             return n.key >= 0 && !ImGui::IsKeyDown(static_cast<ImGuiKey>(n.key));
@@ -191,7 +194,7 @@ public:
                     if(!isBlack) ++whiteIndex;
                 }
             }
-            if(hovered && hit >= 0) ImGui::SetTooltip("MIDI %d | Click to play%s\nComputer keys: zxcvbnm,. / qwertyuiop; black keys: s d g h j l ;", hit, hold ? " / toggle held note" : "; drag to change note");
+            if(hovered && hit >= 0) ImGui::SetTooltip("MIDI %d | Click to play%s\nComputer keys: zxcvbnm,. / qwertyuiop; black keys: s d g h j l ; / 2 3 5 6 7 9 0", hit, hold ? " / toggle held note" : "; drag to change note");
         }
         ImGui::PopID();
     }
