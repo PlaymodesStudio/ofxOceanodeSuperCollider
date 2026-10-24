@@ -18,6 +18,8 @@ int main() {
     ImVec2 controls, keysMin, keysMax;
     int highlighted = 0;
     bool footer = false;
+    float contentBottom=0, contentHeight=0, litTop=0, litBottom=0, windowBottom=0;
+    ImVec2 footerHeader;
     auto frame = [&](bool show=true, bool focus=true, bool text=false) {
         ImGui::NewFrame();
         if(show) {
@@ -27,8 +29,13 @@ int main() {
             else ImGui::SetWindowFocus(nullptr);
             io.WantTextInput=text;
             controls = ImGui::GetCursorScreenPos();
+            controls.y += ImGui::GetFrameHeightWithSpacing();
             if(footer) {
+                windowBottom = ImGui::GetCursorScreenPos().y + ImGui::GetContentRegionAvail().y;
                 piano.beginContent(pitch,gate,voices,first,offset);
+                contentHeight = ImGui::GetWindowSize().y;
+                contentBottom = ImGui::GetWindowPos().y + contentHeight;
+                footerHeader = ImVec2(ImGui::GetWindowPos().x+12, contentBottom+ImGui::GetStyle().ItemSpacing.y+8);
                 ImGui::TextUnformatted("Scrollable synth controls");
                 scKeyboardPiano::endContent();
             } else {
@@ -36,9 +43,13 @@ int main() {
                 keysMin = ImGui::GetItemRectMin();
                 keysMax = ImGui::GetItemRectMax();
             }
-            highlighted = 0;
+            highlighted = 0; litTop=10000; litBottom=0;
             for(const auto& vertex : ImGui::GetWindowDrawList()->VtxBuffer)
-                if(vertex.col == IM_COL32(65,185,220,255)) ++highlighted;
+                if(vertex.col == IM_COL32(65,185,220,255)) {
+                    ++highlighted;
+                    litTop = std::min(litTop, vertex.pos.y);
+                    litBottom = std::max(litBottom, vertex.pos.y);
+                }
             ImGui::End();
         }
         piano.finishFrame();
@@ -173,6 +184,15 @@ int main() {
     assert(highlighted > twoLit);
     // Footer child pairs correctly and keeps a populated parent draw list.
     footer=true; frame(); assert(highlighted>0);
+    assert(litTop > contentBottom && litBottom <= windowBottom); // piano is below controls
+    const float expandedHeight=contentHeight;
+    auto fold = [&](){ io.AddMousePosEvent(footerHeader.x,footerHeader.y); frame(); click(); frame(); };
+    fold(); assert(highlighted==0 && contentHeight>expandedHeight+76);
+    const auto externalGates=gate.get(); frame(); assert(gate.get()==externalGates);
+    key(ImGuiKey_Z,true); assert(piano.isPlaying() && gate.get()[0]==1);
+    key(ImGuiKey_Z,false); assert(!piano.isPlaying() && gate.get()[0]==0);
+    gate.set({1}); fold(); assert(highlighted>0 && contentHeight==expandedHeight);
+    assert(litTop > contentBottom && litBottom <= windowBottom);
     ImGui::DestroyContext();
-    std::cout << "PASS: white/black key layout, chords, mono priority, release, focus, typing, modifiers, octaves, ñ, channels, relative pitch, external highlights, mouse notes, glissando, Hold and footer layout\n";
+    std::cout << "PASS: white/black key layout, chords, mono priority, release, focus, typing, modifiers, octaves, ñ, channels, relative pitch, external highlights, mouse notes, glissando, Hold, bottom placement and folding\n";
 }

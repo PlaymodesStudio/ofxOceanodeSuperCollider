@@ -2033,7 +2033,7 @@ void scPolyComb::drawWindow() {
         return;
     }
     if(!open){ showWindow = false; ImGui::End(); return; }
-    keyboardPiano.draw(pitch, gate, n());
+    keyboardPiano.beginContent(pitch, gate, n());
     const float w = ImGui::GetContentRegionAvail().x;
 
     // ── Header: voices, channels, master, gate mode, voices' levels ─────────
@@ -2100,6 +2100,7 @@ void scPolyComb::drawWindow() {
         tab("Effects", [this](float tw){ drawFxTab(tw); });
         ImGui::EndTabBar();
     }
+    scKeyboardPiano::endContent();
     ImGui::End();
 }
 

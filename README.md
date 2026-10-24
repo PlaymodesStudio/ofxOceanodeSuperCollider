@@ -68,11 +68,13 @@ On keyboards without ñ, use the semicolon key in that position.
 **Up / Down** shifts new notes by one octave; held notes retain their original
 pitch. The current starting octave appears in the editor.
 
-The pitched Box editors include a piano footer showing active Pitch/Gate notes,
+The pitched Box editors and PolyComb include a piano footer showing active Pitch/Gate notes,
 including external parameter input and computer-keyboard notes. Click a piano key
 to play, or drag across keys. Enable **Hold** to latch clicked notes; click them
 again to switch them off. Disable Hold to release latched notes, or use **Release**
-to stop local notes. Hiding/collapsing the editor also releases them.
+to stop local notes. Click the **Piano** header to fold the footer into a single
+row and give its space back to the controls; held notes and computer-keyboard
+playing continue while folded. Hiding/collapsing the editor releases local notes.
 
 Hold several keys for chords, up to the instrument's configured voice count.
 When voices run out, the newest notes take priority. Releasing a key closes

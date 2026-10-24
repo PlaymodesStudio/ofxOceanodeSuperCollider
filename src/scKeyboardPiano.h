@@ -19,7 +19,8 @@ public:
     void beginContent(Notes& pitch, Notes& gate, int voices, int firstVoice = 0, float pitchOffset = 0) {
         const ImVec2 origin = ImGui::GetCursorPos();
         const float available = ImGui::GetContentRegionAvail().y;
-        const float footer = ImGui::GetFrameHeightWithSpacing() + 84.0f;
+        const float footer = ImGui::GetFrameHeightWithSpacing()
+            + (expanded ? ImGui::GetFrameHeightWithSpacing() + 84.0f : 0.0f);
         const float content = std::max(1.0f, available - footer - ImGui::GetStyle().ItemSpacing.y);
         ImGui::SetCursorPos(ImVec2(origin.x, origin.y + content + ImGui::GetStyle().ItemSpacing.y));
         draw(pitch, gate, voices, firstVoice, pitchOffset);
@@ -65,54 +66,66 @@ public:
             if(enabled && ImGui::IsKeyPressed(mapping.key, false)) held.push_back({mapping.key, float(base + mapping.semitones) + pitchOffset});
         }
         ImGui::PushID(this);
-        if(ImGui::Checkbox("Hold", &hold) && !hold) {
-            held.erase(std::remove_if(held.begin(), held.end(), [](const Note& n){ return n.key < 0; }), held.end());
-        }
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Latch clicked notes until clicked again. Turning Hold off releases latched notes.");
-        ImGui::SameLine();
-        if(ImGui::Button("Release")) release();
-        ImGui::SameLine();
-        if(ImGui::SmallButton("Oct -")) base = std::max(0, base - 12);
-        ImGui::SameLine();
-        if(ImGui::SmallButton("Oct +")) base = std::min(96, base + 12);
-        ImGui::SameLine();
-        ImGui::TextDisabled("C%d | Up/Down: octave", base / 12 - 1);
-
-        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        ImGui::SetNextItemOpen(expanded, ImGuiCond_Always);
+        expanded = ImGui::CollapsingHeader("Piano", ImGuiTreeNodeFlags_None);
+        ImVec2 pos;
         const float width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
         const float height = 76.0f, whiteW = width / 75.0f, blackW = whiteW * 0.64f;
-        ImGui::InvisibleButton("##piano", ImVec2(width, height));
-        const bool hovered = ImGui::IsItemHovered();
-        const bool dragging = ImGui::IsItemActive() && ImGui::IsMouseDown(0);
+        bool hovered = false;
+        int hit = -1, whiteIndex = 0;
         const auto black = [](int midi) {
             const int pc = midi % 12;
             return pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
         };
-        int hit = -1, whiteIndex = 0;
-        const ImVec2 mouse = io.MousePos;
-        // Test whites first, then blacks (which overlap and have priority).
-        for(int pass = 0; pass < 2; ++pass) {
-            whiteIndex = 0;
-            for(int midi = 0; midi < 128; ++midi) {
-                const bool isBlack = black(midi);
-                const float x = pos.x + whiteIndex * whiteW - (isBlack ? blackW * 0.5f : 0);
-                if(isBlack == (pass == 1) && mouse.x >= x && mouse.x < x + (isBlack ? blackW : whiteW)
-                   && mouse.y >= pos.y && mouse.y < pos.y + (isBlack ? height * 0.62f : height)) hit = midi;
-                if(!isBlack) ++whiteIndex;
+        if(expanded) {
+            if(ImGui::Checkbox("Hold", &hold) && !hold) {
+                held.erase(std::remove_if(held.begin(), held.end(), [](const Note& n){ return n.key < 0; }), held.end());
             }
-        }
-        if(hovered && ImGui::IsMouseClicked(0) && hit >= 0 && hold) {
-            const int id = -2 - hit;
-            auto note = std::find_if(held.begin(), held.end(), [id](const Note& n){ return n.key == id; });
-            if(note != held.end()) held.erase(note);
-            else held.push_back({id, float(hit) + pitchOffset});
-        }
-        if(!hold) {
-            auto note = std::find_if(held.begin(), held.end(), [](const Note& n){ return n.key == mouseKey; });
-            if(!dragging || !hovered || hit < 0) {
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("Latch clicked notes until clicked again. Turning Hold off releases latched notes.");
+            ImGui::SameLine();
+            if(ImGui::Button("Release")) release();
+            ImGui::SameLine();
+            if(ImGui::SmallButton("Oct -")) base = std::max(0, base - 12);
+            ImGui::SameLine();
+            if(ImGui::SmallButton("Oct +")) base = std::min(96, base + 12);
+            ImGui::SameLine();
+            ImGui::TextDisabled("C%d | Up/Down: octave", base / 12 - 1);
+
+            pos = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##piano", ImVec2(width, height));
+            hovered = ImGui::IsItemHovered();
+            const bool dragging = ImGui::IsItemActive() && ImGui::IsMouseDown(0);
+            const ImVec2 mouse = io.MousePos;
+            // Test whites first, then blacks (which overlap and have priority).
+            for(int pass = 0; pass < 2; ++pass) {
+                whiteIndex = 0;
+                for(int midi = 0; midi < 128; ++midi) {
+                    const bool isBlack = black(midi);
+                    const float x = pos.x + whiteIndex * whiteW - (isBlack ? blackW * 0.5f : 0);
+                    if(isBlack == (pass == 1) && mouse.x >= x && mouse.x < x + (isBlack ? blackW : whiteW)
+                       && mouse.y >= pos.y && mouse.y < pos.y + (isBlack ? height * 0.62f : height)) hit = midi;
+                    if(!isBlack) ++whiteIndex;
+                }
+            }
+            if(hovered && ImGui::IsMouseClicked(0) && hit >= 0 && hold) {
+                const int id = -2 - hit;
+                auto note = std::find_if(held.begin(), held.end(), [id](const Note& n){ return n.key == id; });
                 if(note != held.end()) held.erase(note);
-            } else if(note == held.end()) held.push_back({mouseKey, float(hit) + pitchOffset});
-            else note->pitch = float(hit) + pitchOffset;
+                else held.push_back({id, float(hit) + pitchOffset});
+            }
+            if(!hold) {
+                auto note = std::find_if(held.begin(), held.end(), [](const Note& n){ return n.key == mouseKey; });
+                if(!dragging || !hovered || hit < 0) {
+                    if(note != held.end()) held.erase(note);
+                } else if(note == held.end()) held.push_back({mouseKey, float(hit) + pitchOffset});
+                else note->pitch = float(hit) + pitchOffset;
+            }
+        } else {
+            // Folding preserves latched notes and computer-keyboard playing,
+            // but releases a momentary mouse note whose keys are now hidden.
+            held.erase(std::remove_if(held.begin(), held.end(), [](const Note& n){
+                return n.key == mouseKey;
+            }), held.end());
         }
         if(!held.empty() || gates) {
             const bool starting = !gates;
@@ -144,40 +157,42 @@ public:
             slots = std::move(next);
             if(held.empty()) { gates = nullptr; slots.clear(); }
         }
-        // Read the actual parameters, so external gates and local notes share
-        // the same display. Short vectors repeat cyclically, as the synths do.
-        std::array<bool, 128> lit{};
-        const auto& pitches = pitch.get();
-        const auto& levels = gate.get();
-        if(!pitches.empty() && !levels.empty()) {
-            for(int v = firstVoice; v < firstVoice + std::max(1, voices); ++v) {
-                if(v < 0 || levels[v % levels.size()] <= 0) continue;
-                const float midi = pitches[v % pitches.size()] - pitchOffset;
-                if(std::isfinite(midi) && midi > -0.5f && midi < 127.5f) lit[int(std::round(midi))] = true;
-            }
-        }
-        auto* dl = ImGui::GetWindowDrawList();
-        for(int pass = 0; pass < 2; ++pass) {
-            whiteIndex = 0;
-            for(int midi = 0; midi < 128; ++midi) {
-                const bool isBlack = black(midi);
-                if(isBlack == (pass == 1)) {
-                    const float x = pos.x + whiteIndex * whiteW - (isBlack ? blackW * 0.5f : 0);
-                    const ImVec2 a(x, pos.y), b(x + (isBlack ? blackW : whiteW), pos.y + (isBlack ? height * 0.62f : height));
-                    const ImU32 color = lit[midi] ? IM_COL32(65, 185, 220, 255) :
-                        ((hovered && hit == midi) ? IM_COL32(140, 165, 180, 255) :
-                         (isBlack ? IM_COL32(28, 31, 36, 255) : IM_COL32(225, 228, 232, 255)));
-                    dl->AddRectFilled(a, b, color, 2.0f);
-                    dl->AddRect(a, b, IM_COL32(55, 60, 68, 255), 2.0f);
-                    if(midi % 12 == 0 && whiteW >= 12) {
-                        const std::string label = "C" + std::to_string(midi / 12 - 1);
-                        dl->AddText(ImVec2(x + 1, b.y - ImGui::GetTextLineHeight()), IM_COL32(50, 55, 60, 255), label.c_str());
-                    }
+        if(expanded) {
+            // Read the actual parameters, so external gates and local notes share
+            // the same display. Short vectors repeat cyclically, as the synths do.
+            std::array<bool, 128> lit{};
+            const auto& pitches = pitch.get();
+            const auto& levels = gate.get();
+            if(!pitches.empty() && !levels.empty()) {
+                for(int v = firstVoice; v < firstVoice + std::max(1, voices); ++v) {
+                    if(v < 0 || levels[v % levels.size()] <= 0) continue;
+                    const float midi = pitches[v % pitches.size()] - pitchOffset;
+                    if(std::isfinite(midi) && midi > -0.5f && midi < 127.5f) lit[int(std::round(midi))] = true;
                 }
-                if(!isBlack) ++whiteIndex;
             }
+            auto* dl = ImGui::GetWindowDrawList();
+            for(int pass = 0; pass < 2; ++pass) {
+                whiteIndex = 0;
+                for(int midi = 0; midi < 128; ++midi) {
+                    const bool isBlack = black(midi);
+                    if(isBlack == (pass == 1)) {
+                        const float x = pos.x + whiteIndex * whiteW - (isBlack ? blackW * 0.5f : 0);
+                        const ImVec2 a(x, pos.y), b(x + (isBlack ? blackW : whiteW), pos.y + (isBlack ? height * 0.62f : height));
+                        const ImU32 color = lit[midi] ? IM_COL32(65, 185, 220, 255) :
+                            ((hovered && hit == midi) ? IM_COL32(140, 165, 180, 255) :
+                             (isBlack ? IM_COL32(28, 31, 36, 255) : IM_COL32(225, 228, 232, 255)));
+                        dl->AddRectFilled(a, b, color, 2.0f);
+                        dl->AddRect(a, b, IM_COL32(55, 60, 68, 255), 2.0f);
+                        if(midi % 12 == 0 && whiteW >= 12) {
+                            const std::string label = "C" + std::to_string(midi / 12 - 1);
+                            dl->AddText(ImVec2(x + 1, b.y - ImGui::GetTextLineHeight()), IM_COL32(50, 55, 60, 255), label.c_str());
+                        }
+                    }
+                    if(!isBlack) ++whiteIndex;
+                }
+            }
+            if(hovered && hit >= 0) ImGui::SetTooltip("MIDI %d | Click to play%s\nComputer keys: zxcvbnm,. / qwertyuiop; black keys: s d g h j l ;", hit, hold ? " / toggle held note" : "; drag to change note");
         }
-        if(hovered && hit >= 0) ImGui::SetTooltip("MIDI %d | Click to play%s\nComputer keys: zxcvbnm,. / qwertyuiop; black keys: s d g h j l ;", hit, hold ? " / toggle held note" : "; drag to change note");
         ImGui::PopID();
     }
 
@@ -197,7 +212,7 @@ private:
     static constexpr int mouseKey = -1000;
     struct Note { int key; float pitch; };
     int base = 60, first = 0, count = 0;
-    bool serviced = false, hold = false;
+    bool serviced = false, hold = false, expanded = true;
     Notes* gates = nullptr;
     std::vector<Note> held, slots;
 };
