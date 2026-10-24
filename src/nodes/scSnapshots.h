@@ -16,7 +16,7 @@
 //
 //  A node gives what only it knows (Host): capture() its sound as json,
 //  apply(a, b, t, switched) a blend of two snapshots (t after the curve,
-//  switched: whether switches and modes take b's), its factory list, and an
+//  switched: whether discrete switches and modes take b's), its factory list, and an
 //  import of an older format. The node registers the parameters in its own
 //  publish registry (they are plain ofParameters with their own listeners).
 //
@@ -35,6 +35,7 @@
 #include "ofMain.h"
 #include "imgui.h"
 #include "scSnapshotManager.h"
+#include "scMorphPolicies.h"
 #include "ofxOceanodeShared.h"
 
 #include <array>
@@ -47,7 +48,11 @@ class scSnapshots {
 public:
     static constexpr int SLOTS = 128;
 
+    scMorphPolicies morph;             // explicit audio policies; see docs/snapshotMorphing.md
+
     struct Host {
+        std::function<bool(const std::string&)> morphBlocked;  // connected controls take precedence
+        std::function<void()> morphChanged;                  // resend effective audio values after apply
         std::string folder;                                   // data/nodeSnapshots/<folder>
         std::string title;                                    // shown in window titles
         std::function<ofJson()> capture;                      // the current sound ("name" is added here)
@@ -98,6 +103,22 @@ public:
     }
     void setup(Host h) {
         host = std::move(h);
+        // Every entry point (recall, A/B, timed glide, banks and interrupted
+        // glides) uses the same audio policies. UI parameters keep their types.
+        auto capture = host.capture;
+        if(capture) host.capture = [this, capture]() {
+            auto j = capture(); morph.capture(j); return j;
+        };
+        auto apply = host.apply;
+        if(apply) host.apply = [this, apply](const ofJson& a, const ofJson& b, float t, bool sw) {
+            morph.begin(a, b, t, host.morphBlocked);
+            try {
+                apply(a, b, t, sw);
+                morph.begin(a, b, t, host.morphBlocked); // newly created pads/controls
+                if(host.morphChanged) host.morphChanged();
+            } catch(...) { morph.end(); throw; }
+            morph.end();
+        };
         manager.bindSlots(slots, used, active, [this](int s) { recall(s); }, [this]() { saveLibrary(); },
                           [this](const std::array<int, SLOTS>& map) {   // A / B follow their snapshots
             for(auto* p : {&morphAP, &morphBP}) {
@@ -188,6 +209,14 @@ public:
         recalling = true;
         snapshotP.set(slot >= 0 ? slot + 1 : 0);
         recalling = false;
+    }
+    // An imported sound replaces a running glide through the same policy-aware
+    // path as Recall, without consuming or overwriting a library slot.
+    void applyExternal(const ofJson& state) {
+        if(!state.is_object()) return;
+        running = false;
+        if(host.apply) host.apply(state,state,1.0f,true);
+        setActive(-1);
     }
     // One more snapshot in the first free slot (imports); false when full
     bool appendSnapshot(const ofJson& s) {

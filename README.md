@@ -131,6 +131,18 @@ The backend scheduling adapter always registers targets with core. Timeline
 lanes can produce scheduled events when installed, and other scheduling
 producers can use the same interface without linking timeline code.
 
+## FMBox
+
+`fmBox` uses Aziz Ege Gönül's DX7-Supercollider implementation, with the original
+16,384-preset `.afx` bank and an in-editor bank browser with searchable names
+and source banks from the upstream catalogue (names are marked unverified).
+The dockable Box editor
+keeps its editable FM routing matrix, operator/pitch envelopes, snapshots and
+morphing, right-click publishing/modulation/timeline controls, saturation, EQ,
+echo and reverb. The node face remains compact. Existing SuperFM nodes remain
+available. See [`synthdefs/Defaults/FMBox/README.md`](synthdefs/Defaults/FMBox/README.md)
+for presets, credits and verification.
+
 ## AliasingBox
 
 `aliasingBox` adds the Reaktor-inspired table instrument, 38 imported factory
@@ -958,7 +970,7 @@ Compatibility/
 </details>
 
 <details>
-<summary><b>Defaults</b> (57)</summary>
+<summary><b>Defaults</b> (58)</summary>
 
 ```
 Defaults/
@@ -1007,6 +1019,9 @@ Defaults/
 ├── FM7/
 │   ├── SuperFM7 — 6-Operator FM with Per-Voice ModScale & Trem/Vib
 │   └── SuperFMDrone — 6-Operator FM Drone - per-voice op amps/ratios/detunes. No gate/envelope.
+├── FMBox/
+│   ├── upstream/
+│   └── fmBox.scd
 ├── GrainBox/
 │   └── scGrainBoxPoly.scd
 ├── GraphicEQ/

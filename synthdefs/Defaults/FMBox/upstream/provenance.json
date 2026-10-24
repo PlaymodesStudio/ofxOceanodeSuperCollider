@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/everythingwillbetakenaway/DX7-Supercollider",
+  "commit": "1128e24c5f68a3bc2586927d2b8bbdeb311852ca",
+  "author": "Aziz Ege Gonul",
+  "license": "GPL-3.0-only",
+  "files": {
+    "synthdefs/Defaults/FMBox/upstream/DX7.scd.txt": "7f08e0fd4706e1568ec2648e7eb2b344f7e8c3a8c4740af3a5f2c28f4958f791",
+    "synthdefs/Defaults/FMBox/upstream/LICENSE.md": "0ae0485a5bd37a63e63603596417e4eb0e653334fa6c7f932ca3a0e85d4af227",
+    "data/Supercollider/Presets/FMBox/DX7.afx": "b82557b41509c7f860fbbdda258a63d44c39c994336a21620ca49ece1a3dcee3"
+  }
+}

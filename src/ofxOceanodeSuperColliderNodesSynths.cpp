@@ -13,6 +13,7 @@
 #include "nodes/scAdditiveBox.h"
 #include "nodes/scPulsarBox.h"
 #include "nodes/scFM7.h"
+#include "nodes/scFMBox.h"
 #include "nodes/scFM7Drone.h"
 #include "nodes/scDynGenNode.h"
 #include "nodes/scDynGenPolyNode.h"
@@ -34,6 +35,7 @@ void registerSynthNodes(ofxOceanode &o){
 	o.registerModel<scWavetable>("SuperCollider", controller->getServers());
 	o.registerModel<scAdditiveBox>("SuperCollider", controller->getServers());
 	o.registerModel<scPulsarBox>("SuperCollider", controller->getServers());
+	o.registerModel<scFMBox>("SuperCollider", controller->getServers());
 	o.registerModel<scFM7>("SuperCollider");
 	o.registerModel<scFM7Drone>("SuperCollider");
 	o.registerModel<scDynGenNode>("SuperCollider");

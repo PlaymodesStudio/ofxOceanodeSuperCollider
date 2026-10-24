@@ -166,7 +166,8 @@ channelCounts.do({|numChannels|
         var withEQ = variant[1], withDC = variant[2];
         SynthDef((variant[0] ++ numChannels).asSymbol, {
             arg in=0, out=0;
-            var sig = In.ar(in, numChannels);
+            var dry = In.ar(in, numChannels);
+            var sig = dry;
             if(withEQ, {
                 // graphiceqN's bands: gains in dB, frequencies in Hz,
                 // shelves take rs (= 1/slope), peaks rq (= 1/Q)
@@ -179,7 +180,7 @@ channelCounts.do({|numChannels|
             if(withDC, {
                 sig = LeakDC.ar(sig, 0.9995);   // ~4 Hz (0.995 is a 38 Hz high-pass at 48 kHz)
             });
-            Out.ar(out, sig);
+            Out.ar(out, LinXFade2.ar(dry, sig, \on.kr(1, 0.03) * 2 - 1));
         }).writeDefFile(dir);
     });
 
@@ -353,7 +354,7 @@ channelCounts.do({|numChannels|
     // the input only: the repeats ring out.
     SynthDef(("mixerProEcho" ++ numChannels).asSymbol, {
         arg in=0, out=0;
-        var n = numChannels, maxDel = 4, dry, gate, del, fb, cut, rq, mix, pp, fbIn, wet;
+        var n = numChannels, maxDel = 4, dry, gate, del, fb, cut, rq, mix, pp, fbIn, wet, filters, weights;
         dry  = In.ar(in, n).asArray;
         gate = Lag.ar(K2A.ar(\on.kr(1)), 0.02);
         del  = \delay.kr(0.375, 0.1).clip(0.005, maxDel);
@@ -370,9 +371,12 @@ channelCounts.do({|numChannels|
             };
         };
         wet = LeakDC.ar((fbIn * fb) + (dry * gate), 0.9995);
-        wet = Select.ar(\filtertype.kr(0).clip(0, 3), [
+        filters = [
             RLPF.ar(wet, cut, rq), RHPF.ar(wet, cut, rq), BPF.ar(wet, cut, rq), BPeakEQ.ar(wet, cut, 1, (1 - rq) * 12)
-        ]);
+        ];
+        weights = NamedControl.kr(\filterweights, 0 ! 4);
+        wet = Select.ar(weights.sum > 0, [Select.ar(\filtertype.kr(0).clip(0, 3), filters),
+            Mix(filters.collect { |signal, i| signal * weights[i].lag(0.03) })]);
         wet = (wet * 0.5).tanh * 2;
         LocalOut.ar(DelayC.ar(wet, maxDel, (del - ControlDur.ir).max(0)));
         Out.ar(out, (dry * (1 - (mix * gate)).sqrt) + (fbIn * mix.sqrt));
