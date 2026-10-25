@@ -147,8 +147,14 @@ valueNoise2 = { |x, y, salt = 0|
             var sus = kv.(\sus,0.8).asArray, rel = kv.(\rel,1).asArray;
             var curves = [kv.(\cA,-4),kv.(\cD,-4),kv.(\cR,-4)].collect(_.asArray);
             var env = n.collect { |i|
-                EnvGen.ar(Env.adsr(atk[i].max(0.001),dec[i].max(0.001),sus[i].clip(0,1),rel[i].max(0.001),1,
-                    curves.collect { |c| c[i].clip(-12,12) }),gate.asArray[i])
+                // EnvGen latches a segment's target. Two shared-clock ADSRs
+                // span the sustain range; their live blend follows snapshot
+                // Sustain changes even on held notes, without retriggering.
+                var low = EnvGen.ar(Env.adsr(atk[i].max(0.001),dec[i].max(0.001),0,rel[i].max(0.001),1,
+                    curves.collect { |c| c[i].clip(-12,12) }),gate.asArray[i]);
+                var high = EnvGen.ar(Env.adsr(atk[i].max(0.001),dec[i].max(0.001),1,rel[i].max(0.001),1,
+                    curves.collect { |c| c[i].clip(-12,12) }),gate.asArray[i]);
+                low + ((high - low) * sus[i].clip(0,1))
             } * (1-vt+(vt*vel));
             Out.kr(\out.kr(0), A2K.kr(env));
             if(audio) { Out.ar(\aout.kr(0), env) };

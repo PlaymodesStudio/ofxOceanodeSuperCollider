@@ -17,7 +17,7 @@ if args.capture_dir:
 sys.path.insert(0,str(ROOT.parent/'ofxOceanode/tests'))
 import macro_mixer_regression as native
 native.PRELUDE+=native.block((native.ROOT/'src/Nodes/ofxOceanodeNodeModel.cpp').read_text(),'void ofxOceanodeNodeModel::removeSeparator(')+'\n'
-native.PRELUDE+='\n'+''.join('#include "'+str(ROOT/'src/nodes/boxSynths'/p)+'"\n' for p in ['additiveBox/scAdditiveBox.h','analogBox/scAnalogBox.h','grainBoxPoly/scGrainBoxPoly.h','pulsarBox/scPulsarBox.h','wavetableBox/scWavetableBox.h'])
+native.PRELUDE+='\n'+''.join('#include "'+str(ROOT/'src/nodes/boxSynths'/p)+'"\n' for p in ['additiveBox/scAdditiveBox.h','analogBox/scAnalogBox.h','grainBoxPoly/scGrainBoxPoly.h','pulsarBox/scPulsarBox.h','wavetableBox/scWavetableBox.h','polyComb/scPolyComb.h'])
 native.CASES=r'''
 int main(int argc,char**argv){
  assert(argc==3);std::filesystem::current_path(argv[2]);ofDisableDataPath();ofSeedRandom();
@@ -121,12 +121,37 @@ int main(int argc,char**argv){
   box.snaps.applyExternalMorph(a,b,t,t>=.5);auto w=box.snaps.morph.weights(box.warp1);near(w[0],1-t);near(w[8],t);
  }
  }
+
+ auto checkGenerators=[&](auto& box, auto& m, bool nested, const std::string& prefix){
+  ofxSCServer probe("127.0.0.1",9,0);probe.beginNRTCapture(true);m.lfoCount=1;m.create(&probe,1,1,16);
+  const int original=m.states.at(&probe).lfo[0]->nodeID;
+  auto a=box.snaps.captureForExternalMorph(),b=a;
+  auto& ca=nested?a["controls"]:a;auto& cb=nested?b["controls"]:b;
+  ca[m.lfoNoise[0].getEscapedName()]=true;cb[m.lfoNoise[0].getEscapedName()]=false;
+  ca[m.lfoRndType[0].getEscapedName()]=0;cb[m.lfoRndType[0].getEscapedName()]=1;
+  if(m.unifiedLfoModels){ca[m.lfoModel[0].getEscapedName()]=2;cb[m.lfoModel[0].getEscapedName()]=3;}
+  ca[m.lfoSync[0].getEscapedName()]=true;cb[m.lfoSync[0].getEscapedName()]=false;
+  ca[m.lfoBeats[0].getEscapedName()]={2.f};cb[m.lfoHz[0].getEscapedName()]={7.f};
+  for(float t:{0.f,.001f,.499f,.501f,1.f}){
+   box.snaps.applyExternalMorph(a,b,t,t>=.5);assert(m.states.at(&probe).lfo[0]->nodeID==original);auto w=m.lfoModeWeights(0);near(w[1],1-t);near(w[2],t);
+   near(m.lfoHzFor(0)[0],(1-t)*m.currentBpm/120.f+t*7);
+   m.setBpm(90);near(m.lfoHzFor(0)[0],(1-t)*.75f+t*7);m.setBpm(120);
+   auto held=box.snaps.captureForExternalMorph();box.snaps.applyExternalMorph(held,a,0,false);near(m.lfoModeWeights(0)[2],t);
+   for(float x:m.lfoTable(0,64))assert(std::isfinite(x));
+  }
+  m.free(&probe);m.lfoRndSmooth[0]=.12f;assert(m.generatorMorph.count(m.lfoNoise[0].getEscapedName())==0);
+ };
+ {scWavetableBox b(servers);b.setup();checkGenerators(b,b.modulation,false,"wavetableMod");}
+ {scAdditiveBox b(servers);b.setup();checkGenerators(b,b.mod,false,"additiveMod");}
+ {scAnalogBox b(servers);b.setup();checkGenerators(b,b.modulation,true,"");}
+ {scPolyComb b(servers);b.setup();checkGenerators(b,b.modulation,true,"");}
+ std::cout<<"PASS: shared generators through Wavetable, Additive, Analog and PolyComb snapshot hosts\n";
  std::cout<<"PASS: real Additive/Analog/Grain/Pulsar/Wavetable setup, snapshot entry points, early counts, evaluated modes and interrupted state (ASan/UBSan)\n";
 }
 '''
 SC=ROOT.parent/'ofxSuperCollider';OSC=ROOT.parent/'ofxOsc'
 sources=[str(native.ROOT/'src/Managers/ofxOceanodeScheduling.cpp')]
-sources += [str(ROOT/'src'/p) for p in ['scNode.cpp','serverManager.cpp','ui/scTimelineMenu.cpp','nodes/boxSynths/shared/scModulation.cpp','nodes/boxSynths/additiveBox/scAdditiveBox.cpp','nodes/boxSynths/analogBox/scAnalogBox.cpp','nodes/boxSynths/grainBoxPoly/scGrainBoxPoly.cpp','nodes/boxSynths/wavetableBox/scWavetableBox.cpp']]
+sources += [str(ROOT/'src'/p) for p in ['scNode.cpp','serverManager.cpp','ui/scTimelineMenu.cpp','nodes/boxSynths/shared/scModulation.cpp','nodes/boxSynths/additiveBox/scAdditiveBox.cpp','nodes/boxSynths/analogBox/scAnalogBox.cpp','nodes/boxSynths/grainBoxPoly/scGrainBoxPoly.cpp','nodes/boxSynths/wavetableBox/scWavetableBox.cpp','nodes/boxSynths/polyComb/scPolyComb.cpp']]
 sources += [str(p) for p in sorted((SC/'src').glob('*.cpp'))]+[str(p) for p in sorted((OSC/'src').glob('*.cpp'))]
 sources += [str(p) for p in sorted((OSC/'libs/oscpack/src').rglob('*.cpp')) if 'win32' not in str(p)]
 includes=[ROOT/'src',*sorted({p.parent for p in (ROOT/'src').rglob('*.h')}),SC/'src',OSC/'src',OSC/'libs/oscpack/src',*sorted({p.parent for p in (OSC/'libs/oscpack/src').rglob('*.h')})]

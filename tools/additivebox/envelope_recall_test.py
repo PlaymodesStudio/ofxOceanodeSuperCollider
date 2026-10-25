@@ -49,7 +49,7 @@ struct scModulation {
     std::vector<float> matrix=std::vector<float>(22*10,0);
     int sourceCount()const{return 22;} int T()const{return 10;}
     static std::vector<float> fitMatrix(std::vector<float> m,int,int){return m;}
-    void loadParamsJson(const ofJson&){} void afterLoad(){}
+    void loadGeneratorState(const ofJson&,const std::string&){} void loadParamsJson(const ofJson&){} void afterLoad(){}
     void load(const ofJson&,const std::string&);
 };
 struct scAdditiveBox {

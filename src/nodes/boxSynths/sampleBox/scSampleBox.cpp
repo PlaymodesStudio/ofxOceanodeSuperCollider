@@ -696,10 +696,17 @@ std::string scSampleBox::absKey(const std::string& rel, int pad) const {
     return rel;
 }
 void scSampleBox::rewriteModKeys(ofJson& m, bool toRelative, int pad) const {
-    if(!m.contains("Params") || !m["Params"].is_array()) return;
-    for(auto& e : m["Params"])
-        if(e.is_object() && e.contains("key") && e["key"].is_string())
-            e["key"] = toRelative ? relKey(e["key"].get<std::string>()) : absKey(e["key"].get<std::string>(), pad);
+    auto rewrite = [&](const std::string& key){ return toRelative ? relKey(key) : absKey(key, pad); };
+    if(m.contains("Params") && m["Params"].is_array())
+        for(auto& e : m["Params"])
+            if(e.is_object() && e.contains("key") && e["key"].is_string())
+                e["key"] = rewrite(e["key"].get<std::string>());
+    if(m.contains("Generators") && m["Generators"].is_object()){
+        ofJson generators = ofJson::object();
+        for(auto it = m["Generators"].begin(); it != m["Generators"].end(); ++it)
+            generators[rewrite(it.key())] = it.value();
+        m["Generators"] = std::move(generators);
+    }
 }
 
 ofJson scSampleBox::padState(int k) const {

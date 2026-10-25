@@ -7,7 +7,7 @@ sys.path.insert(0,str(ROOT/'tools/aliasingbox'))
 from render_test import message,bundle,read_wav
 out=pathlib.Path('/tmp/polycomb-lfo-models');out.mkdir(exist_ok=True)
 # Execute the actual Off branch through a minimal OSC-recording server adapter.
-code=(ROOT/'src/nodes/boxSynths/shared/scModulation.cpp').read_text();start=code.index('    s->set("hold", manualLfo(li)');end=code.index('\n    }\n}',start)+6
+code=(ROOT/'src/nodes/boxSynths/shared/scModulation.cpp').read_text();start=code.index('    s->set("hold", manualLfo(li)');end=code.index('\n    s->set("modeweights"',start)
 branch=code[start:end]
 cpp=r'''
 #include <nlohmann/json.hpp>
@@ -16,7 +16,7 @@ cpp=r'''
 using J=nlohmann::json;
 struct Synth{J c;template<class T>void set(const char*k,T v){c[k]=v;}};
 struct Param{float v;float get(){return v;}};
-int n(){return 32;}bool manualLfo(int){return true;}
+bool blended=false; int n(){return 32;}bool manualLfo(int){return true;}
 int main(){for(float value:{0.f,.25f,.5f,.75f,1.f}){
  Synth storage;auto*s=&storage;int li=0;Param lfoManual[]={{value}};
 BRANCH

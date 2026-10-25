@@ -1341,6 +1341,7 @@ void scPolyComb::sendStageAll(int s) {
 
 void scPolyComb::presetSave(ofJson& j) {
     modulation.saveLfoOutputs(j);
+    modulation.captureGeneratorState(j, "polyComb");
     auto& c = j["polyComb"] = ofJson::object();
     for(const auto& control : controls) c[control.key] = control.save();
     modulation.patchBases(c);        // a modulated control: its own value
@@ -1417,6 +1418,7 @@ void scPolyComb::presetRecallAfterSettingParameters(ofJson& j) {
     sendEnvMode(true);
     modulation.loadParamsJson(j.contains("polyCombParams") ? j["polyCombParams"] : ofJson::array());
     updateScramble();
+    modulation.loadGeneratorState(j, "polyComb");
     modulation.afterLoad();          // its phases, sources and routes, everything resent
     resendParametersForNRT();
     for(auto& [server, st] : states){
@@ -3033,6 +3035,7 @@ ofJson scPolyComb::captureSnapshot() const {
     auto& c = s["controls"] = ofJson::object();
     for(const auto& control : controls) if(!snapExcluded(control.key)) c[control.key] = control.save();
     modulation.patchBases(c);
+    modulation.captureGeneratorState(c);
     pitchMorph.capture(s,pitchMorphOverrides());
     s["params"] = modulation.paramsJson();
     s["matrix"] = modulation.matrix;
@@ -3138,6 +3141,9 @@ void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t,
         if(v != control.save()) control.load(v);
     }
 
+    M.morphGenerators(ca, cb, t, "", [this](const std::string& key){ return drivenByConnection(key); });
+    M.resend();
+
     // the matrix
     std::vector<float> ma(M.matrix.size(), 0.0f), mb = ma;
     try { if(a.contains("matrix")) ma = a["matrix"].get<std::vector<float>>(); } catch(...) {}
@@ -3167,7 +3173,7 @@ void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t,
 
 // ── MacroMixer: a saved sound blends on the running synths ─────────────────
 ofxOceanodeNodeModel::MorphKeys scPolyComb::morphKeys() const {
-    return {{"polyComb", "polyCombParams", "polyCombMatrix", "polyCombLfos", "polyCombEnvs", "polyCombExts", voices.getEscapedName()}, {}};
+    return {{"polyComb", "polyCombGenerators", "polyCombParams", "polyCombMatrix", "polyCombLfos", "polyCombEnvs", "polyCombExts", voices.getEscapedName()}, {}};
 }
 
 ofxOceanodeNodeModel::MorphHint scPolyComb::morphHint(const ofxOceanodeAbstractParameter& p) const {
@@ -3188,6 +3194,7 @@ bool scPolyComb::morphCheck(const ofJson& target, std::string& reason) const {
 ofJson scPolyComb::snapshotOf(const ofJson& j) const {
     ofJson s = ofJson::object();
     s["controls"] = j.value("polyComb", ofJson::object());
+    if(j.contains("polyCombGenerators")) s["controls"]["Generators"] = j["polyCombGenerators"];
     s["params"] = j.value("polyCombParams", ofJson::array());
     if(j.contains("polyCombMatrix")) s["matrix"] = j["polyCombMatrix"];
     for(const auto& [from, to] : {std::pair<const char*, const char*>{"polyCombLfos", "lfos"}, {"polyCombEnvs", "envs"}, {"polyCombExts", "exts"}})

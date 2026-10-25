@@ -48,6 +48,8 @@ class scSnapshots {
 public:
     static constexpr int SLOTS = 128;
 
+    static bool applyingSnapshot() { return snapshotApplyDepth() > 0; }
+
     scMorphPolicies morph;             // explicit audio policies; see docs/snapshotMorphing.md
 
     struct Host {
@@ -111,6 +113,10 @@ public:
         };
         auto apply = host.apply;
         if(apply) host.apply = [this, apply](const ofJson& a, const ofJson& b, float t, bool sw) {
+            struct Scope {
+                Scope(){ ++snapshotApplyDepth(); }
+                ~Scope(){ --snapshotApplyDepth(); }
+            } scope;
             morph.begin(a, b, t, host.morphBlocked);
             try {
                 apply(a, b, t, sw);
@@ -928,6 +934,7 @@ public:
     void drawList(float height = 0.0f) { manager.drawList(height); }
 
 private:
+    static int& snapshotApplyDepth(){ static thread_local int depth = 0; return depth; }
     Host host;
     ofEventListeners listeners;
     bool recalling = false;

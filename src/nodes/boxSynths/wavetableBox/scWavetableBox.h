@@ -45,6 +45,7 @@
 #include "ofxSCBus.h"
 #include "../../../ui/scTimelineMenu.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scVoiceCountMorph.h"
 #include "../../../ui/scDropdowns.h"
 #include "../../../ui/scEQEditor.h"
 #include "ofxSCSynth.h"
@@ -357,6 +358,19 @@ private:
     std::string pathToSetAfterLoad;
     std::vector<int> lastTrig;
     std::map<std::string, std::vector<float>> lastSent;
+    // One oscillator per voice retains common phases when the count changes.
+    std::map<ofxSCServer*, std::vector<ofxSCSynth*>> extraVoices;
+    int renderingVoice = -1;
+    std::vector<float> voiceMorphWeights;
+    int voiceMorphCapacity = 0;
+    float voiceMorphRetireAt = -1;
+    int renderingVoices() const;
+    float voiceMorphGain(int voice) const;
+    float voiceOutputGain(int voice) const;
+    void forOscillatorVoices(ofxSCServer* server, const std::function<void()>& send);
+    void syncOscillatorVoices(ofxSCServer* server);
+    void freeExtraVoices(ofxSCServer* server);
+    void finishVoiceMorph();
     int builtVoices = 0;
     bool built2D = false;
     bool builtLive = false;

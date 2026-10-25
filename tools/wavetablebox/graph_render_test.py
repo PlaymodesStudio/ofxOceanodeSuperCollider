@@ -19,7 +19,7 @@ folders=['WavetableBox/CompiledSynthdefs/WavetableBox','Modulation/CompiledSynth
 for folder in folders:
     for file in (ROOT/'synthdefs/Defaults'/folder).glob('*.scsyndef'):
         name=file.stem
-        if not (name=='WavetableOsc3' or name.startswith(('WavetableBoxSpread','WavetableBoxOut','Mod')) or name in {base+str(c) for base in ('mixerProComp','mixerProEQ','PCBlur','mixerProEcho','mixerProRvb') for c in (2,4)}):continue
+        if not (name in ('WavetableOsc1','WavetableOsc3') or name.startswith(('WavetableBoxSpread','WavetableBoxOut','Mod')) or name in {base+str(c) for base in ('mixerProComp','mixerProEQ','PCBlur','mixerProEcho','mixerProRvb') for c in (2,4)}):continue
         dest=defs/file.name
         if not dest.exists():dest.symlink_to(file)
 assert (defs/'WavetableBoxSpread2.scsyndef').exists(),'Compile wavetableBox.scd first'

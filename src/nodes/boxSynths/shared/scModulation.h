@@ -26,6 +26,7 @@
 
 #include "ofMain.h"
 #include "scModulationMorph.h"
+#include "scGeneratorMorph.h"
 #include "ofxOceanodeShared.h"
 #include "ofxSCServer.h"
 #include "ofxSCSynth.h"
@@ -200,14 +201,15 @@ public:
     void save(ofJson& j, const std::string& prefix) const;
     void load(const ofJson& j, const std::string& prefix);
     void loadMorph(const ofJson& a,const ofJson& b,float t,bool switched,const std::string& prefix,
-                   const scModulationMorph::Blocked& blocked={}) {
-        auto x=a,y=b;
-        for(auto* state:{&x,&y}) {
-            const auto key=prefix+"Matrix";
-            if(state->contains(key)) (*state)[key]=fitMatrix(scModulationMorph::numbers((*state)[key]),sourceCount(),T());
-        }
-        load(scModulationMorph::state(x,y,t,switched,prefix,blocked),prefix);
+                   const scModulationMorph::Blocked& blocked={});
+    void morphGenerators(const ofJson& a,const ofJson& b,float t,const std::string& prefix = "",
+                         const scModulationMorph::Blocked& blocked = {});
+    void loadGeneratorState(const ofJson& j, const std::string& prefix = "");
+    void captureGeneratorState(ofJson& j, const std::string& prefix = "") const {
+        if(!generatorMorph.empty()) j[prefix + "Generators"] = generatorMorph;
     }
+    std::vector<float> lfoModeWeights(int li) const;
+    float lfoManualValue(int li) const;
     void afterLoad();                                          // after the node's controls are back
 
 private:
@@ -260,6 +262,7 @@ private:
         int builtVoices = 0;
     };
     Host host;
+    ofJson generatorMorph = ofJson::object();
     std::array<ofParameter<std::vector<float>>, MAX_LFOS> lfoOutputs;
     std::array<std::shared_ptr<ofxOceanodeAbstractParameter>, MAX_LFOS> lfoOutputPins{};
     bool publishLfoOutput(int li, bool publish);

@@ -163,9 +163,9 @@ Remaining discrete cases, after inspecting the Box-family snapshot and DSP paths
 | SampleBox | Sample replacement, playback/trigger/loop modes and pad layout. Filter and insert bypasses/types use existing policies. |
 | PhysicalBox | Body-family/doublet changes and gate rules (Voices is outside sound snapshots). Radiator/sympathetic-set changes now use neutral depth; fractional modal counts fade new resonators and the count-dependent cascade split. |
 | PulsarBox | Rhythm/sieve/trigger semantics and manually changed output layout. Tables, formant Hz/ratio selection and voice/layer snapshot counts now have explicit transitions. |
-| WavetableBox | Table replacement, trigger/oversampling and geometry/count changes. Warp modes now blend per-voice phase results; B-source changes pass through zero FM and feedback, including routed modulation. |
+| WavetableBox | Table replacement, trigger/oversampling and geometry changes. Voice counts share retained independent oscillators and fade presence. Warp modes now blend per-voice phase results; B-source changes pass through zero FM and feedback, including routed modulation. |
 | SlicerBox / EchoBox | Slice/trigger/clock/freeze/reverse and routing decisions. Supported filter and effect activation policies remain continuous. |
-| Shared modulation | LFO model/waveform/reset/sync and envelope trigger semantics still need state-aware transitions. Route amounts interpolate; that alone does not blend source generators. |
+| Shared modulation | Classic/Noise/Random/Manual models and effective Hz/beat/region rates blend on one clock; held-note Sustain follows the blend. Explicit reset, quantization and envelope trigger/segment timing retain their normal semantics. |
 | PolyComb | Its evaluated pitch maps and temporary voice banks retain their dedicated implementation; generic unsupported routing/trigger modes remain discrete. |
 
 This list distinguishes supported audio transitions from outstanding engine work;
@@ -271,3 +271,37 @@ Additional checks:
 
 These checks cover specific transitions, not every arbitrary preset pair or live
 hardware behavior. The remaining discrete cases above are known limitations.
+
+WavetableBox count morphs reuse `WavetableOsc1` for each contributing voice.
+Common voices retain oscillator phase across the whole transition; only new
+voices are created, and outgoing voices retire after their gain lag settles.
+The count distribution is captured with stored/interrupted snapshots. Shared
+modulation, effects and table buffers are not duplicated. Count-dependent spread
+positions and normalization also interpolate, so the final count reduction does
+not boost or move the common voice abruptly. Table replacement, 1D/2D changes
+and init-time oversampling remain separate structural changes.
+
+Regression: `python3 tools/wavetablebox/morph_test.py` checks production code
+with ASan/UBSan and captured OSC for 12-to-1 and 1-to-12 voice morphs, including
+stable oscillator IDs at 0.5, normalization, retirement and interrupted blends.
+
+Shared generator morphing lives in `scModulation` and `scGeneratorMorph`, including
+AnalogBox/PolyComb adapters for their nested snapshots. Every shared LFO uses
+`ModLfoX`, preserving its node and clock while algorithm weights change. Effective
+Hz, beat and region coefficients interpolate independently of the editor Sync
+switch; tempo/region changes still apply. Stored and interrupted snapshots retain
+these weights and coefficients. Connected controls take precedence, and editing
+an LFO directly returns it to the editor settings.
+
+Shared `ModEnv` and `ModEnvAr` blend two synchronized ADSRs with sustain 0/1.
+This makes Sustain respond during held notes and release without retriggering.
+Attack/decay/release times and curves retain EnvGen segment timing semantics.
+This change does not alter the separate per-partial LFO engines in AdditiveBox
+and GrainBox, or synth-specific internal LFOs such as FM's operator modulation.
+
+Rebuild the application and regenerate both shared modulation SynthDef sources
+(`modulation.scd` and `modulationRandom.scd`) for the common generator changes.
+Checks: `tools/snapshot_morph_test/generator_test.py` covers effective state;
+`generator_render_test.py` compiles production DSP and renders all LFO
+algorithms around .5, held Sustain, release and retrigger; `engine_contract_test.py`
+checks real snapshot hosts and stable LFO node IDs with ASan/UBSan.

@@ -1,6 +1,5 @@
-// ModLfoX<N>: ModLfo (modulation.scd, its code as is) plus the original
-// PolyComb's random types and Steps. The node uses it only for an LFO with a
-// Random type or Steps; ModLfo stays as it was for every other one.
+// ModLfoX<N>: shared LFO engine for all box synths. Classic, Noise and
+// Random modes share one clock; modeweights blends them without rebuilding.
 //
 //   \rtype 1  Stepped: a new random value each cycle (sample & hold), at the
 //             voice's own phase; glided by a one-pole of time \rsmooth (s)
@@ -64,6 +63,10 @@ valueNoise2 = { |x, y, salt = 0|
         var pw = kv.(\pw, 0.5).clip(0.001, 1), skew = kv.(\skew, 0), round = kv.(\round, 0.5);
         var midpoint, leftMax, rightMin, centered, left, narrowed, wLo, wHi, widened;
         var threshold, lo, hi, w, tri, cosRaw, cosMapped, upper, shape, noise, sh, held, out;
+        var modeWeights = NamedControl.kr(\modeweights, 0 ! 6).max(0);
+        var modeTotal = modeWeights.sum, activeWeight = modeWeights.copyRange(0, 4).sum;
+        var manualWeight = Select.kr(modeTotal > 0, [0, modeWeights[5] / modeTotal.max(1e-8)]);
+        var classic, legacy;
         // width (PolyComb's applyPulseWidth)
         midpoint = LinLin.kr(skew, -1, 1, 1, 0).clip(0, 1);
         leftMax = LinLin.kr(1 - pw, 0, 0.5, 0, midpoint).clip(0, 1);
@@ -96,8 +99,12 @@ valueNoise2 = { |x, y, salt = 0|
         // index x \nscale (how different the voices are); \seed: this LFO's
         // own noise field (no two LFOs share values)
         noise = valueNoise2.(sweep + \initphase.kr(0), (0 .. (n - 1)) * \nscale.kr(1), \seed.kr(0));
-        shape = Select.kr(\noise.kr(0) > 0.5, [shape, noise]);
-        shape = Select.kr(\rtype.kr(0).clip(0, 3), [shape, rstepped, rsmooth, rjumps]);
+        classic = shape;
+        legacy = Select.kr(\noise.kr(0) > 0.5, [classic, noise]);
+        legacy = Select.kr(\rtype.kr(0).clip(0, 3), [legacy, rstepped, rsmooth, rjumps]);
+        shape = Select.kr(modeTotal > 0, [legacy,
+            ((classic * modeWeights[0]) + (noise * modeWeights[1]) + (rstepped * modeWeights[2])
+             + (rsmooth * modeWeights[3]) + (rjumps * modeWeights[4])) / activeWeight.max(1e-8)]);
         // Gain: stretched around the middle, clipped at 0 / 1 (before S&H, Pow, BiPow)
         shape = (((shape - 0.5) * kv.(\gain, 1)) + 0.5).clip(0, 1);
         // sample & hold, pow, bipow
@@ -110,6 +117,7 @@ valueNoise2 = { |x, y, salt = 0|
             reflect.((customPow.((out * 2) - 1, kv.(\bipow, 0)) + 1) * 0.5)]);
         // Steps: that many levels (0 / 1: smooth), as GrainBox's
         out = Select.kr(steps >= 2, [out, (out * steps).floor.min(steps - 1) / (steps - 1).max(1)]);
+        out = (out * (1 - manualWeight)) + (\manualvalue.kr(0).clip(0, 1) * manualWeight);
         Out.kr(\out.kr(0), Sanitize.kr(out));
     }).writeDefFile(dir);
 };

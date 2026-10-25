@@ -62,14 +62,24 @@ void scWavetableBox::migrateLegacy(ofJson& j){
 }
 
 std::vector<float> scWavetableBox::voicePositions() const{
-    std::vector<float> p(MAX_CHANNELS,0.5f);
-    const int n=voices.get(),c=outChannels.get();
-    for(int i=0;i<n;++i){
-        if(placement==2)p[i]=valueFor(pan.get(),i,0.5f);
-        else if(placement==1)p[i]=c<=1?0.5f:float(i%c)/((c==2||speakerLayout==1)?c-1:c);
-        else if(c>2&&speakerLayout==0)p[i]=float(i)/n*spreadWidth.get()+spreadCenter.get()*0.5f;
-        else p[i]=0.5f+spreadCenter.get()*0.5f+(n>1?(float(i)/(n-1)-0.5f)*spreadWidth.get():0);
-    }return p;
+    std::vector<float> positions(MAX_CHANNELS, 0.5f);
+    const int channels = outChannels.get();
+    auto position = [&](int voice, int count){
+        if(placement == 2) return valueFor(pan.get(), voice, 0.5f);
+        if(placement == 1) return channels <= 1 ? 0.5f : float(voice % channels) / ((channels == 2 || speakerLayout == 1) ? channels - 1 : channels);
+        if(channels > 2 && speakerLayout == 0) return float(voice) / count * spreadWidth.get() + spreadCenter.get() * 0.5f;
+        return 0.5f + spreadCenter.get() * 0.5f + (count > 1 ? (float(voice) / (count - 1) - 0.5f) * spreadWidth.get() : 0);
+    };
+    for(int voice = 0; voice < renderingVoices(); ++voice){
+        if(voiceMorphWeights.empty()){ positions[voice] = position(voice, voices.get()); continue; }
+        float sum = 0, weight = 0;
+        for(size_t i = size_t(voice); i < voiceMorphWeights.size(); ++i){
+            sum += voiceMorphWeights[i] * position(voice, int(i) + 1);
+            weight += voiceMorphWeights[i];
+        }
+        if(weight > 0) positions[voice] = sum / weight;
+    }
+    return positions;
 }
 
 std::string scWavetableBox::fxDef(int stage) const{
@@ -119,7 +129,7 @@ void scWavetableBox::updateOutput(ofxSCServer* server){
     if(!st.spreadSynth){
         st.spreadSynth=new ofxSCSynth("WavetableBoxSpread"+ofToString(c),server);
         st.spreadSynth->set("in",st.voiceBus->index);st.spreadSynth->set("out",st.panBus->index);
-        st.spreadSynth->set("voices",voices.get());st.spreadSynth->set("pos",voicePositions());
+        st.spreadSynth->set("voices",MAX_CHANNELS);st.spreadSynth->set("pos",voicePositions());
         st.spreadSynth->set("mpan",modulation.targetBus(server,TPan));st.spreadSynth->set("line",speakerLayout.get());
         st.spreadSynth->createAndRun(0,st.processing->nodeID,true);
         st.outputSynth=new ofxSCSynth("WavetableBoxOut"+ofToString(c),server);
@@ -127,7 +137,7 @@ void scWavetableBox::updateOutput(ofxSCServer* server){
         st.outputSynth->set("master",master.get());st.outputSynth->createAndRun(1,st.processing->nodeID,true);
         st.outputChannels=c;
     }
-    st.spreadSynth->set("voices",voices.get());st.spreadSynth->set("pos",voicePositions());
+    st.spreadSynth->set("voices",MAX_CHANNELS);st.spreadSynth->set("pos",voicePositions());
     st.spreadSynth->set("mpan",modulation.targetBus(server,TPan));st.spreadSynth->set("line",speakerLayout.get());
     int input=st.panBus->index;
     for(int s=0;s<NumFx;++s){

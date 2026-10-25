@@ -1640,6 +1640,7 @@ ofJson scAnalogBox::captureSnapshot() const {
     auto& c = s["controls"] = ofJson::object();
     for(const auto& control : controls) if(!snapExcluded(control.key)) c[control.key] = control.save();
     modulation.patchBases(c);
+    modulation.captureGeneratorState(c);
     s["params"] = modulation.paramsJson();
     s["matrix"] = modulation.matrix;
     s["lfos"] = modulation.lfoCount;
@@ -1733,6 +1734,9 @@ void scAnalogBox::applyState(const ofJson& aSaved, const ofJson& bSaved, float t
         else continue;
         if(v != control.save()) control.load(v);
     }
+
+    M.morphGenerators(ca, cb, t, "", [this](const std::string& key){ return drivenByConnection(key); });
+    M.resend();
 
     // the matrix
     std::vector<float> ma(NUM_SOURCES * NUM_TARGETS, 0.0f), mb = ma;
