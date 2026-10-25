@@ -59,12 +59,17 @@ struct ofxOceanodeNodeModel {
 struct Timeline {
     struct Binding { std::string parameterPath,id; };
     struct Track { std::string id,name; bool isWaveTrack=false; std::vector<Binding> bindings; };
-    bool bound=false; std::vector<Track> tracks;
+    bool bound=false; int laneRequests=0; std::vector<Track> tracks;
     bool isParameterBound(ofxOceanodeAbstractParameter&){return bound;}
     bool isStepLaneCompatible(ofxOceanodeAbstractParameter&){return true;}
     const auto& getTracks(){return tracks;}
     std::string createTrack(){return "track";}
     std::string addBinding(std::string,ofxOceanodeAbstractParameter&){bound=true;return "binding";}
+    bool requestParameterLane(std::string,ofxOceanodeAbstractParameter& p){
+        bound=true;++laneRequests;
+        if(tracks.front().bindings.empty())tracks.front().bindings.push_back({p.name,"binding"});
+        return true;
+    }
     void requestTrackRename(std::string,bool){} void removeTrack(std::string){}
     void requestNoteGroupSetup(ofxOceanodeAbstractParameter*){}
     void removeBinding(std::string,std::string){bound=false;}
@@ -186,6 +191,14 @@ int main(){
     assert(!menu.bindMidi("cutoff"));assert(!menu.hasMidiBinding("cutoff"));assert(!menu.unbindLastMidi("cutoff"));
     menu.menuItems("cutoff");assert(!menu.parameter("cutoff"));
     assert(std::find(ImGui::seen.begin(),ImGui::seen.end(),"Bind MIDI")==ImGui::seen.end());
+#endif
+#if OFXOCEANODESC_HAS_TIMELINE
+    host.timeline.tracks.push_back({"existing","Existing track",false,{}});
+    ImGui::click="Existing track";menu.menuItems("laneTest");
+    assert(ImGui::click.empty() && host.timeline.laneRequests==1 && menu.parameter("laneTest"));
+    // Already bound parameters can still be added to another clip of this track.
+    ImGui::click="Existing track";menu.menuItems("laneTest");
+    assert(ImGui::click.empty() && host.timeline.laneRequests==2);
 #endif
     std::cout<<"PASS: shared parameter MIDI menus, publication and binding lifecycle\n";
 }

@@ -345,6 +345,8 @@ GrainBox uses its first engine in MIDI pitch mode; SampleBox uses kit channels.
 There are two related entry points:
 
 1. A parameter menu's **Add to Timeline Track** automates that parameter.
+   Choosing an existing track adds a lane in its selected clip and opens the
+   editor; an existing lane for that parameter is focused instead of duplicated.
    **Add to Timeline as Piano Roll...** starts note-group configuration.
 2. The **node's context menu** offers **Add to Timeline as Instrument...**
    when the model reports an instrument. Setup receives its note roles and

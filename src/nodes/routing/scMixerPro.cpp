@@ -2582,8 +2582,9 @@ void scMixerPro::drawTimelineItems(const std::string& key) {
             for(const auto& track : timeline.getTracks()) {
                 if(track.isWaveTrack) continue;
                 const bool already = std::any_of(bound.begin(), bound.end(), [&](const Bound& b) { return b.trackId == track.id; });
-                if(ImGui::Selectable((track.name + "##" + track.id).c_str(), already, already ? ImGuiSelectableFlags_Disabled : 0))
-                    if(auto h = timelineHandle(key)) timeline.addBinding(track.id, *h);
+                if(ImGui::Selectable((track.name + "##" + track.id).c_str(), already))
+                    if(auto h = timelineHandle(key)) timeline.requestParameterLane(track.id, *h);
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add a lane for this parameter and open its clip.");
             }
         }
         ImGui::EndMenu();
