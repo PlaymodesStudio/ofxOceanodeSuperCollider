@@ -129,6 +129,21 @@ public:
 	}
 	
 	void setup();
+#ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
+    bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override {
+        auto& parameters = getParameterGroup();
+        if(!parameters.contains("Gate") || !parameters.contains("Pitch") ||
+           !parameters.contains("Velocity")) return false;
+        out = {};
+        out.gate = &static_cast<ofxOceanodeAbstractParameter&>(parameters.get("Gate"));
+        out.pitch = &static_cast<ofxOceanodeAbstractParameter&>(parameters.get("Pitch"));
+        // SCVST uses binary integer gates and a separate normalized velocity.
+        out.velocity = &static_cast<ofxOceanodeAbstractParameter&>(parameters.get("Velocity"));
+        out.voices = std::max(1, static_cast<int>(pitch.get().size()));
+        return true;
+    }
+#endif
+
 	// Use the same editor action as the node's Editor button.
 	void showEditor() { openEditor.trigger(); }
 	
