@@ -7,7 +7,7 @@ sys.path.insert(0,str(ROOT/'tools/aliasingbox'))
 from render_test import message,bundle,read_wav
 out=pathlib.Path('/tmp/polycomb-lfo-models');out.mkdir(exist_ok=True)
 # Execute the actual Off branch through a minimal OSC-recording server adapter.
-code=(ROOT/'src/nodes/boxSynths/shared/scModulation.cpp').read_text();start=code.index('    s->set("hold", manualLfo(li)');end=code.index('\n    s->set("modeweights"',start)
+code=(ROOT/'src/nodes/boxSynths/shared/scModulation.cpp').read_text().replace("controls.set(", "s->set(");start=code.index('    s->set("hold", manualLfo(li)');end=code.index('\n    s->set("modeweights"',start)
 branch=code[start:end]
 cpp=r'''
 #include <nlohmann/json.hpp>

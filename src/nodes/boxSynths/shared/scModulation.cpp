@@ -8,6 +8,7 @@
 #include "scMorphPolicies.h"
 #include "ofxOceanodeNodeModel.h"
 #include "../../../audio/scSynthStartup.h"
+#include "../../../audio/scSynthControlBatch.h"
 #include "../../../ui/scEnvelopeCurve.h"
 #include "../../../audio/scMorphWave.h"
 #include <algorithm>
@@ -61,6 +62,14 @@ float customPow(float value, float pow) {
 float biPow(float value, float b) { return reflectUnit((customPow(value * 2.0f - 1.0f, b) + 1.0f) * 0.5f); }
 using scmorph::morph;
 
+float quantizeLfo(float value, float steps) {
+    const float q = std::clamp(steps, 1.f, 32.f), low = std::floor(q), mix = q-low;
+    auto quantize = [value](float count){ return count < 2 ? value : std::min(std::floor(value*count), count-1)/(count-1); };
+    return quantize(low)*(1-mix) + quantize(std::min(32.f, low+1))*mix;
+}
+float morphCentered(float ph, float round, float skew, float pw, float centered) {
+    return morph(ph,round,skew,pw,false)*(1-centered)+morph(ph,round,skew,pw,true)*centered;
+}
 float perlin(float x, float seed) {
     auto grad = [seed](float k){ const float v = std::sin((k + seed) * 12.9898f) * 43758.5453f; return (v - std::floor(v)) * 2.0f - 1.0f; };
     const float i = std::floor(x), f = x - i;
@@ -104,10 +113,7 @@ std::vector<float> scModulation::lfoTransfer(int li, int size) const {
         v = ofClamp((v - 0.5f) * gain + 0.5f, 0.0f, 1.0f);
         if(std::abs(pw2) > 1e-4f) v = reflectUnit(customPow(v, pw2));
         if(std::abs(bp) > 1e-4f) v = biPow(v, bp);
-        if(lfoSteps[li].get() >= 2){
-            const float q = (float)lfoSteps[li].get();
-            v = std::min(std::floor(v * q), q - 1.0f) / (q - 1.0f);
-        }
+        v = quantizeLfo(v, lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
         t[i] = ofClamp(v, 0.0f, 1.0f);
     }
     cache.key = key;
@@ -133,8 +139,11 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
         const std::string L = "LFO" + ofToString(li + 1) + " ";
         const std::string X = nameSuffix;
         auto toLfo = [this, li]() {
-            if(!scSnapshots::applyingSnapshot()) generatorMorph.erase(lfoNoise[li].getEscapedName());
-            cycleCache[li].values.clear(); previewCache[li].valid = false;
+            // Snapshot application writes typed editor switches first. Publish only
+            // the final effective state in afterLoad/resend, never that interim switch.
+            if(scSnapshots::applyingSnapshot()) return;
+            generatorMorph.erase(lfoNoise[li].getEscapedName());
+            cycleCache[li].values.clear(); transferCache[li].values.clear(); previewCache[li].valid = false;
             forStates([this, li](ofxSCServer*, ServerState& st){ sendLfo(st, li); }); notify(); };
         lfoSync[li].set(L + "Sync" + X, true);                    host.regB(lfoSync[li], toLfo);
         vec(lfoBeats[li], L + "Beats" + X, (float)(1 << std::min(li, 4)), 0.125f, 512); host.regV(lfoBeats[li], toLfo);
@@ -288,41 +297,43 @@ void scModulation::sendLfo(ServerState& st, int li) {
     if(st.builtVoices != n()) return;
     auto* s = st.lfo[li];
     if(!s) return;
-    s->set("out", st.srcBlock ? st.srcBlock->index + li * busWidth : 0);
-    s->set("freq", lfoHzFor(li));
-    s->set("sh", lfoShFor(li));
-    sendVec(s, "freqdetune", perVoice ? lfoDetune[li].get() : std::vector<float>{0.0f});
-    s->set("initphase", lfoInit[li].get());
-    sendVec(s, "round", lfoRound[li].get());
-    sendVec(s, "skew", lfoSkew[li].get());
-    sendVec(s, "pw", lfoPw[li].get());
-    s->set("centered", lfoCentered[li].get() ? 1.0f : 0.0f);
-    sendVec(s, "gain", lfoGain[li].get());
-    sendVec(s, "pow", lfoPow[li].get());
-    sendVec(s, "bipow", lfoBiPow[li].get());
-    s->set("noise", effectiveNoise(li) ? 1.0f : 0.0f);
-    s->set("shglide", lfoSHGlide[li].get());
-    s->set("nscale", perVoice ? lfoNScale[li].get() : 0.0f);
-    s->set("seed", li * 17.31f);
-    s->set("phoff", perVoice ? expand(lfoPhases[li], n()) : std::vector<float>(n(), 0.0f));
-    s->set("reset", (float)resetCounter);
-    s->set("rtype", (float)effectiveRandom(li));     // ModLfoX only
-    s->set("steps", (float)lfoSteps[li].get());
-    s->set("rsmooth", lfoRndSmooth[li].get());
-    s->set("rshare", perVoice && !lfoRndSame[li].get() ? 0.0f : 1.0f);   // ModLfoX only
+    scSynthControlBatch controls(s, s->getServer());
+    controls.set("out", st.srcBlock ? st.srcBlock->index + li * busWidth : 0);
+    controls.set("freq", lfoHzFor(li));
+    controls.set("sh", lfoShFor(li));
+    controls.set("freqdetune", expand(perVoice ? lfoDetune[li].get() : std::vector<float>{0.0f}, n()));
+    controls.set("initphase", lfoInit[li].get());
+    controls.set("round", expand(lfoRound[li].get(), n()));
+    controls.set("skew", expand(lfoSkew[li].get(), n()));
+    controls.set("pw", expand(lfoPw[li].get(), n()));
+    controls.set("centered", lfoGeneratorValue(li, "centered", lfoCentered[li].get() ? 1.f : 0.f));
+    controls.set("gain", expand(lfoGain[li].get(), n()));
+    controls.set("pow", expand(lfoPow[li].get(), n()));
+    controls.set("bipow", expand(lfoBiPow[li].get(), n()));
+    controls.set("noise", effectiveNoise(li) ? 1.0f : 0.0f);
+    controls.set("shglide", lfoSHGlide[li].get());
+    controls.set("nscale", perVoice ? lfoNScale[li].get() : 0.0f);
+    controls.set("seed", li * 17.31f);
+    controls.set("phoff", perVoice ? expand(lfoPhases[li], n()) : std::vector<float>(n(), 0.0f));
+    controls.set("reset", (float)resetCounter);
+    controls.set("rtype", (float)effectiveRandom(li));     // ModLfoX only
+    controls.set("steps", lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
+    controls.set("rsmooth", lfoRndSmooth[li].get());
+    controls.set("rshare", perVoice ? lfoGeneratorValue(li, "shared", lfoRndSame[li].get() ? 1.f : 0.f) : 1.f);   // ModLfoX only
     const bool blended = generatorMorph.contains(lfoNoise[li].getEscapedName());
-    s->set("hold", manualLfo(li) && !blended ? 1.0f : 0.0f);
+    controls.set("hold", manualLfo(li) && !blended ? 1.0f : 0.0f);
     if(manualLfo(li) && !blended){
         const std::vector<float> zero(n(),0.0f), one(n(),1.0f), half(n(),0.5f);
-        s->set("freq",zero); s->set("freqdetune",zero); s->set("phoff",zero);
-        s->set("initphase",lfoManual[li].get()*0.5f);
-        s->set("round",zero); s->set("skew",zero); s->set("pw",half);
-        s->set("centered",1.0f); s->set("noise",0.0f); s->set("rtype",0.0f);
-        s->set("gain",one); s->set("pow",zero); s->set("bipow",zero);
-        s->set("sh",zero); s->set("steps",0.0f);
+        controls.set("freq",zero); controls.set("freqdetune",zero); controls.set("phoff",zero);
+        controls.set("initphase",lfoManual[li].get()*0.5f);
+        controls.set("round",zero); controls.set("skew",zero); controls.set("pw",half);
+        controls.set("centered",1.0f); controls.set("noise",0.0f); controls.set("rtype",0.0f);
+        controls.set("gain",one); controls.set("pow",zero); controls.set("bipow",zero);
+        controls.set("sh",zero); controls.set("steps",0.0f);
     }
-    s->set("modeweights", lfoModeWeights(li));
-    s->set("manualvalue", lfoManualValue(li));
+    controls.set("modeweights", lfoModeWeights(li));
+    controls.set("manualvalue", lfoManualValue(li));
+    controls.send();
 }
 
 // One value per cycle, from a hash of the LFO and the cycle (no state): the
@@ -589,7 +600,7 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
         const float ph = float(i) / (t.size() - 1);
         float v;
         // noise: 4 Perlin steps per cycle, crossfaded into the next cycle's start so it loops
-        v = weights[0] * morph(ph, rnd, sk, pw, lfoCentered[li].get())
+        v = weights[0] * morphCentered(ph, rnd, sk, pw, lfoGeneratorValue(li, "centered", lfoCentered[li].get() ? 1.f : 0.f))
           + weights[1] * (perlin(ph * 4.0f, seed) * (1.0f - ph) + perlin(ph * 4.0f - 4.0f, seed) * ph);
         for(int mode = 1; mode <= 3; ++mode) if(weights[mode + 1] > 0)
             v += weights[mode + 1] * rndPreview(li, ph, mode, lfoRndSmooth[li].get());
@@ -597,10 +608,7 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
         v = ofClamp((v - 0.5f) * gain + 0.5f, 0.0f, 1.0f);
         if(std::abs(pw2) > 1e-4f) v = reflectUnit(customPow(v, pw2));
         if(std::abs(bp) > 1e-4f) v = biPow(v, bp);
-        if(lfoSteps[li].get() >= 2){
-            const float q = (float)lfoSteps[li].get();
-            v = std::min(std::floor(v * q), q - 1.0f) / (q - 1.0f);
-        }
+        v = quantizeLfo(v, lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
         t[i] = ofClamp(v, 0.0f, 1.0f) * active + weights[5] * lfoManualValue(li);
     }
     t.back() = t.front();
@@ -1368,7 +1376,7 @@ void scModulation::drawLfoCard(int li, float w) {
         auto value = [&](float ph){
             const auto weights = lfoModeWeights(li);
             const float active = 1.0f - weights[5];
-            float v = weights[0] * morph(ph, rnd, sk, pw, lfoCentered[li].get())
+            float v = weights[0] * morphCentered(ph, rnd, sk, pw, lfoGeneratorValue(li, "centered", lfoCentered[li].get() ? 1.f : 0.f))
                     + weights[1] * noise2(ph * 3.0f, 0.0f, li * 17.31f);
             for(int mode = 1; mode <= 3; ++mode) if(weights[mode + 1] > 0)
                 v += weights[mode + 1] * rndPreview(li, ph, mode, lfoRndSmooth[li].get());
@@ -1376,7 +1384,7 @@ void scModulation::drawLfoCard(int li, float w) {
             v = ofClamp((v - 0.5f) * gain + 0.5f, 0.0f, 1.0f);
             if(std::abs(pw2) > 1e-4f) v = reflectUnit(customPow(v, pw2));
             if(std::abs(bp) > 1e-4f) v = biPow(v, bp);
-            if(lfoSteps[li].get() >= 2){ const float q = (float)lfoSteps[li].get(); v = std::min(std::floor(v * q), q - 1.0f) / (q - 1.0f); }
+            v = quantizeLfo(v, lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
             return v * active + weights[5] * lfoManualValue(li);
         };
         const std::array<float, 8> key{rnd, sk, pw + lfoSteps[li].get() * 3.0f, pw2, bp, manualLfo(li) ? -1.0f-lfoManual[li].get() : gain,
@@ -1784,6 +1792,7 @@ void scModulation::loadGeneratorState(const ofJson& j, const std::string& prefix
         }
     }
     for(auto& cache : cycleCache) cache.values.clear();
+    for(auto& cache : transferCache) cache.values.clear();
     for(auto& cache : previewCache) cache.valid = false;
 }
 
@@ -1795,9 +1804,11 @@ void scModulation::morphGenerators(const ofJson& a,const ofJson& b,float t,const
         scGeneratorMorph::LfoKeys keys{lfoNoise[li].getEscapedName(), lfoRndType[li].getEscapedName(),
             unifiedLfoModels ? lfoModel[li].getEscapedName() : "", lfoSync[li].getEscapedName(),
             lfoHz[li].getEscapedName(), lfoBeats[li].getEscapedName(), lfoSH[li].getEscapedName(),
-            unifiedLfoModels ? lfoManual[li].getEscapedName() : "", grainExtras ? lfoRegion[li].getEscapedName() : ""};
+            unifiedLfoModels ? lfoManual[li].getEscapedName() : "", grainExtras ? lfoRegion[li].getEscapedName() : "",
+            lfoRndSame[li].getEscapedName(), lfoCentered[li].getEscapedName(), lfoSteps[li].getEscapedName()};
         ofJson defaults = {{keys.noise, lfoNoise[li].get()}, {keys.random, lfoRndType[li].get()},
             {keys.sync, lfoSync[li].get()}, {keys.hz, lfoHz[li].get()}, {keys.beats, lfoBeats[li].get()}, {keys.sh, lfoSH[li].get()}};
+        defaults[keys.shared] = lfoRndSame[li].get(); defaults[keys.centered] = lfoCentered[li].get(); defaults[keys.steps] = lfoSteps[li].get();
         if(grainExtras) defaults[keys.region] = lfoRegion[li].get();
         if(unifiedLfoModels){ defaults[keys.model] = lfoModel[li].get(); defaults[keys.manual] = lfoManual[li].get(); }
         state[metadata][keys.noise] = scGeneratorMorph::blend(
@@ -1805,4 +1816,9 @@ void scModulation::morphGenerators(const ofJson& a,const ofJson& b,float t,const
             scGeneratorMorph::endpoint(b, metadata, keys, defaults, blocked), t);
     }
     loadGeneratorState(state, prefix);
+}
+
+float scModulation::lfoGeneratorValue(int li, const char* name, float fallback) const {
+    const auto key = lfoNoise[li].getEscapedName();
+    return generatorMorph.contains(key) ? scGeneratorMorph::scalar(generatorMorph.at(key).value(name, ofJson(fallback)), fallback) : fallback;
 }

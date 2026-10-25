@@ -210,6 +210,7 @@ public:
     }
     std::vector<float> lfoModeWeights(int li) const;
     float lfoManualValue(int li) const;
+    float lfoGeneratorValue(int li, const char* key, float fallback) const;
     void afterLoad();                                          // after the node's controls are back
 
 private:

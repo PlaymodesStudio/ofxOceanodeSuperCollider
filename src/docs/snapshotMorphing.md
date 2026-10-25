@@ -165,7 +165,7 @@ Remaining discrete cases, after inspecting the Box-family snapshot and DSP paths
 | PulsarBox | Rhythm/sieve/trigger semantics and manually changed output layout. Tables, formant Hz/ratio selection and voice/layer snapshot counts now have explicit transitions. |
 | WavetableBox | Table replacement, trigger/oversampling and geometry changes. Voice counts share retained independent oscillators and fade presence. Warp modes now blend per-voice phase results; B-source changes pass through zero FM and feedback, including routed modulation. |
 | SlicerBox / EchoBox | Slice/trigger/clock/freeze/reverse and routing decisions. Supported filter and effect activation policies remain continuous. |
-| Shared modulation | Classic/Noise/Random/Manual models and effective Hz/beat/region rates blend on one clock; held-note Sustain follows the blend. Explicit reset, quantization and envelope trigger/segment timing retain their normal semantics. |
+| Shared modulation | Classic/Noise/Random/Manual models and effective Hz/beat/region rates blend on one clock; held-note Sustain follows the blend. Explicit reset, indexer quantization and envelope trigger/segment timing retain their normal semantics. |
 | PolyComb | Its evaluated pitch maps and temporary voice banks retain their dedicated implementation; generic unsupported routing/trigger modes remain discrete. |
 
 This list distinguishes supported audio transitions from outstanding engine work;
@@ -305,3 +305,16 @@ Checks: `tools/snapshot_morph_test/generator_test.py` covers effective state;
 `generator_render_test.py` compiles production DSP and renders all LFO
 algorithms around .5, held Sustain, release and retrigger; `engine_contract_test.py`
 checks real snapshot hosts and stable LFO node IDs with ASan/UBSan.
+
+LFO morphs also preserve fractional Centered, Random Same and Steps values in
+the common generator state. Random Same crossfades two stable hash fields;
+it never changes the random seed as the morph moves. Fractional Steps blends
+adjacent quantizers, with a continuous transition from bypass. Snapshot editor
+callbacks defer LFO sends until the effective state is ready, then send all
+controls and weights in one OSC message. This avoids exposing interim editor
+switches to live DSP. Stored/interrupted morphs retain these values.
+
+`tools/snapshot_morph_test/lfo_switch_render_test.py` checks four voices,
+Classic/Stepped, independent/shared random fields, Centered and Steps around
+midpoint/quantizer boundaries. It freezes every voice's frequency to distinguish
+a morph discontinuity from Random Stepped's intended jumps at cycle boundaries.

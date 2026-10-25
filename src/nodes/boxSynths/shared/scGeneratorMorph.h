@@ -4,7 +4,7 @@
 // Effective generator settings travel with every Box's shared modulation state.
 // Editor switches keep their types; DSP blends algorithms on one running clock.
 struct scGeneratorMorph {
-    struct LfoKeys { std::string noise, random, model, sync, hz, beats, sh, manual, region; };
+    struct LfoKeys { std::string noise, random, model, sync, hz, beats, sh, manual, region; std::string shared{}, centered{}, steps{}; };
     static ofJson read(const ofJson& sound, const std::string& key, const ofJson& fallback,
                        const scModulationMorph::Blocked& blocked) {
         return !key.empty() && !(blocked && blocked(key)) && sound.contains(key) ? sound[key] : fallback;
@@ -73,6 +73,12 @@ struct scGeneratorMorph {
             state["shHz"] = sync ? std::vector<float>(sh.size(), 0) : sh;
             state["shBeatRate"] = sync ? sh : std::vector<float>(sh.size(), 0);
         }
+        for(const auto& item : {std::pair<const char*, std::string>{"shared", keys.shared}, {"centered", keys.centered}, {"steps", keys.steps}}){
+            const bool driven = !item.second.empty() && blocked && blocked(item.second);
+            const float fallback = std::string(item.first) == "centered" ? 1.f : 0.f;
+            state[item.first] = std::clamp(scalar(!driven && saved.is_object() && saved.contains(item.first)
+                ? saved[item.first] : field(item.second), fallback), 0.f, std::string(item.first) == "steps" ? 32.f : 1.f);
+        }
         return state;
     }
     static ofJson blend(const ofJson& a, const ofJson& b, float t) {
@@ -80,6 +86,7 @@ struct scGeneratorMorph {
         ofJson out = ofJson::object();
         for(const char* key : {"weights", "hz", "beatRate", "regionRate", "shHz", "shBeatRate"})
             out[key] = scModulationMorph::interpolate(scModulationMorph::numbers(a.at(key)), scModulationMorph::numbers(b.at(key)), t);
+        for(const char* key : {"shared", "centered", "steps"}) out[key] = (1-t)*a.value(key, 0.f)+t*b.value(key, 0.f);
         const float manualWeight = out["weights"][5].get<float>();
         const float contribution = (1-t)*a["weights"][5].get<float>()*a["manual"].get<float>()
                                  + t*b["weights"][5].get<float>()*b["manual"].get<float>();

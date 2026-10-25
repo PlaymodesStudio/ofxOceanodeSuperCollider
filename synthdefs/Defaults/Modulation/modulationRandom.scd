@@ -50,8 +50,16 @@ valueNoise2 = { |x, y, salt = 0|
         var rpos = (sweep * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff;
         var rcycle = rpos.floor, rfrac = rpos - rcycle;
         // \rshare 0: each voice its own values; 1: one series for every voice
-        var rsalt = (\seed.kr(0) * 7.13) + ((0 .. (n - 1)) * 3.7193 * (1 - (\rshare.kr(0) > 0.5)));
-        var rhash = { |c| ((((c % 8192) * 12.9898) + rsalt).sin * 43758.5453).frac };
+        var rsalt = \seed.kr(0) * 7.13;
+        var sharing = \rshare.kr(0).clip(0, 1);
+        // Blend stable random fields. Moving the hash seed would redraw every
+        // value, and thresholding sharing would jump at the morph midpoint.
+        var rhash = { |c|
+            var salt = ((c % 8192) * 12.9898) + rsalt;
+            var common = (salt.sin * 43758.5453).frac;
+            var independent = ((salt + ((0 .. (n - 1)) * 3.7193)).sin * 43758.5453).frac;
+            (independent * (1 - sharing)) + (common * sharing)
+        };
         var v3 = rhash.(rcycle), v2 = rhash.(rcycle - 1), v1 = rhash.(rcycle - 2), v0 = rhash.(rcycle - 3);
         var rstepped = OnePole.kr(v3, exp(-1 / (\rsmooth.kr(0).max(1.0e-4) * ControlRate.ir)) * (\rsmooth.kr(0) > 0));
         var rsmooth = (v1 + (0.5 * rfrac * ((v2 - v0) + (rfrac * (((2 * v0) - (5 * v1) + (4 * v2) - v3)
@@ -73,7 +81,7 @@ valueNoise2 = { |x, y, salt = 0|
         rightMin = LinLin.kr(pw, 0.5, 1, midpoint, 1).clip(0, 1);
         centered = LinLin.kr(ph, (0.5 - pw).clip(0, 1), (0.5 + pw).clip(0, 1), 0, 1).clip(0, 1);
         left = LinLin.kr(ph, 0, (pw * 2).max(1.0e-7).min(1), 0, 1).clip(0, 1);
-        narrowed = Select.kr(\centered.kr(1) > 0.5, [left, centered]);
+        narrowed = (left * (1 - \centered.kr(1).clip(0, 1))) + (centered * \centered.kr(1).clip(0, 1));
         narrowed = narrowed * (1 - ((skew < 0) * (narrowed >= 0.99999)));
         wLo = LinLin.kr(ph, 0, leftMax.max(1.0e-7), 0, midpoint).clip(0, 1);
         wHi = LinLin.kr(ph, rightMin.min(1 - 1.0e-7), 1, midpoint, 1).clip(0, 1);
@@ -116,7 +124,13 @@ valueNoise2 = { |x, y, salt = 0|
         out = Select.kr(kv.(\bipow, 0).abs > 0.0001, [out,
             reflect.((customPow.((out * 2) - 1, kv.(\bipow, 0)) + 1) * 0.5)]);
         // Steps: that many levels (0 / 1: smooth), as GrainBox's
-        out = Select.kr(steps >= 2, [out, (out * steps).floor.min(steps - 1) / (steps - 1).max(1)]);
+        // Fractional Steps blends adjacent quantizers. 0 and 1 mean bypass;
+        // fade into the first quantizer continuously instead of enabling at 2.
+        out = {
+            var quantize = { |q| Select.kr(q >= 2, [out, (out * q).floor.min(q - 1) / (q - 1).max(1)]) };
+            var q = steps.clip(1, 32), low = q.floor;
+            (quantize.(low) * (1 - q.frac)) + (quantize.((low + 1).min(32)) * q.frac)
+        }.value;
         out = (out * (1 - manualWeight)) + (\manualvalue.kr(0).clip(0, 1) * manualWeight);
         Out.kr(\out.kr(0), Sanitize.kr(out));
     }).writeDefFile(dir);

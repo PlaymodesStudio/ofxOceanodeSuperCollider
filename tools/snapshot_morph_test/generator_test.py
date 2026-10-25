@@ -21,6 +21,14 @@ int main(){
   assert(resumed["weights"]==state["weights"]);near(resumed["beatRate"][0],state["beatRate"][0]);
  }
  b[k.sync]=false;b[k.hz]={7.f};y=scGeneratorMorph::endpoint(b,"mGenerators",k,a);
+ k.shared="LFO1_Random_Same";k.centered="LFO1_Centered";k.steps="LFO1_Steps";
+ a[k.shared]=false;b[k.shared]=true;a[k.centered]=true;b[k.centered]=false;a[k.steps]=0;b[k.steps]=8;
+ x=scGeneratorMorph::endpoint(a,"mGenerators",k,a);y=scGeneratorMorph::endpoint(b,"mGenerators",k,a);
+ for(float t:{.499f,.501f}){
+  auto mixed=scGeneratorMorph::blend(x,y,t);near(mixed["shared"],t);near(mixed["centered"],1-t);near(mixed["steps"],8*t);
+  ofJson held={{"mGenerators",{{k.noise,mixed}}}};
+  auto restored=scGeneratorMorph::endpoint(held,"mGenerators",k,a);assert(restored==mixed);
+ }
  auto state=scGeneratorMorph::blend(x,y,.5f);near(state["hz"][0],3.5f);near(state["beatRate"][0],.5f/1.954f);
  auto blocked=scGeneratorMorph::endpoint(b,"mGenerators",k,a,[&](const std::string& key){return key==k.random;});near(blocked["weights"][0],1);
  k.model="LFO1_Model";k.manual="LFO1_Value";a[k.model]=0;a[k.manual]=.8f;b[k.model]=1;
