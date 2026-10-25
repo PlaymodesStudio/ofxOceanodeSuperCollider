@@ -82,7 +82,7 @@ struct scAdditiveBox{
  std::vector<Action>publishActions;
  std::set<std::string>driven;
  int nextId=100,created=0,freed=0,unexpectedStructure=0;bool dirty=false;
- float level=.5;std::vector<float>gains;
+ int resets=0;float level=.5;std::vector<float>gains;
  bool soundDriven(const std::string&k)const{return driven.count(k);}
  bool notInPresets(const std::string&)const{return false;}
  void migrateOldModulation(const ofJson&){}void migrateOldEnvelope(const ofJson&){}
@@ -102,7 +102,7 @@ struct scAdditiveBox{
  scAdditiveBox(){
   states[nullptr]=State{};partials.value=32;partials.name="Partials";
   numVoices.changed=[this](){if(!loadingBankPreset){++unexpectedStructure;applyStructure();}};
-  publishActions.push_back({"Levels",[this](ofJson&j){j["Levels"]=level;},[this](const ofJson&j){level=j.get<float>();},[this](){level=.5;}});
+  publishActions.push_back({"Levels",[this](ofJson&j){j["Levels"]=level;},[this](const ofJson&j){level=j.get<float>();},[this](){++resets;level=.5;}});
   publishActions.push_back({"Partials",[this](ofJson&j){j["Partials"]=partials.get();},[this](const ofJson&j){partials=j.get<int>();},[this](){partials=32;}});
   applyStructure();
  }
@@ -124,6 +124,8 @@ int main(){
   near(box.mod.matrix[0],t);near(box.mod.matrix[1],1-t);
  }
  assert(box.created==8 && box.mod.rebuilds==1);
+ assert(box.resets==0); // the last morph frame must not reload/reset the sound
+ near(box.level,.8f);
  box.applySound(b,a,.4,false);near(box.voiceMorphGain(7),.6);
  auto stored=box.captureSound();assert(stored.contains(scVoiceCountMorph::key));
  box.applySound(stored,a,0,false);near(box.voiceMorphGain(7),.6);
@@ -159,6 +161,11 @@ int main(){
   bool threw=false;try{p.forPartialBanks(nullptr,[&](){if(p.renderPartialCap==8)throw 1;});}catch(...){threw=true;}
   assert(threw && p.renderPartialCap==0 && p.states[nullptr].voices[0].id==destination);
   p.applySound(stored,low,1,true);p.finishPartialMorph();assert(p.builtCap==8 && !p.partialBankMode && p.states[nullptr].partialBanks.empty());
+ }
+ {
+  scAdditiveBox recall;recall.level=.9f;
+  ofJson legacy={{"Voices",1}};recall.applySound(legacy,legacy,1,true);
+  assert(recall.resets==1);near(recall.level,.5f);
  }
  std::cout<<"PASS: AdditiveBox voice presence at .001, stable common IDs across .5, deferred freeing, stored/interrupted blends, routing interpolation, connected controls and retained partial-cap banks\n";
 }

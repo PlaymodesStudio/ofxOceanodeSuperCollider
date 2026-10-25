@@ -136,8 +136,21 @@ for folder, cls in hosts.items():
     std::cout<<"MORPH BENCH median_ms="<<times[times.size()/2]<<" max_ms="<<times.back()
              <<" computations_per_frame="<<computations/10.0<<" messages_per_frame="<<events/10.0<<std::endl;
     if(const char* score=std::getenv("BOX_MORPH_BENCH_SCORE")){
+     server.setNRTTime(24.4);render.snaps.applyExternalMorph(a,b,.9999f,true);ack();render.flushDirty();
+     auto& state=render.states.at(&server);
+     const int destinationCap=render.capForCount(b[render.partials.getEscapedName()].get<int>());
+     auto destination=[&]() -> scAdditiveBox::VoiceSC& {
+      return (destinationCap==render.builtCap?state.voices:state.partialBanks.at(destinationCap))[0];
+     };
+     const int core=destination().cores[0][0]->nodeID,source=destination().src->nodeID;
+     const int envelope=render.mod.states.at(&server).env[0]->nodeID;
+     const auto before=server.getNRTEventCount();
      server.setNRTTime(25.4);render.snaps.applyExternalMorph(a,b,1,true);ack();render.flushDirty();
+     assert(destination().cores[0][0]->nodeID==core && destination().src->nodeID==source);
+     assert(render.mod.states.at(&server).env[0]->nodeID==envelope);
+     std::cout<<"ENDPOINT: retained oscillator/source/envelope; messages="<<server.getNRTEventCount()-before<<std::endl;
      server.setNRTTime(26);render.finishVoiceMorph();render.finishPartialMorph();render.flushDirty();ack();
+     assert(state.voices[0].cores[0][0]->nodeID==core && state.voices[0].src->nodeID==source);
      server.setNRTTime(27);render.drone=false;render.flushDirty();
      server.endNRTCapture(31.1);assert(server.writeNRTScore(score,31.1));
     }

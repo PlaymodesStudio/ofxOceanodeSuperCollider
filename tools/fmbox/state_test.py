@@ -6,7 +6,7 @@ s=(ROOT/'src/nodes/boxSynths/fmBox/scFMBox.cpp').read_text()
 harness=(ROOT/'tools/fmbox/render_test.py').read_text().split("    cpp=r'''",1)[1].split("'''.replace('CONTROLS'",1)[0]
 a=s.index('    auto add = [this]');b=s.index('    // ── Effects',a)
 controls=s[a:b]
-a=s.index('ofJson scFMBox::dx7Snapshot');b=s.index('std::vector<ofJson> scFMBox::factory()',a)
+a=s.index('ofJson scFMBox::dx7Snapshot');b=s.index('void scFMBox::drawPresets',a)
 methods=s[a:b]
 find=s[s.index('ofParameter<float>& scFMBox::soundParam'):s.index('void scFMBox::drawSoundTab')]
 snapshot=(ROOT/'src/nodes/boxSynths/shared/scSnapshots.h').read_text();a=snapshot.index('    void applyExternal(');b=snapshot.index('\n    }',a)+6
@@ -27,7 +27,8 @@ struct SoundControl{'''.replace('EXTERNAL',external))
 harness=harness.replace('void sendAll(){}void setAlgorithm(int){}void recallAFX(int){}','''void sendAll(){}void setAlgorithm(int){}
  Snapshots snaps;std::vector<scDX7::Patch>afxBank;std::string afxPath,afxMessage;ofJson current,applied;
  ofJson capture(){return current;}
- void recallAFX(int);bool loadAFX(const std::string&,bool recallFirst=true);''')
+ void recallAFX(int);bool loadAFX(const std::string&,bool recallFirst=true);
+ std::vector<ofJson> factory() const;''')
 harness=harness.replace('CONTROLS',controls).replace('FIND',find).replace('METHODS',methods)
 harness+=r'''
 int main(int argc,char**argv){
@@ -36,6 +37,15 @@ int main(int argc,char**argv){
  assert(box.loadAFX(argv[1],false));assert(box.afxBank.size()==16384);
  assert(box.afxNames[0].name=="ARP 2600");
  assert(box.dx7Snapshot(box.afxBank[0],0)["name"]=="DX7 1 / ARP 2600");
+ const auto factory=box.factory();assert(factory.size()==32);
+ assert(factory[0]["name"]=="BRASS 1"&&factory[10]["name"]=="E.PIANO 1"&&factory[31]["name"]=="TAKE OFF");
+ for(int slot=0;slot<32;++slot){
+  const int index=12800+slot;
+  assert(box.afxNames[index].bank=="ROM1A");
+  auto expected=box.dx7Snapshot(box.afxBank[index],index);
+  expected["name"]=box.afxNames[index].name;
+  assert(factory[slot]==expected); // Complete converted sound, in original order.
+ }
  const auto originalBank=box.afxBank;
  std::string broken=std::string(argv[2])+"/broken.afx";
  {std::ofstream f(broken);f<<"not an afx bank\n";}
@@ -56,9 +66,10 @@ int main(int argc,char**argv){
  assert(box.applied["fmModParams"][0]["amounts"]["0"]==0.25);
  const auto snapshot=ofJson::parse(box.applied.dump());
  box.afxBank.clear();box.snaps.running=true;box.applied={};
+ assert(box.factory().size()==1&&box.factory()[0]["name"]=="DX7 Init");
  box.snaps.applyExternal(snapshot);
  assert(box.applied==snapshot&&!box.snaps.running&&box.snaps.active==-1);
- std::cout<<"PASS: rejected imports retain bank; AFX recall preserves effects/modulation and rebases controls; snapshot glide stops; stored sounds are independent of source files\n";
+ std::cout<<"PASS: 32 named ROM1A factory snapshots and init fallback; rejected imports retain bank; AFX recall preserves effects/modulation and rebases controls; snapshot glide stops; stored sounds are independent of source files\n";
 }
 '''
 with tempfile.TemporaryDirectory(prefix='fmbox-state-')as folder:

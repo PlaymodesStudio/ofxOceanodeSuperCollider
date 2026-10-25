@@ -2479,7 +2479,11 @@ void scAdditiveBox::applySound(const ofJson& a, const ofJson& b, float t, bool s
     // Let the DSP's existing amp lag reach zero before freeing outgoing voices.
     voiceMorphCapacity=std::max(before,wanted);
     voiceMorphRetireAt=wanted<before ? ofGetElapsedTimef()+0.08f : -1;
-    if(t>=1.0f && sw){ loadSound(b); return; }
+    // A direct recall still restores defaults for legacy, incomplete presets.
+    // A morph must finish through the same path as its preceding frames:
+    // loadSound resets controls and source counts, which can free/recreate
+    // running envelopes and LFOs even when the endpoint uses the same sources.
+    if(&a==&b && t>=1.0f && sw){ loadSound(b); return; }
     const bool wasLoading=loadingBankPreset;
     loadingBankPreset=true;
     auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);

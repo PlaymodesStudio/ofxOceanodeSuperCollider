@@ -86,7 +86,15 @@ if args.morph_bank:
     print(json.dumps(levels,indent=2))
     assert all(levels[k]>1e-5 for k in ('start','middle','end')), 'Morph must keep both banks sounding through the endpoint'
     assert levels['released']<1e-5 and max(map(abs,audio))<1, 'Morph output must remain finite and release cleanly'
-    print('PASS: actual slot 2 -> 6 bank morph renders across both partial caps for 25 seconds and releases cleanly')
+    # The native fixture holds .9999, then sends exactly 1 at 25.4 seconds.
+    # Check both that frame and the deferred count/bank cleanup at 26 seconds.
+    for when in (25.4, 26.0):
+        def slope(start, end):
+            return max(abs(audio[i*channels]-audio[(i-1)*channels])
+                       for i in range(round(start*sr), round(end*sr)))
+        nearby=max(slope(when-.1,when-.01),slope(when+.03,when+.1))
+        assert slope(when-.002,when+.02)<max(1e-5,nearby*3), ('Endpoint impulse',when)
+    print('PASS: actual slot 2 -> 6 bank morph retains running sources at 1, survives deferred cleanup, and releases cleanly')
     sys.exit(0)
 levels = {name: rms(start, end) for name, start, end in (
     ('attack', .5, .8), ('held', 2, 2.8), ('released', 6.5, 6.9), ('drone', 9, 9.8), ('droneOff', 13.5, 13.9))}

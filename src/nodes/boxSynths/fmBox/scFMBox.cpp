@@ -587,7 +587,14 @@ void scFMBox::recallAFX(int index) {
 }
 std::vector<ofJson> scFMBox::factory() const {
     std::vector<ofJson> out;
-    for(int k=0;k<std::min(128,int(afxBank.size()));++k)out.push_back(dx7Snapshot(afxBank[k],k));
+    // The collection begins with third-party banks. Use Yamaha ROM1A for
+    // the default snapshots, retaining its original order and voice names.
+    for(int k=0;k<int(afxBank.size())&&k<int(afxNames.size());++k) {
+        if(afxNames[k].bank!="ROM1A")continue;
+        auto j=dx7Snapshot(afxBank[k],k);
+        if(!afxNames[k].name.empty())j["name"]=afxNames[k].name;
+        out.push_back(std::move(j));
+    }
     if(out.empty()){auto j=initial;j["name"]="DX7 Init";out.push_back(j);}
     return out;
 }
