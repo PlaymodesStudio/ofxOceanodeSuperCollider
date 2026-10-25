@@ -1,3 +1,4 @@
+#include "../../../audio/scSynthControlBatch.h"
 //
 //  scSpectralFilterBox.cpp
 //  ofxOceanodeSuperCollider
@@ -288,31 +289,37 @@ void scSpectralFilterBox::sendTransposes(bool force){
 }
 
 void scSpectralFilterBox::sendScalar(const std::string& name, float value){
+    const auto previous=sentScalars.find(name);
+    if(previous!=sentScalars.end() && previous->second==value)return;
     sentScalars[name] = value;
     for(auto& [server, synth] : synths) if(synth) synth->set(name, value);
 }
 
 void scSpectralFilterBox::sendAll(ofxSCSynth* synth){
     if(!synth) return;
+    ofxSCServer* server=nullptr;
+    for(auto& [srv,s]:synths)if(s==synth){server=srv;break;}
+    scSynthControlBatch updates(synth,server);
     shaped = shapeMask();
     if(bandpass()){
         updateBandGains(0.0f, sentGains.size() != size_t(bandCount() * channels()));
-        synth->set("gains", sentGains);
-        synth->set("gain", std::pow(10.0f, gainDb.get() / 20.0f));
-        synth->set("mix", mix.get());
-        return;
+        updates.set("gains", sentGains);
+        updates.set("gain", std::pow(10.0f, gainDb.get() / 20.0f));
+        updates.set("mix", mix.get());
+        updates.send();return;
     }
-    synth->set("mask", shaped);
+    updates.set("mask", shaped);
     sentTransposes = channelTransposes();
-    synth->set("transpose", sentTransposes);
-    synth->set("gain", std::pow(10.0f, gainDb.get() / 20.0f));
-    synth->set("mix", mix.get());
-    synth->set("lowfreq", lowFreq.get());
-    synth->set("highfreq", highFreq.get());
-    synth->set("wrap", wrap ? 1.0f : 0.0f);
-    synth->set("attack", attack.get());
-    synth->set("release", release.get());
-    synth->set("hold", hold ? 1.0f : 0.0f);
+    updates.set("transpose", sentTransposes);
+    updates.set("gain", std::pow(10.0f, gainDb.get() / 20.0f));
+    updates.set("mix", mix.get());
+    updates.set("lowfreq", lowFreq.get());
+    updates.set("highfreq", highFreq.get());
+    updates.set("wrap", wrap ? 1.0f : 0.0f);
+    updates.set("attack", attack.get());
+    updates.set("release", release.get());
+    updates.set("hold", hold ? 1.0f : 0.0f);
+    updates.send();
 }
 
 // N Chan or FFT changed: every synth replaced in place (/s_new action 4),

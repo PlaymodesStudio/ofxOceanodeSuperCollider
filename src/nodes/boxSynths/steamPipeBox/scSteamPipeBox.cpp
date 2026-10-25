@@ -83,7 +83,7 @@ void scSteamPipeBox::setup() {
 
     // Pulse: the automatic gates
     drone.set("Drone", false);
-    reg(drone,[this](){sendAll();});
+    reg(drone,[this](){for(auto& [s,st]:states)sendNotes(s,st,NoteRouting);});
     pulseEnabled.set("Pulse", false);
     reg(pulseEnabled,[this](){sendAll();});
 
@@ -109,7 +109,7 @@ void scSteamPipeBox::setup() {
         listeners.push(p->newListener([this,p](std::vector<float>& v) {
             // the timeline's frame set of a value it already sent timetagged: nothing to do
             if(scScheduling::isBackendSendSuppressed()) return;
-            for(auto& [s, st] : states) sendNotes(s, st);
+            for(auto& [s, st] : states) sendNotes(s, st, p == &gate ? NoteGate : NotePitch);
         }));
     }
     listeners.push(voices.newListener([this](int&) { structureDirty = true; }));
@@ -145,7 +145,7 @@ void scSteamPipeBox::setup() {
     dropdowns.set(placement.getEscapedName(),{"Original","Spread","Channels","Manual"});
     dropdowns.set(speakerLayout.getEscapedName(),{"Ring","Line"});
     // ── Effects (MixerPro's inserts) ─────────────────────────────────────────
-    auto toStages = [this]() { for(auto& [sv, st] : states) if(st.created) updateStages(sv, st); };
+    auto toStages = [this]() { sendAll(); };
     eqOn.set("EQ On", false);                 reg(eqOn, toStages);
     {
         const char* names[5] = {"Low", "Lo Mid", "Mid", "Hi Mid", "High"};
@@ -290,33 +290,62 @@ void scSteamPipeBox::setup() {
     requireSynthdefs();
 }
 
-void scSteamPipeBox::sendNotes(ofxSCServer* server, State& st) {
+void scSteamPipeBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
     if(!st.gate) return;
     auto now = scheduled.inEffectNow();   // not a scheduled send: the notes as they stand now
     const int n = st.builtVoices;
+    // A pitch event must never resend Gate, nor a gate event resend Pitch.
+    // Sound automation uses a separate path and cannot overwrite either one.
+    // Bundle a polyphonic pitch update into one packet with one timetag.
+    bool ready = st.gate->isCreated();
+    for(int i=0;i<n;++i) ready = ready && st.voices[i] && st.voices[i]->isCreated();
+    if(ready && !(fields & NoteRouting) && pulse.bus(server)<0) {
+        ofxOscBundle bundle;
+        if(fields & NotePitch) for(int i=0;i<n;++i) {
+            ofxOscMessage message;
+            message.setAddress("/n_set"); message.addIntArg(st.voices[i]->nodeID);
+            message.addStringArg("pitch"); message.addFloatArg(first(pitch.get(),i,60));
+            bundle.addMessage(message);
+        }
+        if(fields & NoteGate) {
+            ofxOscMessage message;
+            message.setAddress("/n_setn"); message.addIntArg(st.gate->nodeID);
+            message.addStringArg("gate"); message.addIntArg(n);
+            for(int i=0;i<n;++i) message.addFloatArg(first(gate.get(),i,0));
+            bundle.addMessage(message);
+        }
+        server->sendBundle(bundle);
+        return;
+    }
+
     auto vec = [&](const char* name, const std::vector<float>& v, float fallback) {
         std::vector<float> out(n); for(int i=0;i<n;++i) out[i] = first(v,i,fallback);
         st.gate->set(name,out);
     };
     // Pulse: the gate synth takes the generator's gates, Gate (Follow Gate) holds its voices
     const int pbus=pulse.bus(server);
-    vec("gate",pbus>=0 ? std::vector<float>{0.0f} : gate.get(),0); vec("velocity",{1.0f},1); // Gate carries note velocity.
-    st.gate->set("out", st.gates->index);
-    st.gate->set("velout",st.velocities->index);
-    st.gate->set("vel", mod.sourceBus(server,scModulation::SRC_VEL));
-    st.gate->set("rnd", mod.sourceBus(server,scModulation::SRC_RND));
-    st.droneSent=droning() ? 1 : 0;
-    st.gate->set("drone",float(st.droneSent));
-    st.gate->set("vel_sel",0.0f);
-    const int gateBus = pbus>=0 ? pbus : gateIn.bus(server);
-    st.gate->set("gate_sel",gateBus >= 0 ? 1.0f : 0.0f);
-    if(gateBus>=0) st.gate->mapan("gate_ar",gateBus,n);
-    pulse.enable(server,gate.get(),n,gateIn.bus(server));
+    if(fields & NoteGate) vec("gate",pbus>=0 ? std::vector<float>{0.0f} : gate.get(),0);
+    if(fields & NoteRouting) {
+        vec("velocity",{1.0f},1); // Gate carries note velocity.
+        st.gate->set("out", st.gates->index);
+        st.gate->set("velout",st.velocities->index);
+        st.gate->set("vel", mod.sourceBus(server,scModulation::SRC_VEL));
+        st.gate->set("rnd", mod.sourceBus(server,scModulation::SRC_RND));
+        st.droneSent=droning() ? 1 : 0;
+        st.gate->set("drone",float(st.droneSent));
+        st.gate->set("vel_sel",0.0f);
+        const int gateBus = pbus>=0 ? pbus : gateIn.bus(server);
+        st.gate->set("gate_sel",gateBus >= 0 ? 1.0f : 0.0f);
+        if(gateBus>=0) st.gate->mapan("gate_ar",gateBus,n);
+    }
+    if(fields & (NoteGate|NoteRouting)) pulse.enable(server,gate.get(),n,gateIn.bus(server));
     const int bus = pitchIn.bus(server);
     for(int i=0;i<n;++i) if(auto* v=st.voices[i]) {
-        v->set("pitch", first(pitch.get(),i,60));
-        v->set("pitch_sel",bus>=0 ? 1.0f : 0.0f);
-        if(bus>=0) v->mapan("pitch_ar",bus+i,1);
+        if(fields & NotePitch) v->set("pitch", first(pitch.get(),i,60));
+        if(fields & NoteRouting) {
+            v->set("pitch_sel",bus>=0 ? 1.0f : 0.0f);
+            if(bus>=0) v->mapan("pitch_ar",bus+i,1);
+        }
     }
 }
 bool scSteamPipeBox::soundOn(const std::string& sc) { return soundParam(sc).get()>0.5f; }
@@ -351,19 +380,33 @@ void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
         updates.send();
     }
     if(st.spread) {
-        st.spread->set("in",st.audio->index);
-        st.spread->set("voices",st.builtVoices);
+        scSynthControlBatch spread(st.spread,server);
+        spread.set("in",st.audio->index);
+        spread.set("voices",st.builtVoices);
         auto pans=panPositions();
         pans.resize(16,0.5f);
-        st.spread->set("pan",pans); st.spread->set("mpan",mod.targetBus(server,Pan));
-        st.spread->set("line",speakerLayout.get()==1?1.f:0.f);
-        st.spread->set("vispan",st.vis->index+VIS_PAN);
+        spread.set("pan",pans); spread.set("mpan",mod.targetBus(server,Pan));
+        spread.set("line",speakerLayout.get()==1?1.f:0.f);
+        spread.set("vispan",st.vis->index+VIS_PAN);
         // Spreader telemetry has its own space after the voice meters.
-        st.spread->set("vis",st.vis->index+96);
+        spread.set("vis",st.vis->index+96);
+        spread.send();
     }
     updateStages(server,st);
 }
-void scSteamPipeBox::sendAll() { for(auto& [s,st] : states) { sendNotes(s,st); sendSound(s,st); } pulse.sendAll(); }
+void scSteamPipeBox::sendAll() { soundDirty = true; }
+void scSteamPipeBox::flushSound() {
+    if(!soundDirty) return;
+    soundDirty = false;
+    {
+        auto now = scheduled.inEffectNow();
+        for(auto& [s,st] : states) {
+            sendSound(s,st);
+            pulse.enable(s,gate.get(),st.builtVoices,gateIn.bus(s));
+        }
+    }
+    pulse.sendAll();
+}
 void scSteamPipeBox::buildSynth(ofxSCServer* server) {
     if(!server) return;
     auto& st=states[server]; release(server,st); st.root=new ofxSCGroup(server);
@@ -428,7 +471,10 @@ void scSteamPipeBox::resetInputBusses(ofxSCServer* s,int) { gateIn.reset(s);pitc
 void scSteamPipeBox::activate() { for(auto& [s,st]:states) if(st.created) st.root->run(true); }
 void scSteamPipeBox::deactivate() { for(auto& [s,st]:states) if(st.created) st.root->run(false); }
 void scSteamPipeBox::setBpm(float v) { bpm=std::max(1.0f,v);mod.setBpm(bpm);sendAll(); }
-void scSteamPipeBox::resendParametersForNRT() { for(auto& [s,st]:states) for(auto& cache:st.sent) cache.clear(); mod.resend();sendAll(); }
+void scSteamPipeBox::resendParametersForNRT() {
+    for(auto& [s,st]:states) { for(auto& cache:st.sent)cache.clear();sendNotes(s,st); }
+    mod.resend();sendAll();flushSound();
+}
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
 bool scSteamPipeBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
     if(!gateIn.handle || !pitchIn.handle) return false;
@@ -567,6 +613,7 @@ void scSteamPipeBox::update(ofEventArgs&) {
     }
     pulse.restart=false;
     mod.showing=show.get();mod.update();
+    flushSound();
     const float now=ofGetElapsedTimef();
     for(auto& [server, st] : states) if(st.created &&
         scFxAwaitingRoute(st.fx, server, [this](int stage){ return stageOn(stage) > 0; },
@@ -792,9 +839,7 @@ void scSteamPipeBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     controls.send();
 }
 
-void scSteamPipeBox::sendStageAll(int stage) {
-    for(auto& [server,st]:states) if(st.created && st.fx[stage].synth) sendStage(stage,st.fx[stage].synth,server);
-}
+void scSteamPipeBox::sendStageAll(int) { sendAll(); }
 
 void scSteamPipeBox::drawFxTab(float w) {
     const float z = zoom();

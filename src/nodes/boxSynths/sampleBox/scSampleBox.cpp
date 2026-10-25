@@ -158,7 +158,7 @@ void scSampleBox::setup() {
     }));
     nodeListeners.push(pitch.newListener([this](std::vector<float>&) {
         if(scScheduling::isBackendSendSuppressed()) return;
-        for(auto& p : pads) sendChannelInputs(*p);
+        for(auto& p : pads) sendChannelInputs(*p,true);
     }));
     nodeListeners.push(gain.newListener([this](float&) {
         for(auto& p : pads) for(auto& [srv, s] : p->sc) if(s.strip) s.strip->set("master", gain.get());
@@ -404,7 +404,7 @@ scSampleBox::Control& scSampleBox::registerPadControl(Pad& p, ofParameter<T>& pa
             if constexpr(std::is_same<T, bool>::value) s->set(name, snaps.morph.activation(param)); else s->set(name, value);
         };
         if(dest == DEST_ENGINE) {
-            if(name=="attack" || name=="release" || name=="filtertype") { for(auto& [srv, s] : pad.sc) sendEngine(srv,pad); }
+            if(name=="attack" || name=="release" || name=="filtertype") { for(auto& [srv, s] : pad.sc) sendEngine(srv,pad,false); }
             else for(auto& [srv, s] : pad.sc) send(s.engine);
         }
         else if(dest == DEST_STRIP) { for(auto& [srv, s] : pad.sc) send(s.strip); }
@@ -564,7 +564,7 @@ void scSampleBox::setupPad(Pad& p) {
     h.publishedUnderline = [this](const std::string& k) { drawPublishedUnderline(k); };
     h.unpublish = [this](const std::string& k) { unpublish(k); };
     h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
-    h.voiceParamsChanged = [this, pp](){ if(!restoring) for(auto& [srv, sc] : pp->sc) sendEngine(srv, *pp); };
+    h.voiceParamsChanged = [this, pp](){ if(!restoring) for(auto& [srv, sc] : pp->sc) sendEngine(srv, *pp,false); };
     h.voices = []() { return MaxVoices; };      // the synth's 8 voices
     p.mod.nameSuffix = p.suffix();
     // the synth reads these, in this order (samplebox.scd)
@@ -850,55 +850,58 @@ void scSampleBox::ensureBuffers(Pad& p, ofxSCServer* srv) {
 // Synths: the node's group, each pad's group
 // ════════════════════════════════════════════════════════════════════════════
 
-void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p) {
+void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p, bool includeNotes) {
     auto it = p.sc.find(srv);
     if(it == p.sc.end() || !it->second.engine) return;
     PadSC& sc = it->second;
     ofxSCSynth* s = sc.engine;
+    scSynthControlBatch updates(s,srv);
     for(const auto& c : controls) {
         if(c.pad != p.index || c.dest != DEST_ENGINE || c.scName.empty() || c.scName == "stretchmode") continue;
         if(c.f) {
-            if(c.f==&p.attack || c.f==&p.release) s->set(c.scName,p.mod.voiceValues(*c.f));
-            else s->set(c.scName, c.f->get());
+            if(c.f==&p.attack || c.f==&p.release) updates.set(c.scName,p.mod.voiceValues(*c.f));
+            else updates.set(c.scName, c.f->get());
         }
-        else if(c.i) s->set(c.scName, c.i->get());
-        else if(c.b) s->set(c.scName, snaps.morph.activation(*c.b));
+        else if(c.i) updates.set(c.scName, c.i->get());
+        else if(c.b) updates.set(c.scName, snaps.morph.activation(*c.b));
     }
-    s->set("filterweights", snaps.morph.weights(p.filterType));
+    updates.set("filterweights", snaps.morph.weights(p.filterType));
     const auto bs = p.sample->buffers.find(srv);
     const bool loaded = bs != p.sample->buffers.end() && (int)bs->second.size() >= p.sample->channels;
-    s->set("loaded", int(loaded));
-    s->set("buf0", loaded ? bs->second[0]->index : 0);
-    s->set("buf1", loaded && p.sample->channels > 1 ? bs->second[1]->index : 0);
-    s->set("gain", 1.0f);
+    updates.set("loaded", int(loaded));
+    updates.set("buf0", loaded ? bs->second[0]->index : 0);
+    updates.set("buf1", loaded && p.sample->channels > 1 ? bs->second[1]->index : 0);
+    updates.set("gain", 1.0f);
     p.sentFitRate = fitRateOf(p);
-    s->set("fitrate", p.sentFitRate);
-    s->set("fitbeats", p.fitBeats.get() > 0.0f ? p.fitBeats.get() : 4.0f);
-    s->set("sync", int(p.synced()));
-    if(sc.bus) s->set("out", sc.bus->index);
-    if(sc.vis) s->set("vis", sc.vis->index);
-    if(sc.latest) s->set("latestbus", sc.latest->index);
-    if(sc.gateBus) s->set("gatebus", sc.gateBus->index);
-    s->set("fire", p.fireCount);
-    s->set("stop", p.stopCount);
+    updates.set("fitrate", p.sentFitRate);
+    updates.set("fitbeats", p.fitBeats.get() > 0.0f ? p.fitBeats.get() : 4.0f);
+    updates.set("sync", int(p.synced()));
+    if(sc.bus) updates.set("out", sc.bus->index);
+    if(sc.vis) updates.set("vis", sc.vis->index);
+    if(sc.latest) updates.set("latestbus", sc.latest->index);
+    if(sc.gateBus) updates.set("gatebus", sc.gateBus->index);
+    if(includeNotes) { updates.set("fire", p.fireCount);updates.set("stop", p.stopCount); }
     // the pad's modulation: the targets it writes, the gates / velocities / randoms it reads
-    s->set("modbus", p.mod.targetBus(srv, 0));
-    s->set("velbus", p.mod.sourceBus(srv, scModulation::SRC_VEL));
-    s->set("rndbus", p.mod.sourceBus(srv, scModulation::SRC_RND));
+    updates.set("modbus", p.mod.targetBus(srv, 0));
+    updates.set("velbus", p.mod.sourceBus(srv, scModulation::SRC_VEL));
+    updates.set("rndbus", p.mod.sourceBus(srv, scModulation::SRC_RND));
     auto n = nodeSC.find(srv);
-    if(n != nodeSC.end() && n->second.choke) s->set("chokeblock", n->second.choke->index);
-    s->set("chokeslot", p.index);
+    if(n != nodeSC.end() && n->second.choke) updates.set("chokeblock", n->second.choke->index);
+    updates.set("chokeslot", p.index);
     std::vector<float> mask(16, 0.0f);
     if(p.choke.get() > 0)
         for(const auto& q : pads) if(q.get() != &p && q->choke.get() == p.choke.get() && q->index < 16) mask[q->index] = 1.0f;
-    s->set("chokemask", mask);
+    updates.set("chokemask", mask);
+    if(includeNotes) {
     // the channel's trigger/velocity level and pitch
     const int ch = padChannel(p);
-    s->set("trigbus", inputBuses.count(srv) && inputBuses[srv] >= 0 ? inputBuses[srv] + ch : -1);
+    updates.set("trigbus", inputBuses.count(srv) && inputBuses[srv] >= 0 ? inputBuses[srv] + ch : -1);
     const int pb = pitchIn.bus(srv);
-    if(pb >= 0) s->mapan("pitch", pb + ch, 1); else s->set("pitch", valueFor(pitch.get(), ch, 60.0f));
-    s->set("velocity", 1.0f); // Trigger/Gate carries note velocity.
-    if(!p.auditionHeld && !p.autoPlaying) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
+    if(pb >= 0) s->mapan("pitch", pb + ch, 1); else updates.set("pitch", valueFor(pitch.get(), ch, 60.0f));
+    updates.set("velocity", 1.0f); // Trigger/Gate carries note velocity.
+    if(!p.auditionHeld && !p.autoPlaying) updates.set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
+    }
+    updates.send();
 }
 
 void scSampleBox::sendFx(ofxSCServer* srv, Pad& p, int fx) {
@@ -906,17 +909,19 @@ void scSampleBox::sendFx(ofxSCServer* srv, Pad& p, int fx) {
     if(it == p.sc.end() || !it->second.fxSynth[fx]) return;
     PadSC& sc = it->second;
     ofxSCSynth* s = sc.fxSynth[fx];
-    s->set("on", snaps.morph.activation(p.fxOn[fx]));
-    if(sc.bus) s->set("bus", sc.bus->index);
-    s->set("modbus", p.mod.targetBus(srv, 0));
-    if(sc.latest) s->set("latestbus", sc.latest->index);
-    if(fx == FX_ECHO) s->set("bpm", bpm);
+    scSynthControlBatch updates(s,srv);
+    updates.set("on", snaps.morph.activation(p.fxOn[fx]));
+    if(sc.bus) updates.set("bus", sc.bus->index);
+    updates.set("modbus", p.mod.targetBus(srv, 0));
+    if(sc.latest) updates.set("latestbus", sc.latest->index);
+    if(fx == FX_ECHO) updates.set("bpm", bpm);
     for(const auto& c : controls) {
         if(c.pad != p.index || c.dest != DEST_FX + fx || c.scName.empty() || c.scName == "on") continue;
-        if(c.f) s->set(c.scName, c.f->get());
-        else if(c.i) s->set(c.scName, c.i->get());
-        else if(c.b) s->set(c.scName, snaps.morph.activation(*c.b));
+        if(c.f) updates.set(c.scName, c.f->get());
+        else if(c.i) updates.set(c.scName, c.i->get());
+        else if(c.b) updates.set(c.scName, snaps.morph.activation(*c.b));
     }
+    updates.send();
 }
 
 void scSampleBox::sendStrip(ofxSCServer* srv, Pad& p) {
@@ -924,15 +929,17 @@ void scSampleBox::sendStrip(ofxSCServer* srv, Pad& p) {
     if(it == p.sc.end() || !it->second.strip) return;
     PadSC& sc = it->second;
     ofxSCSynth* s = sc.strip;
-    if(sc.bus) s->set("bus", sc.bus->index);
-    s->set("level", p.level.get());
-    s->set("master", gain.get());
-    s->set("mute", int(p.mute.get() || (anySolo() && !p.solo.get())));
+    scSynthControlBatch updates(s,srv);
+    if(sc.bus) updates.set("bus", sc.bus->index);
+    updates.set("level", p.level.get());
+    updates.set("master", gain.get());
+    updates.set("mute", int(p.mute.get() || (anySolo() && !p.solo.get())));
     const auto& ob = outputBuses[srv];
     const auto mix = ob.find(0), own = ob.find(p.index + 1);
-    s->set("mix", mix != ob.end() ? mix->second : -1);
-    s->set("padout", own != ob.end() ? own->second : -1);
-    if(sc.meter) s->set("meterbus", sc.meter->index);
+    updates.set("mix", mix != ob.end() ? mix->second : -1);
+    updates.set("padout", own != ob.end() ? own->second : -1);
+    if(sc.meter) updates.set("meterbus", sc.meter->index);
+    updates.send();
 }
 
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
@@ -947,17 +954,17 @@ bool scSampleBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
 }
 #endif
 
-void scSampleBox::sendChannelInputs(Pad& p) {
+void scSampleBox::sendChannelInputs(Pad& p, bool pitchOnly) {
     auto inEffect = noteInputs.inEffectNow();   // not a scheduled send: the notes as they stand now
     for(auto& [srv, sc] : p.sc) {
         if(!sc.engine) continue;
         const int ch = padChannel(p);
         ofxSCSynth* s = sc.engine;
-        s->set("trigbus", inputBuses.count(srv) && inputBuses[srv] >= 0 ? inputBuses[srv] + ch : -1);
+        if(!pitchOnly) s->set("trigbus", inputBuses.count(srv) && inputBuses[srv] >= 0 ? inputBuses[srv] + ch : -1);
         const int pb = pitchIn.bus(srv);
         if(pb >= 0) s->mapan("pitch", pb + ch, 1); else s->set("pitch", valueFor(pitch.get(), ch, 60.0f));
-        s->set("velocity", 1.0f); // Trigger/Gate carries note velocity.
-        if(!p.auditionHeld && !p.autoPlaying) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
+        if(!pitchOnly) s->set("velocity", 1.0f); // Trigger/Gate carries note velocity.
+        if(!pitchOnly && !p.auditionHeld && !p.autoPlaying) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
     }
 }
 

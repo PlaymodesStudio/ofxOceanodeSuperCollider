@@ -20,6 +20,7 @@ struct ofxSCSynth {
     int nodeID=10, mapped=-1;bool created=false;
     std::map<std::string,float> values;
     ofxSCSynth(const char*,ofxSCServer*){}
+    bool isCreated()const{return created;}
     void free(){}
     void set(const std::string& k,float v){values[k]=v;if(k=="gate")mapped=-1;}
     void mapan(const char*,int bus,int){mapped=bus;}
@@ -39,12 +40,14 @@ struct scAdditiveBox {
         std::vector<ofxSCSynth*> noteWriters;
         std::vector<std::map<std::string,float>> noteSent;
         std::vector<int> noteMapped;
+        int noteDroneSent=-1;
     };
     std::map<ofxSCServer*,State> states;
     scAdditiveBox(){auto& s=states[nullptr];s.modGroup=s.modSources=&group;s.gateBus=&bus;}
     ~scAdditiveBox(){for(auto* s:states[nullptr].noteWriters)delete s;}
     int numVoicesClamped()const{return 2;}
     float valueFor(const std::vector<float>& v,int i,float fallback){return v.empty()?fallback:v[i%v.size()];}
+    bool gateEvent=false;
     void syncNoteWriters(ofxSCServer*,bool=false);
 };
 METHOD

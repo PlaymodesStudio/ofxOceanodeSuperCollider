@@ -64,7 +64,11 @@ private:
         bool discrete = false;
     };
     enum Stage {StSat,StEq,StEcho,StRvb,NumStages};
-    struct Fx {ofxSCSynth* synth=nullptr;ofxSCBus* in=nullptr;bool running=false;float offAt=-1;};
+    struct Fx {
+        ofxSCSynth* synth=nullptr;ofxSCBus* in=nullptr;bool running=false;float offAt=-1;
+        int outSent=-1;
+        std::map<std::string,std::vector<float>> sent;
+    };
     // one group per part, in running order; the effects after the spreader
     enum Slot { SlGate, SlNative, SlSrc, SlRoute, SlVoice, SlSpread, SlFx, NumSlots = SlFx + NumStages };
     struct State {
@@ -77,6 +81,8 @@ private:
         ofxSCSynth* spread = nullptr;
         std::array<ofxSCSynth*, 16> voices{};
         std::array<std::map<std::string,float>,16> sent;   // per voice: only changes are sent
+        std::map<std::string,std::vector<float>> nativeSent, spreadSent;
+        int spreadOutSent = -1;
         ofxSCBus* gates = nullptr;
         ofxSCBus* audio = nullptr;      // one channel per voice, into the spreader
         ofxSCBus* vis = nullptr;
@@ -142,6 +148,7 @@ private:
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
     std::vector<std::string> publishedKeys;
     bool separator = false, restoring = false, structureDirty = false;
+    bool soundDirty = false;
     int placeBefore = -1;      // rebuild: the old root the new one goes before
     float bpm = 120, nextRead = 0;
     int draggingPoint = -1, draggingOp = -1;
@@ -155,9 +162,11 @@ private:
     void menu(const std::string&);
     void controlMenuItems(const std::string&);
     void mark(const std::string&);
-    void sendNotes(ofxSCServer*, State&);
+    enum NoteFields { NoteGate = 1, NotePitch = 2, NoteRouting = 4, NoteAll = 7 };
+    void sendNotes(ofxSCServer*, State&, unsigned fields = NoteAll);
     void sendSound(ofxSCServer*, State&);
     void sendAll();
+    void flushSound();
     void refreshOutputs() { for(auto& output : outputs) output = output; }
     void release(ofxSCServer*, State&);
     void rebuild();

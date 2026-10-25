@@ -1,3 +1,4 @@
+#include "../../../audio/scSynthControlBatch.h"
 //
 //  scArpeggiatorBox.h
 //  ofxOceanodeSuperCollider
@@ -1265,12 +1266,14 @@ private:
     }
     void sendStaticControls(ServerState& st){
         if(!st.synth) return;
-        if(st.buffer) st.synth->set("buf", st.buffer->index);
-        st.synth->set("clock", clockMode.get());
-        st.synth->set("trigAmp", trigAmp ? 1.0f : 0.0f);
-        st.synth->set("freeBpm", (double)clockBpm.get());
-        if(st.status) st.synth->set("status", st.status->index);
-        for(auto& [index, bus] : st.outputBuses) if(index >= 0 && index < OUTPUTS) st.synth->set(busName(index), bus);
+        scSynthControlBatch updates(st.synth,st.server);
+        if(st.buffer) updates.set("buf", st.buffer->index);
+        updates.set("clock", clockMode.get());
+        updates.set("trigAmp", trigAmp ? 1.0f : 0.0f);
+        updates.set("freeBpm", (double)clockBpm.get());
+        if(st.status) updates.set("status", st.status->index);
+        for(auto& [index, bus] : st.outputBuses) if(index >= 0 && index < OUTPUTS) updates.set(busName(index), bus);
+        updates.send();
         sendTrigInput(st);
     }
 

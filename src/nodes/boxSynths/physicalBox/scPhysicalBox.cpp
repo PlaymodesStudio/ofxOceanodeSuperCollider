@@ -189,7 +189,7 @@ void scPhysicalBox::setup() {
     addOutput("Out");
 
     drone.set("Drone", false);
-    reg(drone, [this](){ sendAll(); });
+    reg(drone, [this](){ for(auto& [s,st]:states)sendNotes(s,st,NoteRouting); });
     pulseEnabled.set("Pulse", false);
     reg(pulseEnabled, [this](){ sendAll(); });
 
@@ -215,7 +215,7 @@ void scPhysicalBox::setup() {
         listeners.push(p->newListener([this, p](std::vector<float>& v) {
             // the timeline's frame set of a value it already sent timetagged: nothing to do
             if(scScheduling::isBackendSendSuppressed()) return;
-            for(auto& [s, st] : states) sendNotes(s, st);
+            for(auto& [s, st] : states) sendNotes(s, st, p == &gate ? NoteGate : NotePitch);
         }));
     }
     listeners.push(voices.newListener([this](int&) { structureDirty = true; }));
@@ -326,7 +326,7 @@ void scPhysicalBox::setup() {
     }
 
     // ── Effects: shared inserts, then MicroSpace ─────────────────────────────
-    auto toStages = [this]() { for(auto& [sv, st] : states) if(st.created) updateStages(sv, st); };
+    auto toStages = [this]() { sendAll(); };
     satOn.set("Saturation On", false);                      reg(satOn, toStages);
     satDrive.set("Saturation Drive", 6.0f, 0.0f, 36.0f);    reg(satDrive, [this](){ sendStageAll(StSat); });
     satBias.set("Saturation Bias", 0.0f, 0.0f, 1.0f);       reg(satBias, [this](){ sendStageAll(StSat); });
@@ -441,31 +441,59 @@ void scPhysicalBox::setup() {
 }
 
 // ── Server side ──────────────────────────────────────────────────────────────
-void scPhysicalBox::sendNotes(ofxSCServer* server, State& st) {
+void scPhysicalBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
     if(!st.gate) return;
     auto now = scheduled.inEffectNow();   // not a scheduled send: the notes as they stand now
     const int n = st.builtVoices;
+    // A pitch event must never resend Gate, nor a gate event resend Pitch.
+    // Sound automation uses a separate path and cannot overwrite either one.
+    // Bundle a polyphonic pitch update into one packet with one timetag.
+    bool ready = st.gate->isCreated();
+    for(int i=0;i<n;++i) ready = ready && st.voices[i] && st.voices[i]->isCreated();
+    if(ready && !(fields & NoteRouting) && pulse.bus(server)<0) {
+        ofxOscBundle bundle;
+        if(fields & NotePitch) for(int i=0;i<n;++i) {
+            ofxOscMessage message;
+            message.setAddress("/n_set"); message.addIntArg(st.voices[i]->nodeID);
+            message.addStringArg("pitch"); message.addFloatArg(first(pitch.get(),i,48));
+            bundle.addMessage(message);
+        }
+        if(fields & NoteGate) {
+            ofxOscMessage message;
+            message.setAddress("/n_setn"); message.addIntArg(st.gate->nodeID);
+            message.addStringArg("gate"); message.addIntArg(n);
+            for(int i=0;i<n;++i) message.addFloatArg(first(gate.get(),i,0));
+            bundle.addMessage(message);
+        }
+        server->sendBundle(bundle);
+        return;
+    }
+
     // Pulse: ModGate takes the generator's gates, Gate (Follow Gate) holds its voices
     const int pbus = pulse.bus(server);
     std::vector<float> g(n), ones(n, 1.0f);
     for(int i = 0; i < n; ++i) g[i] = pbus >= 0 ? 0.0f : first(gate.get(), i, 0);
-    st.gate->set("gate", g);
-    st.gate->set("velocity", ones);       // the gate's level is the velocity
-    st.gate->set("out", st.gates->index);
-    st.gate->set("vel", mod.sourceBus(server, scModulation::SRC_VEL));
-    st.gate->set("rnd", mod.sourceBus(server, scModulation::SRC_RND));
-    st.droneSent = droning() ? 1 : 0;
-    st.gate->set("drone", float(st.droneSent));
-    const int gbus = gateIn.bus(server);
-    st.gate->set("gate_sel", gbus >= 0 || pbus >= 0 ? 1.0f : 0.0f);
-    if(pbus >= 0) st.gate->mapan("gate_ar", pbus, n);
-    else if(gbus >= 0) st.gate->mapan("gate_ar", gbus, n);
-    pulse.enable(server, gate.get(), n, gbus);
+    if(fields & NoteGate) st.gate->set("gate", g);
+    if(fields & NoteRouting) {
+        st.gate->set("velocity", ones);       // the gate's level is the velocity
+        st.gate->set("out", st.gates->index);
+        st.gate->set("vel", mod.sourceBus(server, scModulation::SRC_VEL));
+        st.gate->set("rnd", mod.sourceBus(server, scModulation::SRC_RND));
+        st.droneSent = droning() ? 1 : 0;
+        st.gate->set("drone", float(st.droneSent));
+        const int gbus = gateIn.bus(server);
+        st.gate->set("gate_sel", gbus >= 0 || pbus >= 0 ? 1.0f : 0.0f);
+        if(pbus >= 0) st.gate->mapan("gate_ar", pbus, n);
+        else if(gbus >= 0) st.gate->mapan("gate_ar", gbus, n);
+    }
+    if(fields & (NoteGate|NoteRouting)) pulse.enable(server, gate.get(), n, gateIn.bus(server));
     const int bus = pitchIn.bus(server);
     for(int i = 0; i < n; ++i) if(auto* v = st.voices[i]) {
-        v->set("pitch", first(pitch.get(), i, 48));
-        v->set("pitch_sel", bus >= 0 ? 1.0f : 0.0f);
-        if(bus >= 0) v->mapan("pitch_ar", bus + i, 1);
+        if(fields & NotePitch) v->set("pitch", first(pitch.get(), i, 48));
+        if(fields & NoteRouting) {
+            v->set("pitch_sel", bus >= 0 ? 1.0f : 0.0f);
+            if(bus >= 0) v->mapan("pitch_ar", bus + i, 1);
+        }
     }
 }
 
@@ -478,10 +506,11 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
     const float comp = 1.0f / std::sqrt(std::max(1.0f, float(st.builtVoices) / st.builtChannels));
     const int inBus = st.in >= 0 ? st.in : st.silent->index;
     for(int i = 0; i < st.builtVoices; ++i) if(auto* v = st.voices[i]) {
+        scSynthControlBatch updates(v,server);
         auto set = [&](const std::string& name, float value) {
             auto& sent = st.sent[i]; auto it = sent.find(name);
             if(it != sent.end() && it->second == value) return;
-            sent[name] = value; v->set(name, value);
+            sent[name] = value; updates.set(name, value);
         };
         for(const auto& c : soundControls) if(c->voiceInput) set(c->sc, mod.morphVoiceValue(c->p,i,snaps.morph));
         set("gatebus", st.gates->index + i);
@@ -493,21 +522,36 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
         set("vca", vca ? 1.0f : 0.0f);
         set("vis", st.vis->index);
         for(int t = 0; t < NUM_TARGETS - 1; ++t) set(names[t], mod.targetBus(server, t) + i);
+        updates.send();
     }
     if(st.spread) {
-        st.spread->set("in", st.audio->index);
-        st.spread->set("voices", st.builtVoices);
+        scSynthControlBatch spread(st.spread,server);
+        spread.set("in", st.audio->index);
+        spread.set("voices", st.builtVoices);
         std::vector<float> pans = panPositions();
         pans.resize(16, 0.5f);
-        st.spread->set("pan", pans);
-        st.spread->set("line", speakerLayout.get() == 1 ? 1.0f : 0.0f);
-        st.spread->set("width", soundParam("width").get());
-        st.spread->set("mpan", mod.targetBus(server, Pan));
-        st.spread->set("vis", st.vis->index + VIS_PAN);
+        spread.set("pan", pans);
+        spread.set("line", speakerLayout.get() == 1 ? 1.0f : 0.0f);
+        spread.set("width", soundParam("width").get());
+        spread.set("mpan", mod.targetBus(server, Pan));
+        spread.set("vis", st.vis->index + VIS_PAN);
+        spread.send();
     }
     updateStages(server, st);
 }
-void scPhysicalBox::sendAll() { for(auto& [s, st] : states) { sendNotes(s, st); sendSound(s, st); } pulse.sendAll(); }
+void scPhysicalBox::sendAll() { soundDirty = true; }
+void scPhysicalBox::flushSound() {
+    if(!soundDirty) return;
+    soundDirty = false;
+    {
+        auto now = scheduled.inEffectNow();
+        for(auto& [s,st] : states) {
+            sendSound(s,st);
+            pulse.enable(s,gate.get(),st.builtVoices,gateIn.bus(s));
+        }
+    }
+    pulse.sendAll();
+}
 
 // Pulse: a new generator at the head of the gate group and a fresh ModGate
 // after it (a level held from Oceanode gate values played before would floor
@@ -604,7 +648,10 @@ void scPhysicalBox::resetInputBusses(ofxSCServer* s, int) {
 void scPhysicalBox::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(true); }
 void scPhysicalBox::deactivate() { for(auto& [s, st] : states) if(st.created) st.root->run(false); }
 void scPhysicalBox::setBpm(float v) { bpm = std::max(1.0f, v); mod.setBpm(bpm); sendAll(); }
-void scPhysicalBox::resendParametersForNRT() { for(auto& [s, st] : states) for(auto& cache : st.sent) cache.clear(); mod.resend(); sendAll(); }
+void scPhysicalBox::resendParametersForNRT() {
+    for(auto& [s,st]:states) { for(auto& cache:st.sent)cache.clear();sendNotes(s,st); }
+    mod.resend();sendAll();flushSound();
+}
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
 bool scPhysicalBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
     if(!gateIn.handle || !pitchIn.handle) return false;
@@ -731,9 +778,7 @@ void scPhysicalBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     }
     c.send();
 }
-void scPhysicalBox::sendStageAll(int stage) {
-    for(auto& [server, st] : states) if(st.created && st.fx[stage].synth) sendStage(stage, st.fx[stage].synth, server);
-}
+void scPhysicalBox::sendStageAll(int) { sendAll(); }
 
 // ── Publishing, snapshots, presets ───────────────────────────────────────────
 bool scPhysicalBox::connected(const std::string& k) const {
@@ -876,6 +921,7 @@ void scPhysicalBox::update(ofEventArgs&) {
     }
     pulse.restart = false;
     mod.showing = show.get(); mod.update();
+    flushSound();
     const float now = ofGetElapsedTimef();
     for(auto& [server, st] : states) if(st.created &&
         scFxAwaitingRoute(st.fx, server, [this](int stage){ return stageOn(stage) > 0; },

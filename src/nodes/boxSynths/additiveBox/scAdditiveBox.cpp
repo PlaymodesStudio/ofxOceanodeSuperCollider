@@ -1,3 +1,4 @@
+#include "../../../audio/scSynthControlBatch.h"
 //
 //  scAdditiveBox.cpp
 //  ofxOceanodeSuperCollider
@@ -736,6 +737,7 @@ void scAdditiveBox::finishPartialMorph(){
 void scAdditiveBox::syncNoteWriters(ofxSCServer* server,bool force){
     auto& st=states[server];
     if(!st.modCreated || !st.modGroup)return;
+    const bool droneChanged=st.noteDroneSent!=(drone.get()?1:0);
     const int V=numVoicesClamped();
     while(int(st.noteWriters.size())>V){auto* s=st.noteWriters.back();s->free();delete s;st.noteWriters.pop_back();}
     while(int(st.noteWriters.size())<V)st.noteWriters.push_back(new ofxSCSynth("AdditiveBoxNote",server));
@@ -750,7 +752,8 @@ void scAdditiveBox::syncNoteWriters(ofxSCServer* server,bool force){
         };
         if(gb<0){
             if(remap)sent.erase("gate");
-            set("gate",drone.get() ? 1.f : std::max(0.f,valueFor(gate.get(),v,0.f)));
+            if(gateEvent || force || remap || droneChanged || !writer->isCreated())
+                set("gate",drone.get() ? 1.f : std::max(0.f,valueFor(gate.get(),v,0.f)));
         }else if(remap)writer->mapan("gate",gb+v,1);
         st.noteMapped[v]=gb;
         set("voice",float(v));
@@ -759,6 +762,7 @@ void scAdditiveBox::syncNoteWriters(ofxSCServer* server,bool force){
         set("velbus",float(mod.sourceBus(server,scModulation::SRC_VEL)+v));
         if(!sent.count("@created")){writer->createAndRun(2,st.modSources->nodeID,true);sent["@created"]=1;}
     }
+    st.noteDroneSent=drone.get()?1:0;
 }
 
 float scAdditiveBox::sampleRate() const {
@@ -1476,9 +1480,10 @@ bool scAdditiveBox::partWanted(int part, int v) const {
 
 // The values of one synth of a voice: its role's arrays and scalars (and the
 // per-server ones in `extra`), only what changed since last time
-void scAdditiveBox::sendTo(VoiceSC& vs, ofxSCSynth* s, unsigned role, const VoiceData& data,
+void scAdditiveBox::sendTo(ofxSCServer* server, VoiceSC& vs, ofxSCSynth* s, unsigned role, const VoiceData& data,
                            const std::map<std::string, float>& extra, bool force){
     if(!s) return;
+    scSynthControlBatch controls(s,server);
     auto& sa = vs.sentA[s];
     auto& ss = vs.sentS[s];
     for(const auto& [name, values] : data.arrays){
@@ -1486,17 +1491,19 @@ void scAdditiveBox::sendTo(VoiceSC& vs, ofxSCSynth* s, unsigned role, const Voic
         auto& last = sa[name];
         if(!force && last == values) continue;
         last = values;
-        s->set(name, values);
+        controls.set(name, values);
     }
     auto scalar = [&](const std::string& name, float value){
         if(!(roleOf(name) & role) || skipScalars.count(name)) return;
+        if(name=="gate" && !gateEvent && !force && s->isCreated()) return;
         auto it = ss.find(name);
         if(!force && it != ss.end() && it->second == value) return;
         ss[name] = value;
-        s->set(name, value);
+        controls.set(name, value);
     };
     for(const auto& [name, value] : data.scalars) scalar(name, value);
     for(const auto& [name, value] : extra) scalar(name, value);
+    controls.send();
 }
 
 void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data, bool force){
@@ -1544,9 +1551,9 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
         ss.erase(name);
         s->mapan(name, bus, 1);
     };
-    sendTo(vs, vs.src, RSrc, data, extra, force);
+    sendTo(server,vs, vs.src, RSrc, data, extra, force);
     for(int k = 0; k < NumParts; k++){
-        sendTo(vs, vs.parts[k], kPartRole[k], data, extra, force);
+        sendTo(server,vs, vs.parts[k], kPartRole[k], data, extra, force);
         if(kPartRole[k] & RSweep) mapTo(vs.parts[k], "gate", gb >= 0 ? gb + v : -1);
         if(kPartRole[k] & RFilt) mapTo(vs.parts[k], "pitch", pb >= 0 ? pb + v : -1);
     }
@@ -1557,7 +1564,7 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
     extra["np"] = float(P);
     VoiceData scalarsOnly;
     scalarsOnly.scalars = data.scalars;
-    sendTo(vs, vs.laneClock, RLane, scalarsOnly, extra, force);
+    sendTo(server,vs, vs.laneClock, RLane, scalarsOnly, extra, force);
     for(int c = 0; c < (int)vs.lanes.size(); c++){
         VoiceData d;
         d.scalars = data.scalars;
@@ -1568,7 +1575,7 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
         }
         auto e = extra;
         e["first"] = float(c * LC);
-        sendTo(vs, vs.lanes[c], RLane, d, e, force);
+        sendTo(server,vs, vs.lanes[c], RLane, d, e, force);
     }
     for(int u = 0; u < (int)vs.cores.size(); u++){
         auto e = extra;
@@ -1583,7 +1590,7 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
         for(const auto& [name, value] : coreScalars(v, u)) d.scalars[name] = value;
         for(int c = 0; c < (int)vs.cores[u].size(); c++){
             e["first"] = float(c * C);
-            sendTo(vs, vs.cores[u][c], RCore, d, e, force);
+            sendTo(server,vs, vs.cores[u][c], RCore, d, e, force);
             mapTo(vs.cores[u][c], "gate", gb >= 0 ? gb + v : -1);
             mapTo(vs.cores[u][c], "pitch", pb >= 0 ? pb + v : -1);
         }
@@ -1593,7 +1600,7 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
         e["vis"] = st.vis && (renderPartialCap==0 || renderPartialCap==builtCap) ? float(st.vis->index+v*displayStride) : junk;
         e["pauser"] = gb < 0 ? 1.0f : 0.0f;   // a gate cable: no pausing (nothing here would resume it)
         e["grp"] = vs.grp ? float(vs.grp->nodeID) : 0.0f;
-        sendTo(vs, vs.tail, RTail, scalarsOnly, e, force);
+        sendTo(server,vs, vs.tail, RTail, scalarsOnly, e, force);
         mapTo(vs.tail, "gate", gb >= 0 ? gb + v : -1);
     }
     skipScalars.clear();
@@ -1821,6 +1828,7 @@ void scAdditiveBox::applyStructure(){
 }
 
 void scAdditiveBox::onGate(const std::vector<float>& values){
+    gateEvent = true;
     const int V = numVoicesClamped();
     for(int v = 0; v < V; v++){
         const bool open = valueFor(values, v, 0.0f) > 0;
@@ -1839,6 +1847,7 @@ void scAdditiveBox::onGate(const std::vector<float>& values){
             });
         }
     }
+    gateEvent = false;
 }
 
 void scAdditiveBox::onTrig(const std::vector<int>& values){

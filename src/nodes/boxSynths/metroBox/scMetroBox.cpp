@@ -1112,13 +1112,15 @@ void scMetroBox::fillBuffers() {
 
 void scMetroBox::sendStaticControls(ServerState& st) {
     if(!st.synth) return;
-    if(st.buffer) st.synth->set("buf", st.buffer->index);
-    st.synth->set("layers", (float)numLayers.get());
+    scSynthControlBatch updates(st.synth,st.server);
+    if(st.buffer) updates.set("buf", st.buffer->index);
+    updates.set("layers", (float)numLayers.get());
     std::vector<float> mutes(MAX_LAYERS);
     for(int i = 0; i < MAX_LAYERS; i++) mutes[i] = layers[i].mute ? 1.0f : 0.0f;
-    st.synth->set("mute", mutes);
+    updates.set("mute", mutes);
     for(auto& [index, bus] : st.outputBuses)
-        if(index >= 0 && index < NUM_OUTPUTS) st.synth->set(busName(index), bus);
+        if(index >= 0 && index < NUM_OUTPUTS) updates.set(busName(index), bus);
+    updates.send();
 }
 
 // ════════════════════════════════════════════════════════════════════════════

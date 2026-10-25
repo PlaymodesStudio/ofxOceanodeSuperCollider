@@ -155,6 +155,7 @@ private:
     void sendGateRouting(ofxSCSynth* synth, const ServerState& st);
     void sendEq(ofxSCSynth* synth);
     void sendEqAll();
+    ofxSCServer* serverForSynth(ofxSCSynth* synth) const;
     void sendAmp(ofxSCSynth* synth);
     float stageOn(int stage) const;
     static const char* stageDef(int stage);

@@ -368,7 +368,11 @@ For scheduled delivery, use [scScheduledInputs](../../timing/scScheduledInputs.h
 and scheduling compatibility helpers. Register note parameters, respect
 backend-send suppression in listeners, read values in effect when sending, and
 unregister during teardown. Send scheduled notes with their timetags and avoid
-a duplicate backend send when the GUI catches up.
+a duplicate backend send when the GUI catches up. Sound automation must not
+resend note inputs or trigger counters. Coalesce ordinary sound changes, retain
+immediate scoped sends for notes, and use bounded control batches. See the
+[Box OSC audit](../../docs/boxOscScheduling.md) for node coverage and regression
+commands.
 
 Timeline menus require the optional timeline addon to be enabled and attached
 to the host container. Compile instrument hooks under the appropriate feature
@@ -392,8 +396,8 @@ LFO/envelope/Routing module; specialized processing may exist independently.
 
 WavetableBox uses independent Voices and Channels, panning, and the PolyComb
 compressor/EQ/blur/echo/reverb chain. Its bundled wavetable browser is included
-in SynthDef sync. Scheduled-note delivery through `scScheduledInputs` remains
-work needed for full instrument parity.
+in SynthDef sync. Published Pitch and Gate inputs register with
+`scScheduledInputs` and honor backend suppression.
 
 ## Implementation and verification reference
 
@@ -417,6 +421,8 @@ python3 tools/modulation/voice_params_test.py
 python3 tools/snapshot_morph_test/run.py
 python3 tools/snapshot_morph_test/fx_lifecycle_test.py
 python3 tools/audio_routing_test/box_fx_startup_test.py
+python3 tools/box_osc_test/run.py
+python3 tools/box_osc_test/native_regression.py
 python3 tools/wavetablebox/render_test.py
 ```
 

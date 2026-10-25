@@ -165,10 +165,13 @@ private:
     bool connected(const std::string&) const;
     void menu(const std::string&);
     void mark(const std::string&);
-    void sendNotes(ofxSCServer*, State&);
+    enum NoteFields { NoteGate=1, NotePitch=2, NoteRouting=4, NoteAll=7 };
+    void sendNotes(ofxSCServer*, State&, unsigned fields=NoteAll);
     void sendSound(ofxSCServer*, State&);
     bool soundOn(const std::string&);
+    bool soundDirty = false;
     void sendAll();
+    void flushSound();
     void refreshOutputs() { for(auto& output : outputs) output = output; }
     void release(ofxSCServer*, State&);
     void rebuild();

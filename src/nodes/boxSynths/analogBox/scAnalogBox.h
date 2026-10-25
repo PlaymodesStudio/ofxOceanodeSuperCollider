@@ -184,7 +184,7 @@ private:
     int mod(const ServerState& st, int t) const;
     void forStates(const std::function<void(ofxSCServer*, ServerState&)>& f);
     void sendVec(ofxSCSynth* s, const std::string& name, const std::vector<float>& v);
-    void sendGate(ServerState& st);
+    void sendGate(ServerState& st, bool notesOnly=false, bool pitchOnly=false);
     void sendPitch(ServerState& st);
     void sendOsc(ServerState& st, int k);
     void sendNoise(ServerState& st);

@@ -44,6 +44,7 @@
 #include "ofxSCGroup.h"
 #include "ofxSCBus.h"
 #include "../../../ui/scTimelineMenu.h"
+#include "../../../timing/scScheduledInputs.h"
 #include "../shared/scSnapshots.h"
 #include "../shared/scVoiceCountMorph.h"
 #include "../../../ui/scDropdowns.h"
@@ -329,6 +330,9 @@ private:
     void createModulation(ofxSCServer* server);
     void freeModulation(ofxSCServer* server);
     void sendModulation(ofxSCServer* server);
+    void sendGate(ofxSCServer* server);
+    scScheduledInputs noteInputs;
+    bool soundDirty=false;
     void markControl(const std::string& key);
     template<typename T> void regMod(ofParameter<T>& p, std::function<void()> send);
 

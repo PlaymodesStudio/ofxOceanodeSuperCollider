@@ -1,3 +1,4 @@
+#include "../../../audio/scSynthControlBatch.h"
 #include "../../../audio/scFxRouting.h"
 //
 //  scEchoBox.cpp
@@ -323,53 +324,65 @@ float scEchoBox::tapSeconds(int t) const {
 
 void scEchoBox::sendTap(ofxSCSynth* s, int t) {
     if(!s) return;
+    ofxSCServer* server=nullptr;
+    for(auto& [srv,st]:states)if(st.taps[t]==s){server=srv;break;}
+    scSynthControlBatch controls(s,server);
     const Tap& tp = taps[t];
-    s->set("time", tapSeconds(t));
-    s->set("level", tp.level.get());
-    s->set("send", tp.send.get());
-    s->set("feed", tp.feed.get());
-    s->set("freeze", tp.freeze.get() ? 1.0f : 0.0f);
-    s->set("pingpong", tp.pingpong.get());
-    s->set("bounce", tp.bounce.get() == 0 ? 1.0f : -1.0f);
-    s->set("rotate", (float)std::min(tp.rotate.get(), n() - 1));
-    s->set("spread", modulation.voiceValues(tp.spread));
-    s->set("wowrate", modulation.voiceValues(tp.wowRate));
-    s->set("wowdepth", modulation.voiceValues(tp.wowDepth));
-    s->set("ftype", (float)tp.ftype.get());
-    s->set("cutoff", tp.cutoff.get());
-    s->set("res", modulation.voiceValues(tp.res));
-    s->set("lowcut", modulation.voiceValues(tp.lowcut));
-    s->set("blur", tp.blur.get());
-    s->set("blurtime", modulation.voiceValues(tp.blurTime));
-    s->set("drive", tp.drive.get());
-    s->set("shift", modulation.voiceValues(tp.shift));
-    s->set("shiftmix", tp.shiftMix.get());
+    controls.set("time", tapSeconds(t));
+    controls.set("level", tp.level.get());
+    controls.set("send", tp.send.get());
+    controls.set("feed", tp.feed.get());
+    controls.set("freeze", tp.freeze.get() ? 1.0f : 0.0f);
+    controls.set("pingpong", tp.pingpong.get());
+    controls.set("bounce", tp.bounce.get() == 0 ? 1.0f : -1.0f);
+    controls.set("rotate", (float)std::min(tp.rotate.get(), n() - 1));
+    controls.set("spread", modulation.voiceValues(tp.spread));
+    controls.set("wowrate", modulation.voiceValues(tp.wowRate));
+    controls.set("wowdepth", modulation.voiceValues(tp.wowDepth));
+    controls.set("ftype", (float)tp.ftype.get());
+    controls.set("cutoff", tp.cutoff.get());
+    controls.set("res", modulation.voiceValues(tp.res));
+    controls.set("lowcut", modulation.voiceValues(tp.lowcut));
+    controls.set("blur", tp.blur.get());
+    controls.set("blurtime", modulation.voiceValues(tp.blurTime));
+    controls.set("drive", tp.drive.get());
+    controls.set("shift", modulation.voiceValues(tp.shift));
+    controls.set("shiftmix", tp.shiftMix.get());
+    controls.send();
 }
 void scEchoBox::sendTap(int t) { for(auto& [s, st] : states) sendTap(st.taps[t], t); }
 
 void scEchoBox::sendMix(ofxSCSynth* s) {
     if(!s) return;
-    s->set("mix", mix.get());
-    s->set("gain", gain.get());
-    s->set("duck", duck.get());
-    s->set("duckrel", duckRel.get());
+    ofxSCServer* server=nullptr;
+    for(auto& [srv,st]:states)if(st.mix==s){server=srv;break;}
+    scSynthControlBatch controls(s,server);
+    controls.set("mix", mix.get());
+    controls.set("gain", gain.get());
+    controls.set("duck", duck.get());
+    controls.set("duckrel", duckRel.get());
+    controls.send();
 }
 
 void scEchoBox::sendRvb(ofxSCSynth* x) {
     if(!x) return;
-    x->set("mix", ofClamp(rvbMix.get(), 0.0f, 1.0f));
-    x->set("decay", std::max(0.05f, rvbDecay.get()));
-    x->set("size", ofClamp(rvbSize.get(), 0.0f, 60.0f));
-    x->set("predelay", ofClamp(rvbPredelay.get(), 0.0f, 500.0f));
-    x->set("position", ofClamp(rvbLate.get(), 0.0f, 1.0f));
-    x->set("spread", ofClamp(rvbSpread.get(), -1.0f, 1.0f));
-    x->set("lowpass", ofClamp(rvbLowpass.get(), 20.0f, 20000.0f));
-    x->set("highdamp", ofClamp(rvbHiDamp.get(), 0.0f, 60.0f));
-    x->set("lowdamp", ofClamp(rvbLoDamp.get(), 0.0f, 60.0f));
-    x->set("modfreq", ofClamp(rvbModRate.get(), 0.001f, 20.0f));
-    x->set("spin", ofClamp(rvbSpin.get(), 0.0f, 20.0f));
-    x->set("wander", ofClamp(rvbWander.get(), 0.0f, 20.0f));
-    x->set("on", snaps.morph.activation(rvbOn));
+    ofxSCServer* server=nullptr;
+    for(auto& [srv,st]:states)if(st.rvb==x){server=srv;break;}
+    scSynthControlBatch controls(x,server);
+    controls.set("mix", ofClamp(rvbMix.get(), 0.0f, 1.0f));
+    controls.set("decay", std::max(0.05f, rvbDecay.get()));
+    controls.set("size", ofClamp(rvbSize.get(), 0.0f, 60.0f));
+    controls.set("predelay", ofClamp(rvbPredelay.get(), 0.0f, 500.0f));
+    controls.set("position", ofClamp(rvbLate.get(), 0.0f, 1.0f));
+    controls.set("spread", ofClamp(rvbSpread.get(), -1.0f, 1.0f));
+    controls.set("lowpass", ofClamp(rvbLowpass.get(), 20.0f, 20000.0f));
+    controls.set("highdamp", ofClamp(rvbHiDamp.get(), 0.0f, 60.0f));
+    controls.set("lowdamp", ofClamp(rvbLoDamp.get(), 0.0f, 60.0f));
+    controls.set("modfreq", ofClamp(rvbModRate.get(), 0.001f, 20.0f));
+    controls.set("spin", ofClamp(rvbSpin.get(), 0.0f, 20.0f));
+    controls.set("wander", ofClamp(rvbWander.get(), 0.0f, 20.0f));
+    controls.set("on", snaps.morph.activation(rvbOn));
+    controls.send();
 }
 
 float scEchoBox::reverbTail() const { return std::min(30.0f, rvbDecay.get() + rvbPredelay.get() * 0.001f + 0.3f); }

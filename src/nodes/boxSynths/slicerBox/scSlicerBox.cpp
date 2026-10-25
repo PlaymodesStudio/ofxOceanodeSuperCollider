@@ -1,3 +1,4 @@
+#include "../../../audio/scSynthControlBatch.h"
 #include "../../../audio/scFxRouting.h"
 //
 //  scSlicerBox.cpp
@@ -666,16 +667,18 @@ int scSlicerBox::seqPerBeat() const {
 
 void scSlicerBox::sendSeq(ofxSCSynth* s, bool notes){
     if(!s) return;
-    s->set("steps", (float)seqSteps.get());
-    s->set("perBeat", (float)seqPerBeat());
-    s->set("bpm", currentBpm);
-    s->set("gatescale", seqGate.get());
-    s->set("randamt", seqRandom.get());
-    s->set("nslices", (float)std::max(1, numSlices()));
+    scSynthControlBatch updates(s,serverForSynth(s));
+    updates.set("steps", (float)seqSteps.get());
+    updates.set("perBeat", (float)seqPerBeat());
+    updates.set("bpm", currentBpm);
+    updates.set("gatescale", seqGate.get());
+    updates.set("randamt", seqRandom.get());
+    updates.set("nslices", (float)std::max(1, numSlices()));
     if(notes){
-        s->set("slice", seqSlice);
-        s->set("len", seqLen);
+        updates.set("slice", seqSlice);
+        updates.set("len", seqLen);
     }
+    updates.send();
 }
 
 // The sequencer synth exists while Sequence is on (switching it on starts at
@@ -757,81 +760,85 @@ void scSlicerBox::setBpm(float bpm){
 
 void scSlicerBox::sendAmp(ofxSCSynth* s){
     if(!s) return;
-    s->set("atk", ampAttack.get());
-    s->set("dec", ampDecay.get());
-    s->set("sus", ampSustain.get());
-    s->set("rel", ampRelease.get());
-    s->set("curveA", ampCurveA.get());
-    s->set("curveD", ampCurveD.get());
-    s->set("curveR", ampCurveR.get());
+    scSynthControlBatch updates(s,serverForSynth(s));
+    updates.set("atk", ampAttack.get());
+    updates.set("dec", ampDecay.get());
+    updates.set("sus", ampSustain.get());
+    updates.set("rel", ampRelease.get());
+    updates.set("curveA", ampCurveA.get());
+    updates.set("curveD", ampCurveD.get());
+    updates.set("curveR", ampCurveR.get());
+    updates.send();
 }
 
 void scSlicerBox::sendStage(int stage, ofxSCSynth* s){
     if(!s) return;
+    scSynthControlBatch updates(s,serverForSynth(s));
     const float on = stageOn(stage);
     switch(stage){
         case StEq:
             sendEq(s);
             break;
         case StFilter:
-            s->set("typeweights", snaps.morph.weights(filterType));
-            s->set("slopeweights", snaps.morph.weights(filterSlope));
-            s->set("type", (float)ofClamp(filterType.get(), 0, 2));
-            s->set("slope", (float)ofClamp(filterSlope.get(), 0, 1));
-            s->set("cutoff", ofClamp(filterCutoff.get(), 20.0f, 20000.0f));
-            s->set("resonance", ofClamp(filterResonance.get(), 0.0f, 0.95f));
-            s->set("on", on);
+            updates.set("typeweights", snaps.morph.weights(filterType));
+            updates.set("slopeweights", snaps.morph.weights(filterSlope));
+            updates.set("type", (float)ofClamp(filterType.get(), 0, 2));
+            updates.set("slope", (float)ofClamp(filterSlope.get(), 0, 1));
+            updates.set("cutoff", ofClamp(filterCutoff.get(), 20.0f, 20000.0f));
+            updates.set("resonance", ofClamp(filterResonance.get(), 0.0f, 0.95f));
+            updates.set("on", on);
             break;
         case StComp:
-            s->set("threshold", compThreshold.get());
-            s->set("ratio", std::max(1.0f, compRatio.get()));
-            s->set("knee", std::max(0.0f, compKnee.get()));
-            s->set("attack", std::max(0.01f, compAttack.get()));
-            s->set("release", std::max(1.0f, compRelease.get()));
-            s->set("makeup", compMakeup.get());
-            s->set("automakeup", snaps.morph.activation(compAuto));
-            s->set("rms", ofClamp(compRms.get(), 0.0f, 1.0f));
-            s->set("schpf", ofClamp(compHpf.get(), 10.0f, 2000.0f));
-            s->set("mix", ofClamp(compMix.get(), 0.0f, 1.0f));
-            s->set("grBus", -1.0f);
-            s->set("on", on);
+            updates.set("threshold", compThreshold.get());
+            updates.set("ratio", std::max(1.0f, compRatio.get()));
+            updates.set("knee", std::max(0.0f, compKnee.get()));
+            updates.set("attack", std::max(0.01f, compAttack.get()));
+            updates.set("release", std::max(1.0f, compRelease.get()));
+            updates.set("makeup", compMakeup.get());
+            updates.set("automakeup", snaps.morph.activation(compAuto));
+            updates.set("rms", ofClamp(compRms.get(), 0.0f, 1.0f));
+            updates.set("schpf", ofClamp(compHpf.get(), 10.0f, 2000.0f));
+            updates.set("mix", ofClamp(compMix.get(), 0.0f, 1.0f));
+            updates.set("grBus", -1.0f);
+            updates.set("on", on);
             break;
         case StSat:
-            s->set("drive", ofClamp(satDrive.get(), 0.0f, 36.0f));
-            s->set("bias", ofClamp(satWarmth.get(), 0.0f, 1.0f));
-            s->set("tone", ofClamp(satTone.get(), 500.0f, 20000.0f));
-            s->set("output", ofClamp(satOutput.get(), -24.0f, 24.0f));
-            s->set("autogain", snaps.morph.activation(satAuto));
-            s->set("mix", ofClamp(satMix.get(), 0.0f, 1.0f));
-            s->set("on", on);
+            updates.set("drive", ofClamp(satDrive.get(), 0.0f, 36.0f));
+            updates.set("bias", ofClamp(satWarmth.get(), 0.0f, 1.0f));
+            updates.set("tone", ofClamp(satTone.get(), 500.0f, 20000.0f));
+            updates.set("output", ofClamp(satOutput.get(), -24.0f, 24.0f));
+            updates.set("autogain", snaps.morph.activation(satAuto));
+            updates.set("mix", ofClamp(satMix.get(), 0.0f, 1.0f));
+            updates.set("on", on);
             break;
         case StEcho:
-            s->set("delay", echoDelaySec());
-            s->set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
-            s->set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
-            s->set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
-            s->set("filterweights", snaps.morph.weights(echoFilter));
-            s->set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
-            s->set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
-            s->set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
-            s->set("on", on);
+            updates.set("delay", echoDelaySec());
+            updates.set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
+            updates.set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
+            updates.set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
+            updates.set("filterweights", snaps.morph.weights(echoFilter));
+            updates.set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
+            updates.set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
+            updates.set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
+            updates.set("on", on);
             break;
         case StRvb:
-            s->set("mix", ofClamp(rvbMix.get(), 0.0f, 1.0f));
-            s->set("decay", std::max(0.05f, rvbDecay.get()));
-            s->set("size", ofClamp(rvbSize.get(), 0.0f, 60.0f));
-            s->set("predelay", ofClamp(rvbPredelay.get(), 0.0f, 500.0f));
-            s->set("position", ofClamp(rvbLate.get(), 0.0f, 1.0f));
-            s->set("spread", ofClamp(rvbSpread.get(), -1.0f, 1.0f));
-            s->set("lowpass", ofClamp(rvbLowpass.get(), 20.0f, 20000.0f));
-            s->set("highdamp", ofClamp(rvbHiDamp.get(), 0.0f, 60.0f));
-            s->set("lowdamp", ofClamp(rvbLoDamp.get(), 0.0f, 60.0f));
-            s->set("modfreq", ofClamp(rvbModRate.get(), 0.001f, 20.0f));
-            s->set("spin", ofClamp(rvbSpin.get(), 0.0f, 20.0f));
-            s->set("wander", ofClamp(rvbWander.get(), 0.0f, 20.0f));
-            s->set("on", on);
+            updates.set("mix", ofClamp(rvbMix.get(), 0.0f, 1.0f));
+            updates.set("decay", std::max(0.05f, rvbDecay.get()));
+            updates.set("size", ofClamp(rvbSize.get(), 0.0f, 60.0f));
+            updates.set("predelay", ofClamp(rvbPredelay.get(), 0.0f, 500.0f));
+            updates.set("position", ofClamp(rvbLate.get(), 0.0f, 1.0f));
+            updates.set("spread", ofClamp(rvbSpread.get(), -1.0f, 1.0f));
+            updates.set("lowpass", ofClamp(rvbLowpass.get(), 20.0f, 20000.0f));
+            updates.set("highdamp", ofClamp(rvbHiDamp.get(), 0.0f, 60.0f));
+            updates.set("lowdamp", ofClamp(rvbLoDamp.get(), 0.0f, 60.0f));
+            updates.set("modfreq", ofClamp(rvbModRate.get(), 0.001f, 20.0f));
+            updates.set("spin", ofClamp(rvbSpin.get(), 0.0f, 20.0f));
+            updates.set("wander", ofClamp(rvbWander.get(), 0.0f, 20.0f));
+            updates.set("on", on);
             break;
     }
+    updates.send();
 }
 
 void scSlicerBox::sendStageAll(int stage){
@@ -939,16 +946,18 @@ void scSlicerBox::sendGateRouting(ofxSCSynth* synth, const ServerState& st){
 
 void scSlicerBox::sendEq(ofxSCSynth* s){
     if(!s) return;
+    scSynthControlBatch updates(s,serverForSynth(s));
     auto vec = [](float v){ return std::vector<float>(2, v); };
     // graphiceq2: bNgain dB, bNfreq Hz, shelves bNslope (= 1/S), peaks bNrq = 1/Q
     for(int b = 0; b < 5; b++){
         const std::string k = "b" + ofToString(b + 1);
-        s->set(k + "gain", vec(eqGain[b].get()));
-        s->set(k + "freq", vec(eqFreq[b].get()));
-        if(scEQEditor::isShelf(b)) s->set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get())));
-        else s->set(k + "rq", vec(1.0f / std::max(0.01f, eqShape[b].get())));
+        updates.set(k + "gain", vec(eqGain[b].get()));
+        updates.set(k + "freq", vec(eqFreq[b].get()));
+        if(scEQEditor::isShelf(b)) updates.set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get())));
+        else updates.set(k + "rq", vec(1.0f / std::max(0.01f, eqShape[b].get())));
     }
-    s->set("mix", (double)(eqMix.get() * snaps.morph.activation(eqOn)));
+    updates.set("mix", (double)(eqMix.get() * snaps.morph.activation(eqOn)));
+    updates.send();
 }
 
 void scSlicerBox::sendEqAll(){
@@ -2252,4 +2261,12 @@ void scSlicerBox::drawSequence(float w){
         if(auditioning >= 0) audition(auditioning, false);
     }
     ImGui::EndChild();
+}
+
+ofxSCServer* scSlicerBox::serverForSynth(ofxSCSynth* synth) const {
+    for(const auto& [server,st]:states){
+        if(st.player==synth || st.seq==synth)return server;
+        for(const auto& fx:st.fx)if(fx.synth==synth)return server;
+    }
+    return nullptr;
 }

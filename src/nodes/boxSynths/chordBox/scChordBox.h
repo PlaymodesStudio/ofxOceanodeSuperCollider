@@ -1,3 +1,4 @@
+#include "../../../audio/scSynthControlBatch.h"
 //
 //  scChordBox.h
 //  ofxOceanodeSuperCollider
@@ -606,13 +607,15 @@ private:
     }
     void sendStatic(ofxSCServer* server, ServerState& st){
         if(!st.clock) return;
-        if(st.marks) st.clock->set("marks", st.marks->index);
-        if(st.info) st.clock->set("info", st.info->index);
-        if(st.rowBus) st.clock->set("rowbus", st.rowBus->index);
-        st.clock->set("mode", timed() ? 1.0f : 0.0f);
-        st.clock->set("steps", (float)engine.progression.size());
-        st.clock->set("liveRow", (float)LIVE_ROW);
-        st.clock->set("liveCount", (float)st.liveCount);
+        scSynthControlBatch updates(st.clock,st.server);
+        if(st.marks) updates.set("marks", st.marks->index);
+        if(st.info) updates.set("info", st.info->index);
+        if(st.rowBus) updates.set("rowbus", st.rowBus->index);
+        updates.set("mode", timed() ? 1.0f : 0.0f);
+        updates.set("steps", (float)engine.progression.size());
+        updates.set("liveRow", (float)LIVE_ROW);
+        updates.set("liveCount", (float)st.liveCount);
+        updates.send();
         for(int i = 0; i < FIXED_PORTS; i++) sendOutputBus(st, i);
         sendIndexInput(st);
         for(size_t o = 0; o < st.voices.size(); o++) sendVoice(st, (int)o);

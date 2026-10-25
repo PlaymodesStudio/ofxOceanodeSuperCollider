@@ -199,6 +199,7 @@ private:
             ofxSCBus* vox = nullptr;              // control, MOD_VOX x capacity (while on)
             ofxSCBus* vis = nullptr;              // control, MOD_VIS
             int voxCap = 0;
+            bool gateInitialized = false;
             std::array<ofxSCBuffer*, 2 * MOD_LFOS> tables{};          // the shapes, then the noise curves
             std::array<std::vector<float>, 2 * MOD_LFOS> sentTables;
         };

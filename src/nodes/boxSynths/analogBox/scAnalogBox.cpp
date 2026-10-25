@@ -1,3 +1,4 @@
+#include "../../../audio/scSynthControlBatch.h"
 #include "../shared/scDroneMode.h"
 #include "../../../audio/scFxRouting.h"
 //
@@ -173,7 +174,7 @@ void scAnalogBox::setup() {
     auto vec = [](ofParameter<std::vector<float>>& p, const std::string& name, float def, float lo, float hi) {
         p.set(name, {def}, {lo}, {hi});
     };
-    auto toGate = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendGate(st); }); };
+    auto toGate = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendGate(st,true); }); };
     auto toPitch = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); }); };
     auto toAmp = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendAmp(st); }); };
     auto toSpread = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendSpread(st); }); };
@@ -414,7 +415,7 @@ void scAnalogBox::setup() {
     listeners.push(pitch.newListener([this, toPitch](std::vector<float>&) {
         if(scScheduling::isBackendSendSuppressed()) return;
         toPitch();
-        if(allocating()) forStates([this](ofxSCServer*, ServerState& st){ sendGate(st); });   // the pitches go through the allocator
+        if(allocating()) forStates([this](ofxSCServer*, ServerState& st){ sendGate(st,true,true); });   // the pitches go through the allocator
     }));
     listeners.push(master.newListener([toAmp](float&) { toAmp(); }));
     listeners.push(resetLFOs.newListener([this]() { modulation.resetLfos(); }));
@@ -486,10 +487,16 @@ bool scAnalogBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
 }
 #endif
 
-void scAnalogBox::sendGate(ServerState& st) {
+void scAnalogBox::sendGate(ServerState& st, bool notesOnly, bool pitchOnly) {
     auto* s = st.gateS;
     if(!s) return;
     auto inEffect = noteInputs.inEffectNow();   // not a scheduled send: the notes as they stand now
+    if(notesOnly && s->isCreated()) {
+        scSynthControlBatch update(s,st.server);
+        const int count=allocating()?nIn():n();
+        update.set(pitchOnly?"pitch":"gate",expand(pitchOnly?pitch.get():gate.get(),count));
+        update.send();return;
+    }
     if(allocating()){
         // ABGateAlloc<Voices>: the inputs (Voices wide) -> the pool (n() wide)
         const int ni = nIn();
@@ -525,44 +532,49 @@ void scAnalogBox::sendGate(ServerState& st) {
 void scAnalogBox::sendPitch(ServerState& st) {
     auto* s = st.pitchS;
     if(!s) return;
+    scSynthControlBatch updates(s,st.server);
+    auto vec=[&](const std::string& key,const std::vector<float>& v){ updates.set(key,expand(v,n())); };
     auto inEffect = noteInputs.inEffectNow();
-    s->set("out", st.noteBus ? st.noteBus->index : 0);
-    s->set("mpitch", mod(st, TPitch));
-    sendVec(s, "pitch", pitch.get());
+    updates.set("out", st.noteBus ? st.noteBus->index : 0);
+    updates.set("mpitch", mod(st, TPitch));
+    vec( "pitch", pitch.get());
     const int pb = allocating() ? (st.poolPitch ? st.poolPitch->index : -1) : pitchIn.bus(st.server);   // pooled: the allocator's
-    if(pb >= 0){ s->set("pitch_sel", 1.0f); s->mapan("pitch_ar", pb, n()); }
-    else s->set("pitch_sel", 0.0f);
-    sendVec(s, "transpose", transpose.get());
-    sendVec(s, "detune", detune.get());
-    s->set("glide", modulation.voiceValues(glide));
-    s->set("vibrate", modulation.voiceValues(vibRate));
-    s->set("vibrand", modulation.voiceValues(vibRand));
-    s->set("vibamt", modulation.voiceValues(vibAmt));
+    if(pb >= 0){ updates.set("pitch_sel", 1.0f); s->mapan("pitch_ar", pb, n()); }
+    else updates.set("pitch_sel", 0.0f);
+    vec( "transpose", transpose.get());
+    vec( "detune", detune.get());
+    updates.set("glide", modulation.voiceValues(glide));
+    updates.set("vibrate", modulation.voiceValues(vibRate));
+    updates.set("vibrand", modulation.voiceValues(vibRand));
+    updates.set("vibamt", modulation.voiceValues(vibAmt));
+    updates.send();
 }
 
 void scAnalogBox::sendOsc(ServerState& st, int k) {
     auto* s = st.osc[k];
     if(!s) return;
+    scSynthControlBatch updates(s,st.server);
+    auto vec=[&](const std::string& key,const std::vector<float>& v){ updates.set(key,expand(v,n())); };
     const Osc& O = osc[k];
-    s->set("note", st.noteBus ? st.noteBus->index : 0);
-    s->set("out", st.mixBus ? st.mixBus->index : 0);
-    s->set("raw", st.raw[k] ? st.raw[k]->index : 0);
-    s->set("freqout", st.freq[k] ? st.freq[k]->index : 0);
-    s->set("presence",oscillatorPresence(k));
-    s->set("oct", (float)O.oct.get());
-    s->set("semi", modulation.voiceValues(O.semi));
-    s->set("fine", modulation.voiceValues(O.fine));
-    s->set("ratio", modulation.voiceValues(O.ratio));
-    s->set("skew", modulation.voiceValues(O.skew));
-    s->set("round", modulation.voiceValues(O.round));
-    s->set("pw", modulation.voiceValues(O.width));
-    s->set("centered", O.centered.get() ? 1.0f : 0.0f);
-    s->set("noise", modulation.voiceValues(O.noise));
-    s->set("drift", modulation.voiceValues(drift));
-    s->set("slave", k > 0 ? 1.0f : 0.0f);
+    updates.set("note", st.noteBus ? st.noteBus->index : 0);
+    updates.set("out", st.mixBus ? st.mixBus->index : 0);
+    updates.set("raw", st.raw[k] ? st.raw[k]->index : 0);
+    updates.set("freqout", st.freq[k] ? st.freq[k]->index : 0);
+    updates.set("presence",oscillatorPresence(k));
+    updates.set("oct", (float)O.oct.get());
+    updates.set("semi", modulation.voiceValues(O.semi));
+    updates.set("fine", modulation.voiceValues(O.fine));
+    updates.set("ratio", modulation.voiceValues(O.ratio));
+    updates.set("skew", modulation.voiceValues(O.skew));
+    updates.set("round", modulation.voiceValues(O.round));
+    updates.set("pw", modulation.voiceValues(O.width));
+    updates.set("centered", O.centered.get() ? 1.0f : 0.0f);
+    updates.set("noise", modulation.voiceValues(O.noise));
+    updates.set("drift", modulation.voiceValues(drift));
+    updates.set("slave", k > 0 ? 1.0f : 0.0f);
     // hard sync: to oscillator 1's frequency
-    s->set("sync", k > 0 ? snaps.morph.activation(O.sync) : 0.0f);
-    s->set("syncfreq", st.freq[0] ? st.freq[0]->index : 0);
+    updates.set("sync", k > 0 ? snaps.morph.activation(O.sync) : 0.0f);
+    updates.set("syncfreq", st.freq[0] ? st.freq[0]->index : 0);
     // FM: from any oscillator in use (an earlier one this block, a later one / itself a block late)
     auto fmWeights = snaps.morph.weights(O.fmFrom);
     std::vector<float> fmBuses(MAX_OSCS, st.raw[k] ? st.raw[k]->index : 0);
@@ -570,30 +582,37 @@ void scAnalogBox::sendOsc(ServerState& st, int k) {
         if(j < oscs() && st.raw[j]) fmBuses[j] = st.raw[j]->index;
         else fmWeights[j+1] = 0;
     }
-    s->set("fmsources", fmBuses);
-    s->set("fmweights", fmWeights);
-    sendVec(s, "fmamt", snaps.morph.value(O.fm));
-    sendVec(s, "level", O.level.get());
-    s->set("mslave", mod(st, TSlave)); s->set("mpw", mod(st, TWidth)); s->set("mskew", mod(st, TSkew));
-    s->set("mround", mod(st, TRound)); s->set("mfm", mod(st, TFm));
+    updates.set("fmsources", fmBuses);
+    updates.set("fmweights", fmWeights);
+    vec( "fmamt", snaps.morph.value(O.fm));
+    vec( "level", O.level.get());
+    updates.set("mslave", mod(st, TSlave)); updates.set("mpw", mod(st, TWidth)); updates.set("mskew", mod(st, TSkew));
+    updates.set("mround", mod(st, TRound)); updates.set("mfm", mod(st, TFm));
+    updates.send();
 }
 
 void scAnalogBox::sendNoise(ServerState& st) {
     auto* s = st.noise;
     if(!s) return;
-    s->set("out", st.mixBus ? st.mixBus->index : 0);
-    sendVec(s, "level", noiseLevel.get());
-    s->set("color", modulation.voiceValues(noiseColor));
-    s->set("mnoise", mod(st, TNoise));
+    scSynthControlBatch updates(s,st.server);
+    auto vec=[&](const std::string& key,const std::vector<float>& v){ updates.set(key,expand(v,n())); };
+    updates.set("out", st.mixBus ? st.mixBus->index : 0);
+    vec( "level", noiseLevel.get());
+    updates.set("color", modulation.voiceValues(noiseColor));
+    updates.set("mnoise", mod(st, TNoise));
+    updates.send();
 }
 
 void scAnalogBox::sendRing(ServerState& st) {
     auto* s = st.ring;
     if(!s) return;
-    s->set("a", st.raw[0] ? st.raw[0]->index : 0);
-    s->set("b", st.raw[1] ? st.raw[1]->index : 0);
-    s->set("out", st.mixBus ? st.mixBus->index : 0);
-    sendVec(s, "level", ringLevel.get());
+    scSynthControlBatch updates(s,st.server);
+    auto vec=[&](const std::string& key,const std::vector<float>& v){ updates.set(key,expand(v,n())); };
+    updates.set("a", st.raw[0] ? st.raw[0]->index : 0);
+    updates.set("b", st.raw[1] ? st.raw[1]->index : 0);
+    updates.set("out", st.mixBus ? st.mixBus->index : 0);
+    vec( "level", ringLevel.get());
+    updates.send();
 }
 
 bool scAnalogBox::vcaOn() const {
@@ -613,30 +632,33 @@ scAnalogBox::FilterRef scAnalogBox::filterRef(int k) {
 void scAnalogBox::sendFilterK(ServerState& st, int k) {
     auto* s = k == 0 ? st.filter : st.moreFilters[k - 1];
     if(!s) return;
+    scSynthControlBatch updates(s,st.server);
+    auto vec=[&](const std::string& key,const std::vector<float>& v){ updates.set(key,expand(v,n())); };
     const int nf = filters();
     auto bus = [](ofxSCBus* b){ return b ? b->index : 0; };
     const bool series = filterRouting.get() == 0;
-    s->set("in", series && k > 0 ? bus(st.chainBus[k - 1]) : bus(st.mixBus));
-    s->set("out", series && k < nf - 1 ? bus(st.chainBus[k]) : bus(st.filtBus));
-    s->set("note", bus(st.noteBus));
+    updates.set("in", series && k > 0 ? bus(st.chainBus[k - 1]) : bus(st.mixBus));
+    updates.set("out", series && k < nf - 1 ? bus(st.chainBus[k]) : bus(st.filtBus));
+    updates.set("note", bus(st.noteBus));
     const FilterRef f = filterRef(k);
-    s->set("on", snaps.morph.activation(*f.on));
-    s->set("mode", (float)f.mode->get());
-    s->set("type", (float)f.type->get());
-    sendVec(s, "cutoff", f.cutoff->get());
-    sendVec(s, "res", f.res->get());
-    s->set("keytrack", modulation.voiceValues(*f.keyTrack));
-    s->set("drive", modulation.voiceValues(*f.drive));
-    s->set("sat", modulation.voiceValues(*f.sat));
-    s->set("fb", modulation.voiceValues(*f.feedback));
-    s->set("level", modulation.voiceValues(*f.level));
-    s->set("hpf", k == 0 ? modulation.voiceValues(hpf) : std::vector<float>(n(),10.0f));
-    s->set("vis", st.visBlock ? st.visBlock->index + VIS_CUT : 0);
-    s->set("vison", k == 0 ? 1.0f : 0.0f);
+    updates.set("on", snaps.morph.activation(*f.on));
+    updates.set("mode", (float)f.mode->get());
+    updates.set("type", (float)f.type->get());
+    vec( "cutoff", f.cutoff->get());
+    vec( "res", f.res->get());
+    updates.set("keytrack", modulation.voiceValues(*f.keyTrack));
+    updates.set("drive", modulation.voiceValues(*f.drive));
+    updates.set("sat", modulation.voiceValues(*f.sat));
+    updates.set("fb", modulation.voiceValues(*f.feedback));
+    updates.set("level", modulation.voiceValues(*f.level));
+    updates.set("hpf", k == 0 ? modulation.voiceValues(hpf) : std::vector<float>(n(),10.0f));
+    updates.set("vis", st.visBlock ? st.visBlock->index + VIS_CUT : 0);
+    updates.set("vison", k == 0 ? 1.0f : 0.0f);
     static const Target cuts[MAX_FILTERS] = {TCut, TCut2, TCut3, TCut4}, ress[MAX_FILTERS] = {TRes, TRes2, TRes3, TRes4};
-    s->set("mcut", mod(st, cuts[k])); s->set("mres", mod(st, ress[k]));
+    updates.set("mcut", mod(st, cuts[k])); updates.set("mres", mod(st, ress[k]));
     // Drive and Filter Fb modulation: every filter
-    s->set("mdrive", mod(st, TDrive)); s->set("mfb", mod(st, TFb));
+    updates.set("mdrive", mod(st, TDrive)); updates.set("mfb", mod(st, TFb));
+    updates.send();
 }
 
 void scAnalogBox::sendFilter(ServerState& st) {
@@ -646,25 +668,29 @@ void scAnalogBox::sendFilter(ServerState& st) {
 void scAnalogBox::sendAmp(ServerState& st) {
     auto* s = st.amp;
     if(!s) return;
-    s->set("in", st.filtBus ? st.filtBus->index : 0);
-    s->set("out", st.voiceBus ? st.voiceBus->index : 0);
-    s->set("vca", vcaOn() ? 1.0f : 0.0f);
-    s->set("gate", st.gateBus ? st.gateBus->index : 0);
-    s->set("vel", src(st, SRC_VEL));
-    s->set("velsens", modulation.voiceValues(velSens));
-    s->set("level", master.get());
-    s->set("mamp", mod(st, TAmp));
+    scSynthControlBatch updates(s,st.server);
+    updates.set("in", st.filtBus ? st.filtBus->index : 0);
+    updates.set("out", st.voiceBus ? st.voiceBus->index : 0);
+    updates.set("vca", vcaOn() ? 1.0f : 0.0f);
+    updates.set("gate", st.gateBus ? st.gateBus->index : 0);
+    updates.set("vel", src(st, SRC_VEL));
+    updates.set("velsens", modulation.voiceValues(velSens));
+    updates.set("level", master.get());
+    updates.set("mamp", mod(st, TAmp));
+    updates.send();
 }
 
 void scAnalogBox::sendSpread(ServerState& st) {
     auto* s = st.spread;
     if(!s) return;
-    s->set("in", st.voiceBus ? st.voiceBus->index : 0);
-    s->set("voices", (float)n());
-    s->set("line", spreadLayout.get() == 1 ? 1.0f : 0.0f);
-    s->set("pan", expand(panPositions(), W, 0.5f));
-    s->set("mpan", mod(st, TPan));
-    s->set("vis", st.visBlock ? st.visBlock->index + VIS_PAN : 0);
+    scSynthControlBatch updates(s,st.server);
+    updates.set("in", st.voiceBus ? st.voiceBus->index : 0);
+    updates.set("voices", (float)n());
+    updates.set("line", spreadLayout.get() == 1 ? 1.0f : 0.0f);
+    updates.set("pan", expand(panPositions(), W, 0.5f));
+    updates.set("mpan", mod(st, TPan));
+    updates.set("vis", st.visBlock ? st.visBlock->index + VIS_PAN : 0);
+    updates.send();
 }
 
 bool scAnalogBox::noiseWanted() const {

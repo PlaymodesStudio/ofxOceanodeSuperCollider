@@ -43,8 +43,10 @@ class Box { public:
     std::vector<Manager*> servers;
     enum { StEq, StSat, StEcho, StRvb, NumStages };
     struct Group { int nodeID=1; } group;
-    struct Fx { ofxSCSynth* synth=nullptr; ofxSCBus* in=nullptr; bool running=false; float offAt=-1; };
+    struct Fx {
+        std::map<std::string,std::vector<float>> sent;int outSent=-1; ofxSCSynth* synth=nullptr; ofxSCBus* in=nullptr; bool running=false; float offAt=-1; };
     struct State {
+        int spreadOutSent=-1;
         bool created=true;
         int out=400,outBus=400;
         std::array<Fx,NumStages> fx{};

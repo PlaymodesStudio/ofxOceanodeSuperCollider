@@ -831,20 +831,22 @@ void scRhythmBox::sendTypedConfigToAll(int ti) {
     for(auto& [srv, synths] : trackSynths) {
         if(ti >= (int)synths.size() || !synths[ti]) continue;
         auto* s = synths[ti];
-        s->set("envSustain", tc.envSustain); s->set("envRelease", tc.envRelease);
-        s->set("filterMode", (float)tc.filterMode);
-        s->set("filterRandom", tc.filterRandom ? 1.0f : 0.0f);
-        s->set("filterRandomRange", tc.filterRandomRange);
-        s->set("kickWaveType", (float)tc.kickWaveType);
-        s->set("kickStartNote", tc.kickStartNote); s->set("kickEndNote", tc.kickEndNote);
-        s->set("kickPitchAttack", tc.kickPitchAttack); s->set("kickPitchDecay", tc.kickPitchDecay);
-        s->set("kickPitchCurve", tc.kickPitchCurve); s->set("kickPMPitch", tc.kickPMPitch);
-        s->set("kickPMIndex", tc.kickPMIndex);
-        s->set("noiseType", (float)tc.noiseType); s->set("noiseDensity", tc.noiseDensity);
-        s->set("snareToneNote", tc.snareToneNote); s->set("snareToneDecay", tc.snareToneDecay);
-        s->set("snareToneLevel", tc.snareToneLevel); s->set("snareNoiseFreq", tc.snareNoiseFreq);
-        s->set("snareNoiseLevel", tc.snareNoiseLevel);
-        s->set("clickCombOctave", (float)tc.clickCombOctave);
+        scSynthControlBatch updates(s,srv);
+        updates.set("envSustain", tc.envSustain); updates.set("envRelease", tc.envRelease);
+        updates.set("filterMode", (float)tc.filterMode);
+        updates.set("filterRandom", tc.filterRandom ? 1.0f : 0.0f);
+        updates.set("filterRandomRange", tc.filterRandomRange);
+        updates.set("kickWaveType", (float)tc.kickWaveType);
+        updates.set("kickStartNote", tc.kickStartNote); updates.set("kickEndNote", tc.kickEndNote);
+        updates.set("kickPitchAttack", tc.kickPitchAttack); updates.set("kickPitchDecay", tc.kickPitchDecay);
+        updates.set("kickPitchCurve", tc.kickPitchCurve); updates.set("kickPMPitch", tc.kickPMPitch);
+        updates.set("kickPMIndex", tc.kickPMIndex);
+        updates.set("noiseType", (float)tc.noiseType); updates.set("noiseDensity", tc.noiseDensity);
+        updates.set("snareToneNote", tc.snareToneNote); updates.set("snareToneDecay", tc.snareToneDecay);
+        updates.set("snareToneLevel", tc.snareToneLevel); updates.set("snareNoiseFreq", tc.snareNoiseFreq);
+        updates.set("snareNoiseLevel", tc.snareNoiseLevel);
+        updates.set("clickCombOctave", (float)tc.clickCombOctave);
+        updates.send();
     }
 }
 

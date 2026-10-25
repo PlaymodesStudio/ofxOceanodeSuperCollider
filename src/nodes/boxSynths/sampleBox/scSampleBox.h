@@ -265,10 +265,10 @@ private:
     void syncPadServer(ofxSCServer*, Pad& p);
     void replaceEngine(ofxSCServer*, Pad& p);
     void syncFx(ofxSCServer*, Pad& p);       // create / free the effects after their On
-    void sendEngine(ofxSCServer*, Pad& p);
+    void sendEngine(ofxSCServer*, Pad& p, bool includeNotes=true);
     void sendFx(ofxSCServer*, Pad& p, int fx);
     void sendStrip(ofxSCServer*, Pad& p);
-    void sendChannelInputs(Pad& p);          // trig bus, pitch, gate/velocity level (after Channel or the inputs changed)
+    void sendChannelInputs(Pad& p, bool pitchOnly=false);          // trig bus, pitch, gate/velocity level (after Channel or the inputs changed)
     void sendChokeMasks();
     void sendMutes();
     // Tempo: Fit and Sync

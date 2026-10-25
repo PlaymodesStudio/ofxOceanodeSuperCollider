@@ -88,7 +88,7 @@ void scAliasingBox::setup() {
     addOutput("Out");
 
     drone.set("Drone", false);
-    reg(drone,[this](){sendAll();});
+    reg(drone,[this](){for(auto& [s,st]:states)sendNotes(s,st,NoteRouting);});
 
     scheduled.add(gateIn.handle, gate); scheduled.add(pitchIn.handle, pitch);
     scheduled.enable(this, [this](){ for(auto& [s, st] : states) if(st.created) return true; return false; });
@@ -96,7 +96,7 @@ void scAliasingBox::setup() {
         listeners.push(p->newListener([this,p](std::vector<float>& v) {
             // the timeline's frame set of a value it already sent timetagged: nothing to do
             if(scScheduling::isBackendSendSuppressed()) return;
-            for(auto& [s, st] : states) sendNotes(s, st);
+            for(auto& [s, st] : states) sendNotes(s, st, p == &gate ? NoteGate : NotePitch);
         }));
     }
     listeners.push(voices.newListener([this](int&) { structureDirty = true; }));
@@ -120,7 +120,7 @@ void scAliasingBox::setup() {
         sound.push_back(std::move(c));
     }
     // ── Effects (MixerPro's inserts) ─────────────────────────────────────────
-    auto toStages = [this]() { for(auto& [sv, st] : states) if(st.created) updateStages(sv, st); };
+    auto toStages = [this]() { sendAll(); };
     eqOn.set("EQ On", false);                 reg(eqOn, toStages);
     {
         const char* names[5] = {"Low", "Lo Mid", "Mid", "Hi Mid", "High"};
@@ -231,29 +231,58 @@ void scAliasingBox::setup() {
     requireSynthdefs();
 }
 
-void scAliasingBox::sendNotes(ofxSCServer* server, State& st) {
+void scAliasingBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
     if(!st.gate) return;
     auto now = scheduled.inEffectNow();   // not a scheduled send: the notes as they stand now
     const int n = st.builtVoices;
+    // A pitch event must never resend Gate, nor a gate event resend Pitch.
+    // Sound automation uses a separate path and cannot overwrite either one.
+    // Bundle a polyphonic pitch update into one packet with one timetag.
+    bool ready = st.gate->isCreated();
+    for(int i=0;i<n;++i) ready = ready && st.voices[i] && st.voices[i]->isCreated();
+    if(ready && !(fields & NoteRouting)) {
+        ofxOscBundle bundle;
+        if(fields & NotePitch) for(int i=0;i<n;++i) {
+            ofxOscMessage message;
+            message.setAddress("/n_set"); message.addIntArg(st.voices[i]->nodeID);
+            message.addStringArg("pitch"); message.addFloatArg(first(pitch.get(),i,60));
+            bundle.addMessage(message);
+        }
+        if(fields & NoteGate) {
+            ofxOscMessage message;
+            message.setAddress("/n_setn"); message.addIntArg(st.gate->nodeID);
+            message.addStringArg("gate"); message.addIntArg(n);
+            for(int i=0;i<n;++i) message.addFloatArg(first(gate.get(),i,0));
+            bundle.addMessage(message);
+        }
+        server->sendBundle(bundle);
+        return;
+    }
+
     auto vec = [&](const char* name, const std::vector<float>& v, float fallback) {
         std::vector<float> out(n); for(int i=0;i<n;++i) out[i] = first(v,i,fallback);
         st.gate->set(name,out);
     };
-    vec("gate",gate.get(),0); vec("velocity",{1.0f},1); // Gate carries note velocity.
-    st.gate->set("out", st.gates->index);
-    st.gate->set("vel", mod.sourceBus(server,scModulation::SRC_VEL));
-    st.gate->set("rnd", mod.sourceBus(server,scModulation::SRC_RND));
-    st.droneSent=droning() ? 1 : 0;
-    st.gate->set("drone",float(st.droneSent));
-    st.gate->set("vel_sel",0.0f);
-    const int gateBus = gateIn.bus(server);
-    st.gate->set("gate_sel",gateBus >= 0 ? 1.0f : 0.0f);
-    if(gateBus>=0) st.gate->mapan("gate_ar",gateBus,n);
+    if(fields & NoteGate) vec("gate",gate.get(),0);
+    if(fields & NoteRouting) {
+        vec("velocity",{1.0f},1); // Gate carries note velocity.
+        st.gate->set("out", st.gates->index);
+        st.gate->set("vel", mod.sourceBus(server,scModulation::SRC_VEL));
+        st.gate->set("rnd", mod.sourceBus(server,scModulation::SRC_RND));
+        st.droneSent=droning() ? 1 : 0;
+        st.gate->set("drone",float(st.droneSent));
+        st.gate->set("vel_sel",0.0f);
+        const int gateBus = gateIn.bus(server);
+        st.gate->set("gate_sel",gateBus >= 0 ? 1.0f : 0.0f);
+        if(gateBus>=0) st.gate->mapan("gate_ar",gateBus,n);
+    }
     const int bus = pitchIn.bus(server);
     for(int i=0;i<n;++i) if(auto* v=st.voices[i]) {
-        v->set("pitch", first(pitch.get(),i,60));
-        v->set("pitch_sel",bus>=0 ? 1.0f : 0.0f);
-        if(bus>=0) v->mapan("pitch_ar",bus+i,1);
+        if(fields & NotePitch) v->set("pitch", first(pitch.get(),i,60));
+        if(fields & NoteRouting) {
+            v->set("pitch_sel",bus>=0 ? 1.0f : 0.0f);
+            if(bus>=0) v->mapan("pitch_ar",bus+i,1);
+        }
     }
 }
 bool scAliasingBox::soundOn(const std::string& sc) { return soundParam(sc).get()>0.5f; }
@@ -264,10 +293,11 @@ void scAliasingBox::sendSound(ofxSCServer* server, State& st) {
     for(int e=0;e<mod.envCount;++e) if(std::abs(mod.matrix[(scModulation::SRC_ENV+e)*NUM_TARGETS+Amp])>0.0001f) vca=true;
     const float comp=1.0f/std::sqrt(std::max(1.0f,float(st.builtVoices)/st.builtChannels));
     for(int i=0;i<st.builtVoices;++i) if(auto* v=st.voices[i]) {
+        scSynthControlBatch updates(v,server);
         auto set = [&](const std::string& name,float value) {
             auto& sent=st.sent[i];auto it=sent.find(name);
             if(it!=sent.end()&&it->second==value) return;
-            sent[name]=value;v->set(name,value);
+            sent[name]=value;updates.set(name,value);
         };
         for(const auto& c : sound) if(c->sc!="stereo") {
             set(c->sc, (c->sc=="filter_on" || c->sc=="notch_on" || c->sc=="dc_block" || c->sc=="read_bidirectional")
@@ -289,21 +319,29 @@ void scAliasingBox::sendSound(ofxSCServer* server, State& st) {
         set("vca", vca ? 1.0f : 0.0f);
         set("vis",st.vis->index);
         for(int t=0;t<NUM_TARGETS-1;++t) set(names[t],mod.targetBus(server,t)+i);
+        updates.send();
     }
     if(st.spread) {
-        st.spread->set("in",st.audio->index);
-        st.spread->set("voices",st.builtVoices);
+        scSynthControlBatch spread(st.spread,server);
+        spread.set("in",st.audio->index);
+        spread.set("voices",st.builtVoices);
         float width=1;
         for(const auto& c : sound) if(c->sc=="stereo") width=c->p.get();
         std::vector<float> pans(16,0.5f);
         for(int i=0;i<st.builtVoices;++i) pans[i]=ofClamp(0.5f+(st.builtVoices>1 ? (float(i)/(st.builtVoices-1)-0.5f)*width : 0),0.0f,1.0f);
-        st.spread->set("pan",pans); st.spread->set("mpan",mod.targetBus(server,Pan));
+        spread.set("pan",pans); spread.set("mpan",mod.targetBus(server,Pan));
         // Spreader telemetry has its own space after the voice meters.
-        st.spread->set("vis",st.vis->index+scAliasingTableView::PAN);
+        spread.set("vis",st.vis->index+scAliasingTableView::PAN);
+        spread.send();
     }
     updateStages(server,st);
 }
-void scAliasingBox::sendAll() { for(auto& [s,st] : states) { sendNotes(s,st); sendSound(s,st); } }
+void scAliasingBox::sendAll() { soundDirty = true; }
+void scAliasingBox::flushSound() {
+    if(!soundDirty) return;
+    soundDirty = false;
+    for(auto& [s,st] : states) sendSound(s,st);
+}
 void scAliasingBox::buildSynth(ofxSCServer* server) {
     if(!server) return;
     auto& st=states[server]; release(server,st); st.root=new ofxSCGroup(server);
@@ -366,7 +404,10 @@ void scAliasingBox::resetInputBusses(ofxSCServer* s,int) { gateIn.reset(s);pitch
 void scAliasingBox::activate() { for(auto& [s,st]:states) if(st.created) st.root->run(true); }
 void scAliasingBox::deactivate() { for(auto& [s,st]:states) if(st.created) st.root->run(false); }
 void scAliasingBox::setBpm(float v) { bpm=std::max(1.0f,v);mod.setBpm(bpm);sendAll(); }
-void scAliasingBox::resendParametersForNRT() { for(auto& [s,st]:states) for(auto& cache:st.sent) cache.clear(); mod.resend();sendAll(); }
+void scAliasingBox::resendParametersForNRT() {
+    for(auto& [s,st]:states) { for(auto& cache:st.sent)cache.clear();sendNotes(s,st); }
+    mod.resend();sendAll();flushSound();
+}
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
 bool scAliasingBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
     if(!gateIn.handle || !pitchIn.handle) return false;
@@ -499,6 +540,7 @@ void scAliasingBox::update(ofEventArgs&) {
     if(structureDirty) rebuild();
     for(auto& [server,st]:states) if(st.created && st.droneSent!=(droning()?1:0)) sendNotes(server,st);
     mod.showing=show.get();mod.update();
+    flushSound();
     const float now=ofGetElapsedTimef();
     for(auto& [server, st] : states) if(st.created &&
         scFxAwaitingRoute(st.fx, server, [this](int stage){ return stageOn(stage) > 0; },
@@ -757,9 +799,7 @@ void scAliasingBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     controls.send();
 }
 
-void scAliasingBox::sendStageAll(int stage) {
-    for(auto& [server,st]:states) if(st.created && st.fx[stage].synth) sendStage(stage,st.fx[stage].synth,server);
-}
+void scAliasingBox::sendStageAll(int) { sendAll(); }
 
 void scAliasingBox::drawFxTab(float w) {
     const float z = zoom();

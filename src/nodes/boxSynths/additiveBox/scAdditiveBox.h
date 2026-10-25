@@ -203,6 +203,7 @@ private:
         std::vector<ofxSCSynth*> noteWriters;
         std::vector<std::map<std::string,float>> noteSent;
         std::vector<int> noteMapped;
+        int noteDroneSent=-1;
         ofxSCSynth* out = nullptr;
         ofxSCBus* mix = nullptr;          // audio, MAX_OUTPUTS channels, the voices sum here
         ofxSCBus* vis = nullptr;          // control, voices * 2 * DISPLAY_MAX
@@ -266,7 +267,7 @@ private:
     std::map<std::string, float> coreScalars(int v, int u) const;   // pitch, amp, pan offset of a copy
     bool partWanted(int part, int v) const;
     void sendVoice(ofxSCServer* server, int v, const VoiceData& data, bool force);
-    void sendTo(VoiceSC& vs, ofxSCSynth* s, unsigned role, const VoiceData& data,
+    void sendTo(ofxSCServer* server, VoiceSC& vs, ofxSCSynth* s, unsigned role, const VoiceData& data,
                 const std::map<std::string, float>& extra, bool force);
     void syncVoice(ofxSCServer* server, int v, bool force);         // groups, bus, synths (parts on / off)
     void syncVoices(ofxSCServer* server);                           // voice / unison count, parts
@@ -394,6 +395,7 @@ private:
     // Voice
     ofParameter<std::vector<float>> pitch, gate, levels, glide;
     ofParameter<bool> drone;
+    bool gateEvent = false;
     scScheduledInputs noteInputs;    // the timeline's notes, timetagged (Gate, Pitch while published)
     ofParameter<std::vector<int>> trig;
     ofParameter<float> volume;

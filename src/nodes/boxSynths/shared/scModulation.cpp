@@ -144,7 +144,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
             if(scSnapshots::applyingSnapshot()) return;
             generatorMorph.erase(lfoNoise[li].getEscapedName());
             cycleCache[li].values.clear(); transferCache[li].values.clear(); previewCache[li].valid = false;
-            forStates([this, li](ofxSCServer*, ServerState& st){ sendLfo(st, li); }); notify(); };
+            forStates([this, li](ofxSCServer* server, ServerState& st){ sendLfo(server, st, li); }); notify(); };
         lfoSync[li].set(L + "Sync" + X, true);                    host.regB(lfoSync[li], toLfo);
         vec(lfoBeats[li], L + "Beats" + X, (float)(1 << std::min(li, 4)), 0.125f, 512); host.regV(lfoBeats[li], toLfo);
         vec(lfoHz[li], L + "Hz" + X, 1, 0.0f, 50);                host.regV(lfoHz[li], toLfo);   // 0: still
@@ -293,11 +293,11 @@ std::vector<float> scModulation::lfoShFor(int li) const {
     return sh;
 }
 
-void scModulation::sendLfo(ServerState& st, int li) {
+void scModulation::sendLfo(ofxSCServer* server, ServerState& st, int li) {
     if(st.builtVoices != n()) return;
     auto* s = st.lfo[li];
     if(!s) return;
-    scSynthControlBatch controls(s, s->getServer());
+    scSynthControlBatch controls(s, server);
     controls.set("out", st.srcBlock ? st.srcBlock->index + li * busWidth : 0);
     controls.set("freq", lfoHzFor(li));
     controls.set("sh", lfoShFor(li));
@@ -399,7 +399,7 @@ void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
         if(li < lfoCount && !s){
             st.lfoDef[li] = wanted;
             s = new ofxSCSynth(def(wanted), server);
-            scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendLfo(st, li); });
+            scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendLfo(server, st, li); });
         }else if(li >= lfoCount && s){ s->free(); delete s; s = nullptr; }
     }
     for(int e = 0; e < MAX_ENVS; e++){
@@ -543,7 +543,7 @@ void scModulation::setGateBus(ofxSCServer* server, int gateBus) {
 
 void scModulation::resend() {
     forStates([this](ofxSCServer* server, ServerState& st){
-        for(int li = 0; li < MAX_LFOS; li++) sendLfo(st, li);
+        for(int li = 0; li < MAX_LFOS; li++) sendLfo(server, st, li);
         for(int e = 0; e < MAX_ENVS; e++) sendEnv(st, e);
         writeSources(server, st);
         syncRoutes(server, st);

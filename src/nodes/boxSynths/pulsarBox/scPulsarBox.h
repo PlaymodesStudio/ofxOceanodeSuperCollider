@@ -1,3 +1,4 @@
+#include "../../../audio/scSynthControlBatch.h"
 //
 //  scPulsarBox.h
 //  ofxOceanodeSuperCollider
@@ -309,12 +310,12 @@ public:
         listeners.push(pitchP.newListener([this](std::vector<float>&){
             if(scScheduling::isBackendSendSuppressed()) return;
             pitchTouched = true; viewDirty = true;
-            if(noteInputs.isSending()) sendNotes(); else controlsDirty = true;
+            if(noteInputs.isSending()) sendNotes(false); else controlsDirty = true;
         }));
         listeners.push(gate.newListener([this](std::vector<float>& v){
             if(scScheduling::isBackendSendSuppressed()) return;
             viewDirty = true;
-            if(noteInputs.isSending()) sendNotes(); else controlsDirty = true;
+            sendNotes(true);
         }));
 
         // Window (any of these can be published to the node)
@@ -460,7 +461,7 @@ public:
         if(controlsDirty){
             auto inEffect = noteInputs.inEffectNow();   // the notes as they stand now
             controlsDirty = false;
-            for(auto& [server, st] : states){ sendAll(server, false); sendGate(server, st); }
+            for(auto& [server, st] : states) sendAll(server, false);
         }
         if(modDirty){
             modDirty = false;
@@ -738,7 +739,7 @@ private:
         return c;
     }
 
-    void sendAll(ofxSCServer* server, bool force){
+    void sendAll(ofxSCServer* server, bool force, bool includeGate=false){
         auto it = states.find(server);
         if(it == states.end() || !it->second.synth) return;
         auto& st = it->second;
@@ -746,14 +747,16 @@ private:
             auto& bank=entry.second;
             auto controls=synthValues(st,entry.first.first);
             controls["morphgain"]={bank.weight};
+            if(st.outBus>=0)controls["out"]={float(st.outBus)};
+            scSynthControlBatch updates(bank.synth,server);
             for(const auto& [name,values]:controls){
+                if(name=="gate" && !includeGate && !force && bank.synth->isCreated())continue;
                 auto previous=bank.sent.find(name);
                 if(!force && previous!=bank.sent.end() && previous->second==values)continue;
                 bank.sent[name]=values;
-                if(values.size()==1)bank.synth->set(name,double(values[0]));
-                else bank.synth->set(name,values);
+                updates.set(name,values);
             }
-            if(st.outBus>=0)bank.synth->set("out",st.outBus);
+            updates.send();
         }
     }
 
@@ -853,20 +856,22 @@ private:
         st.gateS->createAndRun(0, st.modSources->nodeID, true);   // the head of the sources
     }
     // A scheduled note (inside its timetag): only what a note changes.
-    void sendNotes(){
-        for(auto& [server,st]:states){sendAll(server,false);sendGate(server,st);}
+    void sendNotes(bool gateChanged){
+        auto now = noteInputs.inEffectNow();
+        for(auto& [server,st]:states){sendAll(server,false,gateChanged);if(gateChanged)sendGate(server,st);}
     }
     void sendGate(ofxSCServer* server, ServerState& st){
         if(!st.gateS) return;
+        scSynthControlBatch updates(st.gateS,server);
         const int gb = gateIn.bus(server);
         std::vector<float> g(voices(), 0.0f);   // a cable: only the cable (Gate's own 1 would hold every gate)
         if(gb < 0) for(int v = 0; v < voices(); v++) g[v] = pulsarbox::valueFor(gate.get(), v, 1.0f);
-        st.gateS->set("gate", g);
-        if(gb >= 0){ st.gateS->set("gate_sel", 1.0f); st.gateS->mapan("gate_ar", gb, voices()); }
-        else st.gateS->set("gate_sel", 0.0f);
-        st.gateS->set("out", st.gateBus ? st.gateBus->index : 0);
-        st.gateS->set("rnd", mod.sourceBus(server, scModulation::SRC_RND));
-        st.gateS->set("vel", mod.sourceBus(server, scModulation::SRC_VEL));
+        updates.set("gate", g);
+        if(gb >= 0){ updates.set("gate_sel", 1.0f); st.gateS->mapan("gate_ar", gb, voices()); }
+        else updates.set("gate_sel", 0.0f);
+        updates.set("out", st.gateBus ? st.gateBus->index : 0);
+        updates.set("rnd", mod.sourceBus(server, scModulation::SRC_RND));
+        updates.set("vel", mod.sourceBus(server, scModulation::SRC_VEL));        updates.send();
     }
     void createMod(ofxSCServer* server, ServerState& st){
         if(st.modCreated) return;

@@ -1,3 +1,4 @@
+#include "../../../audio/scControlBusBatch.h"
 #include "../shared/scDroneMode.h"
 //
 //  scGrainBoxPoly.cpp
@@ -699,17 +700,19 @@ void scGrainBoxPoly::sendOffsetParams(Playhead& ph) {
     const bool rel = (timeUnitsCur == 0);
     for(auto& [srv, s] : ph.synths) {
         if(!s) continue;
-        s->set("autotrigbeatdiv", div);
-        s->set("position", pos);
-        s->set("duration", dur);
-        s->set("chance",   chc);
+        scSynthControlBatch controls(s,srv);
+        controls.set("autotrigbeatdiv", div);
+        controls.set("position", pos);
+        controls.set("duration", dur);
+        controls.set("chance",   chc);
         if(!rel) {
             // absolute units: every one of these depends on the region / length
-            s->set("inpoint",  inRelOf(ph));
-            s->set("outpoint", outRelOf(ph));
-            s->set("posjit",   posAmtSend(ph, ph.posJit.get(), nv));
-            s->set("durjit",   durAmtSend(ph, ph.durJit.get(), nv));
+            controls.set("inpoint",  inRelOf(ph));
+            controls.set("outpoint", outRelOf(ph));
+            controls.set("posjit",   posAmtSend(ph, ph.posJit.get(), nv));
+            controls.set("durjit",   durAmtSend(ph, ph.durJit.get(), nv));
         }
+        controls.send();
     }
 }
 
@@ -2099,16 +2102,18 @@ void scGrainBoxPoly::onEditorParameterUnpublished(const std::string& key) {
 }
 void scGrainBoxPoly::sendPitchTo(Playhead& ph, ofxSCServer* srv, ofxSCSynth* s) {
     if(!s) return;
+    scSynthControlBatch controls(s,srv);
     auto inEffect = noteInputs.inEffectNow();   // not a scheduled send: the notes as they stand now
     const int nv = phVoices(ph);
     const int pb = ph.pitchIn.bus(srv);
     if(pb >= 0){
-        s->set("pitchoff", -60.0f);                          // MIDI 60: the sample as recorded
+        controls.set("pitchoff", -60.0f);                          // MIDI 60: the sample as recorded
         s->mapan("pitch", pb, std::min(nv, 128));
     }else{
-        s->set("pitchoff", ph.pitchMode.get() == 1 ? -60.0f : 0.0f);   // MIDI mode: 60 as recorded
-        s->set("pitch", expandF(ph.pitch.get(), nv));        // (a set also unmaps)
+        controls.set("pitchoff", ph.pitchMode.get() == 1 ? -60.0f : 0.0f);   // MIDI mode: 60 as recorded
+        controls.set("pitch", expandF(ph.pitch.get(), nv));        // (a set also unmaps)
     }
+    controls.send();
 }
 void scGrainBoxPoly::applyPitchModeRange(Playhead& ph) {
     const bool midi = ph.pitchMode.get() == 1;
@@ -3235,46 +3240,49 @@ void scGrainBoxPoly::sendAllParams(Playhead& ph) {
     const int nv = phVoices(ph);
     for(auto& [srv, s] : ph.synths) {
         if(!s) continue;
+        scSynthControlBatch controls(s,srv);
         setBufnums(ph, s, srv);
 
-        s->set("dynamicdur",    (int)ph.dynamicDur.get());
-        s->set("trigdur",       (int)ph.trigDur.get());
-        s->set("autotrig",      (int)ph.autoTrig.get());
-        s->set("uniquetrig",    (int)ph.uniqueTrig.get());
-        s->set("uniquejit",     (int)ph.uniqueJit.get());
-        s->set("bpm",           effectiveBpm());
-        s->set("inpoint",       inRelOf(ph));
-        s->set("outpoint",      outRelOf(ph));
+        controls.set("dynamicdur",    (int)ph.dynamicDur.get());
+        controls.set("trigdur",       (int)ph.trigDur.get());
+        controls.set("autotrig",      (int)ph.autoTrig.get());
+        controls.set("uniquetrig",    (int)ph.uniqueTrig.get());
+        controls.set("uniquejit",     (int)ph.uniqueJit.get());
+        controls.set("bpm",           effectiveBpm());
+        controls.set("inpoint",       inRelOf(ph));
+        controls.set("outpoint",      outRelOf(ph));
 
-        s->set("amp",              expandF(ph.amp.get(), nv));
+        controls.set("amp",              expandF(ph.amp.get(), nv));
         sendPitchTo(ph, srv, s);
-        s->set("duration",         durSend(ph, nv));
-        s->set("position",         posSend(ph, nv));
-        s->set("panaz",            panSend(ph, nv));
-        s->set("reverse",          expandF(ph.reverse.get(), nv));
+        controls.set("duration",         durSend(ph, nv));
+        controls.set("position",         posSend(ph, nv));
+        controls.set("panaz",            panSend(ph, nv));
+        controls.set("reverse",          expandF(ph.reverse.get(), nv));
         setScaleArgs(ph, s);
         setLiveArgs(ph, s);
-        s->set("vis",              visOn ? 1.0f : 0.0f);
-        s->set("autotrigbeatdiv",  divSend(ph, nv));
-        s->set("trigphase",        trigPhaseSend(ph, nv));
-        s->set("maxoverlap",       (float)std::max(0, ph.maxGrains.get()));
-        s->set("monotrig",         ph.monoTrig.get() ? 1.0f : 0.0f);
-        s->set("delayglide",       ph.delayGlide.get() * 0.001f);
-        s->set("overlap",          ph.overlap.get());
-        s->set("chance",           withOffset(ph.chance.get(), nv, gChanceP.get()));
-        s->set("posjit",           posAmtSend(ph, ph.posJit.get(), nv));
-        s->set("pitchjit",         expandF(ph.pitchJit.get(), nv));
-        s->set("durjit",           durAmtSend(ph, ph.durJit.get(), nv));
-        s->set("ampjit",           expandF(ph.ampJit.get(), nv));
-        s->set("panazjit",         expandF(ph.panAzJit.get(), nv));
-        s->set("levels",           expandF(ph.levels.get(), phChannels(ph)));   // per speaker
+        controls.set("vis",              visOn ? 1.0f : 0.0f);
+        controls.set("autotrigbeatdiv",  divSend(ph, nv));
+        controls.set("trigphase",        trigPhaseSend(ph, nv));
+        controls.set("maxoverlap",       (float)std::max(0, ph.maxGrains.get()));
+        controls.set("monotrig",         ph.monoTrig.get() ? 1.0f : 0.0f);
+        controls.set("delayglide",       ph.delayGlide.get() * 0.001f);
+        controls.set("overlap",          ph.overlap.get());
+        controls.set("chance",           withOffset(ph.chance.get(), nv, gChanceP.get()));
+        controls.set("posjit",           posAmtSend(ph, ph.posJit.get(), nv));
+        controls.set("pitchjit",         expandF(ph.pitchJit.get(), nv));
+        controls.set("durjit",           durAmtSend(ph, ph.durJit.get(), nv));
+        controls.set("ampjit",           expandF(ph.ampJit.get(), nv));
+        controls.set("panazjit",         expandF(ph.panAzJit.get(), nv));
+        controls.set("levels",           expandF(ph.levels.get(), phChannels(ph)));   // per speaker
 
         const bool filtered = synthIsFiltered(s);
-        s->set("latchamp",      (int)ph.latchAmp.get());
+        controls.set("latchamp",      (int)ph.latchAmp.get());
         setMixArgs(ph, s);
         if(filtered) setFilterArgs(ph, s);
         setCtlModArgs(ph, s, srv);
+        controls.send();
         writeMod(ph, srv);
+        if(ph.gateIn.bus(srv)<0)writeGate(ph,srv);
     }
 }
 
@@ -6333,6 +6341,7 @@ void scGrainBoxPoly::ensureModResources(Playhead& ph, ofxSCServer* srv) {
             b = nullptr;
         }
         if(!b) {
+            if(&b==&M.vox)M.gateInitialized=false;
             b = new ofxSCBus(RATE_CONTROL, channels, srv);
             if(!gbpCtlBusIsLive(srv, b)) { b->free(); delete b; b = nullptr; }
         }
@@ -6420,6 +6429,7 @@ void scGrainBoxPoly::writeMod(Playhead& ph, ofxSCServer* srv) {
     if(it == ph.modSC.end() || !it->second.hdr) return;
     auto inEffect = noteInputs.inEffectNow();   // the gates as they stand now
     auto& M = it->second;
+    scControlBusBatch buses(srv);
     const auto& m = *ph.mod;
     const int nv = phVoices(ph);
     // header +8..213 (scGrainBoxPoly.scd)
@@ -6439,36 +6449,37 @@ void scGrainBoxPoly::writeMod(Playhead& ph, ofxSCServer* srv) {
         for(int t = 0; t < MOD_TARGETS; t++)
             h.push_back(used ? m.matrix[sc * MOD_TARGETS + t] * kModRange[t] : 0.0f);
     }
-    gbpSetn(srv, M.hdr->index + 8, h);
-    gbpSetn(srv, M.hdr->index + 215, {(float)nv});
+    buses.set(M.hdr->index + 8, h);
+    buses.set(M.hdr->index + 215, {(float)nv});
     std::vector<float> glides;
     for(int k = 0; k < MOD_LFOS; k++) glides.push_back(m.lfoShGlide(k));
-    gbpSetn(srv, M.hdr->index + 216, glides);   // S&H glide (s)
+    buses.set(M.hdr->index + 216, glides);   // S&H glide (s)
     std::vector<float> noiseHdr;                 // +224 noise on, +232 Noise Scale
     for(int k = 0; k < MOD_LFOS; k++) noiseHdr.push_back(k < m.lfoCount && m.lfoIsNoise(k) ? 1.0f : 0.0f);
     for(int k = 0; k < MOD_LFOS; k++) noiseHdr.push_back(m.lfoNoiseScale(k));
-    gbpSetn(srv, M.hdr->index + 224, noiseHdr);
+    buses.set(M.hdr->index + 224, noiseHdr);
     std::vector<float> curves;                   // +248 the noise curves' buffers
     for(int k = 0; k < MOD_LFOS; k++) curves.push_back(M.tables[MOD_LFOS + k] ? (float)M.tables[MOD_LFOS + k]->index : 0.0f);
-    gbpSetn(srv, M.hdr->index + 248, curves);
-    if(!ph.modOn) gbpSetn(srv, M.hdr->index + 214, {0.0f});   // no voice writes the Cut modulation
+    buses.set(M.hdr->index + 248, curves);
+    if(!ph.modOn) buses.set(M.hdr->index + 214, {0.0f});   // no voice writes the Cut modulation
     // per playhead: Ext 1-8, the LFOs' phase offsets, the Gate
     if(ph.modOn && M.vox && M.voxCap >= nv) {
         for(int k = 0; k < MOD_EXTS; k++) {
             auto v = m.extValues(k);
             v.resize(nv, v.empty() ? 0.0f : v.back());
-            gbpSetn(srv, M.vox->index + k * M.voxCap, v);
+            buses.set(M.vox->index + k * M.voxCap, v);
         }
         for(int k = 0; k < MOD_LFOS; k++) {
             auto v = m.lfoVoiceOffsets(k);
             v.resize(nv, 0.0f);
-            gbpSetn(srv, M.vox->index + (MOD_EXTS + k) * M.voxCap, v);
+            buses.set(M.vox->index + (MOD_EXTS + k) * M.voxCap, v);
         }
         int ampSlot = MOD_EXTS + MOD_LFOS + 1;
         for(auto* q : {&ph.ampA,&ph.ampD,&ph.ampS,&ph.ampR,&ph.ampCA,&ph.ampCD,&ph.ampCR})
-            gbpSetn(srv, M.vox->index + ampSlot++ * M.voxCap, m.voiceValues(*q));
-        if(ph.gateIn.bus(srv) < 0) writeGate(ph, srv);   // (a cable: copied there)
+            buses.set(M.vox->index + ampSlot++ * M.voxCap, m.voiceValues(*q));
+        if(!M.gateInitialized && ph.gateIn.bus(srv) < 0) writeGate(ph, srv);   // (a cable: copied there)
     }
+    buses.send();
     // the LFOs' cycles
     for(int k = 0; k < 2 * MOD_LFOS; k++) {
         auto* b = M.tables[k];
@@ -6487,11 +6498,13 @@ void scGrainBoxPoly::writeMod(Playhead& ph, ofxSCServer* srv) {
     // the control synth's LFO controls
     auto c = ph.synths.find(srv);
     if(c != ph.synths.end() && c->second) {
+        scSynthControlBatch controls(c->second,srv);
         for(int k = 0; k < MOD_LFOS; k++) {
-            c->second->set("lfofreq" + ofToString(k), m.lfoRate(k, 0));
-            c->second->set("lfoinit" + ofToString(k), m.lfoInitPhase(k));
+            controls.set("lfofreq" + ofToString(k), m.lfoRate(k, 0));
+            controls.set("lfoinit" + ofToString(k), m.lfoInitPhase(k));
         }
-        c->second->set("lforeset", (float)m.resets());
+        controls.set("lforeset", (float)m.resets());
+        controls.send();
     }
 }
 
@@ -6502,6 +6515,7 @@ void scGrainBoxPoly::writeGate(Playhead& ph, ofxSCServer* srv) {
     const int nv = phVoices(ph);
     if(it->second.voxCap < nv) return;
     gbpSetn(srv, it->second.vox->index + (MOD_EXTS + MOD_LFOS) * it->second.voxCap, expandF(ph.gate.get(), nv));
+    it->second.gateInitialized = true;
 }
 
 // Per frame: the tempo, the voice count, on / off (the voices change variant),

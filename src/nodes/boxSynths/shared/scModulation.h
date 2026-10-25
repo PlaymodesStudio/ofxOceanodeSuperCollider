@@ -314,7 +314,7 @@ private:
     bool ownsKey(const std::string& key) const;
     void forStates(const std::function<void(ofxSCServer*, ServerState&)>& f);
     void sendVec(ofxSCSynth* s, const std::string& name, const std::vector<float>& v);
-    void sendLfo(ServerState& st, int li);
+    void sendLfo(ofxSCServer* server, ServerState& st, int li);
     void sendEnv(ServerState& st, int e);
     void updateSources(ofxSCServer* server, ServerState& st);
     void syncRoutes(ofxSCServer* server, ServerState& st);

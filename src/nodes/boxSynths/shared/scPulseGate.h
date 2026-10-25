@@ -137,11 +137,13 @@ public:
         auto it = synths.find(server);
         if(it == synths.end() || !it->second.synth) return;
         auto* x = it->second.synth;
+        scSynthControlBatch controls(x, server);
         std::vector<float> held(16, 0.0f);
         for(int i = 0; i < voices && i < 16; ++i) held[i] = gate.empty() ? 0.0f : gate[i % gate.size()];
-        x->set("enable", held);
-        x->set("free", follow.get() ? 0.0f : 1.0f);
-        x->set("enable_sel", gateBus >= 0 ? 1.0f : 0.0f);
+        controls.set("enable", held);
+        controls.set("free", follow.get() ? 0.0f : 1.0f);
+        controls.set("enable_sel", gateBus >= 0 ? 1.0f : 0.0f);
+        controls.send();
         if(gateBus >= 0) x->mapan("enable_ar", gateBus, voices);
     }
 
