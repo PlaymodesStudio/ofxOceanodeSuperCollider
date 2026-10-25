@@ -54,7 +54,8 @@ inline uint64_t fingerprint(const Patch& patch) {
     return hash;
 }
 // The fingerprints prevent a different/reordered bank from inheriting these
-// names. The historical correspondence of the upstream PDF remains unverified.
+// names. The bundled catalogue is rebuilt from parameter-matched SysEx;
+// entries without an exact source match are explicitly labelled Unverified.
 inline std::vector<PresetName> loadNames(const std::string& path,const std::vector<Patch>& patches) {
     std::vector<PresetName> names(patches.size());
     std::ifstream file(path);std::string line;

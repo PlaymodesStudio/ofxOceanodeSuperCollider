@@ -1,0 +1,3139 @@
+{
+  "version": 1,
+  "archive_url": "https://ccrma.stanford.edu/~braun/assets/DX7_AllTheWeb.zip",
+  "archive_sha256": "c2c47bd1aa29ab07bdf5e6ec8a25faa1b10e06ea0bcf57f6a83d8363051ed6ef",
+  "afx_sha256": "b82557b41509c7f860fbbdda258a63d44c39c994336a21620ca49ece1a3dcee3",
+  "notes": "Bank and voice names recovered from parameter matches to packed DX7 SysEx. Values are masked/clamped to the existing AFX field ranges. AFX sound data and indexes are unchanged. Three unmatched patches retain numbered unverified labels.",
+  "banks": [
+    {
+      "start": 0,
+      "bank": "1ST_DEMO",
+      "source": "DX7_AllTheWeb/Dave Benson/1ST_DEMO.SYX",
+      "afx_sha256": "3de89c8cd41df754eac45df042b5b9dcaa42e665c8f446f1ed42537f8d0308e7"
+    },
+    {
+      "start": 32,
+      "bank": "216-A",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 14 TX216/216-A.SYX",
+      "afx_sha256": "ca9a34fac5b2ffc8c00da8c97e83b27aca4b0aee524ef1f6a48e4d2edc2965b3"
+    },
+    {
+      "start": 64,
+      "bank": "216-D",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 14 TX216/216-D.SYX",
+      "afx_sha256": "61448d77ab2c94b0b67db08aea739c4bbd565eb830db873e07f6da73e0681ac0"
+    },
+    {
+      "start": 96,
+      "bank": "216-E",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 14 TX216/216-E.SYX",
+      "afx_sha256": "40914b7d05b84fe93369f1f392c95773ae3f61b3495b85ae5c3115f9d26e687b"
+    },
+    {
+      "start": 128,
+      "bank": "216-J",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 14 TX216/216-J.SYX",
+      "afx_sha256": "53010719e92d7a85a4a1b593e19d37460dfaaf9044cb63f0a8536e656b7f5d3a"
+    },
+    {
+      "start": 160,
+      "bank": "216-K",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 14 TX216/216-K.SYX",
+      "afx_sha256": "a704189108390f782c7b07e7f4ca6be040a508f13e68495fd6eb32a57d1cd7df"
+    },
+    {
+      "start": 192,
+      "bank": "816-C",
+      "source": "DX7_AllTheWeb/Dave Benson/816-C.SYX",
+      "afx_sha256": "a5102a63409b1376706fc6b41c16fd05c6907d354f004dd49cf2ceca3b24d9b0"
+    },
+    {
+      "start": 224,
+      "bank": "816-D",
+      "source": "DX7_AllTheWeb/Dave Benson/816-D.SYX",
+      "afx_sha256": "92d03c8d11a6a3f2e92625a8e26e74fd966ae85e56178db805d3454bb1d4a9fd"
+    },
+    {
+      "start": 256,
+      "bank": "816-G",
+      "source": "DX7_AllTheWeb/Dave Benson/816-G.SYX",
+      "afx_sha256": "c867eaa009a005f2bca2d618d80c060feaad066ca4e4afa1f48e07d3231909ca"
+    },
+    {
+      "start": 288,
+      "bank": "816-H",
+      "source": "DX7_AllTheWeb/Dave Benson/816-H.SYX",
+      "afx_sha256": "fb2926181c25c7b95a64723b33e33ce42f33124a51d378714189272fd07e74d6"
+    },
+    {
+      "start": 320,
+      "bank": "ARPCOMBO",
+      "source": "DX7_AllTheWeb/Dave Benson/ARPCOMBO.SYX",
+      "afx_sha256": "a86fcba1fb4f16fea2b5a8651b0085228a2c26c77c51a388b7e3da1465b17551"
+    },
+    {
+      "start": 352,
+      "bank": "BANGERS",
+      "source": "DX7_AllTheWeb/Dave Benson/BANGERS.SYX",
+      "afx_sha256": "34c2c7e21de196af9109c6b8cd5c1474cb037ac99159e87e1c0895075a243dec"
+    },
+    {
+      "start": 384,
+      "bank": "BANKNO1",
+      "source": "DX7_AllTheWeb/Dave Benson/BANKNO1.SYX",
+      "afx_sha256": "4ebb11250a49c9812888c4aa8a9e6083b8b7dcdeb09d0c162ff8c4e3fde2aad9"
+    },
+    {
+      "start": 416,
+      "bank": "BASS1",
+      "source": "DX7_AllTheWeb/Dave Benson/BASS1.SYX",
+      "afx_sha256": "5d3a258534870b4e9cd97d90a83164f6313e85ef9cff2daf41f6318285f3241c"
+    },
+    {
+      "start": 448,
+      "bank": "BASS_1",
+      "source": "DX7_AllTheWeb/Dave Benson/BASS_1.SYX",
+      "afx_sha256": "d7ade1e7d1c91bc6e87b38e5f7a6483ec3a34773b2e15c824ff01f8be881672b"
+    },
+    {
+      "start": 480,
+      "bank": "BASS_2",
+      "source": "DX7_AllTheWeb/Dave Benson/BASS_2.SYX",
+      "afx_sha256": "295d7cfbd902599bcdbc19e6ca16572df4c16d70459c20570766dd929b9edc24"
+    },
+    {
+      "start": 512,
+      "bank": "BASS_3",
+      "source": "DX7_AllTheWeb/Dave Benson/BASS_3.SYX",
+      "afx_sha256": "c43a6ea62cb17835dbaa44ed65d03d2b18dd013823e43567c7dfdaa25ac2038b"
+    },
+    {
+      "start": 544,
+      "bank": "BBANK3",
+      "source": "DX7_AllTheWeb/Dave Benson/BBANK3.SYX",
+      "afx_sha256": "e32aa371eefac9b35d2ebfddad30e9ab3782eb7e47bd4faad8877856dd3ae6bf"
+    },
+    {
+      "start": 576,
+      "bank": "BBANK4",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 16 Banks/BBANK4.SYX",
+      "afx_sha256": "142094f68073a40a8eb0e525565e48441dc4f8129434c342d65b947dfb28511f",
+      "slots": [
+        2,
+        5,
+        11,
+        13,
+        14,
+        16,
+        18,
+        20,
+        21,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        6,
+        0,
+        12,
+        8,
+        15,
+        19,
+        3,
+        22,
+        9,
+        7,
+        4,
+        1,
+        10,
+        17
+      ]
+    },
+    {
+      "start": 608,
+      "bank": "BELL1",
+      "source": "DX7_AllTheWeb/Dave Benson/BELL1.SYX",
+      "afx_sha256": "ba184dab9d38903d2c0b8fb5de119baa6a851ecb55a9b3aa00b031e3fab78ef4"
+    },
+    {
+      "start": 640,
+      "bank": "BELL_1",
+      "source": "DX7_AllTheWeb/Dave Benson/BELL_1.SYX",
+      "afx_sha256": "76a752a956a88bd28a3aa78538665bd4ef4903183b5bc3fd086d4ad61043637f"
+    },
+    {
+      "start": 672,
+      "bank": "BELL_2",
+      "source": "DX7_AllTheWeb/Dave Benson/BELL_2.SYX",
+      "afx_sha256": "7ea982675cae37f431fbb252f1898ad8ab65ecc8566d981a36637cb810313a21"
+    },
+    {
+      "start": 704,
+      "bank": "BELL_3",
+      "source": "DX7_AllTheWeb/Dave Benson/BELL_3.SYX",
+      "afx_sha256": "109c1a132c7b9de7fdcfff457e9bb2c3a8520afb973e7f555f16cc574e40bdf8"
+    },
+    {
+      "start": 736,
+      "bank": "BESTBANK",
+      "source": "DX7_AllTheWeb/Dave Benson/BESTBANK.SYX",
+      "afx_sha256": "e723b93b40c2e4535869e04942d4757c0b80829822ec8b8aeb64879624882924"
+    },
+    {
+      "start": 768,
+      "bank": "BRASS1",
+      "source": "DX7_AllTheWeb/Dave Benson/BRASS1.SYX",
+      "afx_sha256": "848df9cd25eb0b841891b8fc20c93a98013271b9ebb80e11d8c87fb092468ade"
+    },
+    {
+      "start": 800,
+      "bank": "CLAV_1",
+      "source": "DX7_AllTheWeb/Dave Benson/CLAV_1.SYX",
+      "afx_sha256": "f0d4ef67c30eaa0ffc9067b195f5017095ab2dc91b5f95191c343607552bb900"
+    },
+    {
+      "start": 832,
+      "bank": "CLAV_2",
+      "source": "DX7_AllTheWeb/Dave Benson/CLAV_2.SYX",
+      "afx_sha256": "87ab4f5af61f748627280a9bd56f3d3aec4cc0e14022dde8a7b4df178e5713ac"
+    },
+    {
+      "start": 864,
+      "bank": "CM3",
+      "source": "DX7_AllTheWeb/Dave Benson/CM3.SYX",
+      "afx_sha256": "d7b59fa9c497458861a63ff1f68e82da1eaba2e4d120d84e0dbd5f4c5c36f52f"
+    },
+    {
+      "start": 896,
+      "bank": "CM5",
+      "source": "DX7_AllTheWeb/Dave Benson/CM5.SYX",
+      "afx_sha256": "0f6c860486b4a761083d0435887cfa5f762d804c0b59461ef18208f902fe84c9"
+    },
+    {
+      "start": 928,
+      "bank": "COMBOS_1",
+      "source": "DX7_AllTheWeb/Dave Benson/COMBOS_1.SYX",
+      "afx_sha256": "944955bc54a8cc21a5ca4c538f0bc71712e27ed209ac0145a771b9d58e131a8d"
+    },
+    {
+      "start": 960,
+      "bank": "DR1",
+      "source": "DX7_AllTheWeb/Dave Benson/DR1.SYX",
+      "afx_sha256": "d8e20b11ad9c2bcce3277dfa7a580d8e6157399ac68592083d25922908e525bd"
+    },
+    {
+      "start": 992,
+      "bank": "DR2",
+      "source": "DX7_AllTheWeb/Dave Benson/DR2.SYX",
+      "afx_sha256": "36ea07bb5d15a201bedaf558bb1a1dcbf17e798257b725c19afac2ce3f4a2cbc"
+    },
+    {
+      "start": 1024,
+      "bank": "DR3",
+      "source": "DX7_AllTheWeb/Dave Benson/DR3.SYX",
+      "afx_sha256": "b730b9aa6afad20833205b11870ed9e775aba397560576e74e923366bc5a8e2e"
+    },
+    {
+      "start": 1056,
+      "bank": "DX-BNK01",
+      "source": "DX7_AllTheWeb/Dave Benson/DX-BNK01.SYX",
+      "afx_sha256": "2b4f33ecf6614f35aafe5081ab34f8c6b77c85fc1b1debe6c2ed4e22d81f5fdf"
+    },
+    {
+      "start": 1088,
+      "bank": "DX-BNK02",
+      "source": "DX7_AllTheWeb/Dave Benson/DX-BNK02.SYX",
+      "afx_sha256": "f25cf8f23eca2089561bb70fcf4e2eeaa5b13b2e71249f9826cd6cf569c0777c"
+    },
+    {
+      "start": 1120,
+      "bank": "DX-BNK03",
+      "source": "DX7_AllTheWeb/Dave Benson/DX-BNK03.SYX",
+      "afx_sha256": "ca731c69ea81574f58079eba64594ee466aa3b42f43bc8c5bdafcd07b5afa3b8"
+    },
+    {
+      "start": 1152,
+      "bank": "DX-BNK12",
+      "source": "DX7_AllTheWeb/Dave Benson/DX-BNK12.SYX",
+      "afx_sha256": "5e20463c2d0f9d3cba7ff62be4e470628152399e54a6512651278c242dd49d77"
+    },
+    {
+      "start": 1184,
+      "bank": "DX-BNK13",
+      "source": "DX7_AllTheWeb/Dave Benson/DX-BNK13.SYX",
+      "afx_sha256": "8289adc9d7ccf8f9cd8320fa0c570a4b5a1d5d1d36f568fad644ed8c26eb4195"
+    },
+    {
+      "start": 1216,
+      "bank": "DX-BNK14",
+      "source": "DX7_AllTheWeb/Dave Benson/DX-BNK14.SYX",
+      "afx_sha256": "ffcb5f23967ea4cbdb8d2f6a758ed145d73fc11bd6d29d7dec699dd1f7ab3403"
+    },
+    {
+      "start": 1248,
+      "bank": "DX-BNK15",
+      "source": "DX7_AllTheWeb/Dave Benson/DX-BNK15.SYX",
+      "afx_sha256": "6cb1f5f77cb942653ac4411539830be8e58c5b4d32f159f1f61f07037bf0aab6"
+    },
+    {
+      "start": 1280,
+      "bank": "DX-BNK16",
+      "source": "DX7_AllTheWeb/Dave Benson/DX-BNK16.SYX",
+      "afx_sha256": "29eeb29d99f71f79970a2feb21cffea5c1a55805b38cb89c34a1563d86eca842"
+    },
+    {
+      "start": 1312,
+      "bank": "DX55",
+      "source": "DX7_AllTheWeb/Dave Benson/DX55.SYX",
+      "afx_sha256": "68c66fcd358c41b94a7a1aae9334468f81b63667457d50cebb59fb2426bceeba"
+    },
+    {
+      "start": 1344,
+      "bank": "DX56",
+      "source": "DX7_AllTheWeb/Dave Benson/DX56.SYX",
+      "afx_sha256": "ecafd2af928f8abd3d7cd1472cd339e788aec600429f51ea5a1806f13a535d7c"
+    },
+    {
+      "start": 1376,
+      "bank": "DX59",
+      "source": "DX7_AllTheWeb/Dave Benson/DX59.SYX",
+      "afx_sha256": "3e4045e9d0b9220bbcfd4cf1151004a8a384f2a4e99eb4af2ced5ffe43ad7848"
+    },
+    {
+      "start": 1408,
+      "bank": "DX66",
+      "source": "DX7_AllTheWeb/Dave Benson/DX66.SYX",
+      "afx_sha256": "363eb5526408b6ca006a5fe0df4d31d565a808eefac09d3c5a129e7dd55dc689"
+    },
+    {
+      "start": 1440,
+      "bank": "DX67",
+      "source": "DX7_AllTheWeb/Dave Benson/DX67.SYX",
+      "afx_sha256": "06ec24e16fbe186d7757b9ae23feff86dcbbe60c71e6e21962b4afbecdf4ba04"
+    },
+    {
+      "start": 1472,
+      "bank": "DX68",
+      "source": "DX7_AllTheWeb/Dave Benson/DX68.SYX",
+      "afx_sha256": "749818c2a8786ab00dc202d817e579262032b191d454c649e5b14041c57b7464"
+    },
+    {
+      "start": 1504,
+      "bank": "DX71",
+      "source": "DX7_AllTheWeb/Dave Benson/DX71.SYX",
+      "afx_sha256": "36eba616607786765efc727b4ee466dce3f754ee856740ba8cdc0097ebcb8959"
+    },
+    {
+      "start": 1536,
+      "bank": "DX75",
+      "source": "DX7_AllTheWeb/Dave Benson/DX75.SYX",
+      "afx_sha256": "c0a84444c1ab4b7501fc1bf515e3e5a9191693cc4b40d35c60b2ecd7a0801d44"
+    },
+    {
+      "start": 1568,
+      "bank": "DX76",
+      "source": "DX7_AllTheWeb/Dave Benson/DX76.SYX",
+      "afx_sha256": "c433d048cc27e9d7a0e9f2e11101700b50fdc32814f04708eb8af8ea924de4fc"
+    },
+    {
+      "start": 1600,
+      "bank": "DX77",
+      "source": "DX7_AllTheWeb/Dave Benson/DX77.SYX",
+      "afx_sha256": "35475e343ab3215c1fe0cbf8280417fd9d221f031efd0aa8083ae5e2c18508a9"
+    },
+    {
+      "start": 1632,
+      "bank": "DX78",
+      "source": "DX7_AllTheWeb/Dave Benson/DX78.SYX",
+      "afx_sha256": "4e815e606cd5cb25c7fcfecf33906be4bbb82204a5e97cf3831b6eac64ceb4c8"
+    },
+    {
+      "start": 1664,
+      "bank": "DX79",
+      "source": "DX7_AllTheWeb/Dave Benson/DX79.SYX",
+      "afx_sha256": "73d6afe95a849bd68861e5cae8d6bccb93563be30694fc4f6af84aaf95a19f3c"
+    },
+    {
+      "start": 1696,
+      "bank": "DX7MD8",
+      "source": "DX7_AllTheWeb/Dave Benson/DX7MD8.SYX",
+      "afx_sha256": "c83e8d9d500e04347c1544f2d4559f396e7f41896d979662fdda79f8757a5a44"
+    },
+    {
+      "start": 1728,
+      "bank": "DX7MD9",
+      "source": "DX7_AllTheWeb/Dave Benson/DX7MD9.SYX",
+      "afx_sha256": "d8caca548f5f56a1ffab3138a43d22a77c67b047923bdc3ea5ed4a09e4652fbb"
+    },
+    {
+      "start": 1760,
+      "bank": "DX7PAUL",
+      "source": "DX7_AllTheWeb/Dave Benson/DX7PAUL.SYX",
+      "afx_sha256": "9e6ea611cbf3552139262c464793867f56f8e8bc52f5221768f03f9c19dedf2c"
+    },
+    {
+      "start": 1792,
+      "bank": "DX80",
+      "source": "DX7_AllTheWeb/Dave Benson/DX80.SYX",
+      "afx_sha256": "5879d44fc40f3838c0042753c7c68ec3bd9bb54cc950db0e05e18c48cf53bb69"
+    },
+    {
+      "start": 1824,
+      "bank": "ANALOG1",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 5 Synth/Analog/ANALOG1.SYX",
+      "afx_sha256": "720a50d0c493803f9fc398a1b70ecdf65e6bbaaf4cb7f6352d07521e2cb552b6"
+    },
+    {
+      "start": 1856,
+      "bank": "ANALOG3",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 5 Synth/Analog/ANALOG3.SYX",
+      "afx_sha256": "9cf900b5cc3929cefdec1002c724fa9d8d0891de8bd835b6bfe817ca014171a3"
+    },
+    {
+      "start": 1888,
+      "bank": "ANALOG_1",
+      "source": "DX7_AllTheWeb/Jack Deckard/analog_1.syx",
+      "afx_sha256": "a447db7e5dbda43d0f0bc86575b69cdb85005c1dbef23e43f0dda11e17b82e7e"
+    },
+    {
+      "start": 1920,
+      "bank": "ANALOG_2",
+      "source": "DX7_AllTheWeb/Jack Deckard/analog_2.syx",
+      "afx_sha256": "6c76b1221bdcc74ade8bc01ddf5eaa478f2cbae399d50365b1059372b33518ad"
+    },
+    {
+      "start": 1952,
+      "bank": "ANALOG_3",
+      "source": "DX7_AllTheWeb/Jack Deckard/analog_3.syx",
+      "afx_sha256": "c0618f1f1877544680f7a5b60f3d5ef39c0fbe51d3edbf2ced2168f04e54e17c"
+    },
+    {
+      "start": 1984,
+      "bank": "ANGELO",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 26 A-Z/Misc A-C/ANGELO.SYX",
+      "afx_sha256": "67d1b85a714517914acf101ac6a52bc64c68b14171a94bb1e9fac319d4cdb262"
+    },
+    {
+      "start": 2016,
+      "bank": "ATSU_4",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 26 A-Z/Misc A-C/ATSU_4.SYX",
+      "afx_sha256": "f46a04a1fd8b73a56321cd61031db8cfb41469b3c1db8abd2cc6f96f7bcebc62"
+    },
+    {
+      "start": 2048,
+      "bank": "ATSU_5",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 26 A-Z/Misc A-C/ATSU_5.SYX",
+      "afx_sha256": "df0311ab536daae4e72c1888aea60c454c241bfd66ae3bb69d00bbd736fa9ba6"
+    },
+    {
+      "start": 2080,
+      "bank": "B1",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 26 A-Z/Misc A-C/B1.syx",
+      "afx_sha256": "779f70524c7d1449e8e7b0a8ae0f13b07a8b703a1f6ade4537239b2ab2837e24"
+    },
+    {
+      "start": 2112,
+      "bank": "B3",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 26 A-Z/Misc A-C/B3.syx",
+      "afx_sha256": "e55ebed5c2e6bd2e5bc2f595fe9ce7c427119c94fbd1985d7b8512d73eb3590c"
+    },
+    {
+      "start": 2144,
+      "bank": "PAT 05",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Christopher Pardy (Pat)/pat 05.SYX",
+      "afx_sha256": "1a464f6c51a56364e1fb42374e07693c54780f4879e3c549f4ee801e528c53db"
+    },
+    {
+      "start": 2176,
+      "bank": "PAT 07",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Christopher Pardy (Pat)/pat 07.SYX",
+      "afx_sha256": "6376c46ebec7d7987379069ca53d78c59ee01f7ce7428e3f7ccea3e7efea6ac6"
+    },
+    {
+      "start": 2208,
+      "bank": "BANK0023",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 16 Banks/BANK0023.SYX",
+      "afx_sha256": "8b43990ddd9860f1f9436b2b9678c32539e6bf2cae4fc5fdd63393ccbd989b6d"
+    },
+    {
+      "start": 2240,
+      "bank": "PAT 10",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Christopher Pardy (Pat)/pat 10.SYX",
+      "afx_sha256": "ee111d85129c3b9c37babcc6345014cbcc136afe56a91573adad8e90ed0e7c7d"
+    },
+    {
+      "start": 2272,
+      "bank": "BANK0043",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 16 Banks/Bank0043.syx",
+      "afx_sha256": "9d84e79ec928dc629936d972497b4423ea05b1ac76a5a59f82cab444959195a1",
+      "unverified_slots": [
+        0
+      ]
+    },
+    {
+      "start": 2304,
+      "bank": "BANK0054",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 16 Banks/Bank0054.syx",
+      "afx_sha256": "2b35839c179a1e129c60e28b1708a19b6f6f4154a427f68b713a1f05b47f41bc",
+      "overrides": [
+        {
+          "slot": 5,
+          "source": "DX7_AllTheWeb/Aminet/63.syx",
+          "source_slot": 18
+        },
+        {
+          "slot": 6,
+          "source": "DX7_AllTheWeb/Aminet/8.syx",
+          "source_slot": 6
+        },
+        {
+          "slot": 8,
+          "source": "DX7_AllTheWeb/Aminet/121.syx",
+          "source_slot": 6
+        }
+      ],
+      "unverified_slots": [
+        0,
+        1
+      ]
+    },
+    {
+      "start": 2336,
+      "bank": "BANK08",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/!Unsorted/BANK08.SYX",
+      "afx_sha256": "0259384716bc66840544f85303b967496d0548930217ff4beac641ef1506a8ba"
+    },
+    {
+      "start": 2368,
+      "bank": "PAT 20",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Christopher Pardy (Pat)/pat 20.SYX",
+      "afx_sha256": "37fac56132e46e2ffed3d67ec97efca4d893c4f12ea40cdd49dfe43371660b8d"
+    },
+    {
+      "start": 2400,
+      "bank": "PAT 21",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Christopher Pardy (Pat)/pat 21.SYX",
+      "afx_sha256": "55a25e9bb444f97bea173e42800b3b3abd32d08fb450009e6d7afc68b81b15aa"
+    },
+    {
+      "start": 2432,
+      "bank": "BANK18",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/!Unsorted/BANK18.SYX",
+      "afx_sha256": "fde4be3f9b16b386ee69ba5dcda150f1d5c3199516cc8c605c8dcce929fcb04d"
+    },
+    {
+      "start": 2464,
+      "bank": "BASS_02",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_02.syx",
+      "afx_sha256": "15a1a69e15023a2158da24bb42e8bf944737ca1b8107e344134cba7b1a9082d0"
+    },
+    {
+      "start": 2496,
+      "bank": "BASS_03",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_03.syx",
+      "afx_sha256": "33b5a8c49f441d155b253d5f9a738c98c8a84b17d097a56550518f24d37046f3"
+    },
+    {
+      "start": 2528,
+      "bank": "BASS_04",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_04.syx",
+      "afx_sha256": "a49c804dc2e1b44e73a24ef7741e46da7c151bab5c2dca15e8ab9480fe72827a"
+    },
+    {
+      "start": 2560,
+      "bank": "BASS_05",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_05.syx",
+      "afx_sha256": "84775ab1e341499d0824bc94ac795ca1ece8349686ed32316084f63d10949bc0"
+    },
+    {
+      "start": 2592,
+      "bank": "BASS_06",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_06.syx",
+      "afx_sha256": "e27aaf772c2520965902e89bdabcd67947696476ae0b533680fc20faee5950f6"
+    },
+    {
+      "start": 2624,
+      "bank": "BASS_07",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_07.syx",
+      "afx_sha256": "90371a4d78d56e3765af58d85790d9d531f82aad6b1486c1802c1335ec047927"
+    },
+    {
+      "start": 2656,
+      "bank": "BASS_08",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_08.syx",
+      "afx_sha256": "80ce66ce3b7298a5515b808a68ff2b12f121767f18d2cb33b5fa5f06c70e44b0"
+    },
+    {
+      "start": 2688,
+      "bank": "BASS_09",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_09.syx",
+      "afx_sha256": "cb7474fba724c3b0dc2604817d0b9e3733783243a886e3af01d89251a59a615b"
+    },
+    {
+      "start": 2720,
+      "bank": "BASS_10",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_10.syx",
+      "afx_sha256": "314d54b1c818a7f81c58dcccecb5e989866274da1aa998da44cdf91aca0d7cf1"
+    },
+    {
+      "start": 2752,
+      "bank": "BASS_11",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_11.syx",
+      "afx_sha256": "757061d4ca9158181e8d2be84cc90bbb0f586e2b7370b2d5cc03260fe49e662a"
+    },
+    {
+      "start": 2784,
+      "bank": "BASS_13",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_13.syx",
+      "afx_sha256": "8baea613a2770891e0e80d9bde8caee310f7746cb641e299cc122df07a26337f"
+    },
+    {
+      "start": 2816,
+      "bank": "BASS_14",
+      "source": "DX7_AllTheWeb/Jack Deckard/bass_14.syx",
+      "afx_sha256": "9ca1a1a17213507e8f92ab31c3333090269f0bf72f79b8ef186d68b4536d94ae"
+    },
+    {
+      "start": 2848,
+      "bank": "DXTX008",
+      "source": "DX7_AllTheWeb/Atari/dxtx008.SYX",
+      "afx_sha256": "cc271973496b44d4ad6abc183abfb935e27a7a86a69d246809783096ff10ee24"
+    },
+    {
+      "start": 2880,
+      "bank": "STARTERS",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 26 A-Z/Misc S/starters.SYX",
+      "afx_sha256": "dc7ea481613421bcd2c3632006544efd79d267c533368b8e7e583b892ec00ef2"
+    },
+    {
+      "start": 2912,
+      "bank": "BBANK1",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/!Unsorted/BBANK1.SYX",
+      "afx_sha256": "9b75900100316ed994e7dd7abf9785faa033cd455d9e7fe847e02f03a289ff58"
+    },
+    {
+      "start": 2944,
+      "bank": "BBANK2",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/!Unsorted/BBANK2.SYX",
+      "afx_sha256": "6197103bbc08f084b4a842ce384df75e0ed4691fbea861ba2a7632dffe922814"
+    },
+    {
+      "start": 2976,
+      "bank": "BELLS",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 4 Instruments/Bells/Bells4/BELLS.SYX",
+      "afx_sha256": "ddfb9d5d80945eb983daecdc99ef15e818ccbd8cb049d2c526a866885f1babb1"
+    },
+    {
+      "start": 3008,
+      "bank": "BELLS_01",
+      "source": "DX7_AllTheWeb/Jack Deckard/bells_01.syx",
+      "afx_sha256": "e73efa9f74921f4a3967f162f7652b75b31d0613b96ec8b5665f05fbaf338e2f"
+    },
+    {
+      "start": 3040,
+      "bank": "BORUFF",
+      "source": "DX7_AllTheWeb/Jack Deckard/boruff.syx",
+      "afx_sha256": "037adc571f1d86bc7672df0d444180c18efacb3effabf4b84d07946e886a1bfe"
+    },
+    {
+      "start": 3072,
+      "bank": "BRASS_01",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_01.syx",
+      "afx_sha256": "270b86f1c6a82c316bd1d6b1ee23de081c13bbb853d862981bd881bbddc82160"
+    },
+    {
+      "start": 3104,
+      "bank": "BRASS_02",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_02.syx",
+      "afx_sha256": "98d84260479c8145b27b0733fb9156e6ed7257554ce74a22a4c1b832b10c6508"
+    },
+    {
+      "start": 3136,
+      "bank": "BRASS_03",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_03.syx",
+      "afx_sha256": "25699e13f6865c110caa5ec48294e21110cb2369c6ad9343911bd69fb677a019"
+    },
+    {
+      "start": 3168,
+      "bank": "BRASS_04",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_04.syx",
+      "afx_sha256": "082e8adc0a3370b78655a5d019bf9b7eb0e5a386f0799730d49c387cf0280885"
+    },
+    {
+      "start": 3200,
+      "bank": "BRASS_05",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_05.syx",
+      "afx_sha256": "a97f96dea574debdd015680f7526e33694e165a51de7c58d4491b33344728e2f"
+    },
+    {
+      "start": 3232,
+      "bank": "BRASS_06",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_06.syx",
+      "afx_sha256": "eca5ad375fba885155a590cecd4766a7ceea8d3c40f868b93cdade021ab26ced"
+    },
+    {
+      "start": 3264,
+      "bank": "BRASS_07",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_07.syx",
+      "afx_sha256": "3c668bdb27c820044e6f1e4262812bf976c97fdd4209c99969147b2e1d0f5eac"
+    },
+    {
+      "start": 3296,
+      "bank": "BRASS_09",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_09.syx",
+      "afx_sha256": "72f79696a4d6adda0edb06f0f96ccf6d426e98787d19918e33024fec1cd0f91b"
+    },
+    {
+      "start": 3328,
+      "bank": "BRASS_11",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_11.syx",
+      "afx_sha256": "08fe86ac6adba5645e82802ad9c6cdcf23c09bf75c92fac462d8bf363aa99757"
+    },
+    {
+      "start": 3360,
+      "bank": "BRASS_12",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_12.syx",
+      "afx_sha256": "12a050868a3a21021c7e7eed6e9093f598c6eff734120032e31bc49f75548ff6"
+    },
+    {
+      "start": 3392,
+      "bank": "BRASS_13",
+      "source": "DX7_AllTheWeb/Jack Deckard/brass_13.syx",
+      "afx_sha256": "99335235c896316333f3665a70c59d02cb0e6e1ffb0a8c1f3b0cfb623165bcc2"
+    },
+    {
+      "start": 3424,
+      "bank": "BSTX",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/!Unsorted/BSTX.SYX",
+      "afx_sha256": "ec9c844065c57969fa9d77fb700be19dbdc5fbbc397f305c5c37b0c75f20e729"
+    },
+    {
+      "start": 3456,
+      "bank": "C-LAB_1",
+      "source": "DX7_AllTheWeb/Jack Deckard/c-lab_1.syx",
+      "afx_sha256": "d89640905239932294c7f3f99159d0ef4da6dcad68c5c02874bbc7d4199ec20b"
+    },
+    {
+      "start": 3488,
+      "bank": "CELLO_01",
+      "source": "DX7_AllTheWeb/Jack Deckard/cello_01.syx",
+      "afx_sha256": "702762c08455ecb3d1f339787f3e798404ab8c5d23c432916a74da229f1a6feb"
+    },
+    {
+      "start": 3520,
+      "bank": "CELLO_02",
+      "source": "DX7_AllTheWeb/Jack Deckard/cello_02.syx",
+      "afx_sha256": "82c8b2c3cd72fd7bf3f03fab47980d0037e12af725283ab50dfefc9be7a116e4"
+    },
+    {
+      "start": 3552,
+      "bank": "CHURCH",
+      "source": "DX7_AllTheWeb/Jack Deckard/church.syx",
+      "afx_sha256": "ff1ad1f3e121f37ea3f2b5a8785ff261901f36bbf286652378ceee6bc85dbdc6"
+    },
+    {
+      "start": 3584,
+      "bank": "CIANI",
+      "source": "DX7_AllTheWeb/Jack Deckard/ciani.syx",
+      "afx_sha256": "6130b3250638697640b9ece6ec0c985d5ae3c376c0824d6fd4e027311790cfbc"
+    },
+    {
+      "start": 3616,
+      "bank": "CLANG1",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/!Unsorted/CLANG1.SYX",
+      "afx_sha256": "060ab46333bbc8bd39da6d9034c5a21a42593677c329a483f33357b6b493d171"
+    },
+    {
+      "start": 3648,
+      "bank": "CLARINET",
+      "source": "DX7_AllTheWeb/Jack Deckard/clarinet.syx",
+      "afx_sha256": "c8ad60fe28cf855ae591545b6ec6b71cd2b35cdf3e11c1ea7b1360c50033db10"
+    },
+    {
+      "start": 3680,
+      "bank": "CLAUDE",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 26 A-Z/Misc A-C/CLAUDE.SYX",
+      "afx_sha256": "4d4432ccefeb99e8ca6ea87ba671d2515a38a17d48e0912bbcc19525c13f4d81"
+    },
+    {
+      "start": 3712,
+      "bank": "CLAV1",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/!Instruments/Keyboard/Clavinet/CLAV1.SYX",
+      "afx_sha256": "5e185308d3bfc367057970a59ab8ff3080b24ba29ba015f329dd979e3b7f62fc"
+    },
+    {
+      "start": 3744,
+      "bank": "CLAV_01",
+      "source": "DX7_AllTheWeb/Jack Deckard/clav_01.syx",
+      "afx_sha256": "cd038719a3f109ac28c0274da225492056698cb10b88907e41990f17f5e64cad"
+    },
+    {
+      "start": 3776,
+      "bank": "CLAV_03",
+      "source": "DX7_AllTheWeb/Jack Deckard/clav_03.syx",
+      "afx_sha256": "a76ad2beb0b4e8a645d788421902ba3db90260c4354d9f36215e1e5ee6e1e8ee"
+    },
+    {
+      "start": 3808,
+      "bank": "CLAV_04",
+      "source": "DX7_AllTheWeb/Jack Deckard/clav_04.syx",
+      "afx_sha256": "ea7f28775356546d9f603f79bd1e228cd9b543a3196bfd7ce5da037c83563ad7"
+    },
+    {
+      "start": 3840,
+      "bank": "CLAV_05",
+      "source": "DX7_AllTheWeb/Jack Deckard/clav_05.syx",
+      "afx_sha256": "980c5e20fa0f10fc66a113ffce36e6b308a1cfdcd52b74576e4d8f5f2d68af57"
+    },
+    {
+      "start": 3872,
+      "bank": "CONTEMP",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/!Unsorted/CONTEMP.SYX",
+      "afx_sha256": "7c8ed07de5d7812c00c65bcccbf06103b9a9f1ccd679f3856cf75b44bacf0b36"
+    },
+    {
+      "start": 3904,
+      "bank": "COUNTRY",
+      "source": "DX7_AllTheWeb/LiVeMuSiC/COUNTRY.SYX",
+      "afx_sha256": "d05b1d491d8c9a1411aa1ff949b3f1a7a05c790183d26b81bd07a8665752fcc4"
+    },
+    {
+      "start": 3936,
+      "bank": "CZEISZPE",
+      "source": "DX7_AllTheWeb/Jack Deckard/czeiszpe.syx",
+      "afx_sha256": "87d2cbc3202f1a9108b1ecfb8b57a75b4eefd566167db5fc6461f971fabc6873"
+    },
+    {
+      "start": 3968,
+      "bank": "DAVE1",
+      "source": "DX7_AllTheWeb/Jack Deckard/dave1.syx",
+      "afx_sha256": "41a6cfee8fde1aea2c83b46fbefbb85aeed8d50cad59815718be69dc716b233d"
+    },
+    {
+      "start": 4000,
+      "bank": "DECKARD",
+      "source": "DX7_AllTheWeb/Jack Deckard/deckard.syx",
+      "afx_sha256": "b6c2541d8471ae5f3c08c83a8a297c33da1754a1ac121b705b8b6cb59f9cefef"
+    },
+    {
+      "start": 4032,
+      "bank": "DG1",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 26 A-Z/Misc D-F/DG1.SYX",
+      "afx_sha256": "3a84d5b34fbbb11995654056425a523de2fb5e10d47ede8ae9a34197fef79d9f"
+    },
+    {
+      "start": 4064,
+      "bank": "DIVERS",
+      "source": "DX7_AllTheWeb/Jack Deckard/divers.syx",
+      "afx_sha256": "09bf55ccbef3f36a4cdfa57a36d8d77ce2655c04c8535254516d73c3bcb182b0"
+    },
+    {
+      "start": 4096,
+      "bank": "DJW001",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 26 A-Z/Misc D-F/DJW001.SYX",
+      "afx_sha256": "f7e4c354dcabf38a410f401b95934839d4fa08a6aff858db0c2df5ca878d4cd0"
+    },
+    {
+      "start": 4128,
+      "bank": "DRT1",
+      "source": "DX7_AllTheWeb/Jack Deckard/drt1.syx",
+      "afx_sha256": "69a0386b7fe581174501c83837564556b8dc9ce4759e78619f912a3f32a9d962"
+    },
+    {
+      "start": 4160,
+      "bank": "DRT2",
+      "source": "DX7_AllTheWeb/Jack Deckard/drt2.syx",
+      "afx_sha256": "4934a14cc38a47b38d91d79f786dc787e650eee4b13064170ca53bf5019bbf5c"
+    },
+    {
+      "start": 4192,
+      "bank": "DX5A1",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX5/DX5A1.SYX",
+      "afx_sha256": "09cbb595ed2ac150e2ec10192a4ffe00cc9fb965f8cd7b147467625429703c28"
+    },
+    {
+      "start": 4224,
+      "bank": "DX5A2",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX5/DX5A2.SYX",
+      "afx_sha256": "57d8c94ab715a4b8d859dea0e660563b5fef41155f155da30b56bf98ed4742da"
+    },
+    {
+      "start": 4256,
+      "bank": "DX5B1",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX5/DX5B1.SYX",
+      "afx_sha256": "29dffc67ee7fff15903a56857391caba51282843be3b78c3d03c15c958eeb995"
+    },
+    {
+      "start": 4288,
+      "bank": "DX5B2",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX5/DX5B2.SYX",
+      "afx_sha256": "fc5a4cc3a762f15c89affe32ad49f73899fecad7e6f704d48c901d0bd1d018db"
+    },
+    {
+      "start": 4320,
+      "bank": "DX83",
+      "source": "DX7_AllTheWeb/Dave Benson/DX83.SYX",
+      "afx_sha256": "c2f84d6d7dc9252bb5ea97fc069e4235e73c0356d79567997e3f86bbbc6778f0"
+    },
+    {
+      "start": 4352,
+      "bank": "DX84",
+      "source": "DX7_AllTheWeb/Dave Benson/DX84.SYX",
+      "afx_sha256": "d2595b1c4ace6ea34a483390e7900bb2989bfde30e8fa44649d8c25bff9cf839"
+    },
+    {
+      "start": 4384,
+      "bank": "DX86",
+      "source": "DX7_AllTheWeb/Dave Benson/DX86.SYX",
+      "afx_sha256": "754c2ec7ff2805c3ec64ebafe66430aad469fa05360e38afee93f766dc63c021"
+    },
+    {
+      "start": 4416,
+      "bank": "DX87",
+      "source": "DX7_AllTheWeb/Dave Benson/DX87.SYX",
+      "afx_sha256": "96bf43174a8f5a9d351dfa8ce5ddd6ececc7dafc2b5555fee427c5867679864c"
+    },
+    {
+      "start": 4448,
+      "bank": "DX90",
+      "source": "DX7_AllTheWeb/Dave Benson/DX90.SYX",
+      "afx_sha256": "8f39b167615e50f2fa5531d815060a5d366b5dde7809efe3a9fd0f7249118f4c"
+    },
+    {
+      "start": 4480,
+      "bank": "DX92",
+      "source": "DX7_AllTheWeb/Dave Benson/DX92.SYX",
+      "afx_sha256": "f40d377863c814ba9ddbedb6559b047c305b1f8f3d8478e72621c082bd2139cc"
+    },
+    {
+      "start": 4512,
+      "bank": "DX93",
+      "source": "DX7_AllTheWeb/Dave Benson/DX93.SYX",
+      "afx_sha256": "130d1186a6fb539824f710a53c6231f1e759d4507cee7b2b1fb1c2b26f361bd7"
+    },
+    {
+      "start": 4544,
+      "bank": "DX94",
+      "source": "DX7_AllTheWeb/Dave Benson/DX94.SYX",
+      "afx_sha256": "5969823629d249748b1d4bcba6e5002ee1d8e381fd2faa9fd084ca3707bf4b2b"
+    },
+    {
+      "start": 4576,
+      "bank": "ET_2232",
+      "source": "DX7_AllTheWeb/Dave Benson/ET_2232.SYX",
+      "afx_sha256": "4e00628c744b8044366f574ef143dab38b14ee449859a5f46d7cc4f71ee1b879"
+    },
+    {
+      "start": 4608,
+      "bank": "ET_TOY",
+      "source": "DX7_AllTheWeb/Dave Benson/ET_TOY.SYX",
+      "afx_sha256": "8afb9b87ba1360ffc00ca5e9da0727313a5906c38669020eba1cc2a11831e4e1"
+    },
+    {
+      "start": 4640,
+      "bank": "ET_TX1A",
+      "source": "DX7_AllTheWeb/Dave Benson/ET_TX1A.SYX",
+      "afx_sha256": "06cab9172f75cf4c114320af2204956c8c066096648f44c5c814f58d202a7567"
+    },
+    {
+      "start": 4672,
+      "bank": "ET_WEIRD",
+      "source": "DX7_AllTheWeb/Dave Benson/ET_WEIRD.SYX",
+      "afx_sha256": "daa1ea9d98d3a6dd9b4ef18dd0f9920e62b6d946e24ad51170ff0fad202374f7"
+    },
+    {
+      "start": 4704,
+      "bank": "E_PIANO1",
+      "source": "DX7_AllTheWeb/Dave Benson/E_PIANO1.SYX",
+      "afx_sha256": "6f53e45b5e083fa3772eb5c77a67543412dd171308bbd18a34f2bab31b30798e"
+    },
+    {
+      "start": 4736,
+      "bank": "E_PIANO2",
+      "source": "DX7_AllTheWeb/Dave Benson/E_PIANO2.SYX",
+      "afx_sha256": "b2a05f35879d955394d8e7ee392c3db6d95de07a5d93a82b9f9de0979a5c1962"
+    },
+    {
+      "start": 4768,
+      "bank": "FRED",
+      "source": "DX7_AllTheWeb/Dave Benson/FRED.SYX",
+      "afx_sha256": "d95f750e1a81cbe2fa3e728f4c79503a1add397d01980aa96dd2ef26ec2706b6"
+    },
+    {
+      "start": 4800,
+      "bank": "GUITAR_1",
+      "source": "DX7_AllTheWeb/Dave Benson/GUITAR_1.SYX",
+      "afx_sha256": "070d17c34ae6b00515e741017fa588a0ee86f15a833b4716c9a3eb762ec133de"
+    },
+    {
+      "start": 4832,
+      "bank": "GUITAR_2",
+      "source": "DX7_AllTheWeb/Dave Benson/GUITAR_2.SYX",
+      "afx_sha256": "5d29ce19a8a4932c655f7395eb4479aa5cf72154d486eb3221808e93973c7502"
+    },
+    {
+      "start": 4864,
+      "bank": "GUITAR_3",
+      "source": "DX7_AllTheWeb/Dave Benson/GUITAR_3.SYX",
+      "afx_sha256": "ef06eafefb89fb0677a6c3086758be7e01ab436ff97d0aefbb7496816754082d"
+    },
+    {
+      "start": 4896,
+      "bank": "DXDXMI",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-10/DXDXMI.SYX",
+      "afx_sha256": "5e1708487e88d64c3c4e88729cef708e460323d453cba5421eb3c3c748a6c941"
+    },
+    {
+      "start": 4928,
+      "bank": "DXMIK2",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/!Unsorted/DXMIK2.SYX",
+      "afx_sha256": "be63d7d3aafc255b269cd93a694a61c4fb5d87f330d99137d0942cb0373dbebd"
+    },
+    {
+      "start": 4960,
+      "bank": "DXOC01",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC01.SYX",
+      "afx_sha256": "396dbce9088235b55199b573a8e5e6b4530f0b00a7d918aa7e3df928835bc395"
+    },
+    {
+      "start": 4992,
+      "bank": "DXOC02",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC02.SYX",
+      "afx_sha256": "749cfbab0872514f26e9cee37627cc2cd92a84e587b62172fc3359534428c3a4"
+    },
+    {
+      "start": 5024,
+      "bank": "DXOC03",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC03.SYX",
+      "afx_sha256": "152c3041c5cc5078b62333bc1cdc720f42525dd5076868a9c3b171593af7e0ff"
+    },
+    {
+      "start": 5056,
+      "bank": "DXOC04",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC04.SYX",
+      "afx_sha256": "9aecdc7554aef39abb168d9a41947247a671bcb10aa425a154b65ab331539390"
+    },
+    {
+      "start": 5088,
+      "bank": "DXOC05",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC05.SYX",
+      "afx_sha256": "88496fa169174553a3567d0711d24767b4336e32dac1c55771fa92fe06bc447f"
+    },
+    {
+      "start": 5120,
+      "bank": "DXOC06",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC06.SYX",
+      "afx_sha256": "495637696ce9d880a3b151dbfb63533a09ff1cc2a0148af2c9be818cccff0e2e"
+    },
+    {
+      "start": 5152,
+      "bank": "DXOC07",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC07.SYX",
+      "afx_sha256": "6be4d21bac2ae2e5d0e17b06fd2b4c8150066a2c737c84ca628d90ef0719446a"
+    },
+    {
+      "start": 5184,
+      "bank": "DXOC08",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC08.SYX",
+      "afx_sha256": "51d997bc9dd5bfd9734cac20949cb699565ed0f91201e3fb9281cc4792ff9ee3"
+    },
+    {
+      "start": 5216,
+      "bank": "DXOC09",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC09.SYX",
+      "afx_sha256": "d8281a06b5be4bf6dabcb836f30cf306911221503eef34808f8a8be1b6da7d55"
+    },
+    {
+      "start": 5248,
+      "bank": "DXOC10",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC10.SYX",
+      "afx_sha256": "2fafef8b98f23dfa169110105ac685b01014b8b3d9cfb7ffa700848d40ea98e7"
+    },
+    {
+      "start": 5280,
+      "bank": "DXOC11",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC11.SYX",
+      "afx_sha256": "81385cc121f13850be20767eec880a8bc888b4ff8e074937d4a5dbaaefc37675"
+    },
+    {
+      "start": 5312,
+      "bank": "DXOC12",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC12.SYX",
+      "afx_sha256": "7eaab27aa5f224ea995bed7bf72ef6a5a453dbec5f742ecdac92b04cc22a8f4c"
+    },
+    {
+      "start": 5344,
+      "bank": "DXOC13",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC13.SYX",
+      "afx_sha256": "53ed82ca34d1f009975cd3006ab5e202c333faaedeaf9f9b6011df0616830335"
+    },
+    {
+      "start": 5376,
+      "bank": "DXOC14",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC14.SYX",
+      "afx_sha256": "943991ceaa5be4fc7eddd2b43f295cff2c1c0583848e3671fb15539df0047638"
+    },
+    {
+      "start": 5408,
+      "bank": "DXOC15",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC15.SYX",
+      "afx_sha256": "74b28c6d366288e8a62dccf976e3e356f3e4e0b094b4b84f9f9aed4846c0b639"
+    },
+    {
+      "start": 5440,
+      "bank": "DXOC16",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC16.SYX",
+      "afx_sha256": "19dfe9970234a39ddd81c4a955a271b000fe080e73dac428a75cbd55b2dea975"
+    },
+    {
+      "start": 5472,
+      "bank": "DXOC17",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC17.SYX",
+      "afx_sha256": "95c308a3c7e1f4c9cc1408b48b80defc93bc7a1f77c6b1d42d55ff9c4051d336"
+    },
+    {
+      "start": 5504,
+      "bank": "DXOC18",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC18.SYX",
+      "afx_sha256": "e4f84555e9764a5ecc4549f85604192926df195c510d6ca82706004a57133fc4"
+    },
+    {
+      "start": 5536,
+      "bank": "DXOC19",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC19.SYX",
+      "afx_sha256": "b53b7d463d5d7a1fcd85296eceec4041b45c02a3b32270dca2b0cdc1445ca4e1"
+    },
+    {
+      "start": 5568,
+      "bank": "DXOC20",
+      "source": "DX7_AllTheWeb/Bridge Music Recording Studio/Sysex/Set 6 DX7/DX7-OC/DXOC20.SYX",
+      "afx_sha256": "8698c70e56408371fa57e3e49e839ecb08b6538c85990421206ac492e52320bd"
+    },
+    {
+      "start": 5600,
+      "bank": "DXOC21",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Dxoc21.syx",
+      "afx_sha256": "374b13a51daa84ef316f3361dc45194bdf5f79e4fc1ff103da1ec4372a64aa82"
+    },
+    {
+      "start": 5632,
+      "bank": "DXOC23",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Dxoc23.syx",
+      "afx_sha256": "28e2d92f486dfff8588308706c2433e881e43265092aa1cceee064a0ef8ddf9b"
+    },
+    {
+      "start": 5664,
+      "bank": "DXOC24",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Dxoc24.syx",
+      "afx_sha256": "407b5a5dbc04f6f3435973ae0b9d5a40af1419855d2a7d1badc2ee765f7cea45"
+    },
+    {
+      "start": 5696,
+      "bank": "DXOC25",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Dxoc25.syx",
+      "afx_sha256": "c3072fa0e443654d169c1f32ceea92309c7058e947f087f76ca9c3689bf3d867"
+    },
+    {
+      "start": 5728,
+      "bank": "DXOC26",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Dxoc26.syx",
+      "afx_sha256": "29e49be7941d092bc6532b7cb99097291465f46ec115667e7cf4c83372c8861f"
+    },
+    {
+      "start": 5760,
+      "bank": "DXOC27",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Dxoc27.syx",
+      "afx_sha256": "8440df22044a98aa5470a5184a71517229071f124b68f6983b9d78e9862ab1a9"
+    },
+    {
+      "start": 5792,
+      "bank": "DXOC28",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Dxoc28.syx",
+      "afx_sha256": "e506fd0bbbf1fac9e903974193d70ce1a2db3e098118b38bc89569cfd8016e63"
+    },
+    {
+      "start": 5824,
+      "bank": "DXOC29",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Dxoc29.syx",
+      "afx_sha256": "b65b9809eb85e0b65eb65e3ae58dc69e6ae05e36ad4c489d5e2a18d5a00295d6"
+    },
+    {
+      "start": 5856,
+      "bank": "EFFECTS3",
+      "source": "DX7_AllTheWeb/Jack Deckard/effects3.syx",
+      "afx_sha256": "c1e6bd5854de4611ba7216dcd73989b4028e0d015f495baa61f142ed078cb101"
+    },
+    {
+      "start": 5888,
+      "bank": "EFFECTS4",
+      "source": "DX7_AllTheWeb/Jack Deckard/effects4.syx",
+      "afx_sha256": "5df5eeab4689fd03d87c101427ca6866c0f2ac7c24912ed5c14081d5884ff2cf"
+    },
+    {
+      "start": 5920,
+      "bank": "MIM-C",
+      "source": "DX7_AllTheWeb/Dave Benson/MIM-C.SYX",
+      "afx_sha256": "6d10dfee0d06f757bfd3ad8ac98ae519182888c8c19c1a25f9ffe5e2b5b121cc"
+    },
+    {
+      "start": 5952,
+      "bank": "EFFECTS6",
+      "source": "DX7_AllTheWeb/Jack Deckard/effects6.syx",
+      "afx_sha256": "6363e1999b0c9ceb9d287595b56817392a1a7e23bcda1ca86bac6e1dfaa57af5"
+    },
+    {
+      "start": 5984,
+      "bank": "EFFECTS7",
+      "source": "DX7_AllTheWeb/Jack Deckard/effects7.syx",
+      "afx_sha256": "1087fb011e1132f8fcbc0d612303a57907776f060b1fa88cb0c50247eb9a3b3d"
+    },
+    {
+      "start": 6016,
+      "bank": "EFFECTS8",
+      "source": "DX7_AllTheWeb/Jack Deckard/effects8.syx",
+      "afx_sha256": "0854875605e17275369f776b9e97426944593df4dc9fc1bb66781ca67ad6c81a"
+    },
+    {
+      "start": 6048,
+      "bank": "EFX",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Efx.syx",
+      "afx_sha256": "e7c01a860e5498b66371878d42433fe2eda7cb668bf51e4c2ed53582ed0ec306"
+    },
+    {
+      "start": 6080,
+      "bank": "ETHNIC",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ethnic.syx",
+      "afx_sha256": "3264e2a3c0b71e6e39af5952ab499f3961c1a9c541bfe7b45cb203543e0c7827"
+    },
+    {
+      "start": 6112,
+      "bank": "FLUTE",
+      "source": "DX7_AllTheWeb/Jack Deckard/flute.syx",
+      "afx_sha256": "36cdcba4907abc2fdeadce2df6a5455ba6c45f14dae041e9e4ddd854e48760df"
+    },
+    {
+      "start": 6144,
+      "bank": "FORRICK",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Forrick.syx",
+      "afx_sha256": "e5bacbc19aa480a6b3855fd6dd63f5a489694d43bb10e26ac7d0506d55d15054"
+    },
+    {
+      "start": 6176,
+      "bank": "FRANK1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Frank1.syx",
+      "afx_sha256": "e482cb303464ba3f89759012a6a830090de7763df1b01ca7ca11c04a4fbe1f8c"
+    },
+    {
+      "start": 6208,
+      "bank": "FRANKIE",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Frankie.syx",
+      "afx_sha256": "19fcba88f6af544a6a2d4eda760500b4c0915fb9f0e81670c98e03ae1470fc4b"
+    },
+    {
+      "start": 6240,
+      "bank": "GRAK",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Grak.syx",
+      "afx_sha256": "b4dcd0fff86b346b60d60ebd1a312f29afc76f5f3c2f95fe8a220ba097f87885"
+    },
+    {
+      "start": 6272,
+      "bank": "GTRS_01",
+      "source": "DX7_AllTheWeb/Jack Deckard/gtrs_01.syx",
+      "afx_sha256": "cd31e6802dc2359bd3a208c0569fa9da702a94a76be42a749169d49b804c18f2"
+    },
+    {
+      "start": 6304,
+      "bank": "GTRS_A-D",
+      "source": "DX7_AllTheWeb/Jack Deckard/gtrs_a-d.syx",
+      "afx_sha256": "cac5c7af45bb0a795e91e80c552f66dd4046914d71a53e12bac906d7ca120ced"
+    },
+    {
+      "start": 6336,
+      "bank": "GTRS_D",
+      "source": "DX7_AllTheWeb/Jack Deckard/gtrs_d.syx",
+      "afx_sha256": "733f6baf7aec9fbcf4f77d26dae8441399ba31749bd117a038082a1bf0ac5f25"
+    },
+    {
+      "start": 6368,
+      "bank": "GTRS_EL",
+      "source": "DX7_AllTheWeb/Jack Deckard/gtrs_el.syx",
+      "afx_sha256": "88cb89cbcf7103b22b8df179fdec96736411375fe3f8cedd7fe178e79509d8ef"
+    },
+    {
+      "start": 6400,
+      "bank": "GTRS_G-J",
+      "source": "DX7_AllTheWeb/Jack Deckard/gtrs_g-j.syx",
+      "afx_sha256": "599e919f693e227e4021e646280152972e97c198e125004566accb9c4237de13"
+    },
+    {
+      "start": 6432,
+      "bank": "GTRS_L-N",
+      "source": "DX7_AllTheWeb/Jack Deckard/gtrs_l-n.syx",
+      "afx_sha256": "4a1f66293bdc4669485eb92ed8ce0300698300462f0daaf898c93197d4b6f21a"
+    },
+    {
+      "start": 6464,
+      "bank": "GTRS_N-R",
+      "source": "DX7_AllTheWeb/Jack Deckard/gtrs_n-r.syx",
+      "afx_sha256": "a5f1727e434d3af9ee77b2b7054ec8950fb637a206c7b7123786321f54743bbb"
+    },
+    {
+      "start": 6496,
+      "bank": "GTRS_S-V",
+      "source": "DX7_AllTheWeb/Jack Deckard/gtrs_s-v.syx",
+      "afx_sha256": "29918771219b826af302709b38e1342d26916e7f811a1d61b6576bc7e2efef12"
+    },
+    {
+      "start": 6528,
+      "bank": "GTRSONUS",
+      "source": "DX7_AllTheWeb/Jack Deckard/gtrsonus.syx",
+      "afx_sha256": "2c3d5c74a374d0276c6fc81572b4965278bd5f86484824b03e2965c03dddfa8f"
+    },
+    {
+      "start": 6560,
+      "bank": "GUITAR1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Guitar1.syx",
+      "afx_sha256": "467ce3f29ca5c6f242d5c126910946b8345c3e47b074a57cca79dc4fc726a596"
+    },
+    {
+      "start": 6592,
+      "bank": "GUITARS",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Guitars.syx",
+      "afx_sha256": "a3c67dd14a428a2894ba244517f9bb4e3e2bb88388da1e4d2313e22e8483ef55"
+    },
+    {
+      "start": 6624,
+      "bank": "HARP_1",
+      "source": "DX7_AllTheWeb/Jack Deckard/harp_1.syx",
+      "afx_sha256": "eda0f9722d45d1844c2e26244dcbfb54543df5af8106ab7c38310270ba593363"
+    },
+    {
+      "start": 6656,
+      "bank": "HARP_2",
+      "source": "DX7_AllTheWeb/Jack Deckard/harp_2.syx",
+      "afx_sha256": "73a8d91b802a7e99ef5a0f7b63540c9724524f07eb8d8cb90553eb0a799207bc"
+    },
+    {
+      "start": 6688,
+      "bank": "HARPSI_1",
+      "source": "DX7_AllTheWeb/Jack Deckard/harpsi_1.syx",
+      "afx_sha256": "f0a37d9adc032aba4e6175d7e90444e00771bbf534d094bfda1d20eaf4e05799"
+    },
+    {
+      "start": 6720,
+      "bank": "INDSPEV",
+      "source": "DX7_AllTheWeb/Dave Benson/INDSPEV.SYX",
+      "afx_sha256": "d3f6238cb940c13f2e5325a6faaab08563522ec4d1744a6fd49f3a4cd88f2d09"
+    },
+    {
+      "start": 6752,
+      "bank": "INT_ACE",
+      "source": "DX7_AllTheWeb/Dave Benson/INT_ACE.SYX",
+      "afx_sha256": "7d5be537e653af67514b3dc42a07cd65cbf76fb8a45e0eff537549331d5848b7"
+    },
+    {
+      "start": 6784,
+      "bank": "KNM002",
+      "source": "DX7_AllTheWeb/Dave Benson/KNM002.SYX",
+      "afx_sha256": "4a46d70f3d8401ee9216c5a2eab3dc9768bd53e27c7f1dbc3998b4f1a6380f64"
+    },
+    {
+      "start": 6816,
+      "bank": "MARIMBA1",
+      "source": "DX7_AllTheWeb/Dave Benson/MARIMBA1.SYX",
+      "afx_sha256": "9ec3729bc4d84cb4a2b0b394bd8048000c07faff7bde8d1a91d78647eaa448c1"
+    },
+    {
+      "start": 6848,
+      "bank": "MDSF1",
+      "source": "DX7_AllTheWeb/Dave Benson/MDSF1.SYX",
+      "afx_sha256": "e24132ab2eddc97e4c35716e240dfc45ba8f1332e55f4713133c37c56d4b7554"
+    },
+    {
+      "start": 6880,
+      "bank": "MDSF2",
+      "source": "DX7_AllTheWeb/Dave Benson/MDSF2.SYX",
+      "afx_sha256": "e4e9eef72a032701dab1041d93c86577886771f88560d46cf98f64786436e84c"
+    },
+    {
+      "start": 6912,
+      "bank": "MDSF3",
+      "source": "DX7_AllTheWeb/Dave Benson/MDSF3.SYX",
+      "afx_sha256": "90d0a84ce43376da6c3cce9e9219d9398a839b44fa03b188e35846f89839eacc"
+    },
+    {
+      "start": 6944,
+      "bank": "MDSF4",
+      "source": "DX7_AllTheWeb/Dave Benson/MDSF4.SYX",
+      "afx_sha256": "1a6fa816fba07b02635466f98889f482434c494c186a3bc608f4b95ec26fe3c9"
+    },
+    {
+      "start": 6976,
+      "bank": "MIM-A",
+      "source": "DX7_AllTheWeb/Dave Benson/MIM-A.SYX",
+      "afx_sha256": "d991915760ff0c25734e714979123038e1dbdcd0192a4a72240996112bbb23ee"
+    },
+    {
+      "start": 7008,
+      "bank": "MIM-B",
+      "source": "DX7_AllTheWeb/Dave Benson/MIM-B.SYX",
+      "afx_sha256": "35e9eb413754fb47ca6aba5887379c6e49097d2d48ec08ce965e20d46302ca50"
+    },
+    {
+      "start": 7040,
+      "bank": "EFFECTS5",
+      "source": "DX7_AllTheWeb/Jack Deckard/effects5.syx",
+      "afx_sha256": "6d10dfee0d06f757bfd3ad8ac98ae519182888c8c19c1a25f9ffe5e2b5b121cc"
+    },
+    {
+      "start": 7072,
+      "bank": "MIM-E",
+      "source": "DX7_AllTheWeb/Dave Benson/MIM-E.SYX",
+      "afx_sha256": "fbccd9ca9c76268a09d12c5b5c2b197128f645262ce3a44398a97578a2ad8285"
+    },
+    {
+      "start": 7104,
+      "bank": "MIM-F",
+      "source": "DX7_AllTheWeb/Dave Benson/MIM-F.SYX",
+      "afx_sha256": "4efa74d1fdb67fd406d21889f72d29aae96fdce70bd26280717bad54b32b2457"
+    },
+    {
+      "start": 7136,
+      "bank": "MIM-I",
+      "source": "DX7_AllTheWeb/Dave Benson/MIM-I.SYX",
+      "afx_sha256": "0e1539c370b367957622adeec9195ccf07ed7cfb5a7aaf0353e4e3c750fe470d"
+    },
+    {
+      "start": 7168,
+      "bank": "INT",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Int.syx",
+      "afx_sha256": "246b18ede45d9186f812ae6a585e641d6895692cc7ef56a1ceee76570eaf7c8a"
+    },
+    {
+      "start": 7200,
+      "bank": "ITALIAN2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Italian2.syx",
+      "afx_sha256": "ca639c64ea328ef173bbb1cf11fd21ef3d1e331fc85d056e3f808aac0388d9ef"
+    },
+    {
+      "start": 7232,
+      "bank": "ITALIAN3",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Italian3.syx",
+      "afx_sha256": "9ec204ee67ec2e9d645bbc380943a614358c0f05a4313e2c0247088d5949aabe"
+    },
+    {
+      "start": 7264,
+      "bank": "JB001",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Jb001.syx",
+      "afx_sha256": "26260c1ecadb838fe19e2bf5f919aebe426142aa06d356df0fa8e240a3fda398"
+    },
+    {
+      "start": 7296,
+      "bank": "JB002",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Jb002.syx",
+      "afx_sha256": "810efcbc1c4248f87db2614aa3572943ac0cd16cdea1c4c265227e6c8f5623aa"
+    },
+    {
+      "start": 7328,
+      "bank": "KEYBDS01",
+      "source": "DX7_AllTheWeb/Jack Deckard/keybds01.syx",
+      "afx_sha256": "7febaa2257e31b1c0f552320f89c564666a59d699a2d248f5644eba4313a3724"
+    },
+    {
+      "start": 7360,
+      "bank": "KEYBOARD",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Keyboard.syx",
+      "afx_sha256": "da3a43ef488c01a5a440c7556a291e727e1bd791e73f991380d6489ac808f618"
+    },
+    {
+      "start": 7392,
+      "bank": "KEYS",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Keys.syx",
+      "afx_sha256": "fd7bcd8389c0c2f51f66bdb761a1752f2d723aebfbbd97815d9f697f536d67e3"
+    },
+    {
+      "start": 7424,
+      "bank": "KING",
+      "source": "DX7_AllTheWeb/Jack Deckard/king.syx",
+      "afx_sha256": "ea9abc8b2353ecf4e19145ef00b4513c08e13ce9a35b3b6b98499f2dd7f47c60"
+    },
+    {
+      "start": 7456,
+      "bank": "KOTO",
+      "source": "DX7_AllTheWeb/Jack Deckard/koto.syx",
+      "afx_sha256": "ffc8162c9a5fce56a8ac3c5e0e9acbb6e7034842f1a57604bc4431b7abfefcd3"
+    },
+    {
+      "start": 7488,
+      "bank": "LATIN",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Latin.syx",
+      "afx_sha256": "98d7603bb59dca60e27b1003f6305f527016cc73575b1a5e9e4b4efe1537c621"
+    },
+    {
+      "start": 7520,
+      "bank": "LONNIE2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Lonnie2.syx",
+      "afx_sha256": "346eb7b84f5cad29e06dde3e0a46138a6e104ef790e0c22830ee10975e0b39a5"
+    },
+    {
+      "start": 7552,
+      "bank": "MALLETS1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Mallets1.syx",
+      "afx_sha256": "f8f366f1d34ad30a7070eded226c02aaf7639e947d6c7730401e7b178bc7a75a"
+    },
+    {
+      "start": 7584,
+      "bank": "MALLETS2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Mallets2.syx",
+      "afx_sha256": "1669bddc87b28093908512eb26f4ffda4eb5a702560b128fd8108c8adf539fdf"
+    },
+    {
+      "start": 7616,
+      "bank": "MARK",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Mark.syx",
+      "afx_sha256": "898b4c09eba6b3832b226cb127b8638972aba20da037977a144a800905c8d4fd"
+    },
+    {
+      "start": 7648,
+      "bank": "MARTY1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Marty1.syx",
+      "afx_sha256": "ec7764d23834413d021d03255cf91f5ab554c5eada7afecbc6ef21f26f0c0921"
+    },
+    {
+      "start": 7680,
+      "bank": "MARTY2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Marty2.syx",
+      "afx_sha256": "c782d12b918bc0bf76b961368db552102b75b66abe77b7a70d5fcdc2e0849e48"
+    },
+    {
+      "start": 7712,
+      "bank": "MIKE1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Mike1.syx",
+      "afx_sha256": "e226fe02f1770396169716ecc3c87ea275d1be5f12ef795a8aece135ec075296"
+    },
+    {
+      "start": 7744,
+      "bank": "MIKE2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Mike2.syx",
+      "afx_sha256": "deee0e98e38a86618dab3e06248c6652d1fa53aedbf5082ecbcbcf49f296aa27"
+    },
+    {
+      "start": 7776,
+      "bank": "MISC_01",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_01.syx",
+      "afx_sha256": "77d5ebaaf8799a343273a791898f79a5c67971ad878c80950101d9f46f555dbc"
+    },
+    {
+      "start": 7808,
+      "bank": "MISC_02",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_02.syx",
+      "afx_sha256": "40607e24e73e58c81ad9ad3e877609f5caac7bbd71d837694385babb86fe133a"
+    },
+    {
+      "start": 7840,
+      "bank": "MISC_03",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_03.syx",
+      "afx_sha256": "63b6c62a74eaa7ded24ef030e3111e760c936c2fc13a034deebbc6e8990286e3"
+    },
+    {
+      "start": 7872,
+      "bank": "MISC_04",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_04.syx",
+      "afx_sha256": "971ed77cda85f8d2314b423e00d956ffbb73e85ea0219ad808d31b73a23de3d7"
+    },
+    {
+      "start": 7904,
+      "bank": "MISC_05",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_05.syx",
+      "afx_sha256": "334ea017f77b6d5e1d4033d5d97dc1be202dcdb069c07b098ec47b8d444a8d26"
+    },
+    {
+      "start": 7936,
+      "bank": "MISC_06",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_06.syx",
+      "afx_sha256": "f8b4e6328a743893505a8406c14c26746475a181ce971f5db0e2d4dac8424cd9"
+    },
+    {
+      "start": 7968,
+      "bank": "MISC_08",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_08.syx",
+      "afx_sha256": "e62d3b7862f72cfa67ef5045e7726ed127df55cd89d4d980fbc5912c4ea0e32e"
+    },
+    {
+      "start": 8000,
+      "bank": "MISC_09",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_09.syx",
+      "afx_sha256": "7270c22bb04dfbeeb39c089e958c78c6e7b5be96d82c93869b6f007bdc3d4974"
+    },
+    {
+      "start": 8032,
+      "bank": "MISC_10",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_10.syx",
+      "afx_sha256": "8d7282bc08b631a24ec37d590c36afe55ab63f60b287f49da58951e400b73b73"
+    },
+    {
+      "start": 8064,
+      "bank": "MISC_11",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_11.syx",
+      "afx_sha256": "683ca2752d5288074e6bbec2cdca7aa19ca64bb255d2b806da5a6fa449c4d343"
+    },
+    {
+      "start": 8096,
+      "bank": "MISC_12",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_12.syx",
+      "afx_sha256": "f15db63d7bd87e57d9bf1086d502142a8e5af8179a2497d1e6a03ff9c592ef60"
+    },
+    {
+      "start": 8128,
+      "bank": "MISC_13",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_13.syx",
+      "afx_sha256": "7b0bdb579482a081fa7d2ca170a8c6c60df9aa85d29cdbaca17ac6fb9b8e05cf"
+    },
+    {
+      "start": 8160,
+      "bank": "MISC_14",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_14.syx",
+      "afx_sha256": "5302d695e12e1caab3e8ad9eac5c66edd34a288329e9ee397e6113f5ac57a352"
+    },
+    {
+      "start": 8192,
+      "bank": "MISC_15",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_15.syx",
+      "afx_sha256": "4a5b4cd06f894001c8e2a1fce31ccad3d1a5d6633fe27344b35b3f066940da98"
+    },
+    {
+      "start": 8224,
+      "bank": "MISC_16",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_16.syx",
+      "afx_sha256": "874ceeda208db2ab0f14f509eebc6c8e2063cbccba1abda28257a38acd70d115"
+    },
+    {
+      "start": 8256,
+      "bank": "MISC_17",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_17.syx",
+      "afx_sha256": "b3432981b720d8d44435a9b7a1ab5ccf75bcfc8e5e3ae63b114fa180bb53e431"
+    },
+    {
+      "start": 8288,
+      "bank": "MISC_18",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_18.syx",
+      "afx_sha256": "88018a22866272c2fea528d70ab2bcad0490fddaa169fdc65a23ed853cf5ea52"
+    },
+    {
+      "start": 8320,
+      "bank": "MISC_20",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_20.syx",
+      "afx_sha256": "74ae14c1e1baddd9d3988117a5b5ae804f2bb4a60ebc56d2a464efaf21611ff2"
+    },
+    {
+      "start": 8352,
+      "bank": "MISC_22",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_22.syx",
+      "afx_sha256": "afdcccf4b7fd43863920c0eea1daa0675b83ae7b08d505bf427d32ec51f63188"
+    },
+    {
+      "start": 8384,
+      "bank": "MISC_23",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_23.syx",
+      "afx_sha256": "f5551c7ef1e1962bf795de27cac14bc9b256ebfafc4edae2d4ec4f4938fe978a"
+    },
+    {
+      "start": 8416,
+      "bank": "MISC_24",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_24.syx",
+      "afx_sha256": "f40988b1375c9e887fe8f2f773df402d393ae03a23563dfa49089db000f70ceb"
+    },
+    {
+      "start": 8448,
+      "bank": "MISC_25",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_25.syx",
+      "afx_sha256": "e576b3ad66c777732dd8a20607c949484947d98d62efdb9653007b2b0a571c35"
+    },
+    {
+      "start": 8480,
+      "bank": "MISC_26",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_26.syx",
+      "afx_sha256": "e6064bc677a4a26df2a4de0f6c91b45a8bdccd4b9bc69c74a2b4fad58278c19f"
+    },
+    {
+      "start": 8512,
+      "bank": "MISC_27",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_27.syx",
+      "afx_sha256": "ab1910ae4d8b8c75440985991d27d32ae3a94dad282d550c89879ea501a7ec95"
+    },
+    {
+      "start": 8544,
+      "bank": "MISC_28",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_28.syx",
+      "afx_sha256": "06310951b0180b33c38fe92d32ed46f42f68eb6f9e5f09ade960b125c7eedce0"
+    },
+    {
+      "start": 8576,
+      "bank": "MISC_29",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_29.syx",
+      "afx_sha256": "3fc44986fa7407a00e8db60febcba1d04bac0e366b4ebaf39f4f88016be684c1"
+    },
+    {
+      "start": 8608,
+      "bank": "MISC_30",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_30.syx",
+      "afx_sha256": "956982925646451c29a383bcdef1d652eba85275c7f02982b8966a2da258bca6"
+    },
+    {
+      "start": 8640,
+      "bank": "MISC_33",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_33.syx",
+      "afx_sha256": "d51b067b10b917e4c3975076f8289d818a8bc819ad6484794460a12736218796"
+    },
+    {
+      "start": 8672,
+      "bank": "MISC_34",
+      "source": "DX7_AllTheWeb/Jack Deckard/misc_34.syx",
+      "afx_sha256": "25ea56310e4b9b974926f4cfa70cbf4987b5f220d03b3ee15aecdd4aab04cbb7"
+    },
+    {
+      "start": 8704,
+      "bank": "MONTELEO",
+      "source": "DX7_AllTheWeb/Jack Deckard/monteleo.syx",
+      "afx_sha256": "9e255b0a9e7c588119e296e2944421b49c80cfff15430d3e7bb0b1a598406ffa"
+    },
+    {
+      "start": 8736,
+      "bank": "MOOG",
+      "source": "DX7_AllTheWeb/Jack Deckard/moog.syx",
+      "afx_sha256": "ac2aab3738115be7bb91ad7d0f692dbf35083c5fbe6e44026b0ed8f2b526bf8b"
+    },
+    {
+      "start": 8768,
+      "bank": "MORE_KEY",
+      "source": "DX7_AllTheWeb/Chris Dodunski/More_key.syx",
+      "afx_sha256": "88d5f1310bd27de3f919dcaa0e5139d7d28429354e9141daef89dcd368f8cb85"
+    },
+    {
+      "start": 8800,
+      "bank": "ORGAN_3",
+      "source": "DX7_AllTheWeb/Dave Benson/ORGAN_3.SYX",
+      "afx_sha256": "ce7ce1da2f401a3d00201e4b1f77e77585aeffe81b0f4b250d77045718429889"
+    },
+    {
+      "start": 8832,
+      "bank": "ORIGDXVC",
+      "source": "DX7_AllTheWeb/Dave Benson/ORIGDXVC.SYX",
+      "afx_sha256": "ef924e380defe0ab1fcb6c0fd8e045c456c5b4959e47c5271e1752163500d6a4"
+    },
+    {
+      "start": 8864,
+      "bank": "OBOE BASSOON",
+      "source": "DX7_AllTheWeb/Jack Deckard/Oboe Bassoon.syx",
+      "afx_sha256": "e3d228bf1e892b05006c870f46ca1cf67556023c24421dd6f258ad1ac261e562"
+    },
+    {
+      "start": 8896,
+      "bank": "PAD1",
+      "source": "DX7_AllTheWeb/Dave Benson/PAD1.SYX",
+      "afx_sha256": "caf1c25d35a0754170de39d400ddc031a9f78315f47476cdc65d3ce0407fbb37"
+    },
+    {
+      "start": 8928,
+      "bank": "PASS-C",
+      "source": "DX7_AllTheWeb/Dave Benson/PASS-C.SYX",
+      "afx_sha256": "807b68a5f31405a56d2e8fd80cfa38df5ff8c5c814ac176478d09434c814b59d"
+    },
+    {
+      "start": 8960,
+      "bank": "PC1-E",
+      "source": "DX7_AllTheWeb/Dave Benson/PC1-E.SYX",
+      "afx_sha256": "e297eff3ea25d48fc31c3e473553ecfb222dd87ef2afc1740fe674734efe182f"
+    },
+    {
+      "start": 8992,
+      "bank": "PC1-K",
+      "source": "DX7_AllTheWeb/Dave Benson/PC1-K.SYX",
+      "afx_sha256": "0f0687de540c3b954681ccc393b0c3a7108a587f060314451ac5ef4c6bd76a62"
+    },
+    {
+      "start": 9024,
+      "bank": "PC1-L",
+      "source": "DX7_AllTheWeb/Dave Benson/PC1-L.SYX",
+      "afx_sha256": "460bac18e77a2ab118c896055d9ac1a85a3397d967a1c06af758a6cfe2fcec4a"
+    },
+    {
+      "start": 9056,
+      "bank": "PC1-M",
+      "source": "DX7_AllTheWeb/Dave Benson/PC1-M.SYX",
+      "afx_sha256": "11eeeb451875fc79e3cf88b790a9aabb78dd654e064a5b96add1f5f3849b92ca"
+    },
+    {
+      "start": 9088,
+      "bank": "PC1-S",
+      "source": "DX7_AllTheWeb/Dave Benson/PC1-S.SYX",
+      "afx_sha256": "beb809da48a604b2dc10a5b7a2e689ae8ebf2149008ee36e7de05d57fc0a352e"
+    },
+    {
+      "start": 9120,
+      "bank": "PERCUS_1",
+      "source": "DX7_AllTheWeb/Dave Benson/PERCUS_1.SYX",
+      "afx_sha256": "d098f211f273dfcd68cee2ac0a89be5b57e239de4693d12da1e265217462c337"
+    },
+    {
+      "start": 9152,
+      "bank": "PERCUS_2",
+      "source": "DX7_AllTheWeb/Dave Benson/PERCUS_2.SYX",
+      "afx_sha256": "8d950555a63616ed4566f15fd54c89e5726b86359a7e44a7f221a515d64e7df7"
+    },
+    {
+      "start": 9184,
+      "bank": "PERCUS_3",
+      "source": "DX7_AllTheWeb/Dave Benson/PERCUS_3.SYX",
+      "afx_sha256": "5967c799e9b9afad756ca83af1046fd9ea0e62e1b0747375c15f1040a2afbd6a"
+    },
+    {
+      "start": 9216,
+      "bank": "PERCUS_4",
+      "source": "DX7_AllTheWeb/Dave Benson/PERCUS_4.SYX",
+      "afx_sha256": "36ef20c4a4b1ea72412e7c3dcc46550f728a15e0b5ee65c64914b0cb39785dac"
+    },
+    {
+      "start": 9248,
+      "bank": "PERCUS_5",
+      "source": "DX7_AllTheWeb/Dave Benson/PERCUS_5.SYX",
+      "afx_sha256": "9715c99ecaab2e8253540b9670f245597da7f8d256ef9f9e4b0ec18d8b713267"
+    },
+    {
+      "start": 9280,
+      "bank": "MORTEGA",
+      "source": "DX7_AllTheWeb/Jack Deckard/mortega.syx",
+      "afx_sha256": "5d667fc28593a2b0995f25111e966d8dfd9c73181a099b4723e79bffc89a319a"
+    },
+    {
+      "start": 9312,
+      "bank": "NEWSERI",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Newseri.syx",
+      "afx_sha256": "951b5716c46102aa4f27d1baf91ad836ee3c5a7f3aa45606176b595b203b21fe"
+    },
+    {
+      "start": 9344,
+      "bank": "NEWSND",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Newsnd.syx",
+      "afx_sha256": "53cfda53b47b6ede23272e6c403210aec1ed79b4b71e87a662df75db784e8b3f"
+    },
+    {
+      "start": 9376,
+      "bank": "ORCH_1",
+      "source": "DX7_AllTheWeb/Jack Deckard/orch_1.syx",
+      "afx_sha256": "ff2667725be3f64b20edcc23e85893b537379f0220eff2d48f50759571614b2a"
+    },
+    {
+      "start": 9408,
+      "bank": "ORCHESTR",
+      "source": "DX7_AllTheWeb/Jack Deckard/orchestr.syx",
+      "afx_sha256": "309d1107b33edbda30928e1a3854c10921bac01ef10e21cee7b6bf01b1c4c24c"
+    },
+    {
+      "start": 9440,
+      "bank": "ORGAN1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Organ1.syx",
+      "afx_sha256": "89c7213657cb2dd851cae82df03d87ed7a9399b1d26721d1398f0db5362f3fdd"
+    },
+    {
+      "start": 9472,
+      "bank": "ORGAN2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Organ2.syx",
+      "afx_sha256": "f24c5074bc4d799034cc0f2dfdfd166606c242407caf20434ae0116339c4b295"
+    },
+    {
+      "start": 9504,
+      "bank": "ORGAN_03",
+      "source": "DX7_AllTheWeb/Jack Deckard/organ_03.syx",
+      "afx_sha256": "02b5dfed265c3ad50d15f0dfa2d4db8e06c87d4fa383880e13b1f442b93e7987"
+    },
+    {
+      "start": 9536,
+      "bank": "ORGAN_04",
+      "source": "DX7_AllTheWeb/Jack Deckard/organ_04.syx",
+      "afx_sha256": "be8b55aa4ac9c7f03617478faba97952d7408ba69d60d584d98150fcd51bf817"
+    },
+    {
+      "start": 9568,
+      "bank": "ORGAN_05",
+      "source": "DX7_AllTheWeb/Jack Deckard/organ_05.syx",
+      "afx_sha256": "22c52fe3f52f824a2b62884f5bdbf8883bf24d6c05f563222af1a12348ed49ae"
+    },
+    {
+      "start": 9600,
+      "bank": "ORGAN_06",
+      "source": "DX7_AllTheWeb/Jack Deckard/organ_06.syx",
+      "afx_sha256": "e6f02da3a5793ed8dc7529cc368a51f39311cfeb70ad11bfca5738381cfd7ebf"
+    },
+    {
+      "start": 9632,
+      "bank": "ORGAN_07",
+      "source": "DX7_AllTheWeb/Jack Deckard/organ_07.syx",
+      "afx_sha256": "15d978483d508835c5fed35d1fb8c4003b976ef64cb250464317f3d6f48850f8"
+    },
+    {
+      "start": 9664,
+      "bank": "ORGAN_08",
+      "source": "DX7_AllTheWeb/Jack Deckard/organ_08.syx",
+      "afx_sha256": "b2f255985d5f915eb1d4b2137c109324f250159a4b5d0161a2bd60cf7578ce6e"
+    },
+    {
+      "start": 9696,
+      "bank": "ORGANHAM",
+      "source": "DX7_AllTheWeb/Jack Deckard/organham.syx",
+      "afx_sha256": "12e727abd9bb28ace888c885f94029299386c7f1fe8cc843b258147884cc867c"
+    },
+    {
+      "start": 9728,
+      "bank": "ORGPIPE1",
+      "source": "DX7_AllTheWeb/Jack Deckard/orgpipe1.syx",
+      "afx_sha256": "89518e8b9c6d77174c7758e2344841b1c34ee9f2b5d816e409dc3d086dce87cb"
+    },
+    {
+      "start": 9760,
+      "bank": "ORGPIPE2",
+      "source": "DX7_AllTheWeb/Jack Deckard/orgpipe2.syx",
+      "afx_sha256": "cf0a714e1b3abdc86b85cea43e2d18018d81d9de51da0a19d38a1978e84147e2"
+    },
+    {
+      "start": 9792,
+      "bank": "ORTEGA1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega1.syx",
+      "afx_sha256": "acf0331775f4f802d452379835816a8b64ba1052faf88c439a549c4e63c4a73d"
+    },
+    {
+      "start": 9824,
+      "bank": "ORTEGA10",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega10.syx",
+      "afx_sha256": "aff3e9af91a14dd4c098fca08f2c36c25b0dd09c86bef36ae9dfebd55b79e09c"
+    },
+    {
+      "start": 9856,
+      "bank": "ORTEGA11",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega11.syx",
+      "afx_sha256": "a08415e9ce738c9342ba2d48afc4468625abe7c92dd717db6015cd570cb3aed9"
+    },
+    {
+      "start": 9888,
+      "bank": "ORTEGA12",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega12.syx",
+      "afx_sha256": "2f266194752fbfe90cb84fbb691c62e1c3d24c9fda4e911f524f5d494bb1d4d3"
+    },
+    {
+      "start": 9920,
+      "bank": "ORTEGA14",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega14.syx",
+      "afx_sha256": "05072299a237fededed409dc37f83704abac6bb6f5eec658032e51aae75138a2"
+    },
+    {
+      "start": 9952,
+      "bank": "ORTEGA15",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega15.syx",
+      "afx_sha256": "6858b80372908b570131dd4a4a8e7a178bd09af0d4e5f2d208a52c55282ece35"
+    },
+    {
+      "start": 9984,
+      "bank": "ORTEGA16",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega16.syx",
+      "afx_sha256": "3924b77ba6ec0a9b8902667d43b71660dc718a253b273d5427bacb2f1cd158ed"
+    },
+    {
+      "start": 10016,
+      "bank": "ORTEGA17",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega17.syx",
+      "afx_sha256": "84656972e724641b0f4cde1e322ea6719ff706e46844f38357116df33d37b888"
+    },
+    {
+      "start": 10048,
+      "bank": "ORTEGA18",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega18.syx",
+      "afx_sha256": "e63e05a83515977fb1faad0277ee581b880ed78744f8a9639bedcf4b783efb28"
+    },
+    {
+      "start": 10080,
+      "bank": "ORTEGA19",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega19.syx",
+      "afx_sha256": "0f782763a7d8ec8e7cac6eb27e573d8b5e005c7cbc610e2143e048827a83158b"
+    },
+    {
+      "start": 10112,
+      "bank": "ORTEGA20",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega20.syx",
+      "afx_sha256": "0f0ebd079a360de6a5035aaa657ea7a11f4ac8f6e11c3434edfed80887082c8c"
+    },
+    {
+      "start": 10144,
+      "bank": "ORTEGA3",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega3.syx",
+      "afx_sha256": "ab5e2e9d6feca3615bf01e40c1df9d5f335f52685143897a855c01c485309719"
+    },
+    {
+      "start": 10176,
+      "bank": "ORTEGA4",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega4.syx",
+      "afx_sha256": "ca9f50bd69a5543f8cb9d1a4a2bdebd7793bc737a87969703f03d05b0398f2af"
+    },
+    {
+      "start": 10208,
+      "bank": "ORTEGA5",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega5.syx",
+      "afx_sha256": "38279dd893779dd6217307dbbb4ad2d138e5438993ef015696051aa02d5a249d"
+    },
+    {
+      "start": 10240,
+      "bank": "ORTEGA8",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega8.syx",
+      "afx_sha256": "c5e8856a9e5ebed7aa0bb4096a56df382c53169bfcb6af3e773988de9c7af395"
+    },
+    {
+      "start": 10272,
+      "bank": "ORTEGA9",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Ortega9.syx",
+      "afx_sha256": "e355474bd8cdb52900d2bcbf62bbad58d7c097d287911dc407bdcd0e29cb841d"
+    },
+    {
+      "start": 10304,
+      "bank": "PEARSON",
+      "source": "DX7_AllTheWeb/Jack Deckard/pearson.syx",
+      "afx_sha256": "ac61faa4539df135c263b2c42766c9dd771727370f5c6709e6612ffaeb5a9d68"
+    },
+    {
+      "start": 10336,
+      "bank": "PEDANNA",
+      "source": "DX7_AllTheWeb/Jack Deckard/pedanna.syx",
+      "afx_sha256": "a32365b5512bd19a83bdc6d7d1719a791ebf0dce65cafd7f54ae3177b724db5e"
+    },
+    {
+      "start": 10368,
+      "bank": "PERC1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Perc1.syx",
+      "afx_sha256": "20e63746370cb158d63089bcc1f394ec09b4f40daf04f3e2e98531d2d9506328"
+    },
+    {
+      "start": 10400,
+      "bank": "PERC2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Perc2.syx",
+      "afx_sha256": "c67cc3b398254b2d60328c8ad0eab350f364976a21199cc6b27e1f799711af0a"
+    },
+    {
+      "start": 10432,
+      "bank": "PERCUS01",
+      "source": "DX7_AllTheWeb/Jack Deckard/percus01.syx",
+      "afx_sha256": "4b330af2124e805026a1aa04726869732a3693c5ebeb3664f0c7cc66f8453c0b"
+    },
+    {
+      "start": 10464,
+      "bank": "PERCUS02",
+      "source": "DX7_AllTheWeb/Jack Deckard/percus02.syx",
+      "afx_sha256": "72696c94feccf384eb6cba3cb5f87ded3743c4bbd2176a0499375db77e31e1d9"
+    },
+    {
+      "start": 10496,
+      "bank": "PERCUS03",
+      "source": "DX7_AllTheWeb/Jack Deckard/percus03.syx",
+      "afx_sha256": "a741c86823fa13229e03a38e0db39494dd7381920c51a795d5d8cfebc548dd67"
+    },
+    {
+      "start": 10528,
+      "bank": "PERCUS04",
+      "source": "DX7_AllTheWeb/Jack Deckard/percus04.syx",
+      "afx_sha256": "587c248b56e500eba0642e8eeaef70e23ae128a46c45062c2bda6980c5b4041c"
+    },
+    {
+      "start": 10560,
+      "bank": "PERCUS06",
+      "source": "DX7_AllTheWeb/Jack Deckard/percus06.syx",
+      "afx_sha256": "cdc37aecebf8fc400ab5dc3cad281dab19f51a64e494f4de94a390c362db00c4"
+    },
+    {
+      "start": 10592,
+      "bank": "PERCUS07",
+      "source": "DX7_AllTheWeb/Jack Deckard/percus07.syx",
+      "afx_sha256": "710d49e4d4ca39123760bbcca44becf884a674a1aba7eafb4c5e98801d323b82"
+    },
+    {
+      "start": 10624,
+      "bank": "PERCUS08",
+      "source": "DX7_AllTheWeb/Jack Deckard/percus08.syx",
+      "afx_sha256": "702a52a0c881c22f80c23586cc94f4c96240ff251466ed250b6f19400f87ca82"
+    },
+    {
+      "start": 10656,
+      "bank": "PERCUS09",
+      "source": "DX7_AllTheWeb/Jack Deckard/percus09.syx",
+      "afx_sha256": "2e846de7f433133d24b83c69f28888af6d918892802b5365d675018744006293"
+    },
+    {
+      "start": 10688,
+      "bank": "PERCUS10",
+      "source": "DX7_AllTheWeb/Jack Deckard/percus10.syx",
+      "afx_sha256": "d8dfa2f15de6ba522202f17fe6add8d241f835ee1ed8616bc56a0a88a74469da"
+    },
+    {
+      "start": 10720,
+      "bank": "PERCUSSI",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Percussi.syx",
+      "afx_sha256": "78f755e416b836ffda3a570571700d11c7f81b76f5af6f27d154a12be0fee647"
+    },
+    {
+      "start": 10752,
+      "bank": "PIANO_1",
+      "source": "DX7_AllTheWeb/Dave Benson/PIANO_1.SYX",
+      "afx_sha256": "37cf828c68d7a49c34814022c369ad91732f8c6a0918c65eea25dae0588238e9"
+    },
+    {
+      "start": 10784,
+      "bank": "PIANO_2",
+      "source": "DX7_AllTheWeb/Dave Benson/PIANO_2.SYX",
+      "afx_sha256": "de514933f09658795ddb6cfc4d58cc08c31726ae028af01f229179c0e2e7d056"
+    },
+    {
+      "start": 10816,
+      "bank": "PIANO_3",
+      "source": "DX7_AllTheWeb/Dave Benson/PIANO_3.SYX",
+      "afx_sha256": "3ab0fd5724a01bf58c492ef20ef185839c7af8d7d2381a84c9020d9498fe0064"
+    },
+    {
+      "start": 10848,
+      "bank": "RACK1",
+      "source": "DX7_AllTheWeb/Dave Benson/RACK1.SYX",
+      "afx_sha256": "69e65acfd0764c5311935de51ecc163942f635e2457ebff47d1a69271293b004"
+    },
+    {
+      "start": 10880,
+      "bank": "RACK2",
+      "source": "DX7_AllTheWeb/Dave Benson/RACK2.SYX",
+      "afx_sha256": "6bd22f91cb79033c9798d8357b24f18153146addc5b6dd29b898d489333dc247"
+    },
+    {
+      "start": 10912,
+      "bank": "RACK3",
+      "source": "DX7_AllTheWeb/Dave Benson/RACK3.SYX",
+      "afx_sha256": "55d574d7de3918c15427f0a2705a3f7931ba94fd45cf88e6888aec4e4b47c9a0"
+    },
+    {
+      "start": 10944,
+      "bank": "RCHAN001",
+      "source": "DX7_AllTheWeb/Dave Benson/RCHAN001.SYX",
+      "afx_sha256": "e6b4e53ad60a786ec2fe1f8843ed970ca536f50de31c0dee647ec02cb3b407ad"
+    },
+    {
+      "start": 10976,
+      "bank": "RAM BANK",
+      "source": "DX7_AllTheWeb/Jack Deckard/Ram Bank.syx",
+      "afx_sha256": "fcc2da99b23547a5defe75f4791475ad19d8c3bed66499af48612534844d10b2"
+    },
+    {
+      "start": 11008,
+      "bank": "RAM CARTRIDGE",
+      "source": "DX7_AllTheWeb/Jack Deckard/Ram Cartridge.syx",
+      "afx_sha256": "d4683681e96de8dde062fd8ee193a6b5054d6c19815168f3e6ed1f4337a6f45a"
+    },
+    {
+      "start": 11040,
+      "bank": "SFX1",
+      "source": "DX7_AllTheWeb/Dave Benson/SFX1.SYX",
+      "afx_sha256": "66fb95ae5e8834d69883b8cf1c85d2c0f8b50e77d136798337f119e01b476c7f"
+    },
+    {
+      "start": 11072,
+      "bank": "SFX2",
+      "source": "DX7_AllTheWeb/Dave Benson/SFX2.SYX",
+      "afx_sha256": "b6b02f7ada403ba1c91f3523f4c3d83caac87e7ed6da77cc03f89c2deecb1934"
+    },
+    {
+      "start": 11104,
+      "bank": "SFX3",
+      "source": "DX7_AllTheWeb/Dave Benson/SFX3.SYX",
+      "afx_sha256": "930eac4e834df7a2f0520f884c1b488cc345a9feadf94b64fe6aab0f55d12cae"
+    },
+    {
+      "start": 11136,
+      "bank": "SFX4",
+      "source": "DX7_AllTheWeb/Dave Benson/SFX4.SYX",
+      "afx_sha256": "935cfe25446856c5770546c36d643c0dad9ed19283789ef9bed4396c2c3dd2a5"
+    },
+    {
+      "start": 11168,
+      "bank": "SFX5",
+      "source": "DX7_AllTheWeb/Dave Benson/SFX5.SYX",
+      "afx_sha256": "d3cba03193b62f70adce7a1e5ce2a2a2fbb2d75e46cf1aeedf36c5db9b8c421f"
+    },
+    {
+      "start": 11200,
+      "bank": "SFX_1",
+      "source": "DX7_AllTheWeb/Dave Benson/SFX_1.SYX",
+      "afx_sha256": "81aa05d2dfd900a83df3538f2fc312b5117471fadfc4416cb61011a86de749a5"
+    },
+    {
+      "start": 11232,
+      "bank": "SFX_2",
+      "source": "DX7_AllTheWeb/Dave Benson/SFX_2.SYX",
+      "afx_sha256": "1f1c4fbdd6ce2dbf79fb933020660b61ee56a5423e5219bbeda0f75bfb7d1cd0"
+    },
+    {
+      "start": 11264,
+      "bank": "SFX_3",
+      "source": "DX7_AllTheWeb/Dave Benson/SFX_3.SYX",
+      "afx_sha256": "ef4d8dd0cf8f747a13f401dfeba7c8b555588f8e123314021d6ce73fe764b71e"
+    },
+    {
+      "start": 11296,
+      "bank": "SFX_4",
+      "source": "DX7_AllTheWeb/Dave Benson/SFX_4.SYX",
+      "afx_sha256": "3f611a76943a39338a443332cdd5f86efdc5b68a1644321b7a67b02e6f8ae8a9"
+    },
+    {
+      "start": 11328,
+      "bank": "SFX_5",
+      "source": "DX7_AllTheWeb/Dave Benson/SFX_5.SYX",
+      "afx_sha256": "5dc27c5be1045b95c11707847edbe762f95c5ae913b8e7042e363c0ea55e156c"
+    },
+    {
+      "start": 11360,
+      "bank": "SONUS10",
+      "source": "DX7_AllTheWeb/Dave Benson/SONUS10.SYX",
+      "afx_sha256": "8782967dce92ef021c39f3e1760953df2cb0fa10e1b49050d2286ea4977d9903"
+    },
+    {
+      "start": 11392,
+      "bank": "SONUS2",
+      "source": "DX7_AllTheWeb/Dave Benson/SONUS2.SYX",
+      "afx_sha256": "b346275e81cb56af960f9858f728a11213fbcfa709263d797b40f1e40095b49f"
+    },
+    {
+      "start": 11424,
+      "bank": "SONUS3",
+      "source": "DX7_AllTheWeb/Dave Benson/SONUS3.SYX",
+      "afx_sha256": "c069365136fd13aa8daade4e1763b3a8e751d0cde9547224e976ac79c7bfede0"
+    },
+    {
+      "start": 11456,
+      "bank": "SONUS4",
+      "source": "DX7_AllTheWeb/Dave Benson/SONUS4.SYX",
+      "afx_sha256": "ece7aecbb26ca5339ce7e22458ad46b256c61f45f115393a604dd9120b660a96"
+    },
+    {
+      "start": 11488,
+      "bank": "SONUS5",
+      "source": "DX7_AllTheWeb/Dave Benson/SONUS5.SYX",
+      "afx_sha256": "00966ec840d3fc0f3fa5bc6762381bd3a1a3182c1452e4ee463f5f8bade3b723"
+    },
+    {
+      "start": 11520,
+      "bank": "SONUS7",
+      "source": "DX7_AllTheWeb/Dave Benson/SONUS7.SYX",
+      "afx_sha256": "ed033de5416f7975a9932099c061576978f3890ffd245860f041e14b9ac3c4c3"
+    },
+    {
+      "start": 11552,
+      "bank": "SONUS8",
+      "source": "DX7_AllTheWeb/Dave Benson/SONUS8.SYX",
+      "afx_sha256": "8e82c46729cc614e8917b3088c6d882cb318398a92a0a7666385ddbb01338cc5"
+    },
+    {
+      "start": 11584,
+      "bank": "SONUS9",
+      "source": "DX7_AllTheWeb/Dave Benson/SONUS9.SYX",
+      "afx_sha256": "734501a91aade5c4bca2c238f5045bf9066468b07236b56f681ccc9f2c4afd1b"
+    },
+    {
+      "start": 11616,
+      "bank": "SPL-A",
+      "source": "DX7_AllTheWeb/Dave Benson/SPL-A.SYX",
+      "afx_sha256": "d75750adc06e77f7166058c4c36aa74cd5eea99bec345506ac2ac0f13134cb22"
+    },
+    {
+      "start": 11648,
+      "bank": "SPL-B",
+      "source": "DX7_AllTheWeb/Dave Benson/SPL-B.SYX",
+      "afx_sha256": "e19ed4540e244f16cd1a92c251abd3d804de5cea6b0ab5083b696d82ad45c152"
+    },
+    {
+      "start": 11680,
+      "bank": "SPL-C",
+      "source": "DX7_AllTheWeb/Dave Benson/SPL-C.SYX",
+      "afx_sha256": "f5529afcf6089a1d590b66a2b8e0ed551fb3c656febac9140a97b4b5a28eeec1"
+    },
+    {
+      "start": 11712,
+      "bank": "SPL-D",
+      "source": "DX7_AllTheWeb/Dave Benson/SPL-D.SYX",
+      "afx_sha256": "022e00b919cce9da12e420baeda6e9a986cbce547c731c66565cdea5bf9f27ca"
+    },
+    {
+      "start": 11744,
+      "bank": "SPL-E",
+      "source": "DX7_AllTheWeb/Dave Benson/SPL-E.SYX",
+      "afx_sha256": "420dd67e20a231b96e2df5f0357d2a6d716daad3ed414c1b629d90d57bebdd70"
+    },
+    {
+      "start": 11776,
+      "bank": "SPLIT2DX",
+      "source": "DX7_AllTheWeb/Dave Benson/SPLIT2DX.SYX",
+      "afx_sha256": "0f0a53d7db2fba9eeb55c11c52601b4fb6bd8eef23dd00975efa5e4fcbff37a1"
+    },
+    {
+      "start": 11808,
+      "bank": "PERCVIBE",
+      "source": "DX7_AllTheWeb/Jack Deckard/percvibe.syx",
+      "afx_sha256": "b03983f9db7929bd4ee3a52ede4995b57c39ab92d47ec31b2148920edbde54d6"
+    },
+    {
+      "start": 11840,
+      "bank": "PIANO32",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Piano32.syx",
+      "afx_sha256": "ed21551890433ae6fd996c236869850b38413244ea9fe0a0435613fce1df9fe0"
+    },
+    {
+      "start": 11872,
+      "bank": "PIANO_01",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_01.syx",
+      "afx_sha256": "e6501984e71036cc93374503fde44029322e6b96a1ae79d642c78dcb3985e07b"
+    },
+    {
+      "start": 11904,
+      "bank": "PIANO_02",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_02.syx",
+      "afx_sha256": "12950d8dab161ee7ed13f4df4bc5ad93dfa8e89a94864893fa6d9cffe0e676fc"
+    },
+    {
+      "start": 11936,
+      "bank": "PIANO_03",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_03.syx",
+      "afx_sha256": "85e24d440b74b77f45dc7595a664066db829c7b0625eb910aa5267b969e0d681"
+    },
+    {
+      "start": 11968,
+      "bank": "PIANO_04",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_04.syx",
+      "afx_sha256": "f108b24cee59800556963632894cc31d904e7be1a4ecf7f265044445ba3a10c0"
+    },
+    {
+      "start": 12000,
+      "bank": "PIANO_05",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_05.syx",
+      "afx_sha256": "46be549160e52a6d84f2a12aa2845b0617eb2ae4bb96227635333e0281c5a583"
+    },
+    {
+      "start": 12032,
+      "bank": "PIANO_06",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_06.syx",
+      "afx_sha256": "cf253b74f5c5e46340d015925227760be7375b5436b1621c60f15a8cae6e4881"
+    },
+    {
+      "start": 12064,
+      "bank": "PIANO_A1",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_a1.syx",
+      "afx_sha256": "cd1ff2e0ec150a7e50397bc9145484015f2e12a1d684e32cc9d4b04120267ab8"
+    },
+    {
+      "start": 12096,
+      "bank": "PIANO_E1",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_e1.syx",
+      "afx_sha256": "b65e752895b0f1848d2b475d0c51edde9fcce4e469b25828c0a2fbed1f2a0c9b"
+    },
+    {
+      "start": 12128,
+      "bank": "PIANO_E2",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_e2.syx",
+      "afx_sha256": "7fc300f1ed193cef4686d1a953a77c3d081580015763d5da9dfb536d8f79d74b"
+    },
+    {
+      "start": 12160,
+      "bank": "PIANO_E3",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_e3.syx",
+      "afx_sha256": "eac053f769cf99a5ad211b36ebd2fc5aab3c07a64dd1a81cba83e58635b5160f"
+    },
+    {
+      "start": 12192,
+      "bank": "PIANO_E5",
+      "source": "DX7_AllTheWeb/Jack Deckard/piano_e5.syx",
+      "afx_sha256": "f0debbd2a241de2e344ef6d6765c14dddbe86656b3c35d144226332ff4a8a6f0"
+    },
+    {
+      "start": 12224,
+      "bank": "PLUCKED",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Plucked.syx",
+      "afx_sha256": "fac7b3eaa87e76b4fe5ad59aaa1d6c9081cdcdb1f65babee1eb7e94005c74a2d"
+    },
+    {
+      "start": 12256,
+      "bank": "PR02",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Pr02.syx",
+      "afx_sha256": "ccdb55a784de00e8ea6fd3d161ddf6d2e73dc035346be21dd7d6edc2fb3683e5"
+    },
+    {
+      "start": 12288,
+      "bank": "PR03",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Pr03.syx",
+      "afx_sha256": "17e8152ae6707ef5678caecf66a06d1dfa71e1cc38f3933ae21d463cf67ea9f9"
+    },
+    {
+      "start": 12320,
+      "bank": "PRO2",
+      "source": "DX7_AllTheWeb/Jack Deckard/pro2.syx",
+      "afx_sha256": "e33e020b466ca5c1a9a1df59dd3c25b262d5d3041bb7c98d5ac2a083299eaeb8"
+    },
+    {
+      "start": 12352,
+      "bank": "RAMBANK1",
+      "source": "DX7_AllTheWeb/Jack Deckard/rambank1.syx",
+      "afx_sha256": "19f93fe0a215e0e9106fc1d679cc5d8f6ce23aa61b7f27f95b70088bda8fcbf9"
+    },
+    {
+      "start": 12384,
+      "bank": "RAMCART",
+      "source": "DX7_AllTheWeb/Jack Deckard/ramcart.syx",
+      "afx_sha256": "d0f0352bd9edb2f28b8d223d0ca70647486b741fab841ae901aecc5c2c2e4f18"
+    },
+    {
+      "start": 12416,
+      "bank": "RAMCARTP",
+      "source": "DX7_AllTheWeb/Jack Deckard/ramcartp.syx",
+      "afx_sha256": "8c896c4f77bc7def1ffcc113b0114c3817a63e99ba00e8afd6095848108aefb9"
+    },
+    {
+      "start": 12448,
+      "bank": "RHODES1",
+      "source": "DX7_AllTheWeb/Jack Deckard/rhodes1.syx",
+      "afx_sha256": "0e0db110133630e47aee4ce4fc32c71873dd78b5fd18bd5fb9c787953b3819a8"
+    },
+    {
+      "start": 12480,
+      "bank": "RHODES2",
+      "source": "DX7_AllTheWeb/Jack Deckard/rhodes2.syx",
+      "afx_sha256": "57bbb098d8517751e366e00c1ba488949e4ecca9e6be1922cce4654b9d45c43e"
+    },
+    {
+      "start": 12512,
+      "bank": "ROAD2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Road2.syx",
+      "afx_sha256": "768d4f950df706a1696231eeef53e29014f280e2e53c4594ce63ce9b5d0d53cb"
+    },
+    {
+      "start": 12544,
+      "bank": "ROM1A",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX7 ROM1/ROM1A.syx",
+      "afx_sha256": "f955d0d597065fb83ff2ee44b9977d880238fb2506c43176a0cbfac17be13475"
+    },
+    {
+      "start": 12576,
+      "bank": "ROM1B",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX7 ROM1/ROM1B.syx",
+      "afx_sha256": "f227be086cd0a6223f48856c4d1a2958ee4af2a897bb537bda3c3f15905a47b1"
+    },
+    {
+      "start": 12608,
+      "bank": "ROM2A",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX7 ROM2/ROM2A.syx",
+      "afx_sha256": "5544c34e4d7e7afb8ee8b9ed42638529d9be6e02d051fc63db130504ede93740"
+    },
+    {
+      "start": 12640,
+      "bank": "ROM2B",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX7 ROM2/ROM2B.syx",
+      "afx_sha256": "c56f57d194b009792aabaa18119c1538b4eba5acd45a0f9ccc134adb77b7e72f"
+    },
+    {
+      "start": 12672,
+      "bank": "ROM3A",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX7 ROM3/ROM3A.syx",
+      "afx_sha256": "401526d0cfe71ac2843d1086d6fc364b7f21aa86c473aa9e18d77b64bd26d680"
+    },
+    {
+      "start": 12704,
+      "bank": "ROM3B",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX7 ROM3/ROM3B.syx",
+      "afx_sha256": "c75771f025561158ce6c0378f43ac83943bb9fb63cc0d493ac30137bfd801993"
+    },
+    {
+      "start": 12736,
+      "bank": "ROM4A",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX7 ROM4/ROM4A.syx",
+      "afx_sha256": "d61a6920d3ef1264e038b81b8494a81e3a173abc0ecf50fdb4ce86eaaa7cbd3a"
+    },
+    {
+      "start": 12768,
+      "bank": "ROM4B",
+      "source": "DX7_AllTheWeb/Dexed v1_0 (Black Winny)/Original Yamaha/DX7 ROM4/ROM4B.syx",
+      "afx_sha256": "f281e2c899619b9b4c1ed1fe353037384f692a93b8c92be92cdad050eafd4358"
+    },
+    {
+      "start": 12800,
+      "bank": "SAX_01",
+      "source": "DX7_AllTheWeb/Jack Deckard/sax_01.syx",
+      "afx_sha256": "ef71994a2711acf7e67b13d5e46010884d9033c49234bfbff073692b999e2871"
+    },
+    {
+      "start": 12832,
+      "bank": "SITAR",
+      "source": "DX7_AllTheWeb/Jack Deckard/sitar.syx",
+      "afx_sha256": "b85fa6ded6fbf9bc4cee5c0deed2555b75cc3bf327a707c976f5aef18f57426b"
+    },
+    {
+      "start": 12864,
+      "bank": "SJSU-E",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Sjsu-e.syx",
+      "afx_sha256": "5dc7ea0d3cf7be5cd074e1c1d1de3e3a0a4be109c765678250e6d562ccee0828"
+    },
+    {
+      "start": 12896,
+      "bank": "SJSU-G",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Sjsu-g.syx",
+      "afx_sha256": "6f3dfea9c9780f8ca2c17d5c4a75902b8c535565adfa0d32d61050c6e887d6ca"
+    },
+    {
+      "start": 12928,
+      "bank": "SOLANGE5",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Solange5.syx",
+      "afx_sha256": "5a1f3b3db7ab28056c73bd43ca3aa9306e946ac595020b6c2644c524a898829b"
+    },
+    {
+      "start": 12960,
+      "bank": "SOLANGE6",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Solange6.syx",
+      "afx_sha256": "1da2f3b97c57388e53c519712eab8d81a738003ce6cc509b8d7eb385ad672406"
+    },
+    {
+      "start": 12992,
+      "bank": "SOLANGE7",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Solange7.syx",
+      "afx_sha256": "6426c6cb6cc2eea713dd15e28eafd9fabcd91080635897e7b0139172ff30a780"
+    },
+    {
+      "start": 13024,
+      "bank": "SOLANGE8",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Solange8.syx",
+      "afx_sha256": "a912ad50073f18343afadd54be7ab9ca7f312e8bcdc52678c3c641853de58414"
+    },
+    {
+      "start": 13056,
+      "bank": "SONUS1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Sonus1.syx",
+      "afx_sha256": "3122b92594358aff27b57e3e5275940b156202a741f7b724421b892f02ce5a22"
+    },
+    {
+      "start": 13088,
+      "bank": "SPANGLER",
+      "source": "DX7_AllTheWeb/Jack Deckard/spangler.syx",
+      "afx_sha256": "1df5a4d4e68cbaac12a3a3779e8c50d853f153d4458da4df74b4bb2eda2c1556"
+    },
+    {
+      "start": 13120,
+      "bank": "SPLITS",
+      "source": "DX7_AllTheWeb/Jack Deckard/splits.syx",
+      "afx_sha256": "a3d3df5b5e589ffcfb5049ad61a89cbdba936038b92559328f51bc6ecf48db03"
+    },
+    {
+      "start": 13152,
+      "bank": "STEINBER",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Steinber.syx",
+      "afx_sha256": "1e7d982b63482a0fa3cffa4092d57c1582822034ff62f68edb577d6b1a09fd8d"
+    },
+    {
+      "start": 13184,
+      "bank": "STEPH1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Steph1.syx",
+      "afx_sha256": "f0228a12c8994aece09bb54f6b5e0b2da088483f93545a5b103e1ee1d00a53cc"
+    },
+    {
+      "start": 13216,
+      "bank": "STEPH3",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Steph3.syx",
+      "afx_sha256": "dbbb2c13fdef302bf0560158e5fc4c0526966ce4ed28cd6766452d3443f41858"
+    },
+    {
+      "start": 13248,
+      "bank": "STEPH4",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Steph4.syx",
+      "afx_sha256": "2a496cdb87545dd68c437f9dd4284ab44afb748e3fddcccfe65981f2acfa8a2d"
+    },
+    {
+      "start": 13280,
+      "bank": "STEVE1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Steve1.syx",
+      "afx_sha256": "577fa45cbcabce94846109bb824999dd4e37ef1b969628444d3e0d253a2bb0f6"
+    },
+    {
+      "start": 13312,
+      "bank": "STRING1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/String1.syx",
+      "afx_sha256": "2974e9f4d60fd0e2f16b18223d15efabadccc1ec5cb22659815e15d858ed79d6"
+    },
+    {
+      "start": 13344,
+      "bank": "STRINGB",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Stringb.syx",
+      "afx_sha256": "ea9f76373c39d5ac899faac7661824977548bfcbcdd6b8d9fadfdf0f6633ed73"
+    },
+    {
+      "start": 13376,
+      "bank": "STRINGS",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Strings.syx",
+      "afx_sha256": "b5e3a8400158dc1ebcc4adcc102d379e544b327bef554bf67a9a833b51cef10e"
+    },
+    {
+      "start": 13408,
+      "bank": "STRNGA-A",
+      "source": "DX7_AllTheWeb/Jack Deckard/strnga-a.syx",
+      "afx_sha256": "39af600f6df7644efd85fdd59a627551f0e694313e5c8dcc8c2c671960f001fd"
+    },
+    {
+      "start": 13440,
+      "bank": "STRNGA-B",
+      "source": "DX7_AllTheWeb/Jack Deckard/strnga-b.syx",
+      "afx_sha256": "e3bd0fa20458bafd695d74196759bd8806a365802879adbf5e220e856aff3733"
+    },
+    {
+      "start": 13472,
+      "bank": "STRNGH-K",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngh-k.syx",
+      "afx_sha256": "fd544bc8d19d5be0510fafa63cd2499f557a3415275f10c5f64fb44b662d09fb"
+    },
+    {
+      "start": 13504,
+      "bank": "STRNGS01",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs01.syx",
+      "afx_sha256": "b3b677d7abbc18737653d2605905702c2c7b83de11c786c02120810f5887711a"
+    },
+    {
+      "start": 13536,
+      "bank": "STRNGS02",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs02.syx",
+      "afx_sha256": "491723e421f089a2f784d666ca46bc1a63123342e7d15631ccaabce3f9feeb9d"
+    },
+    {
+      "start": 13568,
+      "bank": "STRNGS03",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs03.syx",
+      "afx_sha256": "c0ae8333c4e10582c29a2dde9bf3d7b9b41aab687a8e676417349002e7f3c82f"
+    },
+    {
+      "start": 13600,
+      "bank": "STRNGS04",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs04.syx",
+      "afx_sha256": "accccfc04dcc359312350a57d3dd5a2fbb721fd582530bd62df28b3613bceacf"
+    },
+    {
+      "start": 13632,
+      "bank": "STRNGS05",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs05.syx",
+      "afx_sha256": "d6d902071c44c4ee08998caf9191e2fe94a773743b87d0470dc3a93eb8462332"
+    },
+    {
+      "start": 13664,
+      "bank": "SYN1",
+      "source": "DX7_AllTheWeb/Dave Benson/SYN1.SYX",
+      "afx_sha256": "8a1f032c04530fddc6cdb1acb6462e1bf4c6b8d8114e83f8dc8c9c37e9e780b2"
+    },
+    {
+      "start": 13696,
+      "bank": "SYN2",
+      "source": "DX7_AllTheWeb/Dave Benson/SYN2.SYX",
+      "afx_sha256": "80958c8702fb7d0e280aa77dbcebdb48cb9bdd86011524f5d3dcd40c59f4d030"
+    },
+    {
+      "start": 13728,
+      "bank": "SYN3",
+      "source": "DX7_AllTheWeb/Dave Benson/SYN3.SYX",
+      "afx_sha256": "5666bc3322b4bdaeaf12d865f18b4b8a0792a2d3e50b9f31ab874987d8c45ea1"
+    },
+    {
+      "start": 13760,
+      "bank": "SYN4",
+      "source": "DX7_AllTheWeb/Dave Benson/SYN4.SYX",
+      "afx_sha256": "82c80966021155a563df4994c1f82a0ed8496e428d20e633c05d91c71764c1b7"
+    },
+    {
+      "start": 13792,
+      "bank": "SYN6",
+      "source": "DX7_AllTheWeb/Dave Benson/SYN6.SYX",
+      "afx_sha256": "04317dfc0dec65218077c0799b11aa9720aafbdc917cbd77d3056ff1936d3435"
+    },
+    {
+      "start": 13824,
+      "bank": "SYN7",
+      "source": "DX7_AllTheWeb/Dave Benson/SYN7.SYX",
+      "afx_sha256": "9d53ee8ac3f4c487ac09c6ce3e82555c23b5864e1b10dd73d27c37e633352b70"
+    },
+    {
+      "start": 13856,
+      "bank": "SYN8",
+      "source": "DX7_AllTheWeb/Dave Benson/SYN8.SYX",
+      "afx_sha256": "7c4679716b981fdd768e152b59909da1b961830eb7e47a30e2ff98fa60af507a"
+    },
+    {
+      "start": 13888,
+      "bank": "TX7-A",
+      "source": "DX7_AllTheWeb/Dave Benson/TX7-A.SYX",
+      "afx_sha256": "a7ee8df46fccf611861e247096a80fcaeefd82c4c4dfffc526b39020976bacd3"
+    },
+    {
+      "start": 13920,
+      "bank": "STRNGS06",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs06.syx",
+      "afx_sha256": "acfdf8ceea6035b48f02582a7089dd7b0b354d6e68102bc64c6cfd59a0c083ca"
+    },
+    {
+      "start": 13952,
+      "bank": "STRNGS07",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs07.syx",
+      "afx_sha256": "5b7d9d2044efb9bc273e1a73372115c18d688222add75896e3850a301fa6179c"
+    },
+    {
+      "start": 13984,
+      "bank": "STRNGS08",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs08.syx",
+      "afx_sha256": "6a9a95c7b9f624d4d87cb8e5947b96c1f4a3fa233a747672ddf7af1ff91a6f6b"
+    },
+    {
+      "start": 14016,
+      "bank": "STRNGS09",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs09.syx",
+      "afx_sha256": "e31f2103c4922eea25d7d0073ce3097b6151374dbbb7d1857f1d66d11e235562"
+    },
+    {
+      "start": 14048,
+      "bank": "STRNGS10",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs10.syx",
+      "afx_sha256": "c0a76f25d18d526edde2af7df5e58a073da0bca5d88a232c403fcea05e80ce7c"
+    },
+    {
+      "start": 14080,
+      "bank": "STRNGS12",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs12.syx",
+      "afx_sha256": "181317859f3948f82b783fa83aceb7d16c06af020f6035ab863240bc122c7819"
+    },
+    {
+      "start": 14112,
+      "bank": "STRNGS13",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs13.syx",
+      "afx_sha256": "d4cfcc40474407fe7d258c8e27385fc50e790144dd4c5ae9b056ea4fe01c095e"
+    },
+    {
+      "start": 14144,
+      "bank": "STRNGS14",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs14.syx",
+      "afx_sha256": "d685c1f2cf7406065a4eac4881dfd7e689d1f090516c3b2bf3376e8294944e33"
+    },
+    {
+      "start": 14176,
+      "bank": "STRNGS15",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs15.syx",
+      "afx_sha256": "42a96a8cbb0a65b46b8cf8d385a568da58eba540f336fbde27cbcb3590381186"
+    },
+    {
+      "start": 14208,
+      "bank": "STRNGS16",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs16.syx",
+      "afx_sha256": "c979bd7bd459ced71a1f2c958a0ceafb5ae74a76a917f788ba428aaeab0baaae"
+    },
+    {
+      "start": 14240,
+      "bank": "STRNGS17",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs17.syx",
+      "afx_sha256": "f6b623af9dac134fb7c87804a87e7e9b1d01a8a2a9ce9736453d2501c2ec6ba8"
+    },
+    {
+      "start": 14272,
+      "bank": "STRNGS18",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs18.syx",
+      "afx_sha256": "87d7cd11d4f71bc8d2d44e8c973298a89cf541fcc0ae2cb2cb0a5580d1c96014"
+    },
+    {
+      "start": 14304,
+      "bank": "STRNGS19",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs19.syx",
+      "afx_sha256": "8da96d34881b4dbc036565042595e086520baf4e95765502e211567a9a80e428"
+    },
+    {
+      "start": 14336,
+      "bank": "STRNGS20",
+      "source": "DX7_AllTheWeb/Jack Deckard/strngs20.syx",
+      "afx_sha256": "9a18a28096ed9b85665aa48956131b6f0f092066a0585311a00cf1d981de3da9"
+    },
+    {
+      "start": 14368,
+      "bank": "SUSTAIN1",
+      "source": "DX7_AllTheWeb/Jack Deckard/sustain1.syx",
+      "afx_sha256": "3240abf1e47e9bf8b84d3025c08c39ec2006df1e3d25c89b890d799a864e294a"
+    },
+    {
+      "start": 14400,
+      "bank": "SYN_PLUS",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Syn_plus.syx",
+      "afx_sha256": "8a2ff1bb2a127a2125e33eea0162848378b5d379822e33d1fe7feeef5a0f8fa2"
+    },
+    {
+      "start": 14432,
+      "bank": "SYNTH_01",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_01.syx",
+      "afx_sha256": "9bc6f215df884f8f7943b7f4141095a1eef19b00e747e4b4727b356b29ddc342"
+    },
+    {
+      "start": 14464,
+      "bank": "SYNTH_02",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_02.syx",
+      "afx_sha256": "720c532eb0ab74346b1df825a675b5358a4ac5ab38fd4daad039476bfadbeeb8"
+    },
+    {
+      "start": 14496,
+      "bank": "SYNTH_03",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_03.syx",
+      "afx_sha256": "a46281e70632fc04a7c612c2486e6458701dea4c55814a1956261cfb891899b4"
+    },
+    {
+      "start": 14528,
+      "bank": "SYNTH_04",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_04.syx",
+      "afx_sha256": "c0d3e7ef3ab8d9e9fcb1fd1d489387bb6b41d81c9137c0e9d3bf1e15914804d4"
+    },
+    {
+      "start": 14560,
+      "bank": "SYNTH_05",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_05.syx",
+      "afx_sha256": "70c37f4f9520565ebe9094aeb3068f589aae1aec4809030856d873f3bdd7aacf"
+    },
+    {
+      "start": 14592,
+      "bank": "SYNTH_06",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_06.syx",
+      "afx_sha256": "bb69a65c139852f9e2ffaf6785351a236fd16fc82fcf934e37da3f6c503ef3d2"
+    },
+    {
+      "start": 14624,
+      "bank": "SYNTH_07",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_07.syx",
+      "afx_sha256": "3955ef7b0210df64064353e1f121406616df34f13f42ef6210154dcb93b08a92"
+    },
+    {
+      "start": 14656,
+      "bank": "SYNTH_08",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_08.syx",
+      "afx_sha256": "b384ed893541453a0e9788b9b7e1aa025041e1171d2e3f8534423460285d960c"
+    },
+    {
+      "start": 14688,
+      "bank": "SYNTH_09",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_09.syx",
+      "afx_sha256": "cdcfc1cc49c22e06dc7ac1330cf58f394a633d8602f1e1af94ae84b272366852"
+    },
+    {
+      "start": 14720,
+      "bank": "SYNTH_10",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_10.syx",
+      "afx_sha256": "c95813a6e3323dd8229458f138baa188b6d143400c288470f0f0a244a1a2a5a6"
+    },
+    {
+      "start": 14752,
+      "bank": "SYNTH_11",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_11.syx",
+      "afx_sha256": "05cf3492d7e5494f7f933bc3655f2f790dac2170af90d59b2f566f4c82e72319"
+    },
+    {
+      "start": 14784,
+      "bank": "SYNTH_12",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_12.syx",
+      "afx_sha256": "6ae0e4ca86504451e9113eae079b459db89c71dca04d1815205e7818d1a09871"
+    },
+    {
+      "start": 14816,
+      "bank": "SYNTH_13",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_13.syx",
+      "afx_sha256": "58622a8ff4b000dafe8859cb00124db36c3a3f6e6069a1eb0557ccd96911599c"
+    },
+    {
+      "start": 14848,
+      "bank": "SYNTH_14",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_14.syx",
+      "afx_sha256": "f50f40b5276d48229538f0fb347e88380f919ac112c101a26833dee5eae5d172"
+    },
+    {
+      "start": 14880,
+      "bank": "SYNTH_15",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_15.syx",
+      "afx_sha256": "fd75b4e444ddd1e4550c0cc16c15a5dd075dcb9e74153b91f9532cf4337a7c19"
+    },
+    {
+      "start": 14912,
+      "bank": "SYNTH_16",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_16.syx",
+      "afx_sha256": "81a0ae83c4ac3872ec6235593c43c445039fa9a6d292ec3fe7b0f988b65943bf"
+    },
+    {
+      "start": 14944,
+      "bank": "SYNTH_17",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_17.syx",
+      "afx_sha256": "1706f332880d1b787970cb52ce40a994d06a4095bb94080b2caf4aea2bb76ca3"
+    },
+    {
+      "start": 14976,
+      "bank": "SYNTH_18",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_18.syx",
+      "afx_sha256": "a0054d085cda1e677975506efc35164781d0cff8e79598a893efb40eb78ef506"
+    },
+    {
+      "start": 15008,
+      "bank": "SYNTH_19",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_19.syx",
+      "afx_sha256": "0b2a05bcef2eeedcd3d0fa7427cefc91b77466d7839bfb94a9e1e5b11acfbf80"
+    },
+    {
+      "start": 15040,
+      "bank": "SYNTH_20",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_20.syx",
+      "afx_sha256": "9b65f46a94ecba808bf5cd2374471d2b02537ce302ebdb96ef7b95d693ee3bfa"
+    },
+    {
+      "start": 15072,
+      "bank": "SYNTH_21",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_21.syx",
+      "afx_sha256": "6bc5284d774adb9860e57ce04832ac989cdddcd197af00c29b241691ec143f51"
+    },
+    {
+      "start": 15104,
+      "bank": "SYNTH_22",
+      "source": "DX7_AllTheWeb/Jack Deckard/synth_22.syx",
+      "afx_sha256": "3c26d813ac1e51695a904cd00f3fb83cba2e2ff465f680b1c64df90a3e83506b"
+    },
+    {
+      "start": 15136,
+      "bank": "SYNTHS32",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Synths32.syx",
+      "afx_sha256": "6e19f7e400f9564b1d6f82b6a6980374603bf48387f1d45d405b906a9a7346e5"
+    },
+    {
+      "start": 15168,
+      "bank": "SYNTHSBN",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Synthsbn.syx",
+      "afx_sha256": "1ae1abb11132ecf085d8f0f3b32e85eea67d16b337218d07e4356dcaa9dd00a4"
+    },
+    {
+      "start": 15200,
+      "bank": "TEXTURES",
+      "source": "DX7_AllTheWeb/Jack Deckard/textures.syx",
+      "afx_sha256": "ada8e2085b7a763ec61b26e168291ba5900abe0e20b92db71fee79c578c7cc9b"
+    },
+    {
+      "start": 15232,
+      "bank": "TFI2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Tfi2.syx",
+      "afx_sha256": "eb0a2a3565e59161c76b1ab98b1ec16463a8e4d11f40c5f76002a9a4f88c7463"
+    },
+    {
+      "start": 15264,
+      "bank": "TFI3",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Tfi3.syx",
+      "afx_sha256": "6fdd985e928618d53c2e02390671de29eccfb45d23c60c4121c2b5ec5cb5be04"
+    },
+    {
+      "start": 15296,
+      "bank": "TFI5",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Tfi5.syx",
+      "afx_sha256": "cd3190e1ef2d3e8b989c583237b541cb49b18166d62958c89d9387bfc724032b"
+    },
+    {
+      "start": 15328,
+      "bank": "TFI6",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Tfi6.syx",
+      "afx_sha256": "dbc9b49d482202f6876226ff7ce69fac9e72794de009f6ca9fc6274e6de4b061"
+    },
+    {
+      "start": 15360,
+      "bank": "TFI8",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Tfi8.syx",
+      "afx_sha256": "45a2735faf3222059e93a1d30b5cb5f4e37f3b140e80d441a92c2432f27479f0"
+    },
+    {
+      "start": 15392,
+      "bank": "TFRACK01",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Tfrack01.syx",
+      "afx_sha256": "c6098d43c2e8d74ca1baae28343f2167b9623635fa580906c11dec9af7b7d391"
+    },
+    {
+      "start": 15424,
+      "bank": "TFRACK02",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Tfrack02.syx",
+      "afx_sha256": "d35093410bb4752ed2327b9e739c182ea1417bc5a628d717a45cea6d894e9fef"
+    },
+    {
+      "start": 15456,
+      "bank": "THEATRE",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Theatre.syx",
+      "afx_sha256": "22380f1830c70d439f742a52ee09c1c78f2e74f2c91d3265e577b0211d56861d"
+    },
+    {
+      "start": 15488,
+      "bank": "THINGS",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Things.syx",
+      "afx_sha256": "5ee1258430bb0157c5274b0eb7aece485e6b1c0da53c642b2ecc474a386fd63b"
+    },
+    {
+      "start": 15520,
+      "bank": "TRUMPET",
+      "source": "DX7_AllTheWeb/Jack Deckard/trumpet.syx",
+      "afx_sha256": "625acac4daed49b25f4acb665af4bde4a394525693d9fb3c35846d8670618af0"
+    },
+    {
+      "start": 15552,
+      "bank": "VIOLIN_1",
+      "source": "DX7_AllTheWeb/Jack Deckard/violin_1.syx",
+      "afx_sha256": "bfd949520d9fe91ed9a666a389490a915f774ad1c52ef2b3af2d296a8721abc2"
+    },
+    {
+      "start": 15584,
+      "bank": "VOICES_1",
+      "source": "DX7_AllTheWeb/Jack Deckard/voices_1.syx",
+      "afx_sha256": "76bf0388a5904ccd47d43ef44e2505c889a995c410e7e0c88d2d7009a8a1f4e5"
+    },
+    {
+      "start": 15616,
+      "bank": "VOICES_2",
+      "source": "DX7_AllTheWeb/Jack Deckard/voices_2.syx",
+      "afx_sha256": "836f6ed8d29a47053505bc0c6938cfc8243f641b7143b6075d11d49b743c7617"
+    },
+    {
+      "start": 15648,
+      "bank": "VOICES_3",
+      "source": "DX7_AllTheWeb/Jack Deckard/voices_3.syx",
+      "afx_sha256": "09d20ada2e93964641123dbd822d0a39d7e8d69ecc68deba5816aaa7fd0e5ae3"
+    },
+    {
+      "start": 15680,
+      "bank": "VOICES_5",
+      "source": "DX7_AllTheWeb/Jack Deckard/voices_5.syx",
+      "afx_sha256": "e6e49aa0620f3e658ecd4254553171cd6be5dc73590f30bd67138303bf904826"
+    },
+    {
+      "start": 15712,
+      "bank": "VOICES_6",
+      "source": "DX7_AllTheWeb/Jack Deckard/voices_6.syx",
+      "afx_sha256": "bbd623d2ae477f79e7e0b3981c439438251025b29f83ba36b21a60ec2630bef7"
+    },
+    {
+      "start": 15744,
+      "bank": "VOICES_7",
+      "source": "DX7_AllTheWeb/Jack Deckard/voices_7.syx",
+      "afx_sha256": "3bb0fb5967ff34f2bf727b85caed4ed48cb6e71d53130d9535395fbd8843e2cc"
+    },
+    {
+      "start": 15776,
+      "bank": "VOICES_8",
+      "source": "DX7_AllTheWeb/Jack Deckard/voices_8.syx",
+      "afx_sha256": "791d42a6dfcf57c4e64a6d6009888f0f0d5c0968655a04fe4066313f982444fa"
+    },
+    {
+      "start": 15808,
+      "bank": "VOICES_9",
+      "source": "DX7_AllTheWeb/Jack Deckard/voices_9.syx",
+      "afx_sha256": "4ab661b444ff6632b6e96422f0552cedff540b22f7df2dc37aabbb5f7962fd53"
+    },
+    {
+      "start": 15840,
+      "bank": "WEIRD2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Weird2.syx",
+      "afx_sha256": "9c2d555b09f9b415d43bb1ae84f9fb075d9aa0930922a844bf97aa9c8cb6b363"
+    },
+    {
+      "start": 15872,
+      "bank": "WEIRD3",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Weird3.syx",
+      "afx_sha256": "b3352967ffc4ed9dd1f796c76be8ac942e83f98addf750f63275a59d91768a38"
+    },
+    {
+      "start": 15904,
+      "bank": "WHEATLEY",
+      "source": "DX7_AllTheWeb/Jack Deckard/wheatley.syx",
+      "afx_sha256": "31ffbd47baab0a2b593b914374d6183392f71d48267e9e7da453614ca5a6b469"
+    },
+    {
+      "start": 15936,
+      "bank": "WHITE",
+      "source": "DX7_AllTheWeb/Jack Deckard/white.syx",
+      "afx_sha256": "e7127f0b10ae3710db558db4c3c75054b02e71606bb0ee68f0b50f5e436c5077"
+    },
+    {
+      "start": 15968,
+      "bank": "WODWIND1",
+      "source": "DX7_AllTheWeb/Jack Deckard/wodwind1.syx",
+      "afx_sha256": "9e55029df56a9304702f08f42853e26d853063dd479e6c2a0803acbf3da3993c"
+    },
+    {
+      "start": 16000,
+      "bank": "WODWIND2",
+      "source": "DX7_AllTheWeb/Jack Deckard/wodwind2.syx",
+      "afx_sha256": "49f13b07ccf61028c4054d8ede858d8f2dc210d088a085ccfb1124ee1f2d4e17"
+    },
+    {
+      "start": 16032,
+      "bank": "WODWIND3",
+      "source": "DX7_AllTheWeb/Jack Deckard/wodwind3.syx",
+      "afx_sha256": "24f044e1a8f070d1a91159931814b04a75014f4b14c8e2eb8a905b4538a7d907"
+    },
+    {
+      "start": 16064,
+      "bank": "WODWIND4",
+      "source": "DX7_AllTheWeb/Jack Deckard/wodwind4.syx",
+      "afx_sha256": "4adc684796c3e9ea048baa5e7abacc29e01fd76d75895cff769713acb6a1d052"
+    },
+    {
+      "start": 16096,
+      "bank": "WODWIND5",
+      "source": "DX7_AllTheWeb/Jack Deckard/wodwind5.syx",
+      "afx_sha256": "26a6db08d277f92d2b460c0b39519db2fff8e0e74e3cec3eead7defbc4f2bb23"
+    },
+    {
+      "start": 16128,
+      "bank": "WWIND1",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Wwind1.syx",
+      "afx_sha256": "d7a0a7aeb13c994e442ea1590c672cb3cdcc9636df4eb01dbe87e4270cfc98b4"
+    },
+    {
+      "start": 16160,
+      "bank": "WWIND2",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Wwind2.syx",
+      "afx_sha256": "78fec9f539bde95aaf22c89179f4f0086b701f17b0d406b1566f785cb821ee95"
+    },
+    {
+      "start": 16192,
+      "bank": "WWIND3",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Wwind3.syx",
+      "afx_sha256": "cdbae49f28cf1d9f879d988c6941c19ae0599dbbd0c9624b7f465d33cfc8901d"
+    },
+    {
+      "start": 16224,
+      "bank": "WWIND4",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Wwind4.syx",
+      "afx_sha256": "907057c87b042838ab8cf2db751f4524eab5dab4b31296299d39c17573e41a68"
+    },
+    {
+      "start": 16256,
+      "bank": "WYATT",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Wyatt.syx",
+      "afx_sha256": "ab6c493978ff7a41a1b5ea58ce23ef19469d4106c01a874a452ae69002feafb8"
+    },
+    {
+      "start": 16288,
+      "bank": "XYLOS",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Xylos.syx",
+      "afx_sha256": "32c60c1bd977406b1fd9a2d9668370d0cdd27498b282041026ff8c118f8a53b5"
+    },
+    {
+      "start": 16320,
+      "bank": "YAM-26",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Yam-26.syx",
+      "afx_sha256": "59b3061e07765154d24550914563282000b2849123aad87f38fbbc5e89fb9d6f"
+    },
+    {
+      "start": 16352,
+      "bank": "ZONE3",
+      "source": "DX7_AllTheWeb/Chris Dodunski/Zone3.syx",
+      "afx_sha256": "36ace88a3a3c017fbc3e0fa694e0b4a6efa21eb6d1d929320315d90efae55373"
+    }
+  ]
+}

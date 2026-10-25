@@ -11,7 +11,7 @@ int main(int argc,char**argv) {
     const auto names=scDX7::loadNames(catalogue.string(),patches);
     int named=0,blank=0;
     for(const auto& name:names){assert(!name.bank.empty());if(name.name.empty())++blank;else ++named;}
-    assert(named==16251&&blank==133);
+    assert(named==16274&&blank==110);
     assert(names[0].name=="ARP 2600"&&names[0].bank=="1ST_DEMO"&&names[0].slot=="01");
     assert(names[16383].name=="ORCHESTRA");
     const auto banks=scDX7::bankGroups(patches.size(),names);
@@ -22,7 +22,29 @@ int main(int argc,char**argv) {
     const auto unknown=scDX7::bankGroups(33,{});
     assert(unknown.size()==2&&unknown[0].presets.size()==32&&unknown[1].presets.size()==1);
     assert(scDX7::presetLabel(0,names)=="DX7 1 / ARP 2600");
-    assert(scDX7::presetLabel(353,names,true)=="DX7 354 / Unnamed / BANGERS 02");
+    assert(scDX7::presetLabel(353,names,true)=="DX7 354 / CRASH CY / BANGERS 02");
+    assert(scDX7::presetLabel(1496,names)=="DX7 1497 / Unnamed");
+    // Verified ROM1A resides at 12544, not the historical PDF's 12800.
+    const std::array<const char*,32> rom1a = {{
+        "BRASS 1","BRASS 2","BRASS 3","STRINGS 1","STRINGS 2","STRINGS 3",
+        "ORCHESTRA","PIANO 1","PIANO 2","PIANO 3","E.PIANO 1","GUITAR 1",
+        "GUITAR 2","SYN-LEAD 1","BASS 1","BASS 2","E.ORGAN 1","PIPES 1",
+        "HARPSICH 1","CLAV 1","VIBE 1","MARIMBA","KOTO","FLUTE 1",
+        "ORCH-CHIME","TUB BELLS","STEEL DRUM","TIMPANI","REFS WHISL",
+        "VOICE 1","TRAIN","TAKE OFF"
+    }};
+    for(int slot=0;slot<32;++slot) {
+        assert(names[12544+slot].bank=="ROM1A"&&names[12544+slot].name==rom1a[slot]);
+        assert(names[12800+slot].bank!="ROM1A");
+    }
+    assert(patches[12544][0]==21&&patches[12544][2]==24);
+    assert(patches[12554][0]==4&&patches[12554][2]==24);
+    assert(patches[12572]!=patches[12573]&&patches[12573]!=patches[12574]&&patches[12574]!=patches[12575]);
+    int unverified=0;
+    for(size_t i=0;i<names.size();++i)if(names[i].name.rfind("Unverified ",0)==0) {
+        assert(i==2272||i==2304||i==2305);++unverified;
+    }
+    assert(unverified==3);
     assert(scDX7::searchText(scDX7::presetLabel(0,names,true)).find("arp 2600")!=std::string::npos);
     assert(scDX7::searchText(scDX7::presetLabel(0,names,true)).find("1st_demo")!=std::string::npos);
     auto changed=patches;std::swap(changed[0],changed[1]);

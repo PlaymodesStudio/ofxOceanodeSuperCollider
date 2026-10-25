@@ -40,12 +40,15 @@ int main(int argc,char**argv){
  const auto factory=box.factory();assert(factory.size()==32);
  assert(factory[0]["name"]=="BRASS 1"&&factory[10]["name"]=="E.PIANO 1"&&factory[31]["name"]=="TAKE OFF");
  for(int slot=0;slot<32;++slot){
-  const int index=12800+slot;
+  const int index=12544+slot;
   assert(box.afxNames[index].bank=="ROM1A");
   auto expected=box.dx7Snapshot(box.afxBank[index],index);
   expected["name"]=box.afxNames[index].name;
   assert(factory[slot]==expected); // Complete converted sound, in original order.
  }
+ assert(factory[0]["Algorithm"]==21&&factory[0]["Transpose"]==24);
+ assert(factory[10]["Algorithm"]==4&&factory[10]["Transpose"]==24);
+ assert(box.afxNames[12800].bank=="SAX_01");
  const auto originalBank=box.afxBank;
  std::string broken=std::string(argv[2])+"/broken.afx";
  {std::ofstream f(broken);f<<"not an afx bank\n";}

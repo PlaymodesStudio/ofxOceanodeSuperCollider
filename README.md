@@ -204,7 +204,8 @@ producers can use the same interface without linking timeline code.
 
 `fmBox` uses Aziz Ege Gönül's DX7-Supercollider implementation, with the original
 16,384-preset `.afx` bank and an in-editor bank browser with searchable names
-and source banks from the upstream catalogue (names are marked unverified).
+and source banks reconstructed by matching the original SysEx parameters.
+Three unmatched voices are explicitly marked Unverified.
 The default snapshot bank uses the collection's 32 Yamaha ROM1A presets in
 their original order, with voice names such as BRASS 1 and E.PIANO 1. Existing
 snapshot libraries are preserved; choose Factory collection to load this bank.

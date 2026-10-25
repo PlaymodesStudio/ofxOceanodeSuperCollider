@@ -621,7 +621,7 @@ void scFMBox::drawPresets(float w) {
         if(ImGui::Button("Next"))afxPreset=current==bank.presets.end()?bank.presets.front()+1:*(current+1)+1;
         ImGui::EndDisabled();ImGui::SameLine();ImGui::TextDisabled("%d presets",int(bank.presets.size()));
         if(std::any_of(afxNames.begin(),afxNames.end(),[](const scDX7::PresetName& n){return !n.bank.empty();}))
-            ImGui::TextWrapped("Catalogue names are unverified and may describe different sounds. Blank names appear as Unnamed.");
+            ImGui::TextWrapped("Names follow the loaded bank's catalogue. Unresolved entries are marked Unverified; blank names appear as Unnamed.");
         ImGui::SetNextItemWidth(std::min(w,530*zoom()));ImGui::InputTextWithHint("##afxSearch","Search this bank's names, numbers or algorithms",afxSearch,sizeof(afxSearch));
         const auto query=scDX7::searchText(afxSearch);
         std::vector<int> matches;

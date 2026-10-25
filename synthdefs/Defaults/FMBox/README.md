@@ -22,19 +22,36 @@ field (290 digits). Empty lines and CRLF line endings are accepted. A bad line
 or out-of-range field rejects the new bank and leaves the current bank intact.
 
 `.afx` contains no patch names. The accompanying `DX7.names.tsv` supplies
-16,251 names and source bank labels from the upstream PDF catalogue, plus 133
-blank names shown as Unnamed. A bank dropdown limits the list to the selected
+bank labels and names recovered from original SysEx parameter matches across
+all 512 banks. Of 16,384 voices, 16,381 match all 145 AFX fields after the
+existing conversion's bit masking and range clamping. This includes 110 blank
+source names, shown as Unnamed. Three voices without exact matches are labelled
+Unverified (preset numbers 2273, 2305 and 2306). A bank dropdown limits the list to the selected
 bank's presets. Rows show only preset names; hover for numbers and algorithms.
 The list adapts to one to four columns, reading down each column in preset order.
 Search and Previous/Next operate within the selected bank. Selecting a bank
 does not change the sound until a preset is chosen. The selected bank is saved
 with the Oceanode patch. Search is case insensitive.
-Names are explicitly unverified: the author reported uncertainty about the
-PDF's correspondence to the bank. Per-patch fingerprints prevent these labels
-from being applied to unrelated or reordered patches. A missing catalogue
-falls back to numbered presets. `tools/fmbox/extract_names.py` regenerates the
-metadata from `pdftotext -layout` output of the upstream PDF.
-The first 128 original sounds also seed the Factory snapshot bank. Any sound
+The historical upstream PDF describes a different bank ordering and is no
+longer used to generate labels. Per-patch fingerprints prevent the corrected
+labels from being applied to unrelated or reordered patches. A missing
+catalogue falls back to numbered presets. The AFX sound data and numeric preset
+indexes are unchanged, preserving saved sounds and automation.
+
+`tools/fmbox/catalogue_sources.json` records the reference archive URL/SHA-256,
+each bank's source file and AFX digest, reordered slots and exact-match name
+overrides. Source banks can contain invalid values or checksums; normalization
+is explicit and every verified label is checked against all converted fields.
+To regenerate or verify the catalogue, download the pinned
+[DX7 All The Web archive](https://ccrma.stanford.edu/~braun/assets/DX7_AllTheWeb.zip)
+and run `python3 tools/fmbox/extract_names.py ARCHIVE.zip` (add `--check` to verify
+without writing). The archive is a mirror of
+[Bobby Blues' collection](https://bobbyblues.recup.ch/yamaha_dx7/dx7_patches.html).
+
+The 32 verified ROM1A sounds at browser numbers 12545–12576 seed the Factory
+snapshot bank, starting with BRASS 1 and including E.PIANO 1. Existing snapshot
+libraries retain their embedded sounds; choose **Factory collection** to load
+the corrected bank. Any sound
 from the full browser can be edited and stored in the shared snapshot library.
 Snapshots and Oceanode patches embed all sound parameters and matrix/mix values;
 they continue to play if the original `.afx` file moves or disappears. The source
