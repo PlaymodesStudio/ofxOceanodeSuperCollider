@@ -277,7 +277,7 @@ void scMetroBox::setFieldValue(int li, const Field& f, float value) {
     L.ampMin = std::min(L.ampMin, L.level);
 
     if(f.b == &Layer::mute) {
-        for(auto& [server, st] : servers) sendStaticControls(st);
+        for(auto& [server, st] : servers) sendStaticControls(server, st);
     } else {
         engine.changed(li);
     }
@@ -844,7 +844,7 @@ void scMetroBox::setup() {
     listeners.push(globalSeed.newListener([this](int& s) { engine.globalSeed = s; engine.changedAll(); }));
     listeners.push(densityIn.newListener([this](vector<float>& d) { engine.densityScale = d; engine.changedAll(); }));
     listeners.push(resendParams.newListener([this]() {
-        for(auto& [server, st] : servers) sendStaticControls(st);
+        for(auto& [server, st] : servers) sendStaticControls(server, st);
         follower.requestAnchor();
     }));
 
@@ -892,7 +892,7 @@ void scMetroBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool s
         for(int i = 0; i < MAX_LAYERS && i < (int)appliedLanes.size(); i++) layers[i] = whole[i];
         engine.changedAll();
         for(int i = 0; i < MAX_LAYERS; i++) refreshPublished(i);
-        for(auto& [server, st] : servers) sendStaticControls(st);
+        for(auto& [server, st] : servers) sendStaticControls(server, st);
     }
     for(auto* p : {&numLayers, &globalSeed}) {
         const std::string k = p->getEscapedName();
@@ -1110,9 +1110,9 @@ void scMetroBox::fillBuffers() {
     }
 }
 
-void scMetroBox::sendStaticControls(ServerState& st) {
+void scMetroBox::sendStaticControls(ofxSCServer* server, ServerState& st) {
     if(!st.synth) return;
-    scSynthControlBatch updates(st.synth,st.server);
+    scSynthControlBatch updates(st.synth,server);
     if(st.buffer) updates.set("buf", st.buffer->index);
     updates.set("layers", (float)numLayers.get());
     std::vector<float> mutes(MAX_LAYERS);
@@ -1255,7 +1255,7 @@ void scMetroBox::createSynth(ofxSCServer* server) {
 void scMetroBox::moveSynthBefore(ofxSCServer* server, int nodeID) {
     auto it = servers.find(server);
     if(it == servers.end() || !it->second.synth) return;
-    sendStaticControls(it->second);
+    sendStaticControls(server, it->second);
     it->second.synth->moveBefore(nodeID);
 }
 
@@ -1338,7 +1338,7 @@ void scMetroBox::presetRecallAfterSettingParameters(ofJson &json) {
     for(int i = 0; i < MAX_LAYERS && i < (int)arr.size(); i++) layers[i] = layerFromJson(arr[i]);
     engine.changedAll();
     for(int i = 0; i < MAX_LAYERS; i++) refreshPublished(i);
-    for(auto& [server, st] : servers) sendStaticControls(st);
+    for(auto& [server, st] : servers) sendStaticControls(server, st);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1431,7 +1431,7 @@ void scMetroBox::moveLane(int from, int to) {
     move(lastPassPhrase);
     move(phrasesSinceAuto);
     engine.moveLane(from, to);
-    for(auto& [server, st] : servers) sendStaticControls(st);
+    for(auto& [server, st] : servers) sendStaticControls(server, st);
     for(int i = 0; i < MAX_LAYERS; i++) refreshPublished(i);
     follower.requestAnchor();
 }

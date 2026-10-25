@@ -208,7 +208,7 @@ private:
     void fillBuffers();                        // keep the cycles around the playhead written
     void writeSlot(ServerState& st, int layer, int64_t cycle);
     std::vector<int64_t> wantedCycles(int layer, const ofxOceanodeTransportState& t) const;
-    void sendStaticControls(ServerState& st);
+    void sendStaticControls(ofxSCServer* server, ServerState& st);
     bool bufferLive(ofxSCServer* server, const ServerState& st) const;
 
     // ── Transport ─────────────────────────────────────────────────────────────
