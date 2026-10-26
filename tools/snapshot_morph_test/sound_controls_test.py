@@ -9,6 +9,12 @@ HERE = Path(__file__).resolve().parent
 
 
 def send_loop(source, name):
+    if name == 'scFMBox':
+        a=source.index('    // FMBox sound frame begin:')
+        b=source.index('    // FMBox sound frame prepared.',a)
+        c=source.index('        // FMBox voice controls begin.',b)
+        d=source.index('        // FMBox voice controls end.',c)
+        return source[a:b]+'\nsize_t controlIndex=0;\n'+source[c:d]
     start = source.index('for(const auto& c : sound)', source.index('void '+name+'::sendSound'))
     semicolon = source.index(';', start)
     brace = source.find('{', start, semicolon)

@@ -153,7 +153,7 @@ void scFMBox::setup() {
     panP.set("Pan",{0.5f},{0.0f},{1.0f});reg(panP,[this](){sendAll();});
     dropdowns.set(spreadMode.getEscapedName(),{"Spread","Channels","Manual"});
     dropdowns.set(spreadLayout.getEscapedName(),{"Ring","Line"});
-    auto toStages = [this]() { sendAll(); };
+    auto toStages = [this]() { sendStageAll(0); };
     eqOn.set("EQ On", false);                 reg(eqOn, toStages);
     {
         const char* names[5] = {"Low", "Lo Mid", "Mid", "Hi Mid", "High"};
@@ -336,6 +336,39 @@ void scFMBox::sendSound(ofxSCServer* server, State& st) {
     static const char* names[5] = {"mpitch","mscale","mfeedback","mamp","mpan"};
     const float vcaW = ampMorph.vcaAmount(liveVca());
     const float comp=1.0f/std::sqrt(std::max(1.0f,float(st.builtVoices)/st.builtChannels));
+    // FMBox sound frame begin: snapshot data is identical across voices.
+    struct PreparedControl {
+        bool effective=false, activation=false, hasTuning=false;
+        float activated=0, base=0;
+        int modeCount=0;
+        size_t offset=0;
+        std::array<float,2> tuning{};
+        std::vector<float> weights;
+    };
+    std::vector<PreparedControl> prepared(sound.size());
+    size_t preparing=0;
+    for(const auto& c : sound) {
+        auto& frame=prepared[preparing++];
+        if(c->sc=="stereo" || c->sc.rfind("lfo_",0)==0) continue;
+        frame.effective=snaps.morph.hasEffective(c->p);
+        frame.activation=c->sc=="env_model" || c->sc=="matrix_model" || c->sc=="osc_sync" ||
+            (c->sc.rfind("op",0)==0 && c->sc.size()>5 && c->sc.substr(4)=="mode");
+        if(frame.activation) frame.activated=snaps.morph.activation(c->p);
+        if(c->sc.rfind("op",0)==0 && c->sc.substr(4)=="coarse" && frame.effective){
+            const auto tuning=snaps.morph.resolvedValue(c->p);
+            if(tuning.is_array() && tuning.size()==2 && tuning[0].is_number() && tuning[1].is_number()){
+                frame.hasTuning=true;frame.tuning={tuning[0].get<float>(),tuning[1].get<float>()};
+                frame.offset=81+size_t(c->sc[2]-'0')*2;
+            }
+        }
+        if(c->sc=="algorithm" || (c->sc.size()>10 && (c->sc.substr(4)=="left_curve" || c->sc.substr(4)=="right_curve"))){
+            frame.modeCount=c->sc=="algorithm" ? 32 : 4;
+            frame.offset=c->sc=="algorithm" ? 1 : 33+size_t(c->sc[2]-'0')*8+(c->sc.substr(4)=="right_curve"?4:0);
+            if(frame.effective){frame.weights=snaps.morph.weights(c->p);frame.base=snaps.morph.value(c->p);}
+        }
+    }
+    // FMBox sound frame prepared.
+    std::vector<float> morphControls(93,0);
     for(int i=0;i<st.builtVoices;++i) if(auto* v=st.voices[i]) {
         scSynthControlBatch batch(v,server);
         auto set = [&](const std::string& name,float value) {
@@ -343,54 +376,36 @@ void scFMBox::sendSound(ofxSCServer* server, State& st) {
             if(it!=sent.end()&&it->second==value) return;
             sent[name]=value;batch.set(name,value);
         };
-        auto setVector=[&](const std::string& name,const std::vector<float>& values){
-            bool changed=false;auto& sent=st.sent[i];
-            for(size_t k=0;k<values.size();++k){
-                const auto key=name+"["+ofToString(k)+"]";
-                auto previous=sent.find(key);
-                if(previous==sent.end() || previous->second!=values[k]){sent[key]=values[k];changed=true;}
-            }
-            if(changed)batch.set(name,values);
-        };
-        std::vector<float> morphControls(93,0);morphControls[0]=mod.voiceValue(soundParam("algorithm"),i);
-        for(const auto& c : sound) if(c->sc!="stereo"){
-            if(c->sc.rfind("op",0)==0 && c->sc.substr(4)=="coarse"){
-                const auto tuning=snaps.morph.resolvedValue(c->p);
-                if(tuning.is_array() && tuning.size()==2 && tuning[0].is_number() && tuning[1].is_number()){
-                    const size_t offset=81+size_t(c->sc[2]-'0')*2;
-                    morphControls[offset]=tuning[0].get<float>();
-                    morphControls[offset+1]=tuning[1].get<float>();
-                }
-            }
-            set(c->sc,(c->sc=="env_model" || c->sc=="matrix_model" || c->sc=="osc_sync" ||
-             (c->sc.rfind("op",0)==0 && c->sc.size()>5 && c->sc.substr(4)=="mode"))
-             ? snaps.morph.activation(c->p) : mod.morphVoiceValue(c->p,i,snaps.morph));
-            if(c->sc=="algorithm" || (c->sc.size()>10 && (c->sc.substr(4)=="left_curve" || c->sc.substr(4)=="right_curve"))){
-                auto weights=snaps.morph.weights(c->p);
-                // Preserve per-voice parameter modulation. During a snapshot
-                // blend it offsets the endpoint weights, rather than replacing
-                // them with the editor's selected side.
-                if(!snaps.morph.hasEffective(c->p)){
-                    std::fill(weights.begin(),weights.end(),0);
-                    weights[std::clamp(int(std::round(mod.voiceValue(c->p,i))),0,int(weights.size())-1)]=1;
+        std::fill(morphControls.begin(),morphControls.end(),0);
+        morphControls[0]=mod.voiceValue(soundParam("algorithm"),i);
+        size_t controlIndex=0;
+        // FMBox voice controls begin.
+        for(const auto& c : sound) {
+            const auto& frame=prepared[controlIndex++];
+            if(c->sc=="stereo" || c->sc.rfind("lfo_",0)==0) continue;
+            if(frame.hasTuning){morphControls[frame.offset]=frame.tuning[0];morphControls[frame.offset+1]=frame.tuning[1];}
+            const float value=frame.activation ? frame.activated :
+                (frame.effective ? mod.morphVoiceValue(c->p,i,snaps.morph) : mod.voiceValue(c->p,i));
+            set(c->sc,value);
+            if(frame.modeCount){
+                if(!frame.effective){
+                    const auto mode=std::clamp(int(std::round(mod.voiceValue(c->p,i))),0,frame.modeCount-1);
+                    morphControls[frame.offset+mode]=1;
                 }else{
-                    const float delta=mod.morphVoiceValue(c->p,i,snaps.morph)-snaps.morph.value(c->p);
-                    if(delta!=0){
-                        auto shifted=weights;std::fill(shifted.begin(),shifted.end(),0);
-                        for(size_t k=0;k<weights.size();++k){
-                            const float position=std::clamp(float(k)+delta,0.f,float(weights.size()-1));
-                            const int left=int(position),right=std::min(left+1,int(weights.size())-1);
-                            const float f=position-left;
-                            shifted[left]+=weights[k]*(1-f);shifted[right]+=weights[k]*f;
-                        }
-                        weights=std::move(shifted);
+                    const float delta=mod.morphVoiceValue(c->p,i,snaps.morph)-frame.base;
+                    if(delta==0) std::copy(frame.weights.begin(),frame.weights.end(),morphControls.begin()+frame.offset);
+                    else for(size_t k=0;k<frame.weights.size();++k){
+                        const float position=std::clamp(float(k)+delta,0.f,float(frame.weights.size()-1));
+                        const int left=int(position),right=std::min(left+1,int(frame.weights.size())-1);
+                        const float f=position-left;
+                        morphControls[frame.offset+left]+=frame.weights[k]*(1-f);
+                        morphControls[frame.offset+right]+=frame.weights[k]*f;
                     }
                 }
-                const size_t offset=c->sc=="algorithm"?1:33+size_t(c->sc[2]-'0')*8+(c->sc.substr(4)=="right_curve"?4:0);
-                std::copy(weights.begin(),weights.end(),morphControls.begin()+offset);
             }
         }
-        setVector("algorithm",morphControls);
+        // FMBox voice controls end.
+        if(st.morphSent[i]!=morphControls){st.morphSent[i]=morphControls;batch.set("algorithm",morphControls);}
         set("gatebus",st.gates->index+i);
         set("nativebus",st.nativeBus->index);
         set("velbus",mod.sourceBus(server,scModulation::SRC_VEL)+i);
@@ -431,9 +446,13 @@ void scFMBox::sendSound(ofxSCServer* server, State& st) {
 // Send the final sound once in update(); notes keep their exact timetags.
 void scFMBox::sendAll() { soundDirty = true; }
 void scFMBox::flushSound() {
-    if(!soundDirty) return;
-    soundDirty = false;
-    for(auto& [s,st] : states) sendSound(s,st);
+    if(!soundDirty && !stagesDirty) return;
+    const bool voicesChanged=soundDirty;
+    soundDirty = stagesDirty = false;
+    for(auto& [s,st] : states) {
+        if(voicesChanged) sendSound(s,st);
+        else if(st.created) updateStages(s,st);
+    }
 }
 void scFMBox::buildSynth(ofxSCServer* server) {
     if(!server) return;
@@ -470,6 +489,7 @@ void scFMBox::release(ofxSCServer* server, State& st) {
     delete st.gate; st.gate=nullptr; delete st.spread; st.spread=nullptr;
     for(auto*& v:st.voices) { delete v; v=nullptr; }
     for(auto& cache:st.sent) cache.clear();
+    for(auto& cache:st.morphSent) cache.clear();
     st.nativeSent.clear();st.spreadSent.clear();st.spreadOutSent=-1;
     for(auto*& g:st.groups) { delete g; g=nullptr; }
     delete st.root; st.root=nullptr; st.created=false;st.droneSent=-1;
@@ -505,6 +525,7 @@ void scFMBox::setBpm(float v) { bpm=std::max(1.0f,v);mod.setBpm(bpm);sendAll(); 
 void scFMBox::resendParametersForNRT() {
     for(auto& [s,st]:states) {
         for(auto& cache:st.sent) cache.clear();
+        for(auto& cache:st.morphSent) cache.clear();
         st.nativeSent.clear();st.spreadSent.clear();st.spreadOutSent=-1;
         for(auto& f:st.fx) { f.sent.clear();f.outSent=-1; }
         sendNotes(s,st);
@@ -992,7 +1013,7 @@ void scFMBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     controls.send();
 }
 
-void scFMBox::sendStageAll(int) { sendAll(); }
+void scFMBox::sendStageAll(int) { stagesDirty = true; }
 
 void scFMBox::drawFxTab(float w) {
     const float z = zoom();

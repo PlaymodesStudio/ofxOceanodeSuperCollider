@@ -67,9 +67,11 @@ struct scModulation {enum {SRC_VEL,SRC_RND};int sourceBus(ofxSCServer*,int){retu
 struct scFMBox {
     enum NoteFields {NoteGate=1,NotePitch=2,NoteRouting=4,NoteAll=7};
     struct State {
+        bool created=true;
         ofxSCSynth* gate=nullptr;int builtVoices=5,droneSent=-1;
         std::array<ofxSCSynth*,16> voices{};
         std::array<std::map<std::string,float>,16> sent;
+        std::array<std::vector<float>,16> morphSent;
         struct Bus {int index=64;}*gates=nullptr,*velocities=nullptr;
         std::map<std::string,std::vector<float>> nativeSent,spreadSent;
         int spreadOutSent=-1;
@@ -86,11 +88,12 @@ struct scFMBox {
         void enable(ofxSCServer*,const std::vector<float>& v,int,int){held=v;++enableWrites;}
         void sendAll(){}
     } pulse;
-    scModulation mod;bool soundDirty=false;int soundSends=0;
+    scModulation mod;bool soundDirty=false,stagesDirty=false;int soundSends=0,fxSends=0;
     bool droning()const{return false;}
     static float first(const std::vector<float>&v,int i,float fallback){return v.empty()?fallback:v[i%v.size()];}
     void sendNotes(ofxSCServer*,State&,unsigned fields=NoteAll);
     void sendSound(ofxSCServer*,State&){++soundSends;}
+    void updateStages(ofxSCServer*,State&){++fxSends;}
     void sendAll();void flushSound();void sendStageAll(int);void resendParametersForNRT();
 };
 NOTES
@@ -182,6 +185,13 @@ int main(){
     std::cout<<"PASS: five voices use one pitch packet and one gate packet; 200 automation callbacks coalesce to one sound send with zero note writes; note-offs, creation, routing and NRT replay preserved.\n";
 }
 '''.replace('NOTES', notes).replace('QUEUE', sound_queue).replace('STAGE', stage_queue).replace('REPLAY', replay)
+if 'stagesDirty = true' in stage_queue:
+    cpp=cpp.replace('    server.tag=3000;', '''    const auto fullBefore=box.soundSends;
+    for(int j=0;j<100;++j)box.sendStageAll(j%4);
+    box.flushSound();assert(box.soundSends==fullBefore && box.fxSends==1 && server.packets.size()==1);
+    box.flushSound();assert(box.fxSends==1);
+    std::cout<<"PASS: 100 effects edits coalesce into one stage update without visiting voices or writing notes.\\n";
+    server.tag=3000;''')
 with tempfile.TemporaryDirectory(prefix='fmbox-osc-') as folder:
     work=Path(folder);(work/'test.cpp').write_text(cpp)
     (work/'ofxSCSynth.h').write_text('#pragma once\n')

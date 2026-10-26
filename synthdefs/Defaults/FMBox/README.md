@@ -199,3 +199,17 @@ Original source and **GPL-3.0** license are preserved under `upstream/`;
 `upstream/provenance.json` records hashes. The `.txt` suffix prevents SynthDef
 sync from executing the original standalone application as another Defaults
 script. The modified engine and generated tables retain GPL-3.0 notices.
+
+## DSP and control-update performance
+
+The voice graph shares gate/phase triggers, native-LFO smoothing, pitch and
+velocity transforms, model weights and FM scaling across its operators. Native
+and seconds envelopes share their amplitude conversions and cyclic level-map
+selectors. Both envelope/model branches remain live so morphs retain their
+original state and timing; muted drones are not paused.
+
+The C++ sender resolves snapshot metadata once per update, reuses packed-control
+storage across voices and compares the packed morph/tuning vector directly.
+Native-LFO parameters are sent only to the shared native-LFO node. Effect-only
+edits coalesce into a stage update without traversing the voice controls. Full
+replays and synth recreation invalidate the packed cache explicitly.

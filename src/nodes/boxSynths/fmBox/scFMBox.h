@@ -82,6 +82,7 @@ private:
         ofxSCSynth* spread = nullptr;
         std::array<ofxSCSynth*, 16> voices{};
         std::array<std::map<std::string,float>,16> sent;   // per voice: only changes are sent
+        std::array<std::vector<float>,16> morphSent; // packed morph/tuning control, compared as a vector
         std::map<std::string,std::vector<float>> nativeSent, spreadSent;
         int spreadOutSent = -1;
         ofxSCBus* gates = nullptr;
@@ -151,7 +152,7 @@ private:
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> published;
     std::vector<std::string> publishedKeys;
     bool separator = false, restoring = false, structureDirty = false;
-    bool soundDirty = false;
+    bool soundDirty = false, stagesDirty = false;
     int placeBefore = -1;      // rebuild: the old root the new one goes before
     float bpm = 120, nextRead = 0;
     int draggingPoint = -1, draggingOp = -1;

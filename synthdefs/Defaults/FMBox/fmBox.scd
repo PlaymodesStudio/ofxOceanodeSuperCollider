@@ -56,11 +56,14 @@ SynthDef(\FMBoxVoice, {
         var offset=if(name=="algorithm",{1},{33+(name.copyRange(2,2).asInteger*8)+if(name.endsWith("right_curve"),4,0)});
         var weights=morphControls.copyRange(offset,offset+count-1);
         var total=weights.sum;
-        weights.collect{|w,i| (w+((mode.round.clip(0,count-1) |==| i)*(total<=0))).lag(0.03)}
+        var selected=mode.round.clip(0,count-1);
+        var fallback=total<=0;
+        weights.collect{|w,i| (w+((selected |==| i)*fallback)).lag(0.03)}
     };
     // ModGate latches Oceanode velocity after its audio gate rises. Align the
     // native envelopes with that latch, including sample-accurate audio gates.
     var gate = DelayN.ar(In.ar(\gatebus.kr(0),1),0.1,ControlDur.ir*2);
+    var gateK = A2K.kr(gate>0);
     var vel = In.kr(\velbus.kr(0),1).clip(0,1)*127;
     var native = In.ar(\nativebus.kr(0),2);
     var pitch = Select.kr(\pitch_sel.kr(0),[\pitch.kr(60),A2K.kr(\pitch_ar.ar(60))]);
@@ -75,13 +78,24 @@ SynthDef(\FMBoxVoice, {
         var speed = 99-p.(("pitch_r"++k).asSymbol,0);
         ((speed-70.337897)/ -25.580953).exp * ((pitchLevels[k]-prev)/96).abs * 2.45 * timeScale
     });
-    var pitchEnv = EnvGen.kr(Env([pitchLevels[3]]++pitchLevels,pitchTimes.max(0.00001),0,3),A2K.kr(gate>0));
-    var freq = note.clip(-100,160).midicps * pitchEnv.midiratio;
+    var pitchEnv = EnvGen.kr(Env([pitchLevels[3]]++pitchLevels,pitchTimes.max(0.00001),0,3),gateK);
+    var pitchRatio = pitchEnv.midiratio;
+    var freq = note.clip(-100,160).midicps * pitchRatio;
+    var nativePitch = Lag2.ar(native[0],0.01);
+    var nativeAmp = Lag2.ar(native[1],0.01);
+    var phaseTrigger = (HPZ1.kr(gateK)>0)+Impulse.kr(0);
+    var oscUnsynced = 1-p.(\osc_sync,1);
+    var transposed = note+3;
+    var keyPosition = integer.((transposed+2)/3)*3;
+    var normalizedVelocity = vel/127;
+    var velocityResponse = table.(\velTable,vel);
+    var envelopeModel = p.(\env_model,0).clip(0,1).lag(0.03)*2-1;
+    var matrixModel = p.(\matrix_model,0).clip(0,1).lag(0.03)*2-1;
+    var matrixScale = (p.(\mod_scale,1).lag(1/30)+m.(\mscale)).clip(0,10);
     var envs = Array.newClear(6);
     var ctls = Array.fill(6,{ |op|
         var pre = "op"++op++"_";
         var q = { |key,def| p.((pre++key).asSymbol,def) };
-        var transposed = note+3;
         var breakpt = q.("breakpoint",39);
         var scaling = { |dummy,curve,depth,name|
             var lin = integer.(dummy/45*depth);
@@ -89,36 +103,41 @@ SynthDef(\FMBoxVoice, {
             ([lin.neg,exp.neg,exp,lin]*modeWeights.(pre++name,curve,4)).sum
         };
         var output = (q.("output",99)+m.(("mlevel"++op).asSymbol)).clip(0,99);
-        var left = (transposed< (breakpt+21)) * scaling.(breakpt-(integer.((transposed+2)/3)*3)+21,q.("left_curve",0),q.("left_depth",0),"left_curve");
-        var right = (transposed> (breakpt+21)) * scaling.((integer.((transposed+2)/3)*3)-breakpt-21,q.("right_curve",0),q.("right_depth",0),"right_curve");
+        var left = (transposed< (breakpt+21)) * scaling.(breakpt-(keyPosition)+21,q.("left_curve",0),q.("left_depth",0),"left_curve");
+        var right = (transposed> (breakpt+21)) * scaling.((keyPosition)-breakpt-21,q.("right_curve",0),q.("right_depth",0),"right_curve");
         var volume = (output+left+right).clip(0,99);
-        var velFin = table.(\velTable,vel) * q.("velocity",0);
+        var velFin = velocityResponse * q.("velocity",0);
         var rateScale = integer.((q.("rate_scale",0)*(transposed-21)/105*127/128*6.5)-0.5);
         var levels = Array.fill(4,{ |k| q.("l"++k,if(k==3,0,99)).clip(0,99) });
         var db = levels.collect { |level| (99-(level+volume-99+velFin))/1.33333333 };
-        var envMap = { |level,next=false|
-            Select.kr((level>5)+(level>16)+(level>20),[
-                64*(2*level+if(next,5,0)),64*(5+level),64*(4+level),64*(14+(level/2).floor)])
+        // Each level participates twice in the cyclic envelope. Share its
+        // selector and common branches while preserving the low-level equations.
+        var levelMaps=levels.collect { |level|
+            var which=(level>5)+(level>16)+(level>20);
+            var common=[64*(5+level),64*(4+level),64*(14+(level/2).floor)];
+            [Select.kr(which,[64*(2*level)]++common),
+             Select.kr(which,[64*(2*level+5)]++common)]
         };
         var volumeDec = (volume+velFin).clip(0,127);
         var vrDec = Select.kr((volumeDec>5)+(volumeDec>16)+(volumeDec>20),[
             32*volumeDec,32*(volumeDec+11),32*(volumeDec+17),32*(volumeDec+28)]);
         var times = Array.fill(4,{ |k|
             var from = levels.wrapAt(k-1),to=levels[k];
-            var a=envMap.(from),b=envMap.(to,true);
+            var a=levelMaps.wrapAt(k-1)[0],b=levelMaps[k][1];
             var speed=(rateScale+99-q.("r"++k,if((k==0)or:(k==3),0,60))).clip(0,99);
             var decay=(((a+vrDec-4064).clip(1,9000)-(b+vrDec-4064).clip(1,9000))*0.0235)/(0.2819*(2**(speed*0.16)));
             var rise=table.(\voice_eg_rate_rise_duration,speed)*(table.(\dx7_voice_eg_rate_rise_percent,integer.((to*volume/99+velFin).clip(0,99)))-table.(\dx7_voice_eg_rate_rise_percent,integer.((from*volume/99+velFin).clip(0,99))));
             Select.kr(a>b,[rise,decay]).max(0.00001)*timeScale
         });
         var curves=Array.fill(4,{ |k| Select.kr(db.wrapAt(k-1)>db[k],[-3,3]) });
-        var nativeEnv=EnvGen.kr(Env(([db[3]]++db).neg.dbamp,times,curves,3),A2K.kr(gate>0));
+        var envelopeAmps=db.neg.dbamp;
+        var nativeEnv=EnvGen.kr(Env([envelopeAmps[3]]++envelopeAmps,times,curves,3),gateK);
         // Seconds mode keeps explicit stage timing and a uniform curve for
         // custom FM sounds; DX7 imports continue using their native envelopes.
-        var amplitudes=levels.collect { |level,k| db[k].neg.dbamp*(level>0) };
+        var amplitudes=levels.collect { |level,k| envelopeAmps[k]*(level>0) };
         var seconds=Array.fill(4,{ |k| q.("seconds"++k,0.1).max(0.00001)*timeScale });
-        var timedEnv=EnvGen.kr(Env([amplitudes[3]]++amplitudes,seconds,p.(\env_curve,-4),3),A2K.kr(gate>0));
-        var env=LinXFade2.kr(nativeEnv,timedEnv*(vel/127),p.(\env_model,0).clip(0,1).lag(0.03)*2-1);
+        var timedEnv=EnvGen.kr(Env([amplitudes[3]]++amplitudes,seconds,p.(\env_curve,-4),3),gateK);
+        var env=LinXFade2.kr(nativeEnv,timedEnv*normalizedVelocity,envelopeModel);
         var fixed=q.("mode",0).clip(0,1).lag(0.03);
         var coarse=(q.("coarse",1)+m.(("mratio"++op).asSymbol)).clip(0,31);
         var fine=q.("fine",0).clip(0,99);
@@ -135,23 +154,24 @@ SynthDef(\FMBoxVoice, {
         var fixedCoarse=Select.kr(tuningHz>0,[Select.kr(coarse.round%4,[1,10,100,1000]),(tuningHz+tuningDelta).max(0.001)]);
         var fixedFine=10**(fine/100);
         var detune=(q.("detune",7)-7+m.(("mdetune"++op).asSymbol))/32;
-        var hz=LinXFade2.kr(ratio*(freq+detune),fixedCoarse*fixedFine*pitchEnv.midiratio,fixed*2-1);
-        var phase=TRand.kr(0,2pi,(HPZ1.kr(A2K.kr(gate>0))>0)+Impulse.kr(0))*(1-p.(\osc_sync,1));
+        var hz=LinXFade2.kr(ratio*(freq+detune),fixedCoarse*fixedFine*pitchRatio,fixed*2-1);
+        var phase=TRand.kr(0,2pi,phaseTrigger)*oscUnsynced;
         envs[op]=env;
-        [hz*Lag2.ar(native[0],0.01),phase,env*(Lag2.ar(native[1],0.01)*(q.("amp_sens",0)/3)).dbamp]
+        [hz*nativePitch,phase,env*(nativeAmp*(q.("amp_sens",0)/3)).dbamp]
     });
     var matrix = Array.fill(6,{ |dst| Array.fill(6,{ |src|
         // lagged: per-frame changes (snapshot morphs) do not step the FM indices
         var amount=p.(("fm"++dst++"_"++src).asSymbol,if((dst==0)and:(src==1),1,0)).lag(1/30).clip(0,4);
-        var scale=(p.(\mod_scale,1).lag(1/30)+m.(\mscale)).clip(0,10);
+        var scale=matrixScale;
         var selected=Array.fill(32,{|algorithm| algorithmWeights[algorithm]*if(data[\feedbackSel][algorithm]==(dst*6+src),1,0)}).sum;
         var dx7=amount*4pi*scale*(1+((fb-1)*selected));
         var raw=amount*scale*if(dst==src,{feedback},{1});
-        LinXFade2.kr(dx7,raw,p.(\matrix_model,0).clip(0,1).lag(0.03)*2-1)
+        LinXFade2.kr(dx7,raw,matrixModel)
     }) });
     var carriers=Array.fill(6,{ |op| p.(("mix"++op).asSymbol,if((op==0)or:(op==2),1,0)).lag(1/30).clip(0,1) });
     var vca=\vca.kr(0,1/30,fixedLag:true).clip(0,1);   // fractional: a snapshot morph crossfades the paths
-    var amp=((1+m.(\mamp)).clip(0,2)*(1-vca))+(m.(\mamp).clip(0,1)*vca);
+    var ampMod=m.(\mamp);
+    var amp=((1+ampMod).clip(0,2)*(1-vca))+(ampMod.clip(0,1)*vca);
     var sig=Sanitize.ar((FM7.ar(ctls,matrix)*carriers).sum)*(-12).dbamp/carriers.sum.max(1);
     sig=LeakDC.ar(sig)*amp*\master.kr(0.6,0.02)*\normalization.kr(1);
     Out.ar(\out.kr(0),sig);
