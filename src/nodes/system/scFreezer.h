@@ -16,7 +16,7 @@ public:
 		
 		if (!mainServer) {
 			ofLogError("scFreezer") << "Could not find SuperCollider server";
-			addParameter(noServer.set("Error", "SC Server not found"));
+			addOutputParameter(noServer.set("Error", "SC Server not found"));
 			return;
 		}
 		
