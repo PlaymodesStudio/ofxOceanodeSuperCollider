@@ -205,8 +205,9 @@ void scEchoBox::setup() {
         h.voices = [this](){ return n(); };        // a "voice" = a channel
         modulation.maxEnvs = 0;                     // no notes: no envelopes
         // the taps read these, in this order (echoBox.scd); Mix: the mix synth
-        modulation.setup(h, {{"Time", 1, "oct"}, {"Feedback", 0.5f, ""}, {"Cutoff", 48, "st"}, {"Level", 1, "x"},
-                             {"Ping-pong", 1, ""}, {"Drive", 24, "dB"}, {"Shimmer", 1, ""}, {"Diffusion", 1, ""},
+        // amount 1: the control's whole span (Time: 1..4000 ms, 12 oct); the last field, older saves' range
+        modulation.setup(h, {{"Time", 12, "oct", false, 1}, {"Feedback", 1.2f, "", false, 0.5f}, {"Cutoff", 123, "st", false, 48}, {"Level", 1, "x"},
+                             {"Ping-pong", 1, ""}, {"Drive", 36, "dB", false, 24}, {"Shimmer", 1, ""}, {"Diffusion", 1, ""},
                              {"Send", 1, "x"}, {"Mix", 1, ""}}, true, false, false);
         modulation.lfoCount = 0;
         modulation.envCount = 0;

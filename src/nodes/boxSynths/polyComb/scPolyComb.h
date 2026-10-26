@@ -321,7 +321,7 @@ private:
     ofParameter<int> ringPitchSource;    // external / oscillator note bus / resonator map
     ofParameter<int> ringModel;          // 0 classic (a note), 1 the original PolyComb's (PCRingR: a ratio of the voice's note)
     ofParameter<float> ringWidth;
-    ofParameter<std::vector<float>> ringRatio;
+    ofParameter<float> ringRatio;          // one ratio for every voice (per-voice offsets: Ring Transpose)
     ofParameter<int> combModel;          // legacy snapshot field, fixed to 1 (PCCombR)
     ofParameter<std::vector<float>> cutoff, res, postCut, postRes;
     ofParameter<float> keyTrack;

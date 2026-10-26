@@ -57,7 +57,7 @@ valueNoise2 = { |x, y, salt = 0|
         var rhash = { |c|
             var salt = ((c % 8192) * 12.9898) + rsalt;
             var common = (salt.sin * 43758.5453).frac;
-            var independent = ((salt + ((0 .. (n - 1)) * 3.7193)).sin * 43758.5453).frac;
+            var independent = ((salt + (((0 .. (n - 1)) + \voffset.kr(0)) * 3.7193)).sin * 43758.5453).frac;
             (independent * (1 - sharing)) + (common * sharing)
         };
         var v3 = rhash.(rcycle), v2 = rhash.(rcycle - 1), v1 = rhash.(rcycle - 2), v0 = rhash.(rcycle - 3);
@@ -106,7 +106,7 @@ valueNoise2 = { |x, y, salt = 0|
         // counter (the LFO's rate: Hz or Beats), y = each voice's seed = its
         // index x \nscale (how different the voices are); \seed: this LFO's
         // own noise field (no two LFOs share values)
-        noise = valueNoise2.(sweep + \initphase.kr(0), (0 .. (n - 1)) * \nscale.kr(1), \seed.kr(0));
+        noise = valueNoise2.(sweep + \initphase.kr(0), ((0 .. (n - 1)) + \voffset.kr(0)) * \nscale.kr(1), \seed.kr(0));
         classic = shape;
         legacy = Select.kr(\noise.kr(0) > 0.5, [classic, noise]);
         legacy = Select.kr(\rtype.kr(0).clip(0, 3), [legacy, rstepped, rsmooth, rjumps]);

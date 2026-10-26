@@ -8,8 +8,15 @@ legacy={'Ring_Model':0,'Ring_On':True,'Ring_Pitch':[72.0],
         'LFO1_Random_Type':2,'LFO1_Sync':True,'LFO1_Beats':[2.0],
         'LFO2_Random_Type':3,'LFO3_Noise':True}
 c=migrate([legacy])[0]
-assert c['Ring_Model']==1 and c['Ring_Ratio']==[2.0]*32
-assert migrate([{**legacy,'Transpose':[12.0]}])[0]['Ring_Ratio']==[1.0]*32
+assert c['Ring_Model']==1 and c['Ring_Ratio']==2.0
+assert migrate([{**legacy,'Transpose':[12.0]}])[0]['Ring_Ratio']==1.0
+# Ring Ratio is one value: per-voice ratios become a common ratio + per-voice
+# semitones on Ring Transpose, each voice keeping its pitch
+import math
+v=migrate([{**c,'Ring_Ratio':[1.0,2.0,4.0],'Ring_Transpose':[0.0,0.0,5.0]}])[0]
+assert abs(v['Ring_Ratio']-2.0)<1e-5,v['Ring_Ratio']
+for t,r,o in zip(v['Ring_Transpose'],[1.0,2.0,4.0],[0.0,0.0,5.0]):assert abs(t+12*math.log2(v['Ring_Ratio'])-(o+12*math.log2(r)))<1e-4,(t,r,o)
+assert migrate([{**c,'Ring_Ratio':[3.0]}])[0]['Ring_Ratio']==3.0
 assert c['Osc_Map_Table']==[0,4,7] and c['Osc_Map_Version']==2
 assert c['LFO1_Model']==c['LFO2_Model']==3 and c['LFO3_Model']==2
 assert c['LFO1_Random_Smooth']==.25

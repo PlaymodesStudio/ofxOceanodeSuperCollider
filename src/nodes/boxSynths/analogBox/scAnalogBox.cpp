@@ -54,7 +54,9 @@ const ImU32 osc[6]     = {IM_COL32(150, 165, 255, 255), IM_COL32(236, 178, 96, 2
 const char* kTargets[scAnalogBox::NUM_TARGETS] = {"Pitch", "Slave Pitch", "Width", "Skew", "Round", "FM", "Noise",
                                                   "Cutoff", "Reso", "Drive", "Filter Fb", "Amp", "Pan",
                                                   "F2 Cutoff", "F2 Reso", "F3 Cutoff", "F3 Reso", "F4 Cutoff", "F4 Reso"};
-const float kTargetRange[scAnalogBox::NUM_TARGETS] = {24, 24, 0.5f, 1, 0.5f, 2, 1, 48, 1, 24, 1, 1, 1, 48, 1, 48, 1, 48, 1};
+// amount 1: the control's whole span (pitches: 48 st); kTargetLegacy, the ranges older saves used
+const float kTargetRange[scAnalogBox::NUM_TARGETS] = {48, 48, 1, 2, 1, 4, 1, 140, 1, 36, 1, 1, 1, 140, 1, 140, 1, 140, 1};
+const float kTargetLegacy[scAnalogBox::NUM_TARGETS] = {24, 24, 0.5f, 1, 0.5f, 2, 1, 48, 1, 24, 1, 1, 1, 48, 1, 48, 1, 48, 1};
 const char* kTargetUnit[scAnalogBox::NUM_TARGETS] = {"st", "st", "", "", "", "cycles", "", "st", "", "dB", "", "", "of the width",
                                                      "st", "", "st", "", "st", ""};
 
@@ -378,7 +380,7 @@ void scAnalogBox::setup() {
         h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
         h.voices = [this](){ return n(); };
         std::vector<scModulation::Target> targets;
-        for(int t = 0; t < NUM_TARGETS; t++) targets.push_back({kTargets[t], kTargetRange[t], kTargetUnit[t]});
+        for(int t = 0; t < NUM_TARGETS; t++) targets.push_back({kTargets[t], kTargetRange[t], kTargetUnit[t], false, kTargetLegacy[t]});
         modulation.setup(h, targets, true, true, true);
         for(auto* p : {&glide, &vibRate, &vibRand, &vibAmt, &drift, &noiseColor, &velSens, &hpf}) modulation.addVoiceParam(*p);
         for(auto& o : osc) for(auto* p : {&o.semi,&o.fine,&o.ratio,&o.skew,&o.round,&o.width,&o.noise}) modulation.addVoiceParam(*p);
@@ -388,7 +390,7 @@ void scAnalogBox::setup() {
         modulation.extCount = 0;
         // Env 1 -> Amp (the VCA), Env 2 -> Cutoff (the filter envelope)
         modulation.matrix[SRC_ENV * NUM_TARGETS + TAmp] = 1.0f;
-        modulation.matrix[(SRC_ENV + 1) * NUM_TARGETS + TCut] = 0.4f;
+        modulation.matrix[(SRC_ENV + 1) * NUM_TARGETS + TCut] = 0.4f * kTargetLegacy[TCut] / kTargetRange[TCut];   // 19.2 st
         modulation.changed = [this]() { ampDirty = true; };
         auto setControl = [this](const std::string& name, float v){
             for(auto& c : controls) if(c.name == name){ c.load(ofJson(v)); return; }
@@ -1868,6 +1870,8 @@ void scAnalogBox::applyState(const ofJson& aSaved, const ofJson& bSaved, float t
     try { if(b.contains("matrix")) mb = scModulation::fitMatrix(b["matrix"].get<std::vector<float>>(), NUM_SOURCES, NUM_TARGETS); } catch(...) {}
     ma.resize(NUM_SOURCES * NUM_TARGETS, 0.0f);
     mb.resize(NUM_SOURCES * NUM_TARGETS, 0.0f);
+    M.rescaleSavedMatrix(ma, a.value("params", ofJson::array()));   // older snapshots: amounts in the old ranges
+    M.rescaleSavedMatrix(mb, b.value("params", ofJson::array()));
     bool changed = countsChanged;
     for(size_t i = 0; i < M.matrix.size() && i < ma.size(); i++){
         const float v = ofLerp(ma[i], mb[i], t);
@@ -2222,7 +2226,7 @@ void scAnalogBox::drawFilterTab(float w) {
         float v = matrixCell(source, TCut);
         if(!has) ImGui::TextColored(ImColor(pal::textDim), pass == 0 ? "add a second envelope" : "add an LFO");
         else if(ImGui::SliderFloat(pass == 0 ? "##envCut" : "##lfoCut", &v, -1.0f, 1.0f, "%+.2f -> Cutoff 1")) setMatrixCell(source, TCut, v);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("The Routing matrix's cell: %+.0f semitones at its peak (F2.. Cutoff: their own columns)", v * 48);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("The Routing matrix's cell: %+.0f semitones at its peak (F2.. Cutoff: their own columns)", v * kTargetRange[TCut]);
     }
     nextCol();
     const float rw = cw * 3 + gapW() * 2;
@@ -2501,6 +2505,14 @@ std::vector<ofJson> scAnalogBox::factorySnapshots() const {
         for(const auto& r : f["routes"]){
             const int so = r[0].get<int>(), ta = r[1].get<int>();
             if(so >= 0 && so < NUM_SOURCES && ta >= 0 && ta < NUM_TARGETS) m[so * NUM_TARGETS + ta] = r[2].get<float>();
+        }
+        // the routes are written in the older ranges and polarity: rescaled, and
+        // without a polarity entry their LFO routes swing around the value
+        modulation.rescaleSavedMatrix(m, ofJson::array());
+        if(s.contains("params") && s["params"].is_array()){
+            ofJson params = ofJson::array();
+            for(const auto& e : s["params"]) if(!(e.is_object() && e.value("key", std::string()) == "@routes")) params.push_back(e);
+            s["params"] = params;
         }
         s["matrix"] = m;
         s["lfos"] = f.value("lfos", 1);

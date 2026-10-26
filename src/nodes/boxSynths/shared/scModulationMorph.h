@@ -79,7 +79,9 @@ struct scModulationMorph {
             }
             ofJson entry{{"key",key},{"base",interpolate(va,vb,t)},{"amounts",amounts}};
             // the routes' polarity: the nearer side's (a side without it: an older save)
-            const auto& near=(t<0.5f ? x.count(key) : !y.count(key)) ? ea : eb;   // (or the side that has it)
+            // (a control routed on one side only: that side's; "@routes" missing = an older save)
+            const bool nearA=key=="@routes" ? t<0.5f : (t<0.5f ? x.count(key)>0 : !y.count(key));
+            const auto& near=nearA ? ea : eb;
             if(near.contains("pol")){ entry["pol"]=near["pol"]; entry["bipolar"]=near.value("bipolar",ofJson::array()); }
             if(key=="@routes" && !entry.contains("pol"))continue;
             out.push_back(entry);

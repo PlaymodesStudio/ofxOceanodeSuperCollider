@@ -402,9 +402,10 @@ void scPhysicalBox::setup() {
     h.unpublish = [this](const std::string& k){ unpublish(k); };
     h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
     h.voices = [this](){ return voices.get(); };
-    mod.setup(h, {{"Pitch", 24, "st"}, {"Material", 1, ""}, {"Excite", 1, ""}, {"Position", 1, ""},
-        {"Hardness", 1, ""}, {"Bow Pressure", 1, ""}, {"Bow Speed", 1, ""}, {"Breath", 1, ""},
-        {"Scrape Speed", 1, ""}, {"Brightness", 1, ""}, {"Decay", 4, "oct"}, {"Shape", 1, ""},
+    // amount 1: the control's whole span (Pitch: 48 st); the last field, older saves' range
+    mod.setup(h, {{"Pitch", 48, "st", false, 24}, {"Material", 1, ""}, {"Excite", 1, ""}, {"Position", 1, ""},
+        {"Hardness", 1, ""}, {"Bow Pressure", 1.2f, "", false, 1}, {"Bow Speed", 1, ""}, {"Breath", 1.2f, "", false, 1},
+        {"Scrape Speed", 1, ""}, {"Brightness", 1, ""}, {"Decay", 10, "oct", false, 4}, {"Shape", 1, ""},
         {"Couple", 1, ""}, {"Cascade", 1, ""}, {"Amp", 1, ""}, {"Pan", 1, ""}}, true, true, true);
     mod.lfoCount = mod.envCount = mod.extCount = 0;
     {

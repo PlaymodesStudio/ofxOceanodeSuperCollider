@@ -193,8 +193,9 @@ void scAliasingBox::setup() {
     h.unpublish = [this](const std::string& k){ unpublish(k); };
     h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
     h.voices = [this](){ return voices.get(); };
-    mod.setup(h, {{"Pitch",24,"st"}, {"Write Pitch",48,"st"}, {"Read Pitch",48,"st"}, {"Write Symmetry",1,""},
-        {"LP Pitch",48,"st"}, {"HP Pitch",48,"st"}, {"LP Resonance",1,""}, {"HP Resonance",1,""},
+    // amount 1: the control's whole span (Pitch: 48 st); the last field, older saves' range
+    mod.setup(h, {{"Pitch",48,"st",false,24}, {"Write Pitch",194,"st",false,48}, {"Read Pitch",128,"st",false,48}, {"Write Symmetry",1,""},
+        {"LP Pitch",130,"st",false,48}, {"HP Pitch",140,"st",false,48}, {"LP Resonance",0.98f,"",false,1}, {"HP Resonance",0.98f,"",false,1},
         {"LP FM",3000,"Hz"}, {"HP FM",3000,"Hz"}, {"Drive",30,"dB"}, {"Amp",1,""}, {"Pan",1,""}}, true, true, true);
     // The original ADSRs remain in the voice. Extra sources start empty and
     // can be added/removed independently with the shared + Add controls.

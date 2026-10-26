@@ -56,7 +56,9 @@ const ImU32 envMod     = IM_COL32(236, 178,  96, 235);
 // ── Routing ──────────────────────────────────────────────────────────────────
 const char* kTargets[scPolyComb::NUM_TARGETS] = {"Pitch", "FM Amt", "FM Ratio", "Cutoff", "Reso", "Comb Pitch",
                                                  "Comb Fb", "Comb Mix", "Ring Mix", "Post Cut", "Drive", "PW", "Amp", "Pan"};
-const float kTargetRange[scPolyComb::NUM_TARGETS] = {24, 1, 4, 48, 1, 24, 1, 1, 1, 48, 10, 0.5f, 1, 1};
+// amount 1: the control's whole span (pitches: 48 st); kTargetLegacy, the ranges older saves used
+const float kTargetRange[scPolyComb::NUM_TARGETS] = {48, 1, 31.9375f, 135, 1, 48, 2.2f, 1, 1, 135, 30, 0.98f, 1, 1};
+const float kTargetLegacy[scPolyComb::NUM_TARGETS] = {24, 1, 4, 48, 1, 24, 1, 1, 1, 48, 10, 0.5f, 1, 1};
 const char* kTargetUnit[scPolyComb::NUM_TARGETS] = {"st", "", "", "st", "", "st", "", "", "", "st", "", "", "", "of the width"};
 
 // Preserve the four original indices and their DSP; append fixed pole types.
@@ -299,7 +301,7 @@ void scPolyComb::setup() {
     vec(ringMix, "Ring Mix", 1, 0, 1);        reg(ringMix, toIns(IRing));
     // Legacy model field fixed to the Reaktor ring modulator (PCRingR).
     ringModel.set("Ring Model", 1, 1, 1);     reg(ringModel, toParts);
-    vec(ringRatio, "Ring Ratio", 1, 0, 32);   reg(ringRatio, toIns(IRing));
+    ringRatio.set("Ring Ratio", 1.0f, 0.0f, 32.0f); reg(ringRatio, toIns(IRing));
     ringWidth.set("Ring Width", 0.0f, -1.0f, 1.0f); reg(ringWidth, toIns(IRing));
     shaperOn.set("Shaper On", false);         reg(shaperOn, toParts);
     vec(drive, "Drive", 1, 0, 30);            reg(drive, toIns(IShaper));
@@ -450,13 +452,13 @@ void scPolyComb::setup() {
         h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
         h.voices = [this](){ return n(); };
         std::vector<scModulation::Target> targets;
-        for(int t = 0; t < NUM_TARGETS; t++) targets.push_back({kTargets[t], kTargetRange[t], kTargetUnit[t]});
+        for(int t = 0; t < NUM_TARGETS; t++) targets.push_back({kTargets[t], kTargetRange[t], kTargetUnit[t], false, kTargetLegacy[t]});
         modulation.extraSources = {"Delta"};      // SRC_DELTA
         modulation.busWidth = W;
         modulation.maxVoices = MAX_VOICES;
         modulation.unifiedLfoModels = true;
         modulation.setup(h, targets, true, true, true);
-        for(auto* p : {&ampA, &ampD, &ampS, &ampR, &ampCA, &ampCD, &ampCR, &velSens, &glide, &vibRate, &vibRand, &vibAmt, &tremRate, &tremRand, &tremDepth, &tremRound, &oscDustDensity, &fmFb, &combSatLevel, &keyTrack, &postKeyTrack, &combTone, &combGlide, &combVibRate, &combVibRand, &combVibAmt, &ringWidth, &subA, &subD, &subS, &subR, &subCA, &subCD, &subCR}) modulation.addVoiceParam(*p);
+        for(auto* p : {&ampA, &ampD, &ampS, &ampR, &ampCA, &ampCD, &ampCR, &velSens, &glide, &vibRate, &vibRand, &vibAmt, &tremRate, &tremRand, &tremDepth, &tremRound, &oscDustDensity, &fmFb, &combSatLevel, &keyTrack, &postKeyTrack, &combTone, &combGlide, &combVibRate, &combVibRand, &combVibAmt, &ringWidth, &ringRatio, &subA, &subD, &subS, &subR, &subCA, &subCD, &subCR}) modulation.addVoiceParam(*p);
         for(int i=1;i<=NUM_LFOS;++i) dropdowns.set("LFO"+ofToString(i)+"_Model", {"Off", "Classic", "Noise", "Random"});
         modulation.lfoCount = 2;
         modulation.envCount = 1;
@@ -747,7 +749,7 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             sendVec(s, "ringtranspose", ringTranspose.get());
             sendVec(s, "ringdetune", ringDetune.get());
             sendVec(s, "ringmix", ringMix.get());
-            sendVec(s, "ringratio", ringRatio.get());
+            s->set("ringratio", modulation.voiceValues(ringRatio));
             s->set("ringwidth", modulation.voiceValues(ringWidth));
             s->set("mrmix", mod(st, 8));
             break;
@@ -1440,6 +1442,7 @@ void scPolyComb::presetRecallAfterSettingParameters(ofJson& j) {
                 break;
             }
             m.resize(ALL_SOURCES * NUM_TARGETS, 0.0f);   // (no Delta row before it existed)
+            modulation.rescaleSavedMatrix(m, j.value("polyCombParams", ofJson::array()));
             modulation.matrix = m;
         } catch(...) {}
     }
@@ -2381,7 +2384,7 @@ void scPolyComb::drawFilterTab(float w) {
 }
 
 void scPolyComb::drawRingPitchVector(float w) {
-    scPitchMapView::pitchVector(ringSourcePitches(),expand(ringTranspose.get(),n()),expand(ringRatio.get(),n()),w,82*zoom(),zoom(),pal::accent);
+    scPitchMapView::pitchVector(ringSourcePitches(),expand(ringTranspose.get(),n()),modulation.voiceValues(ringRatio),w,82*zoom(),zoom(),pal::accent);
 }
 
 void scPolyComb::drawResonatorTab(float w) {
@@ -2427,7 +2430,7 @@ void scPolyComb::drawResonatorTab(float w) {
     combo(ringPitchSource,"Source",cw);
     if(ringPitchSource.get()==0)sliderVec(ringPitch,"Pitch",cw,"%.1f MIDI");
     sliderVec(ringTranspose,"Transpose",cw,"%+.2f st");
-    sliderVec(ringRatio, "Ratio", cw, "x%.3f");
+    slider(ringRatio, "Ratio", cw, "x%.3f");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("The modulator frequency: selected pitch + Transpose, converted to Hz, multiplied by Ratio");
     slider(ringWidth, "Width", cw, "%+.2f");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("-1: flat (no modulation), 0: a sine, 1: narrow peaks");
@@ -3195,6 +3198,8 @@ void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t,
     try { if(b.contains("matrix")) mb = b["matrix"].get<std::vector<float>>(); } catch(...) {}
     ma.resize(M.matrix.size(), 0.0f);   // older snapshots: no Delta row
     mb.resize(M.matrix.size(), 0.0f);
+    M.rescaleSavedMatrix(ma, a.value("params", ofJson::array()));   // older snapshots: amounts in the old ranges
+    M.rescaleSavedMatrix(mb, b.value("params", ofJson::array()));
     bool changed = countsChanged;
     for(size_t i = 0; i < M.matrix.size() && i < ma.size(); i++){
         const float v = ofLerp(ma[i], mb[i], t);

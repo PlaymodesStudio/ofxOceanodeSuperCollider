@@ -221,9 +221,11 @@ void scFMBox::setup() {
     h.unpublish = [this](const std::string& k){ unpublish(k); };
     h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
     h.voices = [this](){ return voices.get(); };
-    std::vector<scModulation::Target> targets={{"Pitch",24,"st"},{"FM Amount",4,""},{"Feedback",7,""},{"Amp",1,""},{"Pan",1,""}};
+    // amount 1: the control's whole span (Pitch: 48 st); the last field, older saves' range
+    std::vector<scModulation::Target> targets={{"Pitch",48,"st",false,24},{"FM Amount",10,"",false,4},{"Feedback",7,""},{"Amp",1,""},{"Pan",1,""}};
     for(const auto& kind: {std::string("Coarse"),std::string("Detune"),std::string("Output")})
-        for(int i=0;i<6;++i) targets.push_back({"Op "+ofToString(i+1)+" "+kind,kind=="Coarse"?16.0f:kind=="Detune"?7.0f:99.0f,""});
+        for(int i=0;i<6;++i) targets.push_back({"Op "+ofToString(i+1)+" "+kind,kind=="Coarse"?31.0f:kind=="Detune"?14.0f:99.0f,"",false,
+                                                kind=="Coarse"?16.0f:kind=="Detune"?7.0f:0.0f});
     mod.setup(h,targets,true,true,true);
     mod.lfoCount=mod.envCount=mod.extCount=0;
     mod.targetOfKey[pitch.getEscapedName()]=Pitch;

@@ -1,4 +1,5 @@
-// modulation.scd — small modulation SynthDefs, N voices wide (N = 1..16),
+// modulation.scd — small modulation SynthDefs, N voices wide (N = 1..32;
+// more voices: several copies, each \voffset voices in),
 // shared by the nodes that build their modulation out of synths (PolyComb
 // first). Every one reads and writes buses, so a node creates only what it
 // uses and routes it with ModRoute.
@@ -119,7 +120,7 @@ valueNoise2 = { |x, y, salt = 0|
         // counter (the LFO's rate: Hz or Beats), y = each voice's seed = its
         // index x \nscale (how different the voices are); \seed: this LFO's
         // own noise field (no two LFOs share values)
-        noise = valueNoise2.(sweep + \initphase.kr(0), (0 .. (n - 1)) * \nscale.kr(1), \seed.kr(0));
+        noise = valueNoise2.(sweep + \initphase.kr(0), ((0 .. (n - 1)) + \voffset.kr(0)) * \nscale.kr(1), \seed.kr(0));
         shape = Select.kr(\noise.kr(0) > 0.5, [shape, noise]);
         // Gain: stretched around the middle, clipped at 0 / 1 (before S&H, Pow, BiPow)
         shape = (((shape - 0.5) * kv.(\gain, 1)) + 0.5).clip(0, 1);

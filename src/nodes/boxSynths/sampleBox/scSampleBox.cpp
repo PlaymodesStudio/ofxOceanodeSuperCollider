@@ -632,10 +632,11 @@ void scSampleBox::setupPad(Pad& p) {
     h.voices = []() { return MaxVoices; };      // the synth's 8 voices
     p.mod.nameSuffix = p.suffix();
     // the synth reads these, in this order (samplebox.scd)
-    p.mod.setup(h, {{"Pitch", 24, "st"}, {"Rate", 4, "x"}, {"In", 1, "", true}, {"Out", 1, "", true}, {"Gain", 1, ""},
-                    {"Pan", 1, ""}, {"Stretch", 4, "x"}, {"Grain", 0.5f, "s"}, {"Loop XF", 50, "%"},
-                    {"Cutoff", 8, "oct"}, {"Reso", 1, ""}, {"Drive", 24, "dB"}, {"Comp Thr", 24, "dB"},
-                    {"Rev Mix", 1, ""}, {"Width", 1, ""}}, true, true, true);
+    // amount 1: the control's whole span (Cutoff 20..20000 Hz: 9.97 oct); the last field, older saves' range
+    p.mod.setup(h, {{"Pitch", 48, "st", false, 24}, {"Rate", 7.875f, "x", false, 4}, {"In", 1, "", true}, {"Out", 1, "", true}, {"Gain", 1, ""},
+                    {"Pan", 2, "", false, 1}, {"Stretch", 7.875f, "x", false, 4}, {"Grain", 0.99f, "s", false, 0.5f}, {"Loop XF", 50, "%"},
+                    {"Cutoff", 9.966f, "oct", false, 8}, {"Reso", 1.9f, "", false, 1}, {"Drive", 36, "dB", false, 24}, {"Comp Thr", 60, "dB", false, 24},
+                    {"Rev Mix", 1, ""}, {"Width", 2, "", false, 1}}, true, true, true);
     p.mod.targetOfKey = {{p.transpose.getEscapedName(), 0}, {p.rate.getEscapedName(), 1}, {p.inPoint.getEscapedName(), 2},
                          {p.outPoint.getEscapedName(), 3}, {p.level.getEscapedName(), 4}, {p.pan.getEscapedName(), 5},
                          {p.stretch.getEscapedName(), 6}, {p.warpWindow.getEscapedName(), 7}, {p.loopCrossfade.getEscapedName(), 8},

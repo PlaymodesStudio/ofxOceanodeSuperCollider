@@ -842,8 +842,9 @@ private:
         mod.maxVoices = MAX_VOICES;
         mod.changed = [this](){ modDirty = true; };
         mod.setup(h, {
-            {"Pitch", 24.0f, "st"}, {"Formant", 24.0f, "st"}, {"Cycles", 2.0f, "oct"},
-            {"Level", 1.0f, ""}, {"Probability", 1.0f, ""}, {"Pan", 4.0f, "ch"},
+            // amount 1: the control's whole span (Pitch: 48 st); the last field, older saves' range
+            {"Pitch", 48.0f, "st", false, 24.0f}, {"Formant", 96.0f, "st", false, 24.0f}, {"Cycles", 4.0f, "oct", false, 2.0f},
+            {"Level", 1.0f, ""}, {"Probability", 1.0f, ""}, {"Pan", 16.0f, "ch", false, 4.0f},
         }, true, true, true);   // velocity: the gates' levels (envelopes can track them)
         mod.targetOfKey[fundamental.getEscapedName()] = TGT_PITCH;
         mod.targetOfKey[transpose.getEscapedName()] = TGT_PITCH;

@@ -2015,9 +2015,10 @@ void scWavetableBox::setupModulation(){
     };
     modulation.defaultEnvSustain=1.0f;
     modulation.skipRoute=[this](int source,int target){return ampMorph.gateDrone() && target==TAmp && source>=scModulation::SRC_ENV && source<scModulation::SRC_ENV+scModulation::MAX_ENVS;};
-    modulation.setup(h, {{"Pitch", 24, "st"}, {"Position", 1, "", true}, {"Pos Y", 1, "", true},
+    // amount 1: the control's whole span (Pitch: 48 st); the last field, older saves' range
+    modulation.setup(h, {{"Pitch", 48, "st", false, 24}, {"Position", 1, "", true}, {"Pos Y", 1, "", true},
         {"Warp 1 Amt", 1, ""}, {"Warp 2 Amt", 1, ""}, {"FM", 10, ""}, {"FM Ratio", 16, ""},
-        {"B Pos", 1, "", true}, {"B Feedback", 10, ""}, {"FM Damp", 1, ""}, {"Amp", 1, ""}, {"Pan", 0.5f, "turn"}}, true, true, true);
+        {"B Pos", 1, "", true}, {"B Feedback", 10, ""}, {"FM Damp", 1, ""}, {"Amp", 1, ""}, {"Pan", 1, "turn", false, 0.5f}}, true, true, true);
     const std::vector<ofAbstractParameter*> targets = {&pitch, &position, &posY, &warp1Amt, &warp2Amt,
         &fm, &fmRatio, &bPos, &bFeedback, &fmDamp, &levels, &pan};
     for(int i = 0; i < NUM_TARGETS; ++i) modulation.targetOfKey[targets[i]->getEscapedName()] = i;

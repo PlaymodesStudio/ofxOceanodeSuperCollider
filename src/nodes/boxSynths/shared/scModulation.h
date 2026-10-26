@@ -58,7 +58,10 @@ public:
     // a route set Bipolar (right-click its matrix cell) swings around it.
     // unipolar: the target's routes in presets saved before routes had a
     // polarity were unipolar already (positions: +1 reaches the end)
-    struct Target { std::string name; float range; std::string unit; bool unipolar = false; };
+    // range: what amount 1 moves the target by (its control's whole span).
+    // legacyRange: the range saves made before targets spanned their controls
+    // used (0: unchanged); their amounts are rescaled at load to sound the same.
+    struct Target { std::string name; float range; std::string unit; bool unipolar = false; float legacyRange = 0.0f; };
     // What the module needs from its node
     struct Host {
         ofxOceanodeNodeModel* node = nullptr; // optional live LFO output pins
@@ -94,6 +97,11 @@ public:
     // The bus stride of every source and target: as many voices as the host
     // can have. W (16) for every host but PolyComb (32). Set before create().
     int busWidth = W;
+    // Set before create: the buses as wide as the voices (CHUNK steps, at
+    // least W), allocated again when the count changes (GrainBox: up to 512)
+    bool fitBusWidth = false;
+    // The widest Mod* defs: more voices run several copies, CHUNK voices each
+    static constexpr int CHUNK = 32;
     // A host's own sources after the built-in ones (PolyComb: "Delta"): matrix
     // rows NUM_SOURCES..., written by the host on sourceBus(server, NUM_SOURCES + k).
     // Set before setup(). None: the layout every other host has.
@@ -176,6 +184,10 @@ public:
     const std::vector<Target>& targets() const { return targetList; }
     // A matrix saved with fewer targets (rows of sources x targets): the new columns at 0
     static std::vector<float> fitMatrix(const std::vector<float>& m, int sources, int targets);
+    // A saved matrix (already fitted) with the params json saved next to it:
+    // saves from before the full-span ranges get their amounts rescaled
+    void rescaleSavedMatrix(std::vector<float>& m, const ofJson& params) const;
+    static bool savedWithFullSpans(const ofJson& params);
     void sendMatrix();
     void modulateMenu(const std::string& key);                // inside a control's right-click menu
     // the mod envelopes (cards, 4 per row); lead: a card of the node's own first (PolyComb's amp envelope)
@@ -267,25 +279,26 @@ private:
     struct ServerState {
         ofxSCBus* srcBlock = nullptr;                          // NUM_SOURCES * W
         ofxSCBus* modBlock = nullptr;                          // (targets + 1) * W
-        std::array<ofxSCSynth*, MAX_LFOS> lfo{};
+        // one copy per CHUNK voices (see chunks())
+        std::array<std::vector<ofxSCSynth*>, MAX_LFOS> lfo;
         std::array<std::string, MAX_LFOS> lfoDef;   // ModLfo or ModLfoRnd
-        std::array<ofxSCSynth*, MAX_ENVS> env{};
-        std::map<int, ofxSCSynth*> routes;
+        std::array<std::vector<ofxSCSynth*>, MAX_ENVS> env;
+        std::map<int, std::vector<ofxSCSynth*>> routes;
         int sourceGroup = -1, routeGroup = -1, gateBus = -1;
         bool created = false;
         int builtVoices = 0;
         // What each synth / bus last received: morph frames resend only what
         // changed (scSynthControlBatch caches). resend() clears them (NRT).
         using Sent = std::map<std::string, std::vector<float>>;
-        std::array<Sent, MAX_LFOS> lfoSent;
-        std::array<Sent, MAX_ENVS> envSent;
+        std::array<std::vector<Sent>, MAX_LFOS> lfoSent;   // per copy
+        std::array<std::vector<Sent>, MAX_ENVS> envSent;
         std::map<int, std::pair<float, float>> routeSent;   // amount, decor
         std::map<int, float> routeBip;                      // bipolar
         std::map<int, std::vector<float>> busSent;          // source buses
         std::vector<bool> zeroed;                           // unrouted target buses already cleared
         void clearSent() {
-            for(auto& c : lfoSent) c.clear();
-            for(auto& c : envSent) c.clear();
+            for(auto& v : lfoSent) for(auto& c : v) c.clear();
+            for(auto& v : envSent) for(auto& c : v) c.clear();
             routeSent.clear(); routeBip.clear(); busSent.clear(); zeroed.clear();
         }
     };
@@ -342,7 +355,9 @@ private:
     void forStates(const std::function<void(ofxSCServer*, ServerState&)>& f);
     void sendVec(ofxSCSynth* s, const std::string& name, const std::vector<float>& v);
     void sendLfo(ofxSCServer* server, ServerState& st, int li);
+    void sendLfoPart(ofxSCServer* server, ServerState& st, int li, int c);
     void sendEnv(ofxSCServer* server, ServerState& st, int e);
+    void sendEnvPart(ofxSCServer* server, ServerState& st, int e, int c);
     void updateSources(ofxSCServer* server, ServerState& st);
     void syncRoutes(ofxSCServer* server, ServerState& st);
     void writeSources(ofxSCServer* server, ServerState& st);
@@ -350,7 +365,13 @@ private:
     void updatePhases();
     std::vector<float> lfoHzFor(int li) const;
     std::vector<float> lfoShFor(int li) const;
-    std::string def(const std::string& name) const { return name + ofToString(n()); }
+    // copy c of a Mod* def: CHUNK voices (the last one the rest)
+    int chunks() const { return (n() + CHUNK - 1) / CHUNK; }
+    int chunkN(int c) const { return std::min(CHUNK, n() - c * CHUNK); }
+    std::string def(const std::string& name, int c = 0) const { return name + ofToString(chunkN(c)); }
+    std::vector<float> slice(const std::vector<float>& v, int c) const;   // copy c's voices of n values
+    int fittedBusWidth() const { return fitBusWidth ? std::max((int)W, chunks() * CHUNK) : busWidth; }
+    void allocBlocks(ofxSCServer* server, ServerState& st);
 
     // widgets (GrainBox's look)
     float labelW = 70.0f;

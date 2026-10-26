@@ -76,18 +76,12 @@ public:
     static constexpr int   WAVEFORM_BINS       = 4096;
     static constexpr int   MAX_PLAYHEADS       = 8;    // engines
     static constexpr int   MAX_VOICES          = 500;  // playheads per engine (largest GrainBoxPolyCtl_<cap>)
-    // Modulation (the shared system, per engine): what the X voice variants
-    // run (scGrainBoxPoly.scd: modApply)
-    static constexpr int   MOD_LFOS            = 8;   // as PolyComb's (scGrainBoxPoly.scd: nL nE nX)
+    // Modulation (the shared system, per engine: scModulation's synths)
+    static constexpr int   MOD_LFOS            = 8;   // as PolyComb's
     static constexpr int   MOD_ENVS            = 4;
     static constexpr int   MOD_EXTS            = 8;
     static constexpr int   MOD_TARGETS         = 7;   // Pos Dur Pitch Amp Pan Rate Cut
     static constexpr int   MOD_SOURCES         = 22;  // LFO 1-8, Env 1-4, Ext 1-8, Random, Voice
-    static constexpr int   MOD_HDR             = 256;
-    static constexpr int   MOD_VIS_STRIDE      = MOD_LFOS + MOD_ENVS + 1;   // + the Amp Envelope
-    static constexpr int   MOD_VIS             = 17 * MOD_VIS_STRIDE;
-    static constexpr int   MOD_VOX             = MOD_EXTS + MOD_LFOS + 1 + 7;   // per playhead: Ext, LFO offsets, Gate, amp ADSR/curves
-    static constexpr int   MOD_TABLE           = 257;
 
     // ── Constructor / Destructor ──────────────────────────────────────────────
     scGrainBoxPoly(vector<serverManager*> servers);
@@ -172,8 +166,9 @@ private:
 
         // ── Modulation (the shared system): LFOs with one oscillator per
         //    playhead, envelopes following Gate, external sources, routed to
-        //    Pos / Dur / Pitch / Amp / Pan / Rate / Cut. The voices run the X
-        //    variants only while something is routed. (Declared before the
+        //    Pos / Dur / Pitch / Amp / Pan / Rate / Cut. Its synths (ModGate,
+        //    ModLfoX, ModEnv, ModRoute) run right before the engine's control
+        //    synth; the voices read the target buses. (Declared before the
         //    listeners: they listen to its parameters.) ──
         std::unique_ptr<scModulation> mod;
         ofParameter<vector<float>> gate;          // per playhead: the envelopes' gate
@@ -181,36 +176,31 @@ private:
         // x the gate's level), unless Drone is enabled.
         ofParameter<bool>           drone;
         ofParameter<float>         ampA, ampD, ampS, ampR, ampCA, ampCD, ampCR;
-        float                      ampGatedSent = -1;   // what the header says (rewritten when it changes)
-        // Gate and Pitch (when published) also take audio cables: the gate copied
-        // onto the playheads' gates (GrainBoxGateIn<k>, after the control synth),
-        // the pitch mapped onto the control synth (MIDI notes, 60: as recorded)
+        float                      ampGatedSent = -1;   // what the amp block says (rewritten when it changes)
+        // Gate and Pitch (when published) also take audio cables: the gate mapped
+        // onto the ModGate copies, the pitch onto the control synth (MIDI notes, 60: as recorded)
         scAudioParam gateIn, pitchIn;
-        struct GateCopy { ofxSCSynth* synth = nullptr; int ctlID = -1, bus = -1, out = -1, k = 0; };
-        std::map<ofxSCServer*, GateCopy> gateCopy;
         ofParameter<int>           placement;     // 0 Manual (PanAz), 1 Spread, 2 Channels
         ofParameter<float>         spreadWidth;   // Spread: how far round the speakers
+        ofParameter<float>         stereoWidth;   // stereo samples: 0 L+R at the pan (mono), 1 L and R apart
         std::vector<ofParameter<float>*> modF;    // its parameters, for the publish registry
         std::vector<ofParameter<int>*> modI;
         std::vector<ofParameter<bool>*> modB;
         std::vector<ofParameter<vector<float>>*> modV;
         struct ModSC {
-            ofxSCBus* hdr = nullptr;              // control, MOD_HDR
-            ofxSCBus* vox = nullptr;              // control, MOD_VOX x capacity (while on)
-            ofxSCBus* vis = nullptr;              // control, MOD_VIS
-            int voxCap = 0;
-            bool gateInitialized = false;
-            std::array<ofxSCBuffer*, 2 * MOD_LFOS> tables{};          // the shapes, then the noise curves
-            std::array<std::vector<float>, 2 * MOD_LFOS> sentTables;
+            ofxSCGroup* src = nullptr;            // the module's sources (ModGate copies first), then
+            ofxSCGroup* route = nullptr;          // its routes: both right before the control synth
+            std::vector<ofxSCSynth*> gates;       // ModGate copies (CHUNK playheads each)
+            ofxSCBus* gateBus = nullptr;          // audio, the module's width: each playhead's gate level
+            ofxSCBus* amp = nullptr;              // control, 8 x width + 1 (see scGrainBoxPoly.scd)
+            int width = 0, voices = 0;            // what the buses / synths were made for
+            bool created = false;                 // scModulation::create done
         };
         std::map<ofxSCServer*, ModSC> modSC;
-        bool modDirty = true;                     // the buses to write
-        bool modOn = false;                       // the voices are the X variants
+        bool modDirty = true;                     // the amp block / gates to write
         int  modVoices = -1;                      // the playheads its indexers were set for
-        std::vector<float> modLive;               // the vis bus (window)
-        float nextModVisRead = 0.0f;
-        std::array<std::vector<float>, MOD_LFOS> lfoTab;   // the LFOs' cycles (window)
-        std::array<std::vector<float>, MOD_LFOS> lfoCurve; // their noise curves (window)
+        std::vector<float> ampLive;               // each playhead's Amp Envelope now (window)
+        float nextAmpRead = 0.0f;
 
         // Trigger
         ofParameter<vector<int>>   trigger;
@@ -333,8 +323,7 @@ private:
         bool   needHard    = true;
     };
     std::vector<std::unique_ptr<Playhead>> playheads;
-    int  activePlayhead = 0;       // GUI tab
-    int  pendingTabSelect = -1;    // select this tab on the next frame
+    int  activePlayhead = 0;       // the window's selected engine
     Playhead& ph0() { return *playheads[0]; }
 
     void createPlayheadParameters(Playhead& ph);
@@ -365,7 +354,7 @@ private:
     void prepareVoiceMorph(Playhead&,const ofJson&,const ofJson&,float);
     int  phVoices(const Playhead& ph) const;     // playheads (= vector size sent)
     int  ctlCap(const Playhead& ph) const;       // control synth size: 8 / 32 / 128 / 500 playheads
-    int  ctlBusSize(const Playhead& ph) const;   // 80 + 15 * ctlCap
+    int  ctlBusSize(const Playhead& ph) const;   // 81 + 15 * ctlCap
     void replaceCtl(Playhead& ph, ofxSCServer* srv);   // another capacity: new bus + control synth
     std::string voiceDefFor(const Playhead& ph) const;
     std::string outDefFor(const Playhead& ph) const;
@@ -478,21 +467,18 @@ public:
     bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override;
 private:
 #endif
-    bool modWanted(const Playhead& ph) const;        // something routed (a used source, a GrainBox target)
     bool ampGated(const Playhead& ph) const;
     float ampGatedAmount(const Playhead& ph) const;         // the Amp Envelope is the VCA unless Drone is enabled
     // Saved before the Amp Envelope: an envelope routed to Amp was the VCA; it becomes the Amp Envelope
     void migrateAmpEnvelope(Playhead& ph, const ofJson& j);
-    void writeGate(Playhead& ph, ofxSCServer* srv);  // the playheads' gates onto the modulation's block
     float regionSecOf(const Playhead& ph) const;     // the region's length (s): LFOs in Smp
     std::vector<float> panSend(const Playhead& ph, int n) const;   // PanAz after Placement
-    void ensureModResources(Playhead& ph, ofxSCServer* srv);       // buses (+ tables while on)
-    void freeModResources(Playhead& ph, ofxSCServer* srv);
-    void writeMod(Playhead& ph, ofxSCServer* srv);
-    std::vector<float> modTableData(const Playhead& ph, int k) const;   // header, per-playhead data, tables, the ctl's LFO controls
+    void ensureModResources(Playhead& ph, ofxSCServer* srv);       // buses; groups + module once the control synth runs
+    void freeModResources(Playhead& ph, ofxSCServer* srv, bool sendFree = true);
+    void writeAmp(Playhead& ph, ofxSCServer* srv);   // the Amp Envelope block
     void setModArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv);   // a voice's buses
     void setCtlModArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv);
-    void updateModulation(Playhead& ph);             // per frame: on / off, dirty -> write, live values
+    void updateModulation(Playhead& ph);             // per frame: voices, tempo, dirty -> write, live values
     void drawModTabs(Playhead& ph, float w, float h);
     void migrateOldLfos(Playhead& ph, const ofJson& j);
     float defaultInterval(int unit) const;   // 1/4 region, 500 ms or 1 beat
@@ -512,12 +498,18 @@ private:
     void  setFilterArgs(Playhead& ph, ofxSCSynth* s);
     static bool synthIsFiltered(ofxSCSynth* s);
 
-    // ── Global FX chain: EQ → Echo → Reverb (the user's SynthDefs) ────────────
+    // ── Global FX chain: Compressor → EQ → Blur → Echo → Reverb (PolyComb's
+    // order; Compressor = MixerPro's, Blur = PolyComb's PCBlur) ─────────────────
     // All off: playheads write straight to the output bus (no extra synths).
     // Otherwise playheads write to a private bus and the enabled stages chain
     // private buses → output bus, right after playhead 1's synth.
-    enum FxStage { FX_EQ = 0, FX_ECHO = 1, FX_REVERB = 2, FX_COUNT = 3 };
+    enum FxStage { FX_COMP = 0, FX_EQ = 1, FX_BLUR = 2, FX_ECHO = 3, FX_REVERB = 4, FX_COUNT = 5 };
     ofParameter<bool>  fxOnP[FX_COUNT];
+    ofParameter<float> compThresholdP, compRatioP, compKneeP, compAttackP, compReleaseP, compMakeupP,
+                       compRmsP, compHpfP, compMixP;
+    ofParameter<bool>  compAutoP;
+    ofParameter<float> blurTimeP, blurAmountP, blurDensityP, blurSpreadP, blurLowCutP, blurHighCutP, blurMixP;
+    float compGr = 0.0f;                  // the compressor's gain reduction now (dB, the window's meter)
     ofParameter<float> eqGainP[5], eqMixP;
     ofParameter<float> eqFreqP[5];    // Hz (graphiceqN defaults 80 / 250 / 1k / 4k / 12k)
     ofParameter<float> eqShapeP[5];   // slope for bands 1 and 5 (shelves), Q for 2..4
@@ -536,8 +528,9 @@ private:
     struct FxState {
         int channels = 0;
         std::vector<int>       plan;                 // enabled + loaded stages, in order
-        ofxSCSynth*            synths[FX_COUNT] = {nullptr, nullptr, nullptr};
+        ofxSCSynth*            synths[FX_COUNT] = {};
         std::vector<ofxSCBus*> buses;                // input bus of each planned stage
+        ofxSCBus*              grBus = nullptr;      // control, 1: the compressor's gain reduction
     };
     std::map<ofxSCServer*, FxState> fx;
     std::map<int, std::map<std::string, std::vector<float>>> fxSent;   // by node ID: what each stage last received
@@ -564,11 +557,17 @@ private:
     // ── GUI ───────────────────────────────────────────────────────────────────
     void drawGrainBoxWindow();
     void drawBrowser(float w, float h);
-    void drawPlayheadTabs();
-    bool globalTab = false;           // the Global tab is selected
-    bool pendingGlobalSelect = false;
+    // Layout (PolyComb's): header, snapshot bar, browser | waveform, the
+    // engines strip, then function tabs (the selected engine's, then the
+    // node-wide Mixer and Effects)
+    enum WindowTab { TAB_GRAINS = 0, TAB_ENVELOPES, TAB_LFOS, TAB_ROUTING, TAB_PANNING, TAB_MIXER, TAB_EFFECTS, TAB_COUNT };
+    int  windowTab = TAB_GRAINS;
+    void drawHeader(Playhead& ph, float w);
+    void drawEngineStrip(float w);
+    void drawGrainsTab(Playhead& ph, float w);
+    bool globalTab = false;           // Mixer / Effects: every engine overlaid (a drop loads the shared sample)
     bool tabsInitialized = false;
-    void drawGlobalPanel(float w);
+    void drawGlobalPanel(float w);    // the Mixer tab
 
     // ── Snapshots and Morph (scSnapshots, shared by the synths): every
     //    editor parameter (not the samples, the live buffer length, the
@@ -700,7 +699,7 @@ private:
     void sendPitchTo(Playhead& ph, ofxSCServer* srv, ofxSCSynth* s);   // values, or the cable mapped
     void applyPitchModeRange(Playhead& ph);    // Pitch's min / max for its mode
     void switchPitchMode(Playhead& ph, int mode);   // the window's switch: the values follow (+-60)
-    void syncGateCopy(Playhead& ph, ofxSCServer* srv);
+    void sendGates(Playhead& ph, ofxSCServer* srv, bool notesOnly = false);   // the ModGate copies
 
     // ── Sync To Transport ─────────────────────────────────────────────────────
     ofParameter<bool>  syncToTransportP;

@@ -92,6 +92,30 @@ inline Json controls(Json c) {
         c["Ring_Ratio"]=ratio; c["Ring_Width"]=0.0f;
     }
     c["Ring_Model"]=1; c["Comb_Model"]=1; c["Comb_Saturation"]=false;
+    // Ring Ratio is one value now. A per-voice ratio (older saves, the old
+    // ring migration above) becomes their common ratio (geometric mean) and
+    // each voice's remainder in semitones on Ring Transpose: the same pitches.
+    if(c.contains("Ring_Ratio") && c["Ring_Ratio"].is_array()){
+        std::vector<float> r;
+        for(const auto& v:c["Ring_Ratio"]) if(v.is_number()) r.push_back(std::clamp(v.get<float>(),0.0f,32.0f));
+        bool uniform=true;
+        for(float v:r) uniform=uniform && std::abs(v-r[0])<1e-6f;
+        if(r.empty()) c["Ring_Ratio"]=1.0f;
+        else if(uniform) c["Ring_Ratio"]=r[0];
+        else{
+            double lg=0;
+            for(float& v:r){ v=std::max(v,1e-4f); lg+=std::log2((double)v); }
+            const float common=std::clamp((float)std::exp2(lg/r.size()),0.0f,32.0f);
+            std::vector<float> old;
+            if(c.contains("Ring_Transpose") && c["Ring_Transpose"].is_array())
+                for(const auto& v:c["Ring_Transpose"]) if(v.is_number()) old.push_back(v.get<float>());
+            if(old.empty()) old.push_back(scalar(c,"Ring_Transpose",0));
+            std::vector<float> t(std::max(r.size(),old.size()));
+            for(size_t i=0;i<t.size();++i)
+                t[i]=std::clamp(old[std::min(i,old.size()-1)]+12.0f*std::log2(r[std::min(i,r.size()-1)]/common),-48.0f,48.0f);
+            c["Ring_Transpose"]=t; c["Ring_Ratio"]=common;
+        }
+    }
     for(const std::string p : {"Osc_Map_","Comb_Map_"}){
         if((int)scalar(c,p+"Version",1)<2){
             auto old=map(c,p);

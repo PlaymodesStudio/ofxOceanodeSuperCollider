@@ -219,10 +219,11 @@ void scSteamPipeBox::setup() {
     h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedKeys; };
     h.voices = [this](){ return voices.get(); };
     mod.unifiedLfoModels = true; // Same shared LFO models and editor as PolyComb.
-    mod.setup(h, {{"Pitch",24,"st"}, {"Tune",48,"st"}, {"Allpass Tune",48,"st"},
-        {"Noise Cutoff",48,"st"}, {"Noise Resonance",1,""}, {"Diffusion",1,""},
-        {"Push",2,""}, {"Offset",1,""}, {"Feedback RT",60,"st"}, {"HP 0",48,"st"},
-        {"LP 0",48,"st"}, {"Mod Wheel",1,""}, {"Amp",1,""}, {"Pan",1,""}}, true, true, true);
+    // amount 1: the control's whole span (Pitch: 48 st); the last field, older saves' range
+    mod.setup(h, {{"Pitch",48,"st",false,24}, {"Tune",120,"st",false,48}, {"Allpass Tune",120,"st",false,48},
+        {"Noise Cutoff",120,"st",false,48}, {"Noise Resonance",1,""}, {"Diffusion",2,"",false,1},
+        {"Push",2,""}, {"Offset",2,"",false,1}, {"Feedback RT",120,"st",false,60}, {"HP 0",120,"st",false,48},
+        {"LP 0",120,"st",false,48}, {"Mod Wheel",1,""}, {"Amp",1,""}, {"Pan",1,""}}, true, true, true);
     for(int i=1;i<=scModulation::MAX_LFOS;++i)
         dropdowns.set("LFO"+ofToString(i)+"_Model", {"Off", "Classic", "Noise", "Random"});
     mod.lfoCount = mod.envCount = mod.extCount = 0;

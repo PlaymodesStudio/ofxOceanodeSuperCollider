@@ -296,22 +296,36 @@ std::vector<float> scModulation::lfoShFor(int li) const {
     return sh;
 }
 
+std::vector<float> scModulation::slice(const std::vector<float>& v, int c) const {
+    const auto all = expand(v, n());
+    const int a = c * CHUNK;
+    return std::vector<float>(all.begin() + a, all.begin() + a + chunkN(c));
+}
+
 void scModulation::sendLfo(ofxSCServer* server, ServerState& st, int li) {
     if(st.builtVoices != n()) return;
-    auto* s = st.lfo[li];
+    for(int c = 0; c < (int)st.lfo[li].size(); c++) sendLfoPart(server, st, li, c);
+}
+
+// Copy c of LFO li: voices c * CHUNK on
+void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int c) {
+    auto* s = c < (int)st.lfo[li].size() ? st.lfo[li][c] : nullptr;
     if(!s) return;
+    if((int)st.lfoSent[li].size() <= c) st.lfoSent[li].resize(c + 1);
     // Cached: a morph frame sends only the controls whose values changed.
-    scSynthControlBatch controls(s, server, &st.lfoSent[li]);
+    scSynthControlBatch controls(s, server, &st.lfoSent[li][c]);
     const bool blended = generatorMorph.contains(lfoNoise[li].getEscapedName());
     const bool held = manualLfo(li) && !blended;   // a still manual LFO: its value as the phase
-    const std::vector<float> zero(n(), 0.0f);
+    const int k = chunkN(c);
+    const std::vector<float> zero(k, 0.0f);
     auto vec = [&](const char* name, const std::vector<float>& v, float heldValue){
-        controls.set(name, held ? std::vector<float>(n(), heldValue) : expand(v, n()));
+        controls.set(name, held ? std::vector<float>(k, heldValue) : slice(v, c));
     };
-    controls.set("out", st.srcBlock ? st.srcBlock->index + li * busWidth : 0);
-    controls.set("freq", held ? zero : lfoHzFor(li));
-    controls.set("sh", held ? zero : lfoShFor(li));
-    controls.set("freqdetune", held ? zero : expand(perVoice ? lfoDetune[li].get() : std::vector<float>{0.0f}, n()));
+    controls.set("out", st.srcBlock ? st.srcBlock->index + li * busWidth + c * CHUNK : 0);
+    controls.set("voffset", (float)(c * CHUNK));
+    controls.set("freq", held ? zero : slice(lfoHzFor(li), c));
+    controls.set("sh", held ? zero : slice(lfoShFor(li), c));
+    controls.set("freqdetune", held ? zero : slice(perVoice ? lfoDetune[li].get() : std::vector<float>{0.0f}, c));
     controls.set("initphase", held ? lfoManual[li].get() * 0.5f : lfoInit[li].get());
     vec("round", lfoRound[li].get(), 0.0f);
     vec("skew", lfoSkew[li].get(), 0.0f);
@@ -324,7 +338,7 @@ void scModulation::sendLfo(ofxSCServer* server, ServerState& st, int li) {
     controls.set("shglide", lfoSHGlide[li].get());
     controls.set("nscale", perVoice ? lfoNScale[li].get() : 0.0f);
     controls.set("seed", li * 17.31f);
-    controls.set("phoff", perVoice && !held ? expand(lfoPhases[li], n()) : zero);
+    controls.set("phoff", perVoice && !held ? slice(lfoPhases[li], c) : zero);
     controls.set("reset", (float)resetCounter);
     controls.set("rtype", held ? 0.0f : (float)effectiveRandom(li));     // ModLfoX only
     controls.set("steps", held ? 0.0f : lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
@@ -355,17 +369,22 @@ float scModulation::rndPreview(int li, float ph, int type, float smooth) {
 
 void scModulation::sendEnv(ofxSCServer* server, ServerState& st, int e) {
     if(st.builtVoices != n()) return;
-    auto* s = st.env[e];
+    for(int c = 0; c < (int)st.env[e].size(); c++) sendEnvPart(server, st, e, c);
+}
+
+void scModulation::sendEnvPart(ofxSCServer* server, ServerState& st, int e, int c) {
+    auto* s = c < (int)st.env[e].size() ? st.env[e][c] : nullptr;
     if(!s) return;
+    if((int)st.envSent[e].size() <= c) st.envSent[e].resize(c + 1);
     auto& E = envs[e];
-    scSynthControlBatch controls(s, server, &st.envSent[e]);
-    auto fill = [&](const char* name, float v){ controls.set(name, std::vector<float>(n(), v)); };
-    controls.set("gate", st.gateBus);
-    controls.set("out", st.srcBlock ? st.srcBlock->index + (SRC_ENV + e) * busWidth : 0);
+    scSynthControlBatch controls(s, server, &st.envSent[e][c]);
+    auto fill = [&](const char* name, float v){ controls.set(name, std::vector<float>(chunkN(c), v)); };
+    controls.set("gate", st.gateBus + c * CHUNK);
+    controls.set("out", st.srcBlock ? st.srcBlock->index + (SRC_ENV + e) * busWidth + c * CHUNK : 0);
     fill("atk", E.a.get()); fill("dec", E.d.get()); fill("sus", E.s.get()); fill("rel", E.r.get());
     fill("cA", E.ca.get()); fill("cD", E.cd.get()); fill("cR", E.cr.get());
     // velocity tracking: the note's velocity (the velocity source, written by the node's gates)
-    controls.set("velbus", st.srcBlock ? st.srcBlock->index + SRC_VEL * busWidth : 0);
+    controls.set("velbus", st.srcBlock ? st.srcBlock->index + SRC_VEL * busWidth + c * CHUNK : 0);
     controls.set("veltrack", velocity ? E.vt.get() : 0.0f);
     controls.send();
 }
@@ -393,26 +412,37 @@ void scModulation::writeSources(ofxSCServer* server, ServerState& st) {
 void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
     if(st.builtVoices != n()) return;
     if(!st.created) return;
+    auto trim = [](std::vector<ofxSCSynth*>& v, int keep){
+        while((int)v.size() > keep){ if(v.back()){ v.back()->free(); delete v.back(); } v.pop_back(); }
+    };
     for(int li = 0; li < MAX_LFOS; li++){
-        auto*& s = st.lfo[li];
+        auto& v = st.lfo[li];
         // ModLfoX contains every generator on one clock. Switching algorithms
         // must never replace the source and reset its phase.
         const std::string wanted = "ModLfoX";
-        if(s && st.lfoDef[li] != wanted){ s->free(); delete s; s = nullptr; }   // legacy engine migration
-        if(li < lfoCount && !s){
+        if(!v.empty() && st.lfoDef[li] != wanted) trim(v, 0);   // legacy engine migration
+        trim(v, li < lfoCount ? chunks() : 0);
+        while(li < lfoCount && (int)v.size() < chunks()){
+            const int c = (int)v.size();
             st.lfoDef[li] = wanted;
-            st.lfoSent[li].clear();
-            s = new ofxSCSynth(def(wanted), server);
-            scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendLfo(server, st, li); });
-        }else if(li >= lfoCount && s){ s->free(); delete s; s = nullptr; }
+            if((int)st.lfoSent[li].size() <= c) st.lfoSent[li].resize(c + 1);
+            st.lfoSent[li][c].clear();
+            auto* s = new ofxSCSynth(def(wanted, c), server);
+            v.push_back(s);
+            scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendLfoPart(server, st, li, c); });
+        }
     }
     for(int e = 0; e < MAX_ENVS; e++){
-        auto*& s = st.env[e];
-        if(e < envCount && !s){
-            st.envSent[e].clear();
-            s = new ofxSCSynth(def("ModEnv"), server);
-            scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendEnv(server, st, e); });
-        }else if(e >= envCount && s){ s->free(); delete s; s = nullptr; }
+        auto& v = st.env[e];
+        trim(v, e < envCount ? chunks() : 0);
+        while(e < envCount && (int)v.size() < chunks()){
+            const int c = (int)v.size();
+            if((int)st.envSent[e].size() <= c) st.envSent[e].resize(c + 1);
+            st.envSent[e][c].clear();
+            auto* s = new ofxSCSynth(def("ModEnv", c), server);
+            v.push_back(s);
+            scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendEnvPart(server, st, e, c); });
+        }
     }
 }
 
@@ -430,30 +460,34 @@ void scModulation::syncRoutes(ofxSCServer* server, ServerState& st) {
             if(used){
                 routed[t] = true;
                 if(it == st.routes.end()){
-                    auto* r = new ofxSCSynth(def("ModRoute"), server);
-                    r->set("src", st.srcBlock->index + s * busWidth);
-                    r->set("out", st.modBlock->index + t * busWidth);
-                    r->set("bipolar", bip);
-                    r->set("scale", targetList[t].range);
-                    r->set("amount", amount);
-                    r->set("decor", s == SRC_RND && !randomShared ? 1.0f : 0.0f);
-                    r->set("salt", t * 7.31f + 1.0f);
-                    r->createAndRun(1, st.routeGroup, true);
-                    st.routes[idx] = r;
+                    auto& parts = st.routes[idx];
+                    for(int c = 0; c < chunks(); c++){
+                        auto* r = new ofxSCSynth(def("ModRoute", c), server);
+                        r->set("src", st.srcBlock->index + s * busWidth + c * CHUNK);
+                        r->set("out", st.modBlock->index + t * busWidth + c * CHUNK);
+                        r->set("bipolar", bip);
+                        r->set("scale", targetList[t].range);
+                        r->set("amount", amount);
+                        r->set("decor", s == SRC_RND && !randomShared ? 1.0f : 0.0f);
+                        r->set("salt", t * 7.31f + 1.0f);
+                        r->createAndRun(1, st.routeGroup, true);
+                        parts.push_back(r);
+                    }
                     st.routeSent[idx] = {amount, s == SRC_RND && !randomShared ? 1.0f : 0.0f};
                     st.routeBip[idx] = bip;
                 }else{
                     const float decor = s == SRC_RND ? (randomShared ? 0.0f : 1.0f) : 0.0f;
                     auto sent = st.routeSent.find(idx);
-                    if(sent == st.routeSent.end() || sent->second.first != amount) it->second->set("amount", amount);
-                    if(s == SRC_RND && (sent == st.routeSent.end() || sent->second.second != decor)) it->second->set("decor", decor);
+                    for(auto* r : it->second){
+                        if(sent == st.routeSent.end() || sent->second.first != amount) r->set("amount", amount);
+                        if(s == SRC_RND && (sent == st.routeSent.end() || sent->second.second != decor)) r->set("decor", decor);
+                    }
                     st.routeSent[idx] = {amount, decor};
                     auto sentBip = st.routeBip.find(idx);
-                    if(sentBip == st.routeBip.end() || sentBip->second != bip){ it->second->set("bipolar", bip); st.routeBip[idx] = bip; }
+                    if(sentBip == st.routeBip.end() || sentBip->second != bip){ for(auto* r : it->second) r->set("bipolar", bip); st.routeBip[idx] = bip; }
                 }
             }else if(it != st.routes.end()){
-                it->second->free();
-                delete it->second;
+                for(auto* r : it->second){ r->free(); delete r; }
                 st.routes.erase(it);
                 st.routeSent.erase(idx);
                 st.routeBip.erase(idx);
@@ -487,6 +521,8 @@ void scModulation::create(ofxSCServer* server, int sourceGroup, int routeGroup, 
         b = new ofxSCBus(RATE_CONTROL, channels, server);
         if(!liveControlBus(server, b)){ b->free(); delete b; b = nullptr; }
     };
+    busWidth = fittedBusWidth();
+    if(st.srcBlock && st.srcBlock->channels != sourceCount() * busWidth) allocBlocks(server, st);
     control(st.srcBlock, sourceCount() * busWidth);
     control(st.modBlock, (T() + 1) * busWidth);
     st.created = true;
@@ -503,9 +539,9 @@ void scModulation::free(ofxSCServer* server, bool sendFree) {
     if(it == states.end()) return;
     auto& st = it->second;
     auto drop = [&](ofxSCSynth*& s){ if(s){ if(sendFree) s->free(); delete s; s = nullptr; } };
-    for(auto*& s : st.lfo) drop(s);
-    for(auto*& s : st.env) drop(s);
-    for(auto& [idx, r] : st.routes){ if(sendFree) r->free(); delete r; }
+    for(auto& v : st.lfo){ for(auto*& s : v) drop(s); v.clear(); }
+    for(auto& v : st.env){ for(auto*& s : v) drop(s); v.clear(); }
+    for(auto& [idx, v] : st.routes) for(auto* r : v){ if(sendFree) r->free(); delete r; }
     st.routes.clear();
     auto bus = [&](ofxSCBus*& b){ if(b && liveControlBus(server, b)) b->free(); delete b; b = nullptr; };
     bus(st.srcBlock);
@@ -538,16 +574,33 @@ void scModulation::rebuild(ofxSCServer* server) {
     if(it == states.end() || !it->second.created) return;
     auto& st = it->second;
     for(int li = 0; li < MAX_LFOS; li++) lfoIndexers[li].indexCountChanged(n());
-    for(auto*& s : st.lfo) if(s){ s->free(); delete s; s = nullptr; }
-    for(auto*& s : st.env) if(s){ s->free(); delete s; s = nullptr; }
-    for(auto& [idx, r] : st.routes){ r->free(); delete r; }
+    for(auto& v : st.lfo){ for(auto* s : v) if(s){ s->free(); delete s; } v.clear(); }
+    for(auto& v : st.env){ for(auto* s : v) if(s){ s->free(); delete s; } v.clear(); }
+    for(auto& [idx, v] : st.routes) for(auto* r : v){ r->free(); delete r; }
     st.routes.clear();
+    // fitBusWidth: buses as wide as the new count (the node reads targetBus again)
+    if(fittedBusWidth() != busWidth || (st.srcBlock && st.srcBlock->channels != sourceCount() * busWidth)){
+        busWidth = fittedBusWidth();
+        allocBlocks(server, st);
+    }
     st.builtVoices = n();
     st.clearSent();
     updatePhases();
     writeSources(server, st);
     updateSources(server, st);
     syncRoutes(server, st);
+}
+
+// The source and target blocks at busWidth (new buses: nothing on them yet)
+void scModulation::allocBlocks(ofxSCServer* server, ServerState& st) {
+    auto control = [&](ofxSCBus*& b, int channels){
+        if(b && liveControlBus(server, b)) b->free();
+        delete b;
+        b = new ofxSCBus(RATE_CONTROL, channels, server);
+        if(!liveControlBus(server, b)){ b->free(); delete b; b = nullptr; }
+    };
+    control(st.srcBlock, sourceCount() * busWidth);
+    control(st.modBlock, (T() + 1) * busWidth);
 }
 
 void scModulation::voicesChanged() {
@@ -579,10 +632,13 @@ void scModulation::sendChanged() {
 void scModulation::setBpm(float bpm) {
     if(bpm != currentBpm){ currentBpm = bpm; notify(); }
     forStates([this](ofxSCServer*, ServerState& st){
-        for(int li = 0; li < lfoCount; li++) if(st.lfo[li]){
-            st.lfo[li]->set("freq", lfoHzFor(li));
-            st.lfo[li]->set("sh", lfoShFor(li));
-            st.lfoSent[li].erase("freq"); st.lfoSent[li].erase("sh");
+        for(int li = 0; li < lfoCount; li++){
+            const auto hz = lfoHzFor(li), sh = lfoShFor(li);
+            for(int c = 0; c < (int)st.lfo[li].size(); c++) if(st.lfo[li][c]){
+                st.lfo[li][c]->set("freq", slice(hz, c));
+                st.lfo[li][c]->set("sh", slice(sh, c));
+                if(c < (int)st.lfoSent[li].size()){ st.lfoSent[li][c].erase("freq"); st.lfoSent[li][c].erase("sh"); }
+            }
         }
     });
 }
@@ -591,7 +647,10 @@ void scModulation::resetLfos() {
     resetCounter++;
     notify();
     forStates([this](ofxSCServer*, ServerState& st){
-        for(int li = 0; li < MAX_LFOS; li++) if(st.lfo[li]){ st.lfo[li]->set("reset", (float)resetCounter); st.lfoSent[li].erase("reset"); }
+        for(int li = 0; li < MAX_LFOS; li++) for(int c = 0; c < (int)st.lfo[li].size(); c++) if(st.lfo[li][c]){
+            st.lfo[li][c]->set("reset", (float)resetCounter);
+            if(c < (int)st.lfoSent[li].size()) st.lfoSent[li][c].erase("reset");
+        }
     });
 }
 
@@ -696,7 +755,10 @@ void scModulation::updatePhases() {
         ix.recomputeIndexs();
         lfoPhases[li] = expand(ix.getIndexs(), n());
         forStates([this, li](ofxSCServer*, ServerState& st){
-            if(st.lfo[li]){ st.lfo[li]->set("phoff", perVoice ? lfoPhases[li] : std::vector<float>(n(), 0.0f)); st.lfoSent[li].erase("phoff"); }
+            for(int c = 0; c < (int)st.lfo[li].size(); c++) if(st.lfo[li][c]){
+                st.lfo[li][c]->set("phoff", perVoice ? slice(lfoPhases[li], c) : std::vector<float>(chunkN(c), 0.0f));
+                if(c < (int)st.lfoSent[li].size()) st.lfoSent[li][c].erase("phoff");
+            }
         });
     }
 }
@@ -869,6 +931,7 @@ void scModulation::loadState(const ofJson& j, const std::string& prefix, bool ge
         try {
             auto m = j[prefix + "Matrix"].get<std::vector<float>>();
             m = fitMatrix(m, sourceCount(), T());
+            rescaleSavedMatrix(m, j.contains(prefix + "Params") ? j[prefix + "Params"] : ofJson::array());
             if((int)m.size() == sourceCount() * T()) matrix = m;
         } catch(...) {}
     }
@@ -1095,7 +1158,27 @@ ofJson scModulation::paramsJson() const {
     ofJson cells = ofJson::array();
     for(size_t i = 0; i < routeBipolar.size(); i++) if(routeBipolar[i]) cells.push_back((int)i);
     a.push_back(ofJson{{"key", "@routes"}, {"pol", 1}, {"bipolar", cells}});
+    a.push_back(ofJson{{"key", "@span"}});                    // the targets' ranges are their controls' spans
     return a;
+}
+
+bool scModulation::savedWithFullSpans(const ofJson& params) {
+    if(params.is_array()) for(const auto& e : params)
+        if(e.is_object() && e.value("key", std::string()) == "@span") return true;
+    return false;
+}
+
+void scModulation::rescaleSavedMatrix(std::vector<float>& m, const ofJson& params) const {
+    if(savedWithFullSpans(params) || (int)m.size() != sourceCount() * T()) return;
+    for(int t = 0; t < T(); t++){
+        const auto& tg = targetList[t];
+        if(!(tg.legacyRange > 0) || !(tg.range > 0) || tg.legacyRange == tg.range) continue;
+        const float k = tg.legacyRange / tg.range;
+        for(int s = 0; s < sourceCount(); s++){
+            float& v = m[(size_t)s * T() + t];
+            v = ofClamp(v * k, -1.0f, 1.0f);
+        }
+    }
 }
 
 bool scModulation::cellBipolar(int s, int t) const {
@@ -1129,6 +1212,7 @@ void scModulation::loadParamsJson(const ofJson& j) {
     for(auto& e : j){
         if(!e.is_object() || !e.contains("key") || !e["key"].is_string()) continue;
         const auto key = e["key"].get<std::string>();
+        if(key == "@span") continue;
         if(key == "@routes"){
             std::fill(routeBipolar.begin(), routeBipolar.end(), 0);
             if(e.contains("bipolar") && e["bipolar"].is_array())
@@ -1887,7 +1971,14 @@ void scModulation::loadMorph(const ofJson& a,const ofJson& b,float t,bool switch
     auto x = a, y = b;
     for(auto* state : {&x, &y}){
         const auto key = prefix + "Matrix";
-        if(state->contains(key)) (*state)[key] = fitMatrix(scModulationMorph::numbers((*state)[key]), sourceCount(), T());
+        if(!state->contains(key)) continue;
+        auto m = fitMatrix(scModulationMorph::numbers((*state)[key]), sourceCount(), T());
+        // each side rescaled by its own save, then marked so loadState leaves the blend alone
+        auto& params = (*state)[prefix + "Params"];
+        if(!params.is_array()) params = ofJson::array();
+        rescaleSavedMatrix(m, params);
+        if(!savedWithFullSpans(params)) params.push_back(ofJson{{"key", "@span"}});
+        (*state)[key] = m;
     }
     auto state = scModulationMorph::state(x, y, t, switched, prefix, blocked);
     loadState(state, prefix, false);   // the generators: blended just below

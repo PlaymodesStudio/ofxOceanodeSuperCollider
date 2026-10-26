@@ -371,9 +371,10 @@ void scAdditiveBox::setup(){
             return out;
         };
         // the synth reads these, in this order (additiveBox.scd)
-        mod.setup(h, {{"Cutoff", 48, "st"}, {"Morph", 1, "", true}, {"Pitch", 12, "st"}, {"Level", 1, "x"}, {"Sweep", 1, ""},
-                      {"Pan", 0.5f, "turn"}, {"Noise", 1, "x"}, {"P.Level", 1, "x"}, {"P.Pan", 0.5f, "turn"},
-                      {"P.Pitch", 12, "st"}}, true, true, true);   // velocity: the gates' levels
+        // amount 1: the control's whole span (pitches: 48 st); the last field, older saves' range
+        mod.setup(h, {{"Cutoff", 140, "st", false, 48}, {"Morph", 1, "", true}, {"Pitch", 48, "st", false, 12}, {"Level", 1, "x"}, {"Sweep", 1, ""},
+                      {"Pan", 1, "turn", false, 0.5f}, {"Noise", 1, "x"}, {"P.Level", 1, "x"}, {"P.Pan", 1, "turn", false, 0.5f},
+                      {"P.Pitch", 48, "st", false, 12}}, true, true, true);   // velocity: the gates' levels
         // Env 1 -> Level: the default amplitude envelope (the voices' VCA).
         mod.envCount = 1;
         mod.matrix[scModulation::SRC_ENV * NUM_TARGETS + 3] = 1.0f;
@@ -2437,6 +2438,11 @@ void scAdditiveBox::migrateOldModulation(const ofJson& json){
         return json.contains(key) && json[key].is_number() ? json[key].get<float>() : fallback;
     };
     std::fill(mod.matrix.begin(), mod.matrix.end(), 0.0f);
+    // the old amounts were in the older ranges
+    auto rescale = [this](int d, float a){
+        const auto& t = mod.targets()[d];
+        return t.legacyRange > 0 ? ofClamp(a * t.legacyRange / t.range, -1.0f, 1.0f) : a;
+    };
     if(any[0]){
         mod.envCount = std::max(mod.envCount, 1);
         set("Env1_Attack", std::max(0.001f, old("Env2_Attack", 0.01f)));
@@ -2444,7 +2450,7 @@ void scAdditiveBox::migrateOldModulation(const ofJson& json){
         set("Env1_Sustain", old("Env2_Sustain", 0.0f));
         set("Env1_Release", std::max(0.001f, old("Env2_Release", 0.5f)));
         for(const char* c : {"Env1_Attack_Curve", "Env1_Decay_Curve", "Env1_Release_Curve"}) set(c, old("Env2_Curve", -4.0f));
-        for(int d = 0; d < 7; d++) mod.matrix[scModulation::SRC_ENV * NUM_TARGETS + d] = amount[0][d];
+        for(int d = 0; d < 7; d++) mod.matrix[scModulation::SRC_ENV * NUM_TARGETS + d] = rescale(d, amount[0][d]);
     }
     for(int l = 0; l < 2; l++){
         if(!any[l + 1]) continue;
@@ -2457,8 +2463,9 @@ void scAdditiveBox::migrateOldModulation(const ofJson& json){
         set(L + "Round", std::vector<float>{shape == 3 ? 1.0f : (shape == 1 || shape == 2) ? 0.0f : 0.5f});
         set(L + "Skew", std::vector<float>{shape == 2 ? 1.0f : 0.0f});
         set(L + "Noise", shape == 4);
-        for(int d = 0; d < 7; d++) mod.matrix[l * NUM_TARGETS + d] = amount[l + 1][d];
+        for(int d = 0; d < 7; d++) mod.matrix[l * NUM_TARGETS + d] = rescale(d, amount[l + 1][d]);
     }
+    mod.loadParamsJson(ofJson::array());   // no polarity saved: its LFO routes swing around the value, as they did
 }
 
 // ════════════════════════════════════════════════════════════════════════════
