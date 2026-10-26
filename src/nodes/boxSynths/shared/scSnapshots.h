@@ -189,6 +189,9 @@ public:
         running = true;
     }
     void applyAB() {
+        // A preset sets Morph / A / B back to what they showed: its own values
+        // are the sound, not the A / B blend (nor a glide still running)
+        if(ofxOceanodeShared::isPresetLoading()) { running = false; return; }
         const int a = morphAP.get() - 1, b = morphBP.get() - 1;
         if(a < 0 || b < 0 || a >= SLOTS || b >= SLOTS || !used[a] || !used[b] || !host.apply) return;
         running = false;   // the slider takes over from a glide
