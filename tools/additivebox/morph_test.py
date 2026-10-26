@@ -84,6 +84,7 @@ struct scAdditiveBox{
  int nextId=100,created=0,freed=0,unexpectedStructure=0;bool dirty=false;
  int resets=0;float level=.5;std::vector<float>gains;
  bool soundDriven(const std::string&k)const{return driven.count(k);}
+ struct{void markApplied(bool)const{}}ampMorph;struct{bool get()const{return false;}}drone;bool levelEnvelope()const{return false;}
  bool notInPresets(const std::string&)const{return false;}
  void migrateOldModulation(const ofJson&){}void migrateOldEnvelope(const ofJson&){}
  void markDirty(){dirty=true;}

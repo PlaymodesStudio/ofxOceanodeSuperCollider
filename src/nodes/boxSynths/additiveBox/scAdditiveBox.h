@@ -62,6 +62,7 @@
 #include "../shared/scAudioParam.h"
 #include "../../../timing/scScheduledInputs.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scAmpMorph.h"
 #include "../shared/scVoiceCountMorph.h"
 #include "../../../ui/scDropdowns.h"
 #include "ofxSCGroup.h"
@@ -347,6 +348,7 @@ private:
     // ── Snapshots and named presets (data/nodeSnapshots/AdditiveBox/Presets):
     //    scSnapshots; a sound = Voices + every control a preset holds + the modulation ──
     scSnapshots snaps;
+    scAmpMorph ampMorph;   // the envelope VCA path blends across snapshot morphs
     std::shared_ptr<ofxOceanodeAbstractParameter> voiceCountHandle;
     bool soundDriven(const std::string& key) const;
     std::vector<float> voiceMorphWeights;

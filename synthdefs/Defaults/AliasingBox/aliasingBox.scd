@@ -26,6 +26,9 @@ File.mkdir(root); File.mkdir(dir);
 SynthDef(\AliasingBoxVoice, {
     var m = { |name| In.kr(NamedControl.kr(name, 0), 1) };
     var p = { |name, def| NamedControl.kr(name, def) };
+    // continuous controls: a short lag, so per-frame changes (snapshot morphs,
+    // modulated publishing) do not step the read/write pitches or levels
+    var pl = { |name, def| NamedControl.kr(name, def, 1/30, fixedLag: true) };
     // Reaktor ADSR times: 0=1 ms, 20=10 ms, 40=100 ms, 60=1 s.
     var time = { |name, def| (10 ** (p.(name,def) / 20)) * 0.001 };
     var voice = \voice.kr(0), voices = \voices.kr(4).max(1);
@@ -34,23 +37,23 @@ SynthDef(\AliasingBoxVoice, {
     var gate = In.ar(\gatebus.kr(0), 1);
     var trig = HPZ1.ar(gate > 0).max(0);
     var note = Select.kr(\pitch_sel.kr(0), [\pitch.kr(60), A2K.kr(\pitch_ar.ar(60))])
-        + p.(\transpose,0) + (p.(\fine_tune,0)) + m.(\mpitch);
+        + pl.(\transpose,0) + (pl.(\fine_tune,0)) + m.(\mpitch);
     var tracking = 2 ** (((60 - note) * p.(\envelope_keytrack,0)) / 12);
     var ampEnv = EnvGen.ar(Env.adsr(time.(\amp_attack,-20)*tracking, time.(\amp_decay,40)*tracking,
         p.(\amp_sustain,1), time.(\amp_release,40)*tracking, curve: [\amp_curve0.kr(-4), \amp_curve1.kr(-4), \amp_curve2.kr(-4)]), gate > 0);
     var filterEnv = EnvGen.kr(Env.adsr(time.(\filter_attack,0), time.(\filter_decay,40),
         p.(\filter_sustain,0), time.(\filter_release,40), curve: [\filter_curve0.kr(-4), \filter_curve1.kr(-4), \filter_curve2.kr(-4)]), A2K.kr(gate > 0));
     var wrate = p.(\write_lfo_rate,0), rrate = p.(\read_lfo_rate,0);
-    var wlfo = SinOsc.kr(wrate * (wrate + index)) * p.(\write_lfo_amount,0).pow(5);
-    var rlfo = SinOsc.kr(rrate * (rrate + index)) * p.(\read_lfo_amount,0).pow(5);
-    var wnote = note + p.(\write_pitch,-32) + p.(\write_fine,0) + (((index*2)-1) * p.(\write_spread,0)) + wlfo + m.(\mwrite);
-    var rnote = note + p.(\read_pitch,-51) + p.(\read_fine,0) + (side * p.(\read_spread,0)) + rlfo + m.(\mread);
+    var wlfo = SinOsc.kr(wrate * (wrate + index)) * pl.(\write_lfo_amount,0).pow(5);
+    var rlfo = SinOsc.kr(rrate * (rrate + index)) * pl.(\read_lfo_amount,0).pow(5);
+    var wnote = note + pl.(\write_pitch,-32) + pl.(\write_fine,0) + (((index*2)-1) * pl.(\write_spread,0)) + wlfo + m.(\mwrite);
+    var rnote = note + pl.(\read_pitch,-51) + pl.(\read_fine,0) + (side * pl.(\read_spread,0)) + rlfo + m.(\mread);
     var wf = wnote.clip(-100,160).midicps, rf = rnote.clip(-100,160).midicps;
     // Raw phase ramps deliberately preserve aliasing; a band-limited oscillator
     // here would erase the defining read/write collisions.
     var wphase = Phasor.ar(trig, wf * SampleDur.ir, 0, 1);
     var rphase = Phasor.ar(trig, rf * SampleDur.ir, 0, 1);
-    var symmetry = (((p.(\write_symmetry,0) + m.(\msym)) + 1) * 0.5).clip(0.00001,0.99999);
+    var symmetry = (((pl.(\write_symmetry,0) + m.(\msym)) + 1) * 0.5).clip(0.00001,0.99999);
     // Primary Tri/Par starts at its rising zero crossing, whereas Ramp
     // starts at zero in 0..1. Preserve that relative phase in the table.
     var wtphase = (wphase+(symmetry*0.5)).wrap(0,1);
@@ -68,14 +71,14 @@ SynthDef(\AliasingBoxVoice, {
     var read = blendMode.("read_quality",p.(\read_quality,0),[
         LinXFade2.ar((rphase+0.5).wrap(0,1),rtri,p.(\read_bidirectional,0).clip(0,1).lag(0.03)*2-1),rphase]);
     var write = blendMode.("write_quality",p.(\write_quality,0),[wphase,wtri,read]);
-    var tableRange = p.(\table_range,1).clip(0,1);
+    var tableRange = pl.(\table_range,1).clip(0,1);
     var table = LocalBuf(1024,1).clear;
     var raw, notch, hp, lp, sig, flfo, frate, cut, vel, amp, cell;
     var phase, saw, tri, sine, pulse, random, smooth, cubic, shape, x, exponent, reset;
     BufWr.ar(read,table,write.clip(0,1) * tableRange * 1023,0);
     raw = (BufRd.ar(1,table,read * tableRange * 1023,0,1) * 2) - 1;
-    notch = BPeakEQ.ar(raw,(p.(\notch_pitch,100)+((note-60)*p.(\notch_keytrack,0))).midicps.clip(10,SampleRate.ir*0.45),
-        (1-p.(\notch_resonance,0.3)).clip(0.02,1),p.(\notch_gain,-30));
+    notch = BPeakEQ.ar(raw,(pl.(\notch_pitch,100)+((note-60)*pl.(\notch_keytrack,0))).midicps.clip(10,SampleRate.ir*0.45),
+        (1-pl.(\notch_resonance,0.3)).clip(0.02,1),pl.(\notch_gain,-30));
     raw = LinXFade2.ar(raw, notch, p.(\notch_on,0).lag(0.03)*2-1);
     // Core MultiWave: phase is -0.5..0.5; the screenshot and decoded
     // arithmetic agree on triangle 1-4|phase| and this sine polynomial.
@@ -96,22 +99,23 @@ SynthDef(\AliasingBoxVoice, {
     flfo = blendMode.("filter_lfo_wave",p.(\filter_lfo_wave,5),[saw,saw.neg,pulse,tri,sine,random,smooth,cubic]);
     exponent = Select.kr(shape<0,[1+(shape*7),1+shape]).max(0.001);
     flfo = ((flfo+1)*0.5).clip(0,1).pow(exponent);
-    cut = p.(\lp_pitch,90) + (filterEnv*p.(\filter_env_amount,0)) + (flfo*p.(\filter_lfo_amount,0)) + m.(\mlp);
+    cut = pl.(\lp_pitch,90) + (filterEnv*pl.(\filter_env_amount,0)) + (flfo*pl.(\filter_lfo_amount,0)) + m.(\mlp);
     // Both FM signals come from the unfiltered input, as wired in the ensemble.
-    hp = BHiPass4.ar(raw,((p.(\hp_pitch,20)+m.(\mhp)).midicps +
-        (raw*(p.(\hp_fm,0)+m.(\mhpfm)))).clip(10,SampleRate.ir*0.45),
-        (1-p.(\hp_resonance,0)-m.(\mhpres)).clip(0.02,1));
-    hp = (hp*(p.(\drive,0)+m.(\mdrive)).clip(0,30).dbamp).tanh;
-    lp = BLowPass4.ar(hp,(cut.midicps+(raw*(p.(\lp_fm,0)+m.(\mlpfm)))).clip(10,SampleRate.ir*0.45),
-        (1-p.(\lp_resonance,0)-m.(\mlpres)).clip(0.02,1));
+    hp = BHiPass4.ar(raw,((pl.(\hp_pitch,20)+m.(\mhp)).midicps +
+        (raw*(pl.(\hp_fm,0)+m.(\mhpfm)))).clip(10,SampleRate.ir*0.45),
+        (1-pl.(\hp_resonance,0)-m.(\mhpres)).clip(0.02,1));
+    hp = (hp*(pl.(\drive,0)+m.(\mdrive)).clip(0,30).dbamp).tanh;
+    lp = BLowPass4.ar(hp,(cut.midicps+(raw*(pl.(\lp_fm,0)+m.(\mlpfm)))).clip(10,SampleRate.ir*0.45),
+        (1-pl.(\lp_resonance,0)-m.(\mlpres)).clip(0.02,1));
     lp = LinXFade2.ar(lp, LeakDC.ar(lp), p.(\dc_block,1).lag(0.03)*2-1);
-    sig = (lp*(p.(\drive,0)+m.(\mdrive)).clip(0,30).dbamp).tanh;
+    sig = (lp*(pl.(\drive,0)+m.(\mdrive)).clip(0,30).dbamp).tanh;
     sig = LinXFade2.ar(raw, sig, p.(\filter_on,1).lag(0.03)*2-1);
     vel = In.kr(\velbus.kr(0),1);
-    amp = Select.kr(\vca.kr(0)>0.5,[(1+m.(\mamp)).clip(0,2),m.(\mamp).clip(0,1)]);
+    // \vca fractional: a snapshot morph crossfades the two amp paths
+    amp = { |vca| ((1+m.(\mamp)).clip(0,2)*(1-vca))+(m.(\mamp).clip(0,1)*vca) }.(\vca.kr(0,1/30,fixedLag:true).clip(0,1));
     sig = Sanitize.ar(sig) * ampEnv * amp *
-        ((1-p.(\velocity_sensitivity,1)) + (vel*p.(\velocity_sensitivity,1))) *
-        p.(\level,-6).dbamp * \master.kr(0.6,0.02) * \normalization.kr(0.25);
+        ((1-pl.(\velocity_sensitivity,1)) + (vel*pl.(\velocity_sensitivity,1))) *
+        pl.(\level,-6).dbamp * \master.kr(0.6,0.02) * \normalization.kr(0.25);
     Out.ar(\out.kr(0),sig);
     // Layout (scAliasingTableView.h): 16 x 6 meters, 16 pan positions from
     // the spreader, then 256 normalized table cells per voice, then each

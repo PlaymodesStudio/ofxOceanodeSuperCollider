@@ -174,14 +174,16 @@ void scAnalogBox::setup() {
     auto vec = [](ofParameter<std::vector<float>>& p, const std::string& name, float def, float lo, float hi) {
         p.set(name, {def}, {lo}, {hi});
     };
-    auto toGate = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendGate(st,true); }); };
-    auto toPitch = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); }); };
-    auto toAmp = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendAmp(st); }); };
-    auto toSpread = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendSpread(st); }); };
-    auto toFilter = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendFilter(st); }); };
-    auto toOsc = [this](int k) { return [this, k]() { forStates([this, k](ofxSCServer*, ServerState& st){ sendOsc(st, k); }); }; };
-    auto toAllOsc = [this]() { forStates([this](ofxSCServer*, ServerState& st){ for(int k = 0; k < MAX_OSCS; k++) sendOsc(st, k); }); };
-    auto toParts = [this]() { forStates([this](ofxSCServer* sv, ServerState& st){ updateParts(sv, st); }); };
+    // While a snapshot applies, these only mark their part: morphChanged sends
+    // each once (oscillators, filters, parts and stages it sends anyway)
+    auto toGate = [this]() { if(snaps.morph.applying()){ gateDirty = true; return; } forStates([this](ofxSCServer*, ServerState& st){ sendGate(st,true); }); };
+    auto toPitch = [this]() { if(snaps.morph.applying()){ pitchDirty = true; return; } forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); }); };
+    auto toAmp = [this]() { if(snaps.morph.applying()){ ampDirty = true; return; } forStates([this](ofxSCServer*, ServerState& st){ sendAmp(st); }); };
+    auto toSpread = [this]() { if(snaps.morph.applying()){ spreadDirty = true; return; } forStates([this](ofxSCServer*, ServerState& st){ sendSpread(st); }); };
+    auto toFilter = [this]() { if(snaps.morph.applying()) return; forStates([this](ofxSCServer*, ServerState& st){ sendFilter(st); }); };
+    auto toOsc = [this](int k) { return [this, k]() { if(snaps.morph.applying()) return; forStates([this, k](ofxSCServer*, ServerState& st){ sendOsc(st, k); }); }; };
+    auto toAllOsc = [this]() { if(snaps.morph.applying()) return; forStates([this](ofxSCServer*, ServerState& st){ for(int k = 0; k < MAX_OSCS; k++) sendOsc(st, k); }); };
+    auto toParts = [this]() { if(snaps.morph.applying()) return; forStates([this](ofxSCServer* sv, ServerState& st){ updateParts(sv, st); }); };
 
     // ── The node ─────────────────────────────────────────────────────────────
     addParameter(showWindow.set("Show", false));
@@ -271,8 +273,8 @@ void scAnalogBox::setup() {
     }
 
     // ── Effects ──────────────────────────────────────────────────────────────
-    auto toStages = [this]() { forStates([this](ofxSCServer* sv, ServerState& st){ if(st.created) updateStages(sv, st); }); };
-    auto toStage = [this](int s) { return [this, s]() { sendStageAll(s); }; };
+    auto toStages = [this]() { if(snaps.morph.applying()) return; forStates([this](ofxSCServer* sv, ServerState& st){ if(st.created) updateStages(sv, st); }); };
+    auto toStage = [this](int s) { return [this, s]() { if(snaps.morph.applying()){ stageDirty |= 1u << s; return; } sendStageAll(s); }; };
     shaperOn.set("Shaper On", false);                       reg(shaperOn, toStages);
     shaperDrive.set("Shaper Drive", 2.0f, 0.0f, 20.0f);     reg(shaperDrive, toStage(StShaper));
     shaperMix.set("Shaper Mix", 1.0f, 0.0f, 1.0f);          reg(shaperMix, toStage(StShaper));
@@ -451,7 +453,23 @@ void scAnalogBox::setup() {
             forStates([this](ofxSCServer* sv, ServerState& st) {
                 if(st.created) { updateStages(sv, st);updateParts(sv,st);sendFilter(st);for(int k=0;k<oscs();++k)sendOsc(st,k); }
             });
+            flushMorphSends();
         };
+        // A snapshot's envelope owns Amp when its matrix routes one there
+        ampMorph.setup(snaps.morph, drone, [this](const ofJson& j){
+            std::vector<float> m;
+            try { if(j.contains("matrix")) m = scModulation::fitMatrix(j["matrix"].get<std::vector<float>>(), NUM_SOURCES, NUM_TARGETS); } catch(...) {}
+            int envs = modulation.envCount;
+            if(j.contains("envs") && j["envs"].is_number()) envs = j["envs"].get<int>();
+            for(int e = 0; e < std::clamp(envs, 0, (int)NUM_ENVS); e++){
+                const size_t i = size_t(SRC_ENV + e) * NUM_TARGETS + TAmp;
+                if(i < m.size() && std::abs(m[i]) > 1e-4f) return true;
+            }
+            return false;
+        }, [](const ofJson& j){
+            const auto sound = scDroneMode::migrated(j);
+            return sound.contains("controls") && sound["controls"].contains("Drone") ? sound["controls"]["Drone"] : ofJson();
+        });
         h.morphBlocked = [this](const std::string& k) {
             auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
         };
@@ -518,7 +536,7 @@ void scAnalogBox::sendGate(ServerState& st, bool notesOnly, bool pitchOnly) {
     }
     sendVec(s, "gate", gate.get());
     sendVec(s, "velocity", {1.0f});
-    s->set("drone", droning() ? 1.0f : 0.0f);
+    s->set("drone", ampMorph.gateDrone() ? 1.0f : 0.0f);
     s->set("out", st.gateBus ? st.gateBus->index : 0);
     s->set("vel", src(st, SRC_VEL));
     s->set("rnd", src(st, SRC_RND));
@@ -671,7 +689,8 @@ void scAnalogBox::sendAmp(ServerState& st) {
     scSynthControlBatch updates(s,st.server);
     updates.set("in", st.filtBus ? st.filtBus->index : 0);
     updates.set("out", st.voiceBus ? st.voiceBus->index : 0);
-    updates.set("vca", vcaOn() ? 1.0f : 0.0f);
+    updates.set("vca", ampMorph.vcaAmount(vcaOn()));
+    updates.set("drone", ampMorph.droneAmount());
     updates.set("gate", st.gateBus ? st.gateBus->index : 0);
     updates.set("vel", src(st, SRC_VEL));
     updates.set("velsens", modulation.voiceValues(velSens));
@@ -915,7 +934,9 @@ void scAnalogBox::rebuildOutput() {
 }
 
 void scAnalogBox::sendEnvMode(bool force) {
-    const int d = droning() ? 1 : 0;
+    // Gates are held open once a morph has fully arrived at Drone; ABAmp
+    // crossfades its own drone path until then
+    const int d = ampMorph.gateDrone() ? 1 : 0;
     if(!force && d == sentDrone) return;
     sentDrone = d;
     forStates([d](ofxSCServer*, ServerState& st){ if(st.gateS) st.gateS->set("drone", (float)d); });
@@ -1374,7 +1395,7 @@ void scAnalogBox::syncDropdowns() {
         const FilterRef f = filterRef(k);
         sync(f.type->getEscapedName(), f.mode->get() == kComb ? combTypes : filterTypes);
     }
-    const auto names = snaps.slotNames();
+    const auto& names = snaps.slotNames();
     for(const auto& key : snaps.slotKeys()) sync(key, names);
 }
 
@@ -1857,6 +1878,17 @@ void scAnalogBox::applyState(const ofJson& aSaved, const ofJson& bSaved, float t
     M.loadParamsJson(scModulationMorph::parameters(a.value("params",ofJson::array()),
         b.value("params",ofJson::array()),t,ca,cb,[this](const std::string& key){return drivenByConnection(key);}));
     M.applyParamBases();
+}
+
+void scAnalogBox::flushMorphSends() {
+    sendEnvMode();
+    if(pitchDirty){ pitchDirty = false; forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); }); }
+    if(gateDirty){ gateDirty = false; forStates([this](ofxSCServer*, ServerState& st){ sendGate(st,true); }); }
+    if(spreadDirty){ spreadDirty = false; forStates([this](ofxSCServer*, ServerState& st){ sendSpread(st); }); }
+    // the amp follows the drone / VCA blend on every frame
+    ampDirty = false; forStates([this](ofxSCServer*, ServerState& st){ sendAmp(st); });
+    for(int s = 0; s < NumStages; s++) if(stageDirty & (1u << s)) sendStageAll(s);
+    stageDirty = 0;
 }
 
 // ── Library (shared files) and banks ─────────────────────────────────────────

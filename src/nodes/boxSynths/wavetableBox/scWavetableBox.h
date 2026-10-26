@@ -47,6 +47,8 @@
 #include "../../../timing/scScheduledInputs.h"
 #include "../shared/scSnapshots.h"
 #include "../shared/scVoiceCountMorph.h"
+#include "../shared/scAmpMorph.h"
+#include "../../../audio/scSynthControlBatch.h"
 #include "../../../ui/scDropdowns.h"
 #include "../../../ui/scEQEditor.h"
 #include "ofxSCSynth.h"
@@ -271,7 +273,10 @@ private:
     ofParameter<float> reverbMix, reverbDecay, reverbSize, reverbPredelay, reverbLate, reverbSpread, reverbLowpass;
     bool fxPending=false;
     std::string fxDef(int stage) const;
-    void sendEffect(ofxSCSynth* synth,int stage);
+    void sendEffect(ofxSCServer* server,ofxSCSynth* synth,int stage,scSynthControlBatch::Cache* cache);
+    float effectTail(int stage) const;
+    float echoDelaySeconds(const ofJson* sound=nullptr) const;
+    void retireEffects();
     void updateOutput(ofxSCServer* server);
     void updateOutputs();
     void freeOutput(ofxSCServer* server);
@@ -314,11 +319,17 @@ private:
         ofxSCGroup* voice = nullptr;
         ofxSCBus* gates = nullptr;
         ofxSCSynth* gateSynth = nullptr;
+        scSynthControlBatch::Cache gateSent;
         ofxSCGroup* processing = nullptr;
         ofxSCBus* voiceBus = nullptr;
         ofxSCBus* panBus = nullptr;
         std::array<ofxSCBus*,NumFx> fxBus{};
         std::array<ofxSCSynth*,NumFx> effects{};
+        // Switched-off effects keep running until their tail has rung out
+        std::array<float,NumFx> effectOffAt{};
+        std::array<scSynthControlBatch::Cache,NumFx> effectSent;
+        scSynthControlBatch::Cache spreadSent, outputSent;
+        std::vector<int> chain;            // running effects in order, as last routed
         ofxSCSynth* spreadSynth = nullptr;
         ofxSCSynth* outputSynth = nullptr;
         int outputChannels=0;
@@ -335,6 +346,15 @@ private:
     void createModulation(ofxSCServer* server);
     void freeModulation(ofxSCServer* server);
     void sendModulation(ofxSCServer* server);
+    // One batch per oscillator voice, remembering what that synth already has
+    scSynthControlBatch voiceControls(ofxSCServer* server);
+    void addBuffers(ofxSCServer* server, scSynthControlBatch& controls);
+    void addModulation(ofxSCServer* server, scSynthControlBatch& controls);
+    void sendGateControls(ofxSCServer* server);
+    std::map<ofxSCServer*, std::map<int, scSynthControlBatch::Cache>> voiceSent;
+    void forgetVoiceControls(ofxSCServer* server, int fromVoice = 0);
+    scAmpMorph ampMorph;                  // Drone / envelope VCA paths blend across morphs
+    bool liveVca() const;
     void sendGate(ofxSCServer* server);
     scScheduledInputs noteInputs;
     bool soundDirty=false;
@@ -366,7 +386,6 @@ private:
 
     std::string pathToSetAfterLoad;
     std::vector<int> lastTrig;
-    std::map<std::string, std::vector<float>> lastSent;
     // One oscillator per voice retains common phases when the count changes.
     std::map<ofxSCServer*, std::vector<ofxSCSynth*>> extraVoices;
     int renderingVoice = -1;
@@ -381,6 +400,12 @@ private:
     void freeExtraVoices(ofxSCServer* server);
     void finishVoiceMorph();
     int builtVoices = 0;
+    // Gate/modulation width: grows with a morph's voice capacity and shrinks only
+    // on a manual Voices change or a recall (a rebuild resets LFO phases)
+    int modWidth = 0;
+    bool keepModWidth = false;
+    int modulationWidth() const { return std::max(1, modWidth > 0 ? modWidth : renderingVoices()); }
+    std::vector<float> gateValues() const;
     bool built2D = false;
     bool builtLive = false;
     int builtOversample = -1;

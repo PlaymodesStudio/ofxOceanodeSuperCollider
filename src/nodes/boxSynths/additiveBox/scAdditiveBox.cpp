@@ -393,6 +393,9 @@ void scAdditiveBox::setup(){
         h.bpm = [this](){ return currentBpm; };
         h.paramMenu = [this](const std::string& k){ controlMenu(k); };
         for(auto& p : fxOn) snaps.morph.bypass(p);
+        ampMorph.setupVca(snaps.morph,[this](const ofJson& j){
+            return !j.value(drone.getEscapedName(),false) && mod.envRoutes(j,"additiveBoxMod",3);
+        });
         snaps.morph.mode(waveA,NumWaves);snaps.morph.mode(waveB,NumWaves);
         snaps.morph.mode(filterMode,NumFilterModes);snaps.morph.mode(filter2Mode,NumFilter2Modes);
         snaps.morph.mode(sweepShape,NumSweepShapes);snaps.morph.mode(sweepMode,2);
@@ -515,7 +518,7 @@ void scAdditiveBox::update(ofEventArgs&){
     timeline.update();
     snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names = snaps.slotNames();
+        const auto& names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) { auto it = publishedHandles.find(key); if(it != publishedHandles.end()) scDropdowns::setNames(it->second, names); }
     }
     const float now = ofGetElapsedTimef();
@@ -1125,7 +1128,7 @@ void scAdditiveBox::laneData(int v, VoiceData& d) const {
         d.scalars[L + "seed"] = nz ? mod.lfoNoiseSeed(lanes[l].lfo) + v * 3.71f : 0.0f;
         d.scalars[L + "shg"] = l < (int)lanes.size() ? mod.lfoShGlide(lanes[l].lfo) : 0.0f;
     }
-    d.scalars["vca"] = !drone.get() && levelEnvelope() ? 1.0f : 0.0f;
+    d.scalars["vca"] = ampMorph.vcaAmount(!drone.get() && levelEnvelope());
 }
 
 bool scAdditiveBox::lanesHaveNoise() const {
@@ -2054,14 +2057,20 @@ void scAdditiveBox::sendFxParams(int stage, ofxSCSynth* s){
     switch(stage){
         case FX_EQ:
             // graphiceqN: bNgain dB, bNfreq Hz, shelves bNslope (= 1/S), peaks bNrq = 1/Q
+        {
+            // EQ On fades the band gains (0 dB: exactly the dry signal) and moves
+            // the mix from all-wet: graphiceq's equal-power mix would swell by
+            // ~3 dB if it faded coherent dry and wet signals
+            const float on = snaps.morph.activation(fxOn[stage]);
             for(int b = 0; b < 5; b++){
                 const std::string k = "b" + ofToString(b + 1);
-                s->set(k + "gain", vec(eqGain[b].get()));
+                s->set(k + "gain", vec(eqGain[b].get() * on));
                 s->set(k + "freq", vec(eqFreq[b].get()));
-                if(scEQEditor::isShelf(b)) s->set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get())));
+                if(scEQEditor::isShelf(b)) s->set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get() * on)));
                 else s->set(k + "rq", vec(1.0f / std::max(0.01f, eqShape[b].get())));
             }
-            s->set("mix", eqMix.get() * snaps.morph.activation(fxOn[stage]));
+            s->set("mix", 1.0f - on * (1.0f - eqMix.get()));
+        }
             break;
         case FX_ECHO:
             s->set("filterweights", snaps.morph.weights(echoFilter));
@@ -2506,6 +2515,7 @@ void scAdditiveBox::applySound(const ofJson& a, const ofJson& b, float t, bool s
     }
     mod.afterLoad();
     mod.refresh();
+    ampMorph.markApplied(!drone.get() && levelEnvelope());
     applyStructure();
     if(voiceMorphRetireAt<0 && scVoiceCountMorph::single(voiceMorphWeights)){
         voiceMorphWeights.clear(); voiceMorphCapacity=0;
@@ -2548,6 +2558,7 @@ void scAdditiveBox::loadSound(const ofJson& json){
     }
     mod.afterLoad();
     loadingBankPreset = false;
+    ampMorph.markApplied(!drone.get() && levelEnvelope());
     applyStructure();
     if(voiceMorphRetireAt<0 && scVoiceCountMorph::single(voiceMorphWeights)){
         voiceMorphWeights.clear(); voiceMorphCapacity=0;

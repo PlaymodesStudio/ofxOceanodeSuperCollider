@@ -272,6 +272,7 @@ private:
 
     // ── Effects (as SlicerBox's chain) ───────────────────────────────────────
     bool stageOn(int s) const;
+    float stageAmount(int s) const;   // a stage's On, fractional while a snapshot morph fades it
     std::string stageDef(int s) const;
     float stageTail(int s) const;
     float echoDelaySec() const;
@@ -401,6 +402,7 @@ private:
     // Temporary renderers have their own count-dependent pitch maps, envelopes
     // and modulation, but no UI/library work or post-spreader effects.
     bool voiceRenderer = false, applyingSnapshot = false, syncingVoiceMorph = false;
+    std::map<std::string, std::function<void()>> morphSends;   // queued while a snapshot applies, one per part
     int morphRenderVoices = 0, voiceAliasCount = 0, morphDomainVoices = 0;
     struct VoicePeer {
         std::unique_ptr<scPolyComb> node;

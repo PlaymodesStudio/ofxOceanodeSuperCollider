@@ -659,6 +659,7 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.ampCR.set          ("Amp Release Curve" + x, -4.0f, -12.0f, 12.0f);
     ph.placement.set      ("Placement"    + x, 0, 0, 2);
     snaps.morph.mode(ph.placement,3);
+    snaps.morph.bypass(ph.drone);   // the Amp Envelope / drone paths crossfade across morphs
     snaps.morph.resolved(ph.scaleType,
         [this, p = &ph](const ofJson& saved) -> ofJson { return scaleMorphData(*p, saved); },
         [this, p = &ph]() {
@@ -1491,7 +1492,7 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     }));
     for(auto* q : {&ph.ampA, &ph.ampD, &ph.ampS, &ph.ampR, &ph.ampCA, &ph.ampCD, &ph.ampCR})
         ph.listeners.push(q->newListener([p](float&) { p->modDirty = true; }));
-    ph.listeners.push(ph.drone.newListener([p](bool&) { p->modDirty = true; }));
+    ph.listeners.push(ph.drone.newListener([this, p](bool&) { snaps.morph.edited(p->drone); p->modDirty = true; }));
     auto toPan = [this, p]() {
         const auto ev = panSend(*p, phVoices(*p));
         for(auto& [srv, s] : p->synths) if(s) s->set("panaz", ev);
@@ -2860,7 +2861,7 @@ void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
     }
     timeline.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names = snaps.slotNames();
+        const auto& names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) {
             const auto it = publishedEditorParameterHandles.find(key);
             dropdowns.set(key, names, it == publishedEditorParameterHandles.end() ? nullptr : it->second);
@@ -6360,7 +6361,7 @@ void scGrainBoxPoly::setupModulation(Playhead& ph) {
 
 // Something routed: a used source (of the ones the voices run) to a target
 bool scGrainBoxPoly::modWanted(const Playhead& ph) const {
-    if(ampGated(ph)) return true;   // the Amp Envelope runs in the same voices
+    if(ampGatedAmount(ph) > 0.0f) return true;   // the Amp Envelope runs in the same voices
     const auto& m = *ph.mod;
     if((int)m.matrix.size() < scModulation::NUM_SOURCES * MOD_TARGETS) return false;
     for(int s : kModSrc) {
@@ -6384,6 +6385,10 @@ bool scGrainBoxPoly::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
 // The Amp Envelope controls note playback unless Drone is enabled.
 bool scGrainBoxPoly::ampGated(const Playhead& ph) const {
     return !ph.drone.get();
+}
+// 1 gated, 0 droning; fractional while a snapshot morph crossfades the two
+float scGrainBoxPoly::ampGatedAmount(const Playhead& ph) const {
+    return 1.0f - snaps.morph.activation(ph.drone);
 }
 
 float scGrainBoxPoly::regionSecOf(const Playhead& ph) const {
@@ -6535,7 +6540,7 @@ void scGrainBoxPoly::writeMod(Playhead& ph, ofxSCServer* srv) {
     }
     // the Amp Envelope, and whether it is the VCA
     for(auto* q : {&ph.ampA, &ph.ampD, &ph.ampS, &ph.ampR, &ph.ampCA, &ph.ampCD, &ph.ampCR}) h.push_back(q->get());
-    h.push_back(ampGated(ph) ? 1.0f : 0.0f);
+    h.push_back(ampGatedAmount(ph));
     for(int si = 0; si < MOD_SOURCES; si++) {
         const int sc = kModSrc[si];
         const bool used = m.sourceUsed(sc);
@@ -6618,7 +6623,7 @@ void scGrainBoxPoly::updateModulation(Playhead& ph) {
     auto& m = *ph.mod;
     m.setBpm(effectiveBpm());
     if(ph.modVoices != phVoices(ph)) { ph.modVoices = phVoices(ph); m.voicesChanged(); ph.modDirty = true; }
-    const int gated = ampGated(ph) ? 1 : 0;
+    const float gated = ampGatedAmount(ph);
     if(gated != ph.ampGatedSent) { ph.ampGatedSent = gated; ph.modDirty = true; }
     const bool want = modWanted(ph);
     if(want != ph.modOn) {

@@ -242,15 +242,23 @@ public:
         for(int k = 0; k < SLOTS; k++) if(!used[k]) { slots[k] = s; used[k] = true; return true; }
         return false;
     }
+    mutable std::vector<std::string> namesCache;
+    mutable float namesCacheAt = 0.0f;
     bool empty() const { for(bool u : used) if(u) return false; return true; }
     // Snapshot / Morph A / Morph B published to the node are dropdowns:
     // their names by value ("-", then "k  name", "k" when empty)
-    std::vector<std::string> slotNames() const {
-        std::vector<std::string> out;
-        out.reserve(SLOTS + 1);
-        out.push_back("-");
-        for(int k = 0; k < SLOTS; k++) out.push_back(used[k] ? ofToString(k + 1) + "  " + name(k) : ofToString(k + 1));
-        return out;
+    // Nodes refresh their published dropdowns every frame: the list is rebuilt
+    // at most 5 times a second (a renamed slot shows within 0.2 s)
+    const std::vector<std::string>& slotNames() const {
+        const float now = ofGetElapsedTimef();
+        if(namesCache.empty() || now >= namesCacheAt || now < namesCacheAt - 1.0f) {
+            namesCacheAt = now + 0.2f;
+            namesCache.clear();
+            namesCache.reserve(SLOTS + 1);
+            namesCache.push_back("-");
+            for(int k = 0; k < SLOTS; k++) namesCache.push_back(used[k] ? ofToString(k + 1) + "  " + name(k) : ofToString(k + 1));
+        }
+        return namesCache;
     }
     std::vector<std::string> slotKeys() const {
         return {snapshotP.getEscapedName(), morphAP.getEscapedName(), morphBP.getEscapedName()};

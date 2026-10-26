@@ -33,6 +33,9 @@ filter = { |sig, type, note, res|
 
 (1..32).do { |n|
     var kv = { |name, def| NamedControl.kr(name, def ! n) };
+    // continuous controls: a short lag, so per-frame changes (snapshot morphs,
+    // modulated publishing) do not step
+    var kl = { |name, def| NamedControl.kr(name, def ! n, 1/30 ! n, fixedLag: true) };
     var modIn = { |name| In.kr(NamedControl.kr(name, 0), n) };
     var insert = { |dry, wet| LinXFade2.ar(dry, wet, \on.kr(1, 0.03) * 2 - 1) };
     var note = { K2A.ar(In.kr(\note.kr(0), n)) };            // the note, with vibrato and pitch modulation
@@ -56,7 +59,7 @@ filter = { |sig, type, note, res|
         var b = Lag.kr(p, kv.(\glide, 0).max(0.02)) + d;
         // each voice its own vibrato rate: Rate * (1 ± a random part up to \vibrand)
         var rate = kv.(\vibrate, 5) * (1 + (({ Rand(-1, 1) } ! n) * kv.(\vibrand, 0).clip(0, 1)));
-        var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * kv.(\vibamt, 0);
+        var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * kl.(\vibamt, 0);
         // the note, the note before vibrato / modulation, and that before the glide (the resonators glide on their own)
         Out.kr(\out.kr(0), (b + v + modIn.(\mpitch)) ++ b ++ (p + d));
     }).writeDefFile(dir);
@@ -64,9 +67,9 @@ filter = { |sig, type, note, res|
     // FM: a sine modulator (with feedback) at a ratio of the note -> Hz to add
     SynthDef(("PCFm" ++ n).asSymbol, {
         var freq = note.().clip(0, 135).midicps;
-        var amt = (kv.(\fmamt, 0) + modIn.(\mamt)).clip(0, 2);
-        var ratio = (kv.(\fmratio, 1) + modIn.(\mratio)).clip(0.0625, 32);
-        Out.ar(\out.kr(0), SinOscFB.ar(freq * ratio, kv.(\fmfb, 0).clip(0, 1.5)) * freq * amt * 8);
+        var amt = (kl.(\fmamt, 0) + modIn.(\mamt)).clip(0, 2);
+        var ratio = (kl.(\fmratio, 1) + modIn.(\mratio)).clip(0.0625, 32);
+        Out.ar(\out.kr(0), SinOscFB.ar(freq * ratio, kl.(\fmfb, 0).clip(0, 1.5)) * freq * amt * 8);
     }).writeDefFile(dir);
 
     // One synth per oscillator type, all adding into the oscillator bus
@@ -74,15 +77,16 @@ filter = { |sig, type, note, res|
         // Saw / Pulse: band-limited, but those break under FM (the frequency
         // goes below 0 and their integrators drift); with FM on, the plain
         // ramp / pulse instead (run backwards right), without DC
-        [\Saw,   { |f, fr| Select.ar(\fmon.kr(0) > 0.5, [Saw.ar(f), LeakDC.ar(LFSaw.ar(f))]) }],
+        // \fmon fractional (a snapshot morph): the band-limited and FM-safe shapes crossfade
+        [\Saw,   { |f, fr, fm| (Saw.ar(f) * (1 - fm)) + (LeakDC.ar(LFSaw.ar(f)) * fm) }],
         [\Tri,   { |f, fr| LFTri.ar(f) }],
-        [\Pulse, { |f, fr|
-            var w = (kv.(\pw, 0.5) + modIn.(\mpw)).clip(0.01, 0.99);
-            Select.ar(\fmon.kr(0) > 0.5, [Pulse.ar(f, w), LeakDC.ar(LFPulse.ar(f, 0, w) * 2 - 1)]) }],
+        [\Pulse, { |f, fr, fm|
+            var w = (kl.(\pw, 0.5) + modIn.(\mpw)).clip(0.01, 0.99);
+            (Pulse.ar(f, w) * (1 - fm)) + (LeakDC.ar(LFPulse.ar(f, 0, w) * 2 - 1) * fm) }],
         [\Sine,  { |f, fr| SinOsc.ar(f) }],
         [\SSaw,  { |f, fr|
             var d = f * {
-                var x = kv.(\ssdetune, 0.5).clip(0, 1);
+                var x = kl.(\ssdetune, 0.5).clip(0, 1);
                 (10028.7312891634 * x.pow(11)) - (50818.8652045924 * x.pow(10)) + (111363.4808729368 * x.pow(9)) -
                 (138150.6761080548 * x.pow(8)) + (106649.6679158292 * x.pow(7)) - (53046.9642751875 * x.pow(6)) +
                 (17019.9518580080 * x.pow(5)) - (3425.0836591318 * x.pow(4)) + (404.2703938388 * x.pow(3)) -
@@ -99,16 +103,18 @@ filter = { |sig, type, note, res|
     ].do { |o|
         SynthDef(("PCOsc" ++ o[0] ++ n).asSymbol, {
             var fr = note.().clip(0, 135).midicps;
-            var f = fr + (In.ar(\fm.kr(0), n) * \fmon.kr(0));
-            Out.ar(\out.kr(0), o[1].(f, fr) * kv.(\level, 1) * kv.(\oscamp, 0.5));
+            // \fmon 0/1; fractional while a snapshot morph fades FM in or out
+            var fmon = \fmon.kr(0, 1/30, fixedLag: true).clip(0, 1);
+            var f = fr + (In.ar(\fm.kr(0), n) * fmon);
+            Out.ar(\out.kr(0), o[1].(f, fr, fmon) * kl.(\level, 1) * kl.(\oscamp, 0.5));
         }).writeDefFile(dir);
     };
 
     // A filter (the main one and the post filter)
     SynthDef(("PCFilter" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
-        var cut = kv.(\cutoff, 100) + (kv.(\keytrack, 0) * (base.() - 60)) + modIn.(\mcut);
-        Out.ar(\out.kr(0), insert.(sig, filter.(sig, \type.kr(0), cut, (kv.(\res, 0.3) + modIn.(\mres)).clip(0, 1))));
+        var cut = kl.(\cutoff, 100) + (kl.(\keytrack, 0) * (base.() - 60)) + modIn.(\mcut);
+        Out.ar(\out.kr(0), insert.(sig, filter.(sig, \type.kr(0), cut, (kl.(\res, 0.3) + modIn.(\mres)).clip(0, 1))));
     }).writeDefFile(dir);
 
     // The comb resonator: follows the note (+ an interval) or a fixed note;
@@ -116,27 +122,27 @@ filter = { |sig, type, note, res|
     SynthDef(("PCComb" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
         var cnote = kv.(\combpitch, 0) + kv.(\combtranspose, 0) + (base.() * (1 - \combmode.kr(0).clip(0,1))) +
-            (({ Rand(-1, 1) } ! n) * kv.(\combdetune, 0)) + modIn.(\mcpitch);
+            (({ Rand(-1, 1) } ! n) * kl.(\combdetune, 0)) + modIn.(\mcpitch);
         var delay = cnote.clip(0, 127).midicps.clip(20, 10000).reciprocal;
-        var fb = (kv.(\combfeed, 0.7) + modIn.(\mcfb)).clip(-0.999, 0.999);
-        var comb = CombC.ar(LPF.ar(sig, kv.(\combtone, 1).linexp(0, 1, 300, 20000)), 0.05, delay,
+        var fb = (kl.(\combfeed, 0.7) + modIn.(\mcfb)).clip(-0.999, 0.999);
+        var comb = CombC.ar(LPF.ar(sig, kl.(\combtone, 1).linexp(0, 1, 300, 20000)), 0.05, delay,
             delay * (0.001.log / fb.abs.max(0.0001).log) * fb.sign);
         comb = (LeakDC.ar(comb) * (1 - (fb.abs * 0.9))).tanh;
-        Out.ar(\out.kr(0), insert.(sig, XFade2.ar(sig, comb, (kv.(\combmix, 1) + modIn.(\mcmix)).clip(0, 1) * 2 - 1)));
+        Out.ar(\out.kr(0), insert.(sig, XFade2.ar(sig, comb, (kl.(\combmix, 1) + modIn.(\mcmix)).clip(0, 1) * 2 - 1)));
     }).writeDefFile(dir);
 
     SynthDef(("PCRing" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
         var ring = sig * SinOsc.ar((kv.(\ringpitch, 72) + kv.(\ringtranspose, 0) +
-            (({ Rand(-1, 1) } ! n) * kv.(\ringdetune, 0))).clip(0, 135).midicps);
-        Out.ar(\out.kr(0), insert.(sig, XFade2.ar(sig, ring, (kv.(\ringmix, 1) + modIn.(\mrmix)).clip(0, 1) * 2 - 1)));
+            (({ Rand(-1, 1) } ! n) * kl.(\ringdetune, 0))).clip(0, 135).midicps);
+        Out.ar(\out.kr(0), insert.(sig, XFade2.ar(sig, ring, (kl.(\ringmix, 1) + modIn.(\mrmix)).clip(0, 1) * 2 - 1)));
     }).writeDefFile(dir);
 
     // The sine shaper (sineshaper.scd)
     SynthDef(("PCShaper" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
-        var shaped = (sig * (kv.(\drive, 1) + modIn.(\mdrive)).clip(0, 30)).sin;
-        Out.ar(\out.kr(0), insert.(sig, XFade2.ar(sig, shaped, kv.(\shapermix, 1).clip(0, 1) * 2 - 1)));
+        var shaped = (sig * (kl.(\drive, 1) + modIn.(\mdrive)).clip(0, 30)).sin;
+        Out.ar(\out.kr(0), insert.(sig, XFade2.ar(sig, shaped, kl.(\shapermix, 1).clip(0, 1) * 2 - 1)));
     }).writeDefFile(dir);
 
     // The VCA: the amp envelope (audio), velocity, amp modulation, level
@@ -146,11 +152,11 @@ filter = { |sig, type, note, res|
         // the gate's level (held from its rising edge, 1 while droning); Vel Sens
         // blends in the velocity (\vel = level x Velocity)
         var lev = In.ar(\gate.kr(0), n);
-        var vs = kv.(\velsens, 0.5).clip(0, 1);
+        var vs = kl.(\velsens, 0.5).clip(0, 1);
         // Like vibrato, each voice has a random rate offset and initial phase.
         // Depth 0 is unity; depth 1 sweeps the amplitude from silence to unity.
         var rate = kv.(\tremrate, 5) * (1 + (({ Rand(-1, 1) } ! n) * kv.(\tremrand, 0).clip(0, 1)));
-        var trem = 1 - ((SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * 0.5 + 0.5) * Lag.kr(kv.(\tremdepth, 0), 0.03).clip(0, 1));
+        var trem = 1 - ((SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * 0.5 + 0.5) * Lag.kr(kl.(\tremdepth, 0), 0.03).clip(0, 1));
         var amp = In.ar(\env.kr(0), n) * ((Gate.ar(lev, lev > 0) * (1 - vs)) + K2A.ar(vel * vs)) *
             K2A.ar((1 + modIn.(\mamp)).clip(0, 2) * trem);
         Out.ar(\out.kr(0), Sanitize.ar(LeakDC.ar(sig * amp) * \level.kr(0.8, 0.05)));

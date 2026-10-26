@@ -171,11 +171,11 @@ channelCounts.do({|numChannels|
             if(withEQ, {
                 // graphiceqN's bands: gains in dB, frequencies in Hz,
                 // shelves take rs (= 1/slope), peaks rq (= 1/Q)
-                sig = BLowShelf.ar(sig, \b1freq.kr(80),    \b1slope.kr(1), \b1gain.kr(0));
-                sig = BPeakEQ.ar(sig,   \b2freq.kr(250),   \b2rq.kr(1),    \b2gain.kr(0));
-                sig = BPeakEQ.ar(sig,   \b3freq.kr(1000),  \b3rq.kr(1),    \b3gain.kr(0));
-                sig = BPeakEQ.ar(sig,   \b4freq.kr(4000),  \b4rq.kr(1),    \b4gain.kr(0));
-                sig = BHiShelf.ar(sig,  \b5freq.kr(12000), \b5slope.kr(1), \b5gain.kr(0));
+                sig = BLowShelf.ar(sig, \b1freq.kr(80, 0.03),    \b1slope.kr(1, 0.03), \b1gain.kr(0, 0.03));
+                sig = BPeakEQ.ar(sig,   \b2freq.kr(250, 0.03),   \b2rq.kr(1, 0.03),    \b2gain.kr(0, 0.03));
+                sig = BPeakEQ.ar(sig,   \b3freq.kr(1000, 0.03),  \b3rq.kr(1, 0.03),    \b3gain.kr(0, 0.03));
+                sig = BPeakEQ.ar(sig,   \b4freq.kr(4000, 0.03),  \b4rq.kr(1, 0.03),    \b4gain.kr(0, 0.03));
+                sig = BHiShelf.ar(sig,  \b5freq.kr(12000, 0.03), \b5slope.kr(1, 0.03), \b5gain.kr(0, 0.03));
             });
             if(withDC, {
                 sig = LeakDC.ar(sig, 0.9995);   // ~4 Hz (0.995 is a 38 Hz high-pass at 48 kHz)

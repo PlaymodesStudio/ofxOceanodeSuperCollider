@@ -80,6 +80,7 @@ struct scPolyComb {
         scSynthControlBatch controls(s,&server);controls.set(key,expand(v,n()));controls.send();
     }
     struct Mod {template<class T>std::vector<float> voiceValues(const Param<T>&p){return std::vector<float>(3,float(p.get()));}} modulation;
+    struct{struct{template<class T>float activation(const Param<T>&p)const{return p.get()?1.f:0.f;}}morph;}snaps;
     ofxSCServer server;
     void sendGate(ServerState&,bool=false);void sendPitch(ServerState&,bool=false);void sendSub(ServerState&,bool=false);
 };

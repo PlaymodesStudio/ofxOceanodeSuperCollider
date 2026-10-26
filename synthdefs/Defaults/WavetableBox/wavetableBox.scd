@@ -127,9 +127,10 @@ voices = { |n, twoD, live|
     // Shared Box matrix targets. Source and route groups run before this voice.
     c[\gate] = In.ar(\gateBus.kr(0), n).asArray;
     c[\velocity] = In.kr(\velBus.kr(0), n).asArray;
-    c[\drone] = \drone.kr(1);
+    // 0..1: snapshot morphs blend the drone and envelope (VCA) amp paths
+    c[\drone] = \drone.kr(1, 1/30, fixedLag: true).clip(0, 1);
     c[\ampMod] = In.kr(\mod10.kr(0), n).asArray;
-    c[\vca] = \vca.kr(0);
+    c[\vca] = \vca.kr(0, 1/30, fixedLag: true).clip(0, 1);
     [\pitch, \pos, \posy, \w1amt, \w2amt, \fm, \ratio, \bpos, \fb, \damp].do { |key, t|
         if(c[key].notNil) {
             c[key] = c[key] + In.kr(NamedControl.kr(("mod" ++ t).asSymbol, 0), n);
@@ -193,15 +194,14 @@ read = { |c, i, buf, bbuf, twoD|
                 var a = read.(c, i, c[\buf], c[\bbuf], twoD);
                 if(live) { a + ((read.(c, i, c[\buf2], c[\bbuf2], twoD) - a) * c[\xf]) } { a }
             };
+            var held = 1 - ((1 - c[\drone]) * (1 - c[\vca]));   // gate held open: drone or VCA
             sig = Sanitize.ar(LeakDC.ar(sig)) * c[\levels];
-            sig = sig * K2A.ar(Select.kr(c[\drone] > 0.5, [Gate.kr(c[\velocity], A2K.kr(c[\gate]) > 0).clip(0, 1), 1 ! n]));
-            sig = sig * K2A.ar(Select.kr(c[\vca] > 0.5, [
-                (1 + c[\ampMod]).clip(0, 2), c[\ampMod].clip(0, 1)
-            ]));
+            // drone 0/1 and vca 0/1 are the former Select paths; between them
+            // (a snapshot morph) the paths crossfade
+            sig = sig * K2A.ar(c[\drone] + ((1 - c[\drone]) * Gate.kr(c[\velocity], A2K.kr(c[\gate]) > 0).clip(0, 1)));
+            sig = sig * K2A.ar(((1 + c[\ampMod]).clip(0, 2) * (1 - c[\vca])) + (c[\ampMod].clip(0, 1) * c[\vca]));
             // An envelope routed to Amp owns its release; otherwise follow Gate.
-            sig = sig * Select.ar(K2A.ar((c[\drone] > 0.5) + (c[\vca] > 0.5) > 0), [
-                Lag.ar(c[\gate].clip(0, 1), 0.005), DC.ar(1) ! n
-            ]);
+            sig = sig * (K2A.ar(held) + (K2A.ar(1 - held) * Lag.ar(c[\gate].clip(0, 1), 0.005)));
             Out.ar(\out.kr(0), sig);
         }).writeDefFile(d +/+ "WavetableBox");
     };

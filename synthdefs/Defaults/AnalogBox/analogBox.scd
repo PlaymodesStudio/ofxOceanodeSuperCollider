@@ -24,6 +24,9 @@ File.mkdir(root); File.mkdir(dir);
 
 (1..16).do { |n|
     var kv = { |name, def| NamedControl.kr(name, def ! n) };
+    // continuous controls: a short lag, so per-frame changes (snapshot morphs,
+    // modulated publishing) do not step
+    var kl = { |name, def| NamedControl.kr(name, def ! n, 1/30 ! n, fixedLag: true) };
     var modIn = { |name| In.kr(NamedControl.kr(name, 0), n) };
     var base = { In.kr(\note.kr(0) + n, n) };        // the note before vibrato and modulation (key tracking)
 
@@ -31,9 +34,9 @@ File.mkdir(root); File.mkdir(dir);
     // the pitch: Oceanode values, or an audio cable (\pitch_ar mapped, \pitch_sel 1)
     SynthDef(("ABPitch" ++ n).asSymbol, {
         var p = Select.kr(\pitch_sel.kr(0) > 0.5, [kv.(\pitch, 60), A2K.kr(\pitch_ar.ar(60 ! n))]);
-        var b = Lag.kr(p, kv.(\glide, 0)) + kv.(\transpose, 0) + (({ Rand(-1, 1) } ! n) * kv.(\detune, 0));
+        var b = Lag.kr(p, kv.(\glide, 0)) + kv.(\transpose, 0) + (({ Rand(-1, 1) } ! n) * kl.(\detune, 0));
         var rate = kv.(\vibrate, 5) * (1 + (({ Rand(-1, 1) } ! n) * kv.(\vibrand, 0).clip(0, 1)));
-        var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * kv.(\vibamt, 0);
+        var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * kl.(\vibamt, 0);
         Out.kr(\out.kr(0), (b + v + modIn.(\mpitch)) ++ b);
     }).writeDefFile(dir);
 
@@ -50,19 +53,19 @@ File.mkdir(root); File.mkdir(dir);
     //     between 0 and 1 (the C++ swaps them). At \sync 0 / 1 both sound the same.
     [false, true].do { |morph|
         SynthDef(((if(morph) { "ABOscMorph" } { "ABOsc" }) ++ n).asSymbol, {
-            var note = In.kr(\note.kr(0), n) + (\oct.kr(0) * 12) + kv.(\semi, 0) + (kv.(\fine, 0) / 100)
+            var note = In.kr(\note.kr(0), n) + (\oct.kr(0) * 12) + kl.(\semi, 0) + (kl.(\fine, 0) / 100)
                 + (modIn.(\mslave) * \slave.kr(0))
-                + (LFNoise2.kr({ Rand(0.08, 0.25) } ! n) * kv.(\drift, 0) * 0.25);
-            var freq = (note.clip(-36, 150).midicps * kv.(\ratio, 1)).clip(0.01, 22000);
+                + (LFNoise2.kr({ Rand(0.08, 0.25) } ! n) * kl.(\drift, 0) * 0.25);
+            var freq = (note.clip(-36, 150).midicps * kl.(\ratio, 1)).clip(0.01, 22000);
             var weights = NamedControl.kr(\fmweights, [1, 0, 0, 0, 0, 0, 0]).lag(0.03);
             var sources = NamedControl.kr(\fmsources, 0 ! 6);
             var activation = weights.copyRange(1, 6).sum;
             var fm = (kv.(\fmamt, 0).lag(0.03) + (modIn.(\mfm) * activation)).max(0);
             var pm = Mix(Array.fill(6, { |i| InFeedback.ar(sources[i], n) * weights[i+1] }))
                 * fm / activation.max(0.00001);
-            var skew = (kv.(\skew, 0) + modIn.(\mskew)).clip(-1, 1);
-            var round = (kv.(\round, 0.5) + modIn.(\mround)).clip(0, 1);
-            var pw = (kv.(\pw, 0.5) + modIn.(\mpw)).clip(0.001, 1);
+            var skew = (kl.(\skew, 0) + modIn.(\mskew)).clip(-1, 1);
+            var round = (kl.(\round, 0.5) + modIn.(\mround)).clip(0, 1);
+            var pw = (kl.(\pw, 0.5) + modIn.(\mpw)).clip(0.001, 1);
             var sync = In.kr(\syncfreq.kr(0), n);
             var osc = if(morph) {
                 LinXFade2.ar(
@@ -76,44 +79,44 @@ File.mkdir(root); File.mkdir(dir);
             // \presence's lag (a swap: the old synth's \presence -> 0 the complement)
             var fade = Select.kr(\fadein.ir(0) > 0, [1, Lag.kr(Line.kr(0, 1, ControlDur.ir), \fadein.ir(0))]);
             var sig = LeakDC.ar(osc)
-                + (WhiteNoise.ar(1 ! n) * kv.(\noise, 0).clip(0, 1) * 1.5);   // Noise: added to this oscillator
+                + (WhiteNoise.ar(1 ! n) * kl.(\noise, 0).clip(0, 1) * 1.5);   // Noise: added to this oscillator
             Out.kr(\freqout.kr(0), freq);
             Out.ar(\raw.kr(0), sig * (\presence.kr(1,0.03) * fade));
-            Out.ar(\out.kr(0), sig * kv.(\level, 0.5) * (\presence.kr(1,0.03) * fade));
+            Out.ar(\out.kr(0), sig * kl.(\level, 0.5) * (\presence.kr(1,0.03) * fade));
         }).writeDefFile(dir);
     };
 
     // Noise: color -1 (dark) .. 0 (white) .. 1 (bright)
     SynthDef(("ABNoise" ++ n).asSymbol, {
         var w = WhiteNoise.ar(1 ! n);
-        var c = kv.(\color, 0).clip(-1, 1);
+        var c = kl.(\color, 0).clip(-1, 1);
         var dark = OnePole.ar(w, c.neg.max(0) * 0.995) * (1 + (c.neg.max(0) * 5));
         var bright = w - OnePole.ar(w, c.max(0) * 0.9);
         var sig = Select.ar(c < 0, [bright, dark]);
         // x1.5: white noise's energy is mostly high up, where the filter usually cuts
-        Out.ar(\out.kr(0), sig * (kv.(\level, 0) + modIn.(\mnoise)).clip(0, 1) * 1.5);
+        Out.ar(\out.kr(0), sig * (kl.(\level, 0) + modIn.(\mnoise)).clip(0, 1) * 1.5);
     }).writeDefFile(dir);
 
     // Ring: oscillator 1 x oscillator 2
     SynthDef(("ABRing" ++ n).asSymbol, {
         var a = In.ar(\a.kr(0), n), b = In.ar(\b.kr(0), n);
-        Out.ar(\out.kr(0), a * b * kv.(\level, 0).clip(0, 1));
+        Out.ar(\out.kr(0), a * b * kl.(\level, 0).clip(0, 1));
     }).writeDefFile(dir);
 
     // A filter: a high-pass (Juno's), then AnalogFilter (SVF / ladder, 2 or 4
     // poles, or a comb) with drive, saturation and feedback; \on crossfades to
     // dry, \level after. Only the first writes \vis (\vison)
     SynthDef(("ABFilter" ++ n).asSymbol, {
-        var sig = HPF.ar(In.ar(\in.kr(0), n), kv.(\hpf,10).clip(10, 4000));
-        var cut = kv.(\cutoff, 100) + (kv.(\keytrack, 0) * (base.() - 60)) + modIn.(\mcut);
+        var sig = HPF.ar(In.ar(\in.kr(0), n), kl.(\hpf,10).clip(10, 4000));
+        var cut = kl.(\cutoff, 100) + (kl.(\keytrack, 0) * (base.() - 60)) + modIn.(\mcut);
         var fc = cut.clip(0, 140).midicps.clip(10, 20000);
-        var res = (kv.(\res, 0.2) + modIn.(\mres)).clip(0, 1);
-        var driveDb = (kv.(\drive, 0) + modIn.(\mdrive)).clip(0, 48);
-        var fb = (kv.(\fb, 0) + modIn.(\mfb)).clip(0, 1);
-        var y = AnalogFilter.ar(sig, fc, res, \mode.kr(3), \type.kr(0), driveDb.dbamp, kv.(\sat, 0), fb);
+        var res = (kl.(\res, 0.2) + modIn.(\mres)).clip(0, 1);
+        var driveDb = (kl.(\drive, 0) + modIn.(\mdrive)).clip(0, 48);
+        var fb = (kl.(\fb, 0) + modIn.(\mfb)).clip(0, 1);
+        var y = AnalogFilter.ar(sig, fc, res, \mode.kr(3), \type.kr(0), driveDb.dbamp, kl.(\sat, 0), fb);
         // the window: each voice's cutoff (note) and resonance now (\vis: control, 2 x 16)
         Out.kr(\vis.kr(0), (cut.clip(0, 140).asArray ++ (0 ! (16 - n)) ++ res.asArray) * \vison.kr(1));
-        Out.ar(\out.kr(0), LinXFade2.ar(sig, y, \on.kr(1, 0.03) * 2 - 1) * Lag.kr(kv.(\level, 1), 0.05));
+        Out.ar(\out.kr(0), LinXFade2.ar(sig, y, \on.kr(1, 0.03) * 2 - 1) * Lag.kr(kl.(\level, 1), 0.05));
     }).writeDefFile(dir);
 
     // The VCA: \vca 1 (an envelope routed to Amp): the Amp modulation is the
@@ -125,9 +128,13 @@ File.mkdir(root); File.mkdir(dir);
         // the gate's level (held from its rising edge, 1 while droning); Vel Sens
         // blends in the velocity (\vel = level x Velocity)
         var lev = In.ar(\gate.kr(0), n);
-        var vs = kv.(\velsens, 0.5).clip(0, 1);
-        var amp = K2A.ar(Select.kr(\vca.kr(0) > 0.5, [(1 + m).clip(0, 2), m.clip(0, 1)])) *
-            ((Gate.ar(lev, lev > 0) * (1 - vs)) + K2A.ar(vel * vs));
+        var vs = kl.(\velsens, 0.5).clip(0, 1);
+        // \vca and \drone are 0 or 1, fractional while a snapshot morph
+        // crossfades their amp paths (1 while droning: the held gate's level)
+        var vca = \vca.kr(0, 1/30, fixedLag: true).clip(0, 1);
+        var drone = K2A.ar(\drone.kr(0, 1/30, fixedLag: true).clip(0, 1));
+        var amp = K2A.ar(((1 + m).clip(0, 2) * (1 - vca)) + (m.clip(0, 1) * vca)) *
+            (drone + ((1 - drone) * ((Gate.ar(lev, lev > 0) * (1 - vs)) + K2A.ar(vel * vs))));
         Out.ar(\out.kr(0), Sanitize.ar(LeakDC.ar(sig * amp) * \level.kr(0.8, 0.05)));
     }).writeDefFile(dir);
 };

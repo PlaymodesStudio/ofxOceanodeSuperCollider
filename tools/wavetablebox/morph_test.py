@@ -24,6 +24,9 @@ int main(int argc,char**argv){
  a[box.oversample.getEscapedName()]=3;b[box.oversample.getEscapedName()]=0;
  b[box.warp1.getEscapedName()]={2};b[box.warp2.getEscapedName()]={6};
  b[box.warp1Amt.getEscapedName()]={.4f};b[box.warp2Amt.getEscapedName()]={.5f};
+ // Drone (A) -> gated with the envelope on Amp (B); Echo on (A) -> off (B)
+ b[box.drone.getEscapedName()]=false;a[box.fxOn[box.FxEcho].getEscapedName()]=true;b[box.fxOn[box.FxEcho].getEscapedName()]=false;
+ a[box.echoFilter.getEscapedName()]=0;b[box.echoFilter.getEscapedName()]=2;
  box.snaps.applyExternal(a);box.buildSynth(&server);box.setOutputBus(&server,0,0);box.createSynth(&server);
  // Counts may change while asynchronous table reads are still pending.
  box.voices=13;box.createSynth(&server);assert(box.modStates.at(&server).gateSynth->getName()=="ModGate13");
@@ -46,11 +49,27 @@ int main(int argc,char**argv){
   near(box.voiceOutputGain(11)*spreadComp,(1-t)*sourceComp);
   assert(box.synths.at(&server)->nodeID==first && box.extraVoices.at(&server).back()->nodeID==last);
   assert(box.renderingVoices()==12);
+  // Amp paths crossfade: drone 1 -> 0, VCA (B's envelope) 0 -> 1, gates held only at a whole drone
+  const auto& sent=box.voiceSent.at(&server).at(0);
+  near(sent.at("drone")[0],1-t);near(sent.at("vca")[0],t);
+  near(box.modStates.at(&server).gateSent.at("drone")[0],t<=0?1:0);
+  // The echo blends its filter weights and keeps running (its tail) at t = 1
+  auto& st=box.modStates.at(&server);
+  assert(st.effects[box.FxEcho]);
+  near(st.effectSent[box.FxEcho].at("on")[0],1-t);near(st.effectSent[box.FxEcho].at("filterweights")[2],t);
+  assert(st.gateSynth->getName()=="ModGate12");
+ }
+ {  // a morph frame where nothing moved sends nothing to the voices
+  auto& st=box.modStates.at(&server);const auto before=box.voiceSent.at(&server).at(0);
+  box.snaps.applyExternalMorph(a,b,1.f,true);ack();assert(box.voiceSent.at(&server).at(0)==before);
+  assert(st.effectOffAt[box.FxEcho]>0);
  }
  box.finishVoiceMorph();ack();assert(box.extraVoices.at(&server).empty());assert(box.synths.at(&server)->nodeID==first);
+ // The modulation keeps its width (no LFO reset) until Voices is edited
+ assert(box.modStates.at(&server).gateSynth->getName()=="ModGate12");
  const float settledGain=box.voiceOutputGain(0);
  box.finishVoiceMorph();near(box.voiceOutputGain(0),settledGain);
- box.outChannels=4;near(box.lastSent.at("levels")[0],box.levels.get()[0]*box.voiceOutputGain(0));
+ box.outChannels=4;near(box.voiceSent.at(&server).at(0).at("levels")[0],box.levels.get()[0]*box.voiceOutputGain(0));
  box.outChannels=2;
  for(float t:{.001f,.499f,.501f,.75f}){
   box.snaps.applyExternalMorph(b,a,t,t>=.5f);ack();near(box.voiceMorphGain(11),t);
@@ -61,7 +80,13 @@ int main(int argc,char**argv){
  // Per-voice controls select their own vector elements and bus offsets.
  box.pitch=std::vector<float>{40,50,60};box.renderingVoice=2;assert(box.expand(box.pitch.get(),0)==std::vector<float>{60});box.renderingVoice=-1;
  // Explicit recall still applies the target quality; A/B morphing does not.
- box.snaps.applyExternal(b);assert(box.oversample.get()==0 && box.builtOversample==0);
+ box.snaps.applyExternal(b);ack();assert(box.oversample.get()==0 && box.builtOversample==0);
+ {  // the switched-off echo is freed once its tail has rung out
+  auto& st=box.modStates.at(&server);
+  box.snaps.applyExternalMorph(a,b,1.f,true);ack();st.effectOffAt[box.FxEcho]=1e-6f;box.retireEffects();
+  assert(!st.effects[box.FxEcho] && st.chain.empty());
+ }
+ box.voices=3;assert(box.modStates.at(&server).gateSynth->getName()=="ModGate3");
  box.free(&server);assert(box.extraVoices.empty() && box.synths.empty());
  std::cout<<"PASS: WavetableBox 12 -> 1 -> 12 shares common oscillator IDs, linear early presence, no midpoint replacement, delayed retirement and stored/interrupted morphs\n";
 }

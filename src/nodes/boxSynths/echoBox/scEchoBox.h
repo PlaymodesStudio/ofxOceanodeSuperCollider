@@ -35,6 +35,7 @@
 #include "../../../ui/scTimelineMenu.h"
 #include "../../../ui/scDropdowns.h"
 #include "../shared/scSnapshots.h"
+#include "../../../audio/scSynthControlBatch.h"
 #include "imgui.h"
 #include <array>
 #include <functional>
@@ -94,6 +95,8 @@ private:
         ofxSCSynth* rvb = nullptr;
         bool rvbRunning = false;
         float rvbOffAt = -1.0f;
+        // what the reverb / mix already have: morph frames send only changes
+        scSynthControlBatch::Cache rvbSent, mixRouteSent;
         ofxSCBus* wetA = nullptr;            // taps -> (reverb)
         ofxSCBus* wetB = nullptr;            // reverb -> mix
         ofxSCBus* vis = nullptr;             // taps' levels, input, wet, duck

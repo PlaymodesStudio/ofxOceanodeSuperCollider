@@ -141,15 +141,17 @@ SynthDef(\FMBoxVoice, {
         [hz*Lag2.ar(native[0],0.01),phase,env*(Lag2.ar(native[1],0.01)*(q.("amp_sens",0)/3)).dbamp]
     });
     var matrix = Array.fill(6,{ |dst| Array.fill(6,{ |src|
-        var amount=p.(("fm"++dst++"_"++src).asSymbol,if((dst==0)and:(src==1),1,0)).clip(0,4);
-        var scale=(p.(\mod_scale,1)+m.(\mscale)).clip(0,10);
+        // lagged: per-frame changes (snapshot morphs) do not step the FM indices
+        var amount=p.(("fm"++dst++"_"++src).asSymbol,if((dst==0)and:(src==1),1,0)).lag(1/30).clip(0,4);
+        var scale=(p.(\mod_scale,1).lag(1/30)+m.(\mscale)).clip(0,10);
         var selected=Array.fill(32,{|algorithm| algorithmWeights[algorithm]*if(data[\feedbackSel][algorithm]==(dst*6+src),1,0)}).sum;
         var dx7=amount*4pi*scale*(1+((fb-1)*selected));
         var raw=amount*scale*if(dst==src,{feedback},{1});
         LinXFade2.kr(dx7,raw,p.(\matrix_model,0).clip(0,1).lag(0.03)*2-1)
     }) });
-    var carriers=Array.fill(6,{ |op| p.(("mix"++op).asSymbol,if((op==0)or:(op==2),1,0)).clip(0,1) });
-    var amp=Select.kr(\vca.kr(0)>0.5,[(1+m.(\mamp)).clip(0,2),m.(\mamp).clip(0,1)]);
+    var carriers=Array.fill(6,{ |op| p.(("mix"++op).asSymbol,if((op==0)or:(op==2),1,0)).lag(1/30).clip(0,1) });
+    var vca=\vca.kr(0,1/30,fixedLag:true).clip(0,1);   // fractional: a snapshot morph crossfades the paths
+    var amp=((1+m.(\mamp)).clip(0,2)*(1-vca))+(m.(\mamp).clip(0,1)*vca);
     var sig=Sanitize.ar((FM7.ar(ctls,matrix)*carriers).sum)*(-12).dbamp/carriers.sum.max(1);
     sig=LeakDC.ar(sig)*amp*\master.kr(0.6,0.02)*\normalization.kr(1);
     Out.ar(\out.kr(0),sig);

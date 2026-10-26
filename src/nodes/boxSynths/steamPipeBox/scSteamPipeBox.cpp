@@ -258,6 +258,7 @@ void scSteamPipeBox::setup() {
     }
     sh.defaultBank="Reaktor SteamPipe 01 - Instrument - Bank 1.json";
     for(auto* p : {&satOn, &eqOn, &echoOn, &rvbOn}) snaps.morph.bypass(*p);
+    ampMorph.setupVca(snaps.morph,[this](const ofJson& j){return mod.envRoutes(j,"steamPipeMod",Amp);});
     for(const auto& c : sound)
         if(c->sc == "allpass_on" || c->sc == "noise_one_pole") snaps.morph.bypass(c->p);
         else if(c->sc == "polarity") snaps.morph.continuous(c->p);
@@ -353,8 +354,7 @@ bool scSteamPipeBox::soundOn(const std::string& sc) { return soundParam(sc).get(
 void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
     if(!st.created) return;
     static const char* names[NUM_TARGETS] = {"mpitch","mtune","maptune","mnoise","mnoiseres","mdiffusion","mpush","moffset","mfeedback","mhp","mlp","mmw","mamp","mpan"};
-    bool vca = false;
-    for(int e=0;e<mod.envCount;++e) if(std::abs(mod.matrix[(scModulation::SRC_ENV+e)*NUM_TARGETS+Amp])>0.0001f) vca=true;
+    const float vcaW = ampMorph.vcaAmount(liveVca());
     for(int i=0;i<st.builtVoices;++i) if(auto* v=st.voices[i]) {
         scSynthControlBatch updates(v,server);
         auto set = [&](const std::string& name,float value) {
@@ -375,7 +375,7 @@ void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
         set("steampipe2",steamPipe2.get()?1.f:0.f);
         set("legato",legato.get()?1.f:0.f);
         set("noise_env",mod.voiceValue(noiseEnvelopeAmount,i));
-        set("vca", vca ? 1.0f : 0.0f);
+        set("vca", vcaW);
         set("vis",st.vis->index);
         for(int t=0;t<NUM_TARGETS-1;++t) set(names[t],mod.targetBus(server,t)+i);
         updates.send();
@@ -547,7 +547,7 @@ void scSteamPipeBox::apply(const ofJson& aSaved, const ofJson& bSaved,float t,bo
     });
     mod.afterLoad();
     mod.refresh();
-    restoring=false;sendAll();
+    restoring=false;ampMorph.markApplied(liveVca());sendAll();
 }
 std::vector<ofJson> scSteamPipeBox::factory() const {
     std::vector<ofJson> out;
@@ -601,7 +601,7 @@ void scSteamPipeBox::requireSynthdefs() {
 void scSteamPipeBox::update(ofEventArgs&) {
     timeline.update();snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names=snaps.slotNames();
+        const auto& names=snaps.slotNames();
         for(const auto& k:snaps.slotKeys()) dropdowns.set(k,names,published.count(k)?published[k]:nullptr);
     }
     if(structureDirty) rebuild();
@@ -1320,4 +1320,10 @@ void scSteamPipeBox::drawHeader() {
     if(ImGui::Button(pulsing()?"Reset":"Reset LFOs")) resetLFOs.trigger();
     if(ImGui::IsItemHovered()) ImGui::SetTooltip(pulsing()?"Reset the LFOs and restart the pulse pattern":"Reset the added modulation LFOs together");
     labelW=70;
+}
+
+bool scSteamPipeBox::liveVca() const {
+    for(int e = 0; e < mod.envCount; ++e)
+        if(std::abs(mod.matrix[(scModulation::SRC_ENV + e) * NUM_TARGETS + Amp]) > 0.0001f) return true;
+    return false;
 }

@@ -216,6 +216,7 @@ void scAliasingBox::setup() {
     sh.bpm = [this](){ return bpm; };
     sh.paramMenu = [this](const std::string& k){ mark(k); menu(k); };
     for(auto* p : {&satOn, &eqOn, &echoOn, &rvbOn}) snaps.morph.bypass(*p);
+    ampMorph.setupVca(snaps.morph,[this](const ofJson& j){return mod.envRoutes(j,"aliasingMod",Amp);});
     for(const auto& c : sound) {
         if(c->sc == "filter_on" || c->sc == "notch_on" || c->sc == "dc_block" || c->sc == "read_bidirectional")
             snaps.morph.bypass(c->p);
@@ -289,8 +290,7 @@ bool scAliasingBox::soundOn(const std::string& sc) { return soundParam(sc).get()
 void scAliasingBox::sendSound(ofxSCServer* server, State& st) {
     if(!st.created) return;
     static const char* names[NUM_TARGETS] = {"mpitch","mwrite","mread","msym","mlp","mhp","mlpres","mhpres","mlpfm","mhpfm","mdrive","mamp","mpan"};
-    bool vca = false;
-    for(int e=0;e<mod.envCount;++e) if(std::abs(mod.matrix[(scModulation::SRC_ENV+e)*NUM_TARGETS+Amp])>0.0001f) vca=true;
+    const float vcaW = ampMorph.vcaAmount(liveVca());
     const float comp=1.0f/std::sqrt(std::max(1.0f,float(st.builtVoices)/st.builtChannels));
     for(int i=0;i<st.builtVoices;++i) if(auto* v=st.voices[i]) {
         scSynthControlBatch updates(v,server);
@@ -316,7 +316,7 @@ void scAliasingBox::sendSound(ofxSCServer* server, State& st) {
         set("voice",i); set("voices",st.builtVoices);
         set("master",master.get()); set("bpm",bpm);
         set("normalization",1.0f/(st.builtVoices*comp));
-        set("vca", vca ? 1.0f : 0.0f);
+        set("vca", vcaW);
         set("vis",st.vis->index);
         for(int t=0;t<NUM_TARGETS-1;++t) set(names[t],mod.targetBus(server,t)+i);
         updates.send();
@@ -468,7 +468,7 @@ void scAliasingBox::apply(const ofJson& aSaved, const ofJson& bSaved,float t,boo
     });
     mod.afterLoad();
     mod.refresh();
-    restoring=false;sendAll();
+    restoring=false;ampMorph.markApplied(liveVca());sendAll();
 }
 std::vector<ofJson> scAliasingBox::factory() const {
     std::vector<ofJson> out;
@@ -534,7 +534,7 @@ void scAliasingBox::requireSynthdefs() {
 void scAliasingBox::update(ofEventArgs&) {
     timeline.update();snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names=snaps.slotNames();
+        const auto& names=snaps.slotNames();
         for(const auto& k:snaps.slotKeys()) dropdowns.set(k,names,published.count(k)?published[k]:nullptr);
     }
     if(structureDirty) rebuild();
@@ -1124,4 +1124,10 @@ void scAliasingBox::drawHeader() {
     if(ImGui::Button("Reset LFOs")) resetLFOs.trigger();
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Reset the added modulation LFOs together");
     labelW=70;
+}
+
+bool scAliasingBox::liveVca() const {
+    for(int e = 0; e < mod.envCount; ++e)
+        if(std::abs(mod.matrix[(scModulation::SRC_ENV + e) * NUM_TARGETS + Amp]) > 0.0001f) return true;
+    return false;
 }

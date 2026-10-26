@@ -43,32 +43,32 @@ File.mkdir(eqDir);
         var mix;
 
         // Band 1: Low Shelf
-        b1gain  = NamedControl.kr(\b1gain,  zeros);
-        b1freq  = NamedControl.kr(\b1freq,  f1def);
-        b1slope = NamedControl.kr(\b1slope, ones);
+        b1gain  = NamedControl.kr(\b1gain, zeros, 0.03);
+        b1freq  = NamedControl.kr(\b1freq, f1def, 0.03);
+        b1slope = NamedControl.kr(\b1slope, ones, 0.03);
 
         // Band 2: Low-Mid Peak  (b2rq = 1/Q, C++ sends 1/Q)
-        b2gain  = NamedControl.kr(\b2gain,  zeros);
-        b2freq  = NamedControl.kr(\b2freq,  f2def);
-        b2rq    = NamedControl.kr(\b2rq,    ones);
+        b2gain  = NamedControl.kr(\b2gain, zeros, 0.03);
+        b2freq  = NamedControl.kr(\b2freq, f2def, 0.03);
+        b2rq    = NamedControl.kr(\b2rq, ones, 0.03);
 
         // Band 3: Mid Peak
-        b3gain  = NamedControl.kr(\b3gain,  zeros);
-        b3freq  = NamedControl.kr(\b3freq,  f3def);
-        b3rq    = NamedControl.kr(\b3rq,    ones);
+        b3gain  = NamedControl.kr(\b3gain, zeros, 0.03);
+        b3freq  = NamedControl.kr(\b3freq, f3def, 0.03);
+        b3rq    = NamedControl.kr(\b3rq, ones, 0.03);
 
         // Band 4: High-Mid Peak
-        b4gain  = NamedControl.kr(\b4gain,  zeros);
-        b4freq  = NamedControl.kr(\b4freq,  f4def);
-        b4rq    = NamedControl.kr(\b4rq,    ones);
+        b4gain  = NamedControl.kr(\b4gain, zeros, 0.03);
+        b4freq  = NamedControl.kr(\b4freq, f4def, 0.03);
+        b4rq    = NamedControl.kr(\b4rq, ones, 0.03);
 
         // Band 5: High Shelf
-        b5gain  = NamedControl.kr(\b5gain,  zeros);
-        b5freq  = NamedControl.kr(\b5freq,  f5def);
-        b5slope = NamedControl.kr(\b5slope, ones);
+        b5gain  = NamedControl.kr(\b5gain, zeros, 0.03);
+        b5freq  = NamedControl.kr(\b5freq, f5def, 0.03);
+        b5slope = NamedControl.kr(\b5slope, ones, 0.03);
 
         // Dry/wet mix: 0 = fully dry, 1 = fully wet
-        mix = NamedControl.kr(\mix, 1.0);
+        mix = NamedControl.kr(\mix, 1.0, 0.03);   // lagged: per-frame changes (snapshot morphs) do not step
 
         sig = In.ar(in, numChannels);
         dry = sig;

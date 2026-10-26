@@ -253,6 +253,7 @@ void scFMBox::setup() {
         auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
     };
     for(auto* p : {&satOn,&eqOn,&echoOn,&rvbOn}) snaps.morph.bypass(*p);
+    ampMorph.setupVca(snaps.morph,[this](const ofJson& j){return mod.envRoutes(j,"fmMod",Amp);});
     sh.morphChanged=[this,toStages](){sendAll();toStages();};
     snaps.morph.mode(echoFilter, 4);
     for(const auto& c : sound){
@@ -333,8 +334,7 @@ void scFMBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
 void scFMBox::sendSound(ofxSCServer* server, State& st) {
     if(!st.created) return;
     static const char* names[5] = {"mpitch","mscale","mfeedback","mamp","mpan"};
-    bool vca = false;
-    for(int e=0;e<mod.envCount;++e) if(std::abs(mod.matrix[(scModulation::SRC_ENV+e)*NUM_TARGETS+Amp])>0.0001f) vca=true;
+    const float vcaW = ampMorph.vcaAmount(liveVca());
     const float comp=1.0f/std::sqrt(std::max(1.0f,float(st.builtVoices)/st.builtChannels));
     for(int i=0;i<st.builtVoices;++i) if(auto* v=st.voices[i]) {
         scSynthControlBatch batch(v,server);
@@ -398,7 +398,7 @@ void scFMBox::sendSound(ofxSCServer* server, State& st) {
         set("voice",i); set("voices",st.builtVoices);
         set("master",master.get()); set("bpm",bpm);
         set("normalization",1.0f/(st.builtVoices*comp));
-        set("vca", vca ? 1.0f : 0.0f);
+        set("vca", vcaW);
         set("vis",st.vis->index);
         for(int t=0;t<5;++t) if(t!=Pan) set(names[t],mod.targetBus(server,t)+i);
         for(int op=0;op<6;++op) {
@@ -575,7 +575,7 @@ void scFMBox::apply(const ofJson& aSaved, const ofJson& bSaved,float t,bool sw) 
     });
     mod.afterLoad();
     mod.refresh();
-    restoring=false;sendAll();
+    restoring=false;ampMorph.markApplied(liveVca());sendAll();
 }
 void scFMBox::setAlgorithm(int algorithm) {
     algorithm=std::clamp(algorithm,0,31);
@@ -749,7 +749,7 @@ void scFMBox::requireSynthdefs() {
 void scFMBox::update(ofEventArgs&) {
     timeline.update();snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names=snaps.slotNames();
+        const auto& names=snaps.slotNames();
         for(const auto& k:snaps.slotKeys()) dropdowns.set(k,names,published.count(k)?published[k]:nullptr);
     }
     if(structureDirty) rebuild();
@@ -1566,4 +1566,10 @@ void scFMBox::drawPanTab(float w) {
             ImGui::SetTooltip("Voice %d at %.2f (now %.2f)\nDrag to place it (Shift: onto a speaker)", hoverVoice + 1, base[hoverVoice], live(hoverVoice));
     }
     ImGui::EndGroup();
+}
+
+bool scFMBox::liveVca() const {
+    for(int e = 0; e < mod.envCount; ++e)
+        if(std::abs(mod.matrix[(scModulation::SRC_ENV + e) * NUM_TARGETS + Amp]) > 0.0001f) return true;
+    return false;
 }

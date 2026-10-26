@@ -24,6 +24,7 @@ prelude=r'''
 #include "nodes/boxSynths/polyComb/scPolyCombMigration.h"
 #include "nodes/boxSynths/shared/scVoiceCountMorph.h"
 #include "nodes/boxSynths/shared/scMorphPolicies.h"
+#include "nodes/boxSynths/shared/scModulationMorph.h"
 #include "nodes/boxSynths/shared/scDroneMode.h"
 #include "nodes/boxSynths/polyComb/scPolyCombPitchMorph.h"
 #include <algorithm>
@@ -57,6 +58,7 @@ struct Mod {
     void refresh(){} void sendMatrix(){} void sendChanged(){}
     template<class F>void morphGenerators(const ofJson&,const ofJson&,float,const std::string&,F){}
     void loadParamsJson(const ofJson& j){params=j;}
+    void applyParamBases(){}
 };
 class scPolyComb {public:
     static constexpr int NUM_LFOS=8,NUM_ENVS=4,NUM_EXT=8,NUM_SOURCES=23,NUM_TARGETS=14,MAX_VOICES=32;
@@ -70,6 +72,7 @@ class scPolyComb {public:
     Param<bool> scramble{"Scramble",false};
     static constexpr int IComb=0,IFilter=1,IPost=2,IRing=3,StEcho=0;
     struct{scMorphPolicies morph;}snaps;
+    std::map<std::string, std::function<void()>> morphSends;
     void updateParts(ofxSCServer*,ServerState&){} void sendSpread(ServerState&){} void sendStage(int,void*,ofxSCServer*){}
     template<class F>void forStates(F){} // no SC server in the recall fixture
     void sendPitch(ServerState&){} void sendIns(ServerState&,int){}

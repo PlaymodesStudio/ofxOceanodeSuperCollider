@@ -1095,7 +1095,7 @@ void scSlicerBox::update(ofEventArgs&){
                           scFxDefinitionsReady(servers, server)))
         updateStages(server, st);
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names = snaps.slotNames();
+        const auto& names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) { auto it = publishedHandles.find(key); if(it != publishedHandles.end()) scDropdowns::setNames(it->second, names); }
     }
     // A file chosen in the window or dropped on it

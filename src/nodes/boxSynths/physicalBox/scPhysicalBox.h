@@ -11,6 +11,7 @@
 #include "../../../ui/scTimelineMenu.h"
 #include "../shared/scModulation.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scAmpMorph.h"
 #include "../../../ui/scEQEditor.h"
 #include "../../../ui/scDropdowns.h"
 #include "../shared/scPulseGate.h"
@@ -170,6 +171,8 @@ private:
     scScheduledInputs scheduled;
     scModulation mod;
     scSnapshots snaps;
+    scAmpMorph ampMorph;   // the envelope VCA path blends across snapshot morphs
+    bool liveVca() const;
     scDropdowns dropdowns;
     scTimelineMenu timeline;
     std::vector<std::unique_ptr<SoundControl>> soundControls;

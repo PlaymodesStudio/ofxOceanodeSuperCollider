@@ -478,7 +478,7 @@ void scRhythmBox::update(ofEventArgs& /*args*/) {
     for(auto& pull : trackControlPulls) pull();
     snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names = snaps.slotNames();
+        const auto& names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) { auto it = snapPublished.find(key); if(it != snapPublished.end()) scDropdowns::setNames(it->second, names); }
     }
     // Poll KR buses on the primary server for playhead and gate readback.

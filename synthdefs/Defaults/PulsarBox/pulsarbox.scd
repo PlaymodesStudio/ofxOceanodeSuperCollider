@@ -56,7 +56,7 @@ File.mkdir(d);
             var psel = \pitch_sel.kr(0) > 0.5;
             var atk = kv.(\atk,0.005), dec = kv.(\dec,0.3), sus = kv.(\sus,1), rel = kv.(\rel,0.3);
             var curves = [kv.(\ca,-4), kv.(\cd,-4), kv.(\cr,-4)].collect { |c| c.clip(-12, 12) };
-            var gated = \gated.kr(1);
+            var gated = \gated.kr(1, 1/30, fixedLag: true).clip(0, 1);   // fractional: a snapshot morph to / from Drone
             var lmode = \lmode.kr(0 ! layers);
             var lhz = \lhz.kr(Array.fill(layers*nv,{ |i| [800,1600,3200,6400][i.div(nv)] }));
             var lrat = \lrat.kr(Array.fill(layers*nv,{ |i| [4,8,16,32][i.div(nv)] }));
@@ -94,8 +94,8 @@ File.mkdir(d);
                 // the Amp Envelope on the gate (a gate rising to 0.2 plays at
                 // 0.2: its level, held until the next); not gated: a drone
                 var glev = Gate.kr(gate[v], gate[v] > 0);
-                var env = Select.kr(gated > 0.5, [1, EnvGen.kr(Env.adsr(atk[v].max(0.001), dec[v].max(0.001), sus[v].clip(0, 1),
-                    rel[v].max(0.001), 1, curves.collect { |c| c[v] }), gate[v] > 0) * glev]);
+                var env = (1 - gated) + (gated * EnvGen.kr(Env.adsr(atk[v].max(0.001), dec[v].max(0.001), sus[v].clip(0, 1),
+                    rel[v].max(0.001), 1, curves.collect { |c| c[v] }), gate[v] > 0) * glev);
                 var levMod = (1 + mLev[v]).max(0);   // routes to Level add
                 var voice = nl.collect { |g|
                     // the layer's Delay (a share of the period): the trigger delayed

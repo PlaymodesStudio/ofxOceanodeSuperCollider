@@ -381,6 +381,7 @@ public:
                 auto it=publishedHandles.find(key);return it!=publishedHandles.end() && it->second->hasInConnection();
             };
             snaps.morph.mode(panMode,4);
+            snaps.morph.bypass(drone);
             for(auto& p:formantMode)snaps.morph.continuous(p);
             for(int g=0;g<LAYERS;++g)for(int e=0;e<2;++e){
                 auto& p=e ? envelope[g] : pulsaret[g];
@@ -429,7 +430,7 @@ public:
         timeline.update();
         snaps.update();
         {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-            const auto names = snaps.slotNames();
+            const auto& names = snaps.slotNames();
             for(const auto& key : snaps.slotKeys()) { auto it = publishedHandles.find(key); if(it != publishedHandles.end()) scDropdowns::setNames(it->second, names); }
         }
         const float now = ofGetElapsedTimef();
@@ -445,7 +446,7 @@ public:
         }
         if(bankRetireAt>=0 && now>=bankRetireAt){bankRetireAt=-1;structureDirty=true;}
         if(structureDirty){ structureDirty = false; applyStructure(); }
-        if(const int g = ampGated() ? 1 : 0; g != ampGatedSent){ ampGatedSent = g; controlsDirty = true; }
+        if(const float g = ampGatedAmount(); g != ampGatedSent){ ampGatedSent = g; controlsDirty = true; }
         if(tablesDirty){
             tablesDirty = false;
             refreshTables();
@@ -623,6 +624,7 @@ private:
         ofxSCSynth* synth=nullptr;
         float weight=1;
         std::map<std::string,std::vector<float>> sent;
+        int mappedPitch=-2;   // the pitch cable bus last mapped
     };
     struct ServerState {
         std::map<std::pair<int,int>,RenderBank> banks;
@@ -667,6 +669,8 @@ private:
     }
     // The Amp Envelope controls note playback unless Drone is enabled.
     bool ampGated() const { return !drone.get(); }
+    // 1 - Drone's activation: a snapshot morph to / from Drone crossfades the envelope
+    float ampGatedAmount() const { return 1.0f - snaps.morph.activation(drone); }
 
     float voiceFund(int v) const {
         if(pitchMode(nullptr) == 1)   // from Pitch (Oceanode values)
@@ -709,7 +713,7 @@ private:
         c["glide"] = bankValues(glide,V);
         c["atk"] = bankValues(attack,V); c["dec"] = bankValues(decay,V); c["sus"] = bankValues(sustain,V); c["rel"] = bankValues(release,V);
         c["ca"] = bankValues(attackCurve,V); c["cd"] = bankValues(decayCurve,V); c["cr"] = bankValues(releaseCurve,V);
-        c["gated"] = {ampGated() ? 1.0f : 0.0f};
+        c["gated"] = {ampGatedAmount()};
         std::vector<float> lmode(LAYERS), lhz(LAYERS*V), lrat(LAYERS*V), lcyc(LAYERS*V), lamp(LAYERS*V),
                            loff(LAYERS*V), lpan(LAYERS*V), pbuf(LAYERS), ebuf(LAYERS);
         for(int g = 0; g < LAYERS; g++){
@@ -910,12 +914,16 @@ private:
     }
     void sendModArgs(ofxSCServer* server, ServerState& st){
         const int pb=pitchIn.bus(server);
+        // Only what changed: every modulation change (each morph frame) lands here
         for(auto& e:st.banks){
-            auto* synth=e.second.synth;
-            synth->set("pitch_sel",pb>=0?1.0f:0.0f);
-            if(pb>=0)synth->mapan("pitch_ar",pb,e.first.first);
-            synth->set("gatebus",st.modCreated && st.gateBus?float(st.gateBus->index):-1.0f);
-            synth->set("mod",st.modCreated?float(mod.targetBus(server,0)):-1.0f);
+            auto& bank=e.second;
+            scSynthControlBatch updates(bank.synth,server,&bank.sent);
+            updates.set("pitch_sel",pb>=0?1.0f:0.0f);
+            updates.set("gatebus",st.modCreated && st.gateBus?float(st.gateBus->index):-1.0f);
+            updates.set("mod",st.modCreated?float(mod.targetBus(server,0)):-1.0f);
+            updates.send();
+            if(pb>=0 && bank.mappedPitch!=pb)bank.synth->mapan("pitch_ar",pb,e.first.first);
+            bank.mappedPitch=pb;
         }
     }
     void loadModulation(const ofJson& json){
@@ -1370,6 +1378,9 @@ private:
     // weighted banks so resizing never replaces a contributing graph.
     void applySound(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw){
         const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
+        std::vector<std::vector<int>> banksBefore;
+        for(const auto& e:bankWeights)banksBefore.push_back(e.first);
+        const int voicesBefore=numVoices.get();
         bankWeights=scConfigurationMorph::blend(a,b,t,bankMetadata,bankFields());
         bankRetireAt=ofGetElapsedTimef()+0.35f;
         loadingBankPreset=true;
@@ -1385,10 +1396,14 @@ private:
         if(!soundDriven(numVoices.getEscapedName()) && src.contains("Voices") && src["Voices"].is_number_integer() && src["Voices"].get<int>() != numVoices.get())
             numVoices = src["Voices"].get<int>();
         loadingBankPreset=false;
-        structureDirty=true;
+        // The graphs change only when a configuration joins or leaves the
+        // blend; bank gains go out with the controls (morphChanged)
+        std::vector<std::vector<int>> banksAfter;
+        for(const auto& e:bankWeights)banksAfter.push_back(e.first);
+        if(banksAfter!=banksBefore || numVoices.get()!=voicesBefore)structureDirty=true;
         mod.loadMorph(a,b,t,sw,"pulsarBoxMod",[this](const std::string& key){return soundDriven(key);});
         migrateAmpEnvelope(src);
-        mod.afterLoad();mod.refresh();modDirty=true;
+        mod.afterLoad();modDirty=true;
     }
     const ofJson* modSource = nullptr;   // the routing switched to (a blend's side)
     float currentBpm = 120.0f;
@@ -2049,7 +2064,7 @@ private:
     ofParameter<float> transpose, glide, attack, release, volume, rateJitter;
     ofParameter<float> decay, sustain, attackCurve, decayCurve, releaseCurve;
     ofParameter<bool> drone;
-    int ampGatedSent = -1;
+    float ampGatedSent = -1;
     // Formants
     ofParameter<int> numLayers;
     ofParameter<float> formantShift, cyclesScale, formantJitter, levelJitter;

@@ -128,7 +128,8 @@ modApply = {|idx, posV, durV, pitchV, ampV, panV, divV|
     // the Amp Envelope: the playhead's VCA (x the gate's level), when gated
     ampEnv = EnvGen.kr(Env.adsr(amp[0].max(0.001), amp[1].max(0.001), amp[2].clip(0, 1), amp[3].max(0.001), 1,
         [amp[4], amp[5], amp[6]].collect({|c| c.clip(-12, 12) })), gate);
-    vca = Select.kr(hdr[59] > 0.5, [1, ampEnv * Gate.kr(gate, gate > 0)]);
+    // hdr[59]: 1 gated, 0 drone; fractional while a snapshot morph crossfades them
+    vca = { |g| (1 - g) + (g * ampEnv * Gate.kr(gate, gate > 0)) }.(hdr[59].clip(0, 1).lag(1/30));
     Out.kr(\modvis.kr(0) + (idx.min(16) * 13), lfoV ++ envV ++ [ampEnv]);
     Out.kr(\modhdr.kr(0) + 214, m[6] * (idx < 0.5));
     [posV + m[0], durV + m[1], pitchV + m[2], ampV + m[3], panV + m[4], (divV + m[5]).max(1/64), vca]

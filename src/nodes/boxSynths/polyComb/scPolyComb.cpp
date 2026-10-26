@@ -93,14 +93,18 @@ void scPolyComb::setup() {
     auto vec = [](ofParameter<std::vector<float>>& p, const std::string& name, float def, float lo, float hi) {
         p.set(name, {def}, {lo}, {hi});
     };
-    // what a change resends
-    auto toGate = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendGate(st, true); }); };
-    auto toAmpEnv = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendAmpEnv(st); }); };
+    // what a change resends. While a snapshot applies, each part is queued
+    // once (by key) and sent at the end of the frame, not once per control
+    auto deferred = [this](std::string key, std::function<void()> send) {
+        return [this, key, send]() { if(applyingSnapshot){ morphSends[key] = send; return; } send(); };
+    };
+    auto toGate = deferred("gate", [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendGate(st, true); }); });
+    auto toAmpEnv = deferred("ampEnv", [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendAmpEnv(st); }); });
     auto toPitch = [this]() { if(!applyingSnapshot) forStates([this](ofxSCServer*, ServerState& st){ sendPitch(st); }); };
-    auto toFm = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendFm(st); }); };
-    auto toAmp = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendAmp(st); }); };
-    auto toSpread = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendSpread(st); }); };
-    auto toOsc = [this](int o) { return [this, o]() {
+    auto toFm = deferred("fm", [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendFm(st); }); });
+    auto toAmp = deferred("amp", [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendAmp(st); }); });
+    auto toSpread = deferred("spread", [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendSpread(st); }); });
+    auto toOsc = [this, deferred](int o) { return deferred("osc" + ofToString(o), [this, o]() {
         forStates([this, o](ofxSCServer* sv, ServerState& st){
             const Part& p = st.osc[o];
             const bool wanted = oscWanted(o);
@@ -112,10 +116,10 @@ void scPolyComb::setup() {
             if(transition) updateParts(sv, st);
             else sendOsc(st, o);
         });
-    }; };
-    auto toAllOsc = [this]() { forStates([this](ofxSCServer*, ServerState& st){ for(int o = 0; o < NumOsc; o++) sendOsc(st, o); }); };
-    auto toIns = [this](int i) { return [this, i]() { forStates([this, i](ofxSCServer*, ServerState& st){ sendIns(st, i); }); }; };
-    auto toParts = [this]() { forStates([this](ofxSCServer* sv, ServerState& st){ updateParts(sv, st); }); };
+    }); };
+    auto toAllOsc = deferred("allOsc", [this]() { forStates([this](ofxSCServer*, ServerState& st){ for(int o = 0; o < NumOsc; o++) sendOsc(st, o); }); });
+    auto toIns = [this, deferred](int i) { return deferred("ins" + ofToString(i), [this, i]() { forStates([this, i](ofxSCServer*, ServerState& st){ sendIns(st, i); }); }); };
+    auto toParts = deferred("parts", [this]() { forStates([this](ofxSCServer* sv, ServerState& st){ updateParts(sv, st); }); });
 
     // ── The node ─────────────────────────────────────────────────────────────
     addParameter(showWindow.set("Show", false));
@@ -219,7 +223,7 @@ void scPolyComb::setup() {
 
     // ── Delta (a modulation source, the matrix's last row): how much a mix of
     //    two LFOs moved over the window. No route from it: no synth. ─────────
-    auto toDelta = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendDelta(st); }); };
+    auto toDelta = deferred("delta", [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendDelta(st); }); });
     deltaSrcA.set("Delta LFO A", 0, 0, NUM_LFOS - 1);      reg(deltaSrcA, toDelta);
     deltaSrcB.set("Delta LFO B", 1, 0, NUM_LFOS - 1);      reg(deltaSrcB, toDelta);
     deltaMixA.set("Delta Mix A", 0.0f, 0.0f, 1.0f);        reg(deltaMixA, toDelta);
@@ -302,7 +306,7 @@ void scPolyComb::setup() {
 
     // Independent sine layer: no synth runs until enabled. Older snapshots
     // reset every Sub control, so an imported patch cannot change their sound.
-    auto toSub = [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendSub(st); }); };
+    auto toSub = deferred("sub", [this]() { forStates([this](ofxSCServer*, ServerState& st){ sendSub(st); }); });
     subOn.set("Sub On", false); reg(subOn, toParts);
     subLevel.set("Sub Level", 0.25f, 0.0f, 1.0f); reg(subLevel, toSub);
     subTranspose.set("Sub Transpose", -12.0f, -96.0f, 96.0f); reg(subTranspose, toSub);
@@ -320,7 +324,8 @@ void scPolyComb::setup() {
     for(const auto& c : controls) if(c.key.rfind("Sub_", 0)==0) subDefaults[c.key]=c.save();
 
     // ── Effects (MixerPro's inserts) ─────────────────────────────────────────
-    auto toStages = [this]() { forStates([this](ofxSCServer* sv, ServerState& st){ if(st.created) updateStages(sv, st); }); };
+    auto toStages = deferred("stages", [this]() { forStates([this](ofxSCServer* sv, ServerState& st){ if(st.created) updateStages(sv, st); }); });
+    auto toStage = [deferred, this](int stage) { return deferred("stage" + ofToString(stage), [this, stage]() { sendStageAll(stage); }); };
     compOn.set("Comp On", false); reg(compOn, toStages);
     compThreshold.set("Comp Threshold", -18.0f, -60.0f, 0.0f);
     compRatio.set("Comp Ratio", 3.0f, 1.0f, 20.0f);
@@ -333,8 +338,8 @@ void scPolyComb::setup() {
     compHpf.set("Comp SC HPF", 20.0f, 20.0f, 1000.0f);
     compMix.set("Comp Mix", 1.0f, 0.0f, 1.0f);
     for(auto* p : {&compThreshold, &compRatio, &compKnee, &compAttack, &compRelease,
-                   &compMakeup, &compRms, &compHpf, &compMix}) reg(*p, [this](){ sendStageAll(StComp); });
-    reg(compAuto, [this](){ sendStageAll(StComp); });
+                   &compMakeup, &compRms, &compHpf, &compMix}) reg(*p, toStage(StComp));
+    reg(compAuto, toStage(StComp));
     for(const auto& c : controls) if(c.key.rfind("Comp_", 0)==0) compDefaults[c.key]=c.save();
     eqOn.set("EQ On", false);                 reg(eqOn, toStages);
     {
@@ -345,7 +350,7 @@ void scPolyComb::setup() {
             eqGain[b].set(std::string("EQ ") + names[b], 0.0f, -24.0f, 24.0f);
             eqFreq[b].set(std::string("EQ ") + names[b] + " Freq", freqs[b], 20.0f, 20000.0f);
             eqShape[b].set(std::string("EQ ") + names[b] + (shelf ? " Slope" : " Q"), 1.0f, 0.1f, shelf ? 4.0f : 20.0f);
-            for(auto* p : {&eqGain[b], &eqFreq[b], &eqShape[b]}) reg(*p, [this]() { sendStageAll(StEq); });
+            for(auto* p : {&eqGain[b], &eqFreq[b], &eqShape[b]}) reg(*p, toStage(StEq));
         }
     }
     echoOn.set("Echo On", false);             reg(echoOn, toStages);
@@ -359,9 +364,9 @@ void scPolyComb::setup() {
     echoPingPong.set("Echo Ping-pong", 0.5f, 0.0f, 1.0f);
     echoMix.set("Echo Mix", 0.3f, 0.0f, 1.0f);
     for(auto* p : {&echoDelay, &echoBeatVal, &echoFeed, &echoCutoff, &echoResonance, &echoPingPong, &echoMix})
-        reg(*p, [this]() { sendStageAll(StEcho); });
-    reg(echoBeats, [this]() { sendStageAll(StEcho); });
-    reg(echoFilter, [this]() { sendStageAll(StEcho); });
+        reg(*p, toStage(StEcho));
+    reg(echoBeats, toStage(StEcho));
+    reg(echoFilter, toStage(StEcho));
     // the original PolyComb's delay as a second model (older snapshots: MixerPro's)
     echoModel.set("Echo Model", 0, 0, 1);
     reg(echoModel, [this]() {
@@ -375,7 +380,7 @@ void scPolyComb::setup() {
     echoLo.set("Echo Lo", 40.0f, 1.0f, 4000.0f);
     echoRes.set("Echo Res", 0.0f, -1.0f, 0.98f);
     echoSpread.set("Echo Spread", 0.0f, -0.33f, 0.33f);
-    for(auto* p : {&echoHi, &echoLo, &echoRes, &echoSpread}) reg(*p, [this]() { sendStageAll(StEcho); });
+    for(auto* p : {&echoHi, &echoLo, &echoRes, &echoSpread}) reg(*p, toStage(StEcho));
     for(const auto& c : controls)
         if(c.key == "Ring_Pitch_Source" || c.key == "Ring_Model" || c.key == "Ring_Ratio" || c.key == "Ring_Width" || c.key == "Filter_Model" || c.key == "Post_Filter_Model" || c.key == "Post_Key_Track" || c.key == "Comb_Model" || c.key == "Echo_Model" || c.key == "Echo_Hi" || c.key == "Echo_Lo" || c.key == "Echo_Res" || c.key == "Echo_Spread") deltaDefaults[c.key] = c.save();
     dropdowns.set(echoModel.getEscapedName(), {"MixerPro", "PolyComb 1.7"});
@@ -399,7 +404,7 @@ void scPolyComb::setup() {
     blurHighCut.set("Blur High Cut", 20000.0f, 20.0f, 20000.0f);
     blurMix.set("Blur Mix", 0.5f, 0.0f, 1.0f);
     for(auto* p : {&blurTime, &blurAmount, &blurDensity, &blurSpread, &blurLowCut, &blurHighCut, &blurMix})
-        reg(*p, [this]() { sendStageAll(StBlur); });
+        reg(*p, toStage(StBlur));
     for(const auto& c : controls) if(c.key.rfind("Blur_", 0)==0) blurDefaults[c.key]=c.save();
     rvbOn.set("Reverb On", false);            reg(rvbOn, toStages);
     rvbMix.set("Reverb Mix", 0.3f, 0.0f, 1.0f);
@@ -416,7 +421,7 @@ void scPolyComb::setup() {
     rvbWander.set("Reverb Wander", 0.25f, 0.0f, 20.0f);
     for(auto* p : {&rvbMix, &rvbDecay, &rvbSize, &rvbPredelay, &rvbLate, &rvbSpread, &rvbLowpass,
                    &rvbHiDamp, &rvbLoDamp, &rvbModRate, &rvbSpin, &rvbWander})
-        reg(*p, [this]() { sendStageAll(StRvb); });
+        reg(*p, toStage(StRvb));
 
     // ── Snapshots (publishable: Snapshot recalls, Morph blends A into B) ────
     // (scSnapshots: the parameters act through their own listeners)
@@ -511,6 +516,10 @@ void scPolyComb::setup() {
     for(auto* mode : {&postFilterModel, &postType}) snaps.morph.neutralDepth(*mode, postOn, "controls");
     for(auto* mode : {&echoModel, &echoFilter}) snaps.morph.neutralDepth(*mode, echoMix, "controls");
     snaps.morph.continuous(combMode, scMorphPolicies::field(combMode.getEscapedName(), "controls"));
+    // On switches whose DSP already crossfades a fractional \on (inserts, Sub,
+    // FM depth, effect stages): they fade instead of switching at the midpoint
+    for(auto* on : {&combOn, &ringOn, &shaperOn, &subOn, &fmOn, &compOn, &eqOn, &blurOn, &echoOn, &rvbOn})
+        snaps.morph.bypass(*on, scMorphPolicies::field(on->getEscapedName(), "controls"));
     snaps.morph.mode(ringPitchSource, 3, scMorphPolicies::field(ringPitchSource.getEscapedName(), "controls"));
     snaps.morph.mode(spreadMode,3,scMorphPolicies::field(spreadMode.getEscapedName(),"controls"));
     snaps.morph.mode(spreadLayout,2,scMorphPolicies::field(spreadLayout.getEscapedName(),"controls"));
@@ -661,7 +670,7 @@ void scPolyComb::sendOsc(ServerState& st, int o) {
     const ofParameter<std::vector<float>>* levels[] = {&oscSaw, &oscTri, &oscPulse, &oscSine, &oscSSaw, &oscWhite, &oscPink, &oscDust, &oscImpulse};
     s->set("note", st.noteBus ? st.noteBus->index : 0);
     s->set("fm", st.fmBus ? st.fmBus->index : 0);
-    s->set("fmon", (st.fm.synth && st.fm.running && fmOn.get()) ? 1.0f : 0.0f);
+    s->set("fmon", (st.fm.synth && st.fm.running) ? snaps.morph.activation(fmOn) : 0.0f);
     s->set("out", st.oscBus ? st.oscBus->index : 0);
     sendVec(s, "level", levels[o]->get());
     sendVec(s, "oscamp", oscAmp.get());
@@ -673,17 +682,17 @@ void scPolyComb::sendOsc(ServerState& st, int o) {
 bool scPolyComb::insWanted(int i) const {
     switch(i){
         case IFilter: return snaps.morph.activation(filterOn)>1e-6f;
-        case IComb: return combOn.get();
-        case IRing: return ringOn.get();
+        case IComb: return snaps.morph.activation(combOn)>1e-6f;
+        case IRing: return snaps.morph.activation(ringOn)>1e-6f;
         case IPost: return snaps.morph.activation(postOn)>1e-6f;
-        default: return shaperOn.get();
+        default: return snaps.morph.activation(shaperOn)>1e-6f;
     }
 }
 
 void scPolyComb::sendIns(ServerState& st, int i) {
     auto* s = st.ins[i].synth;
     if(!s) return;
-    s->set("on", i==IFilter ? snaps.morph.activation(filterOn) : i==IPost ? snaps.morph.activation(postOn) : insWanted(i) ? 1.0f : 0.0f);
+    s->set("on", snaps.morph.activation(i==IFilter ? filterOn : i==IPost ? postOn : i==IComb ? combOn : i==IRing ? ringOn : shaperOn));
     s->set("note", st.noteBus ? st.noteBus->index : 0);
     switch(i){
         case IFilter:
@@ -784,7 +793,7 @@ void scPolyComb::sendSub(ServerState& st, bool notesOnly) {
     controls.set("vibrate", subVibRate.get()); controls.set("vibamt", subVibAmt.get()); controls.set("vibrand", subVibRand.get());
     controls.set("level", subLevel.get()); controls.set("master", master.get());
     controls.set("vel", src(st, SRC_VEL)); controls.set("velsens", modulation.voiceValues(velSens));
-    controls.set("on", subOn.get() ? 1.0f : 0.0f);
+    controls.set("on", snaps.morph.activation(subOn));
     controls.set("atk", modulation.voiceValues(subA)); controls.set("dec", modulation.voiceValues(subD));
     controls.set("sus", modulation.voiceValues(subS)); controls.set("rel", modulation.voiceValues(subR));
     controls.set("cA", modulation.voiceValues(subCA)); controls.set("cD", modulation.voiceValues(subCD)); controls.set("cR", modulation.voiceValues(subCR));
@@ -846,8 +855,8 @@ void scPolyComb::updateParts(ofxSCServer* server, ServerState& st) {
             p.offAt = now + tail;
         }
     };
-    bring(st.sub, subOn.get(), def("PCSub"), SlSub, 0.05f, [&](){ sendSub(st); });
-    bring(st.fm, fmOn.get(), def("PCFm"), SlFm, 0.0f, [&](){ sendFm(st); });
+    bring(st.sub, snaps.morph.activation(subOn) > 1e-6f, def("PCSub"), SlSub, 0.05f, [&](){ sendSub(st); });
+    bring(st.fm, snaps.morph.activation(fmOn) > 1e-6f, def("PCFm"), SlFm, 0.0f, [&](){ sendFm(st); });
     for(int o = 0; o < NumOsc; o++) bring(st.osc[o], oscWanted(o), def(kOscDefs[o]), SlOsc, 0.0f, [&, o](){ sendOsc(st, o); });
     static const char* insDefs[NumIns] = {"PCFilter", "PCCombR", "PCRingR", "PCFilter", "PCShaper"};
     static const int insSlots[NumIns] = {SlFilter, SlComb, SlRing, SlPost, SlShaper};
@@ -1193,7 +1202,7 @@ void scPolyComb::routeChain(ServerState& st) {
 void scPolyComb::update(ofEventArgs& args) {
     if(!voiceRenderer) timeline.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names = snaps.slotNames();
+        const auto& names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) { auto it = published.find(key); dropdowns.set(key, names, it == published.end() ? nullptr : it->second); }
     }
     sendEnvMode();      // Auto follows Gate's connections
@@ -1253,8 +1262,9 @@ void scPolyComb::update(ofEventArgs& args) {
     }
 }
 
-bool scPolyComb::stageOn(int s) const {
-    return s == StComp ? compOn.get() : s == StEq ? eqOn.get() : s == StBlur ? blurOn.get() : s == StEcho ? echoOn.get() : rvbOn.get();
+bool scPolyComb::stageOn(int s) const { return stageAmount(s) > 1e-6f; }
+float scPolyComb::stageAmount(int s) const {
+    return snaps.morph.activation(s == StComp ? compOn : s == StEq ? eqOn : s == StBlur ? blurOn : s == StEcho ? echoOn : rvbOn);
 }
 
 std::string scPolyComb::stageDef(int s) const {
@@ -1287,7 +1297,7 @@ float scPolyComb::stageTail(int s) const {
 void scPolyComb::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     if(!x) return;
     scSynthControlBatch controls(x, server);
-    const float on = stageOn(s) ? 1.0f : 0.0f;
+    const float on = stageAmount(s);
     if(s == StComp){
         controls.set("threshold", compThreshold.get()); controls.set("ratio", compRatio.get());
         controls.set("knee", compKnee.get()); controls.set("attack", compAttack.get());
@@ -1299,10 +1309,11 @@ void scPolyComb::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     }else if(s == StEq){
         // mixerProEQ: gains dB, freqs Hz, shelves bNslope (= 1/S), peaks bNrq (= 1/Q)
         for(int b = 0; b < 5; b++){
+            // the bands' gains fade with EQ On (0 dB: the exact dry signal)
             const std::string k = "b" + ofToString(b + 1);
-            controls.set(k + "gain", eqGain[b].get());
+            controls.set(k + "gain", eqGain[b].get() * on);
             controls.set(k + "freq", eqFreq[b].get());
-            if(scEQEditor::isShelf(b)) controls.set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get()));
+            if(scEQEditor::isShelf(b)) controls.set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get() * on));
             else controls.set(k + "rq", 1.0f / std::max(0.01f, eqShape[b].get()));
         }
     }else if(s == StBlur){
@@ -3189,7 +3200,13 @@ void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t,
     if(countsChanged) M.refresh();       // sources created / freed, and the routes
     else if(changed) M.sendMatrix();
     // the controls any source moves ("Modulate"): the arrival's
-    if(t >= 1.0f) M.loadParamsJson(b.contains("params") ? b["params"] : ofJson::array());
+    M.loadParamsJson(scModulationMorph::parameters(a.value("params",ofJson::array()),
+        b.value("params",ofJson::array()),t,ca,cb,[this](const std::string& key){return drivenByConnection(key);}));
+    M.applyParamBases();
+    // the parts the changed controls queued, each once
+    auto queued = std::move(morphSends);
+    morphSends.clear();
+    for(auto& entry : queued) entry.second();
     // Modes can change in the editor without changing any numeric control.
     // Always resend the evaluated blend, even on either side of Morph Switch.
     forStates([this](ofxSCServer* server,ServerState& st){

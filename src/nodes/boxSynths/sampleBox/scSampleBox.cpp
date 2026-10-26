@@ -1384,7 +1384,7 @@ void scSampleBox::update(ofEventArgs&) {
     timeline.update();
     snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names = snaps.slotNames();
+        const auto& names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) { auto it = published.find(key); if(it != published.end()) scDropdowns::setNames(it->second, names); }
     }
     // Pads waiting for the definitions (createSynth): created once the server

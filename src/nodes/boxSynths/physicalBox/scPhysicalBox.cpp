@@ -429,6 +429,7 @@ void scPhysicalBox::setup() {
     sh.bpm = [this](){ return bpm; };
     sh.paramMenu = [this](const std::string& k){ mark(k); menu(k); };
     for(auto* p : {&satOn, &eqOn, &echoOn, &rvbOn, &spaceOn}) snaps.morph.bypass(*p);
+    ampMorph.setupVca(snaps.morph,[this](const ofJson& j){return mod.envRoutes(j,"physicalMod",Amp);});
     snaps.morph.mode(soundParam("bfamily"),physical::NFAMILIES);
     snaps.morph.mode(placement,3);snaps.morph.mode(speakerLayout,2);
     snaps.morph.neutralDepth(soundParam("radiator"),soundParam("radmix"));
@@ -503,8 +504,7 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
     if(!st.created) return;
     static const char* names[NUM_TARGETS - 1] = {"mpitch", "mmat", "mexc", "mpos", "mhard", "mpress", "mspeed",
         "mbreath", "mscrape", "mbright", "mdecay", "mshape", "mcouple", "mcascade", "mamp"};
-    bool vca = false;
-    for(int e = 0; e < mod.envCount; ++e) if(std::abs(mod.matrix[(scModulation::SRC_ENV + e) * NUM_TARGETS + Amp]) > 0.0001f) vca = true;
+    const float vcaW = ampMorph.vcaAmount(liveVca());
     const float comp = 1.0f / std::sqrt(std::max(1.0f, float(st.builtVoices) / st.builtChannels));
     const int inBus = st.in >= 0 ? st.in : st.silent->index;
     for(int i = 0; i < st.builtVoices; ++i) if(auto* v = st.voices[i]) {
@@ -529,7 +529,7 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
         set("voice", i);
         set("master", master.get());
         set("normalization", 1.0f / (st.builtVoices * comp));
-        set("vca", vca ? 1.0f : 0.0f);
+        set("vca", vcaW);
         set("vis", st.vis->index);
         for(int t = 0; t < NUM_TARGETS - 1; ++t) set(names[t], mod.targetBus(server, t) + i);
         updates.send();
@@ -853,7 +853,7 @@ void scPhysicalBox::apply(const ofJson& aSaved, const ofJson& bSaved, float t, b
     });
     mod.afterLoad();
     mod.refresh();
-    restoring = false; sendAll();
+    restoring = false; ampMorph.markApplied(liveVca());sendAll();
 }
 std::vector<ofJson> scPhysicalBox::factory() const {
     std::vector<ofJson> out;
@@ -918,7 +918,7 @@ void scPhysicalBox::requireSynthdefs() {
 void scPhysicalBox::update(ofEventArgs&) {
     timeline.update(); snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names = snaps.slotNames();
+        const auto& names = snaps.slotNames();
         for(const auto& k : snaps.slotKeys()) dropdowns.set(k, names, published.count(k) ? published[k] : nullptr);
     }
     if(structureDirty) rebuild();
@@ -1901,4 +1901,10 @@ void scPhysicalBox::drawFxTab(float w) {
     toggle(spaceFreeze, "Freeze");
     if(!spaceOn.get()) ImGui::EndDisabled();
     ImGui::EndGroup();
+}
+
+bool scPhysicalBox::liveVca() const {
+    for(int e = 0; e < mod.envCount; ++e)
+        if(std::abs(mod.matrix[(scModulation::SRC_ENV + e) * NUM_TARGETS + Amp]) > 0.0001f) return true;
+    return false;
 }

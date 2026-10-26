@@ -39,6 +39,7 @@
 #include "../shared/scModulation.h"
 #include "../../../ui/scTimelineMenu.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scAmpMorph.h"
 #include "../../../ui/scDropdowns.h"
 #include "../shared/scAudioParam.h"
 #include "../../../timing/scScheduledInputs.h"
@@ -255,6 +256,11 @@ private:
     // no amp envelope of its own: an envelope routed to Amp is the VCA (else it drones)
     bool vcaOn() const;
     bool ampDirty = false;
+    // Snapshot morph frames: the listeners mark what changed, morphChanged sends it once
+    bool pitchDirty = false, spreadDirty = false, gateDirty = false;
+    unsigned stageDirty = 0;
+    void flushMorphSends();
+    scAmpMorph ampMorph;                  // Drone / envelope VCA paths blend across morphs
     ofParameter<float> velSens, glide, vibRate, vibRand, vibAmt, drift;
     ofParameter<std::vector<float>> transpose, detune;
     // ── Oscillators ──────────────────────────────────────────────────────────

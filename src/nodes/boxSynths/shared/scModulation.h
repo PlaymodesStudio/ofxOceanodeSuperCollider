@@ -213,6 +213,9 @@ public:
     float lfoManualValue(int li) const;
     float lfoGeneratorValue(int li, const char* key, float fallback) const;
     void afterLoad();                                          // after the node's controls are back
+    // Does a saved sound route one of its envelopes to `target` (e.g. Amp)?
+    // Snapshot morphs evaluate each endpoint's VCA/drone path from it.
+    bool envRoutes(const ofJson& j, const std::string& prefix, int target) const;
 
 private:
     // Tables depend on shape settings, not tempo, routing or envelope edits.

@@ -26,16 +26,19 @@ dir=root +/+ "SteamPipeBox";File.mkdir(root);File.mkdir(dir);
 (1..16).do { |n|
     SynthDef(("SteamPipeBoxSpread"++n).asSymbol, {
         var input=In.ar(\in.kr(0),16), voices=\voices.kr(6).clip(1,16);
-        var ring=if(n>2,{\line.kr(1)<0.5},{0});
+        // ring weight: 1 Ring, 0 Line; fractional while a snapshot morph
+        // crossfades the two layouts' gains (no jump at the midpoint)
+        var ring=if(n>2,{1-\line.kr(1,1/30,fixedLag:true).clip(0,1)},{0});
         var pan=NamedControl.kr(\pan,0.5!16)+In.kr(\mpan.kr(0),16);
-        var pans=Select.kr(ring,[pan.clip(0,1),pan.wrap(0,1)]);
+        var pans=(pan.clip(0,1)*(1-ring))+(pan.wrap(0,1)*ring);   // shown in the window
         var output=0!n;
         16.do { |v|
-            var sig=input[v]*(v<voices), pos=pans[v]*Select.kr(ring,[n-1,n]);
+            var sig=input[v]*(v<voices);
+            var posLine=pan[v].clip(0,1)*(n-1), posRing=pan[v].wrap(0,1)*n;
             n.do { |ch|
-                var distance=(pos-ch).abs;
-                distance=Select.kr(ring,[distance,distance.min(n-distance)]);
-                output[ch]=output[ch]+(sig*(1-distance).max(0));
+                var lineGain=(1-(posLine-ch).abs).max(0);
+                var d=(posRing-ch).abs, ringGain=(1-d.min(n-d)).max(0);
+                output[ch]=output[ch]+(sig*((lineGain*(1-ring))+(ringGain*ring)));
             };
         };
         Out.ar(\out.kr(0),output);
@@ -104,7 +107,8 @@ SynthDef(\SteamPipeBoxVoice, {
         \amp_curve2, SteamPipeStep.ar(\amp_curve2.kr(-4))
     ];
     sig=SteamPipeVoice.ar(SteamPipeVoice.parameterNames.collect {|key| pairs[pairs.indexOf(key)+1]});
-    amp=Select.kr(\vca.kr(0)>0.5,[(1+m.(\mamp)).clip(0,2),m.(\mamp).clip(0,1)]);
+    // \vca fractional: a snapshot morph crossfades the two amp paths
+    amp= { |vca| ((1+m.(\mamp)).clip(0,2)*(1-vca))+(m.(\mamp).clip(0,1)*vca) }.(\vca.kr(0,1/30,fixedLag:true).clip(0,1));
     // Original envelope excites the pipe: never multiply its ringing output by gate.
     Out.ar(\out.kr(0),Sanitize.ar(sig[0])*amp*\master.kr(1,0.02)*\normalization.kr(1));
     Out.kr(\vis.kr(0)+(voice*6),[A2K.kr(pitch).midicps,0,A2K.kr(sig[1]),Amplitude.kr(sig[0]),0,0]);

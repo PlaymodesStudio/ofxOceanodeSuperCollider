@@ -1193,7 +1193,7 @@ void scMetroBox::update(ofEventArgs&) {
     timeline.update();
     snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names = snaps.slotNames();
+        const auto& names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) { auto it = snapPublished.find(key); if(it != snapPublished.end()) scDropdowns::setNames(it->second, names); }
     }
     syncLaneNames();

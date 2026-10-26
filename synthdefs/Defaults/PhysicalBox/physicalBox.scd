@@ -64,7 +64,8 @@ SynthDef(\PhysicalBoxVoice, {
     var pairs = names.collect({ |name| [name, given[name] ?? { p.(name) }] }).flatten;
     var ext = In.ar(\in.kr(0), 1);
     var sig = PhysicalVoice.ar(ext, pairs, NamedControl.kr(\bfweights,0!6).lag(0.03));
-    var amp = Select.kr(\vca.kr(0) > 0.5, [(1 + m.(\mamp)).clip(0, 2), m.(\mamp).clip(0, 1)]);
+    var vca = \vca.kr(0, 1/30, fixedLag: true).clip(0, 1);   // fractional: a snapshot morph crossfades the paths
+    var amp = ((1 + m.(\mamp)).clip(0, 2) * (1 - vca)) + (m.(\mamp).clip(0, 1) * vca);
     sig = LeakDC.ar(Sanitize.ar(sig)) * amp * \level.kr(0).dbamp * \master.kr(0.6, 0.02) * \normalization.kr(0.25);
     Out.ar(\out.kr(0), sig);
     Out.kr(\vis.kr(0) + (\voice.kr(0) * 4), [Amplitude.kr(sig.sum * 0.5, 0.01, 0.2), A2K.kr(gate), note, 0]);
@@ -100,7 +101,7 @@ SynthDef(\PhysicalBoxVoice, {
         var dry = In.ar(\in.kr(0), c).asArray;
         var on = \on.kr(1).lag(0.05);
         var mix = \mix.kr(0.25).clip(0, 1) * on;
-        var freeze = \freeze.kr(0).clip(0, 1);
+        var freeze = \freeze.kr(0, 0.05).clip(0, 1);   // lagged: a switch (or a morph's) does not cut the input in one block
         var feed = dry * on * (1 - freeze);
         var wet = OceanodeMicroSpace.ar(feed,
             (\time.kr(0.8).clip(0, 1.2) * (100/1.2)),

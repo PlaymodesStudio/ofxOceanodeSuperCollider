@@ -836,6 +836,21 @@ std::vector<float> scModulation::fitMatrix(const std::vector<float>& m, int sour
 
 void scModulation::load(const ofJson& j, const std::string& prefix) { loadState(j, prefix, true); }
 
+bool scModulation::envRoutes(const ofJson& j, const std::string& prefix, int target) const {
+    const auto key = prefix + "Matrix";
+    if(!j.contains(key) || !j[key].is_array() || target < 0 || target >= T()) return false;
+    const auto m = fitMatrix(scModulationMorph::numbers(j[key]), sourceCount(), T());
+    if(m.size() % T() != 0) return false;
+    int envs = envCount;
+    if(j.contains(prefix + "Envs") && j[prefix + "Envs"].is_number()) envs = j[prefix + "Envs"].get<int>();
+    envs = std::clamp(envs, 0, std::min((int)MAX_ENVS, maxEnvs));
+    for(int e = 0; e < envs; ++e){
+        const size_t i = size_t(SRC_ENV + e) * T() + target;
+        if(i < m.size() && std::abs(m[i]) > 1e-4f) return true;
+    }
+    return false;
+}
+
 void scModulation::loadState(const ofJson& j, const std::string& prefix, bool generators) {
     if(generators) loadGeneratorState(j, prefix);
     auto count = [&](const std::string& k, int& v, int lo, int hi){

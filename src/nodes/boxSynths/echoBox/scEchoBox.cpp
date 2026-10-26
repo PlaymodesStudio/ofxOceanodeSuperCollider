@@ -138,6 +138,7 @@ void scEchoBox::setup() {
         tp.send.set(T + "Send", 1.0f, 0.0f, 1.0f);              reg(tp.send, send);
         tp.feed.set(T + "Feedback", 0.45f, 0.0f, 1.2f);         reg(tp.feed, send);
         tp.freeze.set(T + "Freeze", false);                     reg(tp.freeze, send);
+        snaps.morph.bypass(tp.freeze);   // \freeze is lagged and continuous in the tap
         tp.pingpong.set(T + "Ping-pong", 0.0f, 0.0f, 1.0f);     reg(tp.pingpong, send);
         tp.spread.set(T + "Spread", 0.5f, 0.0f, 1.0f);          reg(tp.spread, send);
         tp.rotate.set(T + "Rotate", 0, 0, MAX_CHANNELS - 1);    reg(tp.rotate, send);
@@ -332,7 +333,7 @@ void scEchoBox::sendTap(ofxSCSynth* s, int t) {
     controls.set("level", tp.level.get());
     controls.set("send", tp.send.get());
     controls.set("feed", tp.feed.get());
-    controls.set("freeze", tp.freeze.get() ? 1.0f : 0.0f);
+    controls.set("freeze", snaps.morph.activation(tp.freeze));
     controls.set("pingpong", tp.pingpong.get());
     controls.set("bounce", tp.bounce.get() == 0 ? 1.0f : -1.0f);
     controls.set("rotate", (float)std::min(tp.rotate.get(), n() - 1));
@@ -367,8 +368,9 @@ void scEchoBox::sendMix(ofxSCSynth* s) {
 void scEchoBox::sendRvb(ofxSCSynth* x) {
     if(!x) return;
     ofxSCServer* server=nullptr;
-    for(auto& [srv,st]:states)if(st.rvb==x){server=srv;break;}
-    scSynthControlBatch controls(x,server);
+    scSynthControlBatch::Cache* sent=nullptr;
+    for(auto& [srv,st]:states)if(st.rvb==x){server=srv;sent=&st.rvbSent;break;}
+    scSynthControlBatch controls(x,server,sent);
     controls.set("mix", ofClamp(rvbMix.get(), 0.0f, 1.0f));
     controls.set("decay", std::max(0.05f, rvbDecay.get()));
     controls.set("size", ofClamp(rvbSize.get(), 0.0f, 60.0f));
@@ -420,8 +422,17 @@ void scEchoBox::createTap(ofxSCServer* server, ServerState& st, int t) {
 void scEchoBox::routeWet(ServerState& st) {
     if(!st.mix || !st.wetA) return;
     const bool viaRvb = st.rvb && st.rvbRunning && st.wetB;
-    st.mix->set("wet", viaRvb ? st.wetB->index : st.wetA->index);
-    if(st.rvb && st.wetB){ st.rvb->set("in", st.wetA->index); st.rvb->set("out", st.wetB->index); }
+    // every morph frame lands here: only a changed route is sent
+    ofxSCServer* server = nullptr;
+    for(auto& [srv, state] : states) if(&state == &st){ server = srv; break; }
+    scSynthControlBatch mix(st.mix, server, &st.mixRouteSent);
+    mix.set("wet", viaRvb ? st.wetB->index : st.wetA->index);
+    mix.send();
+    if(st.rvb && st.wetB){
+        scSynthControlBatch rvb(st.rvb, server, &st.rvbSent);
+        rvb.set("in", st.wetA->index); rvb.set("out", st.wetB->index);
+        rvb.send();
+    }
 }
 
 void scEchoBox::updateReverb(ofxSCServer* server, ServerState& st) {
@@ -429,6 +440,7 @@ void scEchoBox::updateReverb(ofxSCServer* server, ServerState& st) {
         if(!st.rvb && !scFxDefinitionsReady(servers, server)) { routeWet(st); return; }
         if(!st.rvb && st.mix){
             st.rvb = new ofxSCSynth("boxMicroSpace" + ofToString(n()), server);
+            st.rvbSent.clear();
             sendRvb(st.rvb);
             st.rvb->set("in", st.wetA ? st.wetA->index : 0);
             st.rvb->set("out", st.wetB ? st.wetB->index : 0);
@@ -441,6 +453,7 @@ void scEchoBox::updateReverb(ofxSCServer* server, ServerState& st) {
         st.rvbOffAt = -1.0f;
     }else if(st.rvb && st.rvbRunning && st.rvbOffAt < 0.0f){
         st.rvb->set("on", 0.0f);                 // the tail rings out, then it pauses
+        st.rvbSent["on"] = {0.0f};
         st.rvbOffAt = ofGetElapsedTimef() + reverbTail();
     }
     routeWet(st);
@@ -519,6 +532,7 @@ void scEchoBox::buildSynth(ofxSCServer* server) {
     for(auto*& t : st.taps) if(t){ t->free(); delete t; t = nullptr; }
     if(st.rvb){ st.rvb->free(); delete st.rvb; st.rvb = nullptr; }
     if(st.mix){ st.mix->free(); delete st.mix; st.mix = nullptr; }
+    st.rvbSent.clear(); st.mixRouteSent.clear();
     st.rvbRunning = false;
     st.rvbOffAt = -1.0f;
     freeMod(server, st, true);
@@ -560,6 +574,7 @@ void scEchoBox::createSynth(ofxSCServer* server) {
     ensureBuses(server, st);
     st.builtChannels = n();
     st.mix = new ofxSCSynth("EchoBoxMix" + ofToString(n()), server);
+    st.mixRouteSent.clear();
     st.mix->set("in", st.inBus);
     st.mix->set("out", st.outBus);
     st.mix->set("wet", st.wetA ? st.wetA->index : 0);
@@ -659,7 +674,7 @@ void scEchoBox::update(ofEventArgs&) {
     timeline.update();
     snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
-        const auto names = snaps.slotNames();
+        const auto& names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) { auto it = published.find(key); if(it != published.end()) scDropdowns::setNames(it->second, names); }
     }
     const float now = ofGetElapsedTimef();

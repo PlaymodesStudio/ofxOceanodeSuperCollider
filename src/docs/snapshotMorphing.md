@@ -407,3 +407,74 @@ offline-render methods retain full resends.
 The native dropdown regression checks unchanged source/route/FX traffic and
 complete explicit resends. `tools/analogbox/osc_swap_test.py` additionally checks
 single/dual oscillator swaps, cached control traffic and retired-node cleanup.
+
+
+## Seamless-morph pass (October 26, second audit)
+
+A review of every Box synth's A/B morph path (apply → listeners → morphChanged
+→ next update → OSC) found three classes of remaining jumps and one class of
+traffic. What changed:
+
+**Amp paths (Drone / envelope VCA).** Most voices chose their amplitude path
+with `Select(\vca > 0.5)` (and some with `Select(\drone > 0.5)`), where `vca`
+was "an envelope routed to Amp". The route amount interpolates, so the level
+faded towards silence and then jumped back to full when the amount reached 0
+(and the reverse on the first frame). `shared/scAmpMorph.h` resolves each
+endpoint's VCA state from its saved matrix (`scModulation::envRoutes`) and
+blends it; Drone uses a bypass policy. The voice defs crossfade the paths
+(`amp = nonVca·(1−v) + vca·v`, drone likewise), identical to the old Select at
+0 and 1. Gate synths hold their gates only once the blend reaches Drone; until
+then the voice's own crossfade covers it, and env→Amp routes fade with
+`1 − drone` instead of being skipped at the midpoint. Manual routing or Drone
+edits return to the live state. Covered: Wavetable (VCA + Drone), AnalogBox
+(VCA + Drone in ABAmp), FMBox, AliasingBox, SteamPipeBox, PhysicalBox,
+AdditiveBox (VCA), PulsarBox (Drone → `gated`), GrainBox (Drone → hdr[59]).
+Boxes that send after the apply (dirty flags) call `markApplied`.
+
+**WavetableBox.** Besides the amp paths: per-voice `scSynthControlBatch`
+caches (`voiceSent`) for every voice control, buffer and modulation bus —
+an unchanged morph frame sends nothing to the voices; listeners stay quiet while
+a snapshot applies and `morphChanged` sends once (previously ~3 full resends per
+frame, modulation twice per voice). The output chain is cached too: effects are
+re-ordered only when one joins or leaves, switched-off effects keep running
+until their tail has rung out (`effectTail`, as FM/PolyComb), Echo Filter blends
+`filterweights`, and Echo Sync blends the evaluated delay seconds. A voice-count
+morph keeps the gate/modulation width (no LFO/envelope reset at the start or at
+retirement); a manual Voices edit or a recall shrinks it.
+
+**PolyComb.** Comb/Ring/Shaper/Sub/FM On and Comp/EQ/Blur/Echo/Reverb On are
+bypass policies (their DSP already crossfades a fractional `\on`; EQ fades its
+band gains; FM crossfades Saw/LFSaw and Pulse/LFPulse instead of a Select).
+"Modulate" parameter routes now interpolate (they used to load only at t ≥ 1 and
+never returned to A). While a snapshot applies, part sends are queued once per
+part (`morphSends`) instead of once per changed control.
+
+**AnalogBox.** Listener sends are marked dirty during an apply and flushed once
+in `morphChanged` (`flushMorphSends`); amp gets the VCA/drone weights.
+
+**Smaller fixes.** AdditiveBox EQ On fades gains and moves the mix from all-wet
+(the equal-power `graphiceq` mix swelled ~3 dB); SteamPipe's spreader blends
+Ring/Line gains (it switched at 0.5); PhysicalBox Space Freeze is lagged; EchoBox
+tap Freeze is a bypass policy (the tap already lags it), and its reverb/route
+sends are cached; PulsarBox rebuilds its banks only when a configuration joins
+or leaves (not every frame) and caches its modulation args; snapshot names for
+published dropdowns are rebuilt at most 5×/s instead of every frame in every Box.
+
+**Lags against zipper steps** (per-frame morph values on unlagged controls):
+PolyComb and AnalogBox continuous voice controls (`kl`), AliasingBox pitches,
+filters, notch and levels (`pl`), FMBox matrix/carrier/mod-scale, MixerPro EQ and
+GraphicEQ bands — 30 ms, which does not change settled sounds.
+
+Rebuild the app and let the SynthDef sync recompile the changed sources
+(WavetableBox, AnalogBox, FMBox, AliasingBox, SteamPipeBox, PhysicalBox,
+AdditiveBox, PulsarBox, GrainBox, PolyComb parts, MixerPro, GraphicEQ).
+
+Still discrete or still costly (needs dedicated work): SampleBox/SlicerBox read
+start/end/reverse/loop live (a moving region crackles; latch per note), SlicerBox
+cap rebuilds and SampleBox `_M` engine swap cut sounding notes, EchoBox tap count
+and filter type / rotate / bounce / unit, Echo Sync in the other Boxes, AnalogBox
+Drone+Extra Voices pool rebuild, filter count/routing and octave, FMBox EnvGen
+levels on held notes and DX7 table quantization, SteamPipe V1/V2, ADSR engine and
+polarity, Additive/Pulsar modulation rebuild on voice-count morphs, Pulsar's
+per-frame table interpolation/upload, and the per-control sends of SampleBox,
+SlicerBox and EchoBox taps.

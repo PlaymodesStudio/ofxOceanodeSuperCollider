@@ -181,7 +181,7 @@ private:
         // x the gate's level), unless Drone is enabled.
         ofParameter<bool>           drone;
         ofParameter<float>         ampA, ampD, ampS, ampR, ampCA, ampCD, ampCR;
-        int                        ampGatedSent = -1;   // what the header says (rewritten when it changes)
+        float                      ampGatedSent = -1;   // what the header says (rewritten when it changes)
         // Gate and Pitch (when published) also take audio cables: the gate copied
         // onto the playheads' gates (GrainBoxGateIn<k>, after the control synth),
         // the pitch mapped onto the control synth (MIDI notes, 60: as recorded)
@@ -479,7 +479,8 @@ public:
 private:
 #endif
     bool modWanted(const Playhead& ph) const;        // something routed (a used source, a GrainBox target)
-    bool ampGated(const Playhead& ph) const;         // the Amp Envelope is the VCA unless Drone is enabled
+    bool ampGated(const Playhead& ph) const;
+    float ampGatedAmount(const Playhead& ph) const;         // the Amp Envelope is the VCA unless Drone is enabled
     // Saved before the Amp Envelope: an envelope routed to Amp was the VCA; it becomes the Amp Envelope
     void migrateAmpEnvelope(Playhead& ph, const ofJson& j);
     void writeGate(Playhead& ph, ofxSCServer* srv);  // the playheads' gates onto the modulation's block
