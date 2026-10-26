@@ -10,10 +10,6 @@
     spd = OceanodeParameterLag.ar(\speed, 1, n, -32, 32, "vf", 1/30, true);
     start = OceanodeParameterLag.ar(\startpos, 0, n, 0, 1, "vf", 1/30, true);
     dur = OceanodeParameterLag.ar(\grainsize, 0.1, n, 0.00001, 2, "vf", 1/30, true);
-    // GrainBuf turns dur into an integer sample count: an inf or huge value
-    // (e.g. a stray audio-rate input) makes grains that never end and fill all
-    // maxGrains for good, so keep it finite and within the parameter's range.
-    dur = Sanitize.ar(dur, 0.1).clip(0.00001, 2);
 
     // Sample rate correction
     sampleRateCorrection = BufSampleRate.kr(buf) / SampleRate.ir;
