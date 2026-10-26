@@ -354,9 +354,10 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
             grainPos  = Select.kr(revFlag, [basePos, (basePos + (readLen / frL)).wrap(0, 1)]);
             grainRate = Select.kr(revFlag, [rate, rate.neg]);
 
-            // Width (a stereo sample, 2+ speakers): L and R either side of the
-            // grain's pan, -/+ Width (Pan2 units; with PanAz one speaker apart
-            // at 1). Level: 0 the mono sum (as before), 1 each side at unity.
+            // Width (a stereo sample, 2+ speakers): 2 speakers, L and R move
+            // from the grain's pan towards their own edge (1: hard left / right,
+            // wherever the pan is); more, either side of it, one speaker apart
+            // at 1. Level: 0 the mono sum (as before), 1 each side at unity.
             wd    = if((k == 2) && (n > 1)) { g[80] } { 0 };
             wGain = if(k == 2) { (Lag.kr(wd, 0.02) + 1) * 0.5 } { 1 };
             Out.ar(out, wGain * Mix.new(k.collect({|ki|
@@ -369,7 +370,7 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
                     rate:        grainRate,
                     pos:         grainPos,
                     interp:      2,
-                    pan:         if(n == 2) { ((panK + 1).wrap(0, 2) - 1 + (side * wd)).clip(-1, 1) }
+                    pan:         if(n == 2) { (((panK + 1).wrap(0, 2) - 1) * (1 - wd)) + (side * wd) }
                                             { (panK + (side * wd / n)).wrap(0, 2) },
                     envbufnum:   envbuf,
                     maxGrains:   512,
