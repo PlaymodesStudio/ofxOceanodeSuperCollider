@@ -156,7 +156,9 @@ filter = { |sig, type, note, res|
         // Like vibrato, each voice has a random rate offset and initial phase.
         // Depth 0 is unity; depth 1 sweeps the amplitude from silence to unity.
         var rate = kv.(\tremrate, 5) * (1 + (({ Rand(-1, 1) } ! n) * kv.(\tremrand, 0).clip(0, 1)));
-        var trem = 1 - ((SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * 0.5 + 0.5) * Lag.kr(kl.(\tremdepth, 0), 0.03).clip(0, 1));
+        // Roundness 1 is the sine; lower drives it into a clip, toward a square at 0.
+        var wave = (SinOsc.kr(rate, { Rand(0, 2pi) } ! n) / kl.(\tremround, 1).clip(0.01, 1)).clip2(1);
+        var trem = 1 - ((wave * 0.5 + 0.5) * Lag.kr(kl.(\tremdepth, 0), 0.03).clip(0, 1));
         var amp = In.ar(\env.kr(0), n) * ((Gate.ar(lev, lev > 0) * (1 - vs)) + K2A.ar(vel * vs)) *
             K2A.ar((1 + modIn.(\mamp)).clip(0, 2) * trem);
         Out.ar(\out.kr(0), Sanitize.ar(LeakDC.ar(sig * amp) * \level.kr(0.8, 0.05)));

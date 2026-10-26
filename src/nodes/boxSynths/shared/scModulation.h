@@ -54,8 +54,10 @@ public:
     // room for a host's own sources after the built-in ones (extraSources)
     static constexpr int MAX_EXTRA_SOURCES = 4, MAX_SOURCES = NUM_SOURCES + MAX_EXTRA_SOURCES;
 
-    // unipolar: an LFO moves it 0..1 x amount (positions: +1 reaches the end),
-    // else -1..1 around the control's value
+    // An LFO route adds 0..1 x amount up from the control's value by default;
+    // a route set Bipolar (right-click its matrix cell) swings around it.
+    // unipolar: the target's routes in presets saved before routes had a
+    // polarity were unipolar already (positions: +1 reaches the end)
     struct Target { std::string name; float range; std::string unit; bool unipolar = false; };
     // What the module needs from its node
     struct Host {
@@ -239,6 +241,7 @@ private:
         float lo = 0.0f, hi = 1.0f;
         std::vector<float> base, written, voiceWritten;
         std::array<float, MAX_SOURCES> amount{};
+        std::array<bool, MAX_SOURCES> bipolar{};               // an LFO swings around the value (else adds up)
         bool applied = false;                                  // the control holds base + modulation now
         bool pending = false;                                  // a loaded base, not set yet
         bool routed() const { for(float a : amount) if(std::abs(a) > 1e-4f) return true; return false; }
@@ -251,7 +254,13 @@ private:
     void writeParam(ParamTarget& pt, const std::vector<float>& v);
     ParamTarget* findParam(const std::string& key);
     void applyParams();
-    float paramSource(int s, int voice) const;                 // a source's value as it moves a control
+    float paramSource(int s, int voice, bool bipolar) const;   // a source's value as it moves a control
+    // The built-in matrix cells' polarity (sources x targets): 1 an LFO swings
+    // around the target, 0 adds up from it. Saved as a "@routes" entry of the
+    // params json (every node saves that), so no node's own save changes.
+    std::vector<uint8_t> routeBipolar;
+    bool cellBipolar(int s, int t) const;
+    bool polarityEditable(int s, int t) const;                 // an LFO route this module runs itself
     bool paramsActive() const;
     void removeParam(size_t i);
     struct EnvParams { ofParameter<float> a, d, s, r, ca, cd, cr, vt; };   // vt: velocity tracking 0..1
@@ -271,12 +280,13 @@ private:
         std::array<Sent, MAX_LFOS> lfoSent;
         std::array<Sent, MAX_ENVS> envSent;
         std::map<int, std::pair<float, float>> routeSent;   // amount, decor
+        std::map<int, float> routeBip;                      // bipolar
         std::map<int, std::vector<float>> busSent;          // source buses
         std::vector<bool> zeroed;                           // unrouted target buses already cleared
         void clearSent() {
             for(auto& c : lfoSent) c.clear();
             for(auto& c : envSent) c.clear();
-            routeSent.clear(); busSent.clear(); zeroed.clear();
+            routeSent.clear(); routeBip.clear(); busSent.clear(); zeroed.clear();
         }
     };
     Host host;

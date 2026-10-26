@@ -77,7 +77,12 @@ struct scModulationMorph {
                 const float value=av*(1-t)+bv*t;
                 if(value!=0)amounts[source]=value;
             }
-            out.push_back(ofJson{{"key",key},{"base",interpolate(va,vb,t)},{"amounts",amounts}});
+            ofJson entry{{"key",key},{"base",interpolate(va,vb,t)},{"amounts",amounts}};
+            // the routes' polarity: the nearer side's (a side without it: an older save)
+            const auto& near=(t<0.5f ? x.count(key) : !y.count(key)) ? ea : eb;   // (or the side that has it)
+            if(near.contains("pol")){ entry["pol"]=near["pol"]; entry["bipolar"]=near.value("bipolar",ofJson::array()); }
+            if(key=="@routes" && !entry.contains("pol"))continue;
+            out.push_back(entry);
         }
         return out;
     }

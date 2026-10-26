@@ -167,6 +167,7 @@ void scPolyComb::setup() {
     tremRate.set("Trem Rate", 5.0f, 0.0f, 20.0f);          reg(tremRate, toAmp);
     tremRand.set("Trem Rate Random", 0.0f, 0.0f, 1.0f);    reg(tremRand, toAmp);
     tremDepth.set("Trem Depth", 0.0f, 0.0f, 1.0f);         reg(tremDepth, toAmp);
+    tremRound.set("Trem Roundness", 1.0f, 0.0f, 1.0f);     reg(tremRound, toAmp);   // 1 sine .. 0 square
     for(const auto& c : controls) if(c.key.rfind("Trem_", 0)==0) tremDefaults[c.key]=c.save();
 
     // ── Pitch & Harmony: internal pitch maps (the original PolyComb's). External
@@ -455,7 +456,7 @@ void scPolyComb::setup() {
         modulation.maxVoices = MAX_VOICES;
         modulation.unifiedLfoModels = true;
         modulation.setup(h, targets, true, true, true);
-        for(auto* p : {&ampA, &ampD, &ampS, &ampR, &ampCA, &ampCD, &ampCR, &velSens, &glide, &vibRate, &vibRand, &vibAmt, &tremRate, &tremRand, &tremDepth, &oscDustDensity, &fmFb, &combSatLevel, &keyTrack, &postKeyTrack, &combTone, &combGlide, &combVibRate, &combVibRand, &combVibAmt, &ringWidth, &subA, &subD, &subS, &subR, &subCA, &subCD, &subCR}) modulation.addVoiceParam(*p);
+        for(auto* p : {&ampA, &ampD, &ampS, &ampR, &ampCA, &ampCD, &ampCR, &velSens, &glide, &vibRate, &vibRand, &vibAmt, &tremRate, &tremRand, &tremDepth, &tremRound, &oscDustDensity, &fmFb, &combSatLevel, &keyTrack, &postKeyTrack, &combTone, &combGlide, &combVibRate, &combVibRand, &combVibAmt, &ringWidth, &subA, &subD, &subS, &subR, &subCA, &subCD, &subCR}) modulation.addVoiceParam(*p);
         for(int i=1;i<=NUM_LFOS;++i) dropdowns.set("LFO"+ofToString(i)+"_Model", {"Off", "Classic", "Noise", "Random"});
         modulation.lfoCount = 2;
         modulation.envCount = 1;
@@ -771,6 +772,7 @@ void scPolyComb::sendAmp(ServerState& st) {
     s->set("tremrate", modulation.voiceValues(tremRate));
     s->set("tremrand", modulation.voiceValues(tremRand));
     s->set("tremdepth", modulation.voiceValues(tremDepth));
+    s->set("tremround", modulation.voiceValues(tremRound));
 }
 
 void scPolyComb::sendSub(ServerState& st, bool notesOnly) {
@@ -2267,6 +2269,7 @@ void scPolyComb::drawOscTab(float w) {
     slider(tremRate, "Trem Rate", qw, "%.2f Hz");
     slider(tremRand, "Rate Rnd", qw, "%.2f");
     slider(tremDepth, "Trem Depth", qw, "%.2f");
+    slider(tremRound, "Roundness", qw, "%.2f");
     labelW = 70.0f;
     ImGui::EndGroup();
     ImGui::Spacing();

@@ -300,7 +300,7 @@ private:
     bool droning() const;          // Whether continuous playback is enabled
     void sendEnvMode(bool force = false);
     ofParameter<float> ampA, ampD, ampS, ampR, ampCA, ampCD, ampCR, velSens, glide, vibRate, vibRand, vibAmt;
-    ofParameter<float> tremRate, tremRand, tremDepth;
+    ofParameter<float> tremRate, tremRand, tremDepth, tremRound;
     ofJson tremDefaults = ofJson::object();
     ofParameter<std::vector<float>> transpose, detune;
     ofParameter<bool> scramble;

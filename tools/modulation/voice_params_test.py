@@ -25,7 +25,7 @@ struct Abstract {void* ptr;template<class T>ofParameter<T>&cast(){return *static
 float decorrelate(float v,float salt){return std::sin(v+salt);}
 struct scModulation{
  static constexpr int MAX_LFOS=8,SRC_RND=13,SRC_EXT=14,SRC_VOICE=22,NUM_SOURCES=23,MAX_SOURCES=27;
- struct ParamTarget {std::string key;Abstract*p=nullptr;int kind=0;float lo=0,hi=1;std::vector<float>base,written,voiceWritten;std::array<float,MAX_SOURCES>amount{};bool applied=false;};
+ struct ParamTarget {std::string key;Abstract*p=nullptr;int kind=0;float lo=0,hi=1;std::vector<float>base,written,voiceWritten;std::array<float,MAX_SOURCES>amount{};std::array<bool,MAX_SOURCES>bipolar{};bool applied=false;};
  struct Host{std::function<void()>voiceParamsChanged;}host;
  std::vector<ParamTarget>params;std::set<std::string>voiceParamKeys;
  bool perVoice=true,randomShared=true;int voices=4;bool active=true;
@@ -35,12 +35,12 @@ struct scModulation{
  float liveValue(int,int v)const{return lfo[v];}void applyParamBases(){}
  std::vector<float>readParam(const ParamTarget&)const;void writeParam(ParamTarget&,const std::vector<float>&);
  float voiceValue(const ofParameter<float>&,int)const;std::vector<float>voiceValues(const ofParameter<float>&)const;
- float paramSource(int,int)const;void applyParams();void removeParam(size_t);void patchBases(ofJson&)const;
+ float paramSource(int,int,bool)const;void applyParams();void removeParam(size_t);void patchBases(ofJson&)const;
 };
 METHODS
 bool near(float a,float b){return std::abs(a-b)<1e-5;}
 int main(){
- scModulation m;ofParameter<float>p{.5f,"DC_Noise"};Abstract a{&p};scModulation::ParamTarget t;t.p=&a;t.key=p.key;t.amount[0]=1;m.params={t};m.voiceParamKeys.insert(p.key);
+ scModulation m;ofParameter<float>p{.5f,"DC_Noise"};Abstract a{&p};scModulation::ParamTarget t;t.p=&a;t.key=p.key;t.amount[0]=1;t.bipolar[0]=true;m.params={t};m.voiceParamKeys.insert(p.key);
  int sends=0;m.host.voiceParamsChanged=[&]{++sends;};
  int scalarWrites=0;p.changed=[&]{++scalarWrites;};
  m.applyParams();assert(sends==1);assert(scalarWrites==0 && near(p.get(),.5));for(int i=0;i<4;++i)assert(near(m.voiceValue(p,i),m.lfo[i]));
@@ -56,7 +56,14 @@ int main(){
  // A vector with one base value expands over voices as before.
  ofParameter<std::vector<float>>vp{{.5f},"Vector"};Abstract va{&vp};t.p=&va;t.key=vp.key;t.kind=2;m.params={t};m.applyParams();assert(vp.v.size()==4);assert(near(vp.v[2],.6));
  m.perVoice=false;m.applyParams();for(float v:vp.v)assert(near(v,.1));
- std::cout<<"PASS: per-voice scalar routing, secondary-only changes, stable scalar base, saved bases, edits, resize, disable/remove, shared controls and vector routing.\n";
+ // Unipolar (the default): the LFO adds up from the value, scaled to the range:
+ // a 0..128 control at 0, amount +0.5 -> 0..64.
+ ofParameter<float>q{0.f,"Wide"};Abstract qa{&q};scModulation::ParamTarget u;u.p=&qa;u.key=q.key;u.lo=0;u.hi=128;u.amount[0]=.5f;
+ m.perVoice=true;m.voiceParamKeys={q.key};m.params={u};m.lfo={0.f,.5f,1.f,.25f};m.applyParams();
+ assert(near(m.voiceValue(q,0),0));assert(near(m.voiceValue(q,1),32));assert(near(m.voiceValue(q,2),64));assert(near(m.voiceValue(q,3),16));
+ // Bipolar: around the value (amount 1 sweeps the whole range), the older behaviour.
+ q.v=64;u.bipolar[0]=true;m.params={u};m.applyParams();assert(near(m.voiceValue(q,0),32));assert(near(m.voiceValue(q,2),96));
+ std::cout<<"PASS: unipolar/bipolar range scaling, per-voice scalar routing, secondary-only changes, stable scalar base, saved bases, edits, resize, disable/remove, shared controls and vector routing.\n";
 }
 '''.replace('METHODS','\n'.join(methods))
 with tempfile.TemporaryDirectory()as d:

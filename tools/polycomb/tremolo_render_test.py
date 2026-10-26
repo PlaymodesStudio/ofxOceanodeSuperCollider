@@ -20,10 +20,12 @@ r = subprocess.run([str(ROOT / 'sclang/osx/sclang'), '-l', str(config), str(prob
 assert r.returncode == 0 and (out / 'PCTremProbe.scsyndef').exists(), r.stdout + r.stderr
 folder = ROOT / 'synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb'
 score = bundle(0, [message('/d_recv', p.read_bytes()) for p in (out / 'PCTremProbe.scsyndef', folder / 'PCAmp3.scsyndef')] + [message('/g_new', 1, 0, 0), message('/c_setn', 100, 3, 1., 1., 1.)])
-cases = [('default', None), ('zero', (8., 1., 0.)), ('partial', (5., 0., .4)), ('full', (5., 0., 1.)), ('faster', (8., 0., 1.)), ('random', (5., .6, 1.))]
+cases = [('default', None), ('zero', (8., 1., 0.)), ('partial', (5., 0., .4)), ('full', (5., 0., 1.)), ('faster', (8., 0., 1.)), ('random', (5., .6, 1.)), ('square', (5., 0., 1., 0.)), ('halfround', (5., 0., 1., .5))]
 for i, (name, controls) in enumerate(cases):
-    args = [] if controls is None else ['tremrate', controls[0], 'tremrand', controls[1], 'tremdepth', controls[2]]
-    score += bundle(i * 3 + .01, [message('/s_new', 'PCTremProbe', 100, 1, 1), message('/s_new', 'PCAmp3', 101, 1, 1, 'in', 32, 'out', 0, 'env', 40, 'gate', 48, 'vel', 100, 'mamp', 110, 'level', 1., *args)])
+    # every voice (the node sends per-voice vectors)
+    names = ['tremrate', 'tremrand', 'tremdepth', 'tremround']
+    sets = [] if controls is None else [message('/n_setn', 101, k, 3, float(v), float(v), float(v)) for k, v in zip(names, controls)]
+    score += bundle(i * 3 + .01, [message('/s_new', 'PCTremProbe', 100, 1, 1), message('/s_new', 'PCAmp3', 101, 1, 1, 'in', 32, 'out', 0, 'env', 40, 'gate', 48, 'vel', 100, 'mamp', 110, 'level', 1.), *sets])
     score += bundle((i + 1) * 3 - .01, [message('/g_freeAll', 1)])
 score += bundle(len(cases) * 3, [message('/c_set', 0, 0.)])
 osc = out / 'test.osc'
@@ -50,4 +52,13 @@ for voice in range(3):
     offset = (bins[np.argmax(spectrum[bins])] - 2000) / 2
     assert 1.5 <= offset <= 8.5, offset
     assert spectrum[bins].max() > spectrum[2000] * .1, 'Random tremolo must modulate amplitude'
-print('PASS: zero-depth sample-identical bypass, 40%/100% depth, 5/8 Hz rates, and per-voice random-rate modulation.')
+# Roundness 0: a square tremolo (the gain sits at 0 or 1 nearly all the time);
+# 0.5 in between; 1 (the default) keeps the sine.
+def gain(x):
+    g = np.abs(x[:, 0]).reshape(-1, 48).max(axis=1) / 0.2   # 1 ms envelope
+    return g
+for name, lo, hi in [('square', .9, 1.), ('halfround', .45, .8), ('full', .2, .45)]:
+    g = gain(parts[name])
+    edge = np.mean((g < .05) | (g > .95))
+    assert lo <= edge <= hi, (name, edge)
+print('PASS: tremolo roundness (square / half / sine), zero-depth sample-identical bypass, 40%/100% depth, 5/8 Hz rates, and per-voice random-rate modulation.')

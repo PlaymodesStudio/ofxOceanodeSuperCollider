@@ -134,6 +134,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
     velocity = hasVelocity;
     random = hasRandom;
     matrix.assign(sourceCount() * T(), 0.0f);
+    routeBipolar.assign(sourceCount() * T(), 0);
     auto vec = [](ofParameter<std::vector<float>>& p, const std::string& name, float def, float lo, float hi) {
         p.set(name, {def}, {lo}, {hi});
     };
@@ -424,6 +425,7 @@ void scModulation::syncRoutes(ofxSCServer* server, ServerState& st) {
             const int idx = s * T() + t;
             const float amount = matrix[idx];
             const bool used = sourceUsed(s) && std::abs(amount) > 1e-4f && !(skipRoute && skipRoute(s, t));
+            const float bip = s < MAX_LFOS && cellBipolar(s, t) ? 1.0f : 0.0f;
             auto it = st.routes.find(idx);
             if(used){
                 routed[t] = true;
@@ -431,7 +433,7 @@ void scModulation::syncRoutes(ofxSCServer* server, ServerState& st) {
                     auto* r = new ofxSCSynth(def("ModRoute"), server);
                     r->set("src", st.srcBlock->index + s * busWidth);
                     r->set("out", st.modBlock->index + t * busWidth);
-                    r->set("bipolar", s < MAX_LFOS && !targetList[t].unipolar ? 1.0f : 0.0f);
+                    r->set("bipolar", bip);
                     r->set("scale", targetList[t].range);
                     r->set("amount", amount);
                     r->set("decor", s == SRC_RND && !randomShared ? 1.0f : 0.0f);
@@ -439,18 +441,22 @@ void scModulation::syncRoutes(ofxSCServer* server, ServerState& st) {
                     r->createAndRun(1, st.routeGroup, true);
                     st.routes[idx] = r;
                     st.routeSent[idx] = {amount, s == SRC_RND && !randomShared ? 1.0f : 0.0f};
+                    st.routeBip[idx] = bip;
                 }else{
                     const float decor = s == SRC_RND ? (randomShared ? 0.0f : 1.0f) : 0.0f;
                     auto sent = st.routeSent.find(idx);
                     if(sent == st.routeSent.end() || sent->second.first != amount) it->second->set("amount", amount);
                     if(s == SRC_RND && (sent == st.routeSent.end() || sent->second.second != decor)) it->second->set("decor", decor);
                     st.routeSent[idx] = {amount, decor};
+                    auto sentBip = st.routeBip.find(idx);
+                    if(sentBip == st.routeBip.end() || sentBip->second != bip){ it->second->set("bipolar", bip); st.routeBip[idx] = bip; }
                 }
             }else if(it != st.routes.end()){
                 it->second->free();
                 delete it->second;
                 st.routes.erase(it);
                 st.routeSent.erase(idx);
+                st.routeBip.erase(idx);
             }
         }
     }
@@ -975,11 +981,13 @@ std::vector<float> scModulation::voiceValues(const ofParameter<float>& p) const 
     return out;
 }
 
-// A source as it moves a control: LFOs, Random, Ext and Voice around the
-// value (-0.5..0.5: amount 1 sweeps the whole range), envelopes and velocity up from it
-float scModulation::paramSource(int s, int voice) const {
+// A source as it moves a control: LFOs up from the value (0..1: amount 1
+// reaches the top of the range from the bottom), or around it when the route
+// is bipolar (-0.5..0.5: amount 1 sweeps the whole range); Random, Ext and
+// Voice around the value, envelopes and velocity up from it
+float scModulation::paramSource(int s, int voice, bool bipolar) const {
     if(s >= NUM_SOURCES) return liveValue(s, voice);    // a host's source: up from the value
-    if(s < MAX_LFOS) return liveValue(s, perVoice ? voice : 0) - 0.5f;
+    if(s < MAX_LFOS) return liveValue(s, perVoice ? voice : 0) - (bipolar ? 0.5f : 0.0f);
     if(s < SRC_RND) return liveValue(s, voice);
     if(s == SRC_RND) return liveValue(s, voice) * 0.5f;
     if(s < SRC_VOICE){
@@ -1024,7 +1032,7 @@ void scModulation::applyParams() {
                     // Random: this control's own value per note (salted by its key), unless shared
                     if(s == SRC_RND && !randomShared)
                         m += pt.amount[s] * 0.5f * decorrelate(liveValue(s, voice), float(std::hash<std::string>{}(pt.key) % 1000) * 0.913f + 50.0f);
-                    else m += pt.amount[s] * paramSource(s, voice);
+                    else m += pt.amount[s] * paramSource(s, voice, pt.bipolar[s]);
                 }
             float v = ofClamp(pt.base[std::min(i, pt.base.size() - 1)] + m * span, pt.lo, pt.hi);
             if(pt.kind == 1 || pt.kind == 3) v = std::round(v);
@@ -1073,11 +1081,34 @@ ofJson scModulation::paramsJson() const {
         e["key"] = pt.key;
         e["base"] = pt.base;
         ofJson am = ofJson::object();
-        for(int s = 0; s < sourceCount(); s++) if(std::abs(pt.amount[s]) > 1e-4f) am[ofToString(s)] = pt.amount[s];
+        ofJson bip = ofJson::array();
+        for(int s = 0; s < sourceCount(); s++){
+            if(std::abs(pt.amount[s]) > 1e-4f) am[ofToString(s)] = pt.amount[s];
+            if(pt.bipolar[s]) bip.push_back(s);
+        }
         e["amounts"] = am;
+        e["pol"] = 1;                                          // polarity saved (older saves: LFOs bipolar)
+        e["bipolar"] = bip;
         a.push_back(e);
     }
+    // the built-in cells' polarity: the bipolar ones
+    ofJson cells = ofJson::array();
+    for(size_t i = 0; i < routeBipolar.size(); i++) if(routeBipolar[i]) cells.push_back((int)i);
+    a.push_back(ofJson{{"key", "@routes"}, {"pol", 1}, {"bipolar", cells}});
     return a;
+}
+
+bool scModulation::cellBipolar(int s, int t) const {
+    const size_t i = (size_t)s * T() + t;
+    return i < routeBipolar.size() && routeBipolar[i];
+}
+
+// Server-side LFO routes and the controls' own; a node's own LFO copies
+// (GrainBox, AdditiveBox's per-partial lanes) keep their own maths
+bool scModulation::polarityEditable(int s, int t) const {
+    if(s >= MAX_LFOS) return false;
+    if(t >= T()) return true;
+    return !liveHook && !(skipRoute && skipRoute(s, t));
 }
 
 void scModulation::loadParamsJson(const ofJson& j) {
@@ -1085,11 +1116,26 @@ void scModulation::loadParamsJson(const ofJson& j) {
     std::map<std::string, ParamTarget> before;   // already resolved: morph frames reload the same keys
     for(auto& pt : params) before.emplace(pt.key, pt);
     params.clear();
-    if(!j.is_array()) return;
+    const auto bipolarBefore = routeBipolar;
+    // Saved before routes had a polarity: its LFO routes swung around the
+    // value (unless the target was unipolar), so they keep doing so
+    routeBipolar.assign(sourceCount() * T(), 0);
+    for(int s = 0; s < MAX_LFOS; s++) for(int t = 0; t < T(); t++){
+        const size_t i = (size_t)s * T() + t;
+        if(i < matrix.size() && std::abs(matrix[i]) > 1e-4f && !targetList[t].unipolar) routeBipolar[i] = 1;
+    }
+    auto routesChanged = [&]{ if(routeBipolar != bipolarBefore) forStates([this](ofxSCServer* sv, ServerState& st){ syncRoutes(sv, st); }); };
+    if(!j.is_array()){ routesChanged(); return; }
     for(auto& e : j){
         if(!e.is_object() || !e.contains("key") || !e["key"].is_string()) continue;
-        ParamTarget pt;
         const auto key = e["key"].get<std::string>();
+        if(key == "@routes"){
+            std::fill(routeBipolar.begin(), routeBipolar.end(), 0);
+            if(e.contains("bipolar") && e["bipolar"].is_array())
+                for(auto& c : e["bipolar"]) if(c.is_number_integer() && c.get<int>() >= 0 && c.get<int>() < (int)routeBipolar.size()) routeBipolar[c.get<int>()] = 1;
+            continue;
+        }
+        ParamTarget pt;
         auto known = before.find(key);
         if(known != before.end() && known->second.p){
             pt.p = known->second.p; pt.kind = known->second.kind; pt.lo = known->second.lo; pt.hi = known->second.hi;
@@ -1101,9 +1147,14 @@ void scModulation::loadParamsJson(const ofJson& j) {
                 const int s = ofToInt(it.key());
                 if(s >= 0 && s < sourceCount() && it.value().is_number()) pt.amount[s] = ofClamp(it.value().get<float>(), -1.0f, 1.0f);
             }
+        if(e.contains("pol")){
+            if(e.contains("bipolar") && e["bipolar"].is_array())
+                for(auto& b : e["bipolar"]) if(b.is_number_integer() && b.get<int>() >= 0 && b.get<int>() < sourceCount()) pt.bipolar[b.get<int>()] = true;
+        }else for(int s = 0; s < MAX_LFOS; s++) pt.bipolar[s] = std::abs(pt.amount[s]) > 1e-4f;   // older save
         pt.pending = !pt.base.empty();
         params.push_back(std::move(pt));
     }
+    routesChanged();
 }
 
 void scModulation::applyParamBases() {
@@ -1656,6 +1707,11 @@ void scModulation::drawRouting(float w) {
     auto colName = [this](int t) -> const std::string& { return t < T() ? targetList[t].name : params[t - T()].name; };
     auto amountRef = [this](int s, int t) -> float& { return t < T() ? matrix[s * T() + t] : params[t - T()].amount[s]; };
     auto amountChanged = [this](int t) { if(t < T()) sendMatrix(); else notify(); };
+    auto isBipolar = [this](int s, int t) { return t < T() ? cellBipolar(s, t) : params[t - T()].bipolar[s]; };
+    auto setBipolar = [this](int s, int t, bool b) {
+        if(t < T()){ const size_t i = (size_t)s * T() + t; if(i < routeBipolar.size()) routeBipolar[i] = b ? 1 : 0; }
+        else params[t - T()].bipolar[s] = b;
+    };
     const float cellW = (w - rowLabelW) / std::max(1, TT);
     int removeParamCol = -1;
     const float cellH = 26.0f * z;
@@ -1726,6 +1782,9 @@ void scModulation::drawRouting(float w) {
                 std::snprintf(t2, sizeof(t2), "%+.2f", v);
                 const ImVec2 ts = ImGui::CalcTextSize(t2);
                 dl->AddText(ImVec2((c0.x + c1.x - ts.x) * 0.5f, (c0.y + c1.y - ts.y) * 0.5f), IM_COL32(255, 255, 255, 230), t2);
+                // a bipolar LFO route: swings around the value instead of adding up from it
+                if(polarityEditable(s, t) && isBipolar(s, t))
+                    dl->AddText(ImVec2(c0.x + 3 * z, c0.y + 1 * z), IM_COL32(255, 255, 255, 170), "+/-");
             }
             if(hov) dl->AddRect(c0, c1, pal::headerText, 3.0f * z);
             if(ImGui::IsItemActivated()){ matrixDrag = idx; matrixDragStart = ImGui::GetMousePos().x; matrixDragValue = v; }
@@ -1744,13 +1803,15 @@ void scModulation::drawRouting(float w) {
             }
             if(hov && !ImGui::IsItemActive()){
                 if(t < T())
-                    ImGui::SetTooltip("%s -> %s: %+.2f  (%+.3g %s)\nDrag left / right (Shift: fine), double-click: 0",
-                                      sourceName(s).c_str(), targetList[t].name.c_str(), v, v * targetList[t].range, targetList[t].unit.c_str());
+                    ImGui::SetTooltip("%s -> %s: %+.2f  (%+.3g %s)%s\nDrag left / right (Shift: fine), double-click: 0",
+                                      sourceName(s).c_str(), targetList[t].name.c_str(), v, v * targetList[t].range, targetList[t].unit.c_str(),
+                                      !polarityEditable(s, t) ? "" : isBipolar(s, t) ? "  bipolar" : "  unipolar");
                 else{
                     const auto& pt = params[t - T()];
-                    ImGui::SetTooltip("%s -> %s: %+.2f  (%+.3g of %.3g..%.3g)\nDrag left / right (Shift: fine), double-click: 0\n"
-                                      "Right-click: remove this control from the matrix",
-                                      sourceName(s).c_str(), pt.name.c_str(), v, v * (pt.hi - pt.lo), pt.lo, pt.hi);
+                    ImGui::SetTooltip("%s -> %s: %+.2f  (%+.3g of %.3g..%.3g)%s\nDrag left / right (Shift: fine), double-click: 0\n"
+                                      "Right-click: polarity, remove this control from the matrix",
+                                      sourceName(s).c_str(), pt.name.c_str(), v, v * (pt.hi - pt.lo), pt.lo, pt.hi,
+                                      !polarityEditable(s, t) ? "" : isBipolar(s, t) ? "  bipolar" : "  unipolar");
                 }
             }
             if(ImGui::BeginPopupContextItem("##cellMenu")){
@@ -1758,6 +1819,12 @@ void scModulation::drawRouting(float w) {
                 float e = amountRef(s, t);
                 ImGui::SetNextItemWidth(120 * z);
                 if(ImGui::InputFloat("##amount", &e, 0.05f, 0.1f, "%.3f")){ amountRef(s, t) = ofClamp(e, -1.0f, 1.0f); amountChanged(t); }
+                if(polarityEditable(s, t)){
+                    const bool bip = isBipolar(s, t);
+                    if(ImGui::MenuItem("Unipolar: adds up from the value", nullptr, !bip) && bip){ setBipolar(s, t, false); amountChanged(t); }
+                    if(ImGui::MenuItem("Bipolar: swings around the value", nullptr, bip) && !bip){ setBipolar(s, t, true); amountChanged(t); }
+                    ImGui::Separator();
+                }
                 if(ImGui::MenuItem("Clear this source's row")){
                     for(int k = 0; k < TT; k++) amountRef(s, k) = 0;
                     sendMatrix();
