@@ -142,6 +142,37 @@ public:
     }
     
 private:
+    // scsynth's console goes to the Log window. A UGen can print the same line
+    // thousands of times a second (GrainBuf's "Too many grains!" on every
+    // rejected trigger), so a run of identical lines is logged once, followed
+    // by a count at most once a second and when the run ends.
+    struct ConsoleLines {
+        std::string last;
+        uint64_t repeats = 0;
+        uint64_t lastSummary = 0;
+
+        void add(const std::string& line){
+            if(!last.empty() && line == last){
+                if(repeats++ == 0) lastSummary = ofGetElapsedTimeMillis();
+                return;
+            }
+            summarize();
+            last = line;
+            ofLog() << line;
+        }
+        // Called while the console is quiet too, so a flood that never ends
+        // still reports its size.
+        void tick(){
+            if(repeats > 0 && ofGetElapsedTimeMillis() - lastSummary >= 1000) summarize();
+        }
+        void summarize(){
+            if(repeats == 0) return;
+            ofLog() << last << " (repeated " << repeats << (repeats == 1 ? " more time)" : " more times)");
+            repeats = 0;
+            lastSummary = ofGetElapsedTimeMillis();
+        }
+    };
+
 #ifdef TARGET_WIN32
     void runProcess(const std::vector<std::string>& args){
         std::string command;
@@ -212,8 +243,10 @@ private:
     // process ends the reading anyway.
     void readOutput(int fd, pid_t pid){
         std::string line;
+        ConsoleLines console;
         char buffer[512];
         while(true){
+            console.tick();
             pollfd p{fd, POLLIN, 0};
             const int ready = poll(&p, 1, 250);
             if(ready > 0){
@@ -221,7 +254,7 @@ private:
                 if(n <= 0) break;   // end of output
                 for(ssize_t i = 0; i < n; i++){
                     if(buffer[i] == '\n'){
-                        ofLog() << line;
+                        console.add(line);
                         line.clear();
                     }else{
                         line += buffer[i];
@@ -235,7 +268,8 @@ private:
                 break;
             }
         }
-        if(!line.empty()) ofLog() << line;
+        if(!line.empty()) console.add(line);
+        console.summarize();
     }
     void stopProcess(){
         const pid_t pid = processId.load();
@@ -266,16 +300,19 @@ private:
     // scsynth's console, line by line, until it exits (Windows: a popen stream)
     void readOutput(FILE* stream){
         std::string line;
+        ConsoleLines console;
         int c;
         while((c = fgetc(stream)) != EOF){
             if(c == '\n'){
-                ofLog() << line;
+                console.add(line);
+                console.tick();
                 line.clear();
             }else{
                 line += (char)c;
             }
         }
-        if(!line.empty()) ofLog() << line;
+        if(!line.empty()) console.add(line);
+        console.summarize();
     }
 
     static std::string shellQuote(const std::string& value){
