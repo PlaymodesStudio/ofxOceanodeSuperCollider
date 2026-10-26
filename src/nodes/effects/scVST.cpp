@@ -24,6 +24,13 @@ namespace {
 // disabled verbose line still pays for formatting the whole message. Paths
 // that run per message test this first and skip the work when no one listens.
 inline bool scVSTVerbose(){ return ofGetLogLevel("scVST") <= OF_LOG_VERBOSE; }
+
+// The server reads and writes temp FXP files asynchronously, so two nodes
+// restoring in the same millisecond must not share a file name.
+std::string uniqueTempSuffix(){
+	static std::atomic<uint64_t> counter{0};
+	return ofToString(ofGetElapsedTimeMillis()) + "_" + ofToString(++counter);
+}
 }
 
 std::map<std::string, std::vector<uint8_t>> scVST::globalFXPCache;
@@ -557,7 +564,11 @@ void scVST::setup(){
 		if(parameterTimerActive) {
 			if(currentTime - parameterTimerStart >= parameterTimerDelay) {
 				
-				if(areAllInstancesReady()) {
+				if(activeInstanceTargets.empty()) {
+					// No synth yet (the graph has not been rebuilt, or the node is not
+					// in it): the restore runs from handleVSTOpen once instances open.
+					parameterTimerActive = false;
+				} else if(areAllInstancesReady()) {
 					parameterTimerActive = false;
 					ofLogNotice("scVST") << "Timer timeout - VST ready, applying preset data now";
 					if(hasPendingPresetData) {
@@ -1226,9 +1237,14 @@ void scVST::loadSelectedPlugin() {
 }
 
 bool scVST::areAllInstancesReady() {
-	// activeInstanceTargets is rebuilt whenever the topology changes, so it is
-	// also the cached expected-instance count for high-rate automation checks.
-	return readyInstances.size() >= activeInstanceTargets.size();
+	// Every current instance must have reported /vst_open itself: ids of freed
+	// synths left in readyInstances must not stand in for new ones, and having
+	// no instances at all is not "ready".
+	if(activeInstanceTargets.empty()) return false;
+	for(const auto& target : activeInstanceTargets) {
+		if(target.synth == nullptr || readyInstances.count(target.synth->nodeID) == 0) return false;
+	}
+	return true;
 }
 
 void scVST::handleVSTParam(ofxOscMessage& msg) {
@@ -4327,6 +4343,10 @@ void scVST::freeVSTInstances(ofxSCServer* server) {
 				// Detach before destroying the event owner.  Runtime topology
 				// changes will attach a fresh listener to every replacement synth.
 				vstFeedbackListeners.erase(synth);
+				// The server may reuse this id for the replacement synth; it must
+				// report /vst_open again before it counts as ready.
+				readyInstances.erase(synth->nodeID);
+				fxpAppliedInstances.erase(synth->nodeID);
 				// First try to send a close message to the VST plugin
 				try {
 					ofxOscMessage closeMsg;
@@ -4712,7 +4732,7 @@ std::string scVST::createTempFXPPath() {
 	std::replace(safeName.begin(), safeName.end(), ':', '_');
 	std::replace(safeName.begin(), safeName.end(), ' ', '_');
 	
-	std::string filename = "oceanode_vst_" + safeName + "_" + ofToString(ofGetElapsedTimeMillis()) + ".fxp";
+	std::string filename = "oceanode_vst_" + safeName + "_" + uniqueTempSuffix() + ".fxp";
 	return tempDir + filename;
 }
 
@@ -5440,7 +5460,7 @@ std::string scVST::createTempSyncFXPPath() {
 	std::replace(safeName.begin(), safeName.end(), ':', '_');
 	std::replace(safeName.begin(), safeName.end(), ' ', '_');
 	
-	std::string filename = "oceanode_vst_sync_" + safeName + "_" + ofToString(ofGetElapsedTimeMillis()) + ".fxp";
+	std::string filename = "oceanode_vst_sync_" + safeName + "_" + uniqueTempSuffix() + ".fxp";
 	return tempDir + filename;
 }
 void scVST::cleanupTempSyncFXPFile() {
@@ -5735,7 +5755,11 @@ void scVST::saveFXPToCache() {
 }
 
 std::string scVST::getNodeCacheKey() {
-	return getParameterGroup().getName();
+	// Node names repeat across Macros ("SC VST 1" in two of them), so the canvas
+	// path keeps one node's cached plugin state from reaching another.
+	const std::string name = getParameterGroup().getName();
+	const std::string parents = getParents();
+	return parents.empty() ? name : parents + "/" + name;
 }
 
 void scVST::loadCacheFromGlobal() {
@@ -6289,7 +6313,7 @@ std::string scVST::createTempPropagateFXPPath() {
 	std::replace(safeName.begin(), safeName.end(), ':', '_');
 	std::replace(safeName.begin(), safeName.end(), ' ', '_');
 	
-	std::string filename = "oceanode_vst_propagate_" + safeName + "_" + ofToString(ofGetElapsedTimeMillis()) + ".fxp";
+	std::string filename = "oceanode_vst_propagate_" + safeName + "_" + uniqueTempSuffix() + ".fxp";
 	return tempDir + filename;
 }
 
