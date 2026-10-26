@@ -42,6 +42,7 @@
 #include "../../../ui/scDropdowns.h"
 #include "../shared/scAudioParam.h"
 #include "../../../timing/scScheduledInputs.h"
+#include "../../../audio/scSynthControlBatch.h"
 #include "imgui.h"
 #include <array>
 #include <filesystem>
@@ -109,7 +110,11 @@ private:
     static constexpr int VIS_CUT = 2 * W;              //   their cutoffs (notes), then resonances (W each)
     enum Slot { SlGate, SlSrc, SlRoute, SlPitch, SlOsc, SlOscLast = SlOsc + MAX_OSCS - 1, SlNoise, SlFilter, SlAmp,
                 SlSpread, SlFx, SlFxLast = SlFx + NumStages - 1, NumSlots };
-    struct Fx { ofxSCSynth* synth = nullptr; ofxSCBus* in = nullptr; bool running = false; float offAt = -1.0f; };
+    struct Fx { ofxSCSynth* synth = nullptr; ofxSCBus* in = nullptr; bool running = false; float offAt = -1.0f;
+                scSynthControlBatch::Cache sent; };   // what its synth was last sent (cleared with it)
+    using Sent = scSynthControlBatch::Cache;
+    // an oscillator synth on its way out (swapped ABOsc <-> ABOscMorph): faded by \presence, then freed
+    struct Retiring { ofxSCSynth* synth = nullptr; float freeAt = 0.0f; };
     struct ServerState {
         ofxSCGroup* root = nullptr;
         std::array<ofxSCGroup*, NumSlots> groups{};
@@ -119,6 +124,12 @@ private:
         ofxSCSynth* gateS = nullptr;                    // ModGate: gates, velocity, random
         ofxSCSynth* pitchS = nullptr;                   // ABPitch
         std::array<ofxSCSynth*, MAX_OSCS> osc{};        // ABOsc, one per oscillator in use
+        std::array<bool, MAX_OSCS> oscMorph{};          //   true: it is ABOscMorph (two MorphOscs, Sync morphing)
+        std::vector<Retiring> retiring;                 // swapped-out oscillators, fading
+        // per synth, the controls last sent (only changes go out; cleared when its synth is new / freed)
+        std::array<Sent, MAX_OSCS> oscSent;
+        std::array<Sent, MAX_FILTERS> filterSent;
+        Sent noiseSent, ringSent;
         ofxSCSynth* noise = nullptr;                    // ABNoise (while its level is up)
         ofxSCSynth* ring = nullptr;                     // ABRing (two oscillators, its level up)
         ofxSCSynth* filter = nullptr;                   // ABFilter (filter 1)
@@ -187,6 +198,14 @@ private:
     void sendGate(ServerState& st, bool notesOnly=false, bool pitchOnly=false);
     void sendPitch(ServerState& st);
     void sendOsc(ServerState& st, int k);
+    // Sync crossfade: ABOscMorph (free + synced MorphOsc) only while Sync's activation is
+    // between 0 and 1 (and SYNC_SETTLE after, for the def's 0.03 s lag); else ABOsc (one)
+    static constexpr float SYNC_SETTLE = 0.15f, SWAP_FADE = 0.1f, SWAP_FADE_IN = 0.03f;
+    std::array<float, MAX_OSCS> syncMorphUntil{};
+    bool syncMorphing(int k);
+    void swapOsc(ofxSCServer* server, ServerState& st, int k, bool morph);
+    void retireOscs(ServerState& st, bool all);
+    void clearSent(ServerState& st);
     void sendNoise(ServerState& st);
     void sendRing(ServerState& st);
     void sendFilter(ServerState& st);           // every filter (and its buses: series / parallel)
@@ -210,7 +229,7 @@ private:
     std::string stageDef(int s) const;
     float stageTail(int s) const;
     float echoDelaySec() const;
-    void sendStage(int s, ofxSCSynth* synth);
+    void sendStage(int s, ServerState& st);
     void sendStageAll(int s);
     void updateStages(ofxSCServer* server, ServerState& st);
     void routeChain(ServerState& st);

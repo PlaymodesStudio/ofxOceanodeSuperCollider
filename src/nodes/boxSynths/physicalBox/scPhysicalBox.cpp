@@ -429,6 +429,8 @@ void scPhysicalBox::setup() {
     sh.bpm = [this](){ return bpm; };
     sh.paramMenu = [this](const std::string& k){ mark(k); menu(k); };
     for(auto* p : {&satOn, &eqOn, &echoOn, &rvbOn, &spaceOn}) snaps.morph.bypass(*p);
+    snaps.morph.mode(soundParam("bfamily"),physical::NFAMILIES);
+    snaps.morph.mode(placement,3);snaps.morph.mode(speakerLayout,2);
     snaps.morph.neutralDepth(soundParam("radiator"),soundParam("radmix"));
     snaps.morph.neutralDepth(soundParam("sympset"),soundParam("symp"));
     sh.morphChanged = [this,toStages](){sendAll();toStages();};
@@ -513,6 +515,14 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
             sent[name] = value; updates.set(name, value);
         };
         for(const auto& c : soundControls) if(c->voiceInput) set(c->sc, mod.morphVoiceValue(c->p,i,snaps.morph));
+        auto& family=soundParam("bfamily");
+        auto familyWeights=snaps.morph.weights(family);
+        if(!snaps.morph.hasEffective(family)){
+            std::fill(familyWeights.begin(),familyWeights.end(),0.f);
+            const int current=std::clamp(int(std::lround(mod.morphVoiceValue(family,i,snaps.morph))),0,physical::NFAMILIES-1);
+            familyWeights[current]=1.f;
+        }
+        updates.set("bfweights",familyWeights);
         set("gatebus", st.gates->index + i);
         set("out", st.audio->index + 2 * i);
         set("in", inBus + (st.in >= 0 ? i % std::max(1, st.inChannels) : 0));
@@ -531,7 +541,7 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
         std::vector<float> pans = panPositions();
         pans.resize(16, 0.5f);
         spread.set("pan", pans);
-        spread.set("line", speakerLayout.get() == 1 ? 1.0f : 0.0f);
+        spread.set("line", snaps.morph.weights(speakerLayout)[1]);
         spread.set("width", soundParam("width").get());
         spread.set("mpan", mod.targetBus(server, Pan));
         spread.set("vis", st.vis->index + VIS_PAN);
@@ -1165,7 +1175,9 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
     body.family = family; body.shape = shape; body.stretch = soundParam("bstretch").get();
     body.material = soundParam("material").get(); body.bdecay = soundParam("bdecay").get();
     body.freeze = soundParam("freeze").get(); body.bright = soundParam("bbright").get(); body.f0 = fb0;
-    const int modes = std::min(std::clamp(int(std::round(soundParam("bmodes").get())), 1, physical::MAXM), physical::modeCount(body));
+    physical::FamilyWeights families{};const auto familyWeights=snaps.morph.weights(soundParam("bfamily"));
+    std::copy(familyWeights.begin(),familyWeights.end(),families.begin());
+    const int modes = std::min(std::clamp(int(std::round(soundParam("bmodes").get())), 1, physical::MAXM), physical::modeCount(body,families));
     physical::Spots spots;
     spots.cx = pos.get(); spots.cy = soundParam("posy").get();
     spots.p1x = p1.get(); spots.p1y = soundParam("pick1y").get();
@@ -1173,13 +1185,13 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
     int hovered = -1; float hoverD = 6 * z;
     std::vector<physical::Mode> ms(modes);
     for(int k = 0; k < modes; ++k) {
-        ms[k] = physical::mode(k, body);
+        ms[k] = physical::mode(k, body,families);
         const auto& m = ms[k];
         if(!m.on || m.ratio > 64 || fb0 * m.ratio > 20000) continue;
         const auto wt = physical::weights(m, spots);
         const float e = float(std::abs(wt.e));
         const float l = 0.5f * float(std::abs(wt.p1) + std::abs(wt.p2));
-        const float hgt = ofClamp(float(e * l * m.amp), 0.03f, 1.0f);
+        const float hgt = ofClamp(float(e * l * m.amp * m.coverage), 0.03f, 1.0f);
         const float x = xOf(m.ratio);
         const float ring = ofClamp(std::log10(m.t60 * 10) / 2.5f, 0.0f, 1.0f);   // 0.1 s .. 30 s
         const ImU32 col = mixColor(IM_COL32(120, 80, 50, 200), IM_COL32(255, 230, 170, 255), ring);
@@ -1592,16 +1604,18 @@ void scPhysicalBox::drawBodyPicture(float w) {
 // ── Panning ──────────────────────────────────────────────────────────────────
 // Spread: evenly (ring or line); Channels: voice i on speaker i; Manual: Pan
 std::vector<float> scPhysicalBox::panPositions() const {
+    return snaps.morph.evaluateVector(speakerLayout,[&](int layoutMode){
+        return snaps.morph.evaluateVector(placement,[&](int placementMode){
     const int nv = voices.get(), c = channels.get();
-    const bool ring = c > 2 && speakerLayout.get() == 0;
+    const bool ring = c > 2 && layoutMode == 0;
     std::vector<float> p(nv, 0.5f);
-    if(placement.get() == 2) {
+    if(placementMode == 2) {
         for(int i = 0; i < nv; ++i) p[i] = first(panP.get(), i, 0.5f);
         return p;
     }
     const float spread = const_cast<scPhysicalBox*>(this)->soundParam("spread").get();
     for(int i = 0; i < nv; ++i) {
-        if(placement.get() == 1) {
+        if(placementMode == 1) {
             const int ch = i % std::max(1, c);
             p[i] = c <= 1 ? 0.5f : ring ? float(ch) / c : float(ch) / (c - 1);
         } else if(ring) {
@@ -1612,6 +1626,9 @@ std::vector<float> scPhysicalBox::panPositions() const {
         }
     }
     return p;
+
+        });
+    });
 }
 void scPhysicalBox::sliderVec(ofParameter<std::vector<float>>& p, const char* label, float w, const char* fmt) {
     const float z = zoom();

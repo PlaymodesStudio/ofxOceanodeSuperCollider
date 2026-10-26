@@ -42,29 +42,46 @@ File.mkdir(root); File.mkdir(dir);
     // the first); phase modulation from an earlier oscillator's raw output;
     // hard sync to the first oscillator's frequency. Its raw output -> \raw (FM,
     // ring), its frequency -> \freqout (sync), x level -> \out (the mix).
-    SynthDef(("ABOsc" ++ n).asSymbol, {
-        var note = In.kr(\note.kr(0), n) + (\oct.kr(0) * 12) + kv.(\semi, 0) + (kv.(\fine, 0) / 100)
-            + (modIn.(\mslave) * \slave.kr(0))
-            + (LFNoise2.kr({ Rand(0.08, 0.25) } ! n) * kv.(\drift, 0) * 0.25);
-        var freq = (note.clip(-36, 150).midicps * kv.(\ratio, 1)).clip(0.01, 22000);
-        var weights = NamedControl.kr(\fmweights, [1, 0, 0, 0, 0, 0, 0]).lag(0.03);
-        var sources = NamedControl.kr(\fmsources, 0 ! 6);
-        var activation = weights.copyRange(1, 6).sum;
-        var fm = (kv.(\fmamt, 0).lag(0.03) + (modIn.(\mfm) * activation)).max(0);
-        var pm = Mix(Array.fill(6, { |i| InFeedback.ar(sources[i], n) * weights[i+1] }))
-            * fm / activation.max(0.00001);
-        var skew = (kv.(\skew, 0) + modIn.(\mskew)).clip(-1, 1);
-        var round = (kv.(\round, 0.5) + modIn.(\mround)).clip(0, 1);
-        var pw = (kv.(\pw, 0.5) + modIn.(\mpw)).clip(0.001, 1);
-        var sync = In.kr(\syncfreq.kr(0), n);
-        var free = MorphOsc.ar(freq, pm, skew, round, pw, \centered.kr(1), 0);
-        var locked = MorphOsc.ar(freq, pm, skew, round, pw, \centered.kr(1), sync);
-        var sig = LeakDC.ar(LinXFade2.ar(free, locked, \sync.kr(0, 0.03)*2-1))
-            + (WhiteNoise.ar(1 ! n) * kv.(\noise, 0).clip(0, 1) * 1.5);   // Noise: added to this oscillator
-        Out.kr(\freqout.kr(0), freq);
-        Out.ar(\raw.kr(0), sig * \presence.kr(1,0.03));
-        Out.ar(\out.kr(0), sig * kv.(\level, 0.5) * \presence.kr(1,0.03));
-    }).writeDefFile(dir);
+    //   ABOsc<n>: one MorphOsc, hard sync on (\sync > 0.5) or off: the synth
+    //     the C++ runs (switching sync on / off is click-free: the resets are
+    //     band-limited).
+    //   ABOscMorph<n>: two, free and synced, crossfaded by \sync (0..1,
+    //     lagged): twice the cost, so only while a snapshot morph moves Sync
+    //     between 0 and 1 (the C++ swaps them). At \sync 0 / 1 both sound the same.
+    [false, true].do { |morph|
+        SynthDef(((if(morph) { "ABOscMorph" } { "ABOsc" }) ++ n).asSymbol, {
+            var note = In.kr(\note.kr(0), n) + (\oct.kr(0) * 12) + kv.(\semi, 0) + (kv.(\fine, 0) / 100)
+                + (modIn.(\mslave) * \slave.kr(0))
+                + (LFNoise2.kr({ Rand(0.08, 0.25) } ! n) * kv.(\drift, 0) * 0.25);
+            var freq = (note.clip(-36, 150).midicps * kv.(\ratio, 1)).clip(0.01, 22000);
+            var weights = NamedControl.kr(\fmweights, [1, 0, 0, 0, 0, 0, 0]).lag(0.03);
+            var sources = NamedControl.kr(\fmsources, 0 ! 6);
+            var activation = weights.copyRange(1, 6).sum;
+            var fm = (kv.(\fmamt, 0).lag(0.03) + (modIn.(\mfm) * activation)).max(0);
+            var pm = Mix(Array.fill(6, { |i| InFeedback.ar(sources[i], n) * weights[i+1] }))
+                * fm / activation.max(0.00001);
+            var skew = (kv.(\skew, 0) + modIn.(\mskew)).clip(-1, 1);
+            var round = (kv.(\round, 0.5) + modIn.(\mround)).clip(0, 1);
+            var pw = (kv.(\pw, 0.5) + modIn.(\mpw)).clip(0.001, 1);
+            var sync = In.kr(\syncfreq.kr(0), n);
+            var osc = if(morph) {
+                LinXFade2.ar(
+                    MorphOsc.ar(freq, pm, skew, round, pw, \centered.kr(1), 0),
+                    MorphOsc.ar(freq, pm, skew, round, pw, \centered.kr(1), sync),
+                    \sync.kr(0, 0.03) * 2 - 1)
+            } {
+                MorphOsc.ar(freq, pm, skew, round, pw, \centered.kr(1), sync * (\sync.kr(0) > 0.5))
+            };
+            // \fadein (s, > 0): rises from silence when created, on the same curve as
+            // \presence's lag (a swap: the old synth's \presence -> 0 the complement)
+            var fade = Select.kr(\fadein.ir(0) > 0, [1, Lag.kr(Line.kr(0, 1, ControlDur.ir), \fadein.ir(0))]);
+            var sig = LeakDC.ar(osc)
+                + (WhiteNoise.ar(1 ! n) * kv.(\noise, 0).clip(0, 1) * 1.5);   // Noise: added to this oscillator
+            Out.kr(\freqout.kr(0), freq);
+            Out.ar(\raw.kr(0), sig * (\presence.kr(1,0.03) * fade));
+            Out.ar(\out.kr(0), sig * kv.(\level, 0.5) * (\presence.kr(1,0.03) * fade));
+        }).writeDefFile(dir);
+    };
 
     // Noise: color -1 (dark) .. 0 (white) .. 1 (bright)
     SynthDef(("ABNoise" ++ n).asSymbol, {

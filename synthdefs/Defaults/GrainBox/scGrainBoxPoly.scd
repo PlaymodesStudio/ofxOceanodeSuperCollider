@@ -363,10 +363,10 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
             sampleRateCorr = BufSampleRate.kr(buf0) / SampleRate.ir;
             pitchSum = pitchV + pjO;
             x = (pitchSum - g[13]).wrap(0, 12);
-            rate = Select.kr(g[12], [
-                pitchSum,
-                ((pitchSum - x) + Select.kr((x * 2).floor.clip(0, 23), g[18..41])).round(1)
-            ]).midiratio * sampleRateCorr;
+            // The lookup may contain interpolated scale/root pitches. Keep
+            // its fractional semitones and fade quantization in/out continuously.
+            rate = (pitchSum + ((((pitchSum - x) + Select.kr((x * 2).floor.clip(0, 23), g[18..41]))
+                - pitchSum) * g[12].clip(0,1))).midiratio * sampleRateCorr;
 
             // ── Duration / position / amp / pan ──
             regionDur = (outP - inP) * BufDur.kr(buf0);

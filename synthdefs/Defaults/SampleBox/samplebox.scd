@@ -2,9 +2,12 @@
 // Run this file in sclang; the node loads CompiledSynthdefs/SampleBox.
 //
 // Per pad, in its group, in this order (scSampleBox.cpp):
-//   SampleBoxPad_K_N_<R|T>  the sampler: voices, amp envelopes, filter.
+//   SampleBoxPad_K_N_<R|T|M> the sampler: voices, amp envelopes, filter.
 //                           K = source channels (1/2), N = output channels
-//                           (1..16), R = resampling, T = Warp1 time stretch.
+//                           (1..16), R = resampling, T = Warp1 time stretch,
+//                           M = both readers blended by \stretchmix (only
+//                           while a snapshot morph is between the modes: it
+//                           costs both readers; C++ goes back to R/T after).
 //                           Writes the pad's own bus (\out, N channels).
 //   the pad's modulation    (synthdefs/Defaults/Modulation)
 //   its effects, in order, each created only while switched on (so an
@@ -51,14 +54,16 @@ modOf = { |k, base|
 // ── The sampler of a pad ────────────────────────────────────────────────────
 (1..2).do { |k|
     (1..16).do { |n|
-        [0, 1].do { |stretchVariant|
-            var name = "SampleBoxPad_" ++ k ++ "_" ++ n ++ if(stretchVariant == 0, { "_R" }, { "_T" });
+        [0, 1, 2].do { |stretchVariant|
+            var name = "SampleBoxPad_" ++ k ++ "_" ++ n ++ ["_R", "_T", "_M"][stretchVariant];
             SynthDef(name.asSymbol, {
                 var trigBus, audioGate, audioTrig, fireTrig, trig, gate, stopTrig, level;
                 var buf, rateBase, inBase, outBase, polyMode, voiceLimit, voiceIndex;
                 var source, voices, finished, sig, modArr, fxMod, f, q, filter;
                 var chokeBlock, chokeIn, cut;
                 var tpos, tphase, syncOn, fitRate;
+                // R: 0, T: 1 (constants: one reader only); M: the morph's weight
+                var stretchMix = if(stretchVariant == 2, { \stretchmix.kr(0).clip(0, 1).lag(0.03) }, { stretchVariant });
 
                 trigBus = \trigbus.kr(-1);
                 audioGate = In.ar(trigBus.max(0), 1) * (trigBus >= 0);
@@ -134,9 +139,14 @@ modOf = { |k, base|
                     startFrame = start * frames;
                     finishFrame = finish * frames;
                     len = (finishFrame - startFrame).max(2);
-                    step = if(stretchVariant == 0,
-                        { speed * (2 ** ((pitch - 60) / 12)) },
-                        { speed / vm.(28, \stretch.kr(1)).clip(0.125, 8) }) * BufRateScale.kr(buf) * fitRate;
+                    // One timeline survives changes of playback mode. The two
+                    // readers share note/gate/envelope/loop state throughout;
+                    // R and T are M's endpoints exactly (stretchmix 0 / 1).
+                    step = switch(stretchVariant,
+                        0, { speed * (2 ** ((pitch - 60) / 12)) },
+                        1, { speed / vm.(28, \stretch.kr(1)).clip(0.125, 8) },
+                        { (speed * (2 ** ((pitch - 60) / 12)) * (1 - stretchMix))
+                            + (speed / vm.(28, \stretch.kr(1)).clip(0.125, 8) * stretchMix) }) * BufRateScale.kr(buf) * fitRate;
                     pos = Sweep.ar(T2A.ar(voiceTrig), step * SampleRate.ir);  // frames since the note started
                     loopOn = \loop.kr(0) > 0.5;
                     // Sync: the transport's phase over the region (x Rate); a
@@ -162,10 +172,11 @@ modOf = { |k, base|
                     frame = Select.ar(rev, [startFrame + offset, finishFrame - 1 - offset]);
                     xframe = Select.ar(rev, [startFrame + xoff, finishFrame - 1 - xoff]);
                     read = { |b, at|
-                        if(stretchVariant == 0, { BufRd.ar(1, b, at, 0, 4) }, {
-                            Warp1.ar(1, b, at / frames, 2 ** ((pitch - 60) / 12),
-                                vm.(32, \warpwindow.kr(0.15)).clip(0.01, 1), -1, 8, 0, 4)
-                        })
+                        var resampled = { BufRd.ar(1, b, at, 0, 4) };
+                        var stretched = { Warp1.ar(1, b, at / frames, 2 ** ((pitch - 60) / 12),
+                            vm.(32, \warpwindow.kr(0.15)).clip(0.01, 1), -1, 8, 0, 4) };
+                        switch(stretchVariant, 0, resampled, 1, stretched,
+                            { (resampled.value * (1 - stretchMix)) + (stretched.value * stretchMix) })
                     };
                     left = read.(buf, frame);
                     left2 = read.(buf, xframe);

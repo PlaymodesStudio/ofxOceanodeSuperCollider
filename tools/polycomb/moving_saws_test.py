@@ -23,6 +23,7 @@ prelude=r'''
 #include <nlohmann/json.hpp>
 #include "nodes/boxSynths/polyComb/scPolyCombMigration.h"
 #include "nodes/boxSynths/shared/scVoiceCountMorph.h"
+#include "nodes/boxSynths/shared/scMorphPolicies.h"
 #include "nodes/boxSynths/shared/scDroneMode.h"
 #include "nodes/boxSynths/polyComb/scPolyCombPitchMorph.h"
 #include <algorithm>
@@ -48,12 +49,13 @@ std::function<void(int)> onVoices;
 template<class T> void Param<T>::set(T v){value=v; if constexpr(std::is_same_v<T,int>) if(onVoices) onVoices(v);}
 struct Handle { bool hasInConnection()const{return false;} };
 struct ofxSCServer{};
-struct ServerState{};
+struct ServerState{struct Fx{void* synth=nullptr;};Fx fx[1];};
 struct Mod {
     int lfoCount=4,envCount=1,extCount=0;
     std::vector<float> matrix=std::vector<float>(336,0);   // 23 sources + Delta, 14 targets
     ofJson params=ofJson::array();
-    void refresh(){} void sendMatrix(){}
+    void refresh(){} void sendMatrix(){} void sendChanged(){}
+    template<class F>void morphGenerators(const ofJson&,const ofJson&,float,const std::string&,F){}
     void loadParamsJson(const ofJson& j){params=j;}
 };
 class scPolyComb {public:
@@ -66,7 +68,9 @@ class scPolyComb {public:
     ofJson pitchDefaults=ofJson::object(), deltaDefaults=ofJson::object();
     scPolyCombPitchMorph pitchMorph;
     Param<bool> scramble{"Scramble",false};
-    static constexpr int IComb=0;
+    static constexpr int IComb=0,IFilter=1,IPost=2,IRing=3,StEcho=0;
+    struct{scMorphPolicies morph;}snaps;
+    void updateParts(ofxSCServer*,ServerState&){} void sendSpread(ServerState&){} void sendStage(int,void*,ofxSCServer*){}
     template<class F>void forStates(F){} // no SC server in the recall fixture
     void sendPitch(ServerState&){} void sendIns(ServerState&,int){}
     bool combMapped()const{return false;}

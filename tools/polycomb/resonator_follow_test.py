@@ -14,6 +14,7 @@ struct Synth{std::map<std::string,std::vector<float>>v;void set(std::string key,
 struct ServerState{};
 struct scPolyComb{
  enum{IComb};bool own=false,internal=true;P<int>combMode;
+ struct Policies{float activation(const P<int>& p){return float(p.get());}};struct{Policies morph;}snaps;
  struct Map{P<float>transpose,offset;}combMap;
  P<float>combSatLevel,combTone,combGlide,combVibRate,combVibRand,combVibAmt;P<std::vector<float>>combPitch,combTranspose,combDetune,combFeed,combMix;
  Synth storage;bool combMapped(){return own;}bool internalPitch(){return internal;}

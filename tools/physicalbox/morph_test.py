@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=Path('/tmp/physical-modal-morph'))
     parser.add_argument('--baseline-plugin', type=Path)
+    parser.add_argument('--plugin-dir', type=Path, default=ROOT/'ugens/OceanodePhysical')
     args = parser.parse_args(); out = args.output.resolve(); out.mkdir(parents=True, exist_ok=True)
     config = out/'sclang.yaml'
     config.write_text('includePaths:\n  - '+json.dumps(str(ROOT/'sclang/SCClassLibrary'))+'\n  - '+json.dumps(str(ROOT/'ugens/OceanodePhysical'))+'\nexcludeDefaultPaths: true\n')
@@ -22,7 +23,7 @@ def main():
         'var seed=RandSeed.ir(1,1234); var pairs=PhysicalVoice.names.collect{|n|[n,NamedControl.kr(n,PhysicalVoice.defaults[PhysicalVoice.names.indexOf(n)])]}.flatten;\n'
         'Out.ar(0,PhysicalVoice.ar(0,pairs));}).writeDefFile('+json.dumps(str(out))+'); "MODAL DONE".postln;0.exit;} {|e|e.reportError;1.exit;};\n')
     with (out/'compile.log').open('w') as log:
-        result = subprocess.run([str(ROOT/'sclang/osx/sclang'), '-D', '-l', str(config), str(script)], stdout=log, stderr=subprocess.STDOUT, timeout=60)
+        result = subprocess.run([str(ROOT/'sclang/osx/sclang'), '-u', '0', '-D', '-l', str(config), str(script)], stdout=log, stderr=subprocess.STDOUT, timeout=60)
     assert result.returncode == 0 and 'MODAL DONE' in (out/'compile.log').read_text()
     definition = out/'CompiledSynthdefs/ModalMorph.scsyndef'
     if not definition.exists(): definition = out/'ModalMorph.scsyndef'
@@ -42,7 +43,7 @@ def main():
         assert ch == 2 and all(math.isfinite(v) for v in samples)
         assert 1e-6 < max(map(abs,samples)) < 2
         return samples,sr
-    plugin = ROOT/'ugens/OceanodePhysical'
+    plugin = args.plugin_dir.resolve()
     endpoint_errors = {}
     for count in [1,7,8,11,12,32,48]:
         samples,sr = render('count'+str(count),count,plugin)

@@ -74,6 +74,7 @@ float ofClamp(float v,float lo,float hi){return std::clamp(v,lo,hi);}
 // The production policy wrapper and external entry points; only the library/UI
 // setup is omitted from this audio-resource lifecycle fixture.
 class scSnapshots {public:
+    static int& snapshotApplyDepth(){static int depth=0;return depth;}
     struct Host {
         std::function<ofJson()> capture;
         std::function<void(const ofJson&,const ofJson&,float,bool)> apply;

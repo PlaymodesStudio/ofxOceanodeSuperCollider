@@ -119,8 +119,9 @@ public:
             } scope;
             morph.begin(a, b, t, host.morphBlocked);
             try {
+                const unsigned registered = morph.revision();
                 apply(a, b, t, sw);
-                morph.begin(a, b, t, host.morphBlocked); // newly created pads/controls
+                if(morph.revision() != registered) morph.begin(a, b, t, host.morphBlocked); // newly created pads/controls
                 if(host.morphChanged) host.morphChanged();
             } catch(...) { morph.end(); throw; }
             morph.end();

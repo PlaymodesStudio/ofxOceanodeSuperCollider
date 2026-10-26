@@ -266,6 +266,7 @@ void scSteamPipeBox::setup() {
         auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
     };
     snaps.morph.mode(echoFilter, 4);
+    snaps.morph.mode(placement,4);snaps.morph.mode(speakerLayout,2);
     snaps.setup(sh);
     // The old importer mixed ensemble and instrument collections in file order.
     // Keep a complete, recoverable copy of the working library and old banks
@@ -386,7 +387,7 @@ void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
         auto pans=panPositions();
         pans.resize(16,0.5f);
         spread.set("pan",pans); spread.set("mpan",mod.targetBus(server,Pan));
-        spread.set("line",speakerLayout.get()==1?1.f:0.f);
+        spread.set("line",snaps.morph.weights(speakerLayout)[1]);
         spread.set("vispan",st.vis->index+VIS_PAN);
         // Spreader telemetry has its own space after the voice meters.
         spread.set("vis",st.vis->index+96);
@@ -1046,8 +1047,10 @@ void scSteamPipeBox::drawSoundTab(float w) {
 }
 // Placement modes match the other box synths; Original keeps imported snapshots.
 std::vector<float> scSteamPipeBox::panPositions() const {
+    return snaps.morph.evaluateVector(speakerLayout,[&](int layoutMode){
+        return snaps.morph.evaluateVector(placement,[&](int placementMode){
     const int nv=voices.get(), c=channels.get();
-    const bool ring=c>2 && speakerLayout.get()==0;
+    const bool ring=c>2 && layoutMode==0;
     std::vector<float> out(nv,0.5f);
     float width=1,randomAmount=1;
     for(const auto& control:sound){
@@ -1055,12 +1058,12 @@ std::vector<float> scSteamPipeBox::panPositions() const {
         if(control->sc=="pan_random") randomAmount=control->p.get();
     }
     for(int i=0;i<nv;++i){
-        if(placement.get()==0){
+        if(placementMode==0){
             const float random=std::sin((i+1)*127.1f)*43758.5453f;
             const float pan=random-std::floor(random);
             out[i]=ofClamp(.5f+(pan-.5f)*randomAmount*width,0.f,1.f);
-        }else if(placement.get()==3) out[i]=first(panP.get(),i,0.5f);
-        else if(placement.get()==2){
+        }else if(placementMode==3) out[i]=first(panP.get(),i,0.5f);
+        else if(placementMode==2){
             const int ch=i%std::max(1,c);
             out[i]=c<=1?0.5f:ring?float(ch)/c:float(ch)/(c-1);
         }else if(ring) out[i]=float(i)/nv*spreadWidth.get()+spreadCenter.get()*0.5f;
@@ -1070,6 +1073,9 @@ std::vector<float> scSteamPipeBox::panPositions() const {
         }
     }
     return out;
+
+        });
+    });
 }
 
 void scSteamPipeBox::sliderVec(ofParameter<std::vector<float>>& p, const char* label, float w, const char* fmt) {

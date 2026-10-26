@@ -312,7 +312,8 @@ std::vector<ofJson> scSampleBox::factorySnapshots() const {
 
 void scSampleBox::requireSynthdefs() {
     std::filesystem::path folder;
-    const std::string expected = "SampleBoxPad_1_2_R.scsyndef";
+    // the newest variant: a folder compiled before the _M defs is out of date
+    const std::string expected = "SampleBoxPad_1_2_M.scsyndef";
     try {
         const std::filesystem::path root = ofToDataPath(SYNTHDEF_DIRECTORY, true);
         if(std::filesystem::exists(root))
@@ -330,9 +331,66 @@ void scSampleBox::requireSynthdefs() {
     for(auto* sm : servers) if(sm) sm->requireSynthdefFolder(synthdefFolder);
 }
 
+// Resample (_R) and Stretch (_T) run one reader each. Only while a snapshot
+// morph rests between the two modes does the pad need _M, which runs both
+// readers (Warp1 included) on one note clock, blended by \stretchmix.
 std::string scSampleBox::engineDef(const Pad& p) const {
-    return "SampleBoxPad_" + ofToString(std::clamp(p.sample->channels, 1, 2)) + "_" + ofToString(channels.get())
-        + (p.stretchMode.get() ? "_T" : "_R");
+    const auto w = snaps.morph.weights(p.stretchMode);
+    const float mix = w.size() == 2 ? w[1] : float(p.stretchMode.get() != 0);
+    const char* variant = mix > 1e-4f && mix < 1.0f - 1e-4f ? "_M" : (mix >= 0.5f ? "_T" : "_R");
+    return "SampleBoxPad_" + ofToString(std::clamp(p.sample->channels, 1, 2)) + "_" + ofToString(channels.get()) + variant;
+}
+
+// Replacing the engine restarts it: sounding notes are cut (running loops
+// re-fire from their start). Entering a morph (R/T -> _M) must swap at once
+// for the blend to be heard. Leaving it (_M resting at an endpoint) does not:
+// _M at stretchmix 0 / 1 sounds exactly like R / T, so it is kept until the
+// pad is idle (settleEngines, every voice's playhead silent), then swapped
+// for the cheaper definition. Any other difference (sample or N Chan
+// channels, R <-> T at once) replaces it immediately, as before.
+void scSampleBox::syncEngine(ofxSCServer* srv, Pad& p) {
+    auto it = p.sc.find(srv);
+    if(it == p.sc.end() || !it->second.engine) return;
+    PadSC& sc = it->second;
+    const std::string want = engineDef(p);
+    const auto base = [](const std::string& def) { return def.substr(0, def.size() - 2); };
+    const bool leavingMorph = sc.engineDef != want && sc.engineDef.size() > 2 && want.size() > 2
+        && sc.engineDef.compare(sc.engineDef.size() - 2, 2, "_M") == 0 && base(sc.engineDef) == base(want);
+    if(sc.engineDef == want || leavingMorph) {
+        if(leavingMorph && !sc.settlePending) sc.idleReads = 0;
+        sc.settlePending = leavingMorph;
+        sendEngine(srv, p);
+    } else {
+        sc.settlePending = false;
+        replaceEngine(srv, p);
+    }
+}
+
+void scSampleBox::settleEngines() {
+    const float now = ofGetElapsedTimef();
+    if(now < nextSettleRead) return;
+    nextSettleRead = now + 0.1f;
+    for(auto& up : pads) {
+        Pad& p = *up;
+        std::vector<ofxSCServer*> ready;
+        for(auto& [srv, sc] : p.sc) {
+            if(!sc.settlePending || !sc.engine || !liveControlBus(srv, sc.vis)) continue;
+            // a running loop never goes idle: it keeps _M (silent swap only)
+            const bool looping = p.loop.get() && (p.autoPlaying || p.loopRunning);
+            const auto& v = sc.vis->readValues;
+            const bool idle = !looping && !v.empty() && std::all_of(v.begin(), v.end(), [](float x){ return x < 0.0f; });
+            sc.idleReads = idle ? sc.idleReads + 1 : 0;
+            // three replies in a row (~0.3 s): not a stale or half-read bus
+            if(sc.idleReads >= 3) ready.push_back(srv);
+            else srv->requestControlValues(sc.vis->index, MaxVoices);
+        }
+        for(auto* srv : ready) {
+            auto& sc = p.sc[srv];
+            sc.settlePending = false;
+            sc.idleReads = 0;
+            if(sc.engineDef != engineDef(p)) replaceEngine(srv, p);
+        }
+    }
 }
 
 void scSampleBox::setBpm(float b) {
@@ -380,6 +438,7 @@ scSampleBox::Control& scSampleBox::registerPadControl(Pad& p, ofParameter<T>& pa
         if((dest >= DEST_FX && c.scName == "on") || c.scName == "filteron") snaps.morph.bypass(param, readSnapshot);
     } else if constexpr(std::is_same<T, int>::value) {
         if(c.scName == "filtertype") snaps.morph.mode(param, 3, readSnapshot);
+        if(c.scName == "stretchmode") snaps.morph.mode(param, 2, readSnapshot);
     }
     controls.push_back(std::move(c));
     Pad* pp = &p;
@@ -388,7 +447,12 @@ scSampleBox::Control& scSampleBox::registerPadControl(Pad& p, ofParameter<T>& pa
         snaps.morph.edited(param);
         if(restoring) return;
         Pad& pad = *pp;
-        if(name == "stretchmode") { for(auto& [srv, s] : pad.sc) replaceEngine(srv, pad); return; }
+        if(name == "stretchmode") {
+            std::vector<ofxSCServer*> srvs;
+            for(auto& [srv, s] : pad.sc) srvs.push_back(srv);
+            for(auto* srv : srvs) syncEngine(srv, pad);   // replaces the engine when its definition changes
+            return;
+        }
         if(name == "channel") { sendChannelInputs(pad); return; }
         if(name == "choke") { sendChokeMasks(); return; }
         if(name == "mute" || name == "solo") { sendMutes(); return; }
@@ -866,6 +930,8 @@ void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p, bool includeNotes) {
         else if(c.b) updates.set(c.scName, snaps.morph.activation(*c.b));
     }
     updates.set("filterweights", snaps.morph.weights(p.filterType));
+    const auto playback = snaps.morph.weights(p.stretchMode);
+    updates.set("stretchmix", playback.size() == 2 ? playback[1] : float(p.stretchMode.get()));
     const auto bs = p.sample->buffers.find(srv);
     const bool loaded = bs != p.sample->buffers.end() && (int)bs->second.size() >= p.sample->channels;
     updates.set("loaded", int(loaded));
@@ -1069,6 +1135,8 @@ void scSampleBox::replaceEngine(ofxSCServer* srv, Pad& p) {
     PadSC& sc = it->second;
     ofxSCSynth* old = sc.engine;
     sc.engineDef = engineDef(p);
+    sc.settlePending = false;
+    sc.idleReads = 0;
     sc.engine = new ofxSCSynth(sc.engineDef, srv);
     sendEngine(srv, p);
     sc.engine->createAndRun(4, old->nodeID, true);   // replace
@@ -1081,8 +1149,7 @@ void scSampleBox::syncPadServer(ofxSCServer* srv, Pad& p) {
     auto it = p.sc.find(srv);
     if(it == p.sc.end() || !it->second.created) return;
     ensureBuffers(p, srv);
-    if(it->second.engineDef != engineDef(p)) replaceEngine(srv, p);
-    else sendEngine(srv, p);
+    syncEngine(srv, p);
     syncFx(srv, p);
     for(int fx = 0; fx < FX_COUNT; fx++) sendFx(srv, p, fx);
     sendStrip(srv, p);
@@ -1359,6 +1426,7 @@ void scSampleBox::update(ofEventArgs&) {
         }
     }
     updateTempo();
+    settleEngines();
     if(pendingLoadDialog) {
         pendingLoadDialog = false;
         Pad& p = *pads[std::clamp(selected, 0, (int)pads.size() - 1)];

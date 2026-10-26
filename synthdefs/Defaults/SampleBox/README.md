@@ -4,7 +4,7 @@ SampleBox is a kit of 1–16 sampler pads. `samplebox.scd` builds, per pad:
 
 | SynthDef | What |
 |---|---|
-| `SampleBoxPad_<sample channels>_<output channels>_<R\|T>` | the sampler: voices, amp envelopes, filter; resampling (`R`) or Warp1 time stretching (`T`) |
+| `SampleBoxPad_<sample channels>_<output channels>_<R\|T\|M>` | the sampler: voices, amp envelopes, filter; resampling (`R`), Warp1 time stretching (`T`), or both blended by `\stretchmix` (`M`: only while a snapshot morph rests between the modes; costs both readers, so the node returns to `R`/`T` once the pad is idle) |
 | `SampleBoxEQ_N`, `SampleBoxComp_N`, `SampleBoxSat_N`, `SampleBoxEcho_N`, `SampleBoxReverb_N`, `SampleBoxImage_N` (N > 1) | the mixer's effects, each replacing the pad's bus in place |
 | `SampleBoxStrip_N` | Level, mute: into the node's Out (summed) and the pad's own output; its peak for the meter |
 

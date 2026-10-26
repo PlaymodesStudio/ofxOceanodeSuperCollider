@@ -9,6 +9,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "../../../audio/scSynthStartup.h"
 #include "../../../audio/scSynthControlBatch.h"
+#include "../../../audio/scControlBusBatch.h"
 #include "../../../ui/scEnvelopeCurve.h"
 #include "../../../audio/scMorphWave.h"
 #include <algorithm>
@@ -108,12 +109,13 @@ std::vector<float> scModulation::lfoTransfer(int li, int size) const {
     const int count = std::max(2, size);
     if(cache.values.size() == (size_t)count && cache.key == key) return cache.values;
     std::vector<float> t(count);
+    const float steps = lfoGeneratorValue(li, "steps", float(lfoSteps[li].get()));
     for(int i = 0; i < (int)t.size(); i++){
         float v = float(i) / (t.size() - 1);
         v = ofClamp((v - 0.5f) * gain + 0.5f, 0.0f, 1.0f);
         if(std::abs(pw2) > 1e-4f) v = reflectUnit(customPow(v, pw2));
         if(std::abs(bp) > 1e-4f) v = biPow(v, bp);
-        v = quantizeLfo(v, lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
+        v = quantizeLfo(v, steps);
         t[i] = ofClamp(v, 0.0f, 1.0f);
     }
     cache.key = key;
@@ -202,7 +204,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
     for(int e = 0; e < MAX_ENVS; e++){
         auto& E = envs[e];
         const std::string L = "Env" + ofToString(e + 1) + " ";
-        auto toEnv = [this, e]() { forStates([this, e](ofxSCServer*, ServerState& st){ sendEnv(st, e); }); };
+        auto toEnv = [this, e]() { forStates([this, e](ofxSCServer* server, ServerState& st){ sendEnv(server, st, e); }); };
         E.a.set(L + "Attack" + nameSuffix, 0.01f, 0.001f, 10.0f);          host.regF(E.a, toEnv);
         E.d.set(L + "Decay" + nameSuffix, 0.5f, 0.001f, 10.0f);            host.regF(E.d, toEnv);
         E.s.set(L + "Sustain" + nameSuffix, ofClamp(defaultEnvSustain, 0.0f, 1.0f), 0.0f, 1.0f); host.regF(E.s, toEnv);
@@ -297,40 +299,37 @@ void scModulation::sendLfo(ofxSCServer* server, ServerState& st, int li) {
     if(st.builtVoices != n()) return;
     auto* s = st.lfo[li];
     if(!s) return;
-    scSynthControlBatch controls(s, server);
+    // Cached: a morph frame sends only the controls whose values changed.
+    scSynthControlBatch controls(s, server, &st.lfoSent[li]);
+    const bool blended = generatorMorph.contains(lfoNoise[li].getEscapedName());
+    const bool held = manualLfo(li) && !blended;   // a still manual LFO: its value as the phase
+    const std::vector<float> zero(n(), 0.0f);
+    auto vec = [&](const char* name, const std::vector<float>& v, float heldValue){
+        controls.set(name, held ? std::vector<float>(n(), heldValue) : expand(v, n()));
+    };
     controls.set("out", st.srcBlock ? st.srcBlock->index + li * busWidth : 0);
-    controls.set("freq", lfoHzFor(li));
-    controls.set("sh", lfoShFor(li));
-    controls.set("freqdetune", expand(perVoice ? lfoDetune[li].get() : std::vector<float>{0.0f}, n()));
-    controls.set("initphase", lfoInit[li].get());
-    controls.set("round", expand(lfoRound[li].get(), n()));
-    controls.set("skew", expand(lfoSkew[li].get(), n()));
-    controls.set("pw", expand(lfoPw[li].get(), n()));
-    controls.set("centered", lfoGeneratorValue(li, "centered", lfoCentered[li].get() ? 1.f : 0.f));
-    controls.set("gain", expand(lfoGain[li].get(), n()));
-    controls.set("pow", expand(lfoPow[li].get(), n()));
-    controls.set("bipow", expand(lfoBiPow[li].get(), n()));
-    controls.set("noise", effectiveNoise(li) ? 1.0f : 0.0f);
+    controls.set("freq", held ? zero : lfoHzFor(li));
+    controls.set("sh", held ? zero : lfoShFor(li));
+    controls.set("freqdetune", held ? zero : expand(perVoice ? lfoDetune[li].get() : std::vector<float>{0.0f}, n()));
+    controls.set("initphase", held ? lfoManual[li].get() * 0.5f : lfoInit[li].get());
+    vec("round", lfoRound[li].get(), 0.0f);
+    vec("skew", lfoSkew[li].get(), 0.0f);
+    vec("pw", lfoPw[li].get(), 0.5f);
+    controls.set("centered", held ? 1.0f : lfoGeneratorValue(li, "centered", lfoCentered[li].get() ? 1.f : 0.f));
+    vec("gain", lfoGain[li].get(), 1.0f);
+    vec("pow", lfoPow[li].get(), 0.0f);
+    vec("bipow", lfoBiPow[li].get(), 0.0f);
+    controls.set("noise", !held && effectiveNoise(li) ? 1.0f : 0.0f);
     controls.set("shglide", lfoSHGlide[li].get());
     controls.set("nscale", perVoice ? lfoNScale[li].get() : 0.0f);
     controls.set("seed", li * 17.31f);
-    controls.set("phoff", perVoice ? expand(lfoPhases[li], n()) : std::vector<float>(n(), 0.0f));
+    controls.set("phoff", perVoice && !held ? expand(lfoPhases[li], n()) : zero);
     controls.set("reset", (float)resetCounter);
-    controls.set("rtype", (float)effectiveRandom(li));     // ModLfoX only
-    controls.set("steps", lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
+    controls.set("rtype", held ? 0.0f : (float)effectiveRandom(li));     // ModLfoX only
+    controls.set("steps", held ? 0.0f : lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
     controls.set("rsmooth", lfoRndSmooth[li].get());
     controls.set("rshare", perVoice ? lfoGeneratorValue(li, "shared", lfoRndSame[li].get() ? 1.f : 0.f) : 1.f);   // ModLfoX only
-    const bool blended = generatorMorph.contains(lfoNoise[li].getEscapedName());
-    controls.set("hold", manualLfo(li) && !blended ? 1.0f : 0.0f);
-    if(manualLfo(li) && !blended){
-        const std::vector<float> zero(n(),0.0f), one(n(),1.0f), half(n(),0.5f);
-        controls.set("freq",zero); controls.set("freqdetune",zero); controls.set("phoff",zero);
-        controls.set("initphase",lfoManual[li].get()*0.5f);
-        controls.set("round",zero); controls.set("skew",zero); controls.set("pw",half);
-        controls.set("centered",1.0f); controls.set("noise",0.0f); controls.set("rtype",0.0f);
-        controls.set("gain",one); controls.set("pow",zero); controls.set("bipow",zero);
-        controls.set("sh",zero); controls.set("steps",0.0f);
-    }
+    controls.set("hold", held ? 1.0f : 0.0f);
     controls.set("modeweights", lfoModeWeights(li));
     controls.set("manualvalue", lfoManualValue(li));
     controls.send();
@@ -353,29 +352,31 @@ float scModulation::rndPreview(int li, float ph, int type, float smooth) {
     return j - std::floor(j);
 }
 
-void scModulation::sendEnv(ServerState& st, int e) {
+void scModulation::sendEnv(ofxSCServer* server, ServerState& st, int e) {
     if(st.builtVoices != n()) return;
     auto* s = st.env[e];
     if(!s) return;
     auto& E = envs[e];
-    s->set("gate", st.gateBus);
-    s->set("out", st.srcBlock ? st.srcBlock->index + (SRC_ENV + e) * busWidth : 0);
-    s->setMultiple("atk", E.a.get(), n()); s->setMultiple("dec", E.d.get(), n()); s->setMultiple("sus", E.s.get(), n()); s->setMultiple("rel", E.r.get(), n());
-    s->setMultiple("cA", E.ca.get(), n()); s->setMultiple("cD", E.cd.get(), n()); s->setMultiple("cR", E.cr.get(), n());
+    scSynthControlBatch controls(s, server, &st.envSent[e]);
+    auto fill = [&](const char* name, float v){ controls.set(name, std::vector<float>(n(), v)); };
+    controls.set("gate", st.gateBus);
+    controls.set("out", st.srcBlock ? st.srcBlock->index + (SRC_ENV + e) * busWidth : 0);
+    fill("atk", E.a.get()); fill("dec", E.d.get()); fill("sus", E.s.get()); fill("rel", E.r.get());
+    fill("cA", E.ca.get()); fill("cD", E.cd.get()); fill("cR", E.cr.get());
     // velocity tracking: the note's velocity (the velocity source, written by the node's gates)
-    s->set("velbus", st.srcBlock ? st.srcBlock->index + SRC_VEL * busWidth : 0);
-    s->set("veltrack", velocity ? E.vt.get() : 0.0f);
+    controls.set("velbus", st.srcBlock ? st.srcBlock->index + SRC_VEL * busWidth : 0);
+    controls.set("veltrack", velocity ? E.vt.get() : 0.0f);
+    controls.send();
 }
 
 void scModulation::writeSources(ofxSCServer* server, ServerState& st) {
     if(!st.srcBlock) return;
+    scControlBusBatch batch(server);
     auto setn = [&](int bus, const std::vector<float>& values){
-        ofxOscMessage m;
-        m.setAddress("/c_setn");
-        m.addIntArg(bus);
-        m.addIntArg((int)values.size());
-        for(float v : values) m.addFloatArg(v);
-        server->sendMsg(m);
+        auto& sent = st.busSent[bus];
+        if(sent == values) return;
+        sent = values;
+        batch.set(bus, values);
     };
     for(int k = 0; k < MAX_EXT; k++){
         std::vector<float> v = expand(exts[k].get(), busWidth, 0.0f);
@@ -385,6 +386,7 @@ void scModulation::writeSources(ofxSCServer* server, ServerState& st) {
     std::vector<float> voice(busWidth, 0.0f);
     for(int i = 0; i < n(); i++) voice[i] = n() > 1 ? (float)i / (n() - 1) * 2.0f - 1.0f : 0.0f;
     setn(st.srcBlock->index + SRC_VOICE * busWidth, voice);
+    batch.send();
 }
 
 void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
@@ -398,6 +400,7 @@ void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
         if(s && st.lfoDef[li] != wanted){ s->free(); delete s; s = nullptr; }   // legacy engine migration
         if(li < lfoCount && !s){
             st.lfoDef[li] = wanted;
+            st.lfoSent[li].clear();
             s = new ofxSCSynth(def(wanted), server);
             scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendLfo(server, st, li); });
         }else if(li >= lfoCount && s){ s->free(); delete s; s = nullptr; }
@@ -405,8 +408,9 @@ void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
     for(int e = 0; e < MAX_ENVS; e++){
         auto*& s = st.env[e];
         if(e < envCount && !s){
+            st.envSent[e].clear();
             s = new ofxSCSynth(def("ModEnv"), server);
-            scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendEnv(st, e); });
+            scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendEnv(server, st, e); });
         }else if(e >= envCount && s){ s->free(); delete s; s = nullptr; }
     }
 }
@@ -434,27 +438,36 @@ void scModulation::syncRoutes(ofxSCServer* server, ServerState& st) {
                     r->set("salt", t * 7.31f + 1.0f);
                     r->createAndRun(1, st.routeGroup, true);
                     st.routes[idx] = r;
+                    st.routeSent[idx] = {amount, s == SRC_RND && !randomShared ? 1.0f : 0.0f};
                 }else{
-                    it->second->set("amount", amount);
-                    if(s == SRC_RND) it->second->set("decor", randomShared ? 0.0f : 1.0f);
+                    const float decor = s == SRC_RND ? (randomShared ? 0.0f : 1.0f) : 0.0f;
+                    auto sent = st.routeSent.find(idx);
+                    if(sent == st.routeSent.end() || sent->second.first != amount) it->second->set("amount", amount);
+                    if(s == SRC_RND && (sent == st.routeSent.end() || sent->second.second != decor)) it->second->set("decor", decor);
+                    st.routeSent[idx] = {amount, decor};
                 }
             }else if(it != st.routes.end()){
                 it->second->free();
                 delete it->second;
                 st.routes.erase(it);
+                st.routeSent.erase(idx);
             }
         }
     }
-    // a target with no route keeps its last value on its bus: zero it (and the spare bus)
+    // a target with no route keeps its last value on its bus: zero it (and the
+    // spare bus) once, when it loses its last route. Only routes write them.
+    if((int)st.zeroed.size() != T() + 1) st.zeroed.assign(T() + 1, false);
+    ofxOscMessage m;
+    m.setAddress("/c_fill");
     for(int t = 0; t <= T(); t++){
-        if(t < T() && routed[t]) continue;
-        ofxOscMessage m;
-        m.setAddress("/c_fill");
+        if(t < T() && routed[t]) { st.zeroed[t] = false; continue; }
+        if(st.zeroed[t]) continue;
+        st.zeroed[t] = true;
         m.addIntArg(st.modBlock->index + t * busWidth);
         m.addIntArg(busWidth);
         m.addFloatArg(0.0f);
-        server->sendMsg(m);
     }
+    if(m.getNumArgs() > 0) server->sendMsg(m);
 }
 
 void scModulation::create(ofxSCServer* server, int sourceGroup, int routeGroup, int gateBus) {
@@ -472,6 +485,7 @@ void scModulation::create(ofxSCServer* server, int sourceGroup, int routeGroup, 
     control(st.modBlock, (T() + 1) * busWidth);
     st.created = true;
     st.builtVoices = n();
+    st.clearSent();
     updatePhases();          // as many offsets as voices now
     writeSources(server, st);
     updateSources(server, st);
@@ -523,6 +537,7 @@ void scModulation::rebuild(ofxSCServer* server) {
     for(auto& [idx, r] : st.routes){ r->free(); delete r; }
     st.routes.clear();
     st.builtVoices = n();
+    st.clearSent();
     updatePhases();
     writeSources(server, st);
     updateSources(server, st);
@@ -538,13 +553,18 @@ void scModulation::setGateBus(ofxSCServer* server, int gateBus) {
     auto it = states.find(server);
     if(it == states.end()) return;
     it->second.gateBus = gateBus;
-    for(int e = 0; e < MAX_ENVS; e++) sendEnv(it->second, e);
+    for(int e = 0; e < MAX_ENVS; e++) sendEnv(server, it->second, e);
 }
 
 void scModulation::resend() {
+    forStates([](ofxSCServer*, ServerState& st){ st.clearSent(); });
+    sendChanged();
+}
+
+void scModulation::sendChanged() {
     forStates([this](ofxSCServer* server, ServerState& st){
         for(int li = 0; li < MAX_LFOS; li++) sendLfo(server, st, li);
-        for(int e = 0; e < MAX_ENVS; e++) sendEnv(st, e);
+        for(int e = 0; e < MAX_ENVS; e++) sendEnv(server, st, e);
         writeSources(server, st);
         syncRoutes(server, st);
     });
@@ -556,6 +576,7 @@ void scModulation::setBpm(float bpm) {
         for(int li = 0; li < lfoCount; li++) if(st.lfo[li]){
             st.lfo[li]->set("freq", lfoHzFor(li));
             st.lfo[li]->set("sh", lfoShFor(li));
+            st.lfoSent[li].erase("freq"); st.lfoSent[li].erase("sh");
         }
     });
 }
@@ -563,7 +584,9 @@ void scModulation::setBpm(float bpm) {
 void scModulation::resetLfos() {
     resetCounter++;
     notify();
-    forStates([this](ofxSCServer*, ServerState& st){ for(auto* l : st.lfo) if(l) l->set("reset", (float)resetCounter); });
+    forStates([this](ofxSCServer*, ServerState& st){
+        for(int li = 0; li < MAX_LFOS; li++) if(st.lfo[li]){ st.lfo[li]->set("reset", (float)resetCounter); st.lfoSent[li].erase("reset"); }
+    });
 }
 
 // A published key of this instance (GrainBox: every engine has one, its names end in " 2", " 3"...)
@@ -596,20 +619,24 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
     const auto weights = lfoModeWeights(li);
     const float active = 1.0f - weights[5];
     const float seed = li * 17.31f;
+    // Generator values are JSON lookups: once per table, not per point
+    const float centered = lfoGeneratorValue(li, "centered", lfoCentered[li].get() ? 1.f : 0.f);
+    const float steps = lfoGeneratorValue(li, "steps", float(lfoSteps[li].get()));
+    const float manual = lfoManualValue(li), smooth = lfoRndSmooth[li].get();
     for(int i = 0; i < (int)t.size(); i++){
         const float ph = float(i) / (t.size() - 1);
         float v;
         // noise: 4 Perlin steps per cycle, crossfaded into the next cycle's start so it loops
-        v = weights[0] * morphCentered(ph, rnd, sk, pw, lfoGeneratorValue(li, "centered", lfoCentered[li].get() ? 1.f : 0.f))
+        v = weights[0] * morphCentered(ph, rnd, sk, pw, centered)
           + weights[1] * (perlin(ph * 4.0f, seed) * (1.0f - ph) + perlin(ph * 4.0f - 4.0f, seed) * ph);
         for(int mode = 1; mode <= 3; ++mode) if(weights[mode + 1] > 0)
-            v += weights[mode + 1] * rndPreview(li, ph, mode, lfoRndSmooth[li].get());
+            v += weights[mode + 1] * rndPreview(li, ph, mode, smooth);
         v /= std::max(active, 1e-8f);
         v = ofClamp((v - 0.5f) * gain + 0.5f, 0.0f, 1.0f);
         if(std::abs(pw2) > 1e-4f) v = reflectUnit(customPow(v, pw2));
         if(std::abs(bp) > 1e-4f) v = biPow(v, bp);
-        v = quantizeLfo(v, lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
-        t[i] = ofClamp(v, 0.0f, 1.0f) * active + weights[5] * lfoManualValue(li);
+        v = quantizeLfo(v, steps);
+        t[i] = ofClamp(v, 0.0f, 1.0f) * active + weights[5] * manual;
     }
     t.back() = t.front();
     cache.key = key;
@@ -663,7 +690,7 @@ void scModulation::updatePhases() {
         ix.recomputeIndexs();
         lfoPhases[li] = expand(ix.getIndexs(), n());
         forStates([this, li](ofxSCServer*, ServerState& st){
-            if(st.lfo[li]) st.lfo[li]->set("phoff", perVoice ? lfoPhases[li] : std::vector<float>(n(), 0.0f));
+            if(st.lfo[li]){ st.lfo[li]->set("phoff", perVoice ? lfoPhases[li] : std::vector<float>(n(), 0.0f)); st.lfoSent[li].erase("phoff"); }
         });
     }
 }
@@ -807,8 +834,10 @@ std::vector<float> scModulation::fitMatrix(const std::vector<float>& m, int sour
     return out;
 }
 
-void scModulation::load(const ofJson& j, const std::string& prefix) {
-    loadGeneratorState(j, prefix);
+void scModulation::load(const ofJson& j, const std::string& prefix) { loadState(j, prefix, true); }
+
+void scModulation::loadState(const ofJson& j, const std::string& prefix, bool generators) {
+    if(generators) loadGeneratorState(j, prefix);
     auto count = [&](const std::string& k, int& v, int lo, int hi){
         if(j.contains(prefix + k) && j[prefix + k].is_number()) v = std::clamp(j[prefix + k].get<int>(), lo, hi);
     };
@@ -831,7 +860,8 @@ void scModulation::afterLoad() {
     notify();
     updatePhases();
     forStates([this](ofxSCServer* server, ServerState& st){ updateSources(server, st); });
-    resend();
+    // Every morph frame lands here: only values the server doesn't have yet.
+    sendChanged();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1037,12 +1067,19 @@ ofJson scModulation::paramsJson() const {
 
 void scModulation::loadParamsJson(const ofJson& j) {
     // the targets of before stop here (the loaded values are set by the node)
+    std::map<std::string, ParamTarget> before;   // already resolved: morph frames reload the same keys
+    for(auto& pt : params) before.emplace(pt.key, pt);
     params.clear();
     if(!j.is_array()) return;
     for(auto& e : j){
         if(!e.is_object() || !e.contains("key") || !e["key"].is_string()) continue;
         ParamTarget pt;
-        if(!resolveParam(e["key"].get<std::string>(), pt)) continue;
+        const auto key = e["key"].get<std::string>();
+        auto known = before.find(key);
+        if(known != before.end() && known->second.p){
+            pt.p = known->second.p; pt.kind = known->second.kind; pt.lo = known->second.lo; pt.hi = known->second.hi;
+            pt.key = key; pt.name = known->second.name;
+        }else if(!resolveParam(key, pt)) continue;
         try { if(e.contains("base")) pt.base = e["base"].get<std::vector<float>>(); } catch(...) {}
         if(e.contains("amounts") && e["amounts"].is_object())
             for(auto it = e["amounts"].begin(); it != e["amounts"].end(); ++it){
@@ -1373,19 +1410,22 @@ void scModulation::drawLfoCard(int li, float w) {
         }
         const float rnd = first(lfoRound[li].get(), 0.5f), sk = first(lfoSkew[li].get()), pw = first(lfoPw[li].get(), 0.5f);
         const float pw2 = first(lfoPow[li].get()), bp = first(lfoBiPow[li].get()), gain = first(lfoGain[li].get(), 1.0f);
+        const auto weights = lfoModeWeights(li);
+        const float active = 1.0f - weights[5];
+        const float centered = lfoGeneratorValue(li, "centered", lfoCentered[li].get() ? 1.f : 0.f);
+        const float steps = lfoGeneratorValue(li, "steps", float(lfoSteps[li].get()));
+        const float manual = lfoManualValue(li), smooth = lfoRndSmooth[li].get();
         auto value = [&](float ph){
-            const auto weights = lfoModeWeights(li);
-            const float active = 1.0f - weights[5];
-            float v = weights[0] * morphCentered(ph, rnd, sk, pw, lfoGeneratorValue(li, "centered", lfoCentered[li].get() ? 1.f : 0.f))
+            float v = weights[0] * morphCentered(ph, rnd, sk, pw, centered)
                     + weights[1] * noise2(ph * 3.0f, 0.0f, li * 17.31f);
             for(int mode = 1; mode <= 3; ++mode) if(weights[mode + 1] > 0)
-                v += weights[mode + 1] * rndPreview(li, ph, mode, lfoRndSmooth[li].get());
+                v += weights[mode + 1] * rndPreview(li, ph, mode, smooth);
             v /= std::max(active, 1e-8f);
             v = ofClamp((v - 0.5f) * gain + 0.5f, 0.0f, 1.0f);
             if(std::abs(pw2) > 1e-4f) v = reflectUnit(customPow(v, pw2));
             if(std::abs(bp) > 1e-4f) v = biPow(v, bp);
-            v = quantizeLfo(v, lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
-            return v * active + weights[5] * lfoManualValue(li);
+            v = quantizeLfo(v, steps);
+            return v * active + weights[5] * manual;
         };
         const std::array<float, 8> key{rnd, sk, pw + lfoSteps[li].get() * 3.0f, pw2, bp, manualLfo(li) ? -1.0f-lfoManual[li].get() : gain,
             (effectiveNoise(li) ? 1.0f : 0.0f) + effectiveRandom(li) * 2.0f + lfoRndSmooth[li].get() * 10.0f, lfoCentered[li].get() ? 1.0f : 0.0f};
@@ -1768,11 +1808,12 @@ void scModulation::loadMorph(const ofJson& a,const ofJson& b,float t,bool switch
         if(state->contains(key)) (*state)[key] = fitMatrix(scModulationMorph::numbers((*state)[key]), sourceCount(), T());
     }
     auto state = scModulationMorph::state(x, y, t, switched, prefix, blocked);
-    load(state, prefix);
+    loadState(state, prefix, false);   // the generators: blended just below
     morphGenerators(a, b, t, prefix, blocked);
 }
 
 void scModulation::loadGeneratorState(const ofJson& j, const std::string& prefix) {
+    const ofJson previous = std::move(generatorMorph);
     generatorMorph = j.value(prefix + "Generators", ofJson::object());
     if(!generatorMorph.is_object()) generatorMorph = ofJson::object();
     for(auto it = generatorMorph.begin(); it != generatorMorph.end(); ){
@@ -1791,6 +1832,9 @@ void scModulation::loadGeneratorState(const ofJson& j, const std::string& prefix
             ++it;
         }
     }
+    // The pictures' caches don't key on blended generators: drop them only
+    // when the blend moved (not on every frame of a morph between equal LFOs).
+    if(generatorMorph == previous) return;
     for(auto& cache : cycleCache) cache.values.clear();
     for(auto& cache : transferCache) cache.values.clear();
     for(auto& cache : previewCache) cache.valid = false;

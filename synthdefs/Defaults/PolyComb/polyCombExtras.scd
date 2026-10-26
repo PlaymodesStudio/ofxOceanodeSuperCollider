@@ -37,14 +37,14 @@ File.mkdir(root); File.mkdir(dir);
         var v = \voices.kr(1).clip(1, 32);
         var sig = In.ar(\in.kr(0), 32).asArray;
         var pos = (NamedControl.kr(\pan, 0.5 ! 32) + Sanitize.kr(In.kr(\mpan.kr(0), 32))).asArray.collect { |p| p.lag(0.02) };
-        var line = \line.kr(0) > 0.5;
+        var line = \line.kr(0).clip(0, 1);
         var comp = (v / c).max(1).sqrt.reciprocal;
         var out = 32.collect { |i|
             var x = sig[i] * (i < v);
             var p = pos[i];
             if(c == 1) { [x] } {
                 if(c == 2) { Pan2.ar(x, (p.clip(0, 1) * 2) - 1) } {
-                    PanAz.ar(c, x, Select.kr(line, [p.wrap(0, 1) * 2, p.clip(0, 1) * 2 * (c - 1) / c]), 1, 2, 0)
+                    PanAz.ar(c, x, ((p * 2) * (1 - line)) + ((p.clip(0, 1) * 2 * (c - 1) / c) * line), 1, 2, 0)
                 }
             }
         }.sum;
@@ -146,7 +146,8 @@ File.mkdir(root); File.mkdir(dir);
     var note = { In.kr(\note.kr(0), n) };
     SynthDef(("PCRingR" ++ n).asSymbol, {
         var sig = In.ar(\in.kr(0), n);
-        var pitch = Select.kr(\ringmode.kr(0), [note.(), kv.(\ringpitch, 72)])
+        var fixed = \ringmode.kr(0).clip(0,1);
+        var pitch = ((1-fixed)*note.()) + (fixed*kv.(\ringpitch,72))
             + kv.(\ringtranspose, 0) + (({ Rand(-1, 1) } ! n) * kv.(\ringdetune, 0));
         var freq = (pitch.clip(0, 135).midicps * kv.(\ringratio, 1)).clip(0, SampleRate.ir * 0.45);
         var width = kv.(\ringwidth, 0).clip(-1, 1);

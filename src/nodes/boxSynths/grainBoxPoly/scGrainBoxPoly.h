@@ -317,6 +317,7 @@ private:
         std::map<ofxSCServer*, ofxSCBuffer*>    envBufs;
         std::map<ofxSCServer*, ofEventListener> grainListeners;
         std::vector<float> envData;
+        std::vector<float> envKey;                   // computeEnvData's inputs for envData (empty: recompute)
         bool               envNeedsUpdate = false;
         float              envResendAt    = -1.0f;  // re-send once after a fresh allocation
         ofEventListeners   listeners;
@@ -402,6 +403,7 @@ private:
     // ── Scale ─────────────────────────────────────────────────────────────────
     int  scaleMaskFor(const Playhead& ph) const;    // 12 bits, relative to the root
     void setScaleArgs(Playhead& ph, ofxSCSynth* s);
+    std::vector<float> scaleMorphData(const Playhead& ph, const ofJson& saved) const;
 
     // ── CPU ───────────────────────────────────────────────────────────────────
     bool visOn = true;                  // /grainTrig replies wanted (window open)
@@ -537,6 +539,7 @@ private:
         std::vector<ofxSCBus*> buses;                // input bus of each planned stage
     };
     std::map<ofxSCServer*, FxState> fx;
+    std::map<int, std::map<std::string, std::vector<float>>> fxSent;   // by node ID: what each stage last received
     bool fxPending = false;                              // a stage waits for its defs
     std::string fxDefName(int stage) const;
     bool fxStageReady(int stage, ofxSCServer* srv) const;

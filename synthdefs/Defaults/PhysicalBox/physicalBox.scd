@@ -63,7 +63,7 @@ SynthDef(\PhysicalBoxVoice, {
     );
     var pairs = names.collect({ |name| [name, given[name] ?? { p.(name) }] }).flatten;
     var ext = In.ar(\in.kr(0), 1);
-    var sig = PhysicalVoice.ar(ext, pairs);
+    var sig = PhysicalVoice.ar(ext, pairs, NamedControl.kr(\bfweights,0!6).lag(0.03));
     var amp = Select.kr(\vca.kr(0) > 0.5, [(1 + m.(\mamp)).clip(0, 2), m.(\mamp).clip(0, 1)]);
     sig = LeakDC.ar(Sanitize.ar(sig)) * amp * \level.kr(0).dbamp * \master.kr(0.6, 0.02) * \normalization.kr(0.25);
     Out.ar(\out.kr(0), sig);
@@ -76,12 +76,12 @@ SynthDef(\PhysicalBoxVoice, {
         var sig = In.ar(\in.kr(0), 32).asArray;
         var pos = (NamedControl.kr(\pan, 0.5 ! 16) + Sanitize.kr(In.kr(\mpan.kr(0), 16))).asArray.collect { |x| x.lag(0.02) };
         var width = \width.kr(0.5).clip(0, 1);
-        var line = \line.kr(0) > 0.5;
+        var line = \line.kr(0).clip(0, 1);
         var comp = (v / c).max(1).sqrt.reciprocal;
         var place = { |x, at|
             if(c == 1) { [x] } {
                 if(c == 2) { Pan2.ar(x, (at.clip(0, 1) * 2) - 1) } {
-                    PanAz.ar(c, x, Select.kr(line, [at.wrap(0, 1) * 2, at.clip(0, 1) * 2 * (c - 1) / c]), 1, 2, 0)
+                    PanAz.ar(c, x, ((at * 2) * (1 - line)) + ((at.clip(0, 1) * 2 * (c - 1) / c) * line), 1, 2, 0)
                 }
             }
         };

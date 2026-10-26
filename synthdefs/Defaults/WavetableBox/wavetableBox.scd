@@ -213,14 +213,14 @@ read = { |c, i, buf, bbuf, twoD|
         var v = \voices.kr(1).clip(1, 16);
         var sig = In.ar(\in.kr(0), 16).asArray;
         var pos = (NamedControl.kr(\pos, 0.5 ! 16) + Sanitize.kr(In.kr(\mpan.kr(0), 16))).lag(0.02);
-        var line = \line.kr(0) > 0.5;
+        var line = \line.kr(0).clip(0, 1);
         var comp = (v / c).max(1).sqrt.reciprocal;
         var mixed = 16.collect { |i|
             var x = sig[i] * (i < v);
             var p = pos[i];
             if(c == 1) { [x] } {
                 if(c == 2) { Pan2.ar(x, p.clip(0, 1) * 2 - 1) } {
-                    PanAz.ar(c, x, Select.kr(line, [p.wrap(0, 1) * 2, p.clip(0, 1) * 2 * (c - 1) / c]), 1, 2, 0)
+                    PanAz.ar(c, x, ((p * 2) * (1 - line)) + ((p.clip(0, 1) * 2 * (c - 1) / c) * line), 1, 2, 0)
                 }
             }
         }.sum;

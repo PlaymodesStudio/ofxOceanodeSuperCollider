@@ -127,6 +127,11 @@ public:
 
     // Same formula as warp() in wavetable.scd
     static float warpPhase(float p, int mode, float amt);
+    float morphedWarpPhase(float phase, int voice, float amount1, float amount2) const;
+    // A voice's warp modes / morph weights, read once for a whole drawn cycle
+    struct WarpBlend { int mode1 = 0, mode2 = 0; std::vector<float> weights1, weights2; };
+    WarpBlend warpBlend(int voice) const;
+    static float morphedWarpPhase(float phase, const WarpBlend& blend, float amount1, float amount2);
 
 private:
     // ── Decoding (background) ────────────────────────────────────────────────

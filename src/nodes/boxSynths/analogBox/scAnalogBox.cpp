@@ -553,7 +553,7 @@ void scAnalogBox::sendPitch(ServerState& st) {
 void scAnalogBox::sendOsc(ServerState& st, int k) {
     auto* s = st.osc[k];
     if(!s) return;
-    scSynthControlBatch updates(s,st.server);
+    scSynthControlBatch updates(s,st.server,&st.oscSent[k]);
     auto vec=[&](const std::string& key,const std::vector<float>& v){ updates.set(key,expand(v,n())); };
     const Osc& O = osc[k];
     updates.set("note", st.noteBus ? st.noteBus->index : 0);
@@ -572,7 +572,7 @@ void scAnalogBox::sendOsc(ServerState& st, int k) {
     updates.set("noise", modulation.voiceValues(O.noise));
     updates.set("drift", modulation.voiceValues(drift));
     updates.set("slave", k > 0 ? 1.0f : 0.0f);
-    // hard sync: to oscillator 1's frequency
+    // hard sync: to oscillator 1's frequency (ABOsc: on / off; ABOscMorph: 0..1, crossfaded)
     updates.set("sync", k > 0 ? snaps.morph.activation(O.sync) : 0.0f);
     updates.set("syncfreq", st.freq[0] ? st.freq[0]->index : 0);
     // FM: from any oscillator in use (an earlier one this block, a later one / itself a block late)
@@ -594,7 +594,7 @@ void scAnalogBox::sendOsc(ServerState& st, int k) {
 void scAnalogBox::sendNoise(ServerState& st) {
     auto* s = st.noise;
     if(!s) return;
-    scSynthControlBatch updates(s,st.server);
+    scSynthControlBatch updates(s,st.server,&st.noiseSent);
     auto vec=[&](const std::string& key,const std::vector<float>& v){ updates.set(key,expand(v,n())); };
     updates.set("out", st.mixBus ? st.mixBus->index : 0);
     vec( "level", noiseLevel.get());
@@ -606,7 +606,7 @@ void scAnalogBox::sendNoise(ServerState& st) {
 void scAnalogBox::sendRing(ServerState& st) {
     auto* s = st.ring;
     if(!s) return;
-    scSynthControlBatch updates(s,st.server);
+    scSynthControlBatch updates(s,st.server,&st.ringSent);
     auto vec=[&](const std::string& key,const std::vector<float>& v){ updates.set(key,expand(v,n())); };
     updates.set("a", st.raw[0] ? st.raw[0]->index : 0);
     updates.set("b", st.raw[1] ? st.raw[1]->index : 0);
@@ -632,7 +632,7 @@ scAnalogBox::FilterRef scAnalogBox::filterRef(int k) {
 void scAnalogBox::sendFilterK(ServerState& st, int k) {
     auto* s = k == 0 ? st.filter : st.moreFilters[k - 1];
     if(!s) return;
-    scSynthControlBatch updates(s,st.server);
+    scSynthControlBatch updates(s,st.server,&st.filterSent[k]);
     auto vec=[&](const std::string& key,const std::vector<float>& v){ updates.set(key,expand(v,n())); };
     const int nf = filters();
     auto bus = [](ofxSCBus* b){ return b ? b->index : 0; };
@@ -709,33 +709,89 @@ void scAnalogBox::updateParts(ofxSCServer* server, ServerState& st) {
     if(!st.created) return;
     for(int k = 0; k < MAX_OSCS; k++){
         auto*& s = st.osc[k];
-        if(k < oscs() && !s){
-            s = new ofxSCSynth(def("ABOsc"), server);
-            sendOsc(st, k);
-            s->createAndRun(1, st.groups[SlOsc + k]->nodeID, true);
-        }else if(k >= oscs() && s){ s->free(); delete s; s = nullptr; }
+        if(k < oscs()){
+            const bool morph = syncMorphing(k);
+            if(!s){
+                s = new ofxSCSynth(def(morph ? "ABOscMorph" : "ABOsc"), server);
+                st.oscMorph[k] = morph;
+                st.oscSent[k].clear();
+                sendOsc(st, k);
+                s->createAndRun(1, st.groups[SlOsc + k]->nodeID, true);
+            }else if(st.oscMorph[k] != morph) swapOsc(server, st, k, morph);   // into a Sync morph
+        }else if(s){ s->free(); delete s; s = nullptr; st.oscSent[k].clear(); st.oscMorph[k] = false; }
     }
     for(int k = 0; k < oscs(); k++) sendOsc(st, k);    // FM sources may have come or gone
-    auto part = [&](ofxSCSynth*& s, bool wanted, const std::string& defName, std::function<void()> send){
+    auto part = [&](ofxSCSynth*& s, Sent& sent, bool wanted, const std::string& defName, std::function<void()> send){
         if(wanted && !s){
             s = new ofxSCSynth(defName, server);
+            sent.clear();
             send();
             s->createAndRun(1, st.groups[SlNoise]->nodeID, true);
         }else if(wanted) send();
-        else if(s){ s->free(); delete s; s = nullptr; }
+        else if(s){ s->free(); delete s; s = nullptr; sent.clear(); }
     };
-    part(st.noise, noiseWanted(), def("ABNoise"), [&](){ sendNoise(st); });
-    part(st.ring, ringWanted(), def("ABRing"), [&](){ sendRing(st); });
+    part(st.noise, st.noiseSent, noiseWanted(), def("ABNoise"), [&](){ sendNoise(st); });
+    part(st.ring, st.ringSent, ringWanted(), def("ABRing"), [&](){ sendRing(st); });
     // filters 2..: after the first, in order (series: each reads the one before)
     for(int k = 1; k < MAX_FILTERS; k++){
         auto*& s = st.moreFilters[k - 1];
         if(k < filters() && !s){
             s = new ofxSCSynth(def("ABFilter"), server);
+            st.filterSent[k].clear();
             sendFilterK(st, k);
             s->createAndRun(1, st.groups[SlFilter]->nodeID, true);
-        }else if(k >= filters() && s){ s->free(); delete s; s = nullptr; }
+        }else if(k >= filters() && s){ s->free(); delete s; s = nullptr; st.filterSent[k].clear(); }
     }
     sendFilter(st);   // the buses follow the count
+}
+
+// Sync between 0 and 1 (a snapshot morph): oscillator k runs ABOscMorph, two
+// MorphOscs (free and synced) crossfaded; held SYNC_SETTLE after the last
+// fractional value so the def's 0.03 s lag lands on 0 / 1 first, where ABOsc
+// (one MorphOsc, sync on / off) sounds the same. Oscillator 1 never syncs.
+bool scAnalogBox::syncMorphing(int k) {
+    if(k <= 0 || k >= MAX_OSCS) return false;
+    const float a = snaps.morph.activation(osc[k].sync);
+    const float now = ofGetElapsedTimef();
+    if(a > 1e-4f && a < 1.0f - 1e-4f) syncMorphUntil[k] = now + SYNC_SETTLE;
+    return now < syncMorphUntil[k];
+}
+
+// Oscillator k's synth swapped for the other def (ABOsc <-> ABOscMorph): the
+// new one rises from silence beside the old one (its slot group, after it;
+// \fadein) while the old one glides out on \presence's 0.03 s lag and is freed
+// SWAP_FADE later. A new synth restarts the oscillator's phase (and its LeakDC,
+// drift, sync master), so this is a short crossfade between two phases rather
+// than a seamless handover: done once when a Sync morph starts and once after
+// it settles (where both defs sound the same).
+void scAnalogBox::swapOsc(ofxSCServer* server, ServerState& st, int k, bool morph) {
+    if(!server || !st.groups[SlOsc + k]) return;
+    if(auto* old = st.osc[k]){
+        old->set("presence", 0.0f);
+        st.retiring.push_back({old, ofGetElapsedTimef() + SWAP_FADE});
+    }
+    auto* s = st.osc[k] = new ofxSCSynth(def(morph ? "ABOscMorph" : "ABOsc"), server);
+    st.oscMorph[k] = morph;
+    st.oscSent[k].clear();
+    sendOsc(st, k);                      // its controls, as creation arguments
+    s->set("fadein", SWAP_FADE_IN);
+    s->createAndRun(1, st.groups[SlOsc + k]->nodeID, true);
+}
+
+void scAnalogBox::retireOscs(ServerState& st, bool all) {
+    const float now = ofGetElapsedTimef();
+    for(auto it = st.retiring.begin(); it != st.retiring.end();){
+        if(!all && now < it->freeAt){ ++it; continue; }
+        if(it->synth){ it->synth->free(); delete it->synth; }
+        it = st.retiring.erase(it);
+    }
+}
+
+void scAnalogBox::clearSent(ServerState& st) {
+    for(auto& c : st.oscSent) c.clear();
+    for(auto& c : st.filterSent) c.clear();
+    st.noiseSent.clear(); st.ringSent.clear();
+    for(auto& f : st.fx) f.sent.clear();
 }
 
 void scAnalogBox::ensureBuses(ofxSCServer* server, ServerState& st) {
@@ -764,6 +820,7 @@ void scAnalogBox::ensureBuses(ofxSCServer* server, ServerState& st) {
 
 void scAnalogBox::createAll(ofxSCServer* server, ServerState& st) {
     ensureBuses(server, st);
+    clearSent(st);
     st.builtVoices = n();
     st.builtChannels = outChannels.get();
     auto fixed = [&](ofxSCSynth*& s, const std::string& defName, int slot, std::function<void()> send){
@@ -789,8 +846,11 @@ void scAnalogBox::freeSynths(ServerState& st) {
     drop(st.gateS); drop(st.pitchS); drop(st.filter); drop(st.amp); drop(st.spread);
     drop(st.noise); drop(st.ring);
     for(auto*& s : st.osc) drop(s);
+    st.oscMorph = {};
+    retireOscs(st, true);
     for(auto*& s : st.moreFilters) drop(s);
     for(auto& f : st.fx){ drop(f.synth); f.running = false; f.offAt = -1.0f; }
+    clearSent(st);
 }
 
 void scAnalogBox::freeAll(ofxSCServer* server, ServerState& st) {
@@ -799,7 +859,11 @@ void scAnalogBox::freeAll(ofxSCServer* server, ServerState& st) {
     forget(st.gateS); forget(st.pitchS); forget(st.filter); forget(st.amp); forget(st.spread);
     forget(st.noise); forget(st.ring);
     for(auto*& s : st.osc) forget(s);
+    st.oscMorph = {};
+    for(auto& r : st.retiring) forget(r.synth);   // (freed with the root)
+    st.retiring.clear();
     for(auto*& s : st.moreFilters) forget(s);
+    clearSent(st);
     if(st.modCreated) modulation.free(server, false);
     st.modCreated = false;
     for(auto& f : st.fx){ forget(f.synth); f.running = false; }
@@ -835,6 +899,7 @@ void scAnalogBox::rebuildOutput() {
         if(st.spread){ st.spread->free(); delete st.spread; st.spread = nullptr; }
         for(auto& f : st.fx){
             if(f.synth){ f.synth->free(); delete f.synth; f.synth = nullptr; }
+            f.sent.clear();
             if(f.in && liveAudioBus(server, f.in)) f.in->free();
             delete f.in;
             f.in = nullptr;
@@ -933,10 +998,11 @@ void scAnalogBox::resetInputBusses(ofxSCServer* server, int) {
 
 void scAnalogBox::resendParametersForNRT() {
     forStates([this](ofxSCServer* server, ServerState& st){
+        clearSent(st);    // an explicit full resend
         sendGate(st); sendPitch(st); sendFilter(st); sendAmp(st); sendSpread(st);
         for(int k = 0; k < MAX_OSCS; k++) sendOsc(st, k);
         sendNoise(st); sendRing(st);
-        for(int s = 0; s < NumStages; s++) if(st.fx[s].synth) sendStage(s, st.fx[s].synth);
+        for(int s = 0; s < NumStages; s++) if(st.fx[s].synth) sendStage(s, st);
         routeChain(st);
     });
     modulation.resend();
@@ -967,18 +1033,19 @@ void scAnalogBox::updateStages(ofxSCServer* server, ServerState& st) {
             }
             if(!f.synth){
                 f.synth = new ofxSCSynth(stageDef(s), server);
+                f.sent.clear();
                 f.synth->set("in", f.in->index);
                 f.synth->set("out", st.outBus);
-                sendStage(s, f.synth);
+                sendStage(s, st);
                 f.synth->createAndRun(1, st.groups[SlFx + s]->nodeID, true);
             }else{
-                sendStage(s, f.synth);
+                sendStage(s, st);
                 if(!f.running) f.synth->run(true);
             }
             f.running = scFxCanRoute(f.synth, server);
             f.offAt = -1.0f;
         }else if(f.synth && f.running && f.offAt < 0.0f){
-            if(s != StEq) f.synth->set("on", 0.0f);
+            if(s != StEq){ f.synth->set("on", 0.0f); f.sent["on"] = {0.0f}; }
             f.offAt = ofGetElapsedTimef() + stageTail(s);
         }
     }
@@ -1017,6 +1084,13 @@ void scAnalogBox::update(ofEventArgs&) {
         oscillatorCapacity=oscillatorWeights.empty()?0:scVoiceCountMorph::activeCount(oscillatorWeights);
         forStates([this](ofxSCServer* server,ServerState& st){updateParts(server,st);});
         if(scVoiceCountMorph::single(oscillatorWeights))oscillatorWeights.clear();
+    }
+    // swapped-out oscillators freed once faded; a settled Sync morph back to ABOsc
+    for(auto& [server, st] : states){
+        if(!st.created) continue;
+        retireOscs(st, false);
+        for(int k = 1; k < MAX_OSCS; ++k)
+            if(st.osc[k] && st.oscMorph[k] && !syncMorphing(k)) swapOsc(server, st, k, false);
     }
     for(auto& [server, st] : states) if(st.created &&
         scFxAwaitingRoute(st.fx, server, [this](int stage){ return stageOn(stage) > 0; },
@@ -1090,93 +1164,96 @@ float scAnalogBox::stageTail(int s) const {
     return 0.05f;
 }
 
-void scAnalogBox::sendStage(int s, ofxSCSynth* x) {
+void scAnalogBox::sendStage(int s, ServerState& st) {
+    auto* x = st.fx[s].synth;
     if(!x) return;
+    scSynthControlBatch c(x, st.server, &st.fx[s].sent);   // only what changed
     const float on = stageOn(s);
     switch(s){
         case StShaper:
-            x->set("drive", shaperDrive.get());
-            x->set("mix", shaperMix.get());
-            x->set("on", on);
+            c.set("drive", shaperDrive.get());
+            c.set("mix", shaperMix.get());
+            c.set("on", on);
             break;
         case StSat:
-            x->set("drive", satDrive.get());
-            x->set("bias", satBias.get());
-            x->set("autogain", 1.0f);
-            x->set("tone", satTone.get());
-            x->set("output", satOutput.get());
-            x->set("mix", satMix.get());
-            x->set("on", on);
+            c.set("drive", satDrive.get());
+            c.set("bias", satBias.get());
+            c.set("autogain", 1.0f);
+            c.set("tone", satTone.get());
+            c.set("output", satOutput.get());
+            c.set("mix", satMix.get());
+            c.set("on", on);
             break;
         case StRing:
-            x->set("freq", ringFreq.get());
-            x->set("spread", ringSpread.get());
-            x->set("mix", ringMix.get());
-            x->set("on", on);
+            c.set("freq", ringFreq.get());
+            c.set("spread", ringSpread.get());
+            c.set("mix", ringMix.get());
+            c.set("on", on);
             break;
         case StShift:
-            x->set("shift", shiftHz.get());
-            x->set("spread", shiftSpread.get());
-            x->set("both", snaps.morph.activation(shiftBoth));
-            x->set("fb", shiftFeed.get());
-            x->set("delay", shiftDelay.get());
-            x->set("tone", shiftTone.get());
-            x->set("mix", shiftMix.get());
-            x->set("on", on);
+            c.set("shift", shiftHz.get());
+            c.set("spread", shiftSpread.get());
+            c.set("both", snaps.morph.activation(shiftBoth));
+            c.set("fb", shiftFeed.get());
+            c.set("delay", shiftDelay.get());
+            c.set("tone", shiftTone.get());
+            c.set("mix", shiftMix.get());
+            c.set("on", on);
             break;
         case StChorus:
-            x->set("rate", chorusRate.get());
-            x->set("depth", chorusDepth.get());
-            x->set("delay", chorusDelay.get());
-            x->set("spread", chorusSpread.get());
-            x->set("mix", chorusMix.get());
-            x->set("on", on);
+            c.set("rate", chorusRate.get());
+            c.set("depth", chorusDepth.get());
+            c.set("delay", chorusDelay.get());
+            c.set("spread", chorusSpread.get());
+            c.set("mix", chorusMix.get());
+            c.set("on", on);
             break;
         case StEq:
-            x->set("on", on);
+            c.set("on", on);
             for(int b = 0; b < 5; b++){
                 const std::string k = "b" + ofToString(b + 1);
-                x->set(k + "gain", eqGain[b].get());
-                x->set(k + "freq", eqFreq[b].get());
-                if(scEQEditor::isShelf(b)) x->set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get()));
-                else x->set(k + "rq", 1.0f / std::max(0.01f, eqShape[b].get()));
+                c.set(k + "gain", eqGain[b].get());
+                c.set(k + "freq", eqFreq[b].get());
+                if(scEQEditor::isShelf(b)) c.set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get()));
+                else c.set(k + "rq", 1.0f / std::max(0.01f, eqShape[b].get()));
             }
             break;
         case StEcho:
-            x->set("delay", echoDelaySec());
-            x->set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
-            x->set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
-            x->set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
-            x->set("filterweights", snaps.morph.weights(echoFilter));
-            x->set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
-            x->set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
-            x->set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
-            x->set("on", on);
+            c.set("delay", echoDelaySec());
+            c.set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
+            c.set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
+            c.set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
+            c.set("filterweights", snaps.morph.weights(echoFilter));
+            c.set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
+            c.set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
+            c.set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
+            c.set("on", on);
             break;
         default:
-            x->set("mix", ofClamp(rvbMix.get(), 0.0f, 1.0f));
-            x->set("decay", std::max(0.05f, rvbDecay.get()));
-            x->set("size", ofClamp(rvbSize.get(), 0.0f, 60.0f));
-            x->set("predelay", ofClamp(rvbPredelay.get(), 0.0f, 500.0f));
-            x->set("position", ofClamp(rvbLate.get(), 0.0f, 1.0f));
-            x->set("spread", ofClamp(rvbSpread.get(), -1.0f, 1.0f));
-            x->set("lowpass", ofClamp(rvbLowpass.get(), 20.0f, 20000.0f));
-            x->set("highdamp", ofClamp(rvbHiDamp.get(), 0.0f, 60.0f));
-            x->set("lowdamp", ofClamp(rvbLoDamp.get(), 0.0f, 60.0f));
-            x->set("modfreq", ofClamp(rvbModRate.get(), 0.001f, 20.0f));
-            x->set("spin", ofClamp(rvbSpin.get(), 0.0f, 20.0f));
-            x->set("wander", ofClamp(rvbWander.get(), 0.0f, 20.0f));
-            x->set("on", on);
+            c.set("mix", ofClamp(rvbMix.get(), 0.0f, 1.0f));
+            c.set("decay", std::max(0.05f, rvbDecay.get()));
+            c.set("size", ofClamp(rvbSize.get(), 0.0f, 60.0f));
+            c.set("predelay", ofClamp(rvbPredelay.get(), 0.0f, 500.0f));
+            c.set("position", ofClamp(rvbLate.get(), 0.0f, 1.0f));
+            c.set("spread", ofClamp(rvbSpread.get(), -1.0f, 1.0f));
+            c.set("lowpass", ofClamp(rvbLowpass.get(), 20.0f, 20000.0f));
+            c.set("highdamp", ofClamp(rvbHiDamp.get(), 0.0f, 60.0f));
+            c.set("lowdamp", ofClamp(rvbLoDamp.get(), 0.0f, 60.0f));
+            c.set("modfreq", ofClamp(rvbModRate.get(), 0.001f, 20.0f));
+            c.set("spin", ofClamp(rvbSpin.get(), 0.0f, 20.0f));
+            c.set("wander", ofClamp(rvbWander.get(), 0.0f, 20.0f));
+            c.set("on", on);
             break;
     }
+    c.send();
 }
 
 void scAnalogBox::sendStageAll(int s) {
     for(auto& [server, st] : states){
         auto& f = st.fx[s];
         if(!f.synth) continue;
-        sendStage(s, f.synth);
-        if(!stageOn(s) && s != StEq) f.synth->set("on", 0.0f);
+        sendStage(s, st);
+        if(!stageOn(s) && s != StEq){ f.synth->set("on", 0.0f); f.sent["on"] = {0.0f}; }
     }
 }
 
@@ -1244,7 +1321,7 @@ void scAnalogBox::requireSynthdefs() {
         return folder;
     };
     for(const auto& [expected, dir] : std::vector<std::pair<std::string, std::string>>{
-            {"ABOsc2.scsyndef", "synthdefs/Defaults/AnalogBox/CompiledSynthdefs/AnalogBox"},
+            {"ABOscMorph2.scsyndef", "synthdefs/Defaults/AnalogBox/CompiledSynthdefs/AnalogBox"},   // (the newest def)
             {"PolyCombSpread2.scsyndef", "synthdefs/Defaults/PolyComb/CompiledSynthdefs/PolyComb"},
             {"ModLfo2.scsyndef", "synthdefs/Defaults/Modulation/CompiledSynthdefs/Modulation"}}){
         const auto folder = find(expected, dir);
@@ -1762,7 +1839,7 @@ void scAnalogBox::applyState(const ofJson& aSaved, const ofJson& bSaved, float t
     }
 
     M.morphGenerators(ca, cb, t, "", [this](const std::string& key){ return drivenByConnection(key); });
-    M.resend();
+    M.sendChanged();
 
     // the matrix
     std::vector<float> ma(NUM_SOURCES * NUM_TARGETS, 0.0f), mb = ma;

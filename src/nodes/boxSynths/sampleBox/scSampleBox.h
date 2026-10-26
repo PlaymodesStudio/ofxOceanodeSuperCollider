@@ -156,6 +156,8 @@ private:
         ofxSCBus* latest = nullptr;      // control, 1: the latest voice (the effects' modulation)
         ofxSCBus* meter = nullptr;       // control, 1: the strip's peak
         std::string engineDef;
+        bool settlePending = false;      // on _M while the morph rests at R or T: swap once idle
+        int idleReads = 0;               // consecutive all-silent playhead reads
         bool created = false;
     };
     struct Pad {
@@ -225,6 +227,7 @@ private:
     std::map<ofxSCServer*, int> inputBuses;                   // Trig/Gate Audio
     float bpm = 120.0f;
     float nextMeterRead = 0.0f;
+    float nextSettleRead = 0.0f;
     ofEventListeners nodeListeners;
     ofEventListener dragListener;
 
@@ -259,6 +262,8 @@ private:
     void ensureBuffers(Pad& p, ofxSCServer*);
     void releaseBuffers(Sample& s, ofxSCServer*);
     std::string engineDef(const Pad& p) const;
+    void syncEngine(ofxSCServer*, Pad& p);   // the right definition (see engineDef), its values
+    void settleEngines();                     // _M -> R / T on idle pads
     void createPad(ofxSCServer*, Pad& p);
     void destroyPad(ofxSCServer*, Pad& p, bool sendFree = true);
     void syncPad(Pad& p);                    // every server: synths that should exist, all values

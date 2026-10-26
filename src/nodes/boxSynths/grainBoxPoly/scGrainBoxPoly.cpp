@@ -565,7 +565,14 @@ void scGrainBoxPoly::setup() {
         };
         h.morphChanged = [this]() {
             rebuildFxAll();sendFxParamsAll();
-            for(auto& ph:playheads)for(auto& [server,synth]:ph->synths)setFilterArgs(*ph,synth);
+            for(auto& ph:playheads){
+                // Upload the 512-point envelope only when the morph moved it
+                const auto envBefore = ph->envKey;
+                computeEnvData(*ph);
+                if(ph->envKey != envBefore) ph->envNeedsUpdate = true;
+                const auto pan = panSend(*ph, phVoices(*ph));
+                for(auto& [server,synth]:ph->synths){ setFilterArgs(*ph,synth); setScaleArgs(*ph,synth); if(synth) synth->set("panaz", pan); }
+            }
         };
         snaps.setup(h);
     }
@@ -615,6 +622,7 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.envRelease.set     ("EnvRelease"   + x, 0.1f, 0.0f, 1.0f);
     ph.envTension.set     ("EnvTension"   + x, 0.0f, -1.0f, 1.0f);
     ph.envShape.set       ("EnvShape"     + x, 0, 0, 6);
+    snaps.morph.mode(ph.envShape, 7);
     ph.liveLength.set     ("Live Length"  + x, 4.0f, 1.0f, 30.0f);
     ph.liveLenBeats.set   ("LiveLenBeats" + x, false);
     ph.grainless.set      ("Grainless"    + x, false);
@@ -650,6 +658,18 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.ampCD.set          ("Amp Decay Curve"   + x, -4.0f, -12.0f, 12.0f);
     ph.ampCR.set          ("Amp Release Curve" + x, -4.0f, -12.0f, 12.0f);
     ph.placement.set      ("Placement"    + x, 0, 0, 2);
+    snaps.morph.mode(ph.placement,3);
+    snaps.morph.resolved(ph.scaleType,
+        [this, p = &ph](const ofJson& saved) -> ofJson { return scaleMorphData(*p, saved); },
+        [this, p = &ph]() {
+            ofJson key=ofJson::array();
+            for(const auto* control : {&p->scaleType,&p->scaleRoot,&p->scaleMask}){
+                const auto pin=publishedEditorParameterHandles.find(control->getEscapedName());
+                key.push_back(pin!=publishedEditorParameterHandles.end() && pin->second->hasInConnection());
+                key.push_back(control->get());
+            }
+            return key;
+        });
     // the window combos' names (published: dropdowns), as drawn there
     dropdowns.set(ph.intervalUnit.getEscapedName(), {"Rel", "ms", "Beats", "Pitch"});
     dropdowns.set(ph.scaleType.getEscapedName(), {"Off", "Chromatic", "Major", "Minor", "Harm. minor", "Dorian",
@@ -661,6 +681,7 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     dropdowns.set(ph.placement.getEscapedName(), {"Manual (PanAz)", "Spread", "Channels"});
     ph.spreadWidth.set    ("Spread Width" + x, 1.0f, 0.0f, 1.0f);
     ph.envData.assign(ENV_BUFFER_SIZE, 0.0f);
+    ph.envKey.clear();
     setupModulation(ph);
 }
 
@@ -1374,12 +1395,13 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     }));
     vfListener("reverse",          ph.reverse);
     // Scale / root / custom mask → scaleon, scaleroot, scalemask
-    auto scaleListener = [this, p](int&) { for(auto& [srv, s] : p->synths) setScaleArgs(*p, s); };
+    auto scaleListener = [this, p](int&) { snaps.morph.edited(p->scaleType); for(auto& [srv, s] : p->synths) setScaleArgs(*p, s); };
     ph.listeners.push(ph.scaleType.newListener(scaleListener));
     ph.listeners.push(ph.scaleRoot.newListener(scaleListener));
     ph.listeners.push(ph.scaleMask.newListener(scaleListener));
     // Envelope shape → recompute + upload (like attack / release / tension)
     ph.listeners.push(ph.envShape.newListener([this, p](int&) {
+        snaps.morph.edited(p->envShape);
         computeEnvData(*p);
         p->envNeedsUpdate = true;
     }));
@@ -1474,7 +1496,7 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
         const auto ev = panSend(*p, phVoices(*p));
         for(auto& [srv, s] : p->synths) if(s) s->set("panaz", ev);
     };
-    ph.listeners.push(ph.placement.newListener([toPan](int&) { toPan(); }));
+    ph.listeners.push(ph.placement.newListener([this, p, toPan](int&) { snaps.morph.edited(p->placement); toPan(); }));
     ph.listeners.push(ph.spreadWidth.newListener([toPan](float&) { toPan(); }));
 
     // Manual trigger → per-voice counters (see triggerCountsFor)
@@ -1532,6 +1554,9 @@ void scGrainBoxPoly::ensureEnvBuffer(Playhead& ph, ofxSCServer* srv) {
 }
 
 void scGrainBoxPoly::resendParametersForNRT() {
+    // An explicit offline-state resend must include unchanged FX controls.
+    // Keep change-only batches for ordinary morph frames.
+    fxSent.clear();
     for(auto& phPtr : playheads) {
         Playhead& ph = *phPtr;
         if((int)ph.envData.size() != ENV_BUFFER_SIZE) computeEnvData(ph);
@@ -2356,9 +2381,9 @@ void scGrainBoxPoly::updateLivePeaks(Playhead& ph) {
 // ════════════════════════════════════════════════════════════════════════════
 
 // 12-bit masks relative to the root (bit k: root + k semitones allowed)
-int scGrainBoxPoly::scaleMaskFor(const Playhead& ph) const {
+static int gbpScaleMask(int type, int custom) {
     auto bits = [](std::initializer_list<int> steps) { int m = 0; for(int k : steps) m |= 1 << k; return m; };
-    switch(ph.scaleType.get()) {
+    switch(type) {
         case 1:  return 4095;                                  // Chromatic
         case 2:  return bits({0, 2, 4, 5, 7, 9, 11});          // Major
         case 3:  return bits({0, 2, 3, 5, 7, 8, 10});          // Minor
@@ -2369,9 +2394,35 @@ int scGrainBoxPoly::scaleMaskFor(const Playhead& ph) const {
         case 8:  return bits({0, 2, 4, 6, 8, 10});             // Whole tone
         case 9:  return bits({0});                             // Octaves
         case 10: return bits({0, 7});                          // Fifths + octaves
-        case 11: return ph.scaleMask.get() & 4095;             // Custom
+        case 11: return custom & 4095;             // Custom
         default: return 4095;
     }
+}
+
+int scGrainBoxPoly::scaleMaskFor(const Playhead& ph) const { return gbpScaleMask(ph.scaleType.get(), ph.scaleMask.get()); }
+
+std::vector<float> scGrainBoxPoly::scaleMorphData(const Playhead& ph, const ofJson& saved) const {
+    auto read = [&](const ofParameter<int>& p){
+        const auto key = p.getEscapedName();
+        const auto pin = publishedEditorParameterHandles.find(key);
+        if(pin != publishedEditorParameterHandles.end() && pin->second->hasInConnection()) return p.get();
+        const auto values = saved.contains(key) ? scModulationMorph::numbers(saved[key]) : std::vector<float>{};
+        return values.empty() ? p.get() : int(values[0]);
+    };
+    const int type = read(ph.scaleType), root = std::clamp(read(ph.scaleRoot), 0, 11), mask = gbpScaleMask(type, read(ph.scaleMask));
+    const bool on = type > 0 && mask != 0;
+    std::vector<float> result(25, 0.f); result[0] = on ? 1.f : 0.f;
+    if(!on) return result;
+    // Resolve all roots into the same C-relative bins before interpolation.
+    // Keep the activation separate so Off retains fractional, unsnapped pitch.
+    for(int j = 0; j < 24; ++j){
+        const int note = (j+1)/2;
+        for(int off : {0,-1,1,-2,2,-3,3,-4,4,-5,5,-6,6}){
+            const int candidate = note+off;
+            if((mask >> (((candidate-root)%12+12)%12)) & 1){ result[j+1] = float(candidate); break; }
+        }
+    }
+    return result;
 }
 
 // The synth snaps with ONE lookup per voice: x = (pitch - root) wrapped to
@@ -2381,6 +2432,16 @@ int scGrainBoxPoly::scaleMaskFor(const Playhead& ph) const {
 // table[j] = that note, relative to the octave start (may be -6..18).
 void scGrainBoxPoly::setScaleArgs(Playhead& ph, ofxSCSynth* s) {
     if(!s) return;
+    if(snaps.morph.hasEffective(ph.scaleType)){
+        const auto values = snaps.morph.resolvedValue(ph.scaleType);
+        if(values.is_array() && values.size() == 25){
+            const float active = std::clamp(values[0].get<float>(),0.f,1.f);
+            std::vector<float> table(24, 0.f);
+            if(active > 0) for(int j=0;j<24;++j) table[j] = values[j+1].get<float>() / active;
+            s->set("scaleon",active); s->set("scaleroot",0.f); s->set("scaletable",table);
+            return;
+        }
+    }
     const int mask = scaleMaskFor(ph);
     static const int offs[13] = {0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6};
     std::vector<float> table(24);
@@ -2658,6 +2719,11 @@ float scGrainBoxPoly::echoDelaySec() const {
 
 void scGrainBoxPoly::sendFxParams(int stage, ofxSCSynth* s) {
     if(!s) return;
+    // Snapshot morphs resend every stage each frame: only changed controls go
+    // out, in one message. Node IDs are never reused, so a new synth starts clean.
+    ofxSCServer* srv = nullptr;   // the stage's server (its synth doesn't expose it)
+    for(auto& [server, st] : fx) for(auto* x : st.synths) if(x == s) srv = server;
+    scSynthControlBatch c(s, srv, srv && s->nodeID > 0 ? &fxSent[s->nodeID] : nullptr);
     const int n = std::max(1, std::min(MAX_CHANNELS, numChannelsP.get()));
     auto vec = [n](float v) { return std::vector<float>(n, v); };
     switch(stage) {
@@ -2665,43 +2731,46 @@ void scGrainBoxPoly::sendFxParams(int stage, ofxSCSynth* s) {
             // graphiceqN: bNgain dB, bNfreq Hz, shelves bNslope, peaks bNrq = 1/Q
             for(int b = 0; b < 5; b++) {
                 const std::string k = "b" + ofToString(b + 1);
-                s->set(k + "gain", vec(eqGainP[b].get()));
-                s->set(k + "freq", vec(eqFreqP[b].get()));
+                c.set(k + "gain", vec(eqGainP[b].get()));
+                c.set(k + "freq", vec(eqFreqP[b].get()));
                 // shelves: SC's argument is rs = 1/S (the editor's "slope" is S),
                 // kept where the filter stays defined (no NaN at high gain)
                 if(scEQEditor::isShelf(b))
-                    s->set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShapeP[b].get(), eqGainP[b].get())));
-                else                       s->set(k + "rq",    vec(1.0f / std::max(0.01f, eqShapeP[b].get())));
+                    c.set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShapeP[b].get(), eqGainP[b].get())));
+                else                       c.set(k + "rq",    vec(1.0f / std::max(0.01f, eqShapeP[b].get())));
             }
-            s->set("mix", eqMixP.get() * snaps.morph.activation(fxOnP[stage]));
+            c.set("mix", eqMixP.get() * snaps.morph.activation(fxOnP[stage]));
             break;
         case FX_ECHO:
-            s->set("filterweights", snaps.morph.weights(echoFilterP));
-            s->set("delay",  vec(echoDelaySec()));
-            s->set("feed",   vec(echoFeedP.get()));
-            s->set("cutoff", vec(echoCutoffP.get()));
-            s->set("mix",    vec(echoMixP.get() * snaps.morph.activation(fxOnP[stage])));
+            c.set("filterweights", snaps.morph.weights(echoFilterP));
+            c.set("delay",  vec(echoDelaySec()));
+            c.set("feed",   vec(echoFeedP.get()));
+            c.set("cutoff", vec(echoCutoffP.get()));
+            c.set("mix",    vec(echoMixP.get() * snaps.morph.activation(fxOnP[stage])));
             // OceanodeParameterDropdown.ar(\filtertype, ...): a plain "filtertype"
             // control of n values (the item index as a float)
-            s->set("filtertype", vec((float)std::max(0, std::min(3, echoFilterP.get()))));
-            s->set("resonance",  vec(echoResonanceP.get()));
+            c.set("filtertype", vec((float)std::max(0, std::min(3, echoFilterP.get()))));
+            c.set("resonance",  vec(echoResonanceP.get()));
             break;
         case FX_REVERB:
-            s->set("size",     revSizeP.get());
-            s->set("decay",    revDecayP.get());
-            s->set("predelay", revPredelayP.get());
-            s->set("lowpass",  revLowpassP.get());
-            s->set("mix",      revMixP.get() * snaps.morph.activation(fxOnP[stage]));
-            s->set("position", revPositionP.get());
-            s->set("spread",   revSpreadP.get());
+            c.set("size",     revSizeP.get());
+            c.set("decay",    revDecayP.get());
+            c.set("predelay", revPredelayP.get());
+            c.set("lowpass",  revLowpassP.get());
+            c.set("mix",      revMixP.get() * snaps.morph.activation(fxOnP[stage]));
+            c.set("position", revPositionP.get());
+            c.set("spread",   revSpreadP.get());
             break;
         default: break;
     }
+    c.send();
 }
 
 void scGrainBoxPoly::sendFxParamsAll() {
+    std::set<int> live;
     for(auto& [srv, st] : fx)
-        for(int stage : st.plan) if(st.synths[stage]) sendFxParams(stage, st.synths[stage]);
+        for(int stage : st.plan) if(st.synths[stage]){ sendFxParams(stage, st.synths[stage]); live.insert(st.synths[stage]->nodeID); }
+    for(auto it = fxSent.begin(); it != fxSent.end(); ) it = live.count(it->first) ? std::next(it) : fxSent.erase(it);
 }
 
 // Stage i reads bus i and writes bus i+1 (the last one: the output bus); each
@@ -2930,12 +2999,18 @@ void scGrainBoxPoly::draw(ofEventArgs& /*args*/) {
 // Values are in 0..1 by construction (clamped), read by GrainBuf with linear
 // interpolation across the grain: the envelope never adds gain.
 void scGrainBoxPoly::computeEnvData(Playhead& ph) {
-    if((int)ph.envData.size() != ENV_BUFFER_SIZE)
-        ph.envData.resize(ENV_BUFFER_SIZE, 0.0f);
-
     float rawAtk = ph.envAttack.get();   // 0..1
     float rawRel = ph.envRelease.get();  // 0..1
     float tension = ph.envTension.get(); // -1..1
+    // Snapshot morphs call this every frame: rebuild only when an input moved
+    const bool morphed = snaps.morph.hasEffective(ph.envShape);
+    const auto weights = snaps.morph.weights(ph.envShape);
+    std::vector<float> key{rawAtk, rawRel, tension, float(ph.envShape.get()), morphed ? 1.0f : 0.0f};
+    if(morphed) key.insert(key.end(), weights.begin(), weights.end());
+    if((int)ph.envData.size() == ENV_BUFFER_SIZE && key == ph.envKey) return;
+    ph.envKey = std::move(key);
+    if((int)ph.envData.size() != ENV_BUFFER_SIZE)
+        ph.envData.resize(ENV_BUFFER_SIZE, 0.0f);
 
     // Normalise so attack + release never exceed 1.0
     float total = rawAtk + rawRel;
@@ -2943,7 +3018,8 @@ void scGrainBoxPoly::computeEnvData(Playhead& ph) {
     float rel = (total > 1.0f) ? rawRel / total : rawRel;
 
     // Preset shapes (Custom = the attack / release / tension editor below)
-    const int shape = ph.envShape.get();
+    // The selector stays integer in the editor; evaluate each contributing envelope.
+    auto build = [&](int shape) {
     if(shape > 0) {
         const int N = ENV_BUFFER_SIZE;
         const float pi = 3.14159265358979f;
@@ -2997,6 +3073,14 @@ void scGrainBoxPoly::computeEnvData(Playhead& ph) {
         }
         ph.envData[i] = std::max(0.0f, std::min(1.0f, val));
     }
+    };
+    if(!morphed){ build(ph.envShape.get()); return; }
+    std::vector<float> blended(ENV_BUFFER_SIZE, 0.f);
+    for(size_t shape = 0; shape < weights.size(); ++shape) if(weights[shape] > 0){
+        build(int(shape));
+        for(size_t i = 0; i < blended.size(); ++i) blended[i] += weights[shape] * ph.envData[i];
+    }
+    ph.envData = std::move(blended);
 }
 
 void scGrainBoxPoly::uploadEnvBuffers(Playhead& ph) {
@@ -6312,7 +6396,7 @@ float scGrainBoxPoly::regionSecOf(const Playhead& ph) const {
 // playhead i on speaker i (round again past the last)
 std::vector<float> scGrainBoxPoly::panSend(const Playhead& ph, int n) const {
     std::vector<float> base = expandF(ph.panAz.get(), n);
-    const int mode = ph.placement.get();
+    auto evaluate = [&](int mode) {
     const int C = phChannels(ph);
     if(mode == 0 || C < 2) return base;
     std::vector<float> out(n);
@@ -6329,6 +6413,15 @@ std::vector<float> scGrainBoxPoly::panSend(const Playhead& ph, int n) const {
         }
     }
     return out;
+    };
+    if(!snaps.morph.hasEffective(ph.placement)) return evaluate(ph.placement.get());
+    const auto weights = snaps.morph.weights(ph.placement);
+    std::vector<float> blended(n, 0.f);
+    for(size_t mode = 0; mode < weights.size(); ++mode) if(weights[mode] > 0){
+        const auto values = evaluate(int(mode));
+        for(int i = 0; i < n; ++i) blended[i] += weights[mode] * values[i];
+    }
+    return blended;
 }
 
 void scGrainBoxPoly::ensureModResources(Playhead& ph, ofxSCServer* srv) {

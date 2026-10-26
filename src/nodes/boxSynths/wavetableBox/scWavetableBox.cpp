@@ -320,7 +320,8 @@ void scWavetableBox::setup(){
         h.morphBlocked = [this](const std::string& k){
             auto it=publishedHandles.find(k);return it!=publishedHandles.end() && it->second->hasInConnection();
         };
-        snaps.morph.mode(warp1,9);snaps.morph.mode(warp2,9);
+        snaps.morph.mode(warp1,NumWarps);snaps.morph.mode(warp2,NumWarps);
+        snaps.morph.mode(placement,3);snaps.morph.mode(speakerLayout,2);
         snaps.morph.neutralDepth(bSource,fm);snaps.morph.neutralDepth(bSource,bFeedback);
         for(auto& on:fxOn)snaps.morph.bypass(on);
         h.morphChanged=[this](){soundDirty=true;updateOutputs();};
@@ -395,15 +396,17 @@ void scWavetableBox::setup(){
     bindFloat(bFeedback, "fb", 0);
     bindFloat(fmDamp, "damp", 1);
     bindFloat(phase, "phase", 0);
-    auto bindInt = [this](ofParameter<std::vector<int>>& p, std::string control){
-        nodeListeners.push(p.newListener([this, control,&p](std::vector<int>& v){
+    auto bindInt = [this](ofParameter<std::vector<int>>& p){
+        nodeListeners.push(p.newListener([this,&p](std::vector<int>&){
             snaps.morph.edited(p);
-            sendVector(control, std::vector<float>(v.begin(), v.end()), 0);
+            // Modes and their effective weights are one DSP update. Sending
+            // the integer selector alone can briefly expose a different mode.
+            if(!snaps.morph.applying()) for(auto& [server, synth] : synths) sendAll(server);
             soundDirty=true;
         }));
     };
-    bindInt(warp1, "w1mode");
-    bindInt(warp2, "w2mode");
+    bindInt(warp1);
+    bindInt(warp2);
     nodeListeners.push(bSource.newListener([this](int&){
         snaps.morph.edited(bSource);
         for(auto& [server, synth] : synths) sendBuffers(server);
@@ -1171,6 +1174,26 @@ float scWavetableBox::warpPhase(float p, int mode, float amt){
 // Publishing
 // ════════════════════════════════════════════════════════════════════════════
 
+float scWavetableBox::morphedWarpPhase(float phase, int voice, float amount1, float amount2) const {
+    return morphedWarpPhase(phase, warpBlend(voice), amount1, amount2);
+}
+
+scWavetableBox::WarpBlend scWavetableBox::warpBlend(int voice) const {
+    WarpBlend b;
+    b.mode1 = valueFor(warp1.get(), voice, 0);
+    b.mode2 = valueFor(warp2.get(), voice, 0);
+    if(snaps.morph.hasEffective(warp1)) b.weights1 = snaps.morph.weights(warp1, voice);
+    if(snaps.morph.hasEffective(warp2)) b.weights2 = snaps.morph.weights(warp2, voice);
+    return b;
+}
+
+float scWavetableBox::morphedWarpPhase(float phase, const WarpBlend& b, float amount1, float amount2) {
+    const float first = scMorphPolicies::evaluateWeights(b.weights1, b.mode1,
+        [&](int mode){ return warpPhase(phase, mode, amount1); });
+    return scMorphPolicies::evaluateWeights(b.weights2, b.mode2,
+        [&](int mode){ return warpPhase(first, mode, amount2); });
+}
+
 template<typename T>
 void scWavetableBox::addPublishAction(ofParameter<T>& parameter, std::vector<std::string> dropdown){
     auto* p = &parameter;
@@ -1254,6 +1277,12 @@ ofJson scWavetableBox::captureSound() const {
 
 void scWavetableBox::applySound(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw){
     auto a = aSaved, b = bSaved; migrateLegacy(a); migrateLegacy(b);
+    // Quality is init-time DSP configuration. An A/B quality switch rebuilds
+    // every oscillator and resets phase, independently of the warp blend.
+    // Retain the running quality for the whole morph, including its endpoints;
+    // an explicit recall (a == b) or manual edit can still change it.
+    const auto qualityKey = oversample.getEscapedName();
+    const bool retainQuality = a.value(qualityKey,ofJson(oversample.get())) != b.value(qualityKey,ofJson(oversample.get()));
     const int before = renderingVoices();
     voiceMorphWeights = hasPublishedConnection(voices.getEscapedName())
         ? scVoiceCountMorph::endpoint(ofJson{{"Voices", voices.get()}}, voices.get(), MAX_CHANNELS, "Voices")
@@ -1264,9 +1293,9 @@ void scWavetableBox::applySound(const ofJson& aSaved, const ofJson& bSaved, floa
     restoring = true;
     voices = wanted;
     auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);
-    scSnapshots::blendActions(publishActions,pinnedA,pinnedB,t,sw,[this](const std::string& k){
+    scSnapshots::blendActions(publishActions,pinnedA,pinnedB,t,sw,[this,retainQuality](const std::string& k){
         auto it=publishedHandles.find(k);
-        return k == voices.getEscapedName() || notInSound(k) || (it!=publishedHandles.end() && it->second->hasInConnection());
+        return k == voices.getEscapedName() || (retainQuality && k == oversample.getEscapedName()) || notInSound(k) || (it!=publishedHandles.end() && it->second->hasInConnection());
     });
     modulation.loadMorph(a,b,t,sw,"wavetableMod",[this](const std::string& key){
         const auto* action=findPublishAction(key);
@@ -1779,11 +1808,11 @@ void scWavetableBox::drawCycleStrip(ImVec2 size){
     std::vector<ImVec2> pts(points);
     const int voices = std::min(std::clamp(this->voices.get(), 1, MAX_CHANNELS), maxDrawnVoices);
     for(int v = voices - 1; v >= 0; v--){
-        const int m1 = valueFor(warp1.get(), v, 0), m2 = valueFor(warp2.get(), v, 0);
         const float a1 = visualValue(warp1Amt, TWarp1, v), a2 = visualValue(warp2Amt, TWarp2, v);
+        const auto blend = warpBlend(v);
         for(int i = 0; i < points; i++){
             const float ph = float(i) / (points - 1);
-            const float w = warpPhase(warpPhase(ph, m1, a1), m2, a2);
+            const float w = morphedWarpPhase(ph, blend, a1, a2);
             pts[i] = ImVec2(o.x + size.x * ph, mid - ofClamp(voiceValue(v, w), -1.2f, 1.2f) * amp);
         }
         dl->AddPolyline(pts.data(), points, voiceColor(v, v == 0 ? 1.0f : 0.6f), 0, v == 0 ? 2.0f : 1.2f);
@@ -1916,7 +1945,7 @@ void scWavetableBox::drawControls(){
     controlMenu(trig.getEscapedName());
     ImGui::SetNextItemWidth(-FLT_MIN);
     comboInt(oversample, oversampleNames);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Mipmapping already band-limits plain playback;\n2x helps heavy warps and FM. Restarts the synth.");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Mipmapping already band-limits plain playback;\n2x helps heavy warps and FM. Manual changes restart the synth.\nA/B morphs retain the running quality to preserve oscillator phase.");
 
     ImGui::EndTable();
 }

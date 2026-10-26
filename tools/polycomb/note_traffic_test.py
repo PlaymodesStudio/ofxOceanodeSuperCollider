@@ -20,6 +20,7 @@ stub = r'''
 struct Arg { char type; std::string text; float value; };
 struct ofxOscMessage {
     std::string address; std::vector<Arg> args;
+    void clear(){address.clear();args.clear();}
     void setAddress(std::string s){address=s;}
     void addIntArg(int v){args.push_back({'i',"",float(v)});}
     void addFloatArg(float v){args.push_back({'f',"",v});}

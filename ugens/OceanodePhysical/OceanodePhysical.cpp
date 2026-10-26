@@ -133,7 +133,7 @@ struct PhysicalVoice : public Unit {
     double cei[2 * MAXM], cex[2 * MAXM], cec[2 * MAXM], ces[2 * MAXM];
     // the body's modes, recomputed when what they depend on changes
     Mode bm[MAXM];
-    double bkey[9];
+    double bkey[9+NFAMILIES];
     int bcount;
     // per block
     double apc, pda, ga, bla, la0, fa0, fb0, lfac, rn, rbs, kia, kca, catk, crel;
@@ -270,16 +270,24 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
 
     // resonator B: the model's modes (cached), drift, tension and doublets
     u->fb0 = std::max(P(P_freq) * std::pow(2, P(P_btune) / 12), 1.0);
+    FamilyWeights familyWeights{},familyCaps{};double familyNorm=0,familyTotal=0;
     {
         Body bd;
         bd.family = P(P_bfamily); bd.shape = P(P_bshape); bd.stretch = P(P_bstretch);
         bd.material = mat; bd.bdecay = P(P_bdecay); bd.freeze = P(P_freeze); bd.bright = P(P_bbright);
         bd.f0 = u->fb0;
-        const double key[9] = {bd.family, bd.shape, bd.stretch, bd.material, bd.bdecay, bd.freeze, bd.bright, bd.f0, P(P_bmodes)};
-        if (!std::equal(key, key + 9, u->bkey)) {
-            std::copy(key, key + 9, u->bkey);
-            u->bcount = std::min(int(clip(std::ceil(P(P_bmodes)), 1, MAXM)), modeCount(bd));
-            for (int k = 0; k < u->bcount; ++k) u->bm[k] = mode(k, bd);
+        if(u->mNumInputs>=P_COUNT+NFAMILIES)for(int family=0;family<NFAMILIES;++family)familyWeights[family]=IN0(P_COUNT+family);
+        familyWeights=normalizeFamilies(familyWeights);
+        for(int family=0;family<NFAMILIES;++family)if(familyWeights[family]>0){
+            auto own=bd;own.family=family;familyCaps[family]=clip(P(P_bmodes),1,std::max(1,modeCount(own)));
+            familyNorm+=familyWeights[family]*1.5/std::sqrt(familyCaps[family]);familyTotal+=familyWeights[family];
+        }
+        double key[9+NFAMILIES] = {bd.family, bd.shape, bd.stretch, bd.material, bd.bdecay, bd.freeze, bd.bright, bd.f0, P(P_bmodes)};
+        std::copy(familyWeights.begin(),familyWeights.end(),key+9);
+        if (!std::equal(key, key + 9+NFAMILIES, u->bkey)) {
+            std::copy(key, key + 9+NFAMILIES, u->bkey);
+            u->bcount = std::min(int(clip(std::ceil(P(P_bmodes)), 1, MAXM)), modeCount(bd,familyWeights));
+            for (int k = 0; k < u->bcount; ++k) u->bm[k] = mode(k, bd,familyWeights);
         }
     }
     const int mc = u->bcount;
@@ -327,7 +335,7 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
             const Weights wt = weights(m, spots);
             // Contact and pickup both contribute one square-root presence:
             // each mode enters continuously without resetting existing state.
-            const double presence = std::sqrt(clip(effectiveModes - k, 0, 1));
+            const double presence = std::sqrt(clip(effectiveModes - k, 0, 1)*m.coverage);
             u->mpe[k] = wt.e * presence;
             u->mp1[k] = wt.p1 * m.amp * presence;
             u->mp2[k] = wt.p2 * m.amp * presence;
@@ -349,10 +357,12 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         u->mp2[MAXM + k] = u->mp2[k]; u->mpc[MAXM + k] = u->mpc[k];
         // The low/high cascade split depends on count too. Interpolate
         // its two integer results so crossing a multiple of four cannot step.
-        const int low = std::max(2, int(std::floor(effectiveModes)) / 4);
-        const int high = std::max(2, int(std::ceil(effectiveModes)) / 4);
-        const double fraction = effectiveModes - std::floor(effectiveModes);
-        const double lo = (k < low ? 1.0 : 0.0) * (1-fraction) + (k < high ? 1.0 : 0.0) * fraction;
+        auto lowAt = [k](double count){
+            const int low=std::max(2,int(std::floor(count))/4),high=std::max(2,int(std::ceil(count))/4);
+            const double f=count-std::floor(count);return (k<low ? 1.0 : 0.0)*(1-f)+(k<high ? 1.0 : 0.0)*f;
+        };
+        double lo=familyTotal>0 ? 0 : lowAt(effectiveModes);
+        if(familyTotal>0)for(int family=0;family<NFAMILIES;++family)if(familyWeights[family]>0)lo+=familyWeights[family]*lowAt(familyCaps[family]);
         u->mlo[k] = u->mlo[MAXM + k] = lo;
         u->mcs[k] = u->mcs[MAXM + k] = 1-lo;
     }
@@ -367,7 +377,7 @@ static void PhysicalVoice_next(PhysicalVoice* u, int n) {
         u->cec[i2] = u->mpc[j] * u->mgx[j]; u->ces[i2] = u->mpc[j] * u->mcs[j] * u->mgx[j];
     }
     u->mcount = std::max(mc, 1);
-    u->bnorm = 1.5 / std::sqrt(effectiveModes);
+    u->bnorm = familyTotal>0 ? familyNorm : 1.5 / std::sqrt(effectiveModes);
 
     u->scgc = std::exp(-2 * M_PI * (200 + 14000 * std::pow(1 - clip(P(P_grit), 0, 1), 2)) / sr);
     u->exa = 1 - clip(P(P_excite), 0, 1);

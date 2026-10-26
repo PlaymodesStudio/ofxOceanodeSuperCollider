@@ -128,5 +128,17 @@ int main() {
     near(tables.resolvedValue(table)[0],.25f);near(tables.resolvedValue(table)[1],.5f);
     ofJson ts={{"Table","A"}};tables.capture(ts);
     tables.begin(ts,{{"Table","B"}},0);tables.end();near(tables.resolvedValue(table)[1],.5f);
+    // Preserve the optimized endpoint cache, including evaluators that also
+    // depend on connected controls (GrainBox root/mask). Only changed inputs
+    // invalidate the resolved entry; ordinary modes remain cached.
+    scMorphPolicies cached;ofParameter<int> scale("Scale",0),other("Other",0);
+    int root=2,evaluations=0,ordinaryEvaluations=0;
+    cached.resolved(scale,[&](const ofJson& j)->ofJson{++evaluations;return ofJson::array({j.value("Scale",0)+root});},[&]()->ofJson{return root;});
+    cached.resolved(other,[&](const ofJson& j)->ofJson{++ordinaryEvaluations;return j.value("Other",0);});
+    ofJson ca={{"Scale",0},{"Other",0}},cb={{"Scale",4},{"Other",8}};
+    cached.begin(ca,cb,.25f);cached.end();near(cached.resolvedValue(scale)[0],3);assert(evaluations==2 && ordinaryEvaluations==2);
+    cached.begin(ca,cb,.75f);cached.end();near(cached.resolvedValue(scale)[0],5);assert(evaluations==2 && ordinaryEvaluations==2);
+    root=9;cached.begin(ca,cb,.75f);cached.end();near(cached.resolvedValue(scale)[0],12);assert(evaluations==4 && ordinaryEvaluations==2);
+    cb["Scale"]=8;cached.begin(ca,cb,.25f);cached.end();near(cached.resolvedValue(scale)[0],11);assert(evaluations==6 && ordinaryEvaluations==4);
     std::cout << "PASS: continuous bypass, zero-depth, direct mode weights, stored/interrupted/reversed morphs, connections, manual edits and legacy schemas\n";
 }

@@ -134,6 +134,7 @@ public:
     int targetBus(ofxSCServer* server, int target) const;     // W wide, N channels used
     int sourceBus(ofxSCServer* server, int source) const;
     void resend();                                            // everything again (NRT)
+    void sendChanged();                                       // morph frames: only values the server needs
     void setBpm(float bpm);
     void resetLfos();
     void voicesChanged();                                     // a new voice count (no server synths: GrainBox)
@@ -261,6 +262,19 @@ private:
         int sourceGroup = -1, routeGroup = -1, gateBus = -1;
         bool created = false;
         int builtVoices = 0;
+        // What each synth / bus last received: morph frames resend only what
+        // changed (scSynthControlBatch caches). resend() clears them (NRT).
+        using Sent = std::map<std::string, std::vector<float>>;
+        std::array<Sent, MAX_LFOS> lfoSent;
+        std::array<Sent, MAX_ENVS> envSent;
+        std::map<int, std::pair<float, float>> routeSent;   // amount, decor
+        std::map<int, std::vector<float>> busSent;          // source buses
+        std::vector<bool> zeroed;                           // unrouted target buses already cleared
+        void clearSent() {
+            for(auto& c : lfoSent) c.clear();
+            for(auto& c : envSent) c.clear();
+            routeSent.clear(); busSent.clear(); zeroed.clear();
+        }
     };
     Host host;
     ofJson generatorMorph = ofJson::object();
@@ -315,10 +329,11 @@ private:
     void forStates(const std::function<void(ofxSCServer*, ServerState&)>& f);
     void sendVec(ofxSCSynth* s, const std::string& name, const std::vector<float>& v);
     void sendLfo(ofxSCServer* server, ServerState& st, int li);
-    void sendEnv(ServerState& st, int e);
+    void sendEnv(ofxSCServer* server, ServerState& st, int e);
     void updateSources(ofxSCServer* server, ServerState& st);
     void syncRoutes(ofxSCServer* server, ServerState& st);
     void writeSources(ofxSCServer* server, ServerState& st);
+    void loadState(const ofJson& j, const std::string& prefix, bool generators);
     void updatePhases();
     std::vector<float> lfoHzFor(int li) const;
     std::vector<float> lfoShFor(int li) const;

@@ -21,9 +21,13 @@ behavior. Existing numeric/logarithmic interpolation remains unchanged.
   interpolate endpoint depths after replacing disabled endpoint depths with zero.
   Use `value(depth)`; do not multiply this result by activation again. An enabled
   endpoint is a boolean true or a positive selector (e.g. FM source 0 = None).
-- `resolved(parameter, evaluator)`: interpolate evaluated arrays (waveforms,
+- `resolved(parameter, evaluator, optionalDependencies)`: interpolate evaluated arrays (waveforms,
   envelopes or pitch/response tables) instead of switching a selector. Read them
   with `resolvedValue`; metadata retains the evaluated intermediate result.
+  Endpoint results stay cached for the snapshot pair. Evaluators that also read
+  live inputs supply a dependency key so only their affected entry is refreshed.
+- `evaluateVector(parameter, evaluator)`: blend evaluated fixed-width vectors,
+  such as speaker positions, from the effective mode weights.
 - `neutralDepth(mode, depth, container)`: for stateful algorithms with a neutral
   carrier/dry path, fade depth to zero at the midpoint and restore it afterward.
   Call `pinSelectors` on copies passed to the ordinary parameter loader, so the
@@ -59,19 +63,19 @@ ignore a stored intermediate audio blend.
 
 | Engine | Continuous activation / depth | Parallel mode blending |
 | --- | --- | --- |
-| PolyComb | Temporary voice-count banks; interpolation of evaluated oscillator/resonator map pitches | Count-dependent voice-bank outputs; inherited/independent resonator tuning |
+| PolyComb | Temporary voice-count banks; evaluated map pitches; filter/postfilter and echo algorithm changes through neutral depth | Count-dependent voice-bank outputs; inherited/independent resonator tuning; Comb/Ring pitch sources; placement/layout |
 | AnalogBox | All insert/filter bypasses; filter algorithm/type via zero wet; sync; frequency-shift sidebands; FM depth; oscillator presence, including raw FM/ring signals | FM source signals; echo filter types; free/synced oscillators |
-| PhysicalBox | Saturation, EQ, echo, reverb, space bypasses; radiator/sympathetic-set changes through neutral depth | Echo filter types |
+| PhysicalBox | Saturation, EQ, echo, reverb, space bypasses; radiator/sympathetic-set changes through neutral depth | Echo filters, native body-family coefficients, placement/layout |
 | AliasingBox | Shared inserts; internal filter, notch, DC block and bidirectional read | Echo filter types; read/write quality; internal filter LFO waveform |
-| SteamPipeBox | Shared inserts; allpass activation, noise-filter slope and signed feedback polarity | Echo filter types |
+| SteamPipeBox | Shared inserts; allpass activation, noise-filter slope and signed feedback polarity | Echo filters, placement/layout |
 | FMBox | Shared inserts; matrix/envelope model, sync and operator ratio/fixed blend; native LFO wave/sync via zero modulation depth | Echo filters, operator keyboard-scaling curves, algorithm-dependent feedback-cell weights |
 | SlicerBox | EQ, filter, compressor, saturation, echo and reverb; automatic gain toggles | Filter types/slopes and echo filter types |
 | EchoBox | Reverb activation, with existing tail handling | — |
 | AdditiveBox | EQ/echo/reverb wet amounts; shared common voices and count-dependent presence; unison changes at zero side-voice depth | Evaluated spectral/filter/sweep/pan modes and echo filters |
-| GrainBox | EQ/echo/reverb wet amounts; individual voice presence; output-filter activation/algorithm via dry neutral path | Echo filter types |
+| GrainBox | EQ/echo/reverb wet amounts; individual voice presence; output filter via dry neutral path; scale activation | Echo filters, evaluated grain envelopes, placement and scale/root pitch tables |
 | PulsarBox | Temporary voice/layer configuration banks; continuous Hz/ratio formant selection | Evaluated pulsaret/envelope tables and pan modes |
-| WavetableBox | B-source changes at zero FM/feedback depth, including routed amounts | Per-voice warp modes |
-| SampleBox | Per-pad filter and all pad insert bypasses | Per-pad filter types |
+| WavetableBox | B-source changes at zero FM/feedback depth, including routed amounts; retained processing quality throughout A/B morphs | Per-voice warp phase results, placement/layout; waveform preview uses the effective warp blend |
+| SampleBox | Per-pad filter and all pad insert bypasses | Per-pad filters and Resample/Stretch readers sharing note and playback state |
 
 PolyComb snapshot voice counts now use temporary banks, as described in
 `polyCombVoiceMorphing.md`. PulsarBox uses temporary configuration banks, while AdditiveBox, AnalogBox and
@@ -155,15 +159,15 @@ Remaining discrete cases, after inspecting the Box-family snapshot and DSP paths
 | Box / shared subsystem | Dedicated transition work still required |
 | --- | --- |
 | AnalogBox | Filter count/routing and output/voice-pool layout changes. Oscillator counts preserve common oscillators; filter algorithms/types now use neutral wet depth. |
-| SteamPipeBox | Original/curved ADSR engine, V1/V2 resonator algorithm, legato/retrigger and gate rules; placement. The node Voices pin is not part of its sound snapshots. |
+| SteamPipeBox | Original/curved ADSR engine, V1/V2 resonator algorithm, legato/retrigger and gate rules. The node Voices pin is not part of its sound snapshots. |
 | AliasingBox | Gate-sync/retrigger rules and placement (Voices is outside sound snapshots). Audio read/write quality and internal filter LFO waveform now blend endpoint weights. |
 | FMBox | DX7 quantization tables and note/retrigger rules. Fixed coarse tuning now blends evaluated endpoint decades. LFO wave/sync now uses zero depth; keyboard-scaling curves and algorithm-dependent feedback-cell selection blend. |
 | AdditiveBox | Partial-cap changes now retain source/core graphs in temporary weighted banks; count-dependent modulation generators can still reset when their width changes. Spectral/filter/sweep/pan modes now blend evaluated values; unison changes use zero side-voice depth. |
-| GrainBox | Sample/source replacement, grainless/grain variants, output layout, scale/clock/trigger rules and controller-capacity changes. Individual voice counts now fade presence and retire after the gain settles. |
-| SampleBox | Sample replacement, playback/trigger/loop modes and pad layout. Filter and insert bypasses/types use existing policies. |
-| PhysicalBox | Body-family/doublet changes and gate rules (Voices is outside sound snapshots). Radiator/sympathetic-set changes now use neutral depth; fractional modal counts fade new resonators and the count-dependent cascade split. |
+| GrainBox | Sample/source replacement, grainless/grain variants, output layout, clock/trigger rules and controller-capacity changes. Individual voice counts now fade presence and retire after the gain settles. |
+| SampleBox | Sample replacement, trigger/loop modes and pad layout. Filter and insert bypasses/types use existing policies. |
+| PhysicalBox | Gate rules (Voices is outside sound snapshots). Radiator/sympathetic-set changes now use neutral depth; fractional modal counts fade new resonators and the count-dependent cascade split. |
 | PulsarBox | Rhythm/sieve/trigger semantics and manually changed output layout. Tables, formant Hz/ratio selection and voice/layer snapshot counts now have explicit transitions. |
-| WavetableBox | Table replacement, trigger/oversampling and geometry changes. Voice counts share retained independent oscillators and fade presence. Warp modes now blend per-voice phase results; B-source changes pass through zero FM and feedback, including routed modulation. |
+| WavetableBox | Table replacement, trigger and geometry changes. A/B morphs retain the current oversampling quality; explicit recall or a manual edit applies the chosen quality. Voice counts share retained independent oscillators and fade presence. Warp modes now blend per-voice phase results; B-source changes pass through zero FM and feedback, including routed modulation. |
 | SlicerBox / EchoBox | Slice/trigger/clock/freeze/reverse and routing decisions. Supported filter and effect activation policies remain continuous. |
 | Shared modulation | Classic/Noise/Random/Manual models and effective Hz/beat/region rates blend on one clock; held-note Sustain follows the blend. Explicit reset, indexer quantization and envelope trigger/segment timing retain their normal semantics. |
 | PolyComb | Its evaluated pitch maps and temporary voice banks retain their dedicated implementation; generic unsupported routing/trigger modes remain discrete. |
@@ -318,3 +322,88 @@ switches to live DSP. Stored/interrupted morphs retain these values.
 Classic/Stepped, independent/shared random fields, Centered and Steps around
 midpoint/quantizer boundaries. It freezes every voice's frequency to distinguish
 a morph discontinuity from Random Stepped's intended jumps at cycle boundaries.
+
+
+## Dropdown transitions (October 26 audit)
+
+WavetableBox already computed weighted warp phases in the audio graph. Its
+preview now evaluates the same weights. Warp edits send complete mode/weight
+updates together. The Solar → SteppedBass pair also changes oversampling (8x to
+1x), which previously rebuilt and reset oscillators at the midpoint. A/B morphs
+now retain the current quality for the entire gesture, including its endpoints;
+ordinary snapshot recall and manual quality edits still apply the chosen quality.
+
+GrainBox evaluates envelope tables and scale/root pitch maps before blending.
+Its scale DSP retains fractional pitches and fades scale activation. Placement
+controls evaluate speaker positions; Wavetable, Physical, SteamPipe and PolyComb
+use the same vector evaluator. Multichannel Ring/Line positioning consumes a
+fractional layout amount rather than a threshold at 0.5.
+
+SampleBox has separate single-reader Resample/Stretch definitions and a mixed
+reader definition sharing its note clock, gate and playback position. Entering
+the mixed definition replaces the old engine; once it is running, crossing 0.5
+and reaching an endpoint preserve that engine until it is silent. This avoids
+permanent dual-reader cost but does not preserve a held note at the initial
+transition into a mixed playback mode.
+
+PhysicalBox blends body-family modal ratios, decay and spatial coefficients in
+its existing resonator bank. Modes absent from an endpoint fade their contact
+and pickup contributions. The optional six-weight UGen input retains compatibility
+with older callers. Install the matching native plugin and class, recompile its
+SynthDefs and restart the server for this change.
+
+Additional regression entry points:
+
+- `python3 tools/snapshot_morph_test/dropdown_test.py`: production host controls,
+  all warp/envelope/scale/family combinations, spatial mode pairs, preserved
+  intermediate state, normal C++ access checks and ASan/UBSan.
+- `python3 tools/snapshot_morph_test/dropdown_render_test.py`: production warp
+  DSP, SampleBox legacy audio endpoints and settled reader blends, PolyComb
+  pitch-source and GrainBox fractional-scale probes.
+- `python3 tools/physicalbox/family_morph_test.py`: native body-family coefficient
+  continuity, legacy one-hot audio endpoints and retained resonator state across
+  the editor's midpoint switch. `--plugin-dir` tests a build without installing it.
+- `python3 tools/wavetablebox/morph_test.py`: retained oscillator IDs and quality
+  during an A/B morph, with explicit recall applying the destination quality.
+
+## Performance (October 26)
+
+A morph must not cost CPU once it has settled, and a morph frame should send
+only what moved.
+
+- Parallel heavy DSP runs only during a fractional blend. SampleBox pads use
+  `_R` (BufRd) / `_T` (Warp1), with `_M` (both) only while playback weights are
+  fractional; `_M` returns to an endpoint def once the pad is idle (`settleEngines`).
+  AnalogBox oscillators use `ABOsc<n>` (one MorphOsc), with `ABOscMorph<n>` only
+  while Sync is fractional (crossfaded swap, `\fadein`). Both are null-tested
+  against the blended defs at the endpoints.
+- `scMorphPolicies::begin` resolves each entry's A/B endpoints once per snapshot
+  pair; frames only interpolate. `scSnapshots` re-runs `begin` after `apply`
+  only when entries were registered or erased (`revision()`).
+- `scModulation::afterLoad` sends through per-synth caches (`sendChanged`): LFO,
+  ModEnv (one batched message), source buses (one `/c_setn`), route amounts, and
+  unrouted target buses cleared once. `resend()` clears the caches (NRT, rebuilds).
+  Morph frames reuse resolved parameter targets and blend generator state once.
+- GrainBox rebuilds/uploads its envelope only when its inputs move; its effect
+  stages and AnalogBox's synths use cached `scSynthControlBatch`es.
+
+Not changed: shared `ModEnv` keeps two EnvGens (a def swap would retrigger held
+notes, and `.kr` envelopes would miss sub-block retrigger gaps) and LFOs stay
+on `ModLfoX` (control rate; swapping would reset phase).
+
+
+### Concurrent optimization compatibility
+
+The combined dropdown changes retain cached mode rows, per-pair evaluated
+endpoints, shared LFO/envelope/source/route OSC change detection, GrainBox's
+512-point envelope cache and FX control batches, cached Wavetable warp preview
+weights, and the single-reader/single-oscillator settled SampleBox/AnalogBox
+paths. GrainBox scale-map dependencies invalidate their own cached endpoints
+when a live root or mask moves. Explicit GrainBox offline resends clear its FX
+send cache, while ordinary morph frames continue sending only changes. AnalogBox
+and PolyComb use the change-only modulation sender during morphs; their explicit
+offline-render methods retain full resends.
+
+The native dropdown regression checks unchanged source/route/FX traffic and
+complete explicit resends. `tools/analogbox/osc_swap_test.py` additionally checks
+single/dual oscillator swaps, cached control traffic and retired-node cleanup.

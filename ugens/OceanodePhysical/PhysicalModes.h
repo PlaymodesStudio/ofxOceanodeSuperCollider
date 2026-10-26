@@ -19,6 +19,7 @@
 //  only corrects for the difference when another material is chosen.
 //
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace physical {
@@ -333,6 +334,9 @@ struct Body {
 struct Mode {
     double ratio = 1, t60 = 0.002, amp = 0; bool on = false;
     int k = 0, ma = 0, mb = 0; bool aOn = false, bOn = false; double f = 0;
+    bool blended = false;
+    double coverage = 1;
+    std::array<double,NMODELS> spatial{};
 };
 
 inline Mode modelMode(int m, int k, const Body& b) {
@@ -403,6 +407,14 @@ inline Weights modelWeights(int m, int k, const Spots& s) {
     return w;
 }
 inline Weights weights(const Mode& md, const Spots& s) {
+    if(md.blended){
+        Weights out;
+        for(int model=0;model<NMODELS;++model) if(md.spatial[model]>0){
+            const auto w=modelWeights(model,md.k,s);const double amount=md.spatial[model];
+            out.e+=amount*w.e;out.p1+=amount*w.p1;out.p2+=amount*w.p2;out.c+=amount*w.c;
+        }
+        return out;
+    }
     if (!md.aOn) return modelWeights(md.mb, md.k, s);
     const Weights a = modelWeights(md.ma, md.k, s);
     if (!md.bOn || md.f <= 1e-6) return a;
@@ -420,6 +432,36 @@ inline int modeCount(const Body& b) {
     const Place p = place(b.family, b.shape);
     const auto& T = tables();
     return p.f > 1e-6 ? std::max(T.count[p.a], T.count[p.b]) : T.count[p.a];
+}
+
+// A family dropdown blends evaluated modes, never intermediate family IDs.
+// Legacy callers and one-hot endpoints retain the exact original calculation.
+using FamilyWeights = std::array<double,NFAMILIES>;
+inline FamilyWeights normalizeFamilies(FamilyWeights weights){
+    double sum=0;for(auto& value:weights){if(!std::isfinite(value)||value<0)value=0;sum+=value;}
+    if(sum>0)for(auto& value:weights)value/=sum;
+    return weights;
+}
+inline int modeCount(const Body& body,const FamilyWeights& input){
+    const auto weights=normalizeFamilies(input);int count=0;
+    for(int family=0;family<NFAMILIES;++family)if(weights[family]>0){auto b=body;b.family=family;count=std::max(count,modeCount(b));}
+    return count>0 ? count : modeCount(body);
+}
+inline Mode mode(int k,const Body& body,const FamilyWeights& input){
+    const auto families=normalizeFamilies(input);int active=0,only=0;
+    for(int family=0;family<NFAMILIES;++family)if(families[family]>0){++active;only=family;}
+    if(active==0)return mode(k,body);
+    if(active==1){auto b=body;b.family=only;return mode(k,b);}
+    Mode out;out.k=k;out.blended=true;double total=0,ratio=0,decay=0;
+    for(int family=0;family<NFAMILIES;++family)if(families[family]>0){
+        auto b=body;b.family=family;const auto m=mode(k,b);if(!m.on)continue;
+        const double w=families[family];total+=w;ratio+=w*std::log(m.ratio);decay+=w*std::log(m.t60);out.amp+=w*m.amp;
+        if(!m.aOn)out.spatial[m.mb]+=w;
+        else if(!m.bOn || m.f<=1e-6)out.spatial[m.ma]+=w;
+        else {out.spatial[m.ma]+=w*(1-m.f);out.spatial[m.mb]+=w*m.f;}
+    }
+    if(total>0){out.on=true;out.coverage=total;out.amp/=total;out.ratio=std::exp(ratio/total);out.t60=std::exp(decay/total);for(auto& weight:out.spatial)weight/=total;}
+    return out;
 }
 
 // Tension: + the pitch rises with the level and falls back as it decays (a

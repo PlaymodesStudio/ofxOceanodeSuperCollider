@@ -20,6 +20,10 @@ int main(int argc,char**argv){
  ofxSCServer server("127.0.0.1",9,0);server.beginNRTCapture(true);
  scWavetableBox box(servers);box.setup();box.drone=true;box.startDecode();box.applyTable(box.decodeTask.get());
  auto a=box.captureSound(),b=a;a["Voices"]=12;b["Voices"]=1;
+ // Solar -> SteppedBass also changes quality and both warp dropdowns.
+ a[box.oversample.getEscapedName()]=3;b[box.oversample.getEscapedName()]=0;
+ b[box.warp1.getEscapedName()]={2};b[box.warp2.getEscapedName()]={6};
+ b[box.warp1Amt.getEscapedName()]={.4f};b[box.warp2Amt.getEscapedName()]={.5f};
  box.snaps.applyExternal(a);box.buildSynth(&server);box.setOutputBus(&server,0,0);box.createSynth(&server);
  // Counts may change while asynchronous table reads are still pending.
  box.voices=13;box.createSynth(&server);assert(box.modStates.at(&server).gateSynth->getName()=="ModGate13");
@@ -33,6 +37,9 @@ int main(int argc,char**argv){
  for(float t:{0.f,.001f,.499f,.50001f,.501f,.9f,1.f}){
   box.snaps.applyExternalMorph(a,b,t,t>=.5f);ack();
   near(box.voiceMorphGain(0),1);near(box.voiceMorphGain(11),1-t);
+  assert(box.oversample.get()==3 && box.builtOversample==3);
+  const auto w1=box.snaps.morph.weights(box.warp1),w2=box.snaps.morph.weights(box.warp2);
+  near(w1[0],1-t);near(w1[2],t);near(w2[0],1-t);near(w2[6],t);
   const float sourceComp=1/std::sqrt(std::max(1.f,12.f/box.outChannels.get()));
   const float spreadComp=1/std::sqrt(std::max(1.f,float(box.MAX_CHANNELS)/box.outChannels.get()));
   near(box.voiceOutputGain(0)*spreadComp,(1-t)*sourceComp+t);
@@ -53,6 +60,8 @@ int main(int argc,char**argv){
  box.snaps.applyExternalMorph(held,b,.5,true);near(box.voiceMorphGain(11),.375f);
  // Per-voice controls select their own vector elements and bus offsets.
  box.pitch=std::vector<float>{40,50,60};box.renderingVoice=2;assert(box.expand(box.pitch.get(),0)==std::vector<float>{60});box.renderingVoice=-1;
+ // Explicit recall still applies the target quality; A/B morphing does not.
+ box.snaps.applyExternal(b);assert(box.oversample.get()==0 && box.builtOversample==0);
  box.free(&server);assert(box.extraVoices.empty() && box.synths.empty());
  std::cout<<"PASS: WavetableBox 12 -> 1 -> 12 shares common oscillator IDs, linear early presence, no midpoint replacement, delayed retirement and stored/interrupted morphs\n";
 }

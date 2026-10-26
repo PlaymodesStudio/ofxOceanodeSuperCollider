@@ -29,8 +29,10 @@ public:
     }
     // Engines can interpolate evaluated tables/coefficients instead of a
     // selector's editor value. Captures preserve the resulting array in metadata.
-    template<class T> void resolved(ofParameter<T>& p,Read evaluate) {
-        add(p,Kind::Value,0,std::move(evaluate));
+    template<class T> void resolved(ofParameter<T>& p,Read evaluate,std::function<ofJson()> dependencies = {}) {
+        // Evaluators can read live controls as well as saved fields. Keep the
+        // pair cache, but refresh just this entry when its live inputs change.
+        add(p,Kind::Value,0,std::move(evaluate)).dependencies=std::move(dependencies);
     }
     template<class T> ofJson resolvedValue(const ofParameter<T>& p) const {
         auto it=entries.find(&p);
@@ -122,6 +124,19 @@ public:
         for(auto& v:out)v/=sum;
         return out;
     }
+    // Evaluate a categorical control into a fixed-width DSP vector (for
+    // example speaker positions), then blend the results rather than its ID.
+    template<class Evaluate> std::vector<float> evaluateVector(const ofParameter<int>& p,Evaluate evaluateMode) const {
+        if(!hasEffective(p))return evaluateMode(p.get());
+        const auto distribution=weights(p);std::vector<float> result;
+        for(size_t mode=0;mode<distribution.size();++mode)if(distribution[mode]>0){
+            const auto value=evaluateMode(int(mode));
+            if(result.empty())result.assign(value.size(),0.f);
+            if(result.size()!=value.size())return evaluateMode(p.get());
+            for(size_t i=0;i<result.size();++i)result[i]+=distribution[mode]*value[i];
+        }
+        return result.empty()?evaluateMode(p.get()):result;
+    }
     template<class T,class Evaluate> float evaluate(const ofParameter<T>& p,int voice,int fallback,Evaluate evaluateMode) const {
         if(!hasEffective(p))return evaluateMode(fallback);
         return evaluateWeights(weights(p,voice),fallback,evaluateMode);
@@ -154,7 +169,9 @@ public:
             for(const auto& mode:item.second.neutral)if(mode.parameter==&p)item.second.effective={};
         }
     }
-    void erase(const ofAbstractParameter& p) { entries.erase(&p); }
+    void erase(const ofAbstractParameter& p) { entries.erase(&p); ++registered; }
+    // Changes whenever an entry is added or removed (apply can create pads).
+    unsigned revision() const { return registered; }
     void clear() {
         for(auto& item : entries) item.second.effective = {};
     }
@@ -162,27 +179,25 @@ public:
         inApply = true;
         blockedControls = blocked;
         t = std::clamp(t, 0.0f, 1.0f);
+        // A glide or A/B morph moves t between the same two snapshots: their
+        // endpoints are resolved once per pair, not on every frame.
+        preparePair(a, b);
         for(auto& item : entries) {
             auto& e = item.second;
             if(blocked && blocked(e.id)) { e.effective = {}; continue; }
-            ofJson x = endpoint(e, a), y = endpoint(e, b);
-            if(e.kind == Kind::Depth) {
-                const auto ax = e.enabled(a), by = e.enabled(b);
-                const bool driven = blocked && blocked(e.selectorKey);
-                const ofJson ex = driven ? e.enabledCurrent() : ax.is_null() ? e.enabledDefault : ax;
-                const ofJson ey = driven ? e.enabledCurrent() : by.is_null() ? e.enabledDefault : by;
-                if(!hasEffective(a, e.id)) x = scale(x, number(ex) > 0 ? 1 : 0);
-                if(!hasEffective(b, e.id)) y = scale(y, number(ey) > 0 ? 1 : 0);
+            // A depth whose enable switch is driven reads its live value
+            const bool driven = e.kind == Kind::Depth && blocked && blocked(e.selectorKey);
+            bool dependencyChanged=false;
+            if(e.dependencies){
+                auto key=e.dependencies();dependencyChanged=key!=e.dependencyKey;e.dependencyKey=std::move(key);
             }
+            if(driven || dependencyChanged || e.stamp != pair.stamp) { resolve(e, a, b, driven); e.stamp = driven ? 0 : pair.stamp; }
             bool changing=false;
-            for(const auto& mode:e.neutral){
-                if(isBlocked(mode.key))continue;
-                auto ma=mode.read(a),mb=mode.read(b);
-                if(ma.is_null())ma=mode.fallback;if(mb.is_null())mb=mode.fallback;
-                changing|=ma!=mb;
-            }
+            for(size_t i=0;i<e.neutral.size();++i) if(e.neutralDiffers[i] && !isBlocked(e.neutral[i].key)) changing=true;
             e.modulationGain=changing ? std::abs(1-2*t) : 1.0f;
-            e.effective=changing ? (t<0.5f ? scale(x,1-2*t) : scale(y,2*t-1)) : lerp(x,y,t);
+            if(changing) e.effective = t<0.5f ? scale(e.x,1-2*t) : scale(e.y,2*t-1);
+            else if(e.same) e.effective = e.x;
+            else e.effective = lerp(e.x,e.y,t);
         }
     }
     void end() { inApply = false; }
@@ -228,16 +243,54 @@ private:
         float modulationGain=1.0f;
         Read read, enabled;
         std::string selectorKey;
-        std::function<ofJson()> enabledCurrent;
+        std::function<ofJson()> enabledCurrent, dependencies;
+        ofJson dependencyKey;
         ofJson fallback, effective, enabledDefault;
         const ofAbstractParameter* selector = nullptr;
+        // The current snapshot pair's resolved endpoints (stamp: which pair)
+        unsigned stamp = 0;
+        ofJson x, y;
+        bool same = false;
+        std::vector<bool> neutralDiffers;
     };
     std::map<const ofAbstractParameter*, Entry> entries;
     bool inApply = false;
+    unsigned registered = 0;
+    struct Pair {
+        const ofJson* a = nullptr;
+        const ofJson* b = nullptr;
+        ofJson aCopy, bCopy;   // a caller can rewrite the same object in place
+        unsigned stamp = 0;
+    } pair;
+    void preparePair(const ofJson& a, const ofJson& b) {
+        if(pair.stamp && pair.a == &a && pair.b == &b && pair.aCopy == a && pair.bCopy == b) return;
+        pair.a = &a; pair.b = &b; pair.aCopy = a; pair.bCopy = b;
+        if(++pair.stamp == 0) pair.stamp = 1;
+    }
+    void resolve(Entry& e, const ofJson& a, const ofJson& b, bool driven) const {
+        ofJson x = endpoint(e, a), y = endpoint(e, b);
+        if(e.kind == Kind::Depth) {
+            const auto ax = e.enabled(a), by = e.enabled(b);
+            const ofJson ex = driven ? e.enabledCurrent() : ax.is_null() ? e.enabledDefault : ax;
+            const ofJson ey = driven ? e.enabledCurrent() : by.is_null() ? e.enabledDefault : by;
+            if(!hasEffective(a, e.id)) x = scale(x, number(ex) > 0 ? 1 : 0);
+            if(!hasEffective(b, e.id)) y = scale(y, number(ey) > 0 ? 1 : 0);
+        }
+        e.neutralDiffers.assign(e.neutral.size(), false);
+        for(size_t i=0;i<e.neutral.size();++i){
+            const auto& mode=e.neutral[i];
+            auto ma=mode.read(a),mb=mode.read(b);
+            if(ma.is_null())ma=mode.fallback;if(mb.is_null())mb=mode.fallback;
+            e.neutralDiffers[i]=ma!=mb;
+        }
+        e.same = x == y;
+        e.x = std::move(x); e.y = std::move(y);
+    }
     std::function<bool(const std::string&)> blockedControls;
     bool isBlocked(const std::string& key) const { return blockedControls && blockedControls(key); }
     template<class T> Entry& add(ofParameter<T>& p, Kind kind, int count, Read read) {
         auto& e = entries[&p];
+        ++registered; e.stamp = 0; e.dependencies = {}; e.dependencyKey = {};
         e.id = p.getEscapedName(); e.kind = kind; e.count = count;
         e.read = read ? std::move(read) : field(e.id);
         e.fallback = ofJson(p.get());

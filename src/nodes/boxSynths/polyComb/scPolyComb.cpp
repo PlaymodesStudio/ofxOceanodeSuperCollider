@@ -507,6 +507,13 @@ void scPolyComb::setup() {
     userVoices = voices.get();
     updateScramble();
     requireSynthdefs();
+    for(auto* mode : {&filterModel, &fType}) snaps.morph.neutralDepth(*mode, filterOn, "controls");
+    for(auto* mode : {&postFilterModel, &postType}) snaps.morph.neutralDepth(*mode, postOn, "controls");
+    for(auto* mode : {&echoModel, &echoFilter}) snaps.morph.neutralDepth(*mode, echoMix, "controls");
+    snaps.morph.continuous(combMode, scMorphPolicies::field(combMode.getEscapedName(), "controls"));
+    snaps.morph.mode(ringPitchSource, 3, scMorphPolicies::field(ringPitchSource.getEscapedName(), "controls"));
+    snaps.morph.mode(spreadMode,3,scMorphPolicies::field(spreadMode.getEscapedName(),"controls"));
+    snaps.morph.mode(spreadLayout,2,scMorphPolicies::field(spreadLayout.getEscapedName(),"controls"));
     if(!voiceRenderer) {
         scSnapshots::Host h;
         h.folder = "PolyComb";
@@ -518,6 +525,10 @@ void scPolyComb::setup() {
         h.defaultBank = "SANTI_1.json";
         h.bpm = [this](){ return currentBpm; };
         h.paramMenu = [this](const std::string& k){ publishedUnderline(k); publishMenu(k); };
+        h.morphBlocked = [this](const std::string& key){ return drivenByConnection(key); };
+        h.morphChanged = [this](){ forStates([this](ofxSCServer* server, ServerState& st){
+            updateParts(server,st);sendSpread(st);sendIns(st,IFilter);sendIns(st,IPost);sendIns(st,IComb);sendIns(st,IRing);sendStage(StEcho,st.fx[StEcho].synth,server);
+        }); };
         snaps.setup(h);
     }
 }
@@ -661,10 +672,10 @@ void scPolyComb::sendOsc(ServerState& st, int o) {
 
 bool scPolyComb::insWanted(int i) const {
     switch(i){
-        case IFilter: return filterOn.get();
+        case IFilter: return snaps.morph.activation(filterOn)>1e-6f;
         case IComb: return combOn.get();
         case IRing: return ringOn.get();
-        case IPost: return postOn.get();
+        case IPost: return snaps.morph.activation(postOn)>1e-6f;
         default: return shaperOn.get();
     }
 }
@@ -672,7 +683,7 @@ bool scPolyComb::insWanted(int i) const {
 void scPolyComb::sendIns(ServerState& st, int i) {
     auto* s = st.ins[i].synth;
     if(!s) return;
-    s->set("on", insWanted(i) ? 1.0f : 0.0f);
+    s->set("on", i==IFilter ? snaps.morph.activation(filterOn) : i==IPost ? snaps.morph.activation(postOn) : insWanted(i) ? 1.0f : 0.0f);
     s->set("note", st.noteBus ? st.noteBus->index : 0);
     switch(i){
         case IFilter:
@@ -699,7 +710,7 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             }else{
                 // Follow the oscillator note bus so glide and live pitch inputs
                 // keep working; the shared-map controls are an added interval.
-                s->set("combmode",internalPitch()?0.f:(float)combMode.get());
+                s->set("combmode",internalPitch()?0.f:snaps.morph.activation(combMode));
                 auto interval=internalPitch()?std::vector<float>{0.f}:combPitch.get();
                 for(auto& value:interval)value+=combMap.transpose.get()+combMap.offset.get();
                 sendVec(s,"combpitch",interval);
@@ -716,8 +727,13 @@ void scPolyComb::sendIns(ServerState& st, int i) {
             s->set("mcpitch", mod(st, 5)); s->set("mcfb", mod(st, 6)); s->set("mcmix", mod(st, 7));
             break;
         case IRing:
-            s->set("ringmode", ringPitchSource.get()==1 ? 0.0f : 1.0f);
-            sendVec(s, "ringpitch", ringPitchSource.get()==2 ? resonatorPitches() : ringPitch.get());
+            {
+                const auto weights=snaps.morph.weights(ringPitchSource);
+                const float fixed=weights[0]+weights[2];
+                auto pitches=expand(ringPitch.get(),n(),72.f), resonators=expand(resonatorPitches(),n(),72.f);
+                if(fixed>0) for(int v=0;v<n();++v) pitches[v]=(weights[0]*pitches[v]+weights[2]*resonators[v])/fixed;
+                s->set("ringmode",fixed);sendVec(s,"ringpitch",pitches);
+            }
             sendVec(s, "ringtranspose", ringTranspose.get());
             sendVec(s, "ringdetune", ringDetune.get());
             sendVec(s, "ringmix", ringMix.get());
@@ -781,7 +797,7 @@ void scPolyComb::sendSpread(ServerState& st) {
     if(!s) return;
     s->set("in", st.voiceBus ? st.voiceBus->index : 0);
     s->set("voices", (float)n());
-    s->set("line", spreadLayout.get() == 1 ? 1.0f : 0.0f);
+    s->set("line", snaps.morph.weights(spreadLayout)[1]);
     s->set("pan", expand(panPositions(), st.spreadLanes, 0.5f));   // as many as its \\pan has
     s->set("mpan", mod(st, 13));
     s->set("vis", st.visBlock ? st.visBlock->index + VIS_PAN : 0);
@@ -1301,7 +1317,7 @@ void scPolyComb::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
         controls.set("hi", echoHi.get());
         controls.set("lo", echoLo.get());
         controls.set("res", echoRes.get());
-        controls.set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
+        controls.set("mix", ofClamp(snaps.morph.value(echoMix), 0.0f, 1.0f));
         controls.set("on", on);
     }else if(s == StEcho){
         controls.set("delay", echoDelaySec());
@@ -1310,7 +1326,7 @@ void scPolyComb::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
         controls.set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
         controls.set("filtertype", (float)ofClamp(echoFilter.get(), 0, 3));
         controls.set("pingpong", ofClamp(echoPingPong.get(), 0.0f, 1.0f));
-        controls.set("mix", ofClamp(echoMix.get(), 0.0f, 1.0f));
+        controls.set("mix", ofClamp(snaps.morph.value(echoMix), 0.0f, 1.0f));
         controls.set("on", on);
     }else{
         controls.set("mix", ofClamp(rvbMix.get(), 0.0f, 1.0f));
@@ -1353,6 +1369,8 @@ void scPolyComb::presetSave(ofJson& j) {
     j["polyCombExts"] = modulation.extCount;
     j["polyCombPublished"] = publishedKeys;
     timeline.save(j, "polyCombTimeline");
+    const auto sound = captureSnapshot();
+    if(sound.contains(scMorphPolicies::metadata)) j["polyCombMorphAudio"] = sound[scMorphPolicies::metadata];
 }
 
 void scPolyComb::loadBeforeConnections(ofJson& j) {
@@ -1419,6 +1437,9 @@ void scPolyComb::presetRecallAfterSettingParameters(ofJson& j) {
     modulation.loadParamsJson(j.contains("polyCombParams") ? j["polyCombParams"] : ofJson::array());
     updateScramble();
     modulation.loadGeneratorState(j, "polyComb");
+    const auto sound = snapshotOf(j);
+    snaps.morph.begin(sound,sound,0,[this](const std::string& key){return drivenByConnection(key);});
+    snaps.morph.end();
     modulation.afterLoad();          // its phases, sources and routes, everything resent
     resendParametersForNRT();
     for(auto& [server, st] : states){
@@ -1482,12 +1503,14 @@ void scPolyComb::publishedUnderline(const std::string& key) const {
 }
 
 std::vector<float> scPolyComb::panPositions() const {
+    return snaps.morph.evaluateVector(spreadLayout,[&](int layoutMode){
+        return snaps.morph.evaluateVector(spreadMode,[&](int placementMode){
     const int nv = n(), c = outChannels.get();
-    const bool ring = c > 2 && spreadLayout.get() == 0;
+    const bool ring = c > 2 && layoutMode == 0;
     std::vector<float> p(nv, 0.5f);
-    if(spreadMode.get() == 2) return expand(panP.get(), nv, 0.5f);
+    if(placementMode == 2) return expand(panP.get(), nv, 0.5f);
     for(int i = 0; i < nv; i++){
-        if(spreadMode.get() == 1){                       // each voice on a channel
+        if(placementMode == 1){                       // each voice on a channel
             const int ch = i % std::max(1, c);
             p[i] = c <= 1 ? 0.5f : ring ? (float)ch / c : (float)ch / (c - 1);
         }else if(ring){                                  // evenly around the ring
@@ -1498,6 +1521,9 @@ std::vector<float> scPolyComb::panPositions() const {
         }
     }
     return p;
+
+        });
+    });
 }
 
 // The incoming pitches over the voices: as many as there are; the rest repeat
@@ -1806,6 +1832,7 @@ void scPolyComb::reg(ofParameter<T>& p, std::function<void()> send) {
     };
     controls.push_back(std::move(c));
     listeners.push(p.newListener([this,&p,key=p.getEscapedName(),send](T& value) {
+        snaps.morph.edited(p);
         const auto normalized=pccontrol::normalize(key,value,p.getMin(),p.getMax());
         if(normalized!=value)p.setWithoutEventNotifications(normalized);
         if(!applyingSnapshot && !drivenByConnection(key) &&
@@ -3046,6 +3073,7 @@ ofJson scPolyComb::captureSnapshot() const {
         s["voices"] = voices.get();
         scVoiceCountMorph::capture(s,voiceMorphWeights);
     }
+    snaps.morph.capture(s);
     return s;
 }
 
@@ -3082,6 +3110,8 @@ ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float
 void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw) {
     const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
     if(!a.is_object() || !b.is_object()) return;
+    struct RendererPolicyScope { scMorphPolicies& policies; bool active; ~RendererPolicyScope(){ if(active)policies.end(); } } policyScope{snaps.morph,voiceRenderer};
+    if(voiceRenderer)snaps.morph.begin(a,b,t,[this](const std::string& key){return drivenByConnection(key);});
     t = ofClamp(t, 0.0f, 1.0f);
     // Restore listener behavior even if malformed saved state throws. The
     // explicit finish restores it before forwarding the sound to voice peers.
@@ -3118,8 +3148,9 @@ void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t,
 
     // the controls: only what changes is set (each sends what it needs)
     static const ofJson none = ofJson::object();
-    const ofJson ca = pcmigration::controls(a.contains("controls") ? a["controls"] : none);
-    const ofJson cb = pcmigration::controls(b.contains("controls") ? b["controls"] : none);
+    auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);
+    const ofJson ca = pcmigration::controls(pinnedA.contains("controls") ? pinnedA["controls"] : none);
+    const ofJson cb = pcmigration::controls(pinnedB.contains("controls") ? pinnedB["controls"] : none);
     for(const auto& control : controls){
         const std::string& k = control.key;
         if(snapExcluded(k) || drivenByConnection(k)) continue;
@@ -3142,7 +3173,7 @@ void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t,
     }
 
     M.morphGenerators(ca, cb, t, "", [this](const std::string& key){ return drivenByConnection(key); });
-    M.resend();
+    M.sendChanged();
 
     // the matrix
     std::vector<float> ma(M.matrix.size(), 0.0f), mb = ma;
@@ -3161,9 +3192,17 @@ void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t,
     if(t >= 1.0f) M.loadParamsJson(b.contains("params") ? b["params"] : ofJson::array());
     // Modes can change in the editor without changing any numeric control.
     // Always resend the evaluated blend, even on either side of Morph Switch.
-    forStates([this](ofxSCServer*,ServerState& st){
+    forStates([this](ofxSCServer* server,ServerState& st){
         sendPitch(st);
         if(!combMapped()) sendIns(st,IComb);
+        // Temporary voice banks apply snapshots directly, without the public
+        // host's morphChanged callback. Their effective controls still move
+        // when the integer editor selection stays on the same side of .5.
+        if(voiceRenderer){
+            updateParts(server,st);sendSpread(st);
+            sendIns(st,IFilter);sendIns(st,IPost);sendIns(st,IRing);
+            sendStage(StEcho,st.fx[StEcho].synth,server);
+        }
     });
     pitchMorph.finish();
     application.finish();
@@ -3173,7 +3212,7 @@ void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t,
 
 // ── MacroMixer: a saved sound blends on the running synths ─────────────────
 ofxOceanodeNodeModel::MorphKeys scPolyComb::morphKeys() const {
-    return {{"polyComb", "polyCombGenerators", "polyCombParams", "polyCombMatrix", "polyCombLfos", "polyCombEnvs", "polyCombExts", voices.getEscapedName()}, {}};
+    return {{"polyComb", "polyCombGenerators", "polyCombMorphAudio", "polyCombParams", "polyCombMatrix", "polyCombLfos", "polyCombEnvs", "polyCombExts", voices.getEscapedName()}, {}};
 }
 
 ofxOceanodeNodeModel::MorphHint scPolyComb::morphHint(const ofxOceanodeAbstractParameter& p) const {
@@ -3194,6 +3233,7 @@ bool scPolyComb::morphCheck(const ofJson& target, std::string& reason) const {
 ofJson scPolyComb::snapshotOf(const ofJson& j) const {
     ofJson s = ofJson::object();
     s["controls"] = j.value("polyComb", ofJson::object());
+    if(j.contains("polyCombMorphAudio")) s[scMorphPolicies::metadata] = j["polyCombMorphAudio"];
     if(j.contains("polyCombGenerators")) s["controls"]["Generators"] = j["polyCombGenerators"];
     s["params"] = j.value("polyCombParams", ofJson::array());
     if(j.contains("polyCombMatrix")) s["matrix"] = j["polyCombMatrix"];
