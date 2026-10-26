@@ -13,6 +13,8 @@
 #include "../nodes/boxSynths/additiveBox/scAdditiveBox.h"
 #include "../nodes/boxSynths/pulsarBox/scPulsarBox.h"
 #include "../nodes/boxSynths/fmBox/scFMBox.h"
+#include "../nodes/generators/scFM7.h"
+#include "../nodes/generators/scFM7Drone.h"
 #include "../nodes/generators/scDynGenNode.h"
 #include "../nodes/generators/pinkTromboneNode.h"
 #include "../nodes/boxSynths/grainBoxPoly/scGrainBoxPoly.h"
@@ -32,6 +34,8 @@ void registerSynthNodes(ofxOceanode &o){
 	o.registerModel<scWavetableBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scAdditiveBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scPulsarBox>("SuperCollider/boxSynths", controller->getServers());
+	o.registerModel<scFM7>("SuperCollider/Generators");
+	o.registerModel<scFM7Drone>("SuperCollider/Generators");
 	o.registerModel<scFMBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scDynGenNode>("SuperCollider/Generators");
 	o.registerModel<pinkTromboneNode>("SuperCollider/Generators");

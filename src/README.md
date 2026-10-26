@@ -59,10 +59,12 @@ SynthDefs and preset assets are retained.
 | Removed implementation | Replacement / status |
 | --- | --- |
 | `scSimpleSamplePlayer` | SampleBox; the old diagnostic player was unregistered |
-| `scFM7` (`SC SuperFM`) | FMBox |
-| `scFM7Drone` (`SC SuperFMDrone`) | FMBox in Drone mode |
 | `scPolyphonicArpeggiator` | ArpeggiatorBox; the old node was unregistered |
 | `scRecbuf` | Registered `scRecbufHold` retains the `Sc RecBuf` model |
+
+`scFM7` (`SC SuperFM`) and `scFM7Drone` (`SC SuperFMDrone`) are registered
+legacy generators again for exact playback of existing patches. Their original
+controls, envelopes and per-voice behavior are retained alongside FMBox.
 
 FM patch migration is explicit rather than a silent model rename: controls,
 envelopes, carrier normalization and connections differ. Use
