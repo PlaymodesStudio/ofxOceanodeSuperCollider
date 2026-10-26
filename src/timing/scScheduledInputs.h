@@ -9,8 +9,9 @@
 //  is due (ofxOceanodeScheduling). The handler sets the parameter for real,
 //  inside an ofxSCServer::ScopedTimetag, so the node's listener sends it as it
 //  would on a frame, but stamped with the exact instant. Meanwhile every other
-//  input holds its latest scheduled value (a Gate send also reads Velocity and
-//  Pitch); afterwards the real values are put back without notifications, so
+//  input holds the value it has at that instant (a Gate send also reads
+//  Velocity and Pitch); afterwards the real values are put back without
+//  notifications. Cables from these inputs do not pass the early value on, so
 //  the GUI and the graph keep seeing the frame's values.
 //
 //  When the playhead reaches the event, the timeline sets the parameter again
@@ -36,6 +37,7 @@
 #include "ofxSCServer.h"
 #include "ofxOceanodeParameter.h"
 
+#include <algorithm>
 #include <chrono>
 #include <deque>
 #include <functional>
@@ -53,8 +55,7 @@ private:
         ofParameter<Values>* parameter = nullptr;
         ofEventListener listener;
         bool scheduled = false;                       // the values below are live
-        Values latest;                                // the last value handed to the backend
-        std::deque<std::pair<uint64_t, Values>> queue; // (due, value) not yet in effect
+        std::deque<std::pair<uint64_t, Values>> queue; // (due, value) not yet in effect, by due
         bool hasCurrent = false;
         Values current;                               // the last one whose instant has passed
     };
@@ -141,6 +142,14 @@ private:
             std::chrono::steady_clock::now().time_since_epoch()).count());
     }
 
+    // The value an input holds at an instant: the last queued value due by
+    // then (a correction can be handed over before events due earlier).
+    static const Values& valueAt(const Input& input, uint64_t atUs) {
+        for(auto it = input.queue.rbegin(); it != input.queue.rend(); ++it)
+            if(it->first <= atUs) return it->second;
+        return input.hasCurrent ? input.current : input.parameter->get();
+    }
+
     static Values parse(const std::string& text) {
         Values values;
         size_t start = 0;
@@ -167,20 +176,27 @@ private:
                     target->current = target->parameter->get();
                     target->hasCurrent = true;
                 }
-                target->latest = value;
-                target->queue.emplace_back(dueUs, value);
-                if(target->queue.size() > 256) target->queue.pop_front();
+                // Kept in due order: InEffect promotes from the front, and a
+                // correction may arrive before events due ahead of it.
+                auto& queue = target->queue;
+                queue.insert(std::upper_bound(queue.begin(), queue.end(), dueUs,
+                    [](uint64_t due, const auto& entry) { return due < entry.first; }),
+                    std::make_pair(dueUs, value));
+                if(queue.size() > 256) queue.pop_front();
 
-                // Every input at this instant: the latest scheduled values.
+                // Every input as it stands at this instant.
                 std::vector<std::pair<Input*, Values>> real;
                 real.reserve(inputs.size());
+                std::vector<std::pair<Input*, Values>> atDue;
+                atDue.reserve(inputs.size());
                 for(auto& other : inputs) {
                     real.push_back({other.get(), other->parameter->get()});
-                    if(other.get() != target && other->scheduled)
-                        other->parameter->setWithoutEventNotifications(other->latest);
+                    if(other.get() != target && other->scheduled) atDue.push_back({other.get(), valueAt(*other, dueUs)});
                 }
+                for(auto& [other, held] : atDue) other->parameter->setWithoutEventNotifications(held);
                 {
                     ofxSCServer::ScopedTimetag tag(ofxSCServer::timetagForSteadyTimeUs(dueUs));
+                    ofxOceanodeScheduling::ScopedScheduledSend early; // cables wait for the frame
                     sending = true;
                     target->parameter->set(value);   // the node's listener sends it, stamped
                     sending = false;

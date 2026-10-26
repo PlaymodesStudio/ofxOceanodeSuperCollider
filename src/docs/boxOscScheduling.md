@@ -14,6 +14,12 @@ Gate or overwrites the prepared Pitch.
 - Honor backend suppression when the GUI catches up with an already scheduled
   event. Send note events immediately within their existing scoped timetag;
   coalesce ordinary sound controls rather than deferring notes.
+- `scScheduledInputs` keeps each input's queued values in due order. During a
+  scheduled send, every other input holds the value due at that event's instant,
+  even when a later value (a correction, or the next note's prepared pitch) was
+  handed over first. The send runs inside
+  `ofxOceanodeScheduling::ScopedScheduledSend`, so cables from those inputs
+  don't pass the early value on; they receive it on the frame instead.
 - Group related controls with `scSynthControlBatch`. Batches have a 4096-byte soft
   budget and clear their payload after a flush. A single vector remains intact,
   even when it exceeds the soft budget. Existing per-voice value caches remain

@@ -102,8 +102,29 @@ extra=r'''
         assert(writes(from,ids,"fire")==0 && writes(from,ids,"stop")==0);
         event(box.triggerHandle,"0",due+100000);assert(writes(from,ids,"gate")==1);
     }
+    {
+        // Inputs hold the value due at the event's instant, even when a later
+        // one was handed over first, and cables never see the early value.
+        ofParameter<std::vector<float>> gp("Sched Gate",{0},{0},{1}),pp("Sched Pitch",{48},{0},{127}),sp("Sched Sink",{0},{0},{1});
+        auto gh=std::make_shared<ofxOceanodeParameter<std::vector<float>>>();gh->bindParameter(gp);
+        auto ph=std::make_shared<ofxOceanodeParameter<std::vector<float>>>();ph->bindParameter(pp);
+        ofxOceanodeParameter<std::vector<float>> sinkHandle;sinkHandle.bindParameter(sp);
+        ofxOceanodeConnection<std::vector<float>,std::vector<float>> cable(*gh,sinkHandle,true);
+        scScheduledInputs sched;sched.add(gh,gp);sched.add(ph,pp);
+        std::vector<float> pitchAtGate;
+        auto listener=gp.newListener([&](std::vector<float>&){if(sched.isSending())pitchAtGate=pp.get();});
+        int owner=0;sched.enable(&owner,[]{return true;});
+        event(ph,"62",due-2000);    // this note's pitch
+        event(ph,"60",due+50000);   // the next note's, handed over before this gate
+        event(gh,"1",due);
+        assert(pitchAtGate==std::vector<float>({62}));
+        assert(gp.get()==std::vector<float>({0}) && pp.get()==std::vector<float>({48})); // frame values restored
+        assert(sp.get()==std::vector<float>({0})); // the cable waits for the frame
+        gp=std::vector<float>{1};assert(sp.get()==std::vector<float>({1}));
+        sched.disable();
+    }
     capture.endNRTCapture();
-    std::cout<<"PASS: real Additive/Pulsar/Wavetable sound automation never rewrites scheduled gates; note-offs and GUI suppression preserved; Analog allocator pitch does not resend gate; Grain modulation ranges exclude initialized gate buses; Sample envelope/filter automation leaves pitch, gate and trigger counters untouched.\n";
+    std::cout<<"PASS: scheduled inputs read their value at the event's instant and cables ignore early values; real Additive/Pulsar/Wavetable sound automation never rewrites scheduled gates; note-offs and GUI suppression preserved; Analog allocator pitch does not resend gate; Grain modulation ranges exclude initialized gate buses; Sample envelope/filter automation leaves pitch, gate and trigger counters untouched.\n";
  }
 '''
 def main(*args,**kwargs):
