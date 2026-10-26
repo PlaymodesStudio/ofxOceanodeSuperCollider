@@ -580,6 +580,8 @@ private:
 
         const std::regex creator("~synthCreator\\s*\\.\\s*(?:value\\s*)?\\(");
         const std::regex creatorName("~synthCreator\\s*\\.\\s*(?:value\\s*)?\\(\\s*\"([^\"]+)\"\\s*,");
+        const std::set<std::string> retired = retiredNames();
+        std::vector<fs::path> retiredSources;
         std::vector<Source> all;
         for(auto it = fs::recursive_directory_iterator(sources); it != fs::recursive_directory_iterator(); ++it){
             const std::string rel = fs::relative(it->path(), sources).generic_string();
@@ -600,8 +602,25 @@ private:
             else if(!isCreator || text.find("@oceanode-no-autocompile") != std::string::npos) continue;
             source.key = scSynthdefSync::gitBlobSha(it->path().string());
             for(std::sregex_iterator m(text.begin(), text.end(), creatorName), e; m != e; ++m) source.names.push_back((*m)[1].str());
+            // A source of a retired synth left from before the sync recorded
+            // files (CircularBufferFFT2.scd): compiled, its builds would be
+            // retired again and it would compile on every sync
+            if(source.kind == Source::Generic && !source.names.empty() &&
+               std::all_of(source.names.begin(), source.names.end(), [&](const std::string& n){ return retired.count(n) > 0; })){
+                retiredSources.push_back(source.path);
+                continue;
+            }
             all.push_back(source);
         }
+
+        for(const auto& path : retiredSources){
+            const fs::path target = retiredRoot / "SynthdefSources" / fs::relative(path, sources);
+            std::error_code ignored;
+            fs::create_directories(target.parent_path());
+            fs::remove(target, ignored);
+            fs::rename(path, target, ignored);
+        }
+        if(!retiredSources.empty()) note(ofToString(retiredSources.size()) + " sources of retired synths moved to _retired_synthdefs/SynthdefSources");
 
         if(!state.contains("compiled") || !state["compiled"].is_object()) state["compiled"] = ofJson::object();
         ofJson& compiled = state["compiled"];
@@ -906,15 +925,23 @@ private:
         return compiled.contains(source.rel) && compiled[source.rel].value("key", "") != source.key;
     }
 
+    // Names in Oceanode/retiredSynthdefs.txt
+    std::set<std::string> retiredNames(){
+        std::set<std::string> names;
+        std::ifstream list(sources / "Oceanode" / "retiredSynthdefs.txt");
+        for(std::string line; std::getline(list, line);){
+            const std::string name = ofTrim(line);
+            if(!name.empty() && name[0] != '#') names.insert(name);
+        }
+        return names;
+    }
+
     // Synths listed in Oceanode/retiredSynthdefs.txt: their metadata and
     // builds, in the folder holding their .txarcmeta (another synth's build
     // may share a file name elsewhere: Pulsar2 was Pulsar's stereo build)
     void retireListed(){
-        std::ifstream list(sources / "Oceanode" / "retiredSynthdefs.txt");
         int count = 0;
-        for(std::string line; std::getline(list, line);){
-            const std::string name = ofTrim(line);
-            if(name.empty() || name[0] == '#') continue;
+        for(const auto& name : retiredNames()){
             const std::regex files(escapeRegex(name) + R"((\d+(?:_\d+)*)?\.(scsyndef|txarcmeta))");
             for(const auto& meta : std::vector<fs::path>(index[name + ".txarcmeta"])){
                 if(!fs::exists(meta)) continue;
