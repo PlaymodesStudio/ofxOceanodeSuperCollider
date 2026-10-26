@@ -584,7 +584,7 @@ int scSlicerBox::sliceCap() const {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Synths: SlicerBoxPlayer<S>_<C> [-> graphiceq2] -> out
+// Synths: SlicerBoxPlayer<S>_<C> [-> mixerProEQ2] -> out
 // ════════════════════════════════════════════════════════════════════════════
 
 std::string scSlicerBox::playerDefName() const {
@@ -731,7 +731,7 @@ float scSlicerBox::stageOn(int stage) const {
 }
 
 const char* scSlicerBox::stageDef(int stage){
-    static const char* defs[NumStages] = {"graphiceq2", "SlicerBoxFilter", "mixerProComp2", "mixerProSat2", "mixerProEcho2", "boxMicroSpace2"};
+    static const char* defs[NumStages] = {"mixerProEQ2", "SlicerBoxFilter", "mixerProComp2", "mixerProSat2", "mixerProEcho2", "boxMicroSpace2"};
     return defs[stage];
 }
 
@@ -947,16 +947,16 @@ void scSlicerBox::sendGateRouting(ofxSCSynth* synth, const ServerState& st){
 void scSlicerBox::sendEq(ofxSCSynth* s){
     if(!s) return;
     scSynthControlBatch updates(s,serverForSynth(s));
-    auto vec = [](float v){ return std::vector<float>(2, v); };
-    // graphiceq2: bNgain dB, bNfreq Hz, shelves bNslope (= 1/S), peaks bNrq = 1/Q
+    // mixerProEQ2 (the Box family's EQ): bNgain dB, bNfreq Hz, shelves bNslope
+    // (= 1/S), peaks bNrq = 1/Q; \on crossfades dry / EQ (= EQ Mix)
     for(int b = 0; b < 5; b++){
         const std::string k = "b" + ofToString(b + 1);
-        updates.set(k + "gain", vec(eqGain[b].get()));
-        updates.set(k + "freq", vec(eqFreq[b].get()));
-        if(scEQEditor::isShelf(b)) updates.set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get())));
-        else updates.set(k + "rq", vec(1.0f / std::max(0.01f, eqShape[b].get())));
+        updates.set(k + "gain", eqGain[b].get());
+        updates.set(k + "freq", eqFreq[b].get());
+        if(scEQEditor::isShelf(b)) updates.set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get()));
+        else updates.set(k + "rq", 1.0f / std::max(0.01f, eqShape[b].get()));
     }
-    updates.set("mix", (double)(eqMix.get() * snaps.morph.activation(eqOn)));
+    updates.set("on", eqMix.get() * snaps.morph.activation(eqOn));
     updates.send();
 }
 

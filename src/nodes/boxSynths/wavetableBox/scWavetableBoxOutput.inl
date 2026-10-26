@@ -89,7 +89,7 @@ std::vector<float> scWavetableBox::voicePositions() const{
 }
 
 std::string scWavetableBox::fxDef(int stage) const{
-    static const char* names[]={"mixerProComp","mixerProEQ","PCBlur","mixerProEcho","mixerProRvb"};
+    static const char* names[]={"mixerProComp","mixerProEQ","PCBlur","mixerProEcho","boxMicroSpace"};
     return std::string(names[stage])+ofToString(outChannels.get());
 }
 void scWavetableBox::requireEffectSynthdefs(){

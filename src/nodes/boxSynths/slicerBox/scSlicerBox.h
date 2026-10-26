@@ -18,7 +18,7 @@
 //    slice. A rising edge restarts its slice.
 //  • Sound: one synth plays every slice (SlicerBoxPlayer<S>_<C>, S = 16 / 32 /
 //    64 slices, C = the file's 1 or 2 channels, synthdefs/Defaults/SlicerBox),
-//    stereo out, then the EQ GrainBox uses (graphiceq2).
+//    stereo out, then the Box family's effects (mixerProEQ2...).
 //  • GUI: the node shows Show, Gate and whatever is published. The dockable
 //    window has the waveform with the slices and a playhead per playing
 //    slice, the slice pads (hold one to hear it), the selected slice's

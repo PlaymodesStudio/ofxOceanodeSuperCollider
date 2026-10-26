@@ -384,7 +384,7 @@ void scGrainBoxPoly::setup() {
         }
     }
     eqMixP.set      ("EQ Mix",       1.0f,   0.0f,     1.0f);
-    echoDelayP.set  ("Echo Delay",   0.2f,   0.01f,    2.0f);
+    echoDelayP.set  ("Echo Delay",   0.2f,   0.005f,   4.0f);
     echoBeatsP.set  ("Echo Beats",   false);
     echoBeatValP.set("Echo Delay Beats", 0.75f, 1.0f / 16.0f, 4.0f);   // 8thD
     echoFeedP.set   ("Echo Feed",    0.5f,   0.0f,     1.0f);
@@ -392,14 +392,20 @@ void scGrainBoxPoly::setup() {
     echoMixP.set    ("Echo Mix",     0.35f,  0.0f,     1.0f);
     echoFilterP.set ("Echo Filter",  0, 0, 3);
     dropdowns.set(echoFilterP.getEscapedName(), {"LowPass", "HighPass", "BandPass", "PeakEQ"});
-    echoResonanceP.set("Echo Resonance", 0.2f, 0.0f,   1.0f);
+    echoResonanceP.set("Echo Resonance", 0.2f, 0.0f,   0.9f);
+    echoPingPongP.set("Echo Ping-pong", 0.5f, 0.0f,    1.0f);
     revSizeP.set    ("Rev Size",    30.0f,   0.0f,    60.0f);
     revDecayP.set   ("Rev Decay",    4.0f,   0.05f,   60.0f);
-    revPredelayP.set("Rev Predelay",20.0f,   0.0f,  1000.0f);   // ms
+    revPredelayP.set("Rev Predelay",20.0f,   0.0f,   500.0f);   // ms
     revLowpassP.set ("Rev Lowpass", 10000.0f, 20.0f, 20000.0f);
     revMixP.set     ("Rev Mix",      0.33f,  0.0f,     1.0f);
-    revPositionP.set("Rev Position", 0.8f,   0.0f,     1.0f);    // MicroSpace adapter \position (early -> late)
-    revSpreadP.set  ("Rev Spread",   0.15f, -1.0f,     1.0f);    // MicroSpace adapter \spread
+    revPositionP.set("Rev Position", 0.8f,   0.0f,     1.0f);    // \position (early -> late)
+    revSpreadP.set  ("Rev Spread",   0.15f, -1.0f,     1.0f);    // \spread
+    revHiDampP.set  ("Rev Hi Damp",  6.0f,   0.0f,    60.0f);    // dB
+    revLoDampP.set  ("Rev Lo Damp",  0.0f,   0.0f,    60.0f);    // dB
+    revModRateP.set ("Rev Mod Rate", 0.2f,   0.001f,  20.0f);    // Hz
+    revSpinP.set    ("Rev Spin",     1.0f,   0.0f,    20.0f);
+    revWanderP.set  ("Rev Wander",   0.25f,  0.0f,    20.0f);
     // Compressor (MixerPro's) and Blur (PolyComb's): PolyComb's names and ranges
     compThresholdP.set("Comp Threshold", -18.0f, -60.0f, 0.0f);
     compRatioP.set    ("Comp Ratio",       3.0f,   1.0f, 20.0f);
@@ -504,6 +510,7 @@ void scGrainBoxPoly::setup() {
     fxParamListener(echoCutoffP,  FX_ECHO);
     fxParamListener(echoMixP,     FX_ECHO);
     fxParamListener(echoResonanceP, FX_ECHO);
+    fxParamListener(echoPingPongP,  FX_ECHO);
     nodeListeners.push(echoFilterP.newListener([this](int&) {
         snaps.morph.edited(echoFilterP);
         for(auto& [srv, st] : fx)
@@ -516,6 +523,7 @@ void scGrainBoxPoly::setup() {
     fxParamListener(revMixP,      FX_REVERB);
     fxParamListener(revPositionP, FX_REVERB);
     fxParamListener(revSpreadP,   FX_REVERB);
+    for(auto* q : {&revHiDampP, &revLoDampP, &revModRateP, &revSpinP, &revWanderP}) fxParamListener(*q, FX_REVERB);
     for(auto* q : {&compThresholdP, &compRatioP, &compKneeP, &compAttackP, &compReleaseP, &compMakeupP,
                    &compRmsP, &compHpfP, &compMixP}) fxParamListener(*q, FX_COMP);
     nodeListeners.push(compAutoP.newListener([this](bool&) {
@@ -2622,12 +2630,12 @@ void scGrainBoxPoly::sendMixParams() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Global FX chain: EQ (graphiceqN) → Echo (EchoN) → Reverb (boxMicroSpaceN)
+// Global FX chain: PolyComb's stages (Defaults/MixerPro + PCBlur)
 // ════════════════════════════════════════════════════════════════════════════
 //
-// Graphic EQ and Echo use vector controls; boxMicroSpace (compiled with
-// Defaults/MixerPro) adapts the existing scalar reverb controls to the shared
-// MicroSpace DSP. Each effect folder is required before creating its stage.
+// mixerProComp -> mixerProEQ -> PCBlur -> mixerProEcho -> boxMicroSpace, the
+// Box family's SynthDefs (PolyComb's). Each effect folder is required before creating
+// its stage.
 
 namespace {
 // Folder that holds "<name>1.scsyndef" under Supercollider/Synthdefs ("" if none).
@@ -2655,7 +2663,7 @@ std::string gbpFindSynthdefFolder(const std::string& name) {
     cache[name] = found;
     return found;
 }
-const char* kFxDefBase[5] = {"mixerProComp", "graphiceq", "PCBlur", "Echo", "boxMicroSpace"};
+const char* kFxDefBase[5] = {"mixerProComp", "mixerProEQ", "PCBlur", "mixerProEcho", "boxMicroSpace"};
 
 } // namespace
 
@@ -2677,7 +2685,7 @@ bool scGrainBoxPoly::fxStageReady(int /*stage*/, ofxSCServer* srv) const {
     return true;
 }
 
-// mixerProComp, graphiceq, PCBlur, Echo and boxMicroSpace:
+// mixerProComp / EQ / Echo, PCBlur and boxMicroSpace:
 // ask every serverManager to load their folders (idempotent).
 void scGrainBoxPoly::requireFxSynthdefs() {
     // GrainBoxPoly's own folder (CompiledSynthdefs/GrainBoxPoly), wherever it
@@ -2729,7 +2737,7 @@ int scGrainBoxPoly::fxOutBus(ofxSCServer* srv, int planPos) const {
 
 float scGrainBoxPoly::echoDelaySec() const {
     if(!echoBeatsP.get()) return echoDelayP.get();
-    return std::max(0.01f, std::min(2.0f, echoBeatValP.get() * 60.0f / std::max(1.0f, effectiveBpm())));
+    return std::max(0.005f, std::min(4.0f, echoBeatValP.get() * 60.0f / std::max(1.0f, effectiveBpm())));
 }
 
 void scGrainBoxPoly::sendFxParams(int stage, ofxSCSynth* s) {
@@ -2758,38 +2766,47 @@ void scGrainBoxPoly::sendFxParams(int stage, ofxSCSynth* s) {
             c.set("on", snaps.morph.activation(fxOnP[stage]));
             break;
         case FX_EQ:
-            // graphiceqN: bNgain dB, bNfreq Hz, shelves bNslope, peaks bNrq = 1/Q
+            // mixerProEQ: bNgain dB, bNfreq Hz, shelves bNslope, peaks bNrq = 1/Q;
+            // \on crossfades dry / EQ (= the EQ Mix)
             for(int b = 0; b < 5; b++) {
                 const std::string k = "b" + ofToString(b + 1);
-                c.set(k + "gain", vec(eqGainP[b].get()));
-                c.set(k + "freq", vec(eqFreqP[b].get()));
+                c.set(k + "gain", eqGainP[b].get());
+                c.set(k + "freq", eqFreqP[b].get());
                 // shelves: SC's argument is rs = 1/S (the editor's "slope" is S),
                 // kept where the filter stays defined (no NaN at high gain)
                 if(scEQEditor::isShelf(b))
-                    c.set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShapeP[b].get(), eqGainP[b].get())));
-                else                       c.set(k + "rq",    vec(1.0f / std::max(0.01f, eqShapeP[b].get())));
+                    c.set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(eqShapeP[b].get(), eqGainP[b].get()));
+                else                       c.set(k + "rq",    1.0f / std::max(0.01f, eqShapeP[b].get()));
             }
-            c.set("mix", eqMixP.get() * snaps.morph.activation(fxOnP[stage]));
+            c.set("on", eqMixP.get() * snaps.morph.activation(fxOnP[stage]));
             break;
         case FX_ECHO:
+            // mixerProEcho: \on gates the input (the repeats ring out)
             c.set("filterweights", snaps.morph.weights(echoFilterP));
-            c.set("delay",  vec(echoDelaySec()));
-            c.set("feed",   vec(echoFeedP.get()));
-            c.set("cutoff", vec(echoCutoffP.get()));
-            c.set("mix",    vec(echoMixP.get() * snaps.morph.activation(fxOnP[stage])));
-            // OceanodeParameterDropdown.ar(\filtertype, ...): a plain "filtertype"
-            // control of n values (the item index as a float)
-            c.set("filtertype", vec((float)std::max(0, std::min(3, echoFilterP.get()))));
-            c.set("resonance",  vec(echoResonanceP.get()));
+            c.set("delay",      echoDelaySec());
+            c.set("feed",       ofClamp(echoFeedP.get(), 0.0f, 0.98f));
+            c.set("cutoff",     ofClamp(echoCutoffP.get(), 12.0f, 130.0f));
+            c.set("resonance",  ofClamp(echoResonanceP.get(), 0.0f, 0.9f));
+            c.set("filtertype", (float)std::max(0, std::min(3, echoFilterP.get())));
+            c.set("pingpong",   echoPingPongP.get());
+            c.set("mix",        echoMixP.get());
+            c.set("on",         snaps.morph.activation(fxOnP[stage]));
             break;
         case FX_REVERB:
+            // boxMicroSpace (the Boxes' reverb): \on gates the input
             c.set("size",     revSizeP.get());
-            c.set("decay",    revDecayP.get());
-            c.set("predelay", revPredelayP.get());
+            c.set("decay",    std::max(0.05f, revDecayP.get()));
+            c.set("predelay", ofClamp(revPredelayP.get(), 0.0f, 500.0f));
             c.set("lowpass",  revLowpassP.get());
-            c.set("mix",      revMixP.get() * snaps.morph.activation(fxOnP[stage]));
+            c.set("mix",      revMixP.get());
             c.set("position", revPositionP.get());
             c.set("spread",   revSpreadP.get());
+            c.set("highdamp", revHiDampP.get());
+            c.set("lowdamp",  revLoDampP.get());
+            c.set("modfreq",  revModRateP.get());
+            c.set("spin",     revSpinP.get());
+            c.set("wander",   revWanderP.get());
+            c.set("on",       snaps.morph.activation(fxOnP[stage]));
             break;
         default: break;
     }
@@ -3790,9 +3807,10 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
     for(int b = 0; b < 5; b++) { regG(eqGainP[b]); regG(eqFreqP[b]); regG(eqShapeP[b]); }
     regG(eqMixP);
     regG(echoDelayP);  regG(echoBeatsP); regG(echoBeatValP); regG(echoFeedP);  regG(echoCutoffP); regG(echoMixP);
-    regG(echoFilterP); regG(echoResonanceP);
+    regG(echoFilterP); regG(echoResonanceP); regG(echoPingPongP);
     regG(revSizeP);    regG(revDecayP);  regG(revPredelayP); regG(revLowpassP); regG(revMixP);
     regG(revPositionP); regG(revSpreadP);
+    for(auto* q : {&revHiDampP, &revLoDampP, &revModRateP, &revSpinP, &revWanderP}) regG(*q);
     for(auto* q : {&compThresholdP, &compRatioP, &compKneeP, &compAttackP, &compReleaseP, &compMakeupP,
                    &compRmsP, &compHpfP, &compMixP}) regG(*q);
     regG(compAutoP);
@@ -4182,6 +4200,10 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
         rs(blurTimeP, 8.0f); rs(blurAmountP, 0.75f); rs(blurDensityP, 0.55f); rs(blurSpreadP, 1.0f);
         rs(blurLowCutP, 20.0f); rs(blurHighCutP, 20000.0f); rs(blurMixP, 0.5f);
         rs(echoFilterP, 0); rs(echoResonanceP, 0.2f);
+        // The Boxes' echo (2026-10-27): older presets had no ping-pong; the
+        // reverb's tank settings were fixed at these values
+        rs(echoPingPongP, 0.0f);
+        rs(revHiDampP, 6.0f); rs(revLoDampP, 0.0f); rs(revModRateP, 0.2f); rs(revSpinP, 1.0f); rs(revWanderP, 0.25f);
         for(auto& ph : playheads) {
             rs(ph->mute, false); rs(ph->solo, false);
             rs(ph->filterType, 0); rs(ph->cutoff, 1000.0f); rs(ph->filterQ, 0.707f);
@@ -5634,7 +5656,7 @@ void scGrainBoxPoly::drawFxPanel(float w) {
     const bool  stacked = colW - lw - m < 70.0f * zoom;
     // Height from the actual row count (Reverb: header + 7 sliders), so no
     // row is ever clipped at any window size / zoom
-    const int   revRows = 7;
+    const int   revRows = 12;
     const float rowH    = ImGui::GetFrameHeightWithSpacing()
                         + (stacked ? ImGui::GetTextLineHeightWithSpacing() : 0.0f);
     const float colH    = ImGui::GetFrameHeightWithSpacing() + revRows * rowH
@@ -5732,7 +5754,7 @@ void scGrainBoxPoly::drawFxPanel(float w) {
                                  : std::max(40.0f * zoom, colW - lw - m - bW - 2.0f * zoom);
         if(!stacked) ImGui::SameLine(lw);
         if(ImGui::Button(beats ? "b##ecu" : "s##ecu", ImVec2(bW, 0))) echoBeatsP.set(!beats);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Delay in seconds (s) or as a note value (b, follows the tempo; max 2 s)");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Delay in seconds (s) or as a note value (b, follows the tempo; max 4 s)");
         drawNodePublishContextMenu(echoBeatsP.getEscapedName());
         ImGui::SameLine(0, 2.0f * zoom);
         ImGui::SetNextItemWidth(sw);
@@ -5764,6 +5786,7 @@ void scGrainBoxPoly::drawFxPanel(float w) {
         drawNodePublishContextMenu(key);
     }
     slider("Reso",   "##ecres", echoResonanceP);
+    slider("Ping-pong", "##ecpp", echoPingPongP);
     slider("Mix",    "##ecmix", echoMixP);
     if(!fxOnP[FX_ECHO].get()) ImGui::EndDisabled();
     }
@@ -5779,6 +5802,11 @@ void scGrainBoxPoly::drawFxPanel(float w) {
     slider("Lowpass",  "##rvlp",   revLowpassP,  "%.0f Hz", ImGuiSliderFlags_Logarithmic);
     slider("Position", "##rvpos",  revPositionP, "%.2f");
     slider("Spread",   "##rvspr",  revSpreadP,   "%+.2f");
+    slider("Hi Damp",  "##rvhd",   revHiDampP,   "%.1f dB");
+    slider("Lo Damp",  "##rvld",   revLoDampP,   "%.1f dB");
+    slider("Mod Rate", "##rvmr",   revModRateP,  "%.3f Hz", ImGuiSliderFlags_Logarithmic);
+    slider("Spin",     "##rvspn",  revSpinP,     "%.2f");
+    slider("Wander",   "##rvwan",  revWanderP,   "%.2f");
     slider("Mix",      "##rvmix",  revMixP);
     if(!fxOnP[FX_REVERB].get()) ImGui::EndDisabled();
     }

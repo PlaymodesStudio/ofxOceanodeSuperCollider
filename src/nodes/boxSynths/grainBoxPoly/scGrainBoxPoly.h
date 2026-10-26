@@ -498,8 +498,8 @@ private:
     void  setFilterArgs(Playhead& ph, ofxSCSynth* s);
     static bool synthIsFiltered(ofxSCSynth* s);
 
-    // ── Global FX chain: Compressor → EQ → Blur → Echo → Reverb (PolyComb's
-    // order; Compressor = MixerPro's, Blur = PolyComb's PCBlur) ─────────────────
+    // ── Global FX chain: Compressor → EQ → Blur → Echo → Reverb, PolyComb's
+    // stages (MixerPro's compressor / EQ / echo, PCBlur, boxMicroSpace) ────────
     // All off: playheads write straight to the output bus (no extra synths).
     // Otherwise playheads write to a private bus and the enabled stages chain
     // private buses → output bus, right after playhead 1's synth.
@@ -511,7 +511,7 @@ private:
     ofParameter<float> blurTimeP, blurAmountP, blurDensityP, blurSpreadP, blurLowCutP, blurHighCutP, blurMixP;
     float compGr = 0.0f;                  // the compressor's gain reduction now (dB, the window's meter)
     ofParameter<float> eqGainP[5], eqMixP;
-    ofParameter<float> eqFreqP[5];    // Hz (graphiceqN defaults 80 / 250 / 1k / 4k / 12k)
+    ofParameter<float> eqFreqP[5];    // Hz (mixerProEQ defaults 80 / 250 / 1k / 4k / 12k)
     ofParameter<float> eqShapeP[5];   // slope for bands 1 and 5 (shelves), Q for 2..4
     scEQEditor eqEditor;              // curve editor shared with scGraphicEQ
     bool       eqCurveDirty = true;
@@ -520,11 +520,13 @@ private:
     // Echo delay in beats (note values, follows the tempo) instead of seconds
     ofParameter<bool>  echoBeatsP;
     ofParameter<float> echoBeatValP;   // beats
-    float echoDelaySec() const;        // what the Echo synth gets (max 2 s)
-    ofParameter<int>   echoFilterP;      // echo.scd \filtertype: 0 LowPass 1 HighPass 2 BandPass 3 PeakEQ
-    ofParameter<float> echoResonanceP;   // echo.scd \resonance
+    float echoDelaySec() const;        // what the Echo synth gets (max 4 s)
+    ofParameter<int>   echoFilterP;      // mixerProEcho \filtertype: 0 LowPass 1 HighPass 2 BandPass 3 PeakEQ
+    ofParameter<float> echoResonanceP;   // mixerProEcho \resonance
+    ofParameter<float> echoPingPongP;    // mixerProEcho \pingpong
     ofParameter<float> revSizeP, revDecayP, revPredelayP, revLowpassP, revMixP;
     ofParameter<float> revPositionP, revSpreadP;   // early/late balance, stereo spread
+    ofParameter<float> revHiDampP, revLoDampP, revModRateP, revSpinP, revWanderP;   // MicroSpace's tank
     struct FxState {
         int channels = 0;
         std::vector<int>       plan;                 // enabled + loaded stages, in order

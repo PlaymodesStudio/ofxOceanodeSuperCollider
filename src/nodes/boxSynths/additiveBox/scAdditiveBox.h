@@ -328,8 +328,8 @@ private:
     void controlMenuItems(const std::string& key, const char* title = nullptr);
     bool notInPresets(const std::string& key) const;
 
-    // ── FX: EQ -> Echo -> Reverb (graphiceq<O>, Echo<O>, boxMicroSpace<O>, the
-    // same synths and controls as GrainBox) between the voices and the output
+    // ── FX: EQ -> Echo -> Reverb (mixerProEQ<O>, mixerProEcho<O>, boxMicroSpace<O>,
+    // the Box family's synths) between the voices and the output
     // synth; a stage that is off runs no synth ──────────────────────────────
     std::string fxDefName(int stage) const;
     bool fxStageReady(ofxSCServer* server) const;

@@ -20,7 +20,7 @@
 //    14 targets by a matrix (Routing tab).
 //  • Effects after the voices: MixerPro's EQ, Blur's allpass diffusion smear
 //    (PCBlur<N>), echo and SpaceMaster reverb
-//    (mixerProEQ<N>, mixerProEcho<N>, mixerProRvb<N>), each created the first
+//    (mixerProEQ<N>, mixerProEcho<N>, boxMicroSpace<N>), each created the first
 //    time it is switched on and paused once its tail is over.
 //
 

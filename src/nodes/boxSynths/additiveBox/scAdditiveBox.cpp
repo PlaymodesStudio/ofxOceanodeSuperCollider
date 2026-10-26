@@ -31,7 +31,7 @@ float hash01(int salt, int k){
     h ^= h >> 15; h *= 2246822519u; h ^= h >> 13; h *= 3266489917u; h ^= h >> 16;
     return (h & 0xFFFFFF) / float(0x1000000);
 }
-const char* fxDefBase[3] = {"graphiceq", "Echo", "boxMicroSpace"};
+const char* fxDefBase[3] = {"mixerProEQ", "mixerProEcho", "boxMicroSpace"};   // the Box family's
 const char* eqBandNames[5] = {"Low", "LoMid", "Mid", "HiMid", "High"};
 
 // Vowel formants (male voice): F1..F3 in Hz, levels in dB, bandwidths in Hz
@@ -2053,34 +2053,33 @@ void scAdditiveBox::rebuildFxAll(){
 
 void scAdditiveBox::sendFxParams(int stage, ofxSCSynth* s){
     if(!s) return;
-    const int n = numOutputsClamped();
-    auto vec = [n](float v){ return std::vector<float>(n, v); };
     switch(stage){
         case FX_EQ:
-            // graphiceqN: bNgain dB, bNfreq Hz, shelves bNslope (= 1/S), peaks bNrq = 1/Q
+            // mixerProEQ: bNgain dB, bNfreq Hz, shelves bNslope (= 1/S), peaks bNrq = 1/Q
         {
-            // EQ On fades the band gains (0 dB: exactly the dry signal) and moves
-            // the mix from all-wet: graphiceq's equal-power mix would swell by
-            // ~3 dB if it faded coherent dry and wet signals
+            // EQ On fades the band gains (0 dB: exactly the dry signal) and the
+            // dry / EQ crossfade (\on, linear) towards EQ Mix
             const float on = snaps.morph.activation(fxOn[stage]);
             for(int b = 0; b < 5; b++){
                 const std::string k = "b" + ofToString(b + 1);
-                s->set(k + "gain", vec(eqGain[b].get() * on));
-                s->set(k + "freq", vec(eqFreq[b].get()));
-                if(scEQEditor::isShelf(b)) s->set(k + "slope", vec(1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get() * on)));
-                else s->set(k + "rq", vec(1.0f / std::max(0.01f, eqShape[b].get())));
+                s->set(k + "gain", eqGain[b].get() * on);
+                s->set(k + "freq", eqFreq[b].get());
+                if(scEQEditor::isShelf(b)) s->set(k + "slope", 1.0f / scEQEditor::safeShelfSlope(eqShape[b].get(), eqGain[b].get() * on));
+                else s->set(k + "rq", 1.0f / std::max(0.01f, eqShape[b].get()));
             }
-            s->set("mix", 1.0f - on * (1.0f - eqMix.get()));
+            s->set("on", 1.0f - on * (1.0f - eqMix.get()));
         }
             break;
         case FX_ECHO:
+            // mixerProEcho: \on gates the input (the repeats ring out)
             s->set("filterweights", snaps.morph.weights(echoFilter));
-            s->set("delay", vec(echoDelay.get()));
-            s->set("feed", vec(echoFeed.get()));
-            s->set("cutoff", vec(echoCutoff.get()));
-            s->set("mix", vec(echoMix.get() * snaps.morph.activation(fxOn[stage])));
-            s->set("filtertype", vec(float(std::clamp(echoFilter.get(), 0, 3))));
-            s->set("resonance", vec(echoResonance.get()));
+            s->set("delay", ofClamp(echoDelay.get(), 0.005f, 4.0f));
+            s->set("feed", ofClamp(echoFeed.get(), 0.0f, 0.98f));
+            s->set("cutoff", ofClamp(echoCutoff.get(), 12.0f, 130.0f));
+            s->set("mix", echoMix.get());
+            s->set("filtertype", float(std::clamp(echoFilter.get(), 0, 3)));
+            s->set("resonance", ofClamp(echoResonance.get(), 0.0f, 0.9f));
+            s->set("on", snaps.morph.activation(fxOn[stage]));
             break;
         case FX_REVERB:
             s->set("size", revSize.get());

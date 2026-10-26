@@ -1272,7 +1272,7 @@ float scPolyComb::stageAmount(int s) const {
 }
 
 std::string scPolyComb::stageDef(int s) const {
-    static const char* names[NumStages] = {"mixerProComp", "mixerProEQ", "PCBlur", "mixerProEcho", "mixerProRvb"};
+    static const char* names[NumStages] = {"mixerProComp", "mixerProEQ", "PCBlur", "mixerProEcho", "boxMicroSpace"};
     if(s == StEcho && echoModel.get() == 1) return "PCEchoR" + ofToString(outChannels.get());
     return names[s] + ofToString(outChannels.get());
 }
