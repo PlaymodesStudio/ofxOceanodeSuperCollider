@@ -146,6 +146,9 @@ public:
 
 	// Use the same editor action as the node's Editor button.
 	void showEditor() { openEditor.trigger(); }
+    bool canShowNodeWindow() override { return true; }
+    void showNodeWindow() override { showEditor(); }
+
 	
     void activate() override;
     
