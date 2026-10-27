@@ -385,10 +385,13 @@ pitched destination in the patch without cables. It applies three features, in
 this order:
 
 1. **Scale** moves the input note to the nearest degree. Scale is a vector of
-   pitch classes 0–11, and fractions are allowed. **Scale Bypass** turns it off.
-   Input notes below **Split Note** (MIDI, 0 = off) move to the nearest degree
-   of **Low Scale** instead, for example to keep the bass in tune with a
-   neighbouring artwork. Transpose and Detune apply after either scale.
+   pitch classes 0–11, and fractions are allowed. Input notes below
+   **Split Note** (MIDI, 0 = off) move to the nearest degree of **Low Scale**
+   instead, for example to keep the bass in tune with a neighbouring artwork.
+   Each side has its own bypass: **Scale Bypass** for notes at and above the
+   split, **Low Scale Bypass** for notes below it. A bypassed side passes notes
+   unchanged, fractions included. Transpose and Detune apply after either
+   scale.
 2. **Transpose** adds semitones after the scale, so a transpose changes the key.
    With **Mod 12** on, a transposed note wraps into its own octave, which starts
    at **Base Note** (C–B). The note never leaves that octave, as with Fit Notes
@@ -404,10 +407,10 @@ destinations that differ from their default, as one string per feature.
 
 There are two mechanisms; see [scGlobalPitch](shared/scGlobalPitch.h):
 
-- **Boxes** read a block of 30 control buses per server, allocated by
+- **Boxes** read a block of 31 control buses per server, allocated by
   serverManager: transpose, scale on, each pitch class's offset to its nearest
-  degree, detune in cents, wrap on, wrap base, split note (-1000 when off) and
-  the low scale's 12 offsets. There is one block for each combination of
+  degree, detune in cents, wrap on, wrap base, split note (-1000 when off), the
+  low scale's 12 offsets and low scale on. There is one block for each combination of
   features a destination follows, so a Box sets a single control, `gtrbus`.
   The synth that makes the sounding pitch declares `gb`/`gg`/`gt`/`gq` (copy
   them from an existing Box). `gq` quantizes and transposes, and wraps when

@@ -9,18 +9,20 @@
 //  (globalPitch/scGlobalPitchNode.h). Each feature has its own list of
 //  destinations.
 //
-//  Boxes read them from a block of 30 control buses per server (allocated by
+//  Boxes read them from a block of 31 control buses per server (allocated by
 //  serverManager): [transpose, scale on, the offset of each pitch class 0-11 to
 //  its nearest scale degree, detune amount in cents, transpose wraps (modulo
 //  12), the wrap's base pitch class, the split note (-1000 when off), the low
-//  scale's 12 offsets]. There is one block for each combination
+//  scale's 12 offsets, low scale on]. Scale on and low scale on are the two
+//  bypasses: the scale at and above the split note, the low scale below it. There is one block for each combination
 //  of the features a destination follows, so a destination sets one control
 //  and the synth that makes its sounding pitch quantizes and transposes the
 //  input note (gq), then adds its voices' detune (gt):
 //
-//    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 30) * (gb >= 0);   // Global Pitch
+//    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);   // Global Pitch
 //    var gt = gg[14] * 0.01 * ({ Rand(-1, 1) } ! voices);               // one random per voice, drawn once
-//    var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]);
+//    var gq = { |p| var r = p.round, on = ((r < gg[17]) * gg[30]) + ((r >= gg[17]) * gg[1]);   // the note's side of the split
+//        var q = Select.kr(on > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]);
 //        var w = gg[16] + (((q - gg[16]) / 12).floor * 12);              // the octave from the base holding the note
 //        q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };    // transposed, wrapped into it when modulo 12
 //    ... note = gq.(input pitch) ... + gt
@@ -55,8 +57,8 @@
 class scGlobalPitch {
 public:
     enum Feature { Transpose = 0, Scale = 1, Detune = 2, NumFeatures = 3 };
-    static constexpr int BlockSize = 30;   // [transpose, scale on, 12 pitch-class offsets, detune cents, wrap on, wrap base,
-                                           //  split note, 12 low-scale offsets]
+    static constexpr int BlockSize = 31;   // [transpose, scale on, 12 pitch-class offsets, detune cents, wrap on, wrap base,
+                                           //  split note, 12 low-scale offsets, low scale on]
     static constexpr int NumBlocks = 8;    // by what a destination follows: bit 0 Transpose, bit 1 Scale, bit 2 Detune
 
     struct Follower {
@@ -81,7 +83,8 @@ public:
         valuesChanged(Transpose);
     }
     static const std::vector<float>& scale() { return state().scale; }
-    static bool scaleOn() { return state().scaleOn && (!state().scale.empty() || splitOn()); }
+    // the scale (at and above the split note) quantizes
+    static bool scaleOn() { return state().scaleOn && !state().scale.empty(); }
     // degrees: pitch classes 0-11 (fractions allowed); on: false = bypassed
     static void setScale(const std::vector<float>& degrees, bool on) {
         if(state().scale == degrees && state().scaleOn == on) return;
@@ -94,10 +97,14 @@ public:
     static const std::vector<float>& lowScale() { return state().lowScale; }
     static float split() { return state().split; }
     static bool splitOn() { return state().split > 0.0f && !state().lowScale.empty(); }
-    static void setLowScale(const std::vector<float>& degrees, float split) {
-        if(state().lowScale == degrees && state().split == split) return;
+    // the low scale quantizes the notes below the split note (its own bypass)
+    static bool lowScaleOn() { return state().lowOn && splitOn(); }
+    static bool lowScaleEnabled() { return state().lowOn; }
+    static void setLowScale(const std::vector<float>& degrees, float split, bool on) {
+        if(state().lowScale == degrees && state().split == split && state().lowOn == on) return;
         state().lowScale = degrees;
         state().split = split;
+        state().lowOn = on;
         state().lowOffsets = offsetsFor(degrees);
         valuesChanged(Scale);
     }
@@ -142,10 +149,11 @@ public:
 
     // what a destination that applies the values itself sends for a pitch v on a channel
     static float apply(ofxOceanodeNodeModel* node, float v, int channel = 0) {
-        if(follows(node, Scale) && scaleOn()) {
+        if(follows(node, Scale)) {
             const float r = std::round(v);
             const int pc = ((int(r) % 12) + 12) % 12;
-            v = r + (splitOn() && r < split() ? state().lowOffsets : state().offsets)[pc];
+            const bool low = splitOn() && r < split();
+            if(low ? lowScaleOn() : scaleOn()) v = r + (low ? state().lowOffsets : state().offsets)[pc];
         }
         if(follows(node, Transpose)) v = transposed(v);
         if(spread(node)) v += detune() * 0.01f * random(node, channel);
@@ -242,6 +250,7 @@ private:
         std::vector<float> lowScale;
         float split = 0.0f;
         std::array<float, 12> lowOffsets{};
+        bool lowOn = false;
         float detune = 0.0f;
         bool wrap = false;
         int wrapBase = 0;
@@ -263,15 +272,16 @@ private:
         m.addIntArg(index);
         m.addIntArg(NumBlocks * BlockSize);
         for(int block = 0; block < NumBlocks; block++) {
-            const bool t = block & 1, q = (block & 2) && scaleOn(), d = block & 4;
+            const bool t = block & 1, s = block & 2, q = s && scaleOn(), lq = s && lowScaleOn(), d = block & 4;
             m.addFloatArg(t ? state().transpose : 0.0f);
             m.addFloatArg(q ? 1.0f : 0.0f);
             for(float o : state().offsets) m.addFloatArg(q ? o : 0.0f);
             m.addFloatArg(d ? state().detune : 0.0f);
             m.addFloatArg(t && state().wrap ? 1.0f : 0.0f);
             m.addFloatArg(t ? float(state().wrapBase) : 0.0f);
-            m.addFloatArg(q && splitOn() ? state().split : -1000.0f);
-            for(float o : state().lowOffsets) m.addFloatArg(q && splitOn() ? o : 0.0f);
+            m.addFloatArg(s && splitOn() ? state().split : -1000.0f);   // where the low side starts, bypassed or not
+            for(float o : state().lowOffsets) m.addFloatArg(lq ? o : 0.0f);
+            m.addFloatArg(lq ? 1.0f : 0.0f);
         }
         server->sendMsg(m);
     }

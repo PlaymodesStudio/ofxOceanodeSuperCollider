@@ -36,9 +36,9 @@ SynthDef(\AliasingBoxVoice, {
     var index = Select.kr(voices > 1, [0.5, voice / (voices - 1).max(1)]);
     var gate = In.ar(\gatebus.kr(0), 1);
     var trig = HPZ1.ar(gate > 0).max(0);
-    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 30) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
     var gt = gg[14] * 0.01 * Rand(-1, 1);   // each voice's detune (the transpose is in gq)
-    var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
+    var gq = { |p| var r = p.round, q = Select.kr((((r < gg[17]) * gg[30]) + ((r >= gg[17]) * gg[1])) > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
     var note = gq.(Select.kr(\pitch_sel.kr(0), [\pitch.kr(60), A2K.kr(\pitch_ar.ar(60))])) + gt
         + pl.(\transpose,0) + (pl.(\fine_tune,0)) + m.(\mpitch);
     var tracking = 2 ** (((60 - note) * p.(\envelope_keytrack,0)) / 12);

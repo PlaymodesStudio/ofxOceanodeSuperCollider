@@ -18,9 +18,9 @@ File.mkdir(root); File.mkdir(dir);
         var cable=A2K.kr(NamedControl.ar(\pitch_ar,60!n));
         // One oscillator at the input root (first pitch), shared by the voice
         // envelopes. Chord tones must never become extra sub frequencies.
-        var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 30) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+        var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
         var gt = gg[14] * 0.01 * Rand(-1, 1);   // each voice's detune (the transpose is in gq)
-        var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
+        var gq = { |p| var r = p.round, q = Select.kr((((r < gg[17]) * gg[30]) + ((r >= gg[17]) * gg[1])) > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
         var pitch = gq.(Select.kr(\pitch_sel.kr(0), [kv.(\pitch,60).asArray[0], cable.asArray[0]]));
         var atk=kv.(\atk,0.01).asArray, dec=kv.(\dec,0.5).asArray, sus=kv.(\sus,1).asArray, rel=kv.(\rel,0.5).asArray;
         var curves=[kv.(\cA,-4),kv.(\cD,-4),kv.(\cR,-4)].collect(_.asArray);

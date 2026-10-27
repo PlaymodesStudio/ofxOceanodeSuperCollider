@@ -6,10 +6,11 @@
 //  patch (pitched Boxes, generic SynthDefs, FM7), Pitch cables and piano-roll
 //  notes included (scGlobalPitch.h):
 //    Scale         the notes move to the nearest degree (pitch classes 0-11)
-//    Scale Bypass  turns the scale off (the low scale too)
+//    Scale Bypass  turns the scale off (at and above Split Note)
 //    Split Note    the input notes below it (MIDI, 0 = off) move to the nearest
 //    Low Scale     degree of Low Scale instead, e.g. to stay in tune with a
 //                  neighbouring piece in the bass while the rest follows Scale
+//    Low Scale Bypass  turns the low scale off (below Split Note)
 //    Transpose     semitones, added after the scale (a transpose changes the key)
 //    Mod 12        a transposed note wraps into its own octave, which starts at
 //    Base Note     (C .. B): it never leaves that octave (cf. Fit Notes In Range)
@@ -45,24 +46,29 @@ public:
         scGlobalPitch::setTranspose(0.0f);
         scGlobalPitch::setTransposeWrap(false, 0);
         scGlobalPitch::setScale({}, false);
-        scGlobalPitch::setLowScale({}, 0.0f);
+        scGlobalPitch::setLowScale({}, 0.0f, false);
         scGlobalPitch::setDetune(0.0f);
         for(int f = 0; f < scGlobalPitch::NumFeatures; f++) scGlobalPitch::setOverridesText(feature(f), "");
     }
 
     void setup() override {
         const auto& current = scGlobalPitch::scale();
+        addSeparator("Scale");
         addParameter(scale.set("Scale", current.empty() ? std::vector<float>{0, 2, 4, 5, 7, 9, 11} : current,
                                std::vector<float>(1, 0.0f), std::vector<float>(1, 11.0f)));
         addParameter(bypass.set("Scale Bypass", !current.empty() && !scGlobalPitch::scaleOn()));
         const auto& low = scGlobalPitch::lowScale();
+        addSeparator("Low Scale");
         addParameter(split.set("Split Note", scGlobalPitch::split(), 0.0f, 127.0f));
         addParameter(lowScale.set("Low Scale", low.empty() ? std::vector<float>{0} : low,
                                   std::vector<float>(1, 0.0f), std::vector<float>(1, 11.0f)));
+        addParameter(lowBypass.set("Low Scale Bypass", !low.empty() && !scGlobalPitch::lowScaleEnabled()));
+        addSeparator("Transpose");
         addParameter(transpose.set("Transpose", scGlobalPitch::transpose(), -48.0f, 48.0f));
         addParameter(wrap.set("Mod 12", scGlobalPitch::transposeWraps()));
         addParameterDropdown(wrapBase, "Base Note", scGlobalPitch::transposeBase(),
                              {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"});
+        addSeparator("Detune");
         addParameter(detune.set("Detune", scGlobalPitch::detune(), 0.0f, 100.0f));
         // the destinations that differ from their default, one string per feature (scGlobalPitch::overridesText)
         static const char* names[scGlobalPitch::NumFeatures] = {"Transpose Destinations", "Scale Destinations", "Detune Destinations"};
@@ -86,10 +92,12 @@ public:
         auto sendLowScale = [this](){
             const std::vector<float> s = lowScale.get();
             const float at = split.get();
-            scGlobalPitch::setLowScale(s, at);
-            share([s, at](scGlobalPitchNode* n){ n->lowScale = s; n->split = at; });
+            const bool b = lowBypass.get();
+            scGlobalPitch::setLowScale(s, at, !b);
+            share([s, at, b](scGlobalPitchNode* n){ n->lowScale = s; n->split = at; n->lowBypass = b; });
         };
         listeners.push(lowScale.newListener([sendLowScale](std::vector<float>&){ sendLowScale(); }));
+        listeners.push(lowBypass.newListener([sendLowScale](bool&){ sendLowScale(); }));
         listeners.push(split.newListener([sendLowScale](float&){ sendLowScale(); }));
         listeners.push(transpose.newListener([this](float& v){
             scGlobalPitch::setTranspose(v);
@@ -109,6 +117,11 @@ public:
         }));
         sendLowScale();
         sendScale();
+    }
+
+    // presets from before Low Scale Bypass: Scale Bypass turned both scales off
+    void presetRecallAfterSettingParameters(ofJson& json) override {
+        if(!json.contains(lowBypass.getEscapedName())) lowBypass = bypass.get();
     }
 
     // one table for the three destination strings: a row per destination, a tick per feature
@@ -167,7 +180,7 @@ private:
 
     ofParameter<std::vector<float>> scale, lowScale;
     ofParameter<float> split;
-    ofParameter<bool> bypass;
+    ofParameter<bool> bypass, lowBypass;
     ofParameter<float> transpose, detune;
     ofParameter<bool> wrap;
     ofParameter<int> wrapBase;

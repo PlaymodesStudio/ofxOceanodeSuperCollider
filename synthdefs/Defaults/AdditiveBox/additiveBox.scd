@@ -144,9 +144,9 @@ caps.do { |np|
     //    (keytracked, modulated) cutoff; Safe Bass keeps the fundamental ────
     part.("AdditiveBoxFilt", np, { |np|
         var s = streams.(np);
-        var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 30) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+        var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
         var gt = gg[14] * 0.01 * \gdr.kr(0);   // each voice's detune (the transpose is in gq)
-        var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
+        var gq = { |p| var r = p.round, q = Select.kr((((r < gg[17]) * gg[30]) + ((r >= gg[17]) * gg[1])) > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
         var pitch = Lag.kr(gq.(lag.(\pitch, 48)) + lag.(\pitchoff, 0), \glide.kr(0)) + gt;   // pitchoff: the transpose
         var p = pitch + mod.(2) + mod.(9);
         var cut = lag.(\cutoff, 100) + (lag.(\keytrack, 0) * (pitch - 60)) + mod.(0);
@@ -254,9 +254,9 @@ chunks.do { |nc|
             var o = chunk.(nc);
             var s = [In.kr(o[0], nc), In.kr(o[1], nc), In.kr(o[2], nc)];
             var vib = In.kr(\bus.kr(0) + (3 * \np.kr(8)) + 1, 2);
-            var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 30) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+            var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
             var gt = gg[14] * 0.01 * \gdr.kr(0);   // each voice's detune (the transpose is in gq)
-            var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
+            var gq = { |p| var r = p.round, q = Select.kr((((r < gg[17]) * gg[30]) + ((r >= gg[17]) * gg[1])) > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
             var pitch = Lag.kr(gq.(lag.(\pitch, 48)) + lag.(\pitchoff, 0), \glide.kr(0)) + gt;   // pitchoff: transpose, unison
             var glev = Gate.kr(\gate.kr(0), \gate.kr(0) > 0);   // the gate's level: a gate at 0.2 plays at 0.2
             // An amplitude envelope owns note-off/release. Without one, close
