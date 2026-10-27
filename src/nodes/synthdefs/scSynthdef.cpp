@@ -190,9 +190,10 @@ void scSynthdef::setup(){
         // Set below for trigger-like parameters; true when the change was a
         // void bang and has been sent as a pulse.
         auto handleVoidBang = std::make_shared<std::function<bool()>>();
-        // Global Transpose / Scale: a pitch value (MIDI notes) is quantized and
-        // transposed; one that can go below 0 is a shift amount and starts left out
-        const bool transposed = (toSendName == "pitch" || toSendName == "pitcharray")
+        // Global Pitch: a pitch value (MIDI notes) is quantized, transposed and
+        // detuned (scGlobalPitch::isPitchControl); one that can go below 0 is a
+        // shift amount and starts left out
+        const bool transposed = scGlobalPitch::isPitchControl(toSendName)
                              && (unitWithoutAudio == "vf" || unitWithoutAudio == "f");
         if(transposed && ofToFloat(specMap["minval"]) < 0) transposeByDefault = false;
         

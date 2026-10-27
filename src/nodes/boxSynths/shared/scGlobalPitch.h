@@ -148,7 +148,8 @@ public:
     }
 
     // what a destination that applies the values itself sends for a pitch v on a channel
-    static float apply(ofxOceanodeNodeModel* node, float v, int channel = 0) {
+    // detune: false for a destination that cannot play a fraction of a semitone (a MIDI note)
+    static float apply(ofxOceanodeNodeModel* node, float v, int channel = 0, bool withDetune = true) {
         if(follows(node, Scale)) {
             const float r = std::round(v);
             const int pc = ((int(r) % 12) + 12) % 12;
@@ -156,7 +157,7 @@ public:
             if(low ? lowScaleOn() : scaleOn()) v = r + (low ? state().lowOffsets : state().offsets)[pc];
         }
         if(follows(node, Transpose)) v = transposed(v);
-        if(spread(node)) v += detune() * 0.01f * random(node, channel);
+        if(withDetune && spread(node)) v += detune() * 0.01f * random(node, channel);
         return v;
     }
     // a note transposed: with modulo 12, wrapped into the octave from the base that holds it
@@ -178,6 +179,12 @@ public:
             while((int)r.size() <= index) r.push_back(uniform(engine));
         }
         return r[index];
+    }
+
+    // the controls of a generic / old-format SynthDef that carry its note (MIDI):
+    // pitch, pitcharray, and carp (PMod's carrier; its modulator modp is timbre)
+    static bool isPitchControl(const std::string& name) {
+        return name == "pitch" || name == "pitcharray" || name == "carp";
     }
 
     // a destination's patch-unique name ("AnalogBox 2", "Macro 1/PolyComb 1")

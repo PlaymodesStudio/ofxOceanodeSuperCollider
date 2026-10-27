@@ -427,11 +427,16 @@ There are two mechanisms; see [scGlobalPitch](shared/scGlobalPitch.h):
   (AdditiveBox's `pitchoff`), so unison and detune are not quantized.
   Sequencers (ArpeggiatorBox, ChordBox, EuclideanBox, MetroBox) do not follow,
   so nothing is applied twice in a chain.
-- **Generic SynthDef nodes** (`scSynthdef`) and FM7 cannot read the buses
-  without recompiling. They send `scGlobalPitch::apply(this, v, channel)` for
-  their `pitch` / `pitcharray` values. While Detune is on they expand a single
+- **Generic SynthDef nodes** (`scSynthdef`), old-format synthdefs
+  (`scOldSynthdef`, from `Supercollider/Synthdefs.json`) and FM7 cannot read
+  the buses without recompiling. They send `scGlobalPitch::apply(this, v,
+  channel)` for their note controls: `pitch`, `pitcharray` and PMod's carrier
+  `carp` (`scGlobalPitch::isPitchControl`). PMod's modulator pitch `modp` sets
+  the timbre, so it doesn't follow. While Detune is on they expand a single
   value to one per channel, and they resend when a feature changes. An audio
   cable into such a pitch does not follow.
+- **The VST node** applies Scale and Transpose to each note at its note-on,
+  without Detune: a MIDI note has no fraction. Held notes keep their pitch.
 
 ## Current coverage
 

@@ -8,6 +8,7 @@
 
 #include "../../ofxOceanodeSuperColliderConfig.h"
 #include "scVST.h"
+#include "../boxSynths/shared/scGlobalPitch.h"
 #include "ofxSCSynth.h"
 #include "imgui.h"
 #include "ofxOceanodeShared.h"
@@ -252,6 +253,9 @@ Multithreading asks VSTPlugin to run plugins on worker threads during realtime o
 }
 
 void scVST::setup(){
+	// Global Pitch: applied to each note at its note-on (held notes keep theirs);
+	// a MIDI note has no fraction, so Detune does not reach it
+	scGlobalPitch::follow(this, true, {});
 	
 	// Initialize FXP-related variables
 	hasSavedFXPData = false;
@@ -3251,12 +3255,10 @@ void scVST::processGates(vector<int> &gates){
 		// Rising edge - gate went from 0 to 1
 		if (currentGate == 1 && previousGate == 0) {
 			// OPTIMIZATION: Get pitch for this index with minimal branching
-			int noteNumber = 60;
-			if (i < pitchSize) {
-				noteNumber = ofClamp(currentPitch[i], 0, 127);
-			} else if (pitchSize > 0) {
-				noteNumber = ofClamp(currentPitch[0], 0, 127);
-			}
+			float note = 60.0f;
+			if (i < pitchSize) note = currentPitch[i];
+			else if (pitchSize > 0) note = currentPitch[0];
+			const int noteNumber = ofClamp(scGlobalPitch::apply(this, note, (int)i, false), 0, 127);   // truncated, as before
 
 			// OPTIMIZATION: Get velocity using pre-computed values
 			float vel = velocityBroadcast ? scalarVelocity :

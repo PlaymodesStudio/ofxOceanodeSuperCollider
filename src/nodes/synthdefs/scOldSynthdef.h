@@ -10,6 +10,8 @@
 
 #include "ofxOceanodeNodeModel.h"
 #include "../../scNode.h"
+#include "../boxSynths/shared/scGlobalPitch.h"
+#include <functional>
 
 class ofxSCSynth;
 class ofxSCServer;
@@ -29,6 +31,7 @@ class scOldSynthdef : public scNode {
 public:
     scOldSynthdef(oldSynthdefDesc description);
     ~scOldSynthdef(){
+        scGlobalPitch::unfollow(this);
         freeAll();
     }
 
@@ -99,6 +102,9 @@ private:
     vector<ofParameter<vector<int>>> buffers;
     vector<ofParameter<vector<int>>> legacyBuffers;
     bool syncingLegacyBuffer = false;
+    // Global Pitch: the sends of the note controls, and whether it follows by default
+    std::vector<std::function<void()>> pitchSends;
+    bool pitchByDefault = true;
 };
 
 #endif /* scOldSynthdef_h */

@@ -11,6 +11,7 @@
 
 #include "ofxOceanodeNodeModel.h"
 #include "../../scNode.h"
+#include "../boxSynths/shared/scGlobalPitch.h"
 #include "ofxOsc.h"
 #include <array>
 #include <mutex>
@@ -42,6 +43,7 @@ class scVST: public scNode {
 public:
 	scVST();
 	~scVST(){
+		scGlobalPitch::unfollow(this);
 		string nodeKey = "";
 		try {
 			nodeKey = getParameterGroup().getName();
