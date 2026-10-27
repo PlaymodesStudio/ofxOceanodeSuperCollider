@@ -385,7 +385,10 @@ without cables. It lives in ofxOceanode core, in `Default_Nodes/globalPitch.h`
 (category General), with its registry in `Nodes/ofxOceanodeGlobalPitch.h`.
 Nothing in either depends on SuperCollider, so nodes in any addon can follow
 it. ofxOceanodeMidi's **Note Gate** and ofxSantiNodes' **Piano Roll Live**
-follow it as well as the SuperCollider nodes. It applies three features, in
+follow it as well as the SuperCollider nodes. The timeline's piano-roll
+editor draws each note where the lane's instrument will play it, with a faint
+ghost at the stored pitch. This is display only: the clip stores and sends its
+notes unchanged, and the instrument applies Global Pitch once. It applies three features, in
 this order:
 
 1. **Scale** moves the input note to the nearest degree. Scale is a vector of
