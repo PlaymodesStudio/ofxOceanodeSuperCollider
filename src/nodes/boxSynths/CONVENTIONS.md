@@ -380,8 +380,12 @@ guard. A piano widget alone does not make a model a timeline instrument.
 
 ## Global Pitch
 
-The **Global Pitch** node (`globalPitch/scGlobalPitchNode.h`) acts on every
-pitched destination in the patch without cables. It applies three features, in
+The **Global Pitch** node acts on every pitched destination in the patch,
+without cables. It lives in ofxOceanode core, in `Default_Nodes/globalPitch.h`
+(category General), with its registry in `Nodes/ofxOceanodeGlobalPitch.h`.
+Nothing in either depends on SuperCollider, so nodes in any addon can follow
+it. ofxOceanodeMidi's **Note Gate** and ofxSantiNodes' **Piano Roll Live**
+follow it as well as the SuperCollider nodes. It applies three features, in
 this order:
 
 1. **Scale** moves the input note to the nearest degree. Scale is a vector of
@@ -405,7 +409,14 @@ nodes whose `pitch` can go below 0 also start unticked, because that `pitch` is
 a shift amount. Several Global Pitch nodes share one state. The node saves the
 destinations that differ from their default, as one string per feature.
 
-There are two mechanisms; see [scGlobalPitch](shared/scGlobalPitch.h):
+A destination applies the values itself, so a chain that passes notes from one
+destination to another applies them twice. For example, Note Gate sends
+quantized MIDI that Note In Fast reads back into a VST. Untick the downstream
+destinations in the table; quantizing twice is harmless, but transposing or
+detuning twice is not.
+
+The SuperCollider nodes use one of two mechanisms. `scGlobalPitch`
+(`shared/scGlobalPitch.h`) is the core registry plus the buses the Boxes read:
 
 - **Boxes** read a block of 31 control buses per server, allocated by
   serverManager: transpose, scale on, each pitch class's offset to its nearest
@@ -439,8 +450,9 @@ There are two mechanisms; see [scGlobalPitch](shared/scGlobalPitch.h):
   the timbre, so it doesn't follow. While Detune is on they expand a single
   value to one per channel, and they resend when a feature changes. An audio
   cable into such a pitch does not follow.
-- **The VST node** applies Scale and Transpose to each note at its note-on,
-  without Detune: a MIDI note has no fraction. Held notes keep their pitch.
+- **The VST node**, like Note Gate outside this addon, applies Scale and
+  Transpose to each note at its note-on, without Detune: a MIDI note has no
+  fraction. Held notes keep their pitch.
 
 ## Current coverage
 

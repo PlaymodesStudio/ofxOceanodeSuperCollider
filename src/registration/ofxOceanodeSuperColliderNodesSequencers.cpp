@@ -16,7 +16,6 @@
 #include "../nodes/boxSynths/chordBox/scChordBox.h"
 #include "../nodes/boxSynths/rhythmBox/scRhythmBox.h"
 #include "../nodes/boxSynths/dataBox/scDataBox.h"
-#include "../nodes/boxSynths/globalPitch/scGlobalPitchNode.h"
 
 namespace ofxOceanodeSuperCollider{
 
@@ -31,7 +30,6 @@ void registerSequencerNodes(ofxOceanode &o){
 	o.registerModel<scChordBox>("SuperCollider/boxSynths");
 	o.registerModel<scRhythmBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scDataBox>("SuperCollider/boxSynths", controller->getServers());
-	o.registerModel<scGlobalPitchNode>("SuperCollider/boxSynths");
 }
 
 }
