@@ -7,7 +7,7 @@
 	input = In.ar(OceanodeInput.kr(\in), n);
 
 	// Parameter controls with proper lag for smooth transitions
-	pitch = OceanodeParameterLag.ar(\pitch, 60, n, 0, 130, "vf", 1/30, true);
+	pitch = OceanodeParameterLag.ar(\cutp, 60, n, 0, 130, "vf", 1/30, true);
 	freq = pitch.midicps;
 	q = (1 - OceanodeParameterLag.ar(\q, 1, n, 0.005, 1, "vf", 1/30, true)).max(0.005);   // rq; was 0 at q = 1 (the default) -> NaN
 	amp = OceanodeParameterLag.ar(\amp, 1, n, 0, 1, "vf", 1/30, true);

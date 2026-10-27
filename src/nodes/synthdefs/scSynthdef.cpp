@@ -196,6 +196,7 @@ void scSynthdef::setup(){
         const bool transposed = scGlobalPitch::isPitchControl(toSendName)
                              && (unitWithoutAudio == "vf" || unitWithoutAudio == "f");
         if(transposed && ofToFloat(specMap["minval"]) < 0) transposeByDefault = false;
+        const float pitchLo = ofToFloat(specMap["minval"]), pitchHi = ofToFloat(specMap["maxval"]);
         
         if(unitWithoutAudio == "vi"){
             ofParameter<vector<int>> vi;
@@ -239,7 +240,7 @@ void scSynthdef::setup(){
                                 vector<float>(1, ofToFloat(specMap["minval"])),
                                 vector<float>(1, ofToFloat(specMap["maxval"]))));
             
-            setValuesToSynths = [this, toSendName, vf, sentCache, transposed](bool force){
+            setValuesToSynths = [this, toSendName, vf, sentCache, transposed, pitchLo, pitchHi](bool force){
                 for(auto f : vf.get()) {
                     if(std::isnan(f)){
                         ofLog() << "Trying to send a nan value";
@@ -250,7 +251,7 @@ void scSynthdef::setup(){
                 if(transposed){
                     // Global Detune gives each channel its own value
                     if(values.size() == 1 && scGlobalPitch::spread(this)) values.assign(std::max(1, numChannels.get()), values[0]);
-                    for(size_t i = 0; i < values.size(); i++) values[i] = scGlobalPitch::apply(this, values[i], (int)i);
+                    for(size_t i = 0; i < values.size(); i++) values[i] = scGlobalPitch::applyInRange(this, values[i], (int)i, pitchLo, pitchHi);
                 }
                 for(auto synthServer : synths){
                     if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, sentValueKey(values), force)) continue;
@@ -259,7 +260,7 @@ void scSynthdef::setup(){
                 }
             };
             
-            setScheduledValueToSynths = [this, toSendName, sentCache, transposed](const std::string& text){
+            setScheduledValueToSynths = [this, toSendName, sentCache, transposed, pitchLo, pitchHi](const std::string& text){
                 sentCache->forget();
                 std::vector<float> values;
                 for(const auto& token : ofSplitString(text, ",", true, true)) values.push_back(ofToFloat(token));
@@ -267,7 +268,7 @@ void scSynthdef::setup(){
                 if(transposed){
                     // Global Detune gives each channel its own value
                     if(values.size() == 1 && scGlobalPitch::spread(this)) values.assign(std::max(1, numChannels.get()), values[0]);
-                    for(size_t i = 0; i < values.size(); i++) values[i] = scGlobalPitch::apply(this, values[i], (int)i);
+                    for(size_t i = 0; i < values.size(); i++) values[i] = scGlobalPitch::applyInRange(this, values[i], (int)i, pitchLo, pitchHi);
                 }
                 for(auto synthServer : synths){
                     if(values.size() == 1) synthServer.second->setMultiple(toSendName, values[0], numChannels.get());
@@ -318,21 +319,21 @@ void scSynthdef::setup(){
                                 ofToFloat(specMap["minval"]),
                                 ofToFloat(specMap["maxval"])));
             
-            setValuesToSynths = [this, toSendName, f, sentCache, transposed](bool force){
+            setValuesToSynths = [this, toSendName, f, sentCache, transposed, pitchLo, pitchHi](bool force){
                 if(std::isnan(f.get())){
                     ofLog() << "Trying to send a nan value";
                     return;
                 }
-                const float value = transposed ? scGlobalPitch::apply(this, f.get()) : f.get();
+                const float value = transposed ? scGlobalPitch::applyInRange(this, f.get(), 0, pitchLo, pitchHi) : f.get();
                 for(auto synthServer : synths){
                     if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, {(double)value}, force)) continue;
                     synthServer.second->set(toSendName, value);
                 }
             };
             
-            setScheduledValueToSynths = [this, toSendName, sentCache, transposed](const std::string& text){
+            setScheduledValueToSynths = [this, toSendName, sentCache, transposed, pitchLo, pitchHi](const std::string& text){
                 sentCache->forget();
-                const double value = transposed ? scGlobalPitch::apply(this, ofToFloat(text)) : ofToFloat(text);
+                const double value = transposed ? scGlobalPitch::applyInRange(this, ofToFloat(text), 0, pitchLo, pitchHi) : ofToFloat(text);
                 if(std::isnan(value)) return;
                 for(auto synthServer : synths) synthServer.second->set(toSendName, value);
             };

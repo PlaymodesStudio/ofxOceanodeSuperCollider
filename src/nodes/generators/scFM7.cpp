@@ -405,7 +405,7 @@ void scFM7::updateEnvelopeParams() {
 void scFM7::sendPitch() {
 	vector<float> p = pitch.get();
 	if(p.size() == 1 && scGlobalPitch::spread(this)) p.assign(std::max(1, numChannels.get()), p[0]);   // a detune per channel
-	for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::apply(this, p[i], (int)i);
+	for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::applyInRange(this, p[i], (int)i, pitch.getMin()[0], pitch.getMax()[0]);
 	sendFloatParameter("pitch", p);
 }
 
@@ -596,7 +596,7 @@ void scFM7::createSynth(ofxSCServer* server) {
 	if(g.size() != n) g.resize(n, 0);
 	if(l.size() != n) l.resize(n, l.empty() ? 1.0f : l[0]);
 	
-	for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::apply(this, p[i], (int)i);
+	for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::applyInRange(this, p[i], (int)i, pitch.getMin()[0], pitch.getMax()[0]);
 	synth->set("pitch", p);
 	synth->set("gate", g);
 	synth->set("velocity", l);

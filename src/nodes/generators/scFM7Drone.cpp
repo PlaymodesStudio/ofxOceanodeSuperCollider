@@ -171,7 +171,7 @@ void scFM7Drone::updateAllParamsToSynth() {
 void scFM7Drone::sendPitch() {
 	vector<float> p = pitch.get();
 	if(p.size() == 1 && scGlobalPitch::spread(this)) p.assign(std::max(1, numChannels.get()), p[0]);   // a detune per channel
-	for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::apply(this, p[i], (int)i);
+	for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::applyInRange(this, p[i], (int)i, pitch.getMin()[0], pitch.getMax()[0]);
 	sendFloatParameter("pitch", p);
 }
 
@@ -407,7 +407,7 @@ void scFM7Drone::createSynth(ofxSCServer* server) {
 	{
 		vector<float> p = pitch.get();
 		if((int)p.size() != n) p.resize(n, p.empty() ? 60.0f : p[0]);
-		for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::apply(this, p[i], (int)i);
+		for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::applyInRange(this, p[i], (int)i, pitch.getMin()[0], pitch.getMax()[0]);
 		synth->set("pitch", p);
 	}
 

@@ -431,7 +431,11 @@ There are two mechanisms; see [scGlobalPitch](shared/scGlobalPitch.h):
   (`scOldSynthdef`, from `Supercollider/Synthdefs.json`) and FM7 cannot read
   the buses without recompiling. They send `scGlobalPitch::apply(this, v,
   channel)` for their note controls: `pitch`, `pitcharray` and PMod's carrier
-  `carp` (`scGlobalPitch::isPitchControl`). PMod's modulator pitch `modp` sets
+  `carp` (`scGlobalPitch::isPitchControl`). A filter's cutoff is `cutp`, not
+  `pitch`, so Global Pitch never reaches it. The filters were renamed on
+  2026-10-27; `tools/migrate_filter_cutp.py` converts presets. Values Global
+  Pitch changes are clamped to the control's declared range
+  (`applyInRange`). PMod's modulator pitch `modp` sets
   the timbre, so it doesn't follow. While Detune is on they expand a single
   value to one per channel, and they resend when a feature changes. An audio
   cable into such a pitch does not follow.

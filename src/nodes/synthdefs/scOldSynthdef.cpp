@@ -108,7 +108,8 @@ void scOldSynthdef::setup(){
             // Global Pitch: a note (pitch / pitcharray / carp) is quantized, transposed and detuned
             const bool pitched = scGlobalPitch::isPitchControl(toSendName);
             if(pitched && ofToFloat(specMap["minval"]) < 0) pitchByDefault = false;
-            auto send = [this, vf, toSendName, pitched](){
+            const float lo = ofToFloat(specMap["minval"]), hi = ofToFloat(specMap["maxval"]);
+            auto send = [this, vf, toSendName, pitched, lo, hi](){
                 std::vector<float> values = vf.get();
                 for(auto f : values) {
                     if(std::isnan(f)){
@@ -118,7 +119,7 @@ void scOldSynthdef::setup(){
                 }
                 if(pitched){
                     if(values.size() == 1 && scGlobalPitch::spread(this)) values.assign(std::max(1, numChannels.get()), values[0]);
-                    for(size_t i = 0; i < values.size(); i++) values[i] = scGlobalPitch::apply(this, values[i], (int)i);
+                    for(size_t i = 0; i < values.size(); i++) values[i] = scGlobalPitch::applyInRange(this, values[i], (int)i, lo, hi);
                 }
                 for(auto synthServer : synths){
                     if(values.size() == 1) synthServer.second->setMultiple(toSendName, values[0], numChannels);
@@ -163,12 +164,13 @@ void scOldSynthdef::setup(){
             string toSendName = ofToLower(spec.first);
             const bool pitched = scGlobalPitch::isPitchControl(toSendName);
             if(pitched && ofToFloat(specMap["minval"]) < 0) pitchByDefault = false;
-            auto send = [this, f, toSendName, pitched](){
+            const float lo = ofToFloat(specMap["minval"]), hi = ofToFloat(specMap["maxval"]);
+            auto send = [this, f, toSendName, pitched, lo, hi](){
                 if(std::isnan(f.get())){
                     ofLog() << "Trying to send a nan value";
                     return;
                 }
-                const float value = pitched ? scGlobalPitch::apply(this, f.get()) : f.get();
+                const float value = pitched ? scGlobalPitch::applyInRange(this, f.get(), 0, lo, hi) : f.get();
                 for(auto synthServer : synths){
                     synthServer.second->set(toSendName, value);
                 }

@@ -3,7 +3,7 @@
 	var input, filters, filtered, freq, res, type, dry, mix, sig;
 
 	// Parameters
-	freq = OceanodeParameterLag.ar(\pitch, 128, n, 20, 135, "vf", 0.05, true).midicps;
+	freq = OceanodeParameterLag.ar(\cutp, 128, n, 20, 135, "vf", 0.05, true).midicps;
 	res = OceanodeParameter.ar(\reso, 1, n, 0, 1, "vf");
 	type = OceanodeParameterDropdown.kr(\type, 0, n, "MoogVCF:MoogFF:BMoog:MoogLadder");
 	mix = OceanodeParameter.ar(\mix, 1, n, 0, 1, "vf");

@@ -3,7 +3,7 @@
 	var input, filters, filtered, freq, res, type, dry, mix, sig,fmin;
 
 	// Parameters
-	freq = OceanodeParameterLag.ar(\pitch, 128, n, 20, 135, "vf", 0.05, true).midicps;
+	freq = OceanodeParameterLag.ar(\cutp, 128, n, 20, 135, "vf", 0.05, true).midicps;
 	res = OceanodeParameter.ar(\q, 1, n, 0.1, 4, "vf");
 	type = OceanodeParameterDropdown.ar(\type, 0, n, "LowPass:HighPass");
 	mix = OceanodeParameter.ar(\mix, 1, n, 0, 1, "vf");
@@ -29,7 +29,7 @@
 	var input, filters, filtered, freq, res, type, dry, mix, sig,fmin;
 
 	// Parameters
-	freq = OceanodeParameterLag.ar(\pitch, 128, n, 20, 135, "vf", 0.05, true).midicps;
+	freq = OceanodeParameterLag.ar(\cutp, 128, n, 20, 135, "vf", 0.05, true).midicps;
 	res = OceanodeParameter.ar(\q, 1, n, 0.1, 4, "vf");
 	type = OceanodeParameterDropdown.ar(\type, 0, n, "LowPass:HighPass");
 	mix = OceanodeParameter.ar(\mix, 1, n, 0, 1, "vf");

@@ -35,8 +35,8 @@
 //    each synth:   s->set("gtrbus", scGlobalPitch::bus(this, server));
 //
 //  A generic SynthDef (scSynthdef) and FM7 cannot read the buses without being
-//  compiled again, so they send apply(value, channel) for their "pitch" /
-//  "pitcharray" values (one per channel while spread() is on) and resend them
+//  compiled again, so they send applyInRange(value, channel, min, max) for their
+//  "pitch" / "pitcharray" values (one per channel while spread() is on) and resend them
 //  when a feature changes (valueChanged): Oceanode values and the timeline
 //  follow, an audio cable into the pitch does not.
 //
@@ -166,6 +166,13 @@ public:
         const float base = float(state().wrapBase);
         const float window = base + std::floor((v - base) / 12.0f) * 12.0f;
         return v + transpose() - 12.0f * std::floor((v + transpose() - window) / 12.0f);
+    }
+    // apply(), kept inside the control's declared range: a transpose must not push
+    // a note (or a filter's cutoff, often a "pitch" too) past what the SynthDef is
+    // built for, e.g. a band-pass bank's top bands up to Nyquist
+    static float applyInRange(ofxOceanodeNodeModel* node, float v, int channel, float lo, float hi, bool withDetune = true) {
+        const float out = apply(node, v, channel, withDetune);
+        return lo <= hi ? std::clamp(out, lo, hi) : out;
     }
     // true while a destination's channels each need their own value (Global Detune)
     static bool spread(ofxOceanodeNodeModel* node) { return detune() != 0.0f && follows(node, Detune); }
