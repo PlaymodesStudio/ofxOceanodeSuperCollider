@@ -50,7 +50,10 @@ SynthDef(\SteamPipeBoxVoice, {
     var m={|name| In.kr(NamedControl.kr(name,0),1)};
     var p={|name,def| NamedControl.kr(name,def)};
     var gate=In.ar(\gatebus.kr(0),1);
-    var pitch=Select.ar(\pitch_sel.kr(0),[SteamPipeStep.ar(\pitch.kr(60)),\pitch_ar.ar(60)]) + SteamPipeStep.ar(m.(\mpitch));
+    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 15) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+    var gt = gg[0] + (gg[14] * 0.01 * Rand(-1, 1));   // + each voice's detune
+    var gq = { |p| var r = p.round; Select.ar(gg[1] > 0.5, [p, r + Select.ar(r.mod(12), K2A.ar(gg[2..13]))]) };
+    var pitch=gq.(Select.ar(\pitch_sel.kr(0),[SteamPipeStep.ar(\pitch.kr(60)),\pitch_ar.ar(60)])) + SteamPipeStep.ar(m.(\mpitch)+gt);
     var velocity=In.ar(\velabus.kr(0),1);
     var voice=\voice.kr(0), pairs, sig, amp;
     pairs=[

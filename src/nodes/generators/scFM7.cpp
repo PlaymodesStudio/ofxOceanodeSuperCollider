@@ -1,4 +1,5 @@
 #include "scFM7.h"
+#include "../boxSynths/shared/scGlobalPitch.h"
 #include "ofxOceanodeShared.h"
 
 scFM7::scFM7() : scNode("SuperFM") {
@@ -22,6 +23,7 @@ scFM7::scFM7() : scNode("SuperFM") {
 }
 
 scFM7::~scFM7() {
+	scGlobalPitch::unfollow(this);
 	listeners.unsubscribeAll();
 	for(auto& pair : synthInstances) {
 		if(pair.second) { pair.second->free(); delete pair.second; }
@@ -30,6 +32,7 @@ scFM7::~scFM7() {
 }
 
 void scFM7::setup() {
+	scGlobalPitch::follow(this, true, [this](){ sendPitch(); }, [this](){ sendPitch(); });
 	// 1. Core
 	addParameter(numChannels.set("N Chan", 1, 1, 64));
 	
@@ -111,7 +114,7 @@ void scFM7::setup() {
 		oldNumChannels = n;
 	}));
 
-	listeners.push(pitch.newListener([this](vector<float> &v){ sendFloatParameter("pitch", v); }));
+	listeners.push(pitch.newListener([this](vector<float> &v){ sendPitch(); }));
 	listeners.push(gate.newListener([this](vector<int> &v){ sendIntParameter("gate", v); }));
 	listeners.push(levels.newListener([this](vector<float> &v){ sendFloatParameter("velocity", v); }));
 	listeners.push(modScale.newListener([this](vector<float> &v){ sendFloatParameter("modScale", v); }));
@@ -398,6 +401,14 @@ void scFM7::updateEnvelopeParams() {
 	}
 }
 
+// Global Pitch: the generic FM7 SynthDefs read no buses, so scale, transpose and detune are applied here
+void scFM7::sendPitch() {
+	vector<float> p = pitch.get();
+	if(p.size() == 1 && scGlobalPitch::spread(this)) p.assign(std::max(1, numChannels.get()), p[0]);   // a detune per channel
+	for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::apply(this, p[i], (int)i);
+	sendFloatParameter("pitch", p);
+}
+
 void scFM7::sendFloatParameter(const string& name, vector<float>& values) {
 	int n = numChannels.get();
 	for(auto& pair : synthInstances) {
@@ -585,6 +596,7 @@ void scFM7::createSynth(ofxSCServer* server) {
 	if(g.size() != n) g.resize(n, 0);
 	if(l.size() != n) l.resize(n, l.empty() ? 1.0f : l[0]);
 	
+	for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::apply(this, p[i], (int)i);
 	synth->set("pitch", p);
 	synth->set("gate", g);
 	synth->set("velocity", l);

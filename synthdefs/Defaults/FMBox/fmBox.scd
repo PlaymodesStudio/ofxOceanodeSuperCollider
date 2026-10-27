@@ -66,8 +66,11 @@ SynthDef(\FMBoxVoice, {
     var gateK = A2K.kr(gate>0);
     var vel = In.kr(\velbus.kr(0),1).clip(0,1)*127;
     var native = In.ar(\nativebus.kr(0),2);
-    var pitch = Select.kr(\pitch_sel.kr(0),[\pitch.kr(60),A2K.kr(\pitch_ar.ar(60))]);
-    var note = pitch + p.(\transpose,24)-24 + m.(\mpitch);
+    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 15) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+    var gt = gg[0] + (gg[14] * 0.01 * Rand(-1, 1));   // + each voice's detune
+    var gq = { |p| var r = p.round; Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]) };
+    var pitch = gq.(Select.kr(\pitch_sel.kr(0),[\pitch.kr(60),A2K.kr(\pitch_ar.ar(60))]));
+    var note = pitch + gt + p.(\transpose,24)-24 + m.(\mpitch);
     var timeScale = p.(\env_time,1).clip(0.01,20);
     var feedback = (p.(\feedback,0)+m.(\mfeedback)).clip(0,7);
     var fb = table.(\feedbackIndex,feedback)*feedback;

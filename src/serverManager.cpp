@@ -13,6 +13,7 @@
 #include "scNode.h"
 #include "scStart.h"
 #include "nodes/routing/scOutput.h"
+#include "nodes/boxSynths/shared/scGlobalPitch.h"
 #include "ofxOceanodeShared.h"
 #include "ofxOceanodeContainer.h"
 #include <algorithm>
@@ -91,6 +92,7 @@ serverManager::serverManager(){
 };
 
 serverManager::~serverManager(){
+    scGlobalPitch::setServerBus(server, -1);
     clearFoldedWaveforms();
     serverSampleRates.erase(server);
     for(auto node : nodesList) node->free(server);
@@ -165,6 +167,7 @@ void serverManager::setup(){
         // reserved silent bus address may now point to a live allocation.
         busFromSilent.reset();
         busFromSilent = std::make_unique<ofxSCBus>(RATE_AUDIO, MAX_NODE_CHANNELS, server);
+        allocateTransposeBus();
         recomputeGraph();
         
         setVolume(volume);
@@ -174,6 +177,15 @@ void serverManager::setup(){
     }));
 	
 	if(busFromSilent == nullptr) busFromSilent = std::make_unique<ofxSCBus>(RATE_AUDIO, MAX_NODE_CHANNELS, server);
+    if(transposeBus == nullptr) allocateTransposeBus();
+}
+
+// Global Transpose / Scale: the control buses the pitched Boxes read (scGlobalPitch.h).
+// Like busFromSilent they live as long as the server's allocator, never freed.
+void serverManager::allocateTransposeBus(){
+    transposeBus.reset();
+    transposeBus = std::make_unique<ofxSCBus>(RATE_CONTROL, scGlobalPitch::NumBlocks * scGlobalPitch::BlockSize, server);
+    scGlobalPitch::setServerBus(server, transposeBus->index);
 }
 
 void serverManager::draw(){

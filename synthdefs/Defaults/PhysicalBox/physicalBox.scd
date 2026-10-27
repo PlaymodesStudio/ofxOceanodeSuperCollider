@@ -37,7 +37,10 @@ SynthDef(\PhysicalBoxVoice, {
     var m = { |name| In.kr(NamedControl.kr(name, 0), 1) };
     var p = { |name| NamedControl.kr(name, d.(name)) };
     var modded = { |name, mod, lo, hi| (p.(name) + m.(mod)).clip(lo, hi) };
-    var note = Select.kr(\pitch_sel.kr(0), [\pitch.kr(60), A2K.kr(\pitch_ar.ar(60))]) + m.(\mpitch);
+    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 15) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+    var gt = gg[0] + (gg[14] * 0.01 * Rand(-1, 1));   // + each voice's detune
+    var gq = { |p| var r = p.round; Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]) };
+    var note = gq.(Select.kr(\pitch_sel.kr(0), [\pitch.kr(60), A2K.kr(\pitch_ar.ar(60))])) + gt + m.(\mpitch);
     var gate = In.ar(\gatebus.kr(0), 1);
     var decay = 2 ** m.(\mdecay), bright = m.(\mbright);
     var given = (

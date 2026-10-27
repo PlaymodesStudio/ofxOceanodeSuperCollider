@@ -33,8 +33,11 @@ File.mkdir(root); File.mkdir(dir);
     // The note: glide, transpose, a random detune per voice, vibrato (a rate per voice), modulation
     // the pitch: Oceanode values, or an audio cable (\pitch_ar mapped, \pitch_sel 1)
     SynthDef(("ABPitch" ++ n).asSymbol, {
-        var p = Select.kr(\pitch_sel.kr(0) > 0.5, [kv.(\pitch, 60), A2K.kr(\pitch_ar.ar(60 ! n))]);
-        var b = Lag.kr(p, kv.(\glide, 0)) + kv.(\transpose, 0) + (({ Rand(-1, 1) } ! n) * kl.(\detune, 0));
+        var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 15) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+        var gt = gg[0] + (gg[14] * 0.01 * ({ Rand(-1, 1) } ! n));   // + each voice's detune
+        var gq = { |p| var r = p.round; Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]) };
+        var p = gq.(Select.kr(\pitch_sel.kr(0) > 0.5, [kv.(\pitch, 60), A2K.kr(\pitch_ar.ar(60 ! n))]));
+        var b = Lag.kr(p, kv.(\glide, 0)) + gt + kv.(\transpose, 0) + (({ Rand(-1, 1) } ! n) * kl.(\detune, 0));
         var rate = kv.(\vibrate, 5) * (1 + (({ Rand(-1, 1) } ! n) * kv.(\vibrand, 0).clip(0, 1)));
         var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * kl.(\vibamt, 0);
         Out.kr(\out.kr(0), (b + v + modIn.(\mpitch)) ++ b);

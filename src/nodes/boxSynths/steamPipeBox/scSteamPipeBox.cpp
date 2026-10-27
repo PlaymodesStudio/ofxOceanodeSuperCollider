@@ -1,6 +1,7 @@
 #include "../shared/scDroneMode.h"
 #include "../../../audio/scFxRouting.h"
 #include "scSteamPipeBox.h"
+#include "../shared/scGlobalPitch.h"
 #include "scSteamPipeBoxData.h"
 #include "../../../ui/scTypedValue.h"
 #include "../../../ui/scEnvelopeCurve.h"
@@ -54,6 +55,7 @@ scSteamPipeBox::scSteamPipeBox(std::vector<serverManager*> s) : scNode("steampip
                   "from a clock to a Geiger counter. Right-click controls to publish or automate.";
 }
 scSteamPipeBox::~scSteamPipeBox() {
+    scGlobalPitch::unfollow(this);
     scheduled.disable();
     listeners.unsubscribeAll();
     for(auto& [s, st] : states) release(s, st);
@@ -70,6 +72,9 @@ template<class T> void scSteamPipeBox::reg(ofParameter<T>& p, std::function<void
     listeners.push(p.newListener([this, &p, send](T&) { snaps.morph.edited(p); if(!restoring) send(); }));
 }
 void scSteamPipeBox::setup() {
+    scGlobalPitch::follow(this, true, [this](){
+        for(auto& [s, st] : states) for(int i = 0; i < st.builtVoices; ++i) if(auto* v = st.voices[i]) v->set("gtrbus", scGlobalPitch::bus(this, s));
+    });
     timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); }, [this](){ return publishedKeys; });
     addParameter(show.set("Show", false));
     addParameter(voices.set("Voices", 6, 1, 16));
@@ -347,6 +352,7 @@ void scSteamPipeBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) 
         if(fields & NotePitch) v->set("pitch", first(pitch.get(),i,60));
         if(fields & NoteRouting) {
             v->set("pitch_sel",bus>=0 ? 1.0f : 0.0f);
+            v->set("gtrbus", scGlobalPitch::bus(this, server));
             if(bus>=0) v->mapan("pitch_ar",bus+i,1);
         }
     }

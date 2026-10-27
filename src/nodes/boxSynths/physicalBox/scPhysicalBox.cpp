@@ -1,6 +1,7 @@
 #include "../shared/scDroneMode.h"
 #include "../../../audio/scFxRouting.h"
 #include "scPhysicalBox.h"
+#include "../shared/scGlobalPitch.h"
 #include "../../../ui/scTypedValue.h"
 #include "../../../audio/scSynthControlBatch.h"
 #include "../../../ofxOceanodeSuperColliderConfig.h"
@@ -148,6 +149,7 @@ scPhysicalBox::scPhysicalBox(std::vector<serverManager*> s) : scNode("physicalBo
                   "Show opens the editor; right-click a control there to publish, modulate or add it to the timeline.";
 }
 scPhysicalBox::~scPhysicalBox() {
+    scGlobalPitch::unfollow(this);
     scheduled.disable();
     listeners.unsubscribeAll();
     for(auto& [s, st] : states) release(s, st);
@@ -176,6 +178,9 @@ void scPhysicalBox::addSound(const std::string& name, const std::string& sc, flo
 }
 
 void scPhysicalBox::setup() {
+    scGlobalPitch::follow(this, true, [this](){
+        for(auto& [s, st] : states) for(int i = 0; i < st.builtVoices; ++i) if(auto* v = st.voices[i]) v->set("gtrbus", scGlobalPitch::bus(this, s));
+    });
     timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); }, [this](){ return publishedKeys; });
     addParameter(show.set("Show", false));
     addParameter(voices.set("Voices", 4, 1, 16));
@@ -496,6 +501,7 @@ void scPhysicalBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
         if(fields & NotePitch) v->set("pitch", first(pitch.get(), i, 48));
         if(fields & NoteRouting) {
             v->set("pitch_sel", bus >= 0 ? 1.0f : 0.0f);
+            v->set("gtrbus", scGlobalPitch::bus(this, server));
             if(bus >= 0) v->mapan("pitch_ar", bus + i, 1);
         }
     }

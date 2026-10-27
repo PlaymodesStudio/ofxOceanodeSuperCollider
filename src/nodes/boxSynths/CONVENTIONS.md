@@ -378,6 +378,49 @@ Timeline menus require the optional timeline addon to be enabled and attached
 to the host container. Compile instrument hooks under the appropriate feature
 guard. A piano widget alone does not make a model a timeline instrument.
 
+## Global Pitch
+
+The **Global Pitch** node (`globalPitch/scGlobalPitchNode.h`) acts on every
+pitched destination in the patch without cables. It applies three features, in
+this order:
+
+1. **Scale** moves the input note to the nearest degree. Scale is a vector of
+   pitch classes 0–11, and fractions are allowed. **Scale Bypass** turns it off.
+2. **Transpose** adds semitones after the scale, so a transpose changes the key.
+3. **Detune** gives each voice its own fixed random offset within ±cents. It is
+   never quantized.
+
+The inspector has one destination table with a tick per feature. SampleBox and
+SlicerBox start unticked; SlicerBox follows Transpose only. Generic SynthDef
+nodes whose `pitch` can go below 0 also start unticked, because that `pitch` is
+a shift amount. Several Global Pitch nodes share one state. The node saves the
+destinations that differ from their default, as one string per feature.
+
+There are two mechanisms; see [scGlobalPitch](shared/scGlobalPitch.h):
+
+- **Boxes** read a block of 15 control buses per server, allocated by
+  serverManager: transpose, scale on, each pitch class's offset to its nearest
+  degree, and detune in cents. There is one block for each combination of
+  features a destination follows, so a Box sets a single control, `gtrbus`.
+  The synth that makes the sounding pitch declares `gb`/`gg`/`gt`/`gq` (copy
+  them from an existing Box). `gt` draws one `Rand(-1, 1)` per voice. If one
+  voice spans several synths, the C++ sends `scGlobalPitch::random(this, voice)`
+  instead, as AdditiveBox's `gdr` does. The synth applies `gq.()` to the input
+  note right after choosing between Oceanode values and the cable, before glide
+  and modulation, and adds `gt` after. Oceanode values, Pitch cables and
+  piano-roll notes all follow, and held notes move.
+  A new pitched Box calls `scGlobalPitch::follow` in `setup()` and `unfollow`
+  in its destructor, and sets `gtrbus` with `scGlobalPitch::bus(this, server)`
+  on each synth that reads it. Send the input note separately from offsets
+  (AdditiveBox's `pitchoff`), so unison and detune are not quantized.
+  Sequencers (ArpeggiatorBox, ChordBox, EuclideanBox, MetroBox) do not follow,
+  so nothing is applied twice in a chain.
+- **Generic SynthDef nodes** (`scSynthdef`) and FM7 cannot read the buses
+  without recompiling. They send `scGlobalPitch::apply(this, v, channel)` for
+  their `pitch` / `pitcharray` values. While Detune is on they expand a single
+  value to one per channel, and they resend when a feature changes. An audio
+  cable into such a pitch does not follow.
+
 ## Current coverage
 
 This describes the current source. “Shared modulation” means the common

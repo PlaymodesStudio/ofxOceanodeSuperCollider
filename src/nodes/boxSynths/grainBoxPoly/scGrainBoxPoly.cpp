@@ -6,6 +6,7 @@
 //
 
 #include "scGrainBoxPoly.h"
+#include "../shared/scGlobalPitch.h"
 #include "../../../samples/scSampleEmbedding.h"
 #include "../../../audio/scSynthControlBatch.h"
 #include "../../../ui/scEnvelopeCurve.h"
@@ -278,6 +279,7 @@ scGrainBoxPoly::scGrainBoxPoly(vector<serverManager*> servers)
 }
 
 scGrainBoxPoly::~scGrainBoxPoly() {
+    scGlobalPitch::unfollow(this);
     try {
         nodeListeners.unsubscribeAll();
         browser.stopPreview();
@@ -317,6 +319,9 @@ scGrainBoxPoly::~scGrainBoxPoly() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scGrainBoxPoly::setup() {
+    scGlobalPitch::follow(this, true, [this](){
+        for(auto& ph : playheads) if(ph) for(auto& [srv, s] : ph->synths) if(s) sendPitchTo(*ph, srv, s);
+    });
     addInspectorParameter(embedSamples.set("Embed Samples", true));
     timeline.setup(this, [this](const std::string& k){ publishEditorParameterToNode(k); },
                    [this](const std::string& k){ unpublishEditorParameterFromNode(k); },
@@ -2174,6 +2179,7 @@ void scGrainBoxPoly::sendPitchTo(Playhead& ph, ofxSCServer* srv, ofxSCSynth* s) 
     auto inEffect = noteInputs.inEffectNow();   // not a scheduled send: the notes as they stand now
     const int nv = phVoices(ph);
     const int pb = ph.pitchIn.bus(srv);
+    controls.set("gtrbus", (float)scGlobalPitch::bus(this, srv));
     if(pb >= 0){
         controls.set("pitchoff", -60.0f);                          // MIDI 60: the sample as recorded
         s->mapan("pitch", pb, std::min(nv, 128));

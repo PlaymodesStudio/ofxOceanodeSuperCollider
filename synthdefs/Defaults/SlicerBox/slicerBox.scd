@@ -51,7 +51,8 @@ File.mkdir(d);
             var audition = \audition.kr(0 ! cap);
             var start = \start.kr(0 ! cap), end = \end.kr(0 ! cap), rate = \rate.kr(1 ! cap);
             var rev = \rev.kr(0 ! cap), mode = \mode.kr(0 ! cap);
-            var scale = BufRateScale.kr(buf);
+            var scale = BufRateScale.kr(buf)   // x Global Transpose (resampled)
+                * (2 ** (((\gtrbus.kr(-1) >= 0) * In.kr(\gtrbus.kr(-1).max(0))) / 12));
             // amplitude envelope, the same for every slice (seconds)
             var atk = \atk.kr(0.002).max(0.001), dec = \dec.kr(0.1).max(0.001);
             var sus = \sus.kr(1).clip(0, 1), rel = \rel.kr(0.008).max(0.003);

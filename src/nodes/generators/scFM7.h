@@ -160,6 +160,7 @@ private:
 	string getPresetFilePath(int slot);
 	
 	// Param Helpers
+	void sendPitch();
 	void sendFloatParameter(const string& name, vector<float>& values);
 	void sendIntParameter(const string& name, vector<int>& values);
 };

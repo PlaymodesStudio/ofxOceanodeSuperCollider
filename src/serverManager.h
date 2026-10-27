@@ -241,6 +241,8 @@ private:
     std::map<nodePort, std::vector<scNode*>> connections;
     
     std::unique_ptr<ofxSCBus> busFromSilent;
+    std::unique_ptr<ofxSCBus> transposeBus;   // Global Transpose / Scale (scGlobalPitch.h)
+    void allocateTransposeBus();
     
     float volume;
     bool mute;
