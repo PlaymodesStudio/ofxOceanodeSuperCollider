@@ -1,10 +1,37 @@
+// Global Pitch for a note control's audio cable (Oceanode values get it in
+// C++, scGlobalPitch::applyInRange). The node sets \gtrbus to the block of
+// buses it follows (scGlobalPitch.h: transpose, scale on, 12 pitch-class
+// offsets, detune cents, wrap on, wrap base, split note, 12 low-scale
+// offsets, low scale on); without one the cable passes untouched. The notes
+// are worked out at control rate: a note changes per block, and a band bank's
+// \pitcharray would cost too much at audio rate.
+OceanodeGlobalPitch {
+	*isNote {arg name; ^[\pitch, \pitcharray, \carp].includes(name.asSymbol) }
+
+	*ar {arg cable, size, min, max;
+		var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);
+		var p = A2K.kr(cable).asArray;
+		var r = p.round, low = r < gg[17];
+		var on = (low * gg[30]) + ((1 - low) * gg[1]);
+		var q = Select.kr(on > 0.5, [p, r + Select.kr(r.mod(12) + (low * 12), gg[2..13] ++ gg[18..29])]);
+		var w = gg[16] + (((q - gg[16]) / 12).floor * 12);
+		var t = q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor);
+		var note = (t + (gg[14] * 0.01 * ({ Rand(-1, 1) } ! p.size))).clip(min, max);
+		^Select.ar(gb >= 0, [cable, K2A.ar(note)])
+	}
+
+	*cable {arg name, cable, size, min, max;
+		^if(this.isNote(name)) { this.ar(cable, size, min, max) } { cable }
+	}
+}
+
 OceanodeParameter {
 	*ar {arg name, default, size, min, max, units;
 		^Select.ar(
 			(name ++ "_sel").asSymbol.kr(0),
 			[
 				K2A.ar(name.asSymbol.kr(default!size, spec: ControlSpec(min, max, default: default, units: "a"++units))),
-				(name ++ "_ar").asSymbol.ar(default!size);
+				OceanodeGlobalPitch.cable(name, (name ++ "_ar").asSymbol.ar(default!size), size, min, max);
 			]
 		)
 	}
@@ -20,7 +47,7 @@ OceanodeParameterLag {
 			(name ++ "_sel").asSymbol.kr(0),
 			[
 				K2A.ar(name.asSymbol.kr(default!size, lag: lagtime, fixedLag: fixedLag, spec: ControlSpec(min, max, default: default, units: "a"++units))),
-				(name ++ "_ar").asSymbol.ar(default!size);
+				OceanodeGlobalPitch.cable(name, (name ++ "_ar").asSymbol.ar(default!size), size, min, max);
 			]
 		)
 	}

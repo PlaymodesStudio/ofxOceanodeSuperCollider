@@ -452,7 +452,15 @@ The SuperCollider nodes use one of two mechanisms. `scGlobalPitch`
   (`applyInRange`). PMod's modulator pitch `modp` sets
   the timbre, so it doesn't follow. While Detune is on they expand a single
   value to one per channel, and they resend when a feature changes. An audio
-  cable into such a pitch does not follow.
+  cable into a generic synth's note control follows inside the synth:
+  `OceanodeParameter` / `OceanodeParameterLag` (`synthdefs/Oceanode/
+  oceanodeParameter.sc`) pass the cable of a `pitch`, `pitcharray` or `carp`
+  input through `OceanodeGlobalPitch`. That reads the bus block the node sends
+  as `gtrbus`, computes at control rate, and clamps to the input's range.
+  Without a block the cable passes untouched. Only builds compiled since
+  2026-10-28 have it. Older builds of a synth still follow on Oceanode values,
+  but not on a cable. An app needs one sync with "Compile everything again"
+  for all its builds, because no synth source changed.
 - **The VST node**, like Note Gate outside this addon, applies Scale and
   Transpose to each note at its note-on, without Detune: a MIDI note has no
   fraction. Held notes keep their pitch.

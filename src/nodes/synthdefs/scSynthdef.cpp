@@ -528,9 +528,15 @@ void scSynthdef::setup(){
         }
     }
     if(!transposeSends.empty()){
+        // a pitch cable gets Global Pitch in the synth (OceanodeGlobalPitch in
+        // oceanodeParameter.sc): it reads the block of buses this node follows
+        auto sendBus = [this](){
+            for(auto synthServer : synths) synthServer.second->set("gtrbus", scGlobalPitch::bus(this, synthServer.first));
+        };
         scGlobalPitch::follow(this, transposeByDefault,
-            [transposeSends](){ for(auto& send : transposeSends) send(true); },
+            [transposeSends, sendBus](){ for(auto& send : transposeSends) send(true); sendBus(); },
             [transposeSends](){ for(auto& send : transposeSends) send(false); });
+        listeners.push(resendParams.newListener([sendBus]{ sendBus(); }));
     }
     
     listeners.push(resendParams.newListener([this](){

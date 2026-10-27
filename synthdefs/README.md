@@ -49,6 +49,10 @@ filter's cutoff or centre frequency in MIDI is `\cutp` (shown as "Cutp"), never
 `\pitch`. Control names must be lower case, because Oceanode lower-cases them
 before sending. The filters renamed on 2026-10-27 are listed in
 `../tools/migrate_filter_cutp.py`, which converts presets and macros.
+A note control's audio cable gets Global Pitch inside the synth
+(`OceanodeGlobalPitch` in `Oceanode/oceanodeParameter.sc`). Changing that file
+changes every synth built with it, but the sync only rebuilds sources that
+changed. After editing it, sync each app with "Compile everything again".
 
 A file whose first line is `// @oceanode-no-autocompile` must not be rebuilt
 for new channel counts (currently only `Source/PhysicalModelling/oteypiano.scd`,
