@@ -80,17 +80,18 @@ pid_t parentProcess(pid_t pid){
 	return info.kp_eproc.e_ppid;
 }
 
-// True while the active application is one this app started, directly
-// (scsynth) or below it (a VSTPlugin bridge host): a plugin editor is focused.
-bool descendantIsFrontmost(){
+pid_t frontmostProcess(){
 	using Msg = id(*)(id, SEL);
 	id workspace = reinterpret_cast<Msg>(objc_msgSend)((id)objc_getClass("NSWorkspace"), sel_registerName("sharedWorkspace"));
 	id app = workspace ? reinterpret_cast<Msg>(objc_msgSend)(workspace, sel_registerName("frontmostApplication")) : nullptr;
-	if(!app) return false;
-	pid_t pid = reinterpret_cast<pid_t(*)(id, SEL)>(objc_msgSend)(app, sel_registerName("processIdentifier"));
+	return app ? reinterpret_cast<pid_t(*)(id, SEL)>(objc_msgSend)(app, sel_registerName("processIdentifier")) : -1;
+}
+
+// True for a process this app started, directly (scsynth) or below it (a
+// VSTPlugin bridge host): when frontmost, a plugin editor is focused.
+bool isDescendant(pid_t pid){
 	const pid_t self = getpid();
-	if(pid == self) return false;
-	for(int depth = 0; pid > 1 && depth < 8; ++depth) {
+	for(int depth = 0; pid > 1 && pid != self && depth < 8; ++depth) {
 		pid = parentProcess(pid);
 		if(pid == self) return true;
 	}
@@ -3075,7 +3076,14 @@ void scVST::updateKeyboard(){
 	// The keys come from the focused Oceanode canvas (ImGui) or, on macOS,
 	// from a plugin editor; any other window (a Box synth, a text field) keeps them.
 	bool canvasKeys = false, editorKeys = false;
-	if(selected && ImGui::GetCurrentContext()) {
+	bool appActive = true;
+#ifdef TARGET_OSX
+	// ofxImGui never reports focus changes, so io.AppFocusLost stays false and
+	// the canvas still looks focused while another app (an editor) is in front.
+	const pid_t front = selected ? frontmostProcess() : -1;
+	appActive = front == getpid();
+#endif
+	if(selected && appActive && ImGui::GetCurrentContext()) {
 		const auto& io = ImGui::GetIO();
 		const ImGuiWindow* nav = ImGui::GetCurrentContext()->NavWindow;
 		const std::string canvas = "###" + ofxOceanodeShared::getActiveCanvasUniqueID();
@@ -3084,7 +3092,7 @@ void scVST::updateKeyboard(){
 			name.size() >= canvas.size() && name.compare(name.size() - canvas.size(), canvas.size(), canvas) == 0;
 	}
 #ifdef TARGET_OSX
-	if(selected && !canvasKeys && descendantIsFrontmost()) {
+	if(selected && !appActive && isDescendant(front)) {
 		editorKeys = true;
 		keyboardCaptureUntil = now + 250;
 		static uint64_t nextTapAttempt = 0;
