@@ -1,5 +1,14 @@
 # PolyComb development and regression tools
 
+The standalone `PolyComb` filter lives in
+[`synthdefs/Effect/Filter/polyComb.scd`](../../synthdefs/Effect/Filter/polyComb.scd).
+It follows `~synthCreator` conventions and uses the same `ReaktorComb` UGen as
+PolyCombBox's `PCCombR`, with absolute MIDI pitch, transpose, detune, glide,
+vibrato, signed feedback, saturation level in dB, send and the resonator's
+internal mix. Its parameters expose the standard Oceanode audio inputs; it
+needs no box-specific note or modulation buses. Sync compiles its metadata
+and mono/stereo builds; other channel counts compile on demand.
+
 For current snapshot/MacroMixer development, start with the
 [consolidated morph reference](../../src/docs/polyCombMorphing.md).
 
