@@ -11,6 +11,12 @@
 #include "ofxSCSynth.h"
 #include "imgui.h"
 #include "ofxOceanodeShared.h"
+#include "../boxSynths/shared/scKeyboardPiano.h"
+#include "ofxOceanodeContainer.h"
+#include "ofxOceanodeNode.h"
+#include "ofxOceanodeNodeGui.h"
+#include "ofxOceanodeNodeMacro.h"
+#include "imgui_internal.h"
 #include <algorithm>
 #include <limits>
 #include <cmath>
@@ -18,8 +24,118 @@
 #include <unordered_set>
 #include <vector>
 #include <fstream>
+#ifdef TARGET_OSX
+#include <ApplicationServices/ApplicationServices.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
+#include <sys/sysctl.h>
+#include <unistd.h>
+#endif
 
 namespace {
+#ifdef TARGET_OSX
+// Physical macOS key codes (Carbon kVK_ANSI_*) of the keyboard piano keys, so
+// the layout matches ImGui's physical keys (Semicolon is ñ on Spanish keyboards).
+int macKeyCode(ImGuiKey key){
+	switch(key){
+		case ImGuiKey_A: return 0;   case ImGuiKey_S: return 1;   case ImGuiKey_D: return 2;
+		case ImGuiKey_H: return 4;   case ImGuiKey_G: return 5;   case ImGuiKey_Z: return 6;
+		case ImGuiKey_X: return 7;   case ImGuiKey_C: return 8;   case ImGuiKey_V: return 9;
+		case ImGuiKey_B: return 11;  case ImGuiKey_Q: return 12;  case ImGuiKey_W: return 13;
+		case ImGuiKey_E: return 14;  case ImGuiKey_R: return 15;  case ImGuiKey_Y: return 16;
+		case ImGuiKey_T: return 17;  case ImGuiKey_2: return 19;  case ImGuiKey_3: return 20;
+		case ImGuiKey_6: return 22;  case ImGuiKey_5: return 23;  case ImGuiKey_9: return 25;
+		case ImGuiKey_7: return 26;  case ImGuiKey_0: return 29;  case ImGuiKey_O: return 31;
+		case ImGuiKey_U: return 32;  case ImGuiKey_I: return 34;  case ImGuiKey_P: return 35;
+		case ImGuiKey_L: return 37;  case ImGuiKey_J: return 38;  case ImGuiKey_Semicolon: return 41;
+		case ImGuiKey_Comma: return 43; case ImGuiKey_N: return 45; case ImGuiKey_M: return 46;
+		case ImGuiKey_Period: return 47;
+		case ImGuiKey_DownArrow: return 125; case ImGuiKey_UpArrow: return 126;
+		default: return -1;
+	}
+}
+
+// The keyboard tap (below) mirrors the key state, needing only Accessibility.
+// Until it exists, polling the HID state works only with Input Monitoring.
+CFMachPortRef editorKeysTap = nullptr;
+std::array<bool, 128> tapKeysDown{};
+CGEventFlags tapFlags = 0;
+
+bool macKeyDown(ImGuiKey key){
+	const int code = macKeyCode(key);
+	if(code < 0) return false;
+	if(editorKeysTap) return tapKeysDown[code];
+	return CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, static_cast<CGKeyCode>(code));
+}
+
+CGEventFlags macModifierFlags(){
+	return editorKeysTap ? tapFlags : CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState);
+}
+
+pid_t parentProcess(pid_t pid){
+	kinfo_proc info{};
+	size_t size = sizeof(info);
+	int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+	if(sysctl(mib, 4, &info, &size, nullptr, 0) != 0 || size == 0) return -1;
+	return info.kp_eproc.e_ppid;
+}
+
+// True while the active application is one this app started, directly
+// (scsynth) or below it (a VSTPlugin bridge host): a plugin editor is focused.
+bool descendantIsFrontmost(){
+	using Msg = id(*)(id, SEL);
+	id workspace = reinterpret_cast<Msg>(objc_msgSend)((id)objc_getClass("NSWorkspace"), sel_registerName("sharedWorkspace"));
+	id app = workspace ? reinterpret_cast<Msg>(objc_msgSend)(workspace, sel_registerName("frontmostApplication")) : nullptr;
+	if(!app) return false;
+	pid_t pid = reinterpret_cast<pid_t(*)(id, SEL)>(objc_msgSend)(app, sel_registerName("processIdentifier"));
+	const pid_t self = getpid();
+	if(pid == self) return false;
+	for(int depth = 0; pid > 1 && depth < 8; ++depth) {
+		pid = parentProcess(pid);
+		if(pid == self) return true;
+	}
+	return false;
+}
+
+bool isEditorKey(int64_t code){
+	if(code == macKeyCode(ImGuiKey_UpArrow) || code == macKeyCode(ImGuiKey_DownArrow)) return true;
+	for(const auto& mapping : scKeyboardPiano::keyMap)
+		if(code == macKeyCode(mapping.key)) return true;
+	return false;
+}
+
+// Runs on the main thread (the tap's source is on the main run loop). Piano
+// keys without modifiers are consumed while a selected node plays from a
+// plugin editor, so the editor does not beep at them; other keys pass through.
+CGEventRef keyboardTapCallback(CGEventTapProxy, CGEventType type, CGEventRef event, void* captureUntil){
+	if(type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
+		if(editorKeysTap) CGEventTapEnable(editorKeysTap, true);
+		return event;
+	}
+	if(type != kCGEventKeyDown && type != kCGEventKeyUp && type != kCGEventFlagsChanged) return event;
+	tapFlags = CGEventGetFlags(event);
+	if(type == kCGEventFlagsChanged) return event;
+	const int64_t code = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
+	if(code >= 0 && code < (int64_t)tapKeysDown.size()) tapKeysDown[code] = type == kCGEventKeyDown;
+	if(ofGetElapsedTimeMillis() >= *static_cast<uint64_t*>(captureUntil)) return event;
+	const bool modifier = tapFlags & (kCGEventFlagMaskCommand | kCGEventFlagMaskControl |
+													kCGEventFlagMaskAlternate | kCGEventFlagMaskShift);
+	if(modifier || !isEditorKey(code)) return event;
+	return nullptr;
+}
+#endif
+
+ofxOceanodeNode* findOceanodeNode(ofxOceanodeContainer* container, ofxOceanodeNodeModel* model){
+	if(!container || !model) return nullptr;
+	for(auto* n : container->getAllModules()) {
+		if(!n) continue;
+		if(&n->getNodeModel() == model) return n;
+		if(auto* macro = dynamic_cast<ofxOceanodeNodeMacro*>(&n->getNodeModel()))
+			if(auto* found = findOceanodeNode(macro->getContainer().get(), model)) return found;
+	}
+	return nullptr;
+}
+
 // ofLog writes every << into its stream before it checks the log level, so a
 // disabled verbose line still pays for formatting the whole message. Paths
 // that run per message test this first and skip the work when no one listens.
@@ -71,6 +187,9 @@ Note Out and CC Out are 128-value normalized state vectors for MIDI emitted by t
 
 TRANSPORT
 Play, Position, Reset, BPM and the inspector time-signature controls drive the hosted plugins. QueryPosition requests the current transport position. Transport commands are sent to all active instances.
+
+KEYBOARD PIANO
+While the node is selected, the computer keyboard plays it with the same keys as the Box synths' piano: z x c v b n m , . and q w e r t y u i o p for white keys, s d g h j l ; and 2 3 5 6 7 9 0 for black keys, Up/Down for octaves. It works while an Oceanode canvas has the focus and while one of the plugin's editor windows does. Notes drive Pitch and Gate, so they reach the outputs and recordings: while keys are held the node uses ten voices, and Pitch and Gate return to their previous values when every key is up. Velocity, Instance and MIDI Chan apply as usual. Keys held with Cmd, Ctrl, Alt or Shift never play. In a plugin editor the piano keys are kept from the plugin, so it does not beep; to type them into one of its text fields, deselect the node or turn Keyboard Piano off in the inspector. Playing from a plugin editor needs the app allowed under Accessibility (macOS asks once); a rebuilt app must be removed from that list and added again.
 
 ADVANCED
 Multithreading asks VSTPlugin to run plugins on worker threads during realtime operation. Its benefit depends on the plugin and instance count. Allow all instances to finish loading before sending gates or automation.)SCVST_HELP";
@@ -302,6 +421,7 @@ void scVST::setup(){
 	addInspectorParameter(enableMultithreading.set("Multithreading", true));
 	addInspectorParameter(singleInstance.set("Single Instance", true));
 	addInspectorParameter(monoInstancing.set("Mono Instancing", false));
+	addInspectorParameter(keyboardPiano.set("Keyboard Piano", true));
 	addInspectorParameter(removeAllParams.set("Remove All Params"));
 	addInspectorParameter(saveFXPToDisk.set("Save FXP to Disk"));
 	
@@ -531,6 +651,7 @@ void scVST::setup(){
 					);
 	
 	listeners.push(ofEvents().update.newListener([this](ofEventArgs&) {
+		updateKeyboard();
 		uint64_t currentTime = ofGetElapsedTimeMillis();
 		
 		if(currentTime - lastBatchProcessTime >= BATCH_PROCESS_INTERVAL_MS) {
@@ -2904,6 +3025,159 @@ void scVST::setVSTParameter(int paramIndex, float value) {
 		}
 	}
 	
+}
+
+uint64_t scVST::keyboardCaptureUntil = 0;
+
+void scVST::installKeyboardTap(){
+#ifdef TARGET_OSX
+	if(editorKeysTap) return;
+	// A consuming tap needs Accessibility; retried while an editor has focus,
+	// so granting it takes effect at once. Ad-hoc signed builds lose the grant
+	// on every rebuild (macOS ties it to the binary's hash).
+	editorKeysTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
+									 CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp) |
+									 CGEventMaskBit(kCGEventFlagsChanged),
+									 keyboardTapCallback, &keyboardCaptureUntil);
+	if(!editorKeysTap) {
+		static bool askedAccessibility = false;
+		if(!askedAccessibility) {
+			askedAccessibility = true;
+			ofLogNotice("scVST") << "Keyboard Piano: allow this app in System Settings > Privacy & Security > "
+								 << "Accessibility to play from plugin editors. After a rebuild, "
+								 << "remove the app there and add it again";
+			const void* keys[] = {kAXTrustedCheckOptionPrompt};
+			const void* values[] = {kCFBooleanTrue};
+			CFDictionaryRef options = CFDictionaryCreate(nullptr, keys, values, 1,
+				&kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+			AXIsProcessTrustedWithOptions(options);
+			CFRelease(options);
+		}
+		return;
+	}
+	CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(nullptr, editorKeysTap, 0);
+	CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes);
+	CFRelease(source);
+#endif
+}
+
+void scVST::updateKeyboard(){
+	const uint64_t now = ofGetElapsedTimeMillis();
+	bool selected = false;
+	if(keyboardPiano.get() && !isPresetLoading) {
+		if(!keyboardNode && now >= keyboardNodeSearch) {
+			keyboardNodeSearch = now + 500;
+			keyboardNode = findOceanodeNode(ofxOceanodeShared::getRootContainer(), this);
+		}
+		selected = keyboardNode && keyboardNode->getNodeGui().getSelected();
+	}
+
+	// The keys come from the focused Oceanode canvas (ImGui) or, on macOS,
+	// from a plugin editor; any other window (a Box synth, a text field) keeps them.
+	bool canvasKeys = false, editorKeys = false;
+	if(selected && ImGui::GetCurrentContext()) {
+		const auto& io = ImGui::GetIO();
+		const ImGuiWindow* nav = ImGui::GetCurrentContext()->NavWindow;
+		const std::string canvas = "###" + ofxOceanodeShared::getActiveCanvasUniqueID();
+		const std::string name = nav && nav->RootWindow && nav->RootWindow->Name ? nav->RootWindow->Name : "";
+		canvasKeys = !io.AppFocusLost && !io.WantTextInput && !ImGui::IsAnyItemActive() &&
+			name.size() >= canvas.size() && name.compare(name.size() - canvas.size(), canvas.size(), canvas) == 0;
+	}
+#ifdef TARGET_OSX
+	if(selected && !canvasKeys && descendantIsFrontmost()) {
+		editorKeys = true;
+		keyboardCaptureUntil = now + 250;
+		static uint64_t nextTapAttempt = 0;
+		if(!editorKeysTap && now >= nextTapAttempt) {
+			nextTapAttempt = now + 1000;
+			installKeyboardTap();
+		}
+	}
+#endif
+	auto keyDown = [&](ImGuiKey key){
+		if(canvasKeys) return ImGui::IsKeyDown(key);
+#ifdef TARGET_OSX
+		if(editorKeys) return macKeyDown(key);
+#endif
+		return false;
+	};
+	bool modifier = false;
+	if(canvasKeys) {
+		const auto& io = ImGui::GetIO();
+		modifier = io.KeyCtrl || io.KeySuper || io.KeyAlt || io.KeyShift;
+	}
+#ifdef TARGET_OSX
+	// Shortcuts (Cmd+S, Shift+letter...) never play.
+	if(editorKeys) modifier = macModifierFlags() & (kCGEventFlagMaskCommand | kCGEventFlagMaskControl |
+													kCGEventFlagMaskAlternate | kCGEventFlagMaskShift);
+#endif
+	const bool enabled = (canvasKeys || editorKeys) && !modifier;
+	const bool up = enabled && keyDown(ImGuiKey_UpArrow);
+	const bool down = enabled && keyDown(ImGuiKey_DownArrow);
+	if(up && !keyboardUpHeld) keyboardBase = std::min(96, keyboardBase + 12);
+	if(down && !keyboardDownHeld) keyboardBase = std::max(0, keyboardBase - 12);
+	keyboardUpHeld = up; keyboardDownHeld = down;
+
+	if(!enabled) keyboardHeld.clear();
+	keyboardHeld.erase(std::remove_if(keyboardHeld.begin(), keyboardHeld.end(), [&](const KeyboardNote& n){
+		return !keyDown(static_cast<ImGuiKey>(n.key));
+	}), keyboardHeld.end());
+	if(enabled) for(const auto& mapping : scKeyboardPiano::keyMap) {
+		const int key = static_cast<int>(mapping.key);
+		if(!keyDown(mapping.key) || std::any_of(keyboardHeld.begin(), keyboardHeld.end(),
+			[key](const KeyboardNote& n){ return n.key == key; })) continue;
+		int note = std::min(127, keyboardBase + mapping.semitones);
+		// Two keys share some pitches (",", "Q"); only the first one sounds.
+		if(std::any_of(keyboardHeld.begin(), keyboardHeld.end(), [note](const KeyboardNote& n){ return n.note == note; })) note = -1;
+		keyboardHeld.push_back({key, note});
+	}
+	applyKeyboardNotes();
+}
+
+void scVST::applyKeyboardNotes(){
+	std::vector<KeyboardNote> sounding;
+	for(const auto& n : keyboardHeld) if(n.note >= 0) sounding.push_back(n);
+	if(sounding.empty() && !keyboardPlaying) return;
+	if(!keyboardPlaying) {
+		keyboardSavedPitch = pitch.get();
+		keyboardSavedGate = gate.get();
+		keyboardSlots.assign(keyboardVoices, -1);
+		keyboardPlaying = true;
+	}
+	// Held notes keep their voice; new notes take free ones. The newest notes
+	// win when all voices are busy, as in the Box synths' piano.
+	const int begin = std::max(0, (int)sounding.size() - keyboardVoices);
+	auto heldFrom = [&](int key){
+		for(int k = begin; k < (int)sounding.size(); ++k) if(sounding[k].key == key) return k;
+		return -1;
+	};
+	std::vector<int> next(keyboardVoices, -1);
+	for(int v = 0; v < keyboardVoices; ++v) if(keyboardSlots[v] >= 0 && heldFrom(keyboardSlots[v]) >= 0) next[v] = keyboardSlots[v];
+	for(int k = begin; k < (int)sounding.size(); ++k) {
+		if(std::find(next.begin(), next.end(), sounding[k].key) != next.end()) continue;
+		for(auto& slot : next) if(slot < 0) { slot = sounding[k].key; break; }
+	}
+
+	// Close changed voices, move their pitch, then open them: the Gate
+	// listener sends the note-ons with the new Pitch.
+	auto p = pitch.get();
+	p.resize(keyboardVoices, p.empty() ? 60.0f : p.back());
+	std::vector<int> g(keyboardVoices, 0);
+	for(int v = 0; v < keyboardVoices; ++v) g[v] = next[v] >= 0 && next[v] == keyboardSlots[v];
+	if(g != gate.get()) gate.set(g);
+	for(int v = 0; v < keyboardVoices; ++v) if(next[v] >= 0) p[v] = sounding[heldFrom(next[v])].note;
+	if(p != pitch.get()) pitch.set(p);
+	for(int v = 0; v < keyboardVoices; ++v) g[v] = next[v] >= 0;
+	if(g != gate.get()) gate.set(g);
+	keyboardSlots = std::move(next);
+
+	if(sounding.empty()) {
+		// Give Pitch and Gate back as they were before the first key.
+		keyboardPlaying = false;
+		keyboardSlots.clear();
+		pitch.set(keyboardSavedPitch);
+		gate.set(keyboardSavedGate);
+	}
 }
 
 bool scVST::isMyVSTInstance(int nodeID) const {

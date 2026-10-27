@@ -475,6 +475,7 @@ private:
 	// Inspector parameters
 	ofParameter<bool> enableMultithreading;
 	ofParameter<bool> monoInstancing;
+	ofParameter<bool> keyboardPiano;
 	ofParameter<void> removeAllParams;
 	
 	// Plugin discovery
@@ -661,6 +662,28 @@ private:
 		scVST& owner;
 	};
 	void flushMidiBatch();
+
+	// --- Keyboard piano while the node is selected ---------------------------
+	// Plays the scKeyboardPiano layout into Pitch and Gate, borrowing
+	// keyboardVoices voices until every key is up, while this node is selected
+	// and an Oceanode canvas or a plugin editor has the keys. The editor is a
+	// window of scsynth (or VSTPlugin's bridge host), so on macOS an event tap
+	// reads its keys and keeps the piano keys from it (it beeps at them).
+	static constexpr int keyboardVoices = 10;
+	static uint64_t keyboardCaptureUntil;    // ms; the tap keeps piano keys until then
+	static void installKeyboardTap();
+	struct KeyboardNote { int key; int note; };  // note -1: pitch already held
+	std::vector<KeyboardNote> keyboardHeld;     // oldest first
+	std::vector<int> keyboardSlots;             // key per borrowed voice, -1 free
+	std::vector<float> keyboardSavedPitch;
+	std::vector<int> keyboardSavedGate;
+	bool keyboardPlaying = false;
+	int keyboardBase = 60;
+	bool keyboardUpHeld = false, keyboardDownHeld = false;
+	ofxOceanodeNode* keyboardNode = nullptr;    // this node's canvas entry, found lazily
+	uint64_t keyboardNodeSearch = 0;
+	void updateKeyboard();
+	void applyKeyboardNotes();
 
 	// Internal batch helpers
 	void markParameterDirty(int paramIndex);
