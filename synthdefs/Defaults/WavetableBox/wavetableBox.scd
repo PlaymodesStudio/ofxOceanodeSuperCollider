@@ -92,9 +92,9 @@ warp = { |p, mode, amt, weights|
 // Everything the variants share: controls, phases, warps. Returns the
 // controls and, per voice, A's warped phase and B's phase.
 voices = { |n, twoD, live|
-    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 15) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
-    var gt = gg[0] + (gg[14] * 0.01 * ({ Rand(-1, 1) } ! n));   // + each voice's detune
-    var gq = { |p| var r = p.round; Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]) };
+    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 17) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+    var gt = gg[14] * 0.01 * ({ Rand(-1, 1) } ! n);   // each voice's detune (the transpose is in gq)
+    var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
     var c = (
         buf: \buf.kr(-1), cycles: \cycles.kr(1),
         bbuf: \bbuf.kr(-1), bcycles: \bcycles.kr(1),

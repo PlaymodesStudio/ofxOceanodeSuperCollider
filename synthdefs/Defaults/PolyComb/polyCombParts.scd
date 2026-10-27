@@ -53,9 +53,9 @@ filter = { |sig, type, note, res|
             var idx = Select.kr(ex, [i.min(kk - 1), i.mod(kk)]);
             Select.kr(idx, cable) + (ex * (i / kk).floor * 12)
         };
-        var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 15) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
-        var gt = gg[0] + (gg[14] * 0.01 * ({ Rand(-1, 1) } ! n));   // + each voice's detune
-        var gq = { |p| var r = p.round; Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]) };
+        var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 17) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+        var gt = gg[14] * 0.01 * ({ Rand(-1, 1) } ! n);   // each voice's detune (the transpose is in gq)
+        var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
         var p = gq.(Select.kr(\pitch_sel.kr(0) > 0.5, [kv.(\pitch, 60), spread]));
         // A short minimum lag removes GUI/map stepping; longer musical glide still applies.
         var d = Lag.kr(kv.(\transpose, 0), 0.02) + (({ Rand(-1, 1) } ! n) * kv.(\detune, 0));
@@ -64,7 +64,7 @@ filter = { |sig, type, note, res|
         var rate = kv.(\vibrate, 5) * (1 + (({ Rand(-1, 1) } ! n) * kv.(\vibrand, 0).clip(0, 1)));
         var v = SinOsc.kr(rate, { Rand(0, 2pi) } ! n) * kl.(\vibamt, 0);
         // the note, the note before vibrato / modulation, and that before the glide (the resonators glide on their own)
-        Out.kr(\out.kr(0), (b + v + modIn.(\mpitch)) ++ b ++ (p + d));
+        Out.kr(\out.kr(0), (b + v + modIn.(\mpitch)) ++ b ++ (p + d + gt));
     }).writeDefFile(dir);
 
     // FM: a sine modulator (with feedback) at a ratio of the note -> Hz to add

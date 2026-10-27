@@ -108,9 +108,9 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
     var gb, gg, gt, gq;   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
 
     vec = {|name, def| NamedControl.kr(name, def ! pmax) };
-    gb = \gtrbus.kr(-1); gg = In.kr(gb.max(0), 15) * (gb >= 0);
-    gt = gg[0] + (gg[14] * 0.01 * ({ Rand(-1, 1) } ! pmax));   // + each voice's detune
-    gq = { |p| var r = p.round; Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]) };
+    gb = \gtrbus.kr(-1); gg = In.kr(gb.max(0), 17) * (gb >= 0);
+    gt = gg[14] * 0.01 * ({ Rand(-1, 1) } ! pmax);   // each voice's detune (the transpose is in gq)
+    gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
 
     anchorPos  = \anchorPos.ar(0);
     anchorFire = \anchorFire.ar(0);

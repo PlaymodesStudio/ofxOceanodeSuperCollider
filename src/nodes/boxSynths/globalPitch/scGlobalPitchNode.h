@@ -8,6 +8,8 @@
 //    Scale         the notes move to the nearest degree (pitch classes 0-11)
 //    Scale Bypass  turns the scale off
 //    Transpose     semitones, added after the scale (a transpose changes the key)
+//    Mod 12        a transposed note wraps into its own octave, which starts at
+//    Base Note     (C .. B): it never leaves that octave (cf. Fit Notes In Range)
 //    Detune        each voice's own fixed random offset within +-cents, never quantized
 //  The inspector lists the destinations with a tick per feature (SampleBox
 //  and SlicerBox start unticked). Several Global Pitch nodes show one state.
@@ -27,7 +29,8 @@ public:
     scGlobalPitchNode() : ofxOceanodeNodeModel("Global Pitch") {
         description = "Scale, Transpose and Detune for every pitched Box and SynthDef in the patch, without cables: "
                       "Oceanode values, Pitch cables and piano-roll notes, held notes included. Notes move to the "
-                      "nearest degree of Scale (pitch classes 0-11), then Transpose (semitones) is added, then each "
+                      "nearest degree of Scale (pitch classes 0-11), then Transpose (semitones) is added (Mod 12: wrapped "
+                      "into the note's own octave from Base Note), then each "
                       "voice's own random Detune (within +-cents). The inspector chooses which destinations follow "
                       "each one.";
     }
@@ -36,6 +39,7 @@ public:
         all.erase(std::remove(all.begin(), all.end(), this), all.end());
         if(!all.empty()) return;   // the last one: the patch has no Global Pitch any more
         scGlobalPitch::setTranspose(0.0f);
+        scGlobalPitch::setTransposeWrap(false, 0);
         scGlobalPitch::setScale({}, false);
         scGlobalPitch::setDetune(0.0f);
         for(int f = 0; f < scGlobalPitch::NumFeatures; f++) scGlobalPitch::setOverridesText(feature(f), "");
@@ -47,6 +51,9 @@ public:
                                std::vector<float>(1, 0.0f), std::vector<float>(1, 11.0f)));
         addParameter(bypass.set("Scale Bypass", !current.empty() && !scGlobalPitch::scaleOn()));
         addParameter(transpose.set("Transpose", scGlobalPitch::transpose(), -48.0f, 48.0f));
+        addParameter(wrap.set("Mod 12", scGlobalPitch::transposeWraps()));
+        addParameterDropdown(wrapBase, "Base Note", scGlobalPitch::transposeBase(),
+                             {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"});
         addParameter(detune.set("Detune", scGlobalPitch::detune(), 0.0f, 100.0f));
         // the destinations that differ from their default, one string per feature (scGlobalPitch::overridesText)
         static const char* names[scGlobalPitch::NumFeatures] = {"Transpose Destinations", "Scale Destinations", "Detune Destinations"};
@@ -71,6 +78,14 @@ public:
             scGlobalPitch::setTranspose(v);
             share([v](scGlobalPitchNode* n){ n->transpose = v; });
         }));
+        auto sendWrap = [this](){
+            const bool on = wrap.get();
+            const int base = wrapBase.get();
+            scGlobalPitch::setTransposeWrap(on, base);
+            share([on, base](scGlobalPitchNode* n){ n->wrap = on; n->wrapBase = base; });
+        };
+        listeners.push(wrap.newListener([sendWrap](bool&){ sendWrap(); }));
+        listeners.push(wrapBase.newListener([sendWrap](int&){ sendWrap(); }));
         listeners.push(detune.newListener([this](float& v){
             scGlobalPitch::setDetune(v);
             share([v](scGlobalPitchNode* n){ n->detune = v; });
@@ -135,6 +150,8 @@ private:
     ofParameter<std::vector<float>> scale;
     ofParameter<bool> bypass;
     ofParameter<float> transpose, detune;
+    ofParameter<bool> wrap;
+    ofParameter<int> wrapBase;
     std::array<ofParameter<std::string>, scGlobalPitch::NumFeatures> destinations;
     ofEventListeners listeners;
 };

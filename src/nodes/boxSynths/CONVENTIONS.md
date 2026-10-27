@@ -387,6 +387,9 @@ this order:
 1. **Scale** moves the input note to the nearest degree. Scale is a vector of
    pitch classes 0–11, and fractions are allowed. **Scale Bypass** turns it off.
 2. **Transpose** adds semitones after the scale, so a transpose changes the key.
+   With **Mod 12** on, a transposed note wraps into its own octave, which starts
+   at **Base Note** (C–B). The note never leaves that octave, as with Fit Notes
+   In Range.
 3. **Detune** gives each voice its own fixed random offset within ±cents. It is
    never quantized.
 
@@ -398,12 +401,14 @@ destinations that differ from their default, as one string per feature.
 
 There are two mechanisms; see [scGlobalPitch](shared/scGlobalPitch.h):
 
-- **Boxes** read a block of 15 control buses per server, allocated by
+- **Boxes** read a block of 17 control buses per server, allocated by
   serverManager: transpose, scale on, each pitch class's offset to its nearest
-  degree, and detune in cents. There is one block for each combination of
+  degree, detune in cents, wrap on and wrap base. There is one block for each combination of
   features a destination follows, so a Box sets a single control, `gtrbus`.
   The synth that makes the sounding pitch declares `gb`/`gg`/`gt`/`gq` (copy
-  them from an existing Box). `gt` draws one `Rand(-1, 1)` per voice. If one
+  them from an existing Box). `gq` quantizes and transposes, and wraps when
+  Mod 12 is on, because the wrap depends on the note. `gt` is only the detune,
+  with one `Rand(-1, 1)` per voice. If one
   voice spans several synths, the C++ sends `scGlobalPitch::random(this, voice)`
   instead, as AdditiveBox's `gdr` does. The synth applies `gq.()` to the input
   note right after choosing between Oceanode values and the cable, before glide

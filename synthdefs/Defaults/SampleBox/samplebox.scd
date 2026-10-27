@@ -64,8 +64,8 @@ modOf = { |k, base|
                 var tpos, tphase, syncOn, fitRate;
                 // R: 0, T: 1 (constants: one reader only); M: the morph's weight
                 var stretchMix = if(stretchVariant == 2, { \stretchmix.kr(0).clip(0, 1).lag(0.03) }, { stretchVariant });
-                var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 15) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
-                var gq = { |p| var r = p.round; Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]) };
+                var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 17) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+                var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
 
                 trigBus = \trigbus.kr(-1);
                 audioGate = In.ar(trigBus.max(0), 1) * (trigBus >= 0);
@@ -134,7 +134,7 @@ modOf = { |k, base|
                     // sounding. Stretch: only the grains' pitch, the
                     // timeline keeps its speed. Resample: speed and pitch.
                     pitch = pitch + \transpose.kr(0).clip(-48, 48).lag(0.03)
-                        + gg[0] + (gg[14] * 0.01 * Rand(-1, 1));   // Global Pitch: transpose + this voice's detune
+                        + (gg[14] * 0.01 * Rand(-1, 1));   // Global Pitch: this voice's detune (the transpose is in gq)
                     speed = vm.(2, rateBase).clip(0.01, 16);
                     start = vm.(3, inBase).clip(0, 0.9999);
                     finish = vm.(4, outBase).clip(start + 0.00001, 1);

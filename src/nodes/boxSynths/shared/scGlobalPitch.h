@@ -8,16 +8,19 @@
 //  (globalPitch/scGlobalPitchNode.h). Each feature has its own list of
 //  destinations.
 //
-//  Boxes read them from a block of 15 control buses per server (allocated by
+//  Boxes read them from a block of 17 control buses per server (allocated by
 //  serverManager): [transpose, scale on, the offset of each pitch class 0-11 to
-//  its nearest scale degree, detune amount in cents]. There is one block for
-//  each combination of the features a destination follows, so a destination
-//  sets one control and the synth that makes its sounding pitch quantizes the
-//  input note, then adds the transpose and its voices' detune:
+//  its nearest scale degree, detune amount in cents, transpose wraps (modulo
+//  12), the wrap's base pitch class]. There is one block for each combination
+//  of the features a destination follows, so a destination sets one control
+//  and the synth that makes its sounding pitch quantizes and transposes the
+//  input note (gq), then adds its voices' detune (gt):
 //
-//    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 15) * (gb >= 0);   // Global Transpose / Scale / Detune
-//    var gt = gg[0] + (gg[14] * 0.01 * ({ Rand(-1, 1) } ! voices));     // one random per voice, drawn once
-//    var gq = { |p| var r = p.round; Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]) };
+//    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 17) * (gb >= 0);   // Global Pitch
+//    var gt = gg[14] * 0.01 * ({ Rand(-1, 1) } ! voices);               // one random per voice, drawn once
+//    var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]);
+//        var w = gg[16] + (((q - gg[16]) / 12).floor * 12);              // the octave from the base holding the note
+//        q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };    // transposed, wrapped into it when modulo 12
 //    ... note = gq.(input pitch) ... + gt
 //
 //  so Oceanode values, Pitch cables and piano-roll notes all follow, and held
@@ -50,7 +53,7 @@
 class scGlobalPitch {
 public:
     enum Feature { Transpose = 0, Scale = 1, Detune = 2, NumFeatures = 3 };
-    static constexpr int BlockSize = 15;   // [transpose, scale on, 12 pitch-class offsets, detune cents]
+    static constexpr int BlockSize = 17;   // [transpose, scale on, 12 pitch-class offsets, detune cents, wrap on, wrap base]
     static constexpr int NumBlocks = 8;    // by what a destination follows: bit 0 Transpose, bit 1 Scale, bit 2 Detune
 
     struct Follower {
@@ -83,6 +86,16 @@ public:
         state().scaleOn = on;
         state().offsets = offsetsFor(degrees);
         valuesChanged(Scale);
+    }
+    // modulo 12: a transposed note wraps into its own octave, which starts at base (pitch class 0-11)
+    static bool transposeWraps() { return state().wrap; }
+    static int transposeBase() { return state().wrapBase; }
+    static void setTransposeWrap(bool on, int base) {
+        base = ((base % 12) + 12) % 12;
+        if(state().wrap == on && state().wrapBase == base) return;
+        state().wrap = on;
+        state().wrapBase = base;
+        valuesChanged(Transpose);
     }
     static float detune() { return state().detune; }
     // cents: each voice's offset is a fixed random within +-cents
@@ -120,9 +133,16 @@ public:
             const int pc = ((int(r) % 12) + 12) % 12;
             v = r + state().offsets[pc];
         }
-        if(follows(node, Transpose)) v += transpose();
+        if(follows(node, Transpose)) v = transposed(v);
         if(spread(node)) v += detune() * 0.01f * random(node, channel);
         return v;
+    }
+    // a note transposed: with modulo 12, wrapped into the octave from the base that holds it
+    static float transposed(float v) {
+        if(!state().wrap) return v + transpose();
+        const float base = float(state().wrapBase);
+        const float window = base + std::floor((v - base) / 12.0f) * 12.0f;
+        return v + transpose() - 12.0f * std::floor((v + transpose() - window) / 12.0f);
     }
     // true while a destination's channels each need their own value (Global Detune)
     static bool spread(ofxOceanodeNodeModel* node) { return detune() != 0.0f && follows(node, Detune); }
@@ -206,6 +226,8 @@ private:
         bool scaleOn = false;
         std::array<float, 12> offsets{};
         float detune = 0.0f;
+        bool wrap = false;
+        int wrapBase = 0;
         std::array<std::map<std::string, bool>, NumFeatures> overrides;
     };
     static State& state() { static State s; return s; }
@@ -229,6 +251,8 @@ private:
             m.addFloatArg(q ? 1.0f : 0.0f);
             for(float o : state().offsets) m.addFloatArg(q ? o : 0.0f);
             m.addFloatArg(d ? state().detune : 0.0f);
+            m.addFloatArg(t && state().wrap ? 1.0f : 0.0f);
+            m.addFloatArg(t ? float(state().wrapBase) : 0.0f);
         }
         server->sendMsg(m);
     }
