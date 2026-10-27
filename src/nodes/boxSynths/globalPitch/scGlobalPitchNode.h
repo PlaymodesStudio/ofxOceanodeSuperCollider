@@ -6,7 +6,10 @@
 //  patch (pitched Boxes, generic SynthDefs, FM7), Pitch cables and piano-roll
 //  notes included (scGlobalPitch.h):
 //    Scale         the notes move to the nearest degree (pitch classes 0-11)
-//    Scale Bypass  turns the scale off
+//    Scale Bypass  turns the scale off (the low scale too)
+//    Split Note    the input notes below it (MIDI, 0 = off) move to the nearest
+//    Low Scale     degree of Low Scale instead, e.g. to stay in tune with a
+//                  neighbouring piece in the bass while the rest follows Scale
 //    Transpose     semitones, added after the scale (a transpose changes the key)
 //    Mod 12        a transposed note wraps into its own octave, which starts at
 //    Base Note     (C .. B): it never leaves that octave (cf. Fit Notes In Range)
@@ -29,7 +32,8 @@ public:
     scGlobalPitchNode() : ofxOceanodeNodeModel("Global Pitch") {
         description = "Scale, Transpose and Detune for every pitched Box and SynthDef in the patch, without cables: "
                       "Oceanode values, Pitch cables and piano-roll notes, held notes included. Notes move to the "
-                      "nearest degree of Scale (pitch classes 0-11), then Transpose (semitones) is added (Mod 12: wrapped "
+                      "nearest degree of Scale (pitch classes 0-11), or of Low Scale "
+                      "when below Split Note (MIDI, 0 = off), then Transpose (semitones) is added (Mod 12: wrapped "
                       "into the note's own octave from Base Note), then each "
                       "voice's own random Detune (within +-cents). The inspector chooses which destinations follow "
                       "each one.";
@@ -41,6 +45,7 @@ public:
         scGlobalPitch::setTranspose(0.0f);
         scGlobalPitch::setTransposeWrap(false, 0);
         scGlobalPitch::setScale({}, false);
+        scGlobalPitch::setLowScale({}, 0.0f);
         scGlobalPitch::setDetune(0.0f);
         for(int f = 0; f < scGlobalPitch::NumFeatures; f++) scGlobalPitch::setOverridesText(feature(f), "");
     }
@@ -50,6 +55,10 @@ public:
         addParameter(scale.set("Scale", current.empty() ? std::vector<float>{0, 2, 4, 5, 7, 9, 11} : current,
                                std::vector<float>(1, 0.0f), std::vector<float>(1, 11.0f)));
         addParameter(bypass.set("Scale Bypass", !current.empty() && !scGlobalPitch::scaleOn()));
+        const auto& low = scGlobalPitch::lowScale();
+        addParameter(split.set("Split Note", scGlobalPitch::split(), 0.0f, 127.0f));
+        addParameter(lowScale.set("Low Scale", low.empty() ? std::vector<float>{0} : low,
+                                  std::vector<float>(1, 0.0f), std::vector<float>(1, 11.0f)));
         addParameter(transpose.set("Transpose", scGlobalPitch::transpose(), -48.0f, 48.0f));
         addParameter(wrap.set("Mod 12", scGlobalPitch::transposeWraps()));
         addParameterDropdown(wrapBase, "Base Note", scGlobalPitch::transposeBase(),
@@ -74,6 +83,14 @@ public:
         };
         listeners.push(scale.newListener([sendScale](std::vector<float>&){ sendScale(); }));
         listeners.push(bypass.newListener([sendScale](bool&){ sendScale(); }));
+        auto sendLowScale = [this](){
+            const std::vector<float> s = lowScale.get();
+            const float at = split.get();
+            scGlobalPitch::setLowScale(s, at);
+            share([s, at](scGlobalPitchNode* n){ n->lowScale = s; n->split = at; });
+        };
+        listeners.push(lowScale.newListener([sendLowScale](std::vector<float>&){ sendLowScale(); }));
+        listeners.push(split.newListener([sendLowScale](float&){ sendLowScale(); }));
         listeners.push(transpose.newListener([this](float& v){
             scGlobalPitch::setTranspose(v);
             share([v](scGlobalPitchNode* n){ n->transpose = v; });
@@ -90,6 +107,7 @@ public:
             scGlobalPitch::setDetune(v);
             share([v](scGlobalPitchNode* n){ n->detune = v; });
         }));
+        sendLowScale();
         sendScale();
     }
 
@@ -147,7 +165,8 @@ private:
         sharing = false;
     }
 
-    ofParameter<std::vector<float>> scale;
+    ofParameter<std::vector<float>> scale, lowScale;
+    ofParameter<float> split;
     ofParameter<bool> bypass;
     ofParameter<float> transpose, detune;
     ofParameter<bool> wrap;

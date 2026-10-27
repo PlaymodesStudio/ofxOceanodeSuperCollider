@@ -66,9 +66,9 @@ SynthDef(\FMBoxVoice, {
     var gateK = A2K.kr(gate>0);
     var vel = In.kr(\velbus.kr(0),1).clip(0,1)*127;
     var native = In.ar(\nativebus.kr(0),2);
-    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 17) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 30) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
     var gt = gg[14] * 0.01 * Rand(-1, 1);   // each voice's detune (the transpose is in gq)
-    var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
+    var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
     var pitch = gq.(Select.kr(\pitch_sel.kr(0),[\pitch.kr(60),A2K.kr(\pitch_ar.ar(60))]));
     var note = pitch + gt + p.(\transpose,24)-24 + m.(\mpitch);
     var timeScale = p.(\env_time,1).clip(0.01,20);

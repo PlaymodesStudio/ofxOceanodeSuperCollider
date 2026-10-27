@@ -46,9 +46,9 @@ File.mkdir(d);
     (1..layers).do { |nl|
         SynthDef(("PulsarBox_" ++ nv ++ "_" ++ no ++ "_" ++ nl).asSymbol, {
             var kv = { |name, def| NamedControl.kr(name,def!nv).asArray };
-            var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 17) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+            var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 30) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
             var gt = gg[14] * 0.01 * ({ Rand(-1, 1) } ! nv);   // each voice's detune (the transpose is in gq)
-            var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
+            var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
             var tr = \tr.kr(0);
             // the note before \tr quantized, then \tr added (\fund already holds it)
             var fund = (gq.(\fund.kr(100 ! nv).clip(0.05, 4000).cpsmidi - tr) + tr).midicps.lag(kv.(\glide,0));

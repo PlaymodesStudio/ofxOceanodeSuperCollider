@@ -3,22 +3,24 @@
 //  ofxOceanodeSuperCollider
 //
 //  Global Transpose, Global Scale and Global Detune: one transpose (semitones),
-//  one scale (pitch classes 0-11) and one random spread per voice (cents) for
+//  one scale (pitch classes 0-11, and a second one for the notes below a split
+//  note) and one random spread per voice (cents) for
 //  every pitched destination in the patch, set by the Global Pitch node
 //  (globalPitch/scGlobalPitchNode.h). Each feature has its own list of
 //  destinations.
 //
-//  Boxes read them from a block of 17 control buses per server (allocated by
+//  Boxes read them from a block of 30 control buses per server (allocated by
 //  serverManager): [transpose, scale on, the offset of each pitch class 0-11 to
 //  its nearest scale degree, detune amount in cents, transpose wraps (modulo
-//  12), the wrap's base pitch class]. There is one block for each combination
+//  12), the wrap's base pitch class, the split note (-1000 when off), the low
+//  scale's 12 offsets]. There is one block for each combination
 //  of the features a destination follows, so a destination sets one control
 //  and the synth that makes its sounding pitch quantizes and transposes the
 //  input note (gq), then adds its voices' detune (gt):
 //
-//    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 17) * (gb >= 0);   // Global Pitch
+//    var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 30) * (gb >= 0);   // Global Pitch
 //    var gt = gg[14] * 0.01 * ({ Rand(-1, 1) } ! voices);               // one random per voice, drawn once
-//    var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]);
+//    var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]);
 //        var w = gg[16] + (((q - gg[16]) / 12).floor * 12);              // the octave from the base holding the note
 //        q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };    // transposed, wrapped into it when modulo 12
 //    ... note = gq.(input pitch) ... + gt
@@ -53,7 +55,8 @@
 class scGlobalPitch {
 public:
     enum Feature { Transpose = 0, Scale = 1, Detune = 2, NumFeatures = 3 };
-    static constexpr int BlockSize = 17;   // [transpose, scale on, 12 pitch-class offsets, detune cents, wrap on, wrap base]
+    static constexpr int BlockSize = 30;   // [transpose, scale on, 12 pitch-class offsets, detune cents, wrap on, wrap base,
+                                           //  split note, 12 low-scale offsets]
     static constexpr int NumBlocks = 8;    // by what a destination follows: bit 0 Transpose, bit 1 Scale, bit 2 Detune
 
     struct Follower {
@@ -78,13 +81,24 @@ public:
         valuesChanged(Transpose);
     }
     static const std::vector<float>& scale() { return state().scale; }
-    static bool scaleOn() { return state().scaleOn && !state().scale.empty(); }
+    static bool scaleOn() { return state().scaleOn && (!state().scale.empty() || splitOn()); }
     // degrees: pitch classes 0-11 (fractions allowed); on: false = bypassed
     static void setScale(const std::vector<float>& degrees, bool on) {
         if(state().scale == degrees && state().scaleOn == on) return;
         state().scale = degrees;
         state().scaleOn = on;
         state().offsets = offsetsFor(degrees);
+        valuesChanged(Scale);
+    }
+    // the input notes below split (MIDI) quantize to the low scale instead; split 0 = off
+    static const std::vector<float>& lowScale() { return state().lowScale; }
+    static float split() { return state().split; }
+    static bool splitOn() { return state().split > 0.0f && !state().lowScale.empty(); }
+    static void setLowScale(const std::vector<float>& degrees, float split) {
+        if(state().lowScale == degrees && state().split == split) return;
+        state().lowScale = degrees;
+        state().split = split;
+        state().lowOffsets = offsetsFor(degrees);
         valuesChanged(Scale);
     }
     // modulo 12: a transposed note wraps into its own octave, which starts at base (pitch class 0-11)
@@ -131,7 +145,7 @@ public:
         if(follows(node, Scale) && scaleOn()) {
             const float r = std::round(v);
             const int pc = ((int(r) % 12) + 12) % 12;
-            v = r + state().offsets[pc];
+            v = r + (splitOn() && r < split() ? state().lowOffsets : state().offsets)[pc];
         }
         if(follows(node, Transpose)) v = transposed(v);
         if(spread(node)) v += detune() * 0.01f * random(node, channel);
@@ -225,6 +239,9 @@ private:
         std::vector<float> scale;
         bool scaleOn = false;
         std::array<float, 12> offsets{};
+        std::vector<float> lowScale;
+        float split = 0.0f;
+        std::array<float, 12> lowOffsets{};
         float detune = 0.0f;
         bool wrap = false;
         int wrapBase = 0;
@@ -253,6 +270,8 @@ private:
             m.addFloatArg(d ? state().detune : 0.0f);
             m.addFloatArg(t && state().wrap ? 1.0f : 0.0f);
             m.addFloatArg(t ? float(state().wrapBase) : 0.0f);
+            m.addFloatArg(q && splitOn() ? state().split : -1000.0f);
+            for(float o : state().lowOffsets) m.addFloatArg(q && splitOn() ? o : 0.0f);
         }
         server->sendMsg(m);
     }

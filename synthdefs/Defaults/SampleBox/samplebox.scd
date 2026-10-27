@@ -64,8 +64,8 @@ modOf = { |k, base|
                 var tpos, tphase, syncOn, fitRate;
                 // R: 0, T: 1 (constants: one reader only); M: the morph's weight
                 var stretchMix = if(stretchVariant == 2, { \stretchmix.kr(0).clip(0, 1).lag(0.03) }, { stretchVariant });
-                var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 17) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
-                var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12), gg[2..13])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
+                var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 30) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+                var gq = { |p| var r = p.round, q = Select.kr(gg[1] > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
 
                 trigBus = \trigbus.kr(-1);
                 audioGate = In.ar(trigBus.max(0), 1) * (trigBus >= 0);
