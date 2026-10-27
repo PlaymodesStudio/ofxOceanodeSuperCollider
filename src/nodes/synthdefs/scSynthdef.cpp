@@ -7,6 +7,7 @@
 
 #include "../../ofxOceanodeSuperColliderConfig.h"
 #include "scSynthdef.h"
+#include "../boxSynths/shared/scGlobalPitch.h"
 #include "ofxSCSynth.h"
 #include "ofxSCServer.h"
 #include "../../timing/scSchedulingCompat.h"
@@ -156,6 +157,9 @@ void scSynthdef::setup(){
     builtNumChannels = numChannels;
     builtVariables = lastVariableValues;
     
+    // Global Transpose / Scale: the sends of the pitch parameters (see `transposed`)
+    std::vector<std::function<void(bool force)>> transposeSends;
+    bool transposeByDefault = true;
     
     for(auto spec : synthDescription.params){
         auto specMap = spec.second;
@@ -186,6 +190,13 @@ void scSynthdef::setup(){
         // Set below for trigger-like parameters; true when the change was a
         // void bang and has been sent as a pulse.
         auto handleVoidBang = std::make_shared<std::function<bool()>>();
+        // Global Pitch: a pitch value (MIDI notes) is quantized, transposed and
+        // detuned (scGlobalPitch::isPitchControl); one that can go below 0 is a
+        // shift amount and starts left out
+        const bool transposed = scGlobalPitch::isPitchControl(toSendName)
+                             && (unitWithoutAudio == "vf" || unitWithoutAudio == "f");
+        if(transposed && ofToFloat(specMap["minval"]) < 0) transposeByDefault = false;
+        const float pitchLo = ofToFloat(specMap["minval"]), pitchHi = ofToFloat(specMap["maxval"]);
         
         if(unitWithoutAudio == "vi"){
             ofParameter<vector<int>> vi;
@@ -229,25 +240,36 @@ void scSynthdef::setup(){
                                 vector<float>(1, ofToFloat(specMap["minval"])),
                                 vector<float>(1, ofToFloat(specMap["maxval"]))));
             
-            setValuesToSynths = [this, toSendName, vf, sentCache](bool force){
+            setValuesToSynths = [this, toSendName, vf, sentCache, transposed, pitchLo, pitchHi](bool force){
                 for(auto f : vf.get()) {
                     if(std::isnan(f)){
                         ofLog() << "Trying to send a nan value";
                         return;
                     }
                 }
+                std::vector<float> values = vf.get();
+                if(transposed){
+                    // Global Detune gives each channel its own value
+                    if(values.size() == 1 && scGlobalPitch::spread(this)) values.assign(std::max(1, numChannels.get()), values[0]);
+                    for(size_t i = 0; i < values.size(); i++) values[i] = scGlobalPitch::applyInRange(this, values[i], (int)i, pitchLo, pitchHi);
+                }
                 for(auto synthServer : synths){
-                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, sentValueKey(vf.get()), force)) continue;
-                    if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
-                    else synthServer.second->set(toSendName, vf);
+                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, sentValueKey(values), force)) continue;
+                    if(values.size() == 1) synthServer.second->setMultiple(toSendName, values[0], numChannels);
+                    else synthServer.second->set(toSendName, values);
                 }
             };
             
-            setScheduledValueToSynths = [this, toSendName, sentCache](const std::string& text){
+            setScheduledValueToSynths = [this, toSendName, sentCache, transposed, pitchLo, pitchHi](const std::string& text){
                 sentCache->forget();
                 std::vector<float> values;
                 for(const auto& token : ofSplitString(text, ",", true, true)) values.push_back(ofToFloat(token));
                 if(values.empty()) return;
+                if(transposed){
+                    // Global Detune gives each channel its own value
+                    if(values.size() == 1 && scGlobalPitch::spread(this)) values.assign(std::max(1, numChannels.get()), values[0]);
+                    for(size_t i = 0; i < values.size(); i++) values[i] = scGlobalPitch::applyInRange(this, values[i], (int)i, pitchLo, pitchHi);
+                }
                 for(auto synthServer : synths){
                     if(values.size() == 1) synthServer.second->setMultiple(toSendName, values[0], numChannels.get());
                     else synthServer.second->set(toSendName, values);
@@ -297,20 +319,21 @@ void scSynthdef::setup(){
                                 ofToFloat(specMap["minval"]),
                                 ofToFloat(specMap["maxval"])));
             
-            setValuesToSynths = [this, toSendName, f, sentCache](bool force){
+            setValuesToSynths = [this, toSendName, f, sentCache, transposed, pitchLo, pitchHi](bool force){
                 if(std::isnan(f.get())){
                     ofLog() << "Trying to send a nan value";
                     return;
                 }
+                const float value = transposed ? scGlobalPitch::applyInRange(this, f.get(), 0, pitchLo, pitchHi) : f.get();
                 for(auto synthServer : synths){
-                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, {(double)f.get()}, force)) continue;
-                    synthServer.second->set(toSendName, f);
+                    if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, {(double)value}, force)) continue;
+                    synthServer.second->set(toSendName, value);
                 }
             };
             
-            setScheduledValueToSynths = [this, toSendName, sentCache](const std::string& text){
+            setScheduledValueToSynths = [this, toSendName, sentCache, transposed, pitchLo, pitchHi](const std::string& text){
                 sentCache->forget();
-                const double value = ofToFloat(text);
+                const double value = transposed ? scGlobalPitch::applyInRange(this, ofToFloat(text), 0, pitchLo, pitchHi) : ofToFloat(text);
                 if(std::isnan(value)) return;
                 for(auto synthServer : synths) synthServer.second->set(toSendName, value);
             };
@@ -501,7 +524,13 @@ void scSynthdef::setup(){
             listeners.push(resendParams.newListener([setValuesToSynths]{
                 setValuesToSynths(true);
             }));
+            if(transposed) transposeSends.push_back(setValuesToSynths);
         }
+    }
+    if(!transposeSends.empty()){
+        scGlobalPitch::follow(this, transposeByDefault,
+            [transposeSends](){ for(auto& send : transposeSends) send(true); },
+            [transposeSends](){ for(auto& send : transposeSends) send(false); });
     }
     
     listeners.push(resendParams.newListener([this](){

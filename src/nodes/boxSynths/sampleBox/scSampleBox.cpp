@@ -4,6 +4,7 @@
 //
 
 #include "scSampleBox.h"
+#include "../shared/scGlobalPitch.h"
 #include "../../../samples/scSampleEmbedding.h"
 #include "../../../ui/scTypedValue.h"
 #include "../../../ui/scEnvelopeCurve.h"
@@ -110,6 +111,7 @@ scSampleBox::scSampleBox(std::vector<serverManager*> s)
 }
 
 scSampleBox::~scSampleBox() {
+    scGlobalPitch::unfollow(this);
     nodeListeners.unsubscribeAll();
     browser.stopPreview();
     for(auto& p : pads) if(p->sample->task.valid()) p->sample->task.wait();
@@ -123,6 +125,10 @@ scSampleBox::~scSampleBox() {
 }
 
 void scSampleBox::setup() {
+    // a kit: drums stay put unless ticked in Global Pitch
+    scGlobalPitch::follow(this, false, [this](){
+        for(auto& p : pads) for(auto& [srv, sc] : p->sc) if(sc.engine) sc.engine->set("gtrbus", scGlobalPitch::bus(this, srv));
+    });
     addInspectorParameter(embedSamples.set("Embed Samples", true));
     addSeparator("SampleBox");
     addParameter(showWindow.set("Show", false));
@@ -959,6 +965,7 @@ void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p, bool includeNotes) {
     if(p.choke.get() > 0)
         for(const auto& q : pads) if(q.get() != &p && q->choke.get() == p.choke.get() && q->index < 16) mask[q->index] = 1.0f;
     updates.set("chokemask", mask);
+    updates.set("gtrbus", (float)scGlobalPitch::bus(this, srv));
     if(includeNotes) {
     // the channel's trigger/velocity level and pitch
     const int ch = padChannel(p);

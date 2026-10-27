@@ -3,7 +3,7 @@
 	var freq, width, stages, filterType, signal, filtered, dry, mix, sig;
 
 	// Parameters
-	freq = OceanodeParameter.ar(\pitch, 90, n, 20, 135, "vf").midicps;
+	freq = OceanodeParameter.ar(\cutp, 90, n, 20, 135, "vf").midicps;
 	width = OceanodeParameter.ar(\width, 50, n, 1, 1000, "vf");
 	filterType = OceanodeParameterDropdown.kr(\type, 0, n, "CascadedBRF:Butterworth");
 	mix = OceanodeParameter.ar(\mix, 1, n, 0, 1, "vf");

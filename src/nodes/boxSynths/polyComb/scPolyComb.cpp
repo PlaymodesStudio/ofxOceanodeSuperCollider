@@ -5,6 +5,7 @@
 //
 
 #include "scPolyComb.h"
+#include "../shared/scGlobalPitch.h"
 #include "scPolyCombControlSteps.h"
 #include "../../../ui/scQuantizedSlider.h"
 #include "scPolyCombMigration.h"
@@ -83,6 +84,7 @@ scPolyComb::scPolyComb(std::vector<serverManager*> s, bool renderer) : scNode("p
 }
 
 scPolyComb::~scPolyComb() {
+    if(!voiceRenderer) scGlobalPitch::unfollow(this);
     voicePeers.clear();
     listeners.unsubscribeAll();
     for(auto& [server, st] : states) freeAll(server, st);
@@ -90,6 +92,18 @@ scPolyComb::~scPolyComb() {
 }
 
 void scPolyComb::setup() {
+    // voice-morph renderers follow their parent's choice (transposeOwner)
+    if(!voiceRenderer) scGlobalPitch::follow(this, true, [this](){
+        auto resend = [](scPolyComb* c){
+            for(auto& [server, st] : c->states) {
+                const int bus = scGlobalPitch::bus(c->transposeOwner, server);
+                if(st.pitchS) st.pitchS->set("gtrbus", bus);
+                if(st.sub.synth) st.sub.synth->set("gtrbus", bus);
+            }
+        };
+        resend(this);
+        for(auto& item : voicePeers) if(item.second.node) resend(item.second.node.get());
+    });
     if(!voiceRenderer) timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
                    [this](){ return publishedKeys; });
     auto vec = [](ofParameter<std::vector<float>>& p, const std::string& name, float def, float lo, float hi) {
@@ -624,6 +638,7 @@ void scPolyComb::sendPitch(ServerState& st, bool notesOnly) {
         const int pb = internalPitch() ? -1 : pitchIn.bus(st.server);
         controls.set("pitch_sel", pb >= 0 ? 1.0f : 0.0f);
         if(pb >= 0) s->mapan("pitch_ar", pb, n());
+        controls.set("gtrbus", scGlobalPitch::bus(transposeOwner, st.server));
         // the cable's own values, spread over the voices as the Oceanode values are
         controls.set("pitch_k", (float)pitchIn.channels());
         controls.set("pitch_expand", expandPitch.get() ? 1.0f : 0.0f);
@@ -792,6 +807,7 @@ void scPolyComb::sendSub(ServerState& st, bool notesOnly) {
     const int pb = pitchIn.bus(st.server);
     if(pb >= 0){ controls.set("pitch_sel", 1.0f); s->mapan("pitch_ar", pb, n()); }
     else controls.set("pitch_sel", 0.0f);
+    controls.set("gtrbus", scGlobalPitch::bus(transposeOwner, st.server));
     controls.set("vis", st.visBlock ? st.visBlock->index + VIS_SUB : 0);
     controls.set("transpose", subTranspose.get() + subFineTune.get());
     controls.set("vibrate", subVibRate.get()); controls.set("vibamt", subVibAmt.get()); controls.set("vibrand", subVibRand.get());

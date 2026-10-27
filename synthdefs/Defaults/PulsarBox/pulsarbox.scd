@@ -46,13 +46,18 @@ File.mkdir(d);
     (1..layers).do { |nl|
         SynthDef(("PulsarBox_" ++ nv ++ "_" ++ no ++ "_" ++ nl).asSymbol, {
             var kv = { |name, def| NamedControl.kr(name,def!nv).asArray };
-            var fund = \fund.kr(100 ! nv).clip(0.05, 4000).lag(kv.(\glide,0));
+            var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+            var gt = gg[14] * 0.01 * ({ Rand(-1, 1) } ! nv);   // each voice's detune (the transpose is in gq)
+            var gq = { |p| var r = p.round, q = Select.kr((((r < gg[17]) * gg[30]) + ((r >= gg[17]) * gg[1])) > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
+            var tr = \tr.kr(0);
+            // the note before \tr quantized, then \tr added (\fund already holds it)
+            var fund = (gq.(\fund.kr(100 ! nv).clip(0.05, 4000).cpsmidi - tr) + tr).midicps.lag(kv.(\glide,0));
             var lev = \lev.kr(0.5 ! nv, 1/30, fixedLag: true).asArray;
             // the gates: their levels from ModGate (\gatebus, audio, nv), else the values
             var gbus = \gatebus.kr(-1);
             var gate = Select.kr(gbus >= 0, [\gate.kr(1 ! nv), A2K.kr(In.ar(gbus.max(0), nv)).asArray]);
             // the pitch from a cable (MIDI notes + \tr semitones), else \fund (Hz)
-            var pcable = (A2K.kr(\pitch_ar.ar(57 ! nv)).asArray + \tr.kr(0)).midicps;
+            var pcable = (gq.(A2K.kr(\pitch_ar.ar(57 ! nv)).asArray) + tr).midicps;
             var psel = \pitch_sel.kr(0) > 0.5;
             var atk = kv.(\atk,0.005), dec = kv.(\dec,0.3), sus = kv.(\sus,1), rel = kv.(\rel,0.3);
             var curves = [kv.(\ca,-4), kv.(\cd,-4), kv.(\cr,-4)].collect { |c| c.clip(-12, 12) };
@@ -82,7 +87,7 @@ File.mkdir(d);
 
             nv.do { |v|
                 var rjit = kv.(\rjit,0)[v], fjit = kv.(\fjit,0)[v], ajit = kv.(\ajit,0)[v], pjit = kv.(\pjit,0)[v];
-                var f0 = (Select.kr(psel, [fund[v], pcable[v]]) * (2 ** (mPitch[v] / 12))).clip(0.05, 4000);
+                var f0 = (Select.kr(psel, [fund[v], pcable[v]]) * (2 ** ((mPitch[v] + gt[v]) / 12))).clip(0.05, 4000);
                 var f = f0 * (2 ** (LFNoise0.kr(f0.min(500)) * rjit));
                 var pulse = Impulse.ar(f);
                 var count = PulseCount.ar(pulse) - 1;

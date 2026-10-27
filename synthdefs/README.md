@@ -43,6 +43,13 @@ checkout, deploy with `tools/deploy_synthdef_compiler.sh <app>/bin/data`.
 Every file in these folders must load from a script, not only block by block
 in the IDE: separate top-level `( ... )` blocks with `;`.
 
+Name controls by what they are. Global Pitch transposes, quantizes and
+detunes every `\pitch`, `\pitcharray` and `\carp` control as a note. A
+filter's cutoff or centre frequency in MIDI is `\cutp` (shown as "Cutp"), never
+`\pitch`. Control names must be lower case, because Oceanode lower-cases them
+before sending. The filters renamed on 2026-10-27 are listed in
+`../tools/migrate_filter_cutp.py`, which converts presets and macros.
+
 A file whose first line is `// @oceanode-no-autocompile` must not be rebuilt
 for new channel counts (currently only `Source/PhysicalModelling/oteypiano.scd`,
 whose shipped binaries came from a lost source).

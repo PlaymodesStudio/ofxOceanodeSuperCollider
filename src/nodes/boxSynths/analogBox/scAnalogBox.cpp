@@ -7,6 +7,7 @@
 //
 
 #include "scAnalogBox.h"
+#include "../shared/scGlobalPitch.h"
 #include "../../../ui/scEnvelopeCurve.h"
 #include "../../../ui/scTypedValue.h"
 #include "ofxOceanodeShared.h"
@@ -165,12 +166,14 @@ scAnalogBox::scAnalogBox(std::vector<serverManager*> s) : scNode("analogBox"), s
 }
 
 scAnalogBox::~scAnalogBox() {
+    scGlobalPitch::unfollow(this);
     listeners.unsubscribeAll();
     for(auto& [server, st] : states) freeAll(server, st);
     states.clear();
 }
 
 void scAnalogBox::setup() {
+    scGlobalPitch::follow(this, true, [this](){ for(auto& [server, st] : states) sendPitch(st); });
     timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
                    [this](){ return publishedKeys; });
     auto vec = [](ofParameter<std::vector<float>>& p, const std::string& name, float def, float lo, float hi) {
@@ -561,6 +564,7 @@ void scAnalogBox::sendPitch(ServerState& st) {
     const int pb = allocating() ? (st.poolPitch ? st.poolPitch->index : -1) : pitchIn.bus(st.server);   // pooled: the allocator's
     if(pb >= 0){ updates.set("pitch_sel", 1.0f); s->mapan("pitch_ar", pb, n()); }
     else updates.set("pitch_sel", 0.0f);
+    updates.set("gtrbus", scGlobalPitch::bus(this, st.server));
     vec( "transpose", transpose.get());
     vec( "detune", detune.get());
     updates.set("glide", modulation.voiceValues(glide));

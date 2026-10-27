@@ -14,6 +14,27 @@ class scKeyboardPiano {
 public:
     using Notes = ofParameter<std::vector<float>>;
 
+    // Piano layout: white keys on the bottom/top rows, matching black
+    // keys on the rows above them. A/F/K and 1/4/8 are the gaps at B-C/E-F.
+    // Semicolon is the physical key occupied by ñ on a Spanish keyboard.
+    // Shared with the VST node, which plays the same keys from its editor.
+    struct KeyPitch { ImGuiKey key; int semitones; };
+    static constexpr std::array<KeyPitch, 33> keyMap = {{
+        {ImGuiKey_Z, 0}, {ImGuiKey_X, 2}, {ImGuiKey_C, 4},
+        {ImGuiKey_V, 5}, {ImGuiKey_B, 7}, {ImGuiKey_N, 9},
+        {ImGuiKey_M, 11}, {ImGuiKey_Comma, 12}, {ImGuiKey_Period, 14},
+        {ImGuiKey_S, 1}, {ImGuiKey_D, 3}, {ImGuiKey_G, 6},
+        {ImGuiKey_H, 8}, {ImGuiKey_J, 10}, {ImGuiKey_L, 13},
+        {ImGuiKey_Semicolon, 15},
+        {ImGuiKey_Q, 12}, {ImGuiKey_W, 14}, {ImGuiKey_E, 16},
+        {ImGuiKey_R, 17}, {ImGuiKey_T, 19}, {ImGuiKey_Y, 21},
+        {ImGuiKey_U, 23}, {ImGuiKey_I, 24}, {ImGuiKey_O, 26},
+        {ImGuiKey_P, 28},
+        {ImGuiKey_2, 13}, {ImGuiKey_3, 15}, {ImGuiKey_5, 18},
+        {ImGuiKey_6, 20}, {ImGuiKey_7, 22}, {ImGuiKey_9, 25},
+        {ImGuiKey_0, 27}
+    }};
+
     // Draw the fixed footer in the parent, then give the controls a scrollable
     // child above it. Always pair with endContent(), including early exits.
     void beginContent(Notes& pitch, Notes& gate, int voices, int firstVoice = 0, float pitchOffset = 0) {
@@ -43,29 +64,10 @@ public:
         if(enabled && ImGui::IsKeyPressed(ImGuiKey_UpArrow, false)) base = std::min(96, base + 12);
         if(enabled && ImGui::IsKeyPressed(ImGuiKey_DownArrow, false)) base = std::max(0, base - 12);
 
-        // Piano layout: white keys on the bottom/top rows, matching black
-        // keys on the rows above them. A/F/K and 1/4/8 are the gaps at B-C/E-F.
-        // Semicolon is the physical key occupied by ñ on a Spanish keyboard.
-        struct KeyPitch { ImGuiKey key; int semitones; };
-        static constexpr std::array<KeyPitch, 33> keys = {{
-            {ImGuiKey_Z, 0}, {ImGuiKey_X, 2}, {ImGuiKey_C, 4},
-            {ImGuiKey_V, 5}, {ImGuiKey_B, 7}, {ImGuiKey_N, 9},
-            {ImGuiKey_M, 11}, {ImGuiKey_Comma, 12}, {ImGuiKey_Period, 14},
-            {ImGuiKey_S, 1}, {ImGuiKey_D, 3}, {ImGuiKey_G, 6},
-            {ImGuiKey_H, 8}, {ImGuiKey_J, 10}, {ImGuiKey_L, 13},
-            {ImGuiKey_Semicolon, 15},
-            {ImGuiKey_Q, 12}, {ImGuiKey_W, 14}, {ImGuiKey_E, 16},
-            {ImGuiKey_R, 17}, {ImGuiKey_T, 19}, {ImGuiKey_Y, 21},
-            {ImGuiKey_U, 23}, {ImGuiKey_I, 24}, {ImGuiKey_O, 26},
-            {ImGuiKey_P, 28},
-            {ImGuiKey_2, 13}, {ImGuiKey_3, 15}, {ImGuiKey_5, 18},
-            {ImGuiKey_6, 20}, {ImGuiKey_7, 22}, {ImGuiKey_9, 25},
-            {ImGuiKey_0, 27}
-        }};
         held.erase(std::remove_if(held.begin(), held.end(), [](const Note& n){
             return n.key >= 0 && !ImGui::IsKeyDown(static_cast<ImGuiKey>(n.key));
         }), held.end());
-        for(const auto& mapping : keys) {
+        for(const auto& mapping : keyMap) {
             if(enabled && ImGui::IsKeyPressed(mapping.key, false)) held.push_back({mapping.key, float(base + mapping.semitones) + pitchOffset});
         }
         ImGui::PushID(this);

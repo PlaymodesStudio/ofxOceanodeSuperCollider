@@ -12,6 +12,7 @@
 #include "../../scNode.h"
 #include "../../timing/scSchedulingCompat.h"
 #include "../../synthdefs/scSynthdefCompiler.h"
+#include "../boxSynths/shared/scGlobalPitch.h"
 #include <set>
 
 class ofxSCSynth;
@@ -33,6 +34,7 @@ public:
     scSynthdef(synthdefDesc description);
     ~scSynthdef(){
         instances().erase(this);
+        scGlobalPitch::unfollow(this);
         // Every scheduled-event handler this node registered points at members
         // that are about to go away.
         scScheduling::unregisterOwner(this);

@@ -402,6 +402,7 @@ private:
     // Temporary renderers have their own count-dependent pitch maps, envelopes
     // and modulation, but no UI/library work or post-spreader effects.
     bool voiceRenderer = false, applyingSnapshot = false, syncingVoiceMorph = false;
+    scPolyComb* transposeOwner = this;   // Global Transpose: a voice-morph renderer reads its parent's choice
     std::map<std::string, std::function<void()>> morphSends;   // queued while a snapshot applies, one per part
     int morphRenderVoices = 0, voiceAliasCount = 0, morphDomainVoices = 0;
     struct VoicePeer {

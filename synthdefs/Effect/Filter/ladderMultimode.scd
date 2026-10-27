@@ -10,7 +10,7 @@
 	sample.
 	*/
 
-	pitch = OceanodeParameterLag.ar(\pitch, 84, n, 0, 135, "vf", 1/30, true);
+	pitch = OceanodeParameterLag.ar(\cutp, 84, n, 0, 135, "vf", 1/30, true);
 	res = OceanodeParameterLag.ar(\res, 0, n, 0, 1, "vf", 1/30, true);
 	type = OceanodeParameterDropdown.ar(\type, 5, n, "HP2:BP2:LP2:BP4:BL4:LP4:HP4:Notch");
 	drywet = OceanodeParameterLag.ar(\drywet, 1, n, 0, 1, "vf", 1/30, true);

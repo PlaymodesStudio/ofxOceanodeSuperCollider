@@ -105,8 +105,12 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
     var anchorPos, anchorFire, run, syncTrig, anchorTrig, hardImp, beatSweep, beatX, beatW, beatAbs, freeBeat;
     var ampP, pitchP, durP, posP, panP, divP, chanceP, posJ, pitchJ, durJ, ampJ, panJ, revP, trigP, levelsP, scaleTable;
     var slots, globals, outVals, fc;
+    var gb, gg, gt, gq;   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
 
     vec = {|name, def| NamedControl.kr(name, def ! pmax) };
+    gb = \gtrbus.kr(-1); gg = In.kr(gb.max(0), 31) * (gb >= 0);
+    gt = gg[14] * 0.01 * ({ Rand(-1, 1) } ! pmax);   // each voice's detune (the transpose is in gq)
+    gq = { |p| var r = p.round, q = Select.kr((((r < gg[17]) * gg[30]) + ((r >= gg[17]) * gg[1])) > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
 
     anchorPos  = \anchorPos.ar(0);
     anchorFire = \anchorFire.ar(0);
@@ -148,7 +152,7 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
     slots = [
         posP,
         durP,
-        pitchP + transpose + \pitchoff.kr(0),   // pitchoff: a Pitch cable carries MIDI notes (60: as recorded)
+        gq.(pitchP + \pitchoff.kr(0)) + transpose + gt,   // pitchoff: a Pitch cable carries MIDI notes (60: as recorded)
         ampP,
         panP,
         // grains per beat (the C++ converts the Interval control to it),

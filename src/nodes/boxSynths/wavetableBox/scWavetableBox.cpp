@@ -6,6 +6,7 @@
 //
 
 #include "scWavetableBox.h"
+#include "../shared/scGlobalPitch.h"
 #include "../../../serverManager.h"
 #include "ofxSCServer.h"
 #include <algorithm>
@@ -243,6 +244,7 @@ scWavetableBox::scWavetableBox(std::vector<serverManager*> outputServers)
 }
 
 scWavetableBox::~scWavetableBox(){
+    scGlobalPitch::unfollow(this);
     keyboardPiano.release();
     noteInputs.disable();
     nodeListeners.unsubscribeAll();
@@ -261,6 +263,11 @@ scWavetableBox::~scWavetableBox(){
 }
 
 void scWavetableBox::setup(){
+    scGlobalPitch::follow(this, true, [this](){
+        std::vector<ofxSCServer*> servers;
+        for(auto& [server, synth] : synths) servers.push_back(server);
+        for(auto* server : servers) sendAll(server);
+    });
         timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                        [this](){ return publishedKeys; });
     // ── Node ─────────────────────────────────────────────────────────────────
@@ -1014,6 +1021,7 @@ void scWavetableBox::sendAll(ofxSCServer* server){
         setF(control, std::vector<float>(v.begin(), v.end()), 0);
     };
     setF("pitch", pitch, 60);
+    controls.set("gtrbus", (float)scGlobalPitch::bus(this, server));
     setF("levels", levels, 0);
     setF("pos", position, 0);
     setF("posy", posY, 0);

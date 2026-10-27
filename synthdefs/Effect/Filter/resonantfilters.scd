@@ -4,7 +4,7 @@
     // Get input from source
     input = In.ar(OceanodeInput.kr(\in), n);
     // Control parameters
-    freq = OceanodeParameterLag.ar(\pitch, 60, n, 0, 127, "vf", 0.05, true).midicps;
+    freq = OceanodeParameterLag.ar(\cutp, 60, n, 0, 127, "vf", 0.05, true).midicps;
     res = 1-(OceanodeParameterLag.ar(\q, 0, n, 0, 0.99999, "vf"));
 
     filtered = RLPF.ar(input, freq, res);
@@ -25,7 +25,7 @@
     // Get input from source
     input = In.ar(OceanodeInput.kr(\in), n);
     // Control parameters
-    freq = OceanodeParameterLag.ar(\pitch, 60, n, 0, 127, "vf", 0.05, true).midicps;
+    freq = OceanodeParameterLag.ar(\cutp, 60, n, 0, 127, "vf", 0.05, true).midicps;
     res = 1-(OceanodeParameterLag.ar(\q, 0, n, 0, 0.99999, "vf"));
 
     filtered = RHPF.ar(input, freq, res);              // Resonant High Pass Filter
@@ -50,7 +50,7 @@
 	input = In.ar(OceanodeInput.kr(\in), n);
 
 	// Parameter controls with proper lag for smooth transitions
-	pitch = OceanodeParameterLag.ar(\pitch, 60, n, 0, 130, "vf", 1/30, true);
+	pitch = OceanodeParameterLag.ar(\cutp, 60, n, 0, 130, "vf", 1/30, true);
 	freq = pitch.midicps;
 	// BPF expects reciprocal Q. The existing default q=1 previously made
 	// both stages zero-bandwidth (NaNs in offline tests); use the same

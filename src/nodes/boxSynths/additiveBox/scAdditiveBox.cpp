@@ -5,6 +5,7 @@
 //
 
 #include "scAdditiveBox.h"
+#include "../shared/scGlobalPitch.h"
 #include "../../../serverManager.h"
 #include "ofxSCServer.h"
 #include "ofxOceanodeShared.h"
@@ -155,12 +156,14 @@ scAdditiveBox::scAdditiveBox(std::vector<serverManager*> outputServers)
 }
 
 scAdditiveBox::~scAdditiveBox(){
+    scGlobalPitch::unfollow(this);
     for(auto& [server, st] : states) freeSynths(server);
     for(auto& [server, st] : states) releaseBuses(server);
     states.clear();
 }
 
 void scAdditiveBox::setup(){
+    scGlobalPitch::follow(this, true, [this](){ resendAllVoices(); });
         timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                        [this](){ return publishedKeys; });
     // ── Node ─────────────────────────────────────────────────────────────────
@@ -1422,7 +1425,7 @@ const char* kPartDef[scAdditiveBox::NumParts] = {"AdditiveBoxMotion", "AdditiveB
 unsigned roleOf(const std::string& n){
     static const std::map<std::string, unsigned> roles = {
         {"pa", RSrc}, {"pd", RSrc}, {"morph", RSrc}, {"maskglide", RSrc}, {"fr", RSrc}, {"pb", RSrc}, {"vca", RCore},
-        {"pitchoff", RFilt | RCore},
+        {"pitchoff", RFilt | RCore}, {"gtrbus", RFilt | RCore}, {"gdr", RFilt | RCore},
         {"gate", RSweep | RCore | RTail},
         {"vf", RMotion}, {"vd", RMotion}, {"nr", RMotion}, {"nd", RMotion},
         {"fbuf", RFilt}, {"po", RFilt}, {"cutoff", RFilt}, {"keytrack", RFilt}, {"safe", RFilt},
@@ -1541,7 +1544,11 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
     // (from the value, not gateOpen: scheduled notes move gateOpen ahead of now)
     extra["gate"] = drone.get() ? 1.0f : std::max(0.0f, valueFor(gate.get(), v, 0.0f));
     extra["velbus"] = float(st.modCreated ? mod.sourceBus(server, scModulation::SRC_VEL) + v : (st.visJunk ? st.visJunk->index : 0));
-    extra["pitchoff"] = pb >= 0 ? mod.voiceValue(transpose, v) : 0.0f;
+    // the synths get the input note and the offsets apart: Global Scale quantizes the note only
+    extra["pitchoff"] = mod.voiceValue(transpose, v);
+    if(pb < 0) extra["pitch"] = rawPitch;
+    extra["gtrbus"] = float(scGlobalPitch::bus(this, server));
+    extra["gdr"] = scGlobalPitch::random(this, v);   // this voice's Global Detune, the same in all its synths
     skipScalars.clear();
     if(gb >= 0) skipScalars.insert("gate");
     if(pb >= 0) skipScalars.insert("pitch");
@@ -1584,7 +1591,8 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
     for(int u = 0; u < (int)vs.cores.size(); u++){
         auto e = extra;
         for(const auto& [name, value] : coreScalars(v, u)) e[name] = value;
-        if(pb >= 0) e["pitchoff"] = e["pitch"] - rawPitch;   // transpose, unison detune / interval
+        e["pitchoff"] = e["pitch"] - rawPitch;   // transpose, unison detune / interval
+        if(pb < 0) e["pitch"] = rawPitch;
         e["out"] = st.mix ? float(st.mix->index) : 0.0f;
         // copy 0's chunks say when the voice is silent (the tail pauses it)
         e["silbus"] = u == 0 && vs.bus ? float(vs.bus->index + 3 * P) : junk;

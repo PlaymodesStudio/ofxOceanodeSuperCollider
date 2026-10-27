@@ -6,6 +6,7 @@
 //
 
 #include "scSlicerBox.h"
+#include "../shared/scGlobalPitch.h"
 #include "../../../samples/scSampleEmbedding.h"
 #include "../../../ui/scEnvelopeCurve.h"
 #include "../../../serverManager.h"
@@ -301,6 +302,7 @@ scSlicerBox::scSlicerBox(std::vector<serverManager*> outputServers)
 }
 
 scSlicerBox::~scSlicerBox(){
+    scGlobalPitch::unfollow(this);
     for(auto& [server, st] : states){
         freeChain(st);
         if(st.buffer && bufferIsLive(server, st.buffer)){ st.buffer->free(); }
@@ -321,6 +323,10 @@ scSlicerBox::~scSlicerBox(){
 }
 
 void scSlicerBox::setup(){
+    // slices of a loop keep their speed unless ticked in Global Pitch (it follows Transpose only)
+    scGlobalPitch::follow(this, false, [this](){
+        for(auto& [server, st] : states) if(st.player) st.player->set("gtrbus", scGlobalPitch::bus(this, server));
+    });
     addInspectorParameter(embedSamples.set("Embed Samples", true));
         timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                        [this](){ return publishedKeys; });
@@ -642,6 +648,7 @@ void scSlicerBox::rebuildChain(ofxSCServer* server, ServerState& st){
         sendSlices(fresh, true);
         sendGate(fresh);
         sendGateRouting(fresh, st);
+        fresh->set("gtrbus", scGlobalPitch::bus(this, server));
         ofxSCSynth* firstFx = nullptr;
         for(auto& f : st.fx) if(f.synth){ firstFx = f.synth; break; }
         if(st.player) fresh->createAndRun(4, st.player->nodeID, getActive());   // replace

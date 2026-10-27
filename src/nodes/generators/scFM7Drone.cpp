@@ -1,4 +1,5 @@
 #include "scFM7Drone.h"
+#include "../boxSynths/shared/scGlobalPitch.h"
 #include "ofxOceanodeShared.h"
 
 // Static helper: build SC control name like "op_amp_1", "op_ratio_3", etc.
@@ -14,6 +15,7 @@ scFM7Drone::scFM7Drone() : scNode("SuperFMDrone") {
 }
 
 scFM7Drone::~scFM7Drone() {
+	scGlobalPitch::unfollow(this);
 	listeners.unsubscribeAll();
 	for(auto& pair : synthInstances) {
 		if(pair.second) { pair.second->free(); delete pair.second; }
@@ -22,6 +24,7 @@ scFM7Drone::~scFM7Drone() {
 }
 
 void scFM7Drone::setup() {
+	scGlobalPitch::follow(this, true, [this](){ sendPitch(); }, [this](){ sendPitch(); });
 	// 1. Core
 	addParameter(numChannels.set("N Chan", 1, 1, 64));
 
@@ -95,7 +98,7 @@ void scFM7Drone::setup() {
 		oldNumChannels = n;
 	}));
 
-	listeners.push(pitch.newListener([this](vector<float> &v){    sendFloatParameter("pitch", v); }));
+	listeners.push(pitch.newListener([this](vector<float> &v){    sendPitch(); }));
 	listeners.push(modScale.newListener([this](vector<float> &v){ sendFloatParameter("modScale", v); }));
 	listeners.push(vibFreq.newListener([this](vector<float> &v){  sendFloatParameter("vibFreq", v); }));
 	listeners.push(vibAmp.newListener([this](vector<float> &v){   sendFloatParameter("vibAmp", v); }));
@@ -162,6 +165,14 @@ void scFM7Drone::updateAllParamsToSynth() {
 		sendFloatParameter(sRatio,  v_ratio);
 		sendFloatParameter(sDetune, v_detune);
 	}
+}
+
+// Global Pitch: the generic FM7 SynthDefs read no buses, so scale, transpose and detune are applied here
+void scFM7Drone::sendPitch() {
+	vector<float> p = pitch.get();
+	if(p.size() == 1 && scGlobalPitch::spread(this)) p.assign(std::max(1, numChannels.get()), p[0]);   // a detune per channel
+	for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::applyInRange(this, p[i], (int)i, pitch.getMin()[0], pitch.getMax()[0]);
+	sendFloatParameter("pitch", p);
 }
 
 void scFM7Drone::sendFloatParameter(const string& name, vector<float>& values) {
@@ -396,6 +407,7 @@ void scFM7Drone::createSynth(ofxSCServer* server) {
 	{
 		vector<float> p = pitch.get();
 		if((int)p.size() != n) p.resize(n, p.empty() ? 60.0f : p[0]);
+		for(size_t i = 0; i < p.size(); i++) p[i] = scGlobalPitch::applyInRange(this, p[i], (int)i, pitch.getMin()[0], pitch.getMax()[0]);
 		synth->set("pitch", p);
 	}
 

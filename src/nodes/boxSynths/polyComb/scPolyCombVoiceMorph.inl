@@ -72,6 +72,7 @@ void scPolyComb::syncVoiceMorph() {
         peer.unusedSince=-1;
         if(!peer.node) {
             peer.node=std::make_unique<scPolyComb>(servers,true);
+            peer.node->transposeOwner=this;
             peer.node->setup();
             peer.node->voices.setWithoutEventNotifications(count);
             peer.node->userVoices=count;

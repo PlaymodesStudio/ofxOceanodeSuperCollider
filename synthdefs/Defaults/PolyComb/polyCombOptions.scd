@@ -18,7 +18,10 @@ File.mkdir(root); File.mkdir(dir);
         var cable=A2K.kr(NamedControl.ar(\pitch_ar,60!n));
         // One oscillator at the input root (first pitch), shared by the voice
         // envelopes. Chord tones must never become extra sub frequencies.
-        var pitch = Select.kr(\pitch_sel.kr(0), [kv.(\pitch,60).asArray[0], cable.asArray[0]]);
+        var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
+        var gt = gg[14] * 0.01 * Rand(-1, 1);   // each voice's detune (the transpose is in gq)
+        var gq = { |p| var r = p.round, q = Select.kr((((r < gg[17]) * gg[30]) + ((r >= gg[17]) * gg[1])) > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
+        var pitch = gq.(Select.kr(\pitch_sel.kr(0), [kv.(\pitch,60).asArray[0], cable.asArray[0]]));
         var atk=kv.(\atk,0.01).asArray, dec=kv.(\dec,0.5).asArray, sus=kv.(\sus,1).asArray, rel=kv.(\rel,0.5).asArray;
         var curves=[kv.(\cA,-4),kv.(\cD,-4),kv.(\cR,-4)].collect(_.asArray);
         var env = n.collect { |i| EnvGen.ar(Env.adsr(atk[i],dec[i],sus[i],rel[i],
@@ -27,7 +30,7 @@ File.mkdir(root); File.mkdir(dir);
         // One vibrato LFO for the single root tone, independent of main voices.
         var rate = \vibrate.kr(5,0.03) * (1 + (Rand(-1,1) * \vibrand.kr(0,0.03).clip(0,1)));
         var vibrato = SinOsc.kr(rate, Rand(0,2pi)) * \vibamt.kr(0,0.03);
-        var tuned = K2A.ar(Lag.kr(pitch+\transpose.kr(-12),0.02)+vibrato);
+        var tuned = K2A.ar(Lag.kr(pitch+gt+\transpose.kr(-12),0.02)+vibrato);
         var sig = SinOsc.ar(tuned.clip(0,135).midicps.min(SampleRate.ir*0.45));
         Out.kr(\vis.kr(0), A2K.kr(env)*on);
         Out.ar(\out.kr(0),sig*env*velocity*\level.kr(0.25,0.03)*\master.kr(0.8)*on);

@@ -6,6 +6,7 @@
 //
 
 #include "scOldSynthdef.h"
+#include "../boxSynths/shared/scGlobalPitch.h"
 #include "ofxSCSynth.h"
 
 scOldSynthdef::scOldSynthdef(oldSynthdefDesc _description) : description(_description), synthdefName(_description.name), scNode(_description.name){
@@ -104,30 +105,30 @@ void scOldSynthdef::setup(){
                                 vector<float>(1, ofToFloat(specMap["minval"])),
                                 vector<float>(1, ofToFloat(specMap["maxval"]))));
             string toSendName = ofToLower(spec.first);
-            listeners.push(vf.newListener([this, toSendName](vector<float> &vf_){
-                for(auto f : vf_) {
+            // Global Pitch: a note (pitch / pitcharray / carp) is quantized, transposed and detuned
+            const bool pitched = scGlobalPitch::isPitchControl(toSendName);
+            if(pitched && ofToFloat(specMap["minval"]) < 0) pitchByDefault = false;
+            const float lo = ofToFloat(specMap["minval"]), hi = ofToFloat(specMap["maxval"]);
+            auto send = [this, vf, toSendName, pitched, lo, hi](){
+                std::vector<float> values = vf.get();
+                for(auto f : values) {
                     if(std::isnan(f)){
                         ofLog() << "Trying to send a nan value";
                         return;
                     }
                 }
-                for(auto synthServer : synths){
-                    if(vf_.size() == 1) synthServer.second->setMultiple(toSendName, vf_[0], numChannels);
-                    else synthServer.second->set(toSendName, vf_);
-                }
-            }));
-            listeners.push(resendParams.newListener([this, vf, toSendName]{
-                for(auto f : vf.get()) {
-                    if(std::isnan(f)){
-                        ofLog() << "Trying to send a nan value";
-                        return;
-                    }
+                if(pitched){
+                    if(values.size() == 1 && scGlobalPitch::spread(this)) values.assign(std::max(1, numChannels.get()), values[0]);
+                    for(size_t i = 0; i < values.size(); i++) values[i] = scGlobalPitch::applyInRange(this, values[i], (int)i, lo, hi);
                 }
                 for(auto synthServer : synths){
-                    if(vf->size() == 1) synthServer.second->setMultiple(toSendName, vf->at(0), numChannels);
-                    else synthServer.second->set(toSendName, vf);
+                    if(values.size() == 1) synthServer.second->setMultiple(toSendName, values[0], numChannels);
+                    else synthServer.second->set(toSendName, values);
                 }
-            }));
+            };
+            listeners.push(vf.newListener([send](vector<float>&){ send(); }));
+            listeners.push(resendParams.newListener([send]{ send(); }));
+            if(pitched) pitchSends.push_back(send);
         }else if(specMap["type"] == "i"){
             ofParameter<int> i;
             
@@ -161,27 +162,31 @@ void scOldSynthdef::setup(){
                                 ofToFloat(specMap["minval"]),
                                 ofToFloat(specMap["maxval"])));
             string toSendName = ofToLower(spec.first);
-            listeners.push(f.newListener([this, toSendName](float &f_){
-                if(std::isnan(f_)){
-                    ofLog() << "Trying to send a nan value";
-                    return;
-                }
-                for(auto synthServer : synths){
-                    synthServer.second->set(toSendName, f_);
-                }
-            }));
-            listeners.push(resendParams.newListener([this, f, toSendName]{
+            const bool pitched = scGlobalPitch::isPitchControl(toSendName);
+            if(pitched && ofToFloat(specMap["minval"]) < 0) pitchByDefault = false;
+            const float lo = ofToFloat(specMap["minval"]), hi = ofToFloat(specMap["maxval"]);
+            auto send = [this, f, toSendName, pitched, lo, hi](){
                 if(std::isnan(f.get())){
                     ofLog() << "Trying to send a nan value";
                     return;
                 }
+                const float value = pitched ? scGlobalPitch::applyInRange(this, f.get(), 0, lo, hi) : f.get();
                 for(auto synthServer : synths){
-                    synthServer.second->set(toSendName, f);
+                    synthServer.second->set(toSendName, value);
                 }
-            }));
+            };
+            listeners.push(f.newListener([send](float&){ send(); }));
+            listeners.push(resendParams.newListener([send]{ send(); }));
+            if(pitched) pitchSends.push_back(send);
         }
     }
     
+    // Global Pitch: resend the notes when it changes (scGlobalPitch.h)
+    if(!pitchSends.empty()){
+        auto sends = pitchSends;
+        scGlobalPitch::follow(this, pitchByDefault, [sends]{ for(auto& s : sends) s(); }, [sends]{ for(auto& s : sends) s(); });
+    }
+
     listeners.push(resendParams.newListener([this](){
         for(auto synthServer : synths){
             if(synthServer.second != nullptr){

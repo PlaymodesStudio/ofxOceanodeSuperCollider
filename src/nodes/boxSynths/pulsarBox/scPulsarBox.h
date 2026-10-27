@@ -44,6 +44,7 @@
 #include "ofxSCServer.h"
 #include "../shared/scModulation.h"
 #include "../shared/scAudioParam.h"
+#include "../shared/scGlobalPitch.h"
 #include "../../../timing/scScheduledInputs.h"
 #include "../../../ui/scEnvelopeCurve.h"
 #include "../shared/scSnapshots.h"
@@ -275,6 +276,7 @@ public:
     }
 
     ~scPulsarBox() override {
+        scGlobalPitch::unfollow(this);
         for(auto& [server, st] : states){
             clearBanks(st);
             freeMod(server, st, true);
@@ -292,6 +294,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        scGlobalPitch::follow(this, true, [this](){ for(auto& [server, st] : states) sendModArgs(server, st); });
         timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                        [this](){ return publishedKeys; });
         addParameter(showWindow.set("Show", false));
@@ -920,6 +923,7 @@ private:
             auto& bank=e.second;
             scSynthControlBatch updates(bank.synth,server,&bank.sent);
             updates.set("pitch_sel",pb>=0?1.0f:0.0f);
+            updates.set("gtrbus",(float)scGlobalPitch::bus(this,server));
             updates.set("gatebus",st.modCreated && st.gateBus?float(st.gateBus->index):-1.0f);
             updates.set("mod",st.modCreated?float(mod.targetBus(server,0)):-1.0f);
             updates.send();

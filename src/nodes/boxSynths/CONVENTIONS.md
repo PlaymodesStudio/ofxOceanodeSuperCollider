@@ -378,6 +378,70 @@ Timeline menus require the optional timeline addon to be enabled and attached
 to the host container. Compile instrument hooks under the appropriate feature
 guard. A piano widget alone does not make a model a timeline instrument.
 
+## Global Pitch
+
+The **Global Pitch** node (`globalPitch/scGlobalPitchNode.h`) acts on every
+pitched destination in the patch without cables. It applies three features, in
+this order:
+
+1. **Scale** moves the input note to the nearest degree. Scale is a vector of
+   pitch classes 0–11, and fractions are allowed. Input notes below
+   **Split Note** (MIDI, 0 = off) move to the nearest degree of **Low Scale**
+   instead, for example to keep the bass in tune with a neighbouring artwork.
+   Each side has its own bypass: **Scale Bypass** for notes at and above the
+   split, **Low Scale Bypass** for notes below it. A bypassed side passes notes
+   unchanged, fractions included. Transpose and Detune apply after either
+   scale.
+2. **Transpose** adds semitones after the scale, so a transpose changes the key.
+   With **Mod 12** on, a transposed note wraps into its own octave, which starts
+   at **Base Note** (C–B). The note never leaves that octave, as with Fit Notes
+   In Range.
+3. **Detune** gives each voice its own fixed random offset within ±cents. It is
+   never quantized.
+
+The inspector has one destination table with a tick per feature. SampleBox and
+SlicerBox start unticked; SlicerBox follows Transpose only. Generic SynthDef
+nodes whose `pitch` can go below 0 also start unticked, because that `pitch` is
+a shift amount. Several Global Pitch nodes share one state. The node saves the
+destinations that differ from their default, as one string per feature.
+
+There are two mechanisms; see [scGlobalPitch](shared/scGlobalPitch.h):
+
+- **Boxes** read a block of 31 control buses per server, allocated by
+  serverManager: transpose, scale on, each pitch class's offset to its nearest
+  degree, detune in cents, wrap on, wrap base, split note (-1000 when off), the
+  low scale's 12 offsets and low scale on. There is one block for each combination of
+  features a destination follows, so a Box sets a single control, `gtrbus`.
+  The synth that makes the sounding pitch declares `gb`/`gg`/`gt`/`gq` (copy
+  them from an existing Box). `gq` quantizes and transposes, and wraps when
+  Mod 12 is on, because the wrap depends on the note. `gt` is only the detune,
+  with one `Rand(-1, 1)` per voice. If one
+  voice spans several synths, the C++ sends `scGlobalPitch::random(this, voice)`
+  instead, as AdditiveBox's `gdr` does. The synth applies `gq.()` to the input
+  note right after choosing between Oceanode values and the cable, before glide
+  and modulation, and adds `gt` after. Oceanode values, Pitch cables and
+  piano-roll notes all follow, and held notes move.
+  A new pitched Box calls `scGlobalPitch::follow` in `setup()` and `unfollow`
+  in its destructor, and sets `gtrbus` with `scGlobalPitch::bus(this, server)`
+  on each synth that reads it. Send the input note separately from offsets
+  (AdditiveBox's `pitchoff`), so unison and detune are not quantized.
+  Sequencers (ArpeggiatorBox, ChordBox, EuclideanBox, MetroBox) do not follow,
+  so nothing is applied twice in a chain.
+- **Generic SynthDef nodes** (`scSynthdef`), old-format synthdefs
+  (`scOldSynthdef`, from `Supercollider/Synthdefs.json`) and FM7 cannot read
+  the buses without recompiling. They send `scGlobalPitch::apply(this, v,
+  channel)` for their note controls: `pitch`, `pitcharray` and PMod's carrier
+  `carp` (`scGlobalPitch::isPitchControl`). A filter's cutoff is `cutp`, not
+  `pitch`, so Global Pitch never reaches it. The filters were renamed on
+  2026-10-27; `tools/migrate_filter_cutp.py` converts presets. Values Global
+  Pitch changes are clamped to the control's declared range
+  (`applyInRange`). PMod's modulator pitch `modp` sets
+  the timbre, so it doesn't follow. While Detune is on they expand a single
+  value to one per channel, and they resend when a feature changes. An audio
+  cable into such a pitch does not follow.
+- **The VST node** applies Scale and Transpose to each note at its note-on,
+  without Detune: a MIDI note has no fraction. Held notes keep their pitch.
+
 ## Current coverage
 
 This describes the current source. “Shared modulation” means the common

@@ -133,6 +133,7 @@ private:
 	string getPresetFilePath(int slot);
 
 	// Param Helpers
+	void sendPitch();
 	void sendFloatParameter(const string& name, vector<float>& values);
 	// SC control name for operator index (e.g. "op_amp_1")
 	static string opParamName(const string& prefix, int opIdx);
