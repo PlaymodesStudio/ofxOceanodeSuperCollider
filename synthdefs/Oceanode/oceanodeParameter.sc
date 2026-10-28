@@ -13,7 +13,8 @@ OceanodeGlobalPitch {
 		var p = A2K.kr(cable).asArray;
 		var r = p.round, low = r < gg[17];
 		var on = (low * gg[30]) + ((1 - low) * gg[1]);
-		var q = Select.kr(on > 0.5, [p, r + Select.kr(r.mod(12) + (low * 12), gg[2..13] ++ gg[18..29])]);
+		// the scale moves a note by its nearest semitone's offset; the note keeps its fraction
+		var q = p + (on * Select.kr(r.mod(12) + (low * 12), gg[2..13] ++ gg[18..29]));
 		var w = gg[16] + (((q - gg[16]) / 12).floor * 12);
 		var t = q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor);
 		var note = (t + (gg[14] * 0.01 * ({ Rand(-1, 1) } ! p.size))).clip(min, max);
