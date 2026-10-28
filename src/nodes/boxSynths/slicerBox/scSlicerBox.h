@@ -34,6 +34,7 @@
 #include "../../../scNode.h"
 #include "../../../ui/scTimelineMenu.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scBoxMacroMorph.h"
 #include "../../../ui/scDropdowns.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -93,6 +94,15 @@ public:
     void loadBeforeConnections(ofJson& json) override;
     void presetRecallBeforeSettingParameters(ofJson& json) override;
     void presetRecallAfterSettingParameters(ofJson& json) override;
+    // MacroMixer: the sound (the window's controls, saved as their own keys or,
+    // published, as parameters) blends through the snapshot morph (applySound)
+    // when the target plays the same file; otherwise MacroMixer replaces the node.
+    MorphKeys morphKeys() const override;
+    MorphHint morphHint(const ofxOceanodeAbstractParameter& p) const override;
+    bool morphCheck(const ofJson& target, std::string& reason) const override;
+    bool morphBegin(const ofJson& target, std::string& reason) override;
+    void morphApply(float t, bool switched) override { macroMorph.apply(snaps, t, switched); }
+    void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
 
     // The audio of a file, decoded on a worker thread
     struct Audio {
@@ -308,6 +318,8 @@ private:
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> publishedHandles;
     scSnapshots snaps;                    // the shared snapshots: library, morph, presets
     ofJson initial;                       // the sound at setup (the factory's base)
+    scBoxMacroMorph macroMorph;           // a MacroMixer morph: the start, the arrival
+    ofJson snapshotOf(const ofJson& saved) const;   // a saved patch as a snapshot
     ofJson captureSound() const;
     void applySound(const ofJson& a, const ofJson& b, float t, bool sw);
     std::vector<ofJson> factorySounds() const;

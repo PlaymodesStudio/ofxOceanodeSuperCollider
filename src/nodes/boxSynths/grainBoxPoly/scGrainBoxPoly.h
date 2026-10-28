@@ -52,6 +52,7 @@
 #include "../shared/scAudioParam.h"
 #include "../../../timing/scScheduledInputs.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scBoxMacroMorph.h"
 #include "../../../ui/scDropdowns.h"
 #include <vector>
 #include <string>
@@ -112,6 +113,14 @@ public:
     void presetRecallAfterSettingParameters(ofJson& j)  override;
     void loadBeforeConnections(ofJson& j)               override;
     void presetHasLoaded()                              override;
+
+    // ── MacroMixer: a saved sound blends on the running synths ────────────────
+    MorphKeys morphKeys() const override;
+    MorphHint morphHint(const ofxOceanodeAbstractParameter& p) const override;
+    bool morphCheck(const ofJson& target, std::string& reason) const override;
+    bool morphBegin(const ofJson& target, std::string& reason) override;
+    void morphApply(float t, bool switched) override { macroMorph.apply(snaps, t, switched); }
+    void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
 
 private:
     // ── Servers ───────────────────────────────────────────────────────────────
@@ -583,6 +592,8 @@ private:
     bool snapshotExcluded(const std::string& key) const;
     ofJson captureSnapshot() const;
     void applySnapshot(const ofJson& snap);
+    scBoxMacroMorph macroMorph;           // a MacroMixer morph: the start, the arrival
+    ofJson snapshotOf(const ofJson& saved) const;   // a saved patch as a snapshot
     // A snapshot's Pitch in each playhead's current units (Pitch Mode is not
     // recalled; snapshots from before it hold semitones)
     ofJson pitchInCurrentUnits(const ofJson& snap) const;

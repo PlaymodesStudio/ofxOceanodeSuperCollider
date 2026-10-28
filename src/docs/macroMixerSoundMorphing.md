@@ -36,10 +36,33 @@ Captured intermediate count distributions remain available when a subsequent
 sound morph starts. Cancelling restores the captured source sound through the
 same path, including its effective blend.
 
-This is the PolyComb pilot, not a conversion of every Box. The shared entry
-points can support AnalogBox and the other engines' existing activation/depth/
-mode policies when their MacroMixer adapters are added. Internal controls still
-use the existing registry and optional publication; no extra ports are required.
+## Every other Box (2026-10-29)
+
+AnalogBox, AdditiveBox, AliasingBox, DrumKitBox, EchoBox, FMBox, GrainBox,
+PhysicalBox, PulsarBox, SampleBox, SlicerBox, SteamPipeBox and WavetableBox
+have the same adapter through `shared/scBoxMacroMorph.h`: `snapshotOf()`
+converts the saved patch to the Box's snapshot format, and begin/apply/end go
+through `captureForExternalMorph` / `applyExternalMorph`. Before this only
+PolyComb had it, so any other Box whose saved sound differed was replaced by a
+crossfaded second instance, and an int Voices was interpolated step by step
+(one synth rebuild per step).
+
+- `blended` is exactly what `snapshotOf` reads. Keys the snapshot does not carry
+  (published lists, timeline, Random Shared, sample files, slice markers) stay
+  out, so a difference there still replaces the node. UI-only keys are `ignored`.
+- Voices: Boxes whose snapshots blend the count (AdditiveBox, PulsarBox,
+  WavetableBox, GrainBox, PolyComb) own it; elsewhere it is `MorphHint::Switch`
+  and MacroMixer sets it once, half way. Output channels stay Structural.
+- A different sample/file (SampleBox, DrumKitBox, SlicerBox, WavetableBox), pad
+  count, or an old preset that needs a full recall's migration fails
+  `morphCheck`, so MacroMixer replaces the node as before.
+- Flat-saved Boxes read published controls through
+  `scBoxMacroMorph::nativeValue` (Oceanode saves them as text, a one-value
+  vector as a bare number).
+
+`python3 tools/boxes/macro_morph_test.py [box ...]`: production MacroMixer and
+Boxes, ASan/UBSan, no SC server. Per Box: same node, no replacement in Details,
+Voices once, arrival, cancellation.
 
 ## Validation
 

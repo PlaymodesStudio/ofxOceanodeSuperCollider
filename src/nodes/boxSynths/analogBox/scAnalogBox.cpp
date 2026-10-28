@@ -1331,6 +1331,42 @@ void scAnalogBox::presetRecallAfterSettingParameters(ofJson& j) {
     }
 }
 
+// ── MacroMixer: a saved sound blends on the running synths ─────────────────
+ofxOceanodeNodeModel::MorphKeys scAnalogBox::morphKeys() const {
+    return {{"analogBox", "analogBoxModMatrix", "analogBoxModLfos", "analogBoxModEnvs", "analogBoxModExts",
+             "analogBoxModParams", "analogBoxModGenerators"}, {}};
+}
+
+ofxOceanodeNodeModel::MorphHint scAnalogBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key = p.getEscapedName();
+    if(key == outChannels.getEscapedName()) return MorphHint::Structural;
+    if(key == voices.getEscapedName()) return MorphHint::Switch;   // other synths: rebuilt once, half way
+    // the window; a published control blends with the rest of the sound
+    if(key == showWindow.getEscapedName() || published.count(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;
+}
+
+bool scAnalogBox::morphCheck(const ofJson& target, std::string& reason) const {
+    if(target.contains("analogBox") && target["analogBox"].is_object()) return true;
+    reason = "no saved analogBox sound";
+    return false;
+}
+
+ofJson scAnalogBox::snapshotOf(const ofJson& j) const {
+    ofJson s = ofJson::object();
+    s["controls"] = j.value("analogBox", ofJson::object());
+    if(j.contains("analogBoxModGenerators")) s["controls"]["Generators"] = j["analogBoxModGenerators"];
+    s["params"] = j.value("analogBoxModParams", ofJson::array());
+    if(j.contains("analogBoxModMatrix")) s["matrix"] = j["analogBoxModMatrix"];
+    for(const auto& [from, to] : {std::pair<const char*, const char*>{"analogBoxModLfos", "lfos"}, {"analogBoxModEnvs", "envs"}, {"analogBoxModExts", "exts"}})
+        if(j.contains(from) && j[from].is_number()) s[to] = j[from];
+    return s;
+}
+
+bool scAnalogBox::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+}
+
 void scAnalogBox::requireSynthdefs() {
     auto find = [](const std::string& expected, const std::string& bundledDir){
         std::filesystem::path folder;

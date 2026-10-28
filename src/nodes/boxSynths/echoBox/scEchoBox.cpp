@@ -770,6 +770,45 @@ void scEchoBox::presetRecallAfterSettingParameters(ofJson& j) {
     modulation.afterLoad();
 }
 
+// ── MacroMixer: a saved sound blends on the running taps ───────────────────
+ofxOceanodeNodeModel::MorphKeys scEchoBox::morphKeys() const {
+    return {{"echoBox", "echoBoxTaps", "echoBoxModMatrix", "echoBoxModLfos", "echoBoxModEnvs", "echoBoxModExts",
+             "echoBoxModParams", "echoBoxModGenerators"}, {"echoBoxMapHeight"}};
+}
+
+ofxOceanodeNodeModel::MorphHint scEchoBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key = p.getEscapedName();
+    if(key == channels.getEscapedName()) return MorphHint::Structural;
+    // the window; a published control blends with the rest of the sound
+    if(key == showWindow.getEscapedName() || published.count(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;   // Mix: MacroMixer's (the snapshot leaves it out)
+}
+
+bool scEchoBox::morphCheck(const ofJson& target, std::string& reason) const {
+    if(target.contains("echoBox") && target["echoBox"].is_object()) return true;
+    reason = "no saved echoBox sound";
+    return false;
+}
+
+// captureSnapshot's format: the controls at the top, the taps, the modulation
+ofJson scEchoBox::snapshotOf(const ofJson& j) const {
+    ofJson s = j.value("echoBox", ofJson::object());
+    if(j.contains("echoBoxTaps") && j["echoBoxTaps"].is_number()) s["taps"] = j["echoBoxTaps"];
+    if(j.contains("echoBoxModMatrix")){
+        for(const char* k : {"echoBoxModMatrix", "echoBoxModLfos", "echoBoxModEnvs", "echoBoxModExts", "echoBoxModParams", "echoBoxModGenerators"})
+            if(j.contains(k)) s[k] = j[k];
+    }else{   // presets from before modulation: nothing routed (as presetRecall)
+        s["echoBoxModMatrix"] = std::vector<float>(modulation.matrix.size(), 0.0f);
+        s["echoBoxModLfos"] = s["echoBoxModExts"] = 0;
+        s["echoBoxModParams"] = ofJson::array();
+    }
+    return s;
+}
+
+bool scEchoBox::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+}
+
 void scEchoBox::publish(const std::string& key) {
     if(published.count(key)) return;
     auto it = std::find_if(controls.begin(), controls.end(), [&](const Control& c){ return c.key == key; });

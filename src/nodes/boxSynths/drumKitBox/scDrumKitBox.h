@@ -62,6 +62,7 @@
 #include "../../../ui/scTimelineMenu.h"
 #include "../../../ui/scDropdowns.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scBoxMacroMorph.h"
 #include "ofxSCGroup.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
@@ -105,6 +106,15 @@ public:
     void loadBeforeConnections(ofJson&) override;
     void presetRecallBeforeSettingParameters(ofJson&) override;
     void presetRecallAfterSettingParameters(ofJson&) override;
+    // MacroMixer: the pieces saved in "drumKitBoxPads" blend on the running
+    // synths through the snapshot morph (applySnapshot) when the target has the
+    // same pads and samples; otherwise MacroMixer replaces the node.
+    MorphKeys morphKeys() const override;
+    MorphHint morphHint(const ofxOceanodeAbstractParameter& p) const override;
+    bool morphCheck(const ofJson& target, std::string& reason) const override;
+    bool morphBegin(const ofJson& target, std::string& reason) override;
+    void morphApply(float t, bool switched) override { macroMorph.apply(snaps, t, switched); }
+    void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
     // A kit: Gate (level = velocity) and Pitch per channel, row n = channel n,
     // each row named after its piece
@@ -325,6 +335,9 @@ private:
     scSnapshots snaps;
     ofJson initialPad;
     ofJson appliedKit;
+    bool kitBlended = false;              // the last snapshot frame was between two kits
+    scBoxMacroMorph macroMorph;           // a MacroMixer morph: the start, the arrival
+    ofJson snapshotOf(const ofJson& saved) const;   // a saved patch as a snapshot
     template<typename T> void registerNodeControl(ofParameter<T>& param);
     ofJson captureSnapshot() const;
     void applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw);

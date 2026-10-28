@@ -591,6 +591,35 @@ void scSteamPipeBox::presetRecallAfterSettingParameters(ofJson& j) {
     apply(state,state,1,true);
     restoring=true;for(const auto& c:controls) if(scSnapshots::isOwnKey(c.key)&&state.contains(c.key)) c.load(state[c.key]);restoring=false;
 }
+// ── MacroMixer: a saved sound blends on the running voices ─────────────────
+ofxOceanodeNodeModel::MorphKeys scSteamPipeBox::morphKeys() const { return {{"steampipeBox"}, {}}; }
+
+ofxOceanodeNodeModel::MorphHint scSteamPipeBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key = p.getEscapedName();
+    if(key == channels.getEscapedName()) return MorphHint::Structural;
+    if(key == voices.getEscapedName()) return MorphHint::Switch;   // other synths: rebuilt once, half way
+    // the window; a published control blends with the rest of the sound
+    if(key == show.getEscapedName() || published.count(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;
+}
+
+bool scSteamPipeBox::morphCheck(const ofJson& target, std::string& reason) const {
+    if(target.contains("steampipeBox") && target["steampipeBox"].is_object()) return true;
+    reason = "no saved steampipeBox sound";
+    return false;
+}
+
+// capture()'s format: the saved state without the snapshot controls
+ofJson scSteamPipeBox::snapshotOf(const ofJson& j) const {
+    ofJson s = j.value("steampipeBox", ofJson::object());
+    for(const auto& c : controls) if(scSnapshots::isOwnKey(c.key)) s.erase(c.key);
+    return s;
+}
+
+bool scSteamPipeBox::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+}
+
 void scSteamPipeBox::requireSynthdefs() {
     for(const auto& entry:std::vector<std::pair<std::string,std::string>>{
         {"SteamPipeBoxVoice.scsyndef","SteamPipeBox"},{"ModLfo1.scsyndef","Modulation"},{"SteamPipeBoxSpread2.scsyndef","SteamPipeBox"},{"PulseGate.scsyndef","Modulation"},{"mixerProEQ2.scsyndef","MixerPro"}}) {

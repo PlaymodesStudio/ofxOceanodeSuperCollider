@@ -1348,6 +1348,56 @@ void scSlicerBox::applySound(const ofJson& a, const ofJson& b, float t, bool sw)
     });
 }
 
+// ── MacroMixer: a saved sound blends on the running synths ─────────────────
+// The sound's keys: a control saves under its own name, published or not
+ofxOceanodeNodeModel::MorphKeys scSlicerBox::morphKeys() const {
+    MorphKeys k;
+    for(const auto& action : publishActions) if(action.save && !scSnapshots::isOwnKey(action.key)) k.blended.push_back(action.key);
+    k.ignored = {"embedSamples", "browseDir", "browserWidth", "waveHeight"};
+    return k;
+}
+
+ofxOceanodeNodeModel::MorphHint scSlicerBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key = p.getEscapedName();
+    // the window; a published control blends with the rest of the sound
+    if(key == showWindow.getEscapedName() || key == embedSamples.getEscapedName() || isPublished(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;
+}
+
+// The file stays (its markers and sequence too: not blended, so a difference splits)
+bool scSlicerBox::morphCheck(const ofJson& target, std::string& reason) const {
+    if(!target.contains("file") || !target["file"].is_string()) { reason = "no saved SlicerBox file"; return false; }
+    const std::string& loaded = !pendingDroppedFile.empty() ? pendingDroppedFile : audio.path.empty() ? pendingPath : audio.path;
+    if(scSampleEmbedding::resolve(target["file"].get<std::string>()) != loaded) { reason = "file differs"; return false; }
+    return true;
+}
+
+// A published control is saved as a parameter (text; a one-element vector as a
+// number): back to the type its action saves
+ofJson scSlicerBox::snapshotOf(const ofJson& j) const {
+    ofJson s = ofJson::object();
+    for(const auto& action : publishActions) {
+        if(!action.save || scSnapshots::isOwnKey(action.key) || !j.contains(action.key)) continue;
+        ofJson v = j[action.key], cur = ofJson::object();
+        action.save(cur);
+        const ofJson& ref = cur[action.key];
+        if(v.is_string() && !ref.is_string()) {
+            const std::string text = v.get<std::string>();
+            if(ref.is_boolean()) v = text == "1" || text == "true";
+            else if(ref.is_number_integer()) v = ofToInt(text);
+            else if(ref.is_number()) v = ofToFloat(text);
+            else continue;
+        }
+        if(ref.is_array() && v.is_number()) v = ofJson::array({v});
+        s[action.key] = v;
+    }
+    return s;
+}
+
+bool scSlicerBox::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+}
+
 // Five starting points (they leave the file's region alone)
 std::vector<ofJson> scSlicerBox::factorySounds() const {
     ofJson base = initial;

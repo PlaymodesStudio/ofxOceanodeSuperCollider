@@ -35,6 +35,7 @@
 #include "../../../ui/scTimelineMenu.h"
 #include "../../../ui/scDropdowns.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scBoxMacroMorph.h"
 #include "../../../audio/scSynthControlBatch.h"
 #include "imgui.h"
 #include <array>
@@ -78,6 +79,14 @@ public:
     void presetSave(ofJson& j) override;
     void loadBeforeConnections(ofJson& j) override;
     void presetRecallAfterSettingParameters(ofJson& j) override;
+    // MacroMixer: the sound saved in "echoBox*" blends on the running taps
+    // through the snapshot morph (applySnapshot); Mix stays MacroMixer's.
+    MorphKeys morphKeys() const override;
+    MorphHint morphHint(const ofxOceanodeAbstractParameter& p) const override;
+    bool morphCheck(const ofJson& target, std::string& reason) const override;
+    bool morphBegin(const ofJson& target, std::string& reason) override;
+    void morphApply(float t, bool switched) override { macroMorph.apply(snaps, t, switched); }
+    void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
 
 private:
     struct Tap {
@@ -163,6 +172,8 @@ private:
     scSnapshots snaps;                    // the shared snapshots: library, morph, presets
     ofJson initial;                       // the sound at setup (the factory's base)
     ofJson appliedMod;                    // the modulation a snapshot last loaded
+    scBoxMacroMorph macroMorph;           // a MacroMixer morph: the start, the arrival
+    ofJson snapshotOf(const ofJson& saved) const;   // a saved patch as a snapshot
     ofJson captureSnapshot() const;
     void applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw);
     std::vector<ofJson> factorySnapshots() const;

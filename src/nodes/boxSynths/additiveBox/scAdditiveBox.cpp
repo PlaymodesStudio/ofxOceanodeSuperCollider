@@ -2386,6 +2386,56 @@ void scAdditiveBox::presetRecallAfterSettingParameters(ofJson& json){
     mod.afterLoad();
 }
 
+// ── MacroMixer: a saved sound blends on the running synths ─────────────────
+namespace {
+const char* additiveModKeys[] = {"additiveBoxModMatrix", "additiveBoxModLfos", "additiveBoxModEnvs",
+                                 "additiveBoxModExts", "additiveBoxModParams", "additiveBoxModGenerators"};
+}
+
+ofxOceanodeNodeModel::MorphKeys scAdditiveBox::morphKeys() const {
+    MorphKeys k;
+    k.blended.push_back(numVoices.getEscapedName());
+    for(const auto& action : publishActions){
+        if(!action.save) continue;
+        if(scSnapshots::isOwnKey(action.key)) k.ignored.push_back(action.key);   // the snapshot controls
+        else if(!notInPresets(action.key)) k.blended.push_back(action.key);
+    }
+    for(const char* key : additiveModKeys) k.blended.push_back(key);
+    k.ignored.push_back("viewHeight");
+    k.ignored.push_back("bankPreset");
+    return k;
+}
+
+ofxOceanodeNodeModel::MorphHint scAdditiveBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key = p.getEscapedName();
+    if(key == numOutputs.getEscapedName()) return MorphHint::Structural;
+    // Voices fades its voices in the sound; the window; a published control blends with the rest
+    if(key == numVoices.getEscapedName() || key == showWindow.getEscapedName() || isPublished(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;
+}
+
+bool scAdditiveBox::morphCheck(const ofJson& target, std::string& reason) const {
+    // older presets migrate their envelope / LFOs on a full recall only
+    if(target.contains("additiveBoxModMatrix") && target["additiveBoxModMatrix"].is_array()) return true;
+    reason = "no saved additiveBox modulation (older preset)";
+    return false;
+}
+
+// the saved keys are the sound's keys (captureSound)
+ofJson scAdditiveBox::snapshotOf(const ofJson& j) const {
+    ofJson s = ofJson::object();
+    if(j.contains(numVoices.getEscapedName())) s["Voices"] = scBoxMacroMorph::nativeValue(numVoices, j[numVoices.getEscapedName()]);
+    for(const auto& action : publishActions)
+        if(action.save && !notInPresets(action.key) && j.contains(action.key))
+            s[action.key] = action.param ? scBoxMacroMorph::nativeValue(*action.param, j[action.key]) : j[action.key];
+    for(const char* key : additiveModKeys) if(j.contains(key)) s[key] = j[key];
+    return s;
+}
+
+bool scAdditiveBox::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+}
+
 // An envelope routed to Level: it is the voices' VCA (the core's \vca)
 bool scAdditiveBox::levelEnvelope() const {
     for(int e = 0; e < mod.envCount; e++)

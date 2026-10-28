@@ -232,7 +232,9 @@ ofJson scSampleBox::captureSnapshot() const {
 void scSampleBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw) {
     if(!a.is_object() || !b.is_object()) return;
     const ofJson& side = sw ? b : a;
-    if(side.contains("pads") && side["pads"].is_array() && side["pads"] != appliedKit) {
+    // an endpoint after blended frames: its numbers again (the kit itself was loaded at the switch)
+    const bool endpoint = t <= 0.0f || t >= 1.0f;
+    if(side.contains("pads") && side["pads"].is_array() && (side["pads"] != appliedKit || (endpoint && kitBlended))) {
         appliedKit = side["pads"];
         const ofJson& arr = side["pads"];
         if(!side.value("allPads", false)) {   // a kit: as many pads as it has
@@ -251,7 +253,8 @@ void scSampleBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool 
         sendMutes();
         selected = std::clamp(selected, 0, (int)pads.size() - 1);
     }
-    if(t <= 0.0f || t >= 1.0f) return;
+    kitBlended = !endpoint;
+    if(endpoint) return;
     auto controlsOf = [](const ofJson& s, int k) -> const ofJson* {
         if(!s.contains("pads") || !s["pads"].is_array() || s["pads"].empty()) return nullptr;
         const ofJson& ps = s["pads"][std::min<size_t>(k, s["pads"].size() - 1)];
@@ -1529,6 +1532,44 @@ void scSampleBox::presetRecallAfterSettingParameters(ofJson& j) {
     if(j.contains("sampleBoxBrowseDir") && j["sampleBoxBrowseDir"].is_string())
         browser.refresh(j["sampleBoxBrowseDir"].get<std::string>());
     if(j.contains("sampleBoxSnapshots")) snaps.loadSettings(j["sampleBoxSnapshots"]);
+}
+
+// ── MacroMixer: a saved kit blends on the running synths ───────────────────
+ofxOceanodeNodeModel::MorphKeys scSampleBox::morphKeys() const {
+    return {{"sampleBoxPads"}, {"embedSamples", "sampleBoxSelected", "sampleBoxBrowseDir", "sampleBoxBrowserWidth", "sampleBoxWaveformHeight"}};
+}
+
+ofxOceanodeNodeModel::MorphHint scSampleBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key = p.getEscapedName();
+    if(key == channels.getEscapedName()) return MorphHint::Structural;
+    // the window; a published control blends with the rest of the kit
+    if(key == showWindow.getEscapedName() || key == embedSamples.getEscapedName() || published.count(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;
+}
+
+// The pads and their samples stay: a kit with others is a new node
+bool scSampleBox::morphCheck(const ofJson& target, std::string& reason) const {
+    if(!target.contains("sampleBoxPads") || !target["sampleBoxPads"].is_array()) { reason = "no saved sampleBox pads"; return false; }
+    const ofJson& arr = target["sampleBoxPads"];
+    if(arr.size() != pads.size()) { reason = "pad count differs"; return false; }
+    for(size_t k = 0; k < arr.size(); k++) {
+        const Sample& s = *pads[k]->sample;
+        const std::string& loaded = !s.pendingFile.empty() ? s.pendingFile : !s.decodingPath.empty() ? s.decodingPath : s.path;
+        if(!arr[k].is_object() || scSampleEmbedding::resolve(arr[k].value("path", std::string())) != loaded) {
+            reason = "pad " + ofToString(k + 1) + " sample differs"; return false;
+        }
+    }
+    return true;
+}
+
+ofJson scSampleBox::snapshotOf(const ofJson& j) const {
+    ofJson arr = j.value("sampleBoxPads", ofJson::array());
+    for(auto& pad : arr) pad["path"] = scSampleEmbedding::resolve(pad.value("path", std::string()));
+    return {{"pads", arr}};
+}
+
+bool scSampleBox::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
