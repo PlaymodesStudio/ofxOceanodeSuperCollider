@@ -94,7 +94,7 @@ warp = { |p, mode, amt, weights|
 voices = { |n, twoD, live|
     var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
     var gt = gg[14] * 0.01 * ({ Rand(-1, 1) } ! n);   // each voice's detune (the transpose is in gq)
-    var gq = { |p| var r = p.round, q = Select.kr((((r < gg[17]) * gg[30]) + ((r >= gg[17]) * gg[1])) > 0.5, [p, r + Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])]), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
+    var gq = { |p| var r = p.round, q = p + (((((r < gg[17]) * gg[30]) + ((r >= gg[17]) * gg[1])) > 0.5) * Select.kr(r.mod(12) + ((r < gg[17]) * 12), gg[2..13] ++ gg[18..29])), w = gg[16] + (((q - gg[16]) / 12).floor * 12); q + gg[0] - (gg[15] * 12 * ((q + gg[0] - w) / 12).floor) };
     var c = (
         buf: \buf.kr(-1), cycles: \cycles.kr(1),
         bbuf: \bbuf.kr(-1), bcycles: \bcycles.kr(1),
