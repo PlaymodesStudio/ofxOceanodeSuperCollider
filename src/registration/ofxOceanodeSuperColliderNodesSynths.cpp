@@ -38,7 +38,7 @@ void registerSynthNodes(ofxOceanode &o){
 	o.registerModel<scFM7Drone>("SuperCollider/Generators");
 	o.registerModel<scFMBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scDynGenNode>("SuperCollider/Generators");
-	o.registerModel<pinkTromboneNode>("SuperCollider/Generators");
+	o.registerModel<pinkTromboneNode>("SuperCollider/Generators", ofxOceanodeNodeRegistrationFlags::Sink);
 	o.registerModel<scGrainBoxPoly>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scSampleBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scSlicerBox>("SuperCollider/boxSynths", controller->getServers());
