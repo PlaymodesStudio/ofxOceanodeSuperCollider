@@ -443,9 +443,10 @@ void scDrumKitBox::drawPadList(float w, float h) {
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Play this pad");
         ImGui::SameLine(0, 3 * z);
         auto flag = [&](ofParameter<bool>& f, const char* text, ImU32 on) {
-            if(f.get()) ImGui::PushStyleColor(ImGuiCol_Button, on);
+            const bool lit = f.get();   // the colour pushed must be the one popped, whatever the click does
+            if(lit) ImGui::PushStyleColor(ImGuiCol_Button, on);
             if(ImGui::Button(text, ImVec2(btn, btn))) f = !f.get();
-            if(f.get()) ImGui::PopStyleColor();
+            if(lit) ImGui::PopStyleColor();
             drawPublishMenu(f.getEscapedName());
         };
         flag(p.B("Mute"), "M", IM_COL32(190, 90, 70, 255));
@@ -906,9 +907,10 @@ void scDrumKitBox::drawStrip(Pad& p, float w, float h) {
     }
     ImGui::SetCursorScreenPos(ImVec2(a.x + 4 * z, faderTop + faderH + 6 * z));
     auto flag = [&](ofParameter<bool>& f, const char* text, ImU32 col, float bw) {
-        if(f.get()) ImGui::PushStyleColor(ImGuiCol_Button, col);
+        const bool lit = f.get();   // the colour pushed must be the one popped, whatever the click does
+        if(lit) ImGui::PushStyleColor(ImGuiCol_Button, col);
         if(ImGui::Button(text, ImVec2(bw, 0))) f = !f.get();
-        if(f.get()) ImGui::PopStyleColor();
+        if(lit) ImGui::PopStyleColor();
         drawPublishMenu(f.getEscapedName());
     };
     const float half = (iw - 4 * z) * 0.5f;
