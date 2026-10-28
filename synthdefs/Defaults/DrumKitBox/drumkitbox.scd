@@ -14,12 +14,16 @@
 //                       5 level           the latest hit's level (velocity)
 //                       6 pitch           semitones from 60, + Tune (live)
 //                       7 gate            the gate (held), for Gated pieces
-//                       8 duration        the latest hit's Duration: a multiplier
+//                       8 duration        the latest hit's Duration (held from the hit): a multiplier
 //                                         of the layers' hold and decay (\dur, per
 //                                         hit: a closed hat stretched open)
 //                       9 filter          the latest hit's Filter (\filt, per hit):
 //                                         -1 low-pass closed .. 0 open .. +1
 //                                         high-pass closed (DKVoice's step filter)
+//                     Stutter: while a hit's gate is open, it retriggers at
+//                     the frequency of \stut (a MIDI note per hit, 0 off), each
+//                     retrigger Stutter Step semitones up, wrapping every
+//                     Stutter Cycle (scRhythmBox's ARP in pitch mode).
 //                     and the modulation's gate / velocity / random sources.
 //   the piece's modulation   (synthdefs/Defaults/Modulation, 1 voice)
 //   its layers, each created only while on, summed into the raw bus
@@ -91,7 +95,7 @@ layer = { |name, func| [false, true].do { |poly|
 // ── DKTrig ──────────────────────────────────────────────────────────────────
 SynthDef(\DKTrig, {
     var trigBus, audioGate, audioEdge, fire, hit, level, gate, count, turn, pitch;
-    var chokeBlock, slot, cut, cutHit, kHit, dur, filt;
+    var chokeBlock, slot, cut, cutHit, kHit, dur, filt, stut, stutIdx, stutHit, allHit;
     var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);   // Global Pitch (scGlobalPitch.h)
     // Global Pitch's quantize / transpose / wrap at audio rate: a pitch sent
     // with its hit must be there at the hit's sample (K2A would ramp to it)
@@ -113,9 +117,15 @@ SynthDef(\DKTrig, {
     level = Latch.ar(Select.ar(audioEdge, [\gate.ar(0), audioGate]), hit);
     level = Select.ar(level > 0, [DC.ar(1), level]);
     gate = ((\gate.ar(0) > 0) + (audioGate > 0)) > 0;
-    count = PulseCount.ar(hit);
+    // Stutter (\stut is audio rate: sent with the hit, there at its sample)
+    stut = Latch.ar(\stut.ar(0).clip(0, 127), hit);
+    stutIdx = Sweep.ar(hit, stut.midicps * (stut > 0)).floor;
+    stutHit = (HPZ1.ar(stutIdx) > 0) * (stut > 0) * gate;
+    allHit = (hit + stutHit) > 0;
+    count = PulseCount.ar(allHit);
     turn = (count - 1) % 4;
-    pitch = gq.(\pitch.ar(60)) - 60 + \tune.kr(0) + (gg[14] * 0.01 * Rand(-1, 1));
+    pitch = gq.(\pitch.ar(60)) - 60 + \tune.kr(0) + (gg[14] * 0.01 * Rand(-1, 1))
+        + ((stutIdx % \stutcycle.kr(4).round.clip(1, 64)) * \stutstep.kr(0) * (stut > 0));
 
     // Choke groups: every piece writes its hits to its slot of \chokeblock;
     // a hit of a piece in this one's group (\chokemask) cuts it
@@ -131,7 +141,7 @@ SynthDef(\DKTrig, {
     dur = Latch.ar(\dur.ar(1).clip(0.05, 24), hit);
     dur = Select.ar(dur > 0, [DC.ar(1), dur]);
     filt = Latch.ar(\filt.ar(0).clip(-1, 1), hit);
-    Out.ar(\hitbus.kr(0), 4.collect { |k| hit * ((turn - k).abs < 0.5) } ++ [cutHit, level, pitch, gate, dur, filt]);
+    Out.ar(\hitbus.kr(0), 4.collect { |k| allHit * ((turn - k).abs < 0.5) } ++ [cutHit, level, pitch, gate, dur, filt]);
     // the modulation's sources: its envelopes follow the gate (a bare hit
     // opens it for 20 ms), Velocity, a Random per hit
     Out.ar(\gatebus.kr(0), Trig1.ar(hit, 0.02).max(gate) * level);
@@ -154,7 +164,7 @@ layer.(\DKBody, { |poly|
         var p, level, amp, sw, bend, freq, ph, fmEnv, pm, x, shape, osc, mode2, g, dec, hold, dur;
         p = Latch.ar(h[kPitch], hit) + modOf.(0);
         level = Latch.ar(h[kLevel], hit);
-        dur = Latch.ar(h[kDur], hit);
+        dur = A2K.kr(h[kDur]);   // control rate: EnvGen sticks on audio-rate times under fast retriggers
         hold = \bodyhold.kr(0) * dur;
         dec = \bodydecay.kr(0.45) * decayK * dur;
         amp = envAHD.(hit, \bodyatk.kr(0.0005), hold, dec, \bodycurve.kr(-5));
@@ -214,7 +224,7 @@ layer.(\DKNoise, { |poly|
         var fenv, cut, rq, filters, x, w, dur;
         level = Latch.ar(h[kLevel], hit);
         pitch = Latch.ar(h[kPitch], hit);
-        dur = Latch.ar(h[kDur], hit);
+        dur = A2K.kr(h[kDur]);   // control rate: EnvGen sticks on audio-rate times under fast retriggers
         colour = \noisecolor.kr(0).clip(0, 2);
         noise = 2.collect { SelectX.ar(colour, [WhiteNoise.ar, PinkNoise.ar * 2, BrownNoise.ar * 2.5]) };
         w = \noisewidth.kr(0).clip(0, 1);
@@ -250,7 +260,7 @@ layer.(\DKMetal, { |poly|
         var level, pitch, base, ratios, freqs, sq, src, tone, rq, bp, c, x, env, dur;
         level = Latch.ar(h[kLevel], hit);
         pitch = Latch.ar(h[kPitch], hit) + modOf.(0);
-        dur = Latch.ar(h[kDur], hit);
+        dur = A2K.kr(h[kDur]);   // control rate: EnvGen sticks on audio-rate times under fast retriggers
         base = \metalfreq.kr(420) * (2 ** (pitch * \metaltrack.kr(1) / 12));
         ratios = [1, 1.4471, 1.617, 1.9265, 2.5028, 2.6637];
         freqs = (base * (1 + ((ratios - 1) * \inharm.kr(1).clip(0, 3)))).clip(1, 20000);
@@ -290,7 +300,7 @@ layer.(\DKMetal, { |poly|
             pos = Sweep.ar(hit, rate * SampleRate.ir);
             frame = Select.ar(K2A.ar(\smpreverse.kr(0) > 0.5), [st + pos, en - 1 - pos]).clip(0, frames - 1);
             edge = ((len - pos) / (rate * SampleRate.ir * 0.004).max(1)).clip(0, 1);
-            dur = Latch.ar(h[kDur], hit);
+            dur = A2K.kr(h[kDur]);   // control rate: EnvGen sticks on audio-rate times under fast retriggers
             dec = \smpdecay.kr(10);
             env = Select.ar(K2A.ar(dec >= 9.99), [
                 envAHD.(hit, \smpatk.kr(0.0002), \smphold.kr(0) * dur, dec * decayK * dur, \smpcurve.kr(-4)),

@@ -119,7 +119,9 @@ void scDrumKitBox::setup() {
     noteInputs.add(pitchIn.handle, pitch);
     filterHandle = addParameter(filter.set("Filter", {0.0f}, {-1.0f}, {1.0f}));
     noteInputs.add(durationHandle, duration);
+    stutterHandle = addParameter(stutter.set("Stutter", {0.0f}, {0.0f}, {127.0f}));
     noteInputs.add(filterHandle, filter);
+    noteInputs.add(stutterHandle, stutter);
     noteInputs.enable(this, [this](){
         for(auto& p : pads) for(auto& [srv, sc] : p->sc) if(sc.trig) return true;
         return false;
@@ -158,6 +160,10 @@ void scDrumKitBox::setup() {
         for(auto& p : pads) sendChannelInputs(*p, true);
     }));
     nodeListeners.push(duration.newListener([this](std::vector<float>&) {
+        if(scScheduling::isBackendSendSuppressed()) return;
+        for(auto& p : pads) sendChannelInputs(*p, true);
+    }));
+    nodeListeners.push(stutter.newListener([this](std::vector<float>&) {
         if(scScheduling::isBackendSendSuppressed()) return;
         for(auto& p : pads) sendChannelInputs(*p, true);
     }));
@@ -732,7 +738,11 @@ void scDrumKitBox::sendTrig(ofxSCServer* srv, Pad& p, bool includeNotes) {
     c.set("velbus", p.mod.sourceBus(srv, scModulation::SRC_VEL));
     c.set("rndbus", p.mod.sourceBus(srv, scModulation::SRC_RND));
     c.set("vis", sc.vis ? sc.vis->index : -1);
-    c.set("tune", p.F("Tune").get());
+    for(const auto& spec : specs()) {
+        if(spec.dest != DEST_TRIG || !spec.sc[0]) continue;
+        if(spec.type == 'f') c.set(spec.sc, p.F(spec.label).get());
+        else if(spec.type == 'i') c.set(spec.sc, p.I(spec.label).get());
+    }
     c.set("gtrbus", (float)scGlobalPitch::bus(this, srv));
     auto n = nodeSC.find(srv);
     c.set("chokeblock", n != nodeSC.end() && n->second.choke ? n->second.choke->index : -1);
@@ -748,6 +758,7 @@ void scDrumKitBox::sendTrig(ofxSCServer* srv, Pad& p, bool includeNotes) {
         if(pb < 0) c.set("pitch", valueFor(pitch.get(), ch, 60.0f));
         c.set("dur", valueFor(duration.get(), ch, 1.0f));
         c.set("filt", valueFor(filter.get(), ch, 0.0f));
+        c.set("stut", valueFor(stutter.get(), ch, 0.0f));
         if(!p.auditionHeld) c.set("gate", ch < (int)gate.get().size() ? gate.get()[ch] : 0.0f);
         c.send();
         if(pb >= 0) s->mapan("pitch", pb + ch, 1);
@@ -881,6 +892,7 @@ bool scDrumKitBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
     out.pitch = pitchIn.handle.get();
     out.duration = durationHandle.get();
     out.filter = filterHandle.get();
+    out.stutter = stutterHandle.get();
     out.velocity = nullptr;
     out.kit = true;
     out.voices = 1;
@@ -920,6 +932,7 @@ void scDrumKitBox::sendChannelInputs(Pad& p, bool pitchOnly) {
         if(pb >= 0) s->mapan("pitch", pb + ch, 1); else s->set("pitch", valueFor(pitch.get(), ch, 60.0f));
         s->set("dur", valueFor(duration.get(), ch, 1.0f));
         s->set("filt", valueFor(filter.get(), ch, 0.0f));
+        s->set("stut", valueFor(stutter.get(), ch, 0.0f));
         if(!pitchOnly && !p.auditionHeld) s->set("gate", ch < (int)gate.get().size() ? gate.get()[ch] : 0.0f);
     }
 }

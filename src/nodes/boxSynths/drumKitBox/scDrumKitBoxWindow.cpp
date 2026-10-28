@@ -250,11 +250,10 @@ void scDrumKitBox::drawSection(Pad& p, const char* section, float w) {
 void scDrumKitBox::playButton(Pad& p, const char* id, ImVec2 size) {
     ImGui::Button(id, size);
     if(ImGui::IsItemActivated()) {
-        // a Gated pad sounds while the button is held
-        if(p.B("Gated").get()) {
-            p.auditionHeld = true;
-            for(auto& [srv, sc] : p.sc) if(sc.trig) sc.trig->set("gate", 1.0f);
-        }
+        // the gate stays open while the button is held (a Gated pad sounds,
+        // a stuttering one buzzes, until it is released)
+        p.auditionHeld = true;
+        for(auto& [srv, sc] : p.sc) if(sc.trig) sc.trig->set("gate", 1.0f);
         fire(p);
     }
     if(ImGui::IsItemDeactivated() && p.auditionHeld) { p.auditionHeld = false; sendChannelInputs(p); }

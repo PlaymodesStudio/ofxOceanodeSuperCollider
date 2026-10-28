@@ -14,6 +14,7 @@ pieces = [
     [\ohatmono, [[\DKMetal, [\metaldecay, 0.4, \metalcurve, -3]]], []],
     [\ohatpoly, [[\DKMetalP, [\metaldecay, 0.4, \metalcurve, -3]]], []],
     [\hatfilt, [[\DKNoise, [\noisefilter, 0, \noisecut, 18000, \noisedecay, 0.2, \noiselevel, -6]]], []],
+    [\stutter, [[\DKBody, [\bodyfreq, 52, \sweep, 0, \bodydecay, 0.4, \bodycurve, -2]]], []],
     [\clap, [[\DKNoise, [\bursts, 4, \burstspace, 0.011, \noisefilter, 1, \noisecut, 1300, \noisereso, 0.3, \noisedecay, 0.25]]], []],
     [\tom, [[\DKBody, [\bodyfreq, 110, \sweep, 7, \bodydecay, 0.35, \m2level, 0.3]], [\DKClick, [\clicktype, 3, \clicktone, 2500, \clicklevel, -12]]], []],
     [\cowbell, [[\DKMetal, [\metalmode, 1, \metalfreq, 540, \inharm, 0.35, \metaltone, 2600, \metalhp, 400, \metaldecay, 0.25, \metalcolor, 0.6]]], []],
@@ -62,8 +63,8 @@ pieces.do { |piece|
     };
     score = score.add([1.1, [\n_set, 1000, \gate, 0.5, \fire, 2]]);
     score = score.add([1.15, [\n_set, 1000, \gate, 0]]);
-    score = score.add([2.1, if(name == \hatfilt, { [\n_set, 1000, \filt, -0.8, \gate, 1, \fire, 3] }, { nil }) ?? if(name == \hatdur, { [\n_set, 1000, \dur, 4, \gate, 1, \fire, 3] }, { [\n_set, 1000, \pitch, 67, \gate, 1, \fire, 3] })]);
-    score = score.add([2.15, [\n_set, 1000, \gate, 0]]);
+    score = score.add([2.1, if(name == \stutter, { [\n_set, 1000, \stut, 60, \gate, 1, \fire, 3] }, { nil }) ?? if(name == \hatfilt, { [\n_set, 1000, \filt, -0.8, \gate, 1, \fire, 3] }, { nil }) ?? if(name == \hatdur, { [\n_set, 1000, \dur, 4, \gate, 1, \fire, 3] }, { [\n_set, 1000, \pitch, 67, \gate, 1, \fire, 3] })]);
+    score = score.add([if(name == \stutter, 2.5, 2.15), [\n_set, 1000, \gate, 0]]);
     score = score.add([3.0, [\c_set, 0, 0]]);
     path = outDir +/+ (name ++ ".wav");
     Score(score).recordNRT(nil, path, sampleRate: 48000, headerFormat: "WAV", sampleFormat: "float",

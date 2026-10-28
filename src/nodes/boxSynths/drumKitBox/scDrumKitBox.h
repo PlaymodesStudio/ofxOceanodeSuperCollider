@@ -254,7 +254,9 @@ private:
     ofParameter<std::vector<float>> duration;
     // per channel: each hit's LP / HP (-1 low-pass closed .. 0 open .. +1 high-pass closed)
     ofParameter<std::vector<float>> filter;
-    std::shared_ptr<ofxOceanodeAbstractParameter> gateHandle, durationHandle, filterHandle;
+    // per channel: each hit's stutter, a retrigger rate as a MIDI note while its gate is open (0: off)
+    ofParameter<std::vector<float>> stutter;
+    std::shared_ptr<ofxOceanodeAbstractParameter> gateHandle, durationHandle, filterHandle, stutterHandle;
     scScheduledInputs noteInputs;
     ofParameter<float> gain;
     ofParameter<int> channels;                     // N Chan

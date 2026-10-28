@@ -38,7 +38,7 @@ def main():
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
     failures = 0
     polyTails = {}
-    names = ["kick", "snare", "hat", "hatdur", "ohatmono", "ohatpoly", "hatfilt", "clap", "tom", "cowbell", "zap"]
+    names = ["kick", "snare", "hat", "hatdur", "ohatmono", "ohatpoly", "hatfilt", "stutter", "clap", "tom", "cowbell", "zap"]
     for name in names:
         path = os.path.join(out, name + ".wav")
         if not os.path.exists(path):
@@ -58,12 +58,19 @@ def main():
         c1, c3 = centroid(hits[0]), centroid(hits[2])
         ok = np.isfinite(a).all() and pre < 1e-6 and min(peaks) > 0.02 and max(peaks) < 2.0 \
             and peaks[1] < peaks[0] and max(tails) < 0.05 \
-            and (name not in ("kick", "tom") or c3 > c1 * 1.3)   # +7 st retunes the body
+            and (name not in ("kick", "tom") or c3 > c1 * 1.3) and (name != "stutter" or True)   # +7 st retunes the body
         if name in ("ohatmono", "ohatpoly"):
             polyTails[name] = float(np.sqrt(np.mean(hits[0][int(0.1 * sr):int(0.3 * sr)] ** 2)))
             ok = np.isfinite(a).all() and pre < 1e-6
             if name == "ohatpoly":   # two hits 30 ms apart: poly rings both (louder tail), mono the last one
                 ok = ok and polyTails["ohatpoly"] > 1.4 * polyTails["ohatmono"]
+        if name == "stutter":   # Stutter C4 on hit 3 (gate open 0.4 s): retriggered at ~262 Hz
+            x = hits[2][int(0.1 * sr):int(0.35 * sr)] * np.hanning(int(0.35 * sr) - int(0.1 * sr))
+            spec = np.abs(np.fft.rfft(x, 8 * len(x))); fr = np.fft.rfftfreq(8 * len(x), 1 / sr)
+            band = (fr > 150) & (fr < 1200)
+            f0 = float(fr[band][np.argmax(spec[band])])
+            ok = ok and abs(f0 / 261.6 - round(f0 / 261.6)) < 0.04 and round(f0 / 261.6) >= 1
+            print(f"     stutter peak {f0:.0f} Hz")
         if name == "hatfilt":   # Filter -0.8 on hit 3: low-passed, far darker than hit 1
             ok = ok and c3 < c1 * 0.3
         if name == "hatdur":   # Duration x4 on hit 3: it rings far longer than hit 1
