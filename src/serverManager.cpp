@@ -137,6 +137,7 @@ void serverManager::setup(){
     listeners.push(server->serverBootedEvent.newListener([this](){
         clearFoldedWaveforms(true);
         foldedWaveformDefAttempted = foldedWaveformDefLoaded = false;
+        glideSynth.reset();   // its node went with the previous server: nothing to free
         initialized = false;
         initialize();
     }));
@@ -182,10 +183,32 @@ void serverManager::setup(){
 
 // Global Transpose / Scale: the control buses the pitched Boxes read (scGlobalPitch.h).
 // Like busFromSilent they live as long as the server's allocator, never freed.
+// Once the server is initialized (its Defaults loaded), the values go through
+// GlobalPitchGlide when that SynthDef is installed: written into a hidden
+// block, glided into the one the Boxes read. It runs at the head of the root
+// group, so a preset load (which frees group 1) leaves it running and it runs
+// before every synth reading the values.
 void serverManager::allocateTransposeBus(){
+    const int size = scGlobalPitch::NumBlocks * scGlobalPitch::BlockSize;
+    if(glideSynth != nullptr && initialized) glideSynth->free();   // a previous one on this same server
+    glideSynth.reset();
+    glideSourceBus.reset();
     transposeBus.reset();
-    transposeBus = std::make_unique<ofxSCBus>(RATE_CONTROL, scGlobalPitch::NumBlocks * scGlobalPitch::BlockSize, server);
-    scGlobalPitch::setServerBus(server, transposeBus->index);
+    transposeBus = std::make_unique<ofxSCBus>(RATE_CONTROL, size, server);
+    const std::string glideDef = ofToDataPath(std::string(SYNTHDEF_DIRECTORY) + "/Defaults/Core/GlobalPitchGlide.scsyndef", true);
+    if(!initialized || !ofFile::doesFileExist(glideDef)){
+        scGlobalPitch::setServerBus(server, transposeBus->index);
+        return;
+    }
+    glideSourceBus = std::make_unique<ofxSCBus>(RATE_CONTROL, size, server);
+    // The source holds the values before the synth starts, so its glide starts there
+    scGlobalPitch::setServerBus(server, transposeBus->index, glideSourceBus->index);
+    glideSynth = std::make_unique<ofxSCSynth>("GlobalPitchGlide", server);
+    glideSynth->set("in", glideSourceBus->index);
+    glideSynth->set("out", transposeBus->index);
+    glideSynth->set("glide", scGlobalPitch::glide());
+    glideSynth->create(0, 0);   // head of the root group
+    scGlobalPitch::setServerBus(server, transposeBus->index, glideSourceBus->index, glideSynth->nodeID);
 }
 
 void serverManager::draw(){

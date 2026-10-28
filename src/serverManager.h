@@ -242,6 +242,10 @@ private:
     
     std::unique_ptr<ofxSCBus> busFromSilent;
     std::unique_ptr<ofxSCBus> transposeBus;   // Global Transpose / Scale (scGlobalPitch.h)
+    // Global Pitch glide: the hidden block the values are written to, and the
+    // GlobalPitchGlide synth copying it into transposeBus (scGlobalPitch.h)
+    std::unique_ptr<ofxSCBus> glideSourceBus;
+    std::unique_ptr<ofxSCSynth> glideSynth;
     void allocateTransposeBus();
     
     float volume;

@@ -28,6 +28,13 @@
 //  so Oceanode values, Pitch cables and piano-roll notes all follow, and held
 //  notes move with them.
 //
+//  Glide: when the server runs GlobalPitchGlide (Defaults/Core/globalPitchGlide.scd,
+//  started by serverManager at the head of the root group), the values are
+//  written into a second, hidden block instead, and that synth copies them into
+//  the block the synths read, gliding the transpose and the scale offsets over
+//  Glide seconds; a held note slides to its new pitch. Without it they are
+//  written straight into the block the synths read (no glide).
+//
 //    setup():      scGlobalPitch::follow(this, true, [this]{ resend gtrbus to the live synths });
 //    destructor:   scGlobalPitch::unfollow(this);
 //    each synth:   s->set("gtrbus", scGlobalPitch::bus(this, server));
@@ -52,13 +59,16 @@ public:
                                            //  split note, 12 low-scale offsets, low scale on]
     static constexpr int NumBlocks = 8;    // by what a destination follows: bit 0 Transpose, bit 1 Scale, bit 2 Detune
 
-    // serverManager: the first of the server's NumBlocks * BlockSize buses (-1 when it has none)
-    static void setServerBus(ofxSCServer* server, int index) {
-        static const bool listening = [](){ onValuesChanged([](){ for(auto& [s, i] : buses()) sendValues(s, i); }); return true; }();
+    // serverManager: the first of the server's NumBlocks * BlockSize buses the
+    // synths read (-1 when it has none); with a glide, the first of the hidden
+    // block the values are written to and the GlobalPitchGlide node copying it
+    static void setServerBus(ofxSCServer* server, int index, int glideSource = -1, int glideNode = -1) {
+        static const bool listening = [](){ onValuesChanged([](){ for(auto& [s, b] : buses()) sendValues(s, b); }); return true; }();
         (void)listening;
         if(index < 0) { buses().erase(server); return; }
-        buses()[server] = index;
-        sendValues(server, index);
+        Buses b{index, glideSource >= 0 ? glideSource : index, glideNode};
+        buses()[server] = b;
+        sendValues(server, b);
     }
 
     // the block a destination's synths read, -1 when it follows no feature
@@ -66,7 +76,7 @@ public:
         const int block = (follows(node, Transpose) ? 1 : 0) | (follows(node, Scale) ? 2 : 0) | (follows(node, Detune) ? 4 : 0);
         auto it = buses().find(server);
         if(block == 0 || it == buses().end()) return -1;
-        return it->second + block * BlockSize;
+        return it->second.read + block * BlockSize;
     }
 
     // the controls of a generic / old-format SynthDef that carry its note (MIDI):
@@ -77,13 +87,22 @@ public:
     }
 
 private:
-    static std::map<ofxSCServer*, int>& buses() { static std::map<ofxSCServer*, int> b; return b; }
+    struct Buses { int read = -1, write = -1, glideNode = -1; };
+    static std::map<ofxSCServer*, Buses>& buses() { static std::map<ofxSCServer*, Buses> b; return b; }
 
-    static void sendValues(ofxSCServer* server, int index) {
+    static void sendValues(ofxSCServer* server, const Buses& b) {
         if(!server) return;
+        if(b.glideNode >= 0) {
+            ofxOscMessage g;
+            g.setAddress("/n_set");
+            g.addIntArg(b.glideNode);
+            g.addStringArg("glide");
+            g.addFloatArg(glide());
+            server->sendMsg(g);
+        }
         ofxOscMessage m;
         m.setAddress("/c_setn");
-        m.addIntArg(index);
+        m.addIntArg(b.write);
         m.addIntArg(NumBlocks * BlockSize);
         for(int block = 0; block < NumBlocks; block++) {
             const bool t = block & 1, s = block & 2, q = s && scaleOn(), lq = s && lowScaleOn(), d = block & 4;
