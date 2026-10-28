@@ -19,6 +19,7 @@
 #include "../nodes/generators/pinkTromboneNode.h"
 #include "../nodes/boxSynths/grainBoxPoly/scGrainBoxPoly.h"
 #include "../nodes/boxSynths/sampleBox/scSampleBox.h"
+#include "../nodes/boxSynths/drumKitBox/scDrumKitBox.h"
 #include "../nodes/boxSynths/polyComb/scPolyComb.h"
 #include "../nodes/boxSynths/analogBox/scAnalogBox.h"
 #include "../nodes/boxSynths/aliasingBox/scAliasingBox.h"
@@ -41,6 +42,7 @@ void registerSynthNodes(ofxOceanode &o){
 	o.registerModel<pinkTromboneNode>("SuperCollider/Generators");
 	o.registerModel<scGrainBoxPoly>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scSampleBox>("SuperCollider/boxSynths", controller->getServers());
+	o.registerModel<scDrumKitBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scSlicerBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scAnalogBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scAliasingBox>("SuperCollider/boxSynths", controller->getServers());
