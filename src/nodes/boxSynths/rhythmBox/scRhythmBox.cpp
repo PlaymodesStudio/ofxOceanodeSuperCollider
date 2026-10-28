@@ -1637,7 +1637,7 @@ void scRhythmBox::triggerSlicePreview(int ti, int sliceIdx) {
 
 void scRhythmBox::drawSequencerWindow() {
     float zoom = ofxOceanodeShared::getZoomLevel();
-    string title = getWindowTitle();
+    string title = getWindowId();
     ImGui::SetNextWindowSize(ImVec2(1100 * zoom, 660 * zoom), ImGuiCond_FirstUseEver);
 
     bool open = showWindow.get();

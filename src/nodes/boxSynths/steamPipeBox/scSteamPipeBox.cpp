@@ -645,7 +645,7 @@ void scSteamPipeBox::drawWindow() {
     const float z=ofxOceanodeShared::getZoomLevel();
     ImGui::SetNextWindowSize(ImVec2(1150*z,850*z),ImGuiCond_FirstUseEver);
     bool open=show.get();
-    if(!ImGui::Begin(getWindowTitle().c_str(),&open,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse)) {
+    if(!ImGui::Begin(getWindowId().c_str(),&open,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse)) {
         ImGui::End();if(!open) show=false;return;
     }
     if(!open){show=false;ImGui::End();return;}

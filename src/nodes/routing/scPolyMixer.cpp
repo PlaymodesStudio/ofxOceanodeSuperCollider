@@ -2353,7 +2353,7 @@ void scPolyMixer::drawMixerWindow() {
 	float w = mixerWindowWidth.get() * zoom;
 	float h = mixerWindowHeight.get() * zoom;
 	bool open = showMixerWindow.get();
-	string title = getWindowTitle();
+	string title = getWindowId();
 
 	ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_FirstUseEver);
 	if(!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {

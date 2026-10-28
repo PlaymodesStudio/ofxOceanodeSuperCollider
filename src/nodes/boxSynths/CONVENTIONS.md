@@ -23,6 +23,9 @@ that individual nodes currently implement.
   A named mode selector should remain a named dropdown on the node.
 - Implement `getWindowTitle()` and `getWindowToggle()` so Mixer Pro's
   **Go to origin synth window** can open the correct instance.
+- Open the window with `ImGui::Begin(getWindowId(), ...)`, not the title.
+  Inside a MacroMixer source it names the source, so the window stays apart
+  from the patch's own and MacroMixer opens and closes it.
 - Respect UI zoom. Controls must remain reachable when resizing the window;
   the piano stays below a scrollable content area.
 
