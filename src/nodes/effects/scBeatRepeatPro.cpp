@@ -186,9 +186,7 @@ void scBeatRepeatPro::setup() {
         // repeat back to the performer: Auto no longer releases it.
         autoOwnsGo = false;
         autoReleasePending = false;
-        for(auto& entry : synths)
-            if(entry.second) entry.second->set(
-                "go", std::vector<float>(numChannels.get(), value ? 1.0f : 0.0f));
+        sendGo();
     }));
     nodeListeners.push(autoEnabled.newListener([this](bool& value) {
         if(!value) stopAutoTrigger();
@@ -407,7 +405,7 @@ void scBeatRepeatPro::sendAllParams(ofxSCSynth* synth, bool includeTransport) {
         synth->set(name, std::vector<float>(channels, value));
     };
     if(includeTransport) {
-        set("go", go.get() ? 1.0f : 0.0f);
+        set("go", goValue());
         set("reset", (float)resetCounter);
     }
     set("division", repeatDivision.get());
@@ -730,16 +728,33 @@ void scBeatRepeatPro::storeSnapshot(int slot) {
 
 void scBeatRepeatPro::recallSnapshot(int slot, bool activate) {
     if(slot < 0 || slot >= (int)snapshotSlots.size() || !snapshotUsed[slot]) return;
-    const bool wasRunning = go.get();
     applySnapshot(snapshotSlots[slot]);
     activeSnapshot = slot;
-    if(activate) {
-        // A pad the player started is theirs: Auto must not release it.
-        autoOwnsGo = false;
-        autoReleasePending = false;
-        if(!wasRunning) go.set(true);
-        else reset.set(1);
+    if(activate) startPadGo();
+}
+
+void scBeatRepeatPro::sendGo() {
+    for(auto& entry : synths)
+        if(entry.second) entry.second->set("go", std::vector<float>(numChannels.get(), goValue()));
+}
+
+void scBeatRepeatPro::startPadGo() {
+    // A pad the player started is theirs: Auto must not release it.
+    autoOwnsGo = false;
+    autoReleasePending = false;
+    if(goValue() > 0.0f) {
+        padGo = true;
+        reset.set(1); // already repeating: cut in with a fresh capture
+    } else {
+        padGo = true;
+        sendGo();
     }
+}
+
+void scBeatRepeatPro::stopPadGo() {
+    if(!padGo) return;
+    padGo = false;
+    sendGo(); // back to whatever Go itself says (dry unless a lane holds it)
 }
 
 void scBeatRepeatPro::pressPad(int slot, bool fromKey) {
@@ -752,10 +767,8 @@ void scBeatRepeatPro::pressPad(int slot, bool fromKey) {
             beginMomentaryHold(slot, fromKey);
             break;
         case PadLatch:
-            if(go.get() && activeSnapshot == slot && !momentaryHoldActive) {
-                autoOwnsGo = false;
-                autoReleasePending = false;
-                go.set(false);
+            if(padGo && activeSnapshot == slot && !momentaryHoldActive) {
+                stopPadGo();
             } else {
                 recallSnapshot(slot, true);
             }
@@ -800,10 +813,7 @@ void scBeatRepeatPro::beginMomentaryHold(int source, bool fromKey) {
     momentaryHoldActive = true;
     momentarySource = source;
     momentaryFromKey = fromKey;
-    autoOwnsGo = false;
-    autoReleasePending = false;
-    if(go.get()) reset.set(1);
-    else go.set(true);
+    startPadGo();
 }
 
 void scBeatRepeatPro::endMomentaryHold(int source) {
@@ -811,7 +821,7 @@ void scBeatRepeatPro::endMomentaryHold(int source) {
     momentaryHoldActive = false;
     momentarySource = -1;
     momentaryFromKey = false;
-    if(go.get()) go.set(false);
+    stopPadGo();
 }
 
 bool scBeatRepeatPro::isAutoKey(const std::string& key) const {
@@ -881,7 +891,7 @@ void scBeatRepeatPro::scheduleAutoRelease(uint64_t steadyTimeUs) {
     go.set(false);
     suppressParamSend = false;
     for(auto& entry : synths)
-        if(entry.second) entry.second->set("go", std::vector<float>(numChannels.get(), 0.0f));
+        if(entry.second) entry.second->set("go", std::vector<float>(numChannels.get(), goValue()));
     autoDisplayQueue.push_back({steadyTimeUs, -1, 0});
 }
 
@@ -903,7 +913,7 @@ void scBeatRepeatPro::stopAutoTrigger() {
         go.set(false);
         suppressParamSend = false;
         for(auto& entry : synths)
-            if(entry.second) entry.second->set("go", std::vector<float>(numChannels.get(), 0.0f));
+            if(entry.second) entry.second->set("go", std::vector<float>(numChannels.get(), goValue()));
     }
     autoSlotOut = -1;
 }

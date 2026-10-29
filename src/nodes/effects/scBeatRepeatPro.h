@@ -206,6 +206,14 @@ private:
     bool momentaryHoldActive = false;
     int momentarySource = -1; // -2 = Go, 0..23 = snapshot slot
     bool momentaryFromKey = false;
+    // A held or latched pad (or held Go button) plays the repeat on its own,
+    // ORed with the Go parameter: a timeline lane or cable driving Go keeps
+    // writing it every frame and must not cancel the performer's pad.
+    bool padGo = false;
+    float goValue() const { return go.get() || padGo ? 1.0f : 0.0f; }
+    void sendGo();
+    void startPadGo();
+    void stopPadGo();
 
     struct PublishAction {
         std::string key;
