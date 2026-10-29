@@ -33,13 +33,13 @@ namespace ofxOceanodeSuperCollider{
 void registerUtilNodes(ofxOceanode &o){
     auto controller = o.getController<ofxOceanodeSuperColliderController>();
 
-	o.registerModel<scInfo>("SuperCollider/System", controller->getServers());
+	o.registerModel<scInfo>("SuperCollider/System", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
 	o.registerModel<scFreezer>("SuperCollider/System");
 	o.registerModel<scBuffer>("SuperCollider/Buffers", controller->getServers());
 	o.registerModel<scCustomBuffer>("SuperCollider/Buffers", controller->getServers());
-	o.registerModel<scBufferAllocator>("SuperCollider/Buffers", controller->getServers());
-	o.registerModel<scBufferBrowser>("SuperCollider/Buffers", controller->getServers());
-	o.registerModel<scRecbufHold>("SuperCollider/Recording", controller->getServers());
+	o.registerModel<scBufferAllocator>("SuperCollider/Buffers", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
+	o.registerModel<scBufferBrowser>("SuperCollider/Buffers", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
+	o.registerModel<scRecbufHold>("SuperCollider/Recording", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
 	o.registerModel<scA2k>("SuperCollider/Analysis", controller->getServers());
 	o.registerModel<scOutput>("SuperCollider/Routing", controller->getServers());
 	o.registerModel<scPolyMixer>("SuperCollider/Routing");
@@ -49,8 +49,8 @@ void registerUtilNodes(ofxOceanode &o){
 	o.registerModel<timelineWaveTrack>("SuperCollider/Timeline", controller->getServers());
 #endif
 	o.registerModel<scCodeNode>("SuperCollider/SynthDefs", controller->getServers());
-	o.registerModel<scMultiTrackRecorder>("SuperCollider/Recording", controller->getServers());
-	o.registerModel<scNRTRecorder>("SuperCollider/Recording", controller.get());
+	o.registerModel<scMultiTrackRecorder>("SuperCollider/Recording", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
+	o.registerModel<scNRTRecorder>("SuperCollider/Recording", ofxOceanodeNodeRegistrationFlags::Sink, controller.get());
 }
 
 }

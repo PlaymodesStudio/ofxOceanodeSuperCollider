@@ -981,7 +981,7 @@ void scEchoBox::drawWindow() {
     const float z = zoom();
     ImGui::SetNextWindowSize(ImVec2(1080 * z, 760 * z), ImGuiCond_FirstUseEver);
     bool open = showWindow.get();
-    const std::string title = getWindowTitle();
+    const std::string title = getWindowId();
     if(!ImGui::Begin(title.c_str(), &open)){ ImGui::End(); if(!open) showWindow = false; return; }
     if(!open){ showWindow = false; ImGui::End(); return; }
     const float w = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize;

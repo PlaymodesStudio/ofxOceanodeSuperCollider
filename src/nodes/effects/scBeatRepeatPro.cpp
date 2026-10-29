@@ -1560,7 +1560,7 @@ void scBeatRepeatPro::drawWindow() {
     // Waiting for a later update used to leave freshly recalled presets at
     // vis=0 until Go (or another parameter) happened to resend every control.
     if(!visOn) setVisualizationEnabled(true);
-    std::string title = getWindowTitle();
+    std::string title = getWindowId();
     bool open = showWindow.get();
     ImGui::SetNextWindowSize(ImVec2(1040.0f, 650.0f), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {

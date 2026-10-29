@@ -1578,7 +1578,7 @@ bool scSlicerBox::checkbox(ofParameter<bool>& p){
 }
 
 void scSlicerBox::drawWindow(){
-    const std::string title = getWindowTitle();
+    const std::string title = getWindowId();
     bool open = showWindow.get();
     ImGui::SetNextWindowSize(ImVec2(1120.0f, 720.0f), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)){

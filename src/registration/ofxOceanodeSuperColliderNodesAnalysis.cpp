@@ -31,10 +31,10 @@ void registerAnalysisNodes(ofxOceanode &o){
 	o.registerModel<scFastEnvelopeFollower>("SuperCollider/Analysis");
 	o.registerModel<scVUMeter>("SuperCollider/Analysis");
 	o.registerModel<scBufferscope>("SuperCollider/Analysis", controller->getServers());
-	o.registerModel<scWavescope>("SuperCollider/Analysis", controller->getServers());
-	o.registerModel<scFFT>("SuperCollider/Analysis", controller->getServers());
-	o.registerModel<scFFTHD>("SuperCollider/Analysis", controller->getServers());
-	o.registerModel<scSpectrogram>("SuperCollider/Analysis", controller->getServers());
+	o.registerModel<scWavescope>("SuperCollider/Analysis", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
+	o.registerModel<scFFT>("SuperCollider/Analysis", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
+	o.registerModel<scFFTHD>("SuperCollider/Analysis", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
+	o.registerModel<scSpectrogram>("SuperCollider/Analysis", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
 	o.registerModel<scLissajous>("SuperCollider/Analysis", controller->getServers());
 	o.registerModel<scMorphOscScope>("SuperCollider/Analysis");
 }

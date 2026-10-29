@@ -1706,7 +1706,7 @@ float scWavetableBox::voiceValue(int voice, float ph) const {
 }
 
 void scWavetableBox::drawWindow(){
-    const std::string title = getWindowTitle();
+    const std::string title = getWindowId();
     bool open = showWindow.get();
     ImGui::SetNextWindowSize(ImVec2(920.0f, 680.0f), ImGuiCond_FirstUseEver);
     if(ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)){

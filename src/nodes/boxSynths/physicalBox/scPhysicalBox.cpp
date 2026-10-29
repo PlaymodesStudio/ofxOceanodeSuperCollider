@@ -1005,7 +1005,7 @@ void scPhysicalBox::drawWindow() {
     const float z = zoom();
     ImGui::SetNextWindowSize(ImVec2(1180 * z, 860 * z), ImGuiCond_FirstUseEver);
     bool open = show.get();
-    if(!ImGui::Begin(getWindowTitle().c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+    if(!ImGui::Begin(getWindowId().c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         ImGui::End(); if(!open) show = false; return;
     }
     if(!open) { show = false; ImGui::End(); return; }

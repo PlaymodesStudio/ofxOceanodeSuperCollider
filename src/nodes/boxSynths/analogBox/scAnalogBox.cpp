@@ -1951,7 +1951,7 @@ void scAnalogBox::drawWindow() {
     const float z = zoom();
     ImGui::SetNextWindowSize(ImVec2(1200 * z, 800 * z), ImGuiCond_FirstUseEver);
     bool open = showWindow.get();
-    const std::string title = getWindowTitle();
+    const std::string title = getWindowId();
     if(!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)){
         ImGui::End();
         if(!open) showWindow = false;

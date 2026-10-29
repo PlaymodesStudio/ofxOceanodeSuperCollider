@@ -835,7 +835,7 @@ void scFMBox::drawWindow() {
     ImGui::SetNextWindowSize(ImVec2(1100*z,780*z),ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(540*z,400*z),ImVec2(FLT_MAX,FLT_MAX));
     bool open=show.get();
-    if(!ImGui::Begin(getWindowTitle().c_str(),&open,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse)) {
+    if(!ImGui::Begin(getWindowId().c_str(),&open,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse)) {
         ImGui::End();if(!open) show=false;return;
     }
     if(!open){show=false;ImGui::End();return;}

@@ -3162,7 +3162,7 @@ void scMixerPro::goToWindow(scNode* node) {
         return;
     }
     ofParameter<bool>* show = node ? node->getWindowToggle() : nullptr;
-    const std::string title = node ? node->getWindowTitle() : "";
+    const std::string title = node ? node->getWindowId() : "";
     if(!show || title.empty()) return;
     if(!show->get()) show->set(true);
     pendingWindowFocus = title;
@@ -3171,7 +3171,7 @@ void scMixerPro::goToWindow(scNode* node) {
 
 void scMixerPro::drawWindow() {
     const float zoom = ofxOceanodeShared::getZoomLevel();
-    const std::string title = getWindowTitle();
+    const std::string title = getWindowId();
     bool open = true;
     ImGui::SetNextWindowSize(ImVec2(960.0f * zoom, 660.0f * zoom), ImGuiCond_FirstUseEver);
     if(!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
