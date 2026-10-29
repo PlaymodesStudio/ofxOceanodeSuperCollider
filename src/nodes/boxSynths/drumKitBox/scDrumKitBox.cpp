@@ -105,8 +105,13 @@ scDrumKitBox::~scDrumKitBox() {
 
 void scDrumKitBox::setup() {
     // a kit: drums stay put unless ticked in Global Pitch
+    // each pad its own row in Global Pitch's table (a kit: unticked by default)
     scGlobalPitch::follow(this, false, [this](){
-        for(auto& p : pads) for(auto& [srv, sc] : p->sc) if(sc.trig) sc.trig->set("gtrbus", scGlobalPitch::bus(this, srv));
+        for(auto& p : pads) for(auto& [srv, sc] : p->sc) if(sc.trig) sc.trig->set("gtrbus", scGlobalPitch::bus(this, padPart(*p), srv));
+    }, {}, [this](){
+        std::vector<ofxOceanodeGlobalPitch::Part> parts;
+        for(auto& p : pads) parts.push_back({padPart(*p), padLabel(*p)});
+        return parts;
     });
     addInspectorParameter(embedSamples.set("Embed Samples", true));
     addSeparator("DrumKitBox");
@@ -316,6 +321,9 @@ scDrumKitBox::Control& scDrumKitBox::registerPadControl(Pad& p, ofParameter<T>& 
         if(sc == "choke") { sendChokeMasks(); return; }
         if(sc == "mute" || sc == "solo") { sendMutes(); return; }
         if(sc == "duckfrom") { sendDucks(); return; }
+        // the note Global Pitch quantizes follows the pad's tuning
+        if(sc == "bodyfreq" || sc == "metalfreq" || sc == "lbody" || sc == "lmetal")
+            for(auto& [srv, s] : pad.sc) if(s.trig) s.trig->set("root", padRoot(pad));
         if constexpr(std::is_same<T, int>::value) {
             if(sc == "model") { applyModel(pad, value, 0); return; }
             if(sc == "style") { applyModel(pad, pad.I("Model").get(), value); return; }
@@ -647,6 +655,16 @@ std::string scDrumKitBox::channelSource(int channel) {
     return port.getNodeRef()->getOutputChannelName(port.getIndex(), channel);
 }
 
+// Global Pitch: a pad's part (stable: its row) and the note it sounds at
+// pitch 60 (the body's frequency, else the metal's)
+std::string scDrumKitBox::padPart(const Pad& p) const { return "Pad " + ofToString(p.index + 1); }
+float scDrumKitBox::padRoot(const Pad& p) const {
+    auto note = [](float hz) { return 69.0f + 12.0f * std::log2(std::max(1.0f, hz) / 440.0f); };
+    if(p.b.at("Body On").get()) return note(p.f.at("Body Freq").get());
+    if(p.b.at("Metal On").get()) return note(p.f.at("Metal Freq").get());
+    return 60.0f;
+}
+
 std::string scDrumKitBox::padLabel(const Pad& p) const {
     return ofToString(p.index + 1) + " " + p.name;
 }
@@ -743,7 +761,8 @@ void scDrumKitBox::sendTrig(ofxSCServer* srv, Pad& p, bool includeNotes) {
         if(spec.type == 'f') c.set(spec.sc, p.F(spec.label).get());
         else if(spec.type == 'i') c.set(spec.sc, p.I(spec.label).get());
     }
-    c.set("gtrbus", (float)scGlobalPitch::bus(this, srv));
+    c.set("gtrbus", (float)scGlobalPitch::bus(this, padPart(p), srv));
+    c.set("root", padRoot(p));
     auto n = nodeSC.find(srv);
     c.set("chokeblock", n != nodeSC.end() && n->second.choke ? n->second.choke->index : -1);
     c.set("chokeslot", p.index);

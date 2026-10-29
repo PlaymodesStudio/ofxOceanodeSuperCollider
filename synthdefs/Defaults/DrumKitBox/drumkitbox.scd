@@ -124,7 +124,10 @@ SynthDef(\DKTrig, {
     allHit = (hit + stutHit) > 0;
     count = PulseCount.ar(allHit);
     turn = (count - 1) % 4;
-    pitch = gq.(\pitch.ar(60)) - 60 + \tune.kr(0) + (gg[14] * 0.01 * Rand(-1, 1))
+    // Global Pitch acts on the note the pad sounds: \root (its Body / Metal
+    // Freq as a note) + Tune + the hit's pitch from 60; the layers get the
+    // result as semitones from \root
+    pitch = gq.(\root.kr(60) + \tune.kr(0) + \pitch.ar(60) - 60) - \root.kr(60) + (gg[14] * 0.01 * Rand(-1, 1))
         + ((stutIdx % \stutcycle.kr(4).round.clip(1, 64)) * \stutstep.kr(0) * (stut > 0));
 
     // Choke groups: every piece writes its hits to its slot of \chokeblock;

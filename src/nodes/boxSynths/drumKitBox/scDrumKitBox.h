@@ -274,6 +274,8 @@ private:
     int padChannel(const Pad& p) const;
     std::string channelSource(int channel);
     std::string padLabel(const Pad& p) const;
+    std::string padPart(const Pad& p) const;   // its Global Pitch part ("Pad 2")
+    float padRoot(const Pad& p) const;         // the note it sounds at pitch 60 (Body / Metal Freq)
     ofJson padState(int k) const;
     void applyPadState(int k, const ofJson& state);
     std::string relKey(const std::string& key) const;
