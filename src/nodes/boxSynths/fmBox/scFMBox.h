@@ -11,6 +11,7 @@
 #include "../../../ui/scTimelineMenu.h"
 #include "../shared/scModulation.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scBoxMacroMorph.h"
 #include "../shared/scAmpMorph.h"
 #include "../../../ui/scEQEditor.h"
 #include "../../../ui/scDropdowns.h"
@@ -44,6 +45,14 @@ public:
     void presetSave(ofJson&) override;
     void loadBeforeConnections(ofJson&) override;
     void presetRecallAfterSettingParameters(ofJson&) override;
+    // MacroMixer: the sound saved in "fmBox" blends on the running synths
+    // through the snapshot morph (apply); Voices switches half way.
+    MorphKeys morphKeys() const override;
+    MorphHint morphHint(const ofxOceanodeAbstractParameter& p) const override;
+    bool morphCheck(const ofJson& target, std::string& reason) const override;
+    bool morphBegin(const ofJson& target, std::string& reason) override;
+    void morphApply(float t, bool switched) override { macroMorph.apply(snaps, t, switched); }
+    void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
     std::string getWindowTitle() override { return "fmBox " + ofToString(getNumIdentifier()); }
     ofParameter<bool>* getWindowToggle() override { return &show; }
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
@@ -176,6 +185,8 @@ private:
     void rebuild();
     void requireSynthdefs();
     ofJson capture() const;
+    scBoxMacroMorph macroMorph;                     // a MacroMixer morph: the start, the arrival
+    ofJson snapshotOf(const ofJson& saved) const;   // a saved patch as a snapshot
     void apply(const ofJson&, const ofJson&, float, bool);
     std::vector<ofJson> factory() const;
     void drawWindow();

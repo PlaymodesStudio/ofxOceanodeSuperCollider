@@ -57,6 +57,7 @@
 #include "../../../ui/scTimelineMenu.h"
 #include "../../../ui/scDropdowns.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scBoxMacroMorph.h"
 #include "ofxSCGroup.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
@@ -105,6 +106,15 @@ public:
     void loadBeforeConnections(ofJson&) override;
     void presetRecallBeforeSettingParameters(ofJson&) override;
     void presetRecallAfterSettingParameters(ofJson&) override;
+    // MacroMixer: the pads saved in "sampleBoxPads" blend on the running synths
+    // through the snapshot morph (applySnapshot) when the target has the same
+    // pads and samples; otherwise MacroMixer replaces the node.
+    MorphKeys morphKeys() const override;
+    MorphHint morphHint(const ofxOceanodeAbstractParameter& p) const override;
+    bool morphCheck(const ofJson& target, std::string& reason) const override;
+    bool morphBegin(const ofJson& target, std::string& reason) override;
+    void morphApply(float t, bool switched) override { macroMorph.apply(snaps, t, switched); }
+    void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
     // A kit: Trigger/Gate and Velocity, key C1 = channel 1 (the pads keep their own pitch)
     bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override;
@@ -308,6 +318,9 @@ private:
     scSnapshots snaps;                    // the shared snapshots: the kit, library, morph, presets
     ofJson initialPad;                    // a fresh pad (the factory's base)
     ofJson appliedKit;                    // the pads a snapshot last loaded whole
+    bool kitBlended = false;              // the last snapshot frame was between two kits
+    scBoxMacroMorph macroMorph;           // a MacroMixer morph: the start, the arrival
+    ofJson snapshotOf(const ofJson& saved) const;   // a saved patch as a snapshot
     template<typename T> void registerNodeControl(ofParameter<T>& param);
     ofJson captureSnapshot() const;
     void applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw);

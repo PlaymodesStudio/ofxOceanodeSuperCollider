@@ -139,6 +139,7 @@ void scRhythmBox::setup() {
     registerControl(soloP.set("Solo",   vector<int>{}, {0}, {1}));
 
     registerControl(swingP.set("Swing", 0.0f, 0.0f, 0.5f));
+    registerControl(speedXP.set("speedX", 1.0f, 0.01f, 16.0f), false);
 
     registerControl(transposeP .set("Transpose",  vector<float>{},  {-24.0f}, {24.0f}));
     registerControl(globalTransposeP.set("GTranspose", 0.0f, -24.0f, 24.0f));
@@ -236,6 +237,15 @@ void scRhythmBox::setup() {
             for(auto& [srv, synths] : trackSynths)
                 if(ti < (int)synths.size() && synths[ti])
                     synths[ti]->set("globalPitch", pitch);
+        }
+    }));
+    nodeListeners.push(speedXP.newListener([this](float& /*v*/) {
+        if(syncToTransportP.get()) {
+            // The step position (transport beat × speed) jumps: re-anchor hard.
+            for(int ti = 0; ti < MAX_TRACKS; ti++) needHard[ti] = true;
+            follower.requestAnchor();
+        } else {
+            sendBpmToAll();
         }
     }));
     nodeListeners.push(swingP.newListener([this](float& v) {
@@ -451,7 +461,7 @@ void scRhythmBox::setup() {
     h.capture = [this]() { return captureSnapshot(); };
     h.apply = [this](const ofJson& a, const ofJson& b, float t, bool sw) { applySnapshot(a, b, t, sw); };
     h.factory = [this]() { return factorySnapshots(); };
-    h.bpm = [this]() { return effectiveBpm(); };
+    h.bpm = [this]() { return effectiveBpm() / speedX(); };   // morph beats follow the tempo, not speedX
     h.paramMenu = [this](const std::string& k) { snapMenu(k); };
     snaps.setup(h);
     initializeTrackControls();
@@ -1140,9 +1150,12 @@ bool scRhythmBox::isSyncing() const {
     return syncToTransportP.get();
 }
 
+float scRhythmBox::speedX() const {
+    return std::max(0.01f, speedXP.get());
+}
+
 float scRhythmBox::effectiveBpm() const {
-    if(syncToTransportP.get()) return syncBpm;
-    return currentBpm;
+    return (syncToTransportP.get() ? syncBpm : currentBpm) * speedX();
 }
 
 void scRhythmBox::updateActiveStates() {
@@ -3901,7 +3914,7 @@ void scRhythmBox::drawTrack(int ti) {
                 ImGui::Dummy(ImVec2(halfW, panelH));
                 dl->AddRectFilled(ep, {ep.x + halfW, ep.y + panelH}, IM_COL32(28, 28, 28, 255));
 
-                float tH = tc.envHoldSteps * (60.0f / std::max(currentBpm, 0.001f)
+                float tH = tc.envHoldSteps * (60.0f / std::max(effectiveBpm(), 0.001f)
                                               / std::max(tc.stepsPerBeat, 1));
                 float yT = ep.y + 6.0f, yB = ep.y + panelH - 6.0f;
 
@@ -5735,6 +5748,19 @@ void scRhythmBox::drawGlobalControls() {
         ImGui::SetTooltip("Global semitone offset added to all track transposes");
 
     ImGui::SameLine(0, 14);
+    ImGui::TextUnformatted("Speed:");
+    ImGui::SameLine(0, 4);
+    ImGui::SetNextItemWidth(60.0f);
+    float sx = speedXP.get();
+    if(windowControl("speedX", [&](){ return ImGui::DragFloat("##speedx", &sx, 0.01f, 0.01f, 16.0f, "%.2fx"); })) {
+        speedXP.set(ofClamp(sx, 0.01f, 16.0f));
+    }
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Sequence speed multiplier (1 = tempo, 2 = double, 0.5 = half, 1.5 ...)\n"
+                          "Steps, arps, beat LFOs and fitted slices all follow it.\n"
+                          "Double-click or Ctrl+click to type a value.");
+
+    ImGui::SameLine(0, 14);
     ImGui::TextUnformatted("StepProb:");
     ImGui::SameLine(0, 4);
     ImGui::SetNextItemWidth(100.0f);
@@ -5787,7 +5813,7 @@ void scRhythmBox::handleSyncChanged(bool on) {
                     scSynthControlBatch controls(s, srv);
                     controls.set("sync", 0.0f);
                     controls.set("run",  0.0f);
-                    controls.set("bpm",  currentBpm);
+                    controls.set("bpm",  currentBpm * speedX());
                     controls.send();
                 }
     }
@@ -5818,7 +5844,7 @@ void scRhythmBox::updateTransportSync() {
     // Playhead: computed from the transport beat (no SC read-back lag).
     const double beat = frame.current.beatPosition;
     for(int ti = 0; ti < numTracks && ti < (int)currentStep.size(); ti++) {
-        const double pos = (beat + offset) * std::max(1, syncSpb[ti]);
+        const double pos = (beat + offset) * speedX() * std::max(1, syncSpb[ti]);
         const double ns  = std::max(1, syncNs[ti]);
         currentStep[ti] = (int)std::floor(scTransportSync::positiveMod(std::floor(pos), ns));
     }
@@ -5844,7 +5870,7 @@ void scRhythmBox::sendAnchor(const scTransportSync::Anchor& a) {
     std::vector<bool> fire(numTracks, false);
     bool anyPending = false;
     for(int ti = 0; ti < numTracks && ti < MAX_TRACKS; ti++) {
-        const double stepPos = (a.beat + offset) * std::max(1, syncSpb[ti]);
+        const double stepPos = (a.beat + offset) * speedX() * std::max(1, syncSpb[ti]);
         anchors[ti] = stepClocks[ti].make(stepPos, a.discontinuity || needHard[ti], a.playing);
         const bool hard = anchors[ti].hard || needHard[ti];
         if(hard) hardCounters[ti] += 1.0;
@@ -5861,12 +5887,12 @@ void scRhythmBox::sendAnchor(const scTransportSync::Anchor& a) {
                 if(!s || !s->isCreated()) continue;
                 scSynthControlBatch controls(s, srv);
                 controls.set("sync",       1.0f);
-                controls.set("bpm",        a.bpm);
+                controls.set("bpm",        a.bpm * speedX());
                 controls.set("run",        a.playing ? 1.0f : 0.0f);
                 controls.set("anchorPos",  anchors[ti].pos);
                 auto& joined = syncJoined[srv];
                 joined.resize(MAX_TRACKS, false);
-                const double stepPos = (a.beat + offset) * std::max(1, syncSpb[ti]);
+                const double stepPos = (a.beat + offset) * speedX() * std::max(1, syncSpb[ti]);
                 const double frac = stepPos - std::floor(stepPos);
                 const bool joinFire = !joined[ti] && a.playing && (frac < 1e-4 || frac > 1.0 - 1e-4);
                 controls.set("anchorFire", (fire[ti] || joinFire) ? 1.0f : 0.0f);

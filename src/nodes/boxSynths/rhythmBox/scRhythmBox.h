@@ -296,6 +296,7 @@ private:
     ofParameter<vector<int>>   muteP;        // per-track mute state: 0=unmuted, 1=muted
     ofParameter<vector<int>>   soloP;        // per-track solo state: 0=off, 1=soloed
     ofParameter<float>         swingP;       // global swing for all tracks (0=straight, 0.5=max)
+    ofParameter<float>         speedXP;      // sequence speed multiplier (1=tempo, 2=double, 0.5=half)
     ofParameter<float>         globalTransposeP; // global semitone offset added to all track transposes
     ofParameter<int>           currentSlotP; // 0..MAX_SLOTS-1
     ofParameter<bool>          embedInProject;
@@ -500,7 +501,8 @@ private:
     double   resetCounter    = 0.0;
     void     sendResetTo(int firstTrack, int endTrack); // bump counter, send to tracks [first, end)
     bool     isSyncing() const;   // Sync To Transport active (false without transport support)
-    float    effectiveBpm() const; // bpm the synths should run at (transport bpm when syncing)
+    float    effectiveBpm() const; // bpm the synths should run at (transport bpm when syncing) × speedX
+    float    speedX() const;       // speedX clamped to a positive rate
     bool     lastPlayVal     = false; // previous value of playSeq — detect rising edge false→true
     int  sliderPaintTrack    = -1;   // track index owning current slider paint gesture (-1 = none)
     int  cutPaintTrack       = -1;   // track index owning current CUT slider paint gesture (-1 = none)

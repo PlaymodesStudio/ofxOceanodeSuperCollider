@@ -48,6 +48,7 @@
 #include "../../../timing/scScheduledInputs.h"
 #include "../../../ui/scEnvelopeCurve.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scBoxMacroMorph.h"
 #include "../../../ui/scDropdowns.h"
 #include "ofxOceanodeShared.h"
 #include "imgui.h"
@@ -617,6 +618,36 @@ public:
         }
         loadModulation(json);
     }
+
+    // ── MacroMixer: a saved sound blends on the running synths ─────────────
+    MorphKeys morphKeys() const override {
+        MorphKeys k;
+        k.blended.push_back(numVoices.getEscapedName());
+        for(const auto& a : publishActions){
+            if(scSnapshots::isOwnKey(a.key)) k.ignored.push_back(a.key);
+            else if(a.save && !notInPresets(a.key)) k.blended.push_back(a.key);
+        }
+        for(const char* s : {"Matrix", "Lfos", "Envs", "Exts", "Params", "Generators"}) k.blended.push_back(std::string("pulsarBoxMod") + s);
+        k.ignored.insert(k.ignored.end(), {"viewHeight", "bankPreset"});
+        return k;
+    }
+    MorphHint morphHint(const ofxOceanodeAbstractParameter& p) const override {
+        const std::string key = p.getEscapedName();
+        if(key == numOutputs.getEscapedName()) return MorphHint::Structural;
+        // the window; Snapshot / Morph... (a morph of their own)
+        if(key == showWindow.getEscapedName() || scSnapshots::isOwnKey(key)) return MorphHint::Skip;
+        return MorphHint::Interpolate;   // Voices and the sound's controls: blended (morphKeys)
+    }
+    bool morphCheck(const ofJson& target, std::string& reason) const override {
+        if(target.is_object() && target.contains("pulsarBoxModMatrix")) return true;
+        reason = "no saved PulsarBox sound";
+        return false;
+    }
+    bool morphBegin(const ofJson& target, std::string& reason) override {
+        return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+    }
+    void morphApply(float t, bool switched) override { macroMorph.apply(snaps, t, switched); }
+    void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
 
 private:
     // ════════════════════════════════════════════════════════════════════════
@@ -1355,6 +1386,20 @@ private:
         mod.patchBases(json);
         mod.save(json, "pulsarBoxMod");
         return json;
+    }
+    // A saved patch as a sound: the same keys, in the controls' own format
+    // (Oceanode saves a published control as a string, a one-value vector as a number)
+    static ofJson nativeValue(const ofAbstractParameter& p, const ofJson& v){ return scBoxMacroMorph::nativeValue(p, v); }
+    ofJson snapshotOf(const ofJson& j) const {
+        ofJson s = ofJson::object();
+        if(j.contains("Voices")) s["Voices"] = nativeValue(numVoices, j["Voices"]);
+        for(const auto& a : publishActions)
+            if(a.save && a.param && !notInPresets(a.key) && j.contains(a.key)) s[a.key] = nativeValue(*a.param, j[a.key]);
+        for(const char* k : {"Matrix", "Lfos", "Envs", "Exts", "Params", "RandomShared", "Generators"}){
+            const std::string key = std::string("pulsarBoxMod") + k;
+            if(j.contains(key)) s[key] = j[key];
+        }
+        return s;
     }
     // Every control back to its default, then the sound's values; the synth
     // is replaced once afterwards if the voice count changed
@@ -2113,6 +2158,7 @@ private:
     bool publishedSeparatorAdded = false;
     // Snapshots and named presets (data/nodeSnapshots/PulsarBox/Presets): scSnapshots
     scSnapshots snaps;
+    scBoxMacroMorph macroMorph;           // a MacroMixer morph: the start, the arrival
     bool loadingBankPreset = false;   // a whole sound is being set (structure changes wait)
 
     ofEventListeners listeners;

@@ -908,6 +908,38 @@ void scPhysicalBox::presetRecallAfterSettingParameters(ofJson& j) {
     restoring = true; for(const auto& c : controls) if(scSnapshots::isOwnKey(c.key) && state.contains(c.key)) c.load(state[c.key]); restoring = false;
     if(state.contains(speakerLayout.getEscapedName())) speakerLayout = state.value(speakerLayout.getEscapedName(), 0);
 }
+// ── MacroMixer: a saved sound blends on the running voices ─────────────────
+ofxOceanodeNodeModel::MorphKeys scPhysicalBox::morphKeys() const { return {{"physicalBox"}, {}}; }
+
+ofxOceanodeNodeModel::MorphHint scPhysicalBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key = p.getEscapedName();
+    if(key == channels.getEscapedName()) return MorphHint::Structural;
+    if(key == voices.getEscapedName()) return MorphHint::Switch;   // other synths: rebuilt once, half way
+    // the window; a published control blends with the rest of the sound
+    if(key == show.getEscapedName() || published.count(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;
+}
+
+bool scPhysicalBox::morphCheck(const ofJson& target, std::string& reason) const {
+    if(!target.contains("physicalBox") || !target["physicalBox"].is_object()) { reason = "no saved physicalBox sound"; return false; }
+    // the speaker layout is the room, not the sound: the snapshot never blends it
+    const auto& state = target["physicalBox"]; const std::string lk = speakerLayout.getEscapedName();
+    if(state.contains(lk) && state[lk].is_number() && state[lk].get<int>() != speakerLayout.get()) { reason = "speaker layout differs"; return false; }
+    return true;
+}
+
+// capture()'s format: the saved state without the snapshot controls and the room
+ofJson scPhysicalBox::snapshotOf(const ofJson& j) const {
+    ofJson s = j.value("physicalBox", ofJson::object());
+    for(const auto& c : controls) if(scSnapshots::isOwnKey(c.key)) s.erase(c.key);
+    s.erase(speakerLayout.getEscapedName());
+    return s;
+}
+
+bool scPhysicalBox::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+}
+
 void scPhysicalBox::requireSynthdefs() {
     for(const auto& entry : std::vector<std::pair<std::string, std::string>>{
         {"PhysicalBoxVoice.scsyndef", "PhysicalBox"}, {"ModGate1.scsyndef", "Modulation"}, {"PulseGate.scsyndef", "Modulation"}, {"mixerProEQ2.scsyndef", "MixerPro"}}) {

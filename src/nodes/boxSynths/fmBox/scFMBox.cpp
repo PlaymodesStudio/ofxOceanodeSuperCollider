@@ -761,6 +761,33 @@ void scFMBox::presetRecallAfterSettingParameters(ofJson& j) {
     apply(state,state,1,true);
     restoring=true;for(const auto& c:controls) if(scSnapshots::isOwnKey(c.key)&&state.contains(c.key)) c.load(state[c.key]);restoring=false;
 }
+// ── MacroMixer: a saved sound blends on the running synths ─────────────────
+// The AFX library / selection only browses: a recalled AFX preset is in "fmBox"
+ofxOceanodeNodeModel::MorphKeys scFMBox::morphKeys() const {
+    return {{"fmBox"}, {"fmBoxAFX"}};
+}
+ofxOceanodeNodeModel::MorphHint scFMBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key=p.getEscapedName();
+    if(key==channels.getEscapedName()) return MorphHint::Structural;
+    if(key==voices.getEscapedName()) return MorphHint::Switch;   // other synths: rebuilt once, half way
+    // the window; a published control blends with the rest of the sound
+    if(key==show.getEscapedName() || published.count(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;
+}
+bool scFMBox::morphCheck(const ofJson& target, std::string& reason) const {
+    if(target.contains("fmBox") && target["fmBox"].is_object()) return true;
+    reason="no saved fmBox sound";
+    return false;
+}
+// "fmBox" is capture() plus the snapshot controls (dropped)
+ofJson scFMBox::snapshotOf(const ofJson& j) const {
+    ofJson s=ofJson::object();
+    for(const auto& [k,v]:j["fmBox"].items()) if(!scSnapshots::isOwnKey(k)&&k!=afxPreset.getEscapedName()) s[k]=v;
+    return s;
+}
+bool scFMBox::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+}
 void scFMBox::requireSynthdefs() {
     for(const auto& entry:std::vector<std::pair<std::string,std::string>>{
         {"FMBoxVoice.scsyndef","FMBox"},{"FMBoxDX7LFO.scsyndef","FMBox"},{"ModGate1.scsyndef","Modulation"},{"PolyCombSpread2.scsyndef","PolyComb"},{"mixerProEQ2.scsyndef","MixerPro"}}) {

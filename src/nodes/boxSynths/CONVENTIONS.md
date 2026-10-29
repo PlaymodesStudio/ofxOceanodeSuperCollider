@@ -362,6 +362,11 @@ through the float Gate level. A kit sets `kit = true`:
 MIDI key 36 / C1 maps to slot 0, with
 successive keys selecting successive slots.
 
+A kit can also fill `out.rowNames` (slot names: DrumKitBox's pad names) and
+set `out.pitch` to a per-slot Pitch vector; the timeline's Drum Grid lane
+names its rows from them and writes a pitch per step (60 = the pad's own
+tuning). The piano roll ignores a kit's pitch, as before.
+
 Keep handles stable while the timeline needs them. Report input note slots,
 which can differ from an internal pool of extra release voices. GrainBox
 currently advertises its first engine in MIDI pitch mode; SampleBox advertises
@@ -478,6 +483,7 @@ LFO/envelope/Routing module; specialized processing may exist independently.
 | AdditiveBox, AliasingBox, AnalogBox, FMBox, PhysicalBox, PulsarBox, SteamPipeBox | Yes | Yes | Yes | Yes |
 | GrainBox | Yes | Per engine | Per engine | First engine, MIDI pitch mode |
 | SampleBox | Yes | Per pad | Selected pad/channel | Kit channels |
+| DrumKitBox | Yes | Per pad | Selected pad/channel | Kit channels with row names (timeline Drum Grid) |
 | WavetableBox | Yes | Yes | Yes | Yes, when Pitch and Gate are published |
 | EchoBox | Yes | Yes | Not applicable | Not applicable |
 | SlicerBox | Yes | No shared module | No | No |

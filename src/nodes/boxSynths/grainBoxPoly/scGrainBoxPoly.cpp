@@ -5442,6 +5442,73 @@ ofJson scGrainBoxPoly::captureSnapshot() const {
     return snap;
 }
 
+// ── MacroMixer: a saved patch blends on the running engines ────────────────
+// Its snapshot keys, plus engine 1's legacy keys (a preset recall sets them
+// last: they win). Engines, samples, Live input / length, N Chan: not
+// blended, a difference replaces the node (MacroMixer's split).
+namespace {
+const std::vector<std::string>& gbpModKeys() {
+    static const std::vector<std::string> k = {"Matrix", "Lfos", "Envs", "Exts", "Params", "Generators"};
+    return k;
+}
+}
+
+ofxOceanodeNodeModel::MorphKeys scGrainBoxPoly::morphKeys() const {
+    MorphKeys k;
+    for(const auto& a : publishableEditorParameters) {
+        if(scSnapshots::isOwnKey(a.key)) k.ignored.push_back(a.key);
+        else if(a.saveValue && !snapshotExcluded(a.key)) k.blended.push_back(a.key);
+    }
+    for(const char* legacy : {"amp", "pitch", "duration", "position", "panaz", "chance", "interval", "trigphase", "posjit",
+                              "pitchjit", "durjit", "ampjit", "panazjit", "levels", "inpoint", "outpoint", "envAttack",
+                              "envRelease", "envTension"}) k.blended.push_back(legacy);
+    for(const auto& ph : playheads) for(const auto& m : gbpModKeys()) k.blended.push_back("gbpMod" + ph->sfx + m);
+    for(const char* ui : {"embedSamples", "browseDir", "waveZoom", "waveH", "waveScroll", "browserW", "activePlayhead",
+                          "globalTab", "gbpTab", "activeSnapshot", "gbpSnapshots"}) k.ignored.push_back(ui);
+    return k;
+}
+
+ofxOceanodeNodeModel::MorphHint scGrainBoxPoly::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key = p.getEscapedName();
+    if(key == numChannelsP.getEscapedName()) return MorphHint::Structural;
+    // the window; Snapshot / Morph... (a morph of their own)
+    if(key == showWindow.getEscapedName() || scSnapshots::isOwnKey(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;   // Playheads and the sound's controls: blended (morphKeys)
+}
+
+bool scGrainBoxPoly::morphCheck(const ofJson& target, std::string& reason) const {
+    if(!target.is_object()) { reason = "no saved GrainBox sound"; return false; }
+    // presets from before modulation: their old LFOs are migrated by a recall only
+    for(const auto& ph : playheads)
+        if(!target.contains("gbpMod" + ph->sfx + "Matrix")) { reason = "saved before GrainBox modulation"; return false; }
+    return true;
+}
+
+ofJson scGrainBoxPoly::snapshotOf(const ofJson& j) const {
+    ofJson s = ofJson::object();
+    for(const auto& a : publishableEditorParameters)
+        if(a.saveValue && !snapshotExcluded(a.key) && j.contains(a.key)) s[a.key] = j[a.key];
+    // engine 1's legacy keys: one value (as presetRecallAfterSettingParameters)
+    const Playhead& p0 = *playheads[0];
+    const std::pair<const char*, const ofAbstractParameter*> legacy[] = {
+        {"amp", &p0.amp}, {"pitch", &p0.pitch}, {"duration", &p0.duration}, {"position", &p0.position},
+        {"panaz", &p0.panAz}, {"chance", &p0.chance}, {"interval", &p0.autoTrigBeatDiv}, {"trigphase", &p0.trigPhase},
+        {"posjit", &p0.posJit}, {"pitchjit", &p0.pitchJit}, {"durjit", &p0.durJit}, {"ampjit", &p0.ampJit},
+        {"panazjit", &p0.panAzJit}, {"levels", &p0.levels}, {"inpoint", &p0.inPoint}, {"outpoint", &p0.outPoint},
+        {"envAttack", &p0.envAttack}, {"envRelease", &p0.envRelease}, {"envTension", &p0.envTension}};
+    for(const auto& [key, p] : legacy) if(j.contains(key) && j[key].is_number()) s[p->getEscapedName()] = j[key];
+    for(const auto& ph : playheads) {
+        for(const auto& m : gbpModKeys()) if(j.contains("gbpMod" + ph->sfx + m)) s["gbpMod" + ph->sfx + m] = j["gbpMod" + ph->sfx + m];
+        const std::string shared = "gbpMod" + ph->sfx + "RandomShared";
+        if(j.contains(shared)) s[shared] = j[shared];
+    }
+    return s;
+}
+
+bool scGrainBoxPoly::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+}
+
 // Values arrive in the snapshot's units (as a preset: no conversion), then
 // one consistent send (timeDirty -> update)
 ofJson scGrainBoxPoly::pitchInCurrentUnits(const ofJson& snap) const {

@@ -1535,6 +1535,74 @@ void scWavetableBox::presetRecallAfterSettingParameters(ofJson& json){
     }
 }
 
+// ── MacroMixer: a saved sound blends on the running synths ─────────────────
+// Channels stays Structural; a different table (file, decoding) cannot blend:
+// MacroMixer replaces the node.
+namespace {
+ofJson nativeValue(const ofAbstractParameter& p, const ofJson& v){ return scBoxMacroMorph::nativeValue(p, v); }
+}
+
+ofxOceanodeNodeModel::MorphKeys scWavetableBox::morphKeys() const {
+    MorphKeys k;
+    for(const auto& action : publishActions){
+        if(scSnapshots::isOwnKey(action.key)) k.ignored.push_back(action.key);
+        else if(action.save && !notInSound(action.key) && action.key != outChannels.getEscapedName()) k.blended.push_back(action.key);
+    }
+    for(const char* s : {"Matrix", "Lfos", "Envs", "Exts", "Params", "Generators"}) k.blended.push_back(std::string("wavetableMod") + s);
+    k.blended.push_back(scVoiceCountMorph::key);
+    k.ignored.insert(k.ignored.end(), {"waterfallHeight", embedTable.getEscapedName()});
+    return k;
+}
+
+ofxOceanodeNodeModel::MorphHint scWavetableBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key = p.getEscapedName();
+    if(key == outChannels.getEscapedName()) return MorphHint::Structural;
+    // the window; Snapshot / Morph... (a morph of their own)
+    if(key == showWindow.getEscapedName() || scSnapshots::isOwnKey(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;   // Voices and the sound's controls: blended (morphKeys)
+}
+
+bool scWavetableBox::morphCheck(const ofJson& target, std::string& reason) const {
+    if(!target.is_object() || !target.contains(voices.getEscapedName()) || !target.contains("wavetableModMatrix")){
+        reason = "no saved WavetableBox sound";
+        return false;
+    }
+    auto same = [&](const ofAbstractParameter& p){
+        const auto key = p.getEscapedName();
+        const auto* action = findPublishAction(key);
+        if(!target.contains(key) || !action || !action->save) return true;
+        ofJson current;
+        action->save(current);
+        return nativeValue(p, target[key]) == current[key];
+    };
+    if(!same(source)){ reason = "a different wavetable source"; return false; }
+    if(isLive()) return true;
+    // the file: the same path, or the same file embedded in the project
+    const bool embedded = target.value("EmbedInProject", false) && target.contains("EmbeddedFilename") && target["EmbeddedFilename"].is_string()
+                          && target["EmbeddedFilename"].get<std::string>() == fs::path(path.get()).filename().string();
+    if(!same(path) && !embedded){ reason = "a different wavetable file"; return false; }
+    for(const ofAbstractParameter* p : std::initializer_list<const ofAbstractParameter*>{&cycleMode, &maxFrames, &normalize, &removeDC})
+        if(!same(*p)){ reason = "a different wavetable decoding (" + p->getName() + ")"; return false; }
+    return true;
+}
+
+ofJson scWavetableBox::snapshotOf(const ofJson& j) const {
+    ofJson s = ofJson::object();
+    for(const auto& action : publishActions)
+        if(action.save && action.parameter && !notInSound(action.key) && action.key != outChannels.getEscapedName() && j.contains(action.key))
+            s[action.key] = nativeValue(*action.parameter, j[action.key]);
+    for(const char* k : {"Matrix", "Lfos", "Envs", "Exts", "Params", "RandomShared", "Generators"}){
+        const std::string key = std::string("wavetableMod") + k;
+        if(j.contains(key)) s[key] = j[key];
+    }
+    if(j.contains(scVoiceCountMorph::key)) s[scVoiceCountMorph::key] = j[scVoiceCountMorph::key];
+    return s;
+}
+
+bool scWavetableBox::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+}
+
 void scWavetableBox::macroSave(ofJson& json, std::string presetFolderPath){
     json["EmbedInProject"] = false;
     if(!embedTable || isLive() || path.get().empty() || table.frames == 0) return;

@@ -79,6 +79,13 @@ public:
         return it->second.read + block * BlockSize;
     }
 
+    // the block a part of a destination reads (a drum kit's pad: follow()'s parts)
+    static int bus(ofxOceanodeNodeModel* node, const std::string& part, ofxSCServer* server) {
+        const int block = (follows(node, part, Transpose) ? 1 : 0) | (follows(node, part, Scale) ? 2 : 0) | (follows(node, part, Detune) ? 4 : 0);
+        auto it = buses().find(server);
+        if(block == 0 || it == buses().end()) return -1;
+        return it->second.read + block * BlockSize;
+    }
     // the controls of a generic / old-format SynthDef that carry its note (MIDI):
     // pitch, pitcharray, and carp (PMod's carrier; its modulator modp is timbre).
     // A filter's cutoff is cutp, so Global Pitch never reaches it.

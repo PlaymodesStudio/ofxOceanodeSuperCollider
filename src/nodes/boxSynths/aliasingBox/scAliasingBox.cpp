@@ -524,6 +524,37 @@ void scAliasingBox::presetRecallAfterSettingParameters(ofJson& j) {
     apply(state,state,1,true);
     restoring=true;for(const auto& c:controls) if(scSnapshots::isOwnKey(c.key)&&state.contains(c.key)) c.load(state[c.key]);restoring=false;
 }
+// ── MacroMixer: a saved sound blends on the running synths ─────────────────
+ofxOceanodeNodeModel::MorphKeys scAliasingBox::morphKeys() const {
+    return {{"aliasingBox"}, {"aliasingBoxDisplay"}};
+}
+ofxOceanodeNodeModel::MorphHint scAliasingBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string key=p.getEscapedName();
+    if(key==channels.getEscapedName()) return MorphHint::Structural;
+    if(key==voices.getEscapedName()) return MorphHint::Switch;   // other synths: rebuilt once, half way
+    // the window; a published control blends with the rest of the sound
+    if(key==show.getEscapedName() || published.count(key)) return MorphHint::Skip;
+    return MorphHint::Interpolate;
+}
+bool scAliasingBox::morphCheck(const ofJson& target, std::string& reason) const {
+    if(target.contains("aliasingBox") && target["aliasingBox"].is_object()) return true;
+    reason="no saved aliasingBox sound";
+    return false;
+}
+// "aliasingBox" is capture() plus the snapshot controls (dropped)
+ofJson scAliasingBox::snapshotOf(const ofJson& j) const {
+    ofJson s=ofJson::object();
+    for(const auto& [k,v]:j["aliasingBox"].items()) if(!scSnapshots::isOwnKey(k)) s[k]=v;
+    // the first patches stored Drone directly on the node (as a recall)
+    if(!s.contains(drone.getEscapedName()) && j.contains("Drone")) {
+        const auto& d=j["Drone"];
+        s[drone.getEscapedName()]=d.is_boolean() ? d.get<bool>() : d.is_number() ? d.get<float>()>0.5f : d.is_string() && (d.get<std::string>()=="1" || d.get<std::string>()=="true");
+    }
+    return s;
+}
+bool scAliasingBox::morphBegin(const ofJson& target, std::string& reason) {
+    return morphCheck(target, reason) && macroMorph.begin(snaps, snapshotOf(target), reason);
+}
 void scAliasingBox::requireSynthdefs() {
     for(const auto& entry:std::vector<std::pair<std::string,std::string>>{
         {"AliasingBoxVoice.scsyndef","AliasingBox"},{"ModGate1.scsyndef","Modulation"},{"PolyCombSpread2.scsyndef","PolyComb"},{"mixerProEQ2.scsyndef","MixerPro"}}) {

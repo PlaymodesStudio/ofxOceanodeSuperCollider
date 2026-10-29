@@ -46,6 +46,7 @@
 #include "../../../ui/scTimelineMenu.h"
 #include "../../../timing/scScheduledInputs.h"
 #include "../shared/scSnapshots.h"
+#include "../shared/scBoxMacroMorph.h"
 #include "../shared/scVoiceCountMorph.h"
 #include "../shared/scAmpMorph.h"
 #include "../../../audio/scSynthControlBatch.h"
@@ -106,6 +107,13 @@ public:
     void presetRecallAfterSettingParameters(ofJson& json) override;
     void macroSave(ofJson& json, std::string presetFolderPath) override;
     void macroLoad(ofJson& json, std::string presetFolderPath) override;
+    // MacroMixer: a saved sound blends on the running synths
+    MorphKeys morphKeys() const override;
+    MorphHint morphHint(const ofxOceanodeAbstractParameter& p) const override;
+    bool morphCheck(const ofJson& target, std::string& reason) const override;
+    bool morphBegin(const ofJson& target, std::string& reason) override;
+    void morphApply(float t, bool switched) override { macroMorph.apply(snaps, t, switched); }
+    void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
 
     bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override {
         auto handle = [this](const std::string& key) -> ofxOceanodeAbstractParameter* {
@@ -417,6 +425,8 @@ private:
     ofJson captureSound() const;
     void applySound(const ofJson& a, const ofJson& b, float t, bool sw);
     std::vector<ofJson> factorySounds() const;
+    scBoxMacroMorph macroMorph;           // a MacroMixer morph: the start, the arrival
+    ofJson snapshotOf(const ofJson& saved) const;   // a saved patch as a sound
     std::vector<std::string> publishedKeys;
     scTimelineMenu timeline;              // "Add to Timeline" from the window
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> publishedHandles;

@@ -50,7 +50,8 @@ struct scRhythmBox {
     std::vector<int> syncSpb = std::vector<int>(MAX_TRACKS, 4);
     std::vector<bool> needHard = std::vector<bool>(MAX_TRACKS, true);
     std::vector<double> hardCounters = std::vector<double>(MAX_TRACKS, 0);
-    double syncBpm = 120, anchorIdCounter = 0;
+    double syncBpm = 120, anchorIdCounter = 0, speed = 1;
+    double speedX() const { return speed; }
     uint64_t lastAnchorUs = 0, lastAnchorTimetag = 0;
     void reloadSamplesForServer(ofxSCServer*) { ++reloads; }
     void freeServerSynths(ofxSCServer* srv) {
@@ -120,11 +121,15 @@ int main() {
     a.discontinuity = false; box.needHard[0] = true; a.beat = 1; box.sendAnchor(a);
     assert(ready->values["anchorFire"] == 1);
     box.sendAnchor(a); assert(ready->values["anchorFire"] == 0);
+    // speedX scales the tempo and the anchored step position (1.5 × beat 2 = step 12 at 4 steps/beat).
+    box.speed = 1.5; box.needHard[0] = true; a.beat = 2; box.sendAnchor(a);
+    assert(ready->values["bpm"] == 135 && ready->values["anchorPos"] == 12 && ready->values["anchorFire"] == 1);
+    box.speed = 1;
     box.free(&serverA);
     assert(!box.trackSynths.count(&serverA) && !box.outputBuses.count(&serverA) && !box.mixBuses.count(&serverA));
     const auto creations = box.creations;
     box.createSynth(&serverA); assert(box.creations == creations);
     assert(box.activeGraphServers().size() == 1);
     box.free(&serverB); assert(ofxSCBus::live == 0 && ofxSCBuffer::live == 0 && box.activeGraphServers().empty());
-    std::cout << "PASS: graph membership, stable mix bus, full rebuilds, disconnect cleanup, delayed server joins, hard/soft anchors, stop/start and tempo\n";
+    std::cout << "PASS: graph membership, stable mix bus, full rebuilds, disconnect cleanup, delayed server joins, hard/soft anchors, stop/start, tempo and speedX\n";
 }
