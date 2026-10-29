@@ -6,10 +6,12 @@
 #include "scBeatRepeatPro.h"
 #include "../../ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeDeterministicRandom.h"
+#include "imgui_internal.h"
 
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <type_traits>
@@ -137,7 +139,8 @@ void scBeatRepeatPro::setup() {
     autoResetMode.set("Reset Timing", 0, 0, 1);
     autoResetLoops.set("Reset Loops", 4.0f, 1.0f, 64.0f);
     autoResetBeats.set("Reset Beats", 4.0f, 0.125f, 64.0f);
-    snapshotActivates.set("Recall Activates", false);
+    padMode.set("Pad Mode", PadHold, PadHold, PadRecall);
+    numberKeys.set("Number Keys", true);
     momentary.set("Momentary", false);
 
     autoClock.set("Auto Clock", 2, 0, 2);
@@ -242,7 +245,7 @@ void scBeatRepeatPro::initializePublishActions() {
     add(filterType); add(cutoffPitch); add(cutoffStep); add(numCutoffSteps);
     add(resonance); add(limiter); add(ceiling);
     add(autoReset); add(autoResetMode); add(autoResetLoops); add(autoResetBeats);
-    add(snapshotActivates); add(momentary);
+    add(padMode); add(numberKeys); add(momentary);
     add(autoClock); add(autoMode); add(autoGrid); add(autoInterval); add(autoOffset); add(autoLaneSteps);
     add(autoChance); add(autoLength); add(autoSeed); add(autoEvolve);
 }
@@ -596,7 +599,7 @@ void scBeatRepeatPro::update(ofEventArgs&) {
     }
     // A release can happen after the editor is closed or undocked, in which
     // case ImGui no longer draws the originating button to report deactivation.
-    if(momentaryHoldActive && !ofGetMousePressed(OF_MOUSE_BUTTON_LEFT))
+    if(momentaryHoldActive && (momentaryFromKey ? !showWindow.get() : !ofGetMousePressed(OF_MOUSE_BUTTON_LEFT)))
         endMomentaryHold(momentarySource);
     updateAutoTrigger();
     // drawWindow refreshes this small lease directly. This is independent of
@@ -694,7 +697,8 @@ ofJson scBeatRepeatPro::captureSnapshot() const {
     snapshot["mix"] = mix.get();
     snapshot["level"] = level.get();
     for(const auto& action : publishActions)
-        if(action.key != snapshotActivates.getEscapedName()
+        if(action.key != padMode.getEscapedName()
+           && action.key != numberKeys.getEscapedName()
            && action.key != momentary.getEscapedName()
            && !isAutoKey(action.key)
            && action.key != pitchMode.getEscapedName()
@@ -724,20 +728,78 @@ void scBeatRepeatPro::storeSnapshot(int slot) {
     saveSharedSnapshotBank();
 }
 
-void scBeatRepeatPro::recallSnapshot(int slot, bool forceActivate, bool suppressActivation) {
+void scBeatRepeatPro::recallSnapshot(int slot, bool activate) {
     if(slot < 0 || slot >= (int)snapshotSlots.size() || !snapshotUsed[slot]) return;
     const bool wasRunning = go.get();
     applySnapshot(snapshotSlots[slot]);
     activeSnapshot = slot;
-    if(!suppressActivation && (forceActivate || snapshotActivates.get())) {
+    if(activate) {
+        // A pad the player started is theirs: Auto must not release it.
+        autoOwnsGo = false;
+        autoReleasePending = false;
         if(!wasRunning) go.set(true);
         else reset.set(1);
     }
 }
 
-void scBeatRepeatPro::beginMomentaryHold(int source) {
+void scBeatRepeatPro::pressPad(int slot, bool fromKey) {
+    if(slot < 0 || slot >= (int)snapshotSlots.size() || !snapshotUsed[slot]) return;
+    switch(padMode.get()) {
+        case PadHold:
+            // Recall first so Auto Reset and all sound parameters are in
+            // place before the rising Go edge begins the new capture.
+            recallSnapshot(slot, false);
+            beginMomentaryHold(slot, fromKey);
+            break;
+        case PadLatch:
+            if(go.get() && activeSnapshot == slot && !momentaryHoldActive) {
+                autoOwnsGo = false;
+                autoReleasePending = false;
+                go.set(false);
+            } else {
+                recallSnapshot(slot, true);
+            }
+            break;
+        default:
+            recallSnapshot(slot, false);
+            break;
+    }
+}
+
+void scBeatRepeatPro::releasePad(int slot) {
+    endMomentaryHold(slot);
+}
+
+void scBeatRepeatPro::handleNumberKeys(bool windowFocused) {
+    // The last BeatRepeat Pro window that had focus keeps the keys while the
+    // patch canvas is focused; any other window (a Box's keyboard piano, a
+    // text field) keeps them for itself.
+    static scBeatRepeatPro* keyboardOwner = nullptr;
+    if(windowFocused) keyboardOwner = this;
+    const ImGuiIO& io = ImGui::GetIO();
+    bool canvasFocused = false;
+    if(const ImGuiWindow* focused = ImGui::GetCurrentContext()->NavWindow)
+        canvasFocused = focused->RootWindow && std::strstr(focused->RootWindow->Name, "###Canvas") != nullptr;
+    const bool enabled = numberKeys.get() && (windowFocused || (canvasFocused && keyboardOwner == this))
+        && !io.AppFocusLost && !io.WantTextInput && !io.KeyCtrl && !io.KeySuper && !io.KeyAlt;
+    for(int slot = 0; slot < 10; ++slot) {
+        const ImGuiKey key = slot < 9 ? ImGuiKey(ImGuiKey_1 + slot) : ImGuiKey_0;
+        const ImGuiKey keypad = slot < 9 ? ImGuiKey(ImGuiKey_Keypad1 + slot) : ImGuiKey_Keypad0;
+        if(enabled && (ImGui::IsKeyPressed(key, false) || ImGui::IsKeyPressed(keypad, false))) {
+            // Shift + number stores, like Shift + click.
+            if(io.KeyShift) storeSnapshot(slot);
+            else pressPad(slot, true);
+        }
+        if(momentaryHoldActive && momentaryFromKey && momentarySource == slot
+           && !ImGui::IsKeyDown(key) && !ImGui::IsKeyDown(keypad))
+            endMomentaryHold(slot);
+    }
+}
+
+void scBeatRepeatPro::beginMomentaryHold(int source, bool fromKey) {
     momentaryHoldActive = true;
     momentarySource = source;
+    momentaryFromKey = fromKey;
     autoOwnsGo = false;
     autoReleasePending = false;
     if(go.get()) reset.set(1);
@@ -748,6 +810,7 @@ void scBeatRepeatPro::endMomentaryHold(int source) {
     if(!momentaryHoldActive || source != momentarySource) return;
     momentaryHoldActive = false;
     momentarySource = -1;
+    momentaryFromKey = false;
     if(go.get()) go.set(false);
 }
 
@@ -1140,17 +1203,12 @@ void scBeatRepeatPro::drawSnapshotMatrix() {
         const bool activated = ImGui::IsItemActivated();
         const bool deactivated = ImGui::IsItemDeactivated();
         const bool shift = ImGui::GetIO().KeyShift;
-        if(momentary.get() && !shift) {
-            if(activated && used) {
-                // Recall first so Auto Reset and all sound parameters are in
-                // place before the rising Go edge begins the new capture.
-                recallSnapshot(slot, false, true);
-                beginMomentaryHold(slot);
-            }
-            if(deactivated) endMomentaryHold(slot);
-        } else if(clicked) {
-            if(shift) storeSnapshot(slot);
-            else recallSnapshot(slot);
+        // Pads act on press (Hold also on release); Shift + click stores.
+        if(shift) {
+            if(clicked) storeSnapshot(slot);
+        } else {
+            if(activated) pressPad(slot, false);
+            if(deactivated) releasePad(slot);
         }
         ImGui::PopStyleColor(2);
         if(ImGui::BeginPopupContextItem("##snapshotMenu")) {
@@ -1280,7 +1338,21 @@ void scBeatRepeatPro::drawControls(float height) {
 
     ImGui::BeginChild("##BeatRepeatSnapshotsCard", ImVec2(cardWidth, cardHeight), true);
     drawSectionHeader("SNAPSHOTS");
-    checkbox("Recall Activates", snapshotActivates);
+    int mode = padMode.get();
+    const char* modes[] = {"Hold", "Latch", "Recall"};
+    ImGui::SetNextItemWidth(brEditorControlWidth("Pads"));
+    if(ImGui::Combo("Pads", &mode, modes, 3)) padMode.set(mode);
+    drawPublishMenu(padMode.getEscapedName());
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Hold: the pad repeats while it is held, release goes back to dry.\n"
+                          "Latch: a press starts the pad; pressing the playing pad again stops it.\n"
+                          "Recall: a press only loads the pad's settings.\n"
+                          "Shift + click (or Shift + number) stores the current settings.");
+    ImGui::SameLine();
+    checkbox("Keys 1-0", numberKeys);
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("Number keys 1..9 and 0 (or the keypad) play pads 1..10 while this\n"
+                          "window, or the patch canvas after it, has focus.");
     if(ImGui::Button("Save bank...##BeatRepeatBankSave")) snapshotSaveDialog = true;
     ImGui::SameLine();
     if(ImGui::Button("Load bank...##BeatRepeatBankLoad")) snapshotLoadDialog = true;
@@ -1299,7 +1371,8 @@ void scBeatRepeatPro::drawControls(float height) {
     drawSectionHeader("LOOP");
     checkbox("Pitch Mode", pitchMode);
     ImGui::SameLine();
-    checkbox("Momentary", momentary);
+    checkbox("Hold Go", momentary);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("The Go button repeats only while it is held.");
     if(pitchMode.get()) {
         sliderFloat("Repeat MIDI", repeatPitch, "%.2f MIDI");
         const float hz = 440.0f * std::pow(2.0f, (repeatPitch.get() - 69.0f) / 12.0f);
@@ -1573,6 +1646,8 @@ void scBeatRepeatPro::drawWindow() {
 
         drawControls(std::max(1.0f, ImGui::GetContentRegionAvail().y));
     }
+    // Also while collapsed or on a hidden dock tab, so a held key still releases.
+    handleNumberKeys(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows));
     ImGui::End();
     if(open != showWindow.get()) showWindow.set(open);
 }
@@ -1613,6 +1688,13 @@ void scBeatRepeatPro::presetRecallAfterSettingParameters(ofJson& json) {
     for(const auto& action : publishActions) {
         if(isPublished(action.key) || !json.contains(action.key) || !action.load) continue;
         action.load(json[action.key]);
+    }
+    // Presets from before Pad Mode: "Recall Activates" pads latched; plain
+    // recall pads become Hold, the new default.
+    if(!json.contains(padMode.getEscapedName()) && !isPublished(padMode.getEscapedName())) {
+        bool latched = false;
+        try { latched = json.value("Recall_Activates", std::string("0")) == "1"; } catch(...) {}
+        padMode.set(latched ? PadLatch : PadHold);
     }
     auto loadArray = [&json](const char* key, float* values, int count) {
         if(!json.contains(key) || !json[key].is_array()) return;

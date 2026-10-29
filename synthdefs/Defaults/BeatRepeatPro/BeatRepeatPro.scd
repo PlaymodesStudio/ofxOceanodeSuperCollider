@@ -23,15 +23,15 @@ File.mkdir(d +/+ "BeatRepeatPro");
 build = {|n|
     var input, recordInput, buffer, output, loopOutput, filteredLoop;
     var bufferSeconds, bufferFrames, writePos, readPos, readPhase, captureAnchor, startAnchor;
-    var musicalDur, pitchedDur, loopDur, loopSamples, offsetSamples;
-    var goRise, resetRise, manualTrig, autoTrig, captureTrig, captureActive, captureFill, captureDone, ready;
-    var cycleDur, cyclePhase, cycleBoundary, cycleTrig;
-    var feedback, stepCount, stepModulo, accumulatedPitch, pitchRatio, playRate;
+    var musicalDur, pitchedDur, loopDur, loopSamples, offsetSamples, prerollSamples;
+    var goRise, resetRise, manualTrigAr, goAr, autoTrigAr, captureTrigAr, captureTrig;
+    var captureElapsed, captureLen, captureActive, captureDone, ready, writerGate;
+    var cycleDur, cycleSamples, cycleCount, cyclePhase, cycleBoundary, cycleTrig, cycleTrigK;
+    var stepCount, currentStep, stepModulo, pitchRatio, playRate, cycleRate;
     var cutoffStepModulo, accumulatedCutoffPitch, cutoffHz;
-    var beatDur, autoPeriod, autoSeed, autoPhase, autoIncrement, autoAdvanced, autoWrap;
-    var nextStep, nextAutoPhase, nextReady;
-    var reverseSign, phaseInLoop, loopStart, loopEnd;
-    var writerGate, fadeFraction, declickEnv, gateEnv, activeWet, wetAmount, limitAmount, limited;
+    var beatDur, autoPeriod, autoSamples, autoClock, autoSoon, stepPitch, stepRatio, repeats, fullCycles, remainder, remWhole, geo, stepSum;
+    var reverseSign, phaseInLoop, loopStart, loopEnd, preroll, fadeSamples;
+    var declickEnv, gateEnv, gateOpen, dryClosed, activeWet, wetAmount, dryAmount, limitAmount, limited;
     var tick, high, low;
 
     // Existing BeatRepeat controls.  Time/transport controls intentionally use
@@ -69,7 +69,6 @@ build = {|n|
     var autoBeatsAll = OceanodeParameter.ar(\autobeats, 4, n, 0.125, 64, "vf");
     var vis = \vis.kr(0);
 
-    var go = A2K.kr(goAll[0]).clip(0, 1);
     var division = A2K.kr(divisionAll[0]).clip(0.6666667, 96);
     var bpm = A2K.kr(bpmAll[0]).clip(1, 999);
     var pitchMode = A2K.kr(pitchModeAll[0]).clip(0, 1);
@@ -83,7 +82,6 @@ build = {|n|
     var pitchStep = A2K.kr(pitchStepAll[0]).clip(-12, 12);
     var numSteps = A2K.kr(numStepsAll[0]).clip(0, 24).round(1);
     var loopAmp = A2K.kr(loopAmpAll[0]).clip(0, 2);
-    var reset = A2K.kr(resetAll[0]);
     var mix = A2K.kr(mixAll[0]).clip(0, 1);
     var inputGain = A2K.kr(inputGainAll[0]).clip(0, 2);
     var filterType = A2K.kr(filterTypeAll[0]).clip(0, 2).round(1);
@@ -110,102 +108,135 @@ build = {|n|
     // Pitch Mode treats the repeat window as one oscillator period. A MIDI 69
     // setting therefore captures/repeats 1/440 second, enabling tonal stutters.
     pitchedDur = 1 / repeatPitch.midicps;
+    // The writer keeps 1.5 s of the buffer behind the capture point intact for
+    // Offset (max 1 s) and the declick pre-roll (max 0.1 s), so a loop is at
+    // most bufferSeconds - 1.5.
     loopDur = Select.kr(pitchMode > 0.5, [musicalDur, pitchedDur])
-        .clip(SampleDur.ir, bufferSeconds - 0.01);
+        .clip(SampleDur.ir, bufferSeconds - 1.5);
     loopSamples = (loopDur * SampleRate.ir).round(1).clip(1, bufferFrames - 2);
 
     // reset is a monotonically increasing counter in the Pro node, and a
     // conventional 0/1 pulse in the metadata-generated node.  Positive edges
     // work for both and cannot create the old double-trigger on pulse release.
-    goRise = HPZ1.kr(go) > 0;
-    resetRise = HPZ1.kr(reset) > 0;
-    manualTrig = (goRise + resetRise).clip(0, 1);
+    // Every timing decision is made per sample: one-sample triggers, sample
+    // counters, no control-block rounding.  Go and Reset are read on their
+    // audio-rate ramps, which leave zero on the first sample of the block the
+    // message lands in (A2K would only see the change a block later, after a
+    // kick on that beat had already started).  A repeat started on a beat
+    // therefore keeps the transient that sits exactly on that beat.
+    goAr = goAll[0] > 0;
+    goRise = Trig1.ar(goAr, SampleDur.ir);
+    resetRise = Trig1.ar(HPZ1.ar(resetAll[0]) > 0, SampleDur.ir);
+    manualTrigAr = (goRise + resetRise).clip(0, 1);
 
-    // Explicit control-block feedback holds the pitch-step counter, automatic
-    // reset clock and ready state without creating a UGen dependency cycle.
-    feedback = LocalIn.kr(3, 0);
-    stepCount = feedback[0];
-    autoPhase = feedback[1];
-    ready = feedback[2];
-
+    // The repeat counter (pitch / cutoff steps) is the only control-block
+    // feedback; nothing about timing depends on it.
+    stepCount = LocalIn.kr(1, 0);
     stepModulo = numSteps.max(1);
     // The live pass heard during capture is the only untransposed occurrence.
     // Wet repetitions cycle through pitch steps 1..N (never 0..N-1), so the
     // very first repeated fragment already has one Pitch Step applied.
-    accumulatedPitch = ((stepCount % stepModulo) + 1) * pitchStep * (numSteps > 0);
-    pitchRatio = 2 ** (accumulatedPitch / 12);
+    stepPitch = pitchStep * (numSteps > 0);
+    cycleRate = rate * (2 ** ((((stepCount % stepModulo) + 1) * stepPitch) / 12));
+
+    // Adapt Length makes one repetition last exactly as long as it takes to
+    // traverse the same captured sample region at the current playback rate.
+    cycleDur = loopDur * Select.kr(adapt > 0.5, [1, 1 / cycleRate.abs.max(0.001)]);
+    // Each repetition fades in over the material just before the capture
+    // point and reaches full level exactly on it, so its first sample (a
+    // kick on the beat) is never faded.  The pre-roll is that fade.
+    preroll = declick.min(cycleDur * 0.49);
+    fadeSamples = (preroll * SampleRate.ir).max(1);
+
+    // Auto Reset is an audio-rate clock started by Go/Reset: every recapture
+    // lands on the exact sample of its musical position.  Repetitions mode
+    // counts occurrences (the live capture is occurrence one), adding each
+    // repetition's own length when Adapt Length follows the pitch steps.
+    // Beats mode uses the smallest whole number of Reset Beats periods that
+    // holds one capture, so recaptures stay on the beat grid.
+    beatDur = 60 / bpm;
+    stepRatio = 2 ** (stepPitch.neg / 12);
+    repeats = (autoLoops - 1).max(0);
+    fullCycles = (repeats / stepModulo).floor;
+    remainder = repeats - (fullCycles * stepModulo);
+    remWhole = remainder.floor;
+    geo = { |count| Select.kr(stepPitch.abs < 0.0001,
+        [stepRatio * (1 - (stepRatio ** count)) / (1 - stepRatio), count]) };
+    stepSum = (fullCycles * geo.(stepModulo)) + geo.(remWhole)
+        + ((remainder - remWhole) * (stepRatio ** (remWhole + 1)));
+    autoPeriod = Select.kr(autoResetMode, [
+        loopDur + Select.kr(adapt > 0.5, [repeats * loopDur, stepSum * loopDur / rate.abs.max(0.001)]),
+        (beatDur * autoBeats) * (loopDur / (beatDur * autoBeats)).ceil.max(1)
+    ]);
+    autoSamples = (autoPeriod * SampleRate.ir).max(1);
+    autoClock = Phasor.ar(manualTrigAr, 1, 0, autoSamples, -1);
+    autoTrigAr = (HPZ1.ar(autoClock) < 0) * (1 - manualTrigAr) * K2A.ar(autoReset) * goAr;
+    // The pre-roll before each recapture hands back to the live input, so the
+    // material on the recapture point (the next kick) is heard dry at full
+    // level instead of on top of a repetition.
+    autoSoon = (autoClock >= (autoSamples - fadeSamples)) * K2A.ar(autoReset);
+    captureTrigAr = (manualTrigAr + autoTrigAr).clip(0, 1);
+    captureTrig = T2K.kr(captureTrigAr);
+
+    // Capture: the live pass plays dry for one Repeat length minus the
+    // pre-roll, then the first repetition fades in and lands on the capture
+    // point one Repeat length after it.
+    captureElapsed = Sweep.ar(captureTrigAr, SampleRate.ir);
+    captureLen = Latch.ar(K2A.ar((loopDur - preroll) * SampleRate.ir), captureTrigAr);
+    captureActive = captureElapsed < captureLen;
+    captureDone = HPZ1.ar(captureElapsed >= captureLen) > 0;
+    ready = SetResetFF.ar(captureDone, captureTrigAr);
+
+    // The writer never jumps.  This keeps Offset meaningful: the requested
+    // pre-roll really is the material immediately preceding the new loop.
+    writerGate = ((1 - goAr) + (captureElapsed < ((bufferSeconds - 1.5) * SampleRate.ir))).clip(0, 1);
+    writePos = Phasor.ar(0, writerGate, 0, bufferFrames, 0);
+    // Capture the new location immediately, but keep the previous loop anchor
+    // alive while its wet signal fades out. Installing the new anchor only
+    // when capture completes makes the position jump inaudible (wet gain is 0).
+    captureAnchor = Latch.ar(writePos, captureTrigAr);
+    startAnchor = Latch.ar(captureAnchor, captureDone);
+    // BufWr has no write-enable input.  Zero the parked boundary frame while
+    // repeating instead of continuously leaking the live input into it.
+    BufWr.ar(recordInput * writerGate, buffer, writePos, loop: 1);
+
+    // Repetition clock, counted in samples.  The musical duration remains
+    // live after capture and resizes forward from the original anchor.
+    cycleSamples = (cycleDur * SampleRate.ir).max(1);
+    // A triggered Phasor outputs resetPos + rate on its trigger sample, so
+    // resetPos = -rate makes every counter read exactly 0 there.
+    cycleCount = Phasor.ar(captureDone, 1, 0, cycleSamples, -1);
+    cyclePhase = cycleCount / cycleSamples;
+    cycleBoundary = (HPZ1.ar(cycleCount) < 0) * ready * (1 - captureDone);
+    cycleTrig = captureDone + cycleBoundary;
+    cycleTrigK = T2K.kr(cycleTrig);
+
+    currentStep = Select.kr(captureTrig > 0, [(stepCount + T2K.kr(cycleBoundary)) % 65536, 0]);
+    LocalOut.kr(currentStep);
+    pitchRatio = 2 ** ((((currentStep % stepModulo) + 1) * stepPitch) / 12);
     playRate = rate * pitchRatio;
 
     // Cutoff has an independent semitone sequence but follows the same repeat
     // counter. Clamp after modulation and MIDI conversion so the filter never
     // receives an unsafe frequency, even when the sequence exceeds its base range.
     cutoffStepModulo = numCutoffSteps.max(1);
-    accumulatedCutoffPitch = ((stepCount % cutoffStepModulo) + 1)
+    accumulatedCutoffPitch = ((currentStep % cutoffStepModulo) + 1)
         * cutoffStep * (numCutoffSteps > 0);
     cutoffHz = (cutoffPitch + accumulatedCutoffPitch).midicps.clip(20, 20000);
 
-    // Adapt Length makes one repetition last exactly as long as it takes to
-    // traverse the same captured sample region at the current playback rate.
-    cycleDur = loopDur * Select.kr(adapt > 0.5, [1, 1 / playRate.abs.max(0.001)]);
+    offsetSamples = Latch.kr((offsetMs * 0.001 * SampleRate.ir).round(1), cycleTrigK);
+    // Buffer frames the head covers during the fade-in at this repetition's rate.
+    prerollSamples = Latch.kr((preroll * SampleRate.ir * playRate.abs).round(1)
+        .min(loopSamples * 0.49), cycleTrigK);
 
-    // Repetitions mode preserves the existing occurrence count: the live
-    // capture is occurrence one, so the clock is seeded by 1 / autoLoops.
-    // Beats mode instead measures elapsed quarter-note beats from the capture
-    // trigger, independently of loop size and playback rate.  Its seed accounts
-    // for the capture time that has already elapsed before ready becomes true.
-    beatDur = 60 / bpm;
-    autoPeriod = Select.kr(autoResetMode, [cycleDur * autoLoops, beatDur * autoBeats]);
-    autoSeed = Select.kr(autoResetMode, [1 / autoLoops, loopDur / (beatDur * autoBeats)]);
-    autoIncrement = ControlDur.ir / autoPeriod.max(ControlDur.ir);
-    autoAdvanced = autoPhase + (autoIncrement * autoReset * go * ready);
-    autoWrap = autoAdvanced >= 1;
-    autoTrig = autoWrap * autoReset * go * ready;
-    captureTrig = (manualTrig + autoTrig).clip(0, 1);
-
-    // Playback starts after the current musical duration at Go/Reset. The
-    // writer keeps filling the full forward window in the background, so later
-    // duration increases still grow from the invariant Go point.
-    captureActive = Trig1.kr(captureTrig, loopDur);
-    captureFill = Trig1.kr(captureTrig, bufferSeconds);
-    captureDone = TDelay.kr(captureTrig, loopDur);
-
-    // The writer never jumps.  This keeps Offset meaningful: the requested
-    // pre-roll really is the material immediately preceding the new loop.
-    writerGate = ((1 - go) + captureFill).clip(0, 1);
-    writePos = Phasor.ar(0, K2A.ar(writerGate),
-        0, bufferFrames, 0);
-    // Capture the new location immediately, but keep the previous loop anchor
-    // alive while its wet signal fades out. Installing the new anchor only
-    // when capture completes makes the position jump inaudible (wet gain is 0).
-    captureAnchor = Latch.ar(writePos, K2A.ar(captureTrig));
-    startAnchor = Latch.ar(captureAnchor, K2A.ar(captureDone));
-    // BufWr has no write-enable input.  Zero the parked boundary frame while
-    // repeating instead of continuously leaking the live input into it.
-    BufWr.ar(recordInput * K2A.ar(writerGate), buffer, writePos, loop: 1);
-
-    // The musical duration remains live after capture and resizes forward from
-    // the original anchor without requiring a new Go/Reset.
-    cyclePhase = Phasor.ar(K2A.ar(captureDone),
-        1 / (SampleRate.ir * cycleDur.max(SampleDur.ir)), 0, 1, 0);
-    cycleBoundary = (HPZ1.ar(cyclePhase) < 0) * K2A.ar(ready);
-    cycleTrig = K2A.ar(captureDone) + cycleBoundary;
-    offsetSamples = Latch.kr((offsetMs * 0.001 * SampleRate.ir).round(1), A2K.kr(cycleTrig));
-
-    nextStep = Select.kr(captureTrig > 0,
-        [(stepCount + T2K.kr(cycleBoundary)) % 65536, 0]);
-    nextAutoPhase = Select.kr(captureTrig > 0,
-        [Select.kr(captureDone > 0, [autoAdvanced.wrap(0, 1), autoSeed]), 0]) * autoReset;
-    nextReady = Select.kr(captureTrig > 0,
-        [Select.kr(captureDone > 0, [ready, 1]), 0]) * go;
-    LocalOut.kr([nextStep, nextAutoPhase, nextReady]);
-
-    readPhase = Phasor.ar(cycleTrig, K2A.ar(playRate.abs), 0, K2A.ar(loopSamples), 0);
+    readPhase = Phasor.ar(cycleTrig, playRate.abs, 0, loopSamples, playRate.abs.neg);
     reverseSign = K2A.ar(reverse);
     phaseInLoop = (readPhase * (1 - reverseSign))
         + ((K2A.ar(loopSamples) - 1 - readPhase) * reverseSign);
-    // Offset zero means the first sample is exactly where Go/Reset was pressed.
-    // Musical duration changes resize forward from that invariant anchor.
-    loopStart = (startAnchor - K2A.ar(offsetSamples)).wrap(0, bufferFrames);
+    // Offset zero means the capture point is heard exactly one pre-roll into
+    // each repetition (forward); Reverse plays the window backwards as before.
+    loopStart = (startAnchor - K2A.ar(offsetSamples)
+        - (K2A.ar(prerollSamples) * (1 - reverseSign))).wrap(0, bufferFrames);
     loopEnd = (loopStart + K2A.ar(loopSamples)).wrap(0, bufferFrames);
     readPos = (loopStart + phaseInLoop).wrap(0, bufferFrames - 1);
 
@@ -216,20 +247,32 @@ build = {|n|
         + (RHPF.ar(loopOutput, K2A.ar(cutoffHz), K2A.ar(rq))
             * K2A.ar(BinaryOpUGen('==', filterType, 2)));
 
-    fadeFraction = (K2A.ar(declick) / K2A.ar(cycleDur.max(SampleDur.ir))).clip(0.000001, 0.49);
-    declickEnv = (((cyclePhase / fadeFraction).min((1 - cyclePhase) / fadeFraction))
+    declickEnv = (((cycleCount / fadeSamples).min((cycleSamples - cycleCount) / fadeSamples))
         .clip(0, 1) * (pi * 0.5)).sin;
-    gateEnv = LagUD.ar(K2A.ar(cyclePhase < gate), K2A.ar(declick), K2A.ar(declick));
+    // Gate is a fraction of the repetition measured from the capture point,
+    // which sits one pre-roll into the cycle.
+    gateOpen = (cycleCount < (fadeSamples + (gate * cycleSamples))) + (gate >= 1);
+    gateEnv = LagUD.ar(gateOpen.clip(0, 1), K2A.ar(declick), K2A.ar(declick));
     loopOutput = filteredLoop * declickEnv * gateEnv * K2A.ar(loopAmp);
 
-    // Capture/reset monitoring stays dry.  Linear mixing cannot add the +3 dB
-    // midpoint boost of XFade2, and exact dry remains exact when Mix is zero.
-    // Auto/manual recapture changes the source from the loop to live input.
-    // Smooth both edges with the existing Declick time; an instantaneous
-    // source swap is discontinuous whenever live and buffered samples differ.
-    activeWet = Ramp.ar(K2A.ar(go * ready * (1 - captureActive)), declick);
+    // Gate < 1 also shapes the live pass while it is being captured: the dry
+    // closes at the same point of the Repeat length and stays closed until
+    // the first repetition takes over (or Go is released).
+    dryClosed = SetResetFF.ar(
+        captureActive * (captureElapsed >= (gate * loopDur * SampleRate.ir)) * K2A.ar(gate < 1),
+        captureTrigAr + (HPZ1.ar(autoSoon) > 0)) * goAr;
+    dryClosed = Slew.ar(dryClosed, 1 / preroll, 1 / preroll);
+
+    // Linear mixing cannot add the +3 dB midpoint boost of XFade2, and exact
+    // dry remains exact when Mix is zero.  The wet fades in over the pre-roll
+    // (so it is full on the capture point), out over the pre-roll before an
+    // Auto Reset (so it is gone on the recapture point) and over Declick
+    // otherwise.
+    activeWet = Slew.ar(goAr * ready * (1 - captureActive) * (1 - autoSoon),
+        1 / preroll, Select.ar(autoSoon, [K2A.ar(1 / declick), K2A.ar(1 / preroll)]));
     wetAmount = activeWet * K2A.ar(mix);
-    output = (input * (1 - wetAmount)) + (loopOutput * wetAmount);
+    dryAmount = 1 - (K2A.ar(mix) * (activeWet + (dryClosed * (1 - activeWet))));
+    output = (input * dryAmount) + (loopOutput * wetAmount);
     output = output * levels;
     // Mix = 0 is a true bypass, including the safety limiter.
     limitAmount = K2A.ar(limiterOn * (mix > 0)) * activeWet;
@@ -250,7 +293,7 @@ build = {|n|
         loopStart / bufferFrames,
         loopEnd / bufferFrames,
         activeWet,
-        K2A.ar(captureActive),
+        captureActive,
         cyclePhase
     ]);
 

@@ -107,8 +107,13 @@ private:
     ofParameter<int>   autoResetMode;
     ofParameter<float> autoResetLoops;
     ofParameter<float> autoResetBeats;
-    ofParameter<bool>  snapshotActivates;
-    ofParameter<bool>  momentary;
+    // How a snapshot pad plays: 0 = Hold (repeats while pressed), 1 = Latch
+    // (press starts it, pressing the playing pad again stops it), 2 = Recall
+    // (loads the sound only).
+    enum PadMode { PadHold = 0, PadLatch = 1, PadRecall = 2 };
+    ofParameter<int>   padMode;
+    ofParameter<bool>  numberKeys;    // 1..9, 0 play pads 1..10
+    ofParameter<bool>  momentary;     // the Go button only
 
     // Auto Trigger: a transport-locked machine that, on each grid step,
     // decides whether to fire a repeat and which snapshot it uses.
@@ -200,6 +205,7 @@ private:
     std::string snapshotBankMessage;
     bool momentaryHoldActive = false;
     int momentarySource = -1; // -2 = Go, 0..23 = snapshot slot
+    bool momentaryFromKey = false;
 
     struct PublishAction {
         std::string key;
@@ -258,12 +264,15 @@ private:
     void drawSectionHeader(const char* title);
     void drawSnapshotMatrix();
     void storeSnapshot(int slot);
-    void recallSnapshot(int slot, bool forceActivate = false, bool suppressActivation = false);
+    void recallSnapshot(int slot, bool activate);
+    void pressPad(int slot, bool fromKey);
+    void releasePad(int slot);
+    void handleNumberKeys(bool windowFocused);
     std::string sharedSnapshotBankPath() const;
     bool saveSnapshotBank(const std::string& path, bool report = true);
     bool loadSnapshotBank(const std::string& path, bool installAsShared = true, bool report = true);
     void saveSharedSnapshotBank();
-    void beginMomentaryHold(int source);
+    void beginMomentaryHold(int source, bool fromKey = false);
     void endMomentaryHold(int source);
     ofJson captureSnapshot() const;
     void applySnapshot(const ofJson& snapshot);
