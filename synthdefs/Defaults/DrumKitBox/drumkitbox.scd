@@ -344,13 +344,14 @@ layer.(\DKMetal, { |poly|
         sig = XFade2.ar(sig, filtered, \filteron.kr(0).lag(0.02) * 2 - 1);
 
         // the step filter: each hit's Filter (the Drum Grid's per-step LP / HP),
-        // -1 low-pass down to 60 Hz .. 0 open (bypassed) .. +1 high-pass up to
-        // 12 kHz, resonance Step Filter Reso
+        // 24 dB / octave: -1 low-pass down to 10 Hz (a kick nearly gone) .. 0 open
+        // (bypassed) .. +1 high-pass up to 18 kHz, resonance Step Filter Reso
         sf = Lag.ar(h[kFilt], 0.002);
-        lpf = 20000 * ((60 / 20000) ** sf.clip(-1, 0).neg);
-        hpf = 20 * ((12000 / 20) ** sf.clip(0, 1));
-        srq = 1 - (\sfreso.kr(0.2).clip(0, 1) * 0.9);
-        stepped = RHPF.ar(RLPF.ar(sig, lpf, srq), hpf, srq);
+        lpf = 20000 * ((10 / 20000) ** sf.clip(-1, 0).neg);
+        hpf = 20 * ((18000 / 20) ** sf.clip(0, 1));
+        srq = (1 - (\sfreso.kr(0.2).clip(0, 1) * 0.9)).sqrt;
+        stepped = RLPF.ar(RLPF.ar(sig, lpf, srq), lpf, srq);
+        stepped = RHPF.ar(RHPF.ar(stepped, hpf, srq), hpf, srq);
         sig = XFade2.ar(sig, stepped, ((sf.abs * 40).clip(0, 1) * 2) - 1);
 
         // character
