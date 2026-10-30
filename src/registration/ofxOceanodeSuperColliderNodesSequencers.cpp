@@ -24,11 +24,11 @@ void registerSequencerNodes(ofxOceanode &o){
 
 	o.registerModel<scPitch>("SuperCollider/Sequencing");
 	o.registerModel<scChord>("SuperCollider/Sequencing");
-	o.registerModel<scMetroBox>("SuperCollider/boxSynths");
-	o.registerModel<scEuclideanBox>("SuperCollider/boxSynths");
-	o.registerModel<scArpeggiatorBox>("SuperCollider/boxSynths");
-	o.registerModel<scChordBox>("SuperCollider/boxSynths");
-	o.registerModel<scRhythmBox>("SuperCollider/boxSynths", controller->getServers());
+	o.registerModel<scMetroBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots);
+	o.registerModel<scEuclideanBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots);
+	o.registerModel<scArpeggiatorBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots);
+	o.registerModel<scChordBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots);
+	o.registerModel<scRhythmBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scDataBox>("SuperCollider/boxSynths", controller->getServers());
 }
 

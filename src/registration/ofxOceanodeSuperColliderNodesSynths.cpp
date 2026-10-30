@@ -32,24 +32,24 @@ namespace ofxOceanodeSuperCollider{
 void registerSynthNodes(ofxOceanode &o){
     auto controller = o.getController<ofxOceanodeSuperColliderController>();
 
-	o.registerModel<scWavetableBox>("SuperCollider/boxSynths", controller->getServers());
-	o.registerModel<scAdditiveBox>("SuperCollider/boxSynths", controller->getServers());
-	o.registerModel<scPulsarBox>("SuperCollider/boxSynths", controller->getServers());
+	o.registerModel<scWavetableBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
+	o.registerModel<scAdditiveBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
+	o.registerModel<scPulsarBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scFM7>("SuperCollider/Generators");
 	o.registerModel<scFM7Drone>("SuperCollider/Generators");
-	o.registerModel<scFMBox>("SuperCollider/boxSynths", controller->getServers());
+	o.registerModel<scFMBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scDynGenNode>("SuperCollider/Generators");
 	o.registerModel<pinkTromboneNode>("SuperCollider/Generators", ofxOceanodeNodeRegistrationFlags::Sink);
-	o.registerModel<scGrainBoxPoly>("SuperCollider/boxSynths", controller->getServers());
+	o.registerModel<scGrainBoxPoly>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scGrainFxBox>("SuperCollider/boxSynths", controller->getServers());   // GrainBox on the In port
-	o.registerModel<scSampleBox>("SuperCollider/boxSynths", controller->getServers());
-	o.registerModel<scDrumKitBox>("SuperCollider/boxSynths", controller->getServers());
-	o.registerModel<scSlicerBox>("SuperCollider/boxSynths", controller->getServers());
-	o.registerModel<scAnalogBox>("SuperCollider/boxSynths", controller->getServers());
-	o.registerModel<scAliasingBox>("SuperCollider/boxSynths", controller->getServers());
-	o.registerModel<scPhysicalBox>("SuperCollider/boxSynths", controller->getServers());
-	o.registerModel<scSteamPipeBox>("SuperCollider/boxSynths", controller->getServers());
-	o.registerModel<scPolyComb>("SuperCollider/boxSynths", controller->getServers());
+	o.registerModel<scSampleBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
+	o.registerModel<scDrumKitBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
+	o.registerModel<scSlicerBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
+	o.registerModel<scAnalogBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
+	o.registerModel<scAliasingBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
+	o.registerModel<scPhysicalBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
+	o.registerModel<scSteamPipeBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
+	o.registerModel<scPolyComb>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 }
 
 }

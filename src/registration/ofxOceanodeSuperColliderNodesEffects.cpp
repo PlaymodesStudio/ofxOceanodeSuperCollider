@@ -29,7 +29,7 @@ void registerEffectNodes(ofxOceanode &o){
 	o.registerModel<scGraphicEQ>("SuperCollider/Effects");
 	o.registerModel<scVelvetReverb>("SuperCollider/Effects");
 	o.registerModel<scBeatRepeatPro>("SuperCollider/Effect/Time/Looping", controller->getServers());
-	o.registerModel<scEchoBox>("SuperCollider/boxSynths", controller->getServers());
+	o.registerModel<scEchoBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scRave>("SuperCollider/Effects", controller->getServers());
 }
 

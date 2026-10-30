@@ -41,7 +41,7 @@ void registerUtilNodes(ofxOceanode &o){
 	o.registerModel<scBufferBrowser>("SuperCollider/Buffers", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
 	o.registerModel<scRecbufHold>("SuperCollider/Recording", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
 	o.registerModel<scA2k>("SuperCollider/Analysis", controller->getServers());
-	o.registerModel<scOutput>("SuperCollider/Routing", controller->getServers());
+	o.registerModel<scOutput>("SuperCollider/Routing", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scPolyMixer>("SuperCollider/Routing");
 	o.registerModel<scMixerPro>("SuperCollider/Routing", controller->getServers());
 	o.registerModel<scChannelRouterMatrix>("SuperCollider/Routing");
