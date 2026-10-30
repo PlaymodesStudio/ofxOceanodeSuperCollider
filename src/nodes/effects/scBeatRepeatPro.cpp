@@ -6,6 +6,7 @@
 #include "scBeatRepeatPro.h"
 #include "../../ofxOceanodeSuperColliderConfig.h"
 #include "ofxOceanodeDeterministicRandom.h"
+#include "ofxOceanodeShared.h"
 #include "imgui_internal.h"
 
 #include <chrono>
@@ -108,6 +109,7 @@ void scBeatRepeatPro::setup() {
     addParameter(showWindow.set("Show", false));
     addParameter(numChannels.set("N Chan", 2, 1, MAX_CHANNELS));
     addParameter(go.set("Go", false));
+    addParameter(snapshotSelect.set("Snapshot", 0, 0, SNAPSHOT_COUNT));
     addParameter(repeatDivision.set("Repeat", 16.0f, 1.0f / 1.5f, 96.0f));
     addParameter(mix.set("Mix", 1.0f, 0.0f, 1.0f));
     addParameter(level.set("Level", 1.0f, 0.0f, 2.0f));
@@ -188,6 +190,7 @@ void scBeatRepeatPro::setup() {
         autoReleasePending = false;
         sendGo();
     }));
+    nodeListeners.push(snapshotSelect.newListener([this](int& value) { selectSnapshotParam(value); }));
     nodeListeners.push(autoEnabled.newListener([this](bool& value) {
         if(!value) stopAutoTrigger();
     }));
@@ -755,6 +758,31 @@ void scBeatRepeatPro::stopPadGo() {
     if(!padGo) return;
     padGo = false;
     sendGo(); // back to whatever Go itself says (dry unless a lane holds it)
+}
+
+void scBeatRepeatPro::selectSnapshotParam(int value) {
+    // A preset only restores the number; a cable or lane that keeps writing
+    // it plays the slot on its next write.
+    if(ofxOceanodeShared::isPresetLoading()) {
+        paramSlot = -1;
+        if(paramGo) { paramGo = false; sendGo(); }
+        return;
+    }
+    const int slot = value - 1;
+    if(slot == paramSlot) return; // a lane or cable writes it every frame
+    paramSlot = slot;
+    if(slot < 0 || slot >= (int)snapshotSlots.size() || !snapshotUsed[slot]) {
+        if(paramGo) { paramGo = false; sendGo(); }
+        return;
+    }
+    recallSnapshot(slot, false);
+    if(padMode.get() == PadRecall) return;
+    autoOwnsGo = false;
+    autoReleasePending = false;
+    const bool playing = goValue() > 0.0f;
+    paramGo = true;
+    if(playing) reset.set(1); // already repeating: cut in with a fresh capture
+    else sendGo();
 }
 
 void scBeatRepeatPro::pressPad(int slot, bool fromKey) {

@@ -75,6 +75,9 @@ private:
     ofParameter<bool>  showWindow;
     ofParameter<int>   numChannels;
     ofParameter<bool>  go;
+    // The snapshot matrix on the node: 0 = none, 1..24 play that pad while
+    // it stays selected (Pad Mode Recall only recalls it).
+    ofParameter<int>   snapshotSelect;
     // Effective musical denominator: 16 = a sixteenth note. Dotted and
     // triplet choices use their duration-equivalent denominators.
     ofParameter<float> repeatDivision;
@@ -210,7 +213,12 @@ private:
     // ORed with the Go parameter: a timeline lane or cable driving Go keeps
     // writing it every frame and must not cancel the performer's pad.
     bool padGo = false;
-    float goValue() const { return go.get() || padGo ? 1.0f : 0.0f; }
+    // The Snapshot parameter plays on its own too, so a GUI pad released
+    // while it holds a slot does not cut it.
+    bool paramGo = false;
+    int paramSlot = -1;
+    float goValue() const { return go.get() || padGo || paramGo ? 1.0f : 0.0f; }
+    void selectSnapshotParam(int value);
     void sendGo();
     void startPadGo();
     void stopPadGo();
