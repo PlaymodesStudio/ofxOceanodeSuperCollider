@@ -28,6 +28,8 @@
 //              transport is and runs at the fitted speed. The transport
 //              clock follows scTransportSync's anchors (\anchorId, \anchorPos
 //              in beats, kept small by C++, \run, \tbpm).
+//   \dur       the note's Duration (latched per voice): varispeed, x2 =
+//              twice as long and an octave lower
 (
 var root, dir, targetRanges, modOf;
 root = if(thisProcess.nowExecutingPath.notNil,
@@ -118,7 +120,7 @@ modOf = { |k, base|
                     var voiceTrig, choke, held, vm, pitch, speed, step, start, finish;
                     var frames, startFrame, finishFrame, len, loopOn, fade, loopLen, pos, offset;
                     var fadeMix, xoff, rev, frame, xframe, edge, amp, voicePan, read;
-                    var syncPhase, syncLoop, syncShot, endPos;
+                    var syncPhase, syncLoop, syncShot, endPos, hitDur;
                     var left, right, left2, right2, raw;
                     voiceTrig = trig * ((voiceIndex - v).abs < 0.5) * (Select.kr(polyMode, [2, voiceLimit]) > v);
                     // another note took over in mono mode, or the choke group cut it: fade out fast
@@ -135,6 +137,9 @@ modOf = { |k, base|
                     // timeline keeps its speed. Resample: speed and pitch.
                     pitch = pitch + \transpose.kr(0).clip(-48, 48).lag(0.03)
                         + (gg[14] * 0.01 * Rand(-1, 1));   // Global Pitch: this voice's detune (the transpose is in gq)
+                    // the note's Duration (timeline Drum Grid), tape varispeed:
+                    // x2 plays it twice as long and an octave lower, in both modes
+                    hitDur = Latch.kr(\dur.kr(1), voiceTrig).clip(0.04, 24);
                     speed = vm.(2, rateBase).clip(0.01, 16);
                     start = vm.(3, inBase).clip(0, 0.9999);
                     finish = vm.(4, outBase).clip(start + 0.00001, 1);
@@ -149,7 +154,7 @@ modOf = { |k, base|
                         0, { speed * (2 ** ((pitch - 60) / 12)) },
                         1, { speed / vm.(28, \stretch.kr(1)).clip(0.125, 8) },
                         { (speed * (2 ** ((pitch - 60) / 12)) * (1 - stretchMix))
-                            + (speed / vm.(28, \stretch.kr(1)).clip(0.125, 8) * stretchMix) }) * BufRateScale.kr(buf) * fitRate;
+                            + (speed / vm.(28, \stretch.kr(1)).clip(0.125, 8) * stretchMix) }) * BufRateScale.kr(buf) * fitRate / hitDur;
                     pos = Sweep.ar(T2A.ar(voiceTrig), step * SampleRate.ir);  // frames since the note started
                     loopOn = \loop.kr(0) > 0.5;
                     // Sync: the transport's phase over the region (x Rate); a
@@ -176,7 +181,7 @@ modOf = { |k, base|
                     xframe = Select.ar(rev, [startFrame + xoff, finishFrame - 1 - xoff]);
                     read = { |b, at|
                         var resampled = { BufRd.ar(1, b, at, 0, 4) };
-                        var stretched = { Warp1.ar(1, b, at / frames, 2 ** ((pitch - 60) / 12),
+                        var stretched = { Warp1.ar(1, b, at / frames, 2 ** ((pitch - 60) / 12) / hitDur,
                             vm.(32, \warpwindow.kr(0.15)).clip(0.01, 1), -1, 8, 0, 4) };
                         switch(stretchVariant, 0, resampled, 1, stretched,
                             { (resampled.value * (1 - stretchMix)) + (stretched.value * stretchMix) })

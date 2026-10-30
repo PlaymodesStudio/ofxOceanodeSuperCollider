@@ -135,8 +135,11 @@ void scSampleBox::setup() {
     triggerHandle = addParameter(trigger.set("Trigger/Gate", {0.0f}, {0.0f}, {1.0f}));
     pitchIn.attach(addParameter(pitch.set("Pitch", {60.0f}, {0.0f}, {127.0f})), availableInputs,
                    [this](){ for(auto& o : outputs) o = o; });
+    // Duration: per channel, the next note's varispeed (x2 = twice as long, an octave lower)
+    durationHandle = addParameter(duration.set("Duration", {1.0f}, {0.1f}, {24.0f}));
     noteInputs.add(triggerHandle, trigger);
     noteInputs.add(pitchIn.handle, pitch);
+    noteInputs.add(durationHandle, duration);
     noteInputs.enable(this, [this](){
         for(auto& p : pads) for(auto& [srv, sc] : p->sc) if(sc.engine) return true;
         return false;
@@ -163,6 +166,10 @@ void scSampleBox::setup() {
         }
     }));
     nodeListeners.push(pitch.newListener([this](std::vector<float>&) {
+        if(scScheduling::isBackendSendSuppressed()) return;
+        for(auto& p : pads) sendChannelInputs(*p,true);
+    }));
+    nodeListeners.push(duration.newListener([this](std::vector<float>&) {
         if(scScheduling::isBackendSendSuppressed()) return;
         for(auto& p : pads) sendChannelInputs(*p,true);
     }));
@@ -883,6 +890,7 @@ void scSampleBox::applyDecoded(Pad& p, scSlicerBox::Audio&& a) {
         const int bin = (int)((int64_t)f * 4096 / a.frames);
         s.peaks[bin] = std::max(s.peaks[bin], std::min(1.0f, std::abs(a.mono[f])));
     }
+    ++s.peaksVersion;
     // a pad still named after its position: the file's name
     if(p.name == "Pad " + ofToString(p.index + 1))
         p.name = std::filesystem::path(a.path).stem().string().substr(0, 24);
@@ -975,6 +983,7 @@ void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p, bool includeNotes) {
     updates.set("trigbus", inputBuses.count(srv) && inputBuses[srv] >= 0 ? inputBuses[srv] + ch : -1);
     const int pb = pitchIn.bus(srv);
     if(pb >= 0) s->mapan("pitch", pb + ch, 1); else updates.set("pitch", valueFor(pitch.get(), ch, 60.0f));
+    updates.set("dur", valueFor(duration.get(), ch, 1.0f));
     updates.set("velocity", 1.0f); // Trigger/Gate carries note velocity.
     if(!p.auditionHeld && !p.autoPlaying) updates.set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
     }
@@ -1023,10 +1032,65 @@ void scSampleBox::sendStrip(ofxSCServer* srv, Pad& p) {
 bool scSampleBox::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
     if(!triggerHandle) return false;
     out.gate = triggerHandle.get();
+    out.pitch = pitchIn.handle.get();
+    out.duration = durationHandle.get();
     out.velocity = nullptr;
     out.kit = true;
     out.voices = 1;
     for(const auto& p : pads) out.voices = std::max(out.voices, padChannel(*p) + 1);
+    out.rowNames.assign(out.voices, std::string());
+    for(const auto& p : pads) {
+        auto& n = out.rowNames[padChannel(*p)];
+        n = n.empty() ? p->name : n + " + " + p->name;
+    }
+    // a colour per pad (DrumKitBox's set); a channel several pads play takes the first one's
+    static const unsigned char padRGB[8][3] = {
+        {236, 150,  80}, {108, 180, 232}, {230, 200,  90}, {228, 122, 146},
+        {120, 200, 140}, {186, 146, 232}, { 96, 200, 176}, {232, 146, 104}};
+    out.rowColors.assign(out.voices, ofColor(130, 130, 140));   // a channel no pad plays: grey
+#ifdef OFXOCEANODE_HAS_TIMELINE_ROW_WAVEFORMS
+    out.rowWaveforms.assign(out.voices, {});
+#endif
+    std::vector<bool> taken(out.voices, false);
+    for(auto& up : pads) {
+        Pad& p = *up;
+        const int ch = padChannel(p);
+        if(taken[ch]) continue;
+        taken[ch] = true;
+        const auto* rgb = padRGB[p.index % 8];
+        out.rowColors[ch] = ofColor(rgb[0], rgb[1], rgb[2]);
+#ifdef OFXOCEANODE_HAS_TIMELINE_ROW_WAVEFORMS
+        // what one hit plays: the In..Out region, backwards when reversed
+        const Sample& smp = *p.sample;
+        if(smp.peaks.empty() || smp.seconds <= 0.0f) continue;
+        const float in = p.inPoint.get(), outPt = std::max(in, p.outPoint.get());
+        if(!p.hitPeaks || p.hitPeaksVersion != smp.peaksVersion || p.hitPeaksIn != in ||
+           p.hitPeaksOut != outPt || p.hitPeaksReverse != p.reverse.get()) {
+            const int bins = (int)smp.peaks.size();
+            const int b0 = std::clamp((int)(in * bins), 0, bins - 1);
+            const int b1 = std::clamp((int)std::ceil(outPt * bins), b0 + 1, bins);
+            auto region = std::make_shared<std::vector<float>>(smp.peaks.begin() + b0, smp.peaks.begin() + b1);
+            if(p.reverse.get()) std::reverse(region->begin(), region->end());
+            p.hitPeaks = region;
+            p.hitPeaksVersion = smp.peaksVersion;
+            p.hitPeaksIn = in;
+            p.hitPeaksOut = outPt;
+            p.hitPeaksReverse = p.reverse.get();
+        }
+        auto& w = out.rowWaveforms[ch];
+        w.peaks = p.hitPeaks;
+        // the synth's speed at pitch 60 (samplebox.scd): Rate x Fit, and Transpose
+        // (Resample) or 1 / Stretch (Stretch mode)
+        const bool resample = p.stretchMode.get() == 0;
+        double speed = p.rate.get() * (double)fitRateOf(p);
+        speed *= resample ? std::pow(2.0, p.transpose.get() / 12.0) : 1.0 / std::max(0.125f, p.stretch.get());
+        w.seconds = (outPt - in) * smp.seconds / std::max(1e-3, speed);
+        w.loops = p.loop.get();
+        w.gated = p.gateMode.get();
+        w.mono = !p.poly.get();
+        w.pitchChangesLength = resample;
+#endif
+    }
     return true;
 }
 #endif
@@ -1040,6 +1104,7 @@ void scSampleBox::sendChannelInputs(Pad& p, bool pitchOnly) {
         if(!pitchOnly) s->set("trigbus", inputBuses.count(srv) && inputBuses[srv] >= 0 ? inputBuses[srv] + ch : -1);
         const int pb = pitchIn.bus(srv);
         if(pb >= 0) s->mapan("pitch", pb + ch, 1); else s->set("pitch", valueFor(pitch.get(), ch, 60.0f));
+        s->set("dur", valueFor(duration.get(), ch, 1.0f));
         if(!pitchOnly) s->set("velocity", 1.0f); // Trigger/Gate carries note velocity.
         if(!pitchOnly && !p.auditionHeld && !p.autoPlaying) s->set("gate", ch < (int)trigger.get().size() ? trigger.get()[ch] : 0.0f);
     }

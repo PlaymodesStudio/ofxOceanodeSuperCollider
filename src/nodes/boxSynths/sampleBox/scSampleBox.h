@@ -145,6 +145,7 @@ private:
         int channels = 1;
         float seconds = 0.0f, rate = 0.0f;
         std::vector<float> peaks;
+        int peaksVersion = 0;            // bumped when peaks change
         std::future<scSlicerBox::Audio> task;
         std::string decodingPath, pendingFile, error;
         std::map<ofxSCServer*, std::vector<ofxSCBuffer*>> buffers;
@@ -190,6 +191,11 @@ private:
         bool autoPlaying = false;        // Play With Transport holds a note now
         bool loopRunning = false;        // a looping note was started (Play, Trigger/Gate) and not stopped
         bool synced() const { return sync.get() && fitBeats.get() > 0.0f; }
+        // The timeline's waveform of a hit (the region, in playing order), rebuilt when these change
+        std::shared_ptr<const std::vector<float>> hitPeaks;
+        int hitPeaksVersion = -1;
+        float hitPeaksIn = -1.0f, hitPeaksOut = -1.0f;
+        bool hitPeaksReverse = false;
         // Mixer
         ofParameter<float> level;
         ofParameter<bool> mute, solo;
@@ -243,8 +249,8 @@ private:
 
     // ── The node's parameters ───────────────────────────────────────────────
     ofParameter<bool> showWindow;
-    ofParameter<std::vector<float>> trigger, pitch;   // per channel
-    std::shared_ptr<ofxOceanodeAbstractParameter> triggerHandle;
+    ofParameter<std::vector<float>> trigger, pitch, duration;   // per channel
+    std::shared_ptr<ofxOceanodeAbstractParameter> triggerHandle, durationHandle;
     scScheduledInputs noteInputs;    // the timeline's notes, timetagged
     ofParameter<float> gain;                                    // the mix's (and every Pad output's) level
     ofParameter<int> channels;                                  // N Chan
