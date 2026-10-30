@@ -227,7 +227,7 @@ private:
     static constexpr int mouseKey = -1000;
     struct Note { int key; float pitch; };
     int base = 60, first = 0, count = 0;
-    bool serviced = false, hold = false, expanded = true, fillAllVoices = false;
+    bool serviced = false, hold = false, expanded = false, fillAllVoices = false;
     Notes* gates = nullptr;
     std::vector<Note> held, slots;
 };

@@ -321,7 +321,7 @@ clicked again; disabling Hold releases them. **Release** stops local notes.
 one note plays every voice, and smaller chords repeat cyclically to fill the
 voice count. It applies to computer keys, mouse playing, and Hold; changing it
 also updates notes already playing. Releasing all notes closes every local gate.
-Folding **Piano** preserves latched notes and computer-keyboard playing while
+**Piano** starts folded in every new editor. Folding it preserves latched notes and computer-keyboard playing while
 reclaiming space. Hiding/collapsing the editor releases its local notes.
 
 Use `beginContent()` / `endContent()` for the fixed footer, and call
