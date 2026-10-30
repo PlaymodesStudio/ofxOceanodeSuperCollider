@@ -487,6 +487,7 @@ LFO/envelope/Routing module; specialized processing may exist independently.
 | --- | --- | --- | --- | --- |
 | AdditiveBox, AliasingBox, AnalogBox, FMBox, PhysicalBox, PulsarBox, SteamPipeBox | Yes | Yes | Yes | Yes |
 | GrainBox | Yes | Per engine | Per engine | First engine, MIDI pitch mode |
+| GrainFxBox | Yes | Per engine | Per engine | As GrainBox; its Gate also drives Wet Mode Gated and Gate Motion |
 | SampleBox | Yes | Per pad | Selected pad/channel | Kit channels |
 | DrumKitBox | Yes | Per pad | Selected pad/channel | Kit channels with row names (timeline Drum Grid) |
 | WavetableBox | Yes | Yes | Yes | Yes, when Pitch and Gate are published |

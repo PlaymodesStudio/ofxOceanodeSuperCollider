@@ -41,6 +41,7 @@ void registerSynthNodes(ofxOceanode &o){
 	o.registerModel<scDynGenNode>("SuperCollider/Generators");
 	o.registerModel<pinkTromboneNode>("SuperCollider/Generators", ofxOceanodeNodeRegistrationFlags::Sink);
 	o.registerModel<scGrainBoxPoly>("SuperCollider/boxSynths", controller->getServers());
+	o.registerModel<scGrainFxBox>("SuperCollider/boxSynths", controller->getServers());   // GrainBox on the In port
 	o.registerModel<scSampleBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scDrumKitBox>("SuperCollider/boxSynths", controller->getServers());
 	o.registerModel<scSlicerBox>("SuperCollider/boxSynths", controller->getServers());

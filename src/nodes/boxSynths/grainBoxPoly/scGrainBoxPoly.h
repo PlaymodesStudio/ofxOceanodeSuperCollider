@@ -3,6 +3,9 @@
 //  ofxOceanodeSuperCollider
 //
 //  Multichannel granular sampler with interactive waveform/envelope GUI.
+//  Two nodes share this class: GrainBox (the instrument: samples) and
+//  GrainFxBox (scGrainFxBox below, the effect: every engine records the In
+//  port; Wet Mode, Gate Motion).
 //
 //  Architecture:
 //    • Inherits scNode — pure audio source (no In port).
@@ -65,7 +68,7 @@
 class scGrainBoxPoly : public scNode {
 public:
     // its window (SC Mixer Pro's "Go to origin synth window" opens and focuses it)
-    std::string getWindowTitle() override { return "GrainBox " + ofToString(getNumIdentifier()); }
+    std::string getWindowTitle() override { return std::string(fxMode ? "GrainFxBox " : "GrainBox ") + ofToString(getNumIdentifier()); }
     ofParameter<bool>* getWindowToggle() override { return &showWindow; }
 private:
     ofParameter<bool> embedSamples;
@@ -85,7 +88,8 @@ public:
     static constexpr int   MOD_SOURCES         = 22;  // LFO 1-8, Env 1-4, Ext 1-8, Random, Voice
 
     // ── Constructor / Destructor ──────────────────────────────────────────────
-    scGrainBoxPoly(vector<serverManager*> servers);
+    // fx: GrainFxBox (live input engines, Dry/Wet, Wet Mode, Gate Motion)
+    scGrainBoxPoly(vector<serverManager*> servers, bool fx = false);
     ~scGrainBoxPoly();
 
     // ── ofxOceanodeNodeModel overrides ────────────────────────────────────────
@@ -123,6 +127,7 @@ public:
     void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
 
 private:
+    const bool fxMode;   // GrainFxBox
     // ── Servers ───────────────────────────────────────────────────────────────
     vector<serverManager*> allServers;
 
@@ -189,7 +194,7 @@ private:
         // Gate and Pitch (when published) also take audio cables: the gate mapped
         // onto the ModGate copies, the pitch onto the control synth (MIDI notes, 60: as recorded)
         scAudioParam gateIn, pitchIn;
-        ofParameter<int>           placement;     // 0 Manual (PanAz), 1 Spread, 2 Channels
+        ofParameter<int>           placement;     // 0 Manual (PanAz), 1 Spread, 2 Channels, 3 Source (1:1)
         ofParameter<float>         spreadWidth;   // Spread: how far round the speakers
         ofParameter<float>         stereoWidth;   // stereo samples: 0 L+R at the pan (mono), 1 L and R apart
         std::vector<ofParameter<float>*> modF;    // its parameters, for the publish registry
@@ -278,15 +283,20 @@ private:
         ofParameter<bool>  freeze;                  // stop recording
         ofParameter<float> feedback;                // Live: engine output back into its buffer (0..1.1)
         ofParameter<float> fbTone;                  // feedback filter: 0 lowpass .. 0.5 open .. 1 highpass
+        // Gate Motion (live input): on the Gate the tape's speed ramps from
+        // Start to End over Time (Curve); Repeat starts it again every Time;
+        // Freeze stops recording while it runs (a loop)
+        ofParameter<bool>  motion, motionRepeat, motionFreeze, motionBeats;
+        ofParameter<float> motionStart, motionEnd, motionTime, motionCurve;
         std::vector<float> liveRing;                // signed max per bin, buffer order
         std::vector<float> liveRingMin;             // signed min per bin
         float              liveHead = 0.0f;         // write position 0..1
         bool               livePeaksDirty = true;
         float              liveResizeAt = -1.0f;    // debounced re-allocation after a length change
         struct LiveSC {
-            ofxSCBuffer*    buf      = nullptr;
+            std::vector<ofxSCBuffer*> bufs;         // one per recorded channel (liveChannels)
             ofxSCBus*       phaseBus = nullptr;     // audio, 1 channel
-            ofxSCBus*       fbBus    = nullptr;     // audio, 1: the engine's sound, back to the recorder
+            ofxSCBus*       fbBus    = nullptr;     // audio, MAX_CHANNELS: the engine's sound, back to the recorder
             ofxSCSynth*     rec      = nullptr;
             ofEventListener recListener;
         };
@@ -336,6 +346,7 @@ private:
     Playhead& ph0() { return *playheads[0]; }
 
     void createPlayheadParameters(Playhead& ph);
+    void applyFxDefaults(Playhead& ph);   // GrainFxBox: a granular delay on the input
     void setupPlayheadListeners(Playhead& ph);
     void allocEnvBuffers(Playhead& ph);
     void ensureEnvBuffer(Playhead& ph, ofxSCServer* srv);    // alloc + data atomically
@@ -377,6 +388,14 @@ private:
     ofxSCSynth* engineLast(Playhead& ph, ofxSCServer* srv);        // its latest synth in SC order
     void forEngineSynth(Playhead& ph, const std::function<void(ofxSCSynth*)>& f);
     int  phOffset(const Playhead& ph) const;     // effective first output channel
+    // Source placement (1:1): the source's channel c on speaker c, when the
+    // source has 2+ channels and the engine 2+ speakers (else panned)
+    int  sourceChannels(const Playhead& ph) const;   // K: the sample's / recording's channels
+    int  liveChannels(const Playhead& ph) const;     // what Live records: N Chan (Source), else 1
+    bool sourceRouted(const Playhead& ph) const;
+    void syncLiveChannels(Playhead& ph);              // a recording of the wrong width: again
+    void setMotionArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv);
+    float motionTimeSec(const Playhead& ph) const;
     int  outBusFor(const Playhead& ph, ofxSCServer* srv) const;
     SampleData&       sampleOf(Playhead& ph);
     const SampleData& sampleOf(const Playhead& ph) const;
@@ -429,6 +448,11 @@ private:
     ofParameter<float> transposeP, volumeP, speedP;
     // Dry/Wet (node parameter): 0 = only the input, 1 = only the engines (equal power)
     ofParameter<float> dryWetP;
+    // Wet Mode (GrainFxBox): 0 Blend (Dry/Wet), 1 Gated: the wet replaces the
+    // dry while engine 1's Gate is up (the engines play through their Amp Envelope)
+    ofParameter<int>   wetModeP;
+    bool wetGated() const { return fxMode && wetModeP.get() == 1; }
+    void setDryArgs(ofxSCServer* srv);
     std::map<ofxSCServer*, ofxSCSynth*> drySynths;   // GrainBoxPolyDry_N, after engine 1
     float dryGain() const;
     float wetGain() const;
@@ -593,6 +617,8 @@ private:
     ofJson captureSnapshot() const;
     void applySnapshot(const ofJson& snap);
     scBoxMacroMorph macroMorph;           // a MacroMixer morph: the start, the arrival
+    ofJson initialSnapshot;               // the defaults (the factory sounds start from them)
+    std::vector<ofJson> factorySnapshots() const;
     ofJson snapshotOf(const ofJson& saved) const;   // a saved patch as a snapshot
     // A snapshot's Pitch in each playhead's current units (Pitch Mode is not
     // recalled; snapshots from before it hold semitones)
@@ -728,4 +754,10 @@ private:
     void sendAnchor(const scTransportSync::Anchor& a);
     void setSyncHoldArgs(Playhead& ph, ofxSCSynth* s);
     bool isSyncing() const { return syncToTransportP.get(); }
+};
+
+// GrainFxBox: the effect node (GrainBox's engines on the In port)
+class scGrainFxBox : public scGrainBoxPoly {
+public:
+    scGrainFxBox(vector<serverManager*> servers) : scGrainBoxPoly(servers, true) {}
 };

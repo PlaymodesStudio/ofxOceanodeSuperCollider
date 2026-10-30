@@ -37,8 +37,21 @@
 //   +79 Overlap (TrigDur: grain length = Overlap x the trigger period)
 //   +80 Width (stereo samples: 0 L and R at the grain's pan, summed to mono;
 //       1 L and R apart, each at full level)
-//   +81 + i * 15: playhead i: pos dur pitch amp pan div chance posjit pitchjit
+//   +81..96 the source's buffer per channel (Source placement: up to 16)
+//   +97..101 Gate Motion (tape): running, delay (s), speed, freeze, level
+//   +104 + i * 15: playhead i: pos dur pitch amp pan div chance posjit pitchjit
 //                 durjit ampjit panjit reverse manual-trigger-counter trigphase
+//
+// Source placement (1:1): GrainBoxPolyVC_K / DC_K / DJC_K write the source's
+// K channels to the engine's bus unpanned; the output synth (\srck = K) puts
+// channel c on speaker c (more speakers: round again; fewer: folded).
+//
+// Gate Motion (live input): on the engine's Gate the tape speed ramps from
+// \tstart to \tend over \ttime (\tcurve; \trepeat starts it again every
+// \ttime). The control synth integrates the delay behind the input (speed 1 =
+// in step with it, 0 = stopped, so the delay grows); the voices read further
+// back by that delay and play at that speed. \tfreeze stops the recorder
+// while it runs (a loop of what was there).
 // Clock bus (audio, 7): syncTrig, freeBeat, beatW, beatAbs, hardImp, run, anchorFire
 //
 // Modulation: the shared system (scModulation: ModGate / ModLfoX / ModEnv /
@@ -57,7 +70,7 @@
 //   (semitones, playhead 1's channel) on \cutbus.
 
 (
-var d, subDir, nslot = 15, g0 = 0, vbase = 81, caps = [8, 32, 128, 500], modIn, ampVca;
+var d, subDir, nslot = 15, g0 = 0, vbase = 104, caps = [8, 32, 128, 500], modIn, ampVca, voiceDef, delayDef, recDef;
 if(thisProcess.nowExecutingPath.notNil) {
     d = thisProcess.nowExecutingPath.dirname +/+ "/CompiledSynthdefs";
 } {
@@ -98,9 +111,12 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
      bufnum0 = 0, bufnum1 = 0,
      filteron = 0, filtertype = 0, cutoff = 1000, filterq = 0.707,
      scaleon = 0, scaleroot = 0, live = 0, phasebus = 0, vis = 1, maxoverlap = 0, monotrig = 0, delayglide = 0.05, overlap = 1,
-     width = 0, cutbus = -1|
+     width = 0, cutbus = -1,
+     tmotion = 0, tstart = 1, tend = 0, ttime = 0.5, tcurve = 0, trepeat = 0, tfreeze = 0,
+     livelen = 4, gatebus = -1, tenvbus = -1|
 
     var total, thin, phaseP;
+    var held, tRun, rise, per, phs, wrapT, ph, cv, shaped, rate, fz, d0, dPrev, dly, tamp;
     var vec, barHz, beatHz;
     var anchorPos, anchorFire, run, syncTrig, anchorTrig, hardImp, beatSweep, beatX, beatW, beatAbs, freeBeat;
     var ampP, pitchP, durP, posP, panP, divP, chanceP, posJ, pitchJ, durJ, ampJ, panJ, revP, trigP, levelsP, scaleTable;
@@ -181,6 +197,29 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
     ReplaceOut.kr(ctl + 78, delayglide);   // Grainless: glide / crossfade time (s)
     ReplaceOut.kr(ctl + 79, overlap.max(0.01));   // TrigDur: grain length = Overlap x the trigger period
     ReplaceOut.kr(ctl + 80, width.clip(0, 1));    // Width: stereo samples
+    ReplaceOut.kr(ctl + 81, NamedControl.kr(\bufs, 0 ! 16));   // every source channel's buffer
+
+    // ── Gate Motion: playhead 1's gate (ModGate, earlier in this cycle); it
+    //    keeps running through the Amp Envelope's release (\tenvbus) ──
+    held  = (A2K.kr(In.ar(gatebus.max(0))) * (gatebus >= 0)) > 0;
+    tRun  = ((held + ((In.kr(tenvbus.max(0)) * (tenvbus >= 0)) > 0.0005)) > 0) * (tmotion > 0);
+    rise  = (HPZ1.kr(held) > 0) * (tmotion > 0);
+    per   = ttime.max(0.01);
+    phs   = Sweep.kr(rise, per.reciprocal);
+    wrapT = (HPZ1.kr(phs.floor) > 0) * (trepeat > 0);
+    ph    = Select.kr(trepeat > 0, [phs.clip(0, 1), phs.frac]);
+    cv    = Select.kr(tcurve.abs < 0.01, [tcurve, 1]);
+    shaped = Select.kr(tcurve.abs < 0.01, [((ph * cv).exp - 1) / (cv.exp - 1), ph]);
+    rate  = tstart + ((tend - tstart) * shaped);
+    fz    = tfreeze * tRun;
+    // frozen: start far enough back to play forward for one period
+    d0    = tfreeze * per * ((tstart + tend) * 0.5).max(0);
+    dPrev = LocalIn.kr(1);
+    dly   = Select.kr((rise + wrapT) > 0, [dPrev + ((1 - fz - rate) * ControlDur.ir), d0]).clip(0, livelen.max(0.01)) * tRun;
+    LocalOut.kr(dly);
+    // a stopped tape is silent; so is one that ran off the end of the recording
+    tamp  = Select.kr(tRun, [1, (rate.abs * 25).clip(0, 1) * (dly < (livelen.max(0.01) * 0.99))]);
+    ReplaceOut.kr(ctl + 97, [tRun, dly, Select.kr(tRun, [1, rate]), fz, Lag.kr(tamp, 0.01)]);
 
     // + the Cut modulation (semitones: playhead 1's channel of its target bus)
     fc = (Lag.kr(cutoff, 0.015) * (In.kr(cutbus.max(0)) * (cutbus >= 0)).clip(-120, 120).midiratio).clip(20, min(20000, SampleRate.ir * 0.45));
@@ -194,12 +233,10 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
 // Only the trigger is audio rate; every value is control rate (GrainBuf polls
 // its arguments when a grain starts). Random draws happen at control rate on
 // the block of the trigger. syncMode 0: free clock only; 1: transport grid.
-[0, 1].do({|syncMode|
-[0, 1].do({|mono|
-(1..2).do({|k|
-    (1..16).do({|n|
-        SynthDef(("GrainBoxPolyV" ++ (if(syncMode == 1) { "S" } { "" }) ++ (if(mono == 1) { "M" } { "" })
-                  ++ "_" ++ k ++ "_" ++ n).asSymbol, {
+//   GrainBoxPoly V(S)(M)_K_N   K sample channels panned over N speakers
+//   GrainBoxPoly VC(S)(M)_K    Source placement: K channels, unpanned (1:1)
+voiceDef = {|name, k, n, syncMode, mono, src|
+        SynthDef(name.asSymbol, {
             |out = 0, ctl = 0, clk = 0, idx = 0|
             var v, g, bufnums, buf0, envbuf, beatHz, inP, outP;
             var posV, durV, pitchV, ampV, panV, divV, chanceV, posJ, pitchJ, durJ, ampJ, panJ, revV, trigC;
@@ -209,10 +246,10 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
             var mappedPos, ampWithJit, panK, ampLatched, ampUsed, revFlag, headK, frL, gapL, availL, durF, readLen, dLin, dMin, dMax, livePos, basePos, grainPos, grainRate;
             var trigPh, thinK, autoRaw, estK, monoTrig, grainTrig, visK, resetA, forced, monoSlot;
             var c, beatW, beatAbs, hardImp, run, anchorFire, beatInt, beatFrac, beatEdge, syncLatchTrig, syncDiv, m, sub, cell, cond, allowed, top, stepT;
-            var wd, wGain, md, vca = 1;
+            var wd, wGain, md, vca = 1, tR, tD, tA;
 
             v = In.kr(ctl + vbase + (idx * nslot), nslot);
-            g = In.kr(ctl + g0, 81);
+            g = In.kr(ctl + g0, vbase);
             posV = v[0]; durV = v[1]; pitchV = v[2]; ampV = v[3]; panV = v[4]; divV = v[5];
             chanceV = v[6]; posJ = v[7]; pitchJ = v[8]; durJ = v[9]; ampJ = v[10]; panJ = v[11];
             revV = v[12]; trigC = v[13]; trigPh = v[14];
@@ -222,10 +259,12 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
             vca = ampVca.(idx);
             thinK = g[77];
             inP = g[0]; outP = g[1];
-            bufnums = [g[2], g[3]].keep(k);
+            bufnums = if(src) { k.collect({|ki| g[81 + ki] }) } { [g[2], g[3]].keep(k) };
             buf0 = bufnums[0];
             envbuf = g[4];
             beatHz = g[5];
+            // Gate Motion: speed (sign = direction), delay (s), level
+            tD = g[98]; tR = g[99]; tA = g[101];
 
             // ── Trigger (the only audio-rate part) ──
             if(syncMode == 0) {
@@ -301,6 +340,7 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
             // its fractional semitones and fade quantization in/out continuously.
             rate = (pitchSum + ((((pitchSum - x) + Select.kr((x * 2).floor.clip(0, 23), g[18..41]))
                 - pitchSum) * g[12].clip(0,1))).midiratio * sampleRateCorr;
+            rate = rate * tR.abs;   // Gate Motion: the tape's speed
 
             // ── Duration / position / amp / pan ──
             regionDur = (outP - inP) * BufDur.kr(buf0);
@@ -340,50 +380,78 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
             SendReply.kr(visK * g[16], '/grainTrig', [mappedPos, actualDur, ampWithJit], idx);
 
             // ── Reverse (re-uses the chance draw, which is held between
-            //    triggers: no latch, so the first grain is decided too) ──
-            revFlag = usedRand < (revV * chanceV * thinK);
+            //    triggers: no latch, so the first grain is decided too);
+            //    a tape running backwards flips it ──
+            revFlag = ((usedRand < (revV * chanceV * thinK)) - (tR < 0)).abs;
 
-            // ── Live input (head read once per block) ──
+            // ── Live input (head read once per block; Gate Motion: further back) ──
             headK  = A2K.kr(In.ar(g[15], 1));
             frL    = BufFrames.kr(buf0).max(1);
             gapL   = 0.005 * SampleRate.ir;   // safety gap to the write head (= the C++ kLiveGap)
             availL = frL - (2 * gapL);
             durF    = actualDur * SampleRate.ir;
             readLen = durF * rate.abs;
-            dLin    = gapL + (mappedPos * availL);
-            dMin    = gapL + Select.kr(revFlag, [(readLen - durF).max(0), readLen]);
+            dLin    = gapL + (mappedPos * availL) + (tD * SampleRate.ir);
+            // (frozen by Gate Motion: the head stands still, so a forward grain
+            //  must end before it)
+            dMin    = gapL + Select.kr(revFlag, [(readLen - durF).max(0) + (g[100] * readLen), readLen]);
             dMax    = frL - gapL - Select.kr(revFlag, [(durF - readLen).max(0), durF]);
             livePos = ((headK - dLin.clip(dMin, dMax)) / frL).wrap(0, 1);
             basePos = Select.kr(g[14], [mappedPos, livePos]);
             grainPos  = Select.kr(revFlag, [basePos, (basePos + (readLen / frL)).wrap(0, 1)]);
             grainRate = Select.kr(revFlag, [rate, rate.neg]);
 
-            // Width (a stereo sample, 2+ speakers): 2 speakers, L and R move
-            // from the grain's pan towards their own edge (1: hard left / right,
-            // wherever the pan is); more, either side of it, one speaker apart
-            // at 1. Level: 0 the mono sum (as before), 1 each side at unity.
-            wd    = if((k == 2) && (n > 1)) { g[80] } { 0 };
-            wGain = if(k == 2) { (Lag.kr(wd, 0.02) + 1) * 0.5 } { 1 };
-            Out.ar(out, wGain * Mix.new(k.collect({|ki|
-                var side = if(k == 2) { (ki * 2) - 1 } { 0 };   // L -1, R +1
-                GrainBuf.ar(
-                    numChannels: n,
-                    trigger:     grainTrig,
-                    dur:         actualDur,
-                    sndbuf:      bufnums[ki],
-                    rate:        grainRate,
-                    pos:         grainPos,
-                    interp:      2,
-                    pan:         if(n == 2) { (((panK + 1).wrap(0, 2) - 1) * (1 - wd)) + (side * wd) }
-                                            { (panK + (side * wd / n)).wrap(0, 2) },
-                    envbufnum:   envbuf,
-                    maxGrains:   512,
-                    mul:         ampUsed
-                )
-            })) * K2A.ar(vca) * \morphgain.kr(1,0.03));   // the Amp Envelope: the whole playhead, grains already sounding too
+            if(src) {
+                // Source (1:1): each channel's grains on its own channel, unpanned
+                // (fewer grains per channel when there are many: RT memory)
+                Out.ar(out, k.collect({|ki|
+                    GrainBuf.ar(
+                        numChannels: 1,
+                        trigger:     grainTrig,
+                        dur:         actualDur,
+                        sndbuf:      bufnums[ki],
+                        rate:        grainRate,
+                        pos:         grainPos,
+                        interp:      2,
+                        envbufnum:   envbuf,
+                        maxGrains:   (1024 / k).clip(64, 512).asInteger,
+                        mul:         ampUsed
+                    )
+                }) * K2A.ar(vca * tA) * \morphgain.kr(1,0.03));
+            } {
+                // Width (a stereo sample, 2+ speakers): 2 speakers, L and R move
+                // from the grain's pan towards their own edge (1: hard left / right,
+                // wherever the pan is); more, either side of it, one speaker apart
+                // at 1. Level: 0 the mono sum (as before), 1 each side at unity.
+                wd    = if((k == 2) && (n > 1)) { g[80] } { 0 };
+                wGain = if(k == 2) { (Lag.kr(wd, 0.02) + 1) * 0.5 } { 1 };
+                Out.ar(out, wGain * Mix.new(k.collect({|ki|
+                    var side = if(k == 2) { (ki * 2) - 1 } { 0 };   // L -1, R +1
+                    GrainBuf.ar(
+                        numChannels: n,
+                        trigger:     grainTrig,
+                        dur:         actualDur,
+                        sndbuf:      bufnums[ki],
+                        rate:        grainRate,
+                        pos:         grainPos,
+                        interp:      2,
+                        pan:         if(n == 2) { (((panK + 1).wrap(0, 2) - 1) * (1 - wd)) + (side * wd) }
+                                                { (panK + (side * wd / n)).wrap(0, 2) },
+                        envbufnum:   envbuf,
+                        maxGrains:   512,
+                        mul:         ampUsed
+                    )
+                })) * K2A.ar(vca * tA) * \morphgain.kr(1,0.03));   // the Amp Envelope: the whole playhead, grains already sounding too
+            };
         }).writeDefFile(subDir);
+};
+[0, 1].do({|syncMode|
+[0, 1].do({|mono|
+    var pre = (if(syncMode == 1) { "S" } { "" }) ++ (if(mono == 1) { "M" } { "" });
+    (1..2).do({|k|
+        (1..16).do({|n| voiceDef.("GrainBoxPolyV" ++ pre ++ "_" ++ k ++ "_" ++ n, k, n, syncMode, mono, false) });
     });
-});
+    (2..16).do({|k| voiceDef.("GrainBoxPolyVC" ++ pre ++ "_" ++ k, k, 1, syncMode, mono, true) });
 });
 });
 
@@ -398,32 +466,39 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
 //                     the two crossfade (equal power, time = ctl +78, min
 //                     5 ms): no pitch bend, no click. During a fade, new
 //                     changes wait for it to end (a continuous LFO steps).
+//   GrainBoxPolyDC_K / DJC_K   Source placement: K channels read at the same
+//                     delay, each to its own channel (unpanned)
+// Gate Motion adds its delay to both heads (continuous: the tape's pitch).
 // Both report the tap's place 20 x / s (/grainTrig) for the waveform.
-[0, 1].do({|jump|
-(1..16).do({|n|
-    SynthDef(("GrainBoxPolyD" ++ (if(jump == 1) { "J" } { "" }) ++ "_" ++ n).asSymbol, {
+delayDef = {|name, jump, n, src|
+    SynthDef(name.asSymbol, {
         |out = 0, ctl = 0, clk = 0, idx = 0|
-        var v, g, buf, frames, head, r, dK, dA, sig, amp, pan, glide, shown;
-        var fb, dX, dY, sel, t, curD, fade, sw, newSel, newX, newY, newT, p, mv, vca = 1;
+        var v, g, bufs, buf, frames, head, r, dK, dA, sig, amp, pan, glide, shown;
+        var fb, dX, dY, sel, t, curD, fade, sw, newSel, newX, newY, newT, p, mv, vca = 1, tOn, tDs, read;
         v      = In.kr(ctl + vbase + (idx * nslot), nslot);
         mv = modIn.(idx);
         v = [v[0] + mv[0], v[1] + mv[1], v[2] + mv[2], v[3] + mv[3], v[4] + mv[4], v[5] + mv[5]] ++ v[6..];
         vca = ampVca.(idx);
-        g      = In.kr(ctl + g0, 79);
-        buf    = g[2];
+        g      = In.kr(ctl + g0, vbase);
+        bufs   = if(src) { n.collect({|c| g[81 + c] }) } { [g[2]] };
+        buf    = bufs[0];
         frames = BufFrames.kr(buf).max(512);
         head   = In.ar(g[15], 1);
-        glide  = g[78];
+        tOn    = g[97];
+        tDs    = K2A.ar(g[98] * SampleRate.ir);   // Gate Motion's delay (samples)
+        glide  = g[78] * (1 - tOn);
         r      = g[0] + (v[0].clip(0, 1) * (g[1] - g[0]));
         dK     = (r * frames).clip(1, frames - 256);
+        // every channel's buffer at one delay (samples)
+        read   = {|dl| bufs.collect({|b| BufRd.ar(1, b, (head - (dl + tDs).clip(1, frames - 256)).wrap(0, frames), 1, 4) }) };
         if(jump == 0) {
             dA    = Lag.ar(K2A.ar(dK), glide.max(0));
-            sig   = BufRd.ar(1, buf, (head - dA).wrap(0, frames), 1, 4);
-            shown = A2K.kr(dA);
+            sig   = read.(dA);
+            shown = A2K.kr(dA + tDs);
         } {
             // two heads X / Y (delays held at control rate), sel = the one
             // fading in, t = time since the last switch (control-rate feedback)
-            fade   = glide.max(0.005);
+            fade   = g[78].max(0.005);
             fb     = LocalIn.kr(4, [0, 0, 0, 100]);
             dX = fb[0]; dY = fb[1]; sel = fb[2]; t = fb[3];
             curD   = Select.kr(sel, [dX, dY]);
@@ -435,29 +510,38 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
             LocalOut.kr([newX, newY, newSel, newT]);
             // p: 0 = all X .. 1 = all Y (ramps over the fade, per block)
             p      = Select.kr(newSel, [1 - (newT / fade).clip(0, 1), (newT / fade).clip(0, 1)]);
-            sig    = (BufRd.ar(1, buf, (head - newX).wrap(0, frames), 1, 4) * K2A.ar((p * 0.5pi).cos))
-                   + (BufRd.ar(1, buf, (head - newY).wrap(0, frames), 1, 4) * K2A.ar((p * 0.5pi).sin));
-            shown  = Select.kr(newSel, [newX, newY]);
+            sig    = (read.(K2A.ar(newX)) * K2A.ar((p * 0.5pi).cos)) + (read.(K2A.ar(newY)) * K2A.ar((p * 0.5pi).sin));
+            shown  = Select.kr(newSel, [newX, newY]) + A2K.kr(tDs);
         };
-        amp    = Lag.kr(v[3].clip(0, 1), 0.02) * vca;
+        amp    = Lag.kr(v[3].clip(0, 1), 0.02) * vca * g[101];
         // display: the tap's current place (Pos LFO and glide included), 20 times
         // a second, as a short "grain" (same message as the grain voices)
         SendReply.kr(Impulse.kr(20) * g[16], '/grainTrig', [(shown / frames).clip(0, 1), 0.06, amp], idx);
         pan    = Lag.kr(v[4], 0.02);
-        Out.ar(out, (case
+        Out.ar(out, (if(src) { sig * amp } {
+            sig = sig[0];
+            case
             { n == 1 } { sig * amp }
             { n == 2 } { Pan2.ar(sig, (pan + 1).wrap(0, 2) - 1, amp) }
-            { PanAz.ar(n, sig, pan.wrap(0, 2), amp, 2, 0.5) }) * \morphgain.kr(1,0.03));   // as GrainBuf pans
+            { PanAz.ar(n, sig, pan.wrap(0, 2), amp, 2, 0.5) }
+        }) * \morphgain.kr(1,0.03));   // as GrainBuf pans
     }).writeDefFile(subDir);
-});
+};
+[0, 1].do({|jump|
+    var pre = "GrainBoxPolyD" ++ (if(jump == 1) { "J" } { "" });
+    (1..16).do({|n| delayDef.(pre ++ "_" ++ n, jump, n, false) });
+    (2..16).do({|k| delayDef.(pre ++ "C_" ++ k, jump, k, true) });
 });
 
 // ── Dry (one per node, after engine 1): the node's input, unprocessed, ────
-//    straight to the node's output (Dry/Wet; the engines get the wet gain)
+//    straight to the node's output (Dry/Wet; the engines get the wet gain).
+//    \gated (Wet Mode Gated): muted while engine 1's gate is up (\gatebus)
 (1..16).do({|n|
     SynthDef(("GrainBoxPolyDry_" ++ n).asSymbol, {
-        |in = 0, out = 0, dry = 0|
-        Out.ar(out, In.ar(in, n) * Lag.kr(dry, 0.02));
+        |in = 0, out = 0, dry = 0, gatebus = -1, gated = 0|
+        var up = (A2K.kr(In.ar(gatebus.max(0))) * (gatebus >= 0)) > 0;
+        var duck = 1 - (gated.clip(0, 1) * LagUD.kr(up, 0.004, 0.015));
+        Out.ar(out, In.ar(in, n) * K2A.ar(Lag.kr(dry, 0.02) * duck));
     }).writeDefFile(subDir);
 });
 
@@ -468,15 +552,24 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
 // the middle, right of it = highpass opening). The cutoff goes through a
 // 50 Hz lowpass (in log, audio rate) before every coefficient, so jumps
 // (random-step Cut LFO) glide instead of clicking or zippering.
+// \srck > 0 (Source placement): the voices wrote the source's srck channels
+// unpanned; speaker j plays channel j (more speakers than channels: round
+// again; fewer: the extra channels folded onto speaker c mod n).
 (1..16).do({|n|
     SynthDef(("GrainBoxPolyOut_" ++ n).asSymbol, {
-        |in = 0, out = 0, ctl = 0, fbbus = -1|
+        |in = 0, out = 0, ctl = 0, fbbus = -1, srck = 0|
         var v, filterOn, fType, fc, qP, gain, levels, dry, filtG, wet;
-        var isDJ, xPos, lpCut, hpCut, nyq, coefs, stage1, stage2, fcS;
+        var isDJ, xPos, lpCut, hpCut, nyq, coefs, stage1, stage2, fcS, raw, fbm, mono;
         v = In.kr(ctl + g0 + 54, 5 + 16);
         filterOn = v[0]; fType = v[1]; fc = v[2]; qP = v[3]; gain = v[4];
         levels = v[5..(5 + n - 1)];
-        dry = In.ar(in, n) * levels;
+        raw = In.ar(in, 16);
+        dry = n.collect({|j|
+            var rep  = Select.ar(j % srck.max(1), raw);
+            var fold = Mix.new((0..15).select({|c| (c % n) == j }).collect({|c| raw[c] * (c < srck) }));
+            Select.ar(srck > 0, [raw[j], Select.ar(j < srck, [rep, fold])])
+        }) * levels;
+        if(n == 1) { dry = dry[0] };
         filtG = Lag.kr(filterOn, 0.02);
         nyq   = SampleRate.ir * 0.45;
         // the cutoff (with the Cut LFO) through a one-pole 50 Hz lowpass, in log,
@@ -518,36 +611,49 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
         });
         wet = (dry + ((wet - dry) * filtG)) * K2A.ar(gain);
         Out.ar(out, wet);
-        // Live feedback: this engine's sound, mono (equal-power sum), before the node FX
-        Out.ar(fbbus.max(0), Mix.new(wet.asArray) * (if(n > 1) { 0.7071 } { 1 }) * (fbbus >= 0));
+        // Live feedback: this engine's sound before the node FX: mono (equal-power
+        // sum), or Source: channel by channel (the recorder records them apart)
+        fbm  = srck > 0;
+        mono = Mix.new(wet.asArray) * (if(n > 1) { 0.7071 } { 1 });
+        Out.ar(fbbus.max(0), ([Select.ar(fbm, [mono, wet.asArray[0]])]
+            ++ wet.asArray[1..].collect({|x| x * fbm })) * (fbbus >= 0));
     }).writeDefFile(subDir);
 });
 
 // ── Live-input recorder (as GrainBoxRec) ───────────────────────────────────
-// Feedback: the engine's own sound (its output synth, before the node FX,
-// mono, on \fbbus; read one block late with InFeedback) is mixed back in:
+// Feedback: the engine's own sound (its output synth, before the node FX, on
+// \fbbus; read one block late with InFeedback) is mixed back in:
 // DC-blocked, through Tone (0..1: left = lowpass closing, middle = open,
 // right = highpass opening), times Feedback, soft-saturated (tanh), so even
-// Feedback > 1 thickens instead of exploding.
-SynthDef(\GrainBoxPolyRec, {
-    |in = 0, bufnum = 0, phasebus = 0, freeze = 0, vis = 1, fbbus = -1, fbamt = 0, fbtone = 0.5|
-    var sig, run, phase, tick, hi, lo, fb, fbG, lpF, hpF;
-    fb    = InFeedback.ar(fbbus.max(0), 1) * (fbbus >= 0);
-    fbG   = Lag.kr(fbamt.clip(0, 2), 0.05);
-    lpF   = Lag.kr(Select.kr(fbtone < 0.45, [20000, fbtone.linexp(0, 0.45, 200, 20000)]), 0.05);
-    hpF   = Lag.kr(Select.kr(fbtone > 0.55, [10, fbtone.linexp(0.55, 1, 20, 4000)]), 0.05);
-    fb    = HPF.ar(LPF.ar(LeakDC.ar(fb), lpF.min(SampleRate.ir * 0.45)), hpF);
-    fb    = (fb * fbG).tanh;
-    sig   = In.ar(in, 1) + fb;
-    run   = 1 - freeze;
-    RecordBuf.ar(sig, bufnum, 0, 1, 0, run, 1);
-    phase = Phasor.ar(0, run, 0, BufFrames.kr(bufnum));
-    Out.ar(phasebus, phase);
-    tick  = Impulse.ar(125);
-    hi    = Delay1.ar(RunningMax.ar(sig, tick));
-    lo    = Delay1.ar(RunningMin.ar(sig, tick));
-    SendReply.ar(tick * vis, '/grainRec', [hi, lo, phase / BufFrames.kr(bufnum).max(1)]);
-}).writeDefFile(subDir);
+// Feedback > 1 thickens instead of exploding. Recording stops while Freeze is
+// on or the engine's Gate Motion freezes it (\tfrz: its control bus slot).
+//   GrainBoxPolyRec       the input's first channel (mono feedback)
+//   GrainBoxPolyRecC_K    K channels, one buffer each (Source placement)
+recDef = {|name, k|
+    SynthDef(name.asSymbol, {
+        |in = 0, phasebus = 0, freeze = 0, vis = 1, fbbus = -1, fbamt = 0, fbtone = 0.5, tfrz = -1|
+        var bufs, sig, run, phase, tick, hi, lo, fb, fbG, lpF, hpF, mon;
+        bufs  = if(k == 1) { [\bufnum.kr(0)] } { NamedControl.kr(\bufs, 0 ! k) };
+        fb    = InFeedback.ar(fbbus.max(0), k).asArray * (fbbus >= 0);
+        fbG   = Lag.kr(fbamt.clip(0, 2), 0.05);
+        lpF   = Lag.kr(Select.kr(fbtone < 0.45, [20000, fbtone.linexp(0, 0.45, 200, 20000)]), 0.05);
+        hpF   = Lag.kr(Select.kr(fbtone > 0.55, [10, fbtone.linexp(0.55, 1, 20, 4000)]), 0.05);
+        fb    = HPF.ar(LPF.ar(LeakDC.ar(fb), lpF.min(SampleRate.ir * 0.45)), hpF);
+        fb    = (fb * fbG).tanh;
+        sig   = In.ar(in, k).asArray + fb;
+        run   = 1 - (freeze + (In.kr(tfrz.max(0)) * (tfrz >= 0))).clip(0, 1);
+        k.do({|c| RecordBuf.ar(sig[c], bufs[c], 0, 1, 0, run, 1) });
+        phase = Phasor.ar(0, run, 0, BufFrames.kr(bufs[0]));
+        Out.ar(phasebus, phase);
+        mon   = Mix.new(sig) / k;
+        tick  = Impulse.ar(125);
+        hi    = Delay1.ar(RunningMax.ar(mon, tick));
+        lo    = Delay1.ar(RunningMin.ar(mon, tick));
+        SendReply.ar(tick * vis, '/grainRec', [hi, lo, phase / BufFrames.kr(bufs[0]).max(1)]);
+    }).writeDefFile(subDir);
+};
+recDef.("GrainBoxPolyRec", 1);
+(2..16).do({|k| recDef.("GrainBoxPolyRecC_" ++ k, k) });
 
 "GrainBoxPoly SynthDefs written to: ".post; subDir.postln;
 )

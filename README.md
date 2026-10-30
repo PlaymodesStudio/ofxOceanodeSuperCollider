@@ -101,6 +101,39 @@ Compile `synthdefs/Defaults/WavetableBox/wavetableBox.scd` and the shared
 voice/panning/effects graph; see its help for the native test build prerequisite.
 Run `python3 tools/wavetablebox/library_sync_test.py` to verify library sync paths.
 
+### GrainBox and GrainFxBox
+
+**GrainBox** is the granular instrument: it plays samples (no In port).
+**GrainFxBox** is the same engine as an effect: every engine records its
+**In** port, and Position is the delay behind the input (Time Units ms).
+
+- **Placement → Source (1:1)**, the default for new nodes: channel 1 of the
+  source plays on output 1, channel 2 on output 2, and so on. This applies to
+  stereo samples and to every channel of GrainFxBox's input. With fewer channels
+  than speakers the pattern repeats; mono sources still pan. Old presets keep
+  their saved Placement.
+- **Wet Mode** (GrainFxBox header): *Blend* mixes the input and the engines
+  with Dry/Wet. *Gated* plays only the input until **Gate** goes up, then the
+  engines replace it until it falls. Disable Drone so the engines play through
+  their Amp Envelope.
+- **Gate Motion** (engine band, Live input): while Gate is up the recording
+  plays like tape changing speed. It moves from *Start* to *End* over *Time*
+  (seconds or beats) with *Curve*. Speed 1 follows the input, 0 is stopped and
+  −1 plays backwards; delay and pitch change together. *Repeat* restarts the
+  motion every Time, like a saw. *Freeze* stops recording while it runs, so
+  the motion loops what came before the gate (stutter).
+- Factory snapshots (**Banks → Factory collection**): GrainBox has clouds,
+  freezes, pitched rain, reverse swells and keys. GrainFxBox has a grain
+  delay, a grain cloud, shimmer, a reverse echo, an octave down, tape stop,
+  spin-up, rewind, brake and reverse, an octave drop, stutters and repeated
+  tape stops. Hold Gate for the gated sounds.
+
+Run `python3 tools/migrate_grainfxbox.py [data folder ...] [--dry-run]` once
+for patches from before the split. It moves GrainBox nodes that recorded their
+input, or had a cable into In, to GrainFxBox and backs up each changed folder.
+`python3 tools/grainfxbox/render_test.py` renders the real SynthDefs offline
+and checks 1:1 routing, the gated tape stop and the stutter.
+
 ## Keyboard piano
 
 Focus the PolyComb, AdditiveBox, SteamPipeBox, PulsarBox, GrainBox, AliasingBox,
