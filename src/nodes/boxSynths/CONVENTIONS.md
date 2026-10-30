@@ -406,7 +406,12 @@ this order:
    Each side has its own bypass: **Scale Bypass** for notes at and above the
    split, **Low Scale Bypass** for notes below it. A bypassed side passes notes
    unchanged, fractions included. Transpose and Detune apply after either
-   scale.
+   scale. **Negative** (negative harmony, as Jacob Collier uses it) then
+   mirrors each note around the axis between **Negative Key**'s minor and
+   major third (C: C ↔ G, E ↔ Eb), to the mirror nearest the note so it keeps
+   its register. It is part of Scale: Scale destinations follow it, and it
+   works on a bypassed side too. It is folded into the 12 offsets per side
+   (`harmonyOffsets`), so the SynthDefs did not need recompiling.
 2. **Transpose** adds semitones after the scale, so a transpose changes the key.
    With **Mod 12** on, a transposed note wraps into its own octave, which starts
    at **Base Note** (C–B). The note never leaves that octave, as with Fit Notes

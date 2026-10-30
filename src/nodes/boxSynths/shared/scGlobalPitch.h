@@ -12,6 +12,8 @@
 //  12), the wrap's base pitch class, the split note (-1000 when off), the low
 //  scale's 12 offsets, low scale on]. Scale on and low scale on are the two
 //  bypasses: the scale at and above the split note, the low scale below it.
+//  Negative harmony is folded into both offset tables (harmonyOffsets), and
+//  turns its side on even when that side's scale is bypassed.
 //  There is one block for each combination of the features a destination
 //  follows, so a destination sets one control and the synth that makes its
 //  sounding pitch quantizes and transposes the input note (gq), then adds its
@@ -111,16 +113,18 @@ private:
         m.setAddress("/c_setn");
         m.addIntArg(b.write);
         m.addIntArg(NumBlocks * BlockSize);
+        // the scale with negative harmony folded in: the synths read one table per side
+        const auto offsets = harmonyOffsets(false), lowOffsets = harmonyOffsets(true);
         for(int block = 0; block < NumBlocks; block++) {
-            const bool t = block & 1, s = block & 2, q = s && scaleOn(), lq = s && lowScaleOn(), d = block & 4;
+            const bool t = block & 1, s = block & 2, q = s && harmonyOn(false), lq = s && splitOn() && harmonyOn(true), d = block & 4;
             m.addFloatArg(t ? transpose() : 0.0f);
             m.addFloatArg(q ? 1.0f : 0.0f);
-            for(float o : scaleOffsets()) m.addFloatArg(q ? o : 0.0f);
+            for(float o : offsets) m.addFloatArg(q ? o : 0.0f);
             m.addFloatArg(d ? detune() : 0.0f);
             m.addFloatArg(t && transposeWraps() ? 1.0f : 0.0f);
             m.addFloatArg(t ? float(transposeBase()) : 0.0f);
             m.addFloatArg(s && splitOn() ? split() : -1000.0f);   // where the low side starts, bypassed or not
-            for(float o : lowScaleOffsets()) m.addFloatArg(lq ? o : 0.0f);
+            for(float o : lowOffsets) m.addFloatArg(lq ? o : 0.0f);
             m.addFloatArg(lq ? 1.0f : 0.0f);
         }
         server->sendMsg(m);
