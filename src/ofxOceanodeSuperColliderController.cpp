@@ -986,6 +986,7 @@ void ofxOceanodeSuperColliderController::setup(){
         selectedAudioInputDeviceName = json.value<std::string>("inputDeviceName", selectedAudioInputDeviceName);
         selectedSampleRate = json.value<int>("sampleRate", selectedSampleRate);
         synthdefSync.setCheckForUpdatesOnStartup(json.value<bool>("checkForSynthdefUpdatesOnStartup", true));
+        showCpuLoad = json.value<bool>("showCpuLoad", true);
         syncAudioDeviceSelection();
         syncAudioInputDeviceSelection();
         syncSampleRateSelection();
@@ -1024,7 +1025,7 @@ static std::string cpuLabel(size_t index, size_t count){
 }
 
 float ofxOceanodeSuperColliderController::menuBarStatusWidth(){
-    if(outputServers.empty()) return 0.0f;
+    if(!showCpuLoad || outputServers.empty()) return 0.0f;
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
     float w = 0.0f;
     for(size_t i = 0; i < outputServers.size(); i++){
@@ -1094,6 +1095,18 @@ void ofxOceanodeSuperColliderController::draw(){
     }
     synthdefSync.drawMenuItem();
     presetShare.drawMenuItem();
+    if(ImGui::MenuItem("Show CPU Load", nullptr, &showCpuLoad)){
+        // remembered at once, like the startup update check
+        const std::string path = "Supercollider/Config/Controller/ControllerPreferences.json";
+        ofJson saved = ofLoadJson(path);
+        if(saved.empty()){
+            ofFilePath::createEnclosingDirectory(path);
+            saveControllerConfig(path);
+        }else{
+            saved["showCpuLoad"] = showCpuLoad;
+            ofSavePrettyJson(path, saved);
+        }
+    }
     if(ImGui::BeginMenu("NRT Rendering")){
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);
         ImGui::InputFloat("Duration (s)", &nrtDuration, 1.0f, 10.0f, "%.2f");
@@ -1336,6 +1349,7 @@ void ofxOceanodeSuperColliderController::saveControllerConfig(std::string filepa
     json["inputDeviceName"] = selectedAudioInputDeviceName;
     json["sampleRate"] = selectedSampleRate;
     json["checkForSynthdefUpdatesOnStartup"] = synthdefSync.getCheckForUpdatesOnStartup();
+    json["showCpuLoad"] = showCpuLoad;
 
 	ofSavePrettyJson(filepath, json);
 }

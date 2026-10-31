@@ -181,6 +181,7 @@ private:
 
     float volume;
     bool mute;
+    bool showCpuLoad = true;            // CPU readout in the menu bar
     int delay;
     bool stereomix;
     int stereomixSize;
