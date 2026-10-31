@@ -41,6 +41,8 @@ public:
     // The SynthDef compiler's prompt: it must open whatever window is visible.
     void drawPopups() override;
     bool isMenuController() const override { return true; }
+    float menuBarStatusWidth() override;
+    void drawMenuBarStatus() override;
     
     void killServers();
 

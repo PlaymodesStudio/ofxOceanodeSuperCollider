@@ -18,6 +18,7 @@
 #include <fstream>
 #include <limits>
 #include "ofxOceanodeTime.h"
+#include "ofxOceanodeColors.h"
 #include <array>
 #include <cstring>
 
@@ -1014,6 +1015,64 @@ void ofxOceanodeSuperColliderController::setup(){
     scSynthdefCompiler::get().setServers(outputServers);
     synthdefSync.setServers(outputServers);
     synthdefSync.checkForUpdates();
+}
+
+// Each server's CPU at the right of the menu bar: the average, coloured by
+// the peak (what drops out first). Grey when the server stopped answering.
+static std::string cpuLabel(size_t index, size_t count){
+    return count > 1 ? "SC" + std::to_string(index + 1) : std::string("SC");
+}
+
+float ofxOceanodeSuperColliderController::menuBarStatusWidth(){
+    if(outputServers.empty()) return 0.0f;
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float w = 0.0f;
+    for(size_t i = 0; i < outputServers.size(); i++){
+        // fixed slot, so changing digits cannot move it
+        w += ImGui::CalcTextSize((cpuLabel(i, outputServers.size()) + " [ 100.0% ]").c_str()).x;
+        if(i > 0) w += spacing;
+    }
+    return w;
+}
+
+void ofxOceanodeSuperColliderController::drawMenuBarStatus(){
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    for(size_t i = 0; i < outputServers.size(); i++){
+        ofxSCServer* server = outputServers[i]->getServer();
+        const std::string label = cpuLabel(i, outputServers.size());
+        const bool alive = server != nullptr && server->getStatusAgeMs() < 2000;
+        const float avg = alive ? server->getAvgCPU() : 0.0f;
+        const float peak = alive ? server->getPeakCPU() : 0.0f;
+
+        char text[48];
+        if(alive) std::snprintf(text, sizeof(text), "%s [ %.1f%% ]", label.c_str(), avg);
+        else      std::snprintf(text, sizeof(text), "%s [ -- ]", label.c_str());
+        const ImVec4 color = !alive ? ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]
+                           : peak < 50.0f ? OceanodeColors::FpsGood
+                           : peak < 80.0f ? OceanodeColors::FpsWarning
+                                          : OceanodeColors::FpsBad;
+        const ImVec2 size(ImGui::CalcTextSize((label + " [ 100.0% ]").c_str()).x,
+                          ImGui::GetTextLineHeight());
+        if(i > 0) ImGui::SameLine(0.0f, spacing);
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(size);
+        // right-aligned in its slot, like the FPS readout
+        const float tw = ImGui::CalcTextSize(text).x;
+        ImGui::GetWindowDrawList()->AddText(ImVec2(pos.x + size.x - tw, pos.y),
+                                            ImGui::GetColorU32(color), text);
+        if(ImGui::IsItemHovered()){
+            ImGui::BeginTooltip();
+            ImGui::Text("SuperCollider server %d", (int)i + 1);
+            if(alive){
+                ImGui::Text("CPU average  %.1f%%", avg);
+                ImGui::Text("CPU peak     %.1f%%", peak);
+                ImGui::Text("Synths %d   UGens %d", server->getNumSynths(), server->getNumUGens());
+            }else{
+                ImGui::TextUnformatted("Not answering (not booted, or busy)");
+            }
+            ImGui::EndTooltip();
+        }
+    }
 }
 
 void ofxOceanodeSuperColliderController::drawPopups(){
