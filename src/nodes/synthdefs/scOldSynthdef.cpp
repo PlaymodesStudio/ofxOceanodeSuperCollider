@@ -259,7 +259,9 @@ void scOldSynthdef::setOutputBus(ofxSCServer* server, int index, int bus){
 void scOldSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
     inputBuses[server][node] = bus;
     for(int i = 0; i < inputs.size(); i++){
-        if(inputs[i]->getNodeRef() == node){
+        const nodePort& wiring = scNode::getGraphInputPort();
+        const bool thisPort = wiring.getNodeRef() == nullptr || inputs[i].get() == wiring;
+        if(inputs[i]->getNodeRef() == node && thisPort){
             string paramName = "in";
             if(i > 0) paramName += ofToString(i+1);
             if(synths[server] != nullptr){
@@ -285,7 +287,8 @@ int scOldSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
         auto node = bypassedOutputBuses.find(server);
         if(node != bypassedOutputBuses.end() && node->second.count(index)) return node->second.at(index);
     }
-    return outputBus[server]; //Only one output in this type
+    auto bus = outputBus.find(server);   // -1 = unknown, never bus 0 (the hardware output)
+    return bus == outputBus.end() ? -1 : bus->second; //Only one output in this type
 }
 
 int scOldSynthdef::getLastSynthID(ofxSCServer* server){

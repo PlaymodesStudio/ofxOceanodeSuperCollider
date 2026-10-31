@@ -497,7 +497,12 @@ void scSynthdef::setup(){
             listeners.push(setAudioRateBusAssignment.newListener([this, toSendName, availableInput](std::tuple<ofxSCServer*, scNode*, int> busAssignmentInfo){
                 const auto [server, node, bus] = busAssignmentInfo;
                 auto synth = synths.find(server);
-                if(availableInput->getNodeRef() == node && synth != synths.end() && synth->second != nullptr){
+                // the graph names the source node, not its port: a source with
+                // several outputs (a sequencer's Gate and Pitch) is told apart
+                // by the bus of the port this input is wired to
+                const nodePort& wiring = scNode::getGraphInputPort();
+                const bool thisPort = wiring.getNodeRef() == nullptr || *availableInput == wiring;
+                if(availableInput->getNodeRef() == node && thisPort && synth != synths.end() && synth->second != nullptr){
                     synth->second->set(toSendName + "_sel", 1);
                     synth->second->mapan(toSendName + "_ar", bus, MAX_NODE_CHANNELS);
                     audioRateState[server][toSendName] = {1, bus};
@@ -800,7 +805,10 @@ void scSynthdef::setOutputBus(ofxSCServer* server, int index, int bus){
 void scSynthdef::setInputBus(ofxSCServer* server, scNode* node, int bus){
     inputBuses[server][node] = bus;
     for(int i = 0; i < inputs.size(); i++){
-        if(inputs[i]->getNodeRef() == node){
+        // several inputs from one multi-output source: each takes its own port's bus
+        const nodePort& wiring = scNode::getGraphInputPort();
+        const bool thisPort = wiring.getNodeRef() == nullptr || inputs[i].get() == wiring;
+        if(inputs[i]->getNodeRef() == node && thisPort){
             string paramName = ofToLower(inputs[i].getName());
             if(synths.count(server) != 0){
                 synths[server]->set(paramName, bus);
@@ -827,7 +835,12 @@ int scSynthdef::getOutputBusIndex(ofxSCServer* server, int index){
         auto node = bypassedOutputBuses.find(server);
         if(node != bypassedOutputBuses.end() && node->second.count(index)) return node->second.at(index);
     }
-    return outputBuses[server][index];
+    // -1 = unknown, never 0 (the hardware output): consumers that fall back
+    // on this bus would otherwise read and feed back the master
+    auto perServer = outputBuses.find(server);
+    if(perServer == outputBuses.end()) return -1;
+    auto bus = perServer->second.find(index);
+    return bus == perServer->second.end() ? -1 : bus->second;
 }
 
 int scSynthdef::getLastSynthID(ofxSCServer* server){

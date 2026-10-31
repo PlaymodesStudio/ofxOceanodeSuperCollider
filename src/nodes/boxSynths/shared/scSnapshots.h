@@ -39,6 +39,8 @@
 #include "ofxOceanodeShared.h"
 
 #include <array>
+#include <map>
+#include <set>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -137,9 +139,14 @@ public:
         moveLegacyPresets();
         scanPresets();
     }
-    // The snapshot controls themselves (never captured, never recalled)
+    // The snapshot controls themselves (never captured, never recalled): by
+    // their exact names (plain and escaped), so a Box's own "Morph Rate"-like
+    // control is not silently left out of its snapshots
     static bool isOwnKey(const std::string& key) {
-        return key.rfind("Snapshot", 0) == 0 || key.rfind("Morph", 0) == 0;
+        static const std::set<std::string> own = {
+            "Snapshot", "Morph", "Morph A", "Morph B", "Morph Time", "Morph Beats", "Morph Glide", "Morph Curve", "Morph Switch",
+            "Morph_A", "Morph_B", "Morph_Time", "Morph_Beats", "Morph_Glide", "Morph_Curve", "Morph_Switch"};
+        return own.count(key) > 0;
     }
 
     // ── Store / recall / glide / morph ─────────────────────────────────────
@@ -296,8 +303,13 @@ public:
             if(logScale && a > 0.0f && b > 0.0f) return std::exp(ofLerp(std::log(a), std::log(b), t));
             return ofLerp(a, b, t);
         };
-        if(x.is_number_float() && y.is_number_float()) return ofJson(num(x.get<float>(), y.get<float>()));
-        if(x.is_array() && y.is_array() && !x.empty() && !y.empty() && x[0].is_number_float() && y[0].is_number_float()) {
+        // a float at either end glides (a factory literal written as "1" is
+        // still a float control); two integers are a switch
+        auto numeric = [](const ofJson& a, const ofJson& b) {
+            return a.is_number() && b.is_number() && !a.is_boolean() && !b.is_boolean() && (a.is_number_float() || b.is_number_float());
+        };
+        if(numeric(x, y)) return ofJson(num(x.get<float>(), y.get<float>()));
+        if(x.is_array() && y.is_array() && !x.empty() && !y.empty() && numeric(x[0], y[0])) {
             ofJson r = ofJson::array();
             const size_t n = std::max(x.size(), y.size());
             for(size_t i = 0; i < n; i++)
@@ -400,7 +412,9 @@ public:
     // ── Library and banks ──────────────────────────────────────────────────
     std::filesystem::path dir() const {
         const std::filesystem::path d = ofToDataPath("nodeSnapshots/" + host.folder, true);
-        try { std::filesystem::create_directories(d / "banks"); } catch(...) {}
+        // created once per folder, not on every call (the bar calls this per frame)
+        static std::set<std::string> created;
+        if(created.insert(d.string()).second) { try { std::filesystem::create_directories(d / "banks"); } catch(...) {} }
         return d;
     }
     void saveLibrary() {
@@ -415,7 +429,7 @@ public:
         // the marker: the library exists (empty slots stay empty, no refill)
         try { ofSaveJson((d / "library.json").string(), ofJson{{"snapshots", 1}, {"bank", currentBank}}); } catch(...) {}
         if(!currentBank.empty())saveBank((d/"banks"/currentBank).string());
-        libTime = setTime();
+        libTime = setTime(true);
     }
     void loadLibrary() {
         const auto d = dir();
@@ -971,12 +985,21 @@ private:
     void recallFromGui(int k) {
         if(morphGlideP.get() != ImGui::GetIO().KeyAlt) glide(k); else recall(k);
     }
-    std::filesystem::file_time_type setTime() const {
+    // The newest write in the library folder. The folder is shared by every
+    // instance of the Box type, so one scan a second serves them all; `fresh`
+    // after this instance wrote it.
+    std::filesystem::file_time_type setTime(bool fresh = false) const {
+        struct Cached { float at = -1.0f; std::filesystem::file_time_type t{}; };
+        static std::map<std::string, Cached> cache;
+        auto& c = cache[host.folder];
+        const float now = ofGetElapsedTimef();
+        if(!fresh && c.at >= 0.0f && now - c.at < 0.9f) return c.t;
         std::filesystem::file_time_type t{};
         try {
             for(auto& e : std::filesystem::directory_iterator(dir()))
                 if(e.is_regular_file()) t = std::max(t, std::filesystem::last_write_time(e.path()));
         } catch(...) {}
+        c.at = now; c.t = t;
         return t;
     }
 };

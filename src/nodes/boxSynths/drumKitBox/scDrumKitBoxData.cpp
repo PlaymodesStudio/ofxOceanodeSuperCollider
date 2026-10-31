@@ -8,6 +8,7 @@
 //
 
 #include "scDrumKitBox.h"
+#include <map>
 #include "../shared/scSnapshots.h"
 #include <set>
 #include <filesystem>
@@ -231,6 +232,17 @@ const std::vector<scDrumKitBox::Spec>& scDrumKitBox::specs() {
         {"stereo", "Bass Freq", "bassFreq", 'f', 150, 20, 1000, DEST_FX + FX_WIDTH, "%.0f Hz", true, nullptr},
     };
     return all;
+}
+
+const std::vector<const scDrumKitBox::Spec*>& scDrumKitBox::specsFor(int dest) {
+    static std::map<int, std::vector<const Spec*>> byDest;
+    auto it = byDest.find(dest);
+    if(it == byDest.end()) {
+        auto& v = byDest[dest];
+        for(const auto& s : specs()) if(s.dest == dest) v.push_back(&s);
+        it = byDest.find(dest);
+    }
+    return it->second;
 }
 
 const std::vector<std::string>& scDrumKitBox::modelNames() {

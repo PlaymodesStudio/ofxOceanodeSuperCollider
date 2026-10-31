@@ -978,10 +978,10 @@ void ofxOceanodeSuperColliderController::setup(){
 	ofJson json = ofLoadJson("Supercollider/Config/Controller/ControllerPreferences.json");
 	if(!json.empty())
 	{
-		delay = json["delay"];
-		volume = json["volume"];
-		stereomixSize = json["stereomixsize"];
-		stereomix = json["stereomix"];
+		delay = json.value("delay", delay);
+		volume = json.value("volume", volume);
+		stereomixSize = json.value("stereomixsize", stereomixSize);
+		stereomix = json.value("stereomix", stereomix);
         selectedAudioDeviceName = json.value<std::string>("deviceName", selectedAudioDeviceName);
         selectedAudioInputDeviceName = json.value<std::string>("inputDeviceName", selectedAudioInputDeviceName);
         selectedSampleRate = json.value<int>("sampleRate", selectedSampleRate);
@@ -1358,29 +1358,29 @@ void ofxOceanodeSuperColliderController::saveControllerConfig(std::string filepa
 void ofxOceanodeSuperColliderController::loadConfig(std::string filepath, scPreferences &prefs){
     ofJson json = ofLoadJson(filepath);
     if(!json.empty()){
-        prefs.local = json["local"];
+        prefs.local = json.value("local", prefs.local);
         prefs.loadOnPreset = json.value<bool>("loadOnPreset", false);
-        prefs.udpPort = json["udpPort"];
-        prefs.bindAddress = json["bindAddress"];
-        prefs.numControlBusChannels = json["numControlBusChannels"];
-        prefs.numAudioBusChannels = json["numAudioBusChannels"];
-        prefs.numInputBusChannels = json["numInputBusChannels"];
-        prefs.numOutputBusChannels = json["numOutputBusChannels"];
-        prefs.blockSize = json["blockSize"];
-        prefs.hardwareBufferSize = json["hardwareBufferSize"];
-        prefs.hardwareSampleRate = json["hardwareSampleRate"];
-        prefs.numBuffers = json["numBuffers"];
-        prefs.maxNodes = json["maxNodes"];
-        prefs.maxSynthDefs = json["maxSynthDefs"];
-        prefs.memSize = json["memSize"];
-        prefs.numWireBufs = json["numWireBufs"];
-        prefs.numRGens = json["numRGens"];
-        prefs.maxLogins = json["maxLogins"];
-        prefs.safetyClipThreshold = json["safetyClipThreshold"];
+        prefs.udpPort = json.value("udpPort", prefs.udpPort);
+        prefs.bindAddress = json.value("bindAddress", prefs.bindAddress);
+        prefs.numControlBusChannels = json.value("numControlBusChannels", prefs.numControlBusChannels);
+        prefs.numAudioBusChannels = json.value("numAudioBusChannels", prefs.numAudioBusChannels);
+        prefs.numInputBusChannels = json.value("numInputBusChannels", prefs.numInputBusChannels);
+        prefs.numOutputBusChannels = json.value("numOutputBusChannels", prefs.numOutputBusChannels);
+        prefs.blockSize = json.value("blockSize", prefs.blockSize);
+        prefs.hardwareBufferSize = json.value("hardwareBufferSize", prefs.hardwareBufferSize);
+        prefs.hardwareSampleRate = json.value("hardwareSampleRate", prefs.hardwareSampleRate);
+        prefs.numBuffers = json.value("numBuffers", prefs.numBuffers);
+        prefs.maxNodes = json.value("maxNodes", prefs.maxNodes);
+        prefs.maxSynthDefs = json.value("maxSynthDefs", prefs.maxSynthDefs);
+        prefs.memSize = json.value("memSize", prefs.memSize);
+        prefs.numWireBufs = json.value("numWireBufs", prefs.numWireBufs);
+        prefs.numRGens = json.value("numRGens", prefs.numRGens);
+        prefs.maxLogins = json.value("maxLogins", prefs.maxLogins);
+        prefs.safetyClipThreshold = json.value("safetyClipThreshold", prefs.safetyClipThreshold);
         prefs.deviceName = json.value<std::string>("deviceName", "nil");
         prefs.inputDeviceName = json.value<std::string>("inputDeviceName", "nil");
-        prefs.verbosity = json["verbosity"];
-        prefs.ugensPlugins = json["ugensPlugins"];
+        prefs.verbosity = json.value("verbosity", prefs.verbosity);
+        prefs.ugensPlugins = json.value("ugensPlugins", prefs.ugensPlugins);
     }
 }
 

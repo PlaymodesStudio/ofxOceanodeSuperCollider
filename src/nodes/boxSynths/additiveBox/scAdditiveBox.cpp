@@ -468,9 +468,19 @@ void scAdditiveBox::setup(){
         onGate(v);
     }));
     // A scheduled pitch is sent at its instant: the voices recomputed now.
-    nodeListeners.push(pitch.newListener([this](std::vector<float>&){
+    nodeListeners.push(pitch.newListener([this](std::vector<float>& v){
         if(scScheduling::isBackendSendSuppressed()) return;
-        markDirty();
+        // only the voices whose note moved are computed again: at 16 voices x
+        // 256 partials every note used to recompute the whole instrument
+        const int V = numVoicesClamped();
+        voiceDirty.resize(V, false);
+        bool any = false;
+        for(int i = 0; i < V; i++){
+            if(valueFor(v, i, 48.0f) != valueFor(lastPitch, i, 48.0f)){ voiceDirty[i] = true; any = true; }
+        }
+        lastPitch = v;
+        if(!any) return;
+        dirty = true;
         if(noteInputs.isSending()) flushDirty();
     }));
     nodeListeners.push(trig.newListener([this](std::vector<int>& v){ onTrig(v); }));
@@ -588,7 +598,11 @@ void scAdditiveBox::flushDirty(){
     modDirty = false;
     // forPartialBanks computes each bank before its callback and restores the
     // editor context afterwards. A preliminary full computation is discarded.
-    if(!partialBankMode) computeAll();
+    if(!partialBankMode){
+        if(allVoicesDirty) computeAll(); else computeDirtyVoices();
+    }
+    allVoicesDirty = false;
+    std::fill(voiceDirty.begin(), voiceDirty.end(), false);
     bool rendered=false;
     // every voice: parts switched on / off where needed, what changed sent
     for(auto& [server, st] : states){
@@ -1230,6 +1244,22 @@ float scAdditiveBox::sweepRangeWeight(int v, float x) const {
     const float in = lo <= 0.0f ? 1.0f : smooth(lo - edge, lo + edge, x);
     const float out = hi >= 1.0f ? 1.0f : 1.0f - smooth(hi - edge, hi + edge, x);
     return in * out;
+}
+
+void scAdditiveBox::computeDirtyVoices(){
+    const int V = numVoicesClamped();
+    if((int)voiceData.size() != V || (int)curveData.size() != V || (int)sweepData.size() != V){ computeAll(); return; }
+    bool any = false;
+    for(int v = 0; v < V && v < (int)voiceDirty.size(); v++){
+        if(!voiceDirty[v]) continue;
+        voiceData[v] = computeVoice(v, 0);
+        curveData[v] = filter1Curve(v);
+        sweepData[v] = sweepTable(v);
+        any = true;
+    }
+    if(!any) return;
+    computeLaneTables();
+    dataGen++;
 }
 
 void scAdditiveBox::computeAll(){

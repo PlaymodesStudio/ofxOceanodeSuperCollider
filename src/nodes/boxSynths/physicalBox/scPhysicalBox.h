@@ -68,6 +68,7 @@ public:
     bool getTimelineInstrument(ofxOceanodeTimelineInstrument&) override;
 #endif
 private:
+    int objectDrag = -1, surfaceDrag = -1;   // the marker being dragged in drawObject / drawSurface
     // server-side modulation targets (per voice); Pan is the spreader's
     enum Target { Pitch, Material, Excite, Position, Hardness, BowPressure, BowSpeed, Breath, ScrapeSpeed,
                   Brightness, Decay, Shape, Couple, Cascade, Amp, Pan, NUM_TARGETS };
@@ -207,7 +208,7 @@ private:
     enum NoteFields { NoteGate=1, NotePitch=2, NoteRouting=4, NoteAll=7 };
     void sendNotes(ofxSCServer*, State&, unsigned fields=NoteAll);
     void sendSound(ofxSCServer*, State&);
-    bool soundDirty = false;
+    bool soundDirty = false, stagesDirty = false;   // the voices / only the effect stages
     void sendAll();
     void flushSound();
     void refreshOutputs() { for(auto& output : outputs) output = output; }

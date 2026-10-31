@@ -558,8 +558,13 @@ void scPhysicalBox::sendSound(ofxSCServer* server, State& st) {
 }
 void scPhysicalBox::sendAll() { soundDirty = true; }
 void scPhysicalBox::flushSound() {
-    if(!soundDirty) return;
-    soundDirty = false;
+    if(!soundDirty){
+        if(!stagesDirty) return;
+        stagesDirty = false;
+        for(auto& [s,st] : states) if(st.created) updateStages(s,st);
+        return;
+    }
+    soundDirty = stagesDirty = false;
     {
         auto now = scheduled.inEffectNow();
         for(auto& [s,st] : states) {
@@ -795,7 +800,8 @@ void scPhysicalBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     }
     c.send();
 }
-void scPhysicalBox::sendStageAll(int) { sendAll(); }
+// An effect control: only the stages go out (sendAll re-sent every voice's ~80 controls)
+void scPhysicalBox::sendStageAll(int) { stagesDirty = true; }
 
 // ── Publishing, snapshots, presets ───────────────────────────────────────────
 bool scPhysicalBox::connected(const std::string& k) const {
@@ -1180,7 +1186,7 @@ void scPhysicalBox::drawObject(ImVec2 a, ImVec2 size) {
             dl->AddText(ImVec2(x - 3 * z, rowA - ampA - 22 * z), markers[m].color, m == 1 ? "1" : "2");
         }
     }
-    static int dragging = -1;
+    int& dragging = objectDrag;   // per instance: two windows must not reset each other's drag
     ImGui::SetCursorScreenPos(ImVec2(a.x, a.y));
     ImGui::InvisibleButton("##object", ImVec2(view > 0 ? x1 - a.x + 9 * z : size.x, size.y * 0.55f));
     const auto mouse = ImGui::GetMousePos();
@@ -1292,7 +1298,7 @@ void scPhysicalBox::drawSurface(ImVec2 a, float side, int kind, float presence) 
             dl->AddText(ImVec2(p.x + 5 * z, p.y - 14 * z), spots[i].color, spots[i].name);
         }
     }
-    static int dragging = -1;
+    int& dragging = surfaceDrag;
     ImGui::SetCursorScreenPos(ImVec2(a.x - 6 * z, a.y - 6 * z));
     ImGui::InvisibleButton("##surface", ImVec2(side + 12 * z, side + 12 * z));
     const auto mouse = ImGui::GetMousePos();

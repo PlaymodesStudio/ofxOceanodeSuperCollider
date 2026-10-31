@@ -84,6 +84,11 @@ scMixerPro::~scMixerPro() {
         tr->listeners.unsubscribeAll();
         destroyRuntime(*tr, true);
     }
+    // The master sections too: deleting the node does not go through free(),
+    // and they kept running (into a bus handed to someone else) for the session
+    std::vector<ofxSCServer*> masters;
+    for(auto& [server, state] : serverStates) masters.push_back(server);
+    for(auto* server : masters) destroyMaster(server, true);
 }
 
 void scMixerPro::setup() {
@@ -1315,35 +1320,41 @@ void scMixerPro::setChannelCount(int channels) {
             tr.insertBus = new ofxSCBus(RATE_AUDIO, channels, server);
         }
 
-        // Replace in place (kAddAction_replace), keeping the execution order
-        auto* synth = new ofxSCSynth(trackDefName(), server);
-        synth->createAndRun(4, tr.synth->nodeID, getActive());
-        orderReplace(server, tr.synth, synth);
-        delete tr.synth;
-        tr.synth = synth;
-        if(tr.insert) {
-            auto* insert = new ofxSCSynth(insertDefName(tr.insertVariant), server);
-            insert->createAndRun(4, tr.insert->nodeID, getActive() && tr.insertRunning);
-            orderReplace(server, tr.insert, insert);
-            delete tr.insert;
-            tr.insert = insert;
-        }
-        auto replaceFx = [&](FxStage& fx, const char* base) {
+        // Swap the wrappers, configure them (the sets ride on /s_new as creation
+        // arguments), then replace in place (kAddAction_replace), keeping the
+        // execution order. Created first, the new synths ran on the SynthDef
+        // defaults -- in=0 / out=0, the hardware buses -- until their /n_go.
+        ofxSCSynth* oldSynth = tr.synth;
+        tr.synth = new ofxSCSynth(trackDefName(), server);
+        ofxSCSynth* oldInsert = tr.insert;
+        if(tr.insert) tr.insert = new ofxSCSynth(insertDefName(tr.insertVariant), server);
+        std::array<ofxSCSynth*, FX_COUNT> oldFx{};
+        for(int k = 0; k < FX_COUNT; k++) {
+            FxStage& fx = tr.fx[k];
             if(fx.bus) {
                 fx.bus->free(); delete fx.bus;
                 fx.bus = new ofxSCBus(RATE_AUDIO, channels, server);
             }
-            if(!fx.synth) return;
-            auto* synth = new ofxSCSynth(base + ofToString(channels), server);
-            synth->createAndRun(4, fx.synth->nodeID, getActive() && fx.running);
-            orderReplace(server, fx.synth, synth);
-            delete fx.synth;
-            fx.synth = synth;
-        };
-        for(int k = 0; k < FX_COUNT; k++) replaceFx(tr.fx[k], fxDefBase(k));
+            oldFx[k] = fx.synth;
+            if(fx.synth) fx.synth = new ofxSCSynth(fxDefBase(k) + ofToString(channels), server);
+        }
         dropSends(tr, true);   // its def and bus depend on the width; updateSends below
         tr.sentMute = -1.0f;
         sendAll(tr);
+        tr.synth->createAndRun(4, oldSynth->nodeID, getActive());
+        orderReplace(server, oldSynth, tr.synth);
+        delete oldSynth;
+        if(oldInsert) {
+            tr.insert->createAndRun(4, oldInsert->nodeID, getActive() && tr.insertRunning);
+            orderReplace(server, oldInsert, tr.insert);
+            delete oldInsert;
+        }
+        for(int k = 0; k < FX_COUNT; k++) {
+            if(!oldFx[k]) continue;
+            tr.fx[k].synth->createAndRun(4, oldFx[k]->nodeID, getActive() && tr.fx[k].running);
+            orderReplace(server, oldFx[k], tr.fx[k].synth);
+            delete oldFx[k];
+        }
         updateAdapter(tr);
     }
     // The master chains are rebuilt at the new width

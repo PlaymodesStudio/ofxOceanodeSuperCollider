@@ -404,8 +404,13 @@ void scSteamPipeBox::sendSound(ofxSCServer* server, State& st) {
 }
 void scSteamPipeBox::sendAll() { soundDirty = true; }
 void scSteamPipeBox::flushSound() {
-    if(!soundDirty) return;
-    soundDirty = false;
+    if(!soundDirty){
+        if(!stagesDirty) return;
+        stagesDirty = false;
+        for(auto& [s,st] : states) if(st.created) updateStages(s,st);
+        return;
+    }
+    soundDirty = stagesDirty = false;
     {
         auto now = scheduled.inEffectNow();
         for(auto& [s,st] : states) {
@@ -876,7 +881,8 @@ void scSteamPipeBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     controls.send();
 }
 
-void scSteamPipeBox::sendStageAll(int) { sendAll(); }
+// An effect control: only the stages go out (sendAll re-sent every voice's ~80 controls)
+void scSteamPipeBox::sendStageAll(int) { stagesDirty = true; }
 
 void scSteamPipeBox::drawFxTab(float w) {
     const float z = zoom();

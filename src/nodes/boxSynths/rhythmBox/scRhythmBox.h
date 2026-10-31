@@ -20,6 +20,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "ofxOceanodeShared.h"
 #include "../../../scNode.h"
+#include "../../../audio/scSynthControlBatch.h"
 #include "../../../timing/scTransportSync.h"
 #include "../../../serverManager.h"
 #include "ofxSuperCollider.h"
@@ -402,6 +403,13 @@ private:
     std::array<std::map<std::string, std::string>, MAX_TRACKS> trackControlKeys;
     std::vector<std::function<void()>> trackControlPulls;
     bool trackControlsDirty = false, legacyPublishing = false;
+    // Per track: 1 = a config field changed, 2 = a step array changed (a
+    // cabled control used to reload the whole slot for every track each frame)
+    std::array<uint8_t, MAX_TRACKS> trackDirty{};
+    // What each track synth already has; cleared when the synth is recreated
+    std::map<ofxSCSynth*, scSynthControlBatch::Cache> trackSent;
+    void syncTrackVectorParams(bool force);   // the per-track node vectors from the configs
+    void sendTrackConfigScalars(int ti);      // shift / timing / env / lfo / eq... of one track
     void initializeTrackControls();
     std::vector<ofxSCServer*> activeGraphServers() const;
     void controlMenuItems(const std::string& key, bool withValue = true);
@@ -442,19 +450,22 @@ private:
         p->set(label + " " + ofToString(ti + 1), ti < numTracks ? get() : T{}, lo, hi);
         registerControl(*p, false, false);
         trackControlKeys[ti][field] = p->getEscapedName();
-        nodeListeners.push(p->newListener([this, ti, set, lo, hi](T& value){
+        const bool stepField = field.rfind("step", 0) == 0;   // a step array (2) or a config field (1)
+        nodeListeners.push(p->newListener([this, ti, set, lo, hi, stepField](T& value){
             if(ti >= numTracks) return;
             T sanitized = value;
             if constexpr(std::is_same_v<T, std::vector<float>> || std::is_same_v<T, std::vector<int>>) {
                 if(sanitized.size() == 1) sanitized.resize(MAX_STEPS, sanitized.front());
                 for(auto& v : sanitized) v = std::max(lo.front(), std::min(v, hi.front()));
             }
-            pendingTrackEdits.push_back([this, ti, set, sanitized](){
-                if(ti < numTracks) { set(sanitized); trackControlsDirty = true; }
+            pendingTrackEdits.push_back([this, ti, set, sanitized, stepField](){
+                if(ti < numTracks) { set(sanitized); trackDirty[ti] |= stepField ? 2 : 1; }
             });
         }));
         trackControlPulls.push_back([this, ti, p, get](){
-            if(ti < numTracks) p->setWithoutEventNotifications(get());
+            if(ti >= numTracks) return;
+            const T v = get();
+            if(p->get() != v) p->setWithoutEventNotifications(v);   // no copy, no notification when unchanged
         });
     }
 

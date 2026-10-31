@@ -502,6 +502,10 @@ void scEchoBox::rebuildChannels() {
         server->setBLatency(true);
         ensureBuses(server, st);
         st.builtChannels = n();
+        // Fresh synths: the route caches say nothing about them (the re-allocated
+        // wet buses often get the same indices, which would skip the sends)
+        st.mixRouteSent.clear();
+        st.rvbSent.clear();
         auto replace = [&](ofxSCSynth*& old, const std::string& def, std::function<void(ofxSCSynth*)> init, bool run){
             if(!old) return;
             auto* fresh = new ofxSCSynth(def, server);
@@ -515,9 +519,14 @@ void scEchoBox::rebuildChannels() {
                 s->set("in", st.inBus); s->set("out", st.wetA ? st.wetA->index : 0);
                 s->set("vis", st.vis ? st.vis->index + t : 0); sendTap(s, t); setModArgs(server, st, s, t);
             }, getActive());
-        replace(st.rvb, "boxMicroSpace" + ofToString(n()), [&](ofxSCSynth* s){ sendRvb(s); }, getActive() && st.rvbRunning);
+        replace(st.rvb, "boxMicroSpace" + ofToString(n()), [&](ofxSCSynth* s){
+            s->set("in", st.wetA ? st.wetA->index : 0); s->set("out", st.wetB ? st.wetB->index : 0); sendRvb(s);
+        }, getActive() && st.rvbRunning);
         replace(st.mix, "EchoBoxMix" + ofToString(n()), [&](ofxSCSynth* s){
-            s->set("in", st.inBus); s->set("out", st.outBus); s->set("vis", st.vis ? st.vis->index + MAX_TAPS : 0); sendMix(s);
+            s->set("in", st.inBus); s->set("out", st.outBus); s->set("vis", st.vis ? st.vis->index + MAX_TAPS : 0);
+            const bool viaRvb = st.rvb && st.rvbRunning && st.wetB;
+            s->set("wet", viaRvb ? st.wetB->index : (st.wetA ? st.wetA->index : 0));
+            sendMix(s);
             setModArgs(server, st, s, 0);
         }, getActive());
         routeWet(st);

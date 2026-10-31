@@ -120,19 +120,20 @@ void scVUMeter::setup() {
 		// Set up parameter listeners - FOLLOW CANONICAL PATTERN FROM scSynthdef
 		listeners.push(numChannels.newListener([this](int &channels){
 			if(channels < 1 || channels > MAX_NODE_CHANNELS) return;
-			// Recreate synths with proper replacement - EXACTLY like scSynthdef
+			// Swap the wrappers, re-send every parameter into them (queued as
+			// creation arguments), then replace on the server: created first,
+			// the new synth ran on in=0 / out=0 (the hardware buses) until /n_go
+			std::map<ofxSCServer*, int> oldIDs;
 			for(auto &synth : synthInstances){
-				ofxSCSynth *newSynth = new ofxSCSynth(getSynthDefName(), synth.first);
-				newSynth->createAndRun(4, synth.second->nodeID, getActive()); // 4 = kAddAction_replace
+				if(!synth.second) continue;
+				oldIDs[synth.first] = synth.second->nodeID;
 				delete synth.second;
-				synth.second = newSynth;
-				
+				synth.second = new ofxSCSynth(getSynthDefName(), synth.first);
 				// Recreate VU bus for new channel count
 				recreateVUBus(synth.first);
 			}
-			
-			// Use event pattern to restore ALL parameters (following scSynthDef)
 			resendParams.notify();
+			for(auto& [srv, oldID] : oldIDs) synthInstances[srv]->createAndRun(4, oldID, getActive()); // 4 = kAddAction_replace
 			
 			// CRITICAL: Trigger graph recomputation - EXACTLY like scSynthdef
 			for(auto& output : outputs) {

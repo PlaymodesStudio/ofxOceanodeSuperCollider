@@ -630,7 +630,10 @@ void scModulation::sendChanged() {
 }
 
 void scModulation::setBpm(float bpm) {
-    if(bpm != currentBpm){ currentBpm = bpm; notify(); }
+    // Hosts that follow the transport call this every frame: nothing to send
+    // while the tempo stands (a new LFO synth gets its rate from sendLfoPart)
+    if(bpm == currentBpm) return;
+    currentBpm = bpm; notify();
     forStates([this](ofxSCServer*, ServerState& st){
         for(int li = 0; li < lfoCount; li++){
             const auto hz = lfoHzFor(li), sh = lfoShFor(li);
@@ -753,7 +756,11 @@ void scModulation::updatePhases() {
         if(ix.indexShuffle_Param != lfoShuffle[li].get()){ ix.indexShuffle_Param = lfoShuffle[li].get(); ix.indexShuffleChanged(ix.indexShuffle_Param); }
         if(ix.indexRand_Param != lfoRand[li].get()){ ix.indexRand_Param = lfoRand[li].get(); ix.indexRandChanged(ix.indexRand_Param); }
         ix.recomputeIndexs();
-        lfoPhases[li] = expand(ix.getIndexs(), n());
+        // Called on every afterLoad (each frame of a morph): send the phases
+        // only when they moved. A new LFO synth gets them from sendLfoPart.
+        auto phases = expand(ix.getIndexs(), n());
+        if(phases == lfoPhases[li]) continue;
+        lfoPhases[li] = std::move(phases);
         forStates([this, li](ofxSCServer*, ServerState& st){
             for(int c = 0; c < (int)st.lfo[li].size(); c++) if(st.lfo[li][c]){
                 st.lfo[li][c]->set("phoff", perVoice ? slice(lfoPhases[li], c) : std::vector<float>(chunkN(c), 0.0f));
@@ -770,7 +777,9 @@ void scModulation::update() {
     // Read at 30 Hz for the editor or published output pins; every frame
     // while the sources move a control
     const float now = ofGetElapsedTimef();
-    if(now < nextLiveRead && !forParams){ updateLfoOutputs(); return; }
+    // 30 Hz for the parameter targets too: they are written at frame rate
+    // from values that come back a frame later anyway
+    if(now < nextLiveRead){ updateLfoOutputs(); return; }
     nextLiveRead = now + 1.0f / 30.0f;
     live.clear();
     for(auto& [server, st] : states){
@@ -829,7 +838,7 @@ void scModulation::updateLfoOutputs() {
             if(li < lfoCount) for(int v = 0; v < (int)values.size(); ++v) values[v] = liveValue(li, v);
         }
         for(auto& value : values) value = std::isfinite(value) ? ofClamp(value, 0.0f, 1.0f) : 0.0f;
-        lfoOutputs[li].set(values);
+        if(lfoOutputs[li].get() != values) lfoOutputs[li].set(values);   // the pins notify their cables
     }
 }
 
@@ -1086,6 +1095,7 @@ void scModulation::applyParams() {
         const bool voiceScalar = pt.kind == 0 && voiceParamKeys.count(pt.key);
         const size_t size = voiceScalar ? (size_t)nv : pt.kind >= 2 ? (pt.base.size() <= 1 ? (size_t)nv : pt.base.size()) : 1;
         const float span = pt.hi - pt.lo;
+        const float salt = float(std::hash<std::string>{}(pt.key) % 1000) * 0.913f + 50.0f;   // once, not per voice
         std::vector<float> out(size);
         for(size_t i = 0; i < size; i++){
             const int voice = (int)(i % nv);
@@ -1094,7 +1104,7 @@ void scModulation::applyParams() {
                 if(std::abs(pt.amount[s]) > 1e-4f && sourceUsed(s)){
                     // Random: this control's own value per note (salted by its key), unless shared
                     if(s == SRC_RND && !randomShared)
-                        m += pt.amount[s] * 0.5f * decorrelate(liveValue(s, voice), float(std::hash<std::string>{}(pt.key) % 1000) * 0.913f + 50.0f);
+                        m += pt.amount[s] * 0.5f * decorrelate(liveValue(s, voice), salt);
                     else m += pt.amount[s] * paramSource(s, voice, pt.bipolar[s]);
                 }
             float v = ofClamp(pt.base[std::min(i, pt.base.size() - 1)] + m * span, pt.lo, pt.hi);

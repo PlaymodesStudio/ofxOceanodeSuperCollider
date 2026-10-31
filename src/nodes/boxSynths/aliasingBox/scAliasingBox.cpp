@@ -345,8 +345,13 @@ void scAliasingBox::sendSound(ofxSCServer* server, State& st) {
 }
 void scAliasingBox::sendAll() { soundDirty = true; }
 void scAliasingBox::flushSound() {
-    if(!soundDirty) return;
-    soundDirty = false;
+    if(!soundDirty){
+        if(!stagesDirty) return;
+        stagesDirty = false;
+        for(auto& [s,st] : states) if(st.created) updateStages(s,st);
+        return;
+    }
+    soundDirty = stagesDirty = false;
     for(auto& [s,st] : states) sendSound(s,st);
 }
 void scAliasingBox::buildSynth(ofxSCServer* server) {
@@ -837,7 +842,8 @@ void scAliasingBox::sendStage(int s, ofxSCSynth* x, ofxSCServer* server) {
     controls.send();
 }
 
-void scAliasingBox::sendStageAll(int) { sendAll(); }
+// An effect control: only the stages go out (sendAll re-sent every voice's ~80 controls)
+void scAliasingBox::sendStageAll(int) { stagesDirty = true; }
 
 void scAliasingBox::drawFxTab(float w) {
     const float z = zoom();

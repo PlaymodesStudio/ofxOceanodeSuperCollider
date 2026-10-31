@@ -757,8 +757,9 @@ void scDrumKitBox::sendTrig(ofxSCServer* srv, Pad& p, bool includeNotes) {
     c.set("velbus", p.mod.sourceBus(srv, scModulation::SRC_VEL));
     c.set("rndbus", p.mod.sourceBus(srv, scModulation::SRC_RND));
     c.set("vis", sc.vis ? sc.vis->index : -1);
-    for(const auto& spec : specs()) {
-        if(spec.dest != DEST_TRIG || !spec.sc[0]) continue;
+    for(const auto* sp : specsFor(DEST_TRIG)) {
+        const auto& spec = *sp;
+        if(!spec.sc[0]) continue;
         if(spec.type == 'f') c.set(spec.sc, p.F(spec.label).get());
         else if(spec.type == 'i') c.set(spec.sc, p.I(spec.label).get());
     }
@@ -794,8 +795,9 @@ void scDrumKitBox::sendSound(ofxSCServer* srv, Pad& p, ofxSCSynth* s, int layer)
     PadSC& sc = it->second;
     const int mine = layer < 0 ? VOICE : 1 << layer;
     scSynthControlBatch c(s, srv);
-    for(const auto& spec : specs()) {
-        if(spec.dest != DEST_SOUND || !spec.sc[0] || !(soundTargets(spec.section) & mine)) continue;
+    for(const auto* sp : specsFor(DEST_SOUND)) {
+        const auto& spec = *sp;
+        if(!spec.sc[0] || !(soundTargets(spec.section) & mine)) continue;
         if(spec.type == 'f') c.set(spec.sc, p.F(spec.label).get());
         else if(spec.type == 'i') c.set(spec.sc, p.I(spec.label).get());
         else c.set(spec.sc, snaps.morph.activation(p.B(spec.label)));

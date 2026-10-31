@@ -27,6 +27,7 @@
 #pragma once
 
 #include "../../../scNode.h"
+#include "../../../audio/scSynthControlBatch.h"
 #include "../shared/scKeyboardPiano.h"
 #include "../../../serverManager.h"
 #include "ofxSCSynth.h"
@@ -126,7 +127,8 @@ private:
                 SlAmp, SlSub, SlSpread, SlComp, SlEq, SlBlur, SlEcho, SlRvb, NumSlots };
     enum Osc { OSaw, OTri, OPulse, OSine, OSSaw, OWhite, OPink, ODust, OImp, NumOsc };
     enum Ins { IFilter, IComb, IRing, IPost, IShaper, NumIns };
-    struct Part { ofxSCSynth* synth = nullptr; bool running = false; float offAt = -1.0f; std::string definition; };
+    // sent: what the synth already has (scSynthControlBatch skips it), cleared with the synth
+    struct Part { ofxSCSynth* synth = nullptr; bool running = false; float offAt = -1.0f; std::string definition; scSynthControlBatch::Cache sent; };
     struct Fx { ofxSCSynth* synth = nullptr; ofxSCBus* in = nullptr; bool running = false; float offAt = -1.0f; };
     struct ServerState {
         ofxSCGroup* root = nullptr;
@@ -141,6 +143,7 @@ private:
         std::array<Part, NumOsc> osc;                   // PCOsc<Type>, the ones audible
         std::array<Part, NumIns> ins;                   // PCFilter / Comb / Ring / Filter (post) / Shaper
         Part sub;                                      // independent sine layer
+        scSynthControlBatch::Cache ampEnvSent, ampSent, spreadSent;   // the fixed synths' caches
         ofxSCSynth* amp = nullptr;                      // PCAmp
         ofxSCSynth* spread = nullptr;                   // PolyCombSpread<C> (PCSpreadWide<C> over 16 voices)
         int spreadLanes = LEGACY_VOICES;                // the spreader's voices: 16 or 32
@@ -199,6 +202,8 @@ private:
     int mod(const ServerState& st, int t) const;
     void forStates(const std::function<void(ofxSCServer*, ServerState&)>& f);
     void sendVec(ofxSCSynth* s, const std::string& name, const std::vector<float>& v);
+    void setVec(scSynthControlBatch& c, const std::string& name, const std::vector<float>& v);
+    void clearSent(ServerState& st);
     // what each part needs, sent to it (on creation and when its controls change)
     void sendGate(ServerState& st, bool notesOnly = false);
     void sendAmpEnv(ServerState& st);

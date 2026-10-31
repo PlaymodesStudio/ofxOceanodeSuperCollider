@@ -411,7 +411,9 @@ private:
         c.load = [&p](const ofJson& j){ try { if(j.is_number()) p.set(std::clamp((int)std::lround(j.get<double>()), p.getMin(), p.getMax())); else if(j.is_boolean()) p.set(j.get<bool>() ? 1 : 0); } catch(...) {} };
         c.text = [&p](){ return ofToString(p.get()); };
         c.apply = [&p](const std::string& t){ p.set(std::clamp((int)std::lround(ofToFloat(t)), p.getMin(), p.getMax())); };
-        if(dropdown.empty()){
+        // numbers glide in a morph; a dropdown or a seed switches (a seed
+        // half way between two is an unrelated pattern, 0 a fresh draw)
+        if(dropdown.empty() && key.find("Seed") == std::string::npos){
             c.get = [&p](){ return (double)p.get(); };
             c.set = [&p](double v){ const int iv = std::clamp((int)std::lround(v), p.getMin(), p.getMax()); if(iv != p.get()) p.set(iv); };
         }
@@ -1094,7 +1096,8 @@ private:
                 lastFreePos = pos;
                 freePos = pos;
             }
-            server->requestControlValues(st.status->index, 2);
+            // Transport mode reads neither value: no round trip per frame then
+            if(clockMode.get() != CLOCK_TRANSPORT) server->requestControlValues(st.status->index, 2);
             break;
         }
     }
@@ -1126,21 +1129,39 @@ private:
     }
     void invalidateServer(ServerState& st){ st.slotChunk.fill(NONE); st.rowOrdinal.fill(NONE); }
 
-    // /b_setn messages for runs of samples (up to ~2000 values each)
+    // /b_setn messages for runs of samples (up to ~2000 values each). One
+    // write is one OSC bundle: the clear and the data land in the same
+    // server block, so the player never reads a cleared frame whose notes
+    // are still on their way (two packets could straddle a block boundary).
     struct Writer {
         ofxSCBuffer* buf;
+        ofxOscBundle bundle;
         ofxOscMessage m;
         int values = 0;
         explicit Writer(ofxSCBuffer* b) : buf(b) { begin(); }
         void begin(){ m.clear(); m.setAddress("/b_setn"); m.addIntArg(buf->index); values = 0; }
+        void zero(int start, int count){
+            ofxOscMessage z;
+            z.setAddress("/b_fill");
+            z.addIntArg(buf->index);
+            z.addIntArg(start);
+            z.addIntArg(count);
+            z.addFloatArg(0.0f);
+            bundle.addMessage(z);
+        }
         void run(int start, const float* data, int count){
-            if(values + count > 2000) flush();
+            if(values + count > 2000) close();
             m.addIntArg(start);
             m.addIntArg(count);
             for(int i = 0; i < count; i++) m.addFloatArg(data[i]);
             values += count + 2;
         }
-        void flush(){ if(values > 0){ buf->server->sendMsg(m); } begin(); }
+        void close(){ if(values > 0) bundle.addMessage(m); begin(); }
+        void flush(){
+            close();
+            if(bundle.getMessageCount() > 0) buf->server->sendBundle(bundle);
+            bundle.clear();
+        }
     };
     void zero(ServerState& st, int start, int count){
         ofxOscMessage m;
@@ -1177,7 +1198,6 @@ private:
     void writeChunk(ServerState& st, int64_t chunk){
         const int slot = (int)arpbox::wrap64(chunk, SLOTS);
         const int firstFrame = slot * CHUNK;
-        zero(st, firstFrame * BUF_CH, CHUNK * BUF_CH);
         const double from = (double)chunk * CHUNK / TPB, to = from + (double)CHUNK / TPB;
         std::map<int, std::array<float, BUF_CH>> frames;
         std::map<int, std::pair<int, int>> spans;   // frame -> first / last slot used
@@ -1200,6 +1220,7 @@ private:
             }
         }
         Writer w(st.buffer);
+        w.zero(firstFrame * BUF_CH, CHUNK * BUF_CH);
         for(const auto& [local, f] : frames){
             const auto& sp = spans[local];
             w.run((firstFrame + local) * BUF_CH + sp.first * CH, f.data() + sp.first * CH, (sp.second - sp.first + 1) * CH);
@@ -2008,6 +2029,7 @@ private:
                     ImGui::TextDisabled("Chance per step (drag)");
                     auto v = pulseSteps.get();
                     if(barEditor("##abPulseSteps", v, 0, 100, false, 90.0f, currentStep(), col)) pulseSteps = v;
+                    controlMenu("pulseStepPattern");
                     if(ImGui::SmallButton("All")) pulseSteps = std::vector<int>(v.size(), 100);
                     ImGui::SameLine();
                     if(ImGui::SmallButton("Half")) pulseSteps = std::vector<int>(v.size(), 50);

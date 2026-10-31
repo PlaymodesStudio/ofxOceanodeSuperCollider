@@ -44,7 +44,8 @@ public:
 
 	// ============ update =======================================================
 	void update(ofEventArgs&) override {
-		if(!waveformBus) return;
+		// the window is its only reader: no channels x samples /c_getn per frame while it is closed
+		if(!waveformBus || !showWindow) return;
 		size_t need = channels()*samplesPerChannel;
 		const auto &v = waveformBus->readValues;
 		if(v.size()>=need) waveformData=v;

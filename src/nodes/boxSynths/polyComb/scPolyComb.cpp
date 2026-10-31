@@ -578,6 +578,12 @@ void scPolyComb::sendVec(ofxSCSynth* s, const std::string& name, const std::vect
     else s->set(name, expand(v, n()));
 }
 
+// The same through a batch: one value spread over the voices, or the vector expanded
+void scPolyComb::setVec(scSynthControlBatch& c, const std::string& name, const std::vector<float>& v) {
+    if(v.size() <= 1) c.set(name, std::vector<float>(n(), first(v)));
+    else c.set(name, expand(v, n()));
+}
+
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
 bool scPolyComb::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
     if(!gateIn.handle || !pitchIn.handle) return false;
@@ -614,11 +620,14 @@ void scPolyComb::sendGate(ServerState& st, bool notesOnly) {
 void scPolyComb::sendAmpEnv(ServerState& st) {
     auto* s = st.ampEnv;
     if(!s) return;
-    s->set("gate", st.gateBus ? st.gateBus->index : 0);
-    s->set("out", st.visBlock ? st.visBlock->index + VIS_AMP : 0);
-    s->set("aout", st.envBus ? st.envBus->index : 0);
-    s->set("atk", modulation.voiceValues(ampA)); s->set("dec", modulation.voiceValues(ampD)); s->set("sus", modulation.voiceValues(ampS)); s->set("rel", modulation.voiceValues(ampR));
-    s->set("cA", modulation.voiceValues(ampCA)); s->set("cD", modulation.voiceValues(ampCD)); s->set("cR", modulation.voiceValues(ampCR));
+    scSynthControlBatch c(s, st.server, &st.ampEnvSent);   // only what changed
+    auto vec = [&](const std::string& nm, const std::vector<float>& v){ setVec(c, nm, v); };
+    c.set("gate", st.gateBus ? st.gateBus->index : 0);
+    c.set("out", st.visBlock ? st.visBlock->index + VIS_AMP : 0);
+    c.set("aout", st.envBus ? st.envBus->index : 0);
+    c.set("atk", modulation.voiceValues(ampA)); c.set("dec", modulation.voiceValues(ampD)); c.set("sus", modulation.voiceValues(ampS)); c.set("rel", modulation.voiceValues(ampR));
+    c.set("cA", modulation.voiceValues(ampCA)); c.set("cD", modulation.voiceValues(ampCD)); c.set("cR", modulation.voiceValues(ampCR));
+    c.send();
 }
 
 
@@ -663,13 +672,16 @@ void scPolyComb::sendPitch(ServerState& st, bool notesOnly) {
 void scPolyComb::sendFm(ServerState& st) {
     auto* s = st.fm.synth;
     if(!s) return;
-    s->set("note", st.noteBus ? st.noteBus->index : 0);
-    s->set("out", st.fmBus ? st.fmBus->index : 0);
-    s->set("mamt", mod(st, 1));
-    s->set("mratio", mod(st, 2));
-    sendVec(s, "fmamt", fmAmt.get());
-    sendVec(s, "fmratio", fmRatio.get());
-    s->set("fmfb", modulation.voiceValues(fmFb));
+    scSynthControlBatch c(s, st.server, &st.fm.sent);   // only what changed
+    auto vec = [&](const std::string& nm, const std::vector<float>& v){ setVec(c, nm, v); };
+    c.set("note", st.noteBus ? st.noteBus->index : 0);
+    c.set("out", st.fmBus ? st.fmBus->index : 0);
+    c.set("mamt", mod(st, 1));
+    c.set("mratio", mod(st, 2));
+    vec("fmamt", fmAmt.get());
+    vec("fmratio", fmRatio.get());
+    c.set("fmfb", modulation.voiceValues(fmFb));
+    c.send();
 }
 
 namespace {
@@ -685,16 +697,19 @@ bool scPolyComb::oscWanted(int o) const {
 void scPolyComb::sendOsc(ServerState& st, int o) {
     auto* s = st.osc[o].synth;
     if(!s) return;
+    scSynthControlBatch c(s, st.server, &st.osc[o].sent);   // only what changed
+    auto vec = [&](const std::string& nm, const std::vector<float>& v){ setVec(c, nm, v); };
     const ofParameter<std::vector<float>>* levels[] = {&oscSaw, &oscTri, &oscPulse, &oscSine, &oscSSaw, &oscWhite, &oscPink, &oscDust, &oscImpulse};
-    s->set("note", st.noteBus ? st.noteBus->index : 0);
-    s->set("fm", st.fmBus ? st.fmBus->index : 0);
-    s->set("fmon", (st.fm.synth && st.fm.running) ? snaps.morph.activation(fmOn) : 0.0f);
-    s->set("out", st.oscBus ? st.oscBus->index : 0);
-    sendVec(s, "level", levels[o]->get());
-    sendVec(s, "oscamp", oscAmp.get());
-    if(o == OPulse){ sendVec(s, "pw", oscPw.get()); s->set("mpw", mod(st, 11)); }
-    if(o == OSSaw) sendVec(s, "ssdetune", oscSSDetune.get());
-    if(o == ODust) s->set("dustoct", modulation.voiceValues(oscDustDensity));
+    c.set("note", st.noteBus ? st.noteBus->index : 0);
+    c.set("fm", st.fmBus ? st.fmBus->index : 0);
+    c.set("fmon", (st.fm.synth && st.fm.running) ? snaps.morph.activation(fmOn) : 0.0f);
+    c.set("out", st.oscBus ? st.oscBus->index : 0);
+    vec("level", levels[o]->get());
+    vec("oscamp", oscAmp.get());
+    if(o == OPulse){ vec("pw", oscPw.get()); c.set("mpw", mod(st, 11)); }
+    if(o == OSSaw) vec("ssdetune", oscSSDetune.get());
+    if(o == ODust) c.set("dustoct", modulation.voiceValues(oscDustDensity));
+    c.send();
 }
 
 bool scPolyComb::insWanted(int i) const {
@@ -710,48 +725,50 @@ bool scPolyComb::insWanted(int i) const {
 void scPolyComb::sendIns(ServerState& st, int i) {
     auto* s = st.ins[i].synth;
     if(!s) return;
-    s->set("on", snaps.morph.activation(i==IFilter ? filterOn : i==IPost ? postOn : i==IComb ? combOn : i==IRing ? ringOn : shaperOn));
-    s->set("note", st.noteBus ? st.noteBus->index : 0);
+    scSynthControlBatch c(s, st.server, &st.ins[i].sent);   // only what changed
+    auto vec = [&](const std::string& nm, const std::vector<float>& v){ setVec(c, nm, v); };
+    c.set("on", snaps.morph.activation(i==IFilter ? filterOn : i==IPost ? postOn : i==IComb ? combOn : i==IRing ? ringOn : shaperOn));
+    c.set("note", st.noteBus ? st.noteBus->index : 0);
     switch(i){
         case IFilter:
-            s->set("type",float(filterModel.get()==1 ? fType.get() : filterChoice(fType.get()).first));
-            if(fType.get()>=4 && filterModel.get()!=1) s->set("slope",float(filterChoice(fType.get()).second));
-            sendVec(s, "cutoff", cutoff.get());
-            sendVec(s, "res", res.get());
-            s->set("keytrack", modulation.voiceValues(keyTrack));
-            s->set("mcut", mod(st, 3)); s->set("mres", mod(st, 4));
+            c.set("type",float(filterModel.get()==1 ? fType.get() : filterChoice(fType.get()).first));
+            if(fType.get()>=4 && filterModel.get()!=1) c.set("slope",float(filterChoice(fType.get()).second));
+            vec("cutoff", cutoff.get());
+            vec("res", res.get());
+            c.set("keytrack", modulation.voiceValues(keyTrack));
+            c.set("mcut", mod(st, 3)); c.set("mres", mod(st, 4));
             break;
         case IPost:
-            s->set("type",float(postFilterModel.get()==1 ? postType.get() : filterChoice(postType.get()).first));
-            if(postType.get()>=4 && postFilterModel.get()!=1) s->set("slope",float(filterChoice(postType.get()).second));
-            sendVec(s, "cutoff", postCut.get());
-            sendVec(s, "res", postRes.get());
-            s->set("keytrack", modulation.voiceValues(postKeyTrack));
-            s->set("mcut", mod(st, 9)); s->set("mres", mod(st, ZERO_TARGET));
+            c.set("type",float(postFilterModel.get()==1 ? postType.get() : filterChoice(postType.get()).first));
+            if(postType.get()>=4 && postFilterModel.get()!=1) c.set("slope",float(filterChoice(postType.get()).second));
+            vec("cutoff", postCut.get());
+            vec("res", postRes.get());
+            c.set("keytrack", modulation.voiceValues(postKeyTrack));
+            c.set("mcut", mod(st, 9)); c.set("mres", mod(st, ZERO_TARGET));
             break;
         case IComb:
-            s->set("satlevel", modulation.voiceValues(combSatLevel));
+            c.set("satlevel", modulation.voiceValues(combSatLevel));
             if(combMapped()){              // map contribution plus the remaining live oscillator follow
-                s->set("combmode", combMapAmount());
-                sendVec(s, "combpitch", combMapPitches());
+                c.set("combmode", combMapAmount());
+                vec("combpitch", combMapPitches());
             }else{
                 // Follow the oscillator note bus so glide and live pitch inputs
                 // keep working; the shared-map controls are an added interval.
-                s->set("combmode",internalPitch()?0.f:snaps.morph.activation(combMode));
+                c.set("combmode",internalPitch()?0.f:snaps.morph.activation(combMode));
                 auto interval=internalPitch()?std::vector<float>{0.f}:combPitch.get();
                 for(auto& value:interval)value+=combMap.transpose.get()+combMap.offset.get();
-                sendVec(s,"combpitch",interval);
+                vec("combpitch",interval);
             }
-            sendVec(s, "combtranspose", combTranspose.get());
-            sendVec(s, "combdetune", combDetune.get());
-            s->set("combglide", modulation.voiceValues(combGlide));
-            s->set("combvibrate", modulation.voiceValues(combVibRate));
-            s->set("combvibrand", modulation.voiceValues(combVibRand));
-            s->set("combvibamt", modulation.voiceValues(combVibAmt));
-            sendVec(s, "combfeed", combFeed.get());
-            s->set("combtone", modulation.voiceValues(combTone));
-            sendVec(s, "combmix", combMix.get());
-            s->set("mcpitch", mod(st, 5)); s->set("mcfb", mod(st, 6)); s->set("mcmix", mod(st, 7));
+            vec("combtranspose", combTranspose.get());
+            vec("combdetune", combDetune.get());
+            c.set("combglide", modulation.voiceValues(combGlide));
+            c.set("combvibrate", modulation.voiceValues(combVibRate));
+            c.set("combvibrand", modulation.voiceValues(combVibRand));
+            c.set("combvibamt", modulation.voiceValues(combVibAmt));
+            vec("combfeed", combFeed.get());
+            c.set("combtone", modulation.voiceValues(combTone));
+            vec("combmix", combMix.get());
+            c.set("mcpitch", mod(st, 5)); c.set("mcfb", mod(st, 6)); c.set("mcmix", mod(st, 7));
             break;
         case IRing:
             {
@@ -759,37 +776,41 @@ void scPolyComb::sendIns(ServerState& st, int i) {
                 const float fixed=weights[0]+weights[2];
                 auto pitches=expand(ringPitch.get(),n(),72.f), resonators=expand(resonatorPitches(),n(),72.f);
                 if(fixed>0) for(int v=0;v<n();++v) pitches[v]=(weights[0]*pitches[v]+weights[2]*resonators[v])/fixed;
-                s->set("ringmode",fixed);sendVec(s,"ringpitch",pitches);
+                c.set("ringmode",fixed);vec("ringpitch",pitches);
             }
-            sendVec(s, "ringtranspose", ringTranspose.get());
-            sendVec(s, "ringdetune", ringDetune.get());
-            sendVec(s, "ringmix", ringMix.get());
-            s->set("ringratio", modulation.voiceValues(ringRatio));
-            s->set("ringwidth", modulation.voiceValues(ringWidth));
-            s->set("mrmix", mod(st, 8));
+            vec("ringtranspose", ringTranspose.get());
+            vec("ringdetune", ringDetune.get());
+            vec("ringmix", ringMix.get());
+            c.set("ringratio", modulation.voiceValues(ringRatio));
+            c.set("ringwidth", modulation.voiceValues(ringWidth));
+            c.set("mrmix", mod(st, 8));
             break;
         default:
-            sendVec(s, "drive", drive.get());
-            sendVec(s, "shapermix", shaperMix.get());
-            s->set("mdrive", mod(st, 10));
+            vec("drive", drive.get());
+            vec("shapermix", shaperMix.get());
+            c.set("mdrive", mod(st, 10));
             break;
     }
+    c.send();
 }
 
 void scPolyComb::sendAmp(ServerState& st) {
     sendSub(st);
     auto* s = st.amp;
     if(!s) return;
-    s->set("env", st.envBus ? st.envBus->index : 0);
-    s->set("gate", st.gateBus ? st.gateBus->index : 0);
-    s->set("vel", src(st, SRC_VEL));
-    s->set("velsens", modulation.voiceValues(velSens));
-    s->set("level", master.get());
-    s->set("mamp", mod(st, 12));
-    s->set("tremrate", modulation.voiceValues(tremRate));
-    s->set("tremrand", modulation.voiceValues(tremRand));
-    s->set("tremdepth", modulation.voiceValues(tremDepth));
-    s->set("tremround", modulation.voiceValues(tremRound));
+    scSynthControlBatch c(s, st.server, &st.ampSent);   // only what changed
+    auto vec = [&](const std::string& nm, const std::vector<float>& v){ setVec(c, nm, v); };
+    c.set("env", st.envBus ? st.envBus->index : 0);
+    c.set("gate", st.gateBus ? st.gateBus->index : 0);
+    c.set("vel", src(st, SRC_VEL));
+    c.set("velsens", modulation.voiceValues(velSens));
+    c.set("level", master.get());
+    c.set("mamp", mod(st, 12));
+    c.set("tremrate", modulation.voiceValues(tremRate));
+    c.set("tremrand", modulation.voiceValues(tremRand));
+    c.set("tremdepth", modulation.voiceValues(tremDepth));
+    c.set("tremround", modulation.voiceValues(tremRound));
+    c.send();
 }
 
 void scPolyComb::sendSub(ServerState& st, bool notesOnly) {
@@ -824,12 +845,15 @@ void scPolyComb::sendSpread(ServerState& st) {
     if(st.builtVoices != n()) return;
     auto* s = st.spread;
     if(!s) return;
-    s->set("in", st.voiceBus ? st.voiceBus->index : 0);
-    s->set("voices", (float)n());
-    s->set("line", snaps.morph.weights(spreadLayout)[1]);
-    s->set("pan", expand(panPositions(), st.spreadLanes, 0.5f));   // as many as its \\pan has
-    s->set("mpan", mod(st, 13));
-    s->set("vis", st.visBlock ? st.visBlock->index + VIS_PAN : 0);
+    scSynthControlBatch c(s, st.server, &st.spreadSent);   // only what changed
+    auto vec = [&](const std::string& nm, const std::vector<float>& v){ setVec(c, nm, v); };
+    c.set("in", st.voiceBus ? st.voiceBus->index : 0);
+    c.set("voices", (float)n());
+    c.set("line", snaps.morph.weights(spreadLayout)[1]);
+    c.set("pan", expand(panPositions(), st.spreadLanes, 0.5f));   // as many as its \\pan has
+    c.set("mpan", mod(st, 13));
+    c.set("vis", st.visBlock ? st.visBlock->index + VIS_PAN : 0);
+    c.send();
 }
 
 
@@ -857,6 +881,7 @@ void scPolyComb::updateParts(ofxSCServer* server, ServerState& st) {
         }
         if(wanted){
             if(!p.synth){
+                p.sent.clear();
                 p.synth = make(server, st, defName, slot);
                 p.definition = defName;
                 p.running = true;
@@ -939,6 +964,7 @@ void scPolyComb::ensureBuses(ofxSCServer* server, ServerState& st) {
 // spreader, the effects
 void scPolyComb::createAll(ofxSCServer* server, ServerState& st) {
     ensureBuses(server, st);
+    clearSent(st);   // new synths know nothing yet
     st.builtVoices = n();
     st.builtChannels = outChannels.get();
     auto fixed = [&](ofxSCSynth*& s, const std::string& defName, int slot, std::function<void()> send){
@@ -970,7 +996,15 @@ void scPolyComb::createAll(ofxSCServer* server, ServerState& st) {
 }
 
 // Free every synth (the groups and buses stay)
+void scPolyComb::clearSent(ServerState& st) {
+    st.ampEnvSent.clear(); st.ampSent.clear(); st.spreadSent.clear();
+    st.fm.sent.clear(); st.sub.sent.clear();
+    for(auto& p : st.osc) p.sent.clear();
+    for(auto& p : st.ins) p.sent.clear();
+}
+
 void scPolyComb::freeSynths(ServerState& st) {
+    clearSent(st);
     auto drop = [](ofxSCSynth*& s){ if(s){ s->free(); delete s; s = nullptr; } };
     drop(st.gateS); drop(st.ampEnv); drop(st.pitchS); drop(st.amp); drop(st.spread); drop(st.delta);
     auto dropPart = [&](Part& p){ drop(p.synth); p.running = false; p.offAt = -1.0f; };
@@ -982,6 +1016,7 @@ void scPolyComb::freeSynths(ServerState& st) {
 
 // Everything, with the groups and buses
 void scPolyComb::freeAll(ofxSCServer* server, ServerState& st) {
+    clearSent(st);
     releaseVoiceMorphServer(server, st);
     if(st.root && st.created) st.root->free();          // frees every synth in it
     auto forget = [](ofxSCSynth*& s){ delete s; s = nullptr; };
@@ -1046,6 +1081,7 @@ void scPolyComb::rebuildOutput() {
         const bool wide = n() > LEGACY_VOICES;
         st.spreadLanes = wide ? W : LEGACY_VOICES;
         const std::string spreadDef = std::string(wide ? "PCSpreadWide" : "PolyCombSpread") + ofToString(outChannels.get());
+        st.spreadSent.clear();
         st.spread = make(server, st, spreadDef, SlSpread);
         scStartConfiguredSynth(st.spread, server, 1, st.groups[SlSpread]->nodeID, [&](){
             sendSpread(st);
@@ -1139,6 +1175,7 @@ void scPolyComb::resetInputBusses(ofxSCServer* server, int) {
 
 void scPolyComb::resendParametersForNRT() {
     forStates([this](ofxSCServer* server, ServerState& st){
+        clearSent(st);   // the score needs everything, whatever was sent before
         sendGate(st); sendAmpEnv(st); sendPitch(st); sendFm(st); sendAmp(st); sendSpread(st); sendDelta(st);
         for(int o = 0; o < NumOsc; o++) sendOsc(st, o);
         for(int i = 0; i < NumIns; i++) sendIns(st, i);
@@ -2144,15 +2181,15 @@ void scPolyComb::drawWindow() {
             ImGui::EndChild();
             ImGui::EndTabItem();
         };
+        // Few tabs, the short sections stacked: a sound is dialled without
+        // hopping between nine tabs (Filters + Resonator; Envelopes, LFOs and
+        // Routing as one Modulation tab; Panning with the Effects)
+        auto gap = [](){ ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing(); };
         tab("Oscillators", [this](float tw){ drawOscTab(tw); });
         tab("Pitch & Harmony", [this](float tw){ drawPitchTab(tw); });
-        tab("Envelopes", [this](float tw){ drawEnvTab(tw); });
-        tab("Filters", [this](float tw){ drawFilterTab(tw); });
-        tab("Resonator", [this](float tw){ drawResonatorTab(tw); });
-        tab("LFOs", [this](float tw){ modulation.drawLfos(tw); drawDeltaCard(tw); });
-        tab("Routing", [this](float tw){ modulation.drawRouting(tw); });
-        tab("Panning", [this](float tw){ drawPanTab(tw); });
-        tab("Effects", [this](float tw){ drawFxTab(tw); });
+        tab("Filters", [this, gap](float tw){ drawFilterTab(tw); gap(); drawResonatorTab(tw); });
+        tab("Modulation", [this, gap](float tw){ drawEnvTab(tw); gap(); modulation.drawLfos(tw); drawDeltaCard(tw); gap(); modulation.drawRouting(tw); });
+        tab("Effects", [this, gap](float tw){ drawPanTab(tw); gap(); drawFxTab(tw); });
         ImGui::EndTabBar();
     }
     scKeyboardPiano::endContent();
@@ -2885,7 +2922,7 @@ void scPolyComb::drawMapColumn(MapParams& edits,const char* id,float w,bool comb
     };
     auto scale=minimal(tones?m.tones.get():m.table.get());
     if(user||tones){
-        syncMapScale(m);
+        // the selection follows the tones as they change (toPitchComb), not per frame
         const auto* selected=mapScaleAt(m.scaleSelection.get());
         const std::string current=selected?selected->name:"User";
         ImGui::SetNextItemWidth(left);

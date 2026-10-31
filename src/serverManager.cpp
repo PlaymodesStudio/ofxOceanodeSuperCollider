@@ -17,6 +17,7 @@
 #include "ofxOceanodeShared.h"
 #include "ofxOceanodeContainer.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <filesystem>
@@ -108,6 +109,7 @@ void serverManager::setup(){
 
     server = new ofxSCServer(preferences.bindAddress, preferences.udpPort, preferences.udpPort+20, preferences.numInputBusChannels, preferences.numOutputBusChannels, preferences.numAudioBusChannels, preferences.numControlBusChannels, preferences.numBuffers);
     watchMixerGraphSync();
+    applyMinimumLead();
     serverSampleRates[server] = preferences.hardwareSampleRate;
     if(preferences.local){
         sc = new scStart(preferences);
@@ -120,6 +122,7 @@ void serverManager::setup(){
             recomputeGraph();
         }
         updateFoldedWaveforms();
+        widenMinimumLead();
     }));
 
     listeners.push(ofxOceanodeShared::getPresetWillBeLoadedEvent().newListener([this](){
@@ -144,6 +147,7 @@ void serverManager::setup(){
     listeners.push(server->serverInitializedEvent.newListener([this](){
         clearFoldedWaveforms(true);
         initialized = true;
+        applyMinimumLead();   // the buffer size may have changed with the restart
         mixerGraphSyncID=-1;
         graphGeneration++;
         // Folders required while the server was booting / loading the
@@ -209,6 +213,55 @@ void serverManager::allocateTransposeBus(){
     glideSynth->set("glide", scGlobalPitch::glide());
     glideSynth->create(0, 0);   // head of the root group
     scGlobalPitch::setServerBus(server, transposeBus->index, glideSourceBus->index, glideSynth->nodeID);
+}
+
+// scsynth executes a timetagged bundle at its instant only if that instant is
+// still ahead of the buffer it is computing, which the device plays later
+// than the wall clock by its buffer and output latency. Anything stamped
+// closer is executed on arrival and logged "late": the same result as an
+// untimed send, so the server sends those untimed (ofxSCServer::
+// setMinimumLeadSeconds). The buffer size gives the floor; the device's own
+// latency is unknown, so scsynth's own "late" reports widen it (repeated ones
+// only, a single late bundle is a host hitch), up to 50 ms; it eases back when
+// they stop.
+double serverManager::baseLeadSeconds() const {
+    const double rate = preferences.hardwareSampleRate > 0 ? preferences.hardwareSampleRate : 44100.0;
+    // 0 = the device's default buffer, unknown here: assume a large one
+    const double buffer = (preferences.hardwareBufferSize > 0 ? preferences.hardwareBufferSize : 512) / rate;
+    return 2.0 * buffer + 0.005;
+}
+
+void serverManager::applyMinimumLead(){
+    if(server != nullptr) server->setMinimumLeadSeconds(baseLeadSeconds());
+}
+
+void serverManager::widenMinimumLead(){
+    if(sc == nullptr || server == nullptr) return;
+    const float now = ofGetElapsedTimef();
+    const double base = baseLeadSeconds();
+    const double current = server->getMinimumLeadSeconds();
+    const double late = sc->takeMaxLateSeconds();
+    if(late > 0.0){
+        // One late bundle is a host hitch (a preset load, a stalled frame); a
+        // device that really plays behind the clock reports them steadily.
+        if(now - lateWindowStart > 5.0f){ lateWindowStart = now; lateReports = 0; lateMax = 0.0; }
+        lateReports++;
+        lateMax = std::max(lateMax, late);
+        lastLateAt = now;
+        if(lateReports < 3) return;
+        lateReports = 0;
+        const double wanted = std::min(0.05, current + lateMax + 0.002);
+        lateMax = 0.0;
+        if(wanted <= current + 1e-4) return;
+        server->setMinimumLeadSeconds(wanted);
+        ofLogWarning("serverManager") << "scsynth keeps running bundles late (" << (int)std::round(late * 1000.0)
+            << " ms behind): timetagged sends closer than " << (int)std::round(wanted * 1000.0)
+            << " ms now go untimed";
+    }else if(current > base + 1e-4 && now - lastLateAt > 30.0f){
+        // Quiet for a while: ease back towards the buffer-based floor
+        lastLateAt = now;
+        server->setMinimumLeadSeconds(std::max(base, (current + base) * 0.5));
+    }
 }
 
 void serverManager::draw(){
@@ -361,6 +414,7 @@ void serverManager::initialize(){
 void serverManager::kill(){
     clearFoldedWaveforms();
     initialized = false;
+    if(server != nullptr) server->resetBootState();
     if(preferences.local && sc != nullptr){
         ofxOscMessage m;
         m.setAddress("/quit");
@@ -372,6 +426,7 @@ void serverManager::kill(){
 void serverManager::prepareForRestart(){
     clearFoldedWaveforms();
     initialized = false;
+    if(server != nullptr) server->resetBootState();
     if(preferences.local){
         ofxOscMessage m;
         m.setAddress("/quit");
@@ -1259,6 +1314,11 @@ void serverManager::recomputeGraph(){
                         busindex = nodeMap[c.first.getIndex()];
                     else
                         busindex = c.first.getBusIndex(server); // fallback for self-managed buses (e.g. mix bus)
+                    // unknown (-1): silence, never a negative or the hardware bus
+                    if(busindex < 0 && busFromSilent) busindex = busFromSilent->index;
+                    // the node learns which of the source's ports this is (a
+                    // multi-output source feeds several inputs of one node)
+                    scNode::ScopedInputPort wiring(c.first);
                     dest->setInputBus(server, c.first.getNodeRef(), busindex);
                     nodeLinks.push_back({c.first.getNodeRef(), dest, busindex});
                 }

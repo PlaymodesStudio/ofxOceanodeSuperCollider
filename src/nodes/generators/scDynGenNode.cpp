@@ -399,8 +399,11 @@ int scDynGenNode::getLastSynthID(ofxSCServer* server) {
     auto it = synthInstances.find(server);
     if(it == synthInstances.end() || it->second.empty()) return -1;
 
-    for(auto voiceIt = it->second.rbegin(); voiceIt != it->second.rend(); ++voiceIt) {
-        if(voiceIt->synth) return voiceIt->synth->nodeID;
+    // The first voice: the head of this node's chain, which an upstream node
+    // is placed before. Returning the last one put upstream synths between
+    // the voices, where the earlier voices read them a cycle late (silence).
+    for(auto& voice : it->second) {
+        if(voice.synth) return voice.synth->nodeID;
     }
     return -1;
 }

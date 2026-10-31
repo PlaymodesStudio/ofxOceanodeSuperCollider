@@ -412,7 +412,9 @@ void scAnalogBox::setup() {
     }
 
     // ── Node parameters' listeners ───────────────────────────────────────────
-    listeners.push(voices.newListener([this](int&) { modulation.voicesChanged(); rebuildAll(); }));
+    // While a preset loads, Extra Voices / Drone may still change the pool
+    // size: update() rebuilds once, at the final count
+    listeners.push(voices.newListener([this](int&) { modulation.voicesChanged(); if(!ofxOceanodeShared::isPresetLoading()) rebuildAll(); }));
     listeners.push(outChannels.newListener([this](int&) { rebuildOutput(); }));
     // The timeline's frame set of a value it already sent timetagged: nothing to do.
     listeners.push(gate.newListener([this, toGate](std::vector<float>& v) {

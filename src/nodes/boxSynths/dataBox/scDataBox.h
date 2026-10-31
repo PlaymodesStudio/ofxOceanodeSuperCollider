@@ -136,6 +136,7 @@ private:
     std::vector<serverManager*> servers;
     std::map<ofxSCServer*, std::vector<ofxSCSynth*>> voices;
     std::map<ofxSCServer*, ofxSCBus*> positionBuses;
+    float nextPositionPoll = 0.0f;   // the window's playheads, read at 30 Hz
     std::map<ofxSCServer*, int> outputBuses;
     // Buffers the voices play, and buffers loaded but not yet synced
     std::map<ofxSCServer*, std::vector<ofxSCBuffer*>> buffers;

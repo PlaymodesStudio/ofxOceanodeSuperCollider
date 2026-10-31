@@ -686,8 +686,11 @@ private:
             if(beat + 1e-9 < engine.originBeat) continue;
             const auto& ev = engine.eventAt(beat + 1e-9);
             const int row = (int)(((ev.k % RING) + RING) % RING);
-            const int64_t startTick = (int64_t)std::llround(ev.start * TPB);
-            const int64_t lapTick = (int64_t)std::llround(ev.lapStart * TPB);
+            // the first tick at or after the start (eventAt gives this event
+            // from that tick on): a start between ticks rounded down would
+            // never match, and the step's Trig would never fire
+            const int64_t startTick = (int64_t)std::ceil(ev.start * TPB - 1e-6);
+            const int64_t lapTick = (int64_t)std::ceil(ev.lapStart * TPB - 1e-6);
             data[i * 4] = (float)(row + 1);
             data[i * 4 + 1] = tick == startTick ? 1.0f : 0.0f;
             data[i * 4 + 2] = (float)(tick - startTick);
@@ -1082,6 +1085,7 @@ private:
         for(int i = 0; i < n; i++) engine.progression.push_back(engine.entryFromToken(chords[i]));
         importMessage = ofToString(n) + " steps" + ((int)chords.size() > n ? " (the first " + ofToString(n) + " of " + ofToString(chords.size()) + ")" : "");
         changed();
+        rebuildControls();
     }
     void appendProgression(const std::string& name, const std::string& text){
         const auto chords = chordbox::Engine::parseChordString(text);
@@ -1348,7 +1352,9 @@ private:
     }
 
     // ── Steps: a column each (scrolls sideways) ─────────────────────────────
-    void drawStepEditor(int s, float w){
+    // false: the step list changed (the controls were rebuilt): stop drawing
+    // the steps this frame, their widgets referenced the old storage
+    bool drawStepEditor(int s, float w){
         auto& en = engine.progression[s];
         const std::string p = "Step" + ofToString(s + 1) + " ";
         const bool now = s == playingEntry;
@@ -1416,21 +1422,36 @@ private:
         if(engine.progression.size() > 1 && ImGui::SmallButton(("Remove##rm" + ofToString(s)).c_str())){
             engine.progression.erase(engine.progression.begin() + s);
             changed();
+            rebuildControls();
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            return false;
         }
         ImGui::SameLine();
         if((int)engine.progression.size() < chordbox::MAX_STEPS && ImGui::SmallButton(("Duplicate##dp" + ofToString(s)).c_str())){
-            engine.progression.insert(engine.progression.begin() + s + 1, en);
+            const auto copy = en;   // `en` dangles once the vector grows
+            engine.progression.insert(engine.progression.begin() + s + 1, copy);
             changed();
+            rebuildControls();
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            return false;
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
+        return true;
     }
     void drawStepsTab(){
         const int n = (int)engine.progression.size();
         ImGui::AlignTextToFramePadding();
         ImGui::Text("%d steps", n);
         ImGui::SameLine();
-        if(n < chordbox::MAX_STEPS && ImGui::SmallButton("+ Step")){ engine.progression.push_back(engine.progression.back()); changed(); }
+        if(n < chordbox::MAX_STEPS && ImGui::SmallButton("+ Step")){
+            const auto copy = engine.progression.back();
+            engine.progression.push_back(copy);
+            changed();
+            rebuildControls();   // the controls reference the vector's storage, which just moved
+        }
         ImGui::SameLine();
         ImGui::TextDisabled("  the progression is %.3g beats", engine.lapBeats());
         const bool markov = engine.progressionOrder == chordbox::ORDER_MARKOV;
@@ -1439,7 +1460,7 @@ private:
         const float w = 175.0f;
         for(int s = 0; s < (int)engine.progression.size(); s++){
             if(s) ImGui::SameLine(0, 8);
-            drawStepEditor(s, w);
+            if(!drawStepEditor(s, w)) break;
         }
         ImGui::EndChild();
         if(markov) drawMarkov();
@@ -1529,7 +1550,7 @@ private:
                 heading("Steps");
                 int n = (int)engine.progression.size();
                 ImGui::SetNextItemWidth(-FLT_MIN);
-                if(ImGui::SliderInt("##cbSteps2", &n, 1, chordbox::MAX_STEPS, "Steps  %d")){ engine.resize(n); changed(); }
+                if(ImGui::SliderInt("##cbSteps2", &n, 1, chordbox::MAX_STEPS, "Steps  %d")){ engine.resize(n); changed(); rebuildControls(); }
                 if(ImGui::SmallButton("All 1 beat")){ for(auto& e : engine.progression) e.beatDuration = 1.0f; changed(); }
                 ImGui::SameLine();
                 if(ImGui::SmallButton("All 1 bar")){ for(auto& e : engine.progression) e.beatDuration = (float)bpb; changed(); }
@@ -1550,19 +1571,20 @@ private:
     }
 
     // ── Outputs: a column each ──────────────────────────────────────────────
-    void drawOutputEditor(int o, float w){
+    bool drawOutputEditor(int o, float w){
         auto& c = engine.outputs[o];
         const std::string p = "Out" + ofToString(o + 1) + " ";
         ImGui::BeginChild(("##out" + ofToString(o)).c_str(), ImVec2(w, 0), true);
         ImGui::TextColored(ImColor(outputColor(o)), "Output %d", o + 1);
         if(engine.outputs.size() > 1){
             ImGui::SameLine(w - 70);
-            if(ImGui::SmallButton(("Remove##ro" + ofToString(o)).c_str())){ engine.outputs.erase(engine.outputs.begin() + o); changed(); ImGui::EndChild(); return; }
+            if(ImGui::SmallButton(("Remove##ro" + ofToString(o)).c_str())){ engine.outputs.erase(engine.outputs.begin() + o); changed(); rebuildControls(); ImGui::EndChild(); return false; }
         }
         const auto notes = o < (int)outVecs.size() ? outVecs[o]->get() : std::vector<float>{};
         keyboard(("##ok" + ofToString(o)).c_str(), notes, ImGui::GetContentRegionAvail().x, 40.0f, outputColor(o, 0.85f));
         wCombo(p + "Source", "Source", sourceNames());
         const bool scl = chordbox::scaleLike(c.sourceMode);
+        (void)scl;
         heading("Register");
         wI(p + "Octave", "Octave");
         wI(p + "Transpose", "Transpose");
@@ -1601,10 +1623,17 @@ private:
         wB(p + "Glide Beats", "In beats");
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Glide in beats (the value / 1000: 500 = half a beat)");
         ImGui::EndChild();
+        return true;
     }
+
     void drawOutputsTab(){
         const int n = (int)engine.outputs.size();
-        if(n < chordbox::MAX_OUTPUTS && ImGui::SmallButton("+ Output")){ engine.outputs.push_back(engine.outputs.back()); changed(); }
+        if(n < chordbox::MAX_OUTPUTS && ImGui::SmallButton("+ Output")){
+            const auto copy = engine.outputs.back();
+            engine.outputs.push_back(copy);
+            changed();
+            rebuildControls();
+        }
         ImGui::SameLine();
         ImGui::TextDisabled("Each output: OutputN (vector) and Pitch N (audio, 16 channels)");
         ImGui::BeginChild("##cbOuts", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
@@ -1612,7 +1641,7 @@ private:
         const float w = std::max(230.0f, (avail - 8.0f * (n - 1)) / std::max(1, std::min(n, 4)));
         for(int o = 0; o < (int)engine.outputs.size(); o++){
             if(o) ImGui::SameLine(0, 8);
-            drawOutputEditor(o, w);
+            if(!drawOutputEditor(o, w)) break;
         }
         ImGui::EndChild();
     }

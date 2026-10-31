@@ -167,8 +167,9 @@ void scDataBox::update(ofEventArgs&){
         oldWavPaths.clear();
     }
 
-    // Playhead positions for the window
-    if(showWindow){
+    // Playhead positions for the window (30 Hz is plenty for a display)
+    if(showWindow && ofGetElapsedTimef() >= nextPositionPoll){
+        nextPositionPoll = ofGetElapsedTimef() + 1.0f / 30.0f;
         for(auto& [server, bus] : positionBuses){
             if(bus){ bus->requestValues(); break; }
         }

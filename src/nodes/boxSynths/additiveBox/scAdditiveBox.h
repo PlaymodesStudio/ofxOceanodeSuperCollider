@@ -287,7 +287,9 @@ private:
     void freeSynths(ofxSCServer* server, bool sendFree = true);
     void onGate(const std::vector<float>& values);
     void onTrig(const std::vector<int>& values);
-    void markDirty() { dirty = true; }
+    void markDirty() { dirty = true; allVoicesDirty = true; }
+    // A changed note marks its voice only (markDirty marks them all)
+    void computeDirtyVoices();
     void flushDirty();                              // every voice recomputed, what changed sent
     void laneData(int v, VoiceData& d) const;      // the modulation's share of a voice's data
     void computeLaneTables();
@@ -466,6 +468,9 @@ private:
     std::vector<float> liveData;               // display bus of the first server
     bool liveValid = false;
     bool dirty = true;
+    bool allVoicesDirty = true;
+    std::vector<bool> voiceDirty;
+    std::vector<float> lastPitch;   // to tell which voices a Pitch set moved
     int builtCap = 0, builtOutputs = 0;
     std::map<std::string, int> dragPoint;      // point editors: last point dragged
 

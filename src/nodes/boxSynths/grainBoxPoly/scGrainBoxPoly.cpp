@@ -807,7 +807,6 @@ void scGrainBoxPoly::sendOffsetParams(Playhead& ph) {
     const auto dur = durSend(ph, nv);
     const auto chc = withOffset(ph.chance.get(), nv, gChanceP.get());
     const auto div = divSend(ph, nv);
-    ph.modDirty = true;   // Smp LFO rates follow the region
     const bool rel = (timeUnitsCur == 0);
     for(auto& [srv, s] : ph.synths) {
         if(!s) continue;
@@ -989,7 +988,6 @@ std::vector<float> scGrainBoxPoly::trigPhaseSend(const Playhead& ph, int n) cons
 void scGrainBoxPoly::sendDiv(Playhead& ph) {
     const auto div = divSend(ph, phVoices(ph));
     for(auto& [srv, s] : ph.synths) if(s) s->set("autotrigbeatdiv", div);
-    ph.modDirty = true;   // Smp LFO rates depend on the same region
 }
 
 float scGrainBoxPoly::defaultInterval(int unit) const {
@@ -1795,7 +1793,13 @@ bool scGrainBoxPoly::removeLastPlayhead() {
     grainHighlights.erase(std::remove_if(grainHighlights.begin(), grainHighlights.end(),
                                          [idx](const GrainHighlight& g) { return g.playhead == idx; }),
                           grainHighlights.end());
+    // Every policy registered for this engine in createPlayheadParameters:
+    // the Playhead is about to be destroyed, and a stale entry would read it
+    snaps.morph.erase(ph.envShape);
     snaps.morph.erase(ph.filterType);
+    snaps.morph.erase(ph.placement);
+    snaps.morph.erase(ph.drone);
+    snaps.morph.erase(ph.scaleType);
     playheads.pop_back();
     if(hadLfoOutputs) parameterGroupChanged.notify(this);
     activePlayhead = std::min(activePlayhead, (int)playheads.size() - 1);
@@ -1901,7 +1905,7 @@ void scGrainBoxPoly::buildSynth(ofxSCServer* srv) {
     for(auto& phPtr : playheads)
         if(phPtr->index > 0 && phPtr->ownSample) reloadSampleBuffersForServer(phPtr->own, srv);
     bool hasSampleBufs = mainSample.bufs.count(srv) && !mainSample.bufs[srv].empty();
-    ofLogNotice("scGrainBoxPoly") << "buildSynth: sampleBufs=" << hasSampleBufs
+    ofLogVerbose("scGrainBoxPoly") << "buildSynth: sampleBufs=" << hasSampleBufs
         << " samplePath=" << (mainSample.path.empty() ? "<empty>" : mainSample.path)
         << " numSampleCh=" << mainSample.numChannels
         << " playheads=" << playheads.size();
@@ -1964,7 +1968,7 @@ void scGrainBoxPoly::createSynth(ofxSCServer* srv) {
     if(!ph0().synths.count(srv) || !ph0().synths[srv])
         buildSynth(srv);
     if(!ph0().synths[srv]) return;
-    ofLogNotice("scGrainBoxPoly") << "createSynth: synthdefName=" << defNameFor(ph0())
+    ofLogVerbose("scGrainBoxPoly") << "createSynth: synthdefName=" << defNameFor(ph0())
         << " sampleBufs=" << (mainSample.bufs.count(srv) ? (int)mainSample.bufs[srv].size() : 0)
         << " outBus=" << (outputBuses.count(srv) ? outputBuses[srv] : -1)
         << " numCh=" << numChannelsP.get()
@@ -2081,7 +2085,7 @@ void scGrainBoxPoly::setBufnums(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv) {
 
 void scGrainBoxPoly::free(ofxSCServer* srv) {
     if(!srv) return;
-    ofLogNotice("scGrainBoxPoly") << "free: called. synth="
+    ofLogVerbose("scGrainBoxPoly") << "free: called. synth="
         << (ph0().synths.count(srv) && ph0().synths[srv] ? ph0().synths[srv]->nodeID : -1)
         << " sampleBufs=" << (mainSample.bufs.count(srv) ? (int)mainSample.bufs[srv].size() : 0);
     for(auto& ph : playheads) {
@@ -2122,7 +2126,7 @@ void scGrainBoxPoly::free(ofxSCServer* srv) {
 void scGrainBoxPoly::setOutputBus(ofxSCServer* srv, int /*idx*/, int bus) {
     if(!srv) return;
     outputBuses[srv] = bus;
-    ofLogNotice("scGrainBoxPoly") << "setOutputBus: bus=" << bus;
+    ofLogVerbose("scGrainBoxPoly") << "setOutputBus: bus=" << bus;
     if(drySynths.count(srv) && drySynths[srv]) drySynths[srv]->set("out", bus);
     // synth objects exist (created in buildSynth, not yet /s_new'd) — set "out"
     // so it becomes an init arg baked into the /s_new call in createSynth.
@@ -2140,7 +2144,7 @@ void scGrainBoxPoly::setOutputBus(ofxSCServer* srv, int /*idx*/, int bus) {
 
 int scGrainBoxPoly::getOutputBusIndex(ofxSCServer* srv, int idx) {
     int result = outputBuses.count(srv) ? outputBuses.at(srv) : -1;
-    ofLogNotice("scGrainBoxPoly") << "getOutputBusIndex: idx=" << idx << " return=" << result;
+    ofLogVerbose("scGrainBoxPoly") << "getOutputBusIndex: idx=" << idx << " return=" << result;
     return result;
 }
 
@@ -2149,7 +2153,7 @@ void scGrainBoxPoly::moveSynthBefore(ofxSCServer* srv, int nodeID) {
         ofLogWarning("scGrainBoxPoly") << "moveSynthBefore: no synth for server, skipping";
         return;
     }
-    ofLogNotice("scGrainBoxPoly") << "moveSynthBefore: myNodeID=" << ph0().synths[srv]->nodeID
+    ofLogVerbose("scGrainBoxPoly") << "moveSynthBefore: myNodeID=" << ph0().synths[srv]->nodeID
         << " beforeNodeID=" << nodeID
         << " outBus=" << (outputBuses.count(srv) ? outputBuses[srv] : -1);
     // Resend all params then move — mirrors scFM7Drone/scRhythmBox pattern.
@@ -4389,8 +4393,17 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
         ph->modDirty = true;
     }
 
-    if(j.contains("samplePath") && !j["samplePath"].get<std::string>().empty())
-        loadSample(scSampleEmbedding::resolve(j["samplePath"].get<std::string>()));
+    if(j.contains("samplePath") && !j["samplePath"].get<std::string>().empty()){
+        // The same file again (a preset recall): keep the buffers the synths
+        // are reading rather than freeing and re-reading them
+        const std::string path = scSampleEmbedding::resolve(j["samplePath"].get<std::string>());
+        // buffers from before a server reboot are gone: read again then
+        bool live = !mainSample.bufs.empty();
+        for(const auto& [srv, bufs] : mainSample.bufs)
+            for(auto* b : bufs)
+                if(!srv || !b || b->index < 0 || b->index >= (int)srv->buffers.size() || srv->buffers[b->index] != b) live = false;
+        if(path != mainSample.path || !live) loadSample(path);
+    }
     if(j.contains("browseDir") && j["browseDir"].is_string()) {
         std::string d = j["browseDir"].get<std::string>();
         if(std::filesystem::exists(d)) browser.refresh(d);
@@ -5797,6 +5810,8 @@ void scGrainBoxPoly::applySnapshot(const ofJson& snapInSaved) {
         if(!snap.contains(fxOnP[st].getEscapedName())) fxOnP[st].set(false);
     for(auto& ph : playheads) {
         prepareVoiceMorph(*ph,snap,snap,0);
+        // values were loaded with the preset-loading guard on: send them all
+        sendAllParams(*ph);
         const std::string pre = "gbpMod" + ph->sfx;
         if(!snap.contains(pre + "Matrix")) continue;
         ph->mod->load(snap, pre);
@@ -5900,7 +5915,9 @@ void scGrainBoxPoly::prepareVoiceMorph(Playhead& ph,const ofJson& a,const ofJson
     for(auto* sm:allServers)if(sm && sm->getServer()){
         replaceCtl(ph,sm->getServer());syncVoiceCount(ph,sm->getServer());
     }
-    sendAllParams(ph);
+    // Only a changed voice count rebuilt anything; the morph's own controls
+    // are sent by applyMorph (every frame of a glide lands here)
+    if(before!=phVoices(ph))sendAllParams(ph);
 }
 
 void scGrainBoxPoly::applyMorph(const ofJson& aInSaved, const ofJson& bInSaved, float t, bool sw) {

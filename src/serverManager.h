@@ -247,6 +247,15 @@ private:
     std::unique_ptr<ofxSCBus> glideSourceBus;
     std::unique_ptr<ofxSCSynth> glideSynth;
     void allocateTransposeBus();
+    // Timetagged sends closer than this go untimed (ofxSCServer): twice the
+    // hardware buffer plus a margin, widened at run time by the lateness
+    // scsynth reports (scStart::takeMaxLateSeconds).
+    double baseLeadSeconds() const;
+    void applyMinimumLead();
+    void widenMinimumLead();
+    int lateReports = 0;          // "late" lines in the current 5 s window
+    double lateMax = 0.0;         // the furthest behind among them
+    float lateWindowStart = 0.0f, lastLateAt = 0.0f;
     
     float volume;
     bool mute;

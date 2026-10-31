@@ -988,7 +988,11 @@ private:
             st.builtVoices = voices();
             sendStaticControls(st);
             st.synth->set("run", 0.0f);
+            // Replaced in place once the server has it; one still awaiting its
+            // /n_go is freed by id (it would keep running, unheard of) and the
+            // new one takes the head of the group, where createSynth put it
             if(old->isCreated()) st.synth->createAndRun(4, old->nodeID, getActive());
+            else { old->free(); st.synth->createAndRun(0, 1, getActive()); }
             delete old;
         }
         forceHardAnchor = true;

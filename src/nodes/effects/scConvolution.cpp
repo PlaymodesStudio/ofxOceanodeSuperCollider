@@ -229,7 +229,12 @@ void scConvolution::free(ofxSCServer* server) {
         // Free genSynth BEFORE irBuffer (genSynth writes into irBuffer)
         if(s.genSynth) { s.genSynth->free(); delete s.genSynth; s.genSynth = nullptr; }
         if(s.irBuffer)  { s.irBuffer->free();  delete s.irBuffer;  s.irBuffer  = nullptr; }
-        s.irState      = s.activeSpecBuffer ? kReady : kIdle;
+        // A finished IR stays; one cancelled mid-build starts again at the
+        // next buildSynth (as scVelvetReverb does). The spec buffer always
+        // exists, so "spec buffer => ready" left a rebuilt node on the silent
+        // single-partition spec for good.
+        const bool wasReady = s.irState == kReady;
+        s.irState      = (wasReady && s.activeSpecBuffer) ? kReady : kIdle;
         s.prepConvSent = false;
         s.timer        = 0.0f;
     }

@@ -183,7 +183,7 @@ private:
     void sendNotes(ofxSCServer*, State&, unsigned fields=NoteAll);
     void sendSound(ofxSCServer*, State&);
     bool soundOn(const std::string&);
-    bool soundDirty = false;
+    bool soundDirty = false, stagesDirty = false;   // the voices / only the effect stages
     void sendAll();
     void flushSound();
     void refreshOutputs() { for(auto& output : outputs) output = output; }

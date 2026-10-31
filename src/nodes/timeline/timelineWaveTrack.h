@@ -27,7 +27,10 @@ public:
     }
 
     ~timelineWaveTrack() override {
-        if(getHostContainer() != nullptr && getHostContainer()->getAutomationExtension())
+        // Only the registered instance steps down: with two Wave Track nodes,
+        // deleting one used to unregister the survivor (its clips never played again)
+        if(getHostContainer() != nullptr && getHostContainer()->getAutomationExtension()
+           && getHostContainer()->getTimelineManager().getWaveAudioProvider() == this)
             getHostContainer()->getTimelineManager().setWaveAudioProvider(nullptr);
         for(auto& serverVoices : voices) {
             for(auto& entry : serverVoices.second) freeVoice(entry.second);

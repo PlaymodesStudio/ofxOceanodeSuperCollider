@@ -159,19 +159,22 @@ void scGraphicEQ::setup() {
     listeners.push(numChannels.newListener([this](int &ch) {
         if(ch < 1 || ch > MAX_NODE_CHANNELS) return;
         if(oldNumChannels != ch) {
+            // Swap the wrappers, re-send every parameter into them (queued as
+            // creation arguments), then replace on the server: a synth created
+            // first ran with in=0 / out=0 (the hardware buses) until its /n_go.
+            std::map<ofxSCServer*, int> oldIDs;
             for(auto& pair : synthInstances) {
-                if(pair.second) {
-                    ofxSCServer* srv = pair.first;
-                    int oldID = pair.second->nodeID;
-                    ofxSCSynth* newSynth = new ofxSCSynth(getSynthDefName(), srv);
-                    newSynth->createAndRun(4, oldID, getActive()); // kAddAction_replace
-                    delete pair.second;
-                    pair.second = newSynth;
-                    // fftanalyzerN depends on the channel count too
-                    if(fftSynthInstances.count(srv)) createFFTSynth(srv);
-                }
+                if(!pair.second) continue;
+                oldIDs[pair.first] = pair.second->nodeID;
+                delete pair.second;
+                pair.second = new ofxSCSynth(getSynthDefName(), pair.first);
             }
             resendParams.notify();
+            for(auto& [srv, oldID] : oldIDs) {
+                synthInstances[srv]->createAndRun(4, oldID, getActive()); // kAddAction_replace
+                // fftanalyzerN depends on the channel count too
+                if(fftSynthInstances.count(srv)) createFFTSynth(srv);
+            }
         }
         oldNumChannels = ch;
     }));
@@ -395,8 +398,10 @@ void scGraphicEQ::moveSynthBefore(ofxSCServer* server, int nodeID) {
 int scGraphicEQ::getLastSynthID(ofxSCServer* server) {
     if(!server) return -1;
 
-    if(fftSynthInstances.count(server) && fftSynthInstances[server])
-        return fftSynthInstances[server]->nodeID;
+    // The head of this node's chain: what an upstream node is placed before.
+    // The FFT analyzer runs after the EQ and used to be returned here, so a
+    // rebuild placed the upstream synth between the two and the EQ read
+    // silence (In.ar of a bus not yet written in the cycle).
 
     auto it = synthInstances.find(server);
     if(it != synthInstances.end() && it->second)

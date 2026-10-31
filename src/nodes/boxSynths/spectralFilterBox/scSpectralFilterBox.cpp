@@ -116,7 +116,7 @@ void scSpectralFilterBox::setup(){
     listeners.push(mix.newListener([this](float& m){ sendScalar("mix", m); }));
     listeners.push(lowFreq.newListener([this](float& f){ sendScalar("lowfreq", f); }));
     listeners.push(highFreq.newListener([this](float& f){ sendScalar("highfreq", f); }));
-    listeners.push(wrap.newListener([this](bool& w){ sendScalar("wrap", w ? 1.0f : 0.0f); }));
+    listeners.push(wrap.newListener([this, dirtyMask](bool& w){ sendScalar("wrap", w ? 1.0f : 0.0f); dirtyMask(); }));   // the blur wraps too
     listeners.push(attack.newListener([this](float& a){ sendScalar("attack", a); }));
     listeners.push(release.newListener([this](float& r){ sendScalar("release", r); }));
     listeners.push(hold.newListener([this](bool& h){ sendScalar("hold", h ? 1.0f : 0.0f); }));
@@ -219,6 +219,8 @@ std::vector<float> scSpectralFilterBox::shapeMask() const {
     if(blur.get() > 0.001f){
         const float sigma = 0.5f + blur.get() * 12.0f;
         const int radius = int(std::ceil(sigma * 2.5f));
+        std::vector<float> kernel(2 * radius + 1);   // once, not per point (a cabled Mask recomputes every frame)
+        for(int j = -radius; j <= radius; j++) kernel[j + radius] = std::exp(-0.5f * (j / sigma) * (j / sigma));
         std::vector<float> out(MASK_SIZE);
         for(int i = 0; i < MASK_SIZE; i++){
             float s = 0, ws = 0;
@@ -226,7 +228,7 @@ std::vector<float> scSpectralFilterBox::shapeMask() const {
                 int n = i + j;
                 if(wrap) n = (n % MASK_SIZE + MASK_SIZE) % MASK_SIZE;
                 else if(n < 0 || n >= MASK_SIZE) continue;
-                const float w = std::exp(-0.5f * (j / sigma) * (j / sigma));
+                const float w = kernel[j + radius];
                 s += v[n] * w;
                 ws += w;
             }

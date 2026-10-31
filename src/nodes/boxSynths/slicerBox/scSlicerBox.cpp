@@ -1258,6 +1258,10 @@ void scSlicerBox::presetRecallAfterSettingParameters(ofJson& json){
     seqSlice.resize(SEQ_STEPS, -1.0f);
     seqLen.resize(SEQ_STEPS, 1.0f);
     seqDirty = true;
+    // The same file with another marker count: the player's control arrays
+    // are sized by the slice cap, so a 64-slice set must not reach a 16-slice
+    // player (the vectors would spill into its other controls)
+    for(auto& [server, st] : states) if(st.chainCreated && st.builtCap != sliceCap()) rebuildChain(server, st);
     if(json.contains("browserWidth") && json["browserWidth"].is_number()) browserWidth = json["browserWidth"].get<float>();
     if(json.contains("waveHeight") && json["waveHeight"].is_number())
         waveHeight = std::max(0.0f, json["waveHeight"].get<float>()) * ofxOceanodeShared::getZoomLevel();

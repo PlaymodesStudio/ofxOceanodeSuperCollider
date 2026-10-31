@@ -10,6 +10,7 @@
 #include "audio/scAudioRouting.h"
 
 ofxSCServer* scNode::graphTraversalServer = nullptr;
+nodePort scNode::graphInputPort;
 
 nodePort scNode::resolveAudioSource(nodePort port){
     return scResolveAudioSource(port,

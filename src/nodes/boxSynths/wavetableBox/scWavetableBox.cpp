@@ -957,7 +957,9 @@ void scWavetableBox::rebuildGraph(){
     modulation.voicesChanged();
     for(auto& [server, synth] : synths){
         if(!server || !synth) continue;
-        if(!synth->isCreated()){
+        // never sent: build it fresh. One awaiting its /n_go exists on the
+        // server already and is replaced in place below like any other
+        if(synth->nodeID == 0){
             delete synth;
             synth = new ofxSCSynth(getSynthDefName(), server);
             forgetVoiceControls(server);

@@ -1064,8 +1064,6 @@ void scPolyMixer::recreateVUBuses(ofxSCServer* server) {
 		trackVUBuses[server].clear();
 	}
 	
-	//is this really needed???
-	std::this_thread::sleep_for(std::chrono::milliseconds(10));
 	
 	trackVUBuses[server].resize(numTracksCount, nullptr);
 	
@@ -1955,8 +1953,6 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 			}
 		}
 		
-		//is this really needed??
-		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
 	}
 	

@@ -152,6 +152,21 @@ private:
     };
     // A pad's objects on one server, in its group: the voices, the
     // modulation's sources and routes, the effects, the strip
+    // controls grouped by pad (rebuilt when the list changes): a send used to
+    // scan every pad's ~400 controls to find its own
+    std::vector<std::vector<const Control*>> padControls;
+    const Control* padControlsData = nullptr;
+    size_t padControlsCount = 0;
+    void rebuildPadControlIndex();
+    // the controls of a pad, rebuilt whenever the list or the pads changed
+    const std::vector<const Control*>& controlsOf(int pad) {
+        static const std::vector<const Control*> none;
+        if(padControlsData != controls.data() || padControlsCount != controls.size() || padControls.size() != pads.size())
+            rebuildPadControlIndex();
+        if(pad < 0 || pad >= (int)padControls.size()) return none;
+        for(const auto* c : padControls[pad]) if(c->pad != pad){ rebuildPadControlIndex(); break; }
+        return padControls[pad];
+    }
     struct PadSC {
         ofxSCGroup* group = nullptr;
         ofxSCGroup* voices = nullptr;

@@ -284,7 +284,7 @@ void scDrumKitBox::drawWindow() {
     const float z = ofxOceanodeShared::getZoomLevel();
     ImGui::SetNextWindowSize(ImVec2(1180 * z, 800 * z), ImGuiCond_FirstUseEver);
     bool open = showWindow.get();
-    const std::string title = getWindowTitle();
+    const std::string title = getWindowId();   // apart from the patch's own inside a MacroMixer source
     if(!ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         windowHovered = false;
         browser.stopPreview();

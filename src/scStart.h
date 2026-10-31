@@ -11,6 +11,8 @@
 #include "ofThread.h"
 #include "serverManager.h"
 #include <atomic>
+#include <functional>
+#include <cstdlib>
 #include <mutex>
 #include <vector>
 #ifndef TARGET_WIN32
@@ -140,6 +142,11 @@ public:
         stopProcess();
         waitForThread(false);
     }
+
+    // scsynth logs "late <seconds>" for every timetagged bundle that reached
+    // it behind its clock. The largest such value since the last call (0:
+    // none); serverManager widens the server's minimum scheduling lead by it.
+    double takeMaxLateSeconds(){ return maxLateSeconds.exchange(0.0); }
     
 private:
     // scsynth's console goes to the Log window. A UGen can print the same line
@@ -150,8 +157,10 @@ private:
         std::string last;
         uint64_t repeats = 0;
         uint64_t lastSummary = 0;
+        std::function<void(const std::string&)> onLine;
 
         void add(const std::string& line){
+            if(onLine) onLine(line);
             if(!last.empty() && line == last){
                 if(repeats++ == 0) lastSummary = ofGetElapsedTimeMillis();
                 return;
@@ -244,6 +253,7 @@ private:
     void readOutput(int fd, pid_t pid){
         std::string line;
         ConsoleLines console;
+        console.onLine = [this](const std::string& l){ noteLate(l); };
         char buffer[512];
         while(true){
             console.tick();
@@ -297,10 +307,20 @@ private:
     }
 #endif
 
+    std::atomic<double> maxLateSeconds{0.0};
+    void noteLate(const std::string& line){
+        if(line.rfind("late ", 0) != 0) return;
+        const double late = std::atof(line.c_str() + 5);
+        if(!(late > 0.0)) return;
+        double current = maxLateSeconds.load();
+        while(late > current && !maxLateSeconds.compare_exchange_weak(current, late)){}
+    }
+
     // scsynth's console, line by line, until it exits (Windows: a popen stream)
     void readOutput(FILE* stream){
         std::string line;
         ConsoleLines console;
+        console.onLine = [this](const std::string& l){ noteLate(l); };
         int c;
         while((c = fgetc(stream)) != EOF){
             if(c == '\n'){

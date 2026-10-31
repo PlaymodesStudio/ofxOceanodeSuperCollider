@@ -84,6 +84,7 @@ scRhythmBox::~scRhythmBox() {
             }
         }
         trackSynths.clear();
+        trackSent.clear();
 
         for(auto& [srv, buses] : privateBuses) {
             for(auto* b : buses) { if(b) { b->free(); delete b; } }
@@ -483,8 +484,21 @@ void scRhythmBox::update(ofEventArgs& /*args*/) {
     flushTrackControls();
     if(trackControlsDirty) {
         trackControlsDirty = false;
+        trackDirty.fill(0);
         reloadCurrentSlot();
         for(int ti = 0; ti < numTracks; ++ti) sendTypedConfigToAll(ti);
+    } else {
+        // A cabled or automated track control: only what it touched goes out
+        bool any = false;
+        for(int ti = 0; ti < numTracks; ++ti) any = any || trackDirty[ti] != 0;
+        if(any) {
+            syncTrackVectorParams(false);
+            for(int ti = 0; ti < numTracks; ++ti) {
+                if(trackDirty[ti] & 1) { sendTrackConfigScalars(ti); sendTypedConfigToAll(ti); }
+                if(trackDirty[ti] & 2) fireStepParams(ti);
+                trackDirty[ti] = 0;
+            }
+        }
     }
     for(auto& pull : trackControlPulls) pull();
     snaps.update();
@@ -588,6 +602,7 @@ void scRhythmBox::free(ofxSCServer* srv) {
     }
     outputBuses.erase(srv);
     trackSynths.erase(srv);
+    trackSent.clear();
     privateBuses.erase(srv);
     stepBuses.erase(srv);
     gateBuses.erase(srv);
@@ -669,6 +684,7 @@ void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
 
     // Free any existing synth at this slot
     if(trackSynths[srv][ti]) {
+        trackSent.erase(trackSynths[srv][ti]);
         trackSynths[srv][ti]->free();
         delete trackSynths[srv][ti];
         trackSynths[srv][ti] = nullptr;
@@ -680,6 +696,7 @@ void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
     if(bufnum < 0 && (tc.type == TrackType::Sample || tc.type == TrackType::Slice)) return;
 
     auto* s = new ofxSCSynth(rhythmBoxSynthName(tc.type), srv);
+    trackSent.erase(s);   // a fresh synth: nothing sent yet (the address may be reused)
     trackSynths[srv][ti] = s;
     syncJoined[srv].resize(MAX_TRACKS, false);
     syncJoined[srv][ti] = false;
@@ -842,7 +859,7 @@ void scRhythmBox::sendTypedConfigToAll(int ti) {
     for(auto& [srv, synths] : trackSynths) {
         if(ti >= (int)synths.size() || !synths[ti]) continue;
         auto* s = synths[ti];
-        scSynthControlBatch updates(s,srv);
+        scSynthControlBatch updates(s,srv,&trackSent[s]);
         updates.set("envSustain", tc.envSustain); updates.set("envRelease", tc.envRelease);
         updates.set("filterMode", (float)tc.filterMode);
         updates.set("filterRandom", tc.filterRandom ? 1.0f : 0.0f);
@@ -1248,107 +1265,115 @@ void scRhythmBox::initSlots() {
     }
 }
 
+void scRhythmBox::syncTrackVectorParams(bool force) {
+    // The per-track node vectors from the track configs (their listeners send to SC)
+    auto tv  = transposeP        .get(); auto vv  = globalVolP        .get();
+    auto pv  = globalProbP       .get(); auto mv  = muteP             .get();
+    auto sv  = soloP             .get(); auto sps = globalStepProbSubP.get();
+    auto gc  = globalCutP        .get(); auto gp  = globalPanOffsetP  .get();
+    auto grp = globalResP        .get();
+    tv .resize(numTracks, 0.0f);  vv .resize(numTracks, 1.0f);
+    pv .resize(numTracks, 1.0f);  mv .resize(numTracks, 0);
+    sv .resize(numTracks, 0);     sps.resize(numTracks, 0.0f);
+    gc .resize(numTracks, 0.0f);  gp .resize(numTracks, 0.0f);
+    grp.resize(numTracks, 0.0f);
+    for(int ti = 0; ti < numTracks; ti++) {
+        tv [ti] = trackConfigs[ti].trackPitch;
+        vv [ti] = trackConfigs[ti].globalVol;
+        pv [ti] = trackConfigs[ti].globalProb;
+        mv [ti] = trackConfigs[ti].muted ? 1 : 0;
+        sv [ti] = trackConfigs[ti].solo  ? 1 : 0;
+        sps[ti] = trackConfigs[ti].globalStepProbSub;
+        gc [ti] = trackConfigs[ti].globalCut;
+        gp [ti] = trackConfigs[ti].globalPanOffset;
+        grp[ti] = trackConfigs[ti].globalRes;
+    }
+    if(force || transposeP.get() != tv) transposeP.set(tv);
+    if(force || globalVolP.get() != vv) globalVolP.set(vv);
+    if(force || globalProbP.get() != pv) globalProbP.set(pv);
+    if(force || muteP.get() != mv) muteP.set(mv);   // fires listener → sets active on SC synths
+    if(force || soloP.get() != sv) soloP.set(sv);   // fires listener → updateActiveStates
+    if(force || globalStepProbSubP.get() != sps) globalStepProbSubP.set(sps);
+    if(force || globalCutP.get() != gc) globalCutP.set(gc);
+    if(force || globalPanOffsetP.get() != gp) globalPanOffsetP.set(gp);
+    if(force || globalResP.get() != grp) globalResP.set(grp);
+}
+
+void scRhythmBox::sendTrackConfigScalars(int ti) {
+    if(ti < 0 || ti >= numTracks) return;
+    for(auto& [srv, synths] : trackSynths) {
+        {
+            if(ti >= (int)synths.size()) continue;
+            auto* s = synths[ti];
+            if(!s) continue;
+            scSynthControlBatch c(s, srv, &trackSent[s]);   // only what changed
+            const TrackData&   tdi = track(ti);
+            const TrackConfig& tci = trackConfigs[ti];
+            c.set("shift",         (float)tdi.shift);
+            c.set("numBeats",      (float)tci.numBeats);
+            c.set("stepsPerBeat",  (float)tci.stepsPerBeat);
+            c.set("numSteps",      (float)tci.getNumSteps());
+            c.set("swing",         swingP.get());
+            c.set("mono",          tci.monoMode      ? 1.0f : 0.0f);
+            c.set("volLatch",      tci.volLatch       ? 1.0f : 0.0f);
+            c.set("inPoint",       tci.inPoint);
+            c.set("outPoint",      tci.outPoint);
+            c.set("loopSample",    tci.loopEnabled   ? 1.0f : 0.0f);
+            c.set("fixDuration",   tci.fixDuration   ? 1.0f : 0.0f);
+            c.set("durationBeats", tci.durationBeats);
+            c.set("envEnabled",    tci.envEnabled    ? 1.0f : 0.0f);
+            c.set("envAttack",     tci.envAttack);
+            c.set("envHoldSteps",  (float)tci.envHoldSteps);
+            c.set("envDecay",      tci.envDecay);
+            c.set("envSustain",    tci.envSustain);
+            c.set("envRelease",    tci.envRelease);
+            c.set("envCurveA",     tci.envCurveA);
+            c.set("envCurveD",     tci.envCurveD);
+            c.set("lfoEnabled",    tci.lfoEnabled    ? 1.0f : 0.0f);
+            c.set("lfoRate",       tci.lfoRate);
+            c.set("lfoDepth",      tci.lfoDepth);
+            c.set("lfoShape",      (float)tci.lfoShape);
+            c.set("lfoPhase",      tci.lfoPhase);
+            c.set("lfoPulseWidth", tci.lfoPulseWidth);
+            c.set("slicerMode",    tci.type == TrackType::Slice ? 1.0f : 0.0f);
+            c.set("sliceFit",      tci.sliceFit     ? 1.0f : 0.0f);
+            c.set("eqEnabled",     tci.eqEnabled   ? 1.0f : 0.0f);
+            c.set("eqHPFreq",      tci.eqHPFreq);
+            c.set("eqHPRq",        1.0f / std::max(tci.eqHPQ,   0.01f));
+            c.set("eqPeakFreq",    tci.eqPeakFreq);
+            c.set("eqPeakGain",    tci.eqPeakGain);
+            c.set("eqPeakRq",      1.0f / std::max(tci.eqPeakQ, 0.01f));
+            c.set("eqLPFreq",      tci.eqLPFreq);
+            c.set("eqLPRq",        1.0f / std::max(tci.eqLPQ,   0.01f));
+            c.set("arpEnabled",       tdi.arpEnabled       ? 1.0f : 0.0f);
+            c.set("arpInterval",      tdi.arpInterval);
+            c.set("arpModulo",        (float)tdi.arpModulo);
+            c.set("arpGateWidth",     tdi.arpGateWidth);
+            c.set("arpSpeedMode",     (float)tdi.arpSpeedMode);
+            c.set("globalArpEnabled", tdi.globalArpEnabled ? 1.0f : 0.0f);
+            c.set("globalArpSpeed",   tdi.globalArpSpeed);
+            c.set("bufnum",           (float)getBufnum(ti, srv));
+            c.set("globalStepProbSub", tci.globalStepProbSub);
+            c.set("globalCut",         tci.globalCut);
+            c.set("globalPanOffset",   tci.globalPanOffset);
+            c.set("globalRes",         tci.globalRes);
+            c.set("clickCombOctave",   (float)tci.clickCombOctave);
+            c.set("filterMode",        (float)tci.filterMode);
+            c.set("filterRandom",      tci.filterRandom ? 1.0f : 0.0f);
+            c.set("filterRandomRange", tci.filterRandomRange);
+            c.send();
+        }
+    }
+}
+
 void scRhythmBox::reloadCurrentSlot() {
     // Sync node-GUI name buffers from global TrackConfig (name is per-track, not per-slot).
     for(int ti = 0; ti < numTracks; ti++)
         snprintf(nameEditBuf[ti], 64, "%s", trackConfigs[ti].name.c_str());
 
-    // Rebuild vector parameters from global track config (fires listeners → SC synths)
-    {
-        auto tv  = transposeP        .get(); auto vv  = globalVolP        .get();
-        auto pv  = globalProbP       .get(); auto mv  = muteP             .get();
-        auto sv  = soloP             .get(); auto sps = globalStepProbSubP.get();
-        auto gc  = globalCutP        .get(); auto gp  = globalPanOffsetP  .get();
-        auto grp = globalResP        .get();
-        tv .resize(numTracks, 0.0f);  vv .resize(numTracks, 1.0f);
-        pv .resize(numTracks, 1.0f);  mv .resize(numTracks, 0);
-        sv .resize(numTracks, 0);     sps.resize(numTracks, 0.0f);
-        gc .resize(numTracks, 0.0f);  gp .resize(numTracks, 0.0f);
-        grp.resize(numTracks, 0.0f);
-        for(int ti = 0; ti < numTracks; ti++) {
-            tv [ti] = trackConfigs[ti].trackPitch;
-            vv [ti] = trackConfigs[ti].globalVol;
-            pv [ti] = trackConfigs[ti].globalProb;
-            mv [ti] = trackConfigs[ti].muted ? 1 : 0;
-            sv [ti] = trackConfigs[ti].solo  ? 1 : 0;
-            sps[ti] = trackConfigs[ti].globalStepProbSub;
-            gc [ti] = trackConfigs[ti].globalCut;
-            gp [ti] = trackConfigs[ti].globalPanOffset;
-            grp[ti] = trackConfigs[ti].globalRes;
-        }
-        transposeP        .set(tv);
-        globalVolP        .set(vv);
-        globalProbP       .set(pv);
-        muteP             .set(mv);   // fires listener → sets active on SC synths
-        soloP             .set(sv);   // fires listener → updateActiveStates
-        globalStepProbSubP.set(sps);
-        globalCutP        .set(gc);
-        globalPanOffsetP  .set(gp);
-        globalResP        .set(grp);
-    }
-
-    // Push slot-specific (shift) and config params to running synths.
-    // Config params don't change between slots, but synths may have been recreated.
-    for(auto& [srv, synths] : trackSynths) {
-        for(int ti = 0; ti < numTracks && ti < (int)synths.size(); ti++) {
-            auto* s = synths[ti];
-            if(!s) continue;
-            const TrackData&   tdi = track(ti);
-            const TrackConfig& tci = trackConfigs[ti];
-            s->set("shift",         (float)tdi.shift);
-            s->set("numBeats",      (float)tci.numBeats);
-            s->set("stepsPerBeat",  (float)tci.stepsPerBeat);
-            s->set("numSteps",      (float)tci.getNumSteps());
-            s->set("swing",         swingP.get());
-            s->set("mono",          tci.monoMode      ? 1.0f : 0.0f);
-            s->set("volLatch",      tci.volLatch       ? 1.0f : 0.0f);
-            s->set("inPoint",       tci.inPoint);
-            s->set("outPoint",      tci.outPoint);
-            s->set("loopSample",    tci.loopEnabled   ? 1.0f : 0.0f);
-            s->set("fixDuration",   tci.fixDuration   ? 1.0f : 0.0f);
-            s->set("durationBeats", tci.durationBeats);
-            s->set("envEnabled",    tci.envEnabled    ? 1.0f : 0.0f);
-            s->set("envAttack",     tci.envAttack);
-            s->set("envHoldSteps",  (float)tci.envHoldSteps);
-            s->set("envDecay",      tci.envDecay);
-            s->set("envSustain",    tci.envSustain);
-            s->set("envRelease",    tci.envRelease);
-            s->set("envCurveA",     tci.envCurveA);
-            s->set("envCurveD",     tci.envCurveD);
-            s->set("lfoEnabled",    tci.lfoEnabled    ? 1.0f : 0.0f);
-            s->set("lfoRate",       tci.lfoRate);
-            s->set("lfoDepth",      tci.lfoDepth);
-            s->set("lfoShape",      (float)tci.lfoShape);
-            s->set("lfoPhase",      tci.lfoPhase);
-            s->set("lfoPulseWidth", tci.lfoPulseWidth);
-            s->set("slicerMode",    tci.type == TrackType::Slice ? 1.0f : 0.0f);
-            s->set("sliceFit",      tci.sliceFit     ? 1.0f : 0.0f);
-            s->set("eqEnabled",     tci.eqEnabled   ? 1.0f : 0.0f);
-            s->set("eqHPFreq",      tci.eqHPFreq);
-            s->set("eqHPRq",        1.0f / std::max(tci.eqHPQ,   0.01f));
-            s->set("eqPeakFreq",    tci.eqPeakFreq);
-            s->set("eqPeakGain",    tci.eqPeakGain);
-            s->set("eqPeakRq",      1.0f / std::max(tci.eqPeakQ, 0.01f));
-            s->set("eqLPFreq",      tci.eqLPFreq);
-            s->set("eqLPRq",        1.0f / std::max(tci.eqLPQ,   0.01f));
-            s->set("arpEnabled",       tdi.arpEnabled       ? 1.0f : 0.0f);
-            s->set("arpInterval",      tdi.arpInterval);
-            s->set("arpModulo",        (float)tdi.arpModulo);
-            s->set("arpGateWidth",     tdi.arpGateWidth);
-            s->set("arpSpeedMode",     (float)tdi.arpSpeedMode);
-            s->set("globalArpEnabled", tdi.globalArpEnabled ? 1.0f : 0.0f);
-            s->set("globalArpSpeed",   tdi.globalArpSpeed);
-            s->set("bufnum",           (float)getBufnum(ti, srv));
-            s->set("globalStepProbSub", tci.globalStepProbSub);
-            s->set("globalCut",         tci.globalCut);
-            s->set("globalPanOffset",   tci.globalPanOffset);
-            s->set("globalRes",         tci.globalRes);
-            s->set("clickCombOctave",   (float)tci.clickCombOctave);
-            s->set("filterMode",        (float)tci.filterMode);
-            s->set("filterRandom",      tci.filterRandom ? 1.0f : 0.0f);
-            s->set("filterRandomRange", tci.filterRandomRange);
-        }
-    }
+    trackSent.clear();   // a full reload: everything goes out again (new synths, NRT)
+    syncTrackVectorParams(true);
+    for(int ti = 0; ti < numTracks; ti++) sendTrackConfigScalars(ti);
     // Fire step params — one call per track covers all servers via the pStep* listener.
     for(int ti = 0; ti < numTracks; ti++)
         fireStepParams(ti);
@@ -3404,10 +3429,10 @@ void scRhythmBox::drawTrack(int ti) {
         // ── Zoom buttons + scrollbar ──────────────────────────────────────────
         {
             // – / + buttons
-            if(windowControl(trackControlKey(ti, "solo"), [&](){ return ImGui::SmallButton("-##slicezm"); })) applyZoomS(0.5f, 0.5f);
+            if(windowControl(std::string(), [&](){ return ImGui::SmallButton("-##slicezm"); })) applyZoomS(0.5f, 0.5f);
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom out");
             ImGui::SameLine(0, 2);
-            if(windowControl(trackControlKey(ti, "solo"), [&](){ return ImGui::SmallButton("+##slicezm"); })) applyZoomS(2.0f, 0.5f);
+            if(windowControl(std::string(), [&](){ return ImGui::SmallButton("+##slicezm"); })) applyZoomS(2.0f, 0.5f);
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom in");
             ImGui::SameLine(0, 4);
             // Zoom level label
@@ -3454,7 +3479,7 @@ void scRhythmBox::drawTrack(int ti) {
 
         // Reset to uniform button
         ImGui::SameLine(0, 10);
-        if(windowControl(trackControlKey(ti, "solo"), [&](){ return ImGui::SmallButton("Reset##slicereset"); })) {
+        if(windowControl(std::string(), [&](){ return ImGui::SmallButton("Reset##slicereset"); })) {
             initSlicePoints(ti);
             std::vector<float> starts, ends;
             computeSliceArrays(ti, starts, ends);

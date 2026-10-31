@@ -141,6 +141,7 @@ public:
         const char* tip;
     };
     static const std::vector<Spec>& specs();
+    static const std::vector<const Spec*>& specsFor(int dest);   // the ones of a destination
 
 private:
     std::string synthdefFolder;

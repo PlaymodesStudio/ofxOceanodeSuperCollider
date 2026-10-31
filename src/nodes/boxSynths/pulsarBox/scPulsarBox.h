@@ -304,7 +304,7 @@ public:
         scNode::addOutput("Out");
         // Gate (levels: a gate rising to 0.2 plays at 0.2) and Pitch (MIDI notes:
         // once used, they set the voices' fundamentals): Oceanode values or audio cables
-        gateIn.attach(addParameter(gate.set("Gate", {1.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
+        gateIn.attach(addParameter(gate.set("Gate", {0.0f}, {0.0f}, {1.0f})), availableInputs, [this](){ refreshOutputs(); });
         pitchIn.attach(addParameter(pitchP.set("Pitch", {57.0f}, {0.0f}, {127.0f})), availableInputs, [this](){ refreshOutputs(); });
         noteInputs.add(gateIn.handle, gate);
         noteInputs.add(pitchIn.handle, pitchP);

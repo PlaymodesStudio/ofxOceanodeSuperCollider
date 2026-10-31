@@ -67,6 +67,14 @@ public:
     // Lets a node that spans several servers (SC Mixer Pro) take part in each
     // server's graph with only the inputs that belong to it.
     static ofxSCServer* getGraphTraversalServer(){ return graphTraversalServer; }
+    // The source port serverManager is wiring while it calls setInputBus();
+    // an empty port otherwise (then nodes match inputs by source node only)
+    static const nodePort& getGraphInputPort(){ return graphInputPort; }
+    struct ScopedInputPort {
+        explicit ScopedInputPort(const nodePort& port) : previous(graphInputPort) { graphInputPort = port; }
+        ~ScopedInputPort(){ graphInputPort = previous; }
+        nodePort previous;
+    };
     struct ScopedGraphTraversal {
         explicit ScopedGraphTraversal(ofxSCServer* server) : previous(graphTraversalServer) { graphTraversalServer = server; }
         ~ScopedGraphTraversal(){ graphTraversalServer = previous; }
@@ -139,6 +147,7 @@ protected:
     bool suppressInputRefresh = false;
 
     static ofxSCServer* graphTraversalServer;
+    static nodePort graphInputPort;
     ofEventListeners listeners;
     
     vector<ofParameter<nodePort>> inputs;

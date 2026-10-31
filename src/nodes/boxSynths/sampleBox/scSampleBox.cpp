@@ -223,6 +223,7 @@ void scSampleBox::registerNodeControl(ofParameter<T>& param) {
     c.save = [&param]() { return param.toString(); };
     c.load = [&param](const std::string& v) { param.fromString(v); };
     controls.push_back(std::move(c));
+    rebuildPadControlIndex();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -458,6 +459,7 @@ scSampleBox::Control& scSampleBox::registerPadControl(Pad& p, ofParameter<T>& pa
         if(c.scName == "stretchmode") snaps.morph.mode(param, 2, readSnapshot);
     }
     controls.push_back(std::move(c));
+    rebuildPadControlIndex();
     Pad* pp = &p;
     const std::string name = scName ? scName : "";
     p.listeners.push(param.newListener([this, pp, &param, dest, name](T& value) {
@@ -512,6 +514,7 @@ void scSampleBox::registerModControl(Pad& p, ofAbstractParameter& param,
     c.save = std::move(save);
     c.load = std::move(load);
     controls.push_back(std::move(c));
+    rebuildPadControlIndex();
 }
 
 scSampleBox::Control* scSampleBox::findControl(const std::string& key) {
@@ -703,6 +706,7 @@ void scSampleBox::removePad(int k) {
         if(c.i) snaps.morph.erase(*c.i);
     }
     controls.erase(std::remove_if(controls.begin(), controls.end(), [idx](const Control& c) { return c.pad == idx; }), controls.end());
+    rebuildPadControlIndex();
     p.listeners.unsubscribeAll();
     if(p.sample->task.valid()) p.sample->task.wait();
     while(!p.sample->buffers.empty()) releaseBuffers(*p.sample, p.sample->buffers.begin()->first);
@@ -939,8 +943,9 @@ void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p, bool includeNotes) {
     PadSC& sc = it->second;
     ofxSCSynth* s = sc.engine;
     scSynthControlBatch updates(s,srv);
-    for(const auto& c : controls) {
-        if(c.pad != p.index || c.dest != DEST_ENGINE || c.scName.empty() || c.scName == "stretchmode") continue;
+    for(const auto* cp : controlsOf(p.index)) {
+        const auto& c = *cp;
+        if(c.dest != DEST_ENGINE || c.scName.empty() || c.scName == "stretchmode") continue;
         if(c.f) {
             if(c.f==&p.attack || c.f==&p.release) updates.set(c.scName,p.mod.voiceValues(*c.f));
             else updates.set(c.scName, c.f->get());
@@ -1002,8 +1007,9 @@ void scSampleBox::sendFx(ofxSCServer* srv, Pad& p, int fx) {
     updates.set("modbus", p.mod.targetBus(srv, 0));
     if(sc.latest) updates.set("latestbus", sc.latest->index);
     if(fx == FX_ECHO) updates.set("bpm", bpm);
-    for(const auto& c : controls) {
-        if(c.pad != p.index || c.dest != DEST_FX + fx || c.scName.empty() || c.scName == "on") continue;
+    for(const auto* cp : controlsOf(p.index)) {
+        const auto& c = *cp;
+        if(c.dest != DEST_FX + fx || c.scName.empty() || c.scName == "on") continue;
         if(c.f) updates.set(c.scName, c.f->get());
         else if(c.i) updates.set(c.scName, c.i->get());
         else if(c.b) updates.set(c.scName, snaps.morph.activation(*c.b));
@@ -1458,6 +1464,7 @@ void scSampleBox::updateTempo() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scSampleBox::update(ofEventArgs&) {
+    rebuildPadControlIndex();   // cheap; keeps the index right whatever re-numbered the pads
     timeline.update();
     snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
@@ -2636,4 +2643,12 @@ void scSampleBox::drawEqEditor(Pad& p, float w, float h) {
         }
     }
     if(off) ImGui::EndDisabled();
+}
+
+void scSampleBox::rebuildPadControlIndex() {
+    padControlsData = controls.data();
+    padControlsCount = controls.size();
+    padControls.assign(pads.size(), {});
+    for(const auto& c : controls)
+        if(c.pad >= 0 && c.pad < (int)padControls.size()) padControls[c.pad].push_back(&c);
 }

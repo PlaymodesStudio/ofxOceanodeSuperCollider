@@ -86,6 +86,13 @@ public:
                 });
             }
         }));
+        // From the start too (not only when Server changes): a node added from
+        // the menu never re-bound after a server reboot or an NRT capture
+        if(serverIndex.get() >= 0 && serverIndex.get() < (int)servers.size()) {
+            serverGraphListener = servers[serverIndex.get()]->graphComputed.newListener([this](){
+                if(input->getNodeRef()) rebindOrRecreateSynth();
+            });
+        }
 
         listeners.push(timeWindow.newListener([this](float& v) {
             if(synth) synth->set("timeWindow", v);

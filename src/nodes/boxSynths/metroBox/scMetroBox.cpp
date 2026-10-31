@@ -1014,7 +1014,12 @@ void scMetroBox::autoEvolve() {
         if(!t.isPlaying || changeZone(L.change) != CHANGE_EVOLVING) { lastPhrase[li] = phrase; phrasesSinceAuto[li] = 0; continue; }
         if(lastPhrase[li] != NO_CYCLE && phrase == lastPhrase[li] + 1 && ++phrasesSinceAuto[li] >= evolveEvery(L.change)) {
             phrasesSinceAuto[li] = 0;
-            engine.mutate(li, now, (uint32_t)hashOf((uint64_t)ofGetElapsedTimeMicros(), ++autoCounter, (uint64_t)li));
+            // Seed > 0: the same seed plays the same evolution (the op depends on
+            // the seed, the lane and the phrase); 0: a fresh draw every time
+            const uint64_t op = globalSeed.get() > 0
+                ? hashOf((uint64_t)globalSeed.get() * 7919u + (uint64_t)L.seed, (uint64_t)phrase, (uint64_t)li)
+                : hashOf((uint64_t)ofGetElapsedTimeMicros(), ++autoCounter, (uint64_t)li);
+            engine.mutate(li, now, (uint32_t)op);
         }
         lastPhrase[li] = phrase;
     }

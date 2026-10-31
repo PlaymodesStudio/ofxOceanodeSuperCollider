@@ -110,8 +110,6 @@ public:
 						int oldNodeID = pair.second->nodeID;
 
 						ofxSCSynth *newSynth = new ofxSCSynth(getSynthDefName(), server);
-						newSynth->createAndRun(4, oldNodeID, getActive()); // 4 = kAddAction_replace
-
 						delete pair.second;
 						pair.second = newSynth;
 
@@ -134,6 +132,9 @@ public:
 						if(outputBuses.count(server) > 0 && outputBuses[server].count(0) > 0) {
 							newSynth->set("out", outputBuses[server][0]);
 						}
+						// configured above: the sets ride on /s_new, so it never
+						// runs on the hardware buses (in=0 / out=0) until /n_go
+						newSynth->createAndRun(4, oldNodeID, getActive()); // 4 = kAddAction_replace
 					}
 				}
 

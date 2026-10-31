@@ -851,26 +851,29 @@ void scFMBox::drawWindow() {
             ImGui::Spacing();
             const float tw=ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ScrollbarSize;
             labelW=70;
-            if(std::string(name)=="Effects" || std::string(name)=="Envelopes" || std::string(name)=="LFOs" || std::string(name)=="Routing" || std::string(name)=="Panning" || std::string(name)=="FM Matrix") {
+            const std::string tabName=name;
+            if(tabName=="Effects" || tabName=="Modulation" || tabName=="Matrix") {
                 ImGui::BeginChild("##fxScroll",ImVec2(0,0),false,ImGuiWindowFlags_HorizontalScrollbar);
-                body(std::max(tw,std::string(name)=="FM Matrix"?1060*z:960*z));ImGui::EndChild();
+                body(std::max(tw,tabName=="Matrix"?1060*z:960*z));ImGui::EndChild();
             }else body(tw);
             ImGui::EndChild();
             ImGui::EndTabItem();
         };
+        // Few tabs, the short sections stacked (the operators with their
+        // envelopes, the matrix with the DX7 globals, LFOs with the routing,
+        // panning with the effects): one sound without hopping between nine tabs
+        auto gap=[](){ImGui::Spacing();ImGui::Separator();ImGui::Spacing();};
         tab("DX7 Presets",[this](float tw){drawPresets(tw);});
-        tab("Operators",[this](float tw){drawSoundTab(tw);});
-        tab("DX7 Global",[this](float tw){drawDX7Global(tw);});
-        tab("FM Matrix",[this](float tw){drawMatrix(tw);});
-        tab("Envelopes",[this](float tw){
+        tab("Operators",[this,gap](float tw){
+            drawSoundTab(tw);
+            gap();
             std::vector<std::function<void(float)>> native;
             for(int op=0;op<6;++op) native.push_back([this,op](float cw){drawNativeEnvelope(op,cw);});
             mod.drawEnvelopeCards(tw,native);
         });
-        tab("LFOs",[this](float tw){mod.drawLfos(tw);});
-        tab("Routing",[this](float tw){mod.drawRouting(tw);});
-        tab("Panning",[this](float tw){drawPanTab(tw);});
-        tab("Effects",[this](float tw){drawFxTab(tw);});
+        tab("Matrix",[this,gap](float tw){drawMatrix(tw);gap();drawDX7Global(tw);});
+        tab("Modulation",[this,gap](float tw){mod.drawLfos(tw);gap();mod.drawRouting(tw);});
+        tab("Effects",[this,gap](float tw){drawPanTab(tw);gap();drawFxTab(tw);});
         ImGui::EndTabBar();
     }
     scKeyboardPiano::endContent();

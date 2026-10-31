@@ -33,7 +33,7 @@ private:
 	vector<serverManager*> servers;
 	vector<vector<ofxSCBuffer*>> buffers;
 	
-	int oldNumBuffers;
+	int oldNumBuffers = 1;   // setup() allocates one per channel
 	
 	// Lag implementation variables
 	vector<float> laggedValues;
