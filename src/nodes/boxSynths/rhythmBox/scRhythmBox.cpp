@@ -154,6 +154,7 @@ void scRhythmBox::setup() {
     // While on, the node's Play / Reset / Stop / BPM are ignored by the synths:
     // transport play/stop and tempo drive them.
     addInspectorParameter(syncToTransportP.set("Sync To Transport", true));
+    addTimeSourceParameter(syncToTransportP); // which timeline it follows
     addInspectorParameter(beatOffsetP.set("Beat Offset", 0.0f, -64.0f, 64.0f));
 
     // ── Slot / track data initialisation ─────────────────────────────────────

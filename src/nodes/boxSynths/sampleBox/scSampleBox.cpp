@@ -125,6 +125,7 @@ scSampleBox::~scSampleBox() {
 }
 
 void scSampleBox::setup() {
+    addTimeSourceParameter(); // which timeline it follows (inspector)
     // a kit: drums stay put unless ticked in Global Pitch
     scGlobalPitch::follow(this, false, [this](){
         for(auto& p : pads) for(auto& [srv, sc] : p->sc) if(sc.engine) sc.engine->set("gtrbus", scGlobalPitch::bus(this, srv));

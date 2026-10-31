@@ -803,6 +803,7 @@ scMetroBox::~scMetroBox() {
 }
 
 void scMetroBox::setup() {
+    addTimeSourceParameter(); // which timeline it follows (inspector)
     timeline.setup(this, [this](const std::string& k) {
         if(snapParams.count(k)) publishSnap(k); else publishKey(k);
     }, [this](const std::string& k) {

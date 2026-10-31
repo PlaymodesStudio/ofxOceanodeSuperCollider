@@ -443,6 +443,7 @@ void scGrainBoxPoly::setup() {
     // follow the global transport (all playheads); BPM input and SyncGate are
     // ignored by the synths.
     addInspectorParameter(syncToTransportP.set("Sync To Transport", false));
+    addTimeSourceParameter(syncToTransportP); // which timeline it follows
     addInspectorParameter(beatOffsetP.set("Beat Offset", 0.0f, -64.0f, 64.0f));
     stepClock.setPatternLength(32.0);   // 32-beat grid block -> anchorPos period 2048 beats
 

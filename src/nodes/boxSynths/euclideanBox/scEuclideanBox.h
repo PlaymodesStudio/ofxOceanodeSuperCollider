@@ -107,6 +107,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        addTimeSourceParameter(); // which timeline it follows (inspector)
         timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
                        [this](){ return publishedKeys; });
         description = "Euclidean sequencer locked to the transport: up to 8 tracks of hits spread over steps, "

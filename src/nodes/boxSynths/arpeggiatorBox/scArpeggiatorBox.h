@@ -103,6 +103,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        addTimeSourceParameter(); // which timeline it follows (inspector)
         timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
                        [this](){ return publishedKeys; });
         description = "Polyphonic arpeggiator played sample accurately: a scale or a chord pool, patterns, polyphony, "

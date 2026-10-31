@@ -86,6 +86,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        addTimeSourceParameter(); // which timeline it follows (inspector)
         timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
                        [this](){ return publishedKeys; });
         description = "Chord progressions locked to the transport: chords, scales, cypher symbols, degrees or functional "

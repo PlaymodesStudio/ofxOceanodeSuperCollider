@@ -104,6 +104,7 @@ scDrumKitBox::~scDrumKitBox() {
 }
 
 void scDrumKitBox::setup() {
+    addTimeSourceParameter(); // which timeline it follows (inspector)
     // a kit: drums stay put unless ticked in Global Pitch
     // each pad its own row in Global Pitch's table (a kit: unticked by default)
     scGlobalPitch::follow(this, false, [this](){

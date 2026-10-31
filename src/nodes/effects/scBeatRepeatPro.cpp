@@ -101,6 +101,7 @@ scBeatRepeatPro::~scBeatRepeatPro() {
 }
 
 void scBeatRepeatPro::setup() {
+    addTimeSourceParameter(); // which timeline it follows (inspector)
     timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                    [this](){ return publishedKeys; });
     description = "Coherent multichannel beat repeater with a live waveform, loop region and read/write heads.";
