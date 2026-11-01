@@ -8,9 +8,14 @@ dir=root +/+ "Modulation";File.mkdir(root);File.mkdir(dir);
     SynthDef(("ModRamp"++n).asSymbol, {
         var gate=A2K.kr(InFeedback.ar(\gate.kr(0),n))>0;
         var mode=\trigmode.kr(2), reset=Changed.kr(\reset.kr(0))+((HPZ1.kr(gate)>0)*(mode>0));
-        var elapsed=Sweep.kr(reset,1),restart=\restartsec.kr(0);
+        var elapsed=Sweep.kr(reset,Select.kr(\transport.kr(0)>0,[1,In.kr(\transportbus.kr(0)+1)])),restart=\restartsec.kr(0);
         var periodic=(HPZ1.kr((elapsed/restart.max(0.001)).floor)>0)*(restart>0)*(mode>0)*gate;
-        var phase=Sweep.kr(reset+periodic,NamedControl.kr(\freq,1 ! n))+NamedControl.kr(\phoff,0 ! n);
+        var freePhase=Sweep.kr(reset+periodic,NamedControl.kr(\freq,1 ! n));
+        var clock=In.kr(\transportbus.kr(0),3),linked=\transport.kr(0);
+        var absolute=clock[0]*NamedControl.kr(\cpb,1 ! n);
+        var origin=Latch.kr(absolute.ceil,reset+periodic+(Changed.kr(clock[2])*clock[1])+Impulse.kr(0));
+        var locked=Select.kr(((mode>0)+(\ending.kr(0) |!=| 1))>0,[absolute,(absolute-origin).max(0)]);
+        var phase=Select.kr(linked>0,[freePhase,locked])+NamedControl.kr(\phoff,0 ! n);
         var ending=\ending.kr(0),bounds=\bounds.kr(0),rate=\ratemode.kr(0);
         var u=Select.kr(ending |==| 1,[phase.max(0),phase.frac]),t=u.clip(0,1);
         var tension={|p| p=p.clip(-0.9999,0.9999); (2*p*0.99999)/(1-(p*0.999999))};
@@ -29,6 +34,9 @@ dir=root +/+ "Modulation";File.mkdir(root);File.mkdir(dir);
         value=value+((u-1).max(0)*terminal*(ending |==| 2));
         value=Select.kr(bounds.clip(0,2),[value,value.clip(0,1),value.frac]);
         value=value*Select.kr(mode>0,[1,gate])*\enabled.kr(1);
+        // Only the first chunk reports completion; the host owns the Go latch.
+        // SendReply is independent of editor visibility and uses the audio clock.
+        SendReply.kr((HPZ1.kr(phase.asArray[0]>=1)>0)*gate.asArray[0]*(mode>0)*(ending |==| 3)*\enabled.kr(1)*\reportdone.kr(0),'/modRampDone',[phase.asArray[0]]);
         Out.kr(\out.kr(0),Sanitize.kr(value));
     }).writeDefFile(dir);
 };

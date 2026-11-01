@@ -7010,6 +7010,13 @@ void scGrainBoxPoly::setupModulation(Playhead& ph) {
     h.unpublish = [this](const std::string& k) { unpublishEditorParameterFromNode(k); };
     h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedEditorParameterKeys; };
     h.voices = [this, p]() { return phVoices(*p); };
+    if(fxMode)m.stopGo=[this,p](){
+        // Engine 1 supplies the shared Go unless this engine publishes its Gate.
+        Playhead& owner=(p->index>0 && !isEditorParameterPublished(p->gate.getEscapedName()))?ph0():*p;
+        if(hasInputConnection(owner.gate.getName()))return;
+        auto gate=owner.gate.get();
+        if(std::any_of(gate.begin(),gate.end(),[](float v){return v>0;}))owner.gate.set(std::vector<float>(gate.size(),0));
+    };
     m.nameSuffix = ph.sfx;
     m.maxVoices = MAX_VOICES;   // up to 500 playheads: the indexer's ranges
     m.fitBusWidth = true;       // buses as wide as the playheads (CHUNK steps); Mod* copies past 32

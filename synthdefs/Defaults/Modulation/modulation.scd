@@ -47,6 +47,13 @@ valueNoise2 = { |x, y, salt = 0|
     (a + ((b - a) * v)).clip(0, 1)
 };
 
+// One shared transport clock per modulation module; sources and AdditiveBox
+// partial lanes read the same anchored beat, run state and discontinuity ID.
+SynthDef(\ModTransportClock, {
+    var beat=\anchorPos.kr(0)+Sweep.kr(Changed.kr(\anchorId.kr(0)),\bpm.kr(120)/60*\run.kr(0));
+    ReplaceOut.kr(\out.kr(0),[beat,\run.kr(0),\anchorHard.kr(0)]);
+}).writeDefFile(dir);
+
 (1..32).do { |n|
     var kv = { |name, def| NamedControl.kr(name, def ! n) };
 
@@ -82,13 +89,18 @@ valueNoise2 = { |x, y, salt = 0|
         var mode = \trigmode.kr(0), gate = A2K.kr(InFeedback.ar(\gate.kr(0), n)) > 0;
         var gateRise = (HPZ1.kr(gate) > 0) * (mode > 0);
         var manualReset = Changed.kr(\reset.kr(0));
-        var elapsed = Sweep.kr(gateRise + manualReset, 1);
+        var elapsed = Sweep.kr(gateRise + manualReset,Select.kr(\transport.kr(0)>0,[1,In.kr(\transportbus.kr(0)+1)]));
         var restartSec = \restartsec.kr(0);
         var periodic = (HPZ1.kr((elapsed / restartSec.max(0.001)).floor) > 0) * (restartSec > 0) * (mode > 0) * gate;
         var reset = manualReset + gateRise + periodic;
         var freq = kv.(\freq, 1), detune = kv.(\freqdetune, 0);
         var spread = n.collect { |i| TRand.kr(0, 1, reset.asArray.wrapAt(i) + Impulse.kr(0)) };
-        var sweep = Sweep.kr(reset, freq + (spread * detune));
+        var freeSweep = Sweep.kr(reset, freq + (spread * detune));
+        var clock=In.kr(\transportbus.kr(0),3), linked=\transport.kr(0);
+        var absolute=clock[0]*kv.(\cpb,1);
+        var origin=Latch.kr(absolute.ceil,reset+(Changed.kr(clock[2])*clock[1])+Impulse.kr(0));
+        var locked=Select.kr(mode>0,[absolute,(absolute-origin).max(0)]);
+        var sweep=Select.kr(linked>0,[freeSweep,locked]);
         var phoff = kv.(\phoff, 0);
         // Hold: stopped at the start, each voice at its offset (an indexer)
         var rawPhase = (sweep * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff;
@@ -134,7 +146,7 @@ valueNoise2 = { |x, y, salt = 0|
         // sample & hold, pow, bipow
         sh = kv.(\sh, 0);
         // S&H Glide (s): each held value slides to the next instead of jumping
-        held = Lag.kr(Latch.kr(shape, Impulse.kr(sh.max(0.001))), \shglide.kr(0).max(0));
+        held = Lag.kr(Latch.kr(shape, Select.kr(linked>0,[Impulse.kr(sh.max(0.001)),((HPZ1.kr((clock[0]*kv.(\shcpb,1)).floor).abs>0)+Changed.kr(clock[2])+Impulse.kr(0)).min(1)])), \shglide.kr(0).max(0));
         shape = (shape * (sh <= 0)) + (held * (sh > 0));
         out = Select.kr(kv.(\pow, 0).abs > 0.0001, [shape, reflect.(customPow.(shape, kv.(\pow, 0)))]);
         out = Select.kr(kv.(\bipow, 0).abs > 0.0001, [out,

@@ -26,6 +26,7 @@
 
 #include "ofMain.h"
 #include "scModulationMorph.h"
+#include "../../../timing/scTransportSync.h"
 #include "scGeneratorMorph.h"
 #include "ofxOceanodeShared.h"
 #include "ofxSCServer.h"
@@ -127,6 +128,8 @@ public:
     // Anything an own LFO copy depends on changed (an LFO setting, the matrix,
     // the tempo, a reset, a preset)
     std::function<void()> changed;
+    // Hosts with a latched Go action may release it at a Ramp's audio-clock end.
+    std::function<void()> stopGo;
     // perVoiceLfo: each voice its own LFO phase (the indexer); false: one LFO for all
     void setup(Host host, std::vector<Target> targets, bool perVoiceLfo, bool hasVelocity, bool hasRandom);
 
@@ -147,6 +150,10 @@ public:
     void resend();                                            // everything again (NRT)
     void sendChanged();                                       // morph frames: only values the server needs
     void setBpm(float bpm);
+    bool followsTransport(int li) const {return lfoTransport[li].get() && lfoSync[li].get() && !lfoRegion[li].get();}
+    int transportBus(ofxSCServer* server) const;
+    float lfoCyclesPerBeat(int li,int voice=0) const;
+    float lfoHoldCyclesPerBeat(int li) const {return lfoSampleHold(li)*60.0f/std::max(1.0f,currentBpm);}
     void resetLfos();
     void voicesChanged();                                     // a new voice count (no server synths: GrainBox)
     int resets() const { return resetCounter; }
@@ -285,12 +292,15 @@ private:
     bool polarityEditable(int s, int t) const;                 // an LFO route this module runs itself
     bool paramsActive() const;
     void removeParam(size_t i);
-    struct EnvParams { ofParameter<float> a, d, s, r, ca, cd, cr, vt; ofParameter<bool> beats; };   // vt: velocity tracking 0..1
+    struct EnvParams { ofParameter<float> a, d, s, r, ca, cd, cr, vt; ofParameter<bool> beats,transport; };   // vt: velocity tracking 0..1
     struct ServerState {
+        ofxSCBus* clockBus = nullptr;
+        ofxSCSynth* clock = nullptr;
         ofxSCBus* srcBlock = nullptr;                          // NUM_SOURCES * W
         ofxSCBus* modBlock = nullptr;                          // (targets + 1) * W
         // one copy per CHUNK voices (see chunks())
         std::array<std::vector<ofxSCSynth*>, MAX_LFOS> lfo;
+        std::array<std::unique_ptr<ofEventListener>, MAX_LFOS> rampDoneListeners;
         std::array<std::string, MAX_LFOS> lfoDef;   // ModLfo or ModLfoRnd
         std::array<std::vector<ofxSCSynth*>, MAX_ENVS> env;
         std::map<int, std::vector<ofxSCSynth*>> routes;
@@ -312,6 +322,12 @@ private:
             routeSent.clear(); routeBip.clear(); busSent.clear(); zeroed.clear();
         }
     };
+    scTransportSync::Follower transportFollower;
+    scTransportSync::StepClock transportStepClock;
+    double transportAnchorId=0,transportAnchorHard=0;
+    float transportBpm=120;
+    void updateTransport();
+    void bindRampCompletion(ServerState& st,int li);
     Host host;
     ofJson generatorMorph = ofJson::object();
     std::array<ofParameter<std::vector<float>>, MAX_LFOS> lfoOutputs;
@@ -340,7 +356,7 @@ private:
     std::array<ofParameter<bool>, MAX_LFOS> lfoRndSame;    // Random: one value for every voice (else each its own)
     // Random type (ModLfoRnd): 0 off (the waveform / noise), 1 stepped, 2 smooth, 3 jumps;
     // Random Smooth: the stepped values' glide (s)
-    std::array<ofParameter<bool>,MAX_LFOS> lfoRamp,lfoRampEnabled,lfoRampRate;
+    std::array<ofParameter<bool>,MAX_LFOS> lfoRamp,lfoRampEnabled,lfoRampRate,lfoTransport;
     std::array<ofParameter<float>,MAX_LFOS> lfoRampFrom,lfoRampTo,lfoRampCurve,lfoRampOffset,lfoRampDuration;
     std::array<ofParameter<int>,MAX_LFOS> lfoRampEnd,lfoRampBounds;
     float rampValue(int li,float phase) const;

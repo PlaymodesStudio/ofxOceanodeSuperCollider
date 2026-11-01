@@ -64,7 +64,7 @@ struct scModulation{
  std::array<ofParameter<std::vector<float>>,8> lfoOutputs;
  std::array<std::shared_ptr<ofxOceanodeAbstractParameter>,8> lfoOutputPins{};
  ~scModulation();int n()const{return voices;}
- void applyParams(){}bool paramsActive(){return false;}
+ void updateTransport(){}void applyParams(){}bool paramsActive(){return false;}
  int sourceCount(){return 8;}bool sourceUsed(int i){return i<lfoCount;}
  void update();bool hasLfoOutputs()const;bool publishLfoOutput(int,bool);
  void updateLfoOutputs();void saveLfoOutputs(ofJson&)const;void loadLfoOutputs(const ofJson&);

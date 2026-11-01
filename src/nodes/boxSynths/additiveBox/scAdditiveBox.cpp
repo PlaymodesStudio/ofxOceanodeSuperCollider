@@ -1137,6 +1137,9 @@ void scAdditiveBox::laneData(int v, VoiceData& d) const {
         d.scalars[L + "rate"] = rate;
         d.scalars[L + "reset"] = float(mod.resets());
         d.scalars[L + "trigmode"] = l < int(lanes.size()) ? float(mod.lfoTriggerMode(lanes[l].lfo)) : 0;
+        d.scalars[L+"transport"]=l<int(lanes.size()) && mod.followsTransport(lanes[l].lfo)?1:0;
+        d.scalars[L+"shcpb"]=l<int(lanes.size())?mod.lfoHoldCyclesPerBeat(lanes[l].lfo):1;
+        d.scalars[L+"cpb"]=l<int(lanes.size())?mod.lfoCyclesPerBeat(lanes[l].lfo,v):1;
         d.scalars[L + "restartsec"] = l < int(lanes.size()) ? mod.lfoRestartSeconds(lanes[l].lfo) : 0;
         const bool ramp=l<int(lanes.size()) && mod.isRamp(lanes[l].lfo);
         d.scalars[L+"ramp"]=ramp?1:0;
@@ -1474,7 +1477,7 @@ unsigned roleOf(const std::string& n){
         {"vibdepth", RSrc}, {"vibrate", RSrc}, {"shift", RCore}, {"amp", RCore}, {"width", RCore},
         {"line", RCore}, {"panoff", RCore}, {"out", RCore}, {"silbus", RCore},
         {"vis", RTail}, {"pauser", RTail}, {"grp", RTail},
-        {"np", RLane | RCore}, {"first", RLane | RCore},
+        {"ltransportbus", RLane}, {"np", RLane | RCore}, {"first", RLane | RCore},
         {"modbus", RAll}, {"voice", RAll}, {"bus", RAll}};
     if(n.size() >= 2 && n[0] == 'l' && (n[1] == '0' || n[1] == '1')) return RLane;   // l0buf, l1rate...
     auto it = roles.find(n);
@@ -1558,6 +1561,7 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
     auto& vs = st.voices[v];
     // per server: buses and buffers
     std::map<std::string, float> extra;
+    extra["ltransportbus"]=float(mod.transportBus(server));
     extra["bus"] = vs.bus ? float(vs.bus->index) : 0.0f;
     extra["voice"] = float(v);
     extra["modbus"] = st.modCreated ? float(mod.targetBus(server, 0)) : -1.0f;

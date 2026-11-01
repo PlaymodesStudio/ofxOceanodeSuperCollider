@@ -152,6 +152,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
             if(scSnapshots::applyingSnapshot())return;
             forStates([this](ofxSCServer* sv,ServerState& st){updateSources(sv,st);});toLfo();
         };
+        lfoTransport[li].set(L+"Transport"+X,false);host.regB(lfoTransport[li],toLfo);
         lfoRamp[li].set(L+"Ramp"+X,false);host.regB(lfoRamp[li],toRamp);
         lfoRampEnabled[li].set(L+"Ramp Enabled"+X,true);host.regB(lfoRampEnabled[li],toLfo);
         lfoRampRate[li].set(L+"Ramp Integrate"+X,false);host.regB(lfoRampRate[li],toLfo);
@@ -160,7 +161,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
         lfoRampCurve[li].set(L+"Ramp Curve"+X,0,-8,8);host.regF(lfoRampCurve[li],toLfo);
         lfoRampOffset[li].set(L+"Ramp Offset"+X,0,-32,32);host.regF(lfoRampOffset[li],toLfo);
         lfoRampDuration[li].set(L+"Ramp Duration"+X,1,0.01f,512);host.regF(lfoRampDuration[li],toLfo);
-        lfoRampEnd[li].set(L+"Ramp End"+X,0,0,2);host.regI(lfoRampEnd[li],toLfo);
+        lfoRampEnd[li].set(L+"Ramp End"+X,0,0,3);host.regI(lfoRampEnd[li],toLfo);
         lfoRampBounds[li].set(L+"Ramp Bounds"+X,0,0,2);host.regI(lfoRampBounds[li],toLfo);
         lfoTrigger[li].set(L + "Trigger Mode" + X, 0, 0, 2); host.regI(lfoTrigger[li], toLfo);
         lfoRestartBeats[li].set(L + "Restart Beats" + X, 0, 0, 512); host.regF(lfoRestartBeats[li], toLfo);
@@ -223,6 +224,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
         auto& E = envs[e];
         const std::string L = "Env" + ofToString(e + 1) + " ";
         auto toEnv = [this, e]() { forStates([this, e](ofxSCServer* server, ServerState& st){ sendEnv(server, st, e); }); };
+        E.transport.set(L+"Transport"+nameSuffix,false);host.regB(E.transport,toEnv);
         E.beats.set(L + "Beats" + nameSuffix, false); host.regB(E.beats, toEnv);
         E.a.set(L + "Attack" + nameSuffix, 0.01f, 0.001f, 10.0f);          host.regF(E.a, toEnv);
         E.d.set(L + "Decay" + nameSuffix, 0.5f, 0.001f, 10.0f);            host.regF(E.d, toEnv);
@@ -240,14 +242,14 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
     // the module's own controls: never targets of "Modulate"
     auto own = [this](const ofAbstractParameter& q){ if(!q.getName().empty()) ownKeys.insert(q.getEscapedName()); };
     for(int li = 0; li < MAX_LFOS; li++){
-        for(auto* q : std::initializer_list<ofAbstractParameter*>{&lfoRamp[li],&lfoRampEnabled[li],&lfoRampRate[li],&lfoRampFrom[li],&lfoRampTo[li],&lfoRampCurve[li],&lfoRampOffset[li],&lfoRampDuration[li],&lfoRampEnd[li],&lfoRampBounds[li],&lfoTrigger[li], &lfoRestartBeats[li], &lfoPhasePower[li], &lfoSync[li], &lfoBeats[li], &lfoHz[li], &lfoSH[li],
+        for(auto* q : std::initializer_list<ofAbstractParameter*>{&lfoTransport[li],&lfoRamp[li],&lfoRampEnabled[li],&lfoRampRate[li],&lfoRampFrom[li],&lfoRampTo[li],&lfoRampCurve[li],&lfoRampOffset[li],&lfoRampDuration[li],&lfoRampEnd[li],&lfoRampBounds[li],&lfoTrigger[li], &lfoRestartBeats[li], &lfoPhasePower[li], &lfoSync[li], &lfoBeats[li], &lfoHz[li], &lfoSH[li],
                 &lfoDetune[li], &lfoInit[li], &lfoRound[li], &lfoSkew[li], &lfoPw[li], &lfoCentered[li], &lfoGain[li],
                 &lfoPow[li], &lfoBiPow[li], &lfoNoise[li], &lfoSHGlide[li], &lfoNScale[li], &lfoRegion[li], &lfoSteps[li],
                 &lfoPSpread[li], &lfoPRand[li], &lfoNWaves[li], &lfoNorm[li], &lfoInvert[li], &lfoSym[li], &lfoShuffle[li],
                 &lfoRand[li], &lfoOffset[li], &lfoQuant[li], &lfoComb[li], &lfoModulo[li], &lfoRndType[li], &lfoRndSmooth[li], &lfoRndSame[li]}) own(*q);
         if(unifiedLfoModels){ own(lfoModel[li]); own(lfoManual[li]); }
     }
-    for(auto& E : envs) for(auto* q : std::initializer_list<ofAbstractParameter*>{&E.a, &E.d, &E.s, &E.r, &E.ca, &E.cd, &E.cr, &E.vt, &E.beats}) own(*q);
+    for(auto& E : envs) for(auto* q : std::initializer_list<ofAbstractParameter*>{&E.a, &E.d, &E.s, &E.r, &E.ca, &E.cd, &E.cr, &E.vt, &E.beats, &E.transport}) own(*q);
     for(auto& e : exts) own(e);
     updatePhases();
 }
@@ -333,6 +335,12 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
     if((int)st.lfoSent[li].size() <= c) st.lfoSent[li].resize(c + 1);
     // Cached: a morph frame sends only the controls whose values changed.
     scSynthControlBatch controls(s, server, &st.lfoSent[li][c]);
+    controls.set("transport",followsTransport(li)?1.0f:0.0f);
+    controls.set("transportbus",st.clockBus?float(st.clockBus->index):0.0f);
+    auto cpb=slice(lfoHzFor(li),c);for(auto& x:cpb)x*=60.0f/std::max(1.0f,currentBpm);
+    controls.set("cpb",cpb);
+    auto shcpb=slice(lfoShFor(li),c);for(auto& x:shcpb)x*=60.0f/std::max(1.0f,currentBpm);
+    controls.set("shcpb",shcpb);
     if(lfoRamp[li].get()) {
         controls.set("out",st.srcBlock?st.srcBlock->index+li*busWidth+c*CHUNK:0);
         controls.set("gate",float(st.gateBus+c*CHUNK));
@@ -341,6 +349,7 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
         controls.set("trigmode",float(lfoTrigger[li].get()));
         controls.set("reset",float(resetCounter));
         controls.set("restartsec",lfoRestartSeconds(li));
+        controls.set("reportdone",stopGo && c==0?1.0f:0.0f);
         controls.set("enabled",lfoRampEnabled[li].get()?1.0f:0.0f);
         controls.set("from",lfoRampFrom[li].get());controls.set("to",lfoRampTo[li].get());
         controls.set("curve",lfoRampCurve[li].get());controls.set("offset",lfoRampOffset[li].get());
@@ -421,7 +430,7 @@ void scModulation::sendEnvPart(ofxSCServer* server, ServerState& st, int e, int 
     auto fill = [&](const char* name, float v){ controls.set(name, std::vector<float>(chunkN(c), v)); };
     controls.set("gate", st.gateBus + c * CHUNK);
     controls.set("out", st.srcBlock ? st.srcBlock->index + (SRC_ENV + e) * busWidth + c * CHUNK : 0);
-    const float timeScale=E.beats.get()?60.0f/std::max(1.0f,currentBpm):1.0f;
+    const float timeScale=E.beats.get()?60.0f/std::max(1.0f,E.transport.get()?transportBpm:currentBpm):1.0f;
     fill("atk", E.a.get()*timeScale); fill("dec", E.d.get()*timeScale); fill("sus", E.s.get()); fill("rel", E.r.get()*timeScale);
     fill("cA", E.ca.get()); fill("cD", E.cd.get()); fill("cR", E.cr.get());
     // velocity tracking: the note's velocity (the velocity source, written by the node's gates)
@@ -450,6 +459,14 @@ void scModulation::writeSources(ofxSCServer* server, ServerState& st) {
     batch.send();
 }
 
+void scModulation::bindRampCompletion(ServerState& st,int li) {
+    st.rampDoneListeners[li].reset();
+    if(!stopGo || !isRamp(li) || st.lfo[li].empty())return;
+    st.rampDoneListeners[li]=std::make_unique<ofEventListener>(st.lfo[li][0]->newFeedbackMessage.newListener([this,li](ofxOscMessage& msg){
+        if(msg.getAddress()=="/modRampDone" && li<lfoCount && isRamp(li) && rampEnabled(li) && rampEnding(li)==3 && lfoTriggerMode(li)>0 && stopGo)stopGo();
+    }));
+}
+
 void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
     if(st.builtVoices != n()) return;
     if(!st.created) return;
@@ -461,7 +478,8 @@ void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
         // LFO algorithms share ModLfoX and its clock. Selecting a Ramp
         // changes the source definition; routing IDs stay unchanged.
         const std::string wanted = lfoRamp[li].get()?"ModRamp":"ModLfoX";
-        if(!v.empty() && st.lfoDef[li] != wanted) trim(v, 0);   // legacy engine migration
+        if(!v.empty() && st.lfoDef[li] != wanted) {st.rampDoneListeners[li].reset();trim(v,0);}   // legacy engine migration
+        if(li>=lfoCount)st.rampDoneListeners[li].reset();
         trim(v, li < lfoCount ? chunks() : 0);
         while(li < lfoCount && (int)v.size() < chunks()){
             const int c = (int)v.size();
@@ -471,6 +489,7 @@ void scModulation::updateSources(ofxSCServer* server, ServerState& st) {
             auto* s = new ofxSCSynth(def(wanted, c), server);
             v.push_back(s);
             scStartConfiguredSynth(s, server, 1, st.sourceGroup, [&](){ sendLfoPart(server, st, li, c); });
+            if(c==0)bindRampCompletion(st,li);
         }
     }
     for(int e = 0; e < MAX_ENVS; e++){
@@ -580,11 +599,13 @@ void scModulation::free(ofxSCServer* server, bool sendFree) {
     if(it == states.end()) return;
     auto& st = it->second;
     auto drop = [&](ofxSCSynth*& s){ if(s){ if(sendFree) s->free(); delete s; s = nullptr; } };
+    for(auto& listener:st.rampDoneListeners)listener.reset();
     for(auto& v : st.lfo){ for(auto*& s : v) drop(s); v.clear(); }
     for(auto& v : st.env){ for(auto*& s : v) drop(s); v.clear(); }
     for(auto& [idx, v] : st.routes) for(auto* r : v){ if(sendFree) r->free(); delete r; }
     st.routes.clear();
     auto bus = [&](ofxSCBus*& b){ if(b && liveControlBus(server, b)) b->free(); delete b; b = nullptr; };
+    drop(st.clock);bus(st.clockBus);
     bus(st.srcBlock);
     bus(st.modBlock);
     states.erase(it);
@@ -601,6 +622,7 @@ bool scModulation::adoptServerState(scModulation& source, ofxSCServer* server) {
     free(server);
     states.emplace(server,std::move(it->second));
     source.states.erase(it);
+    for(int li=0;li<MAX_LFOS;++li)bindRampCompletion(states.at(server),li);
     live=source.live;
     lfoPhases=source.lfoPhases;
     for(auto& pt:params) {
@@ -615,6 +637,7 @@ void scModulation::rebuild(ofxSCServer* server) {
     if(it == states.end() || !it->second.created) return;
     auto& st = it->second;
     for(int li = 0; li < MAX_LFOS; li++) lfoIndexers[li].indexCountChanged(n());
+    for(auto& listener:st.rampDoneListeners)listener.reset();
     for(auto& v : st.lfo){ for(auto* s : v) if(s){ s->free(); delete s; } v.clear(); }
     for(auto& v : st.env){ for(auto* s : v) if(s){ s->free(); delete s; } v.clear(); }
     for(auto& [idx, v] : st.routes) for(auto* r : v){ r->free(); delete r; }
@@ -775,7 +798,7 @@ float scModulation::lfoSampleHold(int li) const {
 }
 scModulation::EnvValues scModulation::envValues(int e) const {
     const auto& E = envs[e];
-    const float ts=E.beats.get()?60.0f/std::max(1.0f,currentBpm):1.0f;
+    const float ts=E.beats.get()?60.0f/std::max(1.0f,E.transport.get()?transportBpm:currentBpm):1.0f;
     return {E.a.get()*ts, E.d.get()*ts, E.s.get(), E.r.get()*ts, E.ca.get(), E.cd.get(), E.cr.get()};
 }
 std::vector<float> scModulation::extValues(int k) const {
@@ -823,7 +846,48 @@ void scModulation::updatePhases() {
     }
 }
 
+int scModulation::transportBus(ofxSCServer* server) const {
+    const auto it=states.find(server);return it!=states.end() && it->second.clockBus?it->second.clockBus->index:0;
+}
+float scModulation::lfoCyclesPerBeat(int li,int voice) const {return lfoRate(li,voice)*60.0f/std::max(1.0f,currentBpm);}
+void scModulation::updateTransport() {
+    if(!host.node)return;
+    bool clocks=false,envTempo=false;
+    for(int li=0;li<lfoCount;++li)clocks|=followsTransport(li);
+    for(int e=0;e<envCount;++e)envTempo|=envs[e].beats.get() && envs[e].transport.get();
+    if(!clocks && !envTempo){transportFollower.reset();return;}
+    const auto frame=host.node->getFrameTransportState();
+    if(frame.current.bpm>0 && frame.current.bpm!=transportBpm) {
+        transportBpm=frame.current.bpm;
+        forStates([this](ofxSCServer* sv,ServerState& st){for(int e=0;e<envCount;++e)if(envs[e].transport.get())sendEnv(sv,st,e);});
+        notify();
+    }
+    if(!clocks){transportFollower.reset();return;}
+    forStates([this](ofxSCServer* sv,ServerState& st){
+        if(!st.created)return;
+        if(!st.clock) {
+            st.clockBus=new ofxSCBus(RATE_CONTROL,3,sv);
+            st.clock=new ofxSCSynth("ModTransportClock",sv);
+            scStartConfiguredSynth(st.clock,sv,0,st.sourceGroup,[&](){st.clock->set("out",st.clockBus->index);});
+            transportFollower.requestAnchor();
+            for(int li=0;li<lfoCount;++li)sendLfo(sv,st,li);
+            notify();
+        }
+        if(!st.clock->isCreated())transportFollower.requestAnchor();
+    });
+    for(const auto& a:transportFollower.poll(frame)) {
+        scTransportSync::AnchorScope scope(a);
+        const auto anchor=transportStepClock.make(a.beat,a.discontinuity,a.playing);
+        ++transportAnchorId;if(anchor.hard)++transportAnchorHard;
+        forStates([&](ofxSCServer* sv,ServerState& st){if(st.clock && st.clock->isCreated()) {
+            scSynthControlBatch c(st.clock,sv);c.set("bpm",a.bpm);c.set("run",a.playing?1.0f:0.0f);
+            c.set("anchorPos",float(anchor.pos));c.set("anchorHard",float(transportAnchorHard));c.set("anchorId",float(transportAnchorId));c.send();
+        }});
+    }
+}
+
 void scModulation::update() {
+    updateTransport();
     applyParams();
     const bool forParams = paramsActive() && !liveHook;
     if(!showing && !forParams && !hasLfoOutputs()){ live.clear(); return; }
@@ -985,12 +1049,14 @@ void scModulation::loadState(const ofJson& j, const std::string& prefix, bool ge
     if(generators) loadGeneratorState(j, prefix);
     if(generators) {
     for(int li=0;li<MAX_LFOS;++li) {
+        if(!j.contains(lfoTransport[li].getEscapedName()))lfoTransport[li]=false;
         if(!j.contains(lfoRamp[li].getEscapedName())) lfoRamp[li]=false;
         if(!j.contains(lfoTrigger[li].getEscapedName())) lfoTrigger[li]=0;
         if(!j.contains(lfoRestartBeats[li].getEscapedName())) lfoRestartBeats[li]=0;
         if(!j.contains(lfoPhasePower[li].getEscapedName())) lfoPhasePower[li]=1;
     }
-    for(auto& E:envs) if(!j.contains(E.beats.getEscapedName())) E.beats=false;
+    for(auto& E:envs) {if(!j.contains(E.beats.getEscapedName())) E.beats=false;
+        if(!j.contains(E.transport.getEscapedName())) E.transport=false;}
     }
     auto count = [&](const std::string& k, int& v, int lo, int hi){
         if(j.contains(prefix + k) && j[prefix + k].is_number()) v = std::clamp(j[prefix + k].get<int>(), lo, hi);
@@ -1514,7 +1580,8 @@ void scModulation::drawEnvCard(int e, float w) {
         ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + h + ImGui::GetStyle().ItemSpacing.y));
         ImGui::Dummy(ImVec2(w, 0));
     }
-    toggle(E.beats,"Beats");
+    toggle(E.beats,"Beats");ImGui::SameLine();toggle(E.transport,"Transport");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Use global transport tempo for beat durations. Gate still triggers this envelope.");
     const char* timeFormat=E.beats.get()?"%.3f b":"%.3f s";
     slider(E.a, "Attack", w, timeFormat, true);
     slider(E.d, "Decay", w, timeFormat, true);
@@ -1626,7 +1693,8 @@ void scModulation::drawRampCard(int li,float w) {
         ImGui::EndPopup();
     }
     ImGui::Text("Output %.3f",liveValue(li,0));
-    toggle(lfoSync[li],"Beats");
+    toggle(lfoSync[li],"Beats");ImGui::SameLine();toggle(lfoTransport[li],"Transport");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("With Beats enabled: follow transport position, play/stop, seeks and loops.\nGate / Go starts at the next cycle boundary; Free running stays on the global grid.");
     slider(lfoRampDuration[li],"Time",w,lfoSync[li].get()?"%.3f b":"%.3f s",true);
     toggle(lfoRampRate[li],"Integrate rate");
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Off: ramp directly from From to To.\nOn: integrate From/To rates, in spans per cycle; useful for scan acceleration and tape braking.");
@@ -1643,7 +1711,8 @@ void scModulation::drawRampCard(int li,float w) {
         if(ImGui::Combo(label,&v,choices,count))p=v;
         if(host.publishMenu)host.publishMenu(p.getEscapedName());
     };
-    const char* endings[]={"Hold end","Loop","Continue end rate"};choice(lfoRampEnd[li],"After Time",endings,3);
+    const char* endings[]={"Hold end","Loop","Continue end rate","Stop GO"};choice(lfoRampEnd[li],"After Time",endings,stopGo?4:3);
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Stop GO: release the host's latched Go when this gated Ramp finishes.\nThe first voice is the completion clock; Free running does not stop Go.\nExternally connected gates remain under their input control.");
     const char* bounds[]={"Unbounded","Clamp 0..1","Wrap 0..1"};choice(lfoRampBounds[li],"Output",bounds,3);
     const char* triggers[]={"Free running","Gate / Go"};int trigger=lfoTrigger[li].get()>0?1:0;
     ImGui::SetNextItemWidth(w);if(ImGui::Combo("Trigger",&trigger,triggers,2))lfoTrigger[li]=trigger?2:0;
@@ -1766,7 +1835,11 @@ void scModulation::drawLfoCard(int li, float w) {
     const bool region = grainExtras && lfoRegion[li].get();
     const bool random = effectiveRandom(li) > 0;
     bool sameLine = false;   // the toggles share a row; the rate slider goes below them
-    if(!region){ toggle(lfoSync[li], "Sync"); sameLine = true; }
+    if(!region){
+        toggle(lfoTransport[li],"Transport");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("With Sync enabled: lock every generator to transport beats, including Random steps.\nStop holds the position; seeks and loops follow the transport. Gate modes start on the next cycle boundary.");
+        toggle(lfoSync[li], "Sync");sameLine = true;
+    }
     if(!random && !unifiedLfoModels){
         if(sameLine) ImGui::SameLine();
         toggle(lfoNoise[li], "Noise");
@@ -1847,9 +1920,9 @@ void scModulation::drawLfoCard(int li, float w) {
     sliderVec(lfoPow[li], "Pow", half, "%+.2f");
     sliderVec(lfoBiPow[li], "BiPow", half, "%+.2f");
     sliderVec(lfoSH[li], "S&H", half, "%.2f");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip(lfoSync[li].get()?"Sample & hold: steps per beat":"Sample & hold: steps per second");
     sliderInt(lfoSteps[li], "Steps", half);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Quantize the shape to this many levels (0: smooth)");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip(lfoSync[li].get() ? "Sample & hold: steps per beat" : "Sample & hold: steps per second");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Quantize to this many levels, including both endpoints (0: smooth).\nFor an 8-beat Pos span: 9 levels = destinations 0, 1, ... 8 beats.\nThe LFO Beats control sets WHEN jumps happen; Steps sets WHERE.");
     slider(lfoSHGlide[li], "Glide", half, "%.3f s", true);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("S&H glide: each held value slides to the next over this time (0: steps)");
     if(!effectiveNoise(li) && !random) toggle(lfoCentered[li], "Centered");
@@ -1884,6 +1957,9 @@ void scModulation::drawLfoCard(int li, float w) {
 
 void scModulation::drawLfos(float w) {
     const float z = zoom();
+    if(ImGui::Button("Reset LFOs / Ramps"))resetLfos();
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Restart local and gate-triggered sources.\nTransport-linked free-running sources stay on the global grid; reset the transport to restart that timeline.");
+    ImGui::Spacing();
     const float cw = colW(w, 4);
     float prevBottom = 0.0f;
     for(int li = 0; li < lfoCount; li++){
@@ -2127,12 +2203,15 @@ void scModulation::loadMorph(const ofJson& a,const ofJson& b,float t,bool switch
         p=discrete?(switched?y:x):x+(y-x)*t;
     };
     for(int li=0;li<MAX_LFOS;++li){
+        blend(lfoTransport[li],0,true);
         const auto rampKey=lfoRamp[li].getEscapedName();
         if(!blocked || !blocked(rampKey))lfoRamp[li]=scalar(switched?b:a,rampKey,0)>0.5f;
         blend(lfoTrigger[li],0,true);blend(lfoRestartBeats[li],0,false);blend(lfoPhasePower[li],1,false);}
     for(auto& E:envs){
         const auto key=E.beats.getEscapedName();
         if(!blocked || !blocked(key)) E.beats=scalar(switched?b:a,key,0)>0.5f;
+        const auto tk=E.transport.getEscapedName();
+        if(!blocked || !blocked(tk))E.transport=scalar(switched?b:a,tk,0)>0.5f;
     }
     auto x = a, y = b;
     for(auto* state : {&x, &y}){

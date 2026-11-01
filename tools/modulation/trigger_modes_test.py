@@ -72,17 +72,19 @@ a=source.index('scModulation::EnvValues scModulation::envValues');b=source.index
 method=source[a:b]
 cpp=r'''
 #include <algorithm>
+#include <cmath>
 #include <cassert>
 template<class T>struct P{T v;T get()const{return v;}};
 struct scModulation {
  struct EnvValues{float a,d,s,r,ca,cd,cr;};
- struct E{P<float>a{1},d{2},s{0.5},r{3},ca{0},cd{0},cr{0};P<bool>beats{false};}envs[1];
- float currentBpm=120;EnvValues envValues(int)const;
+ struct E{P<float>a{1},d{2},s{0.5},r{3},ca{0},cd{0},cr{0};P<bool>beats{false},transport{false};}envs[1];
+ float currentBpm=120,transportBpm=90;EnvValues envValues(int)const;
 };
 METHOD
 int main(){scModulation m;assert(m.envValues(0).a==1);m.envs[0].beats.v=true;
  assert(m.envValues(0).a==0.5 && m.envValues(0).d==1 && m.envValues(0).r==1.5);
  m.currentBpm=60;assert(m.envValues(0).a==1 && m.envValues(0).r==3);
+ m.envs[0].transport.v=true;assert(std::abs(m.envValues(0).a-2.f/3)<.0001);
 }
 '''.replace('METHOD',method)
 (work/'env.cpp').write_text(cpp)

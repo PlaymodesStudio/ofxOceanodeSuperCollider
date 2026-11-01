@@ -71,7 +71,10 @@ Ramps and LFOs share eight source slots, preserving existing route IDs. Route
 **Ramp N** to Pos or any other target in Routing. The GrainBox editor calls
 this tab **Modulators**. Gate / Go starts each voice independently; seconds
 or Beats set the duration. After Time can hold, loop, or continue the final
-slope. Bounds can clamp or wrap the output, or leave it unbounded.
+slope. GrainFxBox also offers **Stop GO**, which releases the Go latch when
+that gated Ramp's first voice completes. Completion comes from the server,
+including when the editor is closed; externally connected gates keep input
+control. Disabled or free-running Ramps do not release Go. Bounds can clamp or wrap the output, or leave it unbounded.
 
 From / To set values; **Integrate rate** instead integrates those rates in
 spans per cycle, which supports acceleration and tape braking. Curve shapes
@@ -90,3 +93,36 @@ other routes; a save using all eight slots needs a slot freed for conversion.
 
 Run `python3 tools/grainfxbox/routing_test.py` for migration, easing/preview
 agreement, Reaktor reference trajectories and rendered tape/stutter checks.
+
+Run `python3 tools/modulation/ramp_stop_go_test.py` for server completion timing
+and the host's Stop GO feedback handler. `python3 tools/synthdef_sync/replaced_source_test.py`
+checks retirement of the obsolete BeatRepeatPro bootstrap source and builds,
+including repeat-sync stability and preservation of backups and user sources.
+
+## Transport linking
+
+Every shared box editor offers an optional **Transport** switch per LFO or
+Ramp. Enable **Sync / Beats** as well. The module uses the common anchored
+transport clock, including playing/stopped state, seeks, loop points and tempo
+changes. Classic, Noise, Random and sample/hold use this clock; AdditiveBox's
+partial lanes share it too. Free-running linked generators stay on the global
+grid even when created halfway through a beat. Gate / Go modes wait for the
+next cycle boundary, then start their full progression. Start/seek/loop
+anchors restart gated progressions. Random draws follow cycle indices, so
+revisiting a transport position revisits the same random sequence.
+
+**Reset LFOs / Ramps** restarts local/gated sources. Reset the global transport
+to restart linked free-running sources. Envelopes keep their note Gate;
+**Beats + Transport** uses the global tempo for their stage durations,
+including host amplitude-envelope copies. All Transport flags default off
+when loading earlier sounds.
+
+Jump timing and destination spacing are separate: **Random Stepped, Beats 1**
+draws once per beat. **Pos span 8 beats, amount 1, Steps 9** selects destinations
+0..8 beats (nine levels include both endpoints). The region can stay in ms;
+it must cover the selected beat span at the current tempo. A smaller region
+clips destinations at its edge. Use zero random smoothing/glide for abrupt
+jumps, or the delay line's Jump crossfade for click-free transitions.
+
+`python3 tools/modulation/transport_test.py` renders late joining generators,
+play/stop, seek, tempo changes, unlinked compatibility and RANDOMPOS spacing.

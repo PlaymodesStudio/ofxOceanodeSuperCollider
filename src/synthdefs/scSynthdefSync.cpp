@@ -134,6 +134,36 @@ void replaceFile(const fs::path& from, const fs::path& to, bool executable){
     fs::permissions(to, executable ? fs::perms(0755) : fs::perms(0644));
 }
 
+// Shipped source relocations that can survive bootstrap installs made before
+// the sync ledger existed. Retire the old source AND its builds together;
+// otherwise it rebuilds missing mono/stereo files and displaces Defaults again.
+int retireReplacedSources(const fs::path& sources,const fs::path& synthdefs,const fs::path& retiredRoot) {
+    const fs::path oldSource="Effect/Time/Looping/BeatRepeatPro.scd";
+    if(!fs::is_regular_file(sources/"Defaults/BeatRepeatPro/BeatRepeatPro.scd"))return 0;
+    int moved=0;
+    for(const auto& pair : {std::make_pair(sources/oldSource,retiredRoot/"SynthdefSources"/oldSource),
+                           std::make_pair(synthdefs/"Effect/Time/Looping/BeatRepeatPro",retiredRoot/"Effect/Time/Looping/BeatRepeatPro")}) {
+        if(!fs::exists(pair.first))continue;
+        fs::create_directories(pair.second.parent_path());
+        if(fs::is_directory(pair.first) && fs::is_directory(pair.second)) {
+            // A later bootstrap may restore only some legacy builds. Merge
+            // those into the backup without dropping previously retired files.
+            for(const auto& entry : fs::recursive_directory_iterator(pair.first))if(entry.is_regular_file()) {
+                const auto dest=pair.second/fs::relative(entry.path(),pair.first);
+                fs::create_directories(dest.parent_path());
+                fs::remove(dest);
+                fs::rename(entry.path(),dest);
+            }
+            fs::remove_all(pair.first);
+        } else {
+            fs::remove_all(pair.second);
+            fs::rename(pair.first,pair.second);
+        }
+        ++moved;
+    }
+    return moved;
+}
+
 struct RemoteFile {
     std::string path;       // in the repository
     std::string sha;        // git blob id
@@ -577,6 +607,13 @@ private:
             return;
         }
         writeClassLibraryConfig();
+        if(retireReplacedSources(sources,synthdefs,retiredRoot)) {
+            // Bootstrap apps may lack compiled ledger entries too. Rebuild
+            // the replacement once so its mono/stereo outputs are restored.
+            rewritten.insert((sources/"Defaults/BeatRepeatPro/BeatRepeatPro.scd").lexically_normal().string());
+            note("Obsolete generic BeatRepeatPro source and builds moved to _retired_synthdefs; Defaults owns the engine now");
+            edit([](scSynthdefSync::Report& r){r.synthdefsChanged=true;});
+        }
 
         const std::regex creator("~synthCreator\\s*\\.\\s*(?:value\\s*)?\\(");
         const std::regex creatorName("~synthCreator\\s*\\.\\s*(?:value\\s*)?\\(\\s*\"([^\"]+)\"\\s*,");
@@ -620,7 +657,7 @@ private:
             fs::remove(target, ignored);
             fs::rename(path, target, ignored);
         }
-        if(!retiredSources.empty()) note(ofToString(retiredSources.size()) + " sources of retired synths moved to _retired_synthdefs/SynthdefSources");
+        if(!retiredSources.empty()) note(ofToString(retiredSources.size()) + " obsolete sources moved to _retired_synthdefs/SynthdefSources");
 
         if(!state.contains("compiled") || !state["compiled"].is_object()) state["compiled"] = ofJson::object();
         ofJson& compiled = state["compiled"];
