@@ -494,6 +494,7 @@ void scGrainBoxPoly::setup() {
     nodeListeners.push(wetModeP.newListener([this](int&) {
         sendMixParams();
         for(auto& [srv, d] : drySynths) setDryArgs(srv);
+        for(auto& q : playheads) for(auto& [srv, s] : q->synths) if(s) setPositionModArgs(*q, s, srv);   // Freeze
     }));
     nodeListeners.push(speedP.newListener([this](float&)     { sendMixParams(); }));
     // Time units: convert the stored values (no jump), or, while a preset is
@@ -2737,14 +2738,16 @@ void scGrainBoxPoly::setFilterArgs(Playhead& ph, ofxSCSynth* s) {
     s->set("filterq",    ph.filterQ.get());
 }
 
-// Wet Mode Gated: both at unity (the dry synth mutes the dry while the gate is up)
+// Effect On Gate: the dry at unity while the gate is down; while it is up
+// the dry synth ducks it to Dry/Wet's dry level (\dryup) and the engines
+// (through their Amp Envelope) play at its wet level
 float scGrainBoxPoly::dryGain() const {
     if(!fxMode) return 0.0f;
     if(wetGated()) return 1.0f;
     return std::cos(std::max(0.0f, std::min(1.0f, dryWetP.get())) * (float)HALF_PI);
 }
 float scGrainBoxPoly::wetGain() const {
-    if(!fxMode || wetGated()) return 1.0f;
+    if(!fxMode) return 1.0f;
     return std::sin(std::max(0.0f, std::min(1.0f, dryWetP.get())) * (float)HALF_PI);
 }
 
@@ -2756,6 +2759,7 @@ void scGrainBoxPoly::setDryArgs(ofxSCServer* srv) {
     it->second->set("in",  in != inputBuses.end() ? in->second : 0);
     it->second->set("dry", in != inputBuses.end() ? dryGain() : 0.0f);
     it->second->set("gated", wetGated() ? 1.0f : 0.0f);
+    it->second->set("dryup", std::cos(std::max(0.0f, std::min(1.0f, dryWetP.get())) * (float)HALF_PI));
     auto m = ph0().modSC.find(srv);
     it->second->set("gatebus", m != ph0().modSC.end() && m->second.gateBus ? (float)m->second.gateBus->index : -1.0f);
 }
@@ -4839,48 +4843,67 @@ void scGrainBoxPoly::drawHeader(Playhead& ph, float w) {
         ImGui::SameLine(0, 12.0f * zoom);
         {
             const std::string key = wetModeP.getEscapedName();
-            label("Wet", key);
+            label("Effect", key);
             int wm = wetModeP.get();
-            const char* wms[] = {"Blend", "Gated"};
-            ImGui::SetNextItemWidth(78.0f * zoom);
+            const char* wms[] = {"Always on", "On Gate"};
+            ImGui::SetNextItemWidth(90.0f * zoom);
             if(ImGui::Combo("##gbpWetMode", &wm, wms, 2)) wetModeP.set(wm);
             if(ImGui::IsItemHovered())
-                ImGui::SetTooltip("Blend: the input and the engines mixed by Dry/Wet.\n"
-                                  "Gated: only the input until Gate goes up; while it is up the\n"
-                                  "engines replace it (Drone off: they play through their Amp\n"
-                                  "Envelope). Route a Ramp to Pos for tape stops, rewinds or stutters.");
+                ImGui::SetTooltip("Always on: the input and the engines mixed by Dry/Wet; Ramps run continuously.\n"
+                                  "On Gate: only the input until the Gate (FX button) goes up. While it is up the\n"
+                                  "engines fade in through their Amp Envelope, mixed by Dry/Wet, and the Ramps start.");
             drawNodePublishContextMenu(key);
         }
-        if(!wetGated()) {
-            ImGui::SameLine(0, 6.0f * zoom);
+        ImGui::SameLine(0, 6.0f * zoom);
+        {
             const std::string key = dryWetP.getEscapedName();
             label("Dry/Wet", key);
             float v = dryWetP.get();
             ImGui::SetNextItemWidth(100.0f * zoom);
             if(gbpSliderFloat("##gbpDryWet", &v, 0.0f, 1.0f, "%.2f")) dryWetP.set(v);
+            if(ImGui::IsItemHovered() && !ImGui::IsItemActive() && wetGated())
+                ImGui::SetTooltip("The mix while the effect is on (1: the effect replaces the input)");
             drawNodePublishContextMenu(key);
         }
-        // Gate: held while the mouse is down (engine 1's; the others follow)
-        ImGui::SameLine(0, 12.0f * zoom);
-        Playhead& g0 = ph0();
-        const bool up = !g0.gate.get().empty() && g0.gate.get()[0] > 0.0f;
-        if(up) ImGui::PushStyleColor(ImGuiCol_Button, gbpAccent(0, 200, 0.9f));
-        ImGui::Button("Gate##gbpHdrGate", ImVec2(52.0f * zoom, 0));
-        if(up) ImGui::PopStyleColor();
-        if(!hasInputConnection(g0.gate.getName())) {
-            if(ImGui::IsItemActivated()) g0.gate.set(vector<float>{1.0f});
-            if(ImGui::IsItemDeactivated()) g0.gate.set(vector<float>{0.0f});
+        if(wetGated()) {
+            // FX: engine 1's Gate (every engine follows it unless its own Gate is
+            // published). A click latches it on / off; held longer than 250 ms it
+            // is momentary (off on release).
+            ImGui::SameLine(0, 12.0f * zoom);
+            Playhead& g0 = ph0();
+            const bool up = !g0.gate.get().empty() && g0.gate.get()[0] > 0.0f;
+            const bool cabled = hasInputConnection(g0.gate.getName());
+            if(up) ImGui::PushStyleColor(ImGuiCol_Button, gbpAccent(0, 200, 0.9f));
+            ImGui::BeginDisabled(cabled);
+            ImGui::Button("FX##gbpHdrGate", ImVec2(52.0f * zoom, 0));
+            ImGui::EndDisabled();
+            if(up) ImGui::PopStyleColor();
+            if(!cabled) {
+                if(ImGui::IsItemActivated()) {
+                    fxPressTime = ofGetElapsedTimef();
+                    fxPressTurnedOn = !up;
+                    g0.gate.set(vector<float>{up ? 0.0f : 1.0f});
+                }
+                if(ImGui::IsItemDeactivated() && fxPressTurnedOn && ofGetElapsedTimef() - fxPressTime > 0.25f)
+                    g0.gate.set(vector<float>{0.0f});
+            }
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip(cabled ? "The Gate input drives the effect"
+                                         : "Click: effect on / off. Hold: on while held.\n"
+                                           "A Ramp ending on End effect switches it off when it finishes.");
+            if(ph.liveInput) {
+                ImGui::SameLine(0, 6.0f * zoom);
+                bool freeze = ph.freezeOnGate.get();
+                if(ImGui::Checkbox("Freeze##gbpHdrFreeze", &freeze)) ph.freezeOnGate = freeze;
+                if(ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Engine %d: stop recording while the effect is on, so it plays\n"
+                                      "the captured audio (route a Ramp to Pos to scan or loop it)", ph.index + 1);
+                drawNodePublishContextMenu(ph.freezeOnGate.getEscapedName());
+            }
         }
-        if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("Hold: Gate up (engine 1's Gate, which every engine follows\n"
-                              "unless its own Gate is published). Gate triggers envelopes and Ramps.");
-        ImGui::SameLine(0, 4.0f * zoom);
-        if(ImGui::Button(up ? "Stop##gbpGo" : "Go##gbpGo", ImVec2(52.0f * zoom, 0)) && !hasInputConnection(g0.gate.getName()))
-            g0.gate.set(vector<float>{up ? 0.0f : 1.0f});
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Click Go to run the selected effect; Stop returns to the input in Wet Mode Gated.\nGate can also be held or driven from the node. Select a Stretch factory preset to start.");
     }
-    ImGui::SameLine(0, 12.0f * zoom);
-    {
+    if(!fxMode) {   // GrainFxBox: the Effect mode decides (ampGated)
+        ImGui::SameLine(0, 12.0f * zoom);
         bool drone = ph.drone.get();
         ImGui::PushStyleColor(ImGuiCol_Text, gbpAccent(ph.index, 255));
         if(ImGui::Checkbox(("Drone##gbpHdrDrone" + ofToString(ph.index)).c_str(), &drone)) ph.drone.set(drone);
@@ -5431,12 +5454,15 @@ void scGrainBoxPoly::drawPlayheadHeader(Playhead& ph, float /*w*/) {
     toggleBtn("S##phSolo", ph.solo, gbpAccent(ph.index, 200, 0.9f), "Solo: only soloed engines sound");
 
     if(ph.liveInput) {
-        bool freeze=ph.freezeOnGate.get();
-        if(ImGui::Checkbox("Freeze on Gate",&freeze))ph.freezeOnGate=freeze;
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("Pause recording while Gate/Go is active. Route a Ramp to Pos to scan or loop the captured audio.");
-        drawNodePublishContextMenu(ph.freezeOnGate.getEscapedName());
+        if(!fxMode) {   // GrainFxBox: next to the FX button (header)
+            bool freeze=ph.freezeOnGate.get();
+            if(ImGui::Checkbox("Freeze on Gate",&freeze))ph.freezeOnGate=freeze;
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Pause recording while Gate is active. Route a Ramp to Pos to scan or loop the captured audio.");
+            drawNodePublishContextMenu(ph.freezeOnGate.getEscapedName());
+            if(!ph.grainless.get())ImGui::SameLine();
+        }
         if(!ph.grainless.get()) {
-            ImGui::SameLine();bool follow=ph.followScanPitch.get();
+            bool follow=ph.followScanPitch.get();
             if(ImGui::Checkbox("Follow scan pitch",&follow))ph.followScanPitch=follow;
             if(ImGui::IsItemHovered())ImGui::SetTooltip("Grain rate and direction follow movement of Pos, like tape. Off preserves independent grain Pitch.");
             drawNodePublishContextMenu(ph.followScanPitch.getEscapedName());
@@ -7054,11 +7080,15 @@ bool scGrainBoxPoly::getTimelineInstrument(ofxOceanodeTimelineInstrument& out) {
 #endif
 
 // The Amp Envelope controls note playback unless Drone is enabled.
+// GrainFxBox: no Drone of its own; Effect On Gate plays the engines through
+// their Amp Envelope (the effect fades in / out), Always on drones
 bool scGrainBoxPoly::ampGated(const Playhead& ph) const {
+    if(fxMode) return wetGated();
     return !ph.drone.get();
 }
 // 1 gated, 0 droning; fractional while a snapshot morph crossfades the two
 float scGrainBoxPoly::ampGatedAmount(const Playhead& ph) const {
+    if(fxMode) return wetGated() ? 1.0f : 0.0f;
     return 1.0f - snaps.morph.activation(ph.drone);
 }
 
@@ -7235,7 +7265,8 @@ float scGrainBoxPoly::positionModScale(const Playhead& ph) const {
 void scGrainBoxPoly::setPositionModArgs(Playhead& ph,ofxSCSynth* s,ofxSCServer* srv) {
     if(!s)return;
     scSynthControlBatch c(s,srv);c.set("posmodscale",positionModScale(ph));
-    c.set("freezegate",ph.freezeOnGate.get()?1.0f:0.0f);
+    // GrainFxBox: the Gate is the effect switch, so Freeze only with Effect On Gate
+    c.set("freezegate",ph.freezeOnGate.get() && (!fxMode || wetGated())?1.0f:0.0f);
     c.set("scanpitch",ph.followScanPitch.get()?1.0f:0.0f);
     auto it=ph.modSC.find(srv);
     c.set("gatebus",it!=ph.modSC.end() && it->second.gateBus?float(it->second.gateBus->index):-1.0f);
@@ -7264,6 +7295,7 @@ void scGrainBoxPoly::writeAmp(Playhead& ph, ofxSCServer* srv) {
 void scGrainBoxPoly::updateModulation(Playhead& ph) {
     auto& m = *ph.mod;
     m.setBpm(effectiveBpm());
+    if(fxMode) m.setRampTrigger(wetGated() ? 2 : 0);   // Ramps start with the effect
     if(ph.modVoices != phVoices(ph)) { ph.modVoices = phVoices(ph); m.voicesChanged(); ph.modDirty = true; }
     const float gated = ampGatedAmount(ph);
     if(gated != ph.ampGatedSent) {
@@ -7399,7 +7431,7 @@ void scGrainBoxPoly::drawModRow(Playhead& ph, float w, float /*h*/) {
             ph.positionModSpan=unit==0?seconds/posScaleSec(ph):unit==1?seconds*1000.0f:seconds*std::max(1.0f,effectiveBpm())/60.0f;
         }
         drawNodePublishContextMenu(ph.positionModUnit.getEscapedName());
-        ImGui::TextDisabled("LFO/Env -> Pos: amount 1 sweeps this span. Go triggers sources in Gate mode.");
+        ImGui::TextDisabled(fxMode ? "LFO/Env -> Pos: amount 1 sweeps this span. Ramps start when the effect turns on." : "LFO/Env -> Pos: amount 1 sweeps this span. Gate triggers sources in Gate mode.");
         ImGui::Spacing();
     }
     switch(modTab) {
@@ -7407,7 +7439,7 @@ void scGrainBoxPoly::drawModRow(Playhead& ph, float w, float /*h*/) {
             // the lead card: the Gate, its mode, the Amp Envelope it opens
             m.drawEnvelopes(w, [this, &ph, zoom](float cw) {
                 gbpSectionHeader("Amp Envelope", cw, zoom);
-                {
+                if(!fxMode) {   // GrainFxBox: the Effect mode decides
                     bool enabled = ph.drone.get();
                     if(ImGui::Checkbox("Drone", &enabled)) ph.drone.set(enabled);
                     if(ImGui::IsItemHovered())
@@ -7464,7 +7496,10 @@ void scGrainBoxPoly::drawModRow(Playhead& ph, float w, float /*h*/) {
                     ph.gate.set(vector<float>{v});
                 drawNodePublishContextMenu(key);
                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw);
-                ImGui::TextDisabled(ampGated(ph)
+                ImGui::TextDisabled(fxMode ? (ampGated(ph)
+                    ? "Effect On Gate: the engine fades in and out through this envelope as the effect turns on and off."
+                    : "Effect Always on: the engine plays continuously. Set Effect to On Gate to fade it with this envelope.")
+                  : ampGated(ph)
                     ? "Each playhead plays through its Amp Envelope: the Gate's level is its velocity; "
                       "a release fades the grains already sounding."
                     : "Droning: the playheads play continuously. Disable Drone to play notes with Gate.");

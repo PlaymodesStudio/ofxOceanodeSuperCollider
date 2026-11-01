@@ -69,12 +69,18 @@ already running with older definitions.
 **+ Add Ramp** adds a Ramp to any box using the shared modulation editor.
 Ramps and LFOs share eight source slots, preserving existing route IDs. Route
 **Ramp N** to Pos or any other target in Routing. The GrainBox editor calls
-this tab **Modulators**. Gate / Go starts each voice independently; seconds
+this tab **Modulators**. Gate starts each voice independently; seconds
 or Beats set the duration. After Time can hold, loop, or continue the final
-slope. GrainFxBox also offers **Stop GO**, which releases the Go latch when
-that gated Ramp's first voice completes. Completion comes from the server,
-including when the editor is closed; externally connected gates keep input
-control. Disabled or free-running Ramps do not release Go. Bounds can clamp or wrap the output, or leave it unbounded.
+slope. Curve, BiPow, Offset, Output bounds and Transport sit under **More**
+(marked `*` when any is in use); bounds can clamp or wrap the output, or
+leave it unbounded.
+
+GrainFxBox fixes every Ramp's trigger to its **Effect** mode (Trigger and
+Restart are hidden): **On Gate** starts Ramps when the FX button / Gate turns
+the effect on, **Always on** runs them freely. It also offers **End effect**,
+which switches the effect off (releases the latched Gate) when that gated
+Ramp's first voice completes. Completion comes from the server, including
+when the editor is closed; externally connected gates keep input control.
 
 From / To set values; **Integrate rate** instead integrates those rates in
 spans per cycle, which supports acceleration and tape braking. Curve shapes

@@ -451,6 +451,8 @@ private:
     // Wet Mode (GrainFxBox): 0 Blend (Dry/Wet), 1 Gated: the wet replaces the
     // dry while engine 1's Gate is up (the engines play through their Amp Envelope)
     ofParameter<int>   wetModeP;
+    float fxPressTime = 0;          // header FX button: press time (hold = momentary)
+    bool  fxPressTurnedOn = false;  // that press switched the effect on
     bool wetGated() const { return fxMode && wetModeP.get() == 1; }
     void setDryArgs(ofxSCServer* srv);
     std::map<ofxSCServer*, ofxSCSynth*> drySynths;   // GrainBoxPolyDry_N, after engine 1

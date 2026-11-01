@@ -130,6 +130,10 @@ public:
     std::function<void()> changed;
     // Hosts with a latched Go action may release it at a Ramp's audio-clock end.
     std::function<void()> stopGo;
+    // Hosts whose Gate switches the effect (GrainFxBox): every Ramp's trigger
+    // is fixed to this (2 = Gate / Go, 0 = free running) and the Ramp card
+    // hides Trigger / Restart. -1: each Ramp's own setting.
+    void setRampTrigger(int mode);
     // perVoiceLfo: each voice its own LFO phase (the indexer); false: one LFO for all
     void setup(Host host, std::vector<Target> targets, bool perVoiceLfo, bool hasVelocity, bool hasRandom);
 
@@ -363,6 +367,8 @@ private:
     float rampValue(int li,float phase) const;
     void drawRampCard(int li,float w);
     std::array<ofParameter<int>, MAX_LFOS> lfoRndType, lfoModel, lfoTrigger,lfoSeed;
+    int rampTriggerFixed=-1;                     // setRampTrigger
+    std::array<bool,MAX_LFOS> rampMore{};          // Ramp card: More section open (UI only)
     std::array<float,MAX_LFOS> freshSeeds{};
     std::array<ofParameter<float>, MAX_LFOS> lfoRestartBeats, lfoPhasePower;
     std::array<ofParameter<float>, MAX_LFOS> lfoManual;

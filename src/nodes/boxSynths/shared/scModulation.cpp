@@ -1692,6 +1692,13 @@ void scModulation::drawEnvelopeCards(float w, const std::vector<std::function<vo
 // LFOs
 // ════════════════════════════════════════════════════════════════════════════
 
+void scModulation::setRampTrigger(int mode) {
+    rampTriggerFixed=mode;
+    if(mode<0)return;
+    for(int li=0;li<MAX_LFOS;++li)
+        if(lfoRamp[li].get() && lfoTrigger[li].get()!=mode)lfoTrigger[li]=mode;
+}
+
 void scModulation::drawRampCard(int li,float w) {
     const float z=zoom();
     ImGui::PushID(li+200);ImGui::BeginGroup();
@@ -1715,32 +1722,42 @@ void scModulation::drawRampCard(int li,float w) {
         ImGui::EndPopup();
     }
     ImGui::Text("Output %.3f",liveValue(li,0));
-    toggle(lfoSync[li],"Beats");ImGui::SameLine();toggle(lfoTransport[li],"Transport");
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("With Beats enabled: follow transport position, play/stop, seeks and loops.\nGate / Go starts at the next cycle boundary; Free running stays on the global grid.");
+    toggle(lfoSync[li],"Beats");
     slider(lfoRampDuration[li],"Time",w,lfoSync[li].get()?"%.3f b":"%.3f s",true);
     toggle(lfoRampRate[li],"Integrate rate");
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Off: ramp directly from From to To.\nOn: integrate From/To rates, in spans per cycle; useful for scan acceleration and tape braking.");
     slider(lfoRampFrom[li],lfoRampRate[li].get()?"Rate from":"From",w,"%.3f");
     slider(lfoRampTo[li],lfoRampRate[li].get()?"Rate to":"To",w,"%.3f");
-    slider(lfoRampCurve[li],"Curve",w,"%.2f");
     sliderVec(lfoPow[li],"Pow",w,"%+.2f");
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Ease the progression in time. Zero is linear; positive starts faster, negative starts slower.\nIn rate mode this also changes the instantaneous speed.");
-    sliderVec(lfoBiPow[li],"BiPow",w,"%+.2f");
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("Bend both halves of the progression around its midpoint.\nCombine with Pow for ease-in / ease-out; zero leaves timing unchanged.");
-    slider(lfoRampOffset[li],"Offset",w,"%.3f");
     auto choice=[&](ofParameter<int>& p,const char* label,const char* const* choices,int count){
         ImGui::TextUnformatted(label);ImGui::SetNextItemWidth(w);int v=p.get();
         if(ImGui::Combo((std::string("##")+label).c_str(),&v,choices,count))p=v;
         if(host.publishMenu)host.publishMenu(p.getEscapedName());
     };
-    const char* endings[]={"Hold end","Loop","Continue end rate","Stop GO"};choice(lfoRampEnd[li],"After Time",endings,stopGo?4:3);
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("Stop GO: release the host's latched Go when this gated Ramp finishes.\nThe first voice is the completion clock; Free running does not stop Go.\nExternally connected gates remain under their input control.");
-    const char* bounds[]={"Unbounded","Clamp 0..1","Wrap 0..1"};choice(lfoRampBounds[li],"Output",bounds,3);
-    const char* triggers[]={"Free running","Gate / Go"};int trigger=lfoTrigger[li].get()>0?1:0;
-    ImGui::TextUnformatted("Trigger");ImGui::SetNextItemWidth(w);if(ImGui::Combo("##trigger",&trigger,triggers,2))lfoTrigger[li]=trigger?2:0;
-    if(host.publishMenu)host.publishMenu(lfoTrigger[li].getEscapedName());
-    slider(lfoRestartBeats[li],"Restart",w,"%.3f b");
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("0: no extra reset. Otherwise restart every N beats after Gate/Go.");
+    const char* endings[]={"Hold end","Loop","Continue end rate","End effect"};choice(lfoRampEnd[li],"After Time",endings,stopGo?4:3);
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("End effect: switch the effect off (release the latched Gate) when this\ngated Ramp finishes. The first voice is the completion clock.\nExternally connected gates remain under their input control.");
+    if(rampTriggerFixed<0) {
+        const char* triggers[]={"Free running","Gate"};int trigger=lfoTrigger[li].get()>0?1:0;
+        ImGui::TextUnformatted("Trigger");ImGui::SetNextItemWidth(w);if(ImGui::Combo("##trigger",&trigger,triggers,2))lfoTrigger[li]=trigger?2:0;
+        if(host.publishMenu)host.publishMenu(lfoTrigger[li].getEscapedName());
+        slider(lfoRestartBeats[li],"Restart",w,"%.3f b");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("0: no extra reset. Otherwise restart every N beats after Gate.");
+    } else ImGui::TextDisabled(rampTriggerFixed>0?"Starts when the effect turns on":"Runs continuously (effect always on)");
+    // the rarely needed shaping, collapsed; marked when any is in use
+    const bool shaped=lfoRampCurve[li].get()!=0 || lfoRampOffset[li].get()!=0 || lfoRampBounds[li].get()!=0 || lfoTransport[li].get()
+        || std::any_of(lfoBiPow[li].get().begin(),lfoBiPow[li].get().end(),[](float v){return v!=0;});
+    if(ImGui::SmallButton((std::string(rampMore[li]?"Less":"More")+(shaped && !rampMore[li]?" *":"")+"##rampMore").c_str()))rampMore[li]=!rampMore[li];
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Curve, BiPow, Offset, Output bounds and Transport%s",shaped?"\n*: some are in use":"");
+    if(rampMore[li]) {
+        slider(lfoRampCurve[li],"Curve",w,"%.2f");
+        sliderVec(lfoBiPow[li],"BiPow",w,"%+.2f");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Bend both halves of the progression around its midpoint.\nCombine with Pow for ease-in / ease-out; zero leaves timing unchanged.");
+        slider(lfoRampOffset[li],"Offset",w,"%.3f");
+        const char* bounds[]={"Unbounded","Clamp 0..1","Wrap 0..1"};choice(lfoRampBounds[li],"Output",bounds,3);
+        toggle(lfoTransport[li],"Transport");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("With Beats enabled: follow transport position, play/stop, seeks and loops.\nGate starts at the next cycle boundary; Free running stays on the global grid.");
+    }
     ImGui::TextDisabled("Route %s in Routing",sourceName(li).c_str());
     ImGui::EndGroup();ImGui::PopID();
 }
@@ -1883,7 +1900,7 @@ void scModulation::drawLfoCard(int li, float w) {
     if(host.publishMenu) host.publishMenu(lfoTrigger[li].getEscapedName());
     if(trigger) {
         slider(lfoRestartBeats[li],"Restart",half,"%.3f b");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("0: no periodic reset; otherwise restart every N beats since Gate/Go. Gate off returns output to zero.");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("0: no periodic reset; otherwise restart every N beats since Gate. Gate off returns output to zero.");
     }
     if(classic) {
         slider(lfoPhasePower[li],"Pow",half,"%.2f");

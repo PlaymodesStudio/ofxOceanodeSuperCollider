@@ -533,12 +533,13 @@ delayDef = {|name, jump, n, src|
 
 // ── Dry (one per node, after engine 1): the node's input, unprocessed, ────
 //    straight to the node's output (Dry/Wet; the engines get the wet gain).
-//    \gated (Wet Mode Gated): muted while engine 1's gate is up (\gatebus)
+//    \gated (Effect On Gate): ducked to \dryup (Dry/Wet's dry level, 0 = muted)
+//    while engine 1's gate is up (\gatebus)
 (1..16).do({|n|
     SynthDef(("GrainBoxPolyDry_" ++ n).asSymbol, {
-        |in = 0, out = 0, dry = 0, gatebus = -1, gated = 0|
+        |in = 0, out = 0, dry = 0, gatebus = -1, gated = 0, dryup = 0|
         var up = (A2K.kr(In.ar(gatebus.max(0))) * (gatebus >= 0)) > 0;
-        var duck = 1 - (gated.clip(0, 1) * LagUD.kr(up, 0.004, 0.015));
+        var duck = 1 - (gated.clip(0, 1) * LagUD.kr(up, 0.004, 0.015) * (1 - Lag.kr(dryup.clip(0, 1), 0.02)));
         Out.ar(out, In.ar(in, n) * K2A.ar(Lag.kr(dry, 0.02) * duck));
     }).writeDefFile(subDir);
 });

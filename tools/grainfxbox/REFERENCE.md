@@ -17,8 +17,8 @@ follow that scan speed. Grain interval = GrainA / beats-per-second; grain
 length = interval + D milliseconds. These are the adapted presets' equations.
 
 `GrainStretch 01` through `08` retain source order and distinguish duplicate
-names. Go is deliberately not stored as part of a sound; click Go after
-selecting a preset. The stretch factory snapshots now use the shared **LFO 1
+names. The Gate is deliberately not stored as part of a sound; click FX
+after selecting a preset (they use Effect On Gate). The stretch factory snapshots now use the shared **LFO 1
 → Pos** route. The generic Gate restart/one-shot modes, beat reset period and
 ramp power supply their timing and curve; the node only scales Position's
 modulation span into milliseconds/beats and reports its actual read position.
