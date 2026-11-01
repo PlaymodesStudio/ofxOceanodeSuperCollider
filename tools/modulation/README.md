@@ -108,8 +108,16 @@ changes. Classic, Noise, Random and sample/hold use this clock; AdditiveBox's
 partial lanes share it too. Free-running linked generators stay on the global
 grid even when created halfway through a beat. Gate / Go modes wait for the
 next cycle boundary, then start their full progression. Start/seek/loop
-anchors restart gated progressions. Random draws follow cycle indices, so
-revisiting a transport position revisits the same random sequence.
+anchors restart gated progressions. Random and Noise offer **Repeat loop**: on reuses the sequence at each
+transport loop; off continues drawing fresh targets across loops. Earlier
+presets without this flag keep their previous repeating behavior. New LFOs
+default to fresh draws across loops.
+
+**Seed 0** means no fixed seed: fresh entropy per LFO instance, recall, Reset,
+and linked transport restart/seek. The private random salt is shared across
+that LFO's voice chunks and servers, so Random Same still works. A positive
+seed reproduces the sequence. Reseeding and loop repetition are independent:
+a fresh sequence can still repeat within each loop when Repeat loop is on.
 
 **Reset LFOs / Ramps** restarts local/gated sources. Reset the global transport
 to restart linked free-running sources. Envelopes keep their note Gate;
@@ -126,3 +134,20 @@ jumps, or the delay line's Jump crossfade for click-free transitions.
 
 `python3 tools/modulation/transport_test.py` renders late joining generators,
 play/stop, seek, tempo changes, unlinked compatibility and RANDOMPOS spacing.
+
+## Region units and random coverage
+
+The GrainBox/GrainFxBox **Region** section now exposes the existing node-wide
+**Units** selector directly: Relative, ms, or Beats. Switching units converts
+In/Out, Position, Duration and their jitter without a timing jump. A region
+stored in Beats follows tempo, so an eight-beat span remains eight beats.
+
+Steps controls possible destinations, not a guarantee that each is visited
+within one transport loop. Eight draws can include duplicates. With Repeat
+loop on those same draws recur each time; turn it off to keep exploring the
+nine destinations across successive loops. RANDOMPOS uses a 0–8 beat region,
+a one-beat Random interval, Steps 9, Pos amount 1, Repeat loop off, Seed 0.
+
+`python3 tools/modulation/random_loop_test.py` tests all nine destinations
+across successive eight-beat loops at 100 BPM, repeat behavior, fixed/unfixed
+seeds, and the native ahead/late loop-anchor calculation.

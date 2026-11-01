@@ -3,9 +3,10 @@
 import pathlib,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 s=(ROOT/'src/nodes/boxSynths/shared/scModulation.cpp').read_text();a=s.index('float scModulation::noise2(');b=s.index('\n}',a)+2;method=s[a:b]
-# All server-backed noise paths must use exactly the same algorithm.
+# All implementations use the same algorithm. GrainBox now runs the shared
+# modulation SynthDefs, rather than maintaining a separate noise generator.
 bodies=[]
-for f in ['Modulation/modulation.scd','Modulation/modulationRandom.scd','AdditiveBox/additiveBox.scd','GrainBox/scGrainBoxPoly.scd']:
+for f in ['Modulation/modulation.scd','Modulation/modulationRandom.scd','AdditiveBox/additiveBox.scd']:
  s=(ROOT/'synthdefs/Defaults'/f).read_text();a=s.index('valueNoise2 = {');b=s.index('\n};',a)+3;bodies.append(s[a:b])
 assert len(set(bodies))==1,'Noise implementations diverged between synths'
 cpp=r'''
@@ -41,7 +42,7 @@ int main(){
   timeDifference+=std::abs(scModulation::noise2(.23f,v)-scModulation::noise2(1.23f,v));
  }
  assert(fieldDifference>1&&timeDifference>1);
- std::cout<<"PASS: 3 scales x 2 fields x 580 phases x 32 voices: no collective midpoint crossing or stop, bounded continuous motion, independent fields and intentional Scale 0 linking; all four SC implementations identical.\n";
+ std::cout<<"PASS: 3 scales x 2 fields x 580 phases x 32 voices: no collective midpoint crossing or stop, bounded continuous motion, independent fields and intentional Scale 0 linking; all three SC implementations identical.\n";
 }
 '''.replace('METHOD',method)
 with tempfile.TemporaryDirectory()as d:

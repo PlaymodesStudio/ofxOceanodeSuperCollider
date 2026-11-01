@@ -1138,6 +1138,7 @@ void scAdditiveBox::laneData(int v, VoiceData& d) const {
         d.scalars[L + "reset"] = float(mod.resets());
         d.scalars[L + "trigmode"] = l < int(lanes.size()) ? float(mod.lfoTriggerMode(lanes[l].lfo)) : 0;
         d.scalars[L+"transport"]=l<int(lanes.size()) && mod.followsTransport(lanes[l].lfo)?1:0;
+        d.scalars[L+"repeatloop"]=l<int(lanes.size()) && mod.lfoRepeatsLoop(lanes[l].lfo)?1:0;
         d.scalars[L+"shcpb"]=l<int(lanes.size())?mod.lfoHoldCyclesPerBeat(lanes[l].lfo):1;
         d.scalars[L+"cpb"]=l<int(lanes.size())?mod.lfoCyclesPerBeat(lanes[l].lfo,v):1;
         d.scalars[L + "restartsec"] = l < int(lanes.size()) ? mod.lfoRestartSeconds(lanes[l].lfo) : 0;

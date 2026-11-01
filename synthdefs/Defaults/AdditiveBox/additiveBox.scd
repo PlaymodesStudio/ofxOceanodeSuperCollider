@@ -215,15 +215,16 @@ SynthDef(\AdditiveBoxLaneClock, {
         var elapsed=Sweep.kr(reset,1),period=k.("restartsec",0);
         var rst=reset + ((HPZ1.kr((elapsed/period.max(0.001)).floor)>0)*(period>0)*(mode>0)*gate);
         var freeSweep=Sweep.kr(rst,k.("rate",1));
-        var transportClock=In.kr(\ltransportbus.kr(0),3),linked=k.("transport",0);
+        var transportClock=In.kr(\ltransportbus.kr(0),4),linked=k.("transport",0);
         var absolute=transportClock[0]*k.("cpb",1);
         var origin=Latch.kr(absolute.ceil,rst+(Changed.kr(transportClock[2])*transportClock[1])+Impulse.kr(0));
         var needsOrigin=(mode>0)+((k.("ramp",0)>0)*(k.("rend",0) |!=| 1));
         var locked=Select.kr(needsOrigin>0,[absolute,(absolute-origin).max(0)]);
         var sweep=Select.kr(linked>0,[freeSweep,locked]);
+        var randomSweep=Select.kr((linked>0)*(mode<0.5)*(k.("repeatloop",1)<0.5),[sweep,transportClock[3]*k.("cpb",1)]);
         var rampPhase=Select.kr(k.("rend",0) |==| 1,[sweep,sweep.wrap(0,1)]);
         [Select.kr(k.("ramp",0)>0,[Select.kr(mode>1.5,[Select.kr(linked>0,[Phasor.kr(rst,k.("rate",1)*ControlDur.ir,0,1),sweep.wrap(0,1)]),sweep.clip(0,0.999999)]),rampPhase]),
-         Select.kr(mode>1.5,[sweep,sweep.clip(0,0.999999)]) + k.("init", 0),
+         Select.kr(mode>1.5,[randomSweep,randomSweep.clip(0,0.999999)]) + k.("init", 0),
          Select.kr(linked>0,[Impulse.kr(k.("sh", 0).max(0.01)),((HPZ1.kr((transportClock[0]*k.("shcpb",1)).floor).abs>0)+Changed.kr(transportClock[2])+Impulse.kr(0)).min(1)])]
     };
     ReplaceOut.kr(b, clock.flat);

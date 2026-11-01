@@ -6741,6 +6741,12 @@ void scGrainBoxPoly::drawControlsPanel(Playhead& ph, float w, float h) {
     drawNodePublishContextMenu(ph.syncGate.getEscapedName());
     ImGui::Spacing();
     secHdr("Region");
+    ImGui::TextUnformatted("Units");ImGui::SameLine(labelW);
+    ImGui::SetNextItemWidth(colW-labelW-m);
+    {const char* units[]={"Relative (0..1)","ms","Beats"};int unit=timeUnitsP.get();
+        if(ImGui::Combo("##regionTimeUnits",&unit,units,3))timeUnitsP=unit;
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Node-wide Time Units, also available in Global.\nConverts In/Out, Position, Duration and their jitter without changing their current timing.\nBeats keeps the region musical when the tempo changes.");
+        drawNodePublishContextMenu(timeUnitsP.getEscapedName());}
     sliderScalar("In",   "##inp",  ph.inPoint,  0.f, 1.f);
     sliderScalar("Out",  "##outp", ph.outPoint, 0.f, 1.f);
     ctrlMeasure = std::max(ctrlMeasure, ImGui::GetCursorPosY());   // content height

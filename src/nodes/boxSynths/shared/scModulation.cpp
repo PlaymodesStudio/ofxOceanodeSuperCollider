@@ -14,8 +14,12 @@
 #include "../../../audio/scMorphWave.h"
 #include <algorithm>
 #include <cmath>
+#include <random>
 
 namespace {
+float freshRandomSalt() {
+    return 1.0f+float(std::random_device{}()>>8)*(8191.0f/16777216.0f);
+}
 bool liveControlBus(ofxSCServer* s, ofxSCBus* b) {
     return s && b && b->index >= 0 && b->index < (int)s->controlBusses.size() && s->controlBusses[b->index] == b;
 }
@@ -152,6 +156,9 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
             if(scSnapshots::applyingSnapshot())return;
             forStates([this](ofxSCServer* sv,ServerState& st){updateSources(sv,st);});toLfo();
         };
+        freshSeeds[li]=freshRandomSalt();
+        lfoSeed[li].set(L+"Seed"+X,0,0,8388607);host.regI(lfoSeed[li],[this,li,toLfo](){if(lfoSeed[li].get()==0)freshSeeds[li]=freshRandomSalt();toLfo();});
+        lfoRandomRepeat[li].set(L+"Random Repeat Loop"+X,false);host.regB(lfoRandomRepeat[li],toLfo);
         lfoTransport[li].set(L+"Transport"+X,false);host.regB(lfoTransport[li],toLfo);
         lfoRamp[li].set(L+"Ramp"+X,false);host.regB(lfoRamp[li],toRamp);
         lfoRampEnabled[li].set(L+"Ramp Enabled"+X,true);host.regB(lfoRampEnabled[li],toLfo);
@@ -242,7 +249,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
     // the module's own controls: never targets of "Modulate"
     auto own = [this](const ofAbstractParameter& q){ if(!q.getName().empty()) ownKeys.insert(q.getEscapedName()); };
     for(int li = 0; li < MAX_LFOS; li++){
-        for(auto* q : std::initializer_list<ofAbstractParameter*>{&lfoTransport[li],&lfoRamp[li],&lfoRampEnabled[li],&lfoRampRate[li],&lfoRampFrom[li],&lfoRampTo[li],&lfoRampCurve[li],&lfoRampOffset[li],&lfoRampDuration[li],&lfoRampEnd[li],&lfoRampBounds[li],&lfoTrigger[li], &lfoRestartBeats[li], &lfoPhasePower[li], &lfoSync[li], &lfoBeats[li], &lfoHz[li], &lfoSH[li],
+        for(auto* q : std::initializer_list<ofAbstractParameter*>{&lfoSeed[li],&lfoRandomRepeat[li],&lfoTransport[li],&lfoRamp[li],&lfoRampEnabled[li],&lfoRampRate[li],&lfoRampFrom[li],&lfoRampTo[li],&lfoRampCurve[li],&lfoRampOffset[li],&lfoRampDuration[li],&lfoRampEnd[li],&lfoRampBounds[li],&lfoTrigger[li], &lfoRestartBeats[li], &lfoPhasePower[li], &lfoSync[li], &lfoBeats[li], &lfoHz[li], &lfoSH[li],
                 &lfoDetune[li], &lfoInit[li], &lfoRound[li], &lfoSkew[li], &lfoPw[li], &lfoCentered[li], &lfoGain[li],
                 &lfoPow[li], &lfoBiPow[li], &lfoNoise[li], &lfoSHGlide[li], &lfoNScale[li], &lfoRegion[li], &lfoSteps[li],
                 &lfoPSpread[li], &lfoPRand[li], &lfoNWaves[li], &lfoNorm[li], &lfoInvert[li], &lfoSym[li], &lfoShuffle[li],
@@ -338,6 +345,7 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
     controls.set("transport",followsTransport(li)?1.0f:0.0f);
     controls.set("transportbus",st.clockBus?float(st.clockBus->index):0.0f);
     auto cpb=slice(lfoHzFor(li),c);for(auto& x:cpb)x*=60.0f/std::max(1.0f,currentBpm);
+    controls.set("repeatloop",lfoRandomRepeat[li].get()?1.0f:0.0f);
     controls.set("cpb",cpb);
     auto shcpb=slice(lfoShFor(li),c);for(auto& x:shcpb)x*=60.0f/std::max(1.0f,currentBpm);
     controls.set("shcpb",shcpb);
@@ -382,7 +390,7 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
     controls.set("noise", !held && effectiveNoise(li) ? 1.0f : 0.0f);
     controls.set("shglide", lfoSHGlide[li].get());
     controls.set("nscale", perVoice ? lfoNScale[li].get() : 0.0f);
-    controls.set("seed", li * 17.31f);
+    controls.set("seed",lfoNoiseSeed(li));
     controls.set("phoff", perVoice && !held ? slice(lfoPhases[li], c) : zero);
     controls.set("reset", (float)resetCounter);
     controls.set("gate", float(st.gateBus + c * CHUNK));
@@ -401,8 +409,8 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
 
 // One value per cycle, from a hash of the LFO and the cycle (no state): the
 // cards' pictures of a random LFO, two cycles wide
-float scModulation::rndPreview(int li, float ph, int type, float smooth) {
-    auto value = [&](int cycle){ const float x = std::sin(cycle * 12.9898f + li * 78.233f) * 43758.5453f; return x - std::floor(x); };
+float scModulation::rndPreview(int li, float ph, int type, float smooth) const {
+    auto value = [&](int cycle){ const float x = std::sin(cycle * 12.9898f + lfoNoiseSeed(li) * 7.13f) * 43758.5453f; return x - std::floor(x); };
     const float pos = ph * 2.0f;
     const int c = (int)std::floor(pos);
     const float f = pos - c;
@@ -624,7 +632,7 @@ bool scModulation::adoptServerState(scModulation& source, ofxSCServer* server) {
     source.states.erase(it);
     for(int li=0;li<MAX_LFOS;++li)bindRampCompletion(states.at(server),li);
     live=source.live;
-    lfoPhases=source.lfoPhases;
+    lfoPhases=source.lfoPhases;freshSeeds=source.freshSeeds;
     for(auto& pt:params) {
         auto match=std::find_if(source.params.begin(),source.params.end(),[&](const ParamTarget& other){return other.key==pt.key;});
         if(match!=source.params.end()) pt.voiceWritten=match->voiceWritten;
@@ -713,14 +721,10 @@ void scModulation::setBpm(float bpm) {
 }
 
 void scModulation::resetLfos() {
-    resetCounter++;
+    ++resetCounter;
+    for(int li=0;li<MAX_LFOS;++li)if(lfoSeed[li].get()==0)freshSeeds[li]=freshRandomSalt();
     notify();
-    forStates([this](ofxSCServer*, ServerState& st){
-        for(int li = 0; li < MAX_LFOS; li++) for(int c = 0; c < (int)st.lfo[li].size(); c++) if(st.lfo[li][c]){
-            st.lfo[li][c]->set("reset", (float)resetCounter);
-            if(c < (int)st.lfoSent[li].size()) st.lfoSent[li][c].erase("reset");
-        }
-    });
+    forStates([this](ofxSCServer* server,ServerState& st){for(int li=0;li<MAX_LFOS;++li)sendLfo(server,st,li);});
 }
 
 // A published key of this instance (GrainBox: every engine has one, its names end in " 2", " 3"...)
@@ -739,6 +743,12 @@ void scModulation::sendMatrix() {
 }
 
 // ── The LFOs for a node's own copies ─────────────────────────────────────────
+float scModulation::lfoNoiseSeed(int li) const {
+    if(lfoSeed[li].get()==0)return freshSeeds[li];
+    uint32_t x=uint32_t(lfoSeed[li].get());
+    x^=x>>16;x*=0x7feb352dU;x^=x>>15;x*=0x846ca68bU;x^=x>>16;
+    return 1.0f+float(x&0x7fffffU)*(8191.0f/8388607.0f);
+}
 float scModulation::rampValue(int li,float phase) const {
     return scRamp::value(phase,lfoRampFrom[li].get(),lfoRampTo[li].get(),lfoRampCurve[li].get(),lfoRampOffset[li].get(),lfoRampRate[li].get(),lfoRampEnd[li].get(),lfoRampBounds[li].get(),first(lfoPow[li].get()),first(lfoBiPow[li].get()));
 }
@@ -756,11 +766,11 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
         (float)lfoSteps[li].get()};
     auto& cache = cycleCache[li];
     const int count = std::max(2, size);
-    if(cache.values.size() == (size_t)count && cache.key == key && cache.phasePower==lfoPhasePower[li].get() && cache.trigger==lfoTrigger[li].get()) return cache.values;
+    if(cache.values.size() == (size_t)count && cache.key == key && cache.phasePower==lfoPhasePower[li].get() && cache.trigger==lfoTrigger[li].get() && cache.seed==lfoNoiseSeed(li)) return cache.values;
     std::vector<float> t(count);
     const auto weights = lfoModeWeights(li);
     const float active = 1.0f - weights[5];
-    const float seed = li * 17.31f;
+    const float seed = lfoNoiseSeed(li);
     // Generator values are JSON lookups: once per table, not per point
     const float centered = lfoGeneratorValue(li, "centered", lfoCentered[li].get() ? 1.f : 0.f);
     const float steps = lfoGeneratorValue(li, "steps", float(lfoSteps[li].get()));
@@ -782,7 +792,7 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
     }
     if(lfoTrigger[li].get()!=2) t.back() = t.front();
     cache.key = key;
-    cache.phasePower=lfoPhasePower[li].get();cache.trigger=lfoTrigger[li].get();
+    cache.phasePower=lfoPhasePower[li].get();cache.trigger=lfoTrigger[li].get();cache.seed=lfoNoiseSeed(li);
     cache.values = t;
     return t;
 }
@@ -857,6 +867,14 @@ void scModulation::updateTransport() {
     for(int e=0;e<envCount;++e)envTempo|=envs[e].beats.get() && envs[e].transport.get();
     if(!clocks && !envTempo){transportFollower.reset();return;}
     const auto frame=host.node->getFrameTransportState();
+    if(frame.current.isPlaying && (!frame.previous.isPlaying || frame.current.generation!=frame.previous.generation)) {
+        bool fresh=false;
+        for(int li=0;li<lfoCount;++li)if(followsTransport(li) && lfoSeed[li].get()==0) {freshSeeds[li]=freshRandomSalt();fresh=true;}
+        if(fresh) {
+            forStates([this](ofxSCServer* sv,ServerState& st){for(int li=0;li<lfoCount;++li)if(followsTransport(li) && lfoSeed[li].get()==0)sendLfo(sv,st,li);});
+            notify();
+        }
+    }
     if(frame.current.bpm>0 && frame.current.bpm!=transportBpm) {
         transportBpm=frame.current.bpm;
         forStates([this](ofxSCServer* sv,ServerState& st){for(int e=0;e<envCount;++e)if(envs[e].transport.get())sendEnv(sv,st,e);});
@@ -866,8 +884,8 @@ void scModulation::updateTransport() {
     forStates([this](ofxSCServer* sv,ServerState& st){
         if(!st.created)return;
         if(!st.clock) {
-            st.clockBus=new ofxSCBus(RATE_CONTROL,3,sv);
-            st.clock=new ofxSCSynth("ModTransportClock",sv);
+            st.clockBus=new ofxSCBus(RATE_CONTROL,4,sv);
+            st.clock=new ofxSCSynth("ModTransportClockV2",sv);
             scStartConfiguredSynth(st.clock,sv,0,st.sourceGroup,[&](){st.clock->set("out",st.clockBus->index);});
             transportFollower.requestAnchor();
             for(int li=0;li<lfoCount;++li)sendLfo(sv,st,li);
@@ -881,6 +899,7 @@ void scModulation::updateTransport() {
         ++transportAnchorId;if(anchor.hard)++transportAnchorHard;
         forStates([&](ofxSCServer* sv,ServerState& st){if(st.clock && st.clock->isCreated()) {
             scSynthControlBatch c(st.clock,sv);c.set("bpm",a.bpm);c.set("run",a.playing?1.0f:0.0f);
+            c.set("anchorRandomPos",float(scTransportSync::positiveMod(scTransportSync::unwrappedBeatAt(frame.current,a.offsetSeconds),8192)));
             c.set("anchorPos",float(anchor.pos));c.set("anchorHard",float(transportAnchorHard));c.set("anchorId",float(transportAnchorId));c.send();
         }});
     }
@@ -1049,6 +1068,9 @@ void scModulation::loadState(const ofJson& j, const std::string& prefix, bool ge
     if(generators) loadGeneratorState(j, prefix);
     if(generators) {
     for(int li=0;li<MAX_LFOS;++li) {
+        if(!j.contains(lfoSeed[li].getEscapedName()))lfoSeed[li]=0;
+        if(lfoSeed[li].get()==0)freshSeeds[li]=freshRandomSalt();
+        if(!j.contains(lfoRandomRepeat[li].getEscapedName()))lfoRandomRepeat[li]=true;
         if(!j.contains(lfoTransport[li].getEscapedName()))lfoTransport[li]=false;
         if(!j.contains(lfoRamp[li].getEscapedName())) lfoRamp[li]=false;
         if(!j.contains(lfoTrigger[li].getEscapedName())) lfoTrigger[li]=0;
@@ -1763,7 +1785,7 @@ void scModulation::drawLfoCard(int li, float w) {
         const float manual = lfoManualValue(li), smooth = lfoRndSmooth[li].get();
         auto value = [&](float ph){
             float v = weights[0] * morphCentered(std::pow(std::min(ph,0.999999f),lfoPhasePower[li].get()), rnd, sk, pw, centered)
-                    + weights[1] * noise2(ph * 3.0f, 0.0f, li * 17.31f);
+                    + weights[1] * noise2(ph * 3.0f, 0.0f, lfoNoiseSeed(li));
             for(int mode = 1; mode <= 3; ++mode) if(weights[mode + 1] > 0)
                 v += weights[mode + 1] * rndPreview(li, ph, mode, smooth);
             v /= std::max(active, 1e-8f);
@@ -1776,10 +1798,10 @@ void scModulation::drawLfoCard(int li, float w) {
         const std::array<float, 8> key{rnd, sk, pw + lfoSteps[li].get() * 3.0f, pw2, bp, manualLfo(li) ? -1.0f-lfoManual[li].get() : gain,
             (effectiveNoise(li) ? 1.0f : 0.0f) + effectiveRandom(li) * 2.0f + lfoRndSmooth[li].get() * 10.0f, lfoCentered[li].get() ? 1.0f : 0.0f};
         auto& preview = previewCache[li];
-        if(!preview.valid || preview.key != key || preview.phasePower!=lfoPhasePower[li].get()){
+        if(!preview.valid || preview.key != key || preview.phasePower!=lfoPhasePower[li].get() || preview.seed!=lfoNoiseSeed(li)){
             for(int i = 0; i <= 96; i++) preview.values[i] = value(i / 96.0f);
             preview.key = key;
-            preview.phasePower=lfoPhasePower[li].get();
+            preview.phasePower=lfoPhasePower[li].get();preview.seed=lfoNoiseSeed(li);
             preview.valid = true;
         }
         std::array<ImVec2, 97> pts;
@@ -1919,6 +1941,14 @@ void scModulation::drawLfoCard(int li, float w) {
                                                  "(noise rarely reaches them). Before S&H, Pow and BiPow.");
     sliderVec(lfoPow[li], "Pow", half, "%+.2f");
     sliderVec(lfoBiPow[li], "BiPow", half, "%+.2f");
+    if(random || effectiveNoise(li)) {
+        sliderInt(lfoSeed[li],"Seed",half);
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("0: no fixed seed; fresh sequence on creation, recall, Reset and transport restart/seek.\nA positive seed repeats the same sequence. Shared by all voices and servers of this LFO.");
+    }
+    if(followsTransport(li) && (random || effectiveNoise(li))) {
+        toggle(lfoRandomRepeat[li],"Repeat loop");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("On: replay the same random sequence each transport loop.\nOff: fresh random draws each loop; jump timing remains on transport beats.");
+    }
     sliderVec(lfoSH[li], "S&H", half, "%.2f");
     if(ImGui::IsItemHovered())ImGui::SetTooltip(lfoSync[li].get()?"Sample & hold: steps per beat":"Sample & hold: steps per second");
     sliderInt(lfoSteps[li], "Steps", half);
@@ -2203,6 +2233,8 @@ void scModulation::loadMorph(const ofJson& a,const ofJson& b,float t,bool switch
         p=discrete?(switched?y:x):x+(y-x)*t;
     };
     for(int li=0;li<MAX_LFOS;++li){
+        blend(lfoSeed[li],0,true);
+        blend(lfoRandomRepeat[li],1,true);
         blend(lfoTransport[li],0,true);
         const auto rampKey=lfoRamp[li].getEscapedName();
         if(!blocked || !blocked(rampKey))lfoRamp[li]=scalar(switched?b:a,rampKey,0)>0.5f;

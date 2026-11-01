@@ -127,6 +127,13 @@ struct Anchor {
 	double beatsSince(double referenceBeat) const { return beat - referenceBeat; }
 };
 
+// Beat travelled through loop iterations, evaluated at an anchor's instant.
+// Future realtime wraps and late NRT captures must give the same result.
+inline double unwrappedBeatAt(const ofxOceanodeTransportState& state,double offsetSeconds) {
+    const double loop=state.loopActive()?state.loopEndBeat-state.loopStartBeat:0.0;
+    return state.beatPosition+(loop*state.loopCount)+(state.isPlaying?offsetSeconds*state.bpm/60.0:0.0);
+}
+
 // Timetag scope for sending an anchor: every set() on any server inside it
 // carries the anchor's instant (and, captured for an NRT render, is stamped
 // at that instant of the score).

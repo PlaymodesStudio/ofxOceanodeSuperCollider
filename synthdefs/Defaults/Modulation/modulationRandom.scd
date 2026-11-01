@@ -44,6 +44,7 @@ valueNoise2 = { |x, y, salt = 0|
         var mode = \trigmode.kr(0), gate = A2K.kr(InFeedback.ar(\gate.kr(0), n)) > 0;
         var gateRise = (HPZ1.kr(gate) > 0) * (mode > 0);
         var manualReset = Changed.kr(\reset.kr(0));
+        var sourceSeed=Select.kr(\seed.kr(0)>0,[TRand.kr(1,8192,manualReset+Impulse.kr(0)),\seed.kr(0)]);
         var elapsed = Sweep.kr(gateRise + manualReset,Select.kr(\transport.kr(0)>0,[1,In.kr(\transportbus.kr(0)+1)]));
         var restartSec = \restartsec.kr(0);
         var periodic = (HPZ1.kr((elapsed / restartSec.max(0.001)).floor) > 0) * (restartSec > 0) * (mode > 0) * gate;
@@ -51,17 +52,18 @@ valueNoise2 = { |x, y, salt = 0|
         var freq = kv.(\freq, 1), detune = kv.(\freqdetune, 0);
         var spread = n.collect { |i| TRand.kr(0, 1, reset.asArray.wrapAt(i) + Impulse.kr(0)) };
         var freeSweep = Sweep.kr(reset, freq + (spread * detune));
-        var clock=In.kr(\transportbus.kr(0),3), linked=\transport.kr(0);
+        var clock=In.kr(\transportbus.kr(0),4), linked=\transport.kr(0);
         var absolute=clock[0]*kv.(\cpb,1);
         var origin=Latch.kr(absolute.ceil,reset+(Changed.kr(clock[2])*clock[1])+Impulse.kr(0));
         var locked=Select.kr(mode>0,[absolute,(absolute-origin).max(0)]);
         var sweep=Select.kr(linked>0,[freeSweep,locked]);
+        var randomSweep=Select.kr((linked>0)*(mode<0.5)*(\repeatloop.kr(1)<0.5),[sweep,clock[3]*kv.(\cpb,1)]);
         var phoff = kv.(\phoff, 0);
         // the random types: per voice, a new value each cycle at the voice's own phase
-        var rpos = (Select.kr(mode>1.5,[sweep,sweep.clip(0,0.999999)]) * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff;
+        var rpos = (Select.kr(mode>1.5,[randomSweep,randomSweep.clip(0,0.999999)]) * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff;
         var rcycle = Select.kr(linked>0,[rpos.floor,RunningMax.kr(rpos.floor,reset+Changed.kr(clock[2])+Impulse.kr(0))]),rfrac=(rpos-rcycle).clip(0,1);
         // \rshare 0: each voice its own values; 1: one series for every voice
-        var rsalt = \seed.kr(0) * 7.13;
+        var rsalt = sourceSeed * 7.13;
         var sharing = \rshare.kr(0).clip(0, 1);
         // Blend stable random fields. Moving the hash seed would redraw every
         // value, and thresholding sharing would jump at the morph midpoint.
@@ -118,7 +120,7 @@ valueNoise2 = { |x, y, salt = 0|
         // counter (the LFO's rate: Hz or Beats), y = each voice's seed = its
         // index x \nscale (how different the voices are); \seed: this LFO's
         // own noise field (no two LFOs share values)
-        noise = valueNoise2.(Select.kr(mode>1.5,[sweep,sweep.clip(0,0.999999)]) + \initphase.kr(0), ((0 .. (n - 1)) + \voffset.kr(0)) * \nscale.kr(1), \seed.kr(0));
+        noise = valueNoise2.(Select.kr(mode>1.5,[randomSweep,randomSweep.clip(0,0.999999)]) + \initphase.kr(0), ((0 .. (n - 1)) + \voffset.kr(0)) * \nscale.kr(1), sourceSeed);
         classic = shape;
         legacy = Select.kr(\noise.kr(0) > 0.5, [classic, noise]);
         legacy = Select.kr(\rtype.kr(0).clip(0, 3), [legacy, rstepped, rsmooth, rjumps]);

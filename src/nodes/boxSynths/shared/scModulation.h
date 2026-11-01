@@ -153,6 +153,7 @@ public:
     bool followsTransport(int li) const {return lfoTransport[li].get() && lfoSync[li].get() && !lfoRegion[li].get();}
     int transportBus(ofxSCServer* server) const;
     float lfoCyclesPerBeat(int li,int voice=0) const;
+    bool lfoRepeatsLoop(int li) const {return lfoRandomRepeat[li].get();}
     float lfoHoldCyclesPerBeat(int li) const {return lfoSampleHold(li)*60.0f/std::max(1.0f,currentBpm);}
     void resetLfos();
     void voicesChanged();                                     // a new voice count (no server synths: GrainBox)
@@ -179,7 +180,7 @@ public:
     static float noise2(float x, float y, float salt = 0.0f);   // salt: each LFO (voice) its own field
     bool lfoIsNoise(int li) const { return !isRamp(li) && effectiveNoise(li); }
     float lfoNoiseScale(int li) const { return lfoNScale[li].get(); }
-    float lfoNoiseSeed(int li) const { return li * 17.31f; }
+    float lfoNoiseSeed(int li) const;
     std::vector<float> lfoTransfer(int li, int size) const;   // Gain / Steps / Pow / BiPow as a curve
     struct EnvValues { float a, d, s, r, ca, cd, cr; };
     EnvValues envValues(int e) const;
@@ -252,14 +253,14 @@ private:
     struct TableCache {
         std::array<float, 9> key{};
         std::vector<float> values;
-        float phasePower=1;int trigger=0;
+        float phasePower=1,seed=0;int trigger=0;
     };
     mutable std::array<TableCache, MAX_LFOS> cycleCache, transferCache;
     struct PreviewCache {
         std::array<float, 8> key{};
         std::array<float, 97> values{};
         bool valid = false;
-        float phasePower=1;
+        float phasePower=1,seed=0;
     };
     std::array<PreviewCache, MAX_LFOS> previewCache;
 
@@ -356,19 +357,20 @@ private:
     std::array<ofParameter<bool>, MAX_LFOS> lfoRndSame;    // Random: one value for every voice (else each its own)
     // Random type (ModLfoRnd): 0 off (the waveform / noise), 1 stepped, 2 smooth, 3 jumps;
     // Random Smooth: the stepped values' glide (s)
-    std::array<ofParameter<bool>,MAX_LFOS> lfoRamp,lfoRampEnabled,lfoRampRate,lfoTransport;
+    std::array<ofParameter<bool>,MAX_LFOS> lfoRamp,lfoRampEnabled,lfoRampRate,lfoTransport,lfoRandomRepeat;
     std::array<ofParameter<float>,MAX_LFOS> lfoRampFrom,lfoRampTo,lfoRampCurve,lfoRampOffset,lfoRampDuration;
     std::array<ofParameter<int>,MAX_LFOS> lfoRampEnd,lfoRampBounds;
     float rampValue(int li,float phase) const;
     void drawRampCard(int li,float w);
-    std::array<ofParameter<int>, MAX_LFOS> lfoRndType, lfoModel, lfoTrigger;
+    std::array<ofParameter<int>, MAX_LFOS> lfoRndType, lfoModel, lfoTrigger,lfoSeed;
+    std::array<float,MAX_LFOS> freshSeeds{};
     std::array<ofParameter<float>, MAX_LFOS> lfoRestartBeats, lfoPhasePower;
     std::array<ofParameter<float>, MAX_LFOS> lfoManual;
     int effectiveRandom(int li) const { return unifiedLfoModels ? (lfoModel[li].get() == 3 ? 1 : 0) : lfoRndType[li].get(); }
     bool effectiveNoise(int li) const { return unifiedLfoModels ? lfoModel[li].get() == 2 : lfoNoise[li].get(); }
     bool manualLfo(int li) const { return unifiedLfoModels && lfoModel[li].get() == 0; }
     std::array<ofParameter<float>, MAX_LFOS> lfoRndSmooth;
-    static float rndPreview(int li, float ph, int type, float smooth);   // a fixed random pattern, for the drawings
+    float rndPreview(int li, float ph, int type, float smooth) const;   // a fixed random pattern, for the drawings
     std::array<ofParameter<std::vector<float>>, MAX_LFOS> lfoGain;
     std::array<ofParameter<std::vector<float>>, MAX_LFOS> lfoBeats, lfoHz, lfoDetune, lfoRound, lfoSkew, lfoPw,
                                                           lfoPow, lfoBiPow, lfoSH;
