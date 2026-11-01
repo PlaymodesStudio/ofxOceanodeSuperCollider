@@ -151,3 +151,20 @@ a one-beat Random interval, Steps 9, Pos amount 1, Repeat loop off, Seed 0.
 `python3 tools/modulation/random_loop_test.py` tests all nine destinations
 across successive eight-beat loops at 100 BPM, repeat behavior, fixed/unfixed
 seeds, and the native ahead/late loop-anchor calculation.
+
+## LFO card layout
+
+Smp (where available), Transport and Sync share a row above the Timing/Shape
+and Voices columns. Cards wrap to fewer columns in narrower windows, keeping
+controls within the display width. Timing **Pow** is phase progression;
+Shape **Pow / BiPow** reshape values. Random/Noise hide the unused phase-power
+and ramp-wave shortcuts. Detune hides while transport overrides it; S&H Glide
+appears only when S&H is active, and Repeat loop only in its free-running
+transport mode. Hidden controls retain their stored values.
+
+GrainFxBox Jump transitions normalize their crossfade gains. This prevents
+correlated beat-position taps, including zero delay, adding a roughly 3 dB
+peak during overlap and clipping an otherwise clean input. The Glide path
+keeps its tape-speed behavior. `python3 tools/grainfxbox/zero_position_test.py`
+checks static zero and repeated jumps at near-full input level, correlated
+and uncorrelated phases, 64/512-sample blocks and live-buffer wraparound.

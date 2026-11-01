@@ -1730,14 +1730,14 @@ void scModulation::drawRampCard(int li,float w) {
     slider(lfoRampOffset[li],"Offset",w,"%.3f");
     auto choice=[&](ofParameter<int>& p,const char* label,const char* const* choices,int count){
         ImGui::TextUnformatted(label);ImGui::SetNextItemWidth(w);int v=p.get();
-        if(ImGui::Combo(label,&v,choices,count))p=v;
+        if(ImGui::Combo((std::string("##")+label).c_str(),&v,choices,count))p=v;
         if(host.publishMenu)host.publishMenu(p.getEscapedName());
     };
     const char* endings[]={"Hold end","Loop","Continue end rate","Stop GO"};choice(lfoRampEnd[li],"After Time",endings,stopGo?4:3);
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Stop GO: release the host's latched Go when this gated Ramp finishes.\nThe first voice is the completion clock; Free running does not stop Go.\nExternally connected gates remain under their input control.");
     const char* bounds[]={"Unbounded","Clamp 0..1","Wrap 0..1"};choice(lfoRampBounds[li],"Output",bounds,3);
     const char* triggers[]={"Free running","Gate / Go"};int trigger=lfoTrigger[li].get()>0?1:0;
-    ImGui::SetNextItemWidth(w);if(ImGui::Combo("Trigger",&trigger,triggers,2))lfoTrigger[li]=trigger?2:0;
+    ImGui::TextUnformatted("Trigger");ImGui::SetNextItemWidth(w);if(ImGui::Combo("##trigger",&trigger,triggers,2))lfoTrigger[li]=trigger?2:0;
     if(host.publishMenu)host.publishMenu(lfoTrigger[li].getEscapedName());
     slider(lfoRestartBeats[li],"Restart",w,"%.3f b");
     if(ImGui::IsItemHovered())ImGui::SetTooltip("0: no extra reset. Otherwise restart every N beats after Gate/Go.");
@@ -1850,48 +1850,56 @@ void scModulation::drawLfoCard(int li, float w) {
         slider(lfoManual[li], "Value", w, "%.3f");
         ImGui::EndGroup(); ImGui::PopID(); return;
     }
-    // two narrow columns: the LFO itself | how it spreads over the voices
-    const float half = perVoice ? (w - 8.0f * z) * 0.5f : w;
-    labelW = 40.0f;
+    // Timing toggles use the full card; the two control columns stay beneath
+    // the display, with explicit origins independent of group content widths.
+    const bool random=effectiveRandom(li)>0;
+    const bool classic=!random && !effectiveNoise(li);
+    bool region=grainExtras && lfoRegion[li].get();
+    if(grainExtras) {
+        toggle(lfoRegion[li],"Smp");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("The cycle in sample-region lengths instead of beats / Hz");
+        region=lfoRegion[li].get();
+        ImGui::SameLine(0,4*z);
+    }
+    ImGui::BeginDisabled(region);
+    toggle(lfoTransport[li],"Transport");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("With Sync enabled: lock the generator to transport beats, including Random steps.\nStop holds the position; seeks and loops follow the transport.");
+    ImGui::SameLine(0,4*z);toggle(lfoSync[li],"Sync");
+    ImGui::EndDisabled();
+    const float gap=8*z,half=perVoice?(w-gap)*0.5f:w;
+    const ImVec2 columns=ImGui::GetCursorScreenPos();
+    labelW=50.0f;
     ImGui::BeginGroup();
-    const bool region = grainExtras && lfoRegion[li].get();
-    const bool random = effectiveRandom(li) > 0;
-    bool sameLine = false;   // the toggles share a row; the rate slider goes below them
-    if(!region){
-        toggle(lfoTransport[li],"Transport");
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("With Sync enabled: lock every generator to transport beats, including Random steps.\nStop holds the position; seeks and loops follow the transport. Gate modes start on the next cycle boundary.");
-        toggle(lfoSync[li], "Sync");sameLine = true;
-    }
-    if(!random && !unifiedLfoModels){
-        if(sameLine) ImGui::SameLine();
-        toggle(lfoNoise[li], "Noise");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Smooth random values instead of a waveform; each voice follows its own trajectory");
-        sameLine = true;
-    }
-    if(grainExtras){
-        if(sameLine) ImGui::SameLine();
-        toggle(lfoRegion[li], "Smp");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("The cycle in lengths of the sample region (In..Out) instead of beats / Hz");
-    }
+    ImGui::TextColored(ImColor(pal::textDim),"Timing");
     if(region) sliderVec(lfoBeats[li], "Regs", half, "%.3f", true);
     else if(lfoSync[li].get()) sliderVec(lfoBeats[li], "Beats", half, "%.3f", true);
     else sliderVec(lfoHz[li], "Rate", half, "%.3fHz", true);
-    if(perVoice) sliderVec(lfoDetune[li], "Detune", half, "%.2f");
+    if(perVoice && !followsTransport(li)) sliderVec(lfoDetune[li], "Detune", half, "%.2f");
     slider(lfoInit[li], "Phase", half, "%.2f");
-    ImGui::SetNextItemWidth(w);
+    ImGui::SetNextItemWidth(half);
     int trigger=lfoTrigger[li].get();
     const char* triggers[]={"Free running", "Gate: restart + loop", "Gate: one shot + hold"};
     if(ImGui::Combo("##triggerMode",&trigger,triggers,3)) lfoTrigger[li]=trigger;
     if(host.publishMenu) host.publishMenu(lfoTrigger[li].getEscapedName());
     if(trigger) {
-        slider(lfoRestartBeats[li],"Restart",w,"%.3f b");
+        slider(lfoRestartBeats[li],"Restart",half,"%.3f b");
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("0: no periodic reset; otherwise restart every N beats since Gate/Go. Gate off returns output to zero.");
     }
-    slider(lfoPhasePower[li],"Ramp power",w,"%.2f");
-    if(ImGui::SmallButton("Ramp up")){ lfoRound[li]=std::vector<float>{0}; lfoSkew[li]=std::vector<float>{-1}; lfoPw[li]=std::vector<float>{0.5f}; }
-    ImGui::SameLine();
-    if(ImGui::SmallButton("Ramp down")){ lfoRound[li]=std::vector<float>{0}; lfoSkew[li]=std::vector<float>{1}; lfoPw[li]=std::vector<float>{0.5f}; }
-
+    if(classic) {
+        slider(lfoPhasePower[li],"Pow",half,"%.2f");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Power of the phase progression (1: linear).\nThe Shape Pow / BiPow controls below reshape output values.");
+        const float buttonW=(half-4*z)*0.5f;
+        if(ImGui::Button("Up",ImVec2(buttonW,0))){lfoRound[li]=std::vector<float>{0};lfoSkew[li]=std::vector<float>{-1};lfoPw[li]=std::vector<float>{0.5f};}
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Set a rising ramp waveform");
+        ImGui::SameLine(0,4*z);
+        if(ImGui::Button("Down",ImVec2(buttonW,0))){lfoRound[li]=std::vector<float>{0};lfoSkew[li]=std::vector<float>{1};lfoPw[li]=std::vector<float>{0.5f};}
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Set a falling ramp waveform");
+    }
+    ImGui::Spacing();ImGui::TextColored(ImColor(pal::textDim),"Shape");
+    if(!random && !unifiedLfoModels) {
+        toggle(lfoNoise[li],"Noise");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Smooth random values instead of a waveform");
+    }
     if(!unifiedLfoModels){   // Random: per voice, a new value each cycle at the voice's own phase (not S&H's common clock)
         static const char* types[] = {"Off", "Stepped", "Smooth", "Jumps"};
         const std::string key = lfoRndType[li].getEscapedName();
@@ -1909,10 +1917,10 @@ void scModulation::drawLfoCard(int li, float w) {
                                                      "the values; Jumps: both added, wrapped (sudden leaps).");
         if(host.publishMenu) host.publishMenu(key);
         if(perVoice && random){
-            toggle(lfoRndSame[li], "Same for all voices");
+            toggle(lfoRndSame[li], "Same voices");
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Off: each voice its own random values\nOn: every voice the same values (at its own phase)");
         }
-        if(effectiveRandom(li) == 1){
+        if(effectiveRandom(li)==1 || effectiveRandom(li)==3){
             slider(lfoRndSmooth[li], "Smooth", half, "%.3f s", true);
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("The stepped values glide (one-pole) over this time (0: they jump)");
         }
@@ -1921,7 +1929,7 @@ void scModulation::drawLfoCard(int li, float w) {
         slider(lfoRndSmooth[li], "Smooth", half, "%.3f s", true);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("0: held random steps. Increase to glide between random values.");
         if(perVoice){
-            toggle(lfoRndSame[li], "Same for all voices");
+            toggle(lfoRndSame[li], "Same voices");
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("Off: each voice its own random values\nOn: every voice the same values (at its own phase)");
         }
     }
@@ -1945,7 +1953,7 @@ void scModulation::drawLfoCard(int li, float w) {
         sliderInt(lfoSeed[li],"Seed",half);
         if(ImGui::IsItemHovered())ImGui::SetTooltip("0: no fixed seed; fresh sequence on creation, recall, Reset and transport restart/seek.\nA positive seed repeats the same sequence. Shared by all voices and servers of this LFO.");
     }
-    if(followsTransport(li) && (random || effectiveNoise(li))) {
+    if(followsTransport(li) && lfoTrigger[li].get()==0 && (random || effectiveNoise(li))) {
         toggle(lfoRandomRepeat[li],"Repeat loop");
         if(ImGui::IsItemHovered())ImGui::SetTooltip("On: replay the same random sequence each transport loop.\nOff: fresh random draws each loop; jump timing remains on transport beats.");
     }
@@ -1953,12 +1961,15 @@ void scModulation::drawLfoCard(int li, float w) {
     if(ImGui::IsItemHovered())ImGui::SetTooltip(lfoSync[li].get()?"Sample & hold: steps per beat":"Sample & hold: steps per second");
     sliderInt(lfoSteps[li], "Steps", half);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Quantize to this many levels, including both endpoints (0: smooth).\nFor an 8-beat Pos span: 9 levels = destinations 0, 1, ... 8 beats.\nThe LFO Beats control sets WHEN jumps happen; Steps sets WHERE.");
-    slider(lfoSHGlide[li], "Glide", half, "%.3f s", true);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("S&H glide: each held value slides to the next over this time (0: steps)");
+    if(std::any_of(lfoSH[li].get().begin(),lfoSH[li].get().end(),[](float v){return v>0;})) {
+        slider(lfoSHGlide[li], "Glide", half, "%.3f s", true);
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("S&H glide: each held value slides to the next over this time (0: steps)");
+    }
     if(!effectiveNoise(li) && !random) toggle(lfoCentered[li], "Centered");
     ImGui::EndGroup();
     if(perVoice){
-        ImGui::SameLine(0, 8.0f * z);
+        ImGui::SameLine();
+        ImGui::SetCursorScreenPos(ImVec2(columns.x+half+gap,columns.y));
         ImGui::BeginGroup();
         ImGui::TextColored(ImColor(pal::textDim), "Voices");
         slider(lfoNWaves[li], "Spread", half, "%.2f");
@@ -1990,14 +2001,15 @@ void scModulation::drawLfos(float w) {
     if(ImGui::Button("Reset LFOs / Ramps"))resetLfos();
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Restart local and gate-triggered sources.\nTransport-linked free-running sources stay on the global grid; reset the transport to restart that timeline.");
     ImGui::Spacing();
-    const float cw = colW(w, 4);
+    const int columns=std::clamp(int((w+gapW())/(280*z+gapW())),1,4);
+    const float cw=colW(w,columns);
     float prevBottom = 0.0f;
     for(int li = 0; li < lfoCount; li++){
-        if(li % 4) ImGui::SameLine(0, gapW());
+        if(li % columns) ImGui::SameLine(0, gapW());
         else if(li) ImGui::Spacing();
         drawLfoCard(li, cw);
         const ImVec2 c0 = ImGui::GetItemRectMin(), c1 = ImGui::GetItemRectMax();
-        if(li % 4){   // a vertical line between this card and the previous one
+        if(li % columns){   // a vertical line between this card and the previous one
             const float x = c0.x - gapW() * 0.5f;
             ImGui::GetWindowDrawList()->AddLine(ImVec2(x, c0.y), ImVec2(x, std::max(c1.y, prevBottom)), pal::grid, 1.0f * z);
         }
