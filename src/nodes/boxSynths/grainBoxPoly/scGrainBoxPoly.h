@@ -278,15 +278,17 @@ private:
         ofParameter<bool>  liveLenBeats;            // Live Length in beats (follows the tempo)
         ofParameter<bool>  grainless;               // Live: plain delay line per playhead (no grains)
         ofParameter<float> overlap;                 // TrigDur: grain length = Overlap x trigger period
+        ofParameter<float> grainTail;               // extra grain length in ms, independent of tempo
         ofParameter<bool>  delayJump;               // Grainless: 0 Glide (tape slide), 1 Jump (crossfade)
         ofParameter<float> delayGlide;              // Grainless: glide / crossfade time (ms)
         ofParameter<bool>  freeze;                  // stop recording
         ofParameter<float> feedback;                // Live: engine output back into its buffer (0..1.1)
         ofParameter<float> fbTone;                  // feedback filter: 0 lowpass .. 0.5 open .. 1 highpass
-        // Gate Motion (live input): on the Gate the tape's speed ramps from
-        // Start to End over Time (Curve); Repeat starts it again every Time;
-        // Freeze stops recording while it runs (a loop)
+        // Gate Motion: scan speed ramps Start -> End over Time (Curve).
+        // Tape couples pitch; Stretch keeps grain pitch independent; loop
+        // wraps delay within Time. Repeat resets; Freeze stops recording.
         ofParameter<bool>  motion, motionRepeat, motionFreeze, motionBeats;
+        ofParameter<int>   motionMode;              // 0 tape, 1 pitch-preserving stretch, 2 wrapped delay ramp
         ofParameter<float> motionStart, motionEnd, motionTime, motionCurve;
         std::vector<float> liveRing;                // signed max per bin, buffer order
         std::vector<float> liveRingMin;             // signed min per bin

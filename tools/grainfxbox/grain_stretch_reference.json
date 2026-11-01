@@ -1,0 +1,111 @@
+{
+  "source": "grain_stretch.ens (Reaktor 2008 ensemble; inspected through a temporary Reaktor 6 save)",
+  "source_sha256": "c0c0a2bd0d85909b429e9902f87a3e75707f4704008e8ebb4dc779474571f5f4",
+  "resolved_connections": 74,
+  "mapping": {
+    "delay_seconds": "saw phase * beats_back / beats_per_second; Go resets phase; clock resets every beats_back beats",
+    "delay_slope": "speed_a (scan speed = 1 - speed_a)",
+    "grain_interval_seconds": "grain_beats / beats_per_second",
+    "grain_duration_seconds": "grain_interval_seconds + decay_ms / 1000",
+    "pitch": "independent semitones",
+    "limits": "GrainBuf envelopes/interpolation differ; interval jitter is not emulated. Custom grain envelope normalizes attack+release; Reaktor attack values above 1 are clamped. Pan jitter uses GrainFxBox placement, with Source placement retaining channel identity."
+  },
+  "snapshots": [
+    {
+      "slot": 1,
+      "name": "SlowDown3",
+      "beats_back": 16,
+      "speed_a": 0,
+      "grain_beats": 0.11000000685453415,
+      "pitch": 0.9120011329650879,
+      "attack": 0.05000000074505806,
+      "decay_ms": 0.5,
+      "interval_jitter_ms": 0,
+      "pan_jitter": 0
+    },
+    {
+      "slot": 2,
+      "name": "SlowDown2",
+      "beats_back": 8,
+      "speed_a": 0.5,
+      "grain_beats": 0.19500000774860382,
+      "pitch": 0,
+      "attack": 5.556299564905289,
+      "decay_ms": 803.2480657398701,
+      "interval_jitter_ms": 40.94488322734833,
+      "pan_jitter": 0.4330708682537079
+    },
+    {
+      "slot": 3,
+      "name": "SlowDown3",
+      "beats_back": 16,
+      "speed_a": 0.75,
+      "grain_beats": 0.06000000238418579,
+      "pitch": 0.24000120162963867,
+      "attack": 13.815748911145635,
+      "decay_ms": 1000,
+      "interval_jitter_ms": 7.874016463756561,
+      "pan_jitter": 0.04724409803748131
+    },
+    {
+      "slot": 4,
+      "name": "canica1",
+      "beats_back": 16,
+      "speed_a": -1,
+      "grain_beats": 0.25,
+      "pitch": 0.8640003204345703,
+      "attack": 3.5897639531114205,
+      "decay_ms": 559.2756219804287,
+      "interval_jitter_ms": 0,
+      "pan_jitter": 0
+    },
+    {
+      "slot": 5,
+      "name": "SlowDown4",
+      "beats_back": 16,
+      "speed_a": 0.875,
+      "grain_beats": 0.07500000298023224,
+      "pitch": 0.14400100708007812,
+      "attack": 9.882677687557898,
+      "decay_ms": 173.64173908531666,
+      "interval_jitter_ms": 0,
+      "pan_jitter": 0.18110236525535583
+    },
+    {
+      "slot": 6,
+      "name": "raro1",
+      "beats_back": 8,
+      "speed_a": 1,
+      "grain_beats": 0.125,
+      "pitch": 0.48000097274780273,
+      "attack": 18.92874157624099,
+      "decay_ms": 1000,
+      "interval_jitter_ms": 25.196853280067444,
+      "pan_jitter": 1
+    },
+    {
+      "slot": 7,
+      "name": "raro2",
+      "beats_back": 16,
+      "speed_a": 0.6500000953674316,
+      "grain_beats": 0.030000001192092896,
+      "pitch": 0,
+      "attack": 0.05000000074505806,
+      "decay_ms": 0.5,
+      "interval_jitter_ms": 0,
+      "pan_jitter": 0
+    },
+    {
+      "slot": 8,
+      "name": "SlowDown2",
+      "beats_back": 16,
+      "speed_a": 3,
+      "grain_beats": 0.5,
+      "pitch": -1.8239994049072266,
+      "attack": 14.602362709275381,
+      "decay_ms": 291.6929234713316,
+      "interval_jitter_ms": 0,
+      "pan_jitter": 0
+    }
+  ]
+}

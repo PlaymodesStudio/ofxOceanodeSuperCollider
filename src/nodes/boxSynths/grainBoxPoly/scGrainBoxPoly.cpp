@@ -643,6 +643,7 @@ void scGrainBoxPoly::setup() {
 // GrainFxBox's starting sound: a granular delay on the input, playing on its
 // own (Drone), every channel on its own speaker
 void scGrainBoxPoly::applyFxDefaults(Playhead& ph) {
+    ph.liveLength.set(16.0f);                  // room for the GrainStretch delay windows
     ph.drone.set(true);
     ph.pitchMode.set(0);                       // semitones: 0 = as played
     ph.pitch.set(vector<float>{0.0f});
@@ -708,11 +709,13 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.grainless.set      ("Grainless"    + x, false);
     ph.delayJump.set      ("DelayJump"    + x, false);
     ph.overlap.set        ("Overlap"      + x, 1.0f, 0.25f, 8.0f);
+    ph.grainTail.set      ("Grain Tail"   + x, 0.0f, 0.0f, 2000.0f);
     ph.delayGlide.set     ("DelayGlide"   + x, 50.0f, 0.0f, 2000.0f);
     ph.freeze.set         ("Freeze"       + x, false);
     ph.feedback.set       ("Feedback"     + x, 0.0f, 0.0f, 1.1f);
     ph.fbTone.set         ("FbTone"       + x, 0.5f, 0.0f, 1.0f);
     ph.motion.set         ("Motion"        + x, false);
+    ph.motionMode.set     ("Motion Mode"   + x, 0, 0, 2);
     ph.motionStart.set    ("Motion Start"  + x, 1.0f, -4.0f, 4.0f);   // tape speed (1 = in step, 0 = stopped, -1 = backwards)
     ph.motionEnd.set      ("Motion End"    + x, 0.0f, -4.0f, 4.0f);
     ph.motionTime.set     ("Motion Time"   + x, 0.5f, 0.01f, 16.0f);  // seconds, or beats (Motion Beats)
@@ -765,6 +768,7 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
                                                   "Pent. major", "Pent. minor", "Whole tone", "Octaves", "Fifths+oct", "Custom"});
     dropdowns.set(ph.scaleRoot.getEscapedName(), {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"});
     dropdowns.set(ph.envShape.getEscapedName(), {"Custom", "Hann", "Gaussian", "Percussive", "Reverse Perc", "Trapezoid", "Rectangular"});
+    dropdowns.set(ph.motionMode.getEscapedName(), {"Tape", "Stretch", "Stretch loop"});
     dropdowns.set(ph.filterType.getEscapedName(), std::vector<const char*>(kFilterNames, kFilterNames + 6));
 
     dropdowns.set(ph.placement.getEscapedName(), {"Manual (PanAz)", "Spread", "Channels", "Source (1:1)"});
@@ -954,11 +958,11 @@ float scGrainBoxPoly::intervalSec(const Playhead& ph, float v) const {
     return (float)intervalUnitToSec(ph, ph.intervalUnitCur, v);
 }
 
-// 1/1000 .. all of the region, 10 ms .. 16 s, 64th .. 4 bars
+// 1/1000 .. all of the region, 10 ms .. 16 s, 1/128 beat .. 4 bars
 void scGrainBoxPoly::setIntervalRange(Playhead& ph) {
     const int u = ph.intervalUnitCur;
     // Pitch: MIDI 0 (8 Hz) .. 96 (C7, 2093 Hz)
-    ph.autoTrigBeatDiv.setMin(vector<float>{u == 1 ? 10.0f    : u == 2 ? 1.0f / 16.0f : u == 3 ? 0.0f  : 0.001f});
+    ph.autoTrigBeatDiv.setMin(vector<float>{u == 1 ? 10.0f    : u == 2 ? 1.0f / 128.0f : u == 3 ? 0.0f  : 0.001f});
     ph.autoTrigBeatDiv.setMax(vector<float>{u == 1 ? 16000.0f : u == 2 ? 16.0f        : u == 3 ? 96.0f : 1.0f});
 }
 
@@ -1562,6 +1566,9 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     ph.listeners.push(ph.overlap.newListener([p](float& v) {
         for(auto& [srv, s] : p->synths) if(s) s->set("overlap", std::max(0.01f, v));
     }));
+    ph.listeners.push(ph.grainTail.newListener([p](float& v) {
+        for(auto& [srv, s] : p->synths) if(s) s->set("graintail", v * 0.001f);
+    }));
     ph.listeners.push(ph.stereoWidth.newListener([p](float& v) {
         for(auto& [srv, s] : p->synths) if(s) s->set("width", std::max(0.0f, std::min(1.0f, v)));
     }));
@@ -1624,6 +1631,7 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     }));
     // Gate Motion: the control synth's tape
     auto motionL = [this, p]() { for(auto& [srv, s] : p->synths) if(s) setMotionArgs(*p, s, srv); };
+    ph.listeners.push(ph.motionMode.newListener([motionL](int&) { motionL(); }));
     for(auto* q : {&ph.motion, &ph.motionRepeat, &ph.motionFreeze, &ph.motionBeats})
         ph.listeners.push(q->newListener([motionL](bool&) { motionL(); }));
     for(auto* q : {&ph.motionStart, &ph.motionEnd, &ph.motionTime, &ph.motionCurve})
@@ -1871,6 +1879,7 @@ void scGrainBoxPoly::configureSynth(Playhead& ph, ofxSCSynth* s, ofxSCServer* sr
     s->set("monotrig",         ph.monoTrig.get() ? 1.0f : 0.0f);
     s->set("delayglide",       ph.delayGlide.get() * 0.001f);
     s->set("overlap",          ph.overlap.get());
+    s->set("graintail",        ph.grainTail.get() * 0.001f);
     s->set("width",            ph.stereoWidth.get());
     // /grainLoad [nodeID, -1, grains sounding, thinning] from the control synth
     ph.grainListeners[srv] = s->newFeedbackMessage.newListener([p, s](ofxOscMessage& msg) {
@@ -3143,11 +3152,22 @@ void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
         else                  for(auto& ph : playheads) sendDiv(*ph);   // region length
         sampleMsP.set(std::max(0.0f, (outRelOf(ph0()) - inRelOf(ph0())) * mainSample.durationSecs * 1000.0f));
     }
-    for(auto& ph : playheads)
+    for(auto& ph : playheads) {
+        // Grow only when a stretch-loop window needs it; snapshots never shrink
+        // a recording. This also handles a slower tempo or an older 4 s patch.
+        if(fxMode && ph->motion.get() && ph->motionMode.get()==2) {
+            const float required=motionTimeSec(*ph)+2.0f;
+            if(liveLenSec(*ph)+0.01f < required) {
+                const float units=ph->liveLenBeats.get()?required*std::max(1.0f,effectiveBpm())/60.0f:required;
+                const float length=std::min(ph->liveLength.getMax(),units);
+                if(length>ph->liveLength.get()+0.01f) ph->liveLength.set(length);
+            }
+        }
         if(ph->liveResizeAt > 0.0f && ofGetElapsedTimef() >= ph->liveResizeAt) {
             ph->liveResizeAt = -1.0f;
             if(ph->liveInput) resizeLiveBuffers(*ph);
         }
+    }
     if(visOn)
         for(auto& ph : playheads) if(ph->liveInput) updateLivePeaks(*ph);
 
@@ -3547,6 +3567,7 @@ void scGrainBoxPoly::sendAllParams(Playhead& ph) {
         controls.set("monotrig",         ph.monoTrig.get() ? 1.0f : 0.0f);
         controls.set("delayglide",       ph.delayGlide.get() * 0.001f);
         controls.set("overlap",          ph.overlap.get());
+        controls.set("graintail",        ph.grainTail.get() * 0.001f);
         controls.set("width",            ph.stereoWidth.get());
         controls.set("chance",           withOffset(ph.chance.get(), nv, gChanceP.get()));
         controls.set("posjit",           posAmtSend(ph, ph.posJit.get(), nv));
@@ -3855,6 +3876,7 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
         regS (ph, ph.delayJump,        false);
         regS (ph, ph.delayGlide,       false);
         regS (ph, ph.overlap,          false);
+        regS (ph, ph.grainTail,        false);
         regS (ph, ph.liveLenBeats,     false);
         regVF(ph, ph.chance,           true);
         regS (ph, ph.uniqueTrig,       true);
@@ -3904,6 +3926,7 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
         regS (ph, ph.feedback,         false);
         regS (ph, ph.fbTone,           false);
         // Gate Motion (Live)
+        regS(ph, ph.motionMode, false);
         for(auto* q : {&ph.motion, &ph.motionRepeat, &ph.motionFreeze, &ph.motionBeats}) regS(ph, *q, false);
         for(auto* q : {&ph.motionStart, &ph.motionEnd, &ph.motionTime, &ph.motionCurve}) regS(ph, *q, false);
         // Modulation: the gate, the placement, every LFO / envelope / ext control
@@ -4359,6 +4382,7 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
             if(!j.contains(ph->phaseOff.getEscapedName())) ph->phaseOff.set(0.0f);
             rs(ph->grainless, false); rs(ph->liveLenBeats, false);
             rs(ph->delayJump, false); rs(ph->delayGlide, 50.0f); rs(ph->overlap, 1.0f);
+            rs(ph->grainTail, 0.0f);
             rv(ph->autoTrigBeatDiv, defaultInterval(ph->intervalUnit.get()));
             rv(ph->trigPhase, 0.0f); rs(ph->maxGrains, 0);
             rv(ph->gate, 0.0f); rs(ph->placement, 0); rs(ph->spreadWidth, 1.0f); rs(ph->stereoWidth, 0.0f);
@@ -4366,6 +4390,7 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
             rs(ph->ampA, 0.01f); rs(ph->ampD, 0.3f); rs(ph->ampS, 1.0f); rs(ph->ampR, 0.5f);
             rs(ph->ampCA, -4.0f); rs(ph->ampCD, -4.0f); rs(ph->ampCR, -4.0f);
             rs(ph->motion, false); rs(ph->motionStart, 1.0f); rs(ph->motionEnd, 0.0f); rs(ph->motionTime, 0.5f);
+            rs(ph->motionMode, 0);
             rs(ph->motionBeats, false); rs(ph->motionCurve, 0.0f); rs(ph->motionRepeat, false); rs(ph->motionFreeze, false);
         }
         if(fxMode) rs(wetModeP, 0);
@@ -4828,11 +4853,17 @@ void scGrainBoxPoly::drawHeader(Playhead& ph, float w) {
         if(up) ImGui::PushStyleColor(ImGuiCol_Button, gbpAccent(0, 200, 0.9f));
         ImGui::Button("Gate##gbpHdrGate", ImVec2(52.0f * zoom, 0));
         if(up) ImGui::PopStyleColor();
-        const bool held = ImGui::IsItemActive();
-        if(held != up && !hasInputConnection(g0.gate.getName())) g0.gate.set(vector<float>{held ? 1.0f : 0.0f});
+        if(!hasInputConnection(g0.gate.getName())) {
+            if(ImGui::IsItemActivated()) g0.gate.set(vector<float>{1.0f});
+            if(ImGui::IsItemDeactivated()) g0.gate.set(vector<float>{0.0f});
+        }
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("Hold: Gate up (engine 1's Gate, which every engine follows\n"
                               "unless its own Gate is published). Wet Mode Gated / Gate Motion.");
+        ImGui::SameLine(0, 4.0f * zoom);
+        if(ImGui::Button(up ? "Stop##gbpGo" : "Go##gbpGo", ImVec2(52.0f * zoom, 0)) && !hasInputConnection(g0.gate.getName()))
+            g0.gate.set(vector<float>{up ? 0.0f : 1.0f});
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Click Go to run the selected effect; Stop returns to the input in Wet Mode Gated.\nGate can also be held or driven from the node. Select a Stretch factory preset to start.");
     }
     ImGui::SameLine(0, 12.0f * zoom);
     {
@@ -5408,18 +5439,26 @@ void scGrainBoxPoly::drawPlayheadHeader(Playhead& ph, float /*w*/) {
         if(ImGui::Checkbox("Gate Motion##gbpMot", &on)) ph.motion.set(on);
         ImGui::PopStyleColor();
         if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("While Gate is up the recording plays like tape changing speed: from\n"
-                              "Start to End over Time (1 = in step with the input, 0 = stopped,\n"
-                              "-1 = backwards, 2 = twice as fast). Delay and pitch move together.\n"
-                              "Tape stop 1 -> 0, spin-up 0 -> 1, rewind -2, octave drop 1 -> 0.5.\n"
-                              "Drone off: it sounds through the Amp Envelope (Envelopes tab);\n"
-                              "Wet Mode Gated: the input is muted meanwhile.");
+            ImGui::SetTooltip("Go or Gate starts the scan-speed ramp: From to To over Time.\n"
+                              "1 = follow the input, 0 = hold a sound, negative = scan backwards.\n"
+                              "Tape changes pitch too; Stretch keeps grain Pitch independent.\n"
+                              "Stretch loop wraps the delay within Time, like Reaktor GrainStretch.\n"
+                              "Use grains (Grainless off) for stretching. Wet Mode Gated replaces the input.");
         drawNodePublishContextMenu(ph.motion.getEscapedName(), "Gate Motion##gbpMot", 0.0f, true);
         if(!on) ImGui::BeginDisabled();
+        ImGui::SameLine(0, 4.0f * zoom);
+        ImGui::SetNextItemWidth(116.0f * zoom);
+        int mode=ph.motionMode.get();
+        const char* modes[]={"Tape", "Stretch", "Stretch loop"};
+        if(ImGui::Combo("##gbpMotionMode", &mode, modes, 3)) {
+            ph.motionMode.set(mode);
+            if(mode) ph.grainless.set(false);
+        }
+        drawNodePublishContextMenu(ph.motionMode.getEscapedName());
         fslider("##gbpMotS", ph.motionStart, 76.0f, "from %.2fx", "Speed when the Gate goes up");
         fslider("##gbpMotE", ph.motionEnd, 70.0f, "to %.2fx", "Speed after Time");
         const bool mb = ph.motionBeats.get();
-        fslider("##gbpMotT", ph.motionTime, 70.0f, mb ? "%.2f b" : "%.2f s", "How long the change takes (Repeat: the period)");
+        fslider("##gbpMotT", ph.motionTime, 70.0f, mb ? "%.2f b" : "%.2f s", "Ramp time; Stretch loop also uses this as the delay window. Repeat resets every Time.\nFor a steady stretch, set From and To to the same scan speed.");
         ImGui::SameLine(0, 2.0f * zoom);
         if(ImGui::SmallButton(mb ? "b##gbpMotU" : "s##gbpMotU")) ph.motionBeats.set(!mb);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Time in seconds (s) or beats (b, follows the tempo)");
@@ -5795,7 +5834,11 @@ void scGrainBoxPoly::applySnapshot(const ofJson& snapInSaved) {
     const auto snapIn = scDroneMode::migrated(snapInSaved);
     if(!snapIn.is_object()) return;
     const ofJson snap = pitchInCurrentUnits(snapIn);
-    for(auto& ph : playheads) if(!snap.contains(ph->drone.getEscapedName())) ph->drone = false;
+    for(auto& ph : playheads) {
+        if(!snap.contains(ph->drone.getEscapedName())) ph->drone = false;
+        if(!snap.contains(ph->motionMode.getEscapedName())) ph->motionMode=0;
+        if(!snap.contains(ph->grainTail.getEscapedName())) ph->grainTail=0.0f;
+    }
     const bool wasLoading = loadingPreset;
     loadingPreset = true;
     std::vector<std::pair<std::function<void(const ofJson&)>, ofJson>> todo;
@@ -5876,7 +5919,64 @@ std::vector<ofJson> scGrainBoxPoly::factorySnapshots() const {
    "Motion Repeat": true, "Motion Freeze": true}},
  {"name": "Repeated Tape Stops", "set": {"Wet Mode": 1, "Drone": false, "Position": 0.0, "PosJit": 0.0, "Interval": 8.0,
    "Overlap": 2.0, "Motion": true, "Motion Start": 1.0, "Motion End": 0.0, "Motion Time": 0.5, "Motion Beats": true,
-   "Motion Repeat": true}}
+   "Motion Repeat": true}},
+ {"name": "Stretch Slowdown", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 1,
+   "Interval": 10.0, "Overlap": 4.0, "EnvShape": 1, "Amp Attack": 0.005, "Amp Release": 0.05, "Motion Start": 1,
+   "Motion End": 0, "Motion Time": 2}},
+ {"name": "Stretch Half Speed", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 2,
+   "Interval": 10.0, "Overlap": 4.0, "EnvShape": 1, "Amp Attack": 0.005, "Amp Release": 0.05, "Motion Start": 0.5,
+   "Motion End": 0.5, "Motion Time": 4}},
+ {"name": "Stretch Reverse Scan", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 2,
+   "Interval": 10.0, "Overlap": 4.0, "EnvShape": 1, "Amp Attack": 0.005, "Amp Release": 0.05, "Motion Start": -1,
+   "Motion End": -1, "Motion Time": 4}},
+ {"name": "GrainStretch 01 - SlowDown3", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 2,
+   "Interval": 0.11000000685453415, "Overlap": 1.0, "EnvShape": 0, "Amp Attack": 0.005, "Amp Release": 0.05,
+   "Motion Start": 1, "Motion End": 1, "Motion Time": 16, "Motion Beats": true, "Motion Repeat": true, "IntervalUnit": 2,
+   "TrigDur": true, "Pitch": 0.9120011329650879, "EnvAttack": 0.05000000074505806, "EnvRelease": 0.009009008452679676,
+   "PanAzJit": 0, "Grain Tail": 0.5}},
+ {"name": "GrainStretch 02 - SlowDown2", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 2,
+   "Interval": 0.19500000774860382, "Overlap": 1.0, "EnvShape": 0, "Amp Attack": 0.005, "Amp Release": 0.05,
+   "Motion Start": 0.5, "Motion End": 0.5, "Motion Time": 8, "Motion Beats": true, "Motion Repeat": true, "IntervalUnit": 2,
+   "TrigDur": true, "Pitch": 0, "EnvAttack": 1, "EnvRelease": 0.8917566329994299, "PanAzJit": 0.4330708682537079,
+   "Grain Tail": 803.248066}},
+ {"name": "GrainStretch 03 - SlowDown3", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 2,
+   "Interval": 0.06000000238418579, "Overlap": 1.0, "EnvShape": 0, "Amp Attack": 0.005, "Amp Release": 0.05,
+   "Motion Start": 0.25, "Motion End": 0.25, "Motion Time": 16, "Motion Beats": true, "Motion Repeat": true,
+   "IntervalUnit": 2, "TrigDur": true, "Pitch": 0.24000120162963867, "EnvAttack": 1, "EnvRelease": 0.9708737852841051,
+   "PanAzJit": 0.04724409803748131, "Grain Tail": 1000}},
+ {"name": "GrainStretch 04 - canica1", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 2,
+   "Interval": 0.25, "Overlap": 1.0, "EnvShape": 0, "Amp Attack": 0.005, "Amp Release": 0.05, "Motion Start": 2,
+   "Motion End": 2, "Motion Time": 16, "Motion Beats": true, "Motion Repeat": true, "IntervalUnit": 2, "TrigDur": true,
+   "Pitch": 0.8640003204345703, "EnvAttack": 1, "EnvRelease": 0.8173250719670162, "PanAzJit": 0, "Grain Tail": 559.275622}},
+ {"name": "GrainStretch 05 - SlowDown4", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 2,
+   "Interval": 0.07500000298023224, "Overlap": 1.0, "EnvShape": 0, "Amp Attack": 0.005, "Amp Release": 0.05,
+   "Motion Start": 0.125, "Motion End": 0.125, "Motion Time": 16, "Motion Beats": true, "Motion Repeat": true,
+   "IntervalUnit": 2, "TrigDur": true, "Pitch": 0.14400100708007812, "EnvAttack": 1, "EnvRelease": 0.8223941822781421,
+   "PanAzJit": 0.18110236525535583, "Grain Tail": 173.641739}},
+ {"name": "GrainStretch 06 - raro1", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 2,
+   "Interval": 0.125, "Overlap": 1.0, "EnvShape": 0, "Amp Attack": 0.005, "Amp Release": 0.05, "Motion Start": 0,
+   "Motion End": 0, "Motion Time": 8, "Motion Beats": true, "Motion Repeat": true, "IntervalUnit": 2, "TrigDur": true,
+   "Pitch": 0.48000097274780273, "EnvAttack": 1, "EnvRelease": 0.9411764705882353, "PanAzJit": 1, "Grain Tail": 1000}},
+ {"name": "GrainStretch 07 - raro2", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 2,
+   "Interval": 0.030000001192092896, "Overlap": 1.0, "EnvShape": 0, "Amp Attack": 0.005, "Amp Release": 0.05,
+   "Motion Start": 0.34999990463256836, "Motion End": 0.34999990463256836, "Motion Time": 16, "Motion Beats": true,
+   "Motion Repeat": true, "IntervalUnit": 2, "TrigDur": true, "Pitch": 0, "EnvAttack": 0.05000000074505806,
+   "EnvRelease": 0.032258063275657806, "PanAzJit": 0, "Grain Tail": 0.5}},
+ {"name": "GrainStretch 08 - SlowDown2", "set": {
+   "Wet Mode": 1, "Drone": false, "Grainless": false, "Position": 0.0, "PosJit": 0.0, "Motion": true, "Motion Mode": 2,
+   "Interval": 0.5, "Overlap": 1.0, "EnvShape": 0, "Amp Attack": 0.005, "Amp Release": 0.05, "Motion Start": -2,
+   "Motion End": -2, "Motion Time": 16, "Motion Beats": true, "Motion Repeat": true, "IntervalUnit": 2, "TrigDur": true,
+   "Pitch": -1.8239994049072266, "EnvAttack": 1, "EnvRelease": 0.5384839100390594, "PanAzJit": 0, "Grain Tail": 291.692923}}
 ])JSON");
 }
 
@@ -5925,6 +6025,10 @@ void scGrainBoxPoly::applyMorph(const ofJson& aInSaved, const ofJson& bInSaved, 
     if(!aIn.is_object() || !bIn.is_object()) return;
     ofJson a = pitchInCurrentUnits(aIn), b = pitchInCurrentUnits(bIn);
     for(const auto& ph : playheads) {
+        for(auto* endpoint : {&a,&b}) {
+            if(!endpoint->contains(ph->motionMode.getEscapedName())) (*endpoint)[ph->motionMode.getEscapedName()]=0;
+            if(!endpoint->contains(ph->grainTail.getEscapedName())) (*endpoint)[ph->grainTail.getEscapedName()]=0.0f;
+        }
         const auto key = ph->drone.getEscapedName();
         if(!a.contains(key)) a[key] = false;
         if(!b.contains(key)) b[key] = false;
@@ -6712,6 +6816,14 @@ void scGrainBoxPoly::drawControlsPanel(Playhead& ph, float w, float h) {
                               "overlaps the next by half (smooth envelope: no dips), <1: gaps.\n"
                               "Shift+drag: fine");
         drawNodePublishContextMenu(key);
+        ImGui::TextUnformatted("Grain tail");
+        drawPublishedCurrentItemUnderline(ph.grainTail.getEscapedName());
+        ImGui::SameLine(labelW);
+        ImGui::SetNextItemWidth(colW - labelW - m);
+        float tail=ph.grainTail.get();
+        if(gbpSliderFloat("##grainTail", &tail, 0.0f, 2000.0f, "%.1f ms")) ph.grainTail.set(tail);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Adds this much time to each grain after Overlap x Interval.\nKeeps a fixed tail when the interval follows tempo, like Reaktor GrainStretch's D.");
+        drawNodePublishContextMenu(ph.grainTail.getEscapedName());
     } else {
         sliderF ("Dur",    "##dur", ph.duration,  0.f,  1.f);
     }
@@ -7127,6 +7239,7 @@ void scGrainBoxPoly::setMotionArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv
     if(!s) return;
     scSynthControlBatch c(s, srv);
     c.set("tmotion", ph.motion.get() && ph.liveInput ? 1.0f : 0.0f);
+    c.set("tmode", ph.motionMode.get());
     c.set("tstart",  ph.motionStart.get());
     c.set("tend",    ph.motionEnd.get());
     c.set("ttime",   motionTimeSec(ph));

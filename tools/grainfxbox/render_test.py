@@ -13,7 +13,7 @@ L = 440 Hz, R = 660 Hz.
 Compiles scGrainBoxPoly.scd (reduced: Ctl_8, 2 channels) with the bundled
 sclang into the output folder.   tools/grainfxbox/render_test.py [--output DIR]
 """
-import argparse, pathlib, shutil, subprocess, sys
+import argparse, json, pathlib, shutil, subprocess, sys
 import numpy as np
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools/aliasingbox'))
@@ -23,6 +23,7 @@ SCLANG = ROOT / 'sclang/osx/sclang'
 SCSYNTH = '/Applications/SuperCollider.app/Contents/Resources/scsynth'
 SR = 48000
 IN, GATE, MIX, CLK, PHASE, CTL = 16, 20, 32, 50, 60, 100   # buses (audio / control)
+AMP = 1000   # outside Ctl_8's 104 + 15*8 control channels
 
 
 def compile_defs(work):
@@ -32,6 +33,7 @@ def compile_defs(work):
     probes = ('SynthDef(\\GBTestSrc, { Out.ar(%d, [SinOsc.ar(440, 0, 0.25), SinOsc.ar(660, 0, 0.25)]) }).writeDefFile("%s");\n'
               'SynthDef(\\GBTestSweep, { Out.ar(%d, SinOsc.ar(Line.ar(200, 1000, 4)) * 0.25 ! 2) }).writeDefFile("%s");\n'
               'SynthDef(\\GBTestGate, { Out.ar(%d, K2A.ar(\\gate.kr(0))) }).writeDefFile("%s");\n' % (IN, work, IN, work, GATE, work))
+    probes += ('SynthDef(\\GBTestMotion, { |ctl=100| Out.ar(0, K2A.ar(In.kr(ctl+98, 2))) }).writeDefFile("%s");\n' % work)
     (work / 'run.scd').write_text('"%s".load;\n%s"COMPILED".postln;\n0.exit;\n' % (work / 'gb.scd', probes))
     (work / 'config.yaml').write_text(f'includePaths:\n    - {ROOT}/sclang/SCClassLibrary\nexcludePaths: []\npostInlineWarnings: false\nexcludeDefaultPaths: true\n')
     home = work / 'home'; home.mkdir(exist_ok=True)
@@ -41,14 +43,23 @@ def compile_defs(work):
     return sorted((work / 'CompiledSynthdefs/GrainBoxPoly').glob('*.scsyndef')) + sorted(work.glob('GBTest*.scsyndef'))
 
 
-def render(work, defs, name, voice, ctl_args, dry_args, gate_events, dur, src='GBTestSrc'):
-    frames = 4 * SR
+def render(work, defs, name, voice, ctl_args, dry_args, gate_events, dur, src='GBTestSrc', buffer_seconds=4, preset=None):
+    frames = buffer_seconds * SR
     t0 = [message('/d_recv', p.read_bytes()) for p in defs]
     t0 += [message('/b_alloc', 0, frames, 1), message('/b_alloc', 1, frames, 1), message('/g_new', 1, 0, 0)]
+    if preset:
+        # Match the production custom envelope (linear, attack/release normalized).
+        atk, rel = preset['EnvAttack'], preset['EnvRelease']
+        total = max(1.0,atk+rel); atk /= total; rel /= total
+        env = [min(1.0, t/max(atk,1e-9), (1-t)/max(rel,1e-9)) for t in np.linspace(0,1,512)]
+        t0 += [message('/b_alloc',2,512,1),message('/c_setn',AMP,8,0.005,0.01,1.0,0.05,0.0,0.0,0.0,1.0)]
     score = bundle(0, t0)
     ctl = ['ctl', CTL, 'clk', CLK, 'bufnum0', 0, 'bufnum1', 1, 'bufs', '$bufs', 'live', 1.0, 'phasebus', PHASE,
            'envbuf', -1.0, 'bpm', 120.0, 'inpoint', 0.0, 'outpoint', 1.0, 'vis', 0.0] + ctl_args
     ctl_msg = message('/s_new', 'GrainBoxPolyCtl_8', 1003, 1, 1, *[a for a in ctl if a != '$bufs' and a != 'bufs'])
+    if preset:
+        score += bundle(0.005,[message('/b_setn',2,0,512,*env)])
+    voice_args = ['ampbus',float(AMP),'modw',1.0,'gatebus',GATE] if preset else []
     score += bundle(0.01, [
         message('/s_new', src, 1000, 1, 1),
         message('/s_new', 'GBTestGate', 1001, 1, 1),
@@ -56,7 +67,7 @@ def render(work, defs, name, voice, ctl_args, dry_args, gate_events, dur, src='G
         message('/n_setn', 1002, 'bufs', 2, 0.0, 1.0),
         ctl_msg,
         message('/n_setn', 1003, 'bufs', 2, 0.0, 1.0),
-        message('/s_new', voice, 1004, 1, 1, 'out', MIX, 'ctl', CTL, 'clk', CLK, 'idx', 0),
+        message('/s_new', voice, 1004, 1, 1, 'out', MIX, 'ctl', CTL, 'clk', CLK, 'idx', 0, *voice_args),
         message('/s_new', 'GrainBoxPolyOut_2', 1005, 1, 1, 'in', MIX, 'out', 0, 'ctl', CTL, 'srck', 2.0),
         message('/s_new', 'GrainBoxPolyDry_2', 1006, 1, 1, 'in', IN, 'out', 0, *dry_args)])
     for t, g in gate_events:
@@ -140,6 +151,68 @@ def main():
     print('  sweep at the gate ~500 Hz; looped 1.6-1.85 s: %.0f Hz, 3.1-3.35 s: %.0f Hz (live would be ~830)' % (early, late))
     check(440 < early < 510 and 440 < late < 510, 'Stutter: the frozen quarter second before the gate repeats')
     check(level(L, 1.6, 3.4) > 0.1, 'Stutter: it sounds')
+
+    # Stretch scans the recording independently of each grain's pitch. A pure
+    # tone must retain its pitch even while scan speed falls all the way to 0.
+    stretch = args + ['position', 0.0, 'tmotion', 1.0, 'tmode', 1.0,
+                     'tstart', 1.0, 'tend', 0.0, 'ttime', 1.0,
+                     'livelen', 3.98, 'gatebus', GATE, 'tenvbus', -1.0]
+    x = render(a.output, defs, 'stretch-freeze', 'GrainBoxPolyVC_2', stretch, ['dry', 0.0],
+               [(1.5, 1), (3.5, 0)], 4.0)
+    check(abs(peak(x[:, 0], 2.7, 3.3)-440) < 12 and abs(peak(x[:, 1], 2.7, 3.3)-660) < 12,
+          'Stretch: zero scan speed sustains original 440 / 660 Hz pitches')
+    check(level(x[:, 0], 2.7, 3.3) > 0.05, 'Stretch: stopped scan keeps sounding')
+    half = stretch + ['tstart', 0.5, 'tend', 0.5]
+    x = render(a.output, defs, 'stretch-sweep', 'GrainBoxPolyVC_2', half, ['dry', 0.0],
+               [(1.5, 1), (3.5, 0)], 4.0, src='GBTestSweep')
+    f1, f2 = peak(x[:, 0], 1.9, 2.1), peak(x[:, 0], 2.9, 3.1)
+    print('  half-speed scan: sweep %.0f -> %.0f Hz (expected ~550 -> ~650)' % (f1, f2))
+    check(abs(f1-550) < 35 and abs(f2-650) < 35,
+          'Stretch: recording advances at half speed without halving grain pitch')
+
+    # The reference graph is a saw delay (SpeedA is delay slope), hard-reset by
+    # Go and by its BeatsBack clock. Compare actual control-synth output with
+    # that independently recovered equation for all eight factory adaptations.
+    source = (ROOT/'src/nodes/boxSynths/grainBoxPoly/scGrainBoxPoly.cpp').read_text()
+    factory = source[source.index('std::vector<ofJson> scGrainBoxPoly::factorySnapshots'):]
+    banks = [json.loads(part.split(')JSON"',1)[0]) for part in factory.split('R"JSON(')[1:3]]
+    bank = {p['name']:p.get('set',{}) for p in banks[1]}
+    reference = json.loads((ROOT/'tools/grainfxbox/grain_stretch_reference.json').read_text())
+    for ref in reference['snapshots']:
+        name = 'GrainStretch %02d - %s' % (ref['slot'],ref['name'])
+        p = bank[name]
+        assert p['Motion Start'] == p['Motion End'] == 1-ref['speed_a']
+        assert p['Motion Time'] == ref['beats_back'] and p['Motion Beats'] and p['Motion Repeat']
+        assert p['Interval'] == ref['grain_beats'] and abs(p['Grain Tail']-ref['decay_ms']) < 1e-5
+        assert p['Pitch'] == ref['pitch'] and p['TrigDur'] and p['Overlap'] == 1
+        window = ref['beats_back']/2
+        ctl = ['tmotion',1.0,'tmode',2.0,'tstart',p['Motion Start'],'tend',p['Motion End'],
+               'ttime',window,'trepeat',1.0,'gatebus',GATE,'livelen',11.98]
+        x = render(a.output,defs,'reference-%02d'%ref['slot'],'GBTestMotion',ctl,['dry',0.0],
+                   [(1.5,1),(10.0,0),(10.2,1)],11.0,buffer_seconds=12)
+        errors = []
+        for t in np.arange(1.6,9.9,0.071):
+            elapsed = (t-1.5) % window
+            expected = (elapsed*ref['speed_a']) % window
+            # Discontinuities can straddle an audio/control block.
+            if min(elapsed,window-elapsed,expected,window-expected) < 0.03 and ref['speed_a']:
+                continue
+            errors.append(abs(x[int(t*SR),0]-expected))
+        check(max(errors) < 0.025 and np.max(np.abs(x[SR:,1]-1)) < 0.001,
+              '%s: reference delay sweep, wrap/reset and independent grain rate' % name)
+        check(abs(x[int(10.3*SR),0] - ((0.1*ref['speed_a']) % window)) < 0.025,
+              '%s: Go retriggers from a fresh ramp' % name)
+        audio_ctl = ctl + ['autotrig',1.0,'autotrigbeatdiv',1/p['Interval'],'trigdur',1.0,
+                          'overlap',p['Overlap'],'graintail',p['Grain Tail']/1000,
+                          'envbuf',2.0,'pitch',p['Pitch'],'position',0.0,'amp',1.0,'levels',1.0]
+        audio = render(a.output,defs,'preset-%02d'%ref['slot'],'GrainBoxPolyVC_2',audio_ctl,
+                       ['dry',1.0,'gated',1.0,'gatebus',GATE],[(9.0,1),(11.0,0)],11.5,
+                       buffer_seconds=12,preset=p)
+        check(np.all(np.isfinite(audio)) and level(audio[:,0],9.8,10.8)>0.01,
+              '%s: actual grains, tail and gated envelope produce audio' % name)
+        check(abs(level(audio[:,0],8.0,8.8)-0.25/np.sqrt(2)) < 0.005
+              and abs(level(audio[:,0],11.2,11.4)-0.25/np.sqrt(2)) < 0.005,
+              '%s: clean input before Go and after Stop' % name)
     print('ALL PASS' if ok else 'SOME CHECKS FAILED')
     sys.exit(0 if ok else 1)
 

@@ -852,9 +852,10 @@ void scFMBox::drawWindow() {
             const float tw=ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ScrollbarSize;
             labelW=70;
             const std::string tabName=name;
-            if(tabName=="Effects" || tabName=="Modulation" || tabName=="Matrix") {
+            if(tabName=="Effects" || tabName=="Modulation" || tabName=="Matrix" || tabName=="Operators") {
                 ImGui::BeginChild("##fxScroll",ImVec2(0,0),false,ImGuiWindowFlags_HorizontalScrollbar);
-                body(std::max(tw,tabName=="Matrix"?1060*z:960*z));ImGui::EndChild();
+                const float minWidth=tabName=="Operators"?1200*z+5*gapW():tabName=="Matrix"?1060*z:960*z;
+                body(std::max(tw,minWidth));ImGui::EndChild();
             }else body(tw);
             ImGui::EndChild();
             ImGui::EndTabItem();
@@ -867,9 +868,7 @@ void scFMBox::drawWindow() {
         tab("Operators",[this,gap](float tw){
             drawSoundTab(tw);
             gap();
-            std::vector<std::function<void(float)>> native;
-            for(int op=0;op<6;++op) native.push_back([this,op](float cw){drawNativeEnvelope(op,cw);});
-            mod.drawEnvelopeCards(tw,native);
+            mod.drawEnvelopeCards(tw,{});
         });
         tab("Matrix",[this,gap](float tw){drawMatrix(tw);gap();drawDX7Global(tw);});
         tab("Modulation",[this,gap](float tw){mod.drawLfos(tw);gap();mod.drawRouting(tw);});
@@ -1169,7 +1168,7 @@ ofParameter<float>& scFMBox::soundParam(const std::string& name) {
     return (*std::find_if(sound.begin(),sound.end(),[&](const auto& c){return c->sc==name;}))->p;
 }
 void scFMBox::drawSoundTab(float w) {
-    const int columns=std::clamp(int(w/(250*zoom())),1,3);const float cw=colW(w,columns);
+    constexpr int columns=6;const float cw=colW(w,columns);
     ImGui::PushTextWrapPos();ImGui::TextDisabled("DX7 operator Output controls both audible carriers and modulation depth. Mix in the FM Matrix selects carriers. Right-click any control to publish, modulate or automate.");ImGui::PopTextWrapPos();
     auto control=[&](const std::string& pre,const char* key,const char* label) {
         auto& p=soundParam(pre+key);
@@ -1201,6 +1200,14 @@ void scFMBox::drawSoundTab(float w) {
         }
         ImGui::EndGroup();ImGui::Spacing();
     }
+    // Both rows share their widths and spacing, even when keyboard scaling is open.
+    ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+    ImGui::BeginGroup();
+    for(int op=0;op<columns;++op) {
+        if(op)nextCol();
+        drawNativeEnvelope(op,cw);
+    }
+    ImGui::EndGroup();
     labelW=70;
 }
 void scFMBox::drawDX7Global(float w) {

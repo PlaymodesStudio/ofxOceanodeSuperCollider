@@ -122,17 +122,37 @@ Run `python3 tools/wavetablebox/library_sync_test.py` to verify library sync pat
   −1 plays backwards; delay and pitch change together. *Repeat* restarts the
   motion every Time, like a saw. *Freeze* stops recording while it runs, so
   the motion loops what came before the gate (stutter).
+- **Go / Stop** (GrainFxBox header): click Go to run a ramp without holding
+  the mouse; Stop releases it. Gate remains momentary and can be published.
+  Start with **Stretch Slowdown** in **Banks → Factory collection**, feed
+  audio to In, then click Go.
+- **Motion Mode**: *Tape* keeps the pitch-changing effects. *Stretch* moves
+  grain positions independently of Pitch: From 1 to To 0 slows the source
+  into a sustained grain freeze. *Stretch loop* wraps the delay inside the
+  Time window, matching `grain_stretch.ens`. From/To are source scan speeds:
+  1 follows live input, 0 holds a sound, negative scans backwards. Individual
+  grains retain their Pitch and Reverse settings. Use grains (Grainless off).
+  Repeat resets every Time; Motion Beats follows tempo. A window longer than
+  the recording grows the buffer, which needs time to fill again.
+- **Grain tail** (TrgDur on): adds milliseconds to Overlap × Interval,
+  independently of tempo, like the ensemble's grain-length extension.
 - Factory snapshots (**Banks → Factory collection**): GrainBox has clouds,
   freezes, pitched rain, reverse swells and keys. GrainFxBox has a grain
   delay, a grain cloud, shimmer, a reverse echo, an octave down, tape stop,
   spin-up, rewind, brake and reverse, an octave drop, stutters and repeated
-  tape stops. Hold Gate for the gated sounds.
+  tape stops. It also includes Stretch Slowdown, Stretch Half Speed, Stretch
+  Reverse Scan and eight numbered **GrainStretch** adaptations of the original
+  SlowDown, canica and raro snapshots. Click Go or hold Gate. Delay slopes,
+  beat windows, grain intervals and independent pitches follow the recovered
+  graph; envelopes and jitter are approximations. See the
+  [reference mapping](tools/grainfxbox/REFERENCE.md) for the differences.
 
 Run `python3 tools/migrate_grainfxbox.py [data folder ...] [--dry-run]` once
 for patches from before the split. It moves GrainBox nodes that recorded their
 input, or had a cable into In, to GrainFxBox and backs up each changed folder.
 `python3 tools/grainfxbox/render_test.py` renders the real SynthDefs offline
-and checks 1:1 routing, the gated tape stop and the stutter.
+and checks 1:1 routing, tape stop, stutter, pitch-preserving stretch/freeze,
+and the eight original delay-ramp equations.
 
 ## Keyboard piano
 

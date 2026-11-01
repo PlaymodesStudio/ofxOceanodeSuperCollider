@@ -39,6 +39,7 @@
 //       1 L and R apart, each at full level)
 //   +81..96 the source's buffer per channel (Source placement: up to 16)
 //   +97..101 Gate Motion (tape): running, delay (s), speed, freeze, level
+//   +103 extra grain tail (s); TrigDur length = interval * overlap + tail
 //   +104 + i * 15: playhead i: pos dur pitch amp pan div chance posjit pitchjit
 //                 durjit ampjit panjit reverse manual-trigger-counter trigphase
 //
@@ -52,6 +53,10 @@
 // in step with it, 0 = stopped, so the delay grows); the voices read further
 // back by that delay and play at that speed. \tfreeze stops the recorder
 // while it runs (a loop of what was there).
+// \tmode: 0 retains tape behavior; 1 scans without changing grain rate or
+// direction; 2 also wraps delay inside \ttime (limited by the live buffer).
+// For Reaktor GrainStretch: scan speed = 1 - SpeedA, ttime = BeatsBack / bps,
+// repeat on. The delay slope is SpeedA and grain pitch remains independent.
 // Clock bus (audio, 7): syncTrig, freeBeat, beatW, beatAbs, hardImp, run, anchorFire
 //
 // Modulation: the shared system (scModulation: ModGate / ModLfoX / ModEnv /
@@ -111,12 +116,12 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
      bufnum0 = 0, bufnum1 = 0,
      filteron = 0, filtertype = 0, cutoff = 1000, filterq = 0.707,
      scaleon = 0, scaleroot = 0, live = 0, phasebus = 0, vis = 1, maxoverlap = 0, monotrig = 0, delayglide = 0.05, overlap = 1,
-     width = 0, cutbus = -1,
-     tmotion = 0, tstart = 1, tend = 0, ttime = 0.5, tcurve = 0, trepeat = 0, tfreeze = 0,
+     width = 0, cutbus = -1, graintail = 0,
+     tmotion = 0, tmode = 0, tstart = 1, tend = 0, ttime = 0.5, tcurve = 0, trepeat = 0, tfreeze = 0,
      livelen = 4, gatebus = -1, tenvbus = -1|
 
     var total, thin, phaseP;
-    var held, tRun, rise, per, phs, wrapT, ph, cv, shaped, rate, fz, d0, dPrev, dly, tamp;
+    var held, tRun, rise, per, phs, wrapT, ph, cv, shaped, rate, fz, d0, dPrev, dly, tamp, nextDelay, window;
     var vec, barHz, beatHz;
     var anchorPos, anchorFire, run, syncTrig, anchorTrig, hardImp, beatSweep, beatX, beatW, beatAbs, freeBeat;
     var ampP, pitchP, durP, posP, panP, divP, chanceP, posJ, pitchJ, durJ, ampJ, panJ, revP, trigP, levelsP, scaleTable;
@@ -196,6 +201,7 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
     ReplaceOut.kr(ctl + 75, monotrig);
     ReplaceOut.kr(ctl + 78, delayglide);   // Grainless: glide / crossfade time (s)
     ReplaceOut.kr(ctl + 79, overlap.max(0.01));   // TrigDur: grain length = Overlap x the trigger period
+    ReplaceOut.kr(ctl + 103, graintail.max(0));
     ReplaceOut.kr(ctl + 80, width.clip(0, 1));    // Width: stereo samples
     ReplaceOut.kr(ctl + 81, NamedControl.kr(\bufs, 0 ! 16));   // every source channel's buffer
 
@@ -215,11 +221,16 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
     // frozen: start far enough back to play forward for one period
     d0    = tfreeze * per * ((tstart + tend) * 0.5).max(0);
     dPrev = LocalIn.kr(1);
-    dly   = Select.kr((rise + wrapT) > 0, [dPrev + ((1 - fz - rate) * ControlDur.ir), d0]).clip(0, livelen.max(0.01)) * tRun;
+    nextDelay = Select.kr((rise + wrapT) > 0, [dPrev + ((1 - fz - rate) * ControlDur.ir), d0]);
+    window = per.min(livelen).max(0.01);
+    dly = Select.kr(tmode > 1.5, [nextDelay.clip(0, livelen.max(0.01)), nextDelay.wrap(0, window)]) * tRun;
     LocalOut.kr(dly);
     // a stopped tape is silent; so is one that ran off the end of the recording
-    tamp  = Select.kr(tRun, [1, (rate.abs * 25).clip(0, 1) * (dly < (livelen.max(0.01) * 0.99))]);
-    ReplaceOut.kr(ctl + 97, [tRun, dly, Select.kr(tRun, [1, rate]), fz, Lag.kr(tamp, 0.01)]);
+    // Stretch advances grain starts independently of grain rate/direction. At
+    // zero scan speed grains still play: this is a sustained sound, not silence.
+    tamp  = Select.kr(tRun, [1, Select.kr(tmode > 0.5, [(rate.abs * 25).clip(0, 1), 1])
+        * Select.kr(tmode > 1.5, [dly < (livelen.max(0.01) * 0.99), 1])]);
+    ReplaceOut.kr(ctl + 97, [tRun, dly, Select.kr(tRun * (tmode < 0.5), [1, rate]), fz, Lag.kr(tamp, 0.01)]);
 
     // + the Cut modulation (semitones: playhead 1's channel of its target bus)
     fc = (Lag.kr(cutoff, 0.015) * (In.kr(cutbus.max(0)) * (cutbus >= 0)).clip(-120, 120).midiratio).clip(20, min(20000, SampleRate.ir * 0.45));
@@ -345,7 +356,7 @@ voiceDef = {|name, k, n, syncMode, mono, src|
             // ── Duration / position / amp / pan ──
             regionDur = (outP - inP) * BufDur.kr(buf0);
             // TrigDur: Overlap x the trigger period (x2: every grain overlaps the next by half)
-            durSec    = Select.kr(g[7], [(durV + duO).clip(0, 1) * regionDur.max(0.001), trigPeriod * g[79]]);
+            durSec    = Select.kr(g[7], [(durV + duO).clip(0, 1) * regionDur.max(0.001), (trigPeriod * g[79]) + g[103]]);
             actualDur = Select.kr(g[6], [durSec, durSec / rate.abs.max(0.001)]);
             // grains this playhead keeps sounding (auto triggers): rate * chance * duration
             estK = (g[8] * beatHz * divV * chanceV.clip(0, 1) * actualDur).min(512);
