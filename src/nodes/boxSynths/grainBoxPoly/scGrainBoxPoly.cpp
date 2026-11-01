@@ -5323,7 +5323,7 @@ void scGrainBoxPoly::drawPlayheadHeader(Playhead& ph, float /*w*/) {
                                   "Glide: slides there like tape (bends the pitch while moving;\n"
                                   "  0 ms = an instant jump, which clicks).\n"
                                   "Jump: a second read head starts at the new delay and the two\n"
-                                  "  crossfade: no pitch bend, no click. For stepped / sequenced\n"
+                                  "  crossfade: no pitch bend or added gain. For stepped / sequenced\n"
                                   "  positions; a continuous LFO moves in fade-length steps.");
             drawNodePublishContextMenu(ph.delayJump.getEscapedName());
             ImGui::SameLine(0, 2.0f * zoom);

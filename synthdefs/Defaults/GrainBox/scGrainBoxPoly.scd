@@ -454,7 +454,7 @@ voiceDef = {|name, k, n, syncMode, mono, src|
 //   GrainBoxPolyD_N   Glide: a tape-like slide (Lag, time = ctl +78), which
 //                     bends the pitch while it moves
 //   GrainBoxPolyDJ_N  Jump: a second read head starts at the new delay and
-//                     the two crossfade (equal power, time = ctl +78, min
+//                     the two crossfade (normalized gains, time = ctl +78, min
 //                     5 ms): no pitch bend, no click. During a fade, new
 //                     changes wait for it to end (a continuous LFO steps).
 //   GrainBoxPolyDC_K / DJC_K   Source placement: K channels read at the same
@@ -465,7 +465,7 @@ delayDef = {|name, jump, n, src|
     SynthDef(name.asSymbol, {
         |out = 0, ctl = 0, clk = 0, idx = 0|
         var v, g, bufs, buf, frames, head, r, dK, dA, sig, amp, pan, glide, shown;
-        var fb, dX, dY, sel, t, curD, fade, sw, newSel, newX, newY, newT, p, mv, vca = 1, read,scanSpeed,safeSpeed;
+        var fb, dX, dY, sel, t, curD, fade, sw, newSel, newX, newY, newT, p, mv, vca = 1, read,scanSpeed,safeSpeed,gainX,gainY;
         v      = In.kr(ctl + vbase + (idx * nslot), nslot);
         g = In.kr(ctl + g0, vbase);
         mv = modIn.(idx);
@@ -500,7 +500,12 @@ delayDef = {|name, jump, n, src|
             LocalOut.kr([newX, newY, newSel, newT]);
             // p: 0 = all X .. 1 = all Y (ramps over the fade, per block)
             p      = Select.kr(newSel, [1 - (newT / fade).clip(0, 1), (newT / fade).clip(0, 1)]);
-            sig    = (read.(K2A.ar(newX)) * K2A.ar((p * 0.5pi).cos)) + (read.(K2A.ar(newY)) * K2A.ar((p * 0.5pi).sin));
+            gainX=K2A.ar((p*0.5pi).cos);gainY=K2A.ar((p*0.5pi).sin);
+            // Beat-quantized taps can contain the same audio, especially when
+            // returning to zero. Equal-power overlap otherwise adds up to
+            // 3 dB and clips a clean input. Normalize the actual audio-rate
+            // weights so the transition cannot create that gain spike.
+            sig=((read.(K2A.ar(newX))*gainX)+(read.(K2A.ar(newY))*gainY))/(gainX+gainY).max(1);
             shown  = Select.kr(newSel, [newX, newY]);
         };
         scanSpeed=(1-g[97])-((HPZ1.kr(shown)*2)/(SampleRate.ir*ControlDur.ir));
@@ -635,8 +640,14 @@ recDef = {|name, k|
         fb    = (fb * fbG).tanh;
         sig   = In.ar(in, k).asArray + fb;
         run   = 1 - (freeze + (In.kr(gatefreeze.max(0)) * (gatefreeze >= 0))).clip(0, 1);
-        k.do({|c| RecordBuf.ar(sig[c], bufs[c], 0, 1, 0, run, 1) });
+        // Every channel writes at the phase the readers get (\phasebus). With
+        // RecordBuf each channel kept its own counter: a buffer that became
+        // valid a block later (async /b_alloc) or was re-allocated wrote
+        // behind the phase, so a 1-sample delay (Position 0) read unwritten
+        // samples: per-block splices of old audio (a sample-rate buzz).
+        // Frozen: the held sample is written back unchanged.
         phase = Phasor.ar(0, run, 0, BufFrames.kr(bufs[0]));
+        k.do({|c| BufWr.ar(Select.ar(K2A.ar(run) > 0.5, [BufRd.ar(1, bufs[c], phase, 1, 1), sig[c]]), bufs[c], phase, 1) });
         Out.ar(phasebus, phase);
         mon   = Mix.new(sig) / k;
         tick  = Impulse.ar(125);
