@@ -148,6 +148,9 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
             generatorMorph.erase(lfoNoise[li].getEscapedName());
             cycleCache[li].values.clear(); transferCache[li].values.clear(); previewCache[li].valid = false;
             forStates([this, li](ofxSCServer* server, ServerState& st){ sendLfo(server, st, li); }); notify(); };
+        lfoTrigger[li].set(L + "Trigger Mode" + X, 0, 0, 2); host.regI(lfoTrigger[li], toLfo);
+        lfoRestartBeats[li].set(L + "Restart Beats" + X, 0, 0, 512); host.regF(lfoRestartBeats[li], toLfo);
+        lfoPhasePower[li].set(L + "Ramp Power" + X, 1, 0.125f, 8); host.regF(lfoPhasePower[li], toLfo);
         lfoSync[li].set(L + "Sync" + X, true);                    host.regB(lfoSync[li], toLfo);
         vec(lfoBeats[li], L + "Beats" + X, (float)(1 << std::min(li, 4)), 0.125f, 512); host.regV(lfoBeats[li], toLfo);
         vec(lfoHz[li], L + "Hz" + X, 1, 0.0f, 50);                host.regV(lfoHz[li], toLfo);   // 0: still
@@ -206,6 +209,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
         auto& E = envs[e];
         const std::string L = "Env" + ofToString(e + 1) + " ";
         auto toEnv = [this, e]() { forStates([this, e](ofxSCServer* server, ServerState& st){ sendEnv(server, st, e); }); };
+        E.beats.set(L + "Beats" + nameSuffix, false); host.regB(E.beats, toEnv);
         E.a.set(L + "Attack" + nameSuffix, 0.01f, 0.001f, 10.0f);          host.regF(E.a, toEnv);
         E.d.set(L + "Decay" + nameSuffix, 0.5f, 0.001f, 10.0f);            host.regF(E.d, toEnv);
         E.s.set(L + "Sustain" + nameSuffix, ofClamp(defaultEnvSustain, 0.0f, 1.0f), 0.0f, 1.0f); host.regF(E.s, toEnv);
@@ -222,14 +226,14 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
     // the module's own controls: never targets of "Modulate"
     auto own = [this](const ofAbstractParameter& q){ if(!q.getName().empty()) ownKeys.insert(q.getEscapedName()); };
     for(int li = 0; li < MAX_LFOS; li++){
-        for(auto* q : std::initializer_list<ofAbstractParameter*>{&lfoSync[li], &lfoBeats[li], &lfoHz[li], &lfoSH[li],
+        for(auto* q : std::initializer_list<ofAbstractParameter*>{&lfoTrigger[li], &lfoRestartBeats[li], &lfoPhasePower[li], &lfoSync[li], &lfoBeats[li], &lfoHz[li], &lfoSH[li],
                 &lfoDetune[li], &lfoInit[li], &lfoRound[li], &lfoSkew[li], &lfoPw[li], &lfoCentered[li], &lfoGain[li],
                 &lfoPow[li], &lfoBiPow[li], &lfoNoise[li], &lfoSHGlide[li], &lfoNScale[li], &lfoRegion[li], &lfoSteps[li],
                 &lfoPSpread[li], &lfoPRand[li], &lfoNWaves[li], &lfoNorm[li], &lfoInvert[li], &lfoSym[li], &lfoShuffle[li],
                 &lfoRand[li], &lfoOffset[li], &lfoQuant[li], &lfoComb[li], &lfoModulo[li], &lfoRndType[li], &lfoRndSmooth[li], &lfoRndSame[li]}) own(*q);
         if(unifiedLfoModels){ own(lfoModel[li]); own(lfoManual[li]); }
     }
-    for(auto& E : envs) for(auto* q : std::initializer_list<ofAbstractParameter*>{&E.a, &E.d, &E.s, &E.r, &E.ca, &E.cd, &E.cr, &E.vt}) own(*q);
+    for(auto& E : envs) for(auto* q : std::initializer_list<ofAbstractParameter*>{&E.a, &E.d, &E.s, &E.r, &E.ca, &E.cd, &E.cr, &E.vt, &E.beats}) own(*q);
     for(auto& e : exts) own(e);
     updatePhases();
 }
@@ -340,6 +344,10 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
     controls.set("seed", li * 17.31f);
     controls.set("phoff", perVoice && !held ? slice(lfoPhases[li], c) : zero);
     controls.set("reset", (float)resetCounter);
+    controls.set("gate", float(st.gateBus + c * CHUNK));
+    controls.set("trigmode", float(lfoTrigger[li].get()));
+    controls.set("restartsec", lfoRestartBeats[li].get() * 60.0f / std::max(1.0f,currentBpm));
+    controls.set("phasepower", lfoPhasePower[li].get());
     controls.set("rtype", held ? 0.0f : (float)effectiveRandom(li));     // ModLfoX only
     controls.set("steps", held ? 0.0f : lfoGeneratorValue(li, "steps", float(lfoSteps[li].get())));
     controls.set("rsmooth", lfoRndSmooth[li].get());
@@ -381,7 +389,8 @@ void scModulation::sendEnvPart(ofxSCServer* server, ServerState& st, int e, int 
     auto fill = [&](const char* name, float v){ controls.set(name, std::vector<float>(chunkN(c), v)); };
     controls.set("gate", st.gateBus + c * CHUNK);
     controls.set("out", st.srcBlock ? st.srcBlock->index + (SRC_ENV + e) * busWidth + c * CHUNK : 0);
-    fill("atk", E.a.get()); fill("dec", E.d.get()); fill("sus", E.s.get()); fill("rel", E.r.get());
+    const float timeScale=E.beats.get()?60.0f/std::max(1.0f,currentBpm):1.0f;
+    fill("atk", E.a.get()*timeScale); fill("dec", E.d.get()*timeScale); fill("sus", E.s.get()); fill("rel", E.r.get()*timeScale);
     fill("cA", E.ca.get()); fill("cD", E.cd.get()); fill("cR", E.cr.get());
     // velocity tracking: the note's velocity (the velocity source, written by the node's gates)
     controls.set("velbus", st.srcBlock ? st.srcBlock->index + SRC_VEL * busWidth + c * CHUNK : 0);
@@ -634,13 +643,15 @@ void scModulation::setBpm(float bpm) {
     // while the tempo stands (a new LFO synth gets its rate from sendLfoPart)
     if(bpm == currentBpm) return;
     currentBpm = bpm; notify();
-    forStates([this](ofxSCServer*, ServerState& st){
+    forStates([this](ofxSCServer* server, ServerState& st){
+        for(int e=0;e<envCount;++e) if(envs[e].beats.get()) sendEnv(server,st,e);
         for(int li = 0; li < lfoCount; li++){
             const auto hz = lfoHzFor(li), sh = lfoShFor(li);
             for(int c = 0; c < (int)st.lfo[li].size(); c++) if(st.lfo[li][c]){
                 st.lfo[li][c]->set("freq", slice(hz, c));
                 st.lfo[li][c]->set("sh", slice(sh, c));
-                if(c < (int)st.lfoSent[li].size()){ st.lfoSent[li][c].erase("freq"); st.lfoSent[li][c].erase("sh"); }
+                st.lfo[li][c]->set("restartsec",lfoRestartBeats[li].get()*60.0f/std::max(1.0f,currentBpm));
+                if(c < (int)st.lfoSent[li].size()){ st.lfoSent[li][c].erase("freq"); st.lfoSent[li][c].erase("sh"); st.lfoSent[li][c].erase("restartsec"); }
             }
         }
     });
@@ -682,7 +693,7 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
         (float)lfoSteps[li].get()};
     auto& cache = cycleCache[li];
     const int count = std::max(2, size);
-    if(cache.values.size() == (size_t)count && cache.key == key) return cache.values;
+    if(cache.values.size() == (size_t)count && cache.key == key && cache.phasePower==lfoPhasePower[li].get() && cache.trigger==lfoTrigger[li].get()) return cache.values;
     std::vector<float> t(count);
     const auto weights = lfoModeWeights(li);
     const float active = 1.0f - weights[5];
@@ -695,7 +706,7 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
         const float ph = float(i) / (t.size() - 1);
         float v;
         // noise: 4 Perlin steps per cycle, crossfaded into the next cycle's start so it loops
-        v = weights[0] * morphCentered(ph, rnd, sk, pw, centered)
+        v = weights[0] * morphCentered(std::pow(std::min(ph,0.999999f),lfoPhasePower[li].get()), rnd, sk, pw, centered)
           + weights[1] * (perlin(ph * 4.0f, seed) * (1.0f - ph) + perlin(ph * 4.0f - 4.0f, seed) * ph);
         for(int mode = 1; mode <= 3; ++mode) if(weights[mode + 1] > 0)
             v += weights[mode + 1] * rndPreview(li, ph, mode, smooth);
@@ -706,8 +717,9 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
         v = quantizeLfo(v, steps);
         t[i] = ofClamp(v, 0.0f, 1.0f) * active + weights[5] * manual;
     }
-    t.back() = t.front();
+    if(lfoTrigger[li].get()!=2) t.back() = t.front();
     cache.key = key;
+    cache.phasePower=lfoPhasePower[li].get();cache.trigger=lfoTrigger[li].get();
     cache.values = t;
     return t;
 }
@@ -723,7 +735,8 @@ float scModulation::lfoSampleHold(int li) const {
 }
 scModulation::EnvValues scModulation::envValues(int e) const {
     const auto& E = envs[e];
-    return {E.a.get(), E.d.get(), E.s.get(), E.r.get(), E.ca.get(), E.cd.get(), E.cr.get()};
+    const float ts=E.beats.get()?60.0f/std::max(1.0f,currentBpm):1.0f;
+    return {E.a.get()*ts, E.d.get()*ts, E.s.get(), E.r.get()*ts, E.ca.get(), E.cd.get(), E.cr.get()};
 }
 std::vector<float> scModulation::extValues(int k) const {
     std::vector<float> v = expand(exts[k].get(), n(), 0.0f);
@@ -930,6 +943,14 @@ bool scModulation::envRoutes(const ofJson& j, const std::string& prefix, int tar
 
 void scModulation::loadState(const ofJson& j, const std::string& prefix, bool generators) {
     if(generators) loadGeneratorState(j, prefix);
+    if(generators) {
+    for(int li=0;li<MAX_LFOS;++li) {
+        if(!j.contains(lfoTrigger[li].getEscapedName())) lfoTrigger[li]=0;
+        if(!j.contains(lfoRestartBeats[li].getEscapedName())) lfoRestartBeats[li]=0;
+        if(!j.contains(lfoPhasePower[li].getEscapedName())) lfoPhasePower[li]=1;
+    }
+    for(auto& E:envs) if(!j.contains(E.beats.getEscapedName())) E.beats=false;
+    }
     auto count = [&](const std::string& k, int& v, int lo, int hi){
         if(j.contains(prefix + k) && j[prefix + k].is_number()) v = std::clamp(j[prefix + k].get<int>(), lo, hi);
     };
@@ -1452,10 +1473,12 @@ void scModulation::drawEnvCard(int e, float w) {
         ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + h + ImGui::GetStyle().ItemSpacing.y));
         ImGui::Dummy(ImVec2(w, 0));
     }
-    slider(E.a, "Attack", w, "%.3f s", true);
-    slider(E.d, "Decay", w, "%.3f s", true);
+    toggle(E.beats,"Beats");
+    const char* timeFormat=E.beats.get()?"%.3f b":"%.3f s";
+    slider(E.a, "Attack", w, timeFormat, true);
+    slider(E.d, "Decay", w, timeFormat, true);
     slider(E.s, "Sustain", w, "%.2f");
-    slider(E.r, "Release", w, "%.3f s", true);
+    slider(E.r, "Release", w, timeFormat, true);
     if(velocity){
         slider(E.vt, "Vel", w, "%.2f");
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Velocity tracking: 0 the same every note, 1 scaled by the note's velocity\n"
@@ -1576,7 +1599,7 @@ void scModulation::drawLfoCard(int li, float w) {
         const float steps = lfoGeneratorValue(li, "steps", float(lfoSteps[li].get()));
         const float manual = lfoManualValue(li), smooth = lfoRndSmooth[li].get();
         auto value = [&](float ph){
-            float v = weights[0] * morphCentered(ph, rnd, sk, pw, centered)
+            float v = weights[0] * morphCentered(std::pow(std::min(ph,0.999999f),lfoPhasePower[li].get()), rnd, sk, pw, centered)
                     + weights[1] * noise2(ph * 3.0f, 0.0f, li * 17.31f);
             for(int mode = 1; mode <= 3; ++mode) if(weights[mode + 1] > 0)
                 v += weights[mode + 1] * rndPreview(li, ph, mode, smooth);
@@ -1590,9 +1613,10 @@ void scModulation::drawLfoCard(int li, float w) {
         const std::array<float, 8> key{rnd, sk, pw + lfoSteps[li].get() * 3.0f, pw2, bp, manualLfo(li) ? -1.0f-lfoManual[li].get() : gain,
             (effectiveNoise(li) ? 1.0f : 0.0f) + effectiveRandom(li) * 2.0f + lfoRndSmooth[li].get() * 10.0f, lfoCentered[li].get() ? 1.0f : 0.0f};
         auto& preview = previewCache[li];
-        if(!preview.valid || preview.key != key){
+        if(!preview.valid || preview.key != key || preview.phasePower!=lfoPhasePower[li].get()){
             for(int i = 0; i <= 96; i++) preview.values[i] = value(i / 96.0f);
             preview.key = key;
+            preview.phasePower=lfoPhasePower[li].get();
             preview.valid = true;
         }
         std::array<ImVec2, 97> pts;
@@ -1665,6 +1689,20 @@ void scModulation::drawLfoCard(int li, float w) {
     else sliderVec(lfoHz[li], "Rate", half, "%.3fHz", true);
     if(perVoice) sliderVec(lfoDetune[li], "Detune", half, "%.2f");
     slider(lfoInit[li], "Phase", half, "%.2f");
+    ImGui::SetNextItemWidth(w);
+    int trigger=lfoTrigger[li].get();
+    const char* triggers[]={"Free running", "Gate: restart + loop", "Gate: one shot + hold"};
+    if(ImGui::Combo("##triggerMode",&trigger,triggers,3)) lfoTrigger[li]=trigger;
+    if(host.publishMenu) host.publishMenu(lfoTrigger[li].getEscapedName());
+    if(trigger) {
+        slider(lfoRestartBeats[li],"Restart",w,"%.3f b");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("0: no periodic reset; otherwise restart every N beats since Gate/Go. Gate off returns output to zero.");
+    }
+    slider(lfoPhasePower[li],"Ramp power",w,"%.2f");
+    if(ImGui::SmallButton("Ramp up")){ lfoRound[li]=std::vector<float>{0}; lfoSkew[li]=std::vector<float>{-1}; lfoPw[li]=std::vector<float>{0.5f}; }
+    ImGui::SameLine();
+    if(ImGui::SmallButton("Ramp down")){ lfoRound[li]=std::vector<float>{0}; lfoSkew[li]=std::vector<float>{1}; lfoPw[li]=std::vector<float>{0.5f}; }
+
     if(!unifiedLfoModels){   // Random: per voice, a new value each cycle at the voice's own phase (not S&H's common clock)
         static const char* types[] = {"Off", "Stepped", "Smooth", "Jumps"};
         const std::string key = lfoRndType[li].getEscapedName();
@@ -1978,6 +2016,20 @@ float scModulation::lfoManualValue(int li) const {
 
 void scModulation::loadMorph(const ofJson& a,const ofJson& b,float t,bool switched,const std::string& prefix,
                              const scModulationMorph::Blocked& blocked) {
+    auto scalar=[](const ofJson& state,const std::string& key,float fallback){
+        auto it=state.find(key);if(it==state.end())return fallback;
+        const auto values=scModulationMorph::numbers(*it);return values.empty()?fallback:values[0];
+    };
+    auto blend=[&](auto& p,float fallback,bool discrete){
+        const auto key=p.getEscapedName();if(blocked && blocked(key))return;
+        const float x=scalar(a,key,fallback),y=scalar(b,key,fallback);
+        p=discrete?(switched?y:x):x+(y-x)*t;
+    };
+    for(int li=0;li<MAX_LFOS;++li){blend(lfoTrigger[li],0,true);blend(lfoRestartBeats[li],0,false);blend(lfoPhasePower[li],1,false);}
+    for(auto& E:envs){
+        const auto key=E.beats.getEscapedName();
+        if(!blocked || !blocked(key)) E.beats=scalar(switched?b:a,key,0)>0.5f;
+    }
     auto x = a, y = b;
     for(auto* state : {&x, &y}){
         const auto key = prefix + "Matrix";

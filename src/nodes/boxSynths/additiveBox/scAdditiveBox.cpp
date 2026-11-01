@@ -1136,6 +1136,8 @@ void scAdditiveBox::laneData(int v, VoiceData& d) const {
         d.arrays[L + "amt"] = amt;
         d.scalars[L + "rate"] = rate;
         d.scalars[L + "reset"] = float(mod.resets());
+        d.scalars[L + "trigmode"] = l < int(lanes.size()) ? float(mod.lfoTriggerMode(lanes[l].lfo)) : 0;
+        d.scalars[L + "restartsec"] = l < int(lanes.size()) ? mod.lfoRestartSeconds(lanes[l].lfo) : 0;
         d.scalars[L + "sh"] = l < (int)lanes.size() ? mod.lfoSampleHold(lanes[l].lfo) : 0.0f;
         // Noise: the 2D noise per partial (the LaneN part): the partials' seeds
         // (index x Scale) and this LFO's and this voice's own field
@@ -1456,7 +1458,7 @@ unsigned roleOf(const std::string& n){
     static const std::map<std::string, unsigned> roles = {
         {"pa", RSrc}, {"pd", RSrc}, {"morph", RSrc}, {"maskglide", RSrc}, {"fr", RSrc}, {"pb", RSrc}, {"vca", RCore},
         {"pitchoff", RFilt | RCore}, {"gtrbus", RFilt | RCore}, {"gdr", RFilt | RCore},
-        {"gate", RSweep | RCore | RTail},
+        {"gate", RLane | RSweep | RCore | RTail},
         {"vf", RMotion}, {"vd", RMotion}, {"nr", RMotion}, {"nd", RMotion},
         {"fbuf", RFilt}, {"po", RFilt}, {"cutoff", RFilt}, {"keytrack", RFilt}, {"safe", RFilt},
         {"pitch", RFilt | RCore}, {"glide", RFilt | RCore},
@@ -1606,6 +1608,7 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
     VoiceData scalarsOnly;
     scalarsOnly.scalars = data.scalars;
     sendTo(server,vs, vs.laneClock, RLane, scalarsOnly, extra, force);
+    mapTo(vs.laneClock,"gate",gb>=0?gb+v:-1);
     for(int c = 0; c < (int)vs.lanes.size(); c++){
         VoiceData d;
         d.scalars = data.scalars;
@@ -1617,6 +1620,7 @@ void scAdditiveBox::sendVoice(ofxSCServer* server, int v, const VoiceData& data,
         auto e = extra;
         e["first"] = float(c * LC);
         sendTo(server,vs, vs.lanes[c], RLane, d, e, force);
+        mapTo(vs.lanes[c],"gate",gb>=0?gb+v:-1);
     }
     for(int u = 0; u < (int)vs.cores.size(); u++){
         auto e = extra;

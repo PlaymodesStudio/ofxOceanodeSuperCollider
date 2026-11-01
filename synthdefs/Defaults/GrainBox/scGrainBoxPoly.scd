@@ -116,7 +116,7 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
      bufnum0 = 0, bufnum1 = 0,
      filteron = 0, filtertype = 0, cutoff = 1000, filterq = 0.707,
      scaleon = 0, scaleroot = 0, live = 0, phasebus = 0, vis = 1, maxoverlap = 0, monotrig = 0, delayglide = 0.05, overlap = 1,
-     width = 0, cutbus = -1, graintail = 0,
+     width = 0, cutbus = -1, graintail = 0, posmodscale = 1,
      tmotion = 0, tmode = 0, tstart = 1, tend = 0, ttime = 0.5, tcurve = 0, trepeat = 0, tfreeze = 0,
      livelen = 4, gatebus = -1, tenvbus = -1|
 
@@ -201,6 +201,7 @@ SynthDef(("GrainBoxPolyCtl_" ++ pmax).asSymbol, {
     ReplaceOut.kr(ctl + 75, monotrig);
     ReplaceOut.kr(ctl + 78, delayglide);   // Grainless: glide / crossfade time (s)
     ReplaceOut.kr(ctl + 79, overlap.max(0.01));   // TrigDur: grain length = Overlap x the trigger period
+    ReplaceOut.kr(ctl + 102, posmodscale);
     ReplaceOut.kr(ctl + 103, graintail.max(0));
     ReplaceOut.kr(ctl + 80, width.clip(0, 1));    // Width: stereo samples
     ReplaceOut.kr(ctl + 81, NamedControl.kr(\bufs, 0 ! 16));   // every source channel's buffer
@@ -257,7 +258,7 @@ voiceDef = {|name, k, n, syncMode, mono, src|
             var mappedPos, ampWithJit, panK, ampLatched, ampUsed, revFlag, headK, frL, gapL, availL, durF, readLen, dLin, dMin, dMax, livePos, basePos, grainPos, grainRate;
             var trigPh, thinK, autoRaw, estK, monoTrig, grainTrig, visK, resetA, forced, monoSlot;
             var c, beatW, beatAbs, hardImp, run, anchorFire, beatInt, beatFrac, beatEdge, syncLatchTrig, syncDiv, m, sub, cell, cond, allowed, top, stepT;
-            var wd, wGain, md, vca = 1, tR, tD, tA;
+            var wd, wGain, md, vca = 1, tR, tD, tA, displayPos;
 
             v = In.kr(ctl + vbase + (idx * nslot), nslot);
             g = In.kr(ctl + g0, vbase);
@@ -265,7 +266,7 @@ voiceDef = {|name, k, n, syncMode, mono, src|
             chanceV = v[6]; posJ = v[7]; pitchJ = v[8]; durJ = v[9]; ampJ = v[10]; panJ = v[11];
             revV = v[12]; trigC = v[13]; trigPh = v[14];
             md = modIn.(idx);
-            posV = posV + md[0]; durV = durV + md[1]; pitchV = pitchV + md[2]; ampV = ampV + md[3];
+            posV = posV + (md[0] * g[102]); durV = durV + md[1]; pitchV = pitchV + md[2]; ampV = ampV + md[3];
             panV = panV + md[4]; divV = (divV + md[5]).max(1/64);
             vca = ampVca.(idx);
             thinK = g[77];
@@ -388,7 +389,7 @@ voiceDef = {|name, k, n, syncMode, mono, src|
                 visK = trigK;
             };
 
-            SendReply.kr(visK * g[16], '/grainTrig', [mappedPos, actualDur, ampWithJit], idx);
+
 
             // ── Reverse (re-uses the chance draw, which is held between
             //    triggers: no latch, so the first grain is decided too);
@@ -408,6 +409,11 @@ voiceDef = {|name, k, n, syncMode, mono, src|
             dMin    = gapL + Select.kr(revFlag, [(readLen - durF).max(0) + (g[100] * readLen), readLen]);
             dMax    = frL - gapL - Select.kr(revFlag, [(durF - readLen).max(0), durF]);
             livePos = ((headK - dLin.clip(dMin, dMax)) / frL).wrap(0, 1);
+            // Display the same bounded read position as the audio engine, not
+            // just the unmodulated editor value or the pre-motion grain start.
+            displayPos = Select.kr(g[14],[mappedPos, ((dLin.clip(dMin,dMax)-gapL)/availL).clip(0,1)]);
+            SendReply.kr(visK * g[16], '/grainTrig', [displayPos, actualDur, ampWithJit * vca], idx);
+            SendReply.kr(Impulse.kr(20) * g[16], '/grainHead', [displayPos], idx);
             basePos = Select.kr(g[14], [mappedPos, livePos]);
             grainPos  = Select.kr(revFlag, [basePos, (basePos + (readLen / frL)).wrap(0, 1)]);
             grainRate = Select.kr(revFlag, [rate, rate.neg]);
@@ -487,8 +493,9 @@ delayDef = {|name, jump, n, src|
         var v, g, bufs, buf, frames, head, r, dK, dA, sig, amp, pan, glide, shown;
         var fb, dX, dY, sel, t, curD, fade, sw, newSel, newX, newY, newT, p, mv, vca = 1, tOn, tDs, read;
         v      = In.kr(ctl + vbase + (idx * nslot), nslot);
+        g = In.kr(ctl + g0, vbase);
         mv = modIn.(idx);
-        v = [v[0] + mv[0], v[1] + mv[1], v[2] + mv[2], v[3] + mv[3], v[4] + mv[4], v[5] + mv[5]] ++ v[6..];
+        v = [v[0] + (mv[0] * g[102]), v[1] + mv[1], v[2] + mv[2], v[3] + mv[3], v[4] + mv[4], v[5] + mv[5]] ++ v[6..];
         vca = ampVca.(idx);
         g      = In.kr(ctl + g0, vbase);
         bufs   = if(src) { n.collect({|c| g[81 + c] }) } { [g[2]] };

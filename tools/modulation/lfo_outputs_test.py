@@ -36,6 +36,7 @@ enum {ofxOceanodeParameterFlags_DisableSavePreset=1,ofxOceanodeParameterFlags_Di
 template<class T> struct ofParameter {
  std::string name; T value;
  void set(std::string s,T v,T,T){name=s;value=v;} void set(T v){value=v;}
+ const T& get() const{return value;}
  std::string getName() const{return name;}
 };
 struct ofxOceanodeAbstractParameter {bool connected=false;bool hasOutConnections(){return connected;}};

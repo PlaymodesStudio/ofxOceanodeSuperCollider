@@ -210,9 +210,13 @@ SynthDef(\AdditiveBoxLaneClock, {
     var b = \bus.kr(0) + (3 * \np.kr(8)) + 3;
     var clock = 2.collect { |l|
         var k = { |name, def| NamedControl.kr(("l" ++ l ++ name).asSymbol, def) };
-        var rst = Changed.kr(k.("reset", 0));
-        [Phasor.kr(rst, k.("rate", 1) * ControlDur.ir, 0, 1),
-         Sweep.kr(rst, k.("rate", 1)) + k.("init", 0),
+        var mode=k.("trigmode",0),gate=\gate.kr(0)>0;
+        var reset=Changed.kr(k.("reset",0)) + ((HPZ1.kr(gate)>0)*(mode>0));
+        var elapsed=Sweep.kr(reset,1),period=k.("restartsec",0);
+        var rst=reset + ((HPZ1.kr((elapsed/period.max(0.001)).floor)>0)*(period>0)*(mode>0)*gate);
+        var sweep=Sweep.kr(rst,k.("rate",1));
+        [Select.kr(mode>1.5,[Phasor.kr(rst,k.("rate",1)*ControlDur.ir,0,1),sweep.clip(0,0.999999)]),
+         Select.kr(mode>1.5,[sweep,sweep.clip(0,0.999999)]) + k.("init", 0),
          Impulse.kr(k.("sh", 0).max(0.01))]
     };
     ReplaceOut.kr(b, clock.flat);
@@ -229,7 +233,8 @@ chunks.do { |nc|
             var lane = 2.collect { |l|
                 var k = { |name, def| NamedControl.kr(("l" ++ l ++ name).asSymbol, def) };
                 var run = clock[3 * l];
-                var x = IndexL.kr(k.("buf", -1), ((run + k.("ph", 0 ! nc)) % 1) * 256);
+                var phase=run+k.("ph",0 ! nc);
+                var x = IndexL.kr(k.("buf", -1), Select.kr(k.("trigmode",0)>1.5,[phase.wrap(0,1),phase.clip(0,0.999999)]) * 256);
                 var sh, v, amt;
                 if(withNoise) {
                     // the seed: this LFO's and this voice's own noise field
@@ -239,6 +244,7 @@ chunks.do { |nc|
                 // S&H (steps / s) with its glide (s)
                 sh = k.("sh", 0);
                 v = (Select.kr(sh > 0, [x, Lag.kr(Latch.kr(x, clock[3 * l + 2]), k.("shg", 0))]) * 2) - 1;
+                v = v * Select.kr(k.("trigmode",0)>0,[1,\gate.kr(0)>0]);
                 amt = k.("amt", [0, 0, 0]);
                 [v * amt[0], v * amt[1], v * amt[2]]
             }.sum;

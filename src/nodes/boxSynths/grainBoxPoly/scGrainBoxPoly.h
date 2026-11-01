@@ -278,6 +278,9 @@ private:
         ofParameter<bool>  liveLenBeats;            // Live Length in beats (follows the tempo)
         ofParameter<bool>  grainless;               // Live: plain delay line per playhead (no grains)
         ofParameter<float> overlap;                 // TrigDur: grain length = Overlap x trigger period
+        ofParameter<float> positionModSpan;
+        ofParameter<int> positionModUnit; // 0 region, 1 ms, 2 beats
+        std::vector<float> audiblePositions; // actual DSP read positions, per voice
         ofParameter<float> grainTail;               // extra grain length in ms, independent of tempo
         ofParameter<bool>  delayJump;               // Grainless: 0 Glide (tape slide), 1 Jump (crossfade)
         ofParameter<float> delayGlide;              // Grainless: glide / crossfade time (ms)
@@ -397,6 +400,7 @@ private:
     bool sourceRouted(const Playhead& ph) const;
     void syncLiveChannels(Playhead& ph);              // a recording of the wrong width: again
     void setMotionArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv);
+    float positionModScale(const Playhead&) const;
     float motionTimeSec(const Playhead& ph) const;
     int  outBusFor(const Playhead& ph, ofxSCServer* srv) const;
     SampleData&       sampleOf(Playhead& ph);

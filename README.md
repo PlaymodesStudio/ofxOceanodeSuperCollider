@@ -116,24 +116,20 @@ Run `python3 tools/wavetablebox/library_sync_test.py` to verify library sync pat
   with Dry/Wet. *Gated* plays only the input until **Gate** goes up, then the
   engines replace it until it falls. Disable Drone so the engines play through
   their Amp Envelope.
-- **Gate Motion** (engine band, Live input): while Gate is up the recording
-  plays like tape changing speed. It moves from *Start* to *End* over *Time*
-  (seconds or beats) with *Curve*. Speed 1 follows the input, 0 is stopped and
-  −1 plays backwards; delay and pitch change together. *Repeat* restarts the
-  motion every Time, like a saw. *Freeze* stops recording while it runs, so
-  the motion loops what came before the gate (stutter).
-- **Go / Stop** (GrainFxBox header): click Go to run a ramp without holding
-  the mouse; Stop releases it. Gate remains momentary and can be published.
-  Start with **Stretch Slowdown** in **Banks → Factory collection**, feed
-  audio to In, then click Go.
-- **Motion Mode**: *Tape* keeps the pitch-changing effects. *Stretch* moves
-  grain positions independently of Pitch: From 1 to To 0 slows the source
-  into a sustained grain freeze. *Stretch loop* wraps the delay inside the
-  Time window, matching `grain_stretch.ens`. From/To are source scan speeds:
-  1 follows live input, 0 holds a sound, negative scans backwards. Individual
-  grains retain their Pitch and Reverse settings. Use grains (Grainless off).
-  Repeat resets every Time; Motion Beats follows tempo. A window longer than
-  the recording grows the buffer, which needs time to fill again.
+- **Go / Stop** (GrainFxBox header): starts/releases Gate. Select **Stretch
+  Slowdown** in **Banks → Factory collection**, feed audio to In and click Go.
+- **Stretch presets use LFOs → Routing → Pos**. Their LFOs and route amounts
+  are editable with the same controls as any other modulation. **Position
+  modulation span** (LFOs / Routing tabs) sets the distance in region units,
+  milliseconds or beats. A route amount of 1 sweeps that span. Individual grain
+  Pitch and Reverse remain independent. Long spans grow the recording buffer;
+  allow it to fill before rewinding into older material.
+- **Waveform cursors show the actual read position**, after LFO/envelope
+  modulation, legacy motion and live-buffer safety limits. Grain highlights
+  use the same effective positions rather than the base Position value.
+- **Tape / legacy motion** keeps the coupled speed/pitch integrator for tape
+  stops, rewinds and frozen-loop effects. Saved presets retain their original
+  playback path. Only the factory collection uses the new LFO routing.
 - **Grain tail** (TrgDur on): adds milliseconds to Overlap × Interval,
   independently of tempo, like the ensemble's grain-length extension.
 - Factory snapshots (**Banks → Factory collection**): GrainBox has clouds,
@@ -153,6 +149,25 @@ input, or had a cable into In, to GrainFxBox and backs up each changed folder.
 `python3 tools/grainfxbox/render_test.py` renders the real SynthDefs offline
 and checks 1:1 routing, tape stop, stutter, pitch-preserving stretch/freeze,
 and the eight original delay-ramp equations.
+
+## Shared modulation triggers and beat envelopes
+
+All box synths using `scModulation` share these controls:
+
+- **LFO Trigger Mode:** Free running, Gate restart + loop, or Gate one shot +
+  hold. Each voice restarts on its own Gate; triggered outputs return to zero
+  when Gate closes. **Restart** optionally resets every N beats since Gate
+  (0 disables the periodic reset).
+- **Ramp up / Ramp down** configure the existing Round/Skew/Width shape.
+  **Ramp power** bends the phase: 1 is linear, 2 is quadratic. The preview
+  uses the same curve. One shots hold the final value until Gate releases.
+- **Env Beats** switches modulation-envelope Attack/Decay/Release values
+  between seconds and beats; beat durations follow the current tempo.
+
+AdditiveBox's per-partial LFO clocks follow the same trigger settings.
+Existing sounds default to free-running LFOs and envelope times in seconds.
+`tools/modulation/trigger_modes_test.py` verifies per-voice trigger behavior;
+`tools/grainfxbox/routing_test.py` verifies the actual shared LFO → Pos effects.
 
 ## Keyboard piano
 

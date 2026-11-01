@@ -149,6 +149,8 @@ public:
     void resetLfos();
     void voicesChanged();                                     // a new voice count (no server synths: GrainBox)
     int resets() const { return resetCounter; }
+    int lfoTriggerMode(int li) const { return lfoTrigger[li].get(); }
+    float lfoRestartSeconds(int li) const { return lfoRestartBeats[li].get()*60.0f/std::max(1.0f,currentBpm); }
     // The LFOs for a node's own copies (first value of vector settings)
     std::vector<float> lfoTable(int li, int size) const;      // one cycle, 0..1, last point = first
     float lfoRate(int li, int voice) const;                   // Hz
@@ -237,12 +239,14 @@ private:
     struct TableCache {
         std::array<float, 9> key{};
         std::vector<float> values;
+        float phasePower=1;int trigger=0;
     };
     mutable std::array<TableCache, MAX_LFOS> cycleCache, transferCache;
     struct PreviewCache {
         std::array<float, 8> key{};
         std::array<float, 97> values{};
         bool valid = false;
+        float phasePower=1;
     };
     std::array<PreviewCache, MAX_LFOS> previewCache;
 
@@ -275,7 +279,7 @@ private:
     bool polarityEditable(int s, int t) const;                 // an LFO route this module runs itself
     bool paramsActive() const;
     void removeParam(size_t i);
-    struct EnvParams { ofParameter<float> a, d, s, r, ca, cd, cr, vt; };   // vt: velocity tracking 0..1
+    struct EnvParams { ofParameter<float> a, d, s, r, ca, cd, cr, vt; ofParameter<bool> beats; };   // vt: velocity tracking 0..1
     struct ServerState {
         ofxSCBus* srcBlock = nullptr;                          // NUM_SOURCES * W
         ofxSCBus* modBlock = nullptr;                          // (targets + 1) * W
@@ -330,7 +334,8 @@ private:
     std::array<ofParameter<bool>, MAX_LFOS> lfoRndSame;    // Random: one value for every voice (else each its own)
     // Random type (ModLfoRnd): 0 off (the waveform / noise), 1 stepped, 2 smooth, 3 jumps;
     // Random Smooth: the stepped values' glide (s)
-    std::array<ofParameter<int>, MAX_LFOS> lfoRndType, lfoModel;
+    std::array<ofParameter<int>, MAX_LFOS> lfoRndType, lfoModel, lfoTrigger;
+    std::array<ofParameter<float>, MAX_LFOS> lfoRestartBeats, lfoPhasePower;
     std::array<ofParameter<float>, MAX_LFOS> lfoManual;
     int effectiveRandom(int li) const { return unifiedLfoModels ? (lfoModel[li].get() == 3 ? 1 : 0) : lfoRndType[li].get(); }
     bool effectiveNoise(int li) const { return unifiedLfoModels ? lfoModel[li].get() == 2 : lfoNoise[li].get(); }

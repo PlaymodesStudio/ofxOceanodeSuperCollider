@@ -41,13 +41,19 @@ valueNoise2 = { |x, y, salt = 0|
             value * (k2 + 1) / k3.max(1.0e-6)
         };
         var reflect = { |v| v + ((v < 0) * v.neg) + ((v > 1) * (1 - v)) };
-        var reset = Changed.kr(\reset.kr(0));
+        var mode = \trigmode.kr(0), gate = A2K.kr(InFeedback.ar(\gate.kr(0), n)) > 0;
+        var gateRise = (HPZ1.kr(gate) > 0) * (mode > 0);
+        var manualReset = Changed.kr(\reset.kr(0));
+        var elapsed = Sweep.kr(gateRise + manualReset, 1);
+        var restartSec = \restartsec.kr(0);
+        var periodic = (HPZ1.kr((elapsed / restartSec.max(0.001)).floor) > 0) * (restartSec > 0) * (mode > 0) * gate;
+        var reset = manualReset + gateRise + periodic;
         var freq = kv.(\freq, 1), detune = kv.(\freqdetune, 0);
-        var spread = { TRand.kr(0, 1, reset + Impulse.kr(0)) } ! n;
+        var spread = n.collect { |i| TRand.kr(0, 1, reset.asArray.wrapAt(i) + Impulse.kr(0)) };
         var sweep = Sweep.kr(reset, freq + (spread * detune));
         var phoff = kv.(\phoff, 0);
         // the random types: per voice, a new value each cycle at the voice's own phase
-        var rpos = (sweep * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff;
+        var rpos = (Select.kr(mode>1.5,[sweep,sweep.clip(0,0.999999)]) * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff;
         var rcycle = rpos.floor, rfrac = rpos - rcycle;
         // \rshare 0: each voice its own values; 1: one series for every voice
         var rsalt = \seed.kr(0) * 7.13;
@@ -67,7 +73,8 @@ valueNoise2 = { |x, y, salt = 0|
         var rjumps = ((rstepped + rsmooth) - 1).wrap(0, 1);
         var steps = \steps.kr(0);
         // Hold: stopped at the start, each voice at its offset (an indexer)
-        var ph = ((sweep * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff).wrap(0, 1);
+        var rawPhase = (sweep * (1 - \hold.kr(0))) + \initphase.kr(0) + phoff;
+        var ph = Select.kr(mode > 1.5,[rawPhase.wrap(0,1),rawPhase.clip(0,0.999999)]).pow(\phasepower.kr(1).max(0.001));
         var pw = kv.(\pw, 0.5).clip(0.001, 1), skew = kv.(\skew, 0), round = kv.(\round, 0.5);
         var midpoint, leftMax, rightMin, centered, left, narrowed, wLo, wHi, widened;
         var threshold, lo, hi, w, tri, cosRaw, cosMapped, upper, shape, noise, sh, held, out;
@@ -106,7 +113,7 @@ valueNoise2 = { |x, y, salt = 0|
         // counter (the LFO's rate: Hz or Beats), y = each voice's seed = its
         // index x \nscale (how different the voices are); \seed: this LFO's
         // own noise field (no two LFOs share values)
-        noise = valueNoise2.(sweep + \initphase.kr(0), ((0 .. (n - 1)) + \voffset.kr(0)) * \nscale.kr(1), \seed.kr(0));
+        noise = valueNoise2.(Select.kr(mode>1.5,[sweep,sweep.clip(0,0.999999)]) + \initphase.kr(0), ((0 .. (n - 1)) + \voffset.kr(0)) * \nscale.kr(1), \seed.kr(0));
         classic = shape;
         legacy = Select.kr(\noise.kr(0) > 0.5, [classic, noise]);
         legacy = Select.kr(\rtype.kr(0).clip(0, 3), [legacy, rstepped, rsmooth, rjumps]);
@@ -132,7 +139,7 @@ valueNoise2 = { |x, y, salt = 0|
             (quantize.(low) * (1 - q.frac)) + (quantize.((low + 1).min(32)) * q.frac)
         }.value;
         out = (out * (1 - manualWeight)) + (\manualvalue.kr(0).clip(0, 1) * manualWeight);
-        Out.kr(\out.kr(0), Sanitize.kr(out));
+        Out.kr(\out.kr(0), Sanitize.kr(out) * Select.kr(mode > 0,[1,gate]));
     }).writeDefFile(dir);
 };
 "Modulation LFOs (random / steps) written to ".post; dir.postln;

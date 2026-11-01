@@ -18,10 +18,18 @@ length = interval + D milliseconds. These are the adapted presets' equations.
 
 `GrainStretch 01` through `08` retain source order and distinguish duplicate
 names. Go is deliberately not stored as part of a sound; click Go after
-selecting a preset. Existing tape presets retain Motion Mode 0, including
-when loading a saved sound from before Motion Mode existed. A wrapped delay
-window automatically grows an undersized recording; allow it to fill before
-using long rewinds. Windows remain limited by the engine's recording range.
+selecting a preset. The stretch factory snapshots now use the shared **LFO 1
+→ Pos** route. The generic Gate restart/one-shot modes, beat reset period and
+ramp power supply their timing and curve; the node only scales Position's
+modulation span into milliseconds/beats and reports its actual read position.
+A quadratic one shot into Position produces the slowdown-to-freeze ramp.
+
+`scGrainStretchRouting.h` builds the new factory adaptations as ordinary routes.
+It is only called during factory generation. Loading a saved snapshot, project
+or morph endpoint never converts its motion settings or routing. Tape presets keep their coupled speed/pitch
+integrator. The legacy controls remain in the collapsible Tape / legacy motion
+section. Long Position spans grow an undersized recording; allow it to fill.
+Windows remain limited by the engine's recording range.
 
 The adaptation preserves source channel identity. The reference wires its
 input channels to the opposite output cloud. Source placement intentionally
@@ -45,3 +53,10 @@ These are close adaptations, not sample-identical Reaktor emulation:
 and renders them offline. Tests measure independent pitch and scan speed,
 audible zero-speed freeze, retained tape behavior, all eight saw-delay
 trajectories, periodic reset, and a new Go after Stop.
+
+`python3 tools/grainfxbox/routing_test.py` checks the shared production LFOs,
+route synth and granular voices with standalone motion disabled. All eight
+reference sweeps, periodic gate resets, one-shot hold and clean dry return
+are checked. `python3 tools/modulation/trigger_modes_test.py` checks independent
+per-voice gates, both shared LFO variants, AdditiveBox clock compilation and
+production envelope beat conversion.

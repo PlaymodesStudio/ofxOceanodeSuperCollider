@@ -23,7 +23,10 @@ struct scModulationMorph {
         if(j.is_boolean()) return {j.get<bool>() ? 1.0f : 0.0f};
         // GrainBox serializes ordinary scalar/vector fields as text.
         if(j.is_string()) {
-            const auto text=j.get<std::string>(); const char* p=text.c_str();
+            const auto text=j.get<std::string>();
+            if(text=="true")return {1};
+            if(text=="false")return {0};
+            const char* p=text.c_str();
             std::vector<float> out;
             while(*p) {
                 char* end=nullptr;const float value=std::strtof(p,&end);

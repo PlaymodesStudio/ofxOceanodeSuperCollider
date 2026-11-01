@@ -43,7 +43,7 @@ def compile_defs(work):
     return sorted((work / 'CompiledSynthdefs/GrainBoxPoly').glob('*.scsyndef')) + sorted(work.glob('GBTest*.scsyndef'))
 
 
-def render(work, defs, name, voice, ctl_args, dry_args, gate_events, dur, src='GBTestSrc', buffer_seconds=4, preset=None):
+def render(work, defs, name, voice, ctl_args, dry_args, gate_events, dur, src='GBTestSrc', buffer_seconds=4, preset=None, lfo=None):
     frames = buffer_seconds * SR
     t0 = [message('/d_recv', p.read_bytes()) for p in defs]
     t0 += [message('/b_alloc', 0, frames, 1), message('/b_alloc', 1, frames, 1), message('/g_new', 1, 0, 0)]
@@ -59,10 +59,22 @@ def render(work, defs, name, voice, ctl_args, dry_args, gate_events, dur, src='G
     ctl_msg = message('/s_new', 'GrainBoxPolyCtl_8', 1003, 1, 1, *[a for a in ctl if a != '$bufs' and a != 'bufs'])
     if preset:
         score += bundle(0.005,[message('/b_setn',2,0,512,*env)])
-    voice_args = ['ampbus',float(AMP),'modw',1.0,'gatebus',GATE] if preset else []
+    mod_messages=[]
+    if lfo:
+        hz=2.0/lfo['LFO1_Beats'] if lfo['LFO1_Sync'] else lfo['LFO1_Hz']
+        span=lfo['Position_Mod_Span']*(0.5 if lfo['Position_Mod_Units']==2 else 0.001)
+        mod_messages=[message('/s_new','ModLfoX1',1010,1,1,'out',700.0,'gate',float(GATE),'freq',hz,
+                              'round',0.0,'skew',lfo['LFO1_Skew'],'trigmode',float(lfo['LFO1_Trigger_Mode']),
+                              'phasepower',lfo['LFO1_Ramp_Power'],'restartsec',lfo['LFO1_Restart_Beats']*0.5),
+                      message('/s_new','ModRoute1',1011,1,1,'src',700.0,'out',800.0,'amount',lfo['gbpModMatrix'][0],'scale',1.0)]
+        ctl_msg=message('/s_new','GrainBoxPolyCtl_8',1003,1,1,*[a for a in ctl if a!='$bufs' and a!='bufs'],
+                        'posmodscale',span/(buffer_seconds-0.01))
+    voice_args = ['ampbus' ,float(AMP),'modw',1.0,'gatebus',GATE] if preset else []
+    if lfo: voice_args+=['modbus',800.0,'modw',1.0,'spansec',span]
     score += bundle(0.01, [
         message('/s_new', src, 1000, 1, 1),
         message('/s_new', 'GBTestGate', 1001, 1, 1),
+        *mod_messages,
         message('/s_new', 'GrainBoxPolyRecC_2', 1002, 1, 1, 'in', IN, 'phasebus', PHASE, 'vis', 0.0, 'tfrz', CTL + 100),
         message('/n_setn', 1002, 'bufs', 2, 0.0, 1.0),
         ctl_msg,
