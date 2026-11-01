@@ -5,7 +5,7 @@
 //  Multichannel granular sampler with interactive waveform/envelope GUI.
 //  Two nodes share this class: GrainBox (the instrument: samples) and
 //  GrainFxBox (scGrainFxBox below, the effect: every engine records the In
-//  port; Wet Mode, Gate Motion).
+//  port; Wet Mode, routed Ramp modulation).
 //
 //  Architecture:
 //    • Inherits scNode — pure audio source (no In port).
@@ -88,7 +88,7 @@ public:
     static constexpr int   MOD_SOURCES         = 22;  // LFO 1-8, Env 1-4, Ext 1-8, Random, Voice
 
     // ── Constructor / Destructor ──────────────────────────────────────────────
-    // fx: GrainFxBox (live input engines, Dry/Wet, Wet Mode, Gate Motion)
+    // fx: GrainFxBox (live input engines, Dry/Wet, Wet Mode, routed Ramp modulation)
     scGrainBoxPoly(vector<serverManager*> servers, bool fx = false);
     ~scGrainBoxPoly();
 
@@ -287,12 +287,7 @@ private:
         ofParameter<bool>  freeze;                  // stop recording
         ofParameter<float> feedback;                // Live: engine output back into its buffer (0..1.1)
         ofParameter<float> fbTone;                  // feedback filter: 0 lowpass .. 0.5 open .. 1 highpass
-        // Gate Motion: scan speed ramps Start -> End over Time (Curve).
-        // Tape couples pitch; Stretch keeps grain pitch independent; loop
-        // wraps delay within Time. Repeat resets; Freeze stops recording.
-        ofParameter<bool>  motion, motionRepeat, motionFreeze, motionBeats;
-        ofParameter<int>   motionMode;              // 0 tape, 1 pitch-preserving stretch, 2 wrapped delay ramp
-        ofParameter<float> motionStart, motionEnd, motionTime, motionCurve;
+        ofParameter<bool> freezeOnGate,followScanPitch;
         std::vector<float> liveRing;                // signed max per bin, buffer order
         std::vector<float> liveRingMin;             // signed min per bin
         float              liveHead = 0.0f;         // write position 0..1
@@ -399,9 +394,8 @@ private:
     int  liveChannels(const Playhead& ph) const;     // what Live records: N Chan (Source), else 1
     bool sourceRouted(const Playhead& ph) const;
     void syncLiveChannels(Playhead& ph);              // a recording of the wrong width: again
-    void setMotionArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv);
+    void setPositionModArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv);
     float positionModScale(const Playhead&) const;
-    float motionTimeSec(const Playhead& ph) const;
     int  outBusFor(const Playhead& ph, ofxSCServer* srv) const;
     SampleData&       sampleOf(Playhead& ph);
     const SampleData& sampleOf(const Playhead& ph) const;

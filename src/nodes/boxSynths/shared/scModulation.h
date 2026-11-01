@@ -40,6 +40,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "scRamp.h"
 
 class scMorphPolicies;
 class ofxOceanodeNodeModel;
@@ -149,6 +150,11 @@ public:
     void resetLfos();
     void voicesChanged();                                     // a new voice count (no server synths: GrainBox)
     int resets() const { return resetCounter; }
+    bool isRamp(int li) const {return lfoRamp[li].get();}
+    bool rampEnabled(int li) const {return lfoRampEnabled[li].get();}
+    int rampEnding(int li) const {return lfoRampEnd[li].get();}
+    int rampBounds(int li) const {return lfoRampBounds[li].get();}
+    float rampTail(int li) const {return scRamp::tail(lfoRampFrom[li].get(),lfoRampTo[li].get(),lfoRampCurve[li].get(),lfoRampRate[li].get(),lfoPow[li].get().empty()?0:lfoPow[li].get()[0],lfoBiPow[li].get().empty()?0:lfoBiPow[li].get()[0]);}
     int lfoTriggerMode(int li) const { return lfoTrigger[li].get(); }
     float lfoRestartSeconds(int li) const { return lfoRestartBeats[li].get()*60.0f/std::max(1.0f,currentBpm); }
     // The LFOs for a node's own copies (first value of vector settings)
@@ -164,7 +170,7 @@ public:
     float lfoShGlide(int li) const { return lfoSHGlide[li].get(); }   // S&H glide (s)
     // Noise (smooth 2D random values): x the rising counter, y = index x Scale + seed
     static float noise2(float x, float y, float salt = 0.0f);   // salt: each LFO (voice) its own field
-    bool lfoIsNoise(int li) const { return effectiveNoise(li); }
+    bool lfoIsNoise(int li) const { return !isRamp(li) && effectiveNoise(li); }
     float lfoNoiseScale(int li) const { return lfoNScale[li].get(); }
     float lfoNoiseSeed(int li) const { return li * 17.31f; }
     std::vector<float> lfoTransfer(int li, int size) const;   // Gain / Steps / Pow / BiPow as a curve
@@ -334,6 +340,11 @@ private:
     std::array<ofParameter<bool>, MAX_LFOS> lfoRndSame;    // Random: one value for every voice (else each its own)
     // Random type (ModLfoRnd): 0 off (the waveform / noise), 1 stepped, 2 smooth, 3 jumps;
     // Random Smooth: the stepped values' glide (s)
+    std::array<ofParameter<bool>,MAX_LFOS> lfoRamp,lfoRampEnabled,lfoRampRate;
+    std::array<ofParameter<float>,MAX_LFOS> lfoRampFrom,lfoRampTo,lfoRampCurve,lfoRampOffset,lfoRampDuration;
+    std::array<ofParameter<int>,MAX_LFOS> lfoRampEnd,lfoRampBounds;
+    float rampValue(int li,float phase) const;
+    void drawRampCard(int li,float w);
     std::array<ofParameter<int>, MAX_LFOS> lfoRndType, lfoModel, lfoTrigger;
     std::array<ofParameter<float>, MAX_LFOS> lfoRestartBeats, lfoPhasePower;
     std::array<ofParameter<float>, MAX_LFOS> lfoManual;

@@ -63,3 +63,30 @@ The production C++ routing, noise algorithm, LFO publication and factory panning
 regression checks also pass. The original-mode SteamPipe kernel reference
 hashes remain unchanged. Restart the application/server to replace any synths
 already running with older definitions.
+
+## Shared Ramp generators
+
+**+ Add Ramp** adds a Ramp to any box using the shared modulation editor.
+Ramps and LFOs share eight source slots, preserving existing route IDs. Route
+**Ramp N** to Pos or any other target in Routing. The GrainBox editor calls
+this tab **Modulators**. Gate / Go starts each voice independently; seconds
+or Beats set the duration. After Time can hold, loop, or continue the final
+slope. Bounds can clamp or wrap the output, or leave it unbounded.
+
+From / To set values; **Integrate rate** instead integrates those rates in
+spans per cycle, which supports acceleration and tape braking. Curve shapes
+the transition. **Pow** and **BiPow** ease normalized time, using the shared
+LFO's rational shaping. Both default to zero. In rate mode, easing time also
+changes instantaneous speed; continuation follows the eased endpoint slope.
+The preview and AdditiveBox partial tables use the same C++ reference math
+as the Ramp DSP. Existing LFO presets still select the LFO engine.
+
+GrainFxBox factory Motion effects and saved Motion settings translate on
+recall to Ramp -> Pos. **Freeze On Gate** controls recording independently;
+**Follow Scan Pitch** derives grain pitch from Pos movement where needed.
+The separate Tape / legacy motion UI and DSP have been removed. Saved preset
+files are not rewritten. Migration uses an unused generator slot and preserves
+other routes; a save using all eight slots needs a slot freed for conversion.
+
+Run `python3 tools/grainfxbox/routing_test.py` for migration, easing/preview
+agreement, Reaktor reference trajectories and rendered tape/stutter checks.

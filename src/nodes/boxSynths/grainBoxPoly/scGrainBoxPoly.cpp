@@ -20,6 +20,11 @@
 #include <array>
 
 namespace {
+ofJson gbpRoutedStretch(ofJson sound,int sources,int targets,const std::string& suffix="",float bpm=120,float regionSeconds=15.99f) {
+    auto result=scGrainStretchRouting(std::move(sound),sources,targets,suffix,bpm,regionSeconds);
+    if(result.contains("rampMigrationError"))ofLogError("GrainFxBox") << result["rampMigrationError"].get<std::string>() << "; free a generator slot before converting this sound.";
+    return result;
+}
 const char* kFilterNames[6] = {"Off", "LPF2", "BPF", "Notch", "HPF2", "LP-HP"};
 const char* kEqBandNames[5] = {"Low", "LoMid", "Mid", "HiMid", "High"};
 
@@ -717,15 +722,8 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.freeze.set         ("Freeze"       + x, false);
     ph.feedback.set       ("Feedback"     + x, 0.0f, 0.0f, 1.1f);
     ph.fbTone.set         ("FbTone"       + x, 0.5f, 0.0f, 1.0f);
-    ph.motion.set         ("Motion"        + x, false);
-    ph.motionMode.set     ("Motion Mode"   + x, 0, 0, 2);
-    ph.motionStart.set    ("Motion Start"  + x, 1.0f, -4.0f, 4.0f);   // tape speed (1 = in step, 0 = stopped, -1 = backwards)
-    ph.motionEnd.set      ("Motion End"    + x, 0.0f, -4.0f, 4.0f);
-    ph.motionTime.set     ("Motion Time"   + x, 0.5f, 0.01f, 16.0f);  // seconds, or beats (Motion Beats)
-    ph.motionBeats.set    ("Motion Beats"  + x, false);
-    ph.motionCurve.set    ("Motion Curve"  + x, 0.0f, -8.0f, 8.0f);
-    ph.motionRepeat.set   ("Motion Repeat" + x, false);
-    ph.motionFreeze.set   ("Motion Freeze" + x, false);
+    ph.freezeOnGate.set("Freeze On Gate"+x,false);
+    ph.followScanPitch.set("Follow Scan Pitch"+x,false);
 
     ph.levels.set         ("Levels"       + x, {1.0f},   {0.0f},   {1.0f});
     // 0 = follow N Chan (from the offset to the last channel)
@@ -771,7 +769,6 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
                                                   "Pent. major", "Pent. minor", "Whole tone", "Octaves", "Fifths+oct", "Custom"});
     dropdowns.set(ph.scaleRoot.getEscapedName(), {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"});
     dropdowns.set(ph.envShape.getEscapedName(), {"Custom", "Hann", "Gaussian", "Percussive", "Reverse Perc", "Trapezoid", "Rectangular"});
-    dropdowns.set(ph.motionMode.getEscapedName(), {"Tape", "Stretch", "Stretch loop"});
     dropdowns.set(ph.filterType.getEscapedName(), std::vector<const char*>(kFilterNames, kFilterNames + 6));
 
     dropdowns.set(ph.placement.getEscapedName(), {"Manual (PanAz)", "Spread", "Channels", "Source (1:1)"});
@@ -1181,7 +1178,7 @@ void scGrainBoxPoly::replaceCtl(Playhead& ph, ofxSCServer* srv) {
     const int bus = ph.ebus[srv].ctl->index;
     for(auto* v : ph.voices[srv]) if(v) v->set("ctl", bus);
     if(ph.outSynths.count(srv) && ph.outSynths[srv]) ph.outSynths[srv]->set("ctl", bus);
-    if(ph.liveSC.count(srv) && ph.liveSC[srv].rec) ph.liveSC[srv].rec->set("tfrz", bus + 100);   // Gate Motion's freeze
+    if(ph.liveSC.count(srv) && ph.liveSC[srv].rec) ph.liveSC[srv].rec->set("gatefreeze", bus + 97);   // Freeze on Gate
     ph.needHard = true;                      // re-anchor the new clock
     if(syncToTransportP.get()) follower.requestAnchor();
 }
@@ -1644,17 +1641,13 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
         toPan();
         syncLiveChannels(*p);       // Source records every input channel
         refreshPlayheadSynths(*p);  // Source: the 1:1 voices
-        for(auto& [srv, s] : p->synths) if(s) setMotionArgs(*p, s, srv);
+        for(auto& [srv, s] : p->synths) if(s) setPositionModArgs(*p, s, srv);
     }));
-    // Gate Motion: the control synth's tape
-    auto motionL = [this, p]() { for(auto& [srv, s] : p->synths) if(s) setMotionArgs(*p, s, srv); };
-    ph.listeners.push(ph.positionModSpan.newListener([motionL](float&){motionL();}));
-    ph.listeners.push(ph.positionModUnit.newListener([motionL](int&){motionL();}));
-    ph.listeners.push(ph.motionMode.newListener([motionL](int&) { motionL(); }));
-    for(auto* q : {&ph.motion, &ph.motionRepeat, &ph.motionFreeze, &ph.motionBeats})
-        ph.listeners.push(q->newListener([motionL](bool&) { motionL(); }));
-    for(auto* q : {&ph.motionStart, &ph.motionEnd, &ph.motionTime, &ph.motionCurve})
-        ph.listeners.push(q->newListener([motionL](float&) { motionL(); }));
+    auto positionModChanged=[this,p](){for(auto& [srv,s]:p->synths)if(s)setPositionModArgs(*p,s,srv);};
+    ph.listeners.push(ph.positionModSpan.newListener([positionModChanged](float&){positionModChanged();}));
+    ph.listeners.push(ph.positionModUnit.newListener([positionModChanged](int&){positionModChanged();}));
+    ph.listeners.push(ph.freezeOnGate.newListener([positionModChanged](bool&){positionModChanged();}));
+    ph.listeners.push(ph.followScanPitch.newListener([positionModChanged](bool&){positionModChanged();}));
     ph.listeners.push(ph.spreadWidth.newListener([toPan](float&) { toPan(); }));
 
     // Manual trigger → per-voice counters (see triggerCountsFor)
@@ -2381,9 +2374,9 @@ void scGrainBoxPoly::setRecArgs(Playhead& ph, ofxSCSynth* rec, ofxSCServer* srv)
         rec->set("bufs", idx);
     }
     if(l.phaseBus) rec->set("phasebus", l.phaseBus->index);
-    // Gate Motion's freeze: its control bus slot (scGrainBoxPoly.scd, +100)
+    // Freeze on Gate: controller's recording flag (+97)
     auto eb = ph.ebus.find(srv);
-    rec->set("tfrz", eb != ph.ebus.end() && eb->second.ctl ? (float)(eb->second.ctl->index + 100) : -1.0f);
+    rec->set("gatefreeze", eb != ph.ebus.end() && eb->second.ctl ? (float)(eb->second.ctl->index + 97) : -1.0f);
     rec->set("freeze",   ph.freeze.get() ? 1.0f : 0.0f);
     rec->set("vis",      visOn ? 1.0f : 0.0f);
     rec->set("fbbus",    l.fbBus ? l.fbBus->index : -1);
@@ -2499,7 +2492,7 @@ void scGrainBoxPoly::setLiveInput(Playhead& ph, bool on) {
             }
             freeLiveResources(ph, srv);
         }
-        if(ph.synths.count(srv) && ph.synths[srv]) setMotionArgs(ph, ph.synths[srv], srv);   // Live only
+        if(ph.synths.count(srv) && ph.synths[srv]) setPositionModArgs(ph, ph.synths[srv], srv);   // Live only
     }
 }
 
@@ -2516,7 +2509,7 @@ void scGrainBoxPoly::resizeLiveBuffers(Playhead& ph) {
         if(running) {
             setBufnums(ph, ph.synths[srv], srv);
             setLiveArgs(ph, ph.synths[srv]);
-            setMotionArgs(ph, ph.synths[srv], srv);   // Live Length
+            setPositionModArgs(ph, ph.synths[srv], srv);   // Live Length
             createLiveRecorder(ph, srv);
         }
     }
@@ -3159,7 +3152,7 @@ void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
         if(timeUnitsCur == 2) timeDirty = true;
         if(echoBeatsP.get()) sendFxParamsAll();   // Echo delay in beats follows the tempo
         for(auto& ph : playheads) {
-            if(ph->motionBeats.get() || ph->positionModUnit.get()==2) for(auto& [srv, s] : ph->synths) if(s) setMotionArgs(*ph, s, srv);
+            if(ph->positionModUnit.get()==2) for(auto& [srv, s] : ph->synths) if(s) setPositionModArgs(*ph, s, srv);
             sendDiv(*ph);   // Relative / ms interval -> grains per beat
             if(ph->liveInput && ph->liveLenBeats.get())   // Live Length in beats: new buffer
                 ph->liveResizeAt = ofGetElapsedTimef() + 0.3f;
@@ -3175,9 +3168,9 @@ void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
     for(auto& ph : playheads) {
         // Grow only when a stretch-loop window needs it; snapshots never shrink
         // a recording. This also handles a slower tempo or an older 4 s patch.
-        if(fxMode && ((ph->motion.get() && ph->motionMode.get()==2) || ph->positionModUnit.get()!=0)) {
+        if(fxMode && ph->positionModUnit.get()!=0) {
             const float span=ph->positionModUnit.get()==1?ph->positionModSpan.get()*0.001f:ph->positionModUnit.get()==2?ph->positionModSpan.get()*60.0f/std::max(1.0f,effectiveBpm()):0;
-            const float required=std::max(span,ph->motion.get()?motionTimeSec(*ph):0.0f)+2.0f;
+            const float required=span+2.0f;
             if(liveLenSec(*ph)+0.01f < required) {
                 const float units=ph->liveLenBeats.get()?required*std::max(1.0f,effectiveBpm())/60.0f:required;
                 const float length=std::min(ph->liveLength.getMax(),units);
@@ -3950,10 +3943,7 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
         regS (ph, ph.freeze,           false);
         regS (ph, ph.feedback,         false);
         regS (ph, ph.fbTone,           false);
-        // Gate Motion (Live)
-        regS(ph, ph.motionMode, false);
-        for(auto* q : {&ph.motion, &ph.motionRepeat, &ph.motionFreeze, &ph.motionBeats}) regS(ph, *q, false);
-        for(auto* q : {&ph.motionStart, &ph.motionEnd, &ph.motionTime, &ph.motionCurve}) regS(ph, *q, false);
+        regS(ph,ph.freezeOnGate,false);regS(ph,ph.followScanPitch,false);
         // Modulation: the gate, the placement, every LFO / envelope / ext control
         regVF(ph, ph.gate,             false);
         regS (ph, ph.drone,         false);
@@ -4321,6 +4311,7 @@ void scGrainBoxPoly::presetRecallBeforeSettingParameters(ofJson& j) {
     int n = 1;
     if(j.contains("numPlayheads") && j["numPlayheads"].is_number()) n = j["numPlayheads"].get<int>();
     setNumPlayheads(n);
+    for(const auto& ph:playheads)j=gbpRoutedStretch(j,ph->mod->sourceCount(),MOD_TARGETS,ph->sfx,effectiveBpm(),posScaleSec(*ph));
     // Pitch arrives in the preset's units: its mode first (none: from before
     // Pitch Mode, Semitones)
     for(auto& ph : playheads) {
@@ -4414,9 +4405,7 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
             rs(ph->drone, false);
             rs(ph->ampA, 0.01f); rs(ph->ampD, 0.3f); rs(ph->ampS, 1.0f); rs(ph->ampR, 0.5f);
             rs(ph->ampCA, -4.0f); rs(ph->ampCD, -4.0f); rs(ph->ampCR, -4.0f);
-            rs(ph->motion, false); rs(ph->motionStart, 1.0f); rs(ph->motionEnd, 0.0f); rs(ph->motionTime, 0.5f);
-            rs(ph->motionMode, 0);
-            rs(ph->motionBeats, false); rs(ph->motionCurve, 0.0f); rs(ph->motionRepeat, false); rs(ph->motionFreeze, false);
+            rs(ph->freezeOnGate,false);rs(ph->followScanPitch,false);
         }
         if(fxMode) rs(wetModeP, 0);
     }
@@ -4790,7 +4779,7 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
     globalTab = overlay;
 
     // ── Function tabs (PolyComb's): the engine's, then the node-wide ones ──
-    static const char* kTabs[TAB_COUNT] = {"Grains", "Envelopes", "LFOs", "Routing", "Panning", "Mixer", "Effects"};
+    static const char* kTabs[TAB_COUNT] = {"Grains", "Envelopes", "Modulators", "Routing", "Panning", "Mixer", "Effects"};
     if(ImGui::BeginTabBar("##gbpTabs")) {
         for(int t = 0; t < TAB_COUNT; t++) {
             const ImGuiTabItemFlags f = (!tabsInitialized && t == windowTab) ? ImGuiTabItemFlags_SetSelected : 0;
@@ -4859,7 +4848,7 @@ void scGrainBoxPoly::drawHeader(Playhead& ph, float w) {
                 ImGui::SetTooltip("Blend: the input and the engines mixed by Dry/Wet.\n"
                                   "Gated: only the input until Gate goes up; while it is up the\n"
                                   "engines replace it (Drone off: they play through their Amp\n"
-                                  "Envelope). With Gate Motion: tape stops, rewinds, stutters.");
+                                  "Envelope). Route a Ramp to Pos for tape stops, rewinds or stutters.");
             drawNodePublishContextMenu(key);
         }
         if(!wetGated()) {
@@ -4884,7 +4873,7 @@ void scGrainBoxPoly::drawHeader(Playhead& ph, float w) {
         }
         if(ImGui::IsItemHovered())
             ImGui::SetTooltip("Hold: Gate up (engine 1's Gate, which every engine follows\n"
-                              "unless its own Gate is published). Wet Mode Gated / Gate Motion.");
+                              "unless its own Gate is published). Gate triggers envelopes and Ramps.");
         ImGui::SameLine(0, 4.0f * zoom);
         if(ImGui::Button(up ? "Stop##gbpGo" : "Go##gbpGo", ImVec2(52.0f * zoom, 0)) && !hasInputConnection(g0.gate.getName()))
             g0.gate.set(vector<float>{up ? 0.0f : 1.0f});
@@ -5441,59 +5430,17 @@ void scGrainBoxPoly::drawPlayheadHeader(Playhead& ph, float /*w*/) {
     ImGui::SameLine(0, 2.0f * zoom);
     toggleBtn("S##phSolo", ph.solo, gbpAccent(ph.index, 200, 0.9f), "Solo: only soloed engines sound");
 
-    // Gate Motion (Live): the tape's speed on the Gate
-    if(ph.liveInput && ImGui::TreeNode("Tape / legacy motion")) {
-        auto fslider = [&](const char* id, ofParameter<float>& p, float w, const char* fmt, const char* tip) {
-            ImGui::SameLine(0, 4.0f * zoom);
-            ImGui::SetNextItemWidth(w * zoom);
-            float v = p.get();
-            if(gbpSliderFloat(id, &v, p.getMin(), p.getMax(), fmt)) p.set(v);
-            if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive()) ImGui::SetTooltip("%s", tip);
-            drawPublishedCurrentItemUnderline(p.getEscapedName());
-            drawNodePublishContextMenu(p.getEscapedName());
-        };
-        auto check = [&](const char* id, ofParameter<bool>& b, const char* tip) {
-            ImGui::SameLine(0, 8.0f * zoom);
-            bool v = b.get();
-            if(ImGui::Checkbox(id, &v)) b.set(v);
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-            drawNodePublishContextMenu(b.getEscapedName(), id, 0.0f, true);
-        };
-        bool on = ph.motion.get();
-        ImGui::PushStyleColor(ImGuiCol_Text, gbpAccent(ph.index, 255));
-        if(ImGui::Checkbox("Gate Motion##gbpMot", &on)) ph.motion.set(on);
-        ImGui::PopStyleColor();
-        if(ImGui::IsItemHovered())
-            ImGui::SetTooltip("Go or Gate starts the scan-speed ramp: From to To over Time.\n"
-                              "1 = follow the input, 0 = hold a sound, negative = scan backwards.\n"
-                              "Tape changes pitch too; Stretch keeps grain Pitch independent.\n"
-                              "Stretch loop wraps the delay within Time, like Reaktor GrainStretch.\n"
-                              "Use grains (Grainless off) for stretching. Wet Mode Gated replaces the input.");
-        drawNodePublishContextMenu(ph.motion.getEscapedName(), "Gate Motion##gbpMot", 0.0f, true);
-        if(!on) ImGui::BeginDisabled();
-        ImGui::SameLine(0, 4.0f * zoom);
-        ImGui::SetNextItemWidth(116.0f * zoom);
-        int mode=ph.motionMode.get();
-        const char* modes[]={"Tape", "Stretch", "Stretch loop"};
-        if(ImGui::Combo("##gbpMotionMode", &mode, modes, 3)) {
-            ph.motionMode.set(mode);
-            if(mode) ph.grainless.set(false);
+    if(ph.liveInput) {
+        bool freeze=ph.freezeOnGate.get();
+        if(ImGui::Checkbox("Freeze on Gate",&freeze))ph.freezeOnGate=freeze;
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Pause recording while Gate/Go is active. Route a Ramp to Pos to scan or loop the captured audio.");
+        drawNodePublishContextMenu(ph.freezeOnGate.getEscapedName());
+        if(!ph.grainless.get()) {
+            ImGui::SameLine();bool follow=ph.followScanPitch.get();
+            if(ImGui::Checkbox("Follow scan pitch",&follow))ph.followScanPitch=follow;
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Grain rate and direction follow movement of Pos, like tape. Off preserves independent grain Pitch.");
+            drawNodePublishContextMenu(ph.followScanPitch.getEscapedName());
         }
-        drawNodePublishContextMenu(ph.motionMode.getEscapedName());
-        fslider("##gbpMotS", ph.motionStart, 76.0f, "from %.2fx", "Speed when the Gate goes up");
-        fslider("##gbpMotE", ph.motionEnd, 70.0f, "to %.2fx", "Speed after Time");
-        const bool mb = ph.motionBeats.get();
-        fslider("##gbpMotT", ph.motionTime, 70.0f, mb ? "%.2f b" : "%.2f s", "Ramp time; Stretch loop also uses this as the delay window. Repeat resets every Time.\nFor a steady stretch, set From and To to the same scan speed.");
-        ImGui::SameLine(0, 2.0f * zoom);
-        if(ImGui::SmallButton(mb ? "b##gbpMotU" : "s##gbpMotU")) ph.motionBeats.set(!mb);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Time in seconds (s) or beats (b, follows the tempo)");
-        drawNodePublishContextMenu(ph.motionBeats.getEscapedName());
-        fslider("##gbpMotC", ph.motionCurve, 70.0f, "curve %.1f", "0 = a straight ramp; positive: changes late (slow start), negative: early");
-        check("Repeat##gbpMotR", ph.motionRepeat, "Start again every Time while the Gate is up (a saw)");
-        check("Freeze##gbpMotF", ph.motionFreeze, "Stop recording while it runs: it starts one Time back and\n"
-                                                  "loops what was there (with Repeat: a stutter)");
-        if(!on) ImGui::EndDisabled();
-        ImGui::TreePop();
     }
     ImGui::Spacing();
 }
@@ -5808,7 +5755,9 @@ bool scGrainBoxPoly::morphCheck(const ofJson& target, std::string& reason) const
     return true;
 }
 
-ofJson scGrainBoxPoly::snapshotOf(const ofJson& j) const {
+ofJson scGrainBoxPoly::snapshotOf(const ofJson& saved) const {
+    ofJson j=saved;
+    for(const auto& ph:playheads)j=gbpRoutedStretch(j,ph->mod->sourceCount(),MOD_TARGETS,ph->sfx,effectiveBpm(),posScaleSec(*ph));
     ofJson s = ofJson::object();
     for(const auto& a : publishableEditorParameters)
         if(a.saveValue && !snapshotExcluded(a.key) && j.contains(a.key)) s[a.key] = j[a.key];
@@ -5859,10 +5808,12 @@ ofJson scGrainBoxPoly::pitchInCurrentUnits(const ofJson& snap) const {
 void scGrainBoxPoly::applySnapshot(const ofJson& snapInSaved) {
     const auto snapIn = scDroneMode::migrated(snapInSaved);
     if(!snapIn.is_object()) return;
-    const ofJson snap = pitchInCurrentUnits(snapIn);
+    ofJson snap=pitchInCurrentUnits(snapIn);
+    for(const auto& ph:playheads)snap=gbpRoutedStretch(snap,ph->mod->sourceCount(),MOD_TARGETS,ph->sfx,effectiveBpm(),posScaleSec(*ph));
     for(auto& ph : playheads) {
         if(!snap.contains(ph->drone.getEscapedName())) ph->drone = false;
-        if(!snap.contains(ph->motionMode.getEscapedName())) ph->motionMode=0;
+        if(!snap.contains(ph->freezeOnGate.getEscapedName()))ph->freezeOnGate=false;
+        if(!snap.contains(ph->followScanPitch.getEscapedName()))ph->followScanPitch=false;
         if(!snap.contains(ph->grainTail.getEscapedName())) ph->grainTail=0.0f;
         if(!snap.contains(ph->positionModSpan.getEscapedName())) ph->positionModSpan=1.0f;
         if(!snap.contains(ph->positionModUnit.getEscapedName())) ph->positionModUnit=0;
@@ -6006,7 +5957,7 @@ std::vector<ofJson> scGrainBoxPoly::factorySnapshots() const {
    "Motion End": -2, "Motion Time": 16, "Motion Beats": true, "Motion Repeat": true, "IntervalUnit": 2, "TrigDur": true,
    "Pitch": -1.8239994049072266, "EnvAttack": 1, "EnvRelease": 0.5384839100390594, "PanAzJit": 0, "Grain Tail": 291.692923}}
 ])JSON");
-    for(auto& preset:factory) preset=scGrainStretchRouting(preset,playheads[0]->mod->sourceCount(),MOD_TARGETS);
+    for(auto& preset:factory) preset=gbpRoutedStretch(preset,playheads[0]->mod->sourceCount(),MOD_TARGETS);
     return factory;
 }
 
@@ -6054,11 +6005,13 @@ void scGrainBoxPoly::applyMorph(const ofJson& aInSaved, const ofJson& bInSaved, 
     const auto aIn = scDroneMode::migrated(aInSaved), bIn = scDroneMode::migrated(bInSaved);
     if(!aIn.is_object() || !bIn.is_object()) return;
     ofJson a = pitchInCurrentUnits(aIn), b = pitchInCurrentUnits(bIn);
+    for(const auto& ph:playheads){a=gbpRoutedStretch(a,ph->mod->sourceCount(),MOD_TARGETS,ph->sfx,effectiveBpm(),posScaleSec(*ph));b=gbpRoutedStretch(b,ph->mod->sourceCount(),MOD_TARGETS,ph->sfx,effectiveBpm(),posScaleSec(*ph));}
     for(const auto& ph : playheads) {
         for(auto* endpoint : {&a,&b}) {
             if(!endpoint->contains(ph->positionModSpan.getEscapedName())) (*endpoint)[ph->positionModSpan.getEscapedName()]=1.0f;
             if(!endpoint->contains(ph->positionModUnit.getEscapedName())) (*endpoint)[ph->positionModUnit.getEscapedName()]=0;
-            if(!endpoint->contains(ph->motionMode.getEscapedName())) (*endpoint)[ph->motionMode.getEscapedName()]=0;
+            if(!endpoint->contains(ph->freezeOnGate.getEscapedName()))(*endpoint)[ph->freezeOnGate.getEscapedName()]=false;
+            if(!endpoint->contains(ph->followScanPitch.getEscapedName()))(*endpoint)[ph->followScanPitch.getEscapedName()]=false;
             if(!endpoint->contains(ph->grainTail.getEscapedName())) (*endpoint)[ph->grainTail.getEscapedName()]=0.0f;
         }
         const auto key = ph->drone.getEscapedName();
@@ -7255,7 +7208,7 @@ void scGrainBoxPoly::setCtlModArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv
     auto it = ph.modSC.find(srv);
     const bool on = it != ph.modSC.end() && it->second.created;
     s->set("cutbus", on ? (float)ph.mod->targetBus(srv, 6) : -1.0f);
-    setMotionArgs(ph, s, srv);   // the gate bus it follows
+    setPositionModArgs(ph, s, srv);   // the gate bus it follows
     if(ph.index == 0) setDryArgs(srv);
 }
 
@@ -7266,31 +7219,13 @@ float scGrainBoxPoly::positionModScale(const Playhead& ph) const {
     return seconds/posScaleSec(ph);
 }
 
-float scGrainBoxPoly::motionTimeSec(const Playhead& ph) const {
-    const float t = std::max(0.01f, ph.motionTime.get());
-    return ph.motionBeats.get() ? t * 60.0f / std::max(1.0f, effectiveBpm()) : t;
-}
-
-// Gate Motion (Live engines): the control synth integrates the tape from the
-// gate (playhead 1's ModGate level) and holds it through the Amp Envelope's
-// release (playhead 1's envelope level, written by the voices)
-void scGrainBoxPoly::setMotionArgs(Playhead& ph, ofxSCSynth* s, ofxSCServer* srv) {
-    if(!s) return;
-    scSynthControlBatch c(s, srv);
-    c.set("posmodscale", positionModScale(ph));
-    c.set("tmotion", ph.motion.get() && ph.liveInput ? 1.0f : 0.0f);
-    c.set("tmode", ph.motionMode.get());
-    c.set("tstart",  ph.motionStart.get());
-    c.set("tend",    ph.motionEnd.get());
-    c.set("ttime",   motionTimeSec(ph));
-    c.set("tcurve",  ph.motionCurve.get());
-    c.set("trepeat", ph.motionRepeat.get() ? 1.0f : 0.0f);
-    c.set("tfreeze", ph.motionFreeze.get() ? 1.0f : 0.0f);
-    c.set("livelen", ph.liveInput ? std::max(0.01f, liveLenSec(ph) - 0.02f) : 0.01f);
-    auto it = ph.modSC.find(srv);
-    const bool m = it != ph.modSC.end();
-    c.set("gatebus", m && it->second.gateBus ? (float)it->second.gateBus->index : -1.0f);
-    c.set("tenvbus", m && it->second.amp ? (float)(it->second.amp->index + 7 * it->second.width + 1) : -1.0f);
+void scGrainBoxPoly::setPositionModArgs(Playhead& ph,ofxSCSynth* s,ofxSCServer* srv) {
+    if(!s)return;
+    scSynthControlBatch c(s,srv);c.set("posmodscale",positionModScale(ph));
+    c.set("freezegate",ph.freezeOnGate.get()?1.0f:0.0f);
+    c.set("scanpitch",ph.followScanPitch.get()?1.0f:0.0f);
+    auto it=ph.modSC.find(srv);
+    c.set("gatebus",it!=ph.modSC.end() && it->second.gateBus?float(it->second.gateBus->index):-1.0f);
     c.send();
 }
 

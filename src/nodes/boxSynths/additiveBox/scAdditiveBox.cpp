@@ -1138,10 +1138,16 @@ void scAdditiveBox::laneData(int v, VoiceData& d) const {
         d.scalars[L + "reset"] = float(mod.resets());
         d.scalars[L + "trigmode"] = l < int(lanes.size()) ? float(mod.lfoTriggerMode(lanes[l].lfo)) : 0;
         d.scalars[L + "restartsec"] = l < int(lanes.size()) ? mod.lfoRestartSeconds(lanes[l].lfo) : 0;
-        d.scalars[L + "sh"] = l < (int)lanes.size() ? mod.lfoSampleHold(lanes[l].lfo) : 0.0f;
+        const bool ramp=l<int(lanes.size()) && mod.isRamp(lanes[l].lfo);
+        d.scalars[L+"ramp"]=ramp?1:0;
+        d.scalars[L+"rend"]=ramp?mod.rampEnding(lanes[l].lfo):0;
+        d.scalars[L+"rbound"]=ramp?mod.rampBounds(lanes[l].lfo):0;
+        d.scalars[L+"rtail"]=ramp?mod.rampTail(lanes[l].lfo):0;
+        d.scalars[L+"renabled"]=!ramp || mod.rampEnabled(lanes[l].lfo)?1:0;
+        d.scalars[L + "sh"] = !ramp && l < (int)lanes.size() ? mod.lfoSampleHold(lanes[l].lfo) : 0.0f;
         // Noise: the 2D noise per partial (the LaneN part): the partials' seeds
         // (index x Scale) and this LFO's and this voice's own field
-        const bool nz = l < (int)lanes.size() && mod.lfoIsNoise(lanes[l].lfo);
+        const bool nz = !ramp && l < (int)lanes.size() && mod.lfoIsNoise(lanes[l].lfo);
         d.scalars[L + "noise"] = nz ? 1.0f : 0.0f;
         d.scalars[L + "nscale"] = nz ? mod.lfoNoiseScale(lanes[l].lfo) : 1.0f;
         d.scalars[L + "init"] = nz ? mod.lfoInitPhase(lanes[l].lfo) : 0.0f;

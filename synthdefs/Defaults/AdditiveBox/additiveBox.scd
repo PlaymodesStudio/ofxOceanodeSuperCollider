@@ -215,7 +215,8 @@ SynthDef(\AdditiveBoxLaneClock, {
         var elapsed=Sweep.kr(reset,1),period=k.("restartsec",0);
         var rst=reset + ((HPZ1.kr((elapsed/period.max(0.001)).floor)>0)*(period>0)*(mode>0)*gate);
         var sweep=Sweep.kr(rst,k.("rate",1));
-        [Select.kr(mode>1.5,[Phasor.kr(rst,k.("rate",1)*ControlDur.ir,0,1),sweep.clip(0,0.999999)]),
+        var rampPhase=Select.kr(k.("rend",0) |==| 1,[sweep,sweep.wrap(0,1)]);
+        [Select.kr(k.("ramp",0)>0,[Select.kr(mode>1.5,[Phasor.kr(rst,k.("rate",1)*ControlDur.ir,0,1),sweep.clip(0,0.999999)]),rampPhase]),
          Select.kr(mode>1.5,[sweep,sweep.clip(0,0.999999)]) + k.("init", 0),
          Impulse.kr(k.("sh", 0).max(0.01))]
     };
@@ -234,8 +235,14 @@ chunks.do { |nc|
                 var k = { |name, def| NamedControl.kr(("l" ++ l ++ name).asSymbol, def) };
                 var run = clock[3 * l];
                 var phase=run+k.("ph",0 ! nc);
-                var x = IndexL.kr(k.("buf", -1), Select.kr(k.("trigmode",0)>1.5,[phase.wrap(0,1),phase.clip(0,0.999999)]) * 256);
-                var sh, v, amt;
+                var ramp=k.("ramp",0),ending=k.("rend",0),bounds=k.("rbound",0);
+                var rampLookup=Select.kr(ending |==| 1,[phase.clip(0,1),phase.wrap(0,1)]);
+                var lookup=Select.kr(ramp>0,[Select.kr(k.("trigmode",0)>1.5,[phase.wrap(0,1),phase.clip(0,0.999999)]),rampLookup]);
+                var x = IndexL.kr(k.("buf", -1), lookup * 256);
+                var sh, v, amt,rv;
+                rv=x+((phase-1).max(0)*k.("rtail",0)*(ending |==| 2));
+                rv=Select.kr(bounds.clip(0,2),[rv,rv.clip(0,1),rv.frac]);
+                x=Select.kr(ramp>0,[x,rv]);
                 if(withNoise) {
                     // the seed: this LFO's and this voice's own noise field
                     var nz = valueNoise2.(clock[3 * l + 1], (first + (0 .. (nc - 1))) * k.("nscale", 1), k.("seed", 0));
@@ -244,7 +251,7 @@ chunks.do { |nc|
                 // S&H (steps / s) with its glide (s)
                 sh = k.("sh", 0);
                 v = (Select.kr(sh > 0, [x, Lag.kr(Latch.kr(x, clock[3 * l + 2]), k.("shg", 0))]) * 2) - 1;
-                v = v * Select.kr(k.("trigmode",0)>0,[1,\gate.kr(0)>0]);
+                v = v * Select.kr(k.("trigmode",0)>0,[1,\gate.kr(0)>0])*k.("renabled",1);
                 amt = k.("amt", [0, 0, 0]);
                 [v * amt[0], v * amt[1], v * amt[2]]
             }.sum;
