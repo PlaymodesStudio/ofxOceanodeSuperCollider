@@ -345,7 +345,7 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
     controls.set("transport",followsTransport(li)?1.0f:0.0f);
     controls.set("transportbus",st.clockBus?float(st.clockBus->index):0.0f);
     auto cpb=slice(lfoHzFor(li),c);for(auto& x:cpb)x*=60.0f/std::max(1.0f,currentBpm);
-    controls.set("repeatloop",lfoRandomRepeat[li].get()?1.0f:0.0f);
+    controls.set("repeatloop",lfoRepeatsLoop(li)?1.0f:0.0f);
     controls.set("cpb",cpb);
     auto shcpb=slice(lfoShFor(li),c);for(auto& x:shcpb)x*=60.0f/std::max(1.0f,currentBpm);
     controls.set("shcpb",shcpb);
@@ -1968,11 +1968,11 @@ void scModulation::drawLfoCard(int li, float w) {
     sliderVec(lfoBiPow[li], "BiPow", half, "%+.2f");
     if(random || effectiveNoise(li)) {
         sliderInt(lfoSeed[li],"Seed",half);
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("0: no fixed seed; fresh sequence on creation, recall, Reset and transport restart/seek.\nA positive seed repeats the same sequence. Shared by all voices and servers of this LFO.");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("0: no fixed seed; fresh sequence on creation, recall, Reset and transport restart/seek.\nA positive seed repeats the same sequence, every transport loop too. Shared by all voices and servers of this LFO.");
     }
-    if(followsTransport(li) && lfoTrigger[li].get()==0 && (random || effectiveNoise(li))) {
+    if(followsTransport(li) && lfoTrigger[li].get()==0 && (random || effectiveNoise(li)) && lfoSeed[li].get()==0) {
         toggle(lfoRandomRepeat[li],"Repeat loop");
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("On: replay the same random sequence each transport loop.\nOff: fresh random draws each loop; jump timing remains on transport beats.");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("On: replay the same random sequence each transport loop.\nOff: fresh random draws each loop; jump timing remains on transport beats.\nA positive Seed always repeats.");
     }
     sliderVec(lfoSH[li], "S&H", half, "%.2f");
     if(ImGui::IsItemHovered())ImGui::SetTooltip(lfoSync[li].get()?"Sample & hold: steps per beat":"Sample & hold: steps per second");

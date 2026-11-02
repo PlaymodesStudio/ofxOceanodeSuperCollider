@@ -157,7 +157,8 @@ public:
     bool followsTransport(int li) const {return lfoTransport[li].get() && lfoSync[li].get() && !lfoRegion[li].get();}
     int transportBus(ofxSCServer* server) const;
     float lfoCyclesPerBeat(int li,int voice=0) const;
-    bool lfoRepeatsLoop(int li) const {return lfoRandomRepeat[li].get();}
+    // a positive Seed always replays its sequence each loop; Seed 0 chooses
+    bool lfoRepeatsLoop(int li) const {return lfoRandomRepeat[li].get() || lfoSeed[li].get()>0;}
     float lfoHoldCyclesPerBeat(int li) const {return lfoSampleHold(li)*60.0f/std::max(1.0f,currentBpm);}
     void resetLfos();
     void voicesChanged();                                     // a new voice count (no server synths: GrainBox)

@@ -165,7 +165,7 @@ and Voices columns. Cards wrap to fewer columns in narrower windows, keeping
 controls within the display width. Timing **Pow** is phase progression;
 Shape **Pow / BiPow** reshape values. Random/Noise hide the unused phase-power
 and ramp-wave shortcuts. Detune hides while transport overrides it; S&H Glide
-appears only when S&H is active, and Repeat loop only in its free-running
+appears only when S&H is active, and Repeat loop only with Seed 0 (a positive Seed always repeats) in its free-running
 transport mode. Hidden controls retain their stored values.
 
 GrainFxBox Jump transitions normalize their crossfade gains. This prevents
