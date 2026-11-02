@@ -129,6 +129,25 @@ int main(int argc, char** argv){
         CHECK(seen.size() >= 8, "%s: only %d different progressions in 20 seeds", styleNames()[style].c_str(), (int)seen.size());
     }
 
+    // ── Jazz is more than ii-V chains; no style is mostly unnameable chords
+    for(int style = 0; style < NUM_STYLES; style++){
+        int fifths = 0, moves = 0, unnamed = 0;
+        for(uint64_t seed = 1; seed <= 40; seed++){
+            Engine e;
+            e.s = Settings::styleDefaults(style);
+            e.s.numChords = 8;
+            e.generate(seed);
+            for(int i = 0; i < 8; i++){
+                if(pc(e.slots[(i + 1) % 8].chord.root - e.slots[i].chord.root) == 5) fifths++;
+                if(e.slots[i].chord.quality.rfind("(", 0) == 0) unnamed++;
+                moves++;
+            }
+        }
+        if(style == STYLE_JAZZ || style == STYLE_NEOSOUL)
+            CHECK(fifths < moves * 0.38, "%s: %d%% falling fifths", styleNames()[style].c_str(), 100 * fifths / moves);
+        CHECK(unnamed < moves / 10, "%s: %d of %d chords unnamed", styleNames()[style].c_str(), unnamed, moves);
+    }
+
     // ── Locks and single-slot dice
     {
         Engine e;

@@ -12,11 +12,19 @@
 //  • Styles propose candidate progressions (seeded):
 //      Functional   Markov walk over the degrees, secondary dominants and
 //                   borrowed chords with Color
-//      Jazz         targets reached by ii-V, V, tritone subs, backdoor
+//      Jazz         phrases of the vocabulary (ii-V-I, turnarounds, diminished
+//                   passing, backdoor, Lady Bird, Coltrane, chromatic ii-Vs,
+//                   tritone chains, modal planing...) chained, keys moving
+//                   with Color, a turnaround back to the first chord
 //      Glass        a short cell (i-VI, i-bVII-bVI-V...) repeated with one
 //                   change per pass, pedal bass and inversions
 //      Reich        a modal field of seconds and fourths over a moving bass
 //      Neo-Riemann  P / L / R walks (N, S, H with Color)
+//      Neo-Soul     ninths and elevenths, IV-iii-ii-I, plagal minor, IV/V,
+//                   backdoor, Dorian vamps, half-step slides
+//      Modal Field  one mode's quartal / sus / seventh chords (no V7 pull)
+//                   favouring its colour note, over a pedal or their roots;
+//                   Color moves to a neighbouring mode or planes the field
 //    Each candidate is scored (smoothness of the whole loop, variety, the
 //    tension level and shape asked for, the style's own likelihood) and the
 //    best of a few hundred wins. Locked slots stay as they are.
@@ -32,6 +40,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <set>
@@ -41,16 +50,18 @@
 namespace harmonybox {
 
 constexpr int MAX_CHORDS = 16, MAX_VOICES = 8, CANDIDATES = 160;
-constexpr float TEMPERATURE = 0.35f;   // how freely a good candidate beats the best one
 
-enum Style { STYLE_FUNCTIONAL, STYLE_JAZZ, STYLE_GLASS, STYLE_REICH, STYLE_NEORIEMANN, NUM_STYLES };
+enum Style { STYLE_FUNCTIONAL, STYLE_JAZZ, STYLE_GLASS, STYLE_REICH, STYLE_NEORIEMANN, STYLE_NEOSOUL, STYLE_MODAL, NUM_STYLES };
+// how freely a good candidate beats the best one (the phrase styles, wider)
+inline float temperature(int style){ return style == STYLE_JAZZ || style == STYLE_NEOSOUL ? 0.6f : 0.35f; }
+
 enum Mode { MODE_MAJOR, MODE_DORIAN, MODE_PHRYGIAN, MODE_LYDIAN, MODE_MIXOLYDIAN, MODE_MINOR, MODE_LOCRIAN,
             MODE_HARMONIC, MODE_MELODIC, NUM_MODES };
 enum Shape { SHAPE_FREE, SHAPE_FLAT, SHAPE_RISE, SHAPE_FALL, SHAPE_ARC, SHAPE_WAVE, NUM_SHAPES };
 enum Spread { SPREAD_CLOSE, SPREAD_DROP2, SPREAD_OPEN, SPREAD_WIDE, NUM_SPREADS };
 
 inline const std::vector<std::string>& styleNames(){
-    static const std::vector<std::string> v{"Functional", "Jazz", "Glass", "Reich", "Neo-Riemann"}; return v;
+    static const std::vector<std::string> v{"Functional", "Jazz", "Glass", "Reich", "Neo-Riemann", "Neo-Soul", "Modal Field"}; return v;
 }
 inline const std::vector<std::string>& modeNames(){
     static const std::vector<std::string> v{"Major", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Minor", "Locrian",
@@ -585,6 +596,8 @@ struct Settings {
             case STYLE_GLASS:      s.extensions = 0.15f; s.color = 0.3f; s.tension = 0.3f; s.mode = MODE_MINOR; break;
             case STYLE_REICH:      s.extensions = 0.5f; s.color = 0.3f; s.tension = 0.3f; s.mode = MODE_DORIAN; s.voices = 5; s.spread = SPREAD_OPEN; break;
             case STYLE_NEORIEMANN: s.extensions = 0.2f; s.color = 0.3f; s.tension = 0.5f; break;
+            case STYLE_NEOSOUL:    s.extensions = 0.85f; s.color = 0.4f; s.tension = 0.45f; s.voices = 5; s.spread = SPREAD_DROP2; break;
+            case STYLE_MODAL:      s.extensions = 0.5f; s.color = 0.3f; s.tension = 0.3f; s.mode = MODE_DORIAN; s.voices = 5; s.spread = SPREAD_OPEN; break;
             default: break;
         }
         return s;
@@ -609,6 +622,8 @@ public:
             case STYLE_GLASS: return glass(n);
             case STYLE_REICH: return reich(n);
             case STYLE_NEORIEMANN: return neoRiemann(n);
+            case STYLE_NEOSOUL: return neoSoul(n);
+            case STYLE_MODAL: return modalField(n);
             default: return functional(n);
         }
     }
@@ -732,56 +747,238 @@ private:
         else if(q == "m7b5") q = l >= 2 && rng.chance(0.5f) ? "m9b5" : "m7b5";
         return makeChord(c.root, q, c.bass);
     }
-    Candidate jazz(int n){
-        const int T = st.key;
-        auto tonic = [&](){ return minor ? makeChord(T, rng.chance(0.5f) ? "m6" : "m7") : makeChord(T, "maj7"); };
-        // diatonic targets (sevenths of the mode), weights; Color adds far keys
-        std::vector<std::pair<Chord, float>> targets;
-        const float tw[7] = {1.0f, 3.0f, 1.5f, 2.5f, 0.6f, 3.0f, 0.4f};
-        for(int d = 1; d < 7; d++){
-            Chord ch = diatonic(T, rel, d, 4);
-            if(ch.isDiminished() || ch.isDominant()) continue;
-            targets.push_back({ch, tw[d]});
-        }
-        targets.push_back({tonic(), 1.0f});
-        targets.push_back({makeChord(T + 3, "maj7"), st.color * 1.5f});
-        targets.push_back({makeChord(T + 8, "maj7"), st.color * 1.5f});
-        targets.push_back({makeChord(T + 5, "m7"), minor ? 0.0f : st.color});
-        targets.push_back({makeChord(T + 1, "maj7"), st.color * 0.6f});
-        std::vector<float> w;
-        for(auto& t : targets) w.push_back(t.second);
+    // A phrase of vocabulary: chords as offsets from a centre. `shift` moves
+    // the centre once the whole phrase is played, `toMinor` (0 / 1) sets its
+    // mode then (-1 keeps it); `color` phrases grow with Color.
+    struct Phrase {
+        const char* name;
+        float weight;
+        bool color;
+        std::vector<std::pair<int, const char*>> chords;
+        int shift = 0, toMinor = -1;
+    };
+    static const std::vector<Phrase>& jazzMajor(){
+        static const std::vector<Phrase> p{
+            {"ii-V-I", 1.8f, false, {{2, "m7"}, {7, "7"}, {0, "maj7"}}},
+            {"I-vi-ii-V", 1.4f, false, {{0, "maj7"}, {9, "m7"}, {2, "m7"}, {7, "7"}}},
+            {"I-VI7-ii-V", 1.5f, false, {{0, "maj7"}, {9, "7"}, {2, "m7"}, {7, "7"}}},
+            {"iii-VI7-ii-V", 1.5f, false, {{4, "m7"}, {9, "7"}, {2, "m7"}, {7, "7"}}},
+            {"diminished passing", 1.2f, false, {{0, "maj7"}, {1, "dim7"}, {2, "m7"}, {3, "dim7"}, {4, "m7"}}},
+            {"IV-iv-I", 1.5f, false, {{5, "maj7"}, {5, "m6"}, {0, "maj7"}}},
+            {"backdoor", 1.2f, false, {{5, "m7"}, {10, "7"}, {0, "maj7"}}},
+            {"deceptive", 1.0f, false, {{2, "m7"}, {7, "7"}, {9, "m7"}}},
+            {"Autumn Leaves", 0.8f, false, {{2, "m7"}, {7, "7"}, {0, "maj7"}, {5, "maj7"}, {11, "m7b5"}, {4, "7b9"}, {9, "m7"}}, 9, 1},
+            {"I-IV7", 0.8f, false, {{0, "maj7"}, {5, "7"}}},
+            {"blues", 0.5f, false, {{0, "7"}, {5, "7"}, {0, "7"}, {7, "7"}}},
+            {"Lady Bird", 1.0f, true, {{0, "maj7"}, {3, "maj7"}, {8, "maj7"}, {1, "maj7"}}},
+            {"Coltrane", 0.8f, true, {{0, "maj7"}, {3, "7"}, {8, "maj7"}, {11, "7"}, {4, "maj7"}}, 4},
+            {"chromatic ii-Vs", 1.2f, true, {{4, "m7"}, {9, "7"}, {3, "m7"}, {8, "7"}, {2, "m7"}, {7, "7"}}},
+            {"tritone chain", 1.0f, true, {{4, "m7"}, {3, "7"}, {2, "m7"}, {1, "7"}, {0, "maj7"}}},
+            {"modal plane", 0.8f, true, {{2, "m7"}, {3, "m7"}}},
+            {"major thirds", 0.6f, true, {{0, "maj7"}, {8, "maj7"}, {4, "maj7"}}},
+            {"bVII7-bIII", 0.8f, true, {{0, "maj7"}, {10, "7"}, {3, "maj7"}, {8, "7"}}}};
+        return p;
+    }
+    static const std::vector<Phrase>& jazzMinor(){
+        static const std::vector<Phrase> p{
+            {"ii-V-i", 1.8f, false, {{2, "m7b5"}, {7, "7b9"}, {0, "m7"}}},
+            {"line cliche", 1.5f, false, {{0, "m"}, {0, "mMaj7"}, {0, "m7"}, {0, "m6"}}},
+            {"i-bVI-ii-V", 2.0f, false, {{0, "m7"}, {8, "maj7"}, {2, "m7b5"}, {7, "7b9"}}},
+            {"to the relative major", 1.5f, false, {{0, "m7"}, {5, "m7"}, {10, "7"}, {3, "maj7"}}, 3, 0},
+            {"iv-V-i", 1.2f, false, {{5, "m7"}, {7, "7b9"}, {0, "m6"}}},
+            {"Dorian vamp", 1.0f, false, {{0, "m7"}, {5, "7"}}},
+            {"bVI7-V7", 1.0f, false, {{8, "7"}, {7, "7b9"}, {0, "m7"}}},
+            {"subV", 1.0f, true, {{1, "7"}, {0, "m6"}}},
+            {"chromatic ii-Vs", 0.8f, true, {{3, "m7"}, {8, "7"}, {2, "m7b5"}, {7, "7b9"}}},
+            {"modal plane", 0.8f, true, {{0, "m7"}, {1, "m7"}}},
+            {"Phrygian", 0.6f, true, {{0, "m7"}, {1, "maj7"}}}};
+        return p;
+    }
+    static const std::vector<Phrase>& neoSoulMajor(){
+        static const std::vector<Phrase> p{
+            {"IV-iii-ii-I", 3.0f, false, {{5, "maj9"}, {4, "m7"}, {2, "m9"}, {0, "maj9"}}},
+            {"ii-V sus-I", 2.0f, false, {{2, "m9"}, {7, "9sus4"}, {0, "maj9"}}},
+            {"I-vi-ii-IV/V", 2.0f, false, {{0, "maj9"}, {9, "m9"}, {2, "m11"}, {7, "IV/V"}}},
+            {"IV-iv-I", 2.0f, false, {{5, "maj7"}, {5, "m9"}, {0, "maj9"}}},
+            {"bVI-bVII-I", 1.5f, false, {{8, "maj7"}, {10, "9"}, {0, "maj9"}}},
+            {"secondary chain", 1.2f, false, {{0, "maj9"}, {4, "7#9"}, {9, "m9"}, {2, "9"}, {2, "m9"}, {7, "13"}}},
+            {"parallel minor", 1.2f, false, {{0, "maj7"}, {0, "m9"}, {5, "maj9"}, {5, "m6"}}},
+            {"I-iii-IV", 1.5f, false, {{0, "maj9"}, {4, "m9"}, {5, "maj7#11"}}},
+            {"chromatic descent", 1.2f, true, {{4, "m7"}, {3, "m7"}, {2, "m9"}, {1, "maj7#11"}, {0, "maj9"}}},
+            {"bIII-IV", 1.0f, true, {{0, "maj9"}, {3, "maj7"}, {5, "maj9"}, {5, "m9"}}},
+            {"Lydian float", 0.8f, true, {{0, "maj7#11"}, {2, "maj7#11"}}},
+            {"to the relative minor", 1.0f, false, {{0, "maj9"}, {11, "m7b5"}, {4, "7#9"}, {9, "m11"}}, 9, 1}};
+        return p;
+    }
+    static const std::vector<Phrase>& neoSoulMinor(){
+        static const std::vector<Phrase> p{
+            {"Dorian vamp", 3.0f, false, {{0, "m9"}, {5, "9"}}},
+            {"i-bVII-bVI-V", 2.0f, false, {{0, "m11"}, {10, "maj9"}, {8, "maj7#11"}, {7, "7#9"}}},
+            {"i-bVI-bVII", 2.0f, false, {{0, "m9"}, {8, "maj7"}, {10, "9"}}},
+            {"iv-bVII-bIII-bVI", 1.5f, false, {{5, "m9"}, {10, "13"}, {3, "maj9"}, {8, "maj7"}}},
+            {"i-iv", 1.5f, false, {{0, "m9"}, {5, "m11"}}},
+            {"to the relative major", 1.2f, false, {{0, "m9"}, {5, "m9"}, {10, "9sus4"}, {3, "maj9"}}, 3, 0},
+            {"minor ii-V", 1.0f, false, {{2, "m7b5"}, {7, "7#9"}, {0, "m9"}}},
+            {"chromatic slide", 1.2f, true, {{1, "m9"}, {0, "m9"}}},
+            {"bII-i", 0.8f, true, {{1, "maj7#11"}, {0, "m11"}}},
+            {"planing up", 0.8f, true, {{0, "m11"}, {2, "m11"}, {3, "maj7#11"}}}};
+        return p;
+    }
 
-        auto approach = [&](const Chord t, int len, std::vector<Chord>& out, bool toTonic){
-            const bool tm = t.isMinor();
-            const bool sub = rng.chance(st.color * 0.5f);
-            if(len >= 2 && toTonic && !minor && rng.chance(st.color * 0.35f)){   // backdoor
-                out.push_back(makeChord(t.root + 5, "m7"));
-                out.push_back(makeChord(t.root + 10, "7"));
-                return;
-            }
-            if(len >= 2) out.push_back(makeChord(t.root + 2, tm ? "m7b5" : "m7"));
-            if(len >= 1) out.push_back(sub ? makeChord(t.root + 1, "7") : makeChord(t.root + 7, tm ? "7b9" : "7"));
-        };
+    // A phrase's chord: "IV/V" is the soul dominant (Fmaj7/G)
+    static Chord phraseChord(int centre, int off, const char* q){
+        if(std::string(q) == "IV/V") return makeChord(centre + off + 10, "maj7", centre + off);
+        return makeChord(centre + off, q);
+    }
+
+    // Phrases chained to fill n chords (the last cut short), keys moving with
+    // Color; the last `reserve` chords lead back to the first
+    Candidate phrases(int n, const std::vector<Phrase>& major, const std::vector<Phrase>& minorP, int reserve,
+                      const std::function<void(const Chord&, int, std::vector<Chord>&)>& approach){
+        int centre = st.key;
+        bool cMinor = minor;
         Candidate c;
-        c.chords.push_back(tonic());
-        int remaining = n - 1;
-        const int reserve = n >= 3 ? 2 : n == 2 ? 1 : 0;
-        int lastTarget = -1;
-        while(remaining - reserve > 0){
-            const int room = remaining - reserve;
-            int ti = rng.weighted(w);
-            if(ti == lastTarget) ti = rng.weighted(w);
-            lastTarget = ti;
-            int a = room == 1 ? 0 : rng.weighted({0.6f, 1.2f, 2.0f});
-            a = std::min(a, room - 1);
-            approach(targets[ti].first, a, c.chords, false);
-            c.chords.push_back(targets[ti].first);
-            remaining -= a + 1;
+        std::set<const Phrase*> used;
+        const Phrase* last = nullptr;
+        bool first = true;
+        while((int)c.chords.size() < n - reserve){
+            if(!first && rng.chance(st.color * 0.25f)){   // a new key for the next phrase
+                static const int offs[] = {5, 10, 3, 8, 2, 7, 9};
+                static const float ow[] = {2.0f, 1.5f, 1.2f, 1.0f, 0.8f, 0.8f, 1.0f};
+                const int o = rng.weighted(std::vector<float>(ow, ow + 7));
+                centre = pc(centre + offs[o]);
+                if(offs[o] == 9) cMinor = true;
+                else if(offs[o] == 3 && cMinor) cMinor = false;
+            }
+            const auto& list = cMinor ? minorP : major;
+            std::vector<float> w;
+            for(const auto& ph : list){
+                float x = ph.weight * (ph.color ? st.color * 2.0f : 1.0f);
+                if(&ph == last) x *= 0.1f;
+                if(used.count(&ph)) x *= 0.5f;
+                if(first && ph.chords.front().first != 0) x *= 0.6f;
+                w.push_back(x);
+            }
+            const Phrase& ph = list[rng.weighted(w)];
+            const int room = n - reserve - (int)c.chords.size();
+            const int take = std::min(room, (int)ph.chords.size());
+            for(int k = 0; k < take; k++) c.chords.push_back(phraseChord(centre, ph.chords[k].first, ph.chords[k].second));
+            if(take == (int)ph.chords.size()){
+                centre = pc(centre + ph.shift);
+                if(ph.toMinor >= 0) cMinor = ph.toMinor == 1;
+            }
+            used.insert(&ph);
+            last = &ph;
+            first = false;
         }
-        approach(c.chords[0], reserve, c.chords, true);
-        while((int)c.chords.size() < n) c.chords.push_back(tonic());
+        const Chord target = c.chords.empty() ? makeChord(st.key, minor ? "m7" : "maj7") : c.chords[0];
+        approach(target, reserve, c.chords);
+        if(c.chords.empty()) c.chords.push_back(target);
+        while((int)c.chords.size() < n) c.chords.push_back(c.chords.back());
         c.chords.resize(n);
+        c.styleScore = 0.12f * (float)used.size();
+        return c;
+    }
+
+    Candidate jazz(int n){
+        const int reserve = n >= 4 ? 2 : n >= 2 ? 1 : 0;
+        Candidate c = phrases(n, jazzMajor(), jazzMinor(), reserve, [&](const Chord& t, int len, std::vector<Chord>& out){
+            const bool tm = t.isMinor();
+            const float col = st.color;
+            if(len >= 2){
+                switch(rng.weighted({3.0f, col * 2.0f, tm ? 0.0f : col * 1.5f, 1.0f, col})){
+                    case 0: out.push_back(makeChord(t.root + 2, tm ? "m7b5" : "m7")); out.push_back(makeChord(t.root + 7, tm ? "7b9" : "7")); break;
+                    case 1: out.push_back(makeChord(t.root + 2, tm ? "m7b5" : "m7")); out.push_back(makeChord(t.root + 1, "7")); break;
+                    case 2: out.push_back(makeChord(t.root + 5, "m7")); out.push_back(makeChord(t.root + 10, "7")); break;     // backdoor
+                    case 3: out.push_back(makeChord(t.root + 9, tm ? "m7b5" : "m7")); out.push_back(makeChord(t.root + 7, "7")); break;
+                    default: out.push_back(makeChord(t.root + 8, "7")); out.push_back(makeChord(t.root + 1, "7")); break;     // bVI7-bII7
+                }
+            }else if(len == 1){
+                switch(rng.weighted({3.0f, col * 2.0f, tm ? 0.0f : col, col})){
+                    case 0: out.push_back(makeChord(t.root + 7, tm ? "7b9" : "7")); break;
+                    case 1: out.push_back(makeChord(t.root + 1, "7")); break;
+                    case 2: out.push_back(makeChord(t.root + 10, "7")); break;
+                    default: out.push_back(makeChord(t.root + 11, "dim7")); break;
+                }
+            }
+        });
         for(auto& ch : c.chords) ch = jazzColor(ch);
+        return c;
+    }
+
+    // ── Neo-soul: rich chords, plagal and backdoor motion, slides by a half step
+    Chord simplify(const Chord& c){
+        static const std::map<std::string, std::string> down{
+            {"maj9", "maj7"}, {"m9", "m7"}, {"m11", "m7"}, {"9", "7"}, {"13", "7"}, {"maj7#11", "maj7"},
+            {"9sus4", "7sus4"}, {"7#9", "7"}, {"maj9#11", "maj7"}};
+        auto it = down.find(c.quality);
+        return it == down.end() ? c : makeChord(c.root, it->second, c.bass);
+    }
+    Candidate neoSoul(int n){
+        const int reserve = n >= 3 ? 1 : 0;
+        Candidate c = phrases(n, neoSoulMajor(), neoSoulMinor(), reserve, [&](const Chord& t, int len, std::vector<Chord>& out){
+            if(len < 1) return;
+            switch(rng.weighted({2.0f, 1.5f, st.color * 2.0f, 1.0f})){
+                case 0: out.push_back(makeChord(t.root + 7, "9sus4")); break;
+                case 1: out.push_back(makeChord(t.root + 5, "m9")); break;                       // minor plagal
+                case 2: out.push_back(makeChord(t.root + 1, t.quality, -1)); break;              // a half step above, same chord
+                default: out.push_back(makeChord(t.root + 5, "maj7", t.root + 7)); break;        // IV/V
+            }
+        });
+        const int len = (int)c.chords.size();
+        for(int i = 1; i < len; i++){
+            // slide into the next chord from a half step above
+            const Chord next = c.chords[(i + 1) % len];
+            if(rng.chance(st.color * 0.3f) && next.bass < 0) c.chords[i] = makeChord(next.root + 1, next.quality);
+        }
+        if(st.extensions < 0.35f) for(auto& ch : c.chords) ch = simplify(ch);
+        return c;
+    }
+
+    // ── Modal field: chords of one mode (quartal, sus, sevenths without a
+    // dominant pull) favouring its colour note, over a pedal or their roots;
+    // Color moves the field to a neighbouring mode or planes it
+    Candidate modalField(int n){
+        static const int colour[NUM_MODES] = {11, 9, 1, 6, 10, 8, 6, 11, 9};
+        static const std::vector<std::vector<int>> neighbours{
+            {MODE_LYDIAN, MODE_MIXOLYDIAN}, {MODE_MINOR, MODE_MIXOLYDIAN}, {MODE_MINOR, MODE_LOCRIAN},
+            {MODE_MAJOR, MODE_MIXOLYDIAN}, {MODE_DORIAN, MODE_MAJOR}, {MODE_DORIAN, MODE_PHRYGIAN},
+            {MODE_PHRYGIAN}, {MODE_MINOR, MODE_MELODIC}, {MODE_DORIAN, MODE_LYDIAN}};
+        int mode = st.mode, tonic = st.key;
+        const int block = n <= 4 ? n : n % 4 == 0 ? 4 : n % 3 == 0 ? 3 : 2;
+        const bool pedal = rng.chance(0.35f);
+        Candidate c;
+        float colourHits = 0.0f;
+        for(int i = 0; i < n; i++){
+            if(i > 0 && i % block == 0 && rng.chance(st.color * 0.8f)){
+                if(rng.chance(0.6f)){ const auto& nb = neighbours[mode]; mode = nb[rng.below((int)nb.size())]; }
+                else{ static const int planes[] = {1, -1, 2, -2, 3, -3, 5}; tonic = pc(tonic + planes[rng.below(7)]); }
+            }
+            const auto sc = modeScale(mode);
+            auto note = [&](int step){ return pc(tonic + sc[((step % 7) + 7) % 7]); };
+            int d = (i % block == 0 && rng.chance(0.5f)) ? 0 : rng.below(7);
+            const float r = rng.uniform();
+            const bool second = rng.chance(0.5f);
+            const int size = 3 + (st.extensions > 0.4f ? 1 : 0) + (st.extensions > 0.75f ? 1 : 0);
+            auto build = [&](int deg){
+                std::vector<int> pcs;
+                if(r < 0.45f) for(int k = 0; k < size; k++) pcs.push_back(note(deg + 3 * k));          // fourths
+                else if(r < 0.75f){                                                                    // sus / add2
+                    pcs = {note(deg), note(deg + (second ? 1 : 3)), note(deg + 4)};
+                    if(size > 3) pcs.push_back(note(deg + 6));
+                }else for(int k = 0; k < size; k++) pcs.push_back(note(deg + 2 * k));                 // thirds
+                Chord ch = fromPcs(pcs, pedal ? tonic : pcs[0]);
+                if(ch.isDominant() && mode != MODE_MIXOLYDIAN)                                         // no V7 pull
+                    ch = fromPcs({note(deg), note(deg + 3), note(deg + 4), note(deg + 6)}, pedal ? tonic : note(deg));
+                return ch;
+            };
+            // a degree whose chord has no name (a diminished fifth, mostly): the next one
+            Chord ch = build(d);
+            for(int k = 1; k < 7 && !ch.quality.empty() && ch.quality.front() == '('; k++) ch = build(d + k);
+            for(int p : ch.pcs()) if(p == pc(tonic + colour[mode])){ colourHits += 1.0f; break; }
+            c.chords.push_back(ch);
+        }
+        c.styleScore = 0.6f * colourHits / (float)std::max(1, n);
         return c;
     }
 
@@ -908,9 +1105,9 @@ inline float scoreProgression(const std::vector<Chord>& p, const Settings& s, fl
     const int n = (int)p.size();
     if(n == 0) return 0.0f;
     Key k{s.key, s.mode};
-    static const float smoothW[NUM_STYLES] = {1.0f, 0.6f, 1.5f, 1.5f, 2.0f};
-    static const float dupW[NUM_STYLES] = {3.0f, 3.0f, 2.0f, 0.7f, 3.0f};
-    float smooth = 0.0f, dups = 0.0f;
+    static const float smoothW[NUM_STYLES] = {1.0f, 0.6f, 1.5f, 1.5f, 2.0f, 0.8f, 1.5f};
+    static const float dupW[NUM_STYLES] = {3.0f, 3.0f, 2.0f, 0.7f, 3.0f, 3.0f, 1.5f};
+    float smooth = 0.0f, dups = 0.0f, score_fifths = 0.0f;
     for(int i = 0; i < n && n > 1; i++){
         const Chord& a = p[i];
         const Chord& b = p[(i + 1) % n];
@@ -920,16 +1117,22 @@ inline float scoreProgression(const std::vector<Chord>& p, const Settings& s, fl
         else if(a.root == b.root && a.bassPc() == b.bassPc() && s.style != STYLE_REICH) dups += 0.35f;   // Am9 then Am7
     }
     smooth /= (float)n;
+    // jazz and neo-soul: not only falling fifths (ii-V chains)
+    if(n >= 4 && (s.style == STYLE_JAZZ || s.style == STYLE_NEOSOUL)){
+        int fifths = 0;
+        for(int i = 0; i < n; i++) if(pc(p[(i + 1) % n].root - p[i].root) == 5) fifths++;
+        score_fifths = 5.0f * std::max(0.0f, (float)fifths / (float)n - 0.3f);
+    }
     std::vector<Chord> distinct;
     for(const auto& c : p){
         bool seen = false;
         for(const auto& d : distinct) if(d.same(c)) seen = true;
         if(!seen) distinct.push_back(c);
     }
-    const int wantDistinct = std::min(n, s.style == STYLE_REICH ? 2 : s.style == STYLE_GLASS ? 2 : 4);
+    const int wantDistinct = std::min(n, s.style == STYLE_REICH ? 2 : s.style == STYLE_GLASS ? 2 : s.style == STYLE_MODAL ? 3 : 4);
     int unnamed = 0;   // chords only nameable as "(2,b5,7)" are usually muddy
     for(const auto& c : p) if(!c.quality.empty() && c.quality.front() == '(') unnamed++;
-    float score = -smoothW[s.style] * smooth - dupW[s.style] * dups
+    float score = -smoothW[s.style] * smooth - dupW[s.style] * dups - score_fifths
                 - 1.5f * (float)std::max(0, wantDistinct - (int)distinct.size()) - 0.4f * (float)unnamed;
     std::vector<float> t(n);
     float mean = 0.0f;
@@ -1108,7 +1311,7 @@ public:
         Rng rng(seed);
         Generator g(s, rng);
         // the good ones win, not always the same best one: each candidate is
-        // drawn by exp(score / TEMPERATURE)
+        // drawn by exp(score / temperature)
         std::vector<std::vector<Chord>> cands;
         std::vector<float> scores;
         float top = -std::numeric_limits<float>::max();
@@ -1122,7 +1325,7 @@ public:
             scores.push_back(sc);
         }
         std::vector<float> w(scores.size());
-        for(size_t k = 0; k < scores.size(); k++) w[k] = std::exp((scores[k] - top) / TEMPERATURE);
+        for(size_t k = 0; k < scores.size(); k++) w[k] = std::exp((scores[k] - top) / temperature(s.style));
         const auto& best = cands[rng.weighted(w)];
         for(int i = 0; i < n; i++) if(which[i]) slots[i].chord = best[i];
         changed();
