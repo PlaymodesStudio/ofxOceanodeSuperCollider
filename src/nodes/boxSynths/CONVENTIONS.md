@@ -493,7 +493,7 @@ LFO/envelope/Routing module; specialized processing may exist independently.
 | WavetableBox | Yes | Yes | Yes | Yes, when Pitch and Gate are published |
 | EchoBox | Yes | Yes | Not applicable | Not applicable |
 | SlicerBox | Yes | No shared module | No | No |
-| ArpeggiatorBox, ChordBox, EuclideanBox, MetroBox, RhythmBox | Yes | No shared module | No shared piano | No instrument descriptor |
+| ArpeggiatorBox, ChordBox, EuclideanBox, HarmonyBox, MetroBox, RhythmBox | Yes | No shared module | No shared piano | No instrument descriptor |
 | DataBox, SpectralFilterBox | No shared snapshot manager | No shared module | No | No |
 
 WavetableBox uses independent Voices and Channels, panning, and the PolyComb

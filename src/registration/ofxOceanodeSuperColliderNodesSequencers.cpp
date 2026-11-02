@@ -14,6 +14,7 @@
 #include "../nodes/boxSynths/euclideanBox/scEuclideanBox.h"
 #include "../nodes/boxSynths/arpeggiatorBox/scArpeggiatorBox.h"
 #include "../nodes/boxSynths/chordBox/scChordBox.h"
+#include "../nodes/boxSynths/harmonyBox/scHarmonyBox.h"
 #include "../nodes/boxSynths/rhythmBox/scRhythmBox.h"
 #include "../nodes/boxSynths/dataBox/scDataBox.h"
 
@@ -28,6 +29,7 @@ void registerSequencerNodes(ofxOceanode &o){
 	o.registerModel<scEuclideanBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots);
 	o.registerModel<scArpeggiatorBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots);
 	o.registerModel<scChordBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots);
+	o.registerModel<scHarmonyBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots);
 	o.registerModel<scRhythmBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scDataBox>("SuperCollider/boxSynths", controller->getServers());
 }
