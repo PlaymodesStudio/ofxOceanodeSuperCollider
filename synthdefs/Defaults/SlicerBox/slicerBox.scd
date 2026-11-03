@@ -97,17 +97,28 @@ File.mkdir(d);
 // Random (\randamt 0..1): each time a step comes round, it plays a random
 // slice (of \nslices) instead of its own with that chance. Drawn when the
 // step's note ends (and at the start), so a note never changes mid-way.
+// \sync 1: the position follows the transport instead (scTransportSync
+// anchors: \anchorPos in steps, \anchorId, \anchorHard, \anchorFire; \runAr
+// = the transport playing). Reset is ignored; a hard anchor that lands on a
+// step closes every gate for one sample, so that step retriggers.
 SynthDef(\SlicerBoxSeq, {
     var n = 64, out = \out.kr(0), ext = \ext.kr(-1);
     var steps = \steps.kr(16).clip(1, n);
     var rate = \bpm.kr(120).max(1) / 60 * \perBeat.kr(4);
     var run = \run.kr(0) > 0.5;
-    var restart = (HPZ1.kr(run) > 0) + \reset.tr(0);
+    var sync = \sync.kr(0) > 0.5;
+    var restart = ((HPZ1.kr(run) > 0) + \reset.tr(0)) * (1 - sync);
     // an audio signal on the node's Reset inlet: each rising edge restarts,
     // sample accurately (-1: none)
     var resetBus = \resetbus.kr(-1);
-    var resetAr = HPZ1.ar((In.ar(resetBus.max(0), 1) * (resetBus >= 0)) > 0.5) > 0;
-    var pos = Phasor.ar((T2A.ar(restart > 0) + resetAr) > 0, rate * run * SampleDur.ir, 0, steps);
+    var resetAr = (HPZ1.ar((In.ar(resetBus.max(0), 1) * (resetBus >= 0)) > 0.5) > 0) * (1 - sync);
+    var free = Phasor.ar((T2A.ar(restart > 0) + resetAr) > 0, rate * run * SampleDur.ir, 0, steps);
+    // anchors at audio rate: a kr value would ramp across the block it changes in
+    var runAr = \runAr.ar(0) > 0.5;
+    var anchored = (\anchorPos.ar(0) + Sweep.ar(T2A.ar(Changed.kr(\anchorId.kr(0))), rate * runAr)).wrap(0, steps);
+    var retrig = 1 - (T2A.ar(Changed.kr(\anchorHard.kr(0))) * (\anchorFire.ar(0) > 0.5) * sync);
+    var pos = Select.ar(sync, [free, anchored]);
+    var gateRun = Select.ar(sync, [K2A.ar(run) > 0.5, runAr]);
     var slices = \slice.kr(-1 ! n), lens = \len.kr(1 ! n);
     var gap = 0.002 * rate, scale = \gatescale.kr(1).max(0.01);
     var randAmt = \randamt.kr(0).clip(0, 1), nsl = \nslices.kr(1).max(1);
@@ -115,7 +126,11 @@ SynthDef(\SlicerBoxSeq, {
         var len = (lens[j] * scale).clip(0.02, n);
         var since = (pos - j).wrap(0, steps);
         var has = (slices[j] >= 0) * (j < steps);
-        var on = (since < (len - gap).max(gap)) * has * run;
+        var onRaw = (since < (len - gap).max(gap)) * has * gateRun;
+        // synced: a drift correction moving the position back across a step
+        // it just started must not cut and retrigger it
+        var hold = Trig1.ar(HPZ1.ar(onRaw) > 0, 0.005) * sync;
+        var on = onRaw.max(hold) * retrig;
         // a new draw when this step's note ends: the next pass, never mid-note
         var trig = (HPZ1.kr(A2K.kr(on)) < 0) + Impulse.kr(0);
         var sl = Select.kr(TRand.kr(0, 1, trig) < randAmt, [slices[j], TIRand.kr(0, nsl - 1, trig)]);
@@ -123,7 +138,7 @@ SynthDef(\SlicerBoxSeq, {
         Select.kr(has, [-1, sl])
     };
     Out.ar(out, In.ar(ext.max(0), n) * (ext >= 0));
-    Out.kr(\posbus.kr(0), [Select.kr(run, [-1, A2K.kr(pos)])] ++ playing);
+    Out.kr(\posbus.kr(0), [Select.kr(Select.kr(sync, [run, A2K.kr(runAr)]), [-1, A2K.kr(pos)])] ++ playing);
 }).writeDefFile(d);
 
 // SlicerBoxFilter: the stereo filter after the player (and the EQ). type 0

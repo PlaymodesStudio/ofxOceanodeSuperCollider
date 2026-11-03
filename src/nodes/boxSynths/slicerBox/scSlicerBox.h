@@ -33,6 +33,7 @@
 
 #include "../../../scNode.h"
 #include "../../../ui/scTimelineMenu.h"
+#include "../../../timing/scTransportSync.h"
 #include "../shared/scSnapshots.h"
 #include "../shared/scBoxMacroMorph.h"
 #include "../../../ui/scDropdowns.h"
@@ -178,6 +179,7 @@ private:
     void ensureSeq(ofxSCServer* server, ServerState& st);
     void sendSeq(ofxSCSynth* synth, bool notes = true);
     int seqPerBeat() const;
+    void sendSeqAnchors();              // Sync To Transport: once per frame
     void audition(int slice, bool on);
 
     // ── Publishing window controls into the node ─────────────────────────────
@@ -265,6 +267,13 @@ private:
     ofParameter<int> seqSteps, seqDivision;
     ofParameter<float> seqGate;
     ofParameter<float> seqRandom;       // each pass, a step plays a random slice with this chance
+    // Sync To Transport: the sequence follows the transport's position and
+    // play / stop (Play then arms it); off: it runs from Play on its own
+    ofParameter<bool> seqSync;
+    scTransportSync::Follower seqFollower;
+    scTransportSync::StepClock seqClock;
+    int seqAnchorId = 0, seqAnchorHard = 0;
+    bool seqForceHard = true;
     std::vector<float> seqPlaying;      // the slice each step plays now (read back, -1 rest)
     int sentSlices = -1;
     std::vector<float> seqSlice = std::vector<float>(SEQ_STEPS, -1.0f);

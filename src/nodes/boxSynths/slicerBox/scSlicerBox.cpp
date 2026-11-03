@@ -328,6 +328,9 @@ void scSlicerBox::setup(){
         for(auto& [server, st] : states) if(st.player) st.player->set("gtrbus", scGlobalPitch::bus(this, server));
     });
     addInspectorParameter(embedSamples.set("Embed Samples", true));
+    // the sequence on the transport (Time Source: which timeline; Free = off)
+    addInspectorParameter(seqSync.set("Sync To Transport", true));
+    addTimeSourceParameter(seqSync);
         timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                        [this](){ return publishedKeys; });
     addParameter(showWindow.set("Show", false));
@@ -512,8 +515,20 @@ void scSlicerBox::setup(){
     listeners.push(seqOn.newListener([this](bool&){
         for(auto& [server, st] : states) if(st.chainCreated && st.player) ensureSeq(server, st);
     }));
-    listeners.push(seqSteps.newListener([this](int&){ seqDirty = true; }));
-    listeners.push(seqDivision.newListener([this](int&){ seqDirty = true; }));
+    // synced, a new length or division moves the position: re-anchor it
+    auto reanchor = [this](){ seqForceHard = true; seqFollower.requestAnchor(); };
+    listeners.push(seqSteps.newListener([this, reanchor](int&){ seqDirty = true; reanchor(); }));
+    listeners.push(seqDivision.newListener([this, reanchor](int&){ seqDirty = true; reanchor(); }));
+    // switching clocks: a new sequencer synth, started the new way
+    listeners.push(seqSync.newListener([this](bool&){
+        seqFollower.reset();
+        seqClock.reset();
+        seqForceHard = true;
+        for(auto& [server, st] : states){
+            if(st.seq){ st.seq->free(); delete st.seq; st.seq = nullptr; }
+            if(st.chainCreated && st.player) ensureSeq(server, st);
+        }
+    }));
     listeners.push(seqGate.newListener([this](float&){ seqDirty = true; }));
     listeners.push(seqRandom.newListener([this](float&){ seqDirty = true; }));
     // The amplitude envelope
@@ -677,7 +692,7 @@ void scSlicerBox::sendSeq(ofxSCSynth* s, bool notes){
     scSynthControlBatch updates(s,serverForSynth(s));
     updates.set("steps", (float)seqSteps.get());
     updates.set("perBeat", (float)seqPerBeat());
-    updates.set("bpm", currentBpm);
+    if(!seqSync.get()) updates.set("bpm", currentBpm);   // synced: it comes with the anchors
     updates.set("gatescale", seqGate.get());
     updates.set("randamt", seqRandom.get());
     updates.set("nslices", (float)std::max(1, numSlices()));
@@ -712,7 +727,16 @@ void scSlicerBox::ensureSeq(ofxSCServer* server, ServerState& st){
             st.seq->set("posbus", st.seqPos->index);
             st.seq->set("ext", st.gateBus);
             st.seq->set("resetbus", st.resetBus);
-            st.seq->set("run", 1.0f);
+            if(seqSync.get()){
+                // holds until the next anchor puts it at the transport's position
+                st.seq->set("sync", 1.0f);
+                st.seq->set("runAr", 0.0f);
+                st.seq->set("bpm", getFrameTransportState().current.bpm);
+                st.seq->set("anchorId", (float)seqAnchorId);
+                st.seq->set("anchorHard", (float)seqAnchorHard);
+                seqForceHard = true;
+                seqFollower.requestAnchor();
+            }else st.seq->set("run", 1.0f);
             sendSeq(st.seq);
             st.seq->createAndRun(2, st.player->nodeID, getActive());   // addBefore the player
         }
@@ -762,7 +786,41 @@ float scSlicerBox::echoDelaySec() const {
 void scSlicerBox::setBpm(float bpm){
     currentBpm = bpm;
     if(echoBeats.get()) sendStageAll(StEcho);
-    for(auto& [server, st] : states) if(st.seq) st.seq->set("bpm", currentBpm);
+    if(!seqSync.get()) for(auto& [server, st] : states) if(st.seq) st.seq->set("bpm", currentBpm);
+}
+
+// Sync To Transport (as EuclideanBox): the position in steps is the
+// transport's beat times steps per beat, so the pattern lines up with the
+// bars; the anchors go out timetagged at their instant
+void scSlicerBox::sendSeqAnchors(){
+    const auto anchors = seqFollower.poll(getFrameTransportState());
+    if(anchors.empty()) return;
+    seqClock.setPatternLength(ofClamp(seqSteps.get(), 1, SEQ_STEPS));
+    const double perBeat = seqPerBeat();
+    for(const auto& a : anchors){
+        const scTransportSync::StepAnchor sa = seqClock.make(a.beat * perBeat, a.discontinuity, a.playing);
+        const bool hard = sa.hard || seqForceHard;
+        seqForceHard = false;
+        seqAnchorId = seqAnchorId % (1 << 20) + 1;
+        if(hard) seqAnchorHard = seqAnchorHard % (1 << 20) + 1;
+        bool pending = false;
+        scTransportSync::AnchorScope scope(a);
+        for(auto& [server, st] : states){
+            if(!st.seq) continue;
+            // sets stored on a synth not confirmed yet would go out later without the timetag
+            if(!st.seq->isCreated()){ pending = true; continue; }
+            scSynthControlBatch controls(st.seq, server);
+            controls.set("sync", 1.0f);
+            controls.set("bpm", a.bpm);
+            controls.set("runAr", a.playing ? 1.0f : 0.0f);
+            controls.set("anchorPos", (float)sa.pos);
+            controls.set("anchorFire", hard && sa.fire ? 1.0f : 0.0f);
+            controls.set("anchorHard", (float)seqAnchorHard);
+            controls.set("anchorId", (float)seqAnchorId);   // last: starts the new anchor
+            controls.send();
+        }
+        if(pending){ seqForceHard = true; seqFollower.requestAnchor(); }
+    }
 }
 
 void scSlicerBox::sendAmp(ofxSCSynth* s){
@@ -1155,6 +1213,7 @@ void scSlicerBox::update(ofEventArgs&){
         seqDirty = false;
         for(auto& [server, st] : states) sendSeq(st.seq);
     }
+    if(seqSync.get() && seqOn.get()) sendSeqAnchors();
     seqPosition = -1.0f;
     seqPlaying.clear();
     if(showWindow){
@@ -1216,6 +1275,7 @@ void scSlicerBox::presetSave(ofJson& json){
     json["browseDir"] = browser.getDir();
     json["seqSlice"] = seqSlice;
     json["seqLen"] = seqLen;
+    json["seqSyncSaved"] = true;
     json["browserWidth"] = browserWidth;
     json["waveHeight"] = waveHeight / std::max(0.01f, ofxOceanodeShared::getZoomLevel());
     for(const auto& action : publishActions)
@@ -1229,6 +1289,8 @@ void scSlicerBox::loadBeforeConnections(ofJson& json){
 }
 
 void scSlicerBox::presetRecallBeforeSettingParameters(ofJson& json){
+    // presets from before Sync To Transport ran free from Play
+    if(!json.contains("seqSyncSaved")) seqSync = false;
     loadBeforeConnections(json);
 }
 
@@ -2150,6 +2212,12 @@ void scSlicerBox::drawSequence(float w){
         bool on = seqOn.get();
         if(ImGui::Button(on ? "Stop" : "Play", ImVec2(64, 0))) seqOn = !on;
         controlMenu(seqOn.getEscapedName());
+        if(ImGui::IsItemHovered() && seqSync.get()) ImGui::SetTooltip("Synced: Play arms the sequence, the transport plays it");
+        ImGui::SameLine();
+        bool sync = seqSync.get();
+        if(ImGui::Checkbox("Sync", &sync)) seqSync = sync;
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("On: follows the transport (play, stop, position, loops), locked to the bars.\n"
+                                                     "Off: runs on its own from Play, at the tempo; Reset restarts it.");
         ImGui::SameLine();
         sliderInt(seqSteps, 150.0f);
         ImGui::SameLine();
