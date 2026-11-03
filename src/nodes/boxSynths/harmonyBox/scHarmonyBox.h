@@ -27,8 +27,8 @@
 //    Chord Track", or Chord Track in the window): a row per chord, named
 //    and coloured by tension, drag in a row to hold that chord. Right-click a
 //    chord there to change it (alternatives that fit its neighbours, a typed
-//    symbol, a new one, lock); the lane's Chords tab picks the Style and
-//    generates (locked chords stay). Neither changes the number or order of
+//    symbol, a new one, lock); the lane's Chords tab picks Key, Mode and
+//    Style and generates (locked chords stay). Neither changes the number or order of
 //    the chords, so the lane's blocks keep their rows.
 //  • Outputs for the chord playing: Pitch (voiced notes), Gate (1 per voice
 //    while a chord plays), Bass, Root, Scale (relative to Root: the notes to
@@ -782,24 +782,32 @@ private:
     void drawChordsPanel(){
         using namespace harmonybox;
         const float w = std::max(60.0f, ImGui::GetContentRegionAvail().x);
-        const auto& styles = styleNames();
-        const int style = styleP.get();
-        ImGui::TextDisabled("Style");
-        ImGui::SetNextItemWidth(w);
-        if(ImGui::BeginCombo("##chordsStyle", style >= 0 && style < (int)styles.size() ? styles[style].c_str() : "?")){
-            for(int k = 0; k < (int)styles.size(); k++){
-                if(ImGui::Selectable(styles[k].c_str(), k == style)) styleP = k;   // its listener regenerates
-                if(k == style) ImGui::SetItemDefaultFocus();
+        // a dropdown setting a node parameter (its listener does the rest)
+        auto pick = [](const char* id, ofParameter<int>& p, const std::vector<std::string>& names, float width, const char* tip){
+            const int v = p.get();
+            ImGui::SetNextItemWidth(width);
+            if(ImGui::BeginCombo(id, v >= 0 && v < (int)names.size() ? names[v].c_str() : "?")){
+                for(int k = 0; k < (int)names.size(); k++){
+                    if(ImGui::Selectable(names[k].c_str(), k == v)) p = k;
+                    if(k == v) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
             }
-            ImGui::EndCombo();
-        }
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Choosing a style generates the unlocked chords in it.");
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        };
+        const float gap = ImGui::GetStyle().ItemSpacing.x;
+        const float keyW = std::max(40.0f, std::floor((w - gap) * 0.35f));
+        ImGui::TextDisabled("Key / Mode");
+        pick("##chordsKey", keyP, keyNames(), keyW, "Moves the whole bank to this key (the chords keep their shape).");
+        ImGui::SameLine(0, gap);
+        pick("##chordsMode", modeP, modeNames(), std::max(40.0f, w - keyW - gap), "Generates the unlocked chords in this mode.");
+        ImGui::TextDisabled("Style");
+        pick("##chordsStyle", styleP, styleNames(), w, "Choosing a style generates the unlocked chords in it.");
         if(ImGui::Button("Generate", ImVec2(w, 0))) generateP.trigger();
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("New chords for every unlocked one (locked ones stay).\nSeed 0: fresh each time; Seed > 0: the next seed number.");
         int locked = 0;
         for(const auto& slot : engine.slots) locked += slot.locked ? 1 : 0;
-        ImGui::TextDisabled("%s %s, %d chords", keyNames()[engine.s.key].c_str(), modeNames()[engine.s.mode].c_str(), engine.size());
-        ImGui::TextDisabled("Seed %d%s", seedP.get(), locked ? (", " + std::to_string(locked) + " locked").c_str() : "");
+        ImGui::TextDisabled("%d chords, Seed %d%s", engine.size(), seedP.get(), locked ? (", " + std::to_string(locked) + " locked").c_str() : "");
         if(ImGui::Button("Open HarmonyBox", ImVec2(w, 0))) showWindow = true;
     }
 
