@@ -21,6 +21,11 @@
 //  • Index 1..N plays chord 1..N (wrapping); Index 0 is no chord: Gate 0,
 //    the outputs keep the last chord (its release). Holding a card plays it
 //    too, over whatever Index says.
+//  • Chord Gates: one gate per chord (component k plays chord k+1), over
+//    Index; the last one opened wins and its value is the Gate level. The
+//    timeline writes it with a Chords lane (node menu "Add to Timeline as
+//    Chord Track", or Chord Track in the window): a row per chord, named
+//    and coloured by tension, drag in a row to hold that chord.
 //  • Outputs for the chord playing: Pitch (voiced notes), Gate (1 per voice
 //    while a chord plays), Bass, Root, Scale (relative to Root: the notes to
 //    play over it), Tension (0..1).
@@ -90,6 +95,7 @@ public:
                       "a Gate, its Root, the Scale to play over it and its Tension. Show opens the chord bank: hold a card to play it.";
         addParameter(showWindow.set("Show", false));
         indexIn.attach(addParameter(indexP.set("Index", 0, 0, 127)), availableInputs, [this](){ refreshPorts(); });
+        chordGatesHandle = addParameter(chordGatesP.set("Chord Gates", {0.0f}, {0.0f}, {1.0f}));
         addParameter(generateP.set("Generate"));
         addParameterDropdown(styleP, "Style", STYLE_FUNCTIONAL, styleNames());
         addParameterDropdown(keyP, "Key", 0, keyNames());
@@ -130,6 +136,7 @@ public:
 
         auto regenerate = [this](){ if(!quiet()) generateNow(false); };
         listeners.push(indexP.newListener([this](int&){ updateOutputs(); }));
+        listeners.push(chordGatesP.newListener([this](std::vector<float>& v){ chordGatesChanged(v); }));
         listeners.push(transposeP.newListener([this](int&){ updateOutputs(); }));
         listeners.push(generateP.newListener([this](){ generateNow(true); }));
         listeners.push(styleP.newListener([this, regenerate](int& v){ engine.s.style = v; regenerate(); }));
@@ -541,11 +548,16 @@ private:
     ofParameter<bool> bassP, leadP;
     ofParameter<std::vector<float>> pitchOut, scaleOut, gateOut;
     ofParameter<float> bassOut, rootOut, tensionOut;
+    ofParameter<std::vector<float>> chordGatesP;
+    std::shared_ptr<ofxOceanodeAbstractParameter> chordGatesHandle;
 
     // window state
     int editingSlot = -1;
     int padSlot = -1;     // the card held down
     int heldSlot = 0;     // the last chord played: Index 0 keeps it
+    int gateSlot = -1;    // the chord Chord Gates holds (-1: none open)
+    float gateLevel = 0.0f;
+    std::vector<float> lastChordGates;
     char editBuffer[64] = {};
     bool focusEdit = false;
     std::string progressionBuffer, message;
@@ -613,9 +625,10 @@ private:
         updateOutputs();
     }
 
-    bool gateOn() const { return padSlot >= 0 || indexP.get() != 0; }
+    bool gateOn() const { return padSlot >= 0 || gateSlot >= 0 || indexP.get() != 0; }
     int currentSlot(){
         if(padSlot >= 0 && padSlot < engine.size()) heldSlot = padSlot;
+        else if(gateSlot >= 0 && gateSlot < engine.size()) heldSlot = gateSlot;
         else if(indexP.get() != 0) heldSlot = engine.wrap(indexP.get() - 1);
         return engine.wrap(heldSlot);
     }
@@ -636,7 +649,8 @@ private:
         if(scale != scaleOut.get()) scaleOut = scale;
         const float tension = engine.tension(i);
         if(tension != tensionOut.get()) tensionOut = tension;
-        const std::vector<float> gate(std::max<size_t>(1, pitch.size()), gateOn() ? 1.0f : 0.0f);
+        const float level = padSlot < 0 && gateSlot >= 0 ? gateLevel : 1.0f;   // Chord Gates: its gate's level
+        const std::vector<float> gate(std::max<size_t>(1, pitch.size()), gateOn() ? level : 0.0f);
         if(gate != gateOut.get()) gateOut = gate;
         // the players' tables follow the bank and Transpose; the live row the chord
         const uint64_t tk = engine.revision * 128 + (uint64_t)(t + 64);
@@ -644,6 +658,43 @@ private:
         fillBuffers();
     }
     uint64_t tableKey = 0;
+
+    // Chord Gates: a gate opening takes its chord; when the one playing
+    // closes, another still open (the lowest) takes over, else none.
+    // Components past the bank's chords play nothing.
+    void chordGatesChanged(const std::vector<float>& v){
+        const int n = std::min<int>((int)v.size(), engine.size());
+        int opened = -1;
+        for(int k = 0; k < n; k++)
+            if(v[k] > 0.0f && (k >= (int)lastChordGates.size() || lastChordGates[k] <= 0.0f)) opened = k;
+        lastChordGates = v;
+        if(opened >= 0) gateSlot = opened;
+        else if(gateSlot >= n || gateSlot < 0 || v[gateSlot] <= 0.0f){
+            gateSlot = -1;
+            for(int k = 0; k < n && gateSlot < 0; k++) if(v[k] > 0.0f) gateSlot = k;
+        }
+        const float level = gateSlot >= 0 ? std::min(1.0f, v[gateSlot]) : 0.0f;
+        gateLevel = level;
+        updateOutputs();
+    }
+
+public:
+#ifdef OFXOCEANODE_HAS_TIMELINE_CHORDS
+    // A chord bank for the timeline's Chords lane: Chord Gates, a row per chord
+    bool getTimelineInstrument(ofxOceanodeTimelineInstrument& out) override {
+        if(!chordGatesHandle) return false;
+        out.gate = chordGatesHandle.get();
+        out.voices = engine.size();
+        out.chords = true;
+        for(int i = 0; i < engine.size(); i++){
+            out.rowNames.push_back(engine.name(i));
+            const float t = std::clamp(engine.tension(i), 0.0f, 1.0f);   // the cards' tension colours
+            out.rowColors.push_back(ofFloatColor(0.35f + 0.6f * t, 0.75f - 0.4f * t, 0.7f - 0.5f * t));
+        }
+        return true;
+    }
+#endif
+private:
 
     // ════════════════════════════════════════════════════════════════════════
     // AI
@@ -804,6 +855,12 @@ Key: <note> <mode>
         ImGui::SameLine();
         combo("Shape", shapeP, shapeNames(), 80);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("How tension moves across the bank: Free, Flat, Rise, Fall, Arc, Wave.");
+        if(timeline.hasTimeline()){
+            ImGui::SameLine();
+            if(ImGui::Button("Chord Track")) timeline.addChordTrack(*chordGatesHandle, getParameterGroup().getName());
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("A timeline track to write the chords on: one row per chord,\n"
+                                                         "drag in a row to hold that chord (Chord Gates).");
+        }
         if(!ai.getStatus().empty()){ ImGui::SameLine(); ImGui::TextDisabled("%s", ai.getStatus().c_str()); }
     }
 

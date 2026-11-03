@@ -126,6 +126,29 @@ bool scTimelineMenu::isOnTimeline(const std::string& key) const {
 #endif
 }
 
+bool scTimelineMenu::hasTimeline() const {
+#if OFXOCEANODESC_HAS_TIMELINE
+    auto* container = node ? node->getHostContainer() : nullptr;
+    return container && container->getAutomationExtension();
+#else
+    return false;
+#endif
+}
+
+bool scTimelineMenu::addChordTrack(ofxOceanodeAbstractParameter& gates, const std::string& name) {
+#if OFXOCEANODESC_HAS_TIMELINE
+    if(!hasTimeline()) return false;
+    auto& timeline = node->getHostContainer()->getTimelineManager();
+    const std::string trackId = timeline.createTrack(name);
+    if(timeline.requestParameterLane(trackId, gates)) return true;
+    timeline.removeTrack(trackId);
+    return false;
+#else
+    (void)gates; (void)name;
+    return false;
+#endif
+}
+
 void scTimelineMenu::items(const std::string& key, bool separator) {
 #if OFXOCEANODESC_HAS_TIMELINE
     auto* container = node ? node->getHostContainer() : nullptr;

@@ -63,6 +63,10 @@ public:
     bool isHidden(const std::string& key) const { return hidden.count(key) > 0; }
 
     bool isOnTimeline(const std::string& key) const;   // scTimelineMenu.cpp
+    // A chord bank's gates (ofxOceanodeTimelineInstrument::chords): a new
+    // timeline track with a Chords lane, opened in the editor. False without a timeline.
+    bool addChordTrack(ofxOceanodeAbstractParameter& gates, const std::string& name);
+    bool hasTimeline() const;
     bool hasMidiBinding(const std::string& key) const;
     bool bindMidi(const std::string& key);
     bool unbindLastMidi(const std::string& key);
