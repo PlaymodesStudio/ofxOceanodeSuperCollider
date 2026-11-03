@@ -25,7 +25,11 @@
 //    Index; the last one opened wins and its value is the Gate level. The
 //    timeline writes it with a Chords lane (node menu "Add to Timeline as
 //    Chord Track", or Chord Track in the window): a row per chord, named
-//    and coloured by tension, drag in a row to hold that chord.
+//    and coloured by tension, drag in a row to hold that chord. Right-click a
+//    chord there to change it (alternatives that fit its neighbours, a typed
+//    symbol, a new one, lock); the lane's Chords tab picks the Style and
+//    generates (locked chords stay). Neither changes the number or order of
+//    the chords, so the lane's blocks keep their rows.
 //  • Outputs for the chord playing: Pitch (voiced notes), Gate (1 per voice
 //    while a chord plays), Bass, Root, Scale (relative to Root: the notes to
 //    play over it), Tension (0..1).
@@ -686,7 +690,15 @@ public:
         out.gate = chordGatesHandle.get();
         out.voices = engine.size();
         out.chords = true;
+#ifdef OFXOCEANODE_HAS_TIMELINE_CHORD_MENUS
+        out.rowMenu = [this](int row){ drawChordMenu(row); };
+        out.panel = [this](){ drawChordsPanel(); };
+        out.panelLabel = "Chords";
+#endif
         for(int i = 0; i < engine.size(); i++){
+#ifdef OFXOCEANODE_HAS_TIMELINE_CHORD_MENUS
+            out.rowLocked.push_back(engine.slots[i].locked);
+#endif
             out.rowNames.push_back(engine.name(i));
             const float t = std::clamp(engine.tension(i), 0.0f, 1.0f);   // the cards' tension colours
             out.rowColors.push_back(ofFloatColor(0.35f + 0.6f * t, 0.75f - 0.4f * t, 0.7f - 0.5f * t));
@@ -695,6 +707,101 @@ public:
     }
 #endif
 private:
+    // ── The timeline's Chords lane: a chord's menu and the lane's Chords tab ──
+
+    // Chords that could stand in slot i: the slot redrawn with several seeds
+    // to fit its neighbours, without the one there; cached per slot and bank.
+    int altSlot = -1;
+    uint64_t altRevision = 0;
+    std::vector<harmonybox::Chord> alternatives;
+    std::vector<std::string> alternativeNames;
+    char chordMenuBuffer[64] = {};
+    int chordMenuEditing = -1;
+    std::string chordMenuMessage;
+    void findAlternatives(int i, uint64_t base){
+        altSlot = i;
+        altRevision = engine.revision;
+        alternatives.clear();
+        alternativeNames.clear();
+        const std::string current = engine.name(i);
+        for(int k = 0; k < 24 && (int)alternatives.size() < 8; k++){
+            harmonybox::Engine e = engine;
+            e.regenerateSlot(i, base + (uint64_t)k);
+            const std::string name = e.name(i);
+            if(name == current || std::find(alternativeNames.begin(), alternativeNames.end(), name) != alternativeNames.end()) continue;
+            alternatives.push_back(e.slots[i].chord);
+            alternativeNames.push_back(name);
+        }
+    }
+    // a chord chosen for slot i: locked, so Generate keeps it
+    void setSlotChord(int i, const harmonybox::Chord& c){
+        engine.slots[i].chord = c;
+        engine.slots[i].locked = true;
+        engine.changed();
+    }
+    void drawChordMenu(int i){
+        if(i < 0 || i >= engine.size()){ ImGui::CloseCurrentPopup(); return; }
+        const bool locked = engine.slots[i].locked;
+        ImGui::TextDisabled("Chord %d: %s  (%s)%s", i + 1, engine.name(i).c_str(), engine.romanAt(i).c_str(), locked ? "  locked" : "");
+        ImGui::Separator();
+        if(ImGui::BeginMenu("Change this chord")){
+            // Seed > 0: the same suggestions for the same bank; 0: fresh ones
+            if(altSlot != i || altRevision != engine.revision)
+                findAlternatives(i, seedP.get() > 0 ? (uint64_t)seedP.get() * 104729ull + (uint64_t)i * 31ull : freshSeed());
+            if(alternatives.empty()) ImGui::TextDisabled("No other chord fits here");
+            for(size_t k = 0; k < alternatives.size(); k++){
+                const std::string label = alternativeNames[k] + "  (" + harmonybox::roman(alternatives[k], engine.key()) + ")";
+                if(ImGui::MenuItem(label.c_str())){ setSlotChord(i, alternatives[k]); altSlot = -1; }
+            }
+            ImGui::Separator();
+            if(ImGui::Selectable("Other suggestions", false, ImGuiSelectableFlags_NoAutoClosePopups)) findAlternatives(i, freshSeed());
+            ImGui::EndMenu();
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Chords that fit between its neighbours; the one picked is locked.");
+        if(chordMenuEditing != i || ImGui::IsWindowAppearing()){
+            chordMenuEditing = i;
+            chordMenuMessage.clear();
+            std::snprintf(chordMenuBuffer, sizeof(chordMenuBuffer), "%s", engine.name(i).c_str());
+        }
+        ImGui::SetNextItemWidth(160);
+        if(ImGui::InputText("Type##chordText", chordMenuBuffer, sizeof(chordMenuBuffer),
+                            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)){
+            if(engine.setChordText(i, chordMenuBuffer)){ chordMenuMessage.clear(); ImGui::CloseCurrentPopup(); }
+            else chordMenuMessage = std::string("Not a chord symbol: ") + chordMenuBuffer;
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("A chord symbol, Enter to set it (locked): Dm9, F/C, G7alt, D(2,4,5)");
+        if(!chordMenuMessage.empty()) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s", chordMenuMessage.c_str());
+        // stays open: roll again until it sounds right
+        if(ImGui::Selectable("New chord here", false, ImGuiSelectableFlags_NoAutoClosePopups)) engine.regenerateSlot(i, drawSeed());
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Draw a new chord for this one, to fit its neighbours (stays unlocked).\nThe menu stays open: click again for another.");
+        if(ImGui::MenuItem(locked ? "Unlock" : "Lock")) engine.slots[i].locked = !locked;
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("A locked chord stays when the bank is generated again.");
+    }
+    // the lane's Chords tab: Style and Generate, through the node's own
+    // parameters (their listeners regenerate, move the Seed, save)
+    void drawChordsPanel(){
+        using namespace harmonybox;
+        const float w = std::max(60.0f, ImGui::GetContentRegionAvail().x);
+        const auto& styles = styleNames();
+        const int style = styleP.get();
+        ImGui::TextDisabled("Style");
+        ImGui::SetNextItemWidth(w);
+        if(ImGui::BeginCombo("##chordsStyle", style >= 0 && style < (int)styles.size() ? styles[style].c_str() : "?")){
+            for(int k = 0; k < (int)styles.size(); k++){
+                if(ImGui::Selectable(styles[k].c_str(), k == style)) styleP = k;   // its listener regenerates
+                if(k == style) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Choosing a style generates the unlocked chords in it.");
+        if(ImGui::Button("Generate", ImVec2(w, 0))) generateP.trigger();
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("New chords for every unlocked one (locked ones stay).\nSeed 0: fresh each time; Seed > 0: the next seed number.");
+        int locked = 0;
+        for(const auto& slot : engine.slots) locked += slot.locked ? 1 : 0;
+        ImGui::TextDisabled("%s %s, %d chords", keyNames()[engine.s.key].c_str(), modeNames()[engine.s.mode].c_str(), engine.size());
+        ImGui::TextDisabled("Seed %d%s", seedP.get(), locked ? (", " + std::to_string(locked) + " locked").c_str() : "");
+        if(ImGui::Button("Open HarmonyBox", ImVec2(w, 0))) showWindow = true;
+    }
 
     // ════════════════════════════════════════════════════════════════════════
     // AI
