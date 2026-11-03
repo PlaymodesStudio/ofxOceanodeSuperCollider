@@ -443,6 +443,8 @@ void scSlicerBox::setup(){
     seqDivision.set("Seq Division", 3, 0, (int)seqDivisionNames.size() - 1);
     seqGate.set("Seq Gate", 1.0f, 0.1f, 2.0f);
     seqRandom.set("Seq Random", 0.0f, 0.0f, 1.0f);
+    seqShuffle.set("Seq Shuffle", 0.0f, 0.0f, 1.0f);
+    seqPattern.set("Seq Pattern", 1, 1, SEQ_PATTERNS);
     snaps.setupParameters();   // Snapshot, Morph... (scSnapshots, shared by the synths)
     initializePublishActions();
     initial = captureSound();
@@ -531,6 +533,11 @@ void scSlicerBox::setup(){
     }));
     listeners.push(seqGate.newListener([this](float&){ seqDirty = true; }));
     listeners.push(seqRandom.newListener([this](float&){ seqDirty = true; }));
+    listeners.push(seqShuffle.newListener([this](float&){ seqDirty = true; }));
+    listeners.push(seqPattern.newListener([this](int& p){
+        storePattern();
+        showPattern(std::clamp(p, 1, SEQ_PATTERNS) - 1);
+    }));
     // The amplitude envelope
     for(auto* p : {&ampAttack, &ampDecay, &ampSustain, &ampRelease, &ampCurveA, &ampCurveD, &ampCurveR})
         listeners.push(p->newListener([this](float&){ for(auto& [server, st] : states) sendAmp(st.player); }));
@@ -695,21 +702,77 @@ void scSlicerBox::sendSeq(ofxSCSynth* s, bool notes){
     if(!seqSync.get()) updates.set("bpm", currentBpm);   // synced: it comes with the anchors
     updates.set("gatescale", seqGate.get());
     updates.set("randamt", seqRandom.get());
+    updates.set("shuffle", seqShuffle.get());
     updates.set("nslices", (float)std::max(1, numSlices()));
     if(notes){
         updates.set("slice", seqSlice);
         updates.set("len", seqLen);
+        updates.set("vel", seqVel);
+        updates.set("pitch", seqPitch);
+        updates.set("rev", seqRev);
+        updates.set("prob", seqProb);
     }
     updates.send();
+}
+
+float scSlicerBox::seqShuffleOffset(int step) const {
+    return (step % 2) ? seqShuffle.get() * 0.5f : 0.0f;
+}
+
+// One-shot plays the whole slice anyway; Gated holds it for the note's length
+// (or while the mouse is down, if longer)
+void scSlicerBox::auditionNote(int step, int slice){
+    audition(slice, true);
+    if(playMode.get() != GateGated || step < 0 || step >= SEQ_STEPS) return;
+    const float stepsPerSecond = std::max(1.0f, (float)currentBpm) / 60.0f * seqPerBeat();
+    const float len = seqLen[step] * seqGate.get() * (1.0f - seqShuffleOffset(step));
+    auditionUntil = ofGetElapsedTimef() + std::max(0.02f, len) / stepsPerSecond;
+}
+
+scSlicerBox::SeqNotes scSlicerBox::shownNotes() const {
+    return {seqSlice, seqLen, seqVel, seqPitch, seqRev, seqProb};
+}
+
+void scSlicerBox::setShownNotes(const SeqNotes& p){
+    auto fit = [](std::vector<float> v, float def){ v.resize(SEQ_STEPS, def); return v; };
+    seqSlice = fit(p.slice, -1.0f);
+    seqLen = fit(p.len, 1.0f);
+    seqVel = fit(p.vel, 1.0f);
+    seqPitch = fit(p.pitch, 0.0f);
+    seqRev = fit(p.rev, 0.0f);
+    seqProb = fit(p.prob, 1.0f);
+    seqDirty = true;
+}
+
+void scSlicerBox::resetNoteValues(int step){
+    if(step < 0 || step >= SEQ_STEPS) return;
+    seqVel[step] = 1.0f;
+    seqPitch[step] = 0.0f;
+    seqRev[step] = 0.0f;
+    seqProb[step] = 1.0f;
+}
+
+void scSlicerBox::storePattern(){
+    seqBank[seqShownPattern] = shownNotes();
+}
+
+void scSlicerBox::showPattern(int index){
+    seqShownPattern = std::clamp(index, 0, SEQ_PATTERNS - 1);
+    setShownNotes(seqBank[seqShownPattern]);
+    seqDragMode = 0;
+    seqDragStep = -1;
+    seqDirty = true;
 }
 
 // The sequencer synth exists while Sequence is on (switching it on starts at
 // step 1); the player then reads its gates
 void scSlicerBox::ensureSeq(ofxSCServer* server, ServerState& st){
     if(seqOn.get() && st.player){
-        if(!audioBusIsLive(server, st.seqBus)){
+        if(!audioBusIsLive(server, st.seqBus) || st.seqBus->channels != SEQ_BUS_LANES * SEQ_STEPS){
+            if(st.seq){ st.seq->free(); delete st.seq; st.seq = nullptr; }   // it writes the old bus
+            if(audioBusIsLive(server, st.seqBus)) st.seqBus->free();
             delete st.seqBus;
-            st.seqBus = new ofxSCBus(RATE_AUDIO, SEQ_STEPS, server);
+            st.seqBus = new ofxSCBus(RATE_AUDIO, SEQ_BUS_LANES * SEQ_STEPS, server);
             if(!audioBusIsLive(server, st.seqBus)){ st.seqBus->free(); delete st.seqBus; st.seqBus = nullptr; }
         }
         if(st.seqPos && (!controlBusIsLive(server, st.seqPos) || st.seqPos->channels != 1 + SEQ_STEPS)){
@@ -1001,12 +1064,21 @@ void scSlicerBox::sendGateRouting(ofxSCSynth* synth, const ServerState& st){
     if(st.seq && st.seqBus){       // the sequencer's gates (with the cable's in them)
         synth->set("gate_sel", 1);
         synth->mapan("gate_ar", st.seqBus->index, sliceCap());
+        synth->mapan("natt_ar", st.seqBus->index + SEQ_STEPS, sliceCap());
+        synth->mapan("npitch_ar", st.seqBus->index + 2 * SEQ_STEPS, sliceCap());
+        synth->mapan("nrev_ar", st.seqBus->index + 3 * SEQ_STEPS, sliceCap());
+        return;
     }else if(st.gateBus >= 0){
         synth->set("gate_sel", 1);
         synth->mapan("gate_ar", st.gateBus, sliceCap());
     }else{
         synth->set("gate_sel", 0);
     }
+    // no sequencer: no note values (a set also unmaps them)
+    const std::vector<float> zeros(sliceCap(), 0.0f);
+    synth->set("natt_ar", zeros);
+    synth->set("npitch_ar", zeros);
+    synth->set("nrev_ar", zeros);
 }
 
 void scSlicerBox::sendEq(ofxSCSynth* s){
@@ -1031,6 +1103,7 @@ void scSlicerBox::sendEqAll(){
 
 void scSlicerBox::audition(int slice, bool on){
     auditioning = on ? slice : -1;
+    auditionUntil = -1.0f;
     std::vector<float> a(sliceCap(), 0.0f);
     if(on && slice >= 0 && slice < (int)a.size()) a[slice] = 1.0f;
     for(auto& [server, st] : states) if(st.player) st.player->set("audition", a);
@@ -1154,6 +1227,8 @@ void scSlicerBox::deactivate(){
 
 void scSlicerBox::update(ofEventArgs&){
     timeline.update();
+    if(auditionUntil >= 0.0f && auditioning >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)
+       && ofGetElapsedTimef() >= auditionUntil) audition(auditioning, false);
     snaps.update();
     for(auto& [server, st] : states) if(st.chainCreated &&
         scFxAwaitingRoute(st.fx, server, [this](int stage){ return stageOn(stage) > 0; },
@@ -1273,8 +1348,13 @@ void scSlicerBox::presetSave(ofJson& json){
     json["file"] = embedSamples.get() ? scSampleEmbedding::embed(file) : file;
     json["points"] = points;
     json["browseDir"] = browser.getDir();
-    json["seqSlice"] = seqSlice;
+    storePattern();
+    json["seqSlice"] = seqSlice;            // the shown pattern (presets from before patterns read only this)
     json["seqLen"] = seqLen;
+    ofJson bank = ofJson::array();
+    for(const auto& p : seqBank)
+        bank.push_back({{"slice", p.slice}, {"len", p.len}, {"vel", p.vel}, {"pitch", p.pitch}, {"rev", p.rev}, {"prob", p.prob}});
+    json["seqBank"] = bank;
     json["seqSyncSaved"] = true;
     json["browserWidth"] = browserWidth;
     json["waveHeight"] = waveHeight / std::max(0.01f, ofxOceanodeShared::getZoomLevel());
@@ -1291,6 +1371,8 @@ void scSlicerBox::loadBeforeConnections(ofJson& json){
 void scSlicerBox::presetRecallBeforeSettingParameters(ofJson& json){
     // presets from before Sync To Transport ran free from Play
     if(!json.contains("seqSyncSaved")) seqSync = false;
+    // and from before patterns: their one pattern goes to pattern 1
+    if(!json.contains("seqBank") && !json.contains("seqBankSlice")) seqPattern = 1;
     loadBeforeConnections(json);
 }
 
@@ -1313,12 +1395,39 @@ void scSlicerBox::presetRecallAfterSettingParameters(ofJson& json){
         else if(file == audio.path) pointsFromPreset = false;
     }
     if(json.contains("browseDir") && json["browseDir"].is_string()) browser.refresh(json["browseDir"].get<std::string>());
-    try {
-        if(json.contains("seqSlice") && json["seqSlice"].is_array()) seqSlice = json["seqSlice"].get<std::vector<float>>();
-        if(json.contains("seqLen") && json["seqLen"].is_array()) seqLen = json["seqLen"].get<std::vector<float>>();
-    } catch(...) {}
-    seqSlice.resize(SEQ_STEPS, -1.0f);
-    seqLen.resize(SEQ_STEPS, 1.0f);
+    // the pattern bank; an older preset (one pattern) puts it in the
+    // selected slot and leaves the others empty
+    for(auto& p : seqBank) p = SeqNotes();
+    auto floats = [](const ofJson& j, const char* key, std::vector<float>& to){
+        if(j.contains(key) && j[key].is_array()) try { to = j[key].get<std::vector<float>>(); } catch(...) {}
+    };
+    bool hasBank = false;
+    if(json.contains("seqBank") && json["seqBank"].is_array()){
+        hasBank = true;
+        for(int b = 0; b < SEQ_PATTERNS && b < (int)json["seqBank"].size(); b++){
+            const auto& j = json["seqBank"][b];
+            if(!j.is_object()) continue;
+            auto& p = seqBank[b];
+            floats(j, "slice", p.slice); floats(j, "len", p.len); floats(j, "vel", p.vel);
+            floats(j, "pitch", p.pitch); floats(j, "rev", p.rev); floats(j, "prob", p.prob);
+        }
+    }else if(json.contains("seqBankSlice") && json["seqBankSlice"].is_array()){   // the first pattern format: notes only
+        hasBank = true;
+        try {
+            auto sl = json["seqBankSlice"].get<std::vector<std::vector<float>>>();
+            auto ln = json.value("seqBankLen", ofJson::array()).get<std::vector<std::vector<float>>>();
+            for(int b = 0; b < SEQ_PATTERNS && b < (int)sl.size(); b++){
+                seqBank[b].slice = sl[b];
+                if(b < (int)ln.size()) seqBank[b].len = ln[b];
+            }
+        } catch(...) {}
+    }
+    seqShownPattern = std::clamp(seqPattern.get(), 1, SEQ_PATTERNS) - 1;
+    if(!hasBank){
+        floats(json, "seqSlice", seqBank[seqShownPattern].slice);
+        floats(json, "seqLen", seqBank[seqShownPattern].len);
+    }
+    showPattern(seqShownPattern);   // (fits every lane to SEQ_STEPS)
     seqDirty = true;
     // The same file with another marker count: the player's control arrays
     // are sized by the slice cap, so a 64-slice set must not reach a 16-slice
@@ -1375,6 +1484,8 @@ void scSlicerBox::initializePublishActions(){
     addPublishAction(seqDivision, seqDivisionNames);
     addPublishAction(seqGate);
     addPublishAction(seqRandom);
+    addPublishAction(seqShuffle);
+    addPublishAction(seqPattern);
     addPublishAction(filterOn);
     addPublishAction(filterType, std::vector<std::string>{"Low pass", "High pass", "Band pass"});
     addPublishAction(filterSlope, std::vector<std::string>{"12 dB/oct", "24 dB/oct"});
@@ -1859,7 +1970,7 @@ void scSlicerBox::drawWaveform(ImVec2 size){
             dragMarker = -1;
         }
     }
-    if(auditioning >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) audition(auditioning, false);
+    if(auditioning >= 0 && auditionUntil < 0.0f && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) audition(auditioning, false);
     // Double-click: a new marker there
     if(hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hoveredMarker < 0 && n < MAX_SLICES){
         const float u = (float)(xToFrame(mouse.x, p0.x, size.x) / audio.frames);
@@ -2219,6 +2330,16 @@ void scSlicerBox::drawSequence(float w){
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("On: follows the transport (play, stop, position, loops), locked to the bars.\n"
                                                      "Off: runs on its own from Play, at the tempo; Reset restarts it.");
         ImGui::SameLine();
+        sliderInt(seqPattern, 120.0f);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("The pattern that plays and that the roll edits (%d patterns, like FL Studio's).\n"
+                                                     "Publish it to switch patterns from a cable.", SEQ_PATTERNS);
+        ImGui::SameLine();
+        if(ImGui::SmallButton("Copy")){ seqClip = shownNotes(); seqClipValid = true; }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!seqClipValid);
+        if(ImGui::SmallButton("Paste")) setShownNotes(seqClip);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
         sliderInt(seqSteps, 150.0f);
         ImGui::SameLine();
         comboInt(seqDivision, seqDivisionNames, 150.0f);
@@ -2231,9 +2352,13 @@ void scSlicerBox::drawSequence(float w){
                                                      "slice instead of its own with this chance (rests stay rests).\n"
                                                      "Outlines: what plays this pass.");
         ImGui::SameLine();
+        sliderFloat(seqShuffle, "%.2f", false, 150.0f);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Swing: every second step (2, 4, ...) starts later,\n"
+                                                     "by up to half a step (0.33: triplet feel)");
+        ImGui::SameLine();
         ImGui::TextDisabled("%.1f BPM", currentBpm);
         auto fill = [&](std::function<int(int)> sliceAt){
-            for(int j = 0; j < SEQ_STEPS; j++){ seqSlice[j] = (float)sliceAt(j); seqLen[j] = 1.0f; }
+            for(int j = 0; j < SEQ_STEPS; j++){ seqSlice[j] = (float)sliceAt(j); seqLen[j] = 1.0f; resetNoteValues(j); }
             seqDirty = true;
         };
         if(n > 0){
@@ -2264,6 +2389,8 @@ void scSlicerBox::drawSequence(float w){
     const ImVec2 o = ImGui::GetCursorScreenPos();
     const ImVec2 g0(o.x + labelW, o.y);
     const ImVec2 g1(g0.x + cw * steps, g0.y + gridH);
+    seqRollX0 = g0.x;
+    seqRollCw = cw;
 
     // labels and rows
     for(int r = 0; r < n; r++){
@@ -2285,9 +2412,10 @@ void scSlicerBox::drawSequence(float w){
         out.clear();
         const int r = (int)seqSlice[j];
         if(r < 0 || r >= n || j >= steps) return;
-        const float len = std::max(0.05f, seqLen[j] * seqGate.get());
+        const float off = seqShuffleOffset(j);
+        const float len = std::max(0.05f, seqLen[j] * seqGate.get() * (1.0f - off));
         const float y = o.y + r * rowH;
-        float start = (float)j, remaining = std::min(len, (float)steps);
+        float start = j + off, remaining = std::min(len, (float)steps);
         while(remaining > 0.0f){
             const float end = std::min((float)steps, start + remaining);
             out.push_back({ImVec2(g0.x + start * cw + 1, y + 2), ImVec2(g0.x + end * cw - 1, y + rowH - 2)});
@@ -2300,8 +2428,30 @@ void scSlicerBox::drawSequence(float w){
         noteRects(j, rects);
         for(size_t k = 0; k < rects.size(); k++){
             const int r = (int)seqSlice[j];
-            dl->AddRectFilled(rects[k].first, rects[k].second, sliceColor(r, k == 0 ? 0.95f : 0.6f), 3.0f);
+            const float vel = 0.35f + 0.65f * ofClamp(seqVel[j], 0.0f, 1.0f);   // quieter notes paler
+            dl->AddRectFilled(rects[k].first, rects[k].second, sliceColor(r, (k == 0 ? 0.95f : 0.6f) * vel), 3.0f);
             if(k == 0) dl->AddRectFilled(rects[k].first, ImVec2(rects[k].first.x + 3, rects[k].second.y), IM_COL32(255, 255, 255, 200), 2.0f);
+        }
+        // what its lanes change: R(everse), pitch, chance
+        if(!rects.empty() && rects[0].second.x - rects[0].first.x > 14.0f && rowH >= 13.0f){
+            std::string tag;
+            if(seqRev[j] > 0.5f) tag += "R";
+            if(std::abs(seqPitch[j]) > 0.001f){
+                char b[16];
+                std::snprintf(b, sizeof(b), "%s%+g", tag.empty() ? "" : " ", std::round(seqPitch[j] * 10.0f) / 10.0f);
+                tag += b;
+            }
+            if(seqProb[j] < 0.999f){
+                char b[16];
+                std::snprintf(b, sizeof(b), "%s%d%%", tag.empty() ? "" : " ", (int)std::lround(seqProb[j] * 100.0f));
+                tag += b;
+            }
+            if(!tag.empty()){
+                dl->PushClipRect(rects[0].first, rects[0].second, true);
+                dl->AddText(ImVec2(rects[0].first.x + 5, rects[0].first.y + (rects[0].second.y - rects[0].first.y - ImGui::GetTextLineHeight()) * 0.5f),
+                            IM_COL32(15, 15, 20, 230), tag.c_str());
+                dl->PopClipRect();
+            }
         }
     }
     // Random: where a step plays another slice this pass, an outline there
@@ -2310,7 +2460,8 @@ void scSlicerBox::drawSequence(float w){
             const int r = (int)std::lround(seqPlaying[j]);
             if(r < 0 || r >= n || r == (int)seqSlice[j]) continue;
             const float y = o.y + r * rowH;
-            dl->AddRect(ImVec2(g0.x + j * cw + 1, y + 2), ImVec2(g0.x + (j + 1) * cw - 1, y + rowH - 2),
+            const float x0 = g0.x + (j + seqShuffleOffset(j)) * cw;
+            dl->AddRect(ImVec2(x0 + 1, y + 2), ImVec2(std::min(g1.x, x0 + cw * (1.0f - seqShuffleOffset(j))) - 1, y + rowH - 2),
                         sliceColor(r, 0.95f), 3.0f, 0, 1.5f);
         }
     }
@@ -2350,14 +2501,15 @@ void scSlicerBox::drawSequence(float w){
                               hit >= 0 ? seqLen[hit] : 0.0f);
     }
     if(ImGui::IsItemClicked(ImGuiMouseButton_Left)){
-        if(hit >= 0 && edge){ seqDragMode = 1; seqDragStep = hit; }
-        else if(hit >= 0){ seqDragMode = 2; seqDragStep = hit; seqDragGrab = mStep - hit; }
+        if(hit >= 0 && edge){ seqDragMode = 1; seqDragStep = hit; auditionNote(hit, (int)seqSlice[hit]); }
+        else if(hit >= 0){ seqDragMode = 2; seqDragStep = hit; seqDragGrab = mStep - hit; auditionNote(hit, (int)seqSlice[hit]); }
         else{
             seqSlice[mCol] = (float)mRow;
             seqLen[mCol] = 1.0f;
+            resetNoteValues(mCol);
             seqDragMode = 1; seqDragStep = mCol;
             seqDirty = true;
-            audition(mRow, true);
+            auditionNote(mCol, mRow);
         }
     }
     if(ImGui::IsItemClicked(ImGuiMouseButton_Right) && hit >= 0){
@@ -2367,7 +2519,9 @@ void scSlicerBox::drawSequence(float w){
     if(seqDragMode && ImGui::IsMouseDown(ImGuiMouseButton_Left)){
         if(seqDragMode == 1 && seqDragStep >= 0){
             // length in quarter steps (Shift: free)
-            float len = (mStep - seqDragStep) / std::max(0.01f, seqGate.get());
+            // (a shuffled step starts late and is drawn shorter: the same mapping back)
+            const float off = seqShuffleOffset(seqDragStep);
+            float len = (mStep - seqDragStep - off) / std::max(0.01f, seqGate.get() * (1.0f - off));
             if(!ImGui::GetIO().KeyShift) len = std::round(len * 4.0f) / 4.0f;
             len = ofClamp(len, 0.25f, (float)SEQ_STEPS);
             if(len != seqLen[seqDragStep]){ seqLen[seqDragStep] = len; seqDirty = true; }
@@ -2376,20 +2530,136 @@ void scSlicerBox::drawSequence(float w){
             const int row = mRow;
             if(to != seqDragStep || row != (int)seqSlice[seqDragStep]){
                 const float len = seqLen[seqDragStep];
+                const float vel = seqVel[seqDragStep], pt = seqPitch[seqDragStep];
+                const float rv = seqRev[seqDragStep], pr = seqProb[seqDragStep];
                 seqSlice[seqDragStep] = -1.0f;
                 seqSlice[to] = (float)row;
                 seqLen[to] = len;
+                seqVel[to] = vel; seqPitch[to] = pt; seqRev[to] = rv; seqProb[to] = pr;
                 seqDragStep = to;
                 seqDirty = true;
+                if(row != auditioning) auditionNote(to, row);
             }
         }
     }
     if(seqDragMode && !ImGui::IsMouseDown(ImGuiMouseButton_Left)){
         seqDragMode = 0;
         seqDragStep = -1;
-        if(auditioning >= 0) audition(auditioning, false);
+        if(auditioning >= 0 && (auditionUntil < 0.0f || ofGetElapsedTimef() >= auditionUntil)) audition(auditioning, false);
     }
     ImGui::EndChild();
+    drawNoteLanes(w);
+}
+
+// The note lanes under the roll (FL Studio's event editor): a handle per
+// note, at its start, lined up with the roll. Drag up / down to set it
+// (across several notes paints them), right-click: back to the default.
+// Pitch snaps to semitones (Shift: free); Reverse paints on / off.
+void scSlicerBox::drawNoteLanes(float w){
+    const int steps = ofClamp(seqSteps.get(), 1, SEQ_STEPS);
+    const int n = numSlices();
+    static const char* names[NumSeqLanes] = {"Velocity", "Pitch", "Reverse", "Probability"};
+    ImGui::Spacing();
+    for(int l = 0; l < NumSeqLanes; l++){
+        if(l) ImGui::SameLine();
+        if(ImGui::RadioButton(names[l], seqLane == l)) seqLane = l;
+    }
+    const float laneH = 70.0f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    const float x0 = seqRollX0, cw = seqRollCw;
+    const ImVec2 a(x0, o.y), b(x0 + cw * steps, o.y + laneH);
+    dl->AddRectFilled(ImVec2(o.x, o.y), ImVec2(o.x + w, b.y), IM_COL32(16, 18, 22, 255), 3.0f);
+    const bool bipolar = seqLane == LanePitch;
+    const float midY = bipolar ? (a.y + b.y) * 0.5f : b.y - 4.0f;
+    const float span = bipolar ? laneH * 0.5f - 6.0f : laneH - 10.0f;
+    const float pitchRange = 24.0f;
+    dl->AddLine(ImVec2(a.x, midY), ImVec2(b.x, midY), IM_COL32(255, 255, 255, 40));
+    if(seqLane != LaneReverse){
+        const char* top = seqLane == LanePitch ? "+24" : "100%";
+        const char* bot = seqLane == LanePitch ? "-24" : "0";
+        dl->AddText(ImVec2(o.x + 3, a.y + 2), IM_COL32(255, 255, 255, 110), top);
+        dl->AddText(ImVec2(o.x + 3, b.y - ImGui::GetTextLineHeight() - 2), IM_COL32(255, 255, 255, 110), bot);
+    }
+    for(int j = 0; j <= steps; j += std::max(1, seqPerBeat()))
+        dl->AddLine(ImVec2(a.x + j * cw, a.y), ImVec2(a.x + j * cw, b.y), IM_COL32(255, 255, 255, 18));
+
+    auto value = [&](int j) -> float& {
+        switch(seqLane){
+            case LanePitch: return seqPitch[j];
+            case LaneReverse: return seqRev[j];
+            case LaneProbability: return seqProb[j];
+            default: return seqVel[j];
+        }
+    };
+    auto noteX = [&](int j){ return a.x + (j + seqShuffleOffset(j)) * cw; };
+    const float barW = ofClamp(cw * 0.45f, 3.0f, 12.0f);
+    for(int j = 0; j < steps; j++){
+        const int r = (int)seqSlice[j];
+        if(r < 0 || r >= n) continue;
+        const float x = noteX(j);
+        const ImU32 col = sliceColor(r, 0.95f);
+        const float v = value(j);
+        if(seqLane == LaneReverse){
+            const ImVec2 c(x + barW * 0.5f + 1, (a.y + b.y) * 0.5f);
+            if(v > 0.5f) dl->AddRectFilled(ImVec2(c.x - barW * 0.5f, c.y - 8), ImVec2(c.x + barW * 0.5f, c.y + 8), col, 2.0f);
+            else dl->AddRect(ImVec2(c.x - barW * 0.5f, c.y - 8), ImVec2(c.x + barW * 0.5f, c.y + 8), col, 2.0f, 0, 1.5f);
+            continue;
+        }
+        const float t = bipolar ? ofClamp(v / pitchRange, -1.0f, 1.0f) : ofClamp(v, 0.0f, 1.0f);
+        const float y = midY - t * span;
+        dl->AddRectFilled(ImVec2(x + 1, std::min(y, midY)), ImVec2(x + 1 + barW, std::max(y, midY) + 1), sliceColor(r, 0.55f), 1.0f);
+        dl->AddCircleFilled(ImVec2(x + 1 + barW * 0.5f, y), 3.5f, col);
+    }
+
+    ImGui::SetCursorScreenPos(o);
+    ImGui::InvisibleButton("##seqLanes", ImVec2(std::max(1.0f, w), laneH), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+    const ImVec2 m = ImGui::GetIO().MousePos;
+    // the note whose handle column the mouse is in
+    auto noteAt = [&](float mx) -> int {
+        const int c = (int)std::floor((mx - a.x) / cw);
+        for(int j : {c, c - 1}){
+            if(j < 0 || j >= steps || seqSlice[j] < 0 || (int)seqSlice[j] >= n) continue;
+            const float x = noteX(j);
+            if(mx >= x && mx < x + cw) return j;
+        }
+        return -1;
+    };
+    const int hover = ImGui::IsItemHovered() || ImGui::IsItemActive() ? noteAt(m.x) : -1;
+    auto fromMouse = [&](){
+        if(bipolar){
+            float p = ofClamp((midY - m.y) / span, -1.0f, 1.0f) * pitchRange;
+            return ImGui::GetIO().KeyShift ? std::round(p * 100.0f) / 100.0f : std::round(p);
+        }
+        return ofClamp((midY - m.y) / span, 0.0f, 1.0f);
+    };
+    if(ImGui::IsItemClicked(ImGuiMouseButton_Left)){
+        seqLaneDragging = true;
+        seqLaneDragStep = -1;
+        if(seqLane == LaneReverse) seqLanePaint = hover >= 0 && value(hover) > 0.5f ? 0.0f : 1.0f;
+    }
+    if(seqLaneDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left)){
+        if(hover >= 0){
+            float& v = value(hover);
+            const float nv = seqLane == LaneReverse ? seqLanePaint : fromMouse();
+            if(nv != v){ v = nv; seqDirty = true; }
+            seqLaneDragStep = hover;
+        }
+    }else seqLaneDragging = false;
+    if(ImGui::IsItemClicked(ImGuiMouseButton_Right) && hover >= 0){
+        static const float defaults[NumSeqLanes] = {1.0f, 0.0f, 0.0f, 1.0f};
+        value(hover) = defaults[seqLane];
+        seqDirty = true;
+    }
+    if(ImGui::IsItemHovered() && hover >= 0){
+        const float v = value(hover);
+        switch(seqLane){
+            case LanePitch: ImGui::SetTooltip("Step %d: %+.2f semitones\nDrag (Shift: free)  ·  right-click: 0", hover + 1, v); break;
+            case LaneReverse: ImGui::SetTooltip("Step %d: %s\nClick / drag to flip  ·  right-click: forwards", hover + 1, v > 0.5f ? "reversed" : "forwards"); break;
+            case LaneProbability: ImGui::SetTooltip("Step %d: plays %d%% of the passes\nDrag  ·  right-click: always", hover + 1, (int)std::lround(v * 100.0f)); break;
+            default: ImGui::SetTooltip("Step %d: velocity %.2f\nDrag  ·  right-click: full", hover + 1, v); break;
+        }
+    }
 }
 
 ofxSCServer* scSlicerBox::serverForSynth(ofxSCSynth* synth) const {

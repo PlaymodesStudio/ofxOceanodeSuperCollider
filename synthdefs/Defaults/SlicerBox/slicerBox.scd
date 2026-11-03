@@ -14,6 +14,11 @@
 //                           audio cable on the node's Gate inlet, or the
 //                           sequencer below); they add to \gate
 //   audition                gate per slice from the node's window
+//   natt_ar npitch_ar nrev_ar  the sequencer's note values per slice (audio
+//                           rate, read with gate_sel, latched at the rising
+//                           edge): level cut (1 - velocity, so 0 = full and
+//                           an unwritten bus plays as before), semitones,
+//                           reverse (flips \rev)
 //   start end               slice bounds in buffer frames
 //   rate                    playback rate (pitch and the buffer's own sample
 //                           rate are applied here with BufRateScale)
@@ -49,6 +54,9 @@ File.mkdir(d);
             // (an audio cable on the Gate inlet, or the sequencer)
             var gate = K2A.ar(\gate.kr(0 ! cap)) + (\gate_ar.ar(0 ! cap) * \gate_sel.kr(0));
             var audition = \audition.kr(0 ! cap);
+            var gsel = \gate_sel.kr(0);
+            var natt = \natt_ar.ar(0 ! cap) * gsel, npitch = \npitch_ar.ar(0 ! cap) * gsel;
+            var nrev = \nrev_ar.ar(0 ! cap) * gsel;
             var start = \start.kr(0 ! cap), end = \end.kr(0 ! cap), rate = \rate.kr(1 ! cap);
             var rev = \rev.kr(0 ! cap), mode = \mode.kr(0 ! cap);
             var scale = BufRateScale.kr(buf)   // x Global Transpose (resampled)
@@ -61,7 +69,11 @@ File.mkdir(d);
             var voices = cap.collect { |i|
                 var g = ((gate[i] + K2A.ar(audition[i])) > 0);
                 var trig = HPZ1.ar(g) > 0;                       // rising edge
-                var speed = rate[i] * scale;                     // buffer frames per output sample
+                // the sequencer note that started it (none: full level, as is)
+                var vel = 1 - Latch.ar(natt[i], trig).clip(0, 1);
+                var flip = Latch.ar(nrev[i], trig) > 0.5;
+                var speed = rate[i] * scale                      // buffer frames per output sample
+                    * (2 ** (Latch.ar(npitch[i], trig).clip(-48, 48) / 12));
                 var len = (end[i] - start[i]).max(1);
                 var pos = Sweep.ar(trig, SampleRate.ir * speed); // frames played since the edge
                 var armed = PulseCount.ar(trig) > 0;             // nothing before the first edge
@@ -70,11 +82,11 @@ File.mkdir(d);
                 // gated: when the gate falls
                 var hold = Select.ar(mode[i], [(len - pos) > (rel * speed * SampleRate.ir), g]);
                 var on = playing * hold;
-                var frame = Select.ar(rev[i], [start[i] + pos, end[i] - 1 - pos]);
+                var frame = Select.ar((rev[i] - flip).abs, [start[i] + pos, end[i] - 1 - pos]);
                 var edge = ((len - pos) / (speed * SampleRate.ir * 0.003).max(1)).clip(0, 1);
                 // a rising edge restarts the envelope (the gate dips for one sample)
                 var env = EnvGen.ar(Env.adsr(atk, dec, sus, rel, 1, curves), on * (1 - trig));
-                var sig = BufRd.ar(channels, buf, frame, 0, 4) * (env * edge);
+                var sig = BufRd.ar(channels, buf, frame, 0, 4) * (env * edge * vel);
                 [sig, A2K.kr(playing * (env > 0.0005) * (pos / len).clip(0.001, 1))]
             };
             var mix = voices.collect(_[0]).sum;
@@ -97,6 +109,13 @@ File.mkdir(d);
 // Random (\randamt 0..1): each time a step comes round, it plays a random
 // slice (of \nslices) instead of its own with that chance. Drawn when the
 // step's note ends (and at the start), so a note never changes mid-way.
+// Per step: \vel (0..1), \pitch (semitones), \rev (1 = backwards) and
+// \prob (the chance it plays, drawn each pass when its note would end). \out
+// has 4 x 64 channels: gates, then per slice 1 - velocity, pitch, reverse,
+// each written while the note is on (the player latches them at its edge).
+// Shuffle (\shuffle 0..1): every second step (2, 4, ...) starts later, by up
+// to half a step (0.33: triplet feel), and its length scales by the same
+// (1 - delay), so a one-step note still ends where it did.
 // \sync 1: the position follows the transport instead (scTransportSync
 // anchors: \anchorPos in steps, \anchorId, \anchorHard, \anchorFire; \runAr
 // = the transport playing). Reset is ignored; a hard anchor that lands on a
@@ -122,19 +141,27 @@ SynthDef(\SlicerBoxSeq, {
     var slices = \slice.kr(-1 ! n), lens = \len.kr(1 ! n);
     var gap = 0.002 * rate, scale = \gatescale.kr(1).max(0.01);
     var randAmt = \randamt.kr(0).clip(0, 1), nsl = \nslices.kr(1).max(1);
+    var shuffle = \shuffle.kr(0).clip(0, 1) * 0.5;
+    var vels = \vel.kr(1 ! n), pitches = \pitch.kr(0 ! n), revs = \rev.kr(0 ! n), probs = \prob.kr(1 ! n);
     var playing = n.collect { |j|
-        var len = (lens[j] * scale).clip(0.02, n);
-        var since = (pos - j).wrap(0, steps);
+        var off = if(j.odd, shuffle, 0);
+        var len = (lens[j] * scale * (1 - off)).clip(0.02, n);
+        var since = (pos - j - off).wrap(0, steps);
         var has = (slices[j] >= 0) * (j < steps);
         var onRaw = (since < (len - gap).max(gap)) * has * gateRun;
         // synced: a drift correction moving the position back across a step
         // it just started must not cut and retrigger it
         var hold = Trig1.ar(HPZ1.ar(onRaw) > 0, 0.005) * sync;
-        var on = onRaw.max(hold) * retrig;
-        // a new draw when this step's note ends: the next pass, never mid-note
-        var trig = (HPZ1.kr(A2K.kr(on)) < 0) + Impulse.kr(0);
-        var sl = Select.kr(TRand.kr(0, 1, trig) < randAmt, [slices[j], TIRand.kr(0, nsl - 1, trig)]);
-        Out.ar(out + sl.clip(0, n - 1), on);
+        // new draws when this step's note ends (played or not): the next
+        // pass, never mid-note
+        var trig = (HPZ1.kr(A2K.kr(onRaw)) < 0) + Impulse.kr(0);
+        var plays = TRand.kr(0, 1, trig) < probs[j];
+        var on = onRaw.max(hold) * retrig * plays;
+        var sl = Select.kr(TRand.kr(0, 1, trig) < randAmt, [slices[j], TIRand.kr(0, nsl - 1, trig)]).clip(0, n - 1);
+        Out.ar(out + sl, on);
+        Out.ar(out + n + sl, on * (1 - vels[j].clip(0, 1)));
+        Out.ar(out + (2 * n) + sl, on * pitches[j]);
+        Out.ar(out + (3 * n) + sl, on * (revs[j] > 0.5));
         Select.kr(has, [-1, sl])
     };
     Out.ar(out, In.ar(ext.max(0), n) * (ext >= 0));

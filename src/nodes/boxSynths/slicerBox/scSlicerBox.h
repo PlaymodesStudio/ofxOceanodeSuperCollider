@@ -267,6 +267,7 @@ private:
     ofParameter<int> seqSteps, seqDivision;
     ofParameter<float> seqGate;
     ofParameter<float> seqRandom;       // each pass, a step plays a random slice with this chance
+    ofParameter<float> seqShuffle;      // every second step starts later, by up to half a step
     // Sync To Transport: the sequence follows the transport's position and
     // play / stop (Play then arms it); off: it runs from Play on its own
     ofParameter<bool> seqSync;
@@ -276,8 +277,46 @@ private:
     bool seqForceHard = true;
     std::vector<float> seqPlaying;      // the slice each step plays now (read back, -1 rest)
     int sentSlices = -1;
+    // the pattern Seq Pattern selects (it plays and is edited); the others
+    // wait in the bank, as in FL Studio's pattern list
+    // and per note: velocity 0..1, pitch in semitones, reverse 0/1, the
+    // chance it plays 0..1 (the lanes under the roll)
     std::vector<float> seqSlice = std::vector<float>(SEQ_STEPS, -1.0f);
     std::vector<float> seqLen = std::vector<float>(SEQ_STEPS, 1.0f);
+    std::vector<float> seqVel = std::vector<float>(SEQ_STEPS, 1.0f);
+    std::vector<float> seqPitch = std::vector<float>(SEQ_STEPS, 0.0f);
+    std::vector<float> seqRev = std::vector<float>(SEQ_STEPS, 0.0f);
+    std::vector<float> seqProb = std::vector<float>(SEQ_STEPS, 1.0f);
+    struct SeqNotes {
+        std::vector<float> slice = std::vector<float>(SEQ_STEPS, -1.0f);
+        std::vector<float> len = std::vector<float>(SEQ_STEPS, 1.0f);
+        std::vector<float> vel = std::vector<float>(SEQ_STEPS, 1.0f);
+        std::vector<float> pitch = std::vector<float>(SEQ_STEPS, 0.0f);
+        std::vector<float> rev = std::vector<float>(SEQ_STEPS, 0.0f);
+        std::vector<float> prob = std::vector<float>(SEQ_STEPS, 1.0f);
+    };
+    SeqNotes shownNotes() const;
+    void setShownNotes(const SeqNotes& p);
+    void resetNoteValues(int step);     // a new note: velocity 1, no pitch, forwards, always
+    static constexpr int SEQ_PATTERNS = 16;
+    ofParameter<int> seqPattern;        // 1..SEQ_PATTERNS
+    std::vector<SeqNotes> seqBank = std::vector<SeqNotes>(SEQ_PATTERNS);
+    int seqShownPattern = 0;            // the bank slot seqSlice... belong to
+    SeqNotes seqClip;                   // Copy / Paste
+    bool seqClipValid = false;
+    void storePattern();                // seqSlice... -> their bank slot
+    void showPattern(int index);        // bank slot -> seqSlice...
+    // the lanes under the roll: which one, and the roll's geometry they line up with
+    enum SeqLane { LaneVelocity, LanePitch, LaneReverse, LaneProbability, NumSeqLanes };
+    int seqLane = LaneVelocity;
+    float seqRollX0 = 0.0f, seqRollCw = 1.0f;
+    int seqLaneDragStep = -1;           // the last step a drag set (each step once per pass over it)
+    float seqLanePaint = 0.0f;          // Reverse: the value a drag paints
+    bool seqLaneDragging = false;
+    void drawNoteLanes(float width);
+    static constexpr int SEQ_BUS_LANES = 4;   // the sequencer's bus: gates, 1 - velocity, pitch, reverse
+    float seqShuffleOffset(int step) const;   // where a step starts late, in steps
+    void auditionNote(int step, int slice);   // the roll: hear a note as it would play
     bool seqDirty = false;
     float seqPosition = -1.0f;          // steps, read back for the window (-1 stopped)
     float nextSeqRead = 0.0f;
@@ -304,6 +343,7 @@ private:
     // Window state
     int selectedSlice = 0;
     int auditioning = -1;
+    float auditionUntil = -1.0f;          // a roll click in Gated mode: lasts its note (elapsed time; -1 none)
     bool editAll = false;
     float viewStart = 0.0f, viewEnd = 1.0f;     // zoom, 0..1 of the file
     int dragMarker = -1;                        // interior boundary being dragged
