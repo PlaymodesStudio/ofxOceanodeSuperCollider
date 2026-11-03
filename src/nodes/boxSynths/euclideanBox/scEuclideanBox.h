@@ -20,7 +20,8 @@
 //    or accent (Advance) the degree moves by Interval (negative: down), kept
 //    within Range degrees (Wrap or Bounce), counted from the start, from each
 //    period or from each cycle (Reset). Pitch outputs (audio) and Note <n>
-//    (Oceanode vectors, one value per voice).
+//    (Oceanode vectors, one value per voice). Cycles <n>: the track's
+//    complete cycles so far (0 at the start of the transport).
 //  • Voices (the node's): each output is that many channels. Round robin:
 //    each hit to the next voice (a polyphonic synth plays them all); All: every
 //    hit to every voice (a stereo / unison synth).
@@ -197,6 +198,7 @@ public:
             regB(ti, T.rndSteps); regI(ti, T.stepsMin); regI(ti, T.stepsMax); regI(ti, T.seed);
             listeners.push(T.mute.newListener([this](bool&){ for(auto& [s, st] : servers) sendStaticControls(st); }));
             notes[ti].set("Note " + ofToString(ti + 1), {48.0f}, {0.0f}, {127.0f});
+            cycles[ti].set("Cycles " + ofToString(ti + 1), 0, 0, INT_MAX);
         }
         syncOutputPorts();
         bpb = beatsPerBar();
@@ -261,6 +263,7 @@ public:
         fillBuffers();
         sendTransportAnchors();
         updateNotes();
+        updateCycles();
     }
 
     void draw(ofEventArgs&) override { if(showWindow) drawWindow(); }
@@ -643,6 +646,35 @@ private:
         }
     }
 
+    // Cycles <n>: complete cycles before the playhead's step. A fixed pattern
+    // that runs on: from the position. Restart or random Steps (cycles of
+    // changing or cut lengths): counted as the steps play, each cycle that
+    // reached its last step; a seek resyncs to the fixed-pattern estimate.
+    void updateCycles(){
+        const int64_t now = metrobox::tickAt(getFrameTransportState().current.beatPosition);
+        for(int ti = 0; ti < numTracks.get(); ti++){
+            const Track& T = tracks[ti];
+            const int64_t s = metrobox::floorDiv(now, stepTicks(ti));
+            const int64_t baseSteps = std::clamp(T.steps.get(), 1, MAX_STEPS);
+            int64_t c = 0;
+            if(s <= 0) c = 0;
+            else if(!T.restart && !T.rndSteps) c = metrobox::floorDiv(s, baseSteps);
+            else if(cycleStep[ti] != NO_CHUNK && s >= cycleStep[ti] && s - cycleStep[ti] <= 4 * MAX_STEPS){
+                c = cycleCount[ti];
+                for(int64_t k = cycleStep[ti] + 1; k <= s; k++){
+                    // a cycle ends complete when its last step is followed by a new cycle
+                    const StepInfo prev = stepInfo(ti, k - 1), cur = stepInfo(ti, k);
+                    if(cur.pos == 0 && prev.pos == prev.pattern.steps - 1) c++;
+                }
+            }
+            else c = metrobox::floorDiv(s, baseSteps);
+            cycleStep[ti] = s;
+            cycleCount[ti] = c;
+            const int v = (int)std::min<int64_t>(c, INT_MAX);
+            if(cycles[ti].get() != v) cycles[ti] = v;
+        }
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // Controls: typed values and publishing ("T<n> <Setting>")
     // ════════════════════════════════════════════════════════════════════════
@@ -824,11 +856,13 @@ private:
             scNode::addOutput("Gate " + t);
             scNode::addOutput("Pitch " + t);
             addOutputParameter(notes[portTracks]);
+            addOutputParameter(cycles[portTracks]);
             portTracks++;
         }
         while(portTracks > n){
             const int first = 1 + (portTracks - 1) * OUTPUTS_PER_TRACK;
             removeParameter(notes[portTracks - 1].getEscapedName());
+            removeParameter(cycles[portTracks - 1].getEscapedName());
             for(int k = OUTPUTS_PER_TRACK - 1; k >= 0; k--) scNode::removeOutput(first + k);
             // the removed ports' buses may go to another node: forgotten (the synth silences the track)
             for(auto& [server, st] : servers) for(int k = 0; k < OUTPUTS_PER_TRACK; k++) st.outputBuses.erase(first + k);
@@ -1131,6 +1165,7 @@ private:
         move(values);
         move(passes);
         move(lastPeriod);
+        cycleStep.fill(NO_CHUNK);                // the moved tracks' counts resync
         std::array<std::vector<float>, MAX_TRACKS> noteValues;
         for(int i = 0; i < MAX_TRACKS; i++) noteValues[i] = notes[i].get();
         move(noteValues);
@@ -1468,6 +1503,9 @@ private:
     ofParameter<int> numVoices;
     ofParameter<std::vector<float>> scale;
     std::array<ofParameter<std::vector<float>>, MAX_TRACKS> notes;   // Note <n> outputs
+    std::array<ofParameter<int>, MAX_TRACKS> cycles;                 // Cycles <n> outputs
+    std::array<int64_t, MAX_TRACKS> cycleStep = [](){ std::array<int64_t, MAX_TRACKS> a; a.fill(NO_CHUNK); return a; }();
+    std::array<int64_t, MAX_TRACKS> cycleCount{};
     bool voicesDirty = false;
     std::array<Track, MAX_TRACKS> tracks;
     ofEvent<void> resendParams;
