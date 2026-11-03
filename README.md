@@ -2,6 +2,13 @@
 
 Addon for interfacing [ofxOceanode](https://github.com/PlaymodesStudio/ofxOceanode) and [Supercollider](https://github.com/supercollider/supercollider) via [ofxSupercollider](https://github.com/PlaymodesStudio/ofxSuperCollider)
 
+The canvas toolbar has a **speaker mute button** and master volume slider immediately after Stop.
+It controls all servers from 0–100% and shares its value with **SuperCollider →
+Master Volume**. The speaker toggles the same Master Mute control and shows a
+white speaker with a cross on a red button when muted. Adjusting either slider while Master Mute is on keeps the
+outputs muted; unmuting restores the selected level. The existing controller
+preferences save action stores this volume.
+
 ## PolyComb morphing
 
 Local snapshots and MacroMixer share PolyComb's sound-morph engine, including

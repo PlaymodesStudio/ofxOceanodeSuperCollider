@@ -143,6 +143,8 @@ public:
 private:
     void drawAudioDevices();
     void drawMasterSettings();
+    void drawCanvasToolbar();
+    void applyMasterVolume();
 
     void reloadAudioDevices();
     void syncAudioDeviceSelection();
@@ -181,6 +183,7 @@ private:
 
     float volume;
     bool mute;
+    ofEventListener canvasToolbarListener;
     bool showCpuLoad = true;            // CPU readout in the menu bar
     int delay;
     bool stereomix;

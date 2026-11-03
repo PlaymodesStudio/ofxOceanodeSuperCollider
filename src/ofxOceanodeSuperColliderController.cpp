@@ -19,6 +19,7 @@
 #include <limits>
 #include "ofxOceanodeTime.h"
 #include "ofxOceanodeColors.h"
+#include "ofxOceanodeShared.h"
 #include <array>
 #include <cstring>
 
@@ -36,11 +37,71 @@ ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOc
 	mute = false;
 	
 	reloadAudioDevices();
+    canvasToolbarListener = ofxOceanodeShared::getCanvasToolbarDrawEvent().newListener([this](){
+        drawCanvasToolbar();
+    });
 }
 
 ofxOceanodeSuperColliderController::~ofxOceanodeSuperColliderController(){
+    canvasToolbarListener.unsubscribe();
     if(nrtCaptureActive) completeNRTCapture(true);
     if(nrtRenderThread.joinable()) nrtRenderThread.join();
+}
+
+void ofxOceanodeSuperColliderController::applyMasterVolume(){
+    for(auto* server : outputServers) server->setVolume(mute ? 0.0f : volume);
+}
+
+void ofxOceanodeSuperColliderController::drawCanvasToolbar(){
+    ImGui::PushID(this);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2, 0));
+    ImGui::SameLine();
+    const float iconSize = ImGui::GetFrameHeight();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool wasMuted = mute;
+    if(wasMuted){
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.12f, 0.12f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.18f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.08f, 0.08f, 1.0f));
+    }
+    if(ImGui::Button("##canvasSCMute", ImVec2(iconSize + 2.0f, iconSize))){
+        mute = !mute;
+        applyMasterVolume();
+    }
+    if(wasMuted) ImGui::PopStyleColor(3);
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", mute ? "Unmute SuperCollider (restore selected volume)"
+                                     : "Mute SuperCollider (all servers)");
+    // Draw the speaker directly so the button works with every theme font.
+    auto* draw = ImGui::GetWindowDrawList();
+    const ImU32 color = ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+    auto point = [&](float x, float y){ return ImVec2(pos.x + 1.0f + iconSize * x, pos.y + iconSize * y); };
+    draw->AddRectFilled(point(0.16f, 0.38f), point(0.34f, 0.62f), color);
+    const ImVec2 horn[] = {point(0.30f, 0.38f), point(0.53f, 0.21f),
+                           point(0.53f, 0.79f), point(0.30f, 0.62f)};
+    draw->AddConvexPolyFilled(horn, 4, color);
+    if(mute){
+        draw->AddLine(point(0.66f, 0.36f), point(0.88f, 0.64f), color, 1.4f);
+        draw->AddLine(point(0.66f, 0.64f), point(0.88f, 0.36f), color, 1.4f);
+    }else{
+        for(float radius : {0.20f, 0.33f}){
+            draw->PathArcTo(point(0.53f, 0.50f), iconSize * radius, -1.0f, 1.0f, 10);
+            draw->PathStroke(color, 0, 1.2f);
+        }
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80);
+    float percent = volume * 100.0f;
+    if(ImGui::SliderFloat("##canvasSCVolume", &percent, 0.0f, 100.0f, "%.0f%%",
+                          ImGuiSliderFlags_AlwaysClamp)){
+        volume = percent / 100.0f;
+        applyMasterVolume();
+    }
+    if(ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", mute ? "SuperCollider master volume (Master Mute is on)"
+                                     : "SuperCollider master volume (all servers)");
+    ImGui::PopStyleVar();
+    ImGui::PopID();
 }
 
 void ofxOceanodeSuperColliderController::update(){
@@ -1147,15 +1208,10 @@ void ofxOceanodeSuperColliderController::draw(){
     ImGui::Separator();
     ImGui::PushItemWidth(ImGui::GetFontSize() * 12.0f);
     if(ImGui::SliderFloat("Master Volume", &volume, 0, 1)){
-        for(auto &n : outputServers){
-            n->setVolume(volume);
-        }
+        applyMasterVolume();
     }
     if(ImGui::Checkbox("Master Mute", &mute)){
-        for(auto &n : outputServers){
-            if(mute) n->setVolume(0);
-            else n->setVolume(volume);
-        }
+        applyMasterVolume();
     }
     ImGui::PopItemWidth();
 
