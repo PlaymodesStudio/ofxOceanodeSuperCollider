@@ -18,9 +18,14 @@
 //    before (Voices, Low / High, Spread, Bass).
 //  • AI: describe a progression ("Glass in A minor with a pedal") or ask for
 //    a variation of the current one.
-//  • Outputs for the chord at Index: Pitch (voiced notes), Bass, Root,
-//    Scale (relative to Root: the notes to play over it), Tension (0..1).
-//  • Audio: an Index cable picks the chord sample accurately; Trig, Root AR
+//  • Index 1..N plays chord 1..N (wrapping); Index 0 is no chord: Gate 0,
+//    the outputs keep the last chord (its release). Holding a card plays it
+//    too, over whatever Index says.
+//  • Outputs for the chord playing: Pitch (voiced notes), Gate (1 per voice
+//    while a chord plays), Bass, Root, Scale (relative to Root: the notes to
+//    play over it), Tension (0..1).
+//  • Audio: an Index cable picks the chord sample accurately (Index 0 there
+//    reads the last chord: Pitch AR does not hold; Gate is control rate); Trig, Root AR
 //    and Pitch AR (16 channels, the voicing repeated, Glide) come from
 //    ChordBox's players (ChordBoxClock in Index mode + ChordBoxVoices,
 //    synthdefs/Defaults/ChordBox) reading two tables: no SynthDef of its own.
@@ -81,8 +86,8 @@ public:
         using namespace harmonybox;
         description = "A bank of chords that work together, played by Index: Generate a progression in a style "
                       "(functional, jazz, Glass, Reich, neo-Riemannian) and key, lock the chords you like, type "
-                      "your own, or ask the AI. Outputs the chord at Index voiced (Pitch, Bass), its Root, the Scale "
-                      "to play over it and its Tension. Show opens the chord bank.";
+                      "your own, or ask the AI. Index 1..N plays a chord (0: none); outputs it voiced (Pitch, Bass), "
+                      "a Gate, its Root, the Scale to play over it and its Tension. Show opens the chord bank: hold a card to play it.";
         addParameter(showWindow.set("Show", false));
         indexIn.attach(addParameter(indexP.set("Index", 0, 0, 127)), availableInputs, [this](){ refreshPorts(); });
         addParameter(generateP.set("Generate"));
@@ -99,12 +104,13 @@ public:
         addOutputParameter(rootOut.set("Root", 0.0f, 0.0f, 11.0f));
         addOutputParameter(scaleOut.set("Scale", {0, 2, 4, 5, 7, 9, 11}, {0.0f}, {11.0f}));
         addOutputParameter(tensionOut.set("Tension", 0.0f, 0.0f, 1.0f));
+        addOutputParameter(gateOut.set("Gate", {0.0f}, {0.0f}, {1.0f}));
 
         for(const char* n : {"Trig", "Root AR", "Pitch AR"}) scNode::addOutput(n);
 
         // the window's controls: node parameters without a widget until published
         const Settings d;
-        const auto hidden = ofxOceanodeParameterFlags_NoGuiWidget;
+        const auto hidden = HIDDEN;
         windowOnly(addParameter(colorP.set("Color", d.color, 0.0f, 1.0f), hidden));
         windowOnly(addParameter(extensionsP.set("Extensions", d.extensions, 0.0f, 1.0f), hidden));
         windowOnly(addParameter(tensionP.set("Tension Level", d.tension, 0.0f, 1.0f), hidden));
@@ -446,7 +452,9 @@ private:
             if(!st.server) st.server = server;
             if(!tablesLive(st)){ if(!st.allocPending) ensureResources(server, st); continue; }
             if(!st.tableWritten){
-                for(int i = 0; i < engine.size(); i++) writeRow(st, INDEX_ROW + i, i);
+                // the cable's Index k reads row k % n: chord k (1-based), the last one at 0
+                const int n = engine.size();
+                for(int i = 0; i < n; i++) writeRow(st, INDEX_ROW + (i + 1) % n, i);
                 if(st.clock) st.clock->set("steps", (float)std::max(1, engine.size()));
                 st.tableWritten = true;
                 writeLiveRow(st);
@@ -462,12 +470,15 @@ private:
     scTimelineMenu timeline;
     std::set<std::string> windowKeys, published;
 
+    // unpublished: no widget (and so no pin unless connected). Not DisableIn/Out
+    // Connection: MacroMixer treats those as protected and would not morph them
+    static constexpr int HIDDEN = ofxOceanodeParameterFlags_NoGuiWidget;
     void windowOnly(const std::shared_ptr<ofxOceanodeAbstractParameter>& h){ if(h) windowKeys.insert(h->getEscapedName()); }
     void setVisible(const std::string& key, bool visible){
         auto* p = timeline.parameter(key);
         if(!p) return;
         const auto flags = p->getFlags();
-        const auto wanted = visible ? (flags & ~ofxOceanodeParameterFlags_NoGuiWidget) : (flags | ofxOceanodeParameterFlags_NoGuiWidget);
+        const auto wanted = visible ? (flags & ~HIDDEN) : (flags | HIDDEN);
         if(wanted != flags){ p->setFlags(wanted); parameterGroupChanged.notify(this); }
     }
     void publish(const std::string& key){
@@ -528,11 +539,13 @@ private:
     ofParameter<float> colorP, extensionsP, tensionP, glideP;
     ofParameter<int> shapeP, voicesP, lowP, highP, spreadP;
     ofParameter<bool> bassP, leadP;
-    ofParameter<std::vector<float>> pitchOut, scaleOut;
+    ofParameter<std::vector<float>> pitchOut, scaleOut, gateOut;
     ofParameter<float> bassOut, rootOut, tensionOut;
 
     // window state
     int editingSlot = -1;
+    int padSlot = -1;     // the card held down
+    int heldSlot = 0;     // the last chord played: Index 0 keeps it
     char editBuffer[64] = {};
     bool focusEdit = false;
     std::string progressionBuffer, message;
@@ -600,7 +613,12 @@ private:
         updateOutputs();
     }
 
-    int currentSlot() const { return engine.wrap(indexP.get()); }
+    bool gateOn() const { return padSlot >= 0 || indexP.get() != 0; }
+    int currentSlot(){
+        if(padSlot >= 0 && padSlot < engine.size()) heldSlot = padSlot;
+        else if(indexP.get() != 0) heldSlot = engine.wrap(indexP.get() - 1);
+        return engine.wrap(heldSlot);
+    }
 
     void updateOutputs(){
         shownRevision = engine.revision;
@@ -618,6 +636,8 @@ private:
         if(scale != scaleOut.get()) scaleOut = scale;
         const float tension = engine.tension(i);
         if(tension != tensionOut.get()) tensionOut = tension;
+        const std::vector<float> gate(std::max<size_t>(1, pitch.size()), gateOn() ? 1.0f : 0.0f);
+        if(gate != gateOut.get()) gateOut = gate;
         // the players' tables follow the bank and Transpose; the live row the chord
         const uint64_t tk = engine.revision * 128 + (uint64_t)(t + 64);
         if(tk != tableKey){ tableKey = tk; tablesChanged(); }
@@ -826,7 +846,7 @@ Key: <note> <mode>
             const float mx = ImGui::GetIO().MousePos.x;
             int best = 0;
             for(int i = 1; i < n; i++) if(std::abs(X((float)i) - mx) < std::abs(X((float)best) - mx)) best = i;
-            ImGui::SetTooltip("%d  %s  tension %.2f\nTension Level %.2f, Shape %s", best, engine.name(best).c_str(),
+            ImGui::SetTooltip("%d  %s  tension %.2f\nTension Level %.2f, Shape %s", best + 1, engine.name(best).c_str(),
                               engine.tension(best), engine.s.tension, shapeNames()[engine.s.shape].c_str());
         }
     }
@@ -844,7 +864,6 @@ Key: <note> <mode>
         const int rows = (n + cols - 1) / cols;
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const int current = currentSlot();
-        const bool indexDriven = getOceanodeParameter(indexP).hasInConnection();
         const ImU32 cardBg = ImGui::GetColorU32(ImGuiCol_FrameBg);
         const ImU32 accent = ImGui::GetColorU32(ImGuiCol_PlotHistogram);
         const ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text);
@@ -859,13 +878,14 @@ Key: <note> <mode>
             if(i == current) dl->AddRect(p0, p1, accent, 6.0f, 0, 2.5f);
             else if(locked) dl->AddRect(p0, p1, dimCol, 6.0f, 0, 1.0f);
 
-            // the card itself: click plays it (Index without a cable), double-click edits, drag reorders
+            // the card itself: held plays it (Gate on), double-click edits, drag reorders
             ImGui::SetCursorScreenPos(p0);
             ImGui::InvisibleButton("card", ImVec2(w, h - 26.0f));
-            if(ImGui::IsItemClicked() && !indexDriven) indexP = i;
+            if(ImGui::IsItemActivated()){ padSlot = i; updateOutputs(); }
+            if(ImGui::IsItemDeactivated() && padSlot == i){ padSlot = -1; updateOutputs(); }
             if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) startEdit(i);
             if(ImGui::IsItemHovered() && !ImGui::IsMouseDragging(0))
-                ImGui::SetTooltip("%s\nclick: play (Index %d)  double-click: type a chord  drag: move\nright-click: more", engine.name(i).c_str(), i);
+                ImGui::SetTooltip("%s (Index %d)\nhold: play  double-click: type a chord  drag: move\nright-click: more", engine.name(i).c_str(), i + 1);
             if(ImGui::BeginDragDropSource()){
                 ImGui::SetDragDropPayload("HB_SLOT", &i, sizeof(int));
                 ImGui::Text("%s", engine.name(i).c_str());
@@ -885,7 +905,7 @@ Key: <note> <mode>
             }
 
             // index, numeral
-            dl->AddText(ImVec2(p0.x + 6, p0.y + 4), dimCol, std::to_string(i).c_str());
+            dl->AddText(ImVec2(p0.x + 6, p0.y + 4), dimCol, std::to_string(i + 1).c_str());
             const std::string rn = engine.romanAt(i);
             const ImVec2 rs = ImGui::CalcTextSize(rn.c_str());
             dl->AddText(ImVec2(p1.x - rs.x - 6, p0.y + 4), dimCol, rn.c_str());
