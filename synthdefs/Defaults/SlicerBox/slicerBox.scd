@@ -97,6 +97,9 @@ File.mkdir(d);
 // Random (\randamt 0..1): each time a step comes round, it plays a random
 // slice (of \nslices) instead of its own with that chance. Drawn when the
 // step's note ends (and at the start), so a note never changes mid-way.
+// Shuffle (\shuffle 0..1): every second step (2, 4, ...) starts later, by up
+// to half a step (0.33: triplet feel), and its length scales by the same
+// (1 - delay), so a one-step note still ends where it did.
 // \sync 1: the position follows the transport instead (scTransportSync
 // anchors: \anchorPos in steps, \anchorId, \anchorHard, \anchorFire; \runAr
 // = the transport playing). Reset is ignored; a hard anchor that lands on a
@@ -122,9 +125,11 @@ SynthDef(\SlicerBoxSeq, {
     var slices = \slice.kr(-1 ! n), lens = \len.kr(1 ! n);
     var gap = 0.002 * rate, scale = \gatescale.kr(1).max(0.01);
     var randAmt = \randamt.kr(0).clip(0, 1), nsl = \nslices.kr(1).max(1);
+    var shuffle = \shuffle.kr(0).clip(0, 1) * 0.5;
     var playing = n.collect { |j|
-        var len = (lens[j] * scale).clip(0.02, n);
-        var since = (pos - j).wrap(0, steps);
+        var off = if(j.odd, shuffle, 0);
+        var len = (lens[j] * scale * (1 - off)).clip(0.02, n);
+        var since = (pos - j - off).wrap(0, steps);
         var has = (slices[j] >= 0) * (j < steps);
         var onRaw = (since < (len - gap).max(gap)) * has * gateRun;
         // synced: a drift correction moving the position back across a step

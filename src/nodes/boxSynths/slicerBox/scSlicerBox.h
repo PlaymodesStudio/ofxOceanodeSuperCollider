@@ -267,6 +267,7 @@ private:
     ofParameter<int> seqSteps, seqDivision;
     ofParameter<float> seqGate;
     ofParameter<float> seqRandom;       // each pass, a step plays a random slice with this chance
+    ofParameter<float> seqShuffle;      // every second step starts later, by up to half a step
     // Sync To Transport: the sequence follows the transport's position and
     // play / stop (Play then arms it); off: it runs from Play on its own
     ofParameter<bool> seqSync;
@@ -276,8 +277,20 @@ private:
     bool seqForceHard = true;
     std::vector<float> seqPlaying;      // the slice each step plays now (read back, -1 rest)
     int sentSlices = -1;
+    // the pattern Seq Pattern selects (it plays and is edited); the others
+    // wait in the bank, as in FL Studio's pattern list
     std::vector<float> seqSlice = std::vector<float>(SEQ_STEPS, -1.0f);
     std::vector<float> seqLen = std::vector<float>(SEQ_STEPS, 1.0f);
+    static constexpr int SEQ_PATTERNS = 16;
+    ofParameter<int> seqPattern;        // 1..SEQ_PATTERNS
+    std::vector<std::vector<float>> seqBankSlice = std::vector<std::vector<float>>(SEQ_PATTERNS, std::vector<float>(SEQ_STEPS, -1.0f));
+    std::vector<std::vector<float>> seqBankLen = std::vector<std::vector<float>>(SEQ_PATTERNS, std::vector<float>(SEQ_STEPS, 1.0f));
+    int seqShownPattern = 0;            // the bank slot seqSlice / seqLen belong to
+    std::vector<float> seqClipSlice, seqClipLen;   // Copy / Paste
+    void storePattern();                // seqSlice / seqLen -> their bank slot
+    void showPattern(int index);        // bank slot -> seqSlice / seqLen
+    float seqShuffleOffset(int step) const;   // where a step starts late, in steps
+    void auditionNote(int step, int slice);   // the roll: hear a note as it would play
     bool seqDirty = false;
     float seqPosition = -1.0f;          // steps, read back for the window (-1 stopped)
     float nextSeqRead = 0.0f;
@@ -304,6 +317,7 @@ private:
     // Window state
     int selectedSlice = 0;
     int auditioning = -1;
+    float auditionUntil = -1.0f;          // a roll click in Gated mode: lasts its note (elapsed time; -1 none)
     bool editAll = false;
     float viewStart = 0.0f, viewEnd = 1.0f;     // zoom, 0..1 of the file
     int dragMarker = -1;                        // interior boundary being dragged
