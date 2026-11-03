@@ -68,7 +68,8 @@ SynthDef(\ModTransportClockV2, {
     // 1 while droning), \vel the note's velocity = that level x Velocity
     // (Oceanode values, or audio: \vel_ar with \vel_sel 1)
     SynthDef(("ModGate" ++ n).asSymbol, {
-        var gateK = kv.(\gate, 0), gateA = \gate_ar.ar(0 ! n) * \gate_sel.kr(0);
+        // a cable replaces the Oceanode values (a value left at 1 would hold the gate open)
+        var gateK = kv.(\gate, 0) * (1 - \gate_sel.kr(0)), gateA = \gate_ar.ar(0 ! n) * \gate_sel.kr(0);
         var drone = K2A.ar(\drone.kr(0) > 0.5);
         var gate = (((K2A.ar(gateK) + gateA) > 0) + drone) > 0;
         var trig = (HPZ1.ar(gate) > 0) + Impulse.ar(0);

@@ -152,7 +152,8 @@ File.mkdir(root); File.mkdir(dir);
 (1..16).do { |n|
     var k = (n * 2).min(16);
     SynthDef(("ABGateAlloc" ++ n).asSymbol, {
-        var gK = NamedControl.kr(\gate, 0 ! n), gA = (\gate_ar.ar(0 ! n) * \gate_sel.kr(0)).asArray;
+        // a cable replaces the Oceanode values (a value left at 1 would hold every gate open)
+        var gK = NamedControl.kr(\gate, 0 ! n) * (1 - \gate_sel.kr(0)), gA = (\gate_ar.ar(0 ! n) * \gate_sel.kr(0)).asArray;
         var inGate = ((K2A.ar(gK) + gA) > 0).asArray;
         var rise = inGate.collect { |g| HPZ1.ar(g) > 0 };
         // the level: a cable's exactly at its edge, Oceanode values held at control rate
