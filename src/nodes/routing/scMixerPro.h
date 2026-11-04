@@ -83,6 +83,7 @@
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
 #include "../../ui/scEQEditor.h"
+#include "../../ui/scDropdowns.h"
 #include "../../ui/scGuiMeshCache.h"
 #include "imgui.h"
 
@@ -198,6 +199,7 @@ private:
         ofParameter<bool>  echo, echoBeats;
         ofParameter<float> echoTime, echoBeatVal, echoFeed, echoCutoff, echoResonance, echoPingPong, echoMix;
         ofParameter<int>   echoFilter;       // 0 LowPass 1 HighPass 2 BandPass 3 PeakEQ
+        ofParameter<int>   echoPingPongMode; // 0 Pairs 1 Rotate 2 Rotate Back 3 Halves 4 Mirror 5 Spread (mixerProEcho \pingmode)
         // Width insert: Width (0 mono .. 1 .. 2), Diffuse, Bass Mono below a frequency
         ofParameter<bool>  wide, wideBassMono;
         ofParameter<float> wideWidth, wideDiffuse, wideBassFreq;
@@ -412,6 +414,7 @@ private:
         bool output = false;                 // a node output (VU): no typed value
     };
     std::map<std::string, PublishAction> publishActions;
+    scDropdowns dropdowns;               // option names of the window combos: published, they are dropdowns
     std::vector<std::string> publishedKeys;
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> nodeHandles; // published or fader
     std::vector<std::string> faderKeys;
