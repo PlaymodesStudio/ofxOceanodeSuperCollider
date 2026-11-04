@@ -119,6 +119,34 @@ void scDrumKitBox::slider(ofParameter<float>& p, const char* label, float w, con
     ImGui::PopID();
 }
 
+// A frequency control as a MIDI note (fractions: cents), the way Global Pitch
+// counts the pad's tuning (padRoot): the label names the note, the slider
+// holds the number. Drag it, or Ctrl-click to type a note; it writes the
+// frequency.
+void scDrumKitBox::noteSlider(ofParameter<float>& hz, float w) {
+    static const char* names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    auto noteOf = [](float f) { return 69.0f + 12.0f * std::log2(std::max(1.0f, f) / 440.0f); };
+    const float z = ofxOceanodeShared::getZoomLevel();
+    ImGui::PushID((hz.getEscapedName() + "/note").c_str());
+    const float x0 = ImGui::GetCursorPosX();
+    float n = noteOf(hz.get());
+    const int r = (int)std::lround(n), cents = (int)std::lround((n - r) * 100.0f);
+    char name[32];
+    std::snprintf(name, sizeof name, "%s%d %+dc", names[((r % 12) + 12) % 12], (int)std::floor(r / 12.0f) - 1, cents);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(name);
+    const char* tip = "The same tuning as a MIDI note. Global Pitch counts the pad as this note rounded (plus Tune): "
+                      "Body Freq while the Body is on, else Metal Freq. Ctrl-click to type one.";
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(x0 + labelW * z);
+    ImGui::SetNextItemWidth(std::max(40.0f * z, w - labelW * z));
+    if(ImGui::SliderFloat("##note", &n, noteOf(hz.getMin()), noteOf(hz.getMax()), "%.2f"))
+        hz.set(ofClamp(440.0f * std::pow(2.0f, (n - 69.0f) / 12.0f), hz.getMin(), hz.getMax()));
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("%s", tip);
+    ImGui::PopID();
+}
+
 void scDrumKitBox::sliderInt(ofParameter<int>& p, const char* label, float w, const char* fmt, const char* tip) {
     const float z = ofxOceanodeShared::getZoomLevel();
     const std::string key = p.getEscapedName();
@@ -213,7 +241,12 @@ void scDrumKitBox::endColumn(bool last) {
 // One control as its spec says (combos get their names here)
 void scDrumKitBox::drawSpec(Pad& p, const Spec& s, float w) {
     const std::string label = shortLabel(s);
-    if(s.type == 'f') { slider(p.F(s.label), label.c_str(), w, s.fmt, s.log, s.tip); return; }
+    if(s.type == 'f') {
+        slider(p.F(s.label), label.c_str(), w, s.fmt, s.log, s.tip);
+        // the tunings Global Pitch reads the pad's note from: also as a note
+        if(std::strcmp(s.label, "Body Freq") == 0 || std::strcmp(s.label, "Metal Freq") == 0) noteSlider(p.F(s.label), w);
+        return;
+    }
     if(s.type == 'b') { toggle(p.B(s.label), label.c_str(), s.tip); return; }
     std::vector<std::string> items;
     const std::string l = s.label;
