@@ -43,6 +43,8 @@ public:
     bool isMenuController() const override { return true; }
     float menuBarStatusWidth() override;
     void drawMenuBarStatus() override;
+    float menuBarStatusSuffixWidth() override;
+    void drawMenuBarStatusSuffix() override;
     
     void killServers();
 
@@ -143,7 +145,7 @@ public:
 private:
     void drawAudioDevices();
     void drawMasterSettings();
-    void drawCanvasToolbar();
+    void drawGlobalAudioControls();
     void applyMasterVolume();
 
     void reloadAudioDevices();
@@ -183,7 +185,6 @@ private:
 
     float volume;
     bool mute;
-    ofEventListener canvasToolbarListener;
     bool showCpuLoad = true;            // CPU readout in the menu bar
     int delay;
     bool stereomix;

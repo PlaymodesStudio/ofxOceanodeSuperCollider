@@ -37,13 +37,9 @@ ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOc
 	mute = false;
 	
 	reloadAudioDevices();
-    canvasToolbarListener = ofxOceanodeShared::getCanvasToolbarDrawEvent().newListener([this](){
-        drawCanvasToolbar();
-    });
 }
 
 ofxOceanodeSuperColliderController::~ofxOceanodeSuperColliderController(){
-    canvasToolbarListener.unsubscribe();
     if(nrtCaptureActive) completeNRTCapture(true);
     if(nrtRenderThread.joinable()) nrtRenderThread.join();
 }
@@ -52,10 +48,9 @@ void ofxOceanodeSuperColliderController::applyMasterVolume(){
     for(auto* server : outputServers) server->setVolume(mute ? 0.0f : volume);
 }
 
-void ofxOceanodeSuperColliderController::drawCanvasToolbar(){
+void ofxOceanodeSuperColliderController::drawGlobalAudioControls(){
     ImGui::PushID(this);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2, 0));
-    ImGui::SameLine();
     const float iconSize = ImGui::GetFrameHeight();
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const bool wasMuted = mute;
@@ -64,7 +59,7 @@ void ofxOceanodeSuperColliderController::drawCanvasToolbar(){
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.18f, 0.18f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.08f, 0.08f, 1.0f));
     }
-    if(ImGui::Button("##canvasSCMute", ImVec2(iconSize + 2.0f, iconSize))){
+    if(ImGui::Button("##globalSCMute", ImVec2(iconSize + 2.0f, iconSize))){
         mute = !mute;
         applyMasterVolume();
     }
@@ -92,11 +87,15 @@ void ofxOceanodeSuperColliderController::drawCanvasToolbar(){
     ImGui::SameLine();
     ImGui::SetNextItemWidth(80);
     float percent = volume * 100.0f;
-    if(ImGui::SliderFloat("##canvasSCVolume", &percent, 0.0f, 100.0f, "%.0f%%",
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyleColorVec4(ImGuiCol_Button));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    if(ImGui::SliderFloat("##globalSCVolume", &percent, 0.0f, 100.0f, "%.0f%%",
                           ImGuiSliderFlags_AlwaysClamp)){
         volume = percent / 100.0f;
         applyMasterVolume();
     }
+    ImGui::PopStyleColor(3);
     if(ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", mute ? "SuperCollider master volume (Master Mute is on)"
                                      : "SuperCollider master volume (all servers)");
@@ -1079,49 +1078,46 @@ void ofxOceanodeSuperColliderController::setup(){
     synthdefSync.checkForUpdates();
 }
 
-// Each server's CPU at the right of the menu bar: the average, coloured by
-// the peak (what drops out first). Grey when the server stopped answering.
-static std::string cpuLabel(size_t index, size_t count){
-    return count > 1 ? "SC" + std::to_string(index + 1) : std::string("SC");
-}
-
+// The global menu includes shared audio controls and one CPU bar per server.
 float ofxOceanodeSuperColliderController::menuBarStatusWidth(){
-    if(!showCpuLoad || outputServers.empty()) return 0.0f;
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    float w = 0.0f;
-    for(size_t i = 0; i < outputServers.size(); i++){
-        // fixed slot, so changing digits cannot move it
-        w += ImGui::CalcTextSize((cpuLabel(i, outputServers.size()) + " [ 100.0% ]").c_str()).x;
-        if(i > 0) w += spacing;
-    }
-    return w;
+    return ImGui::GetFrameHeight() + 2.0f + ImGui::GetStyle().ItemSpacing.x + 80.0f;
 }
 
 void ofxOceanodeSuperColliderController::drawMenuBarStatus(){
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    drawGlobalAudioControls();
+}
+
+float ofxOceanodeSuperColliderController::menuBarStatusSuffixWidth(){
+    if(!showCpuLoad || outputServers.empty()) return 0.0f;
+    const float meterWidth = std::max(4.0f, ImGui::GetFontSize() * 0.3f);
+    return outputServers.size() * meterWidth + (outputServers.size() - 1) * 4.0f;
+}
+
+void ofxOceanodeSuperColliderController::drawMenuBarStatusSuffix(){
+    const float meterWidth = std::max(4.0f, ImGui::GetFontSize() * 0.3f);
+    const float meterHeight = std::max(4.0f, ImGui::GetFrameHeight() - 2.0f);
     for(size_t i = 0; i < outputServers.size(); i++){
+        if(i > 0) ImGui::SameLine(0.0f, 4.0f);
         ofxSCServer* server = outputServers[i]->getServer();
-        const std::string label = cpuLabel(i, outputServers.size());
         const bool alive = server != nullptr && server->getStatusAgeMs() < 2000;
         const float avg = alive ? server->getAvgCPU() : 0.0f;
         const float peak = alive ? server->getPeakCPU() : 0.0f;
-
-        char text[48];
-        if(alive) std::snprintf(text, sizeof(text), "%s [ %.1f%% ]", label.c_str(), avg);
-        else      std::snprintf(text, sizeof(text), "%s [ -- ]", label.c_str());
-        const ImVec4 color = !alive ? ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]
-                           : peak < 50.0f ? OceanodeColors::FpsGood
-                           : peak < 80.0f ? OceanodeColors::FpsWarning
-                                          : OceanodeColors::FpsBad;
-        const ImVec2 size(ImGui::CalcTextSize((label + " [ 100.0% ]").c_str()).x,
-                          ImGui::GetTextLineHeight());
-        if(i > 0) ImGui::SameLine(0.0f, spacing);
         const ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImGui::Dummy(size);
-        // right-aligned in its slot, like the FPS readout
-        const float tw = ImGui::CalcTextSize(text).x;
-        ImGui::GetWindowDrawList()->AddText(ImVec2(pos.x + size.x - tw, pos.y),
-                                            ImGui::GetColorU32(color), text);
+        const float height = ImGui::GetFrameHeight();
+        ImGui::InvisibleButton(("##serverCpu" + std::to_string(i)).c_str(), ImVec2(meterWidth, height));
+        auto* draw = ImGui::GetWindowDrawList();
+        const float y = pos.y + (height - meterHeight) * 0.5f;
+        draw->AddRectFilled(ImVec2(pos.x, y), ImVec2(pos.x + meterWidth, y + meterHeight), IM_COL32(48, 48, 48, 255));
+        const float filled = std::max(0.0f, std::min(1.0f, avg / 100.0f));
+        const float starts[] = {0.0f, 0.5f, 0.8f};
+        const float ends[] = {0.5f, 0.8f, 1.0f};
+        const ImU32 colors[] = {IM_COL32(40, 210, 70, 255), IM_COL32(255, 155, 0, 255), IM_COL32(240, 45, 35, 255)};
+        for(int segment = 0; segment < 3; ++segment){
+            const float end = std::min(filled, ends[segment]);
+            if(end > starts[segment])
+                draw->AddRectFilled(ImVec2(pos.x, y + meterHeight * (1.0f - end)),
+                                    ImVec2(pos.x + meterWidth, y + meterHeight * (1.0f - starts[segment])), colors[segment]);
+        }
         if(ImGui::IsItemHovered()){
             ImGui::BeginTooltip();
             ImGui::Text("SuperCollider server %d", (int)i + 1);
@@ -1129,9 +1125,7 @@ void ofxOceanodeSuperColliderController::drawMenuBarStatus(){
                 ImGui::Text("CPU average  %.1f%%", avg);
                 ImGui::Text("CPU peak     %.1f%%", peak);
                 ImGui::Text("Synths %d   UGens %d", server->getNumSynths(), server->getNumUGens());
-            }else{
-                ImGui::TextUnformatted("Not answering (not booted, or busy)");
-            }
+            }else ImGui::TextUnformatted("Not answering (not booted, or busy)");
             ImGui::EndTooltip();
         }
     }
