@@ -24,7 +24,7 @@ const std::vector<std::string> waveNames = {"Flat", "Saw", "Square", "Triangle",
 const std::vector<std::string> panModeNames = {"Random", "Spectrum", "Alternate", "Channels"};
 const std::vector<std::string> layoutNames = {"Ring", "Line"};
 const std::vector<std::string> sweepModeNames = {"Partials", "Octaves"};
-const std::vector<std::string> sweepShapeNames = {"Lobes", "Triangle", "Saw Up", "Saw Down", "Pulse", "Gauss", "Steps", "Drawn"};
+const std::vector<std::string> sweepShapeNames = {"Lobes", "Triangle", "Saw Up", "Saw Down", "Pulse", "Gauss", "Steps", "Drawn", "Noise"};
 const std::vector<std::string> echoFilterNames = {"LowPass", "HighPass", "BandPass", "PeakEQ"};
 // a fixed draw per (salt, partial): the LFO lanes' random phases
 float hash01(int salt, int k){
@@ -231,6 +231,7 @@ void scAdditiveBox::setup(){
     sweepAmt.set("Sweep", {0.0f}, {0.0f}, {1.0f});
     sweepWaves.set("Sweep Waves", {2.0f}, {0.25f}, {32.0f});
     sweepRate.set("Sweep Rate", {0.2f}, {-10.0f}, {10.0f});
+    sweepEvolve.set("Sweep Evolve", {0.3f}, {0.0f}, {10.0f});
     sweepSharp.set("Sweep Sharp", {0.0f}, {0.0f}, {1.0f});
     sweepMode.set("Sweep Mode", {0}, {0}, {1});
     sweepPhase.set("Sweep Phase", {0.0f}, {0.0f}, {1.0f});
@@ -495,7 +496,7 @@ void scAdditiveBox::setup(){
                    &tilt, &stretch, &inharm, &evenOdd, &detune, &shift,
                    &cutoff, &keytrack, &slope, &resonance, &safeBass, &filterShape,
                    &vowel, &formantShift, &formantWidth, &filter2Mix, &drawnEq,
-                   &sweepAmt, &sweepWaves, &sweepRate, &sweepSharp, &sweepPhase,
+                   &sweepAmt, &sweepWaves, &sweepRate, &sweepSharp, &sweepPhase, &sweepEvolve,
                    &sweepSkew, &sweepLow, &sweepHigh, &sweepDrawn,
                    &density, &randAmp, &maskGlide,
                    &vibrato, &vibRate, &partialVib, &partialVibRate, &shimmer, &shimmerRate,
@@ -970,7 +971,7 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
     };
 
     std::vector<float> fr(P), po(P), pa(P, 0.0f), pbs(P, 0.0f), vf(P), vd(P),
-                       nr(P), nd(P), shr(P), sph(P), sw(P), bl(P), pos(P), drr(P);
+                       nr(P), nd(P), shr(P), sph(P), nph(P), sw(P), bl(P), pos(P), drr(P);
     d.ratio.resize(P);
     // Normalize each endpoint spectrum before blending its partial presence.
     // Computing through the endpoint's full count keeps both rendering caps on
@@ -1029,6 +1030,7 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
         });
         const float cyc = -sx * waves;
         sph[i] = (cyc - std::floor(cyc)) * (SWEEP_SIZE - 1);
+        nph[i] = cyc;                                   // Noise: the place on the ring, in hills
         sw[i] = sweepRangeWeight(v, sx);
 
         pos[i]=scMorphPolicies::evaluateWeights(panWeights,pMode,[&](int mode){
@@ -1080,7 +1082,7 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
     d.peak = peak;
     d.view = std::move(view);
     d.arrays = {{"fr", fr}, {"po", po}, {"pa", pa}, {"pd", pd},
-                {"vf", vf}, {"vd", vd}, {"nr", nr}, {"nd", nd}, {"shr", shr}, {"sph", sph}, {"sw", sw}, {"bl", bl},
+                {"vf", vf}, {"vd", vd}, {"nr", nr}, {"nd", nd}, {"shr", shr}, {"sph", sph}, {"nph", nph}, {"sw", sw}, {"bl", bl},
                 {"pb", pos}, {"drr", drr}};
     d.scalars = {
         {"pitch", p},
@@ -1096,6 +1098,10 @@ scAdditiveBox::VoiceData scAdditiveBox::computeVoice(int v, int u) const {
         {"swrate", valueFor(sweepRate.get(), v, 0.2f)},
         {"swphase", valueFor(sweepPhase.get(), v, 0.0f) + v * mod.voiceValue(sweepVoiceOffset, v)},
         {"swretrig", sweepRetrig ? 1.0f : 0.0f},
+        {"swevolve", valueFor(sweepEvolve.get(), v, 0.3f)},
+        {"nsharp", std::clamp(valueFor(sweepSharp.get(), v, 0.0f), 0.0f, 1.0f)},
+        {"ninv", sweepInvert ? 1.0f : 0.0f},
+        {"nmix", sweepNoiseWeight(v)},
         {"drift", valueFor(drift.get(), v, 0.0f)},
         {"width", valueFor(width.get(), v, 2.0f)},
         {"cutoff", valueFor(cutoff.get(), v, 100.0f)},
@@ -1178,6 +1184,9 @@ void scAdditiveBox::computeLaneTables(){
 // The sweep's shape over one cycle, x = 0..1. Computed on u = x + 0.5, so the
 // shape's middle (the peak of Lobes, Triangle, Pulse, Gauss) sits at x = 0:
 // with Lobes and Skew 0 this is the raised-cosine lobe the sweep always had.
+// Noise has no table: the sweep synth makes a landscape that never repeats
+// (a ring of 64 wandering levels) and crossfades it in by \nmix; here it only
+// returns 1 (neutral), the table's share of a morph is renormalised without it.
 float scAdditiveBox::sweepShapeAt(int v, float x, int mode) const {
     if(mode<0)return snaps.morph.evaluate(sweepShape,v,valueFor(sweepShape.get(),v,0),
         [&](int choice){return sweepShapeAt(v,x,choice);});
@@ -1227,16 +1236,64 @@ float scAdditiveBox::sweepShapeAt(int v, float x, int mode) const {
             y = pts[a] + (pts[b] - pts[a]) * (f - std::floor(f));
             break;
         }
+        case SweepNoise: return 1.0f;   // made on the server (AdditiveBoxSweep): the table's share is neutral
         default: break;
     }
     y = std::clamp(y, 0.0f, 1.0f);
     return sweepInvert ? 1.0f - y : y;
 }
 
+// Share of the Noise shape in this voice: its morph weight, else 0 or 1
+float scAdditiveBox::sweepNoiseWeight(int v) const {
+    if(snaps.morph.hasEffective(sweepShape)){
+        const auto w = snaps.morph.weights(sweepShape, v);
+        return (int)w.size() > SweepNoise ? std::clamp(w[SweepNoise], 0.0f, 1.0f) : 0.0f;
+    }
+    return valueFor(sweepShape.get(), v, 0) == SweepNoise ? 1.0f : 0.0f;
+}
+
+// A stand-in for the server's noise landscape, for the views only (the real
+// one is random on the server): smooth 2D value noise over the ring of 64
+// hills and time at Evolve Hz, with Sharp and Invert applied as the synth does
+float scAdditiveBox::sweepNoisePreview(int v, float hill, float t) const {
+    const float evolve = std::max(0.001f, valueFor(sweepEvolve.get(), v, 0.3f));
+    const float sharp = std::clamp(valueFor(sweepSharp.get(), v, 0.0f), 0.0f, 1.0f);
+    const float x = hill, y = t * evolve;
+    const int ix = int(std::floor(x)), iy = int(std::floor(y));
+    auto fade = [](float f){ return f * f * f * (f * (f * 6.0f - 15.0f) + 10.0f); };
+    const float fx = fade(x - ix), fy = fade(y - iy);
+    auto at = [&](int cx, int cy){
+        const uint32_t hh = hash32((uint32_t(((cx % 64) + 64) % 64) + 1u) * 0x9E3779B1U ^ hash32(uint32_t(cy) * 0x85EBCA77U + uint32_t(v) * 0x27D4EB2FU + 0x61C88647U));
+        return float(hh >> 8) * (1.0f / 16777216.0f);
+    };
+    const float a = at(ix, iy) + (at(ix + 1, iy) - at(ix, iy)) * fx;
+    const float b = at(ix, iy + 1) + (at(ix + 1, iy + 1) - at(ix, iy + 1)) * fx;
+    float n = std::pow(std::clamp(a + (b - a) * fy, 0.0f, 1.0f), 1.0f + sharp * 7.0f);
+    return sweepInvert ? 1.0f - n : n;
+}
+
+// What the views draw at x (0..1 in the cycle) and `hill` (place on the
+// ring) at time t: the table shapes and the noise preview, blended as the
+// synth blends them
+float scAdditiveBox::sweepViewAt(int v, float x, float hill, float t) const {
+    const float w = sweepNoiseWeight(v);
+    const float table = w < 1.0f ? std::clamp((sweepShapeAt(v, x) - w) / (1.0f - w), 0.0f, 1.0f) : 0.0f;   // Noise's share of the blend is 1: taken out
+    return w <= 0.0f ? table : table + (sweepNoisePreview(v, hill, t) - table) * w;
+}
+
 std::vector<float> scAdditiveBox::sweepTable(int v) const {
     std::vector<float> t(SWEEP_SIZE);
-    const auto weights=snaps.morph.hasEffective(sweepShape)?snaps.morph.weights(sweepShape,v):std::vector<float>{};
+    auto weights=snaps.morph.hasEffective(sweepShape)?snaps.morph.weights(sweepShape,v):std::vector<float>{};
     const int mode=valueFor(sweepShape.get(),v,0);
+    // Noise is not in the table (the synth crossfades it in): its share of a
+    // morph is taken out and the rest renormalised; all Noise = a table of 1s
+    if(!weights.empty()){
+        if((int)weights.size() > SweepNoise) weights[SweepNoise] = 0.0f;
+        float sum = 0.0f;
+        for(float w : weights) sum += w;
+        if(sum <= 1e-6f){ std::fill(t.begin(), t.end(), 1.0f); return t; }
+        for(auto& w : weights) w /= sum;
+    } else if(mode == SweepNoise){ std::fill(t.begin(), t.end(), 1.0f); return t; }
     for(int i = 0; i < SWEEP_SIZE - 1; i++)
         t[i] = scMorphPolicies::evaluateWeights(weights,mode,[&](int choice){return sweepShapeAt(v,float(i)/(SWEEP_SIZE-1),choice);});
     t[SWEEP_SIZE - 1] = t[0];   // the reading interpolates past the last point
@@ -1473,7 +1530,8 @@ unsigned roleOf(const std::string& n){
         {"fbuf", RFilt}, {"po", RFilt}, {"cutoff", RFilt}, {"keytrack", RFilt}, {"safe", RFilt},
         {"pitch", RFilt | RCore}, {"glide", RFilt | RCore},
         {"sbuf", RSweep}, {"swamt", RSweep}, {"swrate", RSweep}, {"swphase", RSweep}, {"swretrig", RSweep},
-        {"sph", RSweep}, {"sw", RSweep},
+        {"sph", RSweep}, {"nph", RSweep}, {"sw", RSweep},
+        {"swevolve", RSweep}, {"nsharp", RSweep}, {"ninv", RSweep}, {"nmix", RSweep},
         {"shimmer", RShim}, {"shr", RShim}, {"bl", RBlur}, {"drift", RDrift}, {"drr", RDrift},
         {"vibdepth", RSrc}, {"vibrate", RSrc}, {"shift", RCore}, {"amp", RCore}, {"width", RCore},
         {"line", RCore}, {"panoff", RCore}, {"out", RCore}, {"silbus", RCore},
@@ -2222,6 +2280,7 @@ void scAdditiveBox::initializePublishActions(){
     addPublishAction(sweepAmt);
     addPublishAction(sweepWaves);
     addPublishAction(sweepRate);
+    addPublishAction(sweepEvolve);
     addPublishAction(sweepSharp);
     addPublishAction(sweepMode, sweepModeNames);
     addPublishAction(sweepPhase);
@@ -3285,18 +3344,20 @@ void scAdditiveBox::drawSweepTab(){
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Depth (0: no sweep); modulate it in the Modulation tab");
     comboVector(sweepShape, sweepShapeNames);
     sliderVector(sweepSharp, "%.2f");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Width of the shape: 0 wide .. 1 narrow\n(Pulse: duty, Steps: number of steps)");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Width of the shape: 0 wide .. 1 narrow\n(Pulse: duty, Steps: number of steps, Noise: contrast)");
     sliderVector(sweepSkew, "%+.2f");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Moves the shape's middle earlier (-) or later (+) in the cycle");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Moves the shape's middle earlier (-) or later (+) in the cycle\n(nothing for Noise)");
     checkbox(sweepInvert);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Peaks become notches");
     ImGui::Spacing();
     sliderVector(sweepWaves, "%.2f", true);
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("How many cycles of the shape fit across the partials");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("How many cycles of the shape fit across the partials\n(Noise: how many hills)");
     sliderVector(sweepRate, "%+.3f Hz");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Cycles per second (negative: the other way; 0: still, scan it with Phase)");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Cycles per second (negative: the other way; 0: still, scan it with Phase)\n(Noise: drift, hills per second)");
+    sliderVector(sweepEvolve, "%.2f Hz");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Noise only: how fast the landscape itself changes\n(0: frozen, only Rate moves it)");
     sliderVector(sweepPhase, "%.3f");
-    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Offset in the cycle: with Rate 0, patch it to scan by hand");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Offset in the cycle: with Rate 0, patch it to scan by hand\n(Noise: in hills)");
     comboVector(sweepMode, sweepModeNames);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Partials: cycles evenly spaced in partial number (a comb)\nOctaves: evenly spaced in pitch (a phaser)");
     sliderFloat(sweepVoiceOffset, "%.3f");
@@ -3333,20 +3394,24 @@ void scAdditiveBox::drawSweepShape(ImVec2 size){
     const float pad = 6.0f, top = o.y + 20.0f, bottom = o.y + size.y - pad;
     const int N = std::max(32, int(size.x / 2));
     std::vector<ImVec2> pts(N);
+    // The phase now (approximate: the server's clock is not shared)
+    const float rate = valueFor(sweepRate.get(), 0, 0.2f), now = ofGetElapsedTimef();
+    float ph = valueFor(sweepPhase.get(), 0, 0.0f) + rate * now;
+    const float noiseW = sweepNoiseWeight(0);
     for(int i = 0; i < N; i++){
         const float x = 2.0f * i / (N - 1);
-        pts[i] = ImVec2(o.x + pad + (size.x - 2 * pad) * i / (N - 1), bottom - (bottom - top) * sweepShapeAt(0, x - std::floor(x)));
+        // Noise: two hills of the ring at the drift (a preview: the server's own random levels are not known here)
+        const float y = noiseW > 0.0f ? sweepViewAt(0, x - std::floor(x), x + ph, now) : sweepShapeAt(0, x - std::floor(x));
+        pts[i] = ImVec2(o.x + pad + (size.x - 2 * pad) * i / (N - 1), bottom - (bottom - top) * y);
     }
     dl->AddLine(ImVec2(o.x + size.x * 0.5f, top), ImVec2(o.x + size.x * 0.5f, bottom), IM_COL32(255, 255, 255, 25));
     dl->AddPolyline(pts.data(), N, IM_COL32(255, 200, 120, 230), 0, 1.8f);
-    // The phase now (approximate: the server's clock is not shared)
-    const float rate = valueFor(sweepRate.get(), 0, 0.2f);
-    float ph = valueFor(sweepPhase.get(), 0, 0.0f) + rate * ofGetElapsedTimef();
     ph -= std::floor(ph);
     const float px = o.x + pad + (size.x - 2 * pad) * ph * 0.5f;
     dl->AddLine(ImVec2(px, top), ImVec2(px, bottom), IM_COL32(255, 255, 255, 90));
+    const int shapeNow = std::clamp(valueFor(sweepShape.get(), 0, 0), 0, NumSweepShapes - 1);
     dl->AddText(ImVec2(o.x + 6, o.y + 3), IM_COL32(255, 255, 255, 110),
-                ("SHAPE  " + sweepShapeNames[std::clamp(valueFor(sweepShape.get(), 0, 0), 0, NumSweepShapes - 1)] + " (two cycles)").c_str());
+                ("SHAPE  " + sweepShapeNames[shapeNow] + (shapeNow == SweepNoise ? " (two hills, a preview: the server draws its own)" : " (two cycles)")).c_str());
 }
 
 // Voice 1's sweep over time: x = partials (or octaves, per Mode), y = the
@@ -3369,10 +3434,12 @@ void scAdditiveBox::drawSweepMap(ImVec2 size){
     }
 
     dl->AddRectFilled(o, ImVec2(o.x + size.x, o.y + size.y), IM_COL32(10, 12, 20, 255), 4.0f);
-    if(voiceData.empty() || !voiceData[0].arrays.count("sph")) return;
+    if(voiceData.empty() || !voiceData[0].arrays.count("sph") || !voiceData[0].arrays.count("nph")) return;
     const auto& d = voiceData[0];
     const auto& sph = d.arrays.at("sph");
+    const auto& nph = d.arrays.at("nph");
     const auto& sw = d.arrays.at("sw");
+    const float noiseW = sweepNoiseWeight(0);
     const int count = std::min(std::max(partials.get(), 1), (int)sph.size());
     const bool octaves = valueFor(sweepMode.get(), 0, 0) == 1;
     const float logCount = std::max(1.0f, std::log2(float(count)));
@@ -3396,7 +3463,7 @@ void scAdditiveBox::drawSweepMap(ImVec2 size){
             float x = sph[i] / (SWEEP_SIZE - 1) + cyc;
             x -= std::floor(x);
             const float aw = amt * sw[i];
-            const float g = 1.0f - aw * (1.0f - sweepShapeAt(0, x));
+            const float g = 1.0f - aw * (1.0f - (noiseW > 0.0f ? sweepViewAt(0, x, nph[i] + cyc, t) : sweepShapeAt(0, x)));
             dl->AddRectFilled(ImVec2(xOf(x0), top + r * rh), ImVec2(std::max(xOf(x0) + 1.0f, xOf(x1)), top + (r + 1) * rh),
                               voiceColor(0, 0.15f + 0.85f * g, 0.15f + 0.85f * g));
         }
@@ -3406,7 +3473,7 @@ void scAdditiveBox::drawSweepMap(ImVec2 size){
     for(int i = 0; i < count; i++){
         float x = sph[i] / (SWEEP_SIZE - 1) + phase + rate * now;
         x -= std::floor(x);
-        const float g = 1.0f - amt * sw[i] * (1.0f - sweepShapeAt(0, x));
+        const float g = 1.0f - amt * sw[i] * (1.0f - (noiseW > 0.0f ? sweepViewAt(0, x, nph[i] + phase + rate * now, now) : sweepShapeAt(0, x)));
         pts.push_back(ImVec2(xOf(xOfPartial(i)), top + 3.0f + (1.0f - g) * 30.0f));
     }
     if(pts.size() > 1) dl->AddPolyline(pts.data(), (int)pts.size(), IM_COL32(255, 255, 255, 200), 0, 1.5f);
