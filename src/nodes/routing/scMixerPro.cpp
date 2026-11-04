@@ -378,7 +378,7 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
         t.eqGain[b].set(prefix + " Gain", 0.0f, -24.0f, 24.0f);
         t.eqShape[b].set(prefix + (shelf ? " Slope" : " Q"), 1.0f, shelf ? 0.1f : 0.1f, shelf ? 4.0f : 20.0f);
     }
-    // Compressor (CompressorPro core) and reverb (SpaceMaster) inserts
+    // Compressor (CompressorPro core) and reverb (MicroSpace, as in the Box synths) inserts
     const std::string c = "Comp " + n, r = "Rvb " + n;
     t.comp.set(c, false);
     t.compThreshold.set(c + " Threshold", -18.0f, -60.0f, 0.0f);
@@ -399,8 +399,8 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
     t.rvbPosition.set(r + " Late", 0.8f, 0.0f, 1.0f);
     t.rvbSpread.set(r + " Spread", 0.15f, -1.0f, 1.0f);
     t.rvbLowpass.set(r + " Lowpass", 10000.0f, 200.0f, 20000.0f);
-    t.rvbHighDamp.set(r + " Hi Damp", 6.0f, 0.0f, 24.0f);
-    t.rvbLowDamp.set(r + " Lo Damp", 0.0f, 0.0f, 24.0f);
+    t.rvbHighDamp.set(r + " Hi Damp", 6.0f, 0.0f, 12.0f);
+    t.rvbLowDamp.set(r + " Lo Damp", 0.0f, 0.0f, 12.0f);
     t.rvbModFreq.set(r + " Mod Rate", 0.2f, 0.01f, 10.0f);
     t.rvbSpin.set(r + " Spin", 1.0f, 0.0f, 20.0f);
     t.rvbWander.set(r + " Wander", 0.25f, 0.0f, 20.0f);
@@ -4085,7 +4085,7 @@ void scMixerPro::drawEqPanel(float w, float h) {
         if(!on && tr.fx[k].running) ImGui::TextDisabled(k == FX_ECHO || k == FX_RVB ? "ringing out..." : "fading out...");
         else if(!on) ImGui::TextDisabled("off: costs nothing");
         else if(k == FX_COMP) ImGui::Text("GR %4.1f dB", tr.gr);
-        else if(k == FX_RVB) ImGui::TextDisabled("SpaceMaster  -  Decay = RT60");
+        else if(k == FX_RVB) ImGui::TextDisabled("MicroSpace  -  Decay = RT60");
         else if(k == FX_ECHO) ImGui::TextDisabled("%.0f ms%s", echoDelaySec(tr) * 1000.0f, tr.echoBeats.get() ? " at the node tempo" : "");
         else if(k == FX_WIDE) ImGui::TextDisabled(currentChannels < 2 ? "one channel: no effect" : "the mono sum never changes");
         ImGui::SameLine(0, 12.0f * zoom);
@@ -4225,7 +4225,7 @@ void scMixerPro::drawCompPanel(Track& tr) {
     ImGui::EndGroup();
 }
 
-// Reverb tab: the SpaceMaster controls
+// Reverb tab: the MicroSpace controls (boxMicroSpaceN, shared with the Box synths)
 void scMixerPro::drawRvbPanel(Track& tr) {
     const float zoom = ofxOceanodeShared::getZoomLevel();
     const float fieldW = 150.0f * zoom;
@@ -4245,17 +4245,17 @@ void scMixerPro::drawRvbPanel(Track& tr) {
     ImGui::EndGroup();
     ImGui::SameLine(0, 18.0f * zoom);
     ImGui::BeginGroup();
-    slider("Position", tr.rvbPosition, "%.2f", 0, "SpaceMaster Position: early reflections (0) to late tail (1)");
+    slider("Position", tr.rvbPosition, "%.2f", 0, "Early reflections (0) to late tail (1)");
     slider("Spread", tr.rvbSpread, "%.2f", 0, "Left / right predelay offset");
     slider("Lowpass", tr.rvbLowpass, "%.0f Hz", ImGuiSliderFlags_Logarithmic, "Tone of the reverb input");
-    slider("Hi Damp", tr.rvbHighDamp, "%.1f dB", 0, "High-shelf loss per pass in the tank: darker tail");
+    slider("Hi Damp", tr.rvbHighDamp, "%.1f dB", 0, "High shelf in the tank and on the wet (up to 12 dB): darker tail");
     ImGui::EndGroup();
     ImGui::SameLine(0, 18.0f * zoom);
     ImGui::BeginGroup();
-    slider("Lo Damp", tr.rvbLowDamp, "%.1f dB", 0, "Low-shelf loss per pass in the tank: thinner tail");
-    slider("Mod Rate", tr.rvbModFreq, "%.2f Hz", ImGuiSliderFlags_Logarithmic, "Tank delay modulation rate");
-    slider("Spin", tr.rvbSpin, "%.2f", 0, "Sine modulation depth (ms / 5)");
-    slider("Wander", tr.rvbWander, "%.2f", 0, "Random modulation depth (ms / 5)");
+    slider("Lo Damp", tr.rvbLowDamp, "%.1f dB", 0, "Low shelf in the tank and on the wet (up to 12 dB): thinner tail");
+    slider("Mod Rate", tr.rvbModFreq, "%.2f Hz", ImGuiSliderFlags_Logarithmic, "Tank modulation: rate x (Spin + Wander) sets the depth");
+    slider("Spin", tr.rvbSpin, "%.2f", 0, "Modulation depth (adds to Wander)");
+    slider("Wander", tr.rvbWander, "%.2f", 0, "Modulation depth (adds to Spin)");
     ImGui::EndGroup();
 }
 

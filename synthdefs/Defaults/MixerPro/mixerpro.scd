@@ -30,10 +30,13 @@
 //                      \on (lagged) crossfades to dry before the node pauses
 //                      it. Gain reduction (dB) is written to grBus
 //                      (= vuBus + N + 4).
-//   mixerProRvbN    -- per-channel insert: SpaceMaster reverb (pairwise
-//                      cross-feedback tank). \on gates the tank input only:
-//                      switching it off lets the tail ring out, then the node
-//                      pauses it.
+//   boxMicroSpaceN  -- per-channel insert: MicroSpace reverb, the same def the
+//                      Box synths use (OceanodeMicroSpace.box). \on gates the
+//                      reverb input only: switching it off lets the tail ring
+//                      out, then the node pauses it.
+//   mixerProRvbN    -- the older SpaceMaster reverb (pairwise cross-feedback
+//                      tank). No longer used by the node (MicroSpace since
+//                      2026-11-04); kept for the render tests under tools/.
 //   mixerProHPN     -- per-channel insert: high-pass, 12 / 24 dB/oct
 //   mixerProSatN    -- per-channel insert: soft saturation (anti-aliased tanh)
 //   mixerProEchoN   -- per-channel insert: GrainBox's Echo, tempo-synced by the
@@ -222,7 +225,7 @@ channelCounts.do({|numChannels|
         Out.ar(out, LinXFade2.ar(sig, sig * gain, (mix * on) * 2 - 1));
     }).writeDefFile(dir);
 
-    // ---- Reverb insert (SpaceMaster) ----
+    // ---- SpaceMaster reverb (retired insert, kept for tools/ render tests) ----
     // See SYNTHDEFS/Effect/Time/Reverb/spaceMaster.scd for the reconstruction
     // notes. Strip version: one value per control (no per-channel vectors),
     // buffers sized to what the controls can reach, interpolated reads on the
@@ -311,7 +314,7 @@ channelCounts.do({|numChannels|
         Out.ar(out, results.collect(_[0]));
     }).writeDefFile(dir);
 
-    // Box nodes use MicroSpace; MixerPro's own reverb remains independent.
+    // The reverb insert of the Box synths and of MixerPro's strips.
     SynthDef(("boxMicroSpace" ++ numChannels).asSymbol, {
         var input = In.ar(\in.kr(0), numChannels).asArray;
         Out.ar(\out.kr(0), OceanodeMicroSpace.box(input,
