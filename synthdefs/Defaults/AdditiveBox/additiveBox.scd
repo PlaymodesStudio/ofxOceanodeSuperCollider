@@ -26,7 +26,7 @@
 //                          index x Noise Scale + the voice's seed), through
 //                          the LFO's Gain / Pow / BiPow curve (\l<l>cbuf)
 //   AdditiveBoxFilt<P>     filter 1: level *= the curve at each partial
-//   AdditiveBoxSweep<P>    level *= the sweep shape moving across the partials
+//   AdditiveBoxSweep<P>    level *= the sweep shape moving across the partials (or a wandering noise)
 //   AdditiveBoxShim<P>     level *= a random flicker
 //   AdditiveBoxBlur<P>     level smeared in time (LagUD)
 //   AdditiveBoxDrift<P>    position += a random wander
@@ -156,16 +156,31 @@ caps.do { |np|
         ReplaceOut.kr(\bus.kr(0), s[0] * fg);
     });
 
-    // ── Sweep: the shape (one cycle) moving across the partials ─────────────
+    // ── Sweep: the shape (one cycle) moving across the partials, crossfaded
+    //    (\nmix) with Noise: a landscape that never repeats. A ring of 64
+    //    smooth random levels, each wandering at \swevolve Hz, written to a
+    //    local buffer every block and read along the partials (\nph: each
+    //    partial's place in hills, cubic interpolation) at a phase that drifts
+    //    with the sweep's rate and wraps with the ring, so no jump ever ──────
     part.("AdditiveBoxSweep", np, { |np|
         var s = streams.(np);
         var gate = \gate.kr(0), trig = \trig.tr(0);
         var gateOn = (HPZ1.kr(gate > 0) > 0) + (trig > 0);
         var swA = (lag.(\swamt, 0) + mod.(4)).clip(0, 1);
-        var swPh = Phasor.kr(gateOn * \swretrig.kr(0), lag.(\swrate, 0.2) * ControlDur.ir * 256, 0, 256)
-                   + (lag.(\swphase, 0) * 256);
+        var rate = lag.(\swrate, 0.2) * ControlDur.ir, retrig = gateOn * \swretrig.kr(0), phase = lag.(\swphase, 0);
+        var swPh = Phasor.kr(retrig, rate * 256, 0, 256) + (phase * 256);
         var lobe = IndexL.kr(\sbuf.kr(-1), (\sph.kr(0 ! np) + swPh) % 256);
-        var aw = \sw.kr(1 ! np) * swA;
+        var ring = LocalBuf(64);
+        var evolve = lag.(\swevolve, 0.3).max(0.001), nsharp = lag.(\nsharp, 0), ninv = \ninv.kr(0);
+        var nodes = 64.collect { LFNoise2.kr(evolve, 0.5, 0.5).clip(0, 1) };
+        var nPh = Phasor.kr(retrig, rate, 0, 64) + phase;
+        var nmix = lag.(\nmix, 0), noise, aw;
+        nodes = nodes.pow(1 + (nsharp * 7));            // Sharp: narrower peaks
+        nodes = nodes + ((1 - (2 * nodes)) * ninv);     // Invert: notches
+        64.do { |j| BufWr.kr(nodes[j], ring, j) };      // before the read: the buffer starts as junk
+        noise = BufRd.kr(1, ring, \nph.kr(0 ! np) + nPh, 1, 4).max(0);
+        lobe = lobe + ((noise - lobe) * nmix);
+        aw = \sw.kr(1 ! np) * swA;
         ReplaceOut.kr(\bus.kr(0), s[0] * ((lobe * aw) + (1 - aw)));
     });
 
