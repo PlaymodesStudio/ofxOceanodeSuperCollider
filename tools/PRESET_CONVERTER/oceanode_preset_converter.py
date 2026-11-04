@@ -1677,6 +1677,12 @@ class GraphConverter:
             "y": ["positiony"],
             "pos": ["position"],
             "hz": ["freq", "frequency"],
+            # Filters renamed their cutoff control from \pitch to \cutp on
+            # 2026-10-27 (see tools/migrate_filter_cutp.py). Both are MIDI
+            # note numbers, so a legacy Pitch value or cable maps onto Cutp
+            # unchanged; the alias only applies when the new model has no
+            # Pitch of its own, because the first branch above wins otherwise.
+            "pitch": ["cutp"],
         }
         for candidate in fallbacks.get(source_norm, []):
             if candidate in destination_params:
