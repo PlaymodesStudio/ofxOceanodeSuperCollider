@@ -68,7 +68,9 @@ File.mkdir(d);
             var curves = [\curveA.kr(-4), \curveD.kr(-4), \curveR.kr(-4)].collect(_.clip(-12, 12));
             var voices = cap.collect { |i|
                 var g = ((gate[i] + K2A.ar(audition[i])) > 0);
-                var trig = HPZ1.ar(g) > 0;                       // rising edge
+                // rising edge, or a gate already open when this synth starts
+                // (a preset saved with a gate at 1)
+                var trig = ((HPZ1.ar(g) > 0) + (Impulse.ar(0) * g)) > 0;
                 // the sequencer note that started it (none: full level, as is)
                 var vel = 1 - Latch.ar(natt[i], trig).clip(0, 1);
                 var flip = Latch.ar(nrev[i], trig) > 0.5;
