@@ -482,7 +482,13 @@ void scSynthdefCompiler::drawPopups(){
 
     constexpr const char* popupId = "SuperCollider SynthDefs##scSynthdefCompiler";
     const bool wanted = !asking.empty() || busy || !failed.empty();
-    if(wanted && !ImGui::IsPopupOpen(popupId)) ImGui::OpenPopup(popupId);
+    if(wanted && !ImGui::IsPopupOpen(popupId)){
+        // Wait for other dialogs (a connection error from the same load, the
+        // SynthDefs sync). Two modals reopening over each other every frame
+        // are both kept hidden while ImGui measures them, yet block all input.
+        if(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) return;
+        ImGui::OpenPopup(popupId);
+    }
     if(!ImGui::BeginPopupModal(popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     if(!wanted){
         ImGui::CloseCurrentPopup();
