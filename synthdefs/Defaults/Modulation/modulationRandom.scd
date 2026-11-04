@@ -97,8 +97,8 @@ valueNoise2 = { |x, y, salt = 0|
         left = LinLin.kr(ph, 0, (pw * 2).max(1.0e-7).min(1), 0, 1).clip(0, 1);
         narrowed = (left * (1 - \centered.kr(1).clip(0, 1))) + (centered * \centered.kr(1).clip(0, 1));
         narrowed = narrowed * (1 - ((skew < 0) * (narrowed >= 0.99999)));
-        wLo = LinLin.kr(ph, 0, leftMax.max(1.0e-7), 0, midpoint).clip(0, 1);
-        wHi = LinLin.kr(ph, rightMin.min(1 - 1.0e-7), 1, midpoint, 1).clip(0, 1);
+        wLo = LinLin.kr(ph, 0, leftMax.max(1.0e-7), 0, midpoint).clip(0, midpoint);   // widening: held at the peak between
+        wHi = LinLin.kr(ph, rightMin.min(1 - 1.0e-7), 1, midpoint, 1).clip(midpoint, 1);
         widened = Select.kr(ph < midpoint, [wHi, wLo]);
         ph = Select.kr(pw < 0.5, [Select.kr(pw >= 0.99999, [widened, midpoint]), narrowed]);
         // skew

@@ -85,8 +85,8 @@ float morphShape(double ph, double skew, double round, double pw, bool centered)
     }else if(pw >= 0.99999) w = midpoint;
     else{
         const double leftMax = clampd(lin(1 - pw, 0, 0.5, 0, midpoint), 0, 1), rightMin = clampd(lin(pw, 0.5, 1, midpoint, 1), 0, 1);
-        w = ph < midpoint ? clampd(lin(ph, 0, std::max(leftMax, 1e-7), 0, midpoint), 0, 1)
-                          : clampd(lin(ph, std::min(rightMin, 1 - 1e-7), 1, midpoint, 1), 0, 1);
+        w = ph < midpoint ? clampd(lin(ph, 0, std::max(leftMax, 1e-7), 0, midpoint), 0, midpoint)   // held at the peak between
+                          : clampd(lin(ph, std::min(rightMin, 1 - 1e-7), 1, midpoint, 1), midpoint, 1);
     }
     const double th = clampd(0.5 - skew * 0.5, 0, 1);
     w = w >= th ? clampd(lin(w, std::min(th, 1 - 1e-7), 1, 0.5, 1), 0.5, 1) : clampd(lin(w, 0, std::max(th, 1e-7), 0, 0.5), 0, 0.5);

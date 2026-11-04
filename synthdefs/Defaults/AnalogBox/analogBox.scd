@@ -155,7 +155,10 @@ File.mkdir(root); File.mkdir(dir);
         // a cable replaces the Oceanode values (a value left at 1 would hold every gate open)
         var gK = NamedControl.kr(\gate, 0 ! n) * (1 - \gate_sel.kr(0)), gA = (\gate_ar.ar(0 ! n) * \gate_sel.kr(0)).asArray;
         var inGate = ((K2A.ar(gK) + gA) > 0).asArray;
-        var rise = inGate.collect { |g| HPZ1.ar(g) > 0 };
+        // a note: a gate's rising edge, or a gate already open when this synth
+        // starts (a preset saved with Gate at 1: ModGate's Impulse.ar(0))
+        var start = Impulse.ar(0);
+        var rise = inGate.collect { |g| ((HPZ1.ar(g) > 0) + (start * g)) > 0 };
         // the level: a cable's exactly at its edge, Oceanode values held at control rate
         var levelIn = n.collect { |i| Latch.ar(gA[i], rise[i]).max(K2A.ar(Gate.kr(gK.asArray[i], gK.asArray[i] > 0))).max(0) };
         var pIn = Select.ar(\pitch_sel.kr(0) > 0.5, [K2A.ar(NamedControl.kr(\pitch, 60 ! n)), \pitch_ar.ar(60 ! n)]).asArray;

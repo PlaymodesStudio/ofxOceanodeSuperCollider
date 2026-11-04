@@ -88,8 +88,11 @@ struct Warp {
             return n;
         }
         if (pw >= 0.99999) return midpoint;
-        if (ph < midpoint) return clampd(lin(ph, 0, std::max(leftMax, 1e-7), 0, midpoint), 0, 1);
-        return clampd(lin(ph, std::min(rightMin, 1 - 1e-7), 1, midpoint, 1), 0, 1);
+        // widening: the first half quickly, a hold at the peak, the second
+        // half quickly (each half clamped to its own range, as the Oceanode
+        // oscillator's ofMap: clamping to 0..1 would play two cycles)
+        if (ph < midpoint) return clampd(lin(ph, 0, std::max(leftMax, 1e-7), 0, midpoint), 0, midpoint);
+        return clampd(lin(ph, std::min(rightMin, 1 - 1e-7), 1, midpoint, 1), midpoint, 1);
     }
     double skewed(double w) const {
         if (w >= threshold) return clampd(lin(w, std::min(threshold, 1 - 1e-7), 1, 0.5, 1), 0.5, 1);
