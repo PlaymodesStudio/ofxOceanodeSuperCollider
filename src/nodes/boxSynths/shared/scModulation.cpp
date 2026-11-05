@@ -739,7 +739,169 @@ bool scModulation::ownsKey(const std::string& key) const {
 
 void scModulation::sendMatrix() {
     forStates([this](ofxSCServer* sv, ServerState& st){ syncRoutes(sv, st); });
+    syncCellParams();
     notify();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Routing cells as node parameters
+// ════════════════════════════════════════════════════════════════════════════
+
+std::string scModulation::stableSourceName(int s) const {
+    if(s < MAX_LFOS) return "LFO " + ofToString(s + 1);   // a Ramp keeps its LFO name: a parameter's name is for good
+    return sourceName(s);
+}
+
+std::string scModulation::columnName(int column) const {
+    if(column < 0) return "";
+    if(column < T()) return targetList[column].name;
+    const size_t i = (size_t)(column - T());
+    return i < params.size() ? params[i].name : "";
+}
+
+int scModulation::cellColumn(const CellParam& c) const {
+    if(c.target >= 0) return c.target < T() ? c.target : -1;
+    for(size_t i = 0; i < params.size(); i++) if(params[i].key == c.columnKey) return T() + (int)i;
+    return -1;
+}
+
+const scModulation::CellParam* scModulation::cellAt(int source, int column) const {
+    for(const auto& [key, c] : cellParams) if(c.source == source && cellColumn(c) == column) return &c;
+    return nullptr;
+}
+
+float scModulation::cellAmount(int source, int column) const {
+    if(source < 0 || source >= sourceCount() || column < 0) return 0.0f;
+    if(column < T()) return matrix[(size_t)source * T() + column];
+    const size_t i = (size_t)(column - T());
+    return i < params.size() ? params[i].amount[source] : 0.0f;
+}
+
+void scModulation::setCellAmount(int source, int column, float v) {
+    if(source < 0 || source >= sourceCount() || column < 0) return;
+    v = ofClamp(v, -1.0f, 1.0f);
+    if(column < T()){
+        float& cell = matrix[(size_t)source * T() + column];
+        if(cell == v) return;
+        cell = v;
+        sendMatrix();
+    }else{
+        const size_t i = (size_t)(column - T());
+        if(i >= params.size() || params[i].amount[source] == v) return;
+        params[i].amount[source] = v;
+        syncCellParams();
+        notify();
+    }
+}
+
+bool scModulation::cellIsBipolar(int source, int column) const {
+    if(column < 0) return false;
+    if(column < T()) return cellBipolar(source, column);
+    const size_t i = (size_t)(column - T());
+    return i < params.size() && params[i].bipolar[source];
+}
+
+void scModulation::setCellBipolar(int source, int column, bool b) {
+    if(column < 0) return;
+    if(column < T()){ const size_t i = (size_t)source * T() + column; if(i < routeBipolar.size()) routeBipolar[i] = b ? 1 : 0; }
+    else{ const size_t i = (size_t)(column - T()); if(i < params.size()) params[i].bipolar[source] = b; }
+}
+
+ofParameter<float>* scModulation::cellParameter(int source, int column, bool create) {
+    if(source < 0 || source >= sourceCount() || column < 0 || column >= T() + (int)params.size()) return nullptr;
+    if(const CellParam* c = cellAt(source, column)) return c->p.get();
+    if(!create) return nullptr;
+    const std::string name = stableSourceName(source) + " to " + columnName(column) + nameSuffix;
+    return createCell(source, column < T() ? column : -1, column < T() ? std::string() : params[column - T()].key, name);
+}
+
+ofParameter<float>* scModulation::createCell(int source, int target, const std::string& columnKey, const std::string& name) {
+    if(!host.regF || name.empty()) return nullptr;
+    CellParam c;
+    c.source = source;
+    c.target = target;
+    c.columnKey = columnKey;
+    c.p = std::make_unique<ofParameter<float>>();
+    c.p->set(name, 0.0f, -1.0f, 1.0f);
+    const std::string key = c.p->getEscapedName();
+    auto known = cellParams.find(key);
+    if(known != cellParams.end()) return known->second.p.get();
+    const int column = cellColumn(c);
+    if(column >= 0) c.p->setWithoutEventNotifications(cellAmount(source, column));
+    ofParameter<float>* p = c.p.get();
+    cellParams.emplace(key, std::move(c));
+    ownKeys.insert(key);                                       // not a "Modulate with" target itself
+    host.regF(*p, [this, key]() { cellParamChanged(key); });   // the host's registry: publish, timeline, MIDI, presets
+    if(host.registryChanged) host.registryChanged();
+    return p;
+}
+
+// The parameter was set (the node's widget, a cable, the timeline, a typed value)
+void scModulation::cellParamChanged(const std::string& key) {
+    if(cellSyncing) return;
+    auto it = cellParams.find(key);
+    if(it == cellParams.end()) return;
+    // a recall / morph writes the matrix itself: the parameter follows it
+    if(scSnapshots::applyingSnapshot()) return;
+    const int column = cellColumn(it->second);
+    if(column < 0) return;
+    setCellAmount(it->second.source, column, it->second.p->get());
+}
+
+void scModulation::syncCellParams() {
+    if(cellParams.empty() || cellSyncing) return;
+    cellSyncing = true;
+    for(auto& [key, c] : cellParams){
+        const int column = cellColumn(c);
+        if(column < 0) continue;
+        const float v = cellAmount(c.source, column);
+        if(std::abs(c.p->get() - v) > 1e-6f) c.p->set(v);   // notifies the node's cables
+    }
+    cellSyncing = false;
+}
+
+void scModulation::unpublishCells(const std::function<bool(const CellParam&)>& which) {
+    if(!host.unpublish) return;
+    for(const auto& [key, c] : cellParams) if(which(c)) host.unpublish(key);
+}
+
+// The cell's own entries, inside the host's menu of its parameter
+void scModulation::drawCellMenuItems(const std::string& key) {
+    auto it = cellParams.find(key);
+    if(it == cellParams.end()) return;
+    const CellParam& c = it->second;
+    const int s = c.source, column = cellColumn(c);
+    ImGui::Separator();
+    if(column < 0){ ImGui::TextDisabled("Its column left the matrix"); return; }
+    const float z = zoom();
+    const int TT = T() + (int)params.size();
+    ImGui::TextDisabled("%s -> %s", sourceName(s).c_str(), columnName(column).c_str());
+    float e = cellAmount(s, column);
+    ImGui::SetNextItemWidth(120 * z);
+    if(ImGui::InputFloat("##cellAmount", &e, 0.05f, 0.1f, "%.3f")) setCellAmount(s, column, e);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Amount: -1..1 of the target's range");
+    if(polarityEditable(s, column)){
+        const bool bip = cellIsBipolar(s, column);
+        auto polarityChanged = [this, column]() { if(column < T()) sendMatrix(); else notify(); };
+        if(ImGui::MenuItem("Unipolar: adds up from the value", nullptr, !bip) && bip){ setCellBipolar(s, column, false); polarityChanged(); }
+        if(ImGui::MenuItem("Bipolar: swings around the value", nullptr, bip) && !bip){ setCellBipolar(s, column, true); polarityChanged(); }
+    }
+    if(ImGui::MenuItem("Clear this source's row")){
+        for(int k = 0; k < TT; k++){
+            if(k < T()) matrix[(size_t)s * T() + k] = 0.0f; else params[k - T()].amount[s] = 0.0f;
+        }
+        sendMatrix();
+    }
+    if(ImGui::MenuItem("Clear this target's column")){
+        for(int k = 0; k < sourceCount(); k++){
+            if(column < T()) matrix[(size_t)k * T() + column] = 0.0f; else params[column - T()].amount[k] = 0.0f;
+        }
+        if(column < T()) sendMatrix(); else { syncCellParams(); notify(); }
+    }
+    if(column >= T() && ImGui::MenuItem(("Remove " + columnName(column) + " from the matrix").c_str())){
+        removeParam((size_t)(column - T()));
+        notify();
+    }
 }
 
 // ── The LFOs for a node's own copies ─────────────────────────────────────────
@@ -906,6 +1068,7 @@ void scModulation::updateTransport() {
 }
 
 void scModulation::update() {
+    syncCellParams();   // hosts write matrix cells directly too (presets, morphs)
     updateTransport();
     applyParams();
     const bool forParams = paramsActive() && !liveHook;
@@ -981,6 +1144,15 @@ void scModulation::updateLfoOutputs() {
 void scModulation::saveLfoOutputs(ofJson& j) const {
     auto& list = j["modulationLfoOutputs"][nameSuffix] = ofJson::array();
     for(int li = 0; li < MAX_LFOS; ++li) if(lfoOutputPins[li]) list.push_back(li);
+    // the Routing cells the node publishes (or the timeline / MIDI hold): their
+    // parameters exist again before the host restores its published list
+    auto& cells = j["modulationCells"][nameSuffix] = ofJson::array();
+    if(!host.publishedKeys) return;
+    const auto& keys = host.publishedKeys();
+    for(const auto& [key, c] : cellParams){
+        if(std::find(keys.begin(), keys.end(), key) == keys.end()) continue;
+        cells.push_back(ofJson{{"source", c.source}, {"target", c.target}, {"column", c.columnKey}, {"name", c.p->getName()}});
+    }
 }
 
 void scModulation::loadLfoOutputs(const ofJson& j) {
@@ -991,6 +1163,16 @@ void scModulation::loadLfoOutputs(const ofJson& j) {
             for(const auto& li : outputs[nameSuffix]) if(li.is_number_integer()) wanted.insert(li.get<int>());
     }
     for(int li = 0; li < std::min((int)MAX_LFOS, maxLfos); ++li) publishLfoOutput(li, wanted.count(li) != 0);
+    if(j.contains("modulationCells") && j["modulationCells"].is_object()){
+        const auto& cells = j["modulationCells"];
+        if(cells.contains(nameSuffix) && cells[nameSuffix].is_array())
+            for(const auto& c : cells[nameSuffix]){
+                if(!c.is_object() || !c.contains("name") || !c["name"].is_string()) continue;
+                const int source = c.value("source", -1), target = c.value("target", -1);
+                if(source < 0 || source >= sourceCount() || target >= T()) continue;
+                createCell(source, target, c.value("column", std::string()), c["name"].get<std::string>());
+            }
+    }
 }
 
 float scModulation::liveValue(int source, int voice) const {
@@ -1096,10 +1278,12 @@ void scModulation::loadState(const ofJson& j, const std::string& prefix, bool ge
     }
     loadParamsJson(j.contains(prefix + "Params") ? j[prefix + "Params"] : ofJson::array());
     randomShared = j.value(prefix + "RandomShared", false);
+    syncCellParams();
 }
 
 void scModulation::afterLoad() {
     applyParamBases();
+    syncCellParams();
     notify();
     updatePhases();
     forStates([this](ofxSCServer* server, ServerState& st){ updateSources(server, st); });
@@ -1275,6 +1459,7 @@ void scModulation::applyParams() {
 void scModulation::removeParam(size_t i) {
     if(i >= params.size()) return;
     auto& pt = params[i];
+    unpublishCells([&](const CellParam& c){ return c.target < 0 && c.columnKey == pt.key; });
     const bool voice = !pt.voiceWritten.empty();
     pt.voiceWritten.clear();
     if(pt.applied && pt.p) writeParam(pt, pt.base);
@@ -1511,6 +1696,7 @@ void scModulation::toggle(ofParameter<bool>& p, const char* label) {
 
 // Inside a control's right-click menu: route sources to it
 void scModulation::modulateMenu(const std::string& key) {
+    if(cellParams.count(key)){ drawCellMenuItems(key); return; }   // a Routing cell: its own entries
     auto it = targetOfKey.find(key);
     if(it != targetOfKey.end()){
         const int t = it->second;
@@ -1649,6 +1835,7 @@ void scModulation::drawEnvCard(int e, float w) {
         const std::string prefix = "Env" + ofToString(e + 1) + "_";
         const auto keys = host.publishedKeys();
         for(const auto& k : keys) if(k.rfind(prefix, 0) == 0 && ownsKey(k)) host.unpublish(k);
+        unpublishCells([e](const CellParam& c){ return c.source == SRC_ENV + e; });
         envCount--;
         forStates([this](ofxSCServer* sv, ServerState& st){ updateSources(sv, st); syncRoutes(sv, st); });
     }
@@ -2054,6 +2241,7 @@ void scModulation::drawLfos(float w) {
         const std::string prefix = "LFO" + ofToString(li + 1) + "_";
         const auto keys = host.publishedKeys();
         for(const auto& k : keys) if(k.rfind(prefix, 0) == 0 && ownsKey(k)) host.unpublish(k);
+        unpublishCells([li](const CellParam& c){ return c.source == li; });
         lfoCount--;
         forStates([this](ofxSCServer* sv, ServerState& st){ updateSources(sv, st); syncRoutes(sv, st); });
         notify();
@@ -2074,7 +2262,7 @@ void scModulation::drawRouting(float w) {
     const int TT = T() + (int)params.size();
     auto colName = [this](int t) -> const std::string& { return t < T() ? targetList[t].name : params[t - T()].name; };
     auto amountRef = [this](int s, int t) -> float& { return t < T() ? matrix[s * T() + t] : params[t - T()].amount[s]; };
-    auto amountChanged = [this](int t) { if(t < T()) sendMatrix(); else notify(); };
+    auto amountChanged = [this](int t) { if(t < T()) sendMatrix(); else { syncCellParams(); notify(); } };
     auto isBipolar = [this](int s, int t) { return t < T() ? cellBipolar(s, t) : params[t - T()].bipolar[s]; };
     auto setBipolar = [this](int s, int t, bool b) {
         if(t < T()){ const size_t i = (size_t)s * T() + t; if(i < routeBipolar.size()) routeBipolar[i] = b ? 1 : 0; }
@@ -2085,7 +2273,7 @@ void scModulation::drawRouting(float w) {
     const float cellH = 26.0f * z;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImGui::TextColored(ImColor(pal::textDim), "Drag a cell left / right to set how much a source moves a target "
-                       "(Shift: fine; double-click: 0; right-click: type it).");
+                       "(Shift: fine; double-click: 0; right-click: type it, publish it to the node).");
     if(random && sourceUsed(SRC_RND)){
         ImGui::SameLine(0, 16 * z);
         bool shared = randomShared;
@@ -2155,6 +2343,17 @@ void scModulation::drawRouting(float w) {
                     dl->AddText(ImVec2(c0.x + 3 * z, c0.y + 1 * z), IM_COL32(255, 255, 255, 170), "+/-");
             }
             if(hov) dl->AddRect(c0, c1, pal::headerText, 3.0f * z);
+            // the cell as a parameter of the node: made on right-click, then the
+            // host's menu (publish, timeline, MIDI...) and marks on this cell
+            // (hovered even while another popup is closing on this press: the
+            // host's popup opens on the release, the parameter must exist by then)
+            const CellParam* cell = cellAt(s, t);
+            if(!cell && host.publishMenu && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup)
+               && (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsMouseReleased(ImGuiMouseButton_Right))){
+                cellParameter(s, t, true);
+                cell = cellAt(s, t);
+            }
+            if(cell && host.publishedUnderline) host.publishedUnderline(cell->p->getEscapedName());
             if(ImGui::IsItemActivated()){ matrixDrag = idx; matrixDragStart = ImGui::GetMousePos().x; matrixDragValue = v; }
             if(ImGui::IsItemActive() && matrixDrag == idx){
                 const float fine = ImGui::GetIO().KeyShift ? 0.1f : 1.0f;
@@ -2182,7 +2381,8 @@ void scModulation::drawRouting(float w) {
                                       !polarityEditable(s, t) ? "" : isBipolar(s, t) ? "  bipolar" : "  unipolar");
                 }
             }
-            if(ImGui::BeginPopupContextItem("##cellMenu")){
+            if(cell && host.publishMenu) host.publishMenu(cell->p->getEscapedName());   // the cell's entries: drawCellMenuItems
+            else if(ImGui::BeginPopupContextItem("##cellMenu")){
                 ImGui::Text("%s -> %s", sourceName(s).c_str(), colName(t).c_str());
                 float e = amountRef(s, t);
                 ImGui::SetNextItemWidth(120 * z);
@@ -2225,6 +2425,7 @@ void scModulation::drawRouting(float w) {
         for(int t = 0; t < T(); t++) matrix[(SRC_EXT + k) * T() + t] = 0.0f;
         for(auto& pt : params) pt.amount[SRC_EXT + k] = 0.0f;
         host.unpublish(exts[k].getEscapedName());
+        unpublishCells([k](const CellParam& c){ return c.source == SRC_EXT + k; });
         extCount--;
         sendMatrix();
     }
@@ -2288,6 +2489,14 @@ void scModulation::loadMorph(const ofJson& a,const ofJson& b,float t,bool switch
     }
     auto state = scModulationMorph::state(x, y, t, switched, prefix, blocked);
     loadState(state, prefix, false);   // the generators: blended just below
+    // a cell whose parameter a cable drives keeps the cable's value
+    if(blocked) for(auto& [key, c] : cellParams){
+        if(!blocked(key)) continue;
+        const int column = cellColumn(c);
+        if(column < 0) continue;
+        if(column < T()) matrix[(size_t)c.source * T() + column] = ofClamp(c.p->get(), -1.0f, 1.0f);
+        else params[column - T()].amount[c.source] = ofClamp(c.p->get(), -1.0f, 1.0f);
+    }
     morphGenerators(a, b, t, prefix, blocked);
 }
 

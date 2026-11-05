@@ -182,7 +182,10 @@ In Routing, sources are rows and destinations are columns:
 - Drag a cell horizontally to change its signed amount.
 - Hold **Shift** for fine adjustment.
 - Double-click to reset a cell to zero.
-- Right-click to type an amount or access row/column operations.
+- Right-click a cell for its parameter's menu: **Publish to Node GUI**,
+  timeline, MIDI and the typed value, plus polarity and row/column clears.
+  The parameter ("LFO 1 to Cutoff", -1..1) is created on demand and is the
+  cell itself: the Routing tab and the node widget edit one value.
 - Zero means no contribution; negative amounts reverse the contribution.
 - Interpret depth through the target's registered range and displayed units.
   Amount 1 means that modulation range, not necessarily one native unit.
