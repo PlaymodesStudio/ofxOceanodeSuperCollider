@@ -915,7 +915,7 @@ void scPhysicalBox::presetRecallAfterSettingParameters(ofJson& j) {
     if(state.contains(speakerLayout.getEscapedName())) speakerLayout = state.value(speakerLayout.getEscapedName(), 0);
 }
 // ── MacroMixer: a saved sound blends on the running voices ─────────────────
-ofxOceanodeNodeModel::MorphKeys scPhysicalBox::morphKeys() const { return {{"physicalBox"}, {}}; }
+ofxOceanodeNodeModel::MorphKeys scPhysicalBox::morphKeys() const { return {{"physicalBox"}, {"physicalBoxPublished"}}; }
 
 ofxOceanodeNodeModel::MorphHint scPhysicalBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
     const std::string key = p.getEscapedName();

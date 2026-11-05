@@ -36,6 +36,7 @@
 #include "../../../ui/scDropdowns.h"
 #include "../shared/scSnapshots.h"
 #include "../shared/scBoxMacroMorph.h"
+#include "../shared/scBoxPinMorph.h"
 #include "../../../audio/scSynthControlBatch.h"
 #include "imgui.h"
 #include <array>
@@ -87,6 +88,11 @@ public:
     bool morphBegin(const ofJson& target, std::string& reason) override;
     void morphApply(float t, bool switched) override { macroMorph.apply(snaps, t, switched); }
     void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
+    // Published pins follow the saved patch (scBoxPinMorph)
+    std::vector<std::string> morphPins(const ofJson& saved) const override { return pinMorph.pins(saved); }
+    bool morphPinValue(const ofJson& saved, const std::string& name, ofJson& value) const override { return pinMorph.value(saved, name, value); }
+    void morphPinsBegin(const ofJson& target) override { pinMorph.begin(target, publishedKeys, [this](const std::string& k){ publish(k); }); }
+    void morphPinsEnd(bool completed) override { pinMorph.end(completed, publishedKeys, [this](const std::string& k){ unpublish(k); }); }
 
 private:
     struct Tap {
@@ -173,6 +179,7 @@ private:
     ofJson initial;                       // the sound at setup (the factory's base)
     ofJson appliedMod;                    // the modulation a snapshot last loaded
     scBoxMacroMorph macroMorph;           // a MacroMixer morph: the start, the arrival
+    scBoxPinMorph pinMorph{"echoBoxPublished", "echoBox"};   // a MacroMixer morph: pins it published, the arrival's
     ofJson snapshotOf(const ofJson& saved) const;   // a saved patch as a snapshot
     ofJson captureSnapshot() const;
     void applySnapshot(const ofJson& a, const ofJson& b, float t, bool sw);

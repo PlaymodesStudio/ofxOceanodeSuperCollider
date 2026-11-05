@@ -782,7 +782,7 @@ void scEchoBox::presetRecallAfterSettingParameters(ofJson& j) {
 // ── MacroMixer: a saved sound blends on the running taps ───────────────────
 ofxOceanodeNodeModel::MorphKeys scEchoBox::morphKeys() const {
     return {{"echoBox", "echoBoxTaps", "echoBoxModMatrix", "echoBoxModLfos", "echoBoxModEnvs", "echoBoxModExts",
-             "echoBoxModParams", "echoBoxModGenerators"}, {"echoBoxMapHeight"}};
+             "echoBoxModParams", "echoBoxModGenerators"}, {"echoBoxMapHeight", "echoBoxPublished"}};
 }
 
 ofxOceanodeNodeModel::MorphHint scEchoBox::morphHint(const ofxOceanodeAbstractParameter& p) const {

@@ -1336,7 +1336,7 @@ void scAnalogBox::presetRecallAfterSettingParameters(ofJson& j) {
 // ── MacroMixer: a saved sound blends on the running synths ─────────────────
 ofxOceanodeNodeModel::MorphKeys scAnalogBox::morphKeys() const {
     return {{"analogBox", "analogBoxModMatrix", "analogBoxModLfos", "analogBoxModEnvs", "analogBoxModExts",
-             "analogBoxModParams", "analogBoxModGenerators"}, {}};
+             "analogBoxModParams", "analogBoxModGenerators"}, {"analogBoxPublished"}};
 }
 
 ofxOceanodeNodeModel::MorphHint scAnalogBox::morphHint(const ofxOceanodeAbstractParameter& p) const {

@@ -764,7 +764,7 @@ void scFMBox::presetRecallAfterSettingParameters(ofJson& j) {
 // ── MacroMixer: a saved sound blends on the running synths ─────────────────
 // The AFX library / selection only browses: a recalled AFX preset is in "fmBox"
 ofxOceanodeNodeModel::MorphKeys scFMBox::morphKeys() const {
-    return {{"fmBox"}, {"fmBoxAFX"}};
+    return {{"fmBox"}, {"fmBoxAFX", "fmBoxPublished"}};
 }
 ofxOceanodeNodeModel::MorphHint scFMBox::morphHint(const ofxOceanodeAbstractParameter& p) const {
     const std::string key=p.getEscapedName();

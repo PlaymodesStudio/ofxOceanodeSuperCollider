@@ -3290,7 +3290,7 @@ void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t,
 
 // ── MacroMixer: a saved sound blends on the running synths ─────────────────
 ofxOceanodeNodeModel::MorphKeys scPolyComb::morphKeys() const {
-    return {{"polyComb", "polyCombGenerators", "polyCombMorphAudio", "polyCombParams", "polyCombMatrix", "polyCombLfos", "polyCombEnvs", "polyCombExts", voices.getEscapedName()}, {}};
+    return {{"polyComb", "polyCombGenerators", "polyCombMorphAudio", "polyCombParams", "polyCombMatrix", "polyCombLfos", "polyCombEnvs", "polyCombExts", voices.getEscapedName()}, {"polyCombPublished"}};
 }
 
 ofxOceanodeNodeModel::MorphHint scPolyComb::morphHint(const ofxOceanodeAbstractParameter& p) const {

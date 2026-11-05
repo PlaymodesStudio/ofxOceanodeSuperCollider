@@ -12,6 +12,7 @@
 #include "../shared/scModulation.h"
 #include "../shared/scSnapshots.h"
 #include "../shared/scBoxMacroMorph.h"
+#include "../shared/scBoxPinMorph.h"
 #include "../shared/scAmpMorph.h"
 #include "../../../ui/scEQEditor.h"
 #include "../../../ui/scDropdowns.h"
@@ -61,6 +62,11 @@ public:
     bool morphBegin(const ofJson& target, std::string& reason) override;
     void morphApply(float t, bool switched) override { macroMorph.apply(snaps, t, switched); }
     void morphEnd(bool completed) override { macroMorph.end(snaps, completed); }
+    // Published pins follow the saved patch (scBoxPinMorph)
+    std::vector<std::string> morphPins(const ofJson& saved) const override { return pinMorph.pins(saved); }
+    bool morphPinValue(const ofJson& saved, const std::string& name, ofJson& value) const override { return pinMorph.value(saved, name, value); }
+    void morphPinsBegin(const ofJson& target) override { pinMorph.begin(target, publishedKeys, [this](const std::string& k){ publish(k); }); }
+    void morphPinsEnd(bool completed) override { pinMorph.end(completed, publishedKeys, [this](const std::string& k){ unpublish(k); }); }
     std::string getWindowTitle() override { return "PhysicalBox " + ofToString(getNumIdentifier()); }
     ofParameter<bool>* getWindowToggle() override { return &show; }
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
@@ -182,6 +188,7 @@ private:
     scModulation mod;
     scSnapshots snaps;
     scBoxMacroMorph macroMorph;           // a MacroMixer morph: the start, the arrival
+    scBoxPinMorph pinMorph{"physicalBoxPublished", "physicalBox"};   // a MacroMixer morph: pins it published, the arrival's
     ofJson snapshotOf(const ofJson& saved) const;   // a saved patch as a snapshot
     scAmpMorph ampMorph;   // the envelope VCA path blends across snapshot morphs
     bool liveVca() const;

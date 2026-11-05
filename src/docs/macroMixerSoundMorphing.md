@@ -48,8 +48,16 @@ crossfaded second instance, and an int Voices was interpolated step by step
 (one synth rebuild per step).
 
 - `blended` is exactly what `snapshotOf` reads. Keys the snapshot does not carry
-  (published lists, timeline, Random Shared, sample files, slice markers) stay
-  out, so a difference there still replaces the node. UI-only keys are `ignored`.
+  (timeline, Random Shared, sample files, slice markers) stay out, so a
+  difference there still replaces the node. UI-only keys are `ignored`.
+- Published pins (AnalogBox, EchoBox, FMBox, PhysicalBox, PolyComb, through
+  `shared/scBoxPinMorph.h`): the `...Published` list is `ignored` and compared
+  as a set by MacroMixer's pin hooks. The target's missing pins are published
+  when the morph begins, so cables into them blend; once it completes the pins
+  the target lacks are unpublished (a cancelled morph unpublishes the ones it
+  added). A cable leaving a pin the target does not publish glides to that
+  control's value in the saved sound. The other Boxes' published lists still
+  replace the node when they differ.
 - Voices: Boxes whose snapshots blend the count (AdditiveBox, PulsarBox,
   WavetableBox, GrainBox, PolyComb) own it; elsewhere it is `MorphHint::Switch`
   and MacroMixer sets it once, half way. Output channels stay Structural.
