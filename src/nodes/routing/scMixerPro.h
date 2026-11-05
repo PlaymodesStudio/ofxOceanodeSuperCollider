@@ -19,7 +19,7 @@
 //  the first time either is switched on, placed just before the track synth
 //  and paused while both are off -- a track without them costs nothing.
 //  HP, COMP, SAT, ECHO, RVB and WIDTH (mixerProHPN / CompN / SatN / EchoN /
-//  RvbN / WidthN)
+//  boxMicroSpaceN, the Box synths' MicroSpace reverb / WidthN)
 //  are more inserts with the same rule: created the first time they are
 //  switched on, paused while off. Switching off first fades: HP / COMP / SAT /
 //  WIDTH crossfade to dry (\on, 30 ms), ECHO and RVB stop feeding their loop and let
@@ -83,6 +83,7 @@
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
 #include "../../ui/scEQEditor.h"
+#include "../../ui/scDropdowns.h"
 #include "../../ui/scGuiMeshCache.h"
 #include "imgui.h"
 
@@ -156,7 +157,7 @@ private:
     static int fxPos(int k) { static const int p[FX_COUNT] = {0, 2, 3, 4, 5, 6}; return p[k]; }
     static int fxAtPos(int pos) { static const int k[8] = {FX_HP, -1, FX_COMP, FX_SAT, FX_ECHO, FX_RVB, FX_WIDE, -1}; return pos >= 0 && pos < 8 ? k[pos] : -1; }
     static const char* fxDefBase(int k) {
-        static const char* b[FX_COUNT] = {"mixerProHP", "mixerProComp", "mixerProSat", "mixerProEcho", "mixerProRvb", "mixerProWidth"};
+        static const char* b[FX_COUNT] = {"mixerProHP", "mixerProComp", "mixerProSat", "mixerProEcho", "boxMicroSpace", "mixerProWidth"};
         return b[k];
     }
 
@@ -198,6 +199,7 @@ private:
         ofParameter<bool>  echo, echoBeats;
         ofParameter<float> echoTime, echoBeatVal, echoFeed, echoCutoff, echoResonance, echoPingPong, echoMix;
         ofParameter<int>   echoFilter;       // 0 LowPass 1 HighPass 2 BandPass 3 PeakEQ
+        ofParameter<int>   echoPingPongMode; // 0 Pairs 1 Rotate 2 Rotate Back 3 Halves 4 Mirror 5 Spread (mixerProEcho \pingmode)
         // Width insert: Width (0 mono .. 1 .. 2), Diffuse, Bass Mono below a frequency
         ofParameter<bool>  wide, wideBassMono;
         ofParameter<float> wideWidth, wideDiffuse, wideBassFreq;
@@ -208,7 +210,7 @@ private:
         ofParameter<bool>  comp, compAuto;
         ofParameter<float> compThreshold, compRatio, compKnee, compAttack, compRelease;
         ofParameter<float> compMakeup, compRms, compHpf, compMix;
-        // Reverb insert (SpaceMaster)
+        // Reverb insert (MicroSpace, boxMicroSpaceN: the same reverb as the Box synths)
         ofParameter<bool>  rvb;
         ofParameter<float> rvbMix, rvbDecay, rvbSize, rvbPredelay, rvbPosition, rvbSpread;
         ofParameter<float> rvbLowpass, rvbHighDamp, rvbLowDamp, rvbModFreq, rvbSpin, rvbWander;
@@ -412,6 +414,7 @@ private:
         bool output = false;                 // a node output (VU): no typed value
     };
     std::map<std::string, PublishAction> publishActions;
+    scDropdowns dropdowns;               // option names of the window combos: published, they are dropdowns
     std::vector<std::string> publishedKeys;
     std::map<std::string, std::shared_ptr<ofxOceanodeAbstractParameter>> nodeHandles; // published or fader
     std::vector<std::string> faderKeys;

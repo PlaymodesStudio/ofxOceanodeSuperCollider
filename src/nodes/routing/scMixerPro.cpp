@@ -378,7 +378,7 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
         t.eqGain[b].set(prefix + " Gain", 0.0f, -24.0f, 24.0f);
         t.eqShape[b].set(prefix + (shelf ? " Slope" : " Q"), 1.0f, shelf ? 0.1f : 0.1f, shelf ? 4.0f : 20.0f);
     }
-    // Compressor (CompressorPro core) and reverb (SpaceMaster) inserts
+    // Compressor (CompressorPro core) and reverb (MicroSpace, as in the Box synths) inserts
     const std::string c = "Comp " + n, r = "Rvb " + n;
     t.comp.set(c, false);
     t.compThreshold.set(c + " Threshold", -18.0f, -60.0f, 0.0f);
@@ -399,8 +399,8 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
     t.rvbPosition.set(r + " Late", 0.8f, 0.0f, 1.0f);
     t.rvbSpread.set(r + " Spread", 0.15f, -1.0f, 1.0f);
     t.rvbLowpass.set(r + " Lowpass", 10000.0f, 200.0f, 20000.0f);
-    t.rvbHighDamp.set(r + " Hi Damp", 6.0f, 0.0f, 24.0f);
-    t.rvbLowDamp.set(r + " Lo Damp", 0.0f, 0.0f, 24.0f);
+    t.rvbHighDamp.set(r + " Hi Damp", 6.0f, 0.0f, 12.0f);
+    t.rvbLowDamp.set(r + " Lo Damp", 0.0f, 0.0f, 12.0f);
     t.rvbModFreq.set(r + " Mod Rate", 0.2f, 0.01f, 10.0f);
     t.rvbSpin.set(r + " Spin", 1.0f, 0.0f, 20.0f);
     t.rvbWander.set(r + " Wander", 0.25f, 0.0f, 20.0f);
@@ -424,6 +424,7 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
     t.echoResonance.set(e + " Resonance", 0.1f, 0.0f, 0.9f);
     t.echoFilter.set(e + " Filter", 0, 0, 3);
     t.echoPingPong.set(e + " Ping Pong", 0.0f, 0.0f, 1.0f);
+    t.echoPingPongMode.set(e + " Ping Pong Mode", 0, 0, 5);
     // A return is a wet effect: its echo and reverb start fully wet
     t.echoMix.set(e + " Mix", t.isReturn ? 1.0f : 0.35f, 0.0f, 1.0f);
     if(t.isReturn) t.rvbMix.set(1.0f);
@@ -479,6 +480,7 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
         t.listeners.push(q->newListener([this, tp](float&) { sendSat(*tp); }));
     t.listeners.push(t.echoBeats.newListener([this, tp](bool&) { sendEcho(*tp); }));
     t.listeners.push(t.echoFilter.newListener([this, tp](int&) { sendEcho(*tp); }));
+    t.listeners.push(t.echoPingPongMode.newListener([this, tp](int&) { sendEcho(*tp); }));
     for(auto* q : {&t.echoTime, &t.echoBeatVal, &t.echoFeed, &t.echoCutoff, &t.echoResonance, &t.echoPingPong, &t.echoMix})
         t.listeners.push(q->newListener([this, tp](float&) { sendEcho(*tp); }));
     for(int k = 0; k < MAX_RETURNS; k++) {
@@ -721,7 +723,7 @@ std::vector<ofAbstractParameter*> scMixerPro::fxParams(Track& t) {
         &t.hp, &t.hpFreq, &t.hp24,
         &t.sat, &t.satDrive, &t.satBias, &t.satTone, &t.satOutput, &t.satAuto, &t.satMix,
         &t.echo, &t.echoTime, &t.echoBeats, &t.echoBeatVal, &t.echoFeed, &t.echoCutoff,
-        &t.echoResonance, &t.echoFilter, &t.echoPingPong, &t.echoMix,
+        &t.echoResonance, &t.echoFilter, &t.echoPingPong, &t.echoPingPongMode, &t.echoMix,
         &t.wide, &t.wideWidth, &t.wideDiffuse, &t.wideBassMono, &t.wideBassFreq
     };
     for(int k = 0; k < MAX_RETURNS; k++) { p.push_back(&t.sendLevel[k]); p.push_back(&t.sendPre[k]); }
@@ -1976,6 +1978,7 @@ void scMixerPro::sendEcho(Track& tr) {
     controls.set("resonance", ofClamp(tr.echoResonance.get(), 0.0f, 0.9f));
     controls.set("filtertype", (float)ofClamp(tr.echoFilter.get(), 0, 3));
     controls.set("pingpong", ofClamp(tr.echoPingPong.get(), 0.0f, 1.0f));
+    controls.set("pingmode", (float)ofClamp(tr.echoPingPongMode.get(), 0, 5));
     controls.set("mix", ofClamp(tr.echoMix.get(), 0.0f, 1.0f));
     controls.set("on", (tr.echo.get() && tr.fx[FX_ECHO].offAt < 0.0f) ? 1.0f : 0.0f);
     controls.send();
@@ -2295,6 +2298,12 @@ void scMixerPro::registerTrackActions(Track& tr) {
                    &tr.wide, &tr.wideBassMono})
         addAction(q->getEscapedName(), *q);
     addAction(tr.echoFilter.getEscapedName(), tr.echoFilter);
+    addAction(tr.echoPingPongMode.getEscapedName(), tr.echoPingPongMode);
+    // The combos' option names: published, these are dropdowns
+    dropdowns.set(tr.echoFilter.getEscapedName(), {"LowPass", "HighPass", "BandPass", "PeakEQ"});
+    dropdowns.set(tr.echoPingPongMode.getEscapedName(), {"Pairs", "Rotate", "Rotate Back", "Halves", "Mirror", "Spread"});
+    dropdowns.set(tr.adaptMode.getEscapedName(), {"Direct", "Wrap", "Blocks", "Stretch"});
+    dropdowns.set(tr.scKeyTap.getEscapedName(), {"Pre", "Post"});
     for(auto* q : {&tr.hpFreq, &tr.satDrive, &tr.satBias, &tr.satTone, &tr.satOutput, &tr.satMix,
                    &tr.echoTime, &tr.echoBeatVal, &tr.echoFeed, &tr.echoCutoff, &tr.echoResonance,
                    &tr.echoPingPong, &tr.echoMix, &tr.wideWidth, &tr.wideDiffuse, &tr.wideBassFreq})
@@ -2362,6 +2371,7 @@ bool scMixerPro::publishKey(const std::string& key) {
     if(!publishedSeparatorAdded) { addSeparator("Published", ofColor(200)); publishedSeparatorAdded = true; }
     if(nodeHandles.count(key) == 0) {      // not already in the node as a fader
         nodeHandles[key] = action->second.add();
+        dropdowns.apply(key, nodeHandles[key]);
     }
     if(Track* tr = stripForLevelKey(key)) ensureFaderBadge(*tr);
     publishedKeys.push_back(key);
@@ -2539,6 +2549,7 @@ std::shared_ptr<ofxOceanodeAbstractParameter> scMixerPro::timelineHandle(const s
     if(std::find(timelineKeys.begin(), timelineKeys.end(), key) == timelineKeys.end()) timelineKeys.push_back(key);
     if(nodeHandles.count(key) == 0) {
         nodeHandles[key] = action->second.add();
+        dropdowns.apply(key, nodeHandles[key]);
         updateHandleVisibility(key);
         reorderNodeParameters();
     } else {
@@ -2875,7 +2886,8 @@ ofJson scMixerPro::saveStrip(Track& tr) {
     t["echo"] = {
         {"on", tr.echo.get()}, {"delay", tr.echoTime.get()}, {"beats", tr.echoBeats.get()}, {"delayBeats", tr.echoBeatVal.get()},
         {"feed", tr.echoFeed.get()}, {"cutoff", tr.echoCutoff.get()}, {"resonance", tr.echoResonance.get()},
-        {"filter", tr.echoFilter.get()}, {"pingpong", tr.echoPingPong.get()}, {"mix", tr.echoMix.get()}
+        {"filter", tr.echoFilter.get()}, {"pingpong", tr.echoPingPong.get()},
+        {"pingpongMode", tr.echoPingPongMode.get()}, {"mix", tr.echoMix.get()}
     };
     t["wide"] = {
         {"on", tr.wide.get()}, {"width", tr.wideWidth.get()}, {"diffuse", tr.wideDiffuse.get()},
@@ -2918,42 +2930,69 @@ void scMixerPro::presetSave(ofJson& json) {
     json["mixerPro"] = state;
 }
 
+// A number in a strip's JSON, or def where there is none: NaN and inf are
+// written as null, and a null read with get<float>() throws. The strips of a
+// mixer load in one try block, so one such value used to leave every later
+// strip on its defaults (level 1: a track mixed at -14 dB came back at 0 dB).
+static float stripNum(const ofJson& j, float def) {
+    if(j.is_number()) return j.get<float>();
+    if(j.is_boolean()) return j.get<bool>() ? 1.0f : 0.0f;
+    return def;
+}
+static int stripInt(const ofJson& j, int def) {
+    return j.is_number() ? (int)std::lround(j.get<double>()) : def;
+}
+static bool stripBool(const ofJson& j, bool def) {
+    if(j.is_boolean()) return j.get<bool>();
+    if(j.is_number()) return j.get<double>() != 0.0;
+    return def;
+}
+template<typename T>
+static T stripVal(const ofJson& j, const char* key, T def) {
+    if(!j.is_object() || !j.contains(key)) return def;
+    const ofJson& v = j[key];
+    if constexpr(std::is_same_v<T, bool>) return stripBool(v, def);
+    else if constexpr(std::is_same_v<T, int>) return stripInt(v, def);
+    else if constexpr(std::is_same_v<T, std::string>) return v.is_string() ? v.get<std::string>() : def;
+    else return (T)stripNum(v, (float)def);
+}
+
 void scMixerPro::loadStrip(Track& tr, const ofJson& j) {
-    tr.name = j.value("name", tr.name);
+    tr.name = stripVal<std::string>(j, "name", tr.name);
     if(j.contains("color") && j["color"].is_array() && j["color"].size() == 3)
-        tr.color = ofColor(j["color"][0].get<int>(), j["color"][1].get<int>(), j["color"][2].get<int>());
-    const int server = ofClamp(j.value("server", 0), 0, std::max(0, (int)servers.size() - 1));
+        tr.color = ofColor(stripInt(j["color"][0], tr.color.r), stripInt(j["color"][1], tr.color.g), stripInt(j["color"][2], tr.color.b));
+    const int server = ofClamp(stripVal<int>(j, "server", 0), 0, std::max(0, (int)servers.size() - 1));
     if(server != tr.server) setStripServer(tr, server);
-    tr.level.set(j.value("level", tr.level.get()));
-    tr.balance.set(j.value("balance", tr.balance.get()));
-    tr.mute.set(j.value("mute", false));
-    tr.solo.set(j.value("solo", false));
+    tr.level.set(ofClamp(stripVal<float>(j, "level", tr.level.get()), 0.0f, kTrackMaxGain));
+    tr.balance.set(ofClamp(stripVal<float>(j, "balance", tr.balance.get()), -1.0f, 1.0f));
+    tr.mute.set(stripVal<bool>(j, "mute", false));
+    tr.solo.set(stripVal<bool>(j, "solo", false));
     if(j.contains("bands") && j["bands"].is_array()) {
         for(int b = 0; b < scEQEditor::NUM_BANDS && b < (int)j["bands"].size(); b++) {
             const ofJson& band = j["bands"][b];
             if(!band.is_array() || band.size() < 3) continue;
-            tr.eqFreq[b].set(band[0].get<float>());
-            tr.eqGain[b].set(band[1].get<float>());
-            tr.eqShape[b].set(band[2].get<float>());
+            tr.eqFreq[b].set(stripNum(band[0], tr.eqFreq[b].get()));
+            tr.eqGain[b].set(stripNum(band[1], tr.eqGain[b].get()));
+            tr.eqShape[b].set(stripNum(band[2], tr.eqShape[b].get()));
         }
     }
-    tr.eq.set(j.value("eq", false));
-    tr.dc.set(j.value("dc", false));
+    tr.eq.set(stripVal<bool>(j, "eq", false));
+    tr.dc.set(stripVal<bool>(j, "dc", false));
     if(j.contains("adapt") && j["adapt"].is_array() && j["adapt"].size() >= 3) {
-        tr.adaptMode.set(ofClamp(j["adapt"][0].get<int>(), 0, 3));
-        tr.inChannels.set(ofClamp(j["adapt"][1].get<int>(), 0, MAX_CHANNELS));
-        tr.rotate.set(ofClamp(j["adapt"][2].get<int>(), 0, MAX_CHANNELS - 1));
+        tr.adaptMode.set(ofClamp(stripInt(j["adapt"][0], 0), 0, 3));
+        tr.inChannels.set(ofClamp(stripInt(j["adapt"][1], 0), 0, MAX_CHANNELS));
+        tr.rotate.set(ofClamp(stripInt(j["adapt"][2], 0), 0, MAX_CHANNELS - 1));
     } else {
         tr.adaptMode.set(0); tr.inChannels.set(0); tr.rotate.set(0);
     }
     if(j.contains("sidechain") && j["sidechain"].is_array() && j["sidechain"].size() >= 4) {
         const ofJson& sc = j["sidechain"];
-        tr.scSource.set(ofClamp(sc[0].get<int>(), 0, MAX_TRACKS));
-        tr.scStrength.set(sc[1].get<float>());
-        tr.scAttack.set(sc[2].get<float>());
-        tr.scRelease.set(sc[3].get<float>());
-        if(sc.size() >= 5) tr.scThreshold.set(sc[4].get<float>());
-        tr.scKeyTap.set(sc.size() >= 6 ? ofClamp(sc[5].get<int>(), 0, 1) : 0);
+        tr.scSource.set(ofClamp(stripInt(sc[0], 0), 0, MAX_TRACKS));
+        tr.scStrength.set(stripNum(sc[1], 1.0f));
+        tr.scAttack.set(stripNum(sc[2], 10.0f));
+        tr.scRelease.set(stripNum(sc[3], 200.0f));
+        if(sc.size() >= 5) tr.scThreshold.set(stripNum(sc[4], -18.0f));
+        tr.scKeyTap.set(sc.size() >= 6 ? ofClamp(stripInt(sc[5], 0), 0, 1) : 0);
     } else {
         tr.scSource.set(0);
         tr.scKeyTap.set(0);
@@ -2964,14 +3003,14 @@ void scMixerPro::loadStrip(Track& tr, const ofJson& j) {
     const ofJson& c = (j.contains("comp") && j["comp"].is_object()) ? j["comp"] : none;
     const ofJson& r = (j.contains("rvb") && j["rvb"].is_object()) ? j["rvb"] : none;
     auto num = [](const ofJson& o, const char* k, ofParameter<float>& p, float def) {
-        p.set(ofClamp(o.value(k, def), p.getMin(), p.getMax()));
+        p.set(ofClamp(stripVal<float>(o, k, def), p.getMin(), p.getMax()));
     };
     num(c, "threshold", tr.compThreshold, -18.0f); num(c, "ratio", tr.compRatio, 3.0f);
     num(c, "knee", tr.compKnee, 6.0f);            num(c, "attack", tr.compAttack, 10.0f);
     num(c, "release", tr.compRelease, 150.0f);    num(c, "makeup", tr.compMakeup, 0.0f);
     num(c, "rms", tr.compRms, 0.0f);              num(c, "hpf", tr.compHpf, 20.0f);
     num(c, "mix", tr.compMix, 1.0f);
-    tr.compAuto.set(c.value("auto", false));
+    tr.compAuto.set(stripVal<bool>(c, "auto", false));
     num(r, "mix", tr.rvbMix, 0.25f);         num(r, "decay", tr.rvbDecay, 2.5f);
     num(r, "size", tr.rvbSize, 30.0f);       num(r, "predelay", tr.rvbPredelay, 20.0f);
     num(r, "late", tr.rvbPosition, 0.8f);    num(r, "spread", tr.rvbSpread, 0.15f);
@@ -2984,37 +3023,38 @@ void scMixerPro::loadStrip(Track& tr, const ofJson& j) {
     const ofJson& ej = (j.contains("echo") && j["echo"].is_object()) ? j["echo"] : none;
     const ofJson& wj = (j.contains("wide") && j["wide"].is_object()) ? j["wide"] : none;
     num(hj, "freq", tr.hpFreq, 80.0f);
-    tr.hp24.set(hj.value("24dB", false));
+    tr.hp24.set(stripVal<bool>(hj, "24dB", false));
     num(sj, "drive", tr.satDrive, 6.0f);   num(sj, "warmth", tr.satBias, 0.0f);
     num(sj, "tone", tr.satTone, 20000.0f); num(sj, "output", tr.satOutput, 0.0f);
     num(sj, "mix", tr.satMix, 1.0f);
-    tr.satAuto.set(sj.value("auto", true));
+    tr.satAuto.set(stripVal<bool>(sj, "auto", true));
     num(ej, "delay", tr.echoTime, 0.375f); num(ej, "delayBeats", tr.echoBeatVal, 0.75f);
     num(ej, "feed", tr.echoFeed, 0.45f);   num(ej, "cutoff", tr.echoCutoff, 96.0f);
     num(ej, "resonance", tr.echoResonance, 0.1f); num(ej, "pingpong", tr.echoPingPong, 0.0f);
     num(ej, "mix", tr.echoMix, tr.isReturn ? 1.0f : 0.35f);
-    tr.echoBeats.set(ej.value("beats", true));
-    tr.echoFilter.set(ofClamp(ej.value("filter", 0), 0, 3));
+    tr.echoBeats.set(stripVal<bool>(ej, "beats", true));
+    tr.echoFilter.set(ofClamp(stripVal<int>(ej, "filter", 0), 0, 3));
+    tr.echoPingPongMode.set(ofClamp(stripVal<int>(ej, "pingpongMode", 0), 0, 5));
     num(wj, "width", tr.wideWidth, 1.0f);  num(wj, "diffuse", tr.wideDiffuse, 0.0f);
     num(wj, "bassFreq", tr.wideBassFreq, 150.0f);
-    tr.wideBassMono.set(wj.value("bassMono", true));
+    tr.wideBassMono.set(stripVal<bool>(wj, "bassMono", true));
     for(int k = 0; k < MAX_RETURNS; k++) {
         float level = 0.0f; bool pre = false;
         if(j.contains("sends") && j["sends"].is_array() && k < (int)j["sends"].size()) {
             const ofJson& sk = j["sends"][k];
-            if(sk.is_array() && sk.size() >= 2) { level = sk[0].get<float>(); pre = sk[1].get<bool>(); }
+            if(sk.is_array() && sk.size() >= 2) { level = stripNum(sk[0], 0.0f); pre = stripBool(sk[1], false); }
         }
         tr.sendLevel[k].set(ofClamp(level, 0.0f, 1.0f));
         tr.sendPre[k].set(pre);
     }
-    tr.hp.set(hj.value("on", false));
-    tr.comp.set(c.value("on", false));
-    tr.sat.set(sj.value("on", false));
-    tr.echo.set(ej.value("on", false));
-    tr.rvb.set(r.value("on", false));
-    tr.wide.set(wj.value("on", false));
+    tr.hp.set(stripVal<bool>(hj, "on", false));
+    tr.comp.set(stripVal<bool>(c, "on", false));
+    tr.sat.set(stripVal<bool>(sj, "on", false));
+    tr.echo.set(stripVal<bool>(ej, "on", false));
+    tr.rvb.set(stripVal<bool>(r, "on", false));
+    tr.wide.set(stripVal<bool>(wj, "on", false));
     tr.eqCurveDirty = true;
-    if(!tr.isBus) tr.output.set(ofClamp(j.value("output", 0), 0, MAX_BUSES));
+    if(!tr.isBus) tr.output.set(ofClamp(stripVal<int>(j, "output", 0), 0, MAX_BUSES));
 }
 
 // Before connections: the inputs and the published parameters must exist
@@ -3023,58 +3063,61 @@ void scMixerPro::loadBeforeConnections(ofJson& json) {
     if(!json.contains("mixerPro") || !json["mixerPro"].is_object()) return;
     const ofJson& state = json["mixerPro"];
     try {
-        const int channels = ofClamp(state.value("numChannels", currentChannels), 1, MAX_CHANNELS);
+        const int channels = ofClamp(stripVal<int>(state, "numChannels", currentChannels), 1, MAX_CHANNELS);
         if(numChannels.get() != channels) numChannels.set(channels);
-        setTrackCount(state.value("numTracks", (int)tracks.size()));
+        setTrackCount(stripVal<int>(state, "numTracks", (int)tracks.size()));
 
         // Returns and buses first: the tracks' sends and outputs refer to them
-        setReturnCount(state.value("numReturns", 0));
-        if(state.contains("returns") && state["returns"].is_array()) {
-            const ofJson& list = state["returns"];
-            for(size_t k = 0; k < returns.size() && k < list.size(); k++) loadStrip(*returns[k], list[k]);
-        }
-        setBusCount(state.value("numBuses", 0));
-        if(state.contains("buses") && state["buses"].is_array()) {
-            const ofJson& list = state["buses"];
-            for(size_t k = 0; k < buses.size() && k < list.size(); k++) loadStrip(*buses[k], list[k]);
-        }
-        if(state.contains("tracks") && state["tracks"].is_array()) {
-            const ofJson& list = state["tracks"];
-            for(size_t t = 0; t < tracks.size() && t < list.size(); t++) loadStrip(*tracks[t], list[t]);
-        }
+        setReturnCount(stripVal<int>(state, "numReturns", 0));
+        // Each strip on its own: a value one of them cannot read is logged
+        // and the strips after it still get their settings
+        auto loadStrips = [this](const ofJson& state, const char* key, auto& strips) {
+            if(!(state.contains(key) && state[key].is_array())) return;
+            const ofJson& list = state[key];
+            for(size_t k = 0; k < strips.size() && k < list.size(); k++) {
+                try { loadStrip(*strips[k], list[k]); }
+                catch(const std::exception& e) {
+                    ofLogError("scMixerPro") << "Could not load " << key << " " << k + 1 << ": " << e.what();
+                }
+            }
+        };
+        loadStrips(state, "returns", returns);
+        setBusCount(stripVal<int>(state, "numBuses", 0));
+        loadStrips(state, "buses", buses);
+        loadStrips(state, "tracks", tracks);
         {
             const ofJson none = ofJson::object();
             const ofJson& ms = (state.contains("master") && state["master"].is_object()) ? state["master"] : none;
             auto obj = [&](const char* k) -> const ofJson& { return (ms.contains(k) && ms[k].is_object()) ? ms[k] : none; };
             auto num = [](const ofJson& o, const char* k, ofParameter<float>& p, float def) {
-                p.set(ofClamp(o.value(k, def), p.getMin(), p.getMax()));
+                p.set(ofClamp(stripVal<float>(o, k, def), p.getMin(), p.getMax()));
             };
             const ofJson& hp = obj("hp"); const ofJson& eq = obj("eq"); const ofJson& mx = obj("max"); const ofJson& lm = obj("lim");
             num(hp, "freq", mHpFreq, 30.0f);
-            mHp24.set(hp.value("24dB", true));
+            mHp24.set(stripVal<bool>(hp, "24dB", true));
             for(int b = 0; b < scEQEditor::NUM_BANDS; b++) {
                 float f = kBandFreq[b], g = 0.0f, q = 1.0f;
                 if(eq.contains("bands") && eq["bands"].is_array() && b < (int)eq["bands"].size()) {
                     const ofJson& band = eq["bands"][b];
-                    if(band.is_array() && band.size() >= 3) { f = band[0].get<float>(); g = band[1].get<float>(); q = band[2].get<float>(); }
+                    if(band.is_array() && band.size() >= 3) { f = stripNum(band[0], f); g = stripNum(band[1], g); q = stripNum(band[2], q); }
                 }
                 mEqFreq[b].set(f); mEqGain[b].set(g); mEqShape[b].set(q);
             }
             num(mx, "drive", mMaxDrive, 3.0f); num(mx, "ceiling", mMaxCeiling, -0.3f);
             num(mx, "character", mMaxCharacter, 4.0f);
-            mMaxIsp.set(mx.value("isp", true));
+            mMaxIsp.set(stripVal<bool>(mx, "isp", true));
             num(lm, "ceiling", mLimCeiling, -0.3f);
             mEqCurveDirty = true;
-            mHp.set(hp.value("on", false));
-            mEq.set(eq.value("on", false));
-            mMax.set(mx.value("on", false));
-            mLim.set(lm.value("on", false));
+            mHp.set(stripVal<bool>(hp, "on", false));
+            mEq.set(stripVal<bool>(eq, "on", false));
+            mMax.set(stripVal<bool>(mx, "on", false));
+            mLim.set(stripVal<bool>(lm, "on", false));
         }
-        if(state.value("inputNamesFollowTracks", false)) syncTrackInputNames();
+        if(stripVal<bool>(state, "inputNamesFollowTracks", false)) syncTrackInputNames();
         else useLegacyInputNames();
-        if(state.value("faderNamesFollowTracks", false)) syncFaderNames();
+        if(stripVal<bool>(state, "faderNamesFollowTracks", false)) syncFaderNames();
         else useLegacyFaderNames();
-        const bool faders = state.value("showFaders", false);
+        const bool faders = stripVal<bool>(state, "showFaders", false);
         if(showFaders.get() != faders) showFaders.set(faders);
         // Connections are restored immediately after this hook, so fader
         // parameters must exist now rather than waiting for update().
@@ -3367,10 +3410,16 @@ bool scMixerPro::drawFader(const char* id, float& gain, ImVec2 pos, ImVec2 size,
         changed = true;
     }
     if(ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) { gain = 1.0f; changed = true; }
-    if(ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0.0f) {
-        p = ofClamp(p + ImGui::GetIO().MouseWheel * 0.01f, 0.0f, 1.0f);
-        gain = posToFader(p);
-        changed = true;
+    // Alt + wheel nudges the fader. A plain wheel over a strip is the strips
+    // area scrolling (a trackpad swipe with its inertia): it used to move
+    // whichever fader sat under the pointer by tens of dB without a drag.
+    if(ImGui::IsItemHovered() && ImGui::GetIO().KeyAlt) {
+        ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);   // the wheel is ours, not the scroll's
+        if(ImGui::GetIO().MouseWheel != 0.0f) {
+            p = ofClamp(p + ImGui::GetIO().MouseWheel * 0.01f, 0.0f, 1.0f);
+            gain = posToFader(p);
+            changed = true;
+        }
     }
     p = faderToPos(gain);
     const float cx = pos.x + size.x * 0.5f;
@@ -3384,7 +3433,7 @@ bool scMixerPro::drawFader(const char* id, float& gain, ImVec2 pos, ImVec2 size,
                       hot ? IM_COL32(235, 235, 240, 255) : IM_COL32(190, 190, 198, 255), 2.0f);
     dl->AddLine(ImVec2(pos.x + 3.0f, yc), ImVec2(pos.x + size.x - 3.0f, yc), IM_COL32(30, 30, 34, 255), 1.0f);
     if(ImGui::IsItemActive() || ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s dB  (drag, Shift: fine, wheel, double-click: 0 dB)",
+        ImGui::SetTooltip("%s dB  (drag, Shift: fine, Opt/Alt+wheel, double-click: 0 dB)",
                           gain <= 1e-6f ? "-inf" : ofToString(ampToDb(gain), 1).c_str());
     return changed;
 }
@@ -4085,7 +4134,7 @@ void scMixerPro::drawEqPanel(float w, float h) {
         if(!on && tr.fx[k].running) ImGui::TextDisabled(k == FX_ECHO || k == FX_RVB ? "ringing out..." : "fading out...");
         else if(!on) ImGui::TextDisabled("off: costs nothing");
         else if(k == FX_COMP) ImGui::Text("GR %4.1f dB", tr.gr);
-        else if(k == FX_RVB) ImGui::TextDisabled("SpaceMaster  -  Decay = RT60");
+        else if(k == FX_RVB) ImGui::TextDisabled("MicroSpace  -  Decay = RT60");
         else if(k == FX_ECHO) ImGui::TextDisabled("%.0f ms%s", echoDelaySec(tr) * 1000.0f, tr.echoBeats.get() ? " at the node tempo" : "");
         else if(k == FX_WIDE) ImGui::TextDisabled(currentChannels < 2 ? "one channel: no effect" : "the mono sum never changes");
         ImGui::SameLine(0, 12.0f * zoom);
@@ -4225,7 +4274,7 @@ void scMixerPro::drawCompPanel(Track& tr) {
     ImGui::EndGroup();
 }
 
-// Reverb tab: the SpaceMaster controls
+// Reverb tab: the MicroSpace controls (boxMicroSpaceN, shared with the Box synths)
 void scMixerPro::drawRvbPanel(Track& tr) {
     const float zoom = ofxOceanodeShared::getZoomLevel();
     const float fieldW = 150.0f * zoom;
@@ -4245,17 +4294,17 @@ void scMixerPro::drawRvbPanel(Track& tr) {
     ImGui::EndGroup();
     ImGui::SameLine(0, 18.0f * zoom);
     ImGui::BeginGroup();
-    slider("Position", tr.rvbPosition, "%.2f", 0, "SpaceMaster Position: early reflections (0) to late tail (1)");
+    slider("Position", tr.rvbPosition, "%.2f", 0, "Early reflections (0) to late tail (1)");
     slider("Spread", tr.rvbSpread, "%.2f", 0, "Left / right predelay offset");
     slider("Lowpass", tr.rvbLowpass, "%.0f Hz", ImGuiSliderFlags_Logarithmic, "Tone of the reverb input");
-    slider("Hi Damp", tr.rvbHighDamp, "%.1f dB", 0, "High-shelf loss per pass in the tank: darker tail");
+    slider("Hi Damp", tr.rvbHighDamp, "%.1f dB", 0, "High shelf in the tank and on the wet (up to 12 dB): darker tail");
     ImGui::EndGroup();
     ImGui::SameLine(0, 18.0f * zoom);
     ImGui::BeginGroup();
-    slider("Lo Damp", tr.rvbLowDamp, "%.1f dB", 0, "Low-shelf loss per pass in the tank: thinner tail");
-    slider("Mod Rate", tr.rvbModFreq, "%.2f Hz", ImGuiSliderFlags_Logarithmic, "Tank delay modulation rate");
-    slider("Spin", tr.rvbSpin, "%.2f", 0, "Sine modulation depth (ms / 5)");
-    slider("Wander", tr.rvbWander, "%.2f", 0, "Random modulation depth (ms / 5)");
+    slider("Lo Damp", tr.rvbLowDamp, "%.1f dB", 0, "Low shelf in the tank and on the wet (up to 12 dB): thinner tail");
+    slider("Mod Rate", tr.rvbModFreq, "%.2f Hz", ImGuiSliderFlags_Logarithmic, "Tank modulation: rate x (Spin + Wander) sets the depth");
+    slider("Spin", tr.rvbSpin, "%.2f", 0, "Modulation depth (adds to Wander)");
+    slider("Wander", tr.rvbWander, "%.2f", 0, "Modulation depth (adds to Spin)");
     ImGui::EndGroup();
 }
 
@@ -4386,16 +4435,34 @@ void scMixerPro::drawEchoPanel(Track& tr) {
     ImGui::SameLine(0, 18.0f * zoom);
     ImGui::BeginGroup();
     {
-        static const char* filters[4] = {"LowPass", "HighPass", "BandPass", "PeakEQ"};
-        int f = ofClamp(tr.echoFilter.get(), 0, 3);
+        static const std::vector<const char*> filterNames = {"LowPass", "HighPass", "BandPass", "PeakEQ"};
+        auto filters = dropdowns.names(tr.echoFilter.getEscapedName());
+        if(filters.empty()) filters = filterNames;
+        int f = ofClamp(tr.echoFilter.get(), 0, (int)filters.size() - 1);
         ImGui::SetNextItemWidth(fieldW);
-        if(ImGui::Combo("Filter", &f, filters, 4)) tr.echoFilter.set(f);
+        if(ImGui::Combo("Filter", &f, filters.data(), (int)filters.size())) tr.echoFilter.set(f);
         drawPublishPopup(tr.echoFilter.getEscapedName());
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("In the feedback loop: every repeat goes through it again");
     }
     panelSlider("Cutoff", tr.echoCutoff, "%.0f (note)", 0, fieldW, "Filter frequency as a MIDI note", pub);
     panelSlider("Resonance", tr.echoResonance, "%.2f", 0, fieldW, nullptr, pub);
-    panelSlider("Ping Pong", tr.echoPingPong, "%.2f", 0, fieldW, "Cross-feeds stereo pairs: repeats alternate left / right", pub);
+    panelSlider("Ping Pong", tr.echoPingPong, "%.2f", 0, fieldW,
+                "How much of each repeat comes from a partner channel (Mode): 1 = repeats alternate", pub);
+    {
+        static const std::vector<const char*> modeNames = {"Pairs", "Rotate", "Rotate Back", "Halves", "Mirror", "Spread"};
+        auto modes = dropdowns.names(tr.echoPingPongMode.getEscapedName());
+        if(modes.empty()) modes = modeNames;
+        int m = ofClamp(tr.echoPingPongMode.get(), 0, (int)modes.size() - 1);
+        ImGui::SetNextItemWidth(fieldW);
+        if(ImGui::Combo("Mode", &m, modes.data(), (int)modes.size())) tr.echoPingPongMode.set(m);
+        drawPublishPopup(tr.echoPingPongMode.getEscapedName());
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip(
+            "Which channel feeds each repeat\n"
+            "Pairs: 1-2, 3-4, ...   Rotate: 1 -> 2 -> 3 -> ... -> 1   Rotate Back: the other way\n"
+            "Halves: first half <-> second half   Mirror: outer <-> outer, inner <-> inner\n"
+            "Spread: the mean of all the other channels\n"
+            "Stereo: every mode alternates left / right");
+    }
     ImGui::EndGroup();
 }
 

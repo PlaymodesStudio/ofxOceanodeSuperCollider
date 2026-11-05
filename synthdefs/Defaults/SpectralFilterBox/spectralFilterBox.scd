@@ -22,6 +22,13 @@
 //                          0: its edge values hold
 //   attack release hold    per-bin smoothing of the levels (s); hold freezes them
 //   gain mix               makeup (linear), dry .. wet
+//   Bandpass mode only:
+//   gains[n * k]           each channel's band gains (the node reads the shaped
+//                          mask at the bands' frequencies and smooths it)
+//   reso                   0..1: the bands' Q scaled by 2^(4 reso), 1x (the
+//                          flat-summing bank) .. 16x (resonant peaks, dips
+//                          between the bands). 0 is the bank exactly as before
+//                          the control existed.
 //
 // Latency: fft - blockSize samples (2048: 45 ms, 4096: 91 ms at 44.1 kHz).
 //
@@ -43,11 +50,11 @@ fftSizes.do { |fft|
         SynthDef(("SpectralFilterBox_" ++ fft ++ "_" ++ n).asSymbol, {
             var lag = { |name, default| NamedControl.kr(name, default, 1/30, fixedLag: true) };
             var mask = lag.(\mask, 1 ! maskSize);
-            var transpose = lag.(\transpose, 0 ! n);
+            var transpose = lag.(\transpose, 0 ! n).asArray;   // n = 1: a one-value control is one OutputProxy
             var low = \lowfreq.kr(20), high = \highfreq.kr(20000), wrap = \wrap.kr(1);
             var attack = \attack.kr(0), release = \release.kr(0), hold = \hold.kr(0);
             var gain = lag.(\gain, 1), mix = lag.(\mix, 1);
-            var sig = In.ar(\in.kr(0), n);
+            var sig = In.ar(\in.kr(0), n).asArray;   // n = 1 too: In.ar(.., 1) is one OutputProxy, not an array
             var dry = DelayN.ar(sig, fft / 44100, (fft - BlockSize.ir) * SampleDur.ir);
             var wet = n.collect { |c|
                 var chain = FFT(LocalBuf(fft), sig[c], 0.5, 0);
@@ -64,8 +71,11 @@ fftSizes.do { |fft|
 // bands inverted so neighbours sum flat. The Q comes from the bands' spacing
 // on the bilinear (warped) axis, so the top octave stays as flat as the rest:
 // all 1s give unity within about 1.5 dB from 25 Hz to 19 kHz, at 44.1, 48
-// or 96 kHz. The node reads its mask at each band's frequency (as the FFT
-// mode at each bin) and sends the gains, channel after channel:
+// or 96 kHz. Resonance (reso, 0..1) narrows every band from that Q by up to
+// 16x (2^(4 reso)): the peaks keep their unity gain and the bank stops
+// summing flat, each band ringing on its own. At 0 the coefficients are the
+// flat bank's, untouched. The node reads its mask at each band's frequency
+// (as the FFT mode at each bin) and sends the gains, channel after channel:
 //   gains[n * k]   (smoothed over 1/30 s; attack / release / hold by the node)
 // The dry signal is not delayed (nothing to line up with).
 [64, 128].do { |k|
@@ -74,13 +84,15 @@ fftSizes.do { |fft|
             var lag = { |name, default| NamedControl.kr(name, default, 1/30, fixedLag: true) };
             var gains = lag.(\gains, 1 ! (n * k));
             var gain = lag.(\gain, 1), mix = lag.(\mix, 1);
-            var sig = In.ar(\in.kr(0), n);
+            var reso = lag.(\reso, 0);
+            var qScale = 2 ** (4 * reso);   // 1 at reso 0: the bank as it was
+            var sig = In.ar(\in.kr(0), n).asArray;   // n = 1 too: In.ar(.., 1) is one OutputProxy, not an array
             var sr = SampleRate.ir, ratio = 2000 ** (1 / k);
             var coefs = k.collect { |b|
                 var f = (10 * (2000 ** ((b + 0.5) / k))).min(sr * 0.49);
                 var lr = tan(pi * (f * ratio.sqrt).min(sr * 0.499) / sr) / tan(pi * f / ratio.sqrt / sr);
                 var w0 = 2pi * f / sr;
-                var al = sin(w0) * 1.5 * (lr.sqrt - lr.sqrt.reciprocal) / 2;
+                var al = sin(w0) * 1.5 * (lr.sqrt - lr.sqrt.reciprocal) / 2 / qScale;   // alpha = sin(w0) / (2 Q)
                 var a0 = al / (1 + al);
                 [a0, 0, a0.neg, 2 * cos(w0) / (1 + al), (1 - al).neg / (1 + al)]
             };

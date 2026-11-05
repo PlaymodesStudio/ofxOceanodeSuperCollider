@@ -387,6 +387,7 @@ private:
     void sectionHeader(const char* title, float w, ofParameter<bool>* on = nullptr, ImU32 accent = 0);
     void slider(ofParameter<float>& p, const char* label, float w, const char* fmt = "%.2f", bool logarithmic = false, const char* tip = nullptr);
     void sliderInt(ofParameter<int>& p, const char* label, float w, const char* fmt = "%d", const char* tip = nullptr);
+    void noteSlider(ofParameter<float>& hz, float w);   // a frequency as a MIDI note (Body / Metal Freq)
     void combo(ofParameter<int>& p, const char* label, float w, const std::vector<std::string>& items, const char* tip = nullptr);
     void toggle(ofParameter<bool>& p, const char* label, const char* tip = nullptr);
     void beginColumn(const char* id);

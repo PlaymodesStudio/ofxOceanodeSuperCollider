@@ -9,7 +9,8 @@ GrainBox and AdditiveBox use `boxMicroSpace<N>` (compiled by
 `Defaults/MixerPro/mixerpro.scd`). SampleBox uses the same adapter inside its
 in-place `SampleBoxReverb_N`, preserving its latest-voice Reverb Mix modulation.
 PhysicalBox's additional Space stage and its WIP prototype also use the core.
-Boxes with no reverb stage need no change. MixerPro's own SpaceMaster stays as-is.
+Boxes with no reverb stage need no change. MixerPro's strips use `boxMicroSpace<N>`
+too (since 2026-11-04); its old `mixerProRvb<N>` is still compiled for the render tests.
 
 Existing parameter names and preset data remain usable. The adapter maps Size
 0–60 to MicroSpace 0–100, retains the separate Decay RT60 override and the

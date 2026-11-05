@@ -60,7 +60,8 @@ scSpectralFilterBox::scSpectralFilterBox() : scNode("SpectralFilterBox") {
                   "it in semitones (per channel with Spread). Shaping (interpolation, "
                   "contrast, blur, steps, invert, dB range) and the per-bin attack / release / hold are in the "
                   "inspector. Custom UGen PV_MaskFilter, about 0.5% CPU per channel. Mode Bandpass: the same "
-                  "filter from a bank of bandpasses, without the FFT's latency (64 or 128 bands).";
+                  "filter from a bank of bandpasses, without the FFT's latency (64 or 128 bands); "
+                  "Resonance narrows its bands (0: the flat bank, 1: 16x the Q, ringing peaks).";
 }
 
 scSpectralFilterBox::~scSpectralFilterBox(){
@@ -79,6 +80,7 @@ void scSpectralFilterBox::setup(){
     addParameter(scroll.set("Scroll", 0.0f, -48.0f, 48.0f));
     addParameter(spread.set("Spread", 0.0f, -120.0f, 120.0f));
     addParameter(depth.set("Depth", 1.0f, 0.0f, 1.0f));
+    addParameter(resonance.set("Resonance", 0.0f, 0.0f, 1.0f));   // Bandpass only: 0 = the flat bank, unchanged
     addParameter(gainDb.set("Gain dB", 0.0f, -24.0f, 36.0f));
     addParameter(mix.set("Mix", 1.0f, 0.0f, 1.0f));
     addCustomRegion(
@@ -114,6 +116,7 @@ void scSpectralFilterBox::setup(){
     listeners.push(bandsP.newListener([this](int& b){ if(b != builtBands && bandpass()) rebuild(); }));
     listeners.push(gainDb.newListener([this](float& g){ sendScalar("gain", std::pow(10.0f, g / 20.0f)); }));
     listeners.push(mix.newListener([this](float& m){ sendScalar("mix", m); }));
+    listeners.push(resonance.newListener([this](float& r){ sendScalar("reso", r); }));   // the FFT defs have no reso: ignored there
     listeners.push(lowFreq.newListener([this](float& f){ sendScalar("lowfreq", f); }));
     listeners.push(highFreq.newListener([this](float& f){ sendScalar("highfreq", f); }));
     listeners.push(wrap.newListener([this, dirtyMask](bool& w){ sendScalar("wrap", w ? 1.0f : 0.0f); dirtyMask(); }));   // the blur wraps too
@@ -306,6 +309,7 @@ void scSpectralFilterBox::sendAll(ofxSCSynth* synth){
     if(bandpass()){
         updateBandGains(0.0f, sentGains.size() != size_t(bandCount() * channels()));
         updates.set("gains", sentGains);
+        updates.set("reso", resonance.get());
         updates.set("gain", std::pow(10.0f, gainDb.get() / 20.0f));
         updates.set("mix", mix.get());
         updates.send();return;

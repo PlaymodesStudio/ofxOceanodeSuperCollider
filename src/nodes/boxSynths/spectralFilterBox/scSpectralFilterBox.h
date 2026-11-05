@@ -21,7 +21,10 @@
 //    the node reads the same shaped mask at each band's frequency (with the
 //    channel's transpose) and sends the gains. Attack / release smooth the
 //    gains here, Hold freezes them. Coarser than the FFT (2 or 1 semitones
-//    per band), otherwise the same filter.
+//    per band), otherwise the same filter. Resonance narrows the bands (Q x1
+//    at 0, the flat-summing bank exactly as before, up to x16 at 1): the
+//    peaks keep their gain, the bank stops summing flat and rings. Nothing
+//    in FFT mode.
 //  • Node: the main controls and a preview of the shaped mask where it sits
 //    now; the rest is in the inspector.
 //
@@ -82,7 +85,7 @@ private:
     ofParameter<int> numChannels, fftSize;            // fftSize: 0 = 2048, 1 = 4096
     ofParameter<int> modeP, bandsP;                   // 0 FFT, 1 Bandpass; bands: 0 = 64, 1 = 128
     ofParameter<std::vector<float>> mask;
-    ofParameter<float> circularXFade, transpose, scroll, spread, depth, gainDb, mix;
+    ofParameter<float> circularXFade, transpose, scroll, spread, depth, resonance, gainDb, mix;   // resonance: Bandpass only
     // ── Inspector ────────────────────────────────────────────────────────────
     ofParameter<int> interp;                          // 0 Linear, 1 Smooth, 2 Steps
     ofParameter<float> contrast, rangeDb, blur, lowFreq, highFreq, attack, release;

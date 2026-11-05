@@ -30,10 +30,13 @@
 //                      \on (lagged) crossfades to dry before the node pauses
 //                      it. Gain reduction (dB) is written to grBus
 //                      (= vuBus + N + 4).
-//   mixerProRvbN    -- per-channel insert: SpaceMaster reverb (pairwise
-//                      cross-feedback tank). \on gates the tank input only:
-//                      switching it off lets the tail ring out, then the node
-//                      pauses it.
+//   boxMicroSpaceN  -- per-channel insert: MicroSpace reverb, the same def the
+//                      Box synths use (OceanodeMicroSpace.box). \on gates the
+//                      reverb input only: switching it off lets the tail ring
+//                      out, then the node pauses it.
+//   mixerProRvbN    -- the older SpaceMaster reverb (pairwise cross-feedback
+//                      tank). No longer used by the node (MicroSpace since
+//                      2026-11-04); kept for the render tests under tools/.
 //   mixerProHPN     -- per-channel insert: high-pass, 12 / 24 dB/oct
 //   mixerProSatN    -- per-channel insert: soft saturation (anti-aliased tanh)
 //   mixerProEchoN   -- per-channel insert: GrainBox's Echo, tempo-synced by the
@@ -222,7 +225,7 @@ channelCounts.do({|numChannels|
         Out.ar(out, LinXFade2.ar(sig, sig * gain, (mix * on) * 2 - 1));
     }).writeDefFile(dir);
 
-    // ---- Reverb insert (SpaceMaster) ----
+    // ---- SpaceMaster reverb (retired insert, kept for tools/ render tests) ----
     // See SYNTHDEFS/Effect/Time/Reverb/spaceMaster.scd for the reconstruction
     // notes. Strip version: one value per control (no per-channel vectors),
     // buffers sized to what the controls can reach, interpolated reads on the
@@ -311,7 +314,7 @@ channelCounts.do({|numChannels|
         Out.ar(out, results.collect(_[0]));
     }).writeDefFile(dir);
 
-    // Box nodes use MicroSpace; MixerPro's own reverb remains independent.
+    // The reverb insert of the Box synths and of MixerPro's strips.
     SynthDef(("boxMicroSpace" ++ numChannels).asSymbol, {
         var input = In.ar(\in.kr(0), numChannels).asArray;
         Out.ar(\out.kr(0), OceanodeMicroSpace.box(input,
@@ -361,11 +364,23 @@ channelCounts.do({|numChannels|
     // Differences from echo.scd: the output is the echoes only (echo.scd's wet
     // also held an undelayed filtered copy of the input), the LocalIn/LocalOut
     // block is compensated so Delay is exact, resonance is capped (rq 0 blew up),
-    // the loop is soft-limited, Ping-pong cross-feeds stereo pairs. \on gates
+    // the loop is soft-limited, Ping-pong cross-feeds channels. \on gates
     // the input only: the repeats ring out.
+    // Ping-pong: each channel's feedback is a blend (\pingpong 0..1) of its
+    // own delayed repeat and a partner's. \pingmode picks the partner:
+    //   0 Pairs       0<->1, 2<->3, ...; an odd last channel keeps its own
+    //   1 Rotate      from the channel below: repeats walk 0 -> 1 -> 2 -> ... -> 0
+    //   2 Rotate Back from the channel above: ... -> 2 -> 1 -> 0 -> n-1
+    //   3 Halves      the first half swaps with the second (i <-> i + n - n div 2);
+    //                 the middle channel of an odd count keeps its own
+    //   4 Mirror      i <-> n-1-i: outer with outer, inner with inner
+    //   5 Spread      the mean of all the other channels: repeats diffuse
+    // With two channels every mode is 0<->1 (Spread included); one channel
+    // has no partner. Not lagged: a mode is a routing, not a level.
     SynthDef(("mixerProEcho" ++ numChannels).asSymbol, {
         arg in=0, out=0;
         var n = numChannels, maxDel = 4, dry, gate, del, fb, cut, rq, mix, pp, fbIn, wet, filters, weights;
+        var pmode, partners;
         dry  = In.ar(in, n).asArray;
         gate = Lag.ar(K2A.ar(\on.kr(1)), 0.02);
         del  = \delay.kr(0.375, 0.1).clip(0.005, maxDel);
@@ -374,12 +389,20 @@ channelCounts.do({|numChannels|
         rq   = 1 - \resonance.kr(0.2, 0.05).clip(0, 0.9);
         mix  = \mix.kr(0.35, 0.05).clip(0, 1);
         pp   = \pingpong.kr(0, 0.05).clip(0, 1);
+        pmode = \pingmode.kr(0).clip(0, 5);
         fbIn = LocalIn.ar(n).asArray;
         if(n > 1) {
-            fbIn = fbIn.collect { |x, i|
-                var partner = if(i.even) { (i + 1).min(n - 1) } { i - 1 };
-                (x * (1 - pp)) + (fbIn[partner] * pp)
+            var half = n div: 2, total = fbIn.sum;
+            partners = n.collect { |i|
+                var pairs  = if(i.even) { (i + 1).min(n - 1) } { i - 1 };
+                var rot    = (i - 1 + n) % n;
+                var rotB   = (i + 1) % n;
+                var halves = if(i < half) { i + n - half } { if(i >= (n - half)) { i - (n - half) } { i } };
+                var mirror = n - 1 - i;
+                var spread = (total - fbIn[i]) / (n - 1);
+                Select.ar(pmode, [fbIn[pairs], fbIn[rot], fbIn[rotB], fbIn[halves], fbIn[mirror], spread])
             };
+            fbIn = n.collect { |i| (fbIn[i] * (1 - pp)) + (partners[i] * pp) };
         };
         wet = LeakDC.ar((fbIn * fb) + (dry * gate), 0.9995);
         filters = [

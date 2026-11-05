@@ -106,7 +106,7 @@ public:
     enum Filter2Mode { Filter2Off, Filter2Vowel, Filter2Drawn, NumFilter2Modes };
     enum Wave { WaveFlat, WaveSaw, WaveSquare, WaveTriangle, WaveSine, WavePulse, WaveOrgan, WaveHollow, WaveRandom, WaveDrawn, NumWaves };
     enum PanMode { PanRandom, PanSpectrum, PanAlternate, PanChannels, NumPanModes };
-    enum SweepShape { SweepLobes, SweepTriangle, SweepSawUp, SweepSawDown, SweepPulse, SweepGauss, SweepSteps, SweepDrawn, NumSweepShapes };
+    enum SweepShape { SweepLobes, SweepTriangle, SweepSawUp, SweepSawDown, SweepPulse, SweepGauss, SweepSteps, SweepDrawn, SweepNoise, NumSweepShapes };
     enum FxStage { FX_EQ, FX_ECHO, FX_REVERB, FX_COUNT };
     // a voice's switchable parts, in their order in the voice (additiveBox.scd);
     // the lanes run as a clock and chunks (VoiceSC::laneClock, lanes)
@@ -178,6 +178,9 @@ private:
     std::vector<float> filter1Curve(int voice) const;
     float voiceCutoff(int voice) const;                      // filter 1 cutoff, keytracked (MIDI)
     float sweepShapeAt(int voice, float x, int mode = -1) const;            // the sweep shape, x = 0..1 (one cycle)
+    float sweepNoiseWeight(int voice) const;                                 // share of the Noise shape (morph weight, else 0 / 1)
+    float sweepNoisePreview(int voice, float hill, float t) const;           // a stand-in for the server's landscape (views only)
+    float sweepViewAt(int voice, float x, float hill, float t) const;        // what the views draw: shape and noise preview blended
     std::vector<float> sweepTable(int voice) const;
     float sweepRangeWeight(int voice, float x) const;        // share of the depth at x = 0..1 along the sweep
     float sampleRate() const;
@@ -428,7 +431,7 @@ private:
     ofParameter<std::vector<int>> filter2Mode;
     ofParameter<std::vector<float>> vowel, formantShift, formantWidth, filter2Mix, drawnEq;
     // Sweep
-    ofParameter<std::vector<float>> sweepAmt, sweepWaves, sweepRate, sweepSharp, sweepPhase;
+    ofParameter<std::vector<float>> sweepAmt, sweepWaves, sweepRate, sweepSharp, sweepPhase, sweepEvolve;
     ofParameter<std::vector<int>> sweepMode, sweepShape;
     ofParameter<std::vector<float>> sweepSkew, sweepLow, sweepHigh, sweepDrawn;
     ofParameter<bool> sweepInvert, sweepRetrig;

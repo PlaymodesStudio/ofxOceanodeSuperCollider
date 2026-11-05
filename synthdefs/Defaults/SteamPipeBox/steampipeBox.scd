@@ -14,7 +14,7 @@ dir=root +/+ "SteamPipeBox";File.mkdir(root);File.mkdir(dir);
         var cable=NamedControl.ar(\gate_ar,0!n)*\gate_sel.kr(0);
         var drone=\drone.kr(0)>0.5;
         var gate=(((SteamPipeStep.ar(values)+cable)>0)+SteamPipeStep.ar(drone))>0;
-        var trig=HPZ1.ar(gate)>0;
+        var trig=((HPZ1.ar(gate)>0)+(Impulse.ar(0)*gate))>0;   // a note: an edge, or a gate open at start (a cable already high)
         var level=Select.ar(drone,[Select.ar(\gate_sel.kr(0)>0,[SteamPipeStep.ar(values),Latch.ar(cable,trig)]),DC.ar(1)!n]);
         var vel=Select.ar(\vel_sel.kr(0)>0,[SteamPipeStep.ar(NamedControl.kr(\velocity,1!n)),NamedControl.ar(\vel_ar,1!n)]);
         Out.ar(\out.kr(0),gate*level.max(0));

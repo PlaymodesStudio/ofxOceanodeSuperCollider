@@ -1313,7 +1313,12 @@ void scSynthdefSync::drawPopup(){
         if(finished) finish();
     }
     if(stage == Stage::Closed) return;
-    if(!ImGui::IsPopupOpen(popupId)) ImGui::OpenPopup(popupId);
+    if(!ImGui::IsPopupOpen(popupId)){
+        // Wait for other dialogs: reopening over another modal every frame
+        // keeps both hidden while they still block all input.
+        if(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) return;
+        ImGui::OpenPopup(popupId);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(ImGui::GetFontSize() * 30, 0), ImVec2(ImGui::GetFontSize() * 44, FLT_MAX));
     if(!ImGui::BeginPopupModal(popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 42);
@@ -1642,7 +1647,11 @@ void scPresetShare::drawPopup(){
         }
     }
     if(stage == Stage::Closed) return;
-    if(!ImGui::IsPopupOpen(sharePopupId)) ImGui::OpenPopup(sharePopupId);
+    if(!ImGui::IsPopupOpen(sharePopupId)){
+        // Wait for other dialogs, as above.
+        if(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) return;
+        ImGui::OpenPopup(sharePopupId);
+    }
     if(!ImGui::BeginPopupModal(sharePopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 40);
     bool close = false;
