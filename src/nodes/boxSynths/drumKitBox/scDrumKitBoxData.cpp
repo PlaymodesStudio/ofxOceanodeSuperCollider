@@ -28,6 +28,9 @@ const std::vector<scDrumKitBox::Spec>& scDrumKitBox::specs() {
         // ── The piece ──
         {"piece", "Tune", "tune", 'f', 0, -24, 24, DEST_TRIG, "%+.2f st", false,
          "Every tonal layer, in semitones, on top of the hit's Pitch (60 = no change)."},
+        {"piece", "Read As", "readas", 'i', 0, 0, 2, DEST_NONE, "%d", false,
+         "The note Global Pitch counts this pad as when its tuning (Body Freq, else Metal Freq) sits between two:\n"
+         "the nearest, the one below or the one above. A sub tuned sharp by ear to an out-of-tune instrument is still its note."},
         {"piece", "Decay", "decayscale", 'f', 1, 0.25f, 4, DEST_SOUND, "x%.2f", true, "Every layer's times at once (envelopes, sweeps)."},
         {"piece", "Stutter Step", "stutstep", 'f', 0, -12, 12, DEST_TRIG, "%+.2f st", false,
          "A stuttering hit (the Stutter input: the Drum Grid's Stutter strip) climbs this many semitones at each retrigger"},

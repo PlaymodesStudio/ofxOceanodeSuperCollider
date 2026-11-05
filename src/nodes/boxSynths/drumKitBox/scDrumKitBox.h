@@ -277,6 +277,7 @@ private:
     std::string padLabel(const Pad& p) const;
     std::string padPart(const Pad& p) const;   // its Global Pitch part ("Pad 2")
     float padRoot(const Pad& p) const;         // the note it sounds at pitch 60 (Body / Metal Freq)
+    float padTuning(const Pad& p) const;   // its tuning as a note, fractions as cents (Body Freq, else Metal Freq)
     ofJson padState(int k) const;
     void applyPadState(int k, const ofJson& state);
     std::string relKey(const std::string& key) const;
@@ -388,6 +389,7 @@ private:
     void slider(ofParameter<float>& p, const char* label, float w, const char* fmt = "%.2f", bool logarithmic = false, const char* tip = nullptr);
     void sliderInt(ofParameter<int>& p, const char* label, float w, const char* fmt = "%d", const char* tip = nullptr);
     void noteSlider(ofParameter<float>& hz, float w);   // a frequency as a MIDI note (Body / Metal Freq)
+    static std::string noteName(float midi);            // "E1 +46c"
     void combo(ofParameter<int>& p, const char* label, float w, const std::vector<std::string>& items, const char* tip = nullptr);
     void toggle(ofParameter<bool>& p, const char* label, const char* tip = nullptr);
     void beginColumn(const char* id);

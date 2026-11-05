@@ -123,20 +123,26 @@ void scDrumKitBox::slider(ofParameter<float>& p, const char* label, float w, con
 // counts the pad's tuning (padRoot): the label names the note, the slider
 // holds the number. Drag it, or Ctrl-click to type a note; it writes the
 // frequency.
-void scDrumKitBox::noteSlider(ofParameter<float>& hz, float w) {
+std::string scDrumKitBox::noteName(float midi) {
     static const char* names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    const int r = (int)std::lround(midi), cents = (int)std::lround((midi - r) * 100.0f);
+    char name[32];
+    if(cents == 0) std::snprintf(name, sizeof name, "%s%d", names[((r % 12) + 12) % 12], (int)std::floor(r / 12.0f) - 1);
+    else std::snprintf(name, sizeof name, "%s%d %+dc", names[((r % 12) + 12) % 12], (int)std::floor(r / 12.0f) - 1, cents);
+    return name;
+}
+
+void scDrumKitBox::noteSlider(ofParameter<float>& hz, float w) {
     auto noteOf = [](float f) { return 69.0f + 12.0f * std::log2(std::max(1.0f, f) / 440.0f); };
     const float z = ofxOceanodeShared::getZoomLevel();
     ImGui::PushID((hz.getEscapedName() + "/note").c_str());
     const float x0 = ImGui::GetCursorPosX();
     float n = noteOf(hz.get());
-    const int r = (int)std::lround(n), cents = (int)std::lround((n - r) * 100.0f);
-    char name[32];
-    std::snprintf(name, sizeof name, "%s%d %+dc", names[((r % 12) + 12) % 12], (int)std::floor(r / 12.0f) - 1, cents);
+    const std::string name = noteName(n);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(name);
-    const char* tip = "The same tuning as a MIDI note. Global Pitch counts the pad as this note rounded (plus Tune): "
-                      "Body Freq while the Body is on, else Metal Freq. Ctrl-click to type one.";
+    ImGui::TextUnformatted(name.c_str());
+    const char* tip = "The tuning as a MIDI note (fractions: cents). Global Pitch counts the pad as a whole note: "
+                      "the nearest, or the one below / above (Read As, in the Voice tab). Ctrl-click to type a note.";
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
     ImGui::SameLine();
     ImGui::SetCursorPosX(x0 + labelW * z);
@@ -242,9 +248,9 @@ void scDrumKitBox::endColumn(bool last) {
 void scDrumKitBox::drawSpec(Pad& p, const Spec& s, float w) {
     const std::string label = shortLabel(s);
     if(s.type == 'f') {
-        slider(p.F(s.label), label.c_str(), w, s.fmt, s.log, s.tip);
-        // the tunings Global Pitch reads the pad's note from: also as a note
+        // the tunings Global Pitch reads the pad's note from: as a note first, then in Hz
         if(std::strcmp(s.label, "Body Freq") == 0 || std::strcmp(s.label, "Metal Freq") == 0) noteSlider(p.F(s.label), w);
+        slider(p.F(s.label), label.c_str(), w, s.fmt, s.log, s.tip);
         return;
     }
     if(s.type == 'b') { toggle(p.B(s.label), label.c_str(), s.tip); return; }
@@ -259,6 +265,9 @@ void scDrumKitBox::drawSpec(Pad& p, const Spec& s, float w) {
     } else if(l == "Duck From") {
         items = {"Off"};
         for(int k = 0; k < MaxPads; k++) items.push_back(k < (int)pads.size() ? padLabel(*pads[k]) : "Pad " + ofToString(k + 1));
+    } else if(l == "Read As") {
+        const float t = padTuning(p);
+        items = {"Nearest: " + noteName(std::round(t)), "Below: " + noteName(std::floor(t + 1e-3f)), "Above: " + noteName(std::ceil(t - 1e-3f))};
     } else if(l == "Model") items = modelNames();
     else if(l == "Style") items = styleNames(p.I("Model").get());
     else if(l == "Click Type") items = {"Pulse", "Noise", "Blip", "Ping"};

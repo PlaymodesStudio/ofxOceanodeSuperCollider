@@ -323,7 +323,7 @@ scDrumKitBox::Control& scDrumKitBox::registerPadControl(Pad& p, ofParameter<T>& 
         if(sc == "mute" || sc == "solo") { sendMutes(); return; }
         if(sc == "duckfrom") { sendDucks(); return; }
         // the note Global Pitch quantizes follows the pad's tuning
-        if(sc == "bodyfreq" || sc == "metalfreq" || sc == "lbody" || sc == "lmetal")
+        if(sc == "bodyfreq" || sc == "metalfreq" || sc == "lbody" || sc == "lmetal" || sc == "readas")
             for(auto& [srv, s] : pad.sc) if(s.trig) s.trig->set("root", padRoot(pad));
         if constexpr(std::is_same<T, int>::value) {
             if(sc == "model") { applyModel(pad, value, 0); return; }
@@ -659,11 +659,24 @@ std::string scDrumKitBox::channelSource(int channel) {
 // Global Pitch: a pad's part (stable: its row) and the note it sounds at
 // pitch 60 (the body's frequency, else the metal's)
 std::string scDrumKitBox::padPart(const Pad& p) const { return "Pad " + ofToString(p.index + 1); }
-float scDrumKitBox::padRoot(const Pad& p) const {
+// the pad's tuning as a note (fractions: cents), before Read As decides
+float scDrumKitBox::padTuning(const Pad& p) const {
     auto note = [](float hz) { return 69.0f + 12.0f * std::log2(std::max(1.0f, hz) / 440.0f); };
     if(p.b.at("Body On").get()) return note(p.f.at("Body Freq").get());
     if(p.b.at("Metal On").get()) return note(p.f.at("Metal Freq").get());
     return 60.0f;
+}
+
+// the whole note Global Pitch quantizes: the tuning's nearest note, or the one
+// below / above it (Read As) when the pad is tuned off the grid on purpose.
+// The synth sounds the tuning itself: it gets the offset from this note.
+float scDrumKitBox::padRoot(const Pad& p) const {
+    const float t = padTuning(p);
+    const int readAs = p.i.count("Read As") ? p.i.at("Read As").get() : 0;
+    const float eps = 1e-3f;
+    if(readAs == 1) return std::floor(t + eps);
+    if(readAs == 2) return std::ceil(t - eps);
+    return std::round(t);
 }
 
 std::string scDrumKitBox::padLabel(const Pad& p) const {
