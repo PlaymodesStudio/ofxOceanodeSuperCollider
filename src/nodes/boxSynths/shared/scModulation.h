@@ -81,6 +81,9 @@ public:
         std::function<ofAbstractParameter*(const std::string& key)> control;
         // Resend voice controls even when only voices after the first changed.
         std::function<void()> voiceParamsChanged;
+        // A control registered after setup (a Routing cell's parameter): hosts
+        // that build their publish registry once (GrainBox) rebuild it here
+        std::function<void()> registryChanged;
     };
 
     scModulation() = default;
@@ -218,6 +221,15 @@ public:
     void refresh();
     void drawLfos(float w);
     void drawRouting(float w);
+    // ── Routing cells as node parameters ─────────────────────────────────────
+    // Right-click a cell: the host's control menu (Publish to Node GUI, the
+    // timeline, MIDI...) on a parameter of the cell's own, "LFO 1 to Cutoff"
+    // (-1..1), created on demand and registered with the host like every
+    // other control. The cell and the parameter are one value: the parameter
+    // follows the matrix every frame, a change of the parameter writes the
+    // cell. column: a target (0..T()-1) or T() + a "Modulate with" column.
+    ofParameter<float>* cellParameter(int source, int column, bool create);
+    bool isCellKey(const std::string& key) const { return cellParams.count(key) != 0; }
     // ── Any control as a target ("Modulate" in its right-click menu) ─────────
     // The control's own value moves: its value (the base) + the routed sources
     // x its range (amount 1: the whole range), written every frame (so steps
@@ -413,6 +425,28 @@ private:
     std::vector<float> slice(const std::vector<float>& v, int c) const;   // copy c's voices of n values
     int fittedBusWidth() const { return fitBusWidth ? std::max((int)W, chunks() * CHUNK) : busWidth; }
     void allocBlocks(ofxSCServer* server, ServerState& st);
+
+    // ── Routing cells as parameters ──────────────────────────────────────────
+    struct CellParam {
+        int source = 0, target = -1;            // target: a built-in target; -1: a "Modulate with" column
+        std::string columnKey;                  // that column's control key (resolved when used)
+        std::unique_ptr<ofParameter<float>> p;  // never destroyed: the host keeps its address
+    };
+    std::map<std::string, CellParam> cellParams;   // by the parameter's key
+    bool cellSyncing = false;
+    std::string stableSourceName(int s) const;     // "LFO 1" whether a Ramp or not: names must not change
+    std::string columnName(int column) const;
+    int cellColumn(const CellParam& c) const;      // its column now, -1 gone
+    const CellParam* cellAt(int source, int column) const;
+    ofParameter<float>* createCell(int source, int target, const std::string& columnKey, const std::string& name);
+    void cellParamChanged(const std::string& key);  // the parameter -> the cell
+    void syncCellParams();                          // the matrix -> the parameters
+    void unpublishCells(const std::function<bool(const CellParam&)>& which);
+    void drawCellMenuItems(const std::string& key); // inside the host's menu (modulateMenu)
+    float cellAmount(int source, int column) const;
+    void setCellAmount(int source, int column, float v);
+    bool cellIsBipolar(int source, int column) const;
+    void setCellBipolar(int source, int column, bool b);
 
     // widgets (GrainBox's look)
     float labelW = 70.0f;

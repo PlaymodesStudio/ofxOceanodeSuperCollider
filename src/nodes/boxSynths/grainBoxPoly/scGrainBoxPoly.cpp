@@ -7033,12 +7033,15 @@ void scGrainBoxPoly::setupModulation(Playhead& ph) {
         p->modV.push_back(&q); p->listeners.push(q.newListener([p, send](vector<float>&) { if(send) send(); p->modDirty = true; }));
     };
     h.publishMenu = [this](const std::string& k) { drawNodePublishContextMenu(k); };
+    // a Routing cell's parameter, registered after setup: the registry again
+    h.registryChanged = [this]() { initializePublishableEditorParameters(); };
     h.control = [this](const std::string& k) -> ofAbstractParameter* {
         if(k.rfind("Trigger", 0) == 0 || k.rfind("Gate", 0) == 0) return nullptr;   // events, not values
         const auto* a = findPublishableEditorParameter(k);
         return a ? a->param : nullptr;
     };
-    h.publishedUnderline = [](const std::string&) {};   // the menu underlines the control
+    // the menu underlines a control's label; a Routing cell (no label) gets the whole cell
+    h.publishedUnderline = [this, p](const std::string& k) { if(p->mod && p->mod->isCellKey(k)) drawPublishedCurrentItemUnderline(k); };
     h.unpublish = [this](const std::string& k) { unpublishEditorParameterFromNode(k); };
     h.publishedKeys = [this]() -> const std::vector<std::string>& { return publishedEditorParameterKeys; };
     h.voices = [this, p]() { return phVoices(*p); };
