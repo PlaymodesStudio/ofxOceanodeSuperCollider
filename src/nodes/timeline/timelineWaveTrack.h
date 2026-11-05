@@ -221,27 +221,41 @@ private:
     std::map<ofxSCServer*, int> outputBuses;
     std::map<ofxSCServer*, bool> serverReady;
     std::set<std::string> warnedMissingPaths;
-    static std::string makeKey(const std::string& trackId, const std::string& clipId) {
-        return trackId + "\n" + clipId;
+    // The timeline keys a Wave track's voices by its timeline and track id
+    // (as its engine reports them to this provider), and a clip by its id.
+    static std::string makeKey(const std::string& trackKey, const std::string& clipId) {
+        return trackKey + "\n" + clipId;
+    }
+    static std::string trackKeyOf(const ofxOceanodeTimelineManager::TimelineRef& ref, const std::string& trackId) {
+        return ofxOceanodeTimelineManager::timeSourceId(ref) + "|" + trackId;
+    }
+    // Every Wave track of every timeline, with its key and a name.
+    struct WaveTrack { std::string key; std::string name; const ofxOceanodeTimelineTrack* track; };
+    std::vector<WaveTrack> waveTracks() const {
+        std::vector<WaveTrack> result;
+        if(getHostContainer() == nullptr || !getHostContainer()->getAutomationExtension()) return result;
+        const auto& timeline = getHostContainer()->getTimelineManager();
+        const auto sequences = timeline.allTimelineSequences();
+        for(const auto& [ref, sequence] : sequences)
+            for(const auto& track : sequence->tracks) {
+                if(!track.isWaveTrack) continue;
+                const std::string name = sequences.size() > 1 ? timeline.timelineName(ref) + " / " + track.name : track.name;
+                result.push_back({trackKeyOf(ref, track.id), name, &track});
+            }
+        return result;
     }
 
-    bool selectedTrack(const std::string& trackId) const {
-        if(trackSelector.get() == 0 || getHostContainer() == nullptr || !getHostContainer()->getAutomationExtension()) return true;
-        const auto& timeline = getHostContainer()->getTimelineManager();
+    bool selectedTrack(const std::string& trackKey) const {
+        if(trackSelector.get() == 0) return true;
         int option = 1;
-        for(const auto& track : timeline.getTracks()) {
-            if(!track.isWaveTrack) continue;
-            if(option++ == trackSelector.get()) return track.id == trackId;
-        }
+        for(const auto& wave : waveTracks())
+            if(option++ == trackSelector.get()) return wave.key == trackKey;
         return false;
     }
 
     void refreshTrackOptions() {
         std::vector<std::string> next{"Mix"};
-        if(getHostContainer() != nullptr && getHostContainer()->getAutomationExtension()) {
-            for(const auto& track : getHostContainer()->getTimelineManager().getTracks())
-                if(track.isWaveTrack) next.push_back(track.name);
-        }
+        for(const auto& wave : waveTracks()) next.push_back(wave.name);
         if(next == trackOptions) return;
         trackOptions = std::move(next);
         const int selected = ofClamp(trackSelector.get(), 0, static_cast<int>(trackOptions.size()) - 1);
@@ -258,13 +272,12 @@ private:
     }
 
     void syncVoicesFromTimeline(ofxSCServer* server) {
-        if(getHostContainer() == nullptr || !getHostContainer()->getAutomationExtension()) return;
-        for(const auto& track : getHostContainer()->getTimelineManager().getTracks()) {
-            if(!track.isWaveTrack) continue;
+        for(const auto& wave : waveTracks()) {
+            const auto& track = *wave.track;
             for(const auto& clip : track.clips) {
                 if(clip.waveFilePath.empty() || clip.waveNumChannels <= 0) continue;
                 DesiredState state;
-                const std::string key = makeKey(track.id, clip.id);
+                const std::string key = makeKey(wave.key, clip.id);
                 auto stateIt = states.find(key);
                 if(stateIt != states.end()) state = stateIt->second;
                 state.filePath = clip.waveFilePath;

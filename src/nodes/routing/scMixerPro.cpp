@@ -2573,6 +2573,35 @@ void scMixerPro::pruneTimelineKeys() {
     if(changed) reorderNodeParameters();
 }
 
+
+#if OFXOCEANODESC_HAS_TIMELINE
+namespace {
+using TimelineRef = ofxOceanodeTimelineManager::TimelineRef;
+// The timelines a node's parameters can go on: those of its canvas and of
+// every canvas around it, from the root down (a timeline drives what is
+// inside its canvas). `canvases` gets the canvases walked, the node's last.
+std::vector<TimelineRef> eligibleTimelines(ofxOceanodeTimelineManager& timeline, const std::string& parents,
+                                           std::vector<std::string>* canvases = nullptr) {
+    std::vector<std::string> walked{std::string()};
+    for(size_t at = parents.find(" / "); ; at = parents.find(" / ", at + 3)) {
+        const std::string prefix = at == std::string::npos ? parents : parents.substr(0, at);
+        if(!prefix.empty() && prefix != "Canvas" && prefix != "0" && std::find(walked.begin(), walked.end(), prefix) == walked.end())
+            walked.push_back(prefix);
+        if(at == std::string::npos) break;
+    }
+    std::vector<TimelineRef> refs;
+    for(const auto& canvas : walked)
+        for(const auto& ref : timeline.timelinesOfCanvas(canvas)) refs.push_back(ref);
+    if(canvases != nullptr) *canvases = walked;
+    return refs;
+}
+std::string timelineLabel(const ofxOceanodeTimelineManager& timeline, const TimelineRef& ref) {
+    const bool root = ref.canvas.empty() || ref.canvas == "Canvas" || ref.canvas == "0";
+    return (root ? std::string() : ref.canvas + " > ") + timeline.timelineName(ref);
+}
+} // namespace
+#endif
+
 // As the node GUI's parameter menu: add to a timeline track (new or
 // existing), as a piano roll, remove
 void scMixerPro::drawTimelineItems(const std::string& key) {
@@ -2584,46 +2613,79 @@ void scMixerPro::drawTimelineItems(const std::string& key) {
     if(type != typeid(float).name() && type != typeid(int).name() && type != typeid(bool).name()) return;
     auto& timeline = container->getTimelineManager();
     auto handle = nodeHandles.find(key);
-    const std::string path = handle != nodeHandles.end() && handle->second ? container->getTimelineParameterPath(*handle->second) : "";
-    struct Bound { std::string trackId, trackName, bindingId; };
+    ofxOceanodeAbstractParameter* existing = handle != nodeHandles.end() && handle->second ? handle->second.get() : nullptr;
+    // Every timeline it can go on (this canvas's and those around it), each
+    // with its tracks; where it is bound already, in any of them.
+    std::vector<std::string> canvases;
+    const auto refs = eligibleTimelines(timeline, getParents(), &canvases);
+    struct Bound { TimelineRef ref; std::string trackId, trackName, bindingId; };
     std::vector<Bound> bound;
-    if(!path.empty())
-        for(const auto& track : timeline.getTracks())
-            for(const auto& binding : track.bindings)
-                if(binding.parameterPath == path) bound.push_back({track.id, track.name, binding.id});
+    if(existing != nullptr)
+        for(const auto& ref : refs) {
+            const auto* sequence = timeline.findTimeline(ref);
+            if(sequence == nullptr) continue;
+            const std::string path = timeline.resolverFor(*sequence).pathOf(*existing);
+            if(path.empty()) continue;
+            for(const auto& track : sequence->tracks)
+                for(const auto& binding : track.bindings)
+                    if(binding.parameterPath == path) bound.push_back({ref, track.id, track.name, binding.id});
+        }
     ImGui::Separator();
     if(ImGui::BeginMenu(("Add to Timeline Track##" + key).c_str())) {
-        if(ImGui::Selectable("New Timeline Track")) {
-            if(auto h = timelineHandle(key)) {
-                const std::string trackId = timeline.createTrack();
-                if(!timeline.addBinding(trackId, *h).empty()) timeline.requestTrackRename(trackId, true);
+        if(refs.empty()) {
+            if(ImGui::Selectable("New Timeline...")) {
+                if(auto h = timelineHandle(key)) {
+                    ofxOceanodeTimelineManager::NewTimelineRequest request;
+                    request.canvas = canvases.back();
+                    request.parameter = h.get();
+                    timeline.requestNewTimeline(request);
+                }
             }
+            if(ImGui::IsItemHovered())
+                ImGui::SetTooltip("No timeline on this canvas or around it: make one, with this parameter on its first track.");
         }
-        if(!timeline.getTracks().empty()) {
-            ImGui::Separator();
-            for(const auto& track : timeline.getTracks()) {
-                if(track.isWaveTrack) continue;
-                const bool already = std::any_of(bound.begin(), bound.end(), [&](const Bound& b) { return b.trackId == track.id; });
+        for(const auto& ref : refs) {
+            auto* sequence = timeline.findTimeline(ref);
+            if(sequence == nullptr) continue;
+            ImGui::PushID(ofxOceanodeTimelineManager::timeSourceId(ref).c_str());
+            if(refs.size() > 1) ImGui::TextDisabled("%s", timelineLabel(timeline, ref).c_str());
+            if(ImGui::Selectable("New Timeline Track")) {
+                if(auto h = timelineHandle(key)) {
+                    const std::string trackId = timeline.createTrack(*sequence, "Timeline Track");
+                    if(!timeline.addBinding(*sequence, trackId, *h).empty()) timeline.requestTrackRename(ref, trackId, true);
+                    else timeline.removeTrack(*sequence, trackId);
+                }
+            }
+            for(const auto& track : sequence->tracks) {
+                if(track.isWaveTrack || track.isFolder || track.isMacroTrack()) continue;
+                const bool already = std::any_of(bound.begin(), bound.end(),
+                                                 [&](const Bound& b) { return b.ref == ref && b.trackId == track.id; });
                 if(ImGui::Selectable((track.name + "##" + track.id).c_str(), already))
-                    if(auto h = timelineHandle(key)) timeline.requestParameterLane(track.id, *h);
+                    if(auto h = timelineHandle(key)) timeline.requestParameterLane(ref, track.id, *h);
                 if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add a lane for this parameter and open its clip.");
             }
+            ImGui::PopID();
         }
         ImGui::EndMenu();
     }
-    if(ImGui::Selectable(("Add to Timeline as Piano Roll...##" + key).c_str()))
-        if(auto h = timelineHandle(key)) timeline.requestNoteGroupSetup(h.get());
+    if(refs.size() <= 1) {
+        if(ImGui::Selectable(("Add to Timeline as Piano Roll...##" + key).c_str()) && !refs.empty())
+            if(auto h = timelineHandle(key)) timeline.requestNoteGroupSetup(refs.front(), h.get());
+    } else if(ImGui::BeginMenu(("Add to Timeline as Piano Roll...##" + key).c_str())) {
+        for(const auto& ref : refs)
+            if(ImGui::MenuItem((timelineLabel(timeline, ref) + "##pr" + ofxOceanodeTimelineManager::timeSourceId(ref)).c_str()))
+                if(auto h = timelineHandle(key)) timeline.requestNoteGroupSetup(ref, h.get());
+        ImGui::EndMenu();
+    }
+    auto remove = [&](const Bound& b) {
+        if(auto* sequence = timeline.findTimeline(b.ref)) timeline.removeBinding(*sequence, b.trackId, b.bindingId);
+        pruneTimelineKeys();
+    };
     if(bound.size() == 1) {
-        if(ImGui::Selectable(("Remove from Timeline##" + key).c_str())) {
-            timeline.removeBinding(bound.front().trackId, bound.front().bindingId);
-            pruneTimelineKeys();
-        }
+        if(ImGui::Selectable(("Remove from Timeline##" + key).c_str())) remove(bound.front());
     } else if(bound.size() > 1 && ImGui::BeginMenu(("Remove from Timeline##" + key).c_str())) {
         for(const auto& b : bound)
-            if(ImGui::MenuItem((b.trackName + "##" + b.bindingId).c_str())) {
-                timeline.removeBinding(b.trackId, b.bindingId);
-                pruneTimelineKeys();
-            }
+            if(ImGui::MenuItem((timelineLabel(timeline, b.ref) + " / " + b.trackName + "##" + b.bindingId).c_str())) remove(b);
         ImGui::EndMenu();
     }
 #endif
