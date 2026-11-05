@@ -87,9 +87,10 @@ void ofxOceanodeSuperColliderController::drawGlobalAudioControls(){
     ImGui::SameLine();
     ImGui::SetNextItemWidth(80);
     float percent = volume * 100.0f;
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyleColorVec4(ImGuiCol_Button));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    const ImVec4 sliderBackground = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, sliderBackground);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, sliderBackground);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, sliderBackground);
     if(ImGui::SliderFloat("##globalSCVolume", &percent, 0.0f, 100.0f, "%.0f%%",
                           ImGuiSliderFlags_AlwaysClamp)){
         volume = percent / 100.0f;
