@@ -26,7 +26,7 @@ units live in `registration/`; concrete nodes live in `nodes/` by function.
 | `timing/` | Scheduled inputs and transport compatibility |
 | `samples/` | Sample browsing and embedding |
 | `synthdefs/` | Compilation, synchronization and runtime/plugin path discovery |
-| `integration/` | Bridges to other addon features, currently MacroMixer |
+| `integration/` | Bridges to other addon features, currently MacroMixer (the ScBus audio bridge and the server allocator that puts a transition's incoming audio on a free server; see ofxOceanode `docs/macro-mixer.md`, *SuperCollider*) |
 | `external/` | Third-party code |
 | `docs/` | Design and behavior references |
 

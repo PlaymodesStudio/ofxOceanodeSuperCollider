@@ -144,6 +144,15 @@ public:
     void requestRecomputeGraph(){ recomputePending = true; }
 
     bool hasGraphNodes() const { return !nodesList.empty(); }
+    // Whether the graph runs nodes besides its Outputs and MacroMixer audio
+    // bridges: a server that only plays a mixer's (silent) bridge is free for
+    // the mixer's next graph (MacroMixerServerAllocator).
+    bool hasSoundNodes() const;
+    // The folder holding a SynthDef, by name; empty when unknown.
+    std::string synthdefFolderOf(const std::string& synthdef) const {
+        const auto found = synthdefFolders.find(synthdef);
+        return found == synthdefFolders.end() ? std::string() : found->second;
+    }
     // Tickets are submitted only by a successful rebuild. An older /synced
     // cannot release resources retired after that rebuild was submitted.
     uint64_t requestMixerRouting(std::shared_ptr<void> lease = {}) {

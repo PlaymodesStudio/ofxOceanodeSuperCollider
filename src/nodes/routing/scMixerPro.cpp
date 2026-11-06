@@ -111,6 +111,13 @@ void scMixerPro::setup() {
     addOutputAction(masterVuOut.getEscapedName(), masterVuOut);
     addInspectorParameter(vuAttack.set("VU Attack", 10.0f, 1.0f, 100.0f));
     addInspectorParameter(vuRelease.set("VU Release", 300.0f, 10.0f, 2000.0f));
+    // Off: each strip runs on the server it names (unchanged). On, with every
+    // strip on one server: the strips run on whichever server builds this
+    // node's graph, so a MacroMixer can start a source holding it on a free
+    // server. Connect the output of the strips' server (Out S1 when they are
+    // on S1).
+    addInspectorParameter(followGraphServer.set("Follow Graph Server", false));
+    nodeListeners.push(followGraphServer.newListener([this](bool&) { resetFollow(); }));
     currentChannels = numChannels.get();
 
     addSeparator("Outputs", ofColor(150, 200, 170));
@@ -237,15 +244,74 @@ void scMixerPro::requireSynthdefs() {
 // Servers
 // ════════════════════════════════════════════════════════════════════════════
 
-int scMixerPro::serverIndexOf(ofxSCServer* server) const {
+int scMixerPro::rawServerIndexOf(ofxSCServer* server) const {
     for(int i = 0; i < (int)servers.size(); i++)
         if(servers[i] && servers[i]->getServer() == server) return i;
     return -1;
 }
 
-ofxSCServer* scMixerPro::serverAt(int index) const {
+ofxSCServer* scMixerPro::rawServerAt(int index) const {
     if(index < 0 || index >= (int)servers.size() || !servers[index]) return nullptr;
     return servers[index]->getServer();
+}
+
+int scMixerPro::serverIndexOf(ofxSCServer* server) const {
+    // Following: the server running the strips stands for their home index;
+    // any other server gets an index no strip names (servers.size()), so its
+    // walk follows none of their inputs and it builds none of them.
+    const int home = followHome();
+    if(server && followServer && home >= 0) return server == followServer ? home : (int)servers.size();
+    return rawServerIndexOf(server);
+}
+
+ofxSCServer* scMixerPro::serverAt(int index) const {
+    const int home = followHome();
+    if(followServer && home >= 0 && index == home) return followServer;
+    return rawServerAt(index);
+}
+
+int scMixerPro::followHome() const {
+    if(!followGraphServer.get()) return -1;
+    int home = -1;
+    const auto same = [&home](int server) {
+        if(home < 0) home = server;
+        return server == home;
+    };
+    for(const auto& tr : tracks) if(!same(tr->server)) return -1;
+    for(const auto& b : buses) if(!same(b->server)) return -1;
+    for(const auto& r : returns) if(!same(r->server)) return -1;
+    return std::max(0, home);
+}
+
+void scMixerPro::noteFollowWalk(ofxSCServer* server) {
+    if(followServer || !server || rawServerIndexOf(server) < 0 || followHome() < 0) return;
+    // Strips already running somewhere (the switch was just turned on) stay
+    // there: that server takes them.
+    for(Track* tr : allStrips()) if(tr->liveServer) { followServer = tr->liveServer; return; }
+    followServer = server;
+    // Already part of this server's graph, without strips (another server
+    // ran them): they start now, as a strip moved to a running server does.
+    auto state = serverStates.find(server);
+    if(state == serverStates.end() || !state->second.active) return;   // createSynth starts them
+    for(Track* tr : allStrips()) createRuntime(*tr, server);
+    updateMaster(server);
+    refreshTrackOutputs();
+}
+
+void scMixerPro::resetFollow() {
+    ofxSCServer* previous = followServer;
+    followServer = nullptr;
+    if(previous) {
+        for(Track* tr : allStrips()) if(tr->liveServer == previous) destroyRuntime(*tr, true);
+        destroyMaster(previous, true);
+    }
+    // The strips go to the servers they name; a following mixer is taken
+    // again by the next server whose walk reaches it.
+    if(followHome() < 0)
+        for(Track* tr : allStrips()) if(!tr->synth && isServerActive(tr->server)) createRuntime(*tr, serverAt(tr->server));
+    for(auto& [server, state] : serverStates) if(state.active) updateMaster(server);
+    refreshTrackOutputs();
+    for(auto* manager : servers) if(manager) manager->requestRecomputeGraph();
 }
 
 bool scMixerPro::isServerActive(int index) const {
@@ -261,6 +327,7 @@ bool scMixerPro::isServerActive(int index) const {
 bool scMixerPro::appendOrderedNodes(vector<scNode*>& nodesList,
                                     map<scNode*, std::pair<int, vector<int>>>& visitedNodeChilds,
                                     vector<scNode*> parents) {
+    noteFollowWalk(getGraphTraversalServer());
     const int k = serverIndexOf(getGraphTraversalServer());
     parents.push_back(this);
     for(size_t t = 0; t < tracks.size() && t < availableInputs.size(); t++) {
@@ -323,7 +390,7 @@ void scMixerPro::addTrack() {
     const std::string n = ofToString(t.index + 1);
     t.name = "Track " + n;
     t.color = kTrackPalette[t.index % (sizeof(kTrackPalette) / sizeof(kTrackPalette[0]))];
-    t.server = 0;
+    t.server = std::max(0, followHome()); // Following: with the other strips.
 
     initStrip(t, n);
 
@@ -688,6 +755,13 @@ void scMixerPro::setStripServer(Track& tr, int server) {
     destroyRuntime(tr, true);
     tr.server = server;
     tr.srcBus = -1;
+    if(followGraphServer.get()) {
+        // Following: whether the strips still share a server decides where
+        // all of them run, so every strip and server is placed again.
+        if(tr.isReturn) refreshSends();
+        resetFollow();
+        return;
+    }
     if(isServerActive(server)) createRuntime(tr, serverAt(server));
     if(tr.isReturn) refreshSends();
     refreshTrackOutputs();
@@ -900,7 +974,7 @@ void scMixerPro::addBus() {
     b.index = (int)buses.size();
     b.name = std::string("Bus ") + char('A' + b.index);
     b.color = kTrackPalette[(b.index + 3) % (sizeof(kTrackPalette) / sizeof(kTrackPalette[0]))];
-    b.server = 0;
+    b.server = std::max(0, followHome()); // Following: with the other strips.
     initStrip(b, "B" + ofToString(b.index + 1));
     buses.push_back(std::move(bp));
     registerTrackActions(b);
@@ -951,7 +1025,7 @@ void scMixerPro::addReturn() {
         ofColor(70, 190, 190), ofColor(90, 170, 220), ofColor(120, 200, 150), ofColor(170, 200, 90)
     };
     r.color = kReturnColours[r.index % MAX_RETURNS];
-    r.server = 0;
+    r.server = std::max(0, followHome()); // Following: with the other strips.
     initStrip(r, "R" + ofToString(r.index + 1));
     returns.push_back(std::move(rp));
     registerTrackActions(r);
@@ -2205,6 +2279,18 @@ void scMixerPro::free(ofxSCServer* server) {
     state.order.clear();
     state.placedBefore = -1;
     state.active = false;
+    // Following, and the server running the strips no longer builds this
+    // node: any other server still reaching it walks again and takes them.
+    if(server == followServer) {
+        followServer = nullptr;
+        for(auto* manager : servers)
+            if(manager && manager->getServer() != server && serverStates[manager->getServer()].active) manager->requestRecomputeGraph();
+    }
+}
+
+scMixerPro::MorphHint scMixerPro::inspectorMorphHint(const ofAbstractParameter& p) const {
+    if(p.getName() == followGraphServer.getName()) return MorphHint::Structural;
+    return scNode::inspectorMorphHint(p);
 }
 
 void scMixerPro::moveSynthBefore(ofxSCServer* server, int nodeID) {
@@ -3803,6 +3889,10 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
     const std::string preview = "S" + ofToString(tr.server + 1);
     const bool serverOk = isServerActive(tr.server);
     if(!serverOk) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.4f, 1.0f));
+    // Following, the strips run where the node's graph runs: the server is
+    // not chosen per strip.
+    const bool following = followHome() >= 0;
+    ImGui::BeginDisabled(following);
     if(ImGui::BeginCombo("##server", preview.c_str())) {
         for(int i = 0; i < (int)servers.size(); i++) {
             const std::string label = "Server " + ofToString(i + 1) + (isServerActive(i) ? "" : "  (no output)");
@@ -3810,6 +3900,10 @@ void scMixerPro::drawTrackStrip(Track& tr, float w, float h) {
         }
         ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
+    if(following && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Follow Graph Server: every strip plays on the server that builds this mixer's graph%s",
+                          followServer ? "" : " (none yet)");
     if(!serverOk) {
         ImGui::PopStyleColor();
         if(ImGui::IsItemHovered())

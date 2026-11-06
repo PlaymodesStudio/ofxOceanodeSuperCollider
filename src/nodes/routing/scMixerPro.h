@@ -13,6 +13,14 @@
 //  chain is built on its own track's server only. On server k the node runs
 //  one synth per track of k, all summing into "Out Sk".
 //
+//  Follow Graph Server (Inspector, off by default). With every strip on one
+//  server h and the switch on, "server h" means whichever server builds this
+//  node's graph: the first server whose walk reaches the node runs all the
+//  strips (writing "Out S(h+1)" on that server) and the others run none. A
+//  MacroMixer can then start a source holding this mixer on a free server.
+//  When that server stops building the node, the next one to reach it takes
+//  the strips. Strips on different servers ignore the switch.
+//
 //  DSP (mixerpro.scd). mixerProTrackN is polyMixerTrackN verbatim (balance,
 //  level, mute, masterLevel, NaN protection, VU). EQ / DC correction live in a
 //  separate insert synth (mixerProEQN / mixerProDCN / mixerProEQDCN) created
@@ -140,6 +148,8 @@ public:
     void presetSave(ofJson& json) override;
     void loadBeforeConnections(ofJson& json) override;
     void presetRecallAfterSettingParameters(ofJson& json) override;
+    // Follow Graph Server switches mid-morph only by replacing the node.
+    MorphHint inspectorMorphHint(const ofAbstractParameter& p) const override;
 
 private:
     // An on-demand insert (Comp, Rvb): created when first switched on, paused while off
@@ -274,9 +284,28 @@ private:
     // --- servers ---
     std::vector<serverManager*> servers;
     std::map<ofxSCServer*, ServerState> serverStates;
+    // A strip's server index <-> the server running it. With Follow Graph
+    // Server on and every strip on one server (the "home" index), the home
+    // index means the server that runs this node's graph (followServer) and
+    // every other server runs none of its strips. Otherwise as named.
     int serverIndexOf(ofxSCServer* server) const;
     ofxSCServer* serverAt(int index) const;
     bool isServerActive(int index) const;
+
+    // --- Follow Graph Server (Inspector, off by default) ---
+    // For a mixer inside a MacroMixer source: its strips play on whichever
+    // server builds its graph, so the MacroMixer can start the source on a
+    // free server. Only when every strip names the same server.
+    ofParameter<bool> followGraphServer;
+    ofxSCServer* followServer = nullptr;   // the server running the strips while following
+    int followHome() const;                // the strips' common server, or -1 (not following)
+    int rawServerIndexOf(ofxSCServer* server) const;
+    ofxSCServer* rawServerAt(int index) const;
+    // A graph walk by `server` reached the node: the first one takes the strips.
+    void noteFollowWalk(ofxSCServer* server);
+    // The switch or the strips' servers changed: move the strips to the
+    // servers they now name and rebuild every server's graph.
+    void resetFollow();
 
     // --- node parameters ---
     ofParameter<bool> showWindow;

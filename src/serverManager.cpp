@@ -503,6 +503,15 @@ void serverManager::loadSynthdefFolder(const std::string& folder){
     server->requestNRTSync();
 }
 
+bool serverManager::hasSoundNodes() const {
+    for(auto* node : nodesList){
+        if(node == nullptr || node->isMacroMixerBridge()) continue;
+        if(std::find(outputs.begin(), outputs.end(), node) != outputs.end()) continue;
+        return true;
+    }
+    return false;
+}
+
 bool serverManager::areRequiredSynthdefsLoading() const {
     return server != nullptr && server->isNRTSyncPending();
 }
