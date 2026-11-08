@@ -300,9 +300,10 @@ void forEachSavedNode(const ofJson& definition,const std::function<void(const st
 }
 // A source that shares a server-bound resource with the rest of the patch
 // cannot alternate: an ScBus Portal would pull its other end onto a second
-// server and SC Mixer Pro names its tracks' servers (both: single server). A
-// node saved with a Server (SC FFT HD, Buffer Allocator, A2k) reads the
-// graph's buses on that server, so the graph is placed there (pinned).
+// server, and an SC Mixer Pro with strips on several servers names them
+// itself (both: single server). A node saved with a Server (SC FFT HD,
+// Buffer Allocator, A2k), or a Mixer Pro whose strips all name one server
+// without Follow Graph Server, plays only there: the source is pinned to it.
 // A saved setting as a number or bool: parameters save as strings ("1"), custom blocks as JSON values.
 bool savedInt(const ofJson& value,int& result) {
     if(value.is_number_integer()) { result=value.get<int>(); return true; }
@@ -314,23 +315,26 @@ bool savedInt(const ofJson& value,int& result) {
     }
     return false;
 }
-// An SC Mixer Pro saved with Follow Graph Server on and every strip on one
-// server plays wherever its graph runs: it does not hold the source.
-bool mixerProFollows(const ofJson& settings) {
+// Where a saved SC Mixer Pro plays: its strips' common server (home, -1 when
+// they name several), and whether Follow Graph Server moves them with the graph.
+struct MixerProPlacement { int home=0; bool follows=false; };
+MixerProPlacement mixerProPlacement(const ofJson& settings) {
+    MixerProPlacement result;
     int on=0;
-    if(!settings.contains("Follow_Graph_Server") || !savedInt(settings.at("Follow_Graph_Server"),on) || !on) return false;
-    if(!settings.contains("mixerPro") || !settings.at("mixerPro").is_object()) return true; // Default strips: one server.
+    result.follows=settings.contains("Follow_Graph_Server") && savedInt(settings.at("Follow_Graph_Server"),on) && on;
+    if(!settings.contains("mixerPro") || !settings.at("mixerPro").is_object()) return result; // Default strips: server 0.
     const auto& state=settings.at("mixerPro");
     int home=-1;
     for(const char* key:{"tracks","buses","returns"}) {
         if(!state.contains(key) || !state.at(key).is_array()) continue;
         for(const auto& strip:state.at(key)) {
             int server=0;
-            if(strip.is_object() && strip.contains("server") && !savedInt(strip.at("server"),server)) return false;
-            if(home<0) home=server; else if(server!=home) return false;
+            if(strip.is_object() && strip.contains("server") && !savedInt(strip.at("server"),server)) { result.home=-1; return result; }
+            if(home<0) home=server; else if(server!=home) { result.home=-1; return result; }
         }
     }
-    return true;
+    result.home=std::max(0,home);
+    return result;
 }
 MacroMixerMixing::PlacementPin savedServerPin(const ofJson& definition) {
     MacroMixerMixing::PlacementPin pin;
@@ -341,18 +345,26 @@ MacroMixerMixing::PlacementPin savedServerPin(const ofJson& definition) {
         const ofJson none=ofJson::object();
         const auto& saved=entry.contains("settings") && entry.at("settings").is_object() ? entry.at("settings") : none;
         if(model=="Portal ScBus") { single=path+" (an ScBus Portal) shares audio with the rest of the patch"; return; }
+        // A node that plays only on a given server pins the source there. Two
+        // nodes naming different servers keep it single.
+        const auto pinTo=[&](int index,const std::string& why) {
+            if(pin.index<0) { pin.index=index; pin.reason=why; }
+            else if(pin.index!=index) single=why+" while "+pin.reason;
+        };
         if(model=="SC Mixer Pro") {
-            if(!mixerProFollows(saved))
-                single=path+" (SC Mixer Pro) names its tracks' servers; switch on its Follow Graph Server with every strip on one server";
+            // Following, its strips play wherever the graph runs. Otherwise they
+            // play only on the server they name, so the source must go there.
+            const auto mixer=mixerProPlacement(saved);
+            if(mixer.home<0) single=path+" (SC Mixer Pro) spreads its strips over several servers";
+            else if(!mixer.follows) pinTo(mixer.home,path+" (SC Mixer Pro) plays its strips on server "+std::to_string(mixer.home)
+                +"; switch on its Follow Graph Server to let it alternate");
             return;
         }
         // SC Output is kept out of every source (its Server places the host's graph).
         if(model.rfind("SC ",0)!=0 || model=="SC Output") return;
-        const auto& settings=saved;
         int index=-1;
-        if(!settings.contains("Server") || !savedInt(settings.at("Server"),index)) return;
-        if(pin.index<0) { pin.index=index; pin.reason=path+" uses server "+std::to_string(index); }
-        else if(pin.index!=index) single=path+" uses server "+std::to_string(index)+" while "+pin.reason;
+        if(!saved.contains("Server") || !savedInt(saved.at("Server"),index)) return;
+        pinTo(index,path+" uses server "+std::to_string(index));
     });
     if(!single.empty()) { pin.index=-1; pin.single=true; pin.reason=single; }
     return pin;
