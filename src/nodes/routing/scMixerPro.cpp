@@ -22,6 +22,8 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <initializer_list>
+#include <set>
 
 namespace {
 const char* kBandNames[scEQEditor::NUM_BANDS] = {"Lo", "LoMid", "Mid", "HiMid", "Hi"};
@@ -3048,7 +3050,7 @@ ofJson scMixerPro::saveStrip(Track& tr) {
     return t;
 }
 
-void scMixerPro::presetSave(ofJson& json) {
+ofJson scMixerPro::mixerState() {
     ofJson state;
     state["inputNamesFollowTracks"] = true;
     state["faderNamesFollowTracks"] = true;
@@ -3075,7 +3077,11 @@ void scMixerPro::presetSave(ofJson& json) {
                      {"character", mMaxCharacter.get()}, {"isp", mMaxIsp.get()}};
     master["lim"] = {{"on", mLim.get()}, {"ceiling", mLimCeiling.get()}};
     state["master"] = master;
-    json["mixerPro"] = state;
+    return state;
+}
+
+void scMixerPro::presetSave(ofJson& json) {
+    json["mixerPro"] = mixerState();
 }
 
 // A number in a strip's JSON, or def where there is none: NaN and inf are
@@ -3292,6 +3298,210 @@ void scMixerPro::presetRecallAfterSettingParameters(ofJson&) {
     // Values that arrived as node parameters are already applied by their
     // listeners; live synths (a paste into a running patch) get everything.
     for(Track* tr : allStrips()) if(tr->synth) sendAll(*tr);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MacroMixer sound morph (see the header)
+// ════════════════════════════════════════════════════════════════════════════
+
+namespace {
+// The parameter's type decides: ofClamp returns float for an int control too
+template<typename T, typename U> void setIfChanged(ofParameter<T>& p, U v) { const T value = static_cast<T>(v); if(p.get() != value) p.set(value); }
+// Frequencies and times glide geometrically; everything else linearly.
+bool morphLogKey(const std::string& key, const std::string& parent, int index) {
+    static const std::set<std::string> keys{"freq", "decay", "size", "predelay", "attack", "release", "delay",
+                                            "cutoff", "hpf", "lowpass", "modrate", "tone", "bassFreq"};
+    if(keys.count(key)) return true;
+    if(parent == "bands" && (index == 0 || index == 2)) return true;      // band frequency and Q
+    if(parent == "sidechain" && (index == 2 || index == 3)) return true;  // attack, release
+    return false;
+}
+// Blends two saved blocks of the same shape: floats glide, integers (modes,
+// counts, routing), switches and strings take the target's value from half
+// way, and anything only one side has is the target's.
+ofJson blendMorphJson(const ofJson& a, const ofJson& b, float t, bool switched,
+                      const std::string& key = "", const std::string& parent = "", int index = -1) {
+    if(a.is_object() && b.is_object()) {
+        ofJson out = b;
+        for(auto it = b.begin(); it != b.end(); ++it)
+            if(a.contains(it.key())) out[it.key()] = blendMorphJson(a.at(it.key()), it.value(), t, switched, it.key(), key, -1);
+        return out;
+    }
+    if(a.is_array() && b.is_array() && a.size() == b.size()) {
+        ofJson out = ofJson::array();
+        for(size_t i = 0; i < b.size(); i++) out.push_back(blendMorphJson(a[i], b[i], t, switched, "", key, (int)i));
+        return out;
+    }
+    if(a.is_number_float() && b.is_number()) {
+        const double x = a.get<double>(), y = b.get<double>();
+        if(morphLogKey(key, parent, index) && x > 0.0 && y > 0.0) return std::exp(std::log(x) + (std::log(y) - std::log(x)) * t);
+        return x + (y - x) * t;
+    }
+    return switched ? b : a;
+}
+}
+
+scMixerPro::MorphHint scMixerPro::morphHint(const ofxOceanodeAbstractParameter& p) const {
+    const std::string name = p.getName();
+    if(name == numChannels.getName() || name == numTracks.getName()) return MorphHint::Structural;
+    if(name == showFaders.getName() || name == showWindow.getName()) return MorphHint::Skip;
+    // A published strip or master control is blended with the rest of the mix
+    if(isStripControl(name)) return MorphHint::Skip;
+    return MorphHint::Interpolate;
+}
+
+bool scMixerPro::isStripControl(const std::string& name) const {
+    for(const auto* list : {&tracks, &buses, &returns}) for(const auto& tr : *list) {
+        for(const ofAbstractParameter* q : std::initializer_list<const ofAbstractParameter*>{&tr->level, &tr->balance, &tr->mute, &tr->solo, &tr->eq, &tr->dc,
+                &tr->scSource, &tr->scKeyTap, &tr->scStrength, &tr->scAttack, &tr->scRelease, &tr->scThreshold,
+                &tr->hp, &tr->hp24, &tr->hpFreq, &tr->sat, &tr->satAuto, &tr->satDrive, &tr->satBias, &tr->satTone, &tr->satOutput, &tr->satMix,
+                &tr->echo, &tr->echoBeats, &tr->echoTime, &tr->echoBeatVal, &tr->echoFeed, &tr->echoCutoff, &tr->echoResonance, &tr->echoPingPong,
+                &tr->echoMix, &tr->echoFilter, &tr->echoPingPongMode, &tr->wide, &tr->wideBassMono, &tr->wideWidth, &tr->wideDiffuse, &tr->wideBassFreq,
+                &tr->comp, &tr->compAuto, &tr->compThreshold, &tr->compRatio, &tr->compKnee, &tr->compAttack, &tr->compRelease, &tr->compMakeup,
+                &tr->compRms, &tr->compHpf, &tr->compMix, &tr->rvb, &tr->rvbMix, &tr->rvbDecay, &tr->rvbSize, &tr->rvbPredelay, &tr->rvbPosition,
+                &tr->rvbSpread, &tr->rvbLowpass, &tr->rvbHighDamp, &tr->rvbLowDamp, &tr->rvbModFreq, &tr->rvbSpin, &tr->rvbWander})
+            if(q->getName() == name) return true;
+        for(int b = 0; b < scEQEditor::NUM_BANDS; b++)
+            if(tr->eqFreq[b].getName() == name || tr->eqGain[b].getName() == name || tr->eqShape[b].getName() == name) return true;
+        for(int k = 0; k < MAX_RETURNS; k++)
+            if(tr->sendLevel[k].getName() == name || tr->sendPre[k].getName() == name) return true;
+    }
+    for(const ofAbstractParameter* q : std::initializer_list<const ofAbstractParameter*>{&mHp, &mHp24, &mHpFreq, &mEq, &mMax, &mMaxDrive, &mMaxCeiling,
+                                        &mMaxCharacter, &mMaxIsp, &mLim, &mLimCeiling})
+        if(q->getName() == name) return true;
+    for(int b = 0; b < scEQEditor::NUM_BANDS; b++)
+        if(mEqFreq[b].getName() == name || mEqGain[b].getName() == name || mEqShape[b].getName() == name) return true;
+    return false;
+}
+
+bool scMixerPro::morphCheck(const ofJson& target, std::string& reason) const {
+    if(!target.contains("mixerPro") || !target["mixerPro"].is_object()) { reason = "saved mixer state is missing"; return false; }
+    const ofJson& state = target["mixerPro"];
+    auto count = [&](const char* key, size_t live, const char* what) {
+        if(stripVal<int>(state, key, (int)live) != (int)live) { reason = std::string(what) + " count differs"; return false; }
+        return true;
+    };
+    if(!count("numTracks", tracks.size(), "track") || !count("numBuses", buses.size(), "bus") || !count("numReturns", returns.size(), "return")) return false;
+    if(stripVal<int>(state, "numChannels", currentChannels) != currentChannels) { reason = "channel count differs"; return false; }
+    auto servers = [&](const char* key, const auto& strips) {
+        if(!state.contains(key) || !state[key].is_array()) return true;
+        for(size_t k = 0; k < strips.size() && k < state[key].size(); k++)
+            if(stripVal<int>(state[key][k], "server", strips[k]->server) != strips[k]->server) {
+                reason = strips[k]->name + " is on another server"; return false;
+            }
+        return true;
+    };
+    return servers("tracks", tracks) && servers("buses", buses) && servers("returns", returns);
+}
+
+bool scMixerPro::morphBegin(const ofJson& target, std::string& reason) {
+    if(!morphCheck(target, reason)) return false;
+    morphStart = mixerState();
+    morphTarget = target["mixerPro"];
+    return true;
+}
+
+void scMixerPro::morphApply(float t, bool switched) {
+    if(morphStart.is_null() || morphTarget.is_null()) return;
+    applyMorphState(blendMorphJson(morphStart, morphTarget, ofClamp(t, 0.0f, 1.0f), switched));
+}
+
+void scMixerPro::morphEnd(bool completed) {
+    if(morphStart.is_null() || morphTarget.is_null()) return;
+    applyMorphState(completed ? morphTarget : morphStart);
+    morphStart = ofJson(); morphTarget = ofJson();
+}
+
+void scMixerPro::applyMorphState(const ofJson& state) {
+    auto strips = [&](const char* key, auto& list) {
+        if(!state.contains(key) || !state[key].is_array()) return;
+        for(size_t k = 0; k < list.size() && k < state[key].size(); k++) applyStripMorph(*list[k], state[key][k]);
+    };
+    strips("tracks", tracks); strips("buses", buses); strips("returns", returns);
+    if(state.contains("master") && state["master"].is_object()) applyMasterMorph(state["master"]);
+}
+
+void scMixerPro::applyStripMorph(Track& tr, const ofJson& j) {
+    if(!j.is_object()) return;
+    const ofJson none = ofJson::object();
+    auto block = [&](const char* k) -> const ofJson& { return (j.contains(k) && j[k].is_object()) ? j[k] : none; };
+    auto num = [](const ofJson& o, const char* k, ofParameter<float>& p) {
+        if(o.contains(k) && o[k].is_number()) setIfChanged(p, ofClamp(o[k].get<float>(), p.getMin(), p.getMax()));
+    };
+    auto flag = [](const ofJson& o, const char* k, ofParameter<bool>& p) {
+        if(o.contains(k)) setIfChanged(p, stripBool(o[k], p.get()));
+    };
+    auto ival = [](const ofJson& o, const char* k, ofParameter<int>& p) {
+        if(o.contains(k) && o[k].is_number()) setIfChanged(p, ofClamp(stripInt(o[k], p.get()), p.getMin(), p.getMax()));
+    };
+    num(j, "level", tr.level); num(j, "balance", tr.balance);
+    flag(j, "mute", tr.mute); flag(j, "solo", tr.solo);
+    if(j.contains("bands") && j["bands"].is_array())
+        for(int b = 0; b < scEQEditor::NUM_BANDS && b < (int)j["bands"].size(); b++) {
+            const ofJson& band = j["bands"][b];
+            if(!band.is_array() || band.size() < 3) continue;
+            setIfChanged(tr.eqFreq[b], stripNum(band[0], tr.eqFreq[b].get()));
+            setIfChanged(tr.eqGain[b], stripNum(band[1], tr.eqGain[b].get()));
+            setIfChanged(tr.eqShape[b], stripNum(band[2], tr.eqShape[b].get()));
+        }
+    flag(j, "eq", tr.eq); flag(j, "dc", tr.dc);
+    if(!tr.isBus) ival(j, "output", tr.output);
+    if(j.contains("sidechain") && j["sidechain"].is_array() && j["sidechain"].size() >= 4) {
+        const ofJson& sc = j["sidechain"];
+        setIfChanged(tr.scSource, ofClamp(stripInt(sc[0], tr.scSource.get()), 0, MAX_TRACKS));
+        setIfChanged(tr.scStrength, stripNum(sc[1], tr.scStrength.get()));
+        setIfChanged(tr.scAttack, stripNum(sc[2], tr.scAttack.get()));
+        setIfChanged(tr.scRelease, stripNum(sc[3], tr.scRelease.get()));
+        if(sc.size() >= 5) setIfChanged(tr.scThreshold, stripNum(sc[4], tr.scThreshold.get()));
+        if(sc.size() >= 6) setIfChanged(tr.scKeyTap, ofClamp(stripInt(sc[5], tr.scKeyTap.get()), 0, 1));
+    }
+    const ofJson& c = block("comp"); const ofJson& r = block("rvb"); const ofJson& hj = block("hp");
+    const ofJson& sj = block("sat"); const ofJson& ej = block("echo"); const ofJson& wj = block("wide");
+    num(c, "threshold", tr.compThreshold); num(c, "ratio", tr.compRatio); num(c, "knee", tr.compKnee);
+    num(c, "attack", tr.compAttack); num(c, "release", tr.compRelease); num(c, "makeup", tr.compMakeup);
+    num(c, "rms", tr.compRms); num(c, "hpf", tr.compHpf); num(c, "mix", tr.compMix); flag(c, "auto", tr.compAuto);
+    num(r, "mix", tr.rvbMix); num(r, "decay", tr.rvbDecay); num(r, "size", tr.rvbSize); num(r, "predelay", tr.rvbPredelay);
+    num(r, "late", tr.rvbPosition); num(r, "spread", tr.rvbSpread); num(r, "lowpass", tr.rvbLowpass); num(r, "hidamp", tr.rvbHighDamp);
+    num(r, "lodamp", tr.rvbLowDamp); num(r, "modrate", tr.rvbModFreq); num(r, "spin", tr.rvbSpin); num(r, "wander", tr.rvbWander);
+    num(hj, "freq", tr.hpFreq); flag(hj, "24dB", tr.hp24);
+    num(sj, "drive", tr.satDrive); num(sj, "warmth", tr.satBias); num(sj, "tone", tr.satTone); num(sj, "output", tr.satOutput);
+    num(sj, "mix", tr.satMix); flag(sj, "auto", tr.satAuto);
+    num(ej, "delay", tr.echoTime); num(ej, "delayBeats", tr.echoBeatVal); num(ej, "feed", tr.echoFeed); num(ej, "cutoff", tr.echoCutoff);
+    num(ej, "resonance", tr.echoResonance); num(ej, "pingpong", tr.echoPingPong); num(ej, "mix", tr.echoMix); flag(ej, "beats", tr.echoBeats);
+    ival(ej, "filter", tr.echoFilter); ival(ej, "pingpongMode", tr.echoPingPongMode);
+    num(wj, "width", tr.wideWidth); num(wj, "diffuse", tr.wideDiffuse); num(wj, "bassFreq", tr.wideBassFreq); flag(wj, "bassMono", tr.wideBassMono);
+    if(!tr.isReturn && j.contains("sends") && j["sends"].is_array())
+        for(int k = 0; k < MAX_RETURNS && k < (int)j["sends"].size(); k++) {
+            const ofJson& sk = j["sends"][k];
+            if(!sk.is_array() || sk.size() < 2) continue;
+            setIfChanged(tr.sendLevel[k], ofClamp(stripNum(sk[0], tr.sendLevel[k].get()), 0.0f, 1.0f));
+            setIfChanged(tr.sendPre[k], stripBool(sk[1], tr.sendPre[k].get()));
+        }
+    // The switches last, as loadStrip does: an insert switched on takes its blended settings
+    flag(hj, "on", tr.hp); flag(c, "on", tr.comp); flag(sj, "on", tr.sat);
+    flag(ej, "on", tr.echo); flag(r, "on", tr.rvb); flag(wj, "on", tr.wide);
+}
+
+void scMixerPro::applyMasterMorph(const ofJson& ms) {
+    const ofJson none = ofJson::object();
+    auto obj = [&](const char* k) -> const ofJson& { return (ms.contains(k) && ms[k].is_object()) ? ms[k] : none; };
+    auto num = [](const ofJson& o, const char* k, ofParameter<float>& p) {
+        if(o.contains(k) && o[k].is_number()) setIfChanged(p, ofClamp(o[k].get<float>(), p.getMin(), p.getMax()));
+    };
+    auto flag = [](const ofJson& o, const char* k, ofParameter<bool>& p) { if(o.contains(k)) setIfChanged(p, stripBool(o[k], p.get())); };
+    const ofJson& hp = obj("hp"); const ofJson& eq = obj("eq"); const ofJson& mx = obj("max"); const ofJson& lm = obj("lim");
+    num(hp, "freq", mHpFreq); flag(hp, "24dB", mHp24);
+    if(eq.contains("bands") && eq["bands"].is_array())
+        for(int b = 0; b < scEQEditor::NUM_BANDS && b < (int)eq["bands"].size(); b++) {
+            const ofJson& band = eq["bands"][b];
+            if(!band.is_array() || band.size() < 3) continue;
+            setIfChanged(mEqFreq[b], stripNum(band[0], mEqFreq[b].get()));
+            setIfChanged(mEqGain[b], stripNum(band[1], mEqGain[b].get()));
+            setIfChanged(mEqShape[b], stripNum(band[2], mEqShape[b].get()));
+        }
+    num(mx, "drive", mMaxDrive); num(mx, "ceiling", mMaxCeiling); num(mx, "character", mMaxCharacter); flag(mx, "isp", mMaxIsp);
+    num(lm, "ceiling", mLimCeiling);
+    flag(hp, "on", mHp); flag(eq, "on", mEq); flag(mx, "on", mMax); flag(lm, "on", mLim);
 }
 
 // ════════════════════════════════════════════════════════════════════════════

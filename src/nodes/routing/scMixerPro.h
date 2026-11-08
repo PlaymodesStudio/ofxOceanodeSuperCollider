@@ -150,6 +150,17 @@ public:
     void presetRecallAfterSettingParameters(ofJson& json) override;
     // Follow Graph Server switches mid-morph only by replacing the node.
     MorphHint inspectorMorphHint(const ofAbstractParameter& p) const override;
+    // MacroMixer sound morph: the mixerPro block (strip levels, balance,
+    // mutes, EQ, inserts, sends, sidechain, the master section) blends on the
+    // running node, so a different mix no longer replaces the mixer. Numbers
+    // glide (frequencies and times in log), switches and modes jump half way.
+    // Strip and channel counts and each strip's server are structural.
+    MorphKeys morphKeys() const override { return {{"mixerPro"}, {}}; }
+    MorphHint morphHint(const ofxOceanodeAbstractParameter& p) const override;
+    bool morphCheck(const ofJson& target, std::string& reason) const override;
+    bool morphBegin(const ofJson& target, std::string& reason) override;
+    void morphApply(float t, bool switched) override;
+    void morphEnd(bool completed) override;
 
 private:
     // An on-demand insert (Comp, Rvb): created when first switched on, paused while off
@@ -385,6 +396,17 @@ private:
     Track* eqTarget();
     ofJson saveStrip(Track& tr);
     void loadStrip(Track& tr, const ofJson& j);
+    // The mixerPro block presetSave writes
+    ofJson mixerState();
+    // --- MacroMixer sound morph ---
+    ofJson morphStart, morphTarget;
+    bool isStripControl(const std::string& name) const;
+    // Sets only the sound of a strip / the master from a (blended) block,
+    // leaving names, colours, servers and the adapter alone; each value is
+    // sent only when it changes.
+    void applyStripMorph(Track& tr, const ofJson& j);
+    void applyMasterMorph(const ofJson& m);
+    void applyMorphState(const ofJson& state);
     void setChannelCount(int channels);
     bool anySolo() const;
     void updateMutes();
