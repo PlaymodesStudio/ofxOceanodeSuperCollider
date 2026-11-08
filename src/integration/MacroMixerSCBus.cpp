@@ -409,6 +409,9 @@ void registerMacroMixerSCBus(const std::vector<serverManager*>& servers) {
         for(size_t i=0;i<servers.size();++i) if(servers[i] && servers[i]->getServer()==server) return std::to_string(i);
         return {};
     };
+    hooks.instance=[servers](int index) -> void* {
+        return index>=0 && index<int(servers.size()) && servers[index] ? servers[index]->getServer() : nullptr;
+    };
     registry.registerPlacement("ScBus",std::move(hooks));
     for(const auto& spec:std::vector<std::pair<std::string,std::string>>{{"linear","Linear"},{"equal_power","Equal Power"},{"switch","Switch"},{"fade_out","FadeOut"}}) {
         MacroMixerMixing::Policy p{spec.first,spec.second,"ScBus",[](const Value&,const Value&,float,const ofJson&)->Value {
