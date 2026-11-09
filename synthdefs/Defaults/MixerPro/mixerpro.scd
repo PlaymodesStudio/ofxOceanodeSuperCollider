@@ -123,7 +123,9 @@ channelCounts.do({|numChannels|
         postKey = (keyLevels * faderGain).reduce(\max);
         preKey = Select.kr(CheckBadValues.kr(preKey, 0, 0) > 0, [preKey, 0]);
         postKey = Select.kr(CheckBadValues.kr(postKey, 0, 0) > 0, [postKey, 0]);
-        Out.kr(Select.kr(vuBus >= 0, [-1, vuBus + numChannels]),
+        // no VU bus (-1): an index past every control bus, which Out skips. A negative index is cast
+        // to an unsigned one (on arm64 -1 becomes 0) and would overwrite control bus 0.
+        Out.kr(Select.kr(vuBus >= 0, [1e9, vuBus + numChannels]),
             [preKey, postKey, LagUD.kr(preKey, 0, 0.05), LagUD.kr(postKey, 0, 0.05)]);
 
         // --- SIDECHAIN DUCKING (this track as a target) ---
@@ -154,7 +156,7 @@ channelCounts.do({|numChannels|
 
         // VU on the sanitized signal
         vuSig = LagUD.kr(Amplitude.kr(cleaned), vuAttackTime, vuReleaseTime);
-        Out.kr(vuBus, vuSig.max(0).min(2) * (vuBus >= 0));
+        Out.kr(Select.kr(vuBus >= 0, [1e9, vuBus]), vuSig.max(0).min(2));   // no bus: past every bus (an Out.kr to -1 overwrites control bus 0 with zeros)
 
         processedSig = cleaned * masterLevel.lag(0.05);
         Out.ar(out, processedSig);
@@ -221,7 +223,7 @@ channelCounts.do({|numChannels|
         gain = makeup + (auto * 0.5 * (slope * ((xk.squared / (2 * knee)) + (thr.neg - (knee * 0.5)).max(0))).min(range));
         gain = (gain - grs).dbamp;
 
-        Out.kr(Select.kr(grBus >= 0, [-1, grBus]), A2K.kr(grs));
+        Out.kr(Select.kr(grBus >= 0, [1e9, grBus]), A2K.kr(grs));   // no bus: past every bus (see the VU tap)
         Out.ar(out, LinXFade2.ar(sig, sig * gain, (mix * on) * 2 - 1));
     }).writeDefFile(dir);
 
@@ -518,7 +520,7 @@ channelCounts.do({|numChannels|
     SynthDef(("mixerProMasterOut" ++ numChannels).asSymbol, {
         arg in=0, out=0, vuBus=(-1);
         var sig = In.ar(in, numChannels);
-        Out.kr(vuBus, LagUD.kr(Amplitude.kr(sig), \vuAttackTime.kr(10) * 0.001, \vuReleaseTime.kr(300) * 0.001).max(0).min(2) * (vuBus >= 0));
+        Out.kr(Select.kr(vuBus >= 0, [1e9, vuBus]), LagUD.kr(Amplitude.kr(sig), \vuAttackTime.kr(10) * 0.001, \vuReleaseTime.kr(300) * 0.001).max(0).min(2));   // no bus: past every bus
         Out.ar(out, sig);
     }).writeDefFile(dir);
 
