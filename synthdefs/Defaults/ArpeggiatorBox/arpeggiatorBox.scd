@@ -91,8 +91,9 @@ SynthDef(\ArpeggiatorBoxPlayer, {
     Out.ar(OceanodeOutput.kr(\btrigout), outs[voices..].collect(_[0]));
     Out.ar(OceanodeOutput.kr(\bgateout), outs[voices..].collect(_[1]));
     Out.ar(OceanodeOutput.kr(\bpitchout), outs[voices..].collect(_[2]));
-    // no bus yet (-1): adds zeros to bus 0 instead (Out sums: harmless)
-    Out.kr(\status.kr(-1).max(0), [A2K.kr(cnt), A2K.kr(posF)] * (\status.kr(-1) >= 0));
+    // no bus yet (-1): an index past every control bus, which Out skips (writing zeros to bus 0
+    // would overwrite it: a control bus set from outside is replaced, not summed)
+    Out.kr(Select.kr(\status.kr(-1) >= 0, [1e9, \status.kr(-1)]), [A2K.kr(cnt), A2K.kr(posF)]);
 }).writeDefFile(defDir);
 "ArpeggiatorBoxPlayer compiled".postln;
 )
