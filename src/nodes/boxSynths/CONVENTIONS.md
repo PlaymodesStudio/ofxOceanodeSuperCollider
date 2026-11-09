@@ -467,7 +467,12 @@ The SuperCollider nodes use one of two mechanisms. `scGlobalPitch`
   Pitch changes are clamped to the control's declared range
   (`applyInRange`). PMod's modulator pitch `modp` sets
   the timbre, so it doesn't follow. While Detune is on they expand a single
-  value to one per channel, and they resend when a feature changes. An audio
+  value to one per channel, and they resend when a feature changes. Glide
+  reaches them as well: `apply()` reads the registry's lagged transpose and
+  offset tables, which the Global Pitch node's `update()` moves each frame
+  (`ofxOceanodeGlobalPitch::advance`, the same 60 dB lag as the
+  `GlobalPitchGlide` synth) and which call `valueChanged` while they move, so
+  these nodes resend their notes along the glide. An audio
   cable into a generic synth's note control follows inside the synth:
   `OceanodeParameter` / `OceanodeParameterLag` (`synthdefs/Oceanode/
   oceanodeParameter.sc`) pass the cable of a `pitch`, `pitcharray` or `carp`

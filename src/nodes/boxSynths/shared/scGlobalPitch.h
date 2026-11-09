@@ -45,7 +45,11 @@
 //  compiled again, so they send applyInRange(value, channel, min, max) for their
 //  note controls (isPitchControl; one value per channel while spread() is on)
 //  and resend them when a feature changes (valueChanged): Oceanode values and
-//  the timeline follow, an audio cable into the pitch does not.
+//  the timeline follow, an audio cable into the pitch does not. They glide
+//  too: apply() reads the registry's lagged transpose and offset tables
+//  (ofxOceanodeGlobalPitch::advance, ticked by the Global Pitch node), which
+//  move like the GlobalPitchGlide synth's and call valueChanged each frame
+//  while they move, so the C++ sends land where the buses are.
 //
 
 #pragma once
