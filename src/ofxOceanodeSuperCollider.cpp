@@ -168,12 +168,42 @@ void registerCollection(ofxOceanode &o){
 	registerScope(o);
 }
 
+namespace {
+// Keeps Oceanode's startup splash open until every server has initialized.
+ofEventListeners startupSplashListeners;
+}
+
 void setup(ofxOceanode &o){
 	auto controller = o.getController<ofxOceanodeSuperColliderController>();
+	const auto servers = controller->getServers();
+	auto label = [servers](size_t i){
+		return "SC " + ofToString(i + 1) + " (:" + ofToString(servers[i]->preferences.udpPort) + ")";
+	};
+	for(size_t i = 0; i < servers.size(); ++i) ofLogNotice(label(i)) << "Starting server";
 	controller->setup();
+	// Subscribe after allocation, before the first OSC update.
+	startupSplashListeners.unsubscribeAll();
+	auto released = std::make_shared<std::vector<bool>>(servers.size(), false);
+	for(size_t i = 0; i < servers.size(); ++i){
+		auto *server = servers[i]->getServer();
+		if(server == nullptr) continue;
+		const std::string name = label(i);
+		o.holdStartupSplash();
+		startupSplashListeners.push(server->serverBootedEvent.newListener([name]{
+			ofLogNotice(name) << "Server Booted";
+		}));
+		startupSplashListeners.push(server->serverInitializedEvent.newListener([&o, released, i, name]{
+			ofLogNotice(name) << "Server Initialized";
+			if(!(*released)[i]){
+				(*released)[i] = true;
+				o.releaseStartupSplash();
+			}
+		}));
+	}
 }
 
 void kill(ofxOceanode& o){
+	startupSplashListeners.unsubscribeAll();
 	o.getController<ofxOceanodeSuperColliderController>()->killServers();
 }
 
