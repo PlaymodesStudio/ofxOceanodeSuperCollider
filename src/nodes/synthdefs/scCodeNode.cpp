@@ -1638,6 +1638,8 @@ void scCodeNode::drawToolbar(){
         ImGui::OpenPopup("Save script");
     }
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Save into data/Supercollider/codeScripts (the dropdown's collection)");
+    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if(ImGui::BeginPopup("Save script")){
         ImGui::TextDisabled("data/Supercollider/codeScripts/");
         ImGui::SetNextItemWidth(260);
@@ -2146,6 +2148,8 @@ void scCodeNode::drawPromotePopup(){
         ImGui::OpenPopup(id);
     }
     ImGui::SetNextWindowSize(ImVec2(720, 640), ImGuiCond_Appearing);
+    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if(!ImGui::BeginPopupModal(id, nullptr)) return;
 
     ImGui::TextWrapped("The AI rewrites the tested SynthDef in Oceanode's own format (~synthCreator, n channels, "
@@ -2234,6 +2238,8 @@ void scCodeNode::drawLibraryPopup(){
         ImGui::OpenPopup(id);
     }
     ImGui::SetNextWindowSize(ImVec2(520, 520), ImGuiCond_Appearing);
+    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if(!ImGui::BeginPopupModal(id, nullptr)) return;
     ImGui::TextDisabled("%d sources in synthdefs/  ·  opens the file in the editor", (int)library.size());
     ImGui::SetNextItemWidth(-1);

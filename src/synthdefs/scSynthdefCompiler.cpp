@@ -489,6 +489,8 @@ void scSynthdefCompiler::drawPopups(){
         if(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) return;
         ImGui::OpenPopup(popupId);
     }
+    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if(!ImGui::BeginPopupModal(popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     if(!wanted){
         ImGui::CloseCurrentPopup();

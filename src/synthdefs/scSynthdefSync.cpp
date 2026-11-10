@@ -1320,6 +1320,8 @@ void scSynthdefSync::drawPopup(){
         ImGui::OpenPopup(popupId);
     }
     ImGui::SetNextWindowSizeConstraints(ImVec2(ImGui::GetFontSize() * 30, 0), ImVec2(ImGui::GetFontSize() * 44, FLT_MAX));
+    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if(!ImGui::BeginPopupModal(popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 42);
 
@@ -1652,6 +1654,8 @@ void scPresetShare::drawPopup(){
         if(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) return;
         ImGui::OpenPopup(sharePopupId);
     }
+    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if(!ImGui::BeginPopupModal(sharePopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 40);
     bool close = false;
