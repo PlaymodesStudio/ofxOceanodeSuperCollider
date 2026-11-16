@@ -14,7 +14,10 @@
 //  bypasses: the scale at and above the split note, the low scale below it.
 //  Negative harmony is folded into both offset tables (harmonyOffsets), and
 //  turns its side on even when that side's scale is bypassed.
-//  There is one block for each combination of the features a destination
+//  Each Global Pitch scope (All Levels, a level, a level and its submacros:
+//  ofxOceanodeGlobalPitch's slots, MaxScopes) has its own set of blocks, one
+//  after the other, and a destination reads the set of the state it follows.
+//  In a set there is one block for each combination of the features a destination
 //  follows, so a destination sets one control and the synth that makes its
 //  sounding pitch quantizes and transposes the input note (gq), then adds its
 //  voices' detune (gt):
@@ -34,7 +37,8 @@
 //  started by serverManager at the head of the root group), the values are
 //  written into a second, hidden block instead, and that synth copies them into
 //  the block the synths read, gliding the transpose and the scale offsets over
-//  Glide seconds; a held note slides to its new pitch. Without it they are
+//  Glide seconds; a held note slides to its new pitch. One GlobalPitchGlide
+//  synth runs per scope, with that scope's Glide. Without it they are
 //  written straight into the block the synths read (no glide).
 //
 //    setup():      scGlobalPitch::follow(this, true, [this]{ resend gtrbus to the live synths });
@@ -58,23 +62,26 @@
 #include "ofxSCServer.h"
 #include <map>
 #include <string>
+#include <vector>
 
 class scGlobalPitch : public ofxOceanodeGlobalPitch {
 public:
     static constexpr int BlockSize = 31;   // [transpose, scale on, 12 pitch-class offsets, detune cents, wrap on, wrap base,
                                            //  split note, 12 low-scale offsets, low scale on]
     static constexpr int NumBlocks = 8;    // by what a destination follows: bit 0 Transpose, bit 1 Scale, bit 2 Detune
+    static constexpr int ScopeSize = NumBlocks * BlockSize;   // one scope's blocks (GlobalPitchGlide copies this many)
+    static constexpr int NumBuses = MaxScopes * ScopeSize;    // every scope's, one after the other
 
-    // serverManager: the first of the server's NumBlocks * BlockSize buses the
-    // synths read (-1 when it has none); with a glide, the first of the hidden
-    // block the values are written to and the GlobalPitchGlide node copying it
-    static void setServerBus(ofxSCServer* server, int index, int glideSource = -1, int glideNode = -1) {
-        static const bool listening = [](){ onValuesChanged([](){ for(auto& [s, b] : buses()) sendValues(s, b); }); return true; }();
+    // serverManager: the first of the server's NumBuses buses the synths read
+    // (-1 when it has none); with a glide, the first of the hidden buses the
+    // values are written to and each scope's GlobalPitchGlide node copying its part
+    static void setServerBus(ofxSCServer* server, int index, int glideSource = -1, const std::vector<int>& glideNodes = {}) {
+        static const bool listening = [](){ onValuesChanged([](int slot){ for(auto& [s, b] : buses()) sendValues(s, b, slot); }); return true; }();
         (void)listening;
         if(index < 0) { buses().erase(server); return; }
-        Buses b{index, glideSource >= 0 ? glideSource : index, glideNode};
+        Buses b{index, glideSource >= 0 ? glideSource : index, glideNodes};
         buses()[server] = b;
-        sendValues(server, b);
+        for(int slot = 0; slot < MaxScopes; slot++) sendValues(server, b, slot);
     }
 
     // the block a destination's synths read, -1 when it follows no feature
@@ -82,7 +89,7 @@ public:
         const int block = (follows(node, Transpose) ? 1 : 0) | (follows(node, Scale) ? 2 : 0) | (follows(node, Detune) ? 4 : 0);
         auto it = buses().find(server);
         if(block == 0 || it == buses().end()) return -1;
-        return it->second.read + block * BlockSize;
+        return it->second.read + slotOf(node) * ScopeSize + block * BlockSize;
     }
 
     // the block a part of a destination reads (a drum kit's pad: follow()'s parts)
@@ -90,7 +97,7 @@ public:
         const int block = (follows(node, part, Transpose) ? 1 : 0) | (follows(node, part, Scale) ? 2 : 0) | (follows(node, part, Detune) ? 4 : 0);
         auto it = buses().find(server);
         if(block == 0 || it == buses().end()) return -1;
-        return it->second.read + block * BlockSize;
+        return it->second.read + slotOf(node) * ScopeSize + block * BlockSize;
     }
     // the controls of a generic / old-format SynthDef that carry its note (MIDI):
     // pitch, pitcharray, and carp (PMod's carrier; its modulator modp is timbre).
@@ -100,34 +107,35 @@ public:
     }
 
 private:
-    struct Buses { int read = -1, write = -1, glideNode = -1; };
+    struct Buses { int read = -1, write = -1; std::vector<int> glideNodes; };
     static std::map<ofxSCServer*, Buses>& buses() { static std::map<ofxSCServer*, Buses> b; return b; }
 
-    static void sendValues(ofxSCServer* server, const Buses& b) {
-        if(!server) return;
-        if(b.glideNode >= 0) {
+    // one scope's values (a slot without a Global Pitch node holds neutral ones)
+    static void sendValues(ofxSCServer* server, const Buses& b, int slot) {
+        if(!server || slot < 0 || slot >= MaxScopes) return;
+        if(slot < (int)b.glideNodes.size() && b.glideNodes[slot] >= 0) {
             ofxOscMessage g;
             g.setAddress("/n_set");
-            g.addIntArg(b.glideNode);
+            g.addIntArg(b.glideNodes[slot]);
             g.addStringArg("glide");
-            g.addFloatArg(glide());
+            g.addFloatArg(glide(slot));
             server->sendMsg(g);
         }
         ofxOscMessage m;
         m.setAddress("/c_setn");
-        m.addIntArg(b.write);
-        m.addIntArg(NumBlocks * BlockSize);
+        m.addIntArg(b.write + slot * ScopeSize);
+        m.addIntArg(ScopeSize);
         // the scale with negative harmony folded in: the synths read one table per side
-        const auto offsets = harmonyOffsets(false), lowOffsets = harmonyOffsets(true);
+        const auto offsets = harmonyOffsets(false, slot), lowOffsets = harmonyOffsets(true, slot);
         for(int block = 0; block < NumBlocks; block++) {
-            const bool t = block & 1, s = block & 2, q = s && harmonyOn(false), lq = s && splitOn() && harmonyOn(true), d = block & 4;
-            m.addFloatArg(t ? transpose() : 0.0f);
+            const bool t = block & 1, s = block & 2, q = s && harmonyOn(false, slot), lq = s && splitOn(slot) && harmonyOn(true, slot), d = block & 4;
+            m.addFloatArg(t ? transpose(slot) : 0.0f);
             m.addFloatArg(q ? 1.0f : 0.0f);
             for(float o : offsets) m.addFloatArg(q ? o : 0.0f);
-            m.addFloatArg(d ? detune() : 0.0f);
-            m.addFloatArg(t && transposeWraps() ? 1.0f : 0.0f);
-            m.addFloatArg(t ? float(transposeBase()) : 0.0f);
-            m.addFloatArg(s && splitOn() ? split() : -1000.0f);   // where the low side starts, bypassed or not
+            m.addFloatArg(d ? detune(slot) : 0.0f);
+            m.addFloatArg(t && transposeWraps(slot) ? 1.0f : 0.0f);
+            m.addFloatArg(t ? float(transposeBase(slot)) : 0.0f);
+            m.addFloatArg(s && splitOn(slot) ? split(slot) : -1000.0f);   // where the low side starts, bypassed or not
             for(float o : lowOffsets) m.addFloatArg(lq ? o : 0.0f);
             m.addFloatArg(lq ? 1.0f : 0.0f);
         }

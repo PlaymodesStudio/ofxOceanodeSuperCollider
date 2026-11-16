@@ -425,8 +425,20 @@ this order:
 The inspector has one destination table with a tick per feature. SampleBox and
 SlicerBox start unticked; SlicerBox follows Transpose only. Generic SynthDef
 nodes whose `pitch` can go below 0 also start unticked, because that `pitch` is
-a shift amount. Several Global Pitch nodes share one state. The node saves the
+a shift amount. The node saves the
 destinations that differ from their default, as one string per feature.
+
+**Scope** sets which destinations a Global Pitch node reaches: All Levels (the
+main canvas and every macro, the default), This Level (the canvas it sits in)
+or This Level + Submacros. A destination follows the nearest one: This Level
+on its own canvas, then This Level + Submacros on its canvas or the nearest
+parent, then All Levels. Each scope in use is one state in the registry
+(`claim`/`release`/`slotOf`, at most `MaxScopes`, 8, at once; a node beyond
+that shows `(!)` and does nothing). Global Pitch nodes of the same scope on the
+same canvas show one state, as do all the All Levels ones. A scoped state
+saves its ticks relative to its canvas, so a macro keeps them wherever it is
+loaded. Destinations need no change: `apply`, `follows` and `bus` resolve the
+state from the node.
 
 A destination applies the values itself, so a chain that passes notes from one
 destination to another applies them twice. For example, Note Gate sends
@@ -442,6 +454,9 @@ The SuperCollider nodes use one of two mechanisms. `scGlobalPitch`
   degree, detune in cents, wrap on, wrap base, split note (-1000 when off), the
   low scale's 12 offsets and low scale on. There is one block for each combination of
   features a destination follows, so a Box sets a single control, `gtrbus`.
+  Each scope has its own 8 blocks (`ScopeSize`), one set after the other, and
+  its own `GlobalPitchGlide` synth; `bus()` returns the block in the set of
+  the state the node follows, and `resend` runs when that state changes.
   The synth that makes the sounding pitch declares `gb`/`gg`/`gt`/`gq` (copy
   them from an existing Box). `gq` quantizes and transposes, and wraps when
   Mod 12 is on, because the wrap depends on the note. `gt` is only the detune,

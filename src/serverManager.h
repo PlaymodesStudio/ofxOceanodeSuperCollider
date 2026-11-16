@@ -252,9 +252,10 @@ private:
     std::unique_ptr<ofxSCBus> busFromSilent;
     std::unique_ptr<ofxSCBus> transposeBus;   // Global Transpose / Scale (scGlobalPitch.h)
     // Global Pitch glide: the hidden block the values are written to, and the
-    // GlobalPitchGlide synth copying it into transposeBus (scGlobalPitch.h)
+    // GlobalPitchGlide synths (one per Global Pitch scope) copying it into
+    // transposeBus (scGlobalPitch.h)
     std::unique_ptr<ofxSCBus> glideSourceBus;
-    std::unique_ptr<ofxSCSynth> glideSynth;
+    std::vector<std::unique_ptr<ofxSCSynth>> glideSynths;
     void allocateTransposeBus();
     // Timetagged sends closer than this go untimed (ofxSCServer): twice the
     // hardware buffer plus a margin, widened at run time by the lateness

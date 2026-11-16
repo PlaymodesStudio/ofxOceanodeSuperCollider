@@ -140,7 +140,7 @@ void serverManager::setup(){
     listeners.push(server->serverBootedEvent.newListener([this](){
         clearFoldedWaveforms(true);
         foldedWaveformDefAttempted = foldedWaveformDefLoaded = false;
-        glideSynth.reset();   // its node went with the previous server: nothing to free
+        glideSynths.clear();   // their nodes went with the previous server: nothing to free
         initialized = false;
         initialize();
     }));
@@ -193,9 +193,9 @@ void serverManager::setup(){
 // group, so a preset load (which frees group 1) leaves it running and it runs
 // before every synth reading the values.
 void serverManager::allocateTransposeBus(){
-    const int size = scGlobalPitch::NumBlocks * scGlobalPitch::BlockSize;
-    if(glideSynth != nullptr && initialized) glideSynth->free();   // a previous one on this same server
-    glideSynth.reset();
+    const int size = scGlobalPitch::NumBuses;   // every Global Pitch scope's blocks
+    if(initialized) for(auto& synth : glideSynths) synth->free();   // previous ones on this same server
+    glideSynths.clear();
     glideSourceBus.reset();
     transposeBus.reset();
     transposeBus = std::make_unique<ofxSCBus>(RATE_CONTROL, size, server);
@@ -205,14 +205,20 @@ void serverManager::allocateTransposeBus(){
         return;
     }
     glideSourceBus = std::make_unique<ofxSCBus>(RATE_CONTROL, size, server);
-    // The source holds the values before the synth starts, so its glide starts there
+    // The source holds the values before the synths start, so their glide starts there
     scGlobalPitch::setServerBus(server, transposeBus->index, glideSourceBus->index);
-    glideSynth = std::make_unique<ofxSCSynth>("GlobalPitchGlide", server);
-    glideSynth->set("in", glideSourceBus->index);
-    glideSynth->set("out", transposeBus->index);
-    glideSynth->set("glide", scGlobalPitch::glide());
-    glideSynth->create(0, 0);   // head of the root group
-    scGlobalPitch::setServerBus(server, transposeBus->index, glideSourceBus->index, glideSynth->nodeID);
+    // One GlobalPitchGlide per scope: its own part of the buses, its own Glide
+    std::vector<int> glideNodes;
+    for(int slot = 0; slot < scGlobalPitch::MaxScopes; slot++){
+        auto synth = std::make_unique<ofxSCSynth>("GlobalPitchGlide", server);
+        synth->set("in", glideSourceBus->index + slot * scGlobalPitch::ScopeSize);
+        synth->set("out", transposeBus->index + slot * scGlobalPitch::ScopeSize);
+        synth->set("glide", scGlobalPitch::glide(slot));
+        synth->create(0, 0);   // head of the root group
+        glideNodes.push_back(synth->nodeID);
+        glideSynths.push_back(std::move(synth));
+    }
+    scGlobalPitch::setServerBus(server, transposeBus->index, glideSourceBus->index, glideNodes);
 }
 
 // scsynth executes a timetagged bundle at its instant only if that instant is
