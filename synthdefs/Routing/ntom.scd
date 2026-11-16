@@ -1,6 +1,6 @@
 (
 ~synthCreator.value("NtoM", {|n, variables|
-	var m, source, inPositions, outPositions, signal, weights, level, width;
+	var m, source, inPositions, outPositions, signal, weights, level, width, autogain, autoGains;
 
 	// Get number of output channels from variables
 	m = variables[0];
@@ -35,11 +35,23 @@
 		weights.collect{|row| (row / max(row.sum, 0.000001)).sqrt }
 	};
 
+	// Autogain: equal-power compensation per output. Each output is divided by the root of the
+	// sum of its squared weights, so with inputs of equal level (uncorrelated) every output comes
+	// out at the level of one input channel: a downmix is reduced (4 -> 1 is x0.5, -6 dB) and an
+	// interpolated upmix output is raised (up to +3 dB between two inputs). Exactly 1 when n == m
+	// or when one input feeds an output alone. Off by default: older presets sound the same.
+	autogain = OceanodeParameter.kr(\autogain, 0, 1, 0, 1, "b").asArray[0].lag(0.03);
+	autoGains = m.collect{|o|
+		var rss = weights.collect(_[o]).squared.sum.sqrt;
+		if(rss > 0.000001) { 1 / rss } { 1.0 }
+	};
+
 	signal = m.collect{|outIndex|
 		Mix.ar(source * weights.collect(_[outIndex])) * level.asArray[outIndex]
+			* (1 + (autogain * (autoGains[outIndex] - 1)))
 	};
 
 	// Output the result
 	Out.ar(OceanodeOutput.kr(\out), signal);
-}, description: "Channel count converter with interpolation", category: "Routing", variables: ["NumOut"], variableDimensions: [32]);
+}, description: "Channel count converter with interpolation. Autogain keeps each output at the level of one input channel (equal power)", category: "Routing", variables: ["NumOut"], variableDimensions: [32]);
 )
