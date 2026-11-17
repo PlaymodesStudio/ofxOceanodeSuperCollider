@@ -169,6 +169,8 @@ private:
         ofxSCBus* bus = nullptr;
         bool running = false;                // in the chain (fading out still counts)
         float offAt = -1.0f;                 // switched off: pause at this time (s)
+        float madeAt = -1.0f;                // its /s_new was sent at this time (s)
+        int revived = 0;                     // times made again since the server last confirmed it
     };
 
     // Strip inserts with an FxStage, and their place in the chain

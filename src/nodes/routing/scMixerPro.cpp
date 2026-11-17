@@ -1414,7 +1414,10 @@ void scMixerPro::setChannelCount(int channels) {
                 fx.bus = new ofxSCBus(RATE_AUDIO, channels, server);
             }
             oldFx[k] = fx.synth;
-            if(fx.synth) fx.synth = new ofxSCSynth(fxDefBase(k) + ofToString(channels), server);
+            if(fx.synth) {
+                fx.synth = new ofxSCSynth(fxDefBase(k) + ofToString(channels), server);
+                fx.madeAt = ofGetElapsedTimef();
+            }
         }
         dropSends(tr, true);   // its def and bus depend on the width; updateSends below
         tr.sentMute = -1.0f;
@@ -1608,7 +1611,7 @@ void scMixerPro::destroyRuntime(Track& tr, bool sendFree) {
     dropBus(tr.mixBus);
     tr.insertVariant = 0;
     tr.insertRunning = false;
-    for(auto& f : tr.fx) { f.running = false; f.offAt = -1.0f; }
+    for(auto& f : tr.fx) { f.running = false; f.offAt = -1.0f; f.madeAt = -1.0f; f.revived = 0; }
     tr.sendRunning = false;
     tr.gr = 0.0f;
     tr.liveServer = nullptr;
@@ -1922,6 +1925,7 @@ void scMixerPro::updateFx(Track& tr, int k) {
         f.synth->set("out", f.bus->index);
         sendFx(tr, k);   // stored as /s_new arguments
         f.synth->createAndRun(2, before->nodeID, getActive());   // addBefore
+        f.madeAt = ofGetElapsedTimef();
         orderInsertBefore(server, f.synth, before);
     } else {
         sendFx(tr, k);   // on 1: fades back in from where it was paused
@@ -1962,6 +1966,39 @@ void scMixerPro::setBpm(float bpm) {
 void scMixerPro::processFxTimers() {
     const float now = ofGetElapsedTimef();
     for(Track* tr : allStrips()) {
+        // An insert whose node the server does not have (its /s_new was lost
+        // or refused, or the node was freed): routed through, it would silence
+        // the strip, and its controls would go nowhere. Forget it; one that
+        // is switched on is made again (twice at most, then switched off). Only
+        // while the track synth itself is confirmed: then the server's node
+        // notifications are reaching us.
+        if(tr->synth && tr->liveServer && tr->synth->isCreated()) {
+            for(int k = 0; k < FX_COUNT; k++) {
+                FxStage& f = tr->fx[k];
+                if(!f.synth) continue;
+                if(f.synth->isCreated()) { f.revived = 0; continue; }
+                const bool ended = f.synth->hasEnded();
+                if(!ended && (f.madeAt < 0.0f || now - f.madeAt < 3.0f)) continue;
+                const bool again = fxSwitch(*tr, k).get() && f.revived < 2;
+                ofLogWarning("scMixerPro") << "\"" << tr->name << "\": the " << fxDefBase(k) << " insert (node "
+                                           << f.synth->nodeID << ") " << (ended ? "ended on the server" : "was never created by the server")
+                                           << (again ? "; making it again" : "; bypassed");
+                orderRemove(tr->liveServer, f.synth);
+                if(!ended) f.synth->free();   // in case it does exist: never two of them
+                delete f.synth;
+                f.synth = nullptr;
+                f.running = false;
+                f.offAt = -1.0f;
+                f.madeAt = -1.0f;
+                if(again) { f.revived++; updateFx(*tr, k); }
+                else {
+                    // given up: the switch shows it (not an insert that looks on and does nothing)
+                    f.revived = 0;
+                    applyInputRouting(*tr);
+                    if(fxSwitch(*tr, k).get()) fxSwitch(*tr, k).set(false);
+                }
+            }
+        }
         for(FxStage& f : tr->fx) {
             if(f.offAt < 0.0f || now < f.offAt) continue;
             f.offAt = -1.0f;
