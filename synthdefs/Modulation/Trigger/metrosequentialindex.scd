@@ -41,6 +41,10 @@
 	phaseRate = hz.asArray[0] * SampleDur.ir;
 	phase = Phasor.ar(combinedReset, phaseRate, 0, 1, 0);
 	rawTrig = (HPZ1.ar(phase) < 0) + combinedReset;
+	// Sync To Transport (inspector): the ticks sit on the transport's beat
+	// grid (Hz at the transport's tempo). The channel a tick goes to still
+	// counts from the last Reset.
+	rawTrig = OceanodeTransport.select(rawTrig, OceanodeTransport.trigHz(hz.asArray[0]) + combinedReset);
 
 	// --- COUNTER ---
 	// PulseCount: Reset=0, Next=1, Next=2...

@@ -53,6 +53,12 @@
 		])
 	]);
 
+	// Sync To Transport (inspector): the ramp is the transport's beat, at Hz
+	// cycles per second of the transport's tempo; Reset and FixedNum do nothing.
+	sig = OceanodeTransport.select(sig,
+		(min + (range * OceanodeTransport.phaseHz(cycledur.reciprocal)) + initPh).wrap(min, max));
+	globalPh = OceanodeTransport.select(globalPh, (sig - min) / range);
+
 	// Output signals
 	Out.ar(OceanodeOutput.kr(\out), sig);
 	Out.ar(OceanodeOutput.kr(\globalph), globalPh);

@@ -95,6 +95,7 @@ serverManager::serverManager(){
 serverManager::~serverManager(){
     scGlobalPitch::setServerBus(server, -1);
     clearFoldedWaveforms();
+    clearTransportGates();
     serverSampleRates.erase(server);
     for(auto node : nodesList) node->free(server);
     nodesList.clear();
@@ -122,6 +123,7 @@ void serverManager::setup(){
             recomputeGraph();
         }
         updateFoldedWaveforms();
+        updateTransportGates();
         widenMinimumLead();
     }));
 
@@ -139,6 +141,7 @@ void serverManager::setup(){
     
     listeners.push(server->serverBootedEvent.newListener([this](){
         clearFoldedWaveforms(true);
+        clearTransportGates(true);
         foldedWaveformDefAttempted = foldedWaveformDefLoaded = false;
         glideSynths.clear();   // their nodes went with the previous server: nothing to free
         initialized = false;
@@ -146,6 +149,7 @@ void serverManager::setup(){
     }));
     listeners.push(server->serverInitializedEvent.newListener([this](){
         clearFoldedWaveforms(true);
+        clearTransportGates(true);
         initialized = true;
         applyMinimumLead();   // the buffer size may have changed with the restart
         mixerGraphSyncID=-1;
@@ -419,6 +423,7 @@ void serverManager::initialize(){
 
 void serverManager::kill(){
     clearFoldedWaveforms();
+    clearTransportGates(true);
     initialized = false;
     if(server != nullptr) server->resetBootState();
     if(preferences.local && sc != nullptr){
@@ -431,6 +436,7 @@ void serverManager::kill(){
 
 void serverManager::prepareForRestart(){
     clearFoldedWaveforms();
+    clearTransportGates(true);
     initialized = false;
     if(server != nullptr) server->resetBootState();
     if(preferences.local){
@@ -1063,6 +1069,22 @@ void serverManager::updateFoldedWaveforms(){
     }
 }
 
+void serverManager::clearTransportGates(bool serverGone){
+    if(!serverGone) for(auto& node : transportGates) for(auto& gate : node.second.synths) gate->free();
+    transportGates.clear();
+}
+
+// Once per frame: a node whose transport started or stopped fades its gates
+void serverManager::updateTransportGates(){
+    if(!server || !initialized) return;
+    for(auto& entry : transportGates){
+        const float level = entry.first->isMutedByTransport() ? 0.0f : 1.0f;
+        if(level == entry.second.level) continue;
+        entry.second.level = level;
+        for(auto& gate : entry.second.synths) gate->set("gate", level);
+    }
+}
+
 void serverManager::releaseGraphBusses(){
     for(auto& node:busses) for(auto& port:node.second) port.second->free();
     busses.clear(); outputBussesRefToNode.clear();
@@ -1084,6 +1106,7 @@ void serverManager::teardownGraphForPresetLoad(){
     if(server == nullptr) return;
     mixerGraphSyncID=-1;
     clearFoldedWaveforms();
+    clearTransportGates();
 
     // Every synth in group 1, including those outside the graph, goes below.
     graphGeneration++;
@@ -1130,6 +1153,7 @@ void serverManager::recomputeGraph(){
 //    ofLog() << "Recompute Graph";
     if(outputs.size() == 0){
         clearFoldedWaveforms();
+        clearTransportGates();
         mixerGraphSyncID=-1;
         for(auto node : nodesList) node->free(server);
         nodesList.clear();
@@ -1182,8 +1206,10 @@ void serverManager::recomputeGraph(){
         //Skip all proceses if the list is the same and if the nodeList has not changed (due to destroyed nodes)
         std::vector<bool> newAudioEnabled;
         for(auto* node : newNodesList) newAudioEnabled.push_back(node->isAudioEnabled());
+        std::vector<bool> newMuteWhenStopped;
+        for(auto* node : newNodesList) newMuteWhenStopped.push_back(node->getMuteWhenStopped());
         if(nodesList == newNodesList && !nodesListChanged && newConnections == connections &&
-           graphAudioEnabled == newAudioEnabled){
+           graphAudioEnabled == newAudioEnabled && graphMuteWhenStopped == newMuteWhenStopped){
             if(audioMixer && mixerGraphSyncID>=0 && routingTicket>mixerRoutingSubmitted) {
                 mixerRoutingSubmitted=routingTicket;
                 server->setBLatency(true); mixerGraphSyncID=server->requestSync(); server->setBLatency(false);
@@ -1270,6 +1296,12 @@ void serverManager::recomputeGraph(){
         for(auto &node : toCreateNodes){
             nodeDestroyedListeners[node] = node->destroyedNode.newListener([this, node](){
                 nodesList.erase(std::remove(nodesList.begin(), nodesList.end(), node), nodesList.end());
+                // Its gates are keyed by the pointer that is going away
+                const auto gates = transportGates.find(node);
+                if(gates != transportGates.end()){
+                    for(auto& gate : gates->second.synths) gate->free();
+                    transportGates.erase(gates);
+                }
                 // Drop its links too: they are raw pointers to the node that
                 // is being destroyed right now.
                 nodeLinks.erase(std::remove_if(nodeLinks.begin(), nodeLinks.end(),
@@ -1344,13 +1376,32 @@ void serverManager::recomputeGraph(){
         // reports -1, and "/n_before x -1" only failed on the server.
         // (moveSynthBefore is still called: nodes re-send their bus wiring
         // there; ofxSCNode::moveBefore ignores a target of -1.)
+        // "Mute When Stopped" gates are made again here, in order: each one
+        // right before the node downstream of its own, which then goes before
+        // the gate. Freed and created at the same instant, at the level they
+        // had, so nothing is heard.
+        clearTransportGates();
         int beforeID = -1;
         bool first = true;
         for (auto it = newNodesList.rbegin(); it != newNodesList.rend(); ++it) {
+            if((*it)->getMuteWhenStopped() && (*it)->getNumOutputs() > 0){
+                auto& gates = transportGates[*it];
+                gates.level = (*it)->isMutedByTransport() ? 0.0f : 1.0f;
+                for(int i = 0; i < (*it)->getNumOutputs(); i++){
+                    auto gate = std::make_unique<ofxSCSynth>("OceanodeTransportGate", server);
+                    gate->set("bus", busses.at(*it).at(i)->index);
+                    gate->set("gate", gates.level);
+                    if(beforeID >= 0) gate->create(2, beforeID);   // before the node downstream
+                    else gate->create(1, 1);                       // nothing downstream: the tail
+                    gates.synths.push_back(std::move(gate));
+                }
+                // the first gate made is the earliest of them in the node order
+                beforeID = gates.synths.front()->nodeID;
+            }
             if(std::find(toCreateNodes.begin(), toCreateNodes.end(), (*it)) != toCreateNodes.end()){
                 (*it)->createSynth(server);
             }
-            else if(!first){
+            else if(!first || transportGates.count(*it)){
                 (*it)->moveSynthBefore(server, beforeID);
             }
             first = false;
@@ -1360,6 +1411,7 @@ void serverManager::recomputeGraph(){
         
         nodesList = newNodesList;
         graphAudioEnabled = std::move(newAudioEnabled);
+        graphMuteWhenStopped = std::move(newMuteWhenStopped);
         connections = newConnections;
         mixerRoutingSubmitted=routingTicket;
         // Route and change running state with the same server latency. An Off

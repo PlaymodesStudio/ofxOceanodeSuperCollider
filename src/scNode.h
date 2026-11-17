@@ -60,6 +60,13 @@ public:
     virtual bool isAudioEnabled() const { return true; }
     virtual void applyAudioEnabled(ofxSCServer* server) {}
     virtual void setBypassedOutputBus(ofxSCServer* server, int index, int bus) {}
+
+    // "Mute When Stopped" (inspector): the node's outputs fade to silence
+    // while the transport it follows is stopped. serverManager puts a gate
+    // synth after the node for it, so every SC node has it without any code
+    // of its own, and the node keeps running underneath.
+    bool getMuteWhenStopped() const { return muteWhenStopped.get(); }
+    bool isMutedByTransport() const;
     static nodePort resolveAudioSource(nodePort port);
 
     // The server whose graph serverManager::recomputeGraph() is building while
@@ -149,6 +156,7 @@ protected:
     static ofxSCServer* graphTraversalServer;
     static nodePort graphInputPort;
     ofEventListeners listeners;
+    ofParameter<bool> muteWhenStopped;
     
     vector<ofParameter<nodePort>> inputs;
     vector<ofParameter<nodePort>> outputs;

@@ -183,6 +183,7 @@ private:
     int transportAnchorId = 0;
     int transportHardId = 0;
     bool transportForceHard = true;
+    double transportLastHi = 0.0;
     // The next anchor is a jump: a new or resumed synth starts from it.
     void requestTransportAnchor();
     // Once per frame while synced: the anchors due, timetagged at their instant.

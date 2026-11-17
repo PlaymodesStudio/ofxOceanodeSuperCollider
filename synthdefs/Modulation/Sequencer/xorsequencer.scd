@@ -25,7 +25,8 @@
 	scale = OceanodeParameterLag.ar(\scale, 12, n, 1, 24, "vf", 1/30, true);
 
 	// Clock trigger
-	clock = Impulse.kr(clockHz);
+	// Sync To Transport (inspector): the steps sit on the transport's beat grid
+	clock = Select.kr(OceanodeTransport.sync, [Impulse.kr(clockHz), A2K.kr(Trig1.ar(OceanodeTransport.trigHz(clockHz), ControlDur.ir * 1.5))]);
 
 	// Create reset trigger from reset parameter
 	resetTrig = Trig.kr(reset, 0.001);

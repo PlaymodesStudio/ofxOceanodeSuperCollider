@@ -217,6 +217,18 @@ private:
     void updateFoldedWaveforms();
     void clearFoldedWaveforms(bool serverReset = false);
     bool loadFoldedWaveformDef();
+    // "Mute When Stopped": one OceanodeTransportGate per output of each node
+    // that has it on, placed between the node and whatever reads it. They are
+    // made again with every graph rebuild (the node order may have changed).
+    struct TransportGates {
+        std::vector<std::unique_ptr<ofxSCSynth>> synths;
+        float level = 1.0f;
+    };
+    std::map<scNode*, TransportGates> transportGates;
+    std::vector<bool> graphMuteWhenStopped;
+    // serverGone: its nodes went with the server, there is nothing to free
+    void clearTransportGates(bool serverGone = false);
+    void updateTransportGates();
     void loadNRTSynthdefs();
     void prepareNodesForNRTCapture();
     

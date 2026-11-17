@@ -26,7 +26,8 @@
 	// Create phasor that runs from 0 to 1 with reset control or use external input
 	phasor = Select.ar(externalph, [
 		// Internal phasor
-		Phasor.ar(Trig.ar(reset, 0.001), freq * SampleDur.ir, 0, 1),
+		// Sync To Transport (inspector): the transport's beat, Reset not needed
+		OceanodeTransport.select(Phasor.ar(Trig.ar(reset, 0.001), freq * SampleDur.ir, 0, 1), OceanodeTransport.phaseHz(freq)),
 		// External phasor input
 		extphinput
 	]);

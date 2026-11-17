@@ -10,7 +10,8 @@
 	// Input stage
 	sig = In.ar(OceanodeInput.kr(\in), n);
 	// Phase calculation with reset capability
-	phase = Phasor.ar(phasereset > 0.5, mfreq * 2*pi / SampleRate.ir, 0, 2*pi) + phaseoffset;
+	// Sync To Transport (inspector): the transport's beat, Reset not needed
+	phase = OceanodeTransport.select(Phasor.ar(phasereset > 0.5, mfreq * 2*pi / SampleRate.ir, 0, 2*pi), OceanodeTransport.phaseHz(mfreq) * 2*pi) + phaseoffset;
 	// Create vibrato effect using calculated phase
 	mod1 = sin(phase) * depth + depth;
 	sigout = DelayC.ar(sig, 0.2, mod1);

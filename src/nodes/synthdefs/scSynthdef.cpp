@@ -643,12 +643,15 @@ void scSynthdef::sendTransportAnchors(){
     if(!transportAware || !syncToTransport.get() || synths.empty() || waitingForSynthdef) return;
     const auto anchors = transportFollower.poll(getFrameTransportState());
     for(const auto& a : anchors){
-        const bool hard = a.discontinuity || transportForceHard;
-        transportForceHard = false;
-        transportAnchorId = transportAnchorId % (1 << 20) + 1;
-        if(hard) transportHardId = transportHardId % (1 << 20) + 1;
         const double beat = std::max(0.0, a.beat);
         const double hi = std::floor(beat / 1024.0) * 1024.0;
+        // Crossing into the next 1024-beat block rebases the position: a jump
+        // for the synth too (between jumps it never lets its position go back)
+        const bool hard = a.discontinuity || transportForceHard || hi != transportLastHi;
+        transportForceHard = false;
+        transportLastHi = hi;
+        transportAnchorId = transportAnchorId % (1 << 20) + 1;
+        if(hard) transportHardId = transportHardId % (1 << 20) + 1;
         bool pending = false;
         scTransportSync::AnchorScope scope(a);
         for(auto synthServer : synths){

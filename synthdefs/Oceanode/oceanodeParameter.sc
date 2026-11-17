@@ -157,8 +157,13 @@ OceanodeTransport {
 	// (audio-rate controls: a control-rate one would glide across the block
 	// of a jump when combined with an audio-rate signal)
 	*hi { ^\tposhi.ar(0) }
+	// Never backwards between jumps: an anchor lands on a block boundary, up
+	// to a block early, so a drift correction can step back a millisecond.
+	// Holding still instead keeps a step or a cycle from being crossed twice.
 	*lo {
-		^\tposlo.ar(0) + Sweep.ar(T2A.ar(Changed.kr(\tanchor.kr(0))), \trate.ar(0));
+		^RunningMax.ar(
+			\tposlo.ar(0) + Sweep.ar(T2A.ar(Changed.kr(\tanchor.kr(0))), \trate.ar(0)),
+			this.jump);
 	}
 
 	// Phase 0..1 of a cycle of `beats` beats (a number, or one signal per channel)
@@ -175,6 +180,25 @@ OceanodeTransport {
 	// 1/480 beat (halves, triplets and quintuplets stay exact) it is.
 	*snapBeats {arg beats;
 		^((beats * 480).round.max(1) / 480);   // k/480 exactly: 480/480 is 1
+	}
+
+	// The same for a clock set in Hz: at the transport's tempo that many
+	// cycles per second, on the beat grid (a beat-hz conversion of 1 is one
+	// cycle per beat).
+	*beatsOfHz {arg hz;
+		^this.snapBeats(this.bpm / 60 / hz.max(0.0001));
+	}
+	*phaseHz {arg hz;
+		^this.phase(this.beatsOfHz(hz));
+	}
+	*trigHz {arg hz;
+		var beats = this.beatsOfHz(hz);
+		^this.cycleTrig(this.phase(beats), beats);
+	}
+
+	// The synth's own clock, or the transport's when Sync To Transport is on
+	*select {arg free, synced;
+		^Select.ar(this.sync, [free, synced]);
 	}
 
 	// One-sample trigger at every cycle start of `phase`. A jump onto a cycle

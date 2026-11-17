@@ -24,8 +24,16 @@ int nodePort::getBusIndex(ofxSCServer* server) const{
 }
 
 scNode::scNode(std::string name) : ofxOceanodeNodeModel("SC " + name){
-    
+    addInspectorParameter(muteWhenStopped.set("Mute When Stopped", false));
+    listeners.push(muteWhenStopped.newListener([this](bool&){
+        // The gate is part of the graph: have the Outputs rebuild it
+        for(auto &output : outputs) output = output;
+    }));
 };
+
+bool scNode::isMutedByTransport() const {
+    return muteWhenStopped.get() && !getFrameTransportState().current.isPlaying;
+}
 
 scNode::~scNode(){
     destroyedNode.notify();

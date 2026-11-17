@@ -32,7 +32,8 @@
 	buf.set(seed);
 
 	// Clock trigger (convert to audio rate for Demand UGens)
-	trig = Impulse.ar(clockHz);
+	// Sync To Transport (inspector): the steps sit on the transport's beat grid
+	trig = OceanodeTransport.select(Impulse.ar(clockHz), OceanodeTransport.trigHz(clockHz));
 	resetTrig = Trig.ar(reset, 0.001);
 
 	// Read current register value

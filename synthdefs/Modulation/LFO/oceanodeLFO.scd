@@ -101,7 +101,8 @@
 
     // --- Phase Generation ---
     phase = Select.ar(externalph, [
-        Phasor.ar(phasereset > 0.5, hz * SampleDur.ir, 0, 1),
+        // Sync To Transport (inspector): the transport's beat, Reset not needed
+        OceanodeTransport.select(Phasor.ar(phasereset > 0.5, hz * SampleDur.ir, 0, 1), OceanodeTransport.phaseHz(hz)),
         extphinput
     ]);
     phase = (phase + phaseoffset).wrap(0, 1);

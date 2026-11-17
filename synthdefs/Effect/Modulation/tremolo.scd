@@ -59,7 +59,8 @@
     dry = signals;
 
     // Phase calculation
-    phase = Phasor.ar(phasereset > 0.5, hz * SampleDur.ir, 0, 1) + phaseoffset;
+    // Sync To Transport (inspector): the transport's beat, Reset not needed
+    phase = OceanodeTransport.select(Phasor.ar(phasereset > 0.5, hz * SampleDur.ir, 0, 1), OceanodeTransport.phaseHz(hz)) + phaseoffset;
     phase = phase.wrap(0, 1);
 
     // Generate LFO

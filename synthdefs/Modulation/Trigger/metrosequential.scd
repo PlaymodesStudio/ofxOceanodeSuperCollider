@@ -50,6 +50,10 @@
 
 	// Generate trigger when Phase wraps or on Reset
 	rawTrig = (HPZ1.ar(phase) < 0) + combinedReset;
+	// Sync To Transport (inspector): the ticks sit on the transport's beat
+	// grid (Hz at the transport's tempo). The channel a tick goes to still
+	// counts from the last Reset.
+	rawTrig = OceanodeTransport.select(rawTrig, OceanodeTransport.trigHz(hz.asArray[0]) + combinedReset);
 
 	// 3. Limit Triggers (fixednum) using Stepper
 	// Stepper ensures that on the frame where reset is high, the output is exactly 0.
