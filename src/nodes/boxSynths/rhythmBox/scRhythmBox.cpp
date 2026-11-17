@@ -5360,7 +5360,10 @@ void scRhythmBox::macroSave(ofJson& j, string path) {
     presetSave(j);
     j["embedInProject"] = embedInProject.get();
 
-    if(embedInProject.get()) {
+    // A temporary save (clipboard, encapsulate, canvas undo) keeps the paths
+    // presetSave wrote: its folder is deleted afterwards, and with no preset
+    // open a "samples/..." path from there would resolve to nothing on paste.
+    if(embedInProject.get() && scSampleEmbedding::isDurableSaveFolder(path)) {
         // Local macro (under Presets/): anchor to the shared preset root so the
         // samples path survives macro duplication. Global macro: use path directly.
         std::string absFolderPath      = ofToDataPath(path, true);

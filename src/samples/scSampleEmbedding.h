@@ -15,6 +15,21 @@ inline std::string root() {
     return path.empty() ? std::string() : ofToDataPath(path, true);
 }
 
+// True when a save folder lives inside the data directory (Presets/, Macros/...).
+// Copy, cut, encapsulate and canvas undo save through clipboardPreset or the
+// system temp dir, which are deleted afterwards: nothing may be embedded there.
+inline bool isDurableSaveFolder(const std::string& folder) {
+    namespace fs = std::filesystem;
+    try {
+        const fs::path target = fs::weakly_canonical(fs::path(ofToDataPath(folder, true)));
+        for(const auto& part : target) if(part == "clipboardPreset") return false;
+        const fs::path relative = target.lexically_relative(fs::weakly_canonical(fs::path(ofToDataPath("", true))));
+        return !relative.empty() && *relative.begin() != "..";
+    } catch(const std::exception&) {
+        return false;
+    }
+}
+
 inline std::string resolve(const std::string& stored, const std::string& presetRoot = root()) {
     namespace fs = std::filesystem;
     if(stored.empty() || fs::path(stored).is_absolute()) return stored;

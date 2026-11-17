@@ -12,6 +12,7 @@
 #include "ofxOceanodeShared.h"
 #include "ofxSuperCollider.h"
 #include "../../serverManager.h"
+#include "../../samples/scSampleEmbedding.h"
 #include <filesystem>
 
 // WAVE file header format
@@ -242,6 +243,18 @@ public:
 
 			if(!ofFile::doesFileExist(absolutePath)) {
 				json["EmbedInProject"] = false;
+				return;
+			}
+
+			// Copy, cut, encapsulate and canvas undo save through a temporary
+			// folder (clipboardPreset, the system temp dir) that is deleted
+			// afterwards. Embedding there would point this node, and the pasted
+			// one, at a file that is about to vanish. Keep the current path,
+			// which is already valid from anywhere; the next real preset or
+			// macro save embeds it where it belongs.
+			if(!scSampleEmbedding::isDurableSaveFolder(presetFolderPath)) {
+				json["EmbedInProject"] = true;
+				if(!originalPath.empty()) json["OriginalPath"] = originalPath;
 				return;
 			}
 
