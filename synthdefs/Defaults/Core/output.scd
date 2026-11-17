@@ -20,16 +20,16 @@ SynthDef.new(\output, {
             [0, LinLin.kr(i, 0, size-1, -1, 1)]
         )
     });
-    // Mask to silence channels >= size
+    // Mask to keep channels >= size out of the stereo mix (they would land in
+    // the centre). Multichannel mode passes all 128 channels untouched.
     var mask = Array.fill(128, { |i|
         Select.kr(i < size, [0, 1])
     });
     sig = In.ar(in, 128);
-    sig = sig * mask;  // silence unused channels
     sig = Select.ar(\stereomix.kr(0),
         [
             sig,
-            (Pan2.ar(sig, positions) * level).flop.collect(Mix(_));
+            (Pan2.ar(sig * mask, positions) * level).flop.collect(Mix(_));
         ]
     );
     sig = Sanitize.ar(sig);   // before LeakDC: a NaN reaching LeakDC stayed in its state until the synth was recreated
