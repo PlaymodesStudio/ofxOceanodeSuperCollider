@@ -125,3 +125,69 @@ OceanodeParameterVoid {
 		^T2A.ar(this.kr(name));
 	}
 }
+
+// Sync To Transport for ~synthCreator synths. A synth that calls any of these
+// gets a "Sync To Transport" switch in its node's inspector (scSynthdef finds
+// the \tsync control by its "transport" units); with it on, the node keeps the
+// synth on the transport's beat with timetagged anchors (scTransportSync.h):
+//   \tsync    1 = follow the transport, 0 = the synth's own free-running clock
+//   \tanchor  counter: every change starts a new anchor
+//   \thard    counter: changes on jumps (seek, stop, start, loop restart)
+//   \tposhi   the anchor's beat, whole multiples of 1024 (exact in float32)
+//   \tposlo   the rest of it, 0..1024
+//   \trate    beats per second from the anchor on (0 while stopped)
+//   \tbpm     tempo, also while stopped
+// Off (the default) nothing changes: old patches sound the same.
+//
+//     var sync = OceanodeTransport.sync;                 // 0 / 1, control rate
+//     var phase = OceanodeTransport.phase(beats);        // 0..1 every `beats`
+//     sig = Select.ar(sync, [freeRunning, phase]);       // not K2A.ar(sync): it glides through the block of the switch
+OceanodeTransport {
+	*sync {
+		^\tsync.kr(0, spec: ControlSpec(0, 1, default: 0, units: "transport"));
+	}
+
+	*bpm { ^\tbpm.kr(120).max(1) }
+
+	// 1 for one sample when the transport jumped
+	*jump { ^T2A.ar(Changed.kr(\thard.kr(0))) }
+
+	// The whole 1024-beat blocks, and the beat inside the block (audio rate,
+	// moving sample by sample between anchors)
+	// (audio-rate controls: a control-rate one would glide across the block
+	// of a jump when combined with an audio-rate signal)
+	*hi { ^\tposhi.ar(0) }
+	*lo {
+		^\tposlo.ar(0) + Sweep.ar(T2A.ar(Changed.kr(\tanchor.kr(0))), \trate.ar(0));
+	}
+
+	// Phase 0..1 of a cycle of `beats` beats (a number, or one signal per channel)
+	*phase {arg beats;
+		var b = beats.max(0.0001);
+		var phase = (((this.hi % b) + this.lo) / b).frac;
+		^phase * (phase < 1);   // float rounding can give exactly 1 at a cycle start
+	}
+
+	// A cycle length worked out from two tempos (the transport's, and a Hz or
+	// ms value the patch derived from the tempo, which arrives a little later
+	// and rounded differently) is never exactly the musical length, and the
+	// phase multiplies the difference by the whole beat count. Snapped to
+	// 1/480 beat (halves, triplets and quintuplets stay exact) it is.
+	*snapBeats {arg beats;
+		^((beats * 480).round.max(1) / 480);   // k/480 exactly: 480/480 is 1
+	}
+
+	// One-sample trigger at every cycle start of `phase`. A jump onto a cycle
+	// start (or a hair before it: rounding) fires too; a jump elsewhere does
+	// not; a drift correction that steps back over a start it just crossed
+	// does not fire it twice.
+	*cycleTrig {arg phase, beats;
+		var jump = this.jump;
+		var held = Trig1.ar(jump, ControlDur.ir);              // the block of the jump
+		var wrap = ((Delay1.ar(phase) - phase) > 0.5) * (1 - held);
+		var cycleSec = (beats.max(0.0001) * 60 / this.bpm);
+		var onStart = jump * (\trate.ar(0) > 0) * ((phase.min(1 - phase) * cycleSec) < (ControlDur.ir * 2));
+		var gate = Trig1.ar(wrap + onStart, (cycleSec * 0.25).max(SampleDur.ir * 2));
+		^(gate - Delay1.ar(gate)) > 0;
+	}
+}

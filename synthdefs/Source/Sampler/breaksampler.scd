@@ -3,6 +3,7 @@
 	var sig, bufDur, rate, bufFrames, portionDur;
 	var startPos, endPos, trigger, loop, duration, levels, buffer;
 	var phaseStart, phaseEnd, phase, phaseLoop;
+	var sync, syncBeats, syncPhase;
 
 	// Get buffer info
 	buffer = OceanodeParameter.kr(\buf, 0, n, 0, 1000, "vi");
@@ -51,6 +52,14 @@
 		// Loop: phase wraps between start and end
 		phase
 	]);
+
+	// Sync To Transport (inspector): the break is read at the transport's
+	// position, one pass every Duration (at the transport's tempo), so it
+	// stays on the bar through stops, seeks and loops with no Trigger.
+	sync = OceanodeTransport.sync;
+	syncBeats = OceanodeTransport.snapBeats((duration / 1000) * (OceanodeTransport.bpm / 60));
+	syncPhase = phaseStart + (OceanodeTransport.phase(syncBeats) * (phaseEnd - phaseStart));
+	phaseLoop = Select.ar(sync, [phaseLoop, syncPhase]);
 
 	// Use 1 channel per BufRd so that mono buffers work correctly:
 	// SC multichannel-expands buffer (an n-array) into n separate BufRd.ar(1,...)

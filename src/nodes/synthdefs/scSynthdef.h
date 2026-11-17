@@ -11,6 +11,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "../../scNode.h"
 #include "../../timing/scSchedulingCompat.h"
+#include "../../timing/scTransportSync.h"
 #include "../../synthdefs/scSynthdefCompiler.h"
 #include "../boxSynths/shared/scGlobalPitch.h"
 #include <set>
@@ -171,6 +172,21 @@ private:
         std::function<void(bool force)> resend;
     };
     std::vector<PendingTriggerRestore> pendingTriggerRestores;
+
+    // Sync To Transport, for a SynthDef that uses OceanodeTransport
+    // (oceanodeParameter.sc: it declares \tsync with "transport" units). The
+    // inspector switch puts the synth's clock on the transport's beat; off
+    // (the default) the synth runs free, as it always has.
+    bool transportAware = false;
+    ofParameter<bool> syncToTransport;
+    scTransportSync::Follower transportFollower;
+    int transportAnchorId = 0;
+    int transportHardId = 0;
+    bool transportForceHard = true;
+    // The next anchor is a jump: a new or resumed synth starts from it.
+    void requestTransportAnchor();
+    // Once per frame while synced: the anchors due, timetagged at their instant.
+    void sendTransportAnchors();
 };
 
 #endif /* scSynthdef_h */

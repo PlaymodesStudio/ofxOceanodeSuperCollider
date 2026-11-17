@@ -7,6 +7,7 @@
 
 #include "../../ofxOceanodeSuperColliderConfig.h"
 #include "scSynthdef.h"
+#include "../../audio/scSynthControlBatch.h"
 #include "../boxSynths/shared/scGlobalPitch.h"
 #include "ofxSCSynth.h"
 #include "ofxSCServer.h"
@@ -549,6 +550,25 @@ void scSynthdef::setup(){
             resendBusesToSynth(synthServer.first);
         }
     }));
+
+    // Sync To Transport: only for a SynthDef written for it (OceanodeTransport)
+    for(const auto& spec : synthDescription.params){
+        const auto units = spec.second.find("units");
+        if(units != spec.second.end() && units->second == "transport") transportAware = true;
+    }
+    if(transportAware){
+        addInspectorParameter(syncToTransport.set("Sync To Transport", false));
+        addTimeSourceParameter(syncToTransport);
+        listeners.push(syncToTransport.newListener([this](bool& enabled){
+            if(enabled) requestTransportAnchor();
+            else for(auto synthServer : synths) synthServer.second->set("tsync", 0.0f);
+        }));
+        // A new synth knows nothing yet: tell it the mode, then where the transport is.
+        listeners.push(resendParams.newListener([this](){
+            for(auto synthServer : synths) synthServer.second->set("tsync", syncToTransport.get() ? 1.0f : 0.0f);
+            requestTransportAnchor();
+        }));
+    }
     
     //Last check for outputs
     for(auto spec : synthDescription.params){
@@ -610,7 +630,49 @@ bool scSynthdef::getTimelineInstrument(ofxOceanodeTimelineInstrument& out){
 }
 #endif
 
+void scSynthdef::requestTransportAnchor(){
+    transportFollower.reset();
+    transportForceHard = true;
+}
+
+// The synth's clock stays inside SuperCollider, sample accurate; each anchor
+// says "at this instant the transport is at this beat, moving this fast" and
+// goes out timetagged (scTransportSync.h). The beat is sent in two parts so a
+// long session keeps its precision in float32 (OceanodeTransport.phase).
+void scSynthdef::sendTransportAnchors(){
+    if(!transportAware || !syncToTransport.get() || synths.empty() || waitingForSynthdef) return;
+    const auto anchors = transportFollower.poll(getFrameTransportState());
+    for(const auto& a : anchors){
+        const bool hard = a.discontinuity || transportForceHard;
+        transportForceHard = false;
+        transportAnchorId = transportAnchorId % (1 << 20) + 1;
+        if(hard) transportHardId = transportHardId % (1 << 20) + 1;
+        const double beat = std::max(0.0, a.beat);
+        const double hi = std::floor(beat / 1024.0) * 1024.0;
+        bool pending = false;
+        scTransportSync::AnchorScope scope(a);
+        for(auto synthServer : synths){
+            ofxSCSynth* synth = synthServer.second;
+            if(synth == nullptr) continue;
+            // Sets stored on a synth not confirmed yet would go out with its
+            // creation: untimed, and unseen by the synth as a change.
+            if(!synth->isCreated()){ pending = true; continue; }
+            scSynthControlBatch controls(synth, synthServer.first);
+            controls.set("tsync", 1.0f);
+            controls.set("tbpm", a.bpm);
+            controls.set("trate", a.playing ? a.bpm / 60.0f : 0.0f);
+            controls.set("tposhi", static_cast<float>(hi));
+            controls.set("tposlo", static_cast<float>(beat - hi));
+            controls.set("thard", static_cast<float>(transportHardId));
+            controls.set("tanchor", static_cast<float>(transportAnchorId));   // last: starts the new anchor
+            controls.send();
+        }
+        if(pending) requestTransportAnchor();
+    }
+}
+
 void scSynthdef::update(ofEventArgs &e){
+    sendTransportAnchors();
     if(pendingTriggerRestores.empty()) return;
     const uint64_t frame = ofGetFrameNum();
     std::vector<PendingTriggerRestore> due;
@@ -715,6 +777,7 @@ void scSynthdef::revertToBuiltSynthdef(){
 }
 
 void scSynthdef::activate(){
+    transportFollower.requestAnchor();   // its clock stood still while it was off
     if(waitingForSynthdef) return;
     for(auto &synth : synths) synth.second->run(synthOn);
 }
@@ -727,6 +790,7 @@ void scSynthdef::applyAudioEnabled(ofxSCServer* server){
     auto synth = synths.find(server);
     if(synth != synths.end())
         synth->second->run(getActive() && synthOn && !waitingForSynthdef);
+    transportFollower.requestAnchor();   // a paused synth's clock stands still
 }
 
 void scSynthdef::buildSynth(ofxSCServer* server){

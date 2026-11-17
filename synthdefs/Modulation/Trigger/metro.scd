@@ -1,6 +1,7 @@
 ~synthCreator.value("Metro", {|n|
     var hz, reset, chance, duplicate, seed, reseed;
     var resetTrig, phase, trig, signal, normalChanceRand, seededChanceRand, instanceID, combinedReset;
+    var sync, syncBeats, syncTrig;
 
     // ————— 1) parameters —————
     hz = OceanodeParameterLag.ar(
@@ -49,6 +50,14 @@ phase = Phasor.ar(
 
 // When phase < incr, OR when we just reset
 trig = (phase < (hz / SampleRate.ir)) + combinedReset;
+
+// Sync To Transport (inspector): the ticks sit on the transport's beat grid.
+// Hz still sets how often (at the transport's tempo: beat-hz of 1 is one tick
+// per beat); Reset is not needed and does nothing.
+sync = OceanodeTransport.sync;
+syncBeats = OceanodeTransport.snapBeats(OceanodeTransport.bpm / 60 / hz);
+syncTrig = OceanodeTransport.cycleTrig(OceanodeTransport.phase(syncBeats), syncBeats);
+trig = Select.ar(sync, [trig, syncTrig]);
 
     // ————— 4) Generate normal random (truly random, each synth gets unique generator) —————
     normalChanceRand = Array.fill(n, {|i|

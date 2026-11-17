@@ -3,6 +3,7 @@
 	var min, max, beats, bpm, rate, sig, cycledur, range, reset, initPh, fixednum;
 	var cycleCounter, shouldRun, combinedReset;
 	var loop, singleSig, singleCycleCounter, singleShouldRun, finalSig;
+	var sync, syncSig;
 
 	// Basic LFO controls
 	beats = OceanodeParameterLag.ar(\beats, 1, n, 0.001, 128, "vf", 1/30, true);
@@ -54,6 +55,14 @@
 
 	// Select between looping and single-ramp based on loop toggle
 	finalSig = Select.ar(K2A.ar(loop), [singleSig, sig]);
+
+	// Sync To Transport (inspector): the ramp is the transport's beat, one
+	// cycle every `beats`, whatever Bpm and Reset say. It follows play, stop,
+	// seeks and loops, so it needs no reset to line up.
+	sync = OceanodeTransport.sync;
+	syncSig = min + (range * OceanodeTransport.phase(beats));
+	syncSig = (syncSig + initPh).wrap(min, max);
+	finalSig = Select.ar(sync, [finalSig, syncSig]);
 
 	// Output signal
 	Out.ar(OceanodeOutput.kr(\out), finalSig);
