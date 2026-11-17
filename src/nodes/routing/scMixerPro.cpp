@@ -501,7 +501,7 @@ void scMixerPro::initStrip(Track& t, const std::string& n) {
     t.wide.set(wd, false);
     t.wideWidth.set(wd + " Width", 1.0f, 0.0f, 2.0f);
     t.wideDiffuse.set(wd + " Diffuse", 0.0f, 0.0f, 1.0f);
-    t.wideBassMono.set(wd + " Bass Mono", true);
+    t.wideBassMono.set(wd + " Bass Mono", false);
     t.wideBassFreq.set(wd + " Bass Freq", 150.0f, 40.0f, 500.0f);
     for(int k = 0; k < MAX_RETURNS; k++) {
         const std::string sn = "Send " + n + " Aux" + ofToString(k + 1);
@@ -3191,7 +3191,7 @@ void scMixerPro::loadStrip(Track& tr, const ofJson& j) {
     tr.echoPingPongMode.set(ofClamp(stripVal<int>(ej, "pingpongMode", 0), 0, 5));
     num(wj, "width", tr.wideWidth, 1.0f);  num(wj, "diffuse", tr.wideDiffuse, 0.0f);
     num(wj, "bassFreq", tr.wideBassFreq, 150.0f);
-    tr.wideBassMono.set(stripVal<bool>(wj, "bassMono", true));
+    tr.wideBassMono.set(stripVal<bool>(wj, "bassMono", false));
     for(int k = 0; k < MAX_RETURNS; k++) {
         float level = 0.0f; bool pre = false;
         if(j.contains("sends") && j["sends"].is_array() && k < (int)j["sends"].size()) {
