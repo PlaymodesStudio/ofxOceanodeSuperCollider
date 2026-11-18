@@ -1,7 +1,9 @@
 (
 // War drums: big skin drums played by a group, by synthesis.
-// One channel is one drum section: up to Players drummers (the synth's
-// variable; \players picks how many of them play) hit together, each a little
+// One channel is one drum section: up to MaxPlayers drummers (the synth's
+// variable; \players picks how many of them play. The two must not share a
+// name: the node finds its variable by name, and a control is shown
+// capitalised) hit together, each a little
 // late, tuned a little apart, and no two hits the same.
 //
 // A drummer's drum:
@@ -40,7 +42,7 @@
 	levels = OceanodeParameterLag.ar(\levels, 0.5, n, 0, 1, "vf", 1/30, true).asArray;
 
 	// the group
-	players = OceanodeParameter.kr(\players, 6, n, 1, 6, "vi").asArray;               // how many of the drummers play (up to Players)
+	players = OceanodeParameter.kr(\players, 6, n, 1, 6, "vi").asArray;               // how many of the drummers play (up to MaxPlayers)
 	detune = OceanodeParameter.kr(\detune, 60, n, 0, 1200, "vf").asArray;             // their drums' tunings, spread over +- cents
 	spread = OceanodeParameter.kr(\spread, 40, n, 0, 100, "vf").asArray;              // how far apart they land, ms
 	variation = OceanodeParameter.kr(\variation, 1, n, 0, 2, "vf").asArray;           // how much one hit differs from the next
@@ -165,5 +167,5 @@
 
 	Out.ar(OceanodeOutput.kr(\out), sig);
 
-}, description: "Big skin drums played by a group: taikos, toms, sub drums and clacks", category: "Source/Percussion", variables: ["Players"], variableDimensions: [6]);
+}, description: "Big skin drums played by a group: taikos, toms, sub drums and clacks", category: "Source/Percussion", variables: ["MaxPlayers"], variableDimensions: [6]);
 )
