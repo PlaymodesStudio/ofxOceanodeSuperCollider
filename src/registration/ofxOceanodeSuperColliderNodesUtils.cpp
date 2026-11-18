@@ -24,6 +24,7 @@
 #include "../nodes/timeline/timelineWaveTrack.h"
 #endif
 #include "../nodes/buffers/scBufferBrowser.h"
+#include "../nodes/buffers/scFreesoundBrowser.h"
 #include "../nodes/recording/scMultiTrackRecorder.h"
 #include "../nodes/synthdefs/scCodeNode.h"
 #include "../nodes/recording/scNRTRecorder.h"
@@ -39,6 +40,7 @@ void registerUtilNodes(ofxOceanode &o){
 	o.registerModel<scCustomBuffer>("SuperCollider/Buffers", controller->getServers());
 	o.registerModel<scBufferAllocator>("SuperCollider/Buffers", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
 	o.registerModel<scBufferBrowser>("SuperCollider/Buffers", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
+	o.registerModel<scFreesoundBrowser>("SuperCollider/Buffers", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
 	o.registerModel<scRecbufHold>("SuperCollider/Recording", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
 	o.registerModel<scA2k>("SuperCollider/Analysis", controller->getServers());
 	o.registerModel<scOutput>("SuperCollider/Routing", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());

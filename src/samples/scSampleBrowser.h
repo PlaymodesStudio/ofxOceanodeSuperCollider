@@ -18,6 +18,10 @@
 //      keyboard selection is off screen (it must be drawn to re-centre).
 //    • A folder click is acted on after the row loop (no use-after-free of
 //      the entry list while the clipper runs).
+//    • "Files | Freesound" at the top: Freesound replaces the folder list with
+//      a search of freesound.org (scFreesound.h). Its sounds are auditioned
+//      and dragged like local files; the ones used are kept as WAV in
+//      <data>/Supercollider/Samples/Freesound/.
 //  Optional: onActivate(path) is called on a double-click or Enter on a file
 //  (RhythmBox leaves it unset: there, a file is assigned by drag & drop only).
 //
@@ -31,6 +35,7 @@
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "imgui.h"
+#include "scFreesound.h"
 #include <algorithm>
 #include <filesystem>
 #include <functional>
@@ -61,6 +66,8 @@ public:
     const std::string& getDir() const              { return browseDir; }
     const std::string& getPayloadType() const      { return payloadType; }
     int  getSelection() const                      { return browserSel; }
+    bool isFreesoundMode() const                   { return freesoundMode; }
+    void setFreesoundMode(bool on)                 { freesoundMode = on; }
     void setSelection(int i)                       { browserSel = i; }
 
     // List `dir` (the current folder becomes `dir` even if it does not exist,
@@ -144,6 +151,32 @@ public:
             ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) &&
            !ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))
             stopPreview();
+        // Source: local folders or freesound.org
+        {
+            const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+            auto tab = [&](const char* label, bool on) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(on ? ImGuiCol_ButtonActive : ImGuiCol_Button));
+                const bool clicked = ImGui::Button(label, ImVec2(std::max(1.0f, half), 0));
+                ImGui::PopStyleColor();
+                return clicked;
+            };
+            if(tab("Files", !freesoundMode) && freesoundMode) {
+                freesoundMode = false;
+                stopPreview();
+                refresh(browseDir);   // a sound kept meanwhile may be in this folder
+            }
+            ImGui::SameLine();
+            if(tab("Freesound", freesoundMode) && !freesoundMode) { freesoundMode = true; stopPreview(); }
+        }
+        if(freesoundMode) {
+            scFreesound::Panel::Host host;
+            host.preview     = [this](const std::string& path){ triggerPreview(path); };
+            host.stopPreview = [this](){ stopPreview(); };
+            host.activate    = onActivate;
+            host.payloadType = payloadType;
+            freesound.draw(host, ofToDataPath("Supercollider/Samples", true));
+            return;
+        }
         // Navigation bar
         if(ImGui::Button("...")) {
             auto res = ofSystemLoadDialog("Select Samples Folder", true, browseDir);
@@ -301,6 +334,9 @@ private:
     std::string        browseDir;
     std::vector<Entry> browseEntries;
     int                browserSel = -1;   // keyboard-selected entry index (-1 = none)
+
+    bool               freesoundMode = false;
+    scFreesound::Panel freesound;
 
     ofxSCServer* previewServer = nullptr;
     ofxSCBuffer* previewBuf    = nullptr;
