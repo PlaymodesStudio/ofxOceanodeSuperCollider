@@ -120,6 +120,17 @@ void scMixerPro::setup() {
     // on S1).
     addInspectorParameter(followGraphServer.set("Follow Graph Server", false));
     nodeListeners.push(followGraphServer.newListener([this](bool&) { resetFollow(); }));
+    // Off: a muted strip's sources keep running (unchanged). On: the synths
+    // that only feed strips silenced by mute or solo are paused on the server
+    // to save CPU, Pause Delay seconds after the strip goes silent (so tails
+    // end), and resume the moment it is heard again. Paused synths stand
+    // still: free-running LFOs and long tails continue from where they were.
+    addInspectorParameter(pauseMuted.set("Mute Pauses Sources", false));
+    addInspectorParameter(pauseDelay.set("Pause Delay", 2.0f, 0.0f, 30.0f));
+    nodeListeners.push(pauseMuted.newListener([this](bool&) { sentNeedsSource.clear(); }));
+    nodeListeners.push(pauseDelay.newListener([this](float& seconds) {
+        for(auto* manager : servers) if(manager) manager->setSuspendDelay(seconds);
+    }));
     currentChannels = numChannels.get();
 
     addSeparator("Outputs", ofColor(150, 200, 170));
@@ -952,8 +963,10 @@ void scMixerPro::reorderTracks(const std::vector<int>& order) {
         Track& tr = *trp;
         if(!tr.liveServer) continue;
         int bus = -1;
-        if(tr.index < (int)availableInputs.size() && availableInputs[tr.index]->getNodeRef())
+        if(tr.index < (int)availableInputs.size() && availableInputs[tr.index]->getNodeRef()) {
+            scNode::ScopedNoTap wiring;   // our own input: the graph knows this reader
             bus = availableInputs[tr.index]->getBusIndex(tr.liveServer);
+        }
         if(bus < 0) bus = serverStates[tr.liveServer].silentBus;
         tr.srcBus = bus;
         applyInputRouting(tr);
@@ -1473,6 +1486,41 @@ bool scMixerPro::isSilenced(const Track& tr) const {
     }
     for(const auto& t : tracks) if(t->solo.get() && busFor(*t) == &tr) return false;
     return true;
+}
+
+// A silenced strip still listens to its input while another strip ducks to
+// its Pre key, which is taken before the mute (mixerpro.scd). Its sends, Pre
+// ones included, are after the mute: they keep nothing alive.
+bool scMixerPro::stripNeedsSource(const Track& tr) {
+    if(!isSilenced(tr)) return true;
+    if(tr.isBus || tr.isReturn) return true;
+    for(Track* other : allStrips()) {
+        if(other == &tr || other->scKeyTap.get() != 0 || other->scStrength.get() <= 0.0f) continue;
+        if(other->scSource.get() - 1 == tr.index) return true;
+    }
+    return false;
+}
+
+bool scMixerPro::needsInputAudio(ofxSCServer* server, const nodePort& source) {
+    if(!pauseMuted.get()) return true;
+    const int k = serverIndexOf(server);
+    for(size_t t = 0; t < tracks.size() && t < availableInputs.size(); t++) {
+        if(k >= 0 && tracks[t]->server != k) continue;
+        if(!(*availableInputs[t] == source)) continue;
+        if(stripNeedsSource(*tracks[t])) return true;
+    }
+    return false;
+}
+
+// Tells the servers when what the strips need has changed (mute, solo, a
+// ducking source, the option itself): they work out who is still heard.
+void scMixerPro::updateSourcePausing() {
+    std::vector<bool> needs;
+    needs.reserve(tracks.size());
+    for(const auto& tr : tracks) needs.push_back(!pauseMuted.get() || stripNeedsSource(*tr));
+    if(needs == sentNeedsSource) return;
+    sentNeedsSource = std::move(needs);
+    for(auto* manager : servers) if(manager) manager->requestSuspendUpdate();
 }
 
 void scMixerPro::updateMutes() {
@@ -2954,6 +3002,7 @@ void scMixerPro::update(ofEventArgs&) {
     }
 
     routeSidechains();
+    updateSourcePausing();
     bool keysNeeded = false;
     for(auto& tr : tracks) if(tr->keyNeededMask) { keysNeeded = true; break; }
     const bool meters = visible || vuPublished;

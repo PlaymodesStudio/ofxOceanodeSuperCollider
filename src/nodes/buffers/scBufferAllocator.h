@@ -42,6 +42,13 @@ public:
 		addOutputParameter(done.set("Done"), ofxOceanodeParameterFlags_DisableSavePreset);
 
 		listeners.push(input.newListener([this](nodePort&) { recreateResources(); }));
+		// After a graph build: tells the server this input is still being
+		// read, so its source is not paused (scNode::isExternallyTapped)
+		for(auto* manager : servers) if(manager)
+			listeners.push(manager->graphComputed.newListener([this](){
+				if(input->getNodeRef() == nullptr || synths.empty()) return;
+				for(auto* m : servers) if(m && m->getServer()) input->getBusIndex(m->getServer());
+			}));
 		listeners.push(serverIndex.newListener([this](int&) { recreateResources(); }));
 		listeners.push(numChannels.newListener([this](int&) { recreateResources(); }));
 		listeners.push(lengthMs.newListener([this](float&) { recreateResources(); }));

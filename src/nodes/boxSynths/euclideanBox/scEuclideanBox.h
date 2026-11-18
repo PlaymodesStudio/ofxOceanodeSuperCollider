@@ -296,7 +296,7 @@ public:
         it->second.synth->set("run", 0.0f);   // holds until the next update's hard anchor
         forceHardAnchor = true;
         follower.requestAnchor();
-        it->second.synth->createAndRun(0, 1, getActive());
+        it->second.synth->createAndRun(0, 1, getActive() && !isGraphSuspended(server));
     }
     void moveSynthBefore(ofxSCServer* server, int nodeID) override {
         auto it = servers.find(server);
@@ -341,11 +341,22 @@ public:
     void setInputBus(ofxSCServer*, scNode*, int) override {}
     void resetInputBusses(ofxSCServer*, int) override {}
     void activate() override {
-        for(auto& [server, st] : servers) if(st.synth) st.synth->run(true);
+        for(auto& [server, st] : servers) if(st.synth) st.synth->run(!isGraphSuspended(server));
         forceHardAnchor = true;   // re-positioned without firing the missed ticks
         follower.requestAnchor();
     }
     void deactivate() override { for(auto& [server, st] : servers) if(st.synth) st.synth->run(false); }
+    // Mixer Pro "Mute Pauses Sources" (scNode.h)
+    // Its note / phase outputs feed the patch as data: it keeps running
+    // under a muted strip (cheap), only the synths it plays are paused
+    bool keepsGraphAlive() const override { return true; }
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override {
+        setGraphSuspendedFlag(server, suspended);
+        const auto it = servers.find(server);
+        if(it != servers.end() && it->second.synth) it->second.synth->run(getActive() && !suspended);
+        // It was paused: re-positioned without firing the missed ticks
+        if(!suspended){ forceHardAnchor = true; follower.requestAnchor(); }
+    }
     // The recorder writes the patch's state at score time zero: the onset
     // buffer too (written while it was arming, it never reached the score)
     void resendParametersForNRT() override { resendParams.notify(); invalidate(-1); fillBuffers(); }
@@ -1025,8 +1036,8 @@ private:
             // Replaced in place once the server has it; one still awaiting its
             // /n_go is freed by id (it would keep running, unheard of) and the
             // new one takes the head of the group, where createSynth put it
-            if(old->isCreated()) st.synth->createAndRun(4, old->nodeID, getActive());
-            else { old->free(); st.synth->createAndRun(0, 1, getActive()); }
+            if(old->isCreated()) st.synth->createAndRun(4, old->nodeID, getActive() && !isGraphSuspended(server));
+            else { old->free(); st.synth->createAndRun(0, 1, getActive() && !isGraphSuspended(server)); }
             delete old;
         }
         forceHardAnchor = true;

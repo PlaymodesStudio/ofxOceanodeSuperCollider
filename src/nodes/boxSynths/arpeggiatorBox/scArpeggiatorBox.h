@@ -263,7 +263,7 @@ public:
         it->second.synth->set("run", 0.0f);   // holds until the next update's hard anchor
         forceHardAnchor = true;
         follower.requestAnchor();
-        it->second.synth->createAndRun(0, 1, getActive());
+        it->second.synth->createAndRun(0, 1, getActive() && !isGraphSuspended(server));
         // a new synth: its clocks start again
         if(clockMode.get() == CLOCK_INTERNAL) resetFreeClock();
         if(clockMode.get() == CLOCK_TRIGGER) resetTriggerCount();
@@ -310,11 +310,22 @@ public:
         sendTrigInput(st);
     }
     void activate() override {
-        for(auto& [server, st] : servers) if(st.synth) st.synth->run(true);
+        for(auto& [server, st] : servers) if(st.synth) st.synth->run(!isGraphSuspended(server));
         forceHardAnchor = true;
         follower.requestAnchor();
     }
     void deactivate() override { for(auto& [server, st] : servers) if(st.synth) st.synth->run(false); }
+    // Mixer Pro "Mute Pauses Sources" (scNode.h)
+    // Its note / phase outputs feed the patch as data: it keeps running
+    // under a muted strip (cheap), only the synths it plays are paused
+    bool keepsGraphAlive() const override { return true; }
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override {
+        setGraphSuspendedFlag(server, suspended);
+        const auto it = servers.find(server);
+        if(it != servers.end() && it->second.synth) it->second.synth->run(getActive() && !suspended);
+        // It was paused: re-positioned without firing the missed ticks
+        if(!suspended){ forceHardAnchor = true; follower.requestAnchor(); }
+    }
     // The recorder writes the patch's state at score time zero: the note
     // buffer too (written while it was arming, it never reached the score)
     void resendParametersForNRT() override {

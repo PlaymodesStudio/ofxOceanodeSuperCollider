@@ -194,6 +194,9 @@ public:
 		return "vumeter" + ofToString(numChannels.get());
 	}
 
+    // Its data goes to the patch, not down a cable: never paused by a muted
+    // mixer strip, nor is anything upstream of it (scNode.h)
+    bool keepsGraphAlive() const override { return true; }
 	void activate() override {
 		for(auto& pair : synthInstances) if(pair.second) pair.second->run(true);
 	}

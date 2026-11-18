@@ -1287,7 +1287,7 @@ void scSampleBox::createSynth(ofxSCServer* srv) {
         n.pendingSince = ofGetElapsedTimef();
     }
     for(auto& p : pads) createPad(srv, *p);
-    if(!getActive()) n.root->run(false);
+    if(!getActive() || isGraphSuspended(srv)) n.root->run(false);
 }
 
 void scSampleBox::free(ofxSCServer* srv) {
@@ -2786,4 +2786,11 @@ void scSampleBox::rebuildPadControlIndex() {
     padControls.assign(pads.size(), {});
     for(const auto& c : controls)
         if(c.pad >= 0 && c.pad < (int)padControls.size()) padControls[c.pad].push_back(&c);
+}
+
+// Mixer Pro "Mute Pauses Sources" (scNode.h): the root group holds every pad.
+void scSampleBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    const auto it = nodeSC.find(server);
+    if(it != nodeSC.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
 }

@@ -220,7 +220,7 @@ public:
         auto& st = it->second;
         st.group->create(0, 1);
         st.created = true;
-        if(!getActive()) st.group->run(false);
+        if(!getActive() || isGraphSuspended(server)) st.group->run(false);
         st.clock = new ofxSCSynth("ChordBoxClock", server);
         sendStatic(server, st);
         st.clock->set("run", 0.0f);
@@ -272,11 +272,21 @@ public:
         sendIndexInput(st);
     }
     void activate() override {
-        for(auto& [server, st] : servers) if(st.group && st.created) st.group->run(true);
+        for(auto& [server, st] : servers) if(st.group && st.created) st.group->run(!isGraphSuspended(server));
         forceHardAnchor = true;
         follower.requestAnchor();
     }
     void deactivate() override { for(auto& [server, st] : servers) if(st.group && st.created) st.group->run(false); }
+    // Mixer Pro "Mute Pauses Sources" (scNode.h): the group holds the clock and the voices
+    // Its note / phase outputs feed the patch as data: it keeps running
+    // under a muted strip (cheap), only the synths it plays are paused
+    bool keepsGraphAlive() const override { return true; }
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override {
+        setGraphSuspendedFlag(server, suspended);
+        const auto it = servers.find(server);
+        if(it != servers.end() && it->second.group && it->second.created) it->second.group->run(getActive() && !suspended);
+        if(!suspended){ forceHardAnchor = true; follower.requestAnchor(); }   // its clock stood still
+    }
     // The recorder writes the patch's state at score time zero: the tables too
     void resendParametersForNRT() override {
         resendParams.notify();

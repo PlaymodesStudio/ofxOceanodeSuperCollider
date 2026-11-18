@@ -68,6 +68,10 @@ public:
 		listeners.push(input.newListener([this](nodePort&){
 			updateSynthInputs();
 		}));
+		// After a graph build: asks for the bus again, which also tells the
+		// server this input is still being read (scNode::isExternallyTapped)
+		for(auto* manager : servers) if(manager)
+			listeners.push(manager->graphComputed.newListener([this](){ updateSynthInputs(); }));
 		
 		listeners.push(numChannels.newListener([this](int&){
 			recreateBuffers();

@@ -87,6 +87,9 @@ public:
     void setBpm(float bpm) override;
     void activate() override;
     void deactivate() override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
+    // A published LFO output is read back from the server: keep running
+    bool keepsGraphAlive() const override { return modulation.hasLfoOutputs(); }
 
     // scNode interface
     void buildSynth(ofxSCServer* server) override;

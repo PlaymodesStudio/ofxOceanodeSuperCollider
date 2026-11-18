@@ -501,6 +501,32 @@ The SuperCollider nodes use one of two mechanisms. `scGlobalPitch`
   Transpose to each note at its note-on, without Detune: a MIDI note has no
   fraction. Held notes keep their pitch.
 
+## Pausing under a muted mixer strip
+
+SC Mixer Pro's **Mute Pauses Sources** (Inspector, off by default) pauses the
+nodes that only feed strips silenced by mute or solo. `serverManager` decides
+who is unheard (`updateGraphSuspension`); a node takes part by overriding
+`scNode::applyGraphSuspended(server, suspended)`:
+
+- Call `setGraphSuspendedFlag(server, suspended)` and send the run state of the
+  node's **top-level** synths or root group as `getActive() && !suspended`.
+- AND `!isGraphSuspended(server)` into every other place that sends that run
+  state: `createSynth`, `activate`, replace-in-place (`/s_new` action 4) and
+  rebuilds. A suspended node must not come back running on its own.
+- A node with one root group pauses that group only: scsynth keeps each
+  child's own run flag, so effects or voices the node paused itself stay so.
+- A transport-locked player re-anchors on resume, as it does in `activate`.
+- A node whose data outputs feed the patch overrides `keepsGraphAlive()`
+  instead and keeps running.
+
+A node without the override keeps running unheard; its upstream can still be
+paused. Covered today: FMBox, AliasingBox, SteamPipeBox, PhysicalBox,
+AnalogBox, PolyComb, AdditiveBox, DrumKitBox, SampleBox, WavetableBox,
+MetroBox, SpectralFilterBox and every `scSynthdef` node. Not yet: GrainBox,
+GrainFxBox, PulsarBox, EchoBox, SlicerBox, DataBox, RhythmBox (several
+top-level synths each). ChordBox, HarmonyBox, ArpeggiatorBox and EuclideanBox
+keep running because of their data outputs.
+
 ## Current coverage
 
 This describes the current source. “Shared modulation” means the common

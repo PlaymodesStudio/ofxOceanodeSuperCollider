@@ -342,7 +342,7 @@ void scSpectralFilterBox::rebuild(){
         auto* fresh = new ofxSCSynth(synthDefName(), server);
         sendAll(fresh);
         scResendInOutBuses(fresh, server, inputBuses, outputBuses);
-        if(synth->isCreated()) fresh->createAndRun(4, synth->nodeID, getActive());
+        if(synth->isCreated()) fresh->createAndRun(4, synth->nodeID, getActive() && !isGraphSuspended(server));
         delete synth;   // no /n_free: action 4 replaces the node atomically
         synth = fresh;
     }
@@ -363,7 +363,7 @@ void scSpectralFilterBox::createSynth(ofxSCServer* server){
     auto it = synths.find(server);
     if(it == synths.end() || !it->second) return;
     scResendInOutBuses(it->second, server, inputBuses, outputBuses);
-    if(!it->second->isCreated()) it->second->createAndRun(0, 1, getActive());
+    if(!it->second->isCreated()) it->second->createAndRun(0, 1, getActive() && !isGraphSuspended(server));
 }
 
 void scSpectralFilterBox::free(ofxSCServer* server){
@@ -414,7 +414,7 @@ int scSpectralFilterBox::getLastSynthID(ofxSCServer* server){
 }
 
 void scSpectralFilterBox::activate(){
-    for(auto& [server, synth] : synths) if(synth && synth->isCreated()) synth->run(true);
+    for(auto& [server, synth] : synths) if(synth && synth->isCreated()) synth->run(!isGraphSuspended(server));
 }
 
 void scSpectralFilterBox::deactivate(){
@@ -494,4 +494,11 @@ void scSpectralFilterBox::drawPreview(){
             dl->AddLine(ImVec2(x, o.y), ImVec2(x, o.y + size.y), IM_COL32(255, 220, 120, 90));
         }
     }
+}
+
+// Mixer Pro "Mute Pauses Sources" (scNode.h)
+void scSpectralFilterBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    const auto it = synths.find(server);
+    if(it != synths.end() && it->second && it->second->isCreated()) it->second->run(getActive() && !suspended);
 }

@@ -1122,7 +1122,7 @@ void scPolyComb::createSynth(ofxSCServer* server) {
         g->create(1, st.root->nodeID);       // in slot order
     }
     st.created = true;
-    if(!getActive()) st.root->run(false);
+    if(!getActive() || isGraphSuspended(server)) st.root->run(false);
     createAll(server, st);
 }
 
@@ -1186,7 +1186,7 @@ void scPolyComb::resendParametersForNRT() {
     modulation.resend();
 }
 
-void scPolyComb::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(true); }
+void scPolyComb::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(!isGraphSuspended(s)); }
 void scPolyComb::deactivate() { for(auto& [s, st] : states) if(st.created) st.root->run(false); }
 
 void scPolyComb::setBpm(float bpm) {
@@ -3342,3 +3342,11 @@ void scPolyComb::morphEnd(bool completed) {
 //    banks. Every one of them publishable. ─────────────────────────────────────
 
 #include "scPolyCombVoiceMorph.inl"
+
+// Mixer Pro "Mute Pauses Sources" (scNode.h): the root group holds every
+// synth of the node, and pausing a group keeps its children's own run flags.
+void scPolyComb::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    const auto it = states.find(server);
+    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
+}

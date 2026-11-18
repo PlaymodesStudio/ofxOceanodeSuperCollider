@@ -742,7 +742,7 @@ void scSynthdef::replaceSynths(){
         // A missing default may have kept this synth entirely uncreated.
         const bool hasTarget = oldSynth->isCreated() || oldSynth->nodeID != 0;
         newSynth->createAndRun(hasTarget ? 4 : 0, hasTarget ? oldSynth->nodeID : 1,
-                              getActive() && synthOn && !waitingForSynthdef);
+                              shouldRun(server));
         server->setBLatency(wasLatency);
         delete oldSynth;
     }
@@ -800,17 +800,27 @@ void scSynthdef::revertToBuiltSynthdef(){
 void scSynthdef::activate(){
     transportFollower.requestAnchor();   // its clock stood still while it was off
     if(waitingForSynthdef) return;
-    for(auto &synth : synths) synth.second->run(synthOn);
+    for(auto &synth : synths) synth.second->run(synthOn && !isGraphSuspended(synth.first));
 }
 
 void scSynthdef::deactivate(){
     for(auto &synth : synths) synth.second->run(false);
 }
 
+bool scSynthdef::shouldRun(ofxSCServer* server){
+    return getActive() && synthOn && !waitingForSynthdef && !isGraphSuspended(server);
+}
+
+// Mixer Pro "Mute Pauses Sources" (scNode.h)
+void scSynthdef::applyGraphSuspended(ofxSCServer* server, bool suspended){
+    setGraphSuspendedFlag(server, suspended);
+    applyAudioEnabled(server);
+}
+
 void scSynthdef::applyAudioEnabled(ofxSCServer* server){
     auto synth = synths.find(server);
     if(synth != synths.end())
-        synth->second->run(getActive() && synthOn && !waitingForSynthdef);
+        synth->second->run(shouldRun(server));
     transportFollower.requestAnchor();   // a paused synth's clock stands still
 }
 
@@ -826,7 +836,7 @@ void scSynthdef::buildSynth(ofxSCServer* server){
 void scSynthdef::createSynth(ofxSCServer* server){
     if(synths.count(server) == 0 || !isSynthdefCompiled(builtSynthdef)) return;
     resendParams.notify();
-    synths[server]->createAndRun(0, 1, getActive() && synthOn && !waitingForSynthdef);
+    synths[server]->createAndRun(0, 1, shouldRun(server));
 }
 
 void scSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){

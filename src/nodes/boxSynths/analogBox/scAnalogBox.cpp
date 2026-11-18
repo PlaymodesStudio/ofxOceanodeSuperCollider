@@ -977,7 +977,7 @@ void scAnalogBox::createSynth(ofxSCServer* server) {
         g->create(1, st.root->nodeID);
     }
     st.created = true;
-    if(!getActive()) st.root->run(false);
+    if(!getActive() || isGraphSuspended(server)) st.root->run(false);
     createAll(server, st);
 }
 
@@ -1037,7 +1037,7 @@ void scAnalogBox::resendParametersForNRT() {
     modulation.resend();
 }
 
-void scAnalogBox::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(true); }
+void scAnalogBox::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(!isGraphSuspended(s)); }
 void scAnalogBox::deactivate() { for(auto& [s, st] : states) if(st.created) st.root->run(false); }
 
 void scAnalogBox::setBpm(float bpm) {
@@ -2564,4 +2564,12 @@ std::vector<ofJson> scAnalogBox::factorySnapshots() const {
         out.push_back(s);
     }
     return out;
+}
+
+// Mixer Pro "Mute Pauses Sources" (scNode.h): the root group holds every
+// synth of the node, and pausing a group keeps its children's own run flags.
+void scAnalogBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    const auto it = states.find(server);
+    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
 }

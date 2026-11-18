@@ -131,6 +131,8 @@ public:
                             map<scNode*, std::pair<int, vector<int>>>& visitedNodeChilds,
                             vector<scNode*> parents = {}) override;
     void getConnections(std::map<nodePort, vector<scNode*>>& connections) override;
+    // "Mute Pauses Sources": a port that only reaches silenced strips
+    bool needsInputAudio(ofxSCServer* server, const nodePort& source) override;
 
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;
@@ -310,6 +312,16 @@ private:
     // server builds its graph, so the MacroMixer can start the source on a
     // free server. Only when every strip names the same server.
     ofParameter<bool> followGraphServer;
+    // --- Mute Pauses Sources (Inspector, off by default) ---
+    // A strip silenced by mute or solo stops asking for its input: the nodes
+    // that feed nothing else are paused on the server (serverManager::
+    // updateGraphSuspension) after Pause Delay seconds, and resume at once.
+    ofParameter<bool> pauseMuted;
+    ofParameter<float> pauseDelay;
+    // Whether the strip still uses what arrives at its input
+    bool stripNeedsSource(const Track& tr);
+    std::vector<bool> sentNeedsSource;     // per track, as last told to the servers
+    void updateSourcePausing();
     ofxSCServer* followServer = nullptr;   // the server running the strips while following
     int followHome() const;                // the strips' common server, or -1 (not following)
     int rawServerIndexOf(ofxSCServer* server) const;

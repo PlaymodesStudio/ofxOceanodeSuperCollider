@@ -11,6 +11,18 @@
 
 ofxSCServer* scNode::graphTraversalServer = nullptr;
 nodePort scNode::graphInputPort;
+std::map<ofxSCServer*, std::set<scNode*>> scNode::externalTaps;
+uint64_t scNode::externalTapEpoch = 0;
+int scNode::tapSuppress = 0;
+
+bool scNode::isExternallyTapped(ofxSCServer* server, scNode* node){
+    const auto taps = externalTaps.find(server);
+    return taps != externalTaps.end() && taps->second.count(node) > 0;
+}
+
+void scNode::clearExternalTaps(ofxSCServer* server){
+    externalTaps.erase(server);
+}
 
 nodePort scNode::resolveAudioSource(nodePort port){
     return scResolveAudioSource(port,
@@ -20,6 +32,10 @@ nodePort scNode::resolveAudioSource(nodePort port){
 
 int nodePort::getBusIndex(ofxSCServer* server) const{
     if(nodeRef == nullptr) return -1;
+    // Outside a graph build: somebody is about to read this bus (scNode.h)
+    if(server != nullptr && scNode::graphTraversalServer == nullptr && scNode::tapSuppress == 0
+       && scNode::externalTaps[server].insert(nodeRef).second)
+        scNode::externalTapEpoch++;
     return nodeRef->getOutputBusIndex(server, index);
 }
 
@@ -36,6 +52,7 @@ bool scNode::isMutedByTransport() const {
 }
 
 scNode::~scNode(){
+    for(auto& taps : externalTaps) taps.second.erase(this);
     destroyedNode.notify();
 };
 

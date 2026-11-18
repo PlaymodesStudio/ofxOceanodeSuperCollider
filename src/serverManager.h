@@ -143,6 +143,21 @@ public:
     // reconnected within the same frame are not freed and recreated.
     void requestRecomputeGraph(){ recomputePending = true; }
 
+    // ── Graph suspension (SC Mixer Pro: "Mute Pauses Sources") ──────────────
+    // A node whose audio only ever reaches silenced mixer strips is paused on
+    // the server (/n_run 0) after a short delay, and resumed the moment any
+    // path from it is heard again. It is a pass of its own over the built
+    // graph: muting never rebuilds anything. Nodes decide what they are able
+    // to pause (scNode::applyGraphSuspended); the rest keep running.
+    // Call when what a node answers to needsInputAudio() may have changed.
+    void requestSuspendUpdate(){ suspendDirty = true; }
+    // Seconds a node stays running after it stops being heard (tails)
+    void setSuspendDelay(float seconds){ suspendDelay = seconds < 0.0f ? 0.0f : seconds; }
+    bool isNodeSuspended(scNode* node) const {
+        const auto found = suspension.find(node);
+        return found != suspension.end() && found->second.applied;
+    }
+
     bool hasGraphNodes() const { return !nodesList.empty(); }
     // Whether the graph runs nodes besides its Outputs and MacroMixer audio
     // bridges: a server that only plays a mixer's (silent) bridge is free for
@@ -229,6 +244,21 @@ private:
     // serverGone: its nodes went with the server, there is nothing to free
     void clearTransportGates(bool serverGone = false);
     void updateTransportGates();
+    struct SuspendState {
+        bool applied = false;      // applyGraphSuspended(server, true) was called
+        float deadline = 0.0f;     // when to call it (ofGetElapsedTimef)
+    };
+    std::map<scNode*, SuspendState> suspension;   // the unheard nodes of nodesList
+    bool suspendDirty = false;
+    bool suspendWasCapturing = false;
+    uint64_t suspendTapEpoch = 0;
+    float suspendDelay = 2.0f;
+    std::set<scNode*> computeUnheardNodes();
+    void updateGraphSuspension();
+    // Resumes (when asked) and forgets every suspended node
+    void clearGraphSuspension(bool resume);
+    // graphComputed, with the readers outside the graph counted again
+    void notifyGraphComputed();
     void loadNRTSynthdefs();
     void prepareNodesForNRTCapture();
     

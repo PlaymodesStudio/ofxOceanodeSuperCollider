@@ -26,6 +26,9 @@ public:
 	void setup();
 	void update(ofEventArgs &args) override;
     
+    // Its data goes to the patch, not down a cable: never paused by a muted
+    // mixer strip, nor is anything upstream of it (scNode.h)
+    bool keepsGraphAlive() const override { return true; }
     void activate() override;
     
     void deactivate() override;

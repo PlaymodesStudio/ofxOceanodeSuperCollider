@@ -103,6 +103,7 @@ public:
     }
     void activate() override;
     void deactivate() override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
     // The recorder writes the patch's state at score time zero: the onset
     // buffers too (written while it was arming, they never reached the score)
     void resendParametersForNRT() override { resendParams.notify(); invalidateSlots(-1); fillBuffers(); }

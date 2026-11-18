@@ -9,6 +9,9 @@
 #define scNode_h
 
 #include "ofxOceanodeNodeModel.h"
+#include <map>
+#include <set>
+#include <cstdint>
 
 class scServer;
 class ofxSCServer;
@@ -60,6 +63,40 @@ public:
     virtual bool isAudioEnabled() const { return true; }
     virtual void applyAudioEnabled(ofxSCServer* server) {}
     virtual void setBypassedOutputBus(ofxSCServer* server, int index, int bus) {}
+
+    // ── Graph suspension (SC Mixer Pro: "Mute Pauses Sources") ──────────────
+    // serverManager works out which nodes nobody can hear -- everything they
+    // produce ends in a silenced mixer strip -- and pauses them (/n_run 0) to
+    // save CPU. See serverManager::updateGraphSuspension().
+    //
+    // A node that is heard through more than what the graph's cables show
+    // (control data read by the patch: a VU, an envelope follower): it and
+    // everything upstream of it are never suspended.
+    virtual bool keepsGraphAlive() const { return false; }
+    // Whether this node, being heard itself, does anything with the audio of
+    // `source` (one of its inputs) on `server`. A mixer answers false for a
+    // port that only reaches silenced strips.
+    virtual bool needsInputAudio(ofxSCServer* server, const nodePort& source) { return true; }
+    // Pause / resume every synth of this node on `server`. The node keeps the
+    // flag: whatever it creates, replaces or runs later on that server stays
+    // paused until it is called with false. Must tolerate missing synths.
+    // Default: the node cannot pause and simply keeps running unheard (its
+    // own upstream can still be suspended).
+    virtual void applyGraphSuspended(ofxSCServer* server, bool suspended) {}
+
+    // A port whose bus is asked for outside a graph build is being read by
+    // something the graph does not know (an analyzer, a recorder, a buffer
+    // writer...): its node must keep running. Recorded by nodePort::
+    // getBusIndex(); serverManager forgets them before each graphComputed,
+    // which those readers answer by asking again.
+    static bool isExternallyTapped(ofxSCServer* server, scNode* node);
+    static void clearExternalTaps(ofxSCServer* server);
+    static uint64_t getExternalTapEpoch(){ return externalTapEpoch; }
+    // Asking for a bus without reading it (a display, the node's own wiring)
+    struct ScopedNoTap {
+        ScopedNoTap(){ ++tapSuppress; }
+        ~ScopedNoTap(){ --tapSuppress; }
+    };
 
     // "Mute When Stopped" (inspector): the node's outputs fade to silence
     // while the transport it follows is stopped. serverManager puts a gate
@@ -153,8 +190,22 @@ protected:
     // rebuild per connection while a node rewires many inputs at once)
     bool suppressInputRefresh = false;
 
+    // For applyGraphSuspended(): the servers this node is suspended on. A
+    // node that can pause ANDs !isGraphSuspended(server) into every run state
+    // it sends for its top-level synths / root group.
+    std::set<ofxSCServer*> graphSuspendedServers;
+    bool isGraphSuspended(ofxSCServer* server) const { return graphSuspendedServers.count(server) > 0; }
+    void setGraphSuspendedFlag(ofxSCServer* server, bool suspended){
+        if(suspended) graphSuspendedServers.insert(server);
+        else graphSuspendedServers.erase(server);
+    }
+
     static ofxSCServer* graphTraversalServer;
     static nodePort graphInputPort;
+    friend class nodePort;
+    static std::map<ofxSCServer*, std::set<scNode*>> externalTaps;
+    static uint64_t externalTapEpoch;
+    static int tapSuppress;
     ofEventListeners listeners;
     ofParameter<bool> muteWhenStopped;
     

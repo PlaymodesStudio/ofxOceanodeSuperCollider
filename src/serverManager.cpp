@@ -124,6 +124,7 @@ void serverManager::setup(){
         }
         updateFoldedWaveforms();
         updateTransportGates();
+        updateGraphSuspension();
         widenMinimumLead();
     }));
 
@@ -154,6 +155,8 @@ void serverManager::setup(){
         applyMinimumLead();   // the buffer size may have changed with the restart
         mixerGraphSyncID=-1;
         graphGeneration++;
+        // The synths went with the old server; the nodes still hold the flag
+        clearGraphSuspension(true);
         // Folders required while the server was booting / loading the
         // SynthDef tree came after loadDefs() and were never sent. Loaded
         // before the graph is rebuilt; the /sync keeps
@@ -1013,6 +1016,7 @@ const std::vector<float>* serverManager::requestFoldedWaveform(const nodePort& p
     // Check membership before dereferencing a forwarded Macro/Router/Portal
     // port; graph teardown can leave an old value visible for one frame.
     if(std::find(nodesList.begin(), nodesList.end(), port.getNodeRef()) == nodesList.end()) return nullptr;
+    scNode::ScopedNoTap display;   // a folded node's scope keeps nothing running
     const int bus = port.getBusIndex(server);
     if(bus < 0 || !loadFoldedWaveformDef()) return nullptr;
     auto& capture = foldedWaveforms[bus];
@@ -1097,7 +1101,7 @@ void serverManager::watchMixerGraphSync(){
         mixerGraphSyncID=-1;
         const auto routingTicket=mixerRoutingSubmitted;
         for(auto* node:nodesList) node->graphDidRebuild(server,true);
-        graphComputed.notify();
+        notifyGraphComputed();
         completeMixerRouting(routingTicket);
     });
 }
@@ -1120,6 +1124,7 @@ void serverManager::teardownGraphForPresetLoad(){
     nodeLinks.clear();
     nodesListChanged = true;
 
+    clearGraphSuspension(true);
     const int silentBusIndex = busFromSilent != nullptr ? busFromSilent->index : 0;
     for(auto node : nodesList){
         if(node != nullptr){
@@ -1155,6 +1160,7 @@ void serverManager::recomputeGraph(){
         clearFoldedWaveforms();
         clearTransportGates();
         mixerGraphSyncID=-1;
+        clearGraphSuspension(true);
         for(auto node : nodesList) node->free(server);
         nodesList.clear();
         connections.clear(); nodeLinks.clear(); nodeDestroyedListeners.clear();
@@ -1280,8 +1286,14 @@ void serverManager::recomputeGraph(){
             if(b->second.empty()) b=busses.erase(b); else ++b;
         }
         for(auto node : nodesList){
-            if(node != nullptr)
-                node->free(server);
+            if(node == nullptr) continue;
+            // Leaving the graph: it must not come back paused
+            const auto suspended = suspension.find(node);
+            if(suspended != suspension.end()){
+                if(suspended->second.applied) node->applyGraphSuspended(server, false);
+                suspension.erase(suspended);
+            }
+            node->free(server);
         }
         // What remains in nodesList here is exactly the nodes leaving the
         // graph, so stop listening for their destruction. This loop used to
@@ -1296,6 +1308,7 @@ void serverManager::recomputeGraph(){
         for(auto &node : toCreateNodes){
             nodeDestroyedListeners[node] = node->destroyedNode.newListener([this, node](){
                 nodesList.erase(std::remove(nodesList.begin(), nodesList.end(), node), nodesList.end());
+                suspension.erase(node);
                 // Its gates are keyed by the pointer that is going away
                 const auto gates = transportGates.find(node);
                 if(gates != transportGates.end()){
@@ -1417,6 +1430,11 @@ void serverManager::recomputeGraph(){
         // Route and change running state with the same server latency. An Off
         // synth is never freed merely because its output has been redirected.
         for(auto* node : nodesList) node->applyAudioEnabled(server);
+        // Suspended nodes stay paused through the rebuild (createSynth and the
+        // moves above may have started some of their synths again); who is
+        // heard in the new graph is worked out on the next update.
+        for(auto& entry : suspension) if(entry.second.applied) entry.first->applyGraphSuspended(server, true);
+        suspendDirty = true;
 //            nodesList.insert(nodesList.end(), newNodesList.begin(), newNodesList.end());
 //        }
 //        server->sendStoredBundle();
@@ -1430,8 +1448,90 @@ void serverManager::recomputeGraph(){
         server->setBLatency(false);
         if(mixerGraphSyncID>=0) return;
     }
-    graphComputed.notify();
+    notifyGraphComputed();
     completeMixerRouting(routingTicket);
+}
+
+void serverManager::notifyGraphComputed(){
+    // Readers outside the graph (analyzers, recorders) answer graphComputed
+    // by asking for their input's bus again, which counts them again
+    // (nodePort::getBusIndex). One that has gone since is forgotten here.
+    scNode::clearExternalTaps(server);
+    graphComputed.notify();
+    suspendDirty = true;
+}
+
+// The nodes of the graph nobody can hear. Walks downstream first: a node is
+// heard when it is an end of the graph, is read from outside it, or feeds a
+// heard node that uses that input. A consumer not decided yet is upstream of
+// its own source (feedback): counted as heard, so a loop never pauses itself.
+std::set<scNode*> serverManager::computeUnheardNodes(){
+    std::set<scNode*> unheard;
+    std::map<scNode*, std::vector<std::pair<nodePort, scNode*>>> consumers;
+    for(const auto& connection : connections)
+        for(auto* destination : connection.second)
+            consumers[connection.first.getNodeRef()].emplace_back(connection.first, destination);
+    std::set<scNode*> decided;
+    for(auto it = nodesList.rbegin(); it != nodesList.rend(); ++it){
+        scNode* node = *it;
+        bool heard = node->getNumOutputs() == 0 || node->keepsGraphAlive() || node->isMacroMixerBridge()
+                  || scNode::isExternallyTapped(server, node);
+        if(!heard){
+            const auto found = consumers.find(node);
+            // read by nothing the graph knows about: not ours to judge
+            if(found == consumers.end()) heard = true;
+            else for(const auto& consumer : found->second){
+                if(!decided.count(consumer.second)
+                   || (!unheard.count(consumer.second) && consumer.second->needsInputAudio(server, consumer.first))){
+                    heard = true;
+                    break;
+                }
+            }
+        }
+        decided.insert(node);
+        if(!heard) unheard.insert(node);
+    }
+    return unheard;
+}
+
+void serverManager::updateGraphSuspension(){
+    if(!server || !initialized) return;
+    // An offline render plays every stem, heard or not
+    const bool capturing = server->isNRTCapturing();
+    if(capturing != suspendWasCapturing){ suspendWasCapturing = capturing; suspendDirty = true; }
+    if(scNode::getExternalTapEpoch() != suspendTapEpoch){
+        suspendTapEpoch = scNode::getExternalTapEpoch();
+        suspendDirty = true;
+    }
+    if(!suspendDirty && suspension.empty()) return;
+    const float now = ofGetElapsedTimef();
+    if(suspendDirty && !ofxOceanodeShared::isPresetLoading()){
+        suspendDirty = false;
+        std::set<scNode*> unheard;
+        if(!capturing) unheard = computeUnheardNodes();
+        for(auto* node : nodesList){
+            const auto found = suspension.find(node);
+            if(unheard.count(node)){
+                if(found == suspension.end()) suspension[node].deadline = now + suspendDelay;
+            }else if(found != suspension.end()){
+                // Heard again: at once
+                if(found->second.applied) node->applyGraphSuspended(server, false);
+                suspension.erase(found);
+            }
+        }
+    }
+    for(auto& entry : suspension){
+        if(entry.second.applied || now < entry.second.deadline) continue;
+        entry.second.applied = true;
+        entry.first->applyGraphSuspended(server, true);
+    }
+}
+
+void serverManager::clearGraphSuspension(bool resume){
+    if(resume && server != nullptr)
+        for(auto& entry : suspension) if(entry.second.applied) entry.first->applyGraphSuspended(server, false);
+    suspension.clear();
+    suspendDirty = true;
 }
 
 void serverManager::loadSynthdefsFromPreset(const std::string& path, bool forceLoad, bool waitForLoad){

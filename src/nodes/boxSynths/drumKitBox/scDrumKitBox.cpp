@@ -1183,7 +1183,7 @@ void scDrumKitBox::createSynth(ofxSCServer* srv) {
         n.pendingSince = ofGetElapsedTimef();
     }
     for(auto& p : pads) createPad(srv, *p);
-    if(!getActive()) n.root->run(false);
+    if(!getActive() || isGraphSuspended(srv)) n.root->run(false);
 }
 
 void scDrumKitBox::free(ofxSCServer* srv) {
@@ -1547,4 +1547,11 @@ bool scDrumKitBox::isConnected(const std::string& key) const {
     auto it = published.find(key);
     return it != published.end() && it->second &&
         (it->second->hasInConnection() || it->second->hasOutConnections());
+}
+
+// Mixer Pro "Mute Pauses Sources" (scNode.h): the root group holds every pad.
+void scDrumKitBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    const auto it = nodeSC.find(server);
+    if(it != nodeSC.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
 }

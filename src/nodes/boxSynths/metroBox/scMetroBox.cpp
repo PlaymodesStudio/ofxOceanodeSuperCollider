@@ -1255,7 +1255,7 @@ void scMetroBox::createSynth(ofxSCServer* server) {
     it->second.synth->set("run", 0.0f);
     forceHardAnchor = true;
     follower.requestAnchor();
-    it->second.synth->createAndRun(0, 1, getActive());
+    it->second.synth->createAndRun(0, 1, getActive() && !isGraphSuspended(server));
 }
 
 void scMetroBox::moveSynthBefore(ofxSCServer* server, int nodeID) {
@@ -1297,7 +1297,7 @@ int scMetroBox::getLastSynthID(ofxSCServer* server) {
 }
 
 void scMetroBox::activate() {
-    for(auto& [server, st] : servers) if(st.synth) st.synth->run(true);
+    for(auto& [server, st] : servers) if(st.synth) st.synth->run(!isGraphSuspended(server));
     // It was paused: re-position it without firing the missed ticks
     forceHardAnchor = true;
     follower.requestAnchor();
@@ -1853,4 +1853,13 @@ void scMetroBox::drawAdvanced(int li) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::PopID();
+}
+
+// Mixer Pro "Mute Pauses Sources" (scNode.h)
+void scMetroBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    const auto it = servers.find(server);
+    if(it != servers.end() && it->second.synth) it->second.synth->run(getActive() && !suspended);
+    // It was paused: re-positioned without firing the missed ticks
+    if(!suspended){ forceHardAnchor = true; follower.requestAnchor(); }
 }

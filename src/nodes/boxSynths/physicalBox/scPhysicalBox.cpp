@@ -616,7 +616,7 @@ void scPhysicalBox::createSynth(ofxSCServer* server) {
     for(int i = 0; i < st.builtVoices; ++i) st.voices[i]->createAndRun(1, st.groups[SlVoice]->nodeID, true);
     st.spread->createAndRun(1, st.groups[SlSpread]->nodeID, true);
     routeChain(st);
-    if(!getActive()) st.root->run(false);
+    if(!getActive() || isGraphSuspended(server)) st.root->run(false);
 }
 void scPhysicalBox::release(ofxSCServer* server, State& st) {
     if(st.created && st.root) st.root->free();
@@ -667,7 +667,7 @@ void scPhysicalBox::resetInputBusses(ofxSCServer* s, int) {
     for(auto& cache : st.sent) cache.erase("in");
     sendNotes(s, st); sendSound(s, st);
 }
-void scPhysicalBox::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(true); }
+void scPhysicalBox::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(!isGraphSuspended(s)); }
 void scPhysicalBox::deactivate() { for(auto& [s, st] : states) if(st.created) st.root->run(false); }
 void scPhysicalBox::setBpm(float v) { bpm = std::max(1.0f, v); mod.setBpm(bpm); sendAll(); }
 void scPhysicalBox::resendParametersForNRT() {
@@ -1952,4 +1952,12 @@ bool scPhysicalBox::liveVca() const {
     for(int e = 0; e < mod.envCount; ++e)
         if(std::abs(mod.matrix[(scModulation::SRC_ENV + e) * NUM_TARGETS + Amp]) > 0.0001f) return true;
     return false;
+}
+
+// Mixer Pro "Mute Pauses Sources" (scNode.h): the root group holds every
+// synth of the node, and pausing a group keeps its children's own run flags.
+void scPhysicalBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    const auto it = states.find(server);
+    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
 }

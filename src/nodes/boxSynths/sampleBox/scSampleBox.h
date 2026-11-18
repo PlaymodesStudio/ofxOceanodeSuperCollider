@@ -94,6 +94,12 @@ public:
     void buildSynth(ofxSCServer*) override;
     void createSynth(ofxSCServer*) override;
     void free(ofxSCServer*) override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
+    // A published LFO output is read back from the server: keep running
+    bool keepsGraphAlive() const override {
+        for(const auto& p : pads) if(p && p->mod.hasLfoOutputs()) return true;
+        return false;
+    }
     void setOutputBus(ofxSCServer*, int, int) override;
     int getOutputBusIndex(ofxSCServer*, int) override;
     void moveSynthBefore(ofxSCServer*, int) override;

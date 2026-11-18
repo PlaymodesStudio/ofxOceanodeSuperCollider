@@ -56,6 +56,7 @@ public:
 
     bool isAudioEnabled() const override { return synthOn.get(); }
     void applyAudioEnabled(ofxSCServer* server) override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
     void setBypassedOutputBus(ofxSCServer* server, int index, int bus) override {
         bypassedOutputBuses[server][index] = bus;
     }

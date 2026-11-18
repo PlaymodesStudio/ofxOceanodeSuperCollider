@@ -208,16 +208,22 @@ void scOldSynthdef::setup(){
 }
 
 void scOldSynthdef::activate(){
-    for(auto &synth : synths) synth.second->run(synthOn);
+    for(auto &synth : synths) synth.second->run(synthOn && !isGraphSuspended(synth.first));
 }
 
 void scOldSynthdef::deactivate(){
     for(auto &synth : synths) synth.second->run(false);
 }
 
+// Mixer Pro "Mute Pauses Sources" (scNode.h)
+void scOldSynthdef::applyGraphSuspended(ofxSCServer* server, bool suspended){
+    setGraphSuspendedFlag(server, suspended);
+    applyAudioEnabled(server);
+}
+
 void scOldSynthdef::applyAudioEnabled(ofxSCServer* server){
     auto synth = synths.find(server);
-    if(synth != synths.end()) synth->second->run(getActive() && synthOn);
+    if(synth != synths.end()) synth->second->run(getActive() && synthOn && !isGraphSuspended(server));
 }
 
 void scOldSynthdef::buildSynth(ofxSCServer* server){
@@ -226,7 +232,7 @@ void scOldSynthdef::buildSynth(ofxSCServer* server){
 
 void scOldSynthdef::createSynth(ofxSCServer* server){
     resendParams.notify();
-    synths[server]->createAndRun(0, 1, getActive() && synthOn);
+    synths[server]->createAndRun(0, 1, getActive() && synthOn && !isGraphSuspended(server));
 }
 
 void scOldSynthdef::moveSynthBefore(ofxSCServer* server, int nodeID){
