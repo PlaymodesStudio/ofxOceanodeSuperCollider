@@ -61,6 +61,8 @@ private:
     void loadFileIntoBuffers(const std::string& absPath,
                              std::vector<int>& outIndices);
     void freeAllBuffers();
+    void publishBuffers(std::vector<int> indices);   // by value: also called with loadedIndices itself
+    std::vector<int> loadedIndices{-1};             // the loaded files' own buffers, before Resize
 
     // Saved file list; with Embed Samples the files travel with the patch.
     void saveFiles(ofJson& json, const std::string& folder);
@@ -96,6 +98,9 @@ private:
     ofParameter<bool>         showWindow;
     ofParameter<bool>         embedSamples;
     ofParameter<vector<int>>  bufferOutput;
+    ofParameter<int>          numChannelsOutput;
+    ofParameter<bool>         resize;
+    ofParameter<int>          resizeChannels;
     customGuiRegion           browserRegion;
 
     ofEventListeners nodeListeners;

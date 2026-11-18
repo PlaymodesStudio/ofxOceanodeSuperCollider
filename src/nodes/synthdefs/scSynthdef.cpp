@@ -207,24 +207,42 @@ void scSynthdef::setup(){
                                 vector<int>(1, ofToInt(specMap["minval"])),
                                 vector<int>(1, ofToInt(specMap["maxval"]))));
             
-            setValuesToSynths = [this, toSendName, vi, sentCache](bool force){
+            // A buffer-number control (bufnum, buf) always gets exactly one
+            // number per channel: a list of another size is repeated in turn
+            // (one stereo file into four channels plays L R L R). /n_setn
+            // writes only as many channels as it is given, so a shorter list
+            // left the others on what they held: buffer 0 on a new synth, the
+            // previous file's numbers on a running one, either way some other
+            // sound. scsynth has no "no buffer" number to send instead: its
+            // buffer UGens read buffer 0 for any number out of range.
+            const bool bufferNumbers = toSendName.rfind("buf", 0) == 0;
+            auto perChannel = [this, bufferNumbers](const std::vector<int>& values){
+                const int n = numChannels.get();
+                if(!bufferNumbers || values.size() < 2 || (int)values.size() == n || n < 1) return values;
+                std::vector<int> fitted(n);
+                for(int i = 0; i < n; i++) fitted[i] = values[i % values.size()];
+                return fitted;
+            };
+            
+            setValuesToSynths = [this, toSendName, vi, sentCache, perChannel](bool force){
                 // No NaN check: these are integers, and std::isnan(int)
                 // is always false, so the loop that stood here never fired.
                 for(auto synthServer : synths){
+                    // (a change of N Chan recreates the synth and resends with force, so the list is fitted again)
                     if(!sentCache->shouldSend(sendCacheEpoch, synthServer.second, sentValueKey(vi.get()), force)) continue;
                     if(vi->size() == 1) synthServer.second->setMultiple(toSendName, vi->at(0), numChannels);
-                    else synthServer.second->set(toSendName, vi);
+                    else synthServer.second->set(toSendName, perChannel(vi.get()));
                 }
             };
             
-            setScheduledValueToSynths = [this, toSendName, sentCache](const std::string& text){
+            setScheduledValueToSynths = [this, toSendName, sentCache, perChannel](const std::string& text){
                 sentCache->forget();
                 std::vector<int> values;
                 for(const auto& token : ofSplitString(text, ",", true, true)) values.push_back(ofToInt(token));
                 if(values.empty()) return;
                 for(auto synthServer : synths){
                     if(values.size() == 1) synthServer.second->setMultiple(toSendName, values[0], numChannels.get());
-                    else synthServer.second->set(toSendName, values);
+                    else synthServer.second->set(toSendName, perChannel(values));
                 }
             };
 

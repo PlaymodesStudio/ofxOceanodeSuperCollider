@@ -36,6 +36,15 @@ scBufferBrowser::~scBufferBrowser() {
 void scBufferBrowser::setup() {
     addParameter(showWindow.set("Show", false));
     addOutputParameter(bufferOutput.set("Buffer", {-1}, {-1}, {INT_MAX}));
+    // How many buffers the list holds (every channel of every loaded file):
+    // into a sampler's N Chan, the sampler takes the size of what is loaded.
+    addOutputParameter(numChannelsOutput.set("N Chan", 1, 1, INT_MAX));
+    // Resize on: the list is fitted to Channels (repeated in turn, or cut),
+    // and N Chan says Channels. Off: both are what the loaded files have.
+    addParameter(resize.set("Resize", false));
+    addParameter(resizeChannels.set("Channels", 2, 1, 128));
+    nodeListeners.push(resize.newListener([this](bool&){ publishBuffers(loadedIndices); }));
+    nodeListeners.push(resizeChannels.newListener([this](int&){ if(resize) publishBuffers(loadedIndices); }));
     // On save, the loaded files are copied into the patch's samples/ folder,
     // so the patch opens with its sounds on another computer.
     addInspectorParameter(embedSamples.set("Embed Samples", true));
@@ -98,6 +107,10 @@ void scBufferBrowser::drawBrowserContents() {
         bool embed = embedSamples.get();
         if(ImGui::Checkbox("Embed in patch", &embed)) embedSamples = embed;
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Saving the patch copies the loaded samples into its samples/ folder,\nso it opens with them on any computer.");
+        ImGui::SameLine();
+        bool fit = resize.get();
+        if(ImGui::Checkbox("Resize", &fit)) resize = fit;
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("On: the Buffer output is fitted to the node's Channels value.\nOff: it has the channels of the loaded files.");
     }
     if(freesoundMode) {
         if(loadedFiles.empty()) ImGui::TextDisabled("(no files loaded)");
@@ -319,7 +332,7 @@ void scBufferBrowser::macroLoad(ofJson& json, string /*path*/) {
                 loadFileIntoBuffers(lf, allIndices);
             }
             if(allIndices.empty()) allIndices.push_back(-1);
-            bufferOutput = allIndices;
+            publishBuffers(allIndices);
 
             // Rebuild selectedIndices
             selectedIndices.clear();
@@ -349,7 +362,7 @@ void scBufferBrowser::presetRecallAfterSettingParameters(ofJson& json) {
             loadFileIntoBuffers(f, allIndices);
         }
         if(allIndices.empty()) allIndices.push_back(-1);
-        bufferOutput = allIndices;
+        publishBuffers(allIndices);
 
         // Rebuild selectedIndices to match browseEntries
         selectedIndices.clear();
@@ -454,7 +467,24 @@ void scBufferBrowser::rebuildBuffersFromSelection() {
     }
 
     if(allIndices.empty()) allIndices.push_back(-1);
-    bufferOutput = allIndices;
+    publishBuffers(allIndices);
+}
+
+// The channel count goes out first: a sampler following it is already the
+// right size when the buffer list arrives. It is set only when it changes,
+// since a synth node is rebuilt each time its N Chan is written.
+void scBufferBrowser::publishBuffers(std::vector<int> indices) {
+    if(indices.empty()) indices.push_back(-1);
+    loadedIndices = indices;
+    if(resize && indices[0] >= 0) {
+        const int n = std::max(1, resizeChannels.get());
+        std::vector<int> fitted(n);
+        for(int i = 0; i < n; i++) fitted[i] = indices[i % indices.size()];
+        indices = fitted;
+    }
+    const int count = (int)indices.size();
+    if(numChannelsOutput.get() != count) numChannelsOutput = count;
+    bufferOutput = indices;
 }
 
 void scBufferBrowser::loadFileIntoBuffers(const std::string& absPath,
