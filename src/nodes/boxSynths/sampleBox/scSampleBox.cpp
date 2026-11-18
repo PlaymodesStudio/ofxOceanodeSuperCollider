@@ -84,6 +84,8 @@ std::string formatTime(float seconds) {
 }
 
 const char* fxNames[] = {"EQ", "Comp", "Sat", "Echo", "Reverb", "Stereo"};
+// the escaped name of a pad's Sample Gain without the pad's number
+const char* sampleGainBase = "Sample_Gain";
 const char* fxDefs[] = {"SampleBoxEQ_", "SampleBoxComp_", "SampleBoxSat_", "SampleBoxEcho_", "SampleBoxReverb_", "SampleBoxImage_"};
 }
 
@@ -273,8 +275,14 @@ void scSampleBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool 
         if(!c.f || c.pad < 0 || (published.count(c.key) && published.at(c.key)->hasInConnection())) continue;
         const ofJson* ca = controlsOf(a, c.pad);
         const ofJson* cb = controlsOf(b, c.pad);
-        if(!ca || !cb || !ca->contains(c.base) || !cb->contains(c.base)) continue;
-        const float va = ofToFloat((*ca)[c.base].get<std::string>()), vb = ofToFloat((*cb)[c.base].get<std::string>());
+        if(!ca || !cb) continue;
+        // a side saved before Sample Gain existed: unity there
+        const bool unityDefault = c.base == sampleGainBase;
+        if(!unityDefault && (!ca->contains(c.base) || !cb->contains(c.base))) continue;
+        auto sideValue = [&](const ofJson& side) {
+            return side.contains(c.base) && side[c.base].is_string() ? ofToFloat(side[c.base].get<std::string>()) : 1.0f;
+        };
+        const float va = sideValue(*ca), vb = sideValue(*cb);
         const float v = scSnapshots::blendValue(va, vb, t, sw, scSnapshots::logKey(c.base)).get<float>();
         if(std::abs(v - c.f->get()) > 1e-6f) c.f->set(v);
     }
@@ -550,6 +558,7 @@ void scSampleBox::setupPad(Pad& p) {
     PAD_I(p.filterType, "Filter Type", 0, 0, 2, DEST_ENGINE, "filtertype");
     PAD_F(p.cutoff, "Cutoff", 16000.0f, 20.0f, 20000.0f, DEST_ENGINE, "cutoff");
     PAD_F(p.resonance, "Resonance", 0.7f, 0.1f, 2.0f, DEST_ENGINE, "resonance");
+    PAD_F(p.sampleGain, "Sample Gain", 1.0f, 0.0f, 4.0f, DEST_ENGINE, "gain");
     {   // the combos' names (published: dropdowns); the window refreshes Channel's sources
         std::vector<std::string> chans = {"Auto: row " + ofToString(p.index + 1)};
         for(int c = 1; c <= MaxChannels; c++) chans.push_back(ofToString(c));
@@ -658,7 +667,8 @@ void scSampleBox::setupPad(Pad& p) {
                     {"Cutoff", 9.966f, "oct", false, 8}, {"Reso", 1.9f, "", false, 1}, {"Drive", 36, "dB", false, 24}, {"Comp Thr", 60, "dB", false, 24},
                     {"Rev Mix", 1, ""}, {"Width", 2, "", false, 1}}, true, true, true);
     p.mod.targetOfKey = {{p.transpose.getEscapedName(), 0}, {p.rate.getEscapedName(), 1}, {p.inPoint.getEscapedName(), 2},
-                         {p.outPoint.getEscapedName(), 3}, {p.level.getEscapedName(), 4}, {p.pan.getEscapedName(), 5},
+                         {p.outPoint.getEscapedName(), 3}, {p.level.getEscapedName(), 4}, {p.sampleGain.getEscapedName(), 4},
+                         {p.pan.getEscapedName(), 5},
                          {p.stretch.getEscapedName(), 6}, {p.warpWindow.getEscapedName(), 7}, {p.loopCrossfade.getEscapedName(), 8},
                          {p.cutoff.getEscapedName(), 9}, {p.resonance.getEscapedName(), 10}, {p.satDrive.getEscapedName(), 11},
                          {p.compThreshold.getEscapedName(), 12}, {p.revMix.getEscapedName(), 13}, {p.width.getEscapedName(), 14}};
@@ -828,6 +838,8 @@ void scSampleBox::applyPadState(int k, const ofJson& j) {
         for(auto& c : controls)
             if(c.pad == k && v.contains(c.base) && v[c.base].is_string())
                 try { c.load(v[c.base].get<std::string>()); } catch(...) {}
+        // saved before Sample Gain existed: unity, not the pad's current one
+        if(!v.contains(sampleGainBase)) p.sampleGain = 1.0f;
     }
     restoring = false;
     if(j.contains("mod") && j["mod"].is_object()) {
@@ -975,7 +987,6 @@ void scSampleBox::sendEngine(ofxSCServer* srv, Pad& p, bool includeNotes) {
     updates.set("loaded", int(loaded));
     updates.set("buf0", loaded ? bs->second[0]->index : 0);
     updates.set("buf1", loaded && p.sample->channels > 1 ? bs->second[1]->index : 0);
-    updates.set("gain", 1.0f);
     p.sentFitRate = fitRateOf(p);
     updates.set("fitrate", p.sentFitRate);
     updates.set("fitbeats", p.fitBeats.get() > 0.0f ? p.fitBeats.get() : 4.0f);
@@ -2092,8 +2103,14 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
     Sample& smp = *p.sample;
     const int bins = (int)smp.peaks.size();
     const ImVec2 a = ImGui::GetCursorScreenPos();
+    // Sample Gain's knob sits on the waveform's low right corner: the mouse is its there
+    const float knobR = 9.0f * z, knobBox = 2.0f * knobR + 8.0f * z;
+    const ImVec2 knobMin(a.x + w - knobBox - 2.0f * z, a.y + h - knobBox - 2.0f * z);
+    const bool hasKnob = !smp.peaks.empty() && w > 4.0f * knobBox && h > 2.0f * knobBox;
+    const bool overKnob = hasKnob && ImGui::IsMouseHoveringRect(knobMin, ImVec2(knobMin.x + knobBox, knobMin.y + knobBox));
+    ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##sbWave", ImVec2(std::max(1.0f, w), std::max(1.0f, h)));
-    const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
+    const bool hovered = ImGui::IsItemHovered() && !overKnob, active = ImGui::IsItemActive();
     if(hovered && !smp.peaks.empty()) {      // the wheel zooms here, it does not scroll the window
         ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
         ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelX);
@@ -2151,6 +2168,8 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
         // a few of their bins, the fine table (lowest / highest sample) closer
         const int pixels = std::max(1, (int)w);
         const int fineBins = (int)smp.fineMin.size();
+        // drawn at Sample Gain: what the pad plays (held at the canvas' edges)
+        const float waveGain = std::max(0.0f, p.sampleGain.get()), full = h * 0.46f, most = h * 0.5f;
         const bool fine = fineBins > 0 && smp.frames > 0 && span * bins < 2.0f * pixels;
         float prevLo = 0.0f, prevHi = 0.0f;
         bool havePrev = false;
@@ -2164,7 +2183,7 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
                 float peak = 0;
                 for(int k = b0; k < b1 && k < bins; ++k) peak = std::max(peak, smp.peaks[k]);
                 if(peak <= 0.0f) continue;
-                const float dy = std::max(0.5f, peak * h * 0.46f);
+                const float dy = std::max(0.5f, std::min(most, peak * waveGain * full));
                 dl->AddLine(ImVec2(x, midY - dy), ImVec2(x, midY + dy), pal::padCol(p.index, inside ? 190 : 50));
                 continue;
             }
@@ -2176,7 +2195,7 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
             float dlo = lo, dhi = hi;
             if(havePrev) { dlo = std::min(dlo, prevHi); dhi = std::max(dhi, prevLo); }
             prevLo = lo; prevHi = hi; havePrev = true;
-            float y0 = midY - dhi * h * 0.46f, y1 = midY - dlo * h * 0.46f;
+            float y0 = midY - ofClamp(dhi * waveGain * full, -most, most), y1 = midY - ofClamp(dlo * waveGain * full, -most, most);
             if(y1 - y0 < 1.0f) { const float c = (y0 + y1) * 0.5f; y0 = c - 0.5f; y1 = c + 0.5f; }
             dl->AddLine(ImVec2(x, y0), ImVec2(x, y1), pal::padCol(p.index, inside ? 210 : 60));
         }
@@ -2226,7 +2245,7 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
             char zl[24];
             std::snprintf(zl, sizeof(zl), "Zoom %.0fx", 1.0f / span);
             const ImVec2 ts = ImGui::CalcTextSize(zl);
-            dl->AddText(ImVec2(b.x - ts.x - 5.0f * z, b.y - 2.0f * ImGui::GetTextLineHeight() - 4.0f * z), pal::textDim, zl);
+            dl->AddText(ImVec2(b.x - ts.x - 5.0f * z, std::min(b.y - 2.0f * ImGui::GetTextLineHeight() - 4.0f * z, knobMin.y - ImGui::GetTextLineHeight() - 2.0f * z)), pal::textDim, zl);
         }
     }
     const bool dragging = browser.isDraggingFile() && hovered;
@@ -2255,7 +2274,7 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
                               "Wheel: zoom  |  Shift + wheel: scroll  |  Right-click: zoom menu%s",
                               formatTime(mx * seconds).c_str(), zoomed ? "" : "\nDouble-click: the whole file");
         }
-        if(ImGui::IsItemActivated()) {
+        if(ImGui::IsItemActivated() && !overKnob) {
             if(nearIn || nearOut) regionDrag = (nearIn && nearOut) ? (mx < in ? 0 : 1) : nearIn ? 0 : 1;
             else if(mx > in && mx < out) { regionDrag = 2; regionDragOffset = mx - in; }
             else regionDrag = std::abs(mx - in) < std::abs(mx - out) ? 0 : 1;
@@ -2308,6 +2327,65 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
         ImGui::Separator();
         if(ImGui::MenuItem("Region: the whole file")) { p.inPoint = 0.0f; p.outPoint = 1.0f; }
         ImGui::EndPopup();
+    }
+
+    // ── Sample Gain: the knob on the low right corner (after everything that
+    //    asks about the waveform's own item) ─────────────────────────────────
+    if(hasKnob) {
+        const ImVec2 after = ImGui::GetCursorScreenPos();
+        const std::string key = p.sampleGain.getEscapedName();
+        const float maxGain = p.sampleGain.getMax(), floorDb = -60.0f;
+        auto toDb = [&](float g) { return g > 0.001f ? 20.0f * std::log10(g) : floorDb; };
+        ImGui::PushID(key.c_str());
+        ImGui::SetCursorScreenPos(knobMin);
+        ImGui::InvisibleButton("##sbGainKnob", ImVec2(knobBox, knobBox));
+        const bool kh = ImGui::IsItemHovered(), ka = ImGui::IsItemActive();
+        float gainNow = p.sampleGain.get();
+        if(ka && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f)) {
+            const ImGuiIO& io = ImGui::GetIO();
+            const float move = io.MouseDelta.x - io.MouseDelta.y;
+            if(move != 0.0f) {
+                const float db = toDb(gainNow) + move * (io.KeyShift ? 0.02f : 0.15f) / z;
+                gainNow = db <= floorDb ? 0.0f : ofClamp(std::pow(10.0f, db / 20.0f), 0.0f, maxGain);
+                p.sampleGain = gainNow;
+            }
+        }
+        if(kh && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { gainNow = 1.0f; p.sampleGain = 1.0f; }
+        if(kh || ka) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+        char value[24];
+        if(gainNow <= 0.001f) std::snprintf(value, sizeof(value), "-inf dB");
+        else std::snprintf(value, sizeof(value), "%+.1f dB", toDb(gainNow));
+        if(kh && !ka) ImGui::SetTooltip("Sample Gain: %s\nThe sample's own gain, before the pad's effects; the waveform shows it.\n"
+                                        "Drag up / down (Shift: fine)  |  Double-click: 0 dB  |  Right-click: publish, modulate", value);
+        // the dial: -36 dB .. the most, 0 dB marked
+        const ImVec2 c(knobMin.x + knobBox * 0.5f, knobMin.y + knobBox * 0.5f);
+        const float a0 = 0.75f * (float)M_PI, a1 = 2.25f * (float)M_PI, maxDb = toDb(maxGain);
+        auto angleOf = [&](float db) { return a0 + (a1 - a0) * ofClamp((db + 36.0f) / (maxDb + 36.0f), 0.0f, 1.0f); };
+        const float av = angleOf(toDb(gainNow)), au = angleOf(0.0f);
+        const ImU32 lit = pal::padCol(p.index, 255);
+        dl->AddRectFilled(knobMin, ImVec2(knobMin.x + knobBox, knobMin.y + knobBox), IM_COL32(11, 12, 14, 215), 4.0f * z);
+        dl->PathArcTo(c, knobR, a0, a1, 24);
+        dl->PathStroke(pal::border, 0, 2.0f * z);
+        if(std::abs(av - au) > 0.01f) {
+            dl->PathArcTo(c, knobR, std::min(au, av), std::max(au, av), 16);
+            dl->PathStroke(lit, 0, 2.0f * z);
+        }
+        dl->AddLine(ImVec2(c.x + std::cos(au) * (knobR - 1.5f * z), c.y + std::sin(au) * (knobR - 1.5f * z)),
+                    ImVec2(c.x + std::cos(au) * (knobR + 2.0f * z), c.y + std::sin(au) * (knobR + 2.0f * z)), pal::textDim, 1.0f * z);
+        dl->AddCircleFilled(c, knobR - 3.5f * z, kh || ka ? IM_COL32(70, 74, 84, 255) : IM_COL32(48, 51, 59, 255));
+        dl->AddLine(ImVec2(c.x + std::cos(av) * 1.5f * z, c.y + std::sin(av) * 1.5f * z),
+                    ImVec2(c.x + std::cos(av) * (knobR - 1.0f * z), c.y + std::sin(av) * (knobR - 1.0f * z)), pal::handle, 1.5f * z);
+        // its value beside it while it is not 0 dB, or in hand
+        if(ka || kh || std::abs(gainNow - 1.0f) > 0.0005f) {
+            const ImVec2 ts = ImGui::CalcTextSize(value);
+            const ImVec2 tp(knobMin.x - ts.x - 5.0f * z, c.y - ts.y * 0.5f);
+            dl->AddRectFilled(ImVec2(tp.x - 3.0f * z, tp.y - 1.0f * z), ImVec2(tp.x + ts.x + 3.0f * z, tp.y + ts.y + 1.0f * z), IM_COL32(11, 12, 14, 215), 3.0f * z);
+            dl->AddText(tp, ka || kh ? pal::headerText : pal::textDim, value);
+        }
+        drawPublishedUnderline(key);
+        drawPublishMenu(key);
+        ImGui::PopID();
+        ImGui::SetCursorScreenPos(after);
     }
 
     // ── Overview: the whole file, the region and the part shown (drag it) ──
@@ -2548,7 +2626,7 @@ void scSampleBox::drawSoundTab(Pad& p, float w) {
 
 void scSampleBox::drawMixerTab(float w) {
     const float z = ofxOceanodeShared::getZoomLevel();
-    const float stripW = 104.0f * z, stripH = 300.0f * z;
+    const float stripW = 104.0f * z, stripH = 210.0f * z;
     ImGui::BeginChild("##sbStrips", ImVec2(w, stripH + ImGui::GetStyle().ScrollbarSize + 8.0f * z), false,
                       ImGuiWindowFlags_HorizontalScrollbar);
     for(auto& p : pads) { drawStrip(*p, stripW, stripH); ImGui::SameLine(0, 6.0f * z); }
@@ -2570,19 +2648,21 @@ void scSampleBox::drawStrip(Pad& p, float w, float h) {
     const float iw = w - 8 * z;
     if(ImGui::Selectable(padLabel(p).c_str(), isSel, 0, ImVec2(iw, 0))) selected = p.index;
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s: its effects below", padLabel(p).c_str());
-    // inserts: click switches one on / off (an effect that is off costs nothing)
-    for(int fx = 0; fx < FX_COUNT; fx++) {
-        ImGui::SetCursorScreenPos(ImVec2(a.x + 4 * z, ImGui::GetCursorScreenPos().y));
-        const bool on = p.fxOn[fx].get();
-        const bool usable = fx != FX_IMAGE || channels.get() > 1;
-        if(!usable) ImGui::BeginDisabled();
-        if(on) ImGui::PushStyleColor(ImGuiCol_Button, pal::padCol(p.index, 150));
-        if(ImGui::Button(fxNames[fx], ImVec2(iw, 0))) { p.fxOn[fx] = !on; selected = p.index; }
-        if(on) ImGui::PopStyleColor();
-        if(!usable) ImGui::EndDisabled();
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(usable ? "%s: click to switch it %s (its settings below)" : "%s needs N Chan > 1", fxNames[fx], on ? "off" : "on");
-        drawPublishMenu(p.fxOn[fx].getEscapedName());
+    // which effects are on: lights only (each effect's header switches it, below)
+    {
+        const ImVec2 l0(a.x + 4 * z, ImGui::GetCursorScreenPos().y + 2 * z);
+        const float gapL = 3.0f * z, lw = (iw - gapL * (FX_COUNT - 1)) / FX_COUNT, lh = 4.0f * z;
+        std::string onNames;
+        for(int fx = 0; fx < FX_COUNT; fx++) {
+            const bool on = p.fxOn[fx].get() && (fx != FX_IMAGE || channels.get() > 1);
+            const float x = l0.x + fx * (lw + gapL);
+            dl->AddRectFilled(ImVec2(x, l0.y), ImVec2(x + lw, l0.y + lh), on ? pal::padCol(p.index, 255) : pal::canvas, 1.5f * z);
+            if(on) onNames += (onNames.empty() ? "" : ", ") + std::string(fxNames[fx]);
+        }
+        ImGui::SetCursorScreenPos(ImVec2(l0.x, l0.y - 2 * z));
+        ImGui::Dummy(ImVec2(iw, lh + 4 * z));
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Effects on: %s\nSelect the pad and switch them in their sections below", onNames.empty() ? "none" : onNames.c_str());
     }
     // pan
     ImGui::SetCursorScreenPos(ImVec2(a.x + 4 * z, ImGui::GetCursorScreenPos().y + 4 * z));
@@ -2639,16 +2719,17 @@ void scSampleBox::drawStrip(Pad& p, float w, float h) {
 void scSampleBox::drawEffects(Pad& p, float w) {
     const float z = ofxOceanodeShared::getZoomLevel();
     const float gap = 12.0f * z;
-    labelW = 74.0f;
+    labelW = 66.0f;   // five columns: a little more for the sliders
     ImGui::PushStyleColor(ImGuiCol_Text, pal::padCol(p.index, 255));
     ImGui::TextUnformatted(("Effects of " + padLabel(p)).c_str());
     ImGui::PopStyleColor();
     ImGui::SameLine();
     ImGui::TextColored(ImColor(pal::textDim), "  sound -> EQ -> Comp -> Sat -> Echo -> Reverb -> Stereo -> Level");
-    const float colW = (w - 3 * gap) / 4.0f;
+    // one row, in the chain's order: EQ (two columns) | Compressor, Saturator |
+    // Echo | Reverb, Stereo Image. Each header's checkbox switches its effect.
+    const float colW = (w - 4 * gap) / 5.0f;
     auto off = [&](int fx) { return !p.fxOn[fx].get(); };
 
-    // ── EQ (two columns wide), Compressor, Saturator ──
     const float eqW = colW * 2 + gap;
     beginColumn("eq");
     sectionHeader("EQ", eqW, &p.fxOn[FX_EQ]);
@@ -2659,7 +2740,7 @@ void scSampleBox::drawEffects(Pad& p, float w) {
     drawEqEditor(p, eqW, 180.0f * z);
     endColumn();
 
-    beginColumn("comp");
+    beginColumn("dynamics");
     sectionHeader("Compressor", colW, &p.fxOn[FX_COMP]);
     if(off(FX_COMP)) ImGui::BeginDisabled();
     slider(p.compThreshold, "Threshold", colW, "%.1f dB");
@@ -2668,18 +2749,13 @@ void scSampleBox::drawEffects(Pad& p, float w) {
     slider(p.compRelease, "Release", colW, "%.0f ms", true);
     slider(p.compMakeup, "Makeup", colW, "%+.1f dB");
     if(off(FX_COMP)) ImGui::EndDisabled();
-    endColumn();
-
-    beginColumn("sat");
     sectionHeader("Saturator", colW, &p.fxOn[FX_SAT]);
     if(off(FX_SAT)) ImGui::BeginDisabled();
     slider(p.satDrive, "Drive", colW, "%.1f dB");
     slider(p.satMix, "Mix", colW, "%.2f");
     if(off(FX_SAT)) ImGui::EndDisabled();
-    endColumn(true);
+    endColumn();
 
-    ImGui::Spacing();
-    // ── Echo, Reverb (two columns), Stereo ──
     beginColumn("echo");
     sectionHeader("Echo", colW, &p.fxOn[FX_ECHO]);
     if(off(FX_ECHO)) ImGui::BeginDisabled();
@@ -2694,27 +2770,18 @@ void scSampleBox::drawEffects(Pad& p, float w) {
     if(off(FX_ECHO)) ImGui::EndDisabled();
     endColumn();
 
-    beginColumn("reverb");
+    beginColumn("space");
     sectionHeader("Reverb", colW, &p.fxOn[FX_REVERB]);
     if(off(FX_REVERB)) ImGui::BeginDisabled();
     slider(p.revSize, "Size", colW, "%.1f");
     slider(p.revDecay, "Decay", colW, "%.2f s", true);
     slider(p.revPredelay, "Predelay", colW, "%.0f ms");
     slider(p.revLowpass, "Lowpass", colW, "%.0f Hz", true);
-    if(off(FX_REVERB)) ImGui::EndDisabled();
-    endColumn();
-
-    beginColumn("reverb2");
-    sectionHeader("Reverb Mix", colW);
-    if(off(FX_REVERB)) ImGui::BeginDisabled();
     slider(p.revPosition, "Position", colW, "%.2f");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("0 = early reflections, 1 = the late tail");
     slider(p.revSpread, "Spread", colW, "%+.2f");
     slider(p.revMix, "Mix", colW, "%.2f");
     if(off(FX_REVERB)) ImGui::EndDisabled();
-    endColumn();
-
-    beginColumn("stereo");
     sectionHeader("Stereo Image", colW, &p.fxOn[FX_IMAGE]);
     const bool multi = channels.get() > 1;
     if(off(FX_IMAGE) || !multi) ImGui::BeginDisabled();
