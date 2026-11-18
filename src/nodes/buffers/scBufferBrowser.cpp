@@ -79,6 +79,32 @@ void scBufferBrowser::drawBrowserContents() {
        (!ImGui::IsMouseHoveringRect(panelMin, panelMax, false) ||
         !ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)))
         stopPreview();
+    // ── Source: local folders or freesound.org ───────────────────────
+    {
+        const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        auto tab = [&](const char* label, bool on) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(on ? ImGuiCol_ButtonActive : ImGuiCol_Button));
+            const bool clicked = ImGui::Button(label, ImVec2(std::max(1.0f, half), 0));
+            ImGui::PopStyleColor();
+            return clicked;
+        };
+        if(tab("Files", !freesoundMode) && freesoundMode) { freesoundMode = false; stopPreview(); }
+        ImGui::SameLine();
+        if(tab("Freesound", freesoundMode) && !freesoundMode) { freesoundMode = true; stopPreview(); }
+    }
+    if(freesoundMode) {
+        if(loadedFiles.empty()) ImGui::TextDisabled("(no files loaded)");
+        else if(loadedFiles.size() == 1) ImGui::TextDisabled("Loaded: %s", std::filesystem::path(loadedFiles[0]).filename().string().c_str());
+        else ImGui::TextDisabled("Loaded: %d files", (int)loadedFiles.size());
+        ImGui::TextDisabled("click=preview, dbl=load");
+        scFreesound::Panel::Host host;
+        host.preview     = [this](const std::string& path){ triggerPreview(path); };
+        host.stopPreview = [this](){ stopPreview(); };
+        host.activate    = [this](const std::string& path){ loadFreesoundFile(path); };
+        host.payloadType = "FSS_SAMPLE";   // the sample browsers' payload: Boxes take these drags too
+        freesound.draw(host, ofToDataPath("Supercollider/Samples", true));
+        return;
+    }
     // ── Top bar ──────────────────────────────────────────────────────
     if(ImGui::Button("...")) {
         auto res = ofSystemLoadDialog("Select Samples Folder", true, currentBrowseDir);
@@ -374,6 +400,22 @@ void scBufferBrowser::refreshBrowseDir(std::string dir) {
             }
         }
     }
+}
+
+// A Freesound sound was kept (a file in Supercollider/Samples/Freesound):
+// show that folder, where the files already loaded from it stay selected,
+// and add this one. As with any folder change, files loaded from elsewhere
+// leave the selection.
+void scBufferBrowser::loadFreesoundFile(const std::string& absPath) {
+    stopPreview();
+    refreshBrowseDir(std::filesystem::path(absPath).parent_path().string());
+    for(int i = 0; i < (int)browseEntries.size(); i++) {
+        if(browseEntries[i].fullPath != absPath) continue;
+        selectedIndices.insert(i);
+        focusIndex = i;
+        break;
+    }
+    rebuildBuffersFromSelection();
 }
 
 // ════════════════════════════════════════════════════════════════════════════

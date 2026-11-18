@@ -15,6 +15,7 @@
 #include "ofxSCSynth.h"
 #include "ofxSCBuffer.h"
 #include "imgui.h"
+#include "../../samples/scFreesound.h"
 #include <vector>
 #include <string>
 #include <set>
@@ -62,6 +63,13 @@ private:
     void freeAllBuffers();
 
     int getNumChannelsFromFile(const std::string& absPath);
+
+    // ── freesound.org (the sample browser's panel, see scFreesound.h) ───────
+    // "Files | Freesound" at the top; there, double-click or Enter keeps the
+    // sound in Supercollider/Samples/Freesound and adds it to the loaded files.
+    bool               freesoundMode = false;
+    scFreesound::Panel freesound;
+    void loadFreesoundFile(const std::string& absPath);
 
     // ── Preview ─────────────────────────────────────────────────────────────
     void triggerPreview(const std::string& absPath);
