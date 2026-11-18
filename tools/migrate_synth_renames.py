@@ -18,6 +18,8 @@ Presets store a node by its name, with or without the trailing "*":
 Also renamed 2026-10-22: ReaktorFilter4 -> LadderMultimode and
 ReaktorSaturator -> ParabolicSaturator (DSP unchanged).
 Retired 2026-10-23: MonoBandPassBank32 -> MonoBandPassBank64 (both built 64 bands).
+Replaced 2026-11-18: VowelFilter -> FormantFilter (five formants, voice types;
+Vowel is now A E I O U, the old rq control is gone).
 
 This script finds every preset and reusable macro folder under the data folders given (or every
 apps/Playmodes/*/bin/data by default), copies each affected folder to
@@ -42,6 +44,8 @@ RENAMES = {
     "ReaktorSaturator": "ParabolicSaturator",
     # The old "32" entry actually built the identical 64-band graph.
     "MonoBandPassBank32": "MonoBandPassBank64",
+    # FormantFilter replaced it: same Vowel, Mix and Levels controls.
+    "VowelFilter": "FormantFilter",
 }
 BACKUP = "Presets_backup_SynthRenames"
 

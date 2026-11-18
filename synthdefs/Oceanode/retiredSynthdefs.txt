@@ -29,3 +29,8 @@ steampipe
 # and was identical to MonoBandPassBank64. tools/migrate_synth_renames.py
 # maps saved nodes to that existing 64-band engine without changing controls.
 MonoBandPassBank32
+
+# Replaced 2026-11-18 by FormantFilter (Effect/Filter/formantfilter.scd): five
+# formants, voice types, formant shift. tools/migrate_synth_renames.py moves
+# presets to the new name.
+VowelFilter

@@ -374,6 +374,7 @@ Effect/
 │   ├── CompensatedSVF — Reaktor Core compensated two pole state variable filter; type HP BP LP
 │   ├── DJFilter — Crossfader filter with HPF and LPF
 │   ├── Filter4Pole — 4-pole filter with lowpass and highpass modes
+│   ├── FormantFilter — Five band vocal formant filter with vowel morph, voice type, formant shift, resonance and drive
 │   ├── HPF — Simple high pass filter
 │   ├── LadderFilter — Ladder filter with overdrive and multiple filter types
 │   ├── LadderMultimode — Reaktor Multi LP 4-Pole filter: HP2 BP2 LP2 BP4 BL4 LP4 HP4 Notch
@@ -400,8 +401,7 @@ Effect/
 │   ├── RLPF4Pole — 4-pole LPF
 │   ├── SatFMFilter — Serial HP LP FM filter with saturation
 │   ├── SlinkFilter — Spectral filtering effect with modulated bandpass filterbank
-│   ├── VadimFilter — Vadim filter with multiple filter types
-│   └── VowelFilter — Vocal formant filter with 6 vowel types
+│   └── VadimFilter — Vadim filter with multiple filter types
 ├── Modulation/
 │   ├── AmpMod — Amplitude modulator with multiple waveforms and controls
 │   ├── RingMod — Ring modulator with frequency and strength control
