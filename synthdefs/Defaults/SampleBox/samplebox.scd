@@ -27,7 +27,8 @@
 //              A looping note plays it as is; a one-shot starts where the
 //              transport is and runs at the fitted speed. The transport
 //              clock follows scTransportSync's anchors (\anchorId, \anchorPos
-//              in beats, kept small by C++, \run, \tbpm).
+//              in beats, below Fit, \run, \tbpm): jumps at once, drift
+//              corrections glided.
 //   \dur       the note's Duration (latched per voice): varispeed, x2 =
 //              twice as long and an octave lower
 (
@@ -63,7 +64,7 @@ modOf = { |k, base|
                 var buf, rateBase, inBase, outBase, polyMode, voiceLimit, voiceIndex;
                 var source, voices, finished, sig, modArr, fxMod, f, q, filter;
                 var chokeBlock, chokeIn, cut;
-                var tpos, tphase, syncOn, fitRate;
+                var tphase, syncOn, fitRate, fitBeats, anchorTrig, tinc, target, free, diff, jump, hard;
                 // R: 0, T: 1 (constants: one reader only); M: the morph's weight
                 var stretchMix = if(stretchVariant == 2, { \stretchmix.kr(0).clip(0, 1).lag(0.03) }, { stretchVariant });
                 var gb = \gtrbus.kr(-1), gg = In.kr(gb.max(0), 31) * (gb >= 0);   // Global Pitch: transpose, scale, detune (scGlobalPitch.h)
@@ -93,9 +94,23 @@ modOf = { |k, base|
                 buf = \buf0.kr(0);
                 rateBase = \rate.kr(1).clip(0.125, 8);
                 fitRate = \fitrate.kr(1).clip(0.01, 100);
-                // the transport's position (beats) and the region's phase there
-                tpos = \anchorPos.ar(0) + Sweep.ar(T2A.ar(Changed.kr(\anchorId.kr(0))), \tbpm.kr(120) / 60 * \run.ar(0));
-                tphase = (tpos / \fitbeats.kr(4).max(0.001)).frac;
+                // The transport's phase over the region, on clocks that wrap at 1:
+                // a beat count in float32 is too coarse for a read position (2
+                // frames of a 14 s loop past beat 1000: it sounded downsampled).
+                // An anchor re-sets the target clock; the playing clock follows
+                // it: a jump (start, seek, a new Fit) at once, a drift correction
+                // glided (some cents for a moment). A set lands on its block's start, so each correction
+                // is up to a block off and used to step the sound every few beats.
+                fitBeats = \fitbeats.kr(4).max(0.001);
+                anchorTrig = T2A.ar(Changed.kr(\anchorId.kr(0)));
+                tinc = \tbpm.kr(120) / 60 / fitBeats * \run.ar(0) / SampleRate.ir;
+                target = ((\anchorPos.ar(0) / fitBeats).frac + Phasor.ar(anchorTrig, tinc, 0, 1, 0)).frac;
+                free = Phasor.ar(0, tinc, 0, 1, 0);
+                diff = (target - free + 0.5).frac - 0.5;
+                // more than 5 ms: a jump
+                jump = (diff - Delay1.ar(diff)).abs > (0.005 * \tbpm.kr(120) / 60 / fitBeats);
+                hard = Latch.ar(diff, jump + Impulse.ar(0));
+                tphase = (free + hard + Lag.ar((diff - hard + 0.5).frac - 0.5, 2)).frac;
                 // stopped transport: the pad plays freely (auditioning still works)
                 syncOn = (\sync.kr(0) > 0.5) * (A2K.kr(\run.ar(0)) > 0.5);
                 inBase = \inpoint.kr(0).clip(0, 1);

@@ -54,9 +54,13 @@ its own pitch.
 - **Sync To Transport**: while `\run` is 1, the read position is the transport's,
   `(beat / \fitbeats × Rate).frac` over the region (a one-shot starts there and runs
   on at the fitted speed). The beat comes from scTransportSync anchors
-  (`\anchorId`, `\anchorPos` in beats modulo a multiple of Fit below 2048, `\tbpm`,
-  `\run`), timetagged, so it is sample accurate through seeks, loops and tempo
-  changes. Transport stopped: the pad plays freely.
+  (`\anchorId`, `\anchorPos` in beats modulo Fit, `\tbpm`, `\run`), timetagged.
+  The synth keeps the phase on clocks that wrap at 1 (a beat count in float32 is
+  too coarse for a read position: at beat 1500 a 14 s loop rendered at 33 dB
+  SNR). A jump (start, seek, a new Fit: more than 5 ms) moves the position at
+  once; the drift corrections sent every few beats are glided, because a set
+  lands on its block's start and each one used to step the sound by up to a
+  block. Transport stopped: the pad plays freely.
 - **Play With Transport** (C++ only): fires the pad when the transport starts,
   stops it when it stops.
 

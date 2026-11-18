@@ -1402,9 +1402,9 @@ void scSampleBox::requestAnchor() {
     follower.requestAnchor();
 }
 
-// The transport's position for the synced pads: each gets the beat modulo a
-// multiple of its Fit (below 2048 beats, so float32 stays precise; the phase
-// over the region is the same), timetagged at the anchor's instant
+// The transport's position for the synced pads: each gets the beat modulo
+// its Fit (the phase over the region is the same; float32 keeps a read
+// position only on a small number), timetagged at the anchor's instant
 void scSampleBox::sendTransportAnchors() {
     bool any = false;
     for(auto& p : pads) if(p->synced()) any = true;
@@ -1417,8 +1417,7 @@ void scSampleBox::sendTransportAnchors() {
             Pad& p = *up;
             if(!p.synced()) continue;
             const double fit = p.fitBeats.get();
-            const double period = fit * std::ceil(2048.0 / fit);
-            const float pos = (float)scTransportSync::positiveMod(a.beat, period);
+            const float pos = (float)scTransportSync::positiveMod(a.beat, fit);
             for(auto& [srv, sc] : p.sc) {
                 if(!sc.engine) continue;
                 // sets on a synth not confirmed yet would go out without the timetag
