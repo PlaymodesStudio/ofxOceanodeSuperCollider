@@ -4,6 +4,7 @@
 //
 
 #include "scBufferBrowser.h"
+#include "../../samples/scSampleEmbedding.h"
 #include <algorithm>
 #include <fstream>
 #include <cstring>
@@ -35,6 +36,9 @@ scBufferBrowser::~scBufferBrowser() {
 void scBufferBrowser::setup() {
     addParameter(showWindow.set("Show", false));
     addOutputParameter(bufferOutput.set("Buffer", {-1}, {-1}, {INT_MAX}));
+    // On save, the loaded files are copied into the patch's samples/ folder,
+    // so the patch opens with its sounds on another computer.
+    addInspectorParameter(embedSamples.set("Embed Samples", true));
 
     auto browserRegionRef = addCustomRegion(browserRegion.set("Buffer Browser", [this](){
         drawBrowserContents();
@@ -91,16 +95,19 @@ void scBufferBrowser::drawBrowserContents() {
         if(tab("Files", !freesoundMode) && freesoundMode) { freesoundMode = false; stopPreview(); }
         ImGui::SameLine();
         if(tab("Freesound", freesoundMode) && !freesoundMode) { freesoundMode = true; stopPreview(); }
+        bool embed = embedSamples.get();
+        if(ImGui::Checkbox("Embed in patch", &embed)) embedSamples = embed;
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Saving the patch copies the loaded samples into its samples/ folder,\nso it opens with them on any computer.");
     }
     if(freesoundMode) {
         if(loadedFiles.empty()) ImGui::TextDisabled("(no files loaded)");
         else if(loadedFiles.size() == 1) ImGui::TextDisabled("Loaded: %s", std::filesystem::path(loadedFiles[0]).filename().string().c_str());
         else ImGui::TextDisabled("Loaded: %d files", (int)loadedFiles.size());
-        ImGui::TextDisabled("click=preview, dbl=load");
+        ImGui::TextDisabled("click=preview, dbl=load, shift+dbl=add");
         scFreesound::Panel::Host host;
         host.preview     = [this](const std::string& path){ triggerPreview(path); };
         host.stopPreview = [this](){ stopPreview(); };
-        host.activate    = [this](const std::string& path){ loadFreesoundFile(path); };
+        host.activate    = [this](const std::string& path){ loadFreesoundFile(path, ImGui::GetIO().KeyShift); };
         host.payloadType = "FSS_SAMPLE";   // the sample browsers' payload: Boxes take these drags too
         freesound.draw(host, ofToDataPath("Supercollider/Samples", true));
         return;
@@ -244,12 +251,7 @@ void scBufferBrowser::drawBrowserContents() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scBufferBrowser::presetSave(ofJson& json) {
-    json["browseDir"] = currentBrowseDir;
-    ofJson filesArr = ofJson::array();
-    for(auto& f : loadedFiles) {
-        filesArr.push_back(f);
-    }
-    json["loadedFiles"] = filesArr;
+    saveFiles(json, "");
 }
 
 void scBufferBrowser::loadBeforeConnections(ofJson& json) {
@@ -261,23 +263,43 @@ void scBufferBrowser::loadBeforeConnections(ofJson& json) {
         }
     }
     // Restore loadedFiles list so presetRecallAfterSettingParameters can use it
-    if(json.contains("loadedFiles")) {
-        loadedFiles.clear();
-        for(auto& f : json["loadedFiles"]) {
-            std::string path = f.get<std::string>();
-            if(std::filesystem::exists(path))
-                loadedFiles.push_back(path);
-        }
+    if(json.contains("loadedFiles")) readFiles(json);
+}
+
+// Every node save calls presetSave and then macroSave with the save folder.
+// Only here is the folder known, so this is where the samples are embedded.
+// A temporary save (clipboard, encapsulate, canvas undo) keeps the plain
+// paths: its folder is deleted afterwards. Same rule as scRhythmBox.
+void scBufferBrowser::saveFiles(ofJson& json, const std::string& folder) {
+    json["browseDir"] = currentBrowseDir;
+    std::string root;
+    if(embedSamples.get() && !folder.empty() && scSampleEmbedding::isDurableSaveFolder(folder)) {
+        // Under Presets/ (the patch itself or a local macro in it) the samples
+        // go to the patch's folder; a global macro keeps them in its own.
+        root = ofToDataPath(folder, true);
+        const std::string preset = scSampleEmbedding::root();
+        if(!preset.empty() && root.find("/Presets/") != std::string::npos) root = preset;
+    }
+    ofJson filesArr = ofJson::array();
+    for(auto& f : loadedFiles)
+        filesArr.push_back(root.empty() ? f : scSampleEmbedding::embed(f, root));
+    json["loadedFiles"] = filesArr;
+}
+
+// The saved files that exist here; embedded ones are found in the folder of
+// the patch being loaded.
+void scBufferBrowser::readFiles(const ofJson& json) {
+    loadedFiles.clear();
+    if(!json.contains("loadedFiles") || !json["loadedFiles"].is_array()) return;
+    for(auto& f : json["loadedFiles"]) {
+        if(!f.is_string()) continue;
+        const std::string path = scSampleEmbedding::resolve(f.get<std::string>());
+        if(std::filesystem::exists(path)) loadedFiles.push_back(path);
     }
 }
 
-void scBufferBrowser::macroSave(ofJson& json, string /*path*/) {
-    json["browseDir"] = currentBrowseDir;
-    ofJson filesArr = ofJson::array();
-    for(auto& f : loadedFiles) {
-        filesArr.push_back(f);
-    }
-    json["loadedFiles"] = filesArr;
+void scBufferBrowser::macroSave(ofJson& json, string path) {
+    saveFiles(json, path);
 }
 
 void scBufferBrowser::macroLoad(ofJson& json, string /*path*/) {
@@ -288,12 +310,7 @@ void scBufferBrowser::macroLoad(ofJson& json, string /*path*/) {
         }
     }
     if(json.contains("loadedFiles")) {
-        loadedFiles.clear();
-        for(auto& f : json["loadedFiles"]) {
-            std::string path = f.get<std::string>();
-            if(std::filesystem::exists(path))
-                loadedFiles.push_back(path);
-        }
+        readFiles(json);
         // Reload buffers from restored file list
         if(!loadedFiles.empty()) {
             freeAllBuffers();
@@ -323,13 +340,7 @@ void scBufferBrowser::macroLoad(ofJson& json, string /*path*/) {
 void scBufferBrowser::presetRecallAfterSettingParameters(ofJson& json) {
     // If loadedFiles wasn't restored yet (e.g. loadBeforeConnections not called),
     // restore from json now
-    if(loadedFiles.empty() && json.contains("loadedFiles")) {
-        for(auto& f : json["loadedFiles"]) {
-            std::string path = f.get<std::string>();
-            if(std::filesystem::exists(path))
-                loadedFiles.push_back(path);
-        }
-    }
+    if(loadedFiles.empty() && json.contains("loadedFiles")) readFiles(json);
     // Reload all buffers from the saved file list
     if(!loadedFiles.empty()) {
         freeAllBuffers();
@@ -403,12 +414,14 @@ void scBufferBrowser::refreshBrowseDir(std::string dir) {
 }
 
 // A Freesound sound was kept (a file in Supercollider/Samples/Freesound):
-// show that folder, where the files already loaded from it stay selected,
-// and add this one. As with any folder change, files loaded from elsewhere
+// show that folder and load this sound in place of what was loaded. With
+// add (Shift held) the files already loaded from that folder stay, and this
+// one joins them. As with any folder change, files loaded from elsewhere
 // leave the selection.
-void scBufferBrowser::loadFreesoundFile(const std::string& absPath) {
+void scBufferBrowser::loadFreesoundFile(const std::string& absPath, bool add) {
     stopPreview();
     refreshBrowseDir(std::filesystem::path(absPath).parent_path().string());
+    if(!add) selectedIndices.clear();
     for(int i = 0; i < (int)browseEntries.size(); i++) {
         if(browseEntries[i].fullPath != absPath) continue;
         selectedIndices.insert(i);

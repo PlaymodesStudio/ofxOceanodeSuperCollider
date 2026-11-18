@@ -62,14 +62,19 @@ private:
                              std::vector<int>& outIndices);
     void freeAllBuffers();
 
+    // Saved file list; with Embed Samples the files travel with the patch.
+    void saveFiles(ofJson& json, const std::string& folder);
+    void readFiles(const ofJson& json);
+
     int getNumChannelsFromFile(const std::string& absPath);
 
     // ── freesound.org (the sample browser's panel, see scFreesound.h) ───────
     // "Files | Freesound" at the top; there, double-click or Enter keeps the
-    // sound in Supercollider/Samples/Freesound and adds it to the loaded files.
+    // sound in Supercollider/Samples/Freesound and loads it in place of the
+    // loaded files (Shift held: adds it to them).
     bool               freesoundMode = false;
     scFreesound::Panel freesound;
-    void loadFreesoundFile(const std::string& absPath);
+    void loadFreesoundFile(const std::string& absPath, bool add);
 
     // ── Preview ─────────────────────────────────────────────────────────────
     void triggerPreview(const std::string& absPath);
@@ -89,6 +94,7 @@ private:
 
     // ── Parameters ──────────────────────────────────────────────────────────
     ofParameter<bool>         showWindow;
+    ofParameter<bool>         embedSamples;
     ofParameter<vector<int>>  bufferOutput;
     customGuiRegion           browserRegion;
 
