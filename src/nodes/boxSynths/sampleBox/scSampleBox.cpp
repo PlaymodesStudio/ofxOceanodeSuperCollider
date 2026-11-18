@@ -896,6 +896,20 @@ void scSampleBox::applyDecoded(Pad& p, scSlicerBox::Audio&& a) {
         s.peaks[bin] = std::max(s.peaks[bin], std::min(1.0f, std::abs(a.mono[f])));
     }
     ++s.peaksVersion;
+    // the zoom's table: at most ~4 million bins, whatever the length
+    s.frames = a.frames;
+    s.fineFrames = std::max(16, (int)((int64_t)a.frames / 4000000) + 1);
+    const int fineBins = a.frames > 0 ? (a.frames + s.fineFrames - 1) / s.fineFrames : 0;
+    s.fineMin.assign(fineBins, 1.0f);
+    s.fineMax.assign(fineBins, -1.0f);
+    for(int f = 0; f < a.frames; ++f) {
+        const int bin = f / s.fineFrames;
+        const float v = ofClamp(a.mono[f], -1.0f, 1.0f);
+        s.fineMin[bin] = std::min(s.fineMin[bin], v);
+        s.fineMax[bin] = std::max(s.fineMax[bin], v);
+    }
+    s.viewStart = 0.0f;
+    s.viewEnd = 1.0f;
     // a pad still named after its position: the file's name
     if(p.name == "Pad " + ofToString(p.index + 1))
         p.name = std::filesystem::path(a.path).stem().string().substr(0, 24);
@@ -2075,19 +2089,35 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
     const float z = ofxOceanodeShared::getZoomLevel();
     if(waveformHeight <= 0.0f) waveformHeight = 170.0f * z;
     const float h = waveformHeight;
-    const Sample& smp = *p.sample;
+    Sample& smp = *p.sample;
     const int bins = (int)smp.peaks.size();
     const ImVec2 a = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##sbWave", ImVec2(std::max(1.0f, w), std::max(1.0f, h)));
     const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
+    if(hovered && !smp.peaks.empty()) {      // the wheel zooms here, it does not scroll the window
+        ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+        ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelX);
+    }
     const ImVec2 b(a.x + w, a.y + h);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(a, b, true);
     dl->AddRectFilled(a, b, pal::canvas);
     const float midY = a.y + h * 0.5f;
     const float in = p.inPoint.get(), out = p.outPoint.get();
-    const float xi = a.x + w * in, xo = a.x + w * out;
+    // the part of the file shown (the zoom): everything is placed through toX
+    const float vs = smp.viewStart, ve = std::max(smp.viewStart + 1e-7f, smp.viewEnd), span = ve - vs;
+    const bool zoomed = span < 0.9999f;
+    auto toX = [&](float u) { return a.x + w * (u - vs) / span; };
+    const float xi = toX(in), xo = toX(out);
     const float seconds = smp.seconds;
+    // the closest zoom: 4 pixels per bin of the fine table
+    const float minSpan = smp.frames > 0
+        ? ofClamp(w * 0.25f * smp.fineFrames / (float)smp.frames, 1e-6f, 1.0f) : 1.0f;
+    auto setView = [&](float start, float newSpan) {
+        newSpan = ofClamp(newSpan, minSpan, 1.0f);
+        smp.viewStart = ofClamp(start, 0.0f, 1.0f - newSpan);
+        smp.viewEnd = smp.viewStart + newSpan;
+    };
 
     if(smp.peaks.empty()) {
         const char* msg = "Drop a sample here (browser or Finder), double-click one in the browser, or Load...";
@@ -2095,30 +2125,60 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
         dl->AddText(ImVec2(a.x + (w - ts.x) * 0.5f, midY - ts.y * 0.5f), pal::textDim, msg);
     } else {
         // time grid, a line at every step that leaves room for its label
-        static const float steps[] = {0.01f, 0.02f, 0.05f, 0.1f, 0.2f, 0.5f, 1, 2, 5, 10, 15, 30, 60, 120, 300};
+        static const float steps[] = {0.001f, 0.002f, 0.005f, 0.01f, 0.02f, 0.05f, 0.1f, 0.2f, 0.5f,
+                                      1, 2, 5, 10, 15, 30, 60, 120, 300};
         float step = steps[0];
-        for(float s : steps) { step = s; if(seconds > 0 && w * s / seconds >= 70.0f * z) break; }
-        for(float t = step; seconds > 0 && t < seconds; t += step) {
-            const float x = a.x + w * t / seconds;
-            dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), pal::grid);
-            char label[24];
-            if(step < 1.0f) std::snprintf(label, sizeof(label), "%.2f", t);
-            else if(t < 60.0f) std::snprintf(label, sizeof(label), "%.0f s", t);
-            else std::snprintf(label, sizeof(label), "%d:%02d", (int)t / 60, (int)t % 60);
-            dl->AddText(ImVec2(x + 3.0f * z, b.y - ImGui::GetTextLineHeight() - 2.0f * z), pal::textDim, label);
+        const float shown = seconds * span;
+        for(float s : steps) { step = s; if(shown > 0 && w * s / shown >= 70.0f * z) break; }
+        if(seconds > 0) {
+            for(int64_t k = std::max<int64_t>(1, (int64_t)std::ceil(vs * seconds / step)); ; ++k) {
+                const float t = (float)(k * (double)step);
+                if(t >= seconds || t > ve * seconds) break;
+                const float x = toX(t / seconds);
+                dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), pal::grid);
+                char label[24];
+                const int dec = step < 0.01f ? 3 : 2;
+                if(step < 1.0f && t >= 60.0f)
+                    std::snprintf(label, sizeof(label), "%d:%0*.*f", (int)(t / 60.0f), dec + 3, dec, std::fmod(t, 60.0f));
+                else if(step < 1.0f) std::snprintf(label, sizeof(label), "%.*f", dec, t);
+                else if(t < 60.0f) std::snprintf(label, sizeof(label), "%.0f s", t);
+                else std::snprintf(label, sizeof(label), "%d:%02d", (int)t / 60, (int)t % 60);
+                dl->AddText(ImVec2(x + 3.0f * z, b.y - ImGui::GetTextLineHeight() - 2.0f * z), pal::textDim, label);
+            }
         }
         dl->AddLine(ImVec2(a.x, midY), ImVec2(b.x, midY), pal::gridStrong);
-        // the peaks, bright inside the region
+        // the wave, bright inside the region: the peaks while a pixel covers
+        // a few of their bins, the fine table (lowest / highest sample) closer
         const int pixels = std::max(1, (int)w);
+        const int fineBins = (int)smp.fineMin.size();
+        const bool fine = fineBins > 0 && smp.frames > 0 && span * bins < 2.0f * pixels;
+        float prevLo = 0.0f, prevHi = 0.0f;
+        bool havePrev = false;
         for(int i = 0; i < pixels; ++i) {
-            const int b0 = (int)((int64_t)i * bins / pixels);
-            const int b1 = std::max(b0 + 1, (int)((int64_t)(i + 1) * bins / pixels));
-            float peak = 0;
-            for(int k = b0; k < b1 && k < bins; ++k) peak = std::max(peak, smp.peaks[k]);
-            if(peak <= 0.0f) continue;
-            const float x = a.x + i + 0.5f, dy = std::max(0.5f, peak * h * 0.46f);
+            const double u0 = vs + (double)span * i / pixels, u1 = vs + (double)span * (i + 1) / pixels;
+            const float x = a.x + i + 0.5f;
             const bool inside = x >= xi && x <= xo;
-            dl->AddLine(ImVec2(x, midY - dy), ImVec2(x, midY + dy), pal::padCol(p.index, inside ? 190 : 50));
+            if(!fine) {
+                const int b0 = std::max(0, (int)(u0 * bins));
+                const int b1 = std::max(b0 + 1, (int)(u1 * bins));
+                float peak = 0;
+                for(int k = b0; k < b1 && k < bins; ++k) peak = std::max(peak, smp.peaks[k]);
+                if(peak <= 0.0f) continue;
+                const float dy = std::max(0.5f, peak * h * 0.46f);
+                dl->AddLine(ImVec2(x, midY - dy), ImVec2(x, midY + dy), pal::padCol(p.index, inside ? 190 : 50));
+                continue;
+            }
+            const int k0 = std::max(0, std::min(fineBins - 1, (int)(u0 * smp.frames / smp.fineFrames)));
+            const int k1 = std::min(fineBins, std::max(k0 + 1, (int)std::ceil(u1 * smp.frames / smp.fineFrames)));
+            float lo = 1.0f, hi = -1.0f;
+            for(int k = k0; k < k1; ++k) { lo = std::min(lo, smp.fineMin[k]); hi = std::max(hi, smp.fineMax[k]); }
+            // joined to the pixel before, so the wave stays one line
+            float dlo = lo, dhi = hi;
+            if(havePrev) { dlo = std::min(dlo, prevHi); dhi = std::max(dhi, prevLo); }
+            prevLo = lo; prevHi = hi; havePrev = true;
+            float y0 = midY - dhi * h * 0.46f, y1 = midY - dlo * h * 0.46f;
+            if(y1 - y0 < 1.0f) { const float c = (y0 + y1) * 0.5f; y0 = c - 0.5f; y1 = c + 0.5f; }
+            dl->AddLine(ImVec2(x, y0), ImVec2(x, y1), pal::padCol(p.index, inside ? 210 : 60));
         }
         dl->AddRectFilled(a, ImVec2(xi, b.y), pal::outside);
         dl->AddRectFilled(ImVec2(xo, a.y), b, pal::outside);
@@ -2139,7 +2199,8 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
             const ImU32 c0 = rev ? pal::accentCol(60) : pal::accentCol(0), c1 = rev ? pal::accentCol(0) : pal::accentCol(60);
             dl->AddRectFilledMultiColor(ImVec2(x0, a.y), ImVec2(x1, b.y), c0, c1, c1, c0);
         }
-        // In / Out: lines, flags and times
+        // In / Out: lines, flags and times (the times stay in sight when
+        // their line is scrolled away)
         const float flag = 7.0f * z;
         dl->AddLine(ImVec2(xi, a.y), ImVec2(xi, b.y), pal::handle, 2.0f * z);
         dl->AddLine(ImVec2(xo, a.y), ImVec2(xo, b.y), pal::handle, 2.0f * z);
@@ -2147,17 +2208,25 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
         dl->AddTriangleFilled(ImVec2(xo, a.y), ImVec2(xo - flag, a.y), ImVec2(xo, a.y + flag), pal::handle);
         const std::string ti = "In " + formatTime(in * seconds);
         const std::string to = "Out " + formatTime(out * seconds);
-        const float tow = ImGui::CalcTextSize(to.c_str()).x;
-        dl->AddText(ImVec2(xi + flag + 3.0f * z, a.y + 2.0f * z), pal::headerText, ti.c_str());
-        dl->AddText(ImVec2(std::max(xi + flag + 3.0f * z, xo - flag - 3.0f * z - tow),
-                           a.y + 2.0f * z + (xo - xi < tow + 120.0f * z ? ImGui::GetTextLineHeight() : 0.0f)),
-                    pal::headerText, to.c_str());
+        const float tiw = ImGui::CalcTextSize(ti.c_str()).x, tow = ImGui::CalcTextSize(to.c_str()).x;
+        const float pad = flag + 3.0f * z;
+        const float tix = ofClamp(xi + pad, a.x + 3.0f * z, std::max(a.x + 3.0f * z, b.x - tiw - 3.0f * z));
+        const float tox = ofClamp(xo - pad - tow, a.x + 3.0f * z, std::max(a.x + 3.0f * z, b.x - tow - 3.0f * z));
+        const bool collide = tox < tix + tiw + 12.0f * z && tix < tox + tow + 12.0f * z;
+        dl->AddText(ImVec2(tix, a.y + 2.0f * z), pal::headerText, ti.c_str());
+        dl->AddText(ImVec2(tox, a.y + 2.0f * z + (collide ? ImGui::GetTextLineHeight() : 0.0f)), pal::headerText, to.c_str());
         // a playhead per sounding voice
         for(int v = 0; v < (int)p.playheads.size() && v < std::min(p.voices.get(), MaxVoices); ++v) {
             if(p.playheads[v] < 0.0f) continue;
-            const float x = a.x + w * ofClamp(p.playheads[v], 0.0f, 1.0f);
+            const float x = toX(ofClamp(p.playheads[v], 0.0f, 1.0f));
             dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), pal::voiceCol(v, 235), 1.5f * z);
             dl->AddCircleFilled(ImVec2(x, b.y - 4.0f * z), 3.0f * z, pal::voiceCol(v, 235));
+        }
+        if(zoomed) {
+            char zl[24];
+            std::snprintf(zl, sizeof(zl), "Zoom %.0fx", 1.0f / span);
+            const ImVec2 ts = ImGui::CalcTextSize(zl);
+            dl->AddText(ImVec2(b.x - ts.x - 5.0f * z, b.y - 2.0f * ImGui::GetTextLineHeight() - 4.0f * z), pal::textDim, zl);
         }
     }
     const bool dragging = browser.isDraggingFile() && hovered;
@@ -2166,16 +2235,25 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
     if(hovered) hoveredPad = p.index;
 
     // ── Mouse: drag In / Out (near a line) or the whole region (inside it);
-    //    a click outside moves the nearest edge there; double-click = all ──
+    //    a click outside moves the nearest edge there; the wheel zooms ──────
+    bool openMenu = false;
     if(!smp.peaks.empty()) {
-        const float mx = ofClamp((ImGui::GetMousePos().x - a.x) / w, 0.0f, 1.0f);
-        const float grab = 7.0f * z, mouseX = ImGui::GetMousePos().x;
+        const ImGuiIO& io = ImGui::GetIO();
+        const float mouseX = ImGui::GetMousePos().x;
+        // a drag past the side scrolls the view along
+        if(active && regionDrag >= 0 && zoomed && (mouseX < a.x || mouseX > b.x)) {
+            const float over = mouseX < a.x ? mouseX - a.x : mouseX - b.x;
+            setView(vs + over / w * span * std::min(1.0f, io.DeltaTime * 8.0f), span);
+        }
+        const float mx = ofClamp(smp.viewStart + ofClamp((mouseX - a.x) / w, 0.0f, 1.0f) * span, 0.0f, 1.0f);
+        const float grab = 7.0f * z;
         const bool nearIn = std::abs(mouseX - xi) <= grab, nearOut = std::abs(mouseX - xo) <= grab;
         if(hovered && !active) {
             if(nearIn || nearOut) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             else if(mx > in && mx < out) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-            ImGui::SetTooltip("%s\nDrag In / Out, or the region to move it\nDouble-click: the whole file",
-                              formatTime(mx * seconds).c_str());
+            ImGui::SetTooltip("%s\nDrag In / Out, or the region to move it\n"
+                              "Wheel: zoom  |  Shift + wheel: scroll  |  Right-click: zoom menu%s",
+                              formatTime(mx * seconds).c_str(), zoomed ? "" : "\nDouble-click: the whole file");
         }
         if(ImGui::IsItemActivated()) {
             if(nearIn || nearOut) regionDrag = (nearIn && nearOut) ? (mx < in ? 0 : 1) : nearIn ? 0 : 1;
@@ -2183,7 +2261,8 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
             else regionDrag = std::abs(mx - in) < std::abs(mx - out) ? 0 : 1;
         }
         if(active && regionDrag >= 0) {
-            const float eps = 0.0005f;
+            // the shortest region: 5 ms of a long file
+            const float eps = seconds > 0.0f ? std::min(0.0005f, 0.005f / seconds) : 0.0005f;
             if(regionDrag == 0) p.inPoint = std::min(mx, p.outPoint.get() - eps);
             else if(regionDrag == 1) p.outPoint = std::max(mx, p.inPoint.get() + eps);
             else {
@@ -2194,10 +2273,67 @@ void scSampleBox::drawWaveform(Pad& p, float w) {
             }
         }
         if(ImGui::IsItemDeactivated()) regionDrag = -1;
-        if(hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { p.inPoint = 0.0f; p.outPoint = 1.0f; }
+        // zoomed in, a double-click is too easy while lining an edge up: the menu has it
+        if(hovered && !zoomed && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { p.inPoint = 0.0f; p.outPoint = 1.0f; }
+        // Wheel: zoom around the mouse; horizontal wheel / shift: scroll (SlicerBox's)
+        if(hovered) {
+            float scroll = io.MouseWheelH;
+            if(io.KeyShift) scroll += io.MouseWheel;
+            else if(io.MouseWheel != 0.0f) {
+                const float curSpan = smp.viewEnd - smp.viewStart;
+                const float newSpan = ofClamp(curSpan * std::pow(0.85f, io.MouseWheel), minSpan, 1.0f);
+                setView(mx - (mx - smp.viewStart) * newSpan / curSpan, newSpan);
+            }
+            if(scroll != 0.0f) {
+                const float curSpan = smp.viewEnd - smp.viewStart;
+                setView(smp.viewStart - scroll * curSpan * 0.05f, curSpan);
+            }
+            if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)) openMenu = true;
+        }
     }
     std::string dropped;
     if(browser.acceptDropOnLastItem(dropped)) loadSample(p, dropped);
+
+    if(openMenu) ImGui::OpenPopup("##sbWaveMenu");
+    if(ImGui::BeginPopup("##sbWaveMenu")) {
+        // around a point: about a tenth of a second each side
+        const float close = seconds > 0.0f ? std::min(1.0f, 0.2f / seconds) : 1.0f;
+        if(ImGui::MenuItem("Zoom to fit", nullptr, false, zoomed)) setView(0.0f, 1.0f);
+        if(ImGui::MenuItem("Zoom to region")) {
+            const float len = std::max(minSpan, (out - in) * 1.1f);
+            setView((in + out) * 0.5f - len * 0.5f, len);
+        }
+        if(ImGui::MenuItem("Zoom on In")) setView(in - close * 0.5f, close);
+        if(ImGui::MenuItem("Zoom on Out")) setView(out - close * 0.5f, close);
+        ImGui::Separator();
+        if(ImGui::MenuItem("Region: the whole file")) { p.inPoint = 0.0f; p.outPoint = 1.0f; }
+        ImGui::EndPopup();
+    }
+
+    // ── Overview: the whole file, the region and the part shown (drag it) ──
+    if(!smp.peaks.empty()) {
+        const float oh = 10.0f * z;
+        const ImVec2 o = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##sbWaveOverview", ImVec2(std::max(1.0f, w), oh));
+        const bool ov = ImGui::IsItemHovered(), oa = ImGui::IsItemActive();
+        const float curSpan = smp.viewEnd - smp.viewStart;
+        const float mu = ofClamp((ImGui::GetMousePos().x - o.x) / w, 0.0f, 1.0f);
+        if(ImGui::IsItemActivated())    // inside the window: drag it; outside: centre it there
+            viewDragOffset = mu >= smp.viewStart && mu <= smp.viewEnd ? mu - smp.viewStart : curSpan * 0.5f;
+        if(oa) setView(mu - viewDragOffset, curSpan);
+        if(ov && !oa) ImGui::SetTooltip("The whole file: drag to scroll the zoomed waveform");
+        const ImVec2 o1(o.x + w, o.y + oh);
+        dl->AddRectFilled(o, o1, pal::canvas);
+        dl->AddRectFilled(ImVec2(o.x + w * in, o.y + 2.0f * z), ImVec2(o.x + w * out, o1.y - 2.0f * z), pal::padCol(p.index, 110));
+        for(int v = 0; v < (int)p.playheads.size() && v < std::min(p.voices.get(), MaxVoices); ++v) {
+            if(p.playheads[v] < 0.0f) continue;
+            const float x = o.x + w * ofClamp(p.playheads[v], 0.0f, 1.0f);
+            dl->AddLine(ImVec2(x, o.y), ImVec2(x, o1.y), pal::voiceCol(v, 235), 1.0f * z);
+        }
+        const float wx0 = o.x + w * smp.viewStart, wx1 = std::max(wx0 + 3.0f * z, o.x + w * smp.viewEnd);
+        dl->AddRect(ImVec2(wx0, o.y), ImVec2(std::min(wx1, o1.x), o1.y), ov || oa ? pal::handle : pal::splitterHot, 0, 0, 1.5f * z);
+        dl->AddRect(o, o1, pal::border);
+    }
 
     // ── Resize grip (GrainBox's) ─────────────────────────────────────────────
     const float gripH = 8.0f * z;

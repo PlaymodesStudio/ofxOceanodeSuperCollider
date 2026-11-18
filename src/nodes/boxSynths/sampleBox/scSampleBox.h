@@ -146,6 +146,11 @@ private:
         float seconds = 0.0f, rate = 0.0f;
         std::vector<float> peaks;
         int peaksVersion = 0;            // bumped when peaks change
+        // The window's zoom: lowest / highest sample of every fineFrames
+        // frames (peaks is too coarse for a long file), and the part shown
+        int frames = 0, fineFrames = 16;
+        std::vector<float> fineMin, fineMax;
+        float viewStart = 0.0f, viewEnd = 1.0f;     // 0..1 of the file
         std::future<scSlicerBox::Audio> task;
         std::string decodingPath, pendingFile, error;
         std::map<ofxSCServer*, std::vector<ofxSCBuffer*>> buffers;
@@ -362,6 +367,7 @@ private:
     float padListHeight = 0.0f;
     int regionDrag = -1;
     float regionDragOffset = 0.0f;
+    float viewDragOffset = 0.0f;             // dragging the overview strip's window
     bool windowHovered = false;
     bool pendingLoadDialog = false;
     std::string pendingDropFile;             // from the Finder, for the selected pad
