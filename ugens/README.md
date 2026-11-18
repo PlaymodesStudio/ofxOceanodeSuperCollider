@@ -99,6 +99,7 @@ holding its edges; optional per-bin attack / release / hold.
 | `OceanodeAnalog/OceanodeAnalog.scx` | MorphOsc, AnalogFilter | AnalogBox |
 | `OceanodeSpectral/OceanodeSpectral.scx` | PV_MaskFilter | SpectralFilterBox |
 | `OceanodePhysical/OceanodePhysical.scx` | PhysicalVoice | PhysicalBox |
+| `OceanodeWood/OceanodeWood.scx` | WoodPipe | MarimbaPro (`synthdefs/Source/PhysicalModelling/marimbaPro.scd`) |
 
 Their binaries are committed (universal arm64 + x86_64, ad-hoc signed), so a
 fresh clone works without a SuperCollider source checkout. Install: copy each
@@ -141,3 +142,20 @@ node's display) and in the class file (`PhysicalVoice.ar(ext, [\name, value,
 Build it with `OceanodePhysical/build.sh [SuperCollider source]`. The class
 file is also in `sclang/Extensions/user/OceanodePhysical/` for the bundled
 compiler.
+
+### OceanodeWood (`OceanodeWood/`)
+
+`WoodPipe` is MarimbaPro's voice: the part of the SteamPipe voice that
+SteamPipeBox's GlassWoodTemplate snapshot uses (noise burst, inverted delay
+loop with an allpass inside it, uneven clip, HP/LP), with that snapshot as its
+defaults and the same Primary arithmetic (it includes
+`../OceanodeSteamPipe/PrimaryCompat.h`). It plays in tune (the delays are
+solved for the note; the snapshot sounds about 13 semitones above the key),
+rings two notes per unit, takes the gate's level as loudness and brightness,
+and computes coefficients per block: about 8 times lighter than
+`SteamPipeVoice` (32 voices, offline render time). Its last input, `raw`, is
+for tests: with the snapshot's own delays and noise seed it follows
+`SteamPipeVoice` sample by sample (difference 22 to 37 dB below the signal).
+
+Build it with `OceanodeWood/build.sh [SuperCollider source]`. The class file is
+also in `sclang/Extensions/user/OceanodeWood/` for the bundled compiler.
