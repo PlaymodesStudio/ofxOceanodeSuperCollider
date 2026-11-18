@@ -33,6 +33,12 @@
 #include <set>
 #include <sstream>
 #include <cstring>
+#ifdef TARGET_OSX
+    #include <CoreAudio/CoreAudio.h>
+    #include <chrono>
+    #include <mutex>
+    #include <thread>
+#endif
 
 std::map<ofxSCServer*, int> serverManager::serverSampleRates;
 
@@ -57,7 +63,114 @@ std::string getScPluginPath(const std::string& scsynthPath){
         ? scRoot + "plugins"
         : scRoot;
 }
+
+#ifdef TARGET_OSX
+// Global-scope CoreAudio properties. Element 0 is the main element
+// (kAudioObjectPropertyElementMain, ...ElementMaster before macOS 12).
+template<typename T>
+bool audioProperty(AudioObjectID object, AudioObjectPropertySelector selector, T& value){
+    const AudioObjectPropertyAddress address{selector, kAudioObjectPropertyScopeGlobal, 0};
+    UInt32 size = sizeof(T);
+    return AudioObjectGetPropertyData(object, &address, 0, nullptr, &size, &value) == kAudioHardwareNoError;
 }
+
+template<typename T>
+std::vector<T> audioPropertyList(AudioObjectID object, AudioObjectPropertySelector selector){
+    const AudioObjectPropertyAddress address{selector, kAudioObjectPropertyScopeGlobal, 0};
+    UInt32 size = 0;
+    if(AudioObjectGetPropertyDataSize(object, &address, 0, nullptr, &size) != kAudioHardwareNoError) return {};
+    std::vector<T> values(size / sizeof(T));
+    if(values.empty()) return {};
+    if(AudioObjectGetPropertyData(object, &address, 0, nullptr, &size, values.data()) != kAudioHardwareNoError) return {};
+    values.resize(size / sizeof(T));
+    return values;
+}
+
+// The name scsynth compares its -H arguments with
+std::string audioDeviceName(AudioDeviceID device){
+    const auto chars = audioPropertyList<char>(device, kAudioDevicePropertyDeviceName);
+    return std::string(chars.begin(), std::find(chars.begin(), chars.end(), '\0'));
+}
+
+// `wanted` when every device supports it, else the nearest rate above it that
+// they all do, else the nearest below: scsynth's own order of preference
+double commonSampleRate(const std::vector<std::vector<AudioValueRange>>& devices, double wanted){
+    auto supported = [&devices](double rate){
+        return std::all_of(devices.begin(), devices.end(), [rate](const std::vector<AudioValueRange>& ranges){
+            return std::any_of(ranges.begin(), ranges.end(), [rate](const AudioValueRange& range){
+                return rate >= range.mMinimum && rate <= range.mMaximum;
+            });
+        });
+    };
+    if(supported(wanted)) return wanted;
+    double above = 0, below = 0;
+    for(const auto& ranges : devices){
+        for(const auto& range : ranges){
+            for(double rate : {range.mMinimum, range.mMaximum}){
+                if(!supported(rate)) continue;
+                if(rate > wanted && (above == 0 || rate < above)) above = rate;
+                if(rate < wanted && rate > below) below = rate;
+            }
+        }
+    }
+    return above > 0 ? above : below;
+}
+
+// The device switches asynchronously, and scsynth must not open it mid-change
+bool setAudioDeviceSampleRate(AudioDeviceID device, double rate){
+    auto current = [device]{
+        Float64 value = 0;
+        audioProperty(device, kAudioDevicePropertyNominalSampleRate, value);
+        return value;
+    };
+    if(current() == rate) return true;
+    const AudioObjectPropertyAddress address{kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, 0};
+    const Float64 value = rate;
+    if(AudioObjectSetPropertyData(device, &address, 0, nullptr, sizeof(value), &value) != kAudioHardwareNoError) return false;
+    for(int i = 0; i < 150 && current() != rate; i++) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    return current() == rate;
+}
+#endif
+}
+
+#ifdef TARGET_OSX
+double scPrepareDeviceSampleRate(const std::string& inputDeviceName, const std::string& outputDeviceName, bool usesInput, double wanted){
+    // The servers start together and share the devices
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+
+    // The devices scsynth will open: by name as it looks them up, else the
+    // system defaults
+    AudioDeviceID input = kAudioObjectUnknown, output = kAudioObjectUnknown;
+    for(AudioDeviceID device : audioPropertyList<AudioDeviceID>(kAudioObjectSystemObject, kAudioHardwarePropertyDevices)){
+        const std::string name = audioDeviceName(device);
+        if(name.empty()) continue;
+        if(name == inputDeviceName) input = device;
+        if(name == outputDeviceName) output = device;
+        if(input != kAudioObjectUnknown && output != kAudioObjectUnknown) break;
+    }
+    if(input == kAudioObjectUnknown) audioProperty(kAudioObjectSystemObject, kAudioHardwarePropertyDefaultInputDevice, input);
+    if(output == kAudioObjectUnknown) audioProperty(kAudioObjectSystemObject, kAudioHardwarePropertyDefaultOutputDevice, output);
+    if(output == kAudioObjectUnknown) return 0;
+
+    // Without -S scsynth runs at the output device's rate, and with inputs it
+    // refuses to start unless the input device is at that rate too
+    std::vector<AudioDeviceID> devices{output};
+    if(usesInput && input != kAudioObjectUnknown && input != output) devices.push_back(input);
+
+    std::vector<std::vector<AudioValueRange>> supported;
+    for(AudioDeviceID device : devices){
+        auto ranges = audioPropertyList<AudioValueRange>(device, kAudioDevicePropertyAvailableNominalSampleRates);
+        if(!ranges.empty()) supported.push_back(ranges);   // a device that does not say is taken to accept the rate
+    }
+    const double rate = commonSampleRate(supported, wanted);
+    if(rate <= 0) return 0;
+    for(AudioDeviceID device : devices){
+        if(!setAudioDeviceSampleRate(device, rate)) return 0;
+    }
+    return rate;
+}
+#endif
 
 std::string scUgenPluginPaths(const std::string& ugensPlugins, const std::string& scsynthPath){
     std::string custom = ugensPlugins.empty() ? "" : ofToDataPath(ugensPlugins, true);

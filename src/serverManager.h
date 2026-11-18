@@ -62,6 +62,19 @@ struct scPreferences{
 // installed packages remain unchanged, including across Sync updates.
 std::string scUgenPluginPaths(const std::string& ugensPlugins, const std::string& scsynthPath);
 
+#ifdef TARGET_OSX
+// Puts the audio devices scsynth is about to open at `wanted` Hz, so that it
+// can be started without -S. scsynth 3.13's own handling of -S (the sample-rate
+// merge in SC_CoreAudioDriver::DriverSetup) writes past a heap block when the
+// input and output are different devices with different sample-rate lists,
+// which aborted it at random a few seconds after launch.
+// The names are the ones given to -H; one that matches no device means the
+// system default. Returns the rate the devices were left at (the nearest one
+// they all support when `wanted` is not), or 0 when they could not be brought
+// to a common rate.
+double scPrepareDeviceSampleRate(const std::string& inputDeviceName, const std::string& outputDeviceName, bool usesInput, double wanted);
+#endif
+
 class serverManager{
 public:
     serverManager();

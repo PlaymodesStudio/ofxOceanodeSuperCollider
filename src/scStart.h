@@ -83,7 +83,6 @@ public:
                 "-o", ofToString(launchPrefs.numOutputBusChannels),
                 "-z", ofToString(launchPrefs.blockSize),
                 "-Z", ofToString(launchPrefs.hardwareBufferSize),
-                "-S", ofToString(launchPrefs.hardwareSampleRate),
                 "-b", ofToString(launchPrefs.numBuffers),
                 "-n", ofToString(launchPrefs.maxNodes),
                 "-d", ofToString(launchPrefs.maxSynthDefs),
@@ -103,6 +102,27 @@ public:
                 args.push_back(hasInputDevice ? launchPrefs.inputDeviceName : "");
                 args.push_back(hasOutputDevice ? launchPrefs.deviceName : "");
             }
+#ifdef TARGET_OSX
+            // No -S on macOS: scsynth 3.13 overflows a heap block while
+            // handling it when the input and output devices differ, and
+            // aborted at random on launch. The devices are set here instead.
+            if(launchPrefs.hardwareSampleRate > 0){
+                const double rate = scPrepareDeviceSampleRate(
+                    hasInputDevice ? launchPrefs.inputDeviceName : "",
+                    hasOutputDevice ? launchPrefs.deviceName : "",
+                    launchPrefs.numInputBusChannels > 0, launchPrefs.hardwareSampleRate);
+                if(rate <= 0){
+                    ofLogWarning("scStart") << "Could not set the audio devices to " << launchPrefs.hardwareSampleRate
+                        << " Hz; scsynth starts at the rate they are at";
+                }else if(rate != launchPrefs.hardwareSampleRate){
+                    ofLogWarning("scStart") << "The audio devices do not support " << launchPrefs.hardwareSampleRate
+                        << " Hz; scsynth starts at " << rate << " Hz";
+                }
+            }
+#else
+            args.push_back("-S");
+            args.push_back(ofToString(launchPrefs.hardwareSampleRate));
+#endif
             args.push_back("-D");
             args.push_back("0"); //Deactivate synthdefs
             std::string ugenPaths;
