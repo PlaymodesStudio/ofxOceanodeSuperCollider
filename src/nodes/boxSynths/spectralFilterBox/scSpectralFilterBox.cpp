@@ -114,6 +114,7 @@ void scSpectralFilterBox::setup(){
     listeners.push(fftSize.newListener([this](int& f){ if(f != builtFft && !bandpass()) rebuild(); }));
     listeners.push(modeP.newListener([this](int& m){ if(m != builtMode) rebuild(); }));
     listeners.push(bandsP.newListener([this](int& b){ if(b != builtBands && bandpass()) rebuild(); }));
+    listeners.push(scroll.newListener([this](float& s){ if(s == 0.0f) scrollOffset = 0; }));   // Scroll back at 0: the mask recentres
     listeners.push(gainDb.newListener([this](float& g){ sendScalar("gain", std::pow(10.0f, g / 20.0f)); }));
     listeners.push(mix.newListener([this](float& m){ sendScalar("mix", m); }));
     listeners.push(resonance.newListener([this](float& r){ sendScalar("reso", r); }));   // the FFT defs have no reso: ignored there

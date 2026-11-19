@@ -14,7 +14,7 @@
 //    seam when it scrolls round), blurred, curved (Contrast), quantised, inverted, mapped to
 //    a dB range and scaled by Depth; it is sent only when it changes.
 //    Transpose (semitones) plus Scroll (semitones per second, wrapping round
-//    the mask) plus Spread (an offset per channel) give each channel's
+//    the mask; set back to 0 it recentres) plus Spread (an offset per channel) give each channel's
 //    transpose, sent at the frame rate and smoothed on the server.
 //  • Mode Bandpass (SpectralFilterBoxBP_<bands>_<n>): no FFT, so no latency.
 //    64 or 128 fixed 4th-order bandpasses, 10 Hz .. 20 kHz, summing flat;
