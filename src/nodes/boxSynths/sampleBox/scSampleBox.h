@@ -210,6 +210,7 @@ private:
         ofParameter<bool> filterOn;
         ofParameter<int> filterType;
         ofParameter<float> cutoff, resonance;
+        ofParameter<float> sampleGain;   // the sample's own gain (the waveform's knob), before the effects
         // Tempo
         ofParameter<float> fitBeats;     // 0: off
         ofParameter<bool> sync, autoplay;
