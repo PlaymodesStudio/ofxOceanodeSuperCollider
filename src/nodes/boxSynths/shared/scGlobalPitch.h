@@ -129,7 +129,7 @@ private:
         const auto offsets = harmonyOffsets(false, slot), lowOffsets = harmonyOffsets(true, slot);
         for(int block = 0; block < NumBlocks; block++) {
             const bool t = block & 1, s = block & 2, q = s && harmonyOn(false, slot), lq = s && splitOn(slot) && harmonyOn(true, slot), d = block & 4;
-            m.addFloatArg(t ? transpose(slot) : 0.0f);
+            m.addFloatArg(t ? effectiveTranspose(slot) : 0.0f);   // folded when Shortest Path is on
             m.addFloatArg(q ? 1.0f : 0.0f);
             for(float o : offsets) m.addFloatArg(q ? o : 0.0f);
             m.addFloatArg(d ? detune(slot) : 0.0f);
