@@ -127,6 +127,7 @@ scSampleBox::~scSampleBox() {
 }
 
 void scSampleBox::setup() {
+    addOnToggle();   // On switch in the node bar (scNode.h)
     addTimeSourceParameter(); // which timeline it follows (inspector)
     // a kit: drums stay put unless ticked in Global Pitch
     scGlobalPitch::follow(this, false, [this](){
@@ -1298,7 +1299,7 @@ void scSampleBox::createSynth(ofxSCServer* srv) {
         n.pendingSince = ofGetElapsedTimef();
     }
     for(auto& p : pads) createPad(srv, *p);
-    if(!getActive() || isGraphSuspended(srv)) n.root->run(false);
+    if(!runsOn(srv)) n.root->run(false);
 }
 
 void scSampleBox::free(ofxSCServer* srv) {
@@ -2855,9 +2856,18 @@ void scSampleBox::rebuildPadControlIndex() {
         if(c.pad >= 0 && c.pad < (int)padControls.size()) padControls[c.pad].push_back(&c);
 }
 
+// A deactivated patch or macro pauses the root group, like the other Boxes
+void scSampleBox::activate() {
+    for(auto& [server, n] : nodeSC) if(n.created && n.root) n.root->run(runsOn(server));
+    requestAnchor();   // synced pads: their clocks stood still
+}
+void scSampleBox::deactivate() {
+    for(auto& [server, n] : nodeSC) if(n.created && n.root) n.root->run(false);
+}
+
 // Mixer Pro "Mute Pauses Sources" (scNode.h): the root group holds every pad.
 void scSampleBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
     setGraphSuspendedFlag(server, suspended);
     const auto it = nodeSC.find(server);
-    if(it != nodeSC.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
+    if(it != nodeSC.end() && it->second.created && it->second.root) it->second.root->run(runsOn(server));
 }

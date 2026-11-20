@@ -173,6 +173,7 @@ scAnalogBox::~scAnalogBox() {
 }
 
 void scAnalogBox::setup() {
+    addOnToggle();   // On switch in the node bar (scNode.h)
     scGlobalPitch::follow(this, true, [this](){ for(auto& [server, st] : states) sendPitch(st); });
     timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
                    [this](){ return publishedKeys; });
@@ -977,7 +978,7 @@ void scAnalogBox::createSynth(ofxSCServer* server) {
         g->create(1, st.root->nodeID);
     }
     st.created = true;
-    if(!getActive() || isGraphSuspended(server)) st.root->run(false);
+    if(!runsOn(server)) st.root->run(false);
     createAll(server, st);
 }
 
@@ -1037,7 +1038,7 @@ void scAnalogBox::resendParametersForNRT() {
     modulation.resend();
 }
 
-void scAnalogBox::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(!isGraphSuspended(s)); }
+void scAnalogBox::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(runsOn(s)); }
 void scAnalogBox::deactivate() { for(auto& [s, st] : states) if(st.created) st.root->run(false); }
 
 void scAnalogBox::setBpm(float bpm) {
@@ -2571,5 +2572,5 @@ std::vector<ofJson> scAnalogBox::factorySnapshots() const {
 void scAnalogBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
     setGraphSuspendedFlag(server, suspended);
     const auto it = states.find(server);
-    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
+    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(runsOn(server));
 }

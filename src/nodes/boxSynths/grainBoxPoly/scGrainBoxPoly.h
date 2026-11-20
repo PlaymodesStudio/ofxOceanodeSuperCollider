@@ -98,6 +98,9 @@ public:
     void draw(ofEventArgs&)   override;
     void activate()           override;
     void deactivate()         override;
+    void applyGraphSuspended(ofxSCServer* srv, bool suspended) override;
+    void applyRunState(ofxSCServer* only);
+    bool keepsGraphAlive() const override;
 
     // ── scNode interface ──────────────────────────────────────────────────────
     void buildSynth(ofxSCServer* s)                     override;

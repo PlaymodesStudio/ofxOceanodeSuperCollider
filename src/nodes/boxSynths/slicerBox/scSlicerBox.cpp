@@ -323,6 +323,7 @@ scSlicerBox::~scSlicerBox(){
 }
 
 void scSlicerBox::setup(){
+    addOnToggle();   // On switch in the node bar (scNode.h)
     // slices of a loop keep their speed unless ticked in Global Pitch (it follows Transpose only)
     scGlobalPitch::follow(this, false, [this](){
         for(auto& [server, st] : states) if(st.player) st.player->set("gtrbus", scGlobalPitch::bus(this, server));
@@ -673,9 +674,9 @@ void scSlicerBox::rebuildChain(ofxSCServer* server, ServerState& st){
         fresh->set("gtrbus", scGlobalPitch::bus(this, server));
         ofxSCSynth* firstFx = nullptr;
         for(auto& f : st.fx) if(f.synth){ firstFx = f.synth; break; }
-        if(st.player) fresh->createAndRun(4, st.player->nodeID, getActive());   // replace
-        else if(firstFx) fresh->createAndRun(2, firstFx->nodeID, getActive());  // addBefore the effects
-        else fresh->createAndRun(0, 1, getActive());
+        if(st.player) fresh->createAndRun(4, st.player->nodeID, runsOn(server));   // replace
+        else if(firstFx) fresh->createAndRun(2, firstFx->nodeID, runsOn(server));  // addBefore the effects
+        else fresh->createAndRun(0, 1, runsOn(server));
         delete st.player;
         st.player = fresh;
         st.builtCap = sliceCap();
@@ -801,7 +802,7 @@ void scSlicerBox::ensureSeq(ofxSCServer* server, ServerState& st){
                 seqFollower.requestAnchor();
             }else st.seq->set("run", 1.0f);
             sendSeq(st.seq);
-            st.seq->createAndRun(2, st.player->nodeID, getActive());   // addBefore the player
+            st.seq->createAndRun(2, st.player->nodeID, runsOn(server));   // addBefore the player
         }
     }else if(st.seq){
         st.seq->free(); delete st.seq; st.seq = nullptr;
@@ -999,11 +1000,11 @@ void scSlicerBox::updateStages(ofxSCServer* server, ServerState& st){
                 // right after the node before it in the chain
                 ofxSCSynth* prev = st.player;
                 for(int k = 0; k < s; k++) if(st.fx[k].synth) prev = st.fx[k].synth;
-                if(prev) f.synth->createAndRun(3, prev->nodeID, getActive());    // addAfter
-                else f.synth->createAndRun(0, 1, getActive());
+                if(prev) f.synth->createAndRun(3, prev->nodeID, runsOn(server));    // addAfter
+                else f.synth->createAndRun(0, 1, runsOn(server));
             }else{
                 sendStage(s, f.synth);
-                if(!f.running && getActive()) f.synth->run(true);
+                if(!f.running && runsOn(server)) f.synth->run(true);
             }
             f.running = scFxCanRoute(f.synth, server);
             f.offAt = -1.0f;
@@ -1205,20 +1206,23 @@ void scSlicerBox::resendParametersForNRT(){
     }
 }
 
-void scSlicerBox::activate(){
-    for(auto& [server, st] : states){
-        if(st.seq) st.seq->run(true);
-        if(st.player) st.player->run(true);
-        for(auto& f : st.fx) if(f.synth && f.running) f.synth->run(true);
-    }
+// Every top-level node of the box on `server`: running only while the node is
+// activated, switched On and heard (scNode::runsOn)
+void scSlicerBox::applyRunState(ofxSCServer* server, ServerState& st){
+    const bool run = runsOn(server);
+    if(st.seq) st.seq->run(run);
+    if(st.player) st.player->run(run);
+    for(auto& f : st.fx) if(f.synth) f.synth->run(run && f.running);
 }
 
-void scSlicerBox::deactivate(){
-    for(auto& [server, st] : states){
-        if(st.seq) st.seq->run(false);
-        if(st.player) st.player->run(false);
-        for(auto& f : st.fx) if(f.synth) f.synth->run(false);
-    }
+void scSlicerBox::activate(){ for(auto& [server, st] : states) applyRunState(server, st); }
+void scSlicerBox::deactivate(){ for(auto& [server, st] : states) applyRunState(server, st); }
+
+// The On switch and Mixer Pro "Mute Pauses Sources" (scNode.h)
+void scSlicerBox::applyGraphSuspended(ofxSCServer* server, bool suspended){
+    setGraphSuspendedFlag(server, suspended);
+    const auto it = states.find(server);
+    if(it != states.end()) applyRunState(server, it->second);
 }
 
 // ════════════════════════════════════════════════════════════════════════════

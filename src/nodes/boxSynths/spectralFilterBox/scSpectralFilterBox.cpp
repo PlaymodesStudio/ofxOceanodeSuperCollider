@@ -70,6 +70,7 @@ scSpectralFilterBox::~scSpectralFilterBox(){
 }
 
 void scSpectralFilterBox::setup(){
+    addOnToggle(true);   // On switch in the node bar: Off passes the input through
     addParameter(numChannels.set("N Chan", 2, 1, MAX_CHANNELS));
     addParameterDropdown(modeP, "Mode", 0, modeNames);
     addParameterDropdown(fftSize, "FFT", 1, fftNames);
@@ -343,7 +344,7 @@ void scSpectralFilterBox::rebuild(){
         auto* fresh = new ofxSCSynth(synthDefName(), server);
         sendAll(fresh);
         scResendInOutBuses(fresh, server, inputBuses, outputBuses);
-        if(synth->isCreated()) fresh->createAndRun(4, synth->nodeID, getActive() && !isGraphSuspended(server));
+        if(synth->isCreated()) fresh->createAndRun(4, synth->nodeID, runsOn(server));
         delete synth;   // no /n_free: action 4 replaces the node atomically
         synth = fresh;
     }
@@ -364,7 +365,7 @@ void scSpectralFilterBox::createSynth(ofxSCServer* server){
     auto it = synths.find(server);
     if(it == synths.end() || !it->second) return;
     scResendInOutBuses(it->second, server, inputBuses, outputBuses);
-    if(!it->second->isCreated()) it->second->createAndRun(0, 1, getActive() && !isGraphSuspended(server));
+    if(!it->second->isCreated()) it->second->createAndRun(0, 1, runsOn(server));
 }
 
 void scSpectralFilterBox::free(ofxSCServer* server){
@@ -415,7 +416,7 @@ int scSpectralFilterBox::getLastSynthID(ofxSCServer* server){
 }
 
 void scSpectralFilterBox::activate(){
-    for(auto& [server, synth] : synths) if(synth && synth->isCreated()) synth->run(!isGraphSuspended(server));
+    for(auto& [server, synth] : synths) if(synth && synth->isCreated()) synth->run(runsOn(server));
 }
 
 void scSpectralFilterBox::deactivate(){
@@ -501,5 +502,5 @@ void scSpectralFilterBox::drawPreview(){
 void scSpectralFilterBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
     setGraphSuspendedFlag(server, suspended);
     const auto it = synths.find(server);
-    if(it != synths.end() && it->second && it->second->isCreated()) it->second->run(getActive() && !suspended);
+    if(it != synths.end() && it->second && it->second->isCreated()) it->second->run(runsOn(server));
 }

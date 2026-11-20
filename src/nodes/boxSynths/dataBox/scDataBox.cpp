@@ -92,6 +92,7 @@ scDataBox::~scDataBox(){
 // ════════════════════════════════════════════════════════════════════════════
 
 void scDataBox::setup(){
+    addOnToggle();   // On switch in the node bar (scNode.h)
     addInspectorParameter(embedSamples.set("Embed Samples", true));
     addOutput("Out");
 
@@ -349,7 +350,7 @@ void scDataBox::swapBuffers(ofxSCServer* server){
         auto& list = found->second;
         for(int i = 0; i < (int)list.size(); i++){
             list[i]->set("buf", bufferForHead(server, i));
-            if(list[i]->isCreated()) list[i]->run(getActive());
+            if(list[i]->isCreated()) list[i]->run(runsOn(server));
         }
     }
     // After the voices moved on: /b_free is processed after the /n_set
@@ -441,7 +442,7 @@ void scDataBox::setNumHeads(int n){
             auto* voice = makeVoice(server, (int)list.size());
             // Next to the others, so the graph order holds; without running
             // voices yet, createSynth() creates it with the rest.
-            if(running) voice->createAndRun(3, list.back()->nodeID, getActive() && hasData(buffers, server));
+            if(running) voice->createAndRun(3, list.back()->nodeID, runsOn(server) && hasData(buffers, server));
             list.push_back(voice);
         }
     }
@@ -479,7 +480,7 @@ void scDataBox::createSynth(ofxSCServer* server){
     // Silent until its buffers are loaded on this server
     const bool ready = hasData(buffers, server);
     for(auto* voice : voices[server]){
-        if(!voice->isCreated()) voice->createAndRun(0, 1, getActive() && ready);
+        if(!voice->isCreated()) voice->createAndRun(0, 1, runsOn(server) && ready);
     }
     if(!ready && !pendingLoads.count(server)) loadBuffersOnServer(server);
 }
@@ -522,17 +523,22 @@ int scDataBox::getLastSynthID(ofxSCServer* server){
     return it->second.back()->nodeID;
 }
 
-void scDataBox::activate(){
-    for(auto& [server, list] : voices){
-        const bool ready = hasData(buffers, server);
-        for(auto* voice : list) if(voice->isCreated()) voice->run(ready);
-    }
+// The voices on `server`: running only while the node is activated, switched
+// On and heard (scNode::runsOn), and its buffers are loaded there
+void scDataBox::applyRunState(ofxSCServer* server){
+    const auto it = voices.find(server);
+    if(it == voices.end()) return;
+    const bool run = runsOn(server) && hasData(buffers, server);
+    for(auto* voice : it->second) if(voice->isCreated()) voice->run(run);
 }
 
-void scDataBox::deactivate(){
-    for(auto& [server, list] : voices){
-        for(auto* voice : list) if(voice->isCreated()) voice->run(false);
-    }
+void scDataBox::activate(){ for(auto& [server, list] : voices) applyRunState(server); }
+void scDataBox::deactivate(){ for(auto& [server, list] : voices) applyRunState(server); }
+
+// The On switch and Mixer Pro "Mute Pauses Sources" (scNode.h)
+void scDataBox::applyGraphSuspended(ofxSCServer* server, bool suspended){
+    setGraphSuspendedFlag(server, suspended);
+    applyRunState(server);
 }
 
 // ════════════════════════════════════════════════════════════════════════════

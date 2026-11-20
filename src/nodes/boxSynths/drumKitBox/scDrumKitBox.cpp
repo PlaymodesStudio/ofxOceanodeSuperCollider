@@ -104,6 +104,7 @@ scDrumKitBox::~scDrumKitBox() {
 }
 
 void scDrumKitBox::setup() {
+    addOnToggle();   // On switch in the node bar (scNode.h)
     addTimeSourceParameter(); // which timeline it follows (inspector)
     // a kit: drums stay put unless ticked in Global Pitch
     // each pad its own row in Global Pitch's table (a kit: unticked by default)
@@ -1183,7 +1184,7 @@ void scDrumKitBox::createSynth(ofxSCServer* srv) {
         n.pendingSince = ofGetElapsedTimef();
     }
     for(auto& p : pads) createPad(srv, *p);
-    if(!getActive() || isGraphSuspended(srv)) n.root->run(false);
+    if(!runsOn(srv)) n.root->run(false);
 }
 
 void scDrumKitBox::free(ofxSCServer* srv) {
@@ -1549,9 +1550,17 @@ bool scDrumKitBox::isConnected(const std::string& key) const {
         (it->second->hasInConnection() || it->second->hasOutConnections());
 }
 
+// A deactivated patch or macro pauses the root group, like the other Boxes
+void scDrumKitBox::activate() {
+    for(auto& [server, n] : nodeSC) if(n.created && n.root) n.root->run(runsOn(server));
+}
+void scDrumKitBox::deactivate() {
+    for(auto& [server, n] : nodeSC) if(n.created && n.root) n.root->run(false);
+}
+
 // Mixer Pro "Mute Pauses Sources" (scNode.h): the root group holds every pad.
 void scDrumKitBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
     setGraphSuspendedFlag(server, suspended);
     const auto it = nodeSC.find(server);
-    if(it != nodeSC.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
+    if(it != nodeSC.end() && it->second.created && it->second.root) it->second.root->run(runsOn(server));
 }

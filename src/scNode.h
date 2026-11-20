@@ -60,9 +60,30 @@ public:
 
     // Paused nodes stay in the graph (and retain their synths and buses), but
     // consumers read their first audio input instead of their processed output.
-    virtual bool isAudioEnabled() const { return true; }
-    virtual void applyAudioEnabled(ofxSCServer* server) {}
-    virtual void setBypassedOutputBus(ofxSCServer* server, int index, int bus) {}
+    virtual bool isAudioEnabled() const { return isNodeOn(); }
+    // Called for every node at the end of each graph rebuild. A node with the
+    // shared On switch has its run state re-sent through applyGraphSuspended(),
+    // and only when On changed: resuming re-anchors a transport-locked player.
+    virtual void applyAudioEnabled(ofxSCServer* server);
+    virtual void setBypassedOutputBus(ofxSCServer* server, int index, int bus) { bypassedOutputBuses[server][index] = bus; }
+    // What an Off node's outputs carry instead: an empty port is silence.
+    // Default: the first audio input (an effect passes its dry signal).
+    virtual nodePort getBypassSource() const;
+
+    // ── "On" switch in the node bar ─────────────────────────────────────────
+    // The checkbox scSynthdef nodes have, for any other node: call
+    // addOnToggle() first thing in setup(). Off pauses the node on the server
+    // (/n_run 0) to save CPU; it keeps its synths, buses and place in the
+    // graph. The node must
+    //  - override applyGraphSuspended() and pause / resume there, and
+    //  - send runsOn(server) as the run state of its top-level synths or root
+    //    group everywhere: createSynth, activate, replace-in-place, rebuilds.
+    // passInputWhenOff: an effect, whose consumers read its first input while
+    // it is Off. A source (the default) gives silence.
+    void addOnToggle(bool passInputWhenOff = false);
+    bool isNodeOn() const { return !hasOnToggle || nodeOn.get(); }
+    // Activated, switched On and not suspended by a muted mixer strip
+    bool runsOn(ofxSCServer* server){ return getActive() && isNodeOn() && !isGraphSuspended(server); }
 
     // ── Graph suspension (SC Mixer Pro: "Mute Pauses Sources") ──────────────
     // serverManager works out which nodes nobody can hear -- everything they
@@ -199,6 +220,15 @@ protected:
         if(suspended) graphSuspendedServers.insert(server);
         else graphSuspendedServers.erase(server);
     }
+
+    // The shared On switch (addOnToggle)
+    ofParameter<bool> nodeOn;
+    bool hasOnToggle = false;
+    bool onPassesInput = false;
+    std::map<ofxSCServer*, bool> appliedNodeOn;   // the On state last sent, per server
+    std::map<ofxSCServer*, std::map<int, int>> bypassedOutputBuses;
+    // The bus consumers read while this node is Off (-1: not bypassed)
+    int getBypassedOutputBus(ofxSCServer* server, int index) const;
 
     static ofxSCServer* graphTraversalServer;
     static nodePort graphInputPort;

@@ -86,6 +86,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        addOnToggle();   // On switch in the node bar (scNode.h)
         addTimeSourceParameter(); // which timeline it follows (inspector)
         timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
                        [this](){ return publishedKeys; });
@@ -220,7 +221,7 @@ public:
         auto& st = it->second;
         st.group->create(0, 1);
         st.created = true;
-        if(!getActive() || isGraphSuspended(server)) st.group->run(false);
+        if(!runsOn(server)) st.group->run(false);
         st.clock = new ofxSCSynth("ChordBoxClock", server);
         sendStatic(server, st);
         st.clock->set("run", 0.0f);
@@ -272,7 +273,7 @@ public:
         sendIndexInput(st);
     }
     void activate() override {
-        for(auto& [server, st] : servers) if(st.group && st.created) st.group->run(!isGraphSuspended(server));
+        for(auto& [server, st] : servers) if(st.group && st.created) st.group->run(runsOn(server));
         forceHardAnchor = true;
         follower.requestAnchor();
     }
@@ -284,8 +285,8 @@ public:
     void applyGraphSuspended(ofxSCServer* server, bool suspended) override {
         setGraphSuspendedFlag(server, suspended);
         const auto it = servers.find(server);
-        if(it != servers.end() && it->second.group && it->second.created) it->second.group->run(getActive() && !suspended);
-        if(!suspended){ forceHardAnchor = true; follower.requestAnchor(); }   // its clock stood still
+        if(it != servers.end() && it->second.group && it->second.created) it->second.group->run(runsOn(server));
+        if(runsOn(server)){ forceHardAnchor = true; follower.requestAnchor(); }   // its clock stood still
     }
     // The recorder writes the patch's state at score time zero: the tables too
     void resendParametersForNRT() override {

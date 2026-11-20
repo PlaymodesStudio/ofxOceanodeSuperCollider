@@ -803,6 +803,7 @@ scMetroBox::~scMetroBox() {
 }
 
 void scMetroBox::setup() {
+    addOnToggle();   // On switch in the node bar (scNode.h)
     addTimeSourceParameter(); // which timeline it follows (inspector)
     timeline.setup(this, [this](const std::string& k) {
         if(snapParams.count(k)) publishSnap(k); else publishKey(k);
@@ -1255,7 +1256,7 @@ void scMetroBox::createSynth(ofxSCServer* server) {
     it->second.synth->set("run", 0.0f);
     forceHardAnchor = true;
     follower.requestAnchor();
-    it->second.synth->createAndRun(0, 1, getActive() && !isGraphSuspended(server));
+    it->second.synth->createAndRun(0, 1, runsOn(server));
 }
 
 void scMetroBox::moveSynthBefore(ofxSCServer* server, int nodeID) {
@@ -1297,7 +1298,7 @@ int scMetroBox::getLastSynthID(ofxSCServer* server) {
 }
 
 void scMetroBox::activate() {
-    for(auto& [server, st] : servers) if(st.synth) st.synth->run(!isGraphSuspended(server));
+    for(auto& [server, st] : servers) if(st.synth) st.synth->run(runsOn(server));
     // It was paused: re-position it without firing the missed ticks
     forceHardAnchor = true;
     follower.requestAnchor();
@@ -1859,7 +1860,7 @@ void scMetroBox::drawAdvanced(int li) {
 void scMetroBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
     setGraphSuspendedFlag(server, suspended);
     const auto it = servers.find(server);
-    if(it != servers.end() && it->second.synth) it->second.synth->run(getActive() && !suspended);
+    if(it != servers.end() && it->second.synth) it->second.synth->run(runsOn(server));
     // It was paused: re-positioned without firing the missed ticks
-    if(!suspended){ forceHardAnchor = true; follower.requestAnchor(); }
+    if(runsOn(server)){ forceHardAnchor = true; follower.requestAnchor(); }
 }

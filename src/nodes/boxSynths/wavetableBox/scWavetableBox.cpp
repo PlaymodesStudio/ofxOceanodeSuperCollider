@@ -263,6 +263,7 @@ scWavetableBox::~scWavetableBox(){
 }
 
 void scWavetableBox::setup(){
+    addOnToggle();   // On switch in the node bar (scNode.h)
     scGlobalPitch::follow(this, true, [this](){
         std::vector<ofxSCServer*> servers;
         for(auto& [server, synth] : synths) servers.push_back(server);
@@ -1168,7 +1169,7 @@ int scWavetableBox::getLastSynthID(ofxSCServer* server){
 }
 
 void scWavetableBox::activate(){
-    for(auto& [server, st] : modStates) st.root->run(!isGraphSuspended(server));
+    for(auto& [server, st] : modStates) st.root->run(runsOn(server));
     for(auto& [server, synth] : synths) if(synth && synth->isCreated()) synth->run(synthReady(server));
 }
 
@@ -2144,7 +2145,7 @@ void scWavetableBox::createModulation(ofxSCServer* server){
     st.gateSynth = new ofxSCSynth("ModGate" + ofToString(modulationWidth()), server);
     sendModulation(server);
     st.gateSynth->createAndRun(0, st.root->nodeID, true);
-    st.root->run(getActive() && !isGraphSuspended(server));
+    st.root->run(runsOn(server));
     updateOutput(server);
 }
 
@@ -2325,5 +2326,5 @@ void scWavetableBox::sendGate(ofxSCServer* server){
 void scWavetableBox::applyGraphSuspended(ofxSCServer* server, bool suspended){
     setGraphSuspendedFlag(server, suspended);
     const auto it = modStates.find(server);
-    if(it != modStates.end() && it->second.root) it->second.root->run(getActive() && !suspended);
+    if(it != modStates.end() && it->second.root) it->second.root->run(runsOn(server));
 }

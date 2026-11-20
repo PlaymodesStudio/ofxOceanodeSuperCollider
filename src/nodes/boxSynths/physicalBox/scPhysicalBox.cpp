@@ -178,6 +178,7 @@ void scPhysicalBox::addSound(const std::string& name, const std::string& sc, flo
 }
 
 void scPhysicalBox::setup() {
+    addOnToggle();   // On switch in the node bar (scNode.h)
     scGlobalPitch::follow(this, true, [this](){
         for(auto& [s, st] : states) for(int i = 0; i < st.builtVoices; ++i) if(auto* v = st.voices[i]) v->set("gtrbus", scGlobalPitch::bus(this, s));
     });
@@ -616,7 +617,7 @@ void scPhysicalBox::createSynth(ofxSCServer* server) {
     for(int i = 0; i < st.builtVoices; ++i) st.voices[i]->createAndRun(1, st.groups[SlVoice]->nodeID, true);
     st.spread->createAndRun(1, st.groups[SlSpread]->nodeID, true);
     routeChain(st);
-    if(!getActive() || isGraphSuspended(server)) st.root->run(false);
+    if(!runsOn(server)) st.root->run(false);
 }
 void scPhysicalBox::release(ofxSCServer* server, State& st) {
     if(st.created && st.root) st.root->free();
@@ -667,7 +668,7 @@ void scPhysicalBox::resetInputBusses(ofxSCServer* s, int) {
     for(auto& cache : st.sent) cache.erase("in");
     sendNotes(s, st); sendSound(s, st);
 }
-void scPhysicalBox::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(!isGraphSuspended(s)); }
+void scPhysicalBox::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(runsOn(s)); }
 void scPhysicalBox::deactivate() { for(auto& [s, st] : states) if(st.created) st.root->run(false); }
 void scPhysicalBox::setBpm(float v) { bpm = std::max(1.0f, v); mod.setBpm(bpm); sendAll(); }
 void scPhysicalBox::resendParametersForNRT() {
@@ -1959,5 +1960,5 @@ bool scPhysicalBox::liveVca() const {
 void scPhysicalBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
     setGraphSuspendedFlag(server, suspended);
     const auto it = states.find(server);
-    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
+    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(runsOn(server));
 }

@@ -163,6 +163,7 @@ scAdditiveBox::~scAdditiveBox(){
 }
 
 void scAdditiveBox::setup(){
+    addOnToggle();   // On switch in the node bar (scNode.h)
     scGlobalPitch::follow(this, true, [this](){ resendAllVoices(); });
         timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                        [this](){ return publishedKeys; });
@@ -2022,7 +2023,7 @@ void scAdditiveBox::createSynth(ofxSCServer* server){
         if(st.fx[stage] && !st.fx[stage]->isCreated()) st.fx[stage]->createAndRun(2, st.out->nodeID, true);   // before out, in order
     createMod(server);          // at the head
     syncVoices(server);         // every voice, with the modulation buses
-    if(!getActive() || isGraphSuspended(server)) st.root->run(false);
+    if(!runsOn(server)) st.root->run(false);
 }
 
 void scAdditiveBox::free(ofxSCServer* server){
@@ -2060,7 +2061,7 @@ void scAdditiveBox::activate(){
     // Voices whose gate is off pause themselves again once silent
     for(auto& [server, st] : states){
         if(!st.created) continue;
-        st.root->run(!isGraphSuspended(server));
+        st.root->run(runsOn(server));
         forPartialBanks(server,[&](){for(auto& vs:st.voices)if(vs.grp && vs.grp->isCreated())vs.grp->run(true);});
     }
 }
@@ -3679,5 +3680,5 @@ void scAdditiveBox::drawSpeakers(ImVec2 size){
 void scAdditiveBox::applyGraphSuspended(ofxSCServer* server, bool suspended){
     setGraphSuspendedFlag(server, suspended);
     const auto it = states.find(server);
-    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
+    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(runsOn(server));
 }

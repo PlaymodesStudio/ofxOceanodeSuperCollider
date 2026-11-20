@@ -345,6 +345,7 @@ scGrainBoxPoly::~scGrainBoxPoly() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scGrainBoxPoly::setup() {
+    addOnToggle(fxMode);   // On switch in the node bar (scNode.h): Off, the effect passes its input through
     scGlobalPitch::follow(this, true, [this](){
         for(auto& ph : playheads) if(ph) for(auto& [srv, s] : ph->synths) if(s) sendPitchTo(*ph, srv, s);
     });
@@ -1193,8 +1194,8 @@ void scGrainBoxPoly::replaceCtl(Playhead& ph, ofxSCServer* srv) {
     auto* s = new ofxSCSynth(defNameFor(ph), srv);
     ph.synths[srv] = s;
     configureSynth(ph, s, srv);              // every control, incl. ctl / clk
-    s->set("active", getActive() ? 1.0f : 0.0f);
-    s->createAndRun(4, oldID, getActive() && !ph.isPaused);
+    s->set("active", runsOn(srv) ? 1.0f : 0.0f);
+    s->createAndRun(4, oldID, runsOn(srv) && !ph.isPaused);
     const int bus = ph.ebus[srv].ctl->index;
     for(auto* v : ph.voices[srv]) if(v) v->set("ctl", bus);
     if(ph.outSynths.count(srv) && ph.outSynths[srv]) ph.outSynths[srv]->set("ctl", bus);
@@ -1376,7 +1377,7 @@ void scGrainBoxPoly::syncVoiceCount(Playhead& ph, ofxSCServer* srv) {
         if(vs[i]) { vs[i]->free(); delete vs[i]; }
         vs.pop_back();
     }
-    const bool run = getActive() && !ph.isPaused;
+    const bool run = runsOn(srv) && !ph.isPaused;
     while((int)vs.size() < want) {
         const int i = (int)vs.size();
         auto* v = newVoiceSynth(ph, srv, i);
@@ -2016,15 +2017,17 @@ void scGrainBoxPoly::createSynth(ofxSCServer* srv) {
         << " outBus=" << (outputBuses.count(srv) ? outputBuses[srv] : -1)
         << " numCh=" << numChannelsP.get()
         << " playheads=" << playheads.size();
-    ph0().synths[srv]->createAndRun(0, 1, true);
-    runEngineChain(ph0(), srv, true);
+    // Created paused while the node is deactivated, switched Off or unheard
+    const bool run = runsOn(srv);
+    ph0().synths[srv]->createAndRun(0, 1, run);
+    runEngineChain(ph0(), srv, run);
     for(int i = 1; i < (int)playheads.size(); i++) {
         auto& m = playheads[i]->synths;
         if(!m.count(srv) || !m[srv]) continue;
         ofxSCSynth* before = earliestSynth(srv, i);
-        if(before) m[srv]->createAndRun(2, before->nodeID, true);   // addBefore
-        else       m[srv]->createAndRun(0, 1, true);
-        runEngineChain(*playheads[i], srv, true);
+        if(before) m[srv]->createAndRun(2, before->nodeID, run);   // addBefore
+        else       m[srv]->createAndRun(0, 1, run);
+        runEngineChain(*playheads[i], srv, run);
     }
     // FX stages right after playhead 1's synth (same bundle)
     createFxSynths(srv);
@@ -2052,9 +2055,9 @@ void scGrainBoxPoly::createPlayheadSynth(Playhead& ph, ofxSCServer* srv) {
     ph.synths[srv] = new ofxSCSynth(defNameFor(ph), srv);
     configureSynth(ph, ph.synths[srv], srv);
     buildEngineObjects(ph, srv);
-    ph.synths[srv]->set("active", getActive() ? 1.0f : 0.0f);
-    ph.synths[srv]->createAndRun(2, before->nodeID, getActive());
-    runEngineChain(ph, srv, getActive());
+    ph.synths[srv]->set("active", runsOn(srv) ? 1.0f : 0.0f);
+    ph.synths[srv]->createAndRun(2, before->nodeID, runsOn(srv));
+    runEngineChain(ph, srv, runsOn(srv));
 }
 
 // SynthDef variant (channel count, sample channels) or output offset changed:
@@ -2077,7 +2080,7 @@ void scGrainBoxPoly::refreshPlayheadSynth(Playhead& ph, ofxSCServer* srv) {
     if(!ph.synths.count(srv) || !ph.synths[srv]) return;
     replaceCtl(ph, srv);                     // capacity changed (no-op otherwise)
     setBufnums(ph, ph.synths[srv], srv);
-    const bool run = getActive() && !ph.isPaused;
+    const bool run = runsOn(srv) && !ph.isPaused;
     // Voices: another variant (sample channels K, speakers N) -> replaced in
     // place (action 4 keeps the position in the graph)
     const std::string vdef = voiceDefFor(ph);
@@ -2462,7 +2465,7 @@ void scGrainBoxPoly::createLiveRecorder(Playhead& ph, ofxSCServer* srv) {
         p->liveHead = pos;
         p->livePeaksDirty = true;
     });
-    l.rec->createAndRun(2, before->nodeID, getActive());   // addBefore
+    l.rec->createAndRun(2, before->nodeID, runsOn(srv));   // addBefore
     recOrder[srv].push_front(l.rec);
 }
 
@@ -2676,8 +2679,11 @@ void scGrainBoxPoly::updatePausing() {
         } else {
             ph.pauseAt = -1.0f;
             if(!ph.isPaused) continue;
-            forEngineSynth(ph, [](ofxSCSynth* s) { s->run(true); });
             ph.isPaused = false;
+            // only where the node itself runs (switched On, heard)
+            for(auto& [srv, s] : ph.synths) if(s) s->run(runsOn(srv));
+            for(auto& [srv, vs] : ph.voices) { const bool run = runsOn(srv); for(auto* v : vs) if(v) v->run(run); }
+            for(auto& [srv, o] : ph.outSynths) if(o) o->run(runsOn(srv));
         }
     }
 }
@@ -2697,28 +2703,59 @@ ofxSCSynth* scGrainBoxPoly::earliestRecorder(ofxSCServer* srv) {
     return (it != recOrder.end() && !it->second.empty()) ? it->second.front() : nullptr;
 }
 
+// Every top-level synth of the node on `only` (nullptr: on every server):
+// running only while the node is activated, switched On and heard
+// (scNode::runsOn), and its playhead is not paused by a mute.
+void scGrainBoxPoly::applyRunState(ofxSCServer* only) {
+    auto wanted = [only](ofxSCServer* srv) { return !only || srv == only; };
+    for(auto& ph : playheads) {
+        for(auto& [srv, s] : ph->synths) if(s && wanted(srv)) {
+            const bool on = runsOn(srv);
+            s->set("active", on ? 1.0f : 0.0f);
+            s->run(on && !ph->isPaused);
+        }
+        for(auto& [srv, vs] : ph->voices) if(wanted(srv)) {
+            const bool run = runsOn(srv) && !ph->isPaused;
+            for(auto* v : vs) if(v) v->run(run);
+        }
+        for(auto& [srv, o] : ph->outSynths) if(o && wanted(srv)) o->run(runsOn(srv) && !ph->isPaused);
+        for(auto& [srv, l] : ph->liveSC) if(l.rec && wanted(srv)) l.rec->run(runsOn(srv));
+        // the modulation's groups: its gates, envelopes, LFOs and routes
+        for(auto& [srv, M] : ph->modSC) if(wanted(srv)) {
+            const bool on = runsOn(srv);
+            if(M.src) M.src->run(on);
+            if(M.route) M.route->run(on);
+        }
+    }
+    for(auto& [srv, st] : fx) if(wanted(srv)) {
+        const bool on = runsOn(srv);
+        for(int stage : st.plan) if(st.synths[stage]) st.synths[stage]->run(on);
+    }
+    for(auto& [srv, d] : drySynths) if(d && wanted(srv)) d->run(runsOn(srv));
+}
+
 void scGrainBoxPoly::activate() {
     for(auto& ph : playheads) {
-        for(auto& [srv, s] : ph->synths) if(s) s->set("active", 1.0f);
-        forEngineSynth(*ph, [](ofxSCSynth* s) { s->run(true); });
-        for(auto& [srv, l] : ph->liveSC) if(l.rec) l.rec->run(true);
         ph->isPaused = false;   // updatePausing re-pauses muted playheads
         ph->pauseAt  = -1.0f;
     }
-    for(auto& [srv, st] : fx)
-        for(int stage : st.plan) if(st.synths[stage]) st.synths[stage]->run(true);
-    for(auto& [srv, d] : drySynths) if(d) d->run(true);
+    applyRunState(nullptr);
 }
 
 void scGrainBoxPoly::deactivate() {
-    for(auto& ph : playheads) {
-        for(auto& [srv, s] : ph->synths) if(s) s->set("active", 0.0f);
-        forEngineSynth(*ph, [](ofxSCSynth* s) { s->run(false); });
-        for(auto& [srv, l] : ph->liveSC) if(l.rec) l.rec->run(false);
-    }
-    for(auto& [srv, st] : fx)
-        for(int stage : st.plan) if(st.synths[stage]) st.synths[stage]->run(false);
-    for(auto& [srv, d] : drySynths) if(d) d->run(false);
+    applyRunState(nullptr);
+}
+
+// The On switch and Mixer Pro "Mute Pauses Sources" (scNode.h)
+void scGrainBoxPoly::applyGraphSuspended(ofxSCServer* srv, bool suspended) {
+    setGraphSuspendedFlag(srv, suspended);
+    applyRunState(srv);
+}
+
+// A published LFO output is read back from the server: keep running
+bool scGrainBoxPoly::keepsGraphAlive() const {
+    for(const auto& ph : playheads) if(ph && ph->mod && ph->mod->hasLfoOutputs()) return true;
+    return false;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2797,7 +2834,7 @@ void scGrainBoxPoly::createDry(ofxSCServer* srv) {
     setDryArgs(srv);
     auto out = outputBuses.find(srv);
     d->set("out", out != outputBuses.end() ? out->second : 0);
-    d->createAndRun(3, after->nodeID, getActive());
+    d->createAndRun(3, after->nodeID, runsOn(srv));
 }
 
 void scGrainBoxPoly::freeDry(ofxSCServer* srv) {
@@ -3022,7 +3059,7 @@ void scGrainBoxPoly::createFxSynths(ofxSCServer* srv, bool reuse) {
         s->set("out", fxOutBus(srv, i));
         if(stage == FX_COMP) s->set("grBus", st.grBus ? st.grBus->index : -1);
         sendFxParams(stage, s);
-        if(fresh) s->createAndRun(3, prev->nodeID, getActive());   // addAfter
+        if(fresh) s->createAndRun(3, prev->nodeID, runsOn(srv));   // addAfter
         else s->moveAfter(prev->nodeID);
         st.synths[stage] = s;
         prev = s;
@@ -7300,6 +7337,8 @@ void scGrainBoxPoly::ensureModResources(Playhead& ph, ofxSCServer* srv) {
         M.src->create(2, ctl->nodeID);       // addBefore the control synth
         M.route = new ofxSCGroup(srv);
         M.route->create(3, M.src->nodeID);   // after the sources
+        // the node is deactivated, switched Off or unheard: paused with the rest
+        if(!runsOn(srv)) { M.src->run(false); M.route->run(false); }
     }
     const int gb = M.gateBus ? M.gateBus->index : 0;
     const bool changed = !M.created || M.voices != nv || resized;

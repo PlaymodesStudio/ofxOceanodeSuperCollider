@@ -295,6 +295,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        addOnToggle();   // On switch in the node bar (scNode.h)
         scGlobalPitch::follow(this, true, [this](){ for(auto& [server, st] : states) sendModArgs(server, st); });
         timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                        [this](){ return publishedKeys; });
@@ -513,7 +514,7 @@ public:
     void createSynth(ofxSCServer* server) override {
         auto it = states.find(server);
         if(it == states.end() || !it->second.synth) return;
-        for(auto& e:it->second.banks)if(!e.second.synth->isCreated())e.second.synth->createAndRun(0,1,getActive());
+        for(auto& e:it->second.banks)if(!e.second.synth->isCreated())e.second.synth->createAndRun(0,1,runsOn(server));
         createMod(server, it->second);   // the head: before the synth
     }
     void free(ofxSCServer* server) override {
@@ -561,12 +562,24 @@ public:
         sendGate(server, st);
         sendModArgs(server, st);
     }
-    void activate() override {
-        for(auto& [s, st] : states){ for(auto& e:st.banks)e.second.synth->run(true); if(st.modGroup) st.modGroup->run(true); }
+    // Every top-level node of the box on `server`: running only while the node
+    // is activated, switched On and heard (scNode::runsOn)
+    void applyRunState(ofxSCServer* server){
+        const auto it = states.find(server);
+        if(it == states.end()) return;
+        const bool run = runsOn(server);
+        for(auto& e : it->second.banks) if(e.second.synth) e.second.synth->run(run);
+        if(it->second.modGroup) it->second.modGroup->run(run);
     }
-    void deactivate() override {
-        for(auto& [s, st] : states){ for(auto& e:st.banks)e.second.synth->run(false); if(st.modGroup) st.modGroup->run(false); }
+    void activate() override { for(auto& [s, st] : states) applyRunState(s); }
+    void deactivate() override { for(auto& [s, st] : states) applyRunState(s); }
+    // The On switch and Mixer Pro "Mute Pauses Sources" (scNode.h)
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override {
+        setGraphSuspendedFlag(server, suspended);
+        applyRunState(server);
     }
+    // A published LFO output is read back from the server: keep running
+    bool keepsGraphAlive() const override { return mod.hasLfoOutputs(); }
     void resendParametersForNRT() override {
         for(auto& [server, st] : states){ uploadTables(server, true); sendAll(server, true); sendGate(server, st); sendModArgs(server, st); }
         mod.resend();
@@ -825,8 +838,8 @@ private:
             ofxSCSynth* anchor=nullptr;
             for(const auto& e:st.banks)if(e.second.synth->isCreated()){anchor=e.second.synth;break;}
             for(auto& e:st.banks)if(!e.second.synth->isCreated()){
-                if(anchor)e.second.synth->createAndRun(2,anchor->nodeID,getActive());
-                else {e.second.synth->createAndRun(0,1,getActive());anchor=e.second.synth;}
+                if(anchor)e.second.synth->createAndRun(2,anchor->nodeID,runsOn(server));
+                else {e.second.synth->createAndRun(0,1,runsOn(server));anchor=e.second.synth;}
             }
             if(st.modGroup)st.modGroup->moveBefore(st.synth->nodeID);
         }
@@ -930,7 +943,7 @@ private:
         st.modCreated = true;
         mod.create(server, st.modSources->nodeID, st.modRoutes->nodeID, st.gateBus ? st.gateBus->index : 0);
         createGate(server, st);
-        if(!getActive()) st.modGroup->run(false);
+        if(!runsOn(server)) st.modGroup->run(false);
         sendModArgs(server, st);
     }
     void freeMod(ofxSCServer* server, ServerState& st, bool sendFree){

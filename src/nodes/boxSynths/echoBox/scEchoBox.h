@@ -65,6 +65,9 @@ public:
     void setBpm(float bpm) override;
     void activate() override;
     void deactivate() override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
+    // A published LFO output is read back from the server: keep running
+    bool keepsGraphAlive() const override { return modulation.hasLfoOutputs(); }
 
     void buildSynth(ofxSCServer* s) override;
     void createSynth(ofxSCServer* s) override;
@@ -124,6 +127,7 @@ private:
     };
     std::vector<serverManager*> servers;
     std::map<ofxSCServer*, ServerState> states;
+    void applyRunState(ofxSCServer* server, ServerState& st);
 
     // ── Publishable controls ─────────────────────────────────────────────────
     struct Control {

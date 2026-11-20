@@ -78,6 +78,7 @@ public:
     void draw(ofEventArgs&) override;
     void activate() override;
     void deactivate() override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
 
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;
@@ -326,6 +327,7 @@ private:
     // ── State ────────────────────────────────────────────────────────────────
     std::vector<serverManager*> servers;
     std::map<ofxSCServer*, ServerState> states;
+    void applyRunState(ofxSCServer* server, ServerState& st);
     std::shared_ptr<nodePort> gateInput = std::make_shared<nodePort>();   // audio into Gate
     std::shared_ptr<nodePort> resetInput = std::make_shared<nodePort>();  // audio into Reset
     int silentBus = -1;

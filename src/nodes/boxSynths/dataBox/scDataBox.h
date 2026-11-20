@@ -64,6 +64,8 @@ public:
     void resetInputBusses(ofxSCServer*, int) override {}
     void activate() override;
     void deactivate() override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
+    void applyRunState(ofxSCServer* server);
 
 private:
     // ── Decoding (background) ────────────────────────────────────────────────

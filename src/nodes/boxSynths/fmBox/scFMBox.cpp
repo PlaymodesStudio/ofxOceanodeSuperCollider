@@ -81,6 +81,7 @@ template<class T> void scFMBox::reg(ofParameter<T>& p, std::function<void()> sen
     listeners.push(p.newListener([this, &p, send](T&) { snaps.morph.edited(p); if(!restoring) send(); }));
 }
 void scFMBox::setup() {
+    addOnToggle();   // On switch in the node bar (scNode.h)
     scGlobalPitch::follow(this, true, [this](){
         for(auto& [s, st] : states) for(int i = 0; i < st.builtVoices; ++i) if(auto* v = st.voices[i]) v->set("gtrbus", scGlobalPitch::bus(this, s));
     });
@@ -487,7 +488,7 @@ void scFMBox::createSynth(ofxSCServer* server) {
     for(int i=0;i<st.builtVoices;++i) st.voices[i]->createAndRun(1,st.groups[SlVoice]->nodeID,true);
     st.spread->createAndRun(1,st.groups[SlSpread]->nodeID,true);
     routeChain(st);
-    if(!getActive() || isGraphSuspended(server)) st.root->run(false);
+    if(!runsOn(server)) st.root->run(false);
 }
 void scFMBox::release(ofxSCServer* server, State& st) {
     if(st.created && st.root) st.root->free();
@@ -527,7 +528,7 @@ void scFMBox::setOutputBus(ofxSCServer* s,int,int bus) { auto& st=states[s]; st.
 int scFMBox::getOutputBusIndex(ofxSCServer* s,int) { auto it=states.find(s); return it==states.end() ? -1 : it->second.out; }
 void scFMBox::setInputBus(ofxSCServer* s,scNode* node,int bus) { auto& st=states[s]; if(gateIn.take(s,node,bus)|pitchIn.take(s,node,bus)) sendNotes(s,st); }
 void scFMBox::resetInputBusses(ofxSCServer* s,int) { gateIn.reset(s);pitchIn.reset(s);sendNotes(s,states[s]); }
-void scFMBox::activate() { for(auto& [s,st]:states) if(st.created) st.root->run(!isGraphSuspended(s)); }
+void scFMBox::activate() { for(auto& [s,st]:states) if(st.created) st.root->run(runsOn(s)); }
 void scFMBox::deactivate() { for(auto& [s,st]:states) if(st.created) st.root->run(false); }
 void scFMBox::setBpm(float v) { bpm=std::max(1.0f,v);mod.setBpm(bpm);sendAll(); }
 void scFMBox::resendParametersForNRT() {
@@ -1645,5 +1646,5 @@ bool scFMBox::liveVca() const {
 void scFMBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
     setGraphSuspendedFlag(server, suspended);
     const auto it = states.find(server);
-    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
+    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(runsOn(server));
 }

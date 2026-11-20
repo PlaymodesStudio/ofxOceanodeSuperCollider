@@ -254,6 +254,11 @@ public:
     void setBpm(float bpm)    override;
     void activate()           override;
     void deactivate()         override;
+    void applyGraphSuspended(ofxSCServer* srv, bool suspended) override;
+    void applyRunState(ofxSCServer* srv);
+    std::map<ofxSCServer*, bool> ranOn;   // the run state last sent, per server
+    // "Gate" is read back from the server by the patch: never paused by a muted strip
+    bool keepsGraphAlive() const override { return true; }
 
     // ── scNode interface ──────────────────────────────────────────────────────
     void buildSynth(ofxSCServer* s)                     override;

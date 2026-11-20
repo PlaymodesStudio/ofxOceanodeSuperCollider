@@ -92,6 +92,7 @@ scPolyComb::~scPolyComb() {
 }
 
 void scPolyComb::setup() {
+    addOnToggle();   // On switch in the node bar (scNode.h)
     // voice-morph renderers follow their parent's choice (transposeOwner)
     if(!voiceRenderer) scGlobalPitch::follow(this, true, [this](){
         auto resend = [](scPolyComb* c){
@@ -1122,7 +1123,7 @@ void scPolyComb::createSynth(ofxSCServer* server) {
         g->create(1, st.root->nodeID);       // in slot order
     }
     st.created = true;
-    if(!getActive() || isGraphSuspended(server)) st.root->run(false);
+    if(!runsOn(server)) st.root->run(false);
     createAll(server, st);
 }
 
@@ -1186,7 +1187,7 @@ void scPolyComb::resendParametersForNRT() {
     modulation.resend();
 }
 
-void scPolyComb::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(!isGraphSuspended(s)); }
+void scPolyComb::activate() { for(auto& [s, st] : states) if(st.created) st.root->run(runsOn(s)); }
 void scPolyComb::deactivate() { for(auto& [s, st] : states) if(st.created) st.root->run(false); }
 
 void scPolyComb::setBpm(float bpm) {
@@ -3348,5 +3349,5 @@ void scPolyComb::morphEnd(bool completed) {
 void scPolyComb::applyGraphSuspended(ofxSCServer* server, bool suspended) {
     setGraphSuspendedFlag(server, suspended);
     const auto it = states.find(server);
-    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(getActive() && !suspended);
+    if(it != states.end() && it->second.created && it->second.root) it->second.root->run(runsOn(server));
 }

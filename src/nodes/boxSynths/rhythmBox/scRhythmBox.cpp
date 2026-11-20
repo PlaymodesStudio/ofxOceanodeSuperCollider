@@ -115,6 +115,9 @@ scRhythmBox::~scRhythmBox() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scRhythmBox::setup() {
+    addOnToggle();   // On switch in the node bar (scNode.h)
+    // "Mix" is not one of scNode's outputs: it asks for the graph update itself
+    listeners.push(nodeOn.newListener([this](bool&){ mixOutParam = mixOutParam; }));
     // Minimal node: Show and outputs; window controls publish on demand.
     addParameter(showWindow.set("Show",  false));
     registerControl(resetSeq.set("Reset", 0, 0, 1));
@@ -550,15 +553,31 @@ void scRhythmBox::setBpm(float bpm) {
     if(!isSyncing()) sendBpmToAll();
 }
 
+// The track synths on `srv`: running only while the node is activated,
+// switched On and heard (scNode::runsOn)
+void scRhythmBox::applyRunState(ofxSCServer* srv) {
+    const auto it = trackSynths.find(srv);
+    if(it == trackSynths.end()) return;
+    const bool run = runsOn(srv);
+    // Resuming: its clocks stood still, anchored again on the transport
+    auto ran = ranOn.emplace(srv, true).first;
+    if(run && !ran->second && syncToTransportP.get()) handleSyncChanged(true);
+    ran->second = run;
+    for(auto* s : it->second) if(s) s->run(run);
+}
+
 void scRhythmBox::activate() {
-    if(syncToTransportP.get()) handleSyncChanged(true);
-    for(auto& [srv, synths] : trackSynths)
-        for(auto* s : synths) if(s) s->run(true);
+    for(auto& [srv, synths] : trackSynths) applyRunState(srv);
 }
 
 void scRhythmBox::deactivate() {
-    for(auto& [srv, synths] : trackSynths)
-        for(auto* s : synths) if(s) s->run(false);
+    for(auto& [srv, synths] : trackSynths) applyRunState(srv);
+}
+
+// The On switch and Mixer Pro "Mute Pauses Sources" (scNode.h)
+void scRhythmBox::applyGraphSuspended(ofxSCServer* srv, bool suspended) {
+    setGraphSuspendedFlag(srv, suspended);
+    applyRunState(srv);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -841,7 +860,7 @@ void scRhythmBox::createTrackSynth(ofxSCServer* srv, int ti) {
     // Add to head of default group so reverse-iteration ordering is correct
     // (same as scFM7Drone — serverManager iterates newNodesList in reverse
     // and relies on addToHead so sources end up before outputs in SC).
-    s->createAndRun(0, 1, getActive());
+    s->createAndRun(0, 1, runsOn(srv));
 
     // Queue step arrays via the pStep* ofParameter listeners.
     // At this point s->created is still false (/n_go hasn't arrived yet), so

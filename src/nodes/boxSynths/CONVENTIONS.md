@@ -509,23 +509,41 @@ who is unheard (`updateGraphSuspension`); a node takes part by overriding
 `scNode::applyGraphSuspended(server, suspended)`:
 
 - Call `setGraphSuspendedFlag(server, suspended)` and send the run state of the
-  node's **top-level** synths or root group as `getActive() && !suspended`.
-- AND `!isGraphSuspended(server)` into every other place that sends that run
-  state: `createSynth`, `activate`, replace-in-place (`/s_new` action 4) and
+  node's **top-level** synths or root group as `runsOn(server)`: activated,
+  switched On and not suspended.
+- Send `runsOn(server)` in every other place that sends that run state too:
+  `createSynth`, `activate`, replace-in-place (`/s_new` action 4) and
   rebuilds. A suspended node must not come back running on its own.
 - A node with one root group pauses that group only: scsynth keeps each
   child's own run flag, so effects or voices the node paused itself stay so.
+- A node with several top-level synths has one `applyRunState(server)` that
+  sends all of them, keeping its inner flags (an effect whose tail is over, a
+  muted playhead); `activate`, `deactivate` and `applyGraphSuspended` call it.
 - A transport-locked player re-anchors on resume, as it does in `activate`.
 - A node whose data outputs feed the patch overrides `keepsGraphAlive()`
   instead and keeps running.
 
 A node without the override keeps running unheard; its upstream can still be
-paused. Covered today: FMBox, AliasingBox, SteamPipeBox, PhysicalBox,
-AnalogBox, PolyComb, AdditiveBox, DrumKitBox, SampleBox, WavetableBox,
-MetroBox, SpectralFilterBox and every `scSynthdef` node. Not yet: GrainBox,
-GrainFxBox, PulsarBox, EchoBox, SlicerBox, DataBox, RhythmBox (several
-top-level synths each). ChordBox, HarmonyBox, ArpeggiatorBox and EuclideanBox
-keep running because of their data outputs.
+paused. Covered today: every Box and every `scSynthdef` node. ChordBox,
+HarmonyBox, ArpeggiatorBox, EuclideanBox and RhythmBox are never paused by a
+muted strip because of their data outputs, and neither is a Box with a
+published LFO output.
+
+## The On switch in the node bar
+
+Every Box has the checkbox the SynthDef nodes have: `addOnToggle()` first
+thing in `setup()` (`scNode.h`). Off pauses the node on the server
+(`/n_run 0`) through the same `applyGraphSuspended` path, so it costs a Box
+nothing beyond the contract above. The node keeps its synths, buses and place
+in the graph, and comes back with its tails where they stopped.
+
+- A source gives silence while Off. An effect calls `addOnToggle(true)` and
+  its consumers read its first input instead (SpectralFilterBox, EchoBox,
+  GrainFxBox).
+- On is a node parameter, saved with the patch. It is not one of the Box's
+  registered controls: snapshots and morphs leave it alone.
+- An output that is not one of `scNode`'s `outputs` (RhythmBox "Mix") asks for
+  the graph update itself, from a listener on `nodeOn`.
 
 ## Current coverage
 

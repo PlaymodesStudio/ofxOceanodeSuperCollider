@@ -95,6 +95,8 @@ public:
     void createSynth(ofxSCServer*) override;
     void free(ofxSCServer*) override;
     void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
+    void activate() override;
+    void deactivate() override;
     // A published LFO output is read back from the server: keep running
     bool keepsGraphAlive() const override {
         for(const auto& p : pads) if(p && p->mod.hasLfoOutputs()) return true;

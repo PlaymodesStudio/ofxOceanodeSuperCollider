@@ -103,6 +103,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        addOnToggle();   // On switch in the node bar (scNode.h)
         addTimeSourceParameter(); // which timeline it follows (inspector)
         timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
                        [this](){ return publishedKeys; });
@@ -263,7 +264,7 @@ public:
         it->second.synth->set("run", 0.0f);   // holds until the next update's hard anchor
         forceHardAnchor = true;
         follower.requestAnchor();
-        it->second.synth->createAndRun(0, 1, getActive() && !isGraphSuspended(server));
+        it->second.synth->createAndRun(0, 1, runsOn(server));
         // a new synth: its clocks start again
         if(clockMode.get() == CLOCK_INTERNAL) resetFreeClock();
         if(clockMode.get() == CLOCK_TRIGGER) resetTriggerCount();
@@ -310,7 +311,7 @@ public:
         sendTrigInput(st);
     }
     void activate() override {
-        for(auto& [server, st] : servers) if(st.synth) st.synth->run(!isGraphSuspended(server));
+        for(auto& [server, st] : servers) if(st.synth) st.synth->run(runsOn(server));
         forceHardAnchor = true;
         follower.requestAnchor();
     }
@@ -322,9 +323,9 @@ public:
     void applyGraphSuspended(ofxSCServer* server, bool suspended) override {
         setGraphSuspendedFlag(server, suspended);
         const auto it = servers.find(server);
-        if(it != servers.end() && it->second.synth) it->second.synth->run(getActive() && !suspended);
+        if(it != servers.end() && it->second.synth) it->second.synth->run(runsOn(server));
         // It was paused: re-positioned without firing the missed ticks
-        if(!suspended){ forceHardAnchor = true; follower.requestAnchor(); }
+        if(runsOn(server)){ forceHardAnchor = true; follower.requestAnchor(); }
     }
     // The recorder writes the patch's state at score time zero: the note
     // buffer too (written while it was arming, it never reached the score)

@@ -92,6 +92,7 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     void setup() override {
+        addOnToggle();   // On switch in the node bar (scNode.h)
         using namespace harmonybox;
         description = "A bank of chords that work together, played by Index: Generate a progression in a style "
                       "(functional, jazz, Glass, Reich, neo-Riemannian) and key, lock the chords you like, type "
@@ -263,7 +264,7 @@ public:
         auto& st = it->second;
         st.group->create(0, 1);
         st.created = true;
-        if(!getActive() || isGraphSuspended(server)) st.group->run(false);
+        if(!runsOn(server)) st.group->run(false);
         st.clock = new ofxSCSynth("ChordBoxClock", server);
         st.voices = new ofxSCSynth("ChordBoxVoices", server);
         sendStatic(st);
@@ -314,7 +315,7 @@ public:
         st.server = server;
         sendIndexInput(st);
     }
-    void activate() override { for(auto& [server, st] : servers) if(st.group && st.created) st.group->run(!isGraphSuspended(server)); }
+    void activate() override { for(auto& [server, st] : servers) if(st.group && st.created) st.group->run(runsOn(server)); }
     void deactivate() override { for(auto& [server, st] : servers) if(st.group && st.created) st.group->run(false); }
     // Mixer Pro "Mute Pauses Sources" (scNode.h): the group holds the clock and the voices
     // Its note / phase outputs feed the patch as data: it keeps running
@@ -323,7 +324,7 @@ public:
     void applyGraphSuspended(ofxSCServer* server, bool suspended) override {
         setGraphSuspendedFlag(server, suspended);
         const auto it = servers.find(server);
-        if(it != servers.end() && it->second.group && it->second.created) it->second.group->run(getActive() && !suspended);
+        if(it != servers.end() && it->second.group && it->second.created) it->second.group->run(runsOn(server));
     }
     // The recorder writes the patch's state at score time zero: the tables too
     void resendParametersForNRT() override {

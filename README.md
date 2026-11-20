@@ -222,8 +222,9 @@ Run the headless input regression tests with `python3 tools/keyboard_piano_test/
 
 ## SynthDef On/Off
 
-SynthDef nodes (`scSynthdef` and legacy `scOldSynthdef`) have an `On`
-boolean, enabled by default. An unlabeled checkbox appears just to the right
+SynthDef nodes (`scSynthdef` and legacy `scOldSynthdef`) and every Box synth
+have an `On` boolean, enabled by default. (An effect Box that is Off passes its
+input through, like a SynthDef; a source Box gives silence.) An unlabeled checkbox appears just to the right
 of the collapse arrow in the node header, with a connectable inlet that also works when collapsed.
 Connect a Router B to expose it inside a macro; the value saves with presets.
 The header display requires an ofxOceanode version with
@@ -238,7 +239,8 @@ Macro activation respects the switch. No `.scd` changes are needed.
 
 Pausing freezes delay/reverb state and cuts the current tail; resuming can
 restore stored audio. Switching currently changes routing directly, without
-a crossfade. Custom C++ instrument/effect nodes are unchanged.
+a crossfade. Other custom C++ nodes are unchanged; one gets the switch with
+`scNode::addOnToggle()` (see `src/nodes/boxSynths/CONVENTIONS.md`).
 
 Run the routing regression tests with `sh tools/audio_routing_test/run.sh`.
 

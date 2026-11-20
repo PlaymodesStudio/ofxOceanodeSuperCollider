@@ -27,7 +27,46 @@ void scNode::clearExternalTaps(ofxSCServer* server){
 nodePort scNode::resolveAudioSource(nodePort port){
     return scResolveAudioSource(port,
         [](scNode* node){ return node->isAudioEnabled(); },
-        [](scNode* node){ return node->inputs.empty() ? nodePort() : node->inputs.front().get(); });
+        [](scNode* node){ return node->getBypassSource(); });
+}
+
+nodePort scNode::getBypassSource() const {
+    if(hasOnToggle && !onPassesInput) return nodePort();
+    return inputs.empty() ? nodePort() : inputs.front().get();
+}
+
+void scNode::addOnToggle(bool passInputWhenOff){
+    if(hasOnToggle) return;
+    hasOnToggle = true;
+    onPassesInput = passInputWhenOff;
+    // Host control, like scSynthdef's: never sent to a synth
+    ofxOceanodeParameterFlags onFlags = ofxOceanodeParameterFlags_DisableOutConnection;
+#ifdef OFXOCEANODE_HAS_HEADER_TOGGLE
+    onFlags |= ofxOceanodeParameterFlags_HeaderToggle;
+#endif
+    addParameter(nodeOn.set("On", true), onFlags);
+    listeners.push(nodeOn.newListener([this](bool&){
+        // Part of the graph (what consumers read): have the Outputs rebuild it
+        for(auto& output : outputs) output = output;
+    }));
+}
+
+void scNode::applyAudioEnabled(ofxSCServer* server){
+    if(!hasOnToggle) return;
+    const bool on = nodeOn.get();
+    auto applied = appliedNodeOn.find(server);
+    if(applied == appliedNodeOn.end()) applied = appliedNodeOn.emplace(server, true).first;
+    if(applied->second == on) return;
+    applied->second = on;
+    applyGraphSuspended(server, isGraphSuspended(server));
+}
+
+int scNode::getBypassedOutputBus(ofxSCServer* server, int index) const {
+    if(!hasOnToggle || nodeOn.get()) return -1;
+    const auto node = bypassedOutputBuses.find(server);
+    if(node == bypassedOutputBuses.end()) return -1;
+    const auto bus = node->second.find(index);
+    return bus == node->second.end() ? -1 : bus->second;
 }
 
 int nodePort::getBusIndex(ofxSCServer* server) const{
@@ -36,6 +75,10 @@ int nodePort::getBusIndex(ofxSCServer* server) const{
     if(server != nullptr && scNode::graphTraversalServer == nullptr && scNode::tapSuppress == 0
        && scNode::externalTaps[server].insert(nodeRef).second)
         scNode::externalTapEpoch++;
+    // Switched Off: readers outside the graph (a scope, a recorder) get what
+    // its consumers get
+    const int bypassed = nodeRef->getBypassedOutputBus(server, index);
+    if(bypassed >= 0) return bypassed;
     return nodeRef->getOutputBusIndex(server, index);
 }
 

@@ -113,6 +113,7 @@ void scEchoBox::reg(ofParameter<T>& p, std::function<void()> send) {
 }
 
 void scEchoBox::setup() {
+    addOnToggle(true);   // On switch in the node bar: Off passes the input through
     timeline.setup(this, [this](const std::string& k){ publish(k); }, [this](const std::string& k){ unpublish(k); },
                    [this](){ return publishedKeys; });
     addParameter(showWindow.set("Show", false));
@@ -416,7 +417,7 @@ void scEchoBox::createTap(ofxSCServer* server, ServerState& st, int t) {
     s->set("vis", st.vis ? st.vis->index + t : 0);
     sendTap(s, t);
     setModArgs(server, st, s, t);
-    s->createAndRun(2, st.rvb ? st.rvb->nodeID : st.mix->nodeID, getActive());   // addBefore
+    s->createAndRun(2, st.rvb ? st.rvb->nodeID : st.mix->nodeID, runsOn(server));   // addBefore
     st.taps[t] = s;
 }
 
@@ -445,10 +446,10 @@ void scEchoBox::updateReverb(ofxSCServer* server, ServerState& st) {
             sendRvb(st.rvb);
             st.rvb->set("in", st.wetA ? st.wetA->index : 0);
             st.rvb->set("out", st.wetB ? st.wetB->index : 0);
-            st.rvb->createAndRun(2, st.mix->nodeID, getActive());   // addBefore the mix
+            st.rvb->createAndRun(2, st.mix->nodeID, runsOn(server));   // addBefore the mix
         }else if(st.rvb){
             sendRvb(st.rvb);
-            if(!st.rvbRunning && getActive()) st.rvb->run(true);
+            if(!st.rvbRunning && runsOn(server)) st.rvb->run(true);
         }
         st.rvbRunning = scFxCanRoute(st.rvb, server);
         st.rvbOffAt = -1.0f;
@@ -518,17 +519,17 @@ void scEchoBox::rebuildChannels() {
             replace(st.taps[t], "EchoBoxTap" + ofToString(n()), [&](ofxSCSynth* s){
                 s->set("in", st.inBus); s->set("out", st.wetA ? st.wetA->index : 0);
                 s->set("vis", st.vis ? st.vis->index + t : 0); sendTap(s, t); setModArgs(server, st, s, t);
-            }, getActive());
+            }, runsOn(server));
         replace(st.rvb, "boxMicroSpace" + ofToString(n()), [&](ofxSCSynth* s){
             s->set("in", st.wetA ? st.wetA->index : 0); s->set("out", st.wetB ? st.wetB->index : 0); sendRvb(s);
-        }, getActive() && st.rvbRunning);
+        }, runsOn(server) && st.rvbRunning);
         replace(st.mix, "EchoBoxMix" + ofToString(n()), [&](ofxSCSynth* s){
             s->set("in", st.inBus); s->set("out", st.outBus); s->set("vis", st.vis ? st.vis->index + MAX_TAPS : 0);
             const bool viaRvb = st.rvb && st.rvbRunning && st.wetB;
             s->set("wet", viaRvb ? st.wetB->index : (st.wetA ? st.wetA->index : 0));
             sendMix(s);
             setModArgs(server, st, s, 0);
-        }, getActive());
+        }, runsOn(server));
         routeWet(st);
         server->setBLatency(wasLatency);
     }
@@ -560,7 +561,7 @@ void scEchoBox::createMod(ofxSCServer* server, ServerState& st) {
     st.modRoutes->create(1, st.modGroup->nodeID);
     st.modCreated = true;
     modulation.create(server, st.modSources->nodeID, st.modRoutes->nodeID, 0);
-    if(!getActive()) st.modGroup->run(false);
+    if(!runsOn(server)) st.modGroup->run(false);
 }
 
 void scEchoBox::freeMod(ofxSCServer* server, ServerState& st, bool sendFree) {
@@ -590,7 +591,7 @@ void scEchoBox::createSynth(ofxSCServer* server) {
     st.mix->set("wet", st.wetA ? st.wetA->index : 0);
     st.mix->set("vis", st.vis ? st.vis->index + MAX_TAPS : 0);
     sendMix(st.mix);
-    st.mix->createAndRun(0, 1, getActive());
+    st.mix->createAndRun(0, 1, runsOn(server));
     createMod(server, st);           // the head: before the mix and the taps
     setModArgs(server, st, st.mix, 0);
     updateReverb(server, st);
@@ -655,21 +656,22 @@ void scEchoBox::resendParametersForNRT() {
     modulation.resend();
 }
 
-void scEchoBox::activate() {
-    for(auto& [server, st] : states){
-        for(auto* t : st.taps) if(t) t->run(true);
-        if(st.rvb && st.rvbRunning) st.rvb->run(true);
-        if(st.mix) st.mix->run(true);
-        if(st.modCreated) st.modGroup->run(true);
-    }
+// Every top-level node of the box on `server`: running only while the node is
+// activated, switched On and heard (scNode::runsOn)
+void scEchoBox::applyRunState(ofxSCServer* server, ServerState& st) {
+    const bool run = runsOn(server);
+    for(auto* t : st.taps) if(t) t->run(run);
+    if(st.rvb) st.rvb->run(run && st.rvbRunning);
+    if(st.mix) st.mix->run(run);
+    if(st.modCreated) st.modGroup->run(run);
 }
-void scEchoBox::deactivate() {
-    for(auto& [server, st] : states){
-        for(auto* t : st.taps) if(t) t->run(false);
-        if(st.rvb) st.rvb->run(false);
-        if(st.mix) st.mix->run(false);
-        if(st.modCreated) st.modGroup->run(false);
-    }
+void scEchoBox::activate() { for(auto& [server, st] : states) applyRunState(server, st); }
+void scEchoBox::deactivate() { for(auto& [server, st] : states) applyRunState(server, st); }
+// The On switch and Mixer Pro "Mute Pauses Sources" (scNode.h)
+void scEchoBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    const auto it = states.find(server);
+    if(it != states.end()) applyRunState(server, it->second);
 }
 
 void scEchoBox::setBpm(float bpm) {
