@@ -50,6 +50,7 @@ scVelvetReverb::~scVelvetReverb() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void scVelvetReverb::setup() {
+    addOnToggle(true);   // On switch in the node bar: Off passes the input through
     // Identical layout to scConvolution + lpf/hpf/fbAmt
     addParameter(numChannels.set("N Chan",      1,     1,    16));
     addParameter(wet.set(       "Wet",          0.0f,  0.0f, 1.0f));
@@ -77,7 +78,7 @@ void scVelvetReverb::setup() {
             ofxSCSynth* ns    = new ofxSCSynth(getSynthDefName(), pair.first);
             pair.second = ns;
             resendParams.notify();
-            ns->createAndRun(4, oldID, getActive());
+            ns->createAndRun(4, oldID, runsOn(pair.first));
             delete old;
         }
         oldNumChannels = ch;
@@ -177,8 +178,14 @@ void scVelvetReverb::update(ofEventArgs& args) {
 // activate / deactivate
 // ─────────────────────────────────────────────────────────────────────────────
 
-void scVelvetReverb::activate()   { for(auto& p : synthInstances) if(p.second) p.second->run(true);  }
+void scVelvetReverb::activate()   { for(auto& p : synthInstances) if(p.second) p.second->run(runsOn(p.first));  }
 void scVelvetReverb::deactivate() { for(auto& p : synthInstances) if(p.second) p.second->run(false); }
+
+void scVelvetReverb::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    auto it = synthInstances.find(server);
+    if(it != synthInstances.end() && it->second) it->second->run(runsOn(server));
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // scNode interface — verbatim scConvolution
@@ -202,7 +209,7 @@ void scVelvetReverb::buildSynth(ofxSCServer* server) {
 void scVelvetReverb::createSynth(ofxSCServer* server) {
     if(!server || !synthInstances.count(server)) return;
     resendParams.notify();
-    synthInstances[server]->createAndRun(0, 1, getActive());
+    synthInstances[server]->createAndRun(0, 1, runsOn(server));
 }
 
 void scVelvetReverb::free(ofxSCServer* server) {
@@ -342,7 +349,7 @@ void scVelvetReverb::swapAndReplaceWithNewSpec(ofxSCServer* srv) {
     ofxSCSynth* ns    = new ofxSCSynth(getSynthDefName(), srv);
     synthInstances[srv] = ns;
     resendParams.notify();
-    ns->createAndRun(4, oldID, getActive());
+    ns->createAndRun(4, oldID, runsOn(srv));
     delete old;
 
     if(oldActive) { oldActive->free(); delete oldActive; }

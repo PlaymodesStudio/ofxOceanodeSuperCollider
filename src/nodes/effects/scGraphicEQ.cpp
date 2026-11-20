@@ -79,6 +79,7 @@ vector<float> scGraphicEQ::qToRq(const vector<float>& qVec, int nCh) const {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void scGraphicEQ::setup() {
+    addOnToggle(true);   // On switch in the node bar: Off passes the input through
     timeline.setup(this, nullptr, nullptr, nullptr);
     // ── Core ────────────────────────────────────────────────────────────────
     addParameter(showWindow.set("Show", false));
@@ -171,7 +172,7 @@ void scGraphicEQ::setup() {
             }
             resendParams.notify();
             for(auto& [srv, oldID] : oldIDs) {
-                synthInstances[srv]->createAndRun(4, oldID, getActive()); // kAddAction_replace
+                synthInstances[srv]->createAndRun(4, oldID, runsOn(srv)); // kAddAction_replace
                 // fftanalyzerN depends on the channel count too
                 if(fftSynthInstances.count(srv)) createFFTSynth(srv);
             }
@@ -269,9 +270,17 @@ void scGraphicEQ::update(ofEventArgs &args) {
 
 void scGraphicEQ::activate() {
     for(auto& pair : synthInstances)
-        if(pair.second) pair.second->run(true);
+        if(pair.second) pair.second->run(runsOn(pair.first));
     for(auto& pair : fftSynthInstances)
-        if(pair.second) pair.second->run(true);
+        if(pair.second) pair.second->run(runsOn(pair.first));
+}
+
+void scGraphicEQ::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    auto synth = synthInstances.find(server);
+    if(synth != synthInstances.end() && synth->second) synth->second->run(runsOn(server));
+    auto fft = fftSynthInstances.find(server);
+    if(fft != fftSynthInstances.end() && fft->second) fft->second->run(runsOn(server));
 }
 
 void scGraphicEQ::deactivate() {
@@ -296,7 +305,7 @@ void scGraphicEQ::createSynth(ofxSCServer* server) {
     
     try {
         resendParams.notify();
-        synthInstances[server]->createAndRun(0, 1, getActive());
+        synthInstances[server]->createAndRun(0, 1, runsOn(server));
 
         if(fftWanted()) createFFTSynth(server);
 
@@ -440,7 +449,7 @@ void scGraphicEQ::createFFTSynth(ofxSCServer* server) {
         if(inBus < 0 && inputBuses.count(server) && !inputBuses[server].empty())
             inBus = inputBuses[server].begin()->second;
 
-        fftSynth->createAndRun(3, synthInstances[server]->nodeID, getActive()); // addAfter
+        fftSynth->createAndRun(3, synthInstances[server]->nodeID, runsOn(server)); // addAfter
         if(inBus >= 0) fftSynth->set("in", inBus);
         fftSynth->set("fftbus", bus->index);
 

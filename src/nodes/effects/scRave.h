@@ -112,6 +112,7 @@ public:
     void setup() override {
         description = "RAVE neural timbre transfer (nn.ar). Load a .ts model; the channel count follows the model.";
 
+        addOnToggle(true);   // On switch in the node bar: Off passes the input through
         // Audio I/O — inputs before parameters, outputs last
         addInput("In");
 
@@ -218,11 +219,16 @@ public:
 
     void activate() override {
         for(auto& kv : states)
-            if(kv.second.group && kv.second.group->isCreated()) kv.second.group->run(true);
+            if(kv.second.group && kv.second.group->isCreated()) kv.second.group->run(runsOn(kv.first));
     }
     void deactivate() override {
         for(auto& kv : states)
             if(kv.second.group && kv.second.group->isCreated()) kv.second.group->run(false);
+    }
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override {
+        setGraphSuspendedFlag(server, suspended);
+        auto it = states.find(server);
+        if(it != states.end() && it->second.group && it->second.group->isCreated()) it->second.group->run(runsOn(server));
     }
 
     // ── scNode audio-graph interface ──────────────────────────────────────────
@@ -239,7 +245,7 @@ public:
         ServerState& st = it->second;
 
         st.group->create(0, 1, false);
-        if(!getActive()) st.group->run(false);
+        if(!runsOn(server)) st.group->run(false);
 
         const string abs = resolvedPath();
         if(abs.empty()) { updateStatus(); return; }

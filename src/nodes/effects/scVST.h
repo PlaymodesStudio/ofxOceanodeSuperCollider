@@ -155,6 +155,7 @@ public:
     void activate() override;
     
     void deactivate() override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
 
 	// Preset lifecycle methods - declared as overrides, implemented in .cpp
 	void presetWillBeLoaded() override;

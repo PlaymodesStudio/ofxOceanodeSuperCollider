@@ -42,6 +42,7 @@ public:
     void update(ofEventArgs &args) override;
     void activate() override;
     void deactivate() override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
 
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;

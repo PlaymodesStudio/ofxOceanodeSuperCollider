@@ -298,6 +298,7 @@ scCodeNode::~scCodeNode(){
 }
 
 void scCodeNode::setup(){
+    addOnToggle();   // On switch in the node bar: Off gives silence
     addParameter(showWindow.set("Show", false));
     gate.set("Gate", {0.0f}, {0.0f}, {1.0f});
     trig.set("Trig");
@@ -1138,7 +1139,7 @@ void scCodeNode::createSynth(ofxSCServer* server){
     st.group->create(0, 1);
     st.groupCreated = true;
     st.groupReadyTime = ofGetElapsedTimef() + (server->getBLatency() ? server->getLatency() + 0.05f : 0.0f);
-    if(!getActive()) st.group->run(false);
+    if(!runsOn(server)) st.group->run(false);
     st.builtDef.clear();
     rebuildSynths(server, true);
 }
@@ -1222,11 +1223,17 @@ void scCodeNode::resendParametersForNRT(){
 }
 
 void scCodeNode::activate(){
-    for(auto& [server, st] : states) if(st.groupCreated) st.group->run(true);
+    for(auto& [server, st] : states) if(st.groupCreated) st.group->run(runsOn(server));
 }
 
 void scCodeNode::deactivate(){
     for(auto& [server, st] : states) if(st.groupCreated) st.group->run(false);
+}
+
+void scCodeNode::applyGraphSuspended(ofxSCServer* server, bool suspended){
+    setGraphSuspendedFlag(server, suspended);
+    auto it = states.find(server);
+    if(it != states.end() && it->second.groupCreated && it->second.group) it->second.group->run(runsOn(server));
 }
 
 // ════════════════════════════════════════════════════════════════════════════

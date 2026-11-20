@@ -31,6 +31,7 @@ pinkTromboneNode::~pinkTromboneNode() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void pinkTromboneNode::setup() {
+    addOnToggle();   // On switch in the node bar: Off gives silence
     // Register output port in the SC graph
     addOutput("Out");
 
@@ -418,7 +419,7 @@ void pinkTromboneNode::createSynth(ofxSCServer* server) {
     if (outputBuses.count(server) && outputBuses[server].count(0))
         synth->set("out", outputBuses[server][0]);
 
-    synth->createAndRun(0, 1, getActive());
+    synth->createAndRun(0, 1, runsOn(server));
 
 #if PT_HAS_SHM
     if (!shmBase) setupSHM();
@@ -484,7 +485,7 @@ void pinkTromboneNode::activate() {
     if (shmBase) static_cast<OceanodeRadioSHMHeader*>(shmBase)->active = 1;
 #endif
     for (auto &pair : synthInstances)
-        if (pair.second) pair.second->run(true);
+        if (pair.second) pair.second->run(runsOn(pair.first));
 }
 
 void pinkTromboneNode::deactivate() {
@@ -494,6 +495,12 @@ void pinkTromboneNode::deactivate() {
 #endif
     for (auto &pair : synthInstances)
         if (pair.second) pair.second->run(false);
+}
+
+void pinkTromboneNode::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    auto it = synthInstances.find(server);
+    if(it != synthInstances.end() && it->second) it->second->run(runsOn(server));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

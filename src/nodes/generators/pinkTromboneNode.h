@@ -67,6 +67,7 @@ public:
     int  getLastSynthID    (ofxSCServer* server) override;
     void activate()  override;
     void deactivate() override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
 
 private:
     // ── Synthesis engine ──────────────────────────────────────────────────────

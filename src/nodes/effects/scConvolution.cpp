@@ -43,6 +43,7 @@ scConvolution::~scConvolution() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void scConvolution::setup() {
+    addOnToggle(true);   // On switch in the node bar: Off passes the input through
     addParameter(numChannels.set("N Chan",     2,    1,    16));
     addParameter(wet.set(       "Wet",         0.0f, 0.0f, 1.0f));
     addParameter(level.set(     "Level",       1.0f, 0.0f, 2.0f));
@@ -67,7 +68,7 @@ void scConvolution::setup() {
             ofxSCSynth* ns       = new ofxSCSynth(getSynthDefName(), pair.first);
             pair.second = ns;
             resendParams.notify();
-            ns->createAndRun(4, oldID, getActive());
+            ns->createAndRun(4, oldID, runsOn(pair.first));
             delete old;
         }
         oldNumChannels = ch;
@@ -178,8 +179,14 @@ void scConvolution::update(ofEventArgs& args) {
 // activate / deactivate
 // ─────────────────────────────────────────────────────────────────────────────
 
-void scConvolution::activate()   { for(auto& p : synthInstances) if(p.second) p.second->run(true);  }
+void scConvolution::activate()   { for(auto& p : synthInstances) if(p.second) p.second->run(runsOn(p.first));  }
 void scConvolution::deactivate() { for(auto& p : synthInstances) if(p.second) p.second->run(false); }
+
+void scConvolution::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    auto it = synthInstances.find(server);
+    if(it != synthInstances.end() && it->second) it->second->run(runsOn(server));
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // scNode interface
@@ -206,7 +213,7 @@ void scConvolution::buildSynth(ofxSCServer* server) {
 void scConvolution::createSynth(ofxSCServer* server) {
     if(!server || !synthInstances.count(server)) return;
     resendParams.notify();
-    synthInstances[server]->createAndRun(0, 1, getActive());
+    synthInstances[server]->createAndRun(0, 1, runsOn(server));
 }
 
 void scConvolution::free(ofxSCServer* server) {
@@ -387,7 +394,7 @@ void scConvolution::swapAndReplaceWithNewSpec(ofxSCServer* srv) {
     ofxSCSynth* ns       = new ofxSCSynth(getSynthDefName(), srv);
     synthInstances[srv]  = ns;
     resendParams.notify();                       // queues specbuf + buses + wet/level
-    ns->createAndRun(4, oldID, getActive());     // kAddAction_replace
+    ns->createAndRun(4, oldID, runsOn(srv));     // kAddAction_replace
     delete old;
 
     if(oldActive) { oldActive->free(); delete oldActive; }

@@ -51,6 +51,7 @@ public:
 
 	void activate() override;
 	void deactivate() override;
+	void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
 
 	// Persistence
 	void presetSave(ofJson &json) override;

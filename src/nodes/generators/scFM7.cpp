@@ -32,6 +32,7 @@ scFM7::~scFM7() {
 }
 
 void scFM7::setup() {
+	addOnToggle();   // On switch in the node bar: Off gives silence
 	scGlobalPitch::follow(this, true, [this](){ sendPitch(); }, [this](){ sendPitch(); });
 	// 1. Core
 	addParameter(numChannels.set("N Chan", 1, 1, 64));
@@ -611,7 +612,7 @@ void scFM7::createSynth(ofxSCServer* server) {
 	if(outputBuses.count(server) && outputBuses[server].count(0)) {
 		synth->set("out", outputBuses[server][0]);
 	}
-    synth->createAndRun(0, 1, getActive()); //addToTail
+    synth->createAndRun(0, 1, runsOn(server)); //addToTail
 }
 
 void scFM7::buildSynth(ofxSCServer* server) {
@@ -658,7 +659,7 @@ void scFM7::free(ofxSCServer* server) {
 
 void scFM7::activate() {
 	for(auto& pair : synthInstances) {
-		if(pair.second) pair.second->run(true);
+		if(pair.second) pair.second->run(runsOn(pair.first));
 	}
 }
 
@@ -666,6 +667,12 @@ void scFM7::deactivate() {
 	for(auto& pair : synthInstances) {
 		if(pair.second) pair.second->run(false);
 	}
+}
+
+void scFM7::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+	setGraphSuspendedFlag(server, suspended);
+	auto it = synthInstances.find(server);
+	if(it != synthInstances.end() && it->second) it->second->run(runsOn(server));
 }
 
 void scFM7::setOutputBus(ofxSCServer* server, int index, int bus) {

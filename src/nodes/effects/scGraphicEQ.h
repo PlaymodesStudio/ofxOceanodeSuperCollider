@@ -47,6 +47,7 @@ public:
 
     void activate() override;
     void deactivate() override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
 
     // scNode interface
     void buildSynth(ofxSCServer* server) override;

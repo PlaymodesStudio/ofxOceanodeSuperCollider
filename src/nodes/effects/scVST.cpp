@@ -253,6 +253,7 @@ Multithreading asks VSTPlugin to run plugins on worker threads during realtime o
 }
 
 void scVST::setup(){
+	addOnToggle(true);   // On switch in the node bar: Off passes the input through
 	// Global Pitch: applied to each note at its note-on (held notes keep theirs);
 	// a MIDI note has no fraction, so Detune does not reach it
 	scGlobalPitch::follow(this, true, {});
@@ -760,7 +761,7 @@ void scVST::setup(){
 void scVST::activate(){
     for(auto &synths : synthInstances){
         for(auto &synth : synths.second){
-            synth->run(true);
+            if(synth) synth->run(runsOn(synths.first));
         }
     }
 }
@@ -768,9 +769,16 @@ void scVST::activate(){
 void scVST::deactivate(){
     for(auto &synths : synthInstances){
         for(auto &synth : synths.second){
-            synth->run(false);
+            if(synth) synth->run(false);
         }
     }
+}
+
+void scVST::applyGraphSuspended(ofxSCServer* server, bool suspended){
+    setGraphSuspendedFlag(server, suspended);
+    auto it = synthInstances.find(server);
+    if(it == synthInstances.end()) return;
+    for(auto &synth : it->second) if(synth) synth->run(runsOn(server));
 }
 
 int scVST::calculateNumInstances() const {
@@ -5096,7 +5104,7 @@ void scVST::createSynth(ofxSCServer* server){
 	for(int i = 0; i < synthInstances[server].size(); i++) {
 		if(synthInstances[server][i] != nullptr) {
 			// Create the synth on the server (no need to set channel params since they're fixed in the SynthDef)
-            synthInstances[server][i]->createAndRun(0, 1, getActive());
+            synthInstances[server][i]->createAndRun(0, 1, runsOn(server));
 			/*
 			 ofLogVerbose("scVST") << "Created VST instance " << i
 			 << " with nodeID " << synthInstances[server][i]->nodeID

@@ -70,6 +70,7 @@ public:
     void draw(ofEventArgs& e) override;
     void activate() override;
     void deactivate() override;
+    void applyGraphSuspended(ofxSCServer* server, bool suspended) override;
 
     void buildSynth(ofxSCServer* server) override;
     void createSynth(ofxSCServer* server) override;

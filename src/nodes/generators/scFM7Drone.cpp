@@ -24,6 +24,7 @@ scFM7Drone::~scFM7Drone() {
 }
 
 void scFM7Drone::setup() {
+	addOnToggle();   // On switch in the node bar: Off gives silence
 	scGlobalPitch::follow(this, true, [this](){ sendPitch(); }, [this](){ sendPitch(); });
 	// 1. Core
 	addParameter(numChannels.set("N Chan", 1, 1, 64));
@@ -441,7 +442,7 @@ void scFM7Drone::createSynth(ofxSCServer* server) {
 		synth->set("out", outputBuses[server][0]);
 	}
 
-    synth->createAndRun(0, 1, getActive()); //addToTail
+    synth->createAndRun(0, 1, runsOn(server)); //addToTail
 }
 
 int scFM7Drone::getLastSynthID(ofxSCServer* server) {
@@ -477,12 +478,18 @@ void scFM7Drone::free(ofxSCServer* server) {
 
 void scFM7Drone::activate() {
 	for(auto& pair : synthInstances)
-		if(pair.second) pair.second->run(true);
+		if(pair.second) pair.second->run(runsOn(pair.first));
 }
 
 void scFM7Drone::deactivate() {
 	for(auto& pair : synthInstances)
 		if(pair.second) pair.second->run(false);
+}
+
+void scFM7Drone::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+	setGraphSuspendedFlag(server, suspended);
+	auto it = synthInstances.find(server);
+	if(it != synthInstances.end() && it->second) it->second->run(runsOn(server));
 }
 
 void scFM7Drone::setOutputBus(ofxSCServer* server, int index, int bus) {

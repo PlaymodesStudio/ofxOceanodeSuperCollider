@@ -113,6 +113,7 @@ scDynGenNode::~scDynGenNode() {
 }
 
 void scDynGenNode::setup() {
+    addOnToggle(true);   // On switch in the node bar: Off passes the input through
     addParameter(numChannels.set("Num Channels", 1, 1, kMaxChans));
 
     const std::string defaultCode =
@@ -259,7 +260,7 @@ void scDynGenNode::update(ofEventArgs&) {
 void scDynGenNode::activate() {
     for(auto& pair : synthInstances) {
         for(auto& voice : pair.second) {
-            if(voice.synth) voice.synth->run(true);
+            if(voice.synth) voice.synth->run(runsOn(pair.first));
         }
     }
 }
@@ -270,6 +271,13 @@ void scDynGenNode::deactivate() {
             if(voice.synth) voice.synth->run(false);
         }
     }
+}
+
+void scDynGenNode::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    auto it = synthInstances.find(server);
+    if(it == synthInstances.end()) return;
+    for(auto& voice : it->second) if(voice.synth) voice.synth->run(runsOn(server));
 }
 
 void scDynGenNode::buildSynth(ofxSCServer* server) {
@@ -312,10 +320,10 @@ void scDynGenNode::createSynth(ofxSCServer* server) {
             if(!voice.synth) continue;
             configureVoiceForChannel(server, voice);
             if(firstVoice) {
-                voice.synth->createAndRun(0, 1, getActive());
+                voice.synth->createAndRun(0, 1, runsOn(server));
                 firstVoice = false;
             } else {
-                voice.synth->createAndRun(3, previousNodeID, getActive());
+                voice.synth->createAndRun(3, previousNodeID, runsOn(server));
             }
             previousNodeID = voice.synth->nodeID;
         }
@@ -561,7 +569,7 @@ void scDynGenNode::rebuildServerVoices(ofxSCServer* server) {
         newVoice.channelIndex = i;
         newVoice.synth = new ofxSCSynth(getSynthDefName(), server);
         configureVoiceForChannel(server, newVoice);
-        newVoice.synth->createAndRun(4, voices[i].synth->nodeID, getActive());
+        newVoice.synth->createAndRun(4, voices[i].synth->nodeID, runsOn(server));
         delete voices[i].synth;
         voices[i] = newVoice;
         previousNodeID = newVoice.synth->nodeID;
@@ -582,9 +590,9 @@ void scDynGenNode::rebuildServerVoices(ofxSCServer* server) {
         voice.synth = new ofxSCSynth(getSynthDefName(), server);
         configureVoiceForChannel(server, voice);
         if(ch == 0) {
-            voice.synth->createAndRun(0, 1, getActive());
+            voice.synth->createAndRun(0, 1, runsOn(server));
         } else {
-            voice.synth->createAndRun(3, previousNodeID, getActive());
+            voice.synth->createAndRun(3, previousNodeID, runsOn(server));
         }
         previousNodeID = voice.synth->nodeID;
         voices.push_back(voice);

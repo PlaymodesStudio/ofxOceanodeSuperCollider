@@ -101,6 +101,7 @@ scBeatRepeatPro::~scBeatRepeatPro() {
 }
 
 void scBeatRepeatPro::setup() {
+    addOnToggle(true);   // On switch in the node bar: Off passes the input through
     addTimeSourceParameter(); // which timeline it follows (inspector)
     timeline.setup(this, [this](const std::string& k){ publishByKey(k); }, [this](const std::string& k){ unpublishByKey(k); },
                    [this](){ return publishedKeys; });
@@ -507,7 +508,7 @@ void scBeatRepeatPro::createSynth(ofxSCServer* server) {
     if(!server) return;
     if(!synths.count(server) || !synths[server]) buildSynth(server);
     if(synths[server]) {
-        synths[server]->createAndRun(0, 1, getActive());
+        synths[server]->createAndRun(0, 1, runsOn(server));
         // configureSynth() is also called while constructing the wrapper, but
         // those /n_set messages can precede /s_new on the server. Re-send once
         // the node exists so visualization (and every saved parameter) is live
@@ -537,7 +538,7 @@ void scBeatRepeatPro::recreateSynths() {
         delete oldSynth; // action 4 replaces the server node atomically
         entry.second = new ofxSCSynth(synthDefName(), server);
         configureSynth(server, entry.second);
-        entry.second->createAndRun(4, oldNodeID, getActive());
+        entry.second->createAndRun(4, oldNodeID, runsOn(server));
         configureSynth(server, entry.second);
     }
 }
@@ -572,11 +573,17 @@ int scBeatRepeatPro::getLastSynthID(ofxSCServer* server) {
 }
 
 void scBeatRepeatPro::activate() {
-    for(auto& entry : synths) if(entry.second) entry.second->run(true);
+    for(auto& entry : synths) if(entry.second) entry.second->run(runsOn(entry.first));
 }
 
 void scBeatRepeatPro::deactivate() {
     for(auto& entry : synths) if(entry.second) entry.second->run(false);
+}
+
+void scBeatRepeatPro::applyGraphSuspended(ofxSCServer* server, bool suspended) {
+    setGraphSuspendedFlag(server, suspended);
+    auto it = synths.find(server);
+    if(it != synths.end() && it->second) it->second->run(runsOn(server));
 }
 
 void scBeatRepeatPro::resendParametersForNRT() {
