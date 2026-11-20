@@ -1,5 +1,6 @@
 // ArpeggiatorBox engine tests: tools/arpeggiatorbox_test/run.sh
 #include "../../src/nodes/boxSynths/arpeggiatorBox/scArpeggiatorBoxEngine.h"
+#include "../../src/nodes/boxSynths/arpeggiatorBox/scArpeggiatorNotes.h"
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -212,6 +213,63 @@ int main() {
         CHECK(a != cyclePitches(e, 1), "dev seed 0: new draws per cycle");
         e.fresh ^= 0x1234567; e.invalidate();
         CHECK(a != cyclePitches(e, 0), "dev seed 0: new draws on a new pass");
+    }
+    {   // the piano roll's tool (scArpeggiatorNotes.h): chords as notes in, the arpeggio out
+        auto pitches = [](const std::vector<RollNote>& ns){ std::vector<int> v; for(const auto& n : ns) v.push_back(n.pitch); return v; };
+        // C major for 2 beats from beat 1, then (after a beat's gap) F major for 1 beat
+        const std::vector<RollNote> chords = {{1, 2, 64, 1}, {1, 2, 60, 1}, {1, 2, 67, 1}, {4, 1, 65, 1}, {4, 1, 69, 1}, {4, 1, 72, 1}};
+        RollSettings s;
+        auto ns = arpeggiate(chords, s);
+        CHECK(pitches(ns) == std::vector<int>({60, 64, 67, 60, 64, 67, 60, 64, 65, 69, 72, 65}), "up, restarting with the chord (%zu notes)", ns.size());
+        CHECK(ns.size() == 12 && ns[0].start == 1.0 && ns[1].start == 1.25 && ns[8].start == 4.0 && ns[0].dur == 0.25, "16ths from the first chord, none in the gap");
+        s.restart = false; s.octaves = 2;
+        ns = arpeggiate(chords, s);
+        CHECK(pitches(ns) == std::vector<int>({60, 64, 67, 72, 76, 79, 60, 64, 65, 69, 72, 77}), "two octaves, the pattern running on over the chord change");
+        s = RollSettings(); s.order = ROLL_UPDOWN; s.stepBeats = 0.5;
+        ns = arpeggiate({{0, 4, 60, 1}, {0, 4, 64, 1}, {0, 4, 67, 1}}, s);
+        CHECK(pitches(ns) == std::vector<int>({60, 64, 67, 64, 60, 64, 67, 64}), "up and down, 8ths");
+        s.order = ROLL_DOWN;
+        CHECK(pitches(arpeggiate({{0, 2, 60, 1}, {0, 2, 64, 1}, {0, 2, 67, 1}}, s)) == std::vector<int>({67, 64, 60, 67}), "down");
+        s.order = ROLL_PLAYED;
+        CHECK(pitches(arpeggiate({{0.02, 2, 60, 1}, {0, 2.02, 67, 1}, {0.01, 2, 64, 1}}, s)) == std::vector<int>({67, 67, 64, 60, 67}), "as played: in the order the notes start");
+        // chords and gate: 3 notes a step, notes cut at the selection's end
+        s = RollSettings(); s.polyphony = 3; s.gate = 8;
+        ns = arpeggiate({{0, 1, 60, 1}, {0, 1, 64, 1}, {0, 1, 67, 1}}, s);
+        CHECK(ns.size() == 12, "3 voices x 4 steps, got %zu", ns.size());
+        for(const auto& n : ns) CHECK(n.start + n.dur <= 1.0 + 1e-9, "a note runs past the chords");
+        // mono: one note at a time; range: notes outside are left out
+        s.mono = true; s.strum = 0.2f;
+        ns = arpeggiate({{0, 1, 60, 1}, {0, 1, 64, 1}, {0, 1, 67, 1}}, s);
+        for(size_t i = 0; i + 1 < ns.size(); i++) CHECK(ns[i].start + ns[i].dur <= ns[i + 1].start + 1e-9, "mono notes overlap");
+        s = RollSettings(); s.octaves = 3; s.high = 72;
+        int outside = 0;
+        for(const auto& n : arpeggiate({{0, 4, 60, 1}, {0, 4, 67, 1}}, s, &outside)) CHECK(n.pitch <= 72, "note above the roll");
+        CHECK(outside == 7, "16 steps, 3 of every 6 above the roll: %d left out", outside);
+        // no cycle set: pulses and accents keep their turn over a long chord (3 notes, pulses of 5, accents of 7)
+        s = RollSettings(); s.pulseLen = 5; s.pulseHits = 3; s.accentLen = 7; s.accentStrength = 0.2f; s.velocity = 0.5f;
+        ns = arpeggiate({{0, 64, 60, 1}, {0, 64, 64, 1}, {0, 64, 67, 1}}, s);
+        bool periodic = ns.size() > 105;
+        for(size_t i = 0; periodic && i + 63 < ns.size(); i++)   // 105 steps hold 63 pulses: the same again 105 steps on
+            periodic = ns[i + 63].pitch == ns[i].pitch && ns[i + 63].vel == ns[i].vel && std::abs(ns[i + 63].start - ns[i].start - 105 * 0.25) < 1e-9;
+        CHECK(periodic, "pulses, accents and pattern out of turn at the cycle's wrap (%zu notes)", ns.size());
+        // the bass, an octave under the lowest note; Euclidean pulses; a seed gives the same notes again
+        s = RollSettings(); s.bass = true; s.bassEvery = 4; s.pulseLen = 8; s.pulseHits = 3;
+        s.stepChance = 0.8f; s.noteChance = 0.8f; s.velocityRandom = 0.2f; s.octaveChance = 0.3f; s.humanize = 0.1f; s.order = ROLL_RANDOM;
+        const std::vector<RollNote> held = {{0, 8, 62, 1}, {0, 8, 65, 1}, {0, 8, 69, 1}};
+        ns = arpeggiate(held, s);
+        bool bassHeard = false;
+        for(const auto& n : ns) if(n.pitch == 50) bassHeard = true;
+        CHECK(bassHeard && ns.size() < 32, "bass under the chord, fewer pulses (%zu notes)", ns.size());
+        auto again = arpeggiate(held, s);
+        bool equal = ns.size() == again.size();
+        for(size_t i = 0; equal && i < ns.size(); i++) equal = ns[i].start == again[i].start && ns[i].pitch == again[i].pitch && ns[i].vel == again[i].vel;
+        CHECK(equal, "the same seed, other notes");
+        s.seed = 7;
+        again = arpeggiate(held, s);
+        equal = ns.size() == again.size();
+        for(size_t i = 0; equal && i < ns.size(); i++) equal = ns[i].start == again[i].start && ns[i].pitch == again[i].pitch && ns[i].vel == again[i].vel;
+        CHECK(!equal, "another seed, the same notes");
+        CHECK(arpeggiate({}, s).empty(), "no chords, no notes");
     }
     std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
     return failures ? 1 : 0;

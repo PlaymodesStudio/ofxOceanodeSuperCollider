@@ -17,6 +17,7 @@
 #include "../nodes/boxSynths/harmonyBox/scHarmonyBox.h"
 #include "../nodes/boxSynths/rhythmBox/scRhythmBox.h"
 #include "../nodes/boxSynths/dataBox/scDataBox.h"
+#include "../ui/scPianoRollArpeggiator.h"
 
 namespace ofxOceanodeSuperCollider{
 
@@ -32,6 +33,9 @@ void registerSequencerNodes(ofxOceanode &o){
 	o.registerModel<scHarmonyBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots);
 	o.registerModel<scRhythmBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scDataBox>("SuperCollider/boxSynths", controller->getServers());
+
+	// The timeline piano roll's Arpeggiator tool (the ArpeggiatorBox engine as a note writer)
+	scPianoRollArpeggiator::registerTool();
 }
 
 }
