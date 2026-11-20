@@ -256,6 +256,8 @@ private:
         ofParameter<int>           channels, chanOffset;
         // Mixing (global tab): phgain = 0 when muted, or when another playhead is soloed
         ofParameter<bool>          mute, solo;
+        // the sample's gain (the waveform's knob): x the engine's output, the waveform drawn at it
+        ofParameter<float>         sampleGain;
         // Filter: 0 = Off, 1 LPF2, 2 BPF, 3 Notch, 4 HPF2 (output filter in GrainBox_K_N;
         // latchCut is kept only so older presets load; it no longer does anything)
         std::vector<float> voiceMorphWeights;
@@ -629,6 +631,9 @@ private:
     void drawFxPanel(float w);
     void drawPlayheadHeader(Playhead& ph, float w);   // sample mode + channels row
     void drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, float h);
+    // Sample Gain's knob on the waveform's low right corner (rect: false when it does not fit)
+    bool sampleGainKnobRect(ImVec2 pos, float w, float h, ImVec2& min, float& box) const;
+    void drawSampleGainKnob(Playhead& ph, ImVec2 pos, float w, float h);
     void drawEnvelopePanel(Playhead& ph, float w, float h);   // curve + sliders in one cell
     void drawControlsPanel(Playhead& ph, float w, float h);
     void drawModRow(Playhead& ph, float w, float h);

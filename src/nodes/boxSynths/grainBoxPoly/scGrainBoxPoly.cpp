@@ -71,6 +71,24 @@ ImU32 gbpAccent(int playhead, int alpha, float brightness = 1.0f) {
 // Slight per-voice variation inside a playhead's accent
 float gbpVoiceBrightness(int voice) { return 1.0f - 0.07f * (float)(((voice % 4) + 4) % 4); }
 
+// Grain highlights pile up where they overlap: long grains (a long sample, a
+// long Duration) live long, so dozens cover the same pixels and their accent
+// buries the waveform (drawn in that same accent). Scale every highlight's
+// alpha so the densest column stays a wash: at most `cap` (0..1) added up.
+struct GbpGrainRect { float x0, x1, alpha; int playhead, channel; };
+float gbpGrainDensityScale(const std::vector<GbpGrainRect>& rects, float left, float w, float cap) {
+    constexpr int N = 256;
+    std::array<float, N> sum{};
+    if(w <= 0.0f) return 1.0f;
+    for(const auto& r : rects) {
+        const int c0 = std::max(0, std::min(N - 1, (int)std::floor((r.x0 - left) / w * N)));
+        const int c1 = std::max(c0 + 1, std::min(N, (int)std::ceil((r.x1 - left) / w * N)));
+        for(int c = c0; c < c1; ++c) sum[c] += r.alpha;
+    }
+    const float most = *std::max_element(sum.begin(), sum.end());
+    return most > cap ? cap / most : 1.0f;
+}
+
 // ── Slider with fine / snap drag ─────────────────────────────────────────────
 // ImGui::SliderFloat, plus: Shift while dragging = FINE (the value moves 10x
 // slower than the mouse, from where it was, instead of jumping to the mouse);
@@ -733,6 +751,7 @@ void scGrainBoxPoly::createPlayheadParameters(Playhead& ph) {
     ph.numPlayheads.set   ("Playheads"    + x, 1, 1, MAX_VOICES);
     ph.mute.set           ("Mute"         + x, false);
     ph.solo.set           ("Solo"         + x, false);
+    ph.sampleGain.set     ("Sample Gain"  + x, 1.0f, 0.0f, 4.0f);
     ph.filterType.set     ("Filter"       + x, 0, 0, 5);
     snaps.morph.mode(ph.filterType,6);   // 5 LP-HP (DJ)
     ph.cutoff.set         ("Cutoff"       + x, 1000.0f, 20.0f, 20000.0f);
@@ -1460,6 +1479,7 @@ void scGrainBoxPoly::setupPlayheadListeners(Playhead& ph) {
     // Mute / solo: every playhead's gain can change (solo)
     ph.listeners.push(ph.mute.newListener([this](bool&) { sendMixParams(); }));
     ph.listeners.push(ph.solo.newListener([this](bool&) { sendMixParams(); }));
+    ph.listeners.push(ph.sampleGain.newListener([this, p](float&) { for(auto& [srv, s] : p->synths) setMixArgs(*p, s); }));
 
     // Filter: an output filter inside the same synth, crossfaded on/off in
     // SC over 20 ms (no synth replacement, so no cut grains / clicks)
@@ -2724,7 +2744,7 @@ void scGrainBoxPoly::setMixArgs(Playhead& ph, ofxSCSynth* s) {
     s->set("transpose", transposeP.get());
     s->set("mastervol", volumeP.get() * wetGain());
     s->set("speed",     speedP.get());
-    s->set("phgain",    phGainFor(ph));
+    s->set("phgain",    phGainFor(ph) * std::max(0.0f, ph.sampleGain.get()));
 }
 
 void scGrainBoxPoly::setFilterArgs(Playhead& ph, ofxSCSynth* s) {
@@ -3456,76 +3476,86 @@ void scGrainBoxPoly::loadWaveformData(SampleData& sd, const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if(!f.is_open()) return;
 
-    // Read raw PCM bytes; this is a simplified peak extraction.
-    // Assumes 16-bit signed PCM. For real use the WAV header must be skipped.
-    // We seek past the first 44 bytes (standard WAV header).
     f.seekg(0, std::ios::end);
-    auto fileSize = f.tellg();
+    const std::streamoff fileSize = (std::streamoff)f.tellg();
     f.seekg(0, std::ios::beg);
-    if(fileSize < 46) return;
+    if(fileSize < 12) return;
 
-    // Read WAV header to find audio data offset and bit depth
-    char riff[4]; f.read(riff, 4);
-    if(std::string(riff, 4) != "RIFF") return;
-    f.seekg(22, std::ios::beg);
-    int16_t numCh; f.read((char*)&numCh, 2);
+    // RIFF / WAVE: walk the chunks for "fmt " and "data" (they need not come
+    // first: broadcast WAVs open with "bext", others with "JUNK" / "LIST")
+    char riff[12]; f.read(riff, 12);
+    if(std::string(riff, 4) != "RIFF" || std::string(riff + 8, 4) != "WAVE") return;
+    uint16_t fmtTag = 0, numCh = 0, bitDepth = 0;
+    uint32_t sampleRate = 0;
+    std::streamoff dataOffset = -1, dataSize = 0;
+    std::streamoff at = 12;
+    while(at + 8 <= fileSize) {
+        f.seekg(at, std::ios::beg);
+        char id[4]; uint32_t sz = 0;
+        f.read(id, 4); f.read((char*)&sz, 4);
+        if(!f) break;
+        const std::string cid(id, 4);
+        const std::streamoff body = at + 8;
+        if(cid == "fmt " && sz >= 16) {
+            uint32_t byteRate = 0; uint16_t blockAlign = 0;
+            f.read((char*)&fmtTag, 2); f.read((char*)&numCh, 2); f.read((char*)&sampleRate, 4);
+            f.read((char*)&byteRate, 4); f.read((char*)&blockAlign, 2); f.read((char*)&bitDepth, 2);
+            if(fmtTag == 0xFFFE && sz >= 26) {   // WAVE_FORMAT_EXTENSIBLE: the real tag opens SubFormat
+                f.seekg(body + 24, std::ios::beg);
+                f.read((char*)&fmtTag, 2);
+            }
+        } else if(cid == "data") {
+            dataOffset = body;
+            // a size past the end (streamed / > 4 GB writers): what is there
+            dataSize = std::min<std::streamoff>(sz, fileSize - body);
+            if(numCh > 0) break;              // fmt already read
+        }
+        at = body + (std::streamoff)sz + (sz & 1);   // chunks are word aligned
+    }
+    if(dataOffset < 0 || dataSize <= 0 || numCh == 0 || bitDepth == 0) return;
+    const bool isFloat = fmtTag == 3;
     // Only GrainBox_1_N and GrainBox_2_N exist: files with more channels use
     // their first two (averaged in the SynthDef, like any stereo file).
     sd.numChannels = std::max(1, std::min((int)numCh, MAX_SAMPLE_CHANNELS));
-    int32_t sampleRate = 0;
-    f.seekg(24, std::ios::beg);
-    f.read((char*)&sampleRate, 4);
-    f.seekg(34, std::ios::beg);
-    int16_t bitDepth; f.read((char*)&bitDepth, 2);
 
-    // Find "data" chunk
-    f.seekg(12, std::ios::beg);
-    int dataOffset = -1;
-    int dataSize   = 0;
-    while(f.tellg() < (std::streampos)((std::streamoff)fileSize - 8)) {
-        char id[4]; f.read(id, 4);
-        int32_t sz; f.read((char*)&sz, 4);
-        if(std::string(id, 4) == "data") {
-            dataOffset = (int)f.tellg();
-            dataSize   = sz;
-            break;
-        }
-        f.seekg(sz, std::ios::cur);
-    }
-    if(dataOffset < 0 || dataSize <= 0) return;
-
-    f.seekg(dataOffset, std::ios::beg);
-    int bytesPerSample = (bitDepth == 16) ? 2 : (bitDepth == 24 ? 3 : 4);
-    int totalFrames    = dataSize / (bytesPerSample * std::max(1, (int)numCh));
+    const int bytesPerSample = std::max(1, (int)bitDepth / 8);
+    const int frameBytes     = bytesPerSample * (int)numCh;
+    const int totalFrames    = (int)(dataSize / frameBytes);
     if(totalFrames <= 0) return;
 
     sd.durationSecs = (sampleRate > 0) ? (float)totalFrames / (float)sampleRate : 0.0f;
 
     int framesPerBin = std::max(1, totalFrames / WAVEFORM_BINS);
-    std::vector<char> buf(framesPerBin * bytesPerSample * std::max(1, (int)numCh));
+    std::vector<char> buf((size_t)framesPerBin * frameBytes);
 
     for(int bin = 0; bin < WAVEFORM_BINS; bin++) {
         int framePos = bin * framesPerBin;
         if(framePos >= totalFrames) { sd.peaks[bin] = 0.0f; continue; }
-        f.seekg(dataOffset + framePos * bytesPerSample * std::max(1, (int)numCh), std::ios::beg);
+        f.clear();
+        f.seekg(dataOffset + (std::streamoff)framePos * frameBytes, std::ios::beg);
         int frames = std::min(framesPerBin, totalFrames - framePos);
-        f.read(buf.data(), (std::streamsize)(frames * bytesPerSample * std::max(1, (int)numCh)));
+        f.read(buf.data(), (std::streamsize)frames * frameBytes);
         float peak = 0.0f;
         for(int s = 0; s < frames; s++) {
+            const char* q = buf.data() + (size_t)s * frameBytes;   // the first channel
             float sample = 0.0f;
-            if(bitDepth == 16) {
-                int16_t v = *(int16_t*)(buf.data() + s * bytesPerSample * std::max(1, (int)numCh));
-                sample = std::abs(v / 32768.0f);
+            if(isFloat && bitDepth == 32) {
+                float v; memcpy(&v, q, 4); sample = std::abs(v);
+            } else if(isFloat && bitDepth == 64) {
+                double v; memcpy(&v, q, 8); sample = (float)std::abs(v);
+            } else if(bitDepth == 8) {
+                sample = std::abs(((int)(unsigned char)q[0] - 128) / 128.0f);
+            } else if(bitDepth == 16) {
+                int16_t v; memcpy(&v, q, 2); sample = std::abs(v / 32768.0f);
             } else if(bitDepth == 24) {
                 int32_t v = 0;
-                memcpy(&v, buf.data() + s * 3 * std::max(1, (int)numCh), 3);
+                memcpy(&v, q, 3);
                 if(v & 0x800000) v |= 0xFF000000;
                 sample = std::abs(v / 8388608.0f);
-            } else {
-                float v; memcpy(&v, buf.data() + s * bytesPerSample * std::max(1, (int)numCh), 4);
-                sample = std::abs(v);
+            } else if(bitDepth == 32) {
+                int32_t v; memcpy(&v, q, 4); sample = std::abs(v / 2147483648.0f);
             }
-            peak = std::max(peak, sample);
+            if(std::isfinite(sample)) peak = std::max(peak, sample);
         }
         sd.peaks[bin] = std::min(1.0f, peak);
     }
@@ -3933,6 +3963,7 @@ void scGrainBoxPoly::initializePublishableEditorParameters() {
         // Mixing / filter / latch (new)
         regS (ph, ph.mute,             false);
         regS (ph, ph.solo,             false);
+        regS (ph, ph.sampleGain,       false);
         regS (ph, ph.filterType,       false);
         regS (ph, ph.cutoff,           false);
         regS (ph, ph.filterQ,          false);
@@ -4390,7 +4421,7 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
         rs(echoPingPongP, 0.0f);
         rs(revHiDampP, 6.0f); rs(revLoDampP, 0.0f); rs(revModRateP, 0.2f); rs(revSpinP, 1.0f); rs(revWanderP, 0.25f);
         for(auto& ph : playheads) {
-            rs(ph->mute, false); rs(ph->solo, false);
+            rs(ph->mute, false); rs(ph->solo, false); rs(ph->sampleGain, 1.0f);
             rs(ph->filterType, 0); rs(ph->cutoff, 1000.0f); rs(ph->filterQ, 0.707f);
             rs(ph->latchAmp, false); rs(ph->latchCut, false);
             rs(ph->scaleType, 0); rs(ph->scaleRoot, 0); rs(ph->scaleMask, 4095);
@@ -4723,6 +4754,7 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
         // engine's sample (Mixer / Effects: the shared sample)
         {
             ImVec2 pos = ImGui::GetCursorScreenPos();
+            ImGui::SetNextItemAllowOverlap();   // Sample Gain's knob sits on it
             ImGui::InvisibleButton("##gbpWave", ImVec2(waveW, std::max(1.0f, waveH)));
             ImDrawList* dl = ImGui::GetWindowDrawList();
             if(overlay) drawGlobalWaveform(dl, pos, waveW, waveH);
@@ -4732,6 +4764,8 @@ void scGrainBoxPoly::drawGrainBoxWindow() {
                 if(overlay) loadSample(dropped);
                 else        loadSampleForPlayhead(ph, dropped);
             }
+            // (after the drop target: it asks about the waveform's own item)
+            if(!overlay) drawSampleGainKnob(ph, pos, waveW, waveH);
         }
         // resize handle: a grip bar; drag up / down (kept with the patch)
         {
@@ -5073,6 +5107,7 @@ void scGrainBoxPoly::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, floa
     // ── Grain highlights (every playhead playing this sample), behind the
     //    waveform, in the playhead's accent ─────────────────────────────────
     const float bufDur = (sd.durationSecs > 0.0f) ? sd.durationSecs : 1.0f;
+    std::vector<GbpGrainRect> grainRects;
     for(const auto& gh : grainHighlights) {
         if(gh.playhead < 0 || gh.playhead >= (int)playheads.size()) continue;
         if(&sampleOf(*playheads[gh.playhead]) != &sd) continue;
@@ -5090,16 +5125,23 @@ void scGrainBoxPoly::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, floa
         if(x2 <= pos.x || x >= end.x) continue;
         float fade  = gh.lifeTime / gh.maxLife;
         float alpha = fade * (0.3f + 0.7f * gh.amp);   // quiet grains stay visible
-        dl->AddRectFilled(ImVec2(std::max(pos.x, x), pos.y), ImVec2(x2, end.y),
-                          gbpAccent(gh.playhead, (int)(alpha * 110), gbpVoiceBrightness(gh.channel)));
+        grainRects.push_back({std::max(pos.x, x), x2, alpha * 110.0f / 255.0f, gh.playhead, gh.channel});
+    }
+    {   // dense grains: a wash the waveform stays readable over
+        const float k = gbpGrainDensityScale(grainRects, pos.x, w, 0.35f);
+        for(const auto& r : grainRects)
+            dl->AddRectFilled(ImVec2(r.x0, pos.y), ImVec2(r.x1, end.y),
+                              gbpAccent(r.playhead, (int)(r.alpha * k * 255.0f), gbpVoiceBrightness(r.channel)));
     }
 
     // ── Waveform: light neutral grey inside the region, faint outside ─────
     if(!sd.peaks.empty()) {
         const ImU32 insideColor = gbpAccent(ph.index, gbpPal::waveAlpha);
         const ImU32 outsideColor = gbpAccent(ph.index, gbpPal::waveAlphaDim);
-        sd.waveformMesh.draw(dl, std::array<double, 11>{pos.x, pos.y, w, h, visStart, visW,
-            inP, outP, (double)insideColor, (double)outsideColor, 0}, sd.waveformRevision, [&] {
+        // drawn at Sample Gain: what the engine plays (held at the canvas' edges)
+        const float waveGain = std::max(0.0f, ph.sampleGain.get()), full = h * 0.45f, most = h * 0.5f;
+        sd.waveformMesh.draw(dl, std::array<double, 12>{pos.x, pos.y, w, h, visStart, visW,
+            inP, outP, (double)insideColor, (double)outsideColor, 0, (double)waveGain}, sd.waveformRevision, [&] {
             int bins = (int)sd.peaks.size();
             for(int i = 0; i < (int)w; i++) {
                 float norm    = visStart + ((float)i / w) * visW;
@@ -5111,8 +5153,9 @@ void scGrainBoxPoly::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, floa
                 if(!signedMM && peak <= 0.0f) continue;
                 if(signedMM && peak <= low) { peak += 0.002f; low -= 0.002f; }   // silence: a hairline
                 float px      = pos.x + (float)i;
-                float py      = midY - peak * (h * 0.45f);
-                float py2     = midY - low  * (h * 0.45f);
+                float py      = midY - std::max(-most, std::min(most, peak * waveGain * full));
+                float py2     = midY - std::max(-most, std::min(most, low  * waveGain * full));
+                if(py2 - py < 1.0f) { const float cy = (py + py2) * 0.5f; py = cy - 0.5f; py2 = cy + 0.5f; }
                 const bool inside = norm >= inP && norm <= outP;
                 // the selected playhead's accent (playhead 1: its blue, like its grains)
                 dl->AddLine(ImVec2(px, py), ImVec2(px, py2),
@@ -5178,8 +5221,14 @@ void scGrainBoxPoly::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, floa
 
     // Hit-test for handle dragging
     constexpr float HANDLE_R = 12.0f;
-    bool nearIn  = (std::abs(mouse.x - inX)  < HANDLE_R * zoom && mouse.y > pos.y && mouse.y < end.y);
-    bool nearOut = (std::abs(mouse.x - outX) < HANDLE_R * zoom && mouse.y > pos.y && mouse.y < end.y);
+    bool overKnob = false;
+    {
+        ImVec2 kMin; float kBox = 0.0f;
+        overKnob = sampleGainKnobRect(pos, w, h, kMin, kBox) &&
+                   mouse.x >= kMin.x && mouse.x < kMin.x + kBox && mouse.y >= kMin.y && mouse.y < kMin.y + kBox;
+    }
+    bool nearIn  = !overKnob && (std::abs(mouse.x - inX)  < HANDLE_R * zoom && mouse.y > pos.y && mouse.y < end.y);
+    bool nearOut = !overKnob && (std::abs(mouse.x - outX) < HANDLE_R * zoom && mouse.y > pos.y && mouse.y < end.y);
     if((nearIn || nearOut) && ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
 
     if(active) {
@@ -5243,6 +5292,83 @@ void scGrainBoxPoly::drawWaveformPanel(ImDrawList* dl, ImVec2 pos, float w, floa
         ImVec2 ts = ImGui::CalcTextSize(msg.c_str());
         dl->AddText(ImVec2(pos.x + (w - ts.x) * 0.5f, midY - ts.y * 0.5f), gbpPal::handleLight, msg.c_str());
     }
+}
+
+// ── Sample Gain: a knob on the waveform's low right corner ────────────────────
+// Pumps the selected engine's sample (x its output, before the effects); the
+// waveform above is drawn at it. Drag up / down in dB, double-click: 0 dB.
+
+bool scGrainBoxPoly::sampleGainKnobRect(ImVec2 pos, float w, float h, ImVec2& min, float& box) const {
+    const float z = ofxOceanodeShared::getZoomLevel();
+    const float r = 9.0f * z;
+    box = 2.0f * r + 8.0f * z;
+    min = ImVec2(pos.x + w - box - 3.0f * z, pos.y + h - box - 3.0f * z);
+    return w > 4.0f * box && h > 2.0f * box;
+}
+
+void scGrainBoxPoly::drawSampleGainKnob(Playhead& ph, ImVec2 pos, float w, float h) {
+    ImVec2 knobMin; float knobBox = 0.0f;
+    if(!sampleGainKnobRect(pos, w, h, knobMin, knobBox)) return;
+    const float z = ofxOceanodeShared::getZoomLevel();
+    const float knobR = 9.0f * z;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 after = ImGui::GetCursorScreenPos();
+    const std::string key = ph.sampleGain.getEscapedName();
+    const float maxGain = ph.sampleGain.getMax(), floorDb = -60.0f;
+    auto toDb = [&](float g) { return g > 0.001f ? 20.0f * std::log10(g) : floorDb; };
+    ImGui::PushID(key.c_str());
+    ImGui::SetCursorScreenPos(knobMin);
+    ImGui::InvisibleButton("##gbpGainKnob", ImVec2(knobBox, knobBox));
+    const bool kh = ImGui::IsItemHovered(), ka = ImGui::IsItemActive();
+    float gainNow = ph.sampleGain.get();
+    if(ka && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f)) {
+        const ImGuiIO& io = ImGui::GetIO();
+        const float move = io.MouseDelta.x - io.MouseDelta.y;
+        if(move != 0.0f) {
+            const float db = toDb(gainNow) + move * (io.KeyShift ? 0.02f : 0.15f) / z;
+            gainNow = db <= floorDb ? 0.0f : ofClamp(std::pow(10.0f, db / 20.0f), 0.0f, maxGain);
+            ph.sampleGain = gainNow;
+        }
+    }
+    if(kh && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { gainNow = 1.0f; ph.sampleGain = 1.0f; }
+    if(kh || ka) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    char value[24];
+    if(gainNow <= 0.001f) std::snprintf(value, sizeof(value), "-inf dB");
+    else std::snprintf(value, sizeof(value), "%+.1f dB", toDb(gainNow));
+    if(kh && !ka) ImGui::SetTooltip("Sample Gain: %s\nThe engine's sample gain, before the effects; the waveform shows it.\n"
+                                    "Drag up / down (Shift: fine)  |  Double-click: 0 dB  |  Right-click: publish, modulate", value);
+    drawPublishedCurrentItemUnderline(key);
+    if(ImGui::BeginPopupContextItem(("##PublishToNode_" + key).c_str())) {
+        drawNodePublishMenuItems(key);
+        ImGui::EndPopup();
+    }
+    // the dial: -36 dB .. the most, 0 dB marked
+    const ImVec2 c(knobMin.x + knobBox * 0.5f, knobMin.y + knobBox * 0.5f);
+    const float a0 = 0.75f * (float)M_PI, a1 = 2.25f * (float)M_PI, maxDb = toDb(maxGain);
+    auto angleOf = [&](float db) { return a0 + (a1 - a0) * ofClamp((db + 36.0f) / (maxDb + 36.0f), 0.0f, 1.0f); };
+    const float av = angleOf(toDb(gainNow)), au = angleOf(0.0f);
+    const ImU32 lit = gbpAccent(ph.index, 255);
+    dl->AddRectFilled(knobMin, ImVec2(knobMin.x + knobBox, knobMin.y + knobBox), IM_COL32(11, 12, 14, 215), 4.0f * z);
+    dl->PathArcTo(c, knobR, a0, a1, 24);
+    dl->PathStroke(gbpPal::border, 0, 2.0f * z);
+    if(std::abs(av - au) > 0.01f) {
+        dl->PathArcTo(c, knobR, std::min(au, av), std::max(au, av), 16);
+        dl->PathStroke(lit, 0, 2.0f * z);
+    }
+    dl->AddLine(ImVec2(c.x + std::cos(au) * (knobR - 1.5f * z), c.y + std::sin(au) * (knobR - 1.5f * z)),
+                ImVec2(c.x + std::cos(au) * (knobR + 2.0f * z), c.y + std::sin(au) * (knobR + 2.0f * z)), gbpPal::textDim, 1.0f * z);
+    dl->AddCircleFilled(c, knobR - 3.5f * z, kh || ka ? IM_COL32(70, 74, 84, 255) : IM_COL32(48, 51, 59, 255));
+    dl->AddLine(ImVec2(c.x + std::cos(av) * 1.5f * z, c.y + std::sin(av) * 1.5f * z),
+                ImVec2(c.x + std::cos(av) * (knobR - 1.0f * z), c.y + std::sin(av) * (knobR - 1.0f * z)), gbpPal::handleLight, 1.5f * z);
+    // its value beside it while it is not 0 dB, or in hand
+    if(ka || kh || std::abs(gainNow - 1.0f) > 0.0005f) {
+        const ImVec2 ts = ImGui::CalcTextSize(value);
+        const ImVec2 tp(knobMin.x - ts.x - 5.0f * z, c.y - ts.y * 0.5f);
+        dl->AddRectFilled(ImVec2(tp.x - 3.0f * z, tp.y - 1.0f * z), ImVec2(tp.x + ts.x + 3.0f * z, tp.y + ts.y + 1.0f * z), IM_COL32(11, 12, 14, 215), 3.0f * z);
+        dl->AddText(tp, ka || kh ? gbpPal::handleLight : gbpPal::textDim, value);
+    }
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(after);
 }
 
 // ── Playhead header row ───────────────────────────────────────────────────────
@@ -5496,6 +5622,7 @@ void scGrainBoxPoly::drawGlobalWaveform(ImDrawList* dl, ImVec2 pos, float w, flo
     }
 
     // Grains of every playhead
+    std::vector<GbpGrainRect> grainRects;
     for(const auto& gh : grainHighlights) {
         if(gh.playhead < 0 || gh.playhead >= (int)playheads.size()) continue;
         if(playheads[gh.playhead]->liveInput && playheads[gh.playhead]->grainless.get()) continue;   // tap line (below)
@@ -5506,8 +5633,13 @@ void scGrainBoxPoly::drawGlobalWaveform(ImDrawList* dl, ImVec2 pos, float w, flo
         float x2 = std::min(end.x, x + wd);
         if(x2 <= pos.x || x >= end.x) continue;
         float alpha = (gh.lifeTime / gh.maxLife) * (0.3f + 0.7f * gh.amp);
-        dl->AddRectFilled(ImVec2(std::max(pos.x, x), pos.y), ImVec2(x2, end.y),
-                          gbpAccent(gh.playhead, (int)(alpha * 100), gbpVoiceBrightness(gh.channel)));
+        grainRects.push_back({std::max(pos.x, x), x2, alpha * 100.0f / 255.0f, gh.playhead, gh.channel});
+    }
+    {   // dense grains: a wash the waveforms stay readable over
+        const float k = gbpGrainDensityScale(grainRects, pos.x, w, 0.35f);
+        for(const auto& r : grainRects)
+            dl->AddRectFilled(ImVec2(r.x0, pos.y), ImVec2(r.x1, end.y),
+                              gbpAccent(r.playhead, (int)(r.alpha * k * 255.0f), gbpVoiceBrightness(r.channel)));
     }
 
     // Waveforms: shared one neutral, own ones tinted
