@@ -93,6 +93,7 @@ public:
 
     void setBpm(float bpm) override;
     void presetSave(ofJson& json) override;
+    void macroSave(ofJson& json, std::string path) override;
     void loadBeforeConnections(ofJson& json) override;
     void presetRecallBeforeSettingParameters(ofJson& json) override;
     void presetRecallAfterSettingParameters(ofJson& json) override;

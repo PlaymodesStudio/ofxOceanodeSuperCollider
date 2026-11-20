@@ -76,4 +76,26 @@ inline std::string embed(const std::string& stored, const std::string& presetRoo
         return stored;
     }
 }
+
+// Where a node save into `folder` embeds its samples; empty = keep plain paths.
+// presetSave does not know the folder, so nodes embed in macroSave(json, folder)
+// with this root. A temporary save (copy, cut, encapsulate, canvas undo) gets
+// none: an embedded "Presets/A/samples/x" in the clipboard would be rebased on
+// paste onto the then-current preset B, where the file is not.
+// Under Presets/ (the patch or a local macro in it): the patch's folder; a
+// global macro keeps its samples in its own folder.
+inline std::string saveRoot(const std::string& folder) {
+    if(folder.empty() || !isDurableSaveFolder(folder)) return {};
+    std::string target = ofToDataPath(folder, true);
+    const std::string preset = root();
+    if(!preset.empty() && target.find("/Presets/") != std::string::npos) target = preset;
+    return target;
+}
+
+// json[key] (a path string) embedded under saveRoot(folder), when there is one.
+inline void embedInto(ofJson& value, const std::string& rootFolder) {
+    if(rootFolder.empty() || !value.is_string()) return;
+    const std::string stored = value.get<std::string>();
+    if(!stored.empty()) value = embed(stored, rootFolder);
+}
 }

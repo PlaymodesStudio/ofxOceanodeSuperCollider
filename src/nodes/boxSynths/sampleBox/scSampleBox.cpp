@@ -1569,13 +1569,21 @@ void scSampleBox::update(ofEventArgs&) {
 // Presets
 // ════════════════════════════════════════════════════════════════════════════
 
+// Every node save calls presetSave and then macroSave with its folder: the
+// samples are embedded here, and not for a copy/paste (see saveRoot).
+void scSampleBox::macroSave(ofJson& j, std::string path) {
+    if(!embedSamples.get() || !j.contains("sampleBoxPads") || !j["sampleBoxPads"].is_array()) return;
+    const std::string root = scSampleEmbedding::saveRoot(path);
+    if(root.empty()) return;
+    for(auto& pad : j["sampleBoxPads"])
+        if(pad.is_object() && pad.contains("path")) scSampleEmbedding::embedInto(pad["path"], root);
+}
+
 void scSampleBox::presetSave(ofJson& j) {
     for(auto& p : pads) p->mod.saveLfoOutputs(j);
     ofJson arr = ofJson::array();
     for(int k = 0; k < (int)pads.size(); k++) arr.push_back(padState(k));
-    j["embedSamples"] = embedSamples.get();
-    if(embedSamples.get()) for(auto& pad : arr)
-        pad["path"] = scSampleEmbedding::embed(pad.value("path", std::string()));
+    j["embedSamples"] = embedSamples.get();   // the paths are embedded in macroSave
     j["sampleBoxPads"] = arr;
     j["sampleBoxSelected"] = selected;
     j["sampleBoxBrowseDir"] = browser.getDir();

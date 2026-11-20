@@ -1344,12 +1344,19 @@ void scSlicerBox::draw(ofEventArgs&){
 // Presets
 // ════════════════════════════════════════════════════════════════════════════
 
+// Every node save calls presetSave and then macroSave with its folder: the
+// sample is embedded here, and not for a copy/paste (see saveRoot).
+void scSlicerBox::macroSave(ofJson& json, std::string path){
+    if(embedSamples.get() && json.contains("file"))
+        scSampleEmbedding::embedInto(json["file"], scSampleEmbedding::saveRoot(path));
+}
+
 void scSlicerBox::presetSave(ofJson& json){
     json["publishedEditorParameters"] = publishedKeys;
     timeline.save(json, "timelineHiddenEditorParameters");
     json["embedSamples"] = embedSamples.get();
     const auto file = audio.path.empty() ? pendingPath : audio.path;
-    json["file"] = embedSamples.get() ? scSampleEmbedding::embed(file) : file;
+    json["file"] = file;   // embedded in macroSave (it knows the folder)
     json["points"] = points;
     json["browseDir"] = browser.getDir();
     storePattern();

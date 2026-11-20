@@ -4274,13 +4274,13 @@ void scGrainBoxPoly::presetSave(ofJson& j) {
     for(auto& ph : playheads) ph->mod->saveLfoOutputs(j);
     Playhead& p0 = ph0();
     j["embedSamples"] = embedSamples.get();
-    j["samplePath"] = embedSamples.get() ? scSampleEmbedding::embed(mainSample.path) : mainSample.path;
+    j["samplePath"] = mainSample.path;   // embedded in macroSave (it knows the folder)
     j["browseDir"]   = browser.getDir();
     // Playheads 2+: sample mode and own sample ("sampleOwn 2", "samplePath 2"...)
     for(auto& ph : playheads) {
         if(ph->index == 0) continue;
         j["sampleOwn"  + ph->sfx] = ph->ownSample;
-        j["samplePath" + ph->sfx] = embedSamples.get() ? scSampleEmbedding::embed(ph->own.path) : ph->own.path;
+        j["samplePath" + ph->sfx] = ph->own.path;
     }
     // Live input, any playhead ("sampleLive", "sampleLive 2"...)
     for(auto& ph : playheads) j["sampleLive" + ph->sfx] = ph->liveInput;
@@ -4339,6 +4339,18 @@ void scGrainBoxPoly::presetSave(ofJson& j) {
     // a modulated one: its own value)
     for(auto& ph : playheads) ph->mod->patchBases(j);
     for(auto& ph : playheads) ph->mod->save(j, "gbpMod" + ph->sfx);
+}
+
+// Every node save calls presetSave and then macroSave with its folder: the
+// samples are embedded here, and not for a copy/paste (see saveRoot).
+void scGrainBoxPoly::macroSave(ofJson& j, std::string path) {
+    if(!embedSamples.get()) return;
+    const std::string root = scSampleEmbedding::saveRoot(path);
+    if(root.empty()) return;
+    for(auto& ph : playheads) {
+        const std::string key = "samplePath" + ph->sfx;
+        if(j.contains(key)) scSampleEmbedding::embedInto(j[key], root);
+    }
 }
 
 void scGrainBoxPoly::loadBeforeConnections(ofJson& j) {

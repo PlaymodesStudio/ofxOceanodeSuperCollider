@@ -48,6 +48,7 @@ public:
 
     void setup() override;
     void presetSave(ofJson&) override;
+    void macroSave(ofJson& json, std::string folder) override;
     void presetRecallAfterSettingParameters(ofJson&) override;
     void update(ofEventArgs&) override;
     void draw(ofEventArgs&) override;

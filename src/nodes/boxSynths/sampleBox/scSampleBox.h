@@ -111,6 +111,7 @@ public:
     std::string requiredSynthdefFolder() const override { return synthdefFolder; }
     void resendParametersForNRT() override;
     void presetSave(ofJson&) override;
+    void macroSave(ofJson& j, std::string path) override;
     void loadBeforeConnections(ofJson&) override;
     void presetRecallBeforeSettingParameters(ofJson&) override;
     void presetRecallAfterSettingParameters(ofJson&) override;

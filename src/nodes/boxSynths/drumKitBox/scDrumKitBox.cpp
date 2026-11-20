@@ -1422,13 +1422,21 @@ void scDrumKitBox::applySnapshot(const ofJson& a, const ofJson& b, float t, bool
 // Presets
 // ════════════════════════════════════════════════════════════════════════════
 
+// Every node save calls presetSave and then macroSave with its folder: the
+// samples are embedded here, and not for a copy/paste (see saveRoot).
+void scDrumKitBox::macroSave(ofJson& j, std::string path) {
+    if(!embedSamples.get() || !j.contains("drumKitBoxPads") || !j["drumKitBoxPads"].is_array()) return;
+    const std::string root = scSampleEmbedding::saveRoot(path);
+    if(root.empty()) return;
+    for(auto& pad : j["drumKitBoxPads"])
+        if(pad.is_object() && pad.contains("path")) scSampleEmbedding::embedInto(pad["path"], root);
+}
+
 void scDrumKitBox::presetSave(ofJson& j) {
     for(auto& p : pads) p->mod.saveLfoOutputs(j);
     ofJson arr = ofJson::array();
     for(int k = 0; k < (int)pads.size(); k++) arr.push_back(padState(k));
-    j["embedSamples"] = embedSamples.get();
-    if(embedSamples.get()) for(auto& pad : arr)
-        pad["path"] = scSampleEmbedding::embed(pad.value("path", std::string()));
+    j["embedSamples"] = embedSamples.get();   // the paths are embedded in macroSave
     j["drumKitBoxPads"] = arr;
     j["drumKitBoxSelected"] = selected;
     j["drumKitBoxBrowseDir"] = browser.getDir();

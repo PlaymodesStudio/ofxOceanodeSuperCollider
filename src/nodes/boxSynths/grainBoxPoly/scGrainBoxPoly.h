@@ -116,6 +116,7 @@ public:
 
     // ── Preset serialization ──────────────────────────────────────────────────
     void presetSave(ofJson& j)                          override;
+    void macroSave(ofJson& j, std::string path)         override;
     void presetRecallBeforeSettingParameters(ofJson& j) override;
     void presetRecallAfterSettingParameters(ofJson& j)  override;
     void loadBeforeConnections(ofJson& j)               override;

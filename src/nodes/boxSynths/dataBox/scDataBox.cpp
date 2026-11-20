@@ -756,7 +756,14 @@ void scDataBox::drawSettings(){
 
 void scDataBox::presetSave(ofJson& json) {
     json["embedSamples"] = embedSamples.get();
-    json["Path"] = embedSamples.get() ? scSampleEmbedding::embed(path.get()) : path.get();
+    json["Path"] = path.get();   // embedded in macroSave (it knows the folder)
+}
+
+// Every node save calls presetSave and then macroSave with its folder: the
+// file is embedded here, and not for a copy/paste (see saveRoot).
+void scDataBox::macroSave(ofJson& json, std::string folder) {
+    if(embedSamples.get() && json.contains("Path"))
+        scSampleEmbedding::embedInto(json["Path"], scSampleEmbedding::saveRoot(folder));
 }
 
 void scDataBox::presetRecallAfterSettingParameters(ofJson& json) {
