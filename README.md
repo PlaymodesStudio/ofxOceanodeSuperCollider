@@ -1221,7 +1221,8 @@ Defaults/
 ├── WavetableBox/
 │   └── wavetableBox.scd
 └── WaveTrack/
-    └── waveTrackPlayer.scd
+    ├── waveTrackPlayer.scd
+    └── waveTrackStretchPlayer.scd   (granular: timeline clips with Timestretch on)
 ```
 
 </details>

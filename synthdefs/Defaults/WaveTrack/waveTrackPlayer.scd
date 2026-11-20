@@ -30,7 +30,7 @@ File.mkdir(waveTrackDir);
         var reverse = \reverse.kr(0);
 
         var clipDurSec, phaseRate, correctPhase, resetTrig, startPhase, phase;
-        var sourcePhase, bufferPhase, inRange, playEnv, endFade, sig;
+        var sourcePhase, bufferPhase, inRange, playEnv, endFade, sig, gainSmooth;
 
         // Seconds needed to traverse the whole clip content at rate 1.
         // clipLenBeats, sourceStartBeat and sourceFileDurationBeats are all
@@ -86,7 +86,13 @@ File.mkdir(waveTrackDir);
             BufRd.ar(1, buf, frameIndex, loop: 0, interpolation: 2);
         });
 
-        sig = sig * gain * playEnv * endFade;
+        // gain arrives once per GUI frame (clip gain, track volume, fades and
+        // crossfades): smoothed so those steps become ramps. For the first
+        // moments after a reset (a clip starting, a seek, a loop wrap) it is
+        // taken as sent, so an attack is never faded in from a stale value.
+        gainSmooth = Select.kr(Trig1.kr(resetTrig, 0.04), [Lag.kr(gain, 0.03), gain]);
+
+        sig = sig * gainSmooth * playEnv * endFade;
 
         Out.ar(out, sig);
     }).writeDefFile(waveTrackDir);

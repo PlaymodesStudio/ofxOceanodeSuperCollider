@@ -117,6 +117,11 @@ public:
         return last;
     }
 
+    // Arrives before the clip's updateWaveClip: which of the two players it uses.
+    void setWaveClipTimestretch(const std::string& trackId, const std::string& clipId, bool timestretch) override {
+        states[makeKey(trackId, clipId)].timestretch = timestretch;
+    }
+
     void updateWaveClip(const std::string& trackId, const std::string& clipId,
                         const std::string& filePath, float gain, float trackVolume,
                         int numChannels, double sourceBeat, double contentDurationBeats,
@@ -184,6 +189,9 @@ private:
         float playbackRate = 1.0f;
         float bpm = 120.0f;
         bool reverse = false;
+        // Stretched in time by grains (the pitch stays) instead of read at
+        // another speed: a synthdef of its own, waveTrackStretchPlayerN.
+        bool timestretch = false;
         bool playing = false;
         bool transportPlaying = false;
         bool audible = false;
@@ -193,6 +201,7 @@ private:
     struct Voice {
         std::string filePath;
         int numChannels = 0;
+        bool timestretch = false;
         std::vector<ofxSCBuffer*> buffers;
         ofxSCSynth* synth = nullptr;
         // Server this voice lives on (ofxSCNode::getServer() is protected).
@@ -298,7 +307,8 @@ private:
     void ensureVoice(ofxSCServer* server, const std::string& key, const DesiredState& state) {
         if(server == nullptr || state.numChannels <= 0 || state.numChannels > 16 || state.filePath.empty()) return;
         auto& voice = voices[server][key];
-        if(voice.synth != nullptr && (voice.filePath != state.filePath || voice.numChannels != state.numChannels))
+        if(voice.synth != nullptr && (voice.filePath != state.filePath || voice.numChannels != state.numChannels ||
+                                      voice.timestretch != state.timestretch))
             freeVoice(voice);
         if(voice.synth != nullptr) return;
         const std::string path = resolvePath(state.filePath);
@@ -309,12 +319,14 @@ private:
         }
         voice.filePath = state.filePath;
         voice.numChannels = state.numChannels;
+        voice.timestretch = state.timestretch;
         for(int ch = 0; ch < state.numChannels; ++ch) {
             auto* buffer = new ofxSCBuffer(0, 0, server);
             buffer->readChannel(path, {ch});
             voice.buffers.push_back(buffer);
         }
-        voice.synth = new ofxSCSynth("waveTrackPlayer" + ofToString(state.numChannels), server);
+        voice.synth = new ofxSCSynth((state.timestretch ? "waveTrackStretchPlayer" : "waveTrackPlayer") +
+                                     ofToString(state.numChannels), server);
         voice.server = server;
         for(int ch = 0; ch < state.numChannels; ++ch)
             voice.synth->set("buf" + ofToString(ch), voice.buffers[ch]->index);
