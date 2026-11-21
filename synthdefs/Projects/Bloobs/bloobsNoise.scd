@@ -16,5 +16,5 @@
     ];
     signal = Select.ar(type, waves) * levels;
     Out.ar(OceanodeOutput.kr(\out), signal);
-}, description: "BLOOBS four-choice noise source", category: "Optimized/Bloobs");
+}, description: "BLOOBS four-choice noise source", category: "Projects/Bloobs");
 )

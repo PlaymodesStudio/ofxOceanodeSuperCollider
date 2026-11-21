@@ -15,6 +15,31 @@ Do not rename existing DSP by rewriting it. Migrate node IDs, saved values,
 connections and GUI bindings together; back up the installed state and verify
 that the compiled DSP remains unchanged.
 
+## Project synths (`Projects/<Name>/`)
+
+A synth made for one project goes in `synthdefs/Projects/<Name>/`, never in
+the shared categories: a cheaper variant tuned to one patch (fixed type,
+fixed channel count, control-rate parameters a project never modulates at
+audio rate), a legacy graph reproduced for one show, a synth only its macros
+use. Its category is `Projects/<Name>`.
+
+- **Opt-in per app.** "Sync with SynthDefs Git" downloads and compiles a
+  project only in apps that tick it in the Sync dialog; the choice is kept in
+  the app's `data/Supercollider/Config/SynthdefProjects.json`
+  (`{"projects": ["Bloobs"]}`). Other apps never see it.
+- **Unticking keeps what is installed.** Presets may still use the nodes, so
+  the sync neither removes nor recompiles them; it only stops updating them.
+- **Keep the controls of what it replaces.** A variant keeps the parameter
+  names, ranges and ports of the shared synth it stands in for, minus the
+  ones it fixes, so a node is swapped by renaming it in the macro and its
+  cables and saved values carry over. Say what it replaces and what it drops
+  in the folder's README.
+- **Do not edit a shared synth for one project.** Other projects load it.
+  Make the project variant instead, and promote it to a shared category only
+  when it is reusable as one function (see above), with a migration.
+- **Several projects need it:** each app ticks that project, or the synth is
+  reusable and belongs in a shared category.
+
 ## Reusable additions from the ensemble conversions
 
 | Browser name | Function | New native DSP needed? |

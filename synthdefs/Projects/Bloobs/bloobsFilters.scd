@@ -12,7 +12,7 @@
 	mix = OceanodeParameter.kr(\mix, 1, n, 0, 1, "vf");
 	input = In.ar(OceanodeInput.kr(\in), n);
 	Out.ar(OceanodeOutput.kr(\out), XFade2.ar(input, BLowPass4.ar(input, freq, res), mix * 2 - 1));
-}, description: "BLOOBS 4-pole lowpass (Filter4Pole at control rate)", category: "Optimized/Bloobs");
+}, description: "BLOOBS 4-pole lowpass (Filter4Pole at control rate)", category: "Projects/Bloobs");
 );
 (
 ~synthCreator.value("BloobsHiPass", {|n|
@@ -22,5 +22,5 @@
 	mix = OceanodeParameter.kr(\mix, 1, n, 0, 1, "vf");
 	input = In.ar(OceanodeInput.kr(\in), n);
 	Out.ar(OceanodeOutput.kr(\out), XFade2.ar(input, BHiPass4.ar(input, freq, res), mix * 2 - 1));
-}, description: "BLOOBS 4-pole highpass (Filter4Pole at control rate)", category: "Optimized/Bloobs");
+}, description: "BLOOBS 4-pole highpass (Filter4Pole at control rate)", category: "Projects/Bloobs");
 )

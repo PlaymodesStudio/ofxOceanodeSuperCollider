@@ -9,5 +9,5 @@
 	fmin = OceanodeParameterLag.ar(\fm_in, 0, n, -1, 1, "vf", 1/30, true);
 	levels = OceanodeParameterLag.ar(\levels, 0, n, 0, 1, "vf", 1/30, true);
 	Out.ar(OceanodeOutput.kr(\out), SinOsc.ar(freq + fmin, phase * pi) * levels);
-}, description: "BLOOBS sine oscillator (SinOs without oversampling)", category: "Optimized/Bloobs");
+}, description: "BLOOBS sine oscillator (SinOs without oversampling)", category: "Projects/Bloobs");
 )

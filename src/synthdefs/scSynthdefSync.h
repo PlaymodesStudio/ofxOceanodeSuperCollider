@@ -38,6 +38,11 @@
 //    5. Loads the new SynthDefs into the running servers, or offers to restart
 //       them when UGens changed (scsynth loads plugins only when it boots).
 //
+//  synthdefs/Projects/<Name>/ holds synths made for one project. An app syncs
+//  only the projects ticked in the dialog, kept in
+//  data/Supercollider/Config/SynthdefProjects.json; unticking one leaves what
+//  it installed in place (presets may still use its nodes).
+//
 //  What was synced and compiled is kept in data/Supercollider/Config/SynthdefSync.json.
 //  macOS only, like the compiler.
 //
@@ -94,6 +99,7 @@ public:
         std::vector<std::pair<std::string, std::string>> failures;  // what, why
         std::vector<std::string> notes;
         std::vector<std::string> changedSynths; // ~synthCreator names rebuilt
+        std::vector<std::string> projects;      // synthdefs/Projects/ folders in the repository
         bool ugensChanged = false;
         bool synthdefsChanged = false;
         bool cancelled = false;
@@ -113,6 +119,8 @@ private:
     void start();
     void finish();
     void restartServers();
+    void refreshProjects();         // the dialog's project list and this app's choice
+    void drawProjects();
 
     std::vector<serverManager*> servers;
     std::function<void()> reloadCallback;
@@ -126,6 +134,8 @@ private:
     char branch[128] = "";
     bool fromCheckout = false;
     bool rebuildAll = false;
+    std::vector<std::string> knownProjects;     // offered in the dialog
+    std::vector<std::string> syncedProjects;    // this app's choice (Config/SynthdefProjects.json)
 
     std::thread worker;
     std::shared_ptr<Progress> progress;

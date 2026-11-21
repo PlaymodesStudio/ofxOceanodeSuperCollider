@@ -8,5 +8,5 @@
     signal = BPF.ar(input, pitch, rq);
     signal = BPF.ar(signal, pitch, rq);
     Out.ar(OceanodeOutput.kr(\out), signal);
-}, description: "BLOOBS cascaded 78-voice bandpass", category: "Optimized/Bloobs");
+}, description: "BLOOBS cascaded 78-voice bandpass", category: "Projects/Bloobs");
 )

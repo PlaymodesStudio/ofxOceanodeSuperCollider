@@ -7,5 +7,5 @@
     panned = Array.fill(n, {|i| Pan2.ar(input[i], position[i]) });
     signal = Mix.new(panned);
     Out.ar(OceanodeOutput.kr(\out), signal);
-}, description: "BLOOBS signed stereo pan mixer", category: "Optimized/Bloobs");
+}, description: "BLOOBS signed stereo pan mixer", category: "Projects/Bloobs");
 )

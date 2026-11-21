@@ -47,6 +47,44 @@ std::string readFile(const fs::path& path){
     return contents.str();
 }
 
+// synthdefs/Projects/<Name>/ holds the synths of one app's project. An app
+// syncs only the projects listed in data/Supercollider/Config/SynthdefProjects.json
+// ({"projects": ["Bloobs"]}); the others are neither downloaded nor compiled.
+// A project taken off the list keeps what is installed.
+fs::path projectsConfigPath(){
+    return fs::path(ofToDataPath("Supercollider", true)) / "Config" / "SynthdefProjects.json";
+}
+
+std::set<std::string> loadProjects(){
+    std::set<std::string> projects;
+    try {
+        std::ifstream file(projectsConfigPath());
+        if(!file) return projects;
+        const ofJson json = ofJson::parse(file);
+        for(const auto& name : json.value("projects", ofJson::array())){
+            if(name.is_string() && !name.get<std::string>().empty()) projects.insert(name.get<std::string>());
+        }
+    } catch(const std::exception& error) {
+        ofLogWarning("scSynthdefSync") << "Could not read " << projectsConfigPath() << ": " << error.what();
+    }
+    return projects;
+}
+
+void saveProjects(const std::set<std::string>& projects){
+    std::error_code ignored;
+    fs::create_directories(projectsConfigPath().parent_path(), ignored);
+    ofJson json = ofJson::object();
+    json["projects"] = std::vector<std::string>(projects.begin(), projects.end());
+    std::ofstream(projectsConfigPath()) << json.dump(4);
+}
+
+// The project of a path relative to synthdefs/ ("Projects/Bloobs/x.scd" -> "Bloobs"),
+// "" outside Projects/ or for a file directly in it
+std::string projectOf(const std::string& rel){
+    const auto parts = ofSplitString(rel, "/", true);
+    return parts.size() >= 3 && parts[0] == "Projects" ? parts[1] : "";
+}
+
 bool sameContents(const fs::path& a, const fs::path& b){
     std::error_code error;
     if(!fs::exists(a, error) || !fs::exists(b, error)) return false;
@@ -206,6 +244,7 @@ public:
         retiredRoot = data / "_retired_synthdefs";
         work = data / "tmp" / (checkOnly ? "synthdefUpdateCheck" : "synthdefSync");
         statePath = data / "Config" / "SynthdefSync.json";
+        projects = loadProjects();
         parallel = std::clamp((int)std::thread::hardware_concurrency() / 2, 2, 6);
     }
 
@@ -299,6 +338,8 @@ private:
         if(parts.empty() || parts.back() == ".DS_Store") return {};
         if(parts[0] == "synthdefs" && parts.size() > 1){
             if(parts[1] == "WIP") return {};
+            // Only the projects this app syncs
+            if(parts[1] == "Projects" && !projects.count(projectOf(path.substr(std::string("synthdefs/").size())))) return {};
             if(std::find(parts.begin(), parts.end(), "CompiledSynthdefs") != parts.end()) return {};
             return sources / path.substr(std::string("synthdefs/").size());
         }
@@ -348,6 +389,7 @@ private:
                     if(!it->is_regular_file()) continue;
                     RemoteFile file;
                     file.path = fs::relative(it->path(), addonRoot).generic_string();
+                    noteProject(file.path);
                     file.dest = destinationOf(file.path);
                     if(file.dest.empty()) continue;
                     file.preset = isPresetPath(file.path);
@@ -383,6 +425,7 @@ private:
                 if(mode == "120000") continue;  // symbolic link
                 RemoteFile file;
                 file.path = entry.value("path", "");
+                noteProject(file.path);
                 file.dest = destinationOf(file.path);
                 if(file.dest.empty()) continue;
                 file.preset = isPresetPath(file.path);
@@ -393,11 +436,20 @@ private:
             sourceId = std::string(repository) + "@" + branch;
             note("Repository " + std::string(repository) + ", branch " + branch + ", commit " + commit.substr(0, 7));
         }
+        edit([&](scSynthdefSync::Report& r){ r.projects.assign(availableProjects.begin(), availableProjects.end()); });
         if(files.empty()){
             fail("The repository has no SynthDef sources");
             return false;
         }
         return true;
+    }
+
+    // The repository's project folders, offered in the dialog whether synced or not
+    void noteProject(const std::string& repoPath){
+        const std::string prefix = "synthdefs/";
+        if(!startsWith(repoPath, prefix)) return;
+        const std::string project = projectOf(repoPath.substr(prefix.size()));
+        if(!project.empty()) availableProjects.insert(project);
     }
 
     // ── 2. Download ───────────────────────────────────────────────────────────
@@ -627,9 +679,14 @@ private:
                 if(top == "Oceanode" || top == "OceanodeCode" || top == "WIP" || it->path().filename() == "CompiledSynthdefs"){
                     it.disable_recursion_pending();
                 }
+                // A project this app does not sync (left from when it did): not compiled
+                if(top == "Projects" && it.depth() == 1 && !projects.count(it->path().filename().string())){
+                    it.disable_recursion_pending();
+                }
                 continue;
             }
             if(it->path().extension() != ".scd") continue;
+            if(top == "Projects" && projectOf(rel).empty()) continue;
             const std::string text = readFile(it->path());
             const bool isCreator = std::regex_search(text, creator);
             Source source;
@@ -1144,6 +1201,8 @@ private:
     int parallel = 2;
     ofJson state = ofJson::object();
     std::vector<RemoteFile> files;
+    std::set<std::string> projects;             // Projects/ folders this app syncs
+    std::set<std::string> availableProjects;    // Projects/ folders in the repository
     std::map<std::string, std::vector<fs::path>> index;    // file name -> installed copies
     const fs::file_time_type syncStart = fs::file_time_type::clock::now();
 };
@@ -1278,6 +1337,48 @@ void scSynthdefSync::finish(){
     for(const auto& name : report.changedSynths) scSynthdef::reloadAll(name);
 }
 
+void scSynthdefSync::refreshProjects(){
+    const std::set<std::string> chosen = loadProjects();
+    std::set<std::string> known(chosen.begin(), chosen.end());
+    // The repository's, as the last check or sync read them
+    known.insert(report.projects.begin(), report.projects.end());
+    // Folders on disk: this checkout's and those installed in the data folder
+    std::vector<fs::path> roots = {fs::path(ofToDataPath("Supercollider", true)) / "SynthdefSources" / "Projects"};
+    if(!addonRoot.empty()) roots.push_back(fs::path(addonRoot) / "synthdefs" / "Projects");
+    for(const auto& root : roots){
+        std::error_code error;
+        if(!fs::is_directory(root, error)) continue;
+        for(const auto& entry : fs::directory_iterator(root, error)){
+            if(entry.is_directory()) known.insert(entry.path().filename().string());
+        }
+    }
+    knownProjects.assign(known.begin(), known.end());
+    syncedProjects.assign(chosen.begin(), chosen.end());
+}
+
+void scSynthdefSync::drawProjects(){
+    ImGui::TextUnformatted("Projects");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(synthdefs/Projects/: synths made for one project)");
+    if(knownProjects.empty()){
+        ImGui::TextDisabled("No project folders found yet. A sync lists the repository's.");
+        return;
+    }
+    ImGui::Indent();
+    for(const auto& name : knownProjects){
+        bool on = std::find(syncedProjects.begin(), syncedProjects.end(), name) != syncedProjects.end();
+        if(ImGui::Checkbox(name.c_str(), &on)){
+            std::set<std::string> chosen(syncedProjects.begin(), syncedProjects.end());
+            if(on) chosen.insert(name);
+            else chosen.erase(name);
+            saveProjects(chosen);
+            syncedProjects.assign(chosen.begin(), chosen.end());
+        }
+    }
+    ImGui::Unindent();
+    ImGui::TextDisabled("Only ticked projects are synced to this app. Unticking one keeps what it already installed.");
+}
+
 void scSynthdefSync::restartServers(){
     for(auto* manager : servers) if(manager) manager->prepareForRestart();
     for(auto* manager : servers) if(manager) manager->boot();
@@ -1301,7 +1402,10 @@ void scSynthdefSync::drawPopup(){
     }
     if(openRequested){
         openRequested = false;
-        if(stage != Stage::Running) stage = Stage::Confirm;
+        if(stage != Stage::Running){
+            stage = Stage::Confirm;
+            refreshProjects();
+        }
         ImGui::OpenPopup(popupId);
     }
     if(stage == Stage::Running){
@@ -1374,6 +1478,8 @@ void scSynthdefSync::drawPopup(){
         ImGui::Checkbox("Compile everything again", &rebuildAll);
         ImGui::SameLine();
         ImGui::TextDisabled("(slow: every synth and Defaults script)");
+        ImGui::Spacing();
+        drawProjects();
         ImGui::Spacing();
         ImGui::BeginDisabled(!fromCheckout && ofTrim(branch).empty());
         if(ImGui::Button("Sync", ImVec2(120, 0))) start();

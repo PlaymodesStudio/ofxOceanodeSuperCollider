@@ -1,4 +1,11 @@
-# BLOOBS 78-channel SynthDefs
+# BLOOBS project SynthDefs
+
+Synths made for BLOOBS. Like every `Projects/` folder, an app gets them from
+"Sync with SynthDefs Git" only when it ticks the **Bloobs** project (kept in
+its `data/Supercollider/Config/SynthdefProjects.json`). Moved here from
+`Optimized/Bloobs/` on 2026-11-21.
+
+## 78-channel models
 
 These metadata-backed SynthDefs reproduce the old BLOOBS 78-channel chain
 without the extra audio-rate parameter selection and unused noise types in
@@ -10,8 +17,10 @@ the generic new SynthDefs.
 | `BloobsBandpass` | old `bandpass78` | Two cascaded BPFs; control-rate pitch and Q |
 | `BloobsStereoPan` | old `stereopan78` | Signed -1..1 Pan2 per channel, mixed to stereo |
 
-Only `N Chan = 78` is compiled for BLOOBS. The models are used by
-`MICROBUBBLES_THALASTASI` and `LLUERNIA_SONIFICATOR_2/Macro_12`.
+Only `N Chan = 78` is compiled for BLOOBS. The models are also used by
+`MICROBUBBLES_THALASTASI` and `LLUERNIA_SONIFICATOR_2/Macro_12`: an app that
+loads those macros must tick the Bloobs project to keep getting their sources
+(builds it already has stay installed either way).
 
 The compiled 78-channel graphs contain 711, 244, and 137 UGens respectively.
 The old reference binaries contain 711, 243, and 136. In a 30-second offline
