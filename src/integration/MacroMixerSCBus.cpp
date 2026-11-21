@@ -33,8 +33,12 @@ class AudioBridge : public scNode {
     std::map<ofxSCServer*,State> states;
     std::vector<Retirement> retired;
     Value sourceA=MacroMixerMixing::object("ScBus",nodePort()),sourceB=sourceA;
-    int channels=2;
-    float gainA=1,gainB=0,smoothing=.02f;
+    // Width of the bridge synth: the wider of its two sources (channelsOf, resize).
+    static constexpr int fallbackChannels=16;
+    // Fixed de-zipper on the gains: the host sends them once per frame.
+    static constexpr float smoothing=.02f;
+    int channels=fallbackChannels;
+    float gainA=1,gainB=0;
     ofEventListeners graphListeners;
     std::vector<serverManager*> managers;
     std::map<serverManager*,uint64_t> routingTickets;
@@ -51,6 +55,43 @@ class AudioBridge : public scNode {
         state.synth->set("inA",state.a); state.synth->set("inB",state.b); state.synth->set("out",state.out);
         state.synth->set("gainA",gainA); state.synth->set("gainB",gainB); state.synth->set("smoothing",smoothing);
     }
+    // A source's channel count: what its node declares, else its N Chan
+    // parameter (the convention SC Mixer Pro reads too), else the fallback.
+    // An empty or switched-off source has no width (0).
+    static int channelsOf(const nodePort& port) {
+        if(!port.getNodeRef()) return 0;
+        const nodePort source=scNode::resolveAudioSource(port);
+        scNode* node=source.getNodeRef();
+        if(!node) return 0;
+        int count=node->getOutputNumChannels(source.getIndex());
+        if(count<=0) {
+            auto& group=node->getParameterGroup();
+            if(group.contains("N_Chan")) {
+                // Oceanode keeps its own wrapper in the group, not the ofParameter
+                ofAbstractParameter& param=group.get("N_Chan");
+                if(auto* p=dynamic_cast<ofxOceanodeParameter<int>*>(&param)) count=p->getParameter().get();
+                else if(auto* p=dynamic_cast<ofxOceanodeParameter<float>*>(&param)) count=int(std::round(p->getParameter().get()));
+                else if(auto* p=dynamic_cast<ofParameter<int>*>(&param)) count=p->get();
+            }
+        }
+        return count>0 ? std::min(count,MAX_NODE_CHANNELS) : fallbackChannels;
+    }
+    // Rebuilds the bridge synth at a new width, replacing the running one in
+    // place (addAction 4) so its position in the server's node order holds.
+    void resize(int count) {
+        if(count==channels) return;
+        channels=count;
+        for(auto& item:states) {
+            auto& state=item.second;
+            if(!state.synth) continue;
+            auto next=std::make_unique<ofxSCSynth>(synthName(),item.first);
+            const bool running=state.synth->isCreationRequested();
+            const int replaced=state.synth->nodeID;
+            state.synth=std::move(next);
+            if(running) { send(state); state.synth->createAndRun(4,replaced,true); }
+        }
+    }
+    std::string synthName() const { return "oceanodeMacroMixer"+std::to_string(channels); }
     void completed(ofxSCServer* server) {
         auto state=states.find(server);
         if(state!=states.end() && !state->second.ready) return;
@@ -173,6 +214,8 @@ public:
         for(auto* manager:managers) if(manager && (manager->hasGraphNodes() || states.count(manager->getServer()))) manager->requestMixerRouting(lease);
     }
     bool isMacroMixerBridge() const override { return true; }
+    // A morph feeding another morph passes its width on.
+    int getOutputNumChannels(int) override { return channels; }
     void graphWillRebuild(ofxSCServer* server) override { states[server].ready=false; }
     // Unscoped (no affinity, or both inputs on this server): the ordinary walk,
     // exactly as before. Scoped: SC Mixer Pro's walk over this server's inputs.
@@ -208,9 +251,9 @@ public:
     void updateSources(const Value& av,const Value& bv,float progress,const ofJson& options,const std::string& policy) {
         const auto& a=MacroMixerMixing::object<nodePort>(av); const auto& b=MacroMixerMixing::object<nodePort>(bv);
         if(a.getNodeRef()==this || b.getNodeRef()==this) throw std::runtime_error("A ScBus router cannot feed its own mixer output back into itself");
-        const int count=options.at("channels").get<int>();
-        if(count!=channels && !states.empty()) throw std::runtime_error("Clear Playback before changing ScBus channel count");
-        channels=count; smoothing=options.at("smoothing_ms").get<float>()*.001f;
+        // As wide as the wider source; both unknown or empty: the fallback.
+        const int detected=std::max(channelsOf(a),channelsOf(b));
+        resize(detected>0 ? detected : fallbackChannels);
         const auto& oldA=MacroMixerMixing::object<nodePort>(sourceA); const auto& oldB=MacroMixerMixing::object<nodePort>(sourceB);
         const bool changed=!(a==oldA) || !(b==oldB);
         place(std::get<MacroMixerMixing::Object>(av).placement,std::get<MacroMixerMixing::Object>(bv).placement,a==b);
@@ -241,7 +284,7 @@ public:
     }
     void buildSynth(ofxSCServer* server) override {
         auto& state=states[server];
-        state.synth=std::make_unique<ofxSCSynth>("oceanodeMacroMixer"+std::to_string(channels),server);
+        state.synth=std::make_unique<ofxSCSynth>(synthName(),server);
         state.ready=false; state.failed=false;
     }
     void createSynth(ofxSCServer* server) override { auto& state=states.at(server); send(state); state.synth->createAndRun(0,1,true); }
@@ -277,14 +320,14 @@ public:
 };
 ofJson audioOptions(const ofJson& input,bool switching) {
     if(!input.is_object()) throw std::runtime_error("ScBus options must be an object");
-    ofJson result={{"channels",2},{"smoothing_ms",20.0}}; if(switching) result["threshold"]=.5;
+    // Channels and gain smoothing are no longer options (the width is detected
+    // from the sources, the smoothing is fixed): saved ones are dropped.
+    ofJson result=ofJson::object(); if(switching) result["threshold"]=.5;
     for(auto it=input.begin();it!=input.end();++it) {
+        if(it.key()=="channels" || it.key()=="smoothing_ms") continue;
         if(!result.contains(it.key()) || !it.value().is_number()) throw std::runtime_error("Invalid ScBus option: "+it.key());
         result[it.key()]=it.value();
     }
-    const double channels=result["channels"].get<double>(),smooth=result["smoothing_ms"].get<double>();
-    if(!result["channels"].is_number_integer() || channels<1 || channels>MAX_NODE_CHANNELS) throw std::runtime_error("ScBus channels must be 1..128");
-    if(!std::isfinite(smooth) || smooth<0 || smooth>1000) throw std::runtime_error("ScBus smoothing must be 0..1000 ms");
     if(switching) { const double t=result["threshold"].get<double>(); if(!std::isfinite(t) || t<0 || t>1) throw std::runtime_error("Switch threshold must be 0..1"); }
     return result;
 }
