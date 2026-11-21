@@ -7,3 +7,4 @@ clang++ -std=c++17 -O2 -Wall loop_test.cpp -o "$out"
 "$out"
 python3 nrt_test.py
 python3 precision_test.py
+python3 span_test.py

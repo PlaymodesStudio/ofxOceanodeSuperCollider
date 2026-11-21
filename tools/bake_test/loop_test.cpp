@@ -141,6 +141,17 @@ int main(){
         std::printf("random: %s\n", r2.message.c_str());
         CHECK(r2.ok && r2.repeat < 0.1, "random source flagged: %.3f", r2.repeat);
     }
+    {   // Span: keep [2 s, 6 s) of a render, fade in (starts inside the sound) and out
+        Audio render = make(3, 8.0, sr, 2, false, 11), span;
+        SpanResult r = makeSpan(render, 2.0, 6.0, span);
+        std::printf("span: %s\n", r.message.c_str());
+        CHECK(r.ok && span.channels == 2 && span.frames() == (std::size_t)(4 * sr), "span shape");
+        const std::size_t mid = 2 * sr;
+        CHECK(span.samples[mid * 2] == render.samples[(2 * sr + mid) * 3], "span taken from the right place");
+        CHECK(std::fabs(span.samples[0]) < 0.01f && std::fabs(span.samples[(span.frames() - 1) * 2]) < 0.01f, "span edges faded");
+        Audio fromZero;
+        CHECK(makeSpan(render, 0.0, 1.0, fromZero).ok && fromZero.samples[sr / 2 * 2] == render.samples[sr / 2 * 3], "span from 0");
+    }
     std::printf(failures ? "FAILED (%d)\n" : "PASS\n", failures);
     return failures ? 1 : 0;
 }

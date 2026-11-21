@@ -28,6 +28,14 @@
 //  they should; stopped, it is silent. A tempo change after the bake
 //  resamples the loop (the node says so: Rebake).
 //
+//  Timeline Span ("Bake Timeline Span", from a bar, so many bars, a tail):
+//  a freeze. The render runs from the transport's start to the span's end
+//  plus the tail; the file keeps the span and the tail, and plays at the
+//  transport's position (BakeSpan<n>), silent before and after it -- what
+//  the original played there, including its history (a reverb from before
+//  the span) and its tails. Not with tempo automation (placed by beats at
+//  one tempo); at most 2^24 frames (5.8 minutes at 48 kHz).
+//
 //  Unbake puts the cables back on the original; Rebake renders it again with
 //  the node's current settings (Inspector). The file is saved with the preset
 //  (copied into its samples folder, like SampleBox's samples).
@@ -99,6 +107,14 @@ public:
         float bpm = 120.0f;         // the tempo the loop is rendered at
         double loopBeats() const { return bars * beatsPerBar; }
         double cycleSeconds() const { return loopBeats() * 60.0 / std::max(1.0f, bpm); }
+        // Timeline Span
+        bool span = false;
+        float fromBar = 1.0f;       // 1 = the start
+        float lengthBars = 16.0f;
+        float tail = 4.0f;          // seconds past the span's end
+        double spanStartBeat() const { return (fromBar - 1.0) * beatsPerBar; }
+        double spanEndBeat() const { return spanStartBeat() + lengthBars * beatsPerBar; }
+        double beatSeconds() const { return 60.0 / std::max(1.0f, bpm); }
     };
     // Renders `source`'s output `outputIndex` and takes its place when done.
     void startBake(scNode& source, int outputIndex, const Settings& settings);
@@ -139,6 +155,8 @@ private:
     ofParameter<bool> matchLoop;
     ofParameter<bool> syncedMode;
     ofParameter<int> barsParam;
+    ofParameter<bool> spanMode;
+    ofParameter<float> fromBarParam, lengthBarsParam, tailParam;
 
     // What plays, and what it was baked from (saved with the preset)
     std::string filePath;
@@ -150,8 +168,14 @@ private:
     double loopBeats = 0.0;
     int loopFrames = 0;
     float bakedBpm = 0.0f;
+    // Timeline Span: where the file starts (beats), its length (loopFrames)
+    bool span = false;
+    double spanStartBeat = 0.0;
+    int fileRate = 0;           // the file's sample rate (frames per second)
     scTransportSync::Follower follower;
     int anchorIdCounter = 0;
+    int anchorHardCounter = 0;
+    bool followsTransport() const { return synced || span; }
     std::string sourceName;        // the original node's name in this canvas
     std::string sourceOutput;      // its output's name
     std::string loopInfo;
@@ -171,6 +195,7 @@ private:
     std::string loopMessage;
     int loopChannels = 0;
     int loopFramesOut = 0;
+    int loopRateOut = 0;
 
     struct ServerState {
         ofxSCSynth* synth = nullptr;

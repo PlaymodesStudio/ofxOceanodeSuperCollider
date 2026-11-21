@@ -28,6 +28,21 @@
 //              corrections only past 256 frames, glided. Play starts at full
 //              level; stopped: silent within 20 ms.
 //
+// BakeSpan<n>  plays a Timeline Span bake (a freeze): the file is the node's
+//              sound from the span's start to its end plus the tail, played
+//              at the transport's position -- silent before and after it. C++
+//              sends anchors with the position already in frames:
+//                \anchorPos    the file's frame at the anchor (whole, may be
+//                              negative: before the span)
+//                \anchorId     counter, a new anchor on every change
+//                \anchorHard   counter, changes on a jump (seek, start, loop
+//                              wrap, a new synth): the clock is set there
+//                \run, \tbpm, \bakedbpm   as BakeSync
+//              The clock counts frames from the last jump (one per sample at
+//              the baked tempo: whole numbers, exact reads up to 2^24 frames,
+//              5.8 minutes at 48 kHz); drift corrections only past 256
+//              frames, glided.
+//
 // Defaults scripts are loaded by syncCompile.scd, whose argv[0] is the
 // compilation mode, not an output path: write beside this source.
 var compiledDir, destination;
@@ -58,7 +73,9 @@ File.mkdir(destination);
         // so the read position is a whole number (exact in float32, however
         // long the loop) and every sample is read as it was rendered. Another
         // tempo resamples.
-        var rate = bpm / \bakedbpm.kr(120).max(1) * BufRateScale.kr(\loopbuf.kr(0)) * run;
+        // BufRateScale is 0 until the buffer has loaded: the clock must not stall
+        var scale = BufRateScale.kr(\loopbuf.kr(0));
+        var rate = bpm / \bakedbpm.kr(120).max(1) * Select.kr(scale > 0, [1, scale]) * run;
         var anchorTrig = T2A.ar(Changed.kr(\anchorId.kr(0)));
         var anchorFrames = (\anchorPos.ar(0) / beats).frac * frames;
         var target = (anchorFrames + Phasor.ar(anchorTrig, rate, 0, frames, 0)) % frames;
@@ -88,6 +105,30 @@ File.mkdir(destination);
         // own creation fades in (a graph rebuild mid-loop), Play does not
         var gain = LagUD.ar(run, 0, 0.02) * \levels.kr(1, 0.05) * EnvGen.kr(Env([0, 1], [0.02]));
         Out.ar(\out.kr(0), n.collect { |c| Select.ar(introOn, [loopSig[c], introSig[c]]) } * gain);
+    }).writeDefFile(destination);
+
+    SynthDef(("BakeSpan" ++ n).asSymbol, {
+        var buf = \buf.kr(0);
+        var frames = \frames.kr(1).max(1);
+        var run = \run.ar(0);
+        // BufRateScale is 0 until the buffer has loaded: the clock must not stall
+        var scale = BufRateScale.kr(buf);
+        var rate = \tbpm.kr(120) / \bakedbpm.kr(120).max(1) * Select.kr(scale > 0, [1, scale]) * run;
+        var anchorTrig = T2A.ar(Changed.kr(\anchorId.kr(0)));
+        // a jump sets the clock; Impulse: an anchor sent with the synth itself
+        var hardTrig = T2A.ar(Changed.kr(\anchorHard.kr(0)) + Impulse.kr(0));
+        var anchorPos = \anchorPos.ar(0);
+        // a Phasor triggered by a 0 -> 1 step already adds one increment at
+        // the reset sample (sub-sample reset): take it back
+        var target = anchorPos - rate + Phasor.ar(anchorTrig, rate, 0, 1e9, 0);
+        var clock = Phasor.ar(hardTrig, rate, -1e9, 1e9, anchorPos - rate);
+        var soft = target - clock;
+        var pos = clock + Lag.ar((soft / 256).round * 256, 2);
+        var inside = (pos >= 0) * (pos < frames);
+        var sig = BufRd.ar(n, buf, pos.clip(0, frames - 1), 0, 4).asArray;
+        // instant on (a downbeat keeps its attack), 20 ms off; creation fades in
+        var gain = LagUD.ar(run, 0, 0.02) * \levels.kr(1, 0.05) * EnvGen.kr(Env([0, 1], [0.02])) * inside;
+        Out.ar(\out.kr(0), sig * gain);
     }).writeDefFile(destination);
 
     SynthDef(("BakeTap" ++ n).asSymbol, {

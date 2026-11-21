@@ -295,4 +295,54 @@ inline SyncedResult makeSyncedLoop(const Audio& in, double cycleSeconds, Audio& 
     return result;
 }
 
+// Timeline Span (a freeze): the render from the transport's start; the file
+// keeps [startSeconds, endSeconds) of it. A span starting inside the sound
+// fades in over 5 ms (it would otherwise start with a click when played
+// from before it); the end fades out over 10 ms.
+struct SpanResult {
+    bool ok = false;
+    std::string message;
+    int channels = 0;
+    int frames = 0;
+};
+
+inline SpanResult makeSpan(const Audio& in, double startSeconds, double endSeconds, Audio& out){
+    SpanResult result;
+    const int ch = in.channels;
+    const std::size_t total = in.frames();
+    if(ch <= 0 || in.sampleRate <= 0 || total == 0){ result.message = "The render is empty"; return result; }
+    const std::size_t first = (std::size_t)std::llround(std::max(0.0, startSeconds) * in.sampleRate);
+    const std::size_t last = std::min(total, (std::size_t)std::llround(endSeconds * in.sampleRate));
+    if(last <= first + 64){ result.message = "The render is shorter than the span"; return result; }
+    const std::size_t F = last - first;
+    if(F >= (1u << 24)){ result.message = "The span is longer than 2^24 frames"; return result; }
+
+    int used = 0;
+    for(int c = 0; c < ch; c++){
+        float peak = 0.0f;
+        for(std::size_t f = first; f < last; f++) peak = std::max(peak, std::fabs(in.samples[f * ch + c]));
+        if(peak > 1e-6f) used = c + 1;
+    }
+    if(used == 0){ result.message = "The node made no sound in the span"; return result; }
+
+    out.channels = used;
+    out.sampleRate = in.sampleRate;
+    out.samples.assign(F * (std::size_t)used, 0.0f);
+    const std::size_t fadeIn = first > 0 ? std::min<std::size_t>(F / 4, (std::size_t)(0.005 * in.sampleRate)) : 0;
+    const std::size_t fadeOut = std::min<std::size_t>(F / 4, (std::size_t)(0.010 * in.sampleRate));
+    for(std::size_t f = 0; f < F; f++){
+        double g = 1.0;
+        if(f < fadeIn) g *= (f + 0.5) / fadeIn;
+        if(f + fadeOut >= F) g *= (F - f - 0.5) / fadeOut;
+        for(int c = 0; c < used; c++) out.samples[f * used + c] = (float)(in.samples[(first + f) * ch + c] * g);
+    }
+    result.ok = true;
+    result.channels = used;
+    result.frames = (int)F;
+    char text[160];
+    std::snprintf(text, sizeof(text), "%.2f s span, %d ch", F / (double)in.sampleRate, used);
+    result.message = text;
+    return result;
+}
+
 } // namespace scBakeLoop
