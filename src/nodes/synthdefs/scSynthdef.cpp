@@ -15,6 +15,7 @@
 #include "ofxOceanodeShared.h"
 #include "ofxOceanodeConnection.h"
 #include <cstdlib>
+#include <cstring>
 
 namespace {
 // What each synth was last sent for one parameter. Oceanode connections pass
@@ -626,10 +627,23 @@ void scSynthdef::loadBeforeConnections(ofJson& json){
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT
 bool scSynthdef::getTimelineInstrument(ofxOceanodeTimelineInstrument& out){
     // Numeric controls only (a trigger t_gate is not a held gate).
-    auto find = [this](std::initializer_list<const char*> names) -> ofxOceanodeAbstractParameter* {
+    // The timeline asks for this several times a frame, so names are compared
+    // ASCII case-insensitively in place: ofToLower builds a std::locale per
+    // call, which made this lookup most of a frame on large patches.
+    auto sameName = [](const std::string& a, const char* b){
+        const size_t n = std::strlen(b);
+        if(a.size() != n) return false;
+        for(size_t i = 0; i < n; ++i){
+            char c = a[i];
+            if(c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            if(c != b[i]) return false;
+        }
+        return true;
+    };
+    auto find = [this, &sameName](std::initializer_list<const char*> names) -> ofxOceanodeAbstractParameter* {
         for(const char* name : names){
             for(auto& entry : getParameterGroup()){
-                if(ofToLower(entry->getName()) != name) continue;
+                if(!sameName(entry->getName(), name)) continue;
                 auto parameter = std::dynamic_pointer_cast<ofxOceanodeAbstractParameter>(entry);
                 if(!parameter) continue;
                 const std::string type = parameter->valueType();
