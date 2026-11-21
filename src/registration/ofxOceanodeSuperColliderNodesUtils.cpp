@@ -28,6 +28,7 @@
 #include "../nodes/recording/scMultiTrackRecorder.h"
 #include "../nodes/synthdefs/scCodeNode.h"
 #include "../nodes/recording/scNRTRecorder.h"
+#include "../nodes/recording/scBake.h"
 
 namespace ofxOceanodeSuperCollider{
 
@@ -53,6 +54,8 @@ void registerUtilNodes(ofxOceanode &o){
 	o.registerModel<scCodeNode>("SuperCollider/SynthDefs", controller->getServers());
 	o.registerModel<scMultiTrackRecorder>("SuperCollider/Recording", ofxOceanodeNodeRegistrationFlags::Sink, controller->getServers());
 	o.registerModel<scNRTRecorder>("SuperCollider/Recording", ofxOceanodeNodeRegistrationFlags::Sink, controller.get());
+	scBake::setController(controller.get());
+	o.registerModel<scBake>("SuperCollider/Recording", controller.get());
 }
 
 }

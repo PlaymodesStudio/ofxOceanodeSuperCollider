@@ -485,8 +485,8 @@ scSampleBox::Control& scSampleBox::registerPadControl(Pad& p, ofParameter<T>& pa
         if(name == "choke") { sendChokeMasks(); return; }
         if(name == "mute" || name == "solo") { sendMutes(); return; }
         if(name == "fitbeats" || name == "sync") { sendTempo(pad); requestAnchor(); return; }
-        if(name == "autoplay") {
-            // playing with the transport means looping with it
+        if(name == "autoplay" || name == "playalways") {
+            // playing with the transport (or always) means looping
             if constexpr(std::is_same<T, bool>::value) if(value && !pad.loop.get()) pad.loop = true;
             return;
         }
@@ -574,6 +574,7 @@ void scSampleBox::setupPad(Pad& p) {
     PAD_F(p.fitBeats, "Fit Beats", 0.0f, 0.0f, 128.0f, DEST_NONE, "fitbeats");
     PAD_B(p.sync, "Sync To Transport", false, DEST_NONE, "sync");
     PAD_B(p.autoplay, "Play With Transport", false, DEST_NONE, "autoplay");
+    PAD_B(p.playAlways, "Play Always", false, DEST_NONE, "playalways");
     // Mixer
     PAD_F(p.level, "Level", 1.0f, 0.0f, 2.0f, DEST_STRIP, "level");
     PAD_B(p.mute, "Mute", false, DEST_STRIP, "mute");
@@ -680,6 +681,30 @@ void scSampleBox::setupPad(Pad& p) {
 // ════════════════════════════════════════════════════════════════════════════
 // Pads: add, remove, move, duplicate
 // ════════════════════════════════════════════════════════════════════════════
+
+void scSampleBox::loadLoopPad(const std::string& path, float sampleGain, float fitBeats) {
+    if(pads.empty() && addPad() == nullptr) return;
+    Pad& p = *pads.front();
+    p.inPoint = 0.0f;
+    p.outPoint = 1.0f;
+    p.loopCrossfade = 0.0f;
+    p.gateMode = false;
+    p.reverse = false;
+    p.sampleGain = sampleGain;
+    p.loop = true;
+    if(fitBeats > 0.0f) {
+        p.stretchMode = 0;      // Resample: at the baked tempo the speed is exactly 1
+        p.fitBeats = fitBeats;
+        p.sync = true;
+        p.autoplay = true;
+        p.playAlways = false;
+    } else {
+        p.playAlways = true;
+    }
+    p.name = std::filesystem::path(path).stem().string();
+    selected = 0;
+    loadSample(p, path);
+}
 
 scSampleBox::Pad* scSampleBox::addPad() {
     if((int)pads.size() >= MaxPads) return nullptr;
@@ -1467,11 +1492,13 @@ void scSampleBox::updateTempo() {
         if(std::abs(r - p->sentFitRate) > 1e-6f * std::max(1.0f, r)) sendTempo(*p);
     }
     sendTransportAnchors();
-    // Play With Transport: a note held while the transport plays
+    // Play With Transport: a note held while the transport plays; Play
+    // Always: held whenever there is a sample
     const bool playing = getFrameTransportState().current.isPlaying;
     for(auto& up : pads) {
         Pad& p = *up;
-        const bool want = p.autoplay.get() && p.synced() && playing && !p.sample->path.empty();
+        const bool want = !p.sample->path.empty() &&
+            ((p.autoplay.get() && p.synced() && playing) || p.playAlways.get());
         if(want == p.autoPlaying) continue;
         p.autoPlaying = want;
         if(want) {
@@ -2456,6 +2483,10 @@ void scSampleBox::drawTransport(Pad& p, float w) {
     ImGui::SameLine(0, 18.0f * z);
     toggle(p.loop, "Loop");
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("Repeat the region until Stop (or the gate falls in Gate Mode)");
+    ImGui::SameLine(0, 10.0f * z);
+    toggle(p.playAlways, "Play Always");
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Loops from the moment the sample is loaded, transport or not:\n"
+                                                 "no trigger needed (a drone, a baked texture)");
     ImGui::SameLine(0, 10.0f * z);
     toggle(p.reverse, "Reverse");
     ImGui::SameLine(0, 10.0f * z);

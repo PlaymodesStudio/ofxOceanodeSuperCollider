@@ -9,6 +9,7 @@
 #define serverManager_h
 
 #include <vector>
+#include <algorithm>
 #include <map>
 #include <string>
 #include <ofConstants.h>
@@ -113,6 +114,16 @@ public:
     bool writeNRTScore(const std::string& path, double endTime = -1.0) const;
     // Same capture, but the file-writing synth reads `bus` instead.
     bool writeNRTStemScore(const std::string& path, double endTime, int bus) const;
+    // Bake (scBake): the same capture, but the file is `channels` channels of
+    // `bus`, raw. The output synth is pointed at a silent bus and muted, and a
+    // BakeTap<channels> synth (loaded from tapFolder) copies the bus to the
+    // file's outputs from the tail of the tree, after every node.
+    bool writeNRTBakeScore(const std::string& path, double endTime, int bus, int channels,
+                           const std::string& tapFolder) const;
+    // Whether the current graph plays `node` (it is upstream of an Output).
+    bool hasNode(const scNode* node) const {
+        return std::find(nodesList.begin(), nodesList.end(), node) != nodesList.end();
+    }
     std::size_t getNRTEventCount() const;
     // Whether any Output on this server has something patched into it. A
     // server with none makes no sound, so an offline render can skip it.

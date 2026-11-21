@@ -9,6 +9,7 @@
 #include "ofxSCServer.h"
 #include "imgui.h"
 #include "serverManager.h"
+#include "scNode.h"
 #include "synthdefs/scSynthdefCompiler.h"
 #include "ofxOceanodeSuperColliderConfig.h"
 #include <algorithm>
@@ -107,6 +108,7 @@ void ofxOceanodeSuperColliderController::drawGlobalAudioControls(){
 void ofxOceanodeSuperColliderController::update(){
     joinFinishedNRTThread();
     updateNRTArming();
+    updateNRTBake();
     if(!nrtCaptureActive) return;
 
     // update() runs after the nodes. On the first frame after recording
@@ -123,7 +125,136 @@ void ofxOceanodeSuperColliderController::joinFinishedNRTThread(){
     if(nrtRenderThread.joinable() && !nrtRendering.load()){
         nrtRenderThread.join();
         nrtStatus = nrtRenderResult == 0 ? "NRT render complete" : "NRT render failed";
+        if(bakeState == BakeState::Rendering){
+            // scsynth can crash on its way out (VSTPlugin loaded twice) with
+            // the file already complete: judge the files, not the exit code.
+            const long long expected = nrtRenderExpectedBytes.load();
+            bool complete = !bakeFiles.empty();
+            for(const auto& file : bakeFiles){
+                std::ifstream in(file, std::ios::binary | std::ios::ate);
+                if(!in || (long long)in.tellg() < expected - 64 * 1024) complete = false;
+            }
+            if(complete) finishNRTBake(true, "Rendered");
+            else finishNRTBake(false, "scsynth could not render the bake (see the .log beside it)");
+        }
     }
+}
+
+bool ofxOceanodeSuperColliderController::requestNRTBake(const NRTBakeRequest& request){
+    if(request.node == nullptr || request.outputPath.empty()) return false;
+    if(isNRTBusy()){
+        nrtStatus = "Another offline capture or render is running";
+        return false;
+    }
+    joinFinishedNRTThread();
+    // The recorder's choices would add stems, masters and DC removal to the
+    // bake's render: set aside, put back by finishNRTBake().
+    bakeSavedSourceLabels = nrtSourceLabels;
+    bakeSavedRecordStems = nrtRecordStems;
+    bakeSavedServerMasters = nrtServerMasters;
+    bakeSavedRemoveDC = nrtRemoveDC;
+    bakeSavedDuration = nrtDuration;
+    nrtSourceLabels.clear();
+    nrtRecordStems = false;
+    nrtServerMasters = false;
+    nrtRemoveDC = false;
+
+    bake = request;
+    bake.channels = std::max(1, std::min(64, request.channels));
+    bakeManager = nullptr;
+    bakeBus = -1;
+    bakeState = BakeState::Arming;
+    ofDirectory::createDirectory(ofFilePath::getEnclosingDirectory(bake.outputPath), false, true);
+    if(!armNRTRecording(0, bake.channels, bake.outputPath)){
+        // finishNRTBake() would call `done` from inside the caller's request
+        bake.done = nullptr;
+        finishNRTBake(false, nrtStatus);
+        return false;
+    }
+    return true;
+}
+
+void ofxOceanodeSuperColliderController::updateNRTBake(){
+    if(bakeState == BakeState::Capturing && bake.node == nullptr && nrtCaptureActive){
+        completeNRTCapture(true);   // finishes the bake
+        return;
+    }
+    if(bakeState != BakeState::Arming) return;
+    if(isNRTSettling()) return;
+    if(bake.node == nullptr){
+        disarmNRTRecording();
+        finishNRTBake(false, "cancelled");
+        return;
+    }
+    if(!isNRTArmed()){
+        // Disarmed under us: the patch changed while it settled
+        finishNRTBake(false, "The patch changed while the bake was arming");
+        return;
+    }
+    nrtDuration = (float)std::max(0.1, bake.seconds);
+    bakeState = BakeState::Capturing;
+    if(!beginNRTRecording(0, bake.channels, bake.outputPath, false)){
+        disarmNRTRecording();
+        finishNRTBake(false, nrtStatus.empty() ? "Could not start the capture" : nrtStatus);
+    }
+}
+
+void ofxOceanodeSuperColliderController::resolveBakeBus(){
+    bakeManager = nullptr;
+    bakeBus = -1;
+    if(bake.node == nullptr) return;
+    for(int index : nrtServers){
+        serverManager* manager = outputServers[index];
+        if(manager == nullptr || manager->getServer() == nullptr || !manager->hasNode(bake.node)) continue;
+        const int bus = bake.node->getOutputBusIndex(manager->getServer(), bake.outputIndex);
+        if(bus < 0) continue;
+        bakeManager = manager;
+        bakeBus = bus;
+        return;
+    }
+}
+
+void ofxOceanodeSuperColliderController::cancelNRTBake(const scNode* node){
+    if(bakeState == BakeState::Idle || node == nullptr || bake.node != node) return;
+    // Often called from a node's destructor, where rebuilding the graph is
+    // not safe: only forget the node here; updateNRTBake() stops the capture
+    // on the next frame, and a render under way just finishes unheard.
+    bake.node = nullptr;
+    bake.done = nullptr;
+}
+
+std::string ofxOceanodeSuperColliderController::getNRTBakeStage() const{
+    switch(bakeState){
+        case BakeState::Arming: return "Arming";
+        case BakeState::Capturing: return "Capturing";
+        case BakeState::Rendering: return "Rendering";
+        case BakeState::Idle: break;
+    }
+    return {};
+}
+
+void ofxOceanodeSuperColliderController::finishNRTBake(bool ok, const std::string& message){
+    nrtSourceLabels = bakeSavedSourceLabels;
+    nrtRecordStems = bakeSavedRecordStems;
+    nrtServerMasters = bakeSavedServerMasters;
+    nrtRemoveDC = bakeSavedRemoveDC;
+    nrtDuration = bakeSavedDuration;
+    auto done = std::move(bake.done);
+    if(!ok){
+        for(const auto& file : bakeFiles){
+            std::remove(file.c_str());
+            std::remove((file + ".osc").c_str());
+        }
+    }
+    const std::vector<std::string> files = ok ? bakeFiles : std::vector<std::string>();
+    const int filesChannels = bakeFilesChannels;
+    bake = NRTBakeRequest();
+    bakeManager = nullptr;
+    bakeBus = -1;
+    bakeFiles.clear();
+    bakeFilesChannels = 0;
+    bakeState = BakeState::Idle;
+    if(done) done(ok, message, files, filesChannels);
 }
 
 void ofxOceanodeSuperColliderController::startNRTRender(){
@@ -446,6 +577,10 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
     const int outputChannels = std::max(1, nrtCaptureOutputChannels);
     const std::string outputPath = ofToDataPath(nrtCaptureOutputPath.empty() ? nrtOutputPath : nrtCaptureOutputPath, true);
 
+    // The bake's bus belongs to the capture's graph: read it before the graph
+    // is rebuilt on the realtime server.
+    if(bakeState == BakeState::Capturing) resolveBakeBus();
+
     const std::vector<int> captured = nrtServers;
     nrtServers.clear();
     for(int index : captured){
@@ -462,16 +597,50 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
 
     if(cancelled){
         nrtStatus = "NRT capture cancelled";
+        if(bakeState != BakeState::Idle) finishNRTBake(false, "The bake was cancelled");
         return;
     }
     if(captured.empty()){
         nrtStatus = "Could not write NRT score";
+        if(bakeState != BakeState::Idle) finishNRTBake(false, nrtStatus);
+        return;
+    }
+
+    if(bakeState == BakeState::Capturing){
+        // One file: the node's bus, tapped raw (serverManager::writeNRTBakeScore)
+        if(bakeManager == nullptr || bakeBus < 0){
+            finishNRTBake(false, "The node was not playing during the render: connect it to an Output first");
+            return;
+        }
+        // A render file has as many channels as the server has outputs:
+        // a wider node is rendered in groups of that many, side by side.
+        const int total = std::max(1, bake.channels);
+        const int width = std::max(1, std::min(total, bakeManager->preferences.numOutputBusChannels));
+        std::vector<NRTRenderJob> parts;
+        bakeFiles.clear();
+        for(int first = 0, part = 0; first < total; first += width, part++){
+            const int channels = std::min(width, total - first);
+            const std::string file = total <= width ? outputPath
+                : ofFilePath::removeExt(outputPath) + "_part" + ofToString(part) + ".wav";
+            const std::string scorePath = file + ".osc";
+            if(!bakeManager->writeNRTBakeScore(scorePath, duration, bakeBus + first, channels, bake.tapSynthdefFolder)){
+                finishNRTBake(false, "Could not write the bake's render score");
+                return;
+            }
+            parts.push_back({bakeManager, scorePath, file, "bake " + ofToString(part)});
+            bakeFiles.push_back(file);
+        }
+        bakeFilesChannels = width;
+        nrtRemoveDC = false;
+        bakeState = BakeState::Rendering;
+        launchNRTRenderJobs(parts, width, duration,
+                            bakeManager->preferences.hardwareSampleRate, {}, {}, false);
         return;
     }
 
     // One job per file. A stem only differs from its server's master by which
     // bus the file-writing synth reads, so no second capture is needed.
-    struct renderJob { serverManager* manager; std::string score, output, label; };
+    using renderJob = NRTRenderJob;
     std::vector<renderJob> jobs;
 
     // With several servers, every file a server produces on its own carries
@@ -585,6 +754,16 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
         nrtStatus = "Nothing to render";
         return;
     }
+    launchNRTRenderJobs(jobs, outputChannels, duration,
+                        outputServers[captured.front()]->preferences.hardwareSampleRate,
+                        mixInto, serverMasters, keepServerMasters);
+}
+
+void ofxOceanodeSuperColliderController::launchNRTRenderJobs(const std::vector<NRTRenderJob>& jobs, int outputChannels,
+                                                             double duration, int sampleRate,
+                                                             const std::string& mixInto,
+                                                             const std::vector<std::string>& serverMasters,
+                                                             bool keepServerMasters){
 
     // What the progress bar reads while the render runs. scsynth reports no
     // progress of its own, so the only live signal is the output files
@@ -607,8 +786,7 @@ void ofxOceanodeSuperColliderController::completeNRTCapture(bool cancelled, doub
     if(!mixInto.empty()){
         std::ofstream truncate(mixInto, std::ios::binary | std::ios::trunc);
     }
-    const long long frames = (long long)std::llround((double)duration *
-                                                     (double)outputServers[captured.front()]->preferences.hardwareSampleRate);
+    const long long frames = (long long)std::llround(duration * (double)sampleRate);
     // 44-byte canonical WAVE header, 32-bit float samples.
     nrtRenderExpectedBytes = 44 + frames * (long long)std::max(1, outputChannels) * 4;
 

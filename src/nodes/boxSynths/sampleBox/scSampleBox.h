@@ -87,6 +87,13 @@ public:
     explicit scSampleBox(std::vector<serverManager*> servers);
     ~scSampleBox() override;
 
+    // Pad 1 plays `path` as an endless loop of the whole file, with no
+    // trigger: SC Bake's "Replace with SampleBox". The file already loops
+    // seamlessly, so no crossfade is added. fitBeats 0: Play Always; > 0 the
+    // loop is that many beats and follows the transport (Fit, Sync To
+    // Transport, Play With Transport, Resample).
+    void loadLoopPad(const std::string& path, float sampleGain = 1.0f, float fitBeats = 0.0f);
+
     void setup() override;
     void update(ofEventArgs&) override;
     void setBpm(float bpm) override;
@@ -217,8 +224,9 @@ private:
         // Tempo
         ofParameter<float> fitBeats;     // 0: off
         ofParameter<bool> sync, autoplay;
+        ofParameter<bool> playAlways;    // loops from load on, transport or not (a drone, a baked texture)
         float sentFitRate = -1.0f;
-        bool autoPlaying = false;        // Play With Transport holds a note now
+        bool autoPlaying = false;        // Play With Transport / Play Always holds a note now
         bool loopRunning = false;        // a looping note was started (Play, Trigger/Gate) and not stopped
         bool synced() const { return sync.get() && fitBeats.get() > 0.0f; }
         // The timeline's waveform of a hit (the region, in playing order), rebuilt when these change

@@ -23,6 +23,7 @@ class scStart;
 class ofxSCServer;
 class serverManager;
 class scPreferences;
+class scNode;
 
 class ofxOceanodeSuperColliderController : public ofxOceanodeBaseController{
 public:
@@ -132,6 +133,40 @@ public:
     // renders of self-oscillating and asymmetric material often settle a few
     // LSBs away from zero, which costs headroom and thumps on edit points.
     void setNRTRemoveDC(bool remove){ nrtRemoveDC = remove; }
+    // Bake (scBake): the same frame-stepped capture, but the file is the
+    // audio one node writes on one of its outputs, alone and raw -- no master
+    // volume, stereo mix, tanh or LeakDC, which the output synth would add and
+    // which the baked file's player goes through again, live. The capture
+    // starts at the transport's start and lasts `seconds`; arming, capturing
+    // and rendering all follow from this one call. `done` runs on the main
+    // thread once the file is written (ok) or the bake failed or was
+    // cancelled (message says why). Refused (false) while any NRT capture or
+    // render is under way.
+    struct NRTBakeRequest {
+        scNode* node = nullptr;
+        int outputIndex = 0;
+        int channels = 2;
+        double seconds = 10.0;
+        std::string outputPath;        // absolute
+        std::string tapSynthdefFolder; // holds BakeTap<channels>.scsyndef
+        // files: the render, in channel order. A render has only as many
+        // channels as the server has outputs, so a wider node comes back as
+        // several files of filesChannels each (the last one's extra channels
+        // are silent); the caller interleaves them and deletes them.
+        std::function<void(bool ok, const std::string& message,
+                           const std::vector<std::string>& files, int filesChannels)> done;
+    };
+    bool requestNRTBake(const NRTBakeRequest& request);
+    // The node is going away: a bake of it stops, and `done` is never called.
+    void cancelNRTBake(const scNode* node);
+    bool isNRTBaking() const { return bakeState != BakeState::Idle; }
+    const scNode* getNRTBakeNode() const { return bake.node; }
+    // "Arming", "Capturing" or "Rendering", for the baking node's display.
+    std::string getNRTBakeStage() const;
+    bool isNRTBusy() const {
+        return nrtCaptureActive || nrtRendering.load() || nrtArmState != NRTArmState::Disarmed || isNRTBaking();
+    }
+
     // 0..1 through the timeline while capturing, or -1. Only meaningful when
     // the capture has a fixed duration; an externally stopped one has none.
     float getNRTCaptureProgress() const;
@@ -249,6 +284,32 @@ private:
     bool nrtRemoveDC = false;
     std::string nrtCaptureOutputPath;
     int nrtCaptureOutputChannels = 2;
+
+    // One file per render job; a stem only differs from its server's master
+    // by which bus the file-writing synth reads.
+    struct NRTRenderJob { serverManager* manager; std::string score, output, label; };
+    // Runs the jobs on worker threads (nrtRenderThread); the summed master,
+    // when mixInto is set, is built from serverMasters afterwards.
+    void launchNRTRenderJobs(const std::vector<NRTRenderJob>& jobs, int outputChannels, double duration,
+                             int sampleRate, const std::string& mixInto,
+                             const std::vector<std::string>& serverMasters, bool keepServerMasters);
+
+    enum class BakeState { Idle, Arming, Capturing, Rendering };
+    BakeState bakeState = BakeState::Idle;
+    NRTBakeRequest bake;
+    // Read from the capture's own graph, before it is put back on the
+    // realtime server (which may hand the node another bus).
+    serverManager* bakeManager = nullptr;
+    int bakeBus = -1;
+    std::vector<std::string> bakeFiles;
+    int bakeFilesChannels = 0;
+    // The recorder's choices, put back when the bake ends.
+    std::vector<std::string> bakeSavedSourceLabels;
+    bool bakeSavedRecordStems = false, bakeSavedServerMasters = false, bakeSavedRemoveDC = false;
+    float bakeSavedDuration = 10.0f;
+    void updateNRTBake();
+    void resolveBakeBus();
+    void finishNRTBake(bool ok, const std::string& message);
 };
 
 #endif /* ofxOceanodeSuperColliderController_h */

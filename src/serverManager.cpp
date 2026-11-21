@@ -925,6 +925,50 @@ bool serverManager::writeNRTStemScore(const std::string& path, double endTime, i
     return server->writeNRTScore(path, endTime, {redirect});
 }
 
+bool serverManager::writeNRTBakeScore(const std::string& path, double endTime, int bus, int channels,
+                                      const std::string& tapFolder) const{
+    if(server == nullptr || bus < 0 || channels < 1) return false;
+    const std::string tapName = "BakeTap" + ofToString(channels);
+    const std::string tapFile = ofFilePath::join(tapFolder, tapName + ".scsyndef");
+    if(!ofFile::doesFileExist(tapFile)){
+        ofLogError("serverManager") << "Bake: " << tapFile << " is missing; compile synthdefs/Defaults/Bake";
+        return false;
+    }
+    std::vector<ofxOscMessage> extras;
+    // The mix must not reach the file: the output synth reads a bus nothing
+    // writes, at level zero. Its id has to come from the score (see
+    // writeNRTStemScore).
+    const int outputNode = server->findNRTNodeID(scOutput::getSynthDefName());
+    if(outputNode > 0){
+        ofxOscMessage mute;
+        mute.setAddress("/n_set");
+        mute.addIntArg(outputNode);
+        mute.addStringArg("in");
+        mute.addFloatArg(busFromSilent != nullptr ? (float)busFromSilent->index : 0.0f);
+        mute.addStringArg("levels");
+        mute.addFloatArg(0.0f);
+        extras.push_back(mute);
+    }
+    // NRT runs asynchronous commands in order, so the definition exists for
+    // the /s_new that follows it in the same packet.
+    ofxOscMessage load;
+    load.setAddress("/d_load");
+    load.addStringArg(tapFile);
+    extras.push_back(load);
+    ofxOscMessage tap;
+    tap.setAddress("/s_new");
+    tap.addStringArg(tapName);
+    tap.addIntArg(-1);
+    tap.addIntArg(1);   // tail of the root group: after every node
+    tap.addIntArg(0);
+    tap.addStringArg("in");
+    tap.addFloatArg((float)bus);
+    tap.addStringArg("out");
+    tap.addFloatArg(0.0f);
+    extras.push_back(tap);
+    return server->writeNRTScore(path, endTime, extras);
+}
+
 bool serverManager::hasConnectedOutput() const{
     for(auto output : outputs){
         if(output != nullptr && output->isInputConnected()) return true;

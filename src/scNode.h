@@ -147,6 +147,14 @@ public:
     };
     
     int getNumOutputs(){return outputs.size();};
+    std::string getOutputName(int index) const {
+        return index >= 0 && index < (int)outputs.size() ? outputs[index].getName() : std::string();
+    }
+#ifdef OFXOCEANODE_HAS_NODE_CONTEXT_MENU
+    // Right-click menu: "Bake to Texture Loop" on every node with an output
+    // (scBake). A node overriding this should call scNode's too.
+    bool drawNodeContextMenu() override;
+#endif
     
     virtual void buildSynth(ofxSCServer* server){};
     virtual std::string requiredSynthdefFolder() const { return {}; }

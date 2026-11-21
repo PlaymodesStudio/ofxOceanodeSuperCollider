@@ -8,6 +8,13 @@
 #include "scNode.h"
 #include "ofxSuperCollider.h"
 #include "audio/scAudioRouting.h"
+#include "nodes/recording/scBake.h"
+
+#ifdef OFXOCEANODE_HAS_NODE_CONTEXT_MENU
+bool scNode::drawNodeContextMenu(){
+    return scBake::drawNodeMenu(*this);
+}
+#endif
 
 ofxSCServer* scNode::graphTraversalServer = nullptr;
 nodePort scNode::graphInputPort;
