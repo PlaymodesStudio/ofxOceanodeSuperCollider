@@ -19,3 +19,18 @@ render of the full chain, the optimized version took about 4.2 seconds, the
 old version 4.2 seconds, and the generic new chain 6.0 seconds on this Mac.
 The old reference binaries came from OceanodeScroller because BLOOBS' old
 binary folder was removed.
+
+## SONIF_ENGINES CPU models (2026-11-21)
+
+Drop-in replacements used by `BITXOS_BODY_SONIF` and `BITXOS_BUBBLES_BIRTH`,
+with the same controls as the generic synth they replace (minus the ones
+noted). Costs are % of one core per instance, NRT at 48 kHz on the studio Mac.
+
+| Model | Replaces | Dropped controls | Before | After |
+| --- | --- | --- | --- | --- |
+| `BloobsSine` (8 ch) | `SinOs` | none (no 4x oversampling) | 4.0 | 0.06 |
+| `BloobsLowPass` / `BloobsHiPass` (8 ch) | `Filter4Pole` Type LowPass / HighPass | Type, Fm In; Cutp and Q at control rate | 0.73 | 0.09 |
+| `BloobsDust` (78 ch) | `BloobsNoise` Type Dust | Type | 3.5 | 0.8 |
+
+Compiled with the metadata SynthDef plus 1, 2 and 8 channels (78 for
+`BloobsDust`); other counts compile on demand.
