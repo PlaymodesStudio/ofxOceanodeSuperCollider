@@ -100,6 +100,7 @@ holding its edges; optional per-bin attack / release / hold.
 | `OceanodeSpectral/OceanodeSpectral.scx` | PV_MaskFilter | SpectralFilterBox |
 | `OceanodePhysical/OceanodePhysical.scx` | PhysicalVoice | PhysicalBox |
 | `OceanodeWood/OceanodeWood.scx` | WoodPipe | MarimbaPro (`synthdefs/Source/PhysicalModelling/marimbaPro.scd`) |
+| `OceanodeFlute/OceanodeFlute.scx` | FluteVoice | FlutePro (`synthdefs/Source/PhysicalModelling/flutepro.scd`) |
 
 Their binaries are committed (universal arm64 + x86_64, ad-hoc signed), so a
 fresh clone works without a SuperCollider source checkout. Install: copy each
@@ -159,3 +160,26 @@ for tests: with the snapshot's own delays and noise seed it follows
 
 Build it with `OceanodeWood/build.sh [SuperCollider source]`. The class file is
 also in `sclang/Extensions/user/OceanodeWood/` for the bundled compiler.
+
+### OceanodeFlute (`OceanodeFlute/`)
+
+`FluteVoice` is FlutePro's loop: the loop of Flute (`flute.scd`, the Csound
+slide flute) computed sample by sample. Flute closes it with LocalIn/LocalOut,
+one block late, so it cannot rise above about F5 (MIDI 77), and its unbounded
+cubic overflows at high feedback until the graph is rebuilt. `flute.scd` itself
+is unchanged.
+
+- Mode 1 (test) is Flute's own arithmetic, block included: from the same breath
+  it follows Flute to about -100 dB (`tools/flutepro/null_test.py`).
+- Mode 0 (FlutePro) has no block in the loop. The bore is solved from the
+  linearised loop so the sounding mode is in tune (C1..C8 within a few cents
+  with Keytrack 3), the loop's low-pass follows the note above Lpf, and
+  `overblow` 1 / 2 / 3 asks for the octave / twelfth / two octaves (the mode
+  that sounds is heard and tuned, and the pitch heard trims the bore where the
+  model misses). The loop is bounded above where Flute is stable: any feedback
+  comes back.
+- Tests: `tools/flutepro/` (`null_test.py`, `sweep.py`, `intune.py`,
+  `timbre.py`, `robust.py`, `demo.py`; helpers in `sc.py`).
+
+Build it with `OceanodeFlute/build.sh [SuperCollider source]`. The class file is
+also in `sclang/Extensions/user/OceanodeFlute/` for the bundled compiler.
