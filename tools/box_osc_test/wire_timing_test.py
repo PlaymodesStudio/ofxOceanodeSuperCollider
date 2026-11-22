@@ -292,7 +292,7 @@ def main():
     mixer.PRELUDE += ''.join(f'#include "{h}"\n' for h in HEADERS) + '#include <iomanip>\n'
     mixer.CASES = CASES.replace('BODY', body)
     sources = [str(mixer.ROOT/'src/Managers/ofxOceanodeScheduling.cpp')]
-    sources += [str(p) for p in sorted((ROOT/'src').rglob('*.cpp')) if 'registration' not in str(p) and not p.name.startswith('ofxOceanodeSuperCollider')]
+    sources += [str(p) for p in sorted((ROOT/'src').rglob('*.cpp')) if 'registration' not in str(p) and not p.name.startswith('ofxOceanodeSuperCollider') and p.name != 'scBake.cpp']  # scBake needs the controller: stubbed below
     sources += [str(p) for p in sorted((native.SUPERCOLLIDER/'src').glob('*.cpp'))]
     sources += [str(p) for p in sorted((native.OSC/'src').glob('*.cpp'))]
     sources += [str(p) for p in sorted((native.OSC/'libs/oscpack/src').rglob('*.cpp')) if 'win32' not in str(p)]
@@ -333,6 +333,9 @@ sys.exit(subprocess.run(cmd).returncode)
             old = folder/'ofxSCServer_old.cpp'
             old.write_text(f'#line 1 "{server}"\n' + server.read_text().replace('osc.sendTimedBundle(', 'osc.sendBundle('))
             sources[sources.index(str(server))] = str(old)
+        stub = folder/'scBake_stub.cpp'   # scNode's context menu is the only reference
+        stub.write_text('#include "nodes/recording/scBake.h"\nbool scBake::drawNodeMenu(scNode&){ return false; }\n')
+        sources.append(str(stub))
         mixer.main(extra_sources=sources, extra_includes=includes, std='c++20')
 
 if __name__ == '__main__': main()
