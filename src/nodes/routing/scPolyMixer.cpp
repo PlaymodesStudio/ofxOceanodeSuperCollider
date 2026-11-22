@@ -453,6 +453,16 @@ void scPolyMixer::update(ofEventArgs &args) {
 	}
 	
 	// 2. Update individual track VU meters
+	// Read like MixerPro's meters: at 30 Hz while they are drawn, every frame
+	// while a VU output has a reader; otherwise not at all (they resume)
+	meterDemand.clearOutputs();
+	meterDemand.watch(masterVUData);
+	for(auto& [t, p] : trackVUData) meterDemand.watch(p);
+	const bool vuRead = meterDemand.outputRead(*this);
+	const float now = ofGetElapsedTimef();
+	if(!vuRead && !(meterDemand.shown() && now >= nextMeterRead)) return;
+	if(!vuRead) nextMeterRead = now + 1.0f / 30.0f;
+
 	// We sum these up to create the master VU
 	vector<float> masterSum(numChannels.get(), 0.0f);
 	int activeTracks = 0;
@@ -2074,96 +2084,6 @@ void scPolyMixer::restoreTrackParameters(ofxSCServer* server, int trackIndex) {
 		}
 	}
 	
-	void scPolyMixer::updateVUMeters() {
-		// Multiple safety layers
-		if(!ENABLE_VU_METERS) return;
-		if(!vuMetersReady) return;
-		if(vuMeterBuses.empty()) return;
-		if(trackVUMeters.empty()) return;
-		
-		static int updateCounter = 0;
-		updateCounter++;
-		
-		// Log occasionally for debugging
-		bool shouldLog = (updateCounter % 300 == 0); // Every ~5 seconds at 60fps
-		
-		if(shouldLog) {
-			ofLogNotice("scPolyMixer") << "VU meter update #" << updateCounter
-			<< " (servers: " << vuMeterBuses.size() << ")";
-		}
-		
-		for(auto& serverBuses : vuMeterBuses) {
-			ofxSCServer* server = serverBuses.first;
-			if(server == nullptr) continue;
-			
-			try {
-				auto& buses = serverBuses.second;
-				
-				for(int trackIndex = 0; trackIndex < buses.size(); trackIndex++) {
-					// Ultra-defensive checking
-					if(buses[trackIndex] == nullptr) continue;
-					if(buses[trackIndex]->index < 0) continue;
-					if(trackVUMeters.count(trackIndex) == 0) continue;
-					
-					auto vuMeterParam = trackVUMeters[trackIndex];
-					if(vuMeterParam == nullptr) continue;
-					
-					try {
-						// Get VU meter data
-						vector<float> vuLevels = buses[trackIndex]->readValues;
-						
-						// Extensive data validation
-						int expectedChannels = numChannels.get();
-						bool dataValid = true;
-						
-						if(vuLevels.empty()) {
-							vuLevels.resize(expectedChannels, 0.0f);
-							dataValid = false;
-						} else if(vuLevels.size() != expectedChannels) {
-							vuLevels.resize(expectedChannels, 0.0f);
-							dataValid = false;
-						}
-						
-						// Validate each value
-						for(auto& level : vuLevels) {
-							if(!std::isfinite(level)) {
-								level = 0.0f;
-								dataValid = false;
-							} else {
-								level = ofClamp(level, 0.0f, 1.0f);
-							}
-						}
-						
-						// Only update parameter if we have reasonable data
-						if(dataValid || shouldLog) {
-							// Use setWithoutEventNotifications to prevent recursion
-							vuMeterParam->getParameter().setWithoutEventNotifications(vuLevels);
-							
-							if(shouldLog && trackIndex == 0) {
-								ofLogNotice("scPolyMixer") << "Track 0 VU: "
-								<< (vuLevels.empty() ? 0.0f : vuLevels[0]);
-							}
-						}
-						
-						// Always request next values
-						buses[trackIndex]->requestValues();
-						
-					} catch(const std::exception& e) {
-						if(shouldLog) {
-							ofLogError("scPolyMixer") << "Error updating VU meter for track "
-							<< trackIndex << ": " << e.what();
-						}
-					}
-				}
-				
-			} catch(const std::exception& e) {
-				if(shouldLog) {
-					ofLogError("scPolyMixer") << "Error in server VU meter update: " << e.what();
-				}
-			}
-		}
-	}
-	
 	void scPolyMixer::startVUMeterUpdates() {
 		// VU meter updates will be called from the main update loop
 		// This could be enhanced with a timer-based system if needed
@@ -2443,6 +2363,7 @@ void scPolyMixer::drawMixerStrip(int trackIndex, float stripWidth, float stripHe
 	faderH = std::max(44.0f * zoom, faderH);
 	float centerX = start.x + stripWidth * 0.5f;
 
+	meterDemand.markShown();
 	vector<float> vu = master ? masterVUMeter.get() :
 		(vuParameters.count(trackIndex) > 0 ? vuParameters[trackIndex].get() : vector<float>(numChannels.get(), 0.0f));
 	ImVec2 vuPos(start.x + 14.0f * zoom, top);
@@ -2711,6 +2632,7 @@ void scPolyMixer::drawCompactTrackWidget(int trackIndex) {
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 
 	// Get VU meter data
+	meterDemand.markShown();
 	const vector<float>& vuLevels = vuParameters[trackIndex].get();
 	int numChans = vuLevels.size();
 
@@ -2889,6 +2811,7 @@ void scPolyMixer::drawMasterVUWidget() {
 	ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 
 	// Get master VU meter data
+	meterDemand.markShown();
 	const vector<float>& masterVULevels = masterVUMeter.get();
 	int numChans = masterVULevels.size();
 

@@ -11,6 +11,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "../../scNode.h"
 #include "../../ui/scTimelineMenu.h"
+#include "../analysis/scOutputDemand.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
 #include "imgui.h"
@@ -174,7 +175,8 @@ private:
 	void updateTrackVUTiming(int trackIndex, float attackTime, float releaseTime);
 	
 	// VU meter management
-	void updateVUMeters();
+	scOutputDemand meterDemand;   // meters drawn / VU outputs read
+	float nextMeterRead = 0.0f;
 	void startVUMeterUpdates();
 	void stopVUMeterUpdates();
 	
