@@ -45,3 +45,12 @@ ReaktorColorComb : UGen {
     }
     checkInputs { ^this.checkValidInputs }
 }
+
+// ReaktorSVF4: Reaktor 6's Multi/LP 4-Pole exactly (two Chamberlin SVFs in series, Reaktor's
+// coefficient tables). freq Hz, res 0..1; out: 0 HP2 1 BP2 2 LP2 3 BP4 4 BL4 5 LP4
+ReaktorSVF4 : UGen {
+    *ar { arg in = 0.0, freq = 1000.0, res = 0.0, out = 3, mul = 1.0, add = 0.0;
+        ^this.multiNew('audio', in, freq, res, out).madd(mul, add)
+    }
+    checkInputs { ^this.checkValidInputs }
+}

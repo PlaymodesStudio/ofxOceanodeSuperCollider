@@ -788,11 +788,95 @@ static void ReaktorColorComb_next(ReaktorColorComb* unit, int inNumSamples) {
     unit->s1 = s1; unit->s2 = s2;
 }
 
+// ReaktorSVF4: Reaktor 6's Multi/LP 4-Pole exactly (mono::AudioFilt4Lowpass, decoded from
+// the Reaktor 6.5 binary for AnimaBox): two Chamberlin state-variable filters in series,
+// the second fed by the first's low-pass, one frequency coefficient f and damping q for
+// both. f and q: bilinear lookups (EventFiltPLookup / EventFiltResLookup) in Reaktor's
+// 11 x 11 tables, rows = resonance x 10 (0..1), columns = cutoff / Nyquist x 10 (0..1).
+//   per sample (each stage): hp = x - q bp - lp; bp += f hp; lp += f bp (+1e-12)
+//   outputs (out): 0 HP2 (hp1)  1 BP2 (bp1)  2 LP2 (lp1)  3 BP4 (hp2)  4 BL4 (bp2)  5 LP4 (lp2)
+// freq in Hz, res 0..1 (1: self-oscillation), both at any rate.
+static const float kReaktorSVF4F[121] = {
+    0.0f, 0.281789988f, 0.503920019f, 0.673889995f, 0.79907f, 0.88669002f, 0.943790018f, 0.977230012f, 0.993629992f, 0.999279975f, 1.0f,
+    0.0f, 0.267859995f, 0.484070003f, 0.653590023f, 0.781620025f, 0.873629987f, 0.935320019f, 0.972670018f, 0.991819977f, 0.998929977f, 1.0f,
+    0.0f, 0.268559992f, 0.487340003f, 0.659720003f, 0.789749979f, 0.882239997f, 0.942789971f, 0.97776997f, 0.994229972f, 0.999419987f, 1.0f,
+    0.0f, 0.276490003f, 0.503239989f, 0.68189001f, 0.815310001f, 0.907720029f, 0.964770019f, 0.993589997f, 1.00275004f, 1.00180995f, 1.0f,
+    0.0f, 0.286229998f, 0.523490012f, 0.711239993f, 0.850730001f, 0.945029973f, 0.999300003f, 1.02091002f, 1.01969004f, 1.0079f, 1.0f,
+    0.0f, 0.29479f, 0.543139994f, 0.74217999f, 0.891030013f, 0.990939974f, 1.04567003f, 1.06171f, 1.04890001f, 1.02122998f, 1.0f,
+    0.0f, 0.300960004f, 0.560039997f, 0.772119998f, 0.933990001f, 1.04457998f, 1.10525f, 1.12021995f, 1.09723997f, 1.04905999f, 1.0f,
+    0.0f, 0.304769993f, 0.574039996f, 0.800890028f, 0.979929983f, 1.10753f, 1.18204999f, 1.20406997f, 1.17679f, 1.10642004f, 1.0f,
+    0.0f, 0.307040006f, 0.586510003f, 0.830359995f, 1.03154004f, 1.18417001f, 1.28356004f, 1.32608998f, 1.30850995f, 1.22458005f, 1.0f,
+    0.0f, 0.30915001f, 0.600000024f, 0.86423999f, 1.09407997f, 1.28234005f, 1.42234004f, 1.50739002f, 1.52901006f, 1.46875f, 1.0f,
+    0.0f, 0.312869996f, 0.618030011f, 0.907980024f, 1.17557001f, 1.41420996f, 1.61802995f, 1.78200996f, 1.90210998f, 1.97537994f, 1.0f};
+static const float kReaktorSVF4Q[121] = {
+    2.0f, 1.71820998f, 1.49608004f, 1.32611001f, 1.20093f, 1.11330998f, 1.05621004f, 1.02277005f, 1.00636995f, 1.00072002f, 1.0f,
+    1.91498005f, 1.67580998f, 1.48092997f, 1.32642996f, 1.20818996f, 1.12193f, 1.06314003f, 1.02696002f, 1.00813997f, 1.00107002f, 1.0f,
+    1.70714998f, 1.53100002f, 1.38353002f, 1.26343f, 1.16909003f, 1.09870005f, 1.05008996f, 1.02032995f, 1.00549996f, 1.00057006f, 1.0f,
+    1.45825005f, 1.34133005f, 1.24240994f, 1.16103005f, 1.09683001f, 1.04942f, 1.01810002f, 1.00139999f, 0.996420025f, 0.998160004f, 1.0f,
+    1.21543002f, 1.14522004f, 1.08659995f, 1.03954005f, 1.00411999f, 0.980599999f, 0.969070017f, 0.96904999f, 0.978420019f, 0.99198997f, 1.0f,
+    0.992269992f, 0.955910027f, 0.927799999f, 0.907980024f, 0.896799981f, 0.894789993f, 0.902570009f, 0.920440018f, 0.94730997f, 0.978500008f, 1.0f,
+    0.785870015f, 0.772989988f, 0.766480028f, 0.766690016f, 0.774129986f, 0.789640009f, 0.814320027f, 0.849380016f, 0.895420014f, 0.950309991f, 1.0f,
+    0.589280009f, 0.591009974f, 0.598140001f, 0.61115998f, 0.630869985f, 0.658439994f, 0.695580005f, 0.74466002f, 0.808870017f, 0.892040014f, 1.0f,
+    0.39526999f, 0.403890014f, 0.416920006f, 0.435030013f, 0.45923999f, 0.491050005f, 0.53275001f, 0.588f, 0.663100004f, 0.771380007f, 1.0f,
+    0.199200004f, 0.207200006f, 0.218030006f, 0.232309997f, 0.250939995f, 0.275330007f, 0.307729989f, 0.35205999f, 0.416110009f, 0.520630002f, 1.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+struct ReaktorSVF4 : public Unit {
+    double hp1, bp1, lp1, hp2, bp2, lp2;
+    float lastFreq, lastRes, f, q;
+};
+static void ReaktorSVF4_next(ReaktorSVF4* unit, int inNumSamples);
+static void ReaktorSVF4_coefs(ReaktorSVF4* unit, float freq, float res) {
+    const float x = std::clamp(freq * 2.0f / (float)SAMPLERATE, 0.0f, 1.0f) * 10.0f;
+    const float r = std::clamp(res, 0.0f, 1.0f) * 10.0f;
+    int ix = std::min(9, (int)x), ir = std::min(9, (int)r);
+    const float fx = std::min(1.0f, x - ix), fr = std::min(1.0f, r - ir);
+    auto bil = [&](const float* t) {
+        const int k = ir * 11 + ix;
+        return (1 - fr) * ((1 - fx) * t[k] + fx * t[k + 1]) + fr * ((1 - fx) * t[k + 11] + fx * t[k + 12]);
+    };
+    unit->f = bil(kReaktorSVF4F); unit->q = bil(kReaktorSVF4Q);
+    unit->lastFreq = freq; unit->lastRes = res;
+}
+static void ReaktorSVF4_Ctor(ReaktorSVF4* unit) {
+    unit->hp1 = unit->bp1 = unit->lp1 = unit->hp2 = unit->bp2 = unit->lp2 = 0.0;
+    ReaktorSVF4_coefs(unit, IN0(1), IN0(2));
+    SETCALC(ReaktorSVF4_next);
+    OUT0(0) = 0.0f;
+}
+static void ReaktorSVF4_next(ReaktorSVF4* unit, int inNumSamples) {
+    const float* in = IN(0);
+    float* out = OUT(0);
+    const bool fAudio = INRATE(1) == calc_FullRate, rAudio = INRATE(2) == calc_FullRate;
+    const int sel = std::clamp((int)IN0(3), 0, 5);
+    double hp1 = unit->hp1, bp1 = unit->bp1, lp1 = unit->lp1, hp2 = unit->hp2, bp2 = unit->bp2, lp2 = unit->lp2;
+    for (int i = 0; i < inNumSamples; ++i) {
+        const float freq = fAudio ? IN(1)[i] : IN0(1), res = rAudio ? IN(2)[i] : IN0(2);
+        if (freq != unit->lastFreq || res != unit->lastRes) ReaktorSVF4_coefs(unit, freq, res);
+        const double f = unit->f, q = unit->q;
+        hp1 = in[i] - (q * bp1 + lp1); bp1 += f * hp1; lp1 += f * bp1 + 1e-12;
+        hp2 = lp1 - (q * bp2 + lp2);   bp2 += f * hp2; lp2 += f * bp2 + 1e-12;
+        double o;
+        switch (sel) {
+            case 0: o = hp1; break;
+            case 1: o = bp1; break;
+            case 2: o = lp1; break;
+            case 3: o = hp2; break;
+            case 4: o = bp2; break;
+            default: o = lp2;
+        }
+        out[i] = (float)o;
+    }
+    // a blown-up state (a resonance at 1 driven hard) starts again from silence
+    if (!std::isfinite(lp2) || !std::isfinite(lp1) || std::fabs(lp2) > 1e6) hp1 = bp1 = lp1 = hp2 = bp2 = lp2 = 0.0;
+    unit->hp1 = hp1; unit->bp1 = bp1; unit->lp1 = lp1; unit->hp2 = hp2; unit->bp2 = bp2; unit->lp2 = lp2;
+}
+
 PluginLoad(OceanodeAnalog) {
     ft = inTable;
     DefineSimpleUnit(MorphOsc);
     DefineDtorUnit(AnalogFilter);
     DefineDtorUnit(ReaktorComb);
     DefineSimpleUnit(ReaktorMulti4);
+    DefineSimpleUnit(ReaktorSVF4);
     DefineDtorUnit(ReaktorColorComb);
 }
