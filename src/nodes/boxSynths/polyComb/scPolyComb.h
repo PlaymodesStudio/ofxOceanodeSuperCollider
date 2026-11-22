@@ -448,7 +448,24 @@ private:
     bool drivenByConnection(const std::string& key) const;
     ofJson captureSnapshot() const;
     void applyState(const ofJson& a, const ofJson& b, float t, bool sw);   // t 0: a, 1: b; sw: switches take b's
+    // applyState's work per snapshot pair (see there): the migrated pair, and
+    // its pinned controls for one side of t and one set of driven selectors
+    struct MorphPairCache {
+        unsigned stamp = 0;
+        const ofJson* aSaved = nullptr;
+        const ofJson* bSaved = nullptr;
+        ofJson a, b;
+        bool pinned = false;
+        int side = -1;
+        unsigned revision = 0;
+        std::vector<char> pinBlocked;
+        ofJson ca, cb;
+    } morphCache;
+    int morphCacheDepth = 0;
+    struct ControlOption { bool option = false; ofJson fallback; };
+    std::vector<ControlOption> controlOptions;   // per control, in controls' order (applyState)
     ofJson snapshotOf(const ofJson& saved) const;   // a saved preset's sound, as a snapshot
     ofJson morphFrom, morphTo;                      // a MacroMixer morph: the start, the arrival
+    unsigned morphIdentity = 0;                     // renewed with them: frames skip comparing them
     scBoxPinMorph pinMorph{"polyCombPublished", "polyComb"};   // a MacroMixer morph: pins it published, the arrival's
 };

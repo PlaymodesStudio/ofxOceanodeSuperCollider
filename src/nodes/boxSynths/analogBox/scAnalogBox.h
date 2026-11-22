@@ -354,6 +354,8 @@ private:
     void sliderInt(ofParameter<int>& p, const char* label, float w);
     void combo(ofParameter<int>& p, const char* label, float w);   // its names: dropdowns
     void syncDropdowns();
+    std::array<int, 1 + MAX_FILTERS> dropdownSignature{};   // oscs(), comb filters: what the lists were built for
+    bool dropdownSignatureValid = false;
     void toggle(ofParameter<bool>& p, const char* label);
     float labelW = 70.0f;
     float matrixCell(int source, int target) const;
@@ -370,5 +372,19 @@ private:
     bool drivenByConnection(const std::string& key) const;
     ofJson captureSnapshot() const;
     void applyState(const ofJson& a, const ofJson& b, float t, bool sw);   // sw: switches take b's
+    // applyState's work per snapshot pair (see there): the migrated pair, and
+    // its pinned controls for one side of t and one set of driven selectors
+    struct MorphPairCache {
+        unsigned stamp = 0;
+        const ofJson* aSaved = nullptr;
+        const ofJson* bSaved = nullptr;
+        ofJson a, b;
+        bool pinned = false;
+        int side = -1;
+        unsigned revision = 0;
+        std::vector<char> pinBlocked;
+        ofJson ca, cb, oscA, oscB;   // controls (with the newer defaults), and for the oscillator count
+    } morphCache;
+    int morphCacheDepth = 0;
     std::vector<ofJson> factorySnapshots() const;
 };

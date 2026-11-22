@@ -77,7 +77,7 @@ public:
     ofParameter<float> morphP, morphTimeP;
     ofParameter<bool> morphBeatsP, morphGlideP;
 
-    std::array<ofJson, SLOTS> slots;
+    std::array<ofJson, SLOTS> slots;   // written directly? then saveLibrary() (or slotsChanged()) before an A/B morph
     std::array<bool, SLOTS> used{};
     int active = -1;
     scSnapshotManager manager;            // the slots in the Manage window
@@ -95,6 +95,7 @@ public:
         morphGlideP.set("Morph Glide", false);
         morphCurveP.set("Morph Curve", 1, 0, 3);           // Lin, Ease, Exp, Log
         morphSwitchP.set("Morph Switch", 1, 0, 2);         // switches jump at start / middle / end
+        slotKeyCache = {snapshotP.getEscapedName(), morphAP.getEscapedName(), morphBP.getEscapedName()};
         listeners.push(snapshotP.newListener([this](int& v) {
             // (a preset sets it back to the number it showed: its own values
             // are already the sound, nothing to recall)
@@ -119,11 +120,13 @@ public:
                 Scope(){ ++snapshotApplyDepth(); }
                 ~Scope(){ --snapshotApplyDepth(); }
             } scope;
-            morph.begin(a, b, t, host.morphBlocked);
+            const unsigned identity = pendingIdentity;   // only for this call
+            pendingIdentity = 0;
+            morph.begin(a, b, t, host.morphBlocked, identity);
             try {
                 const unsigned registered = morph.revision();
                 apply(a, b, t, sw);
-                if(morph.revision() != registered) morph.begin(a, b, t, host.morphBlocked); // newly created pads/controls
+                if(morph.revision() != registered) morph.begin(a, b, t, host.morphBlocked, identity); // newly created pads/controls
                 if(host.morphChanged) host.morphChanged();
             } catch(...) { morph.end(); throw; }
             morph.end();
@@ -171,7 +174,7 @@ public:
     void recall(int slot) {
         if(slot < 0 || slot >= SLOTS || !used[slot] || !host.apply) return;
         running = false;
-        host.apply(slots[slot], slots[slot], 1.0f, true);
+        host.apply(slots[slot], slots[slot], 1.0f, true);   // once: compared, so a slot written directly is safe
         setActive(slot);
     }
     void glide(int slot) {
@@ -190,6 +193,7 @@ public:
         }
         from = host.capture();
         to = snapshot;
+        contentChanged();
         target = slot;
         t0 = ofGetElapsedTimef();
         progress = 0.0f;
@@ -203,7 +207,7 @@ public:
         if(a < 0 || b < 0 || a >= SLOTS || b >= SLOTS || !used[a] || !used[b] || !host.apply) return;
         running = false;   // the slider takes over from a glide
         const float t = curve(morphP.get());
-        host.apply(slots[a], slots[b], t, switched(t));
+        applyStored(slots[a], slots[b], t, switched(t));
     }
     bool gliding() const { return running; }
     float glideProgress() const { return progress; }
@@ -242,14 +246,21 @@ public:
         running = false;
         return host.capture ? host.capture() : ofJson::object();
     }
-    void applyExternalMorph(const ofJson& a, const ofJson& b, float t, bool switched) {
+    // identity: scMorphPolicies::nextIdentity() taken when a / b were last
+    // written (0: unknown, their contents are compared)
+    void applyExternalMorph(const ofJson& a, const ofJson& b, float t, bool switched, unsigned identity = 0) {
         running = false;
-        if(host.apply) host.apply(a,b,ofClamp(t,0.0f,1.0f),switched);
+        if(!host.apply) return;
+        pendingIdentity = identity;
+        host.apply(a,b,ofClamp(t,0.0f,1.0f),switched);
+        pendingIdentity = 0;
     }
+    // The slots were rewritten outside this class: A/B frames compare them again
+    void slotsChanged() { contentChanged(); }
     // One more snapshot in the first free slot (imports); false when full
     bool appendSnapshot(const ofJson& s) {
         if(!s.is_object()) return false;
-        for(int k = 0; k < SLOTS; k++) if(!used[k]) { slots[k] = s; used[k] = true; return true; }
+        for(int k = 0; k < SLOTS; k++) if(!used[k]) { slots[k] = s; used[k] = true; contentChanged(); return true; }
         return false;
     }
     mutable std::vector<std::string> namesCache;
@@ -270,9 +281,12 @@ public:
         }
         return namesCache;
     }
-    std::vector<std::string> slotKeys() const {
-        return {snapshotP.getEscapedName(), morphAP.getEscapedName(), morphBP.getEscapedName()};
+    // Nodes read these every frame: the names are fixed by setupParameters
+    const std::vector<std::string>& slotKeys() const {
+        if(slotKeyCache.empty()) slotKeyCache = {snapshotP.getEscapedName(), morphAP.getEscapedName(), morphBP.getEscapedName()};
+        return slotKeyCache;
     }
+    mutable std::vector<std::string> slotKeyCache;
     // The recall / morph settings, for a node that saves them itself (one
     // whose publish registry does not hold these parameters)
     ofJson settingsJson() const {
@@ -404,7 +418,7 @@ public:
             const float u = (now - t0) / std::max(0.001f, duration);
             progress = ofClamp(u, 0.0f, 1.0f);
             const float t = progress >= 1.0f ? 1.0f : curve(progress);
-            if(host.apply) host.apply(from, to, t, switched(t));
+            if(host.apply) applyStored(from, to, t, switched(t));
             if(progress >= 1.0f) { running = false; setActive(target); }
         }
     }
@@ -430,6 +444,7 @@ public:
         try { ofSaveJson((d / "library.json").string(), ofJson{{"snapshots", 1}, {"bank", currentBank}}); } catch(...) {}
         if(!currentBank.empty())saveBank((d/"banks"/currentBank).string());
         libTime = setTime(true);
+        contentChanged();   // every writer of the slots saves (store, banks, the manager)
     }
     void loadLibrary() {
         const auto d = dir();
@@ -472,6 +487,7 @@ public:
             } catch(...) {}
         }
         if(active >= 0 && !used[active]) active = -1;
+        contentChanged();
         if(!std::filesystem::exists(d / "library.json")) saveLibrary();   // slot files without the marker
         libTime = setTime();
     }
@@ -602,6 +618,7 @@ public:
         std::string p = path;
         if(std::filesystem::path(p).extension().string() != ".json") p += ".json";
         const bool saved=ofSavePrettyJson(p,j);
+        bankMenuAt = -1.0f;
         message = saved ? "Saved " + std::filesystem::path(p).stem().string() : "Could not save " + p;
         return saved;
     }
@@ -833,16 +850,23 @@ public:
             ImGui::Separator();
             if(host.factory && ImGui::MenuItem("Factory collection")) loadFactory();
             if(ImGui::BeginMenu("Load bank")) {
-                bool any = false;
-                try {
-                    for(auto& e : std::filesystem::directory_iterator(dir() / "banks")) {
-                        if(e.path().extension() != ".json") continue;
-                        any = true;
-                        if(ImGui::MenuItem(e.path().stem().string().c_str())) loadBank(e.path().string());
-                    }
-                } catch(...) {}
-                if(!any) ImGui::TextDisabled("No banks yet");
+                // the folder read at most once a second while the menu is open
+                const float now = ofGetElapsedTimef();
+                if(bankMenuAt < 0.0f || now - bankMenuAt >= 1.0f || now < bankMenuAt) {
+                    bankMenuAt = now;
+                    bankMenu.clear();
+                    try {
+                        for(auto& e : std::filesystem::directory_iterator(dir() / "banks")) {
+                            if(e.path().extension() != ".json") continue;
+                            bankMenu.push_back({e.path().stem().string(), e.path().string()});
+                        }
+                    } catch(...) {}
+                }
+                std::string chosen;
+                for(const auto& [stem, path] : bankMenu) if(ImGui::MenuItem(stem.c_str())) chosen = path;
+                if(bankMenu.empty()) ImGui::TextDisabled("No banks yet");
                 ImGui::EndMenu();
+                if(!chosen.empty()) loadBank(chosen);
             }
             if(ImGui::BeginMenu("Save bank as")) {
                 ImGui::SetNextItemWidth(180 * z);
@@ -978,6 +1002,18 @@ private:
     ofJson storeDestination;
     std::filesystem::file_time_type libTime{};
     float libCheckAt = 0.0f;
+    // The slots' and the glide's contents as a morph pair identity: renewed by
+    // every write to them, so a running A/B or glide frame skips comparing them
+    unsigned contentIdentity = scMorphPolicies::nextIdentity();
+    unsigned pendingIdentity = 0;   // for the decorated host.apply call in progress
+    void contentChanged() { contentIdentity = scMorphPolicies::nextIdentity(); }
+    void applyStored(const ofJson& a, const ofJson& b, float t, bool sw) {
+        pendingIdentity = contentIdentity;
+        host.apply(a, b, t, sw);
+        pendingIdentity = 0;
+    }
+    std::vector<std::pair<std::string, std::string>> bankMenu;   // "Load bank": stem, path
+    float bankMenuAt = -1.0f;
 
     template<typename T>
     void menuFor(ofParameter<T>& p) { if(host.paramMenu) host.paramMenu(p.getEscapedName()); }

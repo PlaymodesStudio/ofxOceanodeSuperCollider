@@ -149,7 +149,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
             // Snapshot application writes typed editor switches first. Publish only
             // the final effective state in afterLoad/resend, never that interim switch.
             if(scSnapshots::applyingSnapshot()) return;
-            generatorMorph.erase(lfoNoise[li].getEscapedName());
+            generatorMorph.erase(lfoNoiseKeys[li]);
             cycleCache[li].values.clear(); transferCache[li].values.clear(); previewCache[li].valid = false;
             forStates([this, li](ofxSCServer* server, ServerState& st){ sendLfo(server, st, li); }); notify(); };
         auto toRamp=[this,toLfo](){
@@ -189,6 +189,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
         vec(lfoPow[li], L + "Pow" + X, 0, -1, 1);                 host.regV(lfoPow[li], toLfo);
         vec(lfoBiPow[li], L + "BiPow" + X, 0, -1, 1);             host.regV(lfoBiPow[li], toLfo);
         lfoNoise[li].set(L + "Noise" + X, false);                 host.regB(lfoNoise[li], toLfo);
+        lfoNoiseKeys[li] = lfoNoise[li].getEscapedName();         // the generator state's key, read per send
         lfoSHGlide[li].set(L + "S&H Glide" + X, 0.0f, 0.0f, 10.0f); host.regF(lfoSHGlide[li], toLfo);
         lfoNScale[li].set(L + "Noise Scale" + X, 1.0f, 0.0f, 10.0f); host.regF(lfoNScale[li], toLfo);
         // Random: each voice a new value per cycle (at its own phase): another SynthDef
@@ -226,6 +227,7 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
         ix.wrapShuffle_Param = false; ix.indexShuffle_Param = 0.0f; ix.indexRand_Param = 0.0f; ix.indexOffset_Param = 0.0f;
         ix.indexQuant_Param = n(); ix.combination_Param = 0.0f; ix.modulo_Param = n(); ix.discrete_Param = false;
         ix.indexCountChanged(n());
+        phaseKeyValid[li] = false;
     }
     for(int e = 0; e < MAX_ENVS; e++){
         auto& E = envs[e];
@@ -288,7 +290,7 @@ void scModulation::sendVec(ofxSCSynth* s, const std::string& name, const std::ve
 std::vector<float> scModulation::lfoHzFor(int li) const {
     const float bps = std::max(1.0f, currentBpm) / 60.0f;
     if(lfoRamp[li].get()) return std::vector<float>(n(),(lfoSync[li].get()?bps:1.0f)/std::max(0.01f,lfoRampDuration[li].get()));
-    const auto key = lfoNoise[li].getEscapedName();
+    const auto& key = lfoNoiseKeys[li];
     if(generatorMorph.contains(key)){
         const auto& state = generatorMorph.at(key);
         auto hz = expand(scModulationMorph::numbers(state.at("hz")), n(), 0);
@@ -311,7 +313,7 @@ std::vector<float> scModulation::lfoHzFor(int li) const {
 }
 std::vector<float> scModulation::lfoShFor(int li) const {
     const float bps = std::max(1.0f, currentBpm) / 60.0f;
-    const auto key = lfoNoise[li].getEscapedName();
+    const auto& key = lfoNoiseKeys[li];
     if(generatorMorph.contains(key)){
         const auto& state = generatorMorph.at(key);
         auto hz = expand(scModulationMorph::numbers(state.at("shHz")), n(), 0);
@@ -344,15 +346,17 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
     scSynthControlBatch controls(s, server, &st.lfoSent[li][c]);
     controls.set("transport",followsTransport(li)?1.0f:0.0f);
     controls.set("transportbus",st.clockBus?float(st.clockBus->index):0.0f);
-    auto cpb=slice(lfoHzFor(li),c);for(auto& x:cpb)x*=60.0f/std::max(1.0f,currentBpm);
+    // each rate once per send (they were evaluated twice, for cpb and freq)
+    const auto hz=slice(lfoHzFor(li),c), sh=slice(lfoShFor(li),c);
+    auto cpb=hz;for(auto& x:cpb)x*=60.0f/std::max(1.0f,currentBpm);
     controls.set("repeatloop",lfoRepeatsLoop(li)?1.0f:0.0f);
     controls.set("cpb",cpb);
-    auto shcpb=slice(lfoShFor(li),c);for(auto& x:shcpb)x*=60.0f/std::max(1.0f,currentBpm);
+    auto shcpb=sh;for(auto& x:shcpb)x*=60.0f/std::max(1.0f,currentBpm);
     controls.set("shcpb",shcpb);
     if(lfoRamp[li].get()) {
         controls.set("out",st.srcBlock?st.srcBlock->index+li*busWidth+c*CHUNK:0);
         controls.set("gate",float(st.gateBus+c*CHUNK));
-        controls.set("freq",slice(lfoHzFor(li),c));
+        controls.set("freq",hz);
         controls.set("phoff",slice(lfoPhases[li],c));
         controls.set("trigmode",float(lfoTrigger[li].get()));
         controls.set("reset",float(resetCounter));
@@ -367,7 +371,7 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
         controls.set("ending",float(lfoRampEnd[li].get()));controls.set("bounds",float(lfoRampBounds[li].get()));
         controls.send();return;
     }
-    const bool blended = generatorMorph.contains(lfoNoise[li].getEscapedName());
+    const bool blended = generatorMorph.contains(lfoNoiseKeys[li]);
     const bool held = manualLfo(li) && !blended;   // a still manual LFO: its value as the phase
     const int k = chunkN(c);
     const std::vector<float> zero(k, 0.0f);
@@ -376,8 +380,8 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
     };
     controls.set("out", st.srcBlock ? st.srcBlock->index + li * busWidth + c * CHUNK : 0);
     controls.set("voffset", (float)(c * CHUNK));
-    controls.set("freq", held ? zero : slice(lfoHzFor(li), c));
-    controls.set("sh", held ? zero : slice(lfoShFor(li), c));
+    controls.set("freq", held ? zero : hz);
+    controls.set("sh", held ? zero : sh);
     controls.set("freqdetune", held ? zero : slice(perVoice ? lfoDetune[li].get() : std::vector<float>{0.0f}, c));
     controls.set("initphase", held ? lfoManual[li].get() * 0.5f : lfoInit[li].get());
     vec("round", lfoRound[li].get(), 0.0f);
@@ -645,6 +649,7 @@ void scModulation::rebuild(ofxSCServer* server) {
     if(it == states.end() || !it->second.created) return;
     auto& st = it->second;
     for(int li = 0; li < MAX_LFOS; li++) lfoIndexers[li].indexCountChanged(n());
+    phaseKeyValid.fill(false);
     for(auto& listener:st.rampDoneListeners)listener.reset();
     for(auto& v : st.lfo){ for(auto* s : v) if(s){ s->free(); delete s; } v.clear(); }
     for(auto& v : st.env){ for(auto* s : v) if(s){ s->free(); delete s; } v.clear(); }
@@ -677,6 +682,7 @@ void scModulation::allocBlocks(ofxSCServer* server, ServerState& st) {
 
 void scModulation::voicesChanged() {
     for(int li = 0; li < MAX_LFOS; li++) lfoIndexers[li].indexCountChanged(n());
+    phaseKeyValid.fill(false);
     updatePhases();
 }
 
@@ -920,7 +926,7 @@ std::vector<float> scModulation::lfoTable(int li, int size) const {
         for(int i=0;i<int(values.size());++i) values[i]=scRamp::value(float(i)/(values.size()-1),lfoRampFrom[li].get(),lfoRampTo[li].get(),lfoRampCurve[li].get(),lfoRampOffset[li].get(),lfoRampRate[li].get(),0,0,first(lfoPow[li].get()),first(lfoBiPow[li].get()));
         return values;
     }
-    if(manualLfo(li) && !generatorMorph.contains(lfoNoise[li].getEscapedName())) return std::vector<float>(std::max(2,size),lfoManual[li].get());
+    if(manualLfo(li) && !generatorMorph.contains(lfoNoiseKeys[li])) return std::vector<float>(std::max(2,size),lfoManual[li].get());
     const float rnd = first(lfoRound[li].get(), 0.5f), sk = first(lfoSkew[li].get()), pw = first(lfoPw[li].get(), 0.5f);
     const float pw2 = first(lfoPow[li].get()), bp = first(lfoBiPow[li].get()), gain = first(lfoGain[li].get(), 1.0f);
     const std::array<float, 9> key{rnd, sk, pw, pw2, bp, gain,
@@ -992,7 +998,8 @@ void scModulation::updatePhases() {
         auto& ix = lfoIndexers[li];
         // the voice count can change before the node creates anything: the
         // indexer always as wide as the voices (else every voice the same phase)
-        if((int)ix.getIndexs().size() != n()) ix.indexCountChanged(n());
+        const bool resized = (int)ix.getIndexs().size() != n();
+        if(resized) ix.indexCountChanged(n());
         ix.numWaves_Param = lfoNWaves[li].get();
         ix.normalize_Param = lfoNorm[li].get();
         ix.indexInvert_Param = lfoInvert[li].get();
@@ -1003,6 +1010,14 @@ void scModulation::updatePhases() {
         ix.modulo_Param = lfoModulo[li].get() >= lfoModulo[li].getMax() ? n() : std::clamp(lfoModulo[li].get(), 1, n());
         if(ix.indexShuffle_Param != lfoShuffle[li].get()){ ix.indexShuffle_Param = lfoShuffle[li].get(); ix.indexShuffleChanged(ix.indexShuffle_Param); }
         if(ix.indexRand_Param != lfoRand[li].get()){ ix.indexRand_Param = lfoRand[li].get(); ix.indexRandChanged(ix.indexRand_Param); }
+        // Every morph frame lands here for all LFOs: the indexes (and so the
+        // phases) only change with these inputs (the shuffle / random orders
+        // change only with a count, shuffle or random change, all in the key)
+        const std::array<float, 11> key{float(n()), ix.numWaves_Param, ix.normalize_Param ? 1.0f : 0.0f, ix.indexInvert_Param,
+            float(ix.symmetry_Param), ix.indexOffset_Param, float(ix.indexQuant_Param), ix.combination_Param,
+            float(ix.modulo_Param), ix.indexShuffle_Param, ix.indexRand_Param};
+        if(!resized && phaseKeyValid[li] && key == phaseKeys[li]) continue;
+        phaseKeys[li] = key; phaseKeyValid[li] = true;
         ix.recomputeIndexs();
         // Called on every afterLoad (each frame of a morph): send the phases
         // only when they moved. A new LFO synth gets them from sendLfoPart.
@@ -1364,23 +1379,28 @@ float scModulation::morphVoiceValue(const ofParameter<float>& p,int voice,const 
     const float current=voiceValue(p,voice);
     if(!policies.hasEffective(p))return current;
     float base=p.get();
-    for(const auto& pt:params)if(pt.key==p.getEscapedName() && !pt.base.empty()){
+    const std::string key=params.empty()?std::string():p.getEscapedName();
+    for(const auto& pt:params)if(pt.key==key && !pt.base.empty()){
         base=pt.base[size_t(std::max(0,voice))%pt.base.size()];break;
     }
     return policies.value(p)+(current-base)*policies.neutralGain(p);
 }
 
 float scModulation::voiceValue(const ofParameter<float>& p, int voice) const {
+    if(params.empty()) return p.get();
+    const std::string key = p.getEscapedName();
     for(const auto& pt : params)
-        if(pt.key == p.getEscapedName() && !pt.voiceWritten.empty() && pt.written.size() == 1 && p.get() == pt.written[0])
+        if(pt.key == key && !pt.voiceWritten.empty() && pt.written.size() == 1 && p.get() == pt.written[0])
             return pt.voiceWritten[ofClamp(voice, 0, int(pt.voiceWritten.size()) - 1)];
     return p.get();
 }
 
 std::vector<float> scModulation::voiceValues(const ofParameter<float>& p) const {
     std::vector<float> out(n(), p.get());
+    if(params.empty()) return out;
+    const std::string key = p.getEscapedName();
     for(const auto& pt : params){
-        if(pt.key != p.getEscapedName() || pt.voiceWritten.empty() || pt.written.size() != 1 || p.get() != pt.written[0]) continue;
+        if(pt.key != key || pt.voiceWritten.empty() || pt.written.size() != 1 || p.get() != pt.written[0]) continue;
         for(size_t i = 0; i < out.size(); ++i) out[i] = pt.voiceWritten[std::min(i, pt.voiceWritten.size() - 1)];
         break;
     }
@@ -2291,6 +2311,31 @@ void scModulation::drawRouting(float w) {
         dl->PopClipRect();
     }
     ImGui::Dummy(ImVec2(w, ImGui::GetTextLineHeightWithSpacing()));
+    // The published cells by (source, column), built once per frame instead of
+    // a scan per cell (cellAt): the first in map order wins, as in cellAt. A
+    // cell's column follows params, so a removal from a cell's menu rebuilds it.
+    using CellEntry = std::pair<const std::string, CellParam>;
+    std::vector<const CellEntry*> cellIndex;
+    size_t cellIndexParams = 0, cellIndexCount = 0;
+    auto indexCells = [&](){
+        cellIndexParams = params.size(); cellIndexCount = cellParams.size();
+        const int columns = T() + (int)params.size();
+        cellIndex.assign(cellParams.empty() ? 0 : (size_t)sourceCount() * columns, nullptr);
+        if(cellIndex.empty()) return;
+        for(const auto& entry : cellParams){
+            const int column = cellColumn(entry.second), source = entry.second.source;
+            if(column < 0 || column >= columns || source < 0 || source >= sourceCount()) continue;
+            auto& slot = cellIndex[(size_t)source * columns + column];
+            if(!slot) slot = &entry;
+        }
+    };
+    indexCells();
+    auto cellEntryAt = [&](int s, int t) -> const CellEntry* {
+        if(cellIndexParams != params.size() || cellIndexCount != cellParams.size()) indexCells();
+        const int columns = T() + (int)params.size();
+        if(cellIndex.empty() || s < 0 || s >= sourceCount() || t < 0 || t >= columns) return nullptr;
+        return cellIndex[(size_t)s * columns + t];
+    };
     bool anySource = false;
     for(int s = 0; s < sourceCount(); s++){
         if(!sourceUsed(s)) continue;
@@ -2347,13 +2392,14 @@ void scModulation::drawRouting(float w) {
             // host's menu (publish, timeline, MIDI...) and marks on this cell
             // (hovered even while another popup is closing on this press: the
             // host's popup opens on the release, the parameter must exist by then)
-            const CellParam* cell = cellAt(s, t);
+            const CellEntry* cell = cellEntryAt(s, t);
             if(!cell && host.publishMenu && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup)
                && (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsMouseReleased(ImGuiMouseButton_Right))){
                 cellParameter(s, t, true);
-                cell = cellAt(s, t);
+                cell = cellEntryAt(s, t);
             }
-            if(cell && host.publishedUnderline) host.publishedUnderline(cell->p->getEscapedName());
+            // the map's key is the parameter's escaped name
+            if(cell && host.publishedUnderline) host.publishedUnderline(cell->first);
             if(ImGui::IsItemActivated()){ matrixDrag = idx; matrixDragStart = ImGui::GetMousePos().x; matrixDragValue = v; }
             if(ImGui::IsItemActive() && matrixDrag == idx){
                 const float fine = ImGui::GetIO().KeyShift ? 0.1f : 1.0f;
@@ -2381,7 +2427,7 @@ void scModulation::drawRouting(float w) {
                                       !polarityEditable(s, t) ? "" : isBipolar(s, t) ? "  bipolar" : "  unipolar");
                 }
             }
-            if(cell && host.publishMenu) host.publishMenu(cell->p->getEscapedName());   // the cell's entries: drawCellMenuItems
+            if(cell && host.publishMenu) host.publishMenu(cell->first);   // the cell's entries: drawCellMenuItems
             else if(ImGui::BeginPopupContextItem("##cellMenu")){
                 ImGui::Text("%s -> %s", sourceName(s).c_str(), colName(t).c_str());
                 float e = amountRef(s, t);
@@ -2438,7 +2484,7 @@ void scModulation::drawRouting(float w) {
 }
 
 std::vector<float> scModulation::lfoModeWeights(int li) const {
-    const auto key = lfoNoise[li].getEscapedName();
+    const auto& key = lfoNoiseKeys[li];
     if(generatorMorph.contains(key)) return generatorMorph.at(key).at("weights").get<std::vector<float>>();
     const int mode = manualLfo(li) ? 5 : effectiveRandom(li) > 0 ? effectiveRandom(li) + 1 : effectiveNoise(li) ? 1 : 0;
     std::vector<float> weights(6, 0); weights[std::clamp(mode, 0, 5)] = 1;
@@ -2446,7 +2492,7 @@ std::vector<float> scModulation::lfoModeWeights(int li) const {
 }
 
 float scModulation::lfoManualValue(int li) const {
-    const auto key = lfoNoise[li].getEscapedName();
+    const auto& key = lfoNoiseKeys[li];
     return generatorMorph.contains(key) ? generatorMorph.at(key).value("manual", 0.f)
          : unifiedLfoModels ? lfoManual[li].get() : 0.f;
 }
@@ -2533,7 +2579,7 @@ void scModulation::morphGenerators(const ofJson& a,const ofJson& b,float t,const
     const auto metadata = prefix + "Generators";
     ofJson state; state[metadata] = ofJson::object();
     for(int li = 0; li < MAX_LFOS; ++li){
-        scGeneratorMorph::LfoKeys keys{lfoNoise[li].getEscapedName(), lfoRndType[li].getEscapedName(),
+        scGeneratorMorph::LfoKeys keys{lfoNoiseKeys[li], lfoRndType[li].getEscapedName(),
             unifiedLfoModels ? lfoModel[li].getEscapedName() : "", lfoSync[li].getEscapedName(),
             lfoHz[li].getEscapedName(), lfoBeats[li].getEscapedName(), lfoSH[li].getEscapedName(),
             unifiedLfoModels ? lfoManual[li].getEscapedName() : "", grainExtras ? lfoRegion[li].getEscapedName() : "",
@@ -2551,6 +2597,6 @@ void scModulation::morphGenerators(const ofJson& a,const ofJson& b,float t,const
 }
 
 float scModulation::lfoGeneratorValue(int li, const char* name, float fallback) const {
-    const auto key = lfoNoise[li].getEscapedName();
+    const auto& key = lfoNoiseKeys[li];
     return generatorMorph.contains(key) ? scGeneratorMorph::scalar(generatorMorph.at(key).value(name, ofJson(fallback)), fallback) : fallback;
 }

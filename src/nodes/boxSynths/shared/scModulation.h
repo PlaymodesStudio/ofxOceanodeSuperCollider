@@ -400,6 +400,10 @@ private:
     std::array<ofParameter<int>, MAX_LFOS> lfoSym, lfoQuant, lfoModulo;
     std::array<baseIndexer, MAX_LFOS> lfoIndexers;
     std::array<std::vector<float>, MAX_LFOS> lfoPhases;
+    std::array<std::string, MAX_LFOS> lfoNoiseKeys;          // lfoNoise's escaped names: generatorMorph's keys
+    // updatePhases: the indexer inputs each LFO's phases were computed from
+    std::array<std::array<float, 11>, MAX_LFOS> phaseKeys{};
+    std::array<bool, MAX_LFOS> phaseKeyValid{};
     std::array<EnvParams, MAX_ENVS> envs;
     std::array<ofParameter<std::vector<float>>, MAX_EXT> exts;
 

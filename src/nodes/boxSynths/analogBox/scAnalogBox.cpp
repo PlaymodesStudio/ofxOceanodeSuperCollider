@@ -12,6 +12,7 @@
 #include "../../../ui/scTypedValue.h"
 #include "ofxOceanodeShared.h"
 #include "../../../ofxOceanodeSuperColliderConfig.h"
+#include "../shared/scSynthdefIndex.h"
 #include "ofxSCServer.h"
 #include <algorithm>
 #include <cmath>
@@ -1374,11 +1375,7 @@ void scAnalogBox::requireSynthdefs() {
     auto find = [](const std::string& expected, const std::string& bundledDir){
         std::filesystem::path folder;
         try {
-            const std::filesystem::path root = ofToDataPath(SYNTHDEF_DIRECTORY, true);
-            if(std::filesystem::exists(root))
-                for(const auto& e : std::filesystem::recursive_directory_iterator(root,
-                        std::filesystem::directory_options::skip_permission_denied))
-                    if(e.is_regular_file() && e.path().filename() == expected){ folder = e.path().parent_path(); break; }
+            folder = scSynthdefIndex::find(expected);   // one walk of the tree per process
             if(folder.empty()){
                 const auto bundled = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path().parent_path() / bundledDir;
                 if(std::filesystem::exists(bundled / expected)) folder = bundled;
@@ -1432,13 +1429,21 @@ void scAnalogBox::publish(const std::string& key) {
 void scAnalogBox::syncDropdowns() {
     auto handle = [this](const std::string& key) { auto it = published.find(key); return it == published.end() ? nullptr : it->second; };
     auto sync = [&](const std::string& key, const std::vector<std::string>& items) { dropdowns.set(key, items, handle(key)); };
-    std::vector<std::string> from = {"FM off"};
-    for(int j = 0; j < oscs(); j++) from.push_back("from Osc " + ofToString(j + 1));
-    for(int k = 0; k < MAX_OSCS; k++) sync(osc[k].fmFrom.getEscapedName(), from);
-    const std::vector<std::string> combTypes(kCombTypes.begin(), kCombTypes.end()), filterTypes(kFilterTypes.begin(), kFilterTypes.end());
-    for(int k = 0; k < MAX_FILTERS; k++) {
-        const FilterRef f = filterRef(k);
-        sync(f.type->getEscapedName(), f.mode->get() == kComb ? combTypes : filterTypes);
+    // Called every frame: the lists depend only on the oscillator count and
+    // which filters are combs (a later publish gets its names from publish())
+    std::array<int, 1 + MAX_FILTERS> signature{oscs()};
+    for(int k = 0; k < MAX_FILTERS; k++) signature[1 + k] = filterRef(k).mode->get() == kComb ? 1 : 0;
+    if(!dropdownSignatureValid || signature != dropdownSignature) {
+        dropdownSignatureValid = true;
+        dropdownSignature = signature;
+        std::vector<std::string> from = {"FM off"};
+        for(int j = 0; j < oscs(); j++) from.push_back("from Osc " + ofToString(j + 1));
+        for(int k = 0; k < MAX_OSCS; k++) sync(osc[k].fmFrom.getEscapedName(), from);
+        const std::vector<std::string> combTypes(kCombTypes.begin(), kCombTypes.end()), filterTypes(kFilterTypes.begin(), kFilterTypes.end());
+        for(int k = 0; k < MAX_FILTERS; k++) {
+            const FilterRef f = filterRef(k);
+            sync(f.type->getEscapedName(), f.mode->get() == kComb ? combTypes : filterTypes);
+        }
     }
     const auto& names = snaps.slotNames();
     for(const auto& key : snaps.slotKeys()) sync(key, names);
@@ -1850,7 +1855,20 @@ ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float
 }
 
 void scAnalogBox::applyState(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw) {
-    const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
+    // A glide / A-B morph applies the same two snapshots on every frame: their
+    // migrated copies (and the pinned controls below) are kept per pair. The
+    // policies' pair stamp (from begin() on these same objects) names the pair.
+    // (a nested call, from a listener, works on its own copies)
+    MorphPairCache nested;
+    auto& C = morphCacheDepth > 0 ? nested : morphCache;
+    struct Depth { int& d; explicit Depth(int& v):d(v){ ++d; } ~Depth(){ --d; } } depth(morphCacheDepth);
+    const unsigned stamp = snaps.morph.applying() && &C == &morphCache ? snaps.morph.pairStamp() : 0;
+    if(!stamp || C.stamp != stamp || C.aSaved != &aSaved || C.bSaved != &bSaved){
+        C.a = scDroneMode::migrated(aSaved); C.b = scDroneMode::migrated(bSaved);
+        C.stamp = stamp; C.aSaved = &aSaved; C.bSaved = &bSaved; C.pinned = false;
+    }
+    const ofJson& a = C.a;
+    const ofJson& b = C.b;
     if(!a.is_object() || !b.is_object()) return;
     t = ofClamp(t, 0.0f, 1.0f);
     // the counts first (the routes need their sources): while blending, the larger
@@ -1865,41 +1883,53 @@ void scAnalogBox::applyState(const ofJson& aSaved, const ofJson& bSaved, float t
     M.lfoCount = nl; M.envCount = ne; M.extCount = nx;
 
     // the controls: only what changes is set (each sends what it needs)
-    static const ofJson none = ofJson::object();
-    ofJson ca = a.contains("controls") ? a["controls"] : none;
-    ofJson cb = b.contains("controls") ? b["controls"] : none;
-    auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);
-    if(pinnedA.contains("controls"))ca=pinnedA["controls"];
-    if(pinnedB.contains("controls"))cb=pinnedB["controls"];
+    // Pinned selectors depend on the pair, the side of t and which selectors
+    // a connection drives: rebuilt only when one of those changes.
+    const int side = t < 0.5f ? 0 : 1;
+    auto pinBlocked = snaps.morph.pinBlocked();
+    if(!C.pinned || C.side != side || C.revision != snaps.morph.revision() || C.pinBlocked != pinBlocked){
+        static const ofJson none = ofJson::object();
+        C.ca = a.contains("controls") ? a["controls"] : none;
+        C.cb = b.contains("controls") ? b["controls"] : none;
+        {
+            auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);
+            if(pinnedA.contains("controls"))C.ca=std::move(pinnedA["controls"]);
+            if(pinnedB.contains("controls"))C.cb=std::move(pinnedB["controls"]);
+        }
+        C.oscA = C.ca; C.oscB = C.cb;
+        if(a.contains("_oscillatorCountBlend"))C.oscA[scVoiceCountMorph::key]=a["_oscillatorCountBlend"];
+        if(b.contains("_oscillatorCountBlend"))C.oscB[scVoiceCountMorph::key]=b["_oscillatorCountBlend"];
+        // snapshots from before the extra filters and the frequency shifter: those at their defaults
+        if(defaultSnap.contains("controls")){
+            auto isNew = [](std::string k){
+                std::replace(k.begin(), k.end(), '_', ' ');
+                for(const char* p : {"F2 ", "F3 ", "F4 ", "Freq Shift"}) if(k.rfind(p, 0) == 0) return true;
+                return k == "Filters" || k == "Filter Routing" || k == "Filter Level";
+            };
+            for(auto it = defaultSnap["controls"].begin(); it != defaultSnap["controls"].end(); ++it){
+                if(!isNew(it.key())) continue;
+                if(!C.ca.contains(it.key())) C.ca[it.key()] = it.value();
+                if(!C.cb.contains(it.key())) C.cb[it.key()] = it.value();
+            }
+        }
+        C.pinned = true; C.side = side; C.revision = snaps.morph.revision(); C.pinBlocked = std::move(pinBlocked);
+    }
+    const ofJson& ca = C.ca;
+    const ofJson& cb = C.cb;
     if(!drivenByConnection(oscCount.getEscapedName())){
-        auto x=ca,y=cb;
-        if(a.contains("_oscillatorCountBlend"))x[scVoiceCountMorph::key]=a["_oscillatorCountBlend"];
-        if(b.contains("_oscillatorCountBlend"))y[scVoiceCountMorph::key]=b["_oscillatorCountBlend"];
-        oscillatorWeights=scVoiceCountMorph::blend(x,y,t,oscCount.get(),MAX_OSCS,oscCount.getEscapedName().c_str());
+        oscillatorWeights=scVoiceCountMorph::blend(C.oscA,C.oscB,t,oscCount.get(),MAX_OSCS,oscCount.getEscapedName().c_str());
         oscillatorCapacity=std::max(oscs(),scVoiceCountMorph::activeCount(oscillatorWeights));
         oscillatorRetireAt=ofGetElapsedTimef()+0.35f;
     }else {oscillatorWeights.clear();oscillatorCapacity=0;oscillatorRetireAt=-1;}
-    // snapshots from before the extra filters and the frequency shifter: those at their defaults
-    if(defaultSnap.contains("controls")){
-        auto isNew = [](std::string k){
-            std::replace(k.begin(), k.end(), '_', ' ');
-            for(const char* p : {"F2 ", "F3 ", "F4 ", "Freq Shift"}) if(k.rfind(p, 0) == 0) return true;
-            return k == "Filters" || k == "Filter Routing" || k == "Filter Level";
-        };
-        for(auto it = defaultSnap["controls"].begin(); it != defaultSnap["controls"].end(); ++it){
-            if(!isNew(it.key())) continue;
-            if(!ca.contains(it.key())) ca[it.key()] = it.value();
-            if(!cb.contains(it.key())) cb[it.key()] = it.value();
-        }
-    }
     for(const auto& control : controls){
         const std::string& k = control.key;
         if(snapExcluded(k) || drivenByConnection(k)) continue;
-        const bool ha = ca.contains(k), hb = cb.contains(k);
+        const auto ia = ca.find(k), ib = cb.find(k);
+        const bool ha = ia != ca.end(), hb = ib != cb.end();
         ofJson v;
-        if(ha && hb) v = blendJson(k, ca[k], cb[k], t, sw);
-        else if(hb && sw) v = cb[k];
-        else if(ha && !sw) v = ca[k];
+        if(ha && hb) v = blendJson(k, *ia, *ib, t, sw);
+        else if(hb && sw) v = *ib;
+        else if(ha && !sw) v = *ia;
         else continue;
         if(v != control.save()) control.load(v);
     }

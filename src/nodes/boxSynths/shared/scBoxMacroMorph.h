@@ -15,11 +15,13 @@
 // Output channels stay Structural.
 struct scBoxMacroMorph {
     ofJson from, to;   // the sound at the start, the arrival (snapshot format)
+    unsigned identity = 0;   // renewed with from / to: frames skip comparing them
 
     bool begin(scSnapshots& snaps, ofJson target, std::string& reason) {
         if(!target.is_object()) { reason = "no saved sound"; return false; }
         from = snaps.captureForExternalMorph();   // the current sound, including an interrupted blend
         to = std::move(target);
+        identity = scMorphPolicies::nextIdentity();
         return true;
     }
     // A saved value in the control's own format: Oceanode saves a published
@@ -35,11 +37,12 @@ struct scBoxMacroMorph {
         return v;
     }
     void apply(scSnapshots& snaps, float t, bool switched) {
-        if(from.is_object()) snaps.applyExternalMorph(from, to, t, switched);
+        if(from.is_object()) snaps.applyExternalMorph(from, to, t, switched, identity);
     }
     // cancelled: back to the sound captured at the start
     void end(scSnapshots& snaps, bool completed) {
-        if(!completed && from.is_object()) snaps.applyExternalMorph(from, from, 1.0f, true);
+        if(!completed && from.is_object()) snaps.applyExternalMorph(from, from, 1.0f, true, identity);
         from = to = ofJson();
+        identity = scMorphPolicies::nextIdentity();
     }
 };

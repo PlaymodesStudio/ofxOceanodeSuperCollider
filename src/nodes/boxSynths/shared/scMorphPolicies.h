@@ -35,8 +35,8 @@ public:
         add(p,Kind::Value,0,std::move(evaluate)).dependencies=std::move(dependencies);
     }
     template<class T> ofJson resolvedValue(const ofParameter<T>& p) const {
-        auto it=entries.find(&p);
-        return hasEffective(p) ? it->second.effective : ofJson();
+        const Entry* e=effectiveEntry(p);
+        return e ? e->effective : ofJson();
     }
     // Modes whose DSP already runs parallel alternatives. weights() blends
     // endpoints directly (never visits unrelated intermediate enum values).
@@ -60,6 +60,14 @@ public:
             else {a[mode.container][mode.key]=value;b[mode.container][mode.key]=value;}
         }
     }
+    // What pinSelectors depends on besides the two snapshots and the side of
+    // t (t < 0.5): which declared selectors a connection drives. Hosts key
+    // their pinned copies on it (with revision()) instead of pinning per frame.
+    std::vector<char> pinBlocked() const {
+        std::vector<char> blocked;
+        for(const auto& item:entries)for(const auto& mode:item.second.neutral)blocked.push_back(isBlocked(mode.key) ? 1 : 0);
+        return blocked;
+    }
     template<class T, class E>
     void enabledDepth(ofParameter<E>& enabled, ofParameter<T>& depth, Read readEnabled = {}, Read readDepth = {}) {
         auto& e = add(depth, Kind::Depth, 0, std::move(readDepth));
@@ -79,25 +87,25 @@ public:
             return s->contains(key) ? (*s)[key] : ofJson();
         };
     }
+    // The accessors run per send on every morph frame: one lookup each, and the
+    // entry's stored id (the escaped name) for the connection check.
     template<class T> T value(const ofParameter<T>& p) const {
-        auto it = entries.find(&p);
-        if(!isBlocked(p.getEscapedName()) && it != entries.end() && !it->second.effective.is_null()) {
-            try { return it->second.effective.template get<T>(); } catch(...) {}
+        if(const Entry* e = effectiveEntry(p)) {
+            try { return e->effective.template get<T>(); } catch(...) {}
         }
         return p.get();
     }
     template<class T> float activation(const ofParameter<T>& p) const {
         auto it = entries.find(&p);
-        return isBlocked(p.getEscapedName()) || it == entries.end() || !it->second.effective.is_number()
+        return it == entries.end() || !it->second.effective.is_number() || isBlocked(it->second.id)
             ? std::clamp(number(ofJson(p.get())), 0.0f, 1.0f) : it->second.effective.template get<float>();
     }
     template<class T> bool hasEffective(const ofParameter<T>& p) const {
-        auto it=entries.find(&p);
-        return !isBlocked(p.getEscapedName()) && it!=entries.end() && !it->second.effective.is_null();
+        return effectiveEntry(p) != nullptr;
     }
     template<class T> float neutralGain(const ofParameter<T>& p) const {
-        auto it=entries.find(&p);
-        return hasEffective(p) && it!=entries.end() ? it->second.modulationGain : 1.0f;
+        const Entry* e = effectiveEntry(p);
+        return e ? e->modulationGain : 1.0f;
     }
     template<class T> std::vector<float> weights(const ofParameter<T>& p,int voice=0) const {
         auto it=entries.find(&p);
@@ -108,7 +116,7 @@ public:
         // single row must not copy that entire JSON table on every DSP lookup.
         ofJson current;
         const ofJson* table=&e.effective;
-        if(!hasEffective(p)){current=modeWeights(ofJson(p.get()),e.count);table=&current;}
+        if(e.effective.is_null() || isBlocked(e.id)){current=modeWeights(ofJson(p.get()),e.count);table=&current;}
         const auto& value=*table;
         if(!value.is_array() || value.empty())return oneHot(ofJson(0),e.count);
         const auto& row=value.front().is_array() ? value[size_t(std::max(0,voice))%value.size()] : value;
@@ -170,18 +178,30 @@ public:
         }
     }
     void erase(const ofAbstractParameter& p) { entries.erase(&p); ++registered; }
+    // A fresh pair identity for begin(), unique in the process (never 0)
+    static unsigned nextIdentity() {
+        static unsigned counter = 0;
+        if(++counter == 0) counter = 1;
+        return counter;
+    }
+    // Which snapshot pair the last begin() resolved: changes with the pair
+    unsigned pairStamp() const { return pair.stamp; }
     // Changes whenever an entry is added or removed (apply can create pads).
     unsigned revision() const { return registered; }
     void clear() {
         for(auto& item : entries) item.second.effective = {};
     }
-    void begin(const ofJson& a, const ofJson& b, float t, const std::function<bool(const std::string&)>& blocked = {}) {
+    // identity: a token (nextIdentity()) the caller changes whenever a or b is
+    // rewritten in place, e.g. a snapshot slot or a glide's endpoints. With it,
+    // the same objects and token are the same pair without comparing their
+    // contents every frame. 0: compare them.
+    void begin(const ofJson& a, const ofJson& b, float t, const std::function<bool(const std::string&)>& blocked = {}, unsigned identity = 0) {
         inApply = true;
         blockedControls = blocked;
         t = std::clamp(t, 0.0f, 1.0f);
         // A glide or A/B morph moves t between the same two snapshots: their
         // endpoints are resolved once per pair, not on every frame.
-        preparePair(a, b);
+        preparePair(a, b, identity);
         for(auto& item : entries) {
             auto& e = item.second;
             if(blocked && blocked(e.id)) { e.effective = {}; continue; }
@@ -261,10 +281,12 @@ private:
         const ofJson* b = nullptr;
         ofJson aCopy, bCopy;   // a caller can rewrite the same object in place
         unsigned stamp = 0;
+        unsigned identity = 0;
     } pair;
-    void preparePair(const ofJson& a, const ofJson& b) {
-        if(pair.stamp && pair.a == &a && pair.b == &b && pair.aCopy == a && pair.bCopy == b) return;
-        pair.a = &a; pair.b = &b; pair.aCopy = a; pair.bCopy = b;
+    void preparePair(const ofJson& a, const ofJson& b, unsigned identity) {
+        if(pair.stamp && pair.a == &a && pair.b == &b
+           && (identity ? identity == pair.identity : pair.aCopy == a && pair.bCopy == b)) return;
+        pair.a = &a; pair.b = &b; pair.aCopy = a; pair.bCopy = b; pair.identity = identity;
         if(++pair.stamp == 0) pair.stamp = 1;
     }
     void resolve(Entry& e, const ofJson& a, const ofJson& b, bool driven) const {
@@ -288,6 +310,12 @@ private:
     }
     std::function<bool(const std::string&)> blockedControls;
     bool isBlocked(const std::string& key) const { return blockedControls && blockedControls(key); }
+    // The entry while it holds an effective value its connection doesn't override
+    const Entry* effectiveEntry(const ofAbstractParameter& p) const {
+        auto it = entries.find(&p);
+        if(it == entries.end() || it->second.effective.is_null() || isBlocked(it->second.id)) return nullptr;
+        return &it->second;
+    }
     template<class T> Entry& add(ofParameter<T>& p, Kind kind, int count, Read read) {
         auto& e = entries[&p];
         ++registered; e.stamp = 0; e.dependencies = {}; e.dependencyKey = {};

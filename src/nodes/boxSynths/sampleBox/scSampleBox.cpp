@@ -11,6 +11,7 @@
 #include "../../../audio/scSynthControlBatch.h"
 #include "ofxOceanodeShared.h"
 #include "../../../ofxOceanodeSuperColliderConfig.h"
+#include "../shared/scSynthdefIndex.h"
 #include "ofxSuperCollider.h"
 #include "ofxOceanodeContainer.h"
 #include <algorithm>
@@ -342,11 +343,7 @@ void scSampleBox::requireSynthdefs() {
     // the newest variant: a folder compiled before the _M defs is out of date
     const std::string expected = "SampleBoxPad_1_2_M.scsyndef";
     try {
-        const std::filesystem::path root = ofToDataPath(SYNTHDEF_DIRECTORY, true);
-        if(std::filesystem::exists(root))
-            for(const auto& e : std::filesystem::recursive_directory_iterator(root,
-                    std::filesystem::directory_options::skip_permission_denied))
-                if(e.is_regular_file() && e.path().filename() == expected) { folder = e.path().parent_path(); break; }
+        folder = scSynthdefIndex::find(expected);   // one walk of the tree per process
         if(folder.empty()) {
             const auto bundled = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path().parent_path()
                 / "synthdefs/Defaults/SampleBox/CompiledSynthdefs/SampleBox";
@@ -421,10 +418,13 @@ void scSampleBox::settleEngines() {
 }
 
 void scSampleBox::setBpm(float b) {
+    // Called every frame: the echoes only when the tempo moved (a new echo
+    // synth gets it from sendFx)
+    const bool changed = b != bpm;
     bpm = b;
     for(auto& p : pads) {
         p->mod.setBpm(b);
-        for(auto& [srv, s] : p->sc) if(s.fxSynth[FX_ECHO]) s.fxSynth[FX_ECHO]->set("bpm", b);
+        if(changed) for(auto& [srv, s] : p->sc) if(s.fxSynth[FX_ECHO]) s.fxSynth[FX_ECHO]->set("bpm", b);
     }
 }
 
@@ -1516,7 +1516,8 @@ void scSampleBox::updateTempo() {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scSampleBox::update(ofEventArgs&) {
-    rebuildPadControlIndex();   // cheap; keeps the index right whatever re-numbered the pads
+    // (no per-frame rebuild of the pad control index: pads are only added or
+    // removed at the end, each rebuilds it, and controlsOf() checks it anyway)
     timeline.update();
     snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown

@@ -16,6 +16,7 @@
 #include "../../../ui/scTypedValue.h"
 #include "ofxOceanodeShared.h"
 #include "../../../ofxOceanodeSuperColliderConfig.h"
+#include "../shared/scSynthdefIndex.h"
 #include "ofxSCServer.h"
 #include <algorithm>
 #include <cmath>
@@ -1860,11 +1861,7 @@ void scPolyComb::requireSynthdefs() {
     auto find = [](const std::string& expected, const std::string& bundledDir){
         std::filesystem::path folder;
         try {
-            const std::filesystem::path root = ofToDataPath(SYNTHDEF_DIRECTORY, true);
-            if(std::filesystem::exists(root))
-                for(const auto& e : std::filesystem::recursive_directory_iterator(root,
-                        std::filesystem::directory_options::skip_permission_denied))
-                    if(e.is_regular_file() && e.path().filename() == expected){ folder = e.path().parent_path(); break; }
+            folder = scSynthdefIndex::find(expected);   // one walk of the tree per process
             if(folder.empty()){
                 const auto bundled = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path().parent_path() / bundledDir;
                 if(std::filesystem::exists(bundled / expected)) folder = bundled;
@@ -3179,7 +3176,20 @@ ofJson blendJson(const std::string& key, const ofJson& x, const ofJson& y, float
 }
 
 void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t, bool sw) {
-    const auto a = scDroneMode::migrated(aSaved), b = scDroneMode::migrated(bSaved);
+    // A glide / A-B morph applies the same two snapshots on every frame: their
+    // migrated copies (and the pinned controls below) are kept per pair. The
+    // policies' pair stamp (from begin() on these same objects) names the pair;
+    // a nested call, from a listener, works on its own copies.
+    MorphPairCache nested;
+    auto& C = morphCacheDepth > 0 ? nested : morphCache;
+    struct Depth { int& d; explicit Depth(int& v):d(v){ ++d; } ~Depth(){ --d; } } depth(morphCacheDepth);
+    const unsigned stamp = snaps.morph.applying() && &C == &morphCache ? snaps.morph.pairStamp() : 0;
+    if(!stamp || C.stamp != stamp || C.aSaved != &aSaved || C.bSaved != &bSaved){
+        C.a = scDroneMode::migrated(aSaved); C.b = scDroneMode::migrated(bSaved);
+        C.stamp = stamp; C.aSaved = &aSaved; C.bSaved = &bSaved; C.pinned = false;
+    }
+    const ofJson& a = C.a;
+    const ofJson& b = C.b;
     if(!a.is_object() || !b.is_object()) return;
     struct RendererPolicyScope { scMorphPolicies& policies; bool active; ~RendererPolicyScope(){ if(active)policies.end(); } } policyScope{snaps.morph,voiceRenderer};
     if(voiceRenderer)snaps.morph.begin(a,b,t,[this](const std::string& key){return drivenByConnection(key);});
@@ -3218,27 +3228,49 @@ void scPolyComb::applyState(const ofJson& aSaved, const ofJson& bSaved, float t,
     }
 
     // the controls: only what changes is set (each sends what it needs)
-    static const ofJson none = ofJson::object();
-    auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);
-    const ofJson ca = pcmigration::controls(pinnedA.contains("controls") ? pinnedA["controls"] : none);
-    const ofJson cb = pcmigration::controls(pinnedB.contains("controls") ? pinnedB["controls"] : none);
-    for(const auto& control : controls){
+    // Pinned selectors depend on the pair, the side of t and which selectors
+    // a connection drives: rebuilt only when one of those changes.
+    const int side = t < 0.5f ? 0 : 1;
+    auto pinBlocked = snaps.morph.pinBlocked();
+    if(!C.pinned || C.side != side || C.revision != snaps.morph.revision() || C.pinBlocked != pinBlocked){
+        static const ofJson none = ofJson::object();
+        auto pinnedA=a,pinnedB=b;snaps.morph.pinSelectors(pinnedA,pinnedB,t);
+        C.ca = pcmigration::controls(pinnedA.contains("controls") ? pinnedA["controls"] : none);
+        C.cb = pcmigration::controls(pinnedB.contains("controls") ? pinnedB["controls"] : none);
+        C.pinned = true; C.side = side; C.revision = snaps.morph.revision(); C.pinBlocked = std::move(pinBlocked);
+    }
+    const ofJson& ca = C.ca;
+    const ofJson& cb = C.cb;
+    // Which controls are options (with their fallback): fixed once the
+    // defaults are filled at setup, not worked out per control per frame
+    if(controlOptions.size() != controls.size()){
+        controlOptions.assign(controls.size(), {});
+        for(size_t i = 0; i < controls.size(); i++){
+            const std::string& k = controls[i].key;
+            auto& o = controlOptions[i];
+            o.option = k==combSaturation.getEscapedName() || k==combSatLevel.getEscapedName() || compDefaults.contains(k) || blurDefaults.contains(k) || subDefaults.contains(k)
+                    || pitchDefaults.contains(k) || deltaDefaults.contains(k) || tremDefaults.contains(k);
+            if(o.option)
+                o.fallback=subDefaults.contains(k) ? subDefaults[k] : compDefaults.contains(k) ? compDefaults[k] : blurDefaults.contains(k) ? blurDefaults[k] : pitchDefaults.contains(k) ? pitchDefaults[k]
+                          : deltaDefaults.contains(k) ? deltaDefaults[k] : tremDefaults.contains(k) ? tremDefaults[k] : k==combSatLevel.getEscapedName() ? ofJson(12.0f) : ofJson(false);
+        }
+    }
+    for(size_t i = 0; i < controls.size(); i++){
+        const auto& control = controls[i];
         const std::string& k = control.key;
         if(snapExcluded(k) || drivenByConnection(k)) continue;
-        const bool ha = ca.contains(k), hb = cb.contains(k);
-        const bool option = k==combSaturation.getEscapedName() || k==combSatLevel.getEscapedName() || compDefaults.contains(k) || blurDefaults.contains(k) || subDefaults.contains(k)
-                         || pitchDefaults.contains(k) || deltaDefaults.contains(k) || tremDefaults.contains(k);
-        if(option){
-            const ofJson fallback=subDefaults.contains(k) ? subDefaults[k] : compDefaults.contains(k) ? compDefaults[k] : blurDefaults.contains(k) ? blurDefaults[k] : pitchDefaults.contains(k) ? pitchDefaults[k]
-                                : deltaDefaults.contains(k) ? deltaDefaults[k] : tremDefaults.contains(k) ? tremDefaults[k] : k==combSatLevel.getEscapedName() ? ofJson(12.0f) : ofJson(false);
-            auto v=blendJson(k,ha?ca[k]:fallback,hb?cb[k]:fallback,t,sw);
+        const auto ia = ca.find(k), ib = cb.find(k);
+        const bool ha = ia != ca.end(), hb = ib != cb.end();
+        if(controlOptions[i].option){
+            const ofJson& fallback = controlOptions[i].fallback;
+            auto v=blendJson(k,ha?*ia:fallback,hb?*ib:fallback,t,sw);
             if(v!=control.save()) control.load(v);
             continue;
         }
         ofJson v;
-        if(ha && hb) v = blendJson(k, ca[k], cb[k], t, sw);
-        else if(hb && sw) v = cb[k];
-        else if(ha && !sw) v = ca[k];
+        if(ha && hb) v = blendJson(k, *ia, *ib, t, sw);
+        else if(hb && sw) v = *ib;
+        else if(ha && !sw) v = *ia;
         else continue;
         if(v != control.save()) control.load(v);
     }
@@ -3327,16 +3359,18 @@ bool scPolyComb::morphBegin(const ofJson& target, std::string& reason) {
     if(!morphCheck(target, reason)) return false;
     morphFrom = snaps.captureForExternalMorph(); // current bases and effective morph state
     morphTo = snapshotOf(target);
+    morphIdentity = scMorphPolicies::nextIdentity();
     return true;
 }
 
 void scPolyComb::morphApply(float t, bool switched) {
-    if(morphFrom.is_object()) snaps.applyExternalMorph(morphFrom, morphTo, t, switched);
+    if(morphFrom.is_object()) snaps.applyExternalMorph(morphFrom, morphTo, t, switched, morphIdentity);
 }
 
 void scPolyComb::morphEnd(bool completed) {
-    if(!completed && morphFrom.is_object()) snaps.applyExternalMorph(morphFrom, morphFrom, 1.0f, true);
+    if(!completed && morphFrom.is_object()) snaps.applyExternalMorph(morphFrom, morphFrom, 1.0f, true, morphIdentity);
     morphFrom = morphTo = ofJson();
+    morphIdentity = scMorphPolicies::nextIdentity();
 }
 
 // ── The bar under the header: a slot menu (recall), store, glide, A/B morph,

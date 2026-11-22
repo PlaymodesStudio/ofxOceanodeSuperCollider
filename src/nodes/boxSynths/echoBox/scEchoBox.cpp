@@ -9,6 +9,7 @@
 #include "../../../ui/scTypedValue.h"
 #include "ofxOceanodeShared.h"
 #include "../../../ofxOceanodeSuperColliderConfig.h"
+#include "../shared/scSynthdefIndex.h"
 #include "ofxSCServer.h"
 #include <algorithm>
 #include <cmath>
@@ -300,11 +301,7 @@ void scEchoBox::requireSynthdefs() {
     std::filesystem::path folder;
     const std::string expected = "EchoBoxTap2.scsyndef";
     try {
-        const std::filesystem::path root = ofToDataPath(SYNTHDEF_DIRECTORY, true);
-        if(std::filesystem::exists(root))
-            for(const auto& e : std::filesystem::recursive_directory_iterator(root,
-                    std::filesystem::directory_options::skip_permission_denied))
-                if(e.is_regular_file() && e.path().filename() == expected) { folder = e.path().parent_path(); break; }
+        folder = scSynthdefIndex::find(expected);   // one walk of the tree per process
         if(folder.empty()){
             const auto bundled = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path().parent_path()
                 / "synthdefs/Defaults/EchoBox/CompiledSynthdefs/EchoBox";
@@ -675,9 +672,12 @@ void scEchoBox::applyGraphSuspended(ofxSCServer* server, bool suspended) {
 }
 
 void scEchoBox::setBpm(float bpm) {
+    // The transport calls this every frame: the beat taps only when the tempo
+    // moved (a tap created later gets its time from sendTap)
+    const bool changed = bpm != currentBpm;
     currentBpm = bpm;
     modulation.setBpm(bpm);
-    for(int t = 0; t < tapCount; t++)
+    if(changed) for(int t = 0; t < tapCount; t++)
         if(taps[t].unit.get() == 1)
             for(auto& [s, st] : states) if(st.taps[t]) st.taps[t]->set("time", tapSeconds(t));
 }
