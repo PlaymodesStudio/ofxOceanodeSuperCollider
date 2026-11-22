@@ -281,3 +281,190 @@ Compiled defs installed:
   - `sendLfoPart` dirty skip.
   - RhythmBox gate-bus gating.
   - Wavetable and PolyComb `.inl` files not changed.
+
+## Timeline and transport review (2026-11-22, not fixed yet)
+
+Read-only. Two audits: the ofxOceanodeTimeline engine, and transport /
+scheduling plus the timeline editor GUI. The items marked ✔ were re-read by
+hand. Paths are relative to `addons/`.
+
+### High
+
+1. ✔ **Parameter paths are resolved from strings every frame, and the
+   second apply pass has no cache at all.**
+   - `beginParameterCache` (`ofxOceanodeTimeline.cpp:5366`) clears the
+     cache every frame.
+   - `ofxOceanodeContainer.cpp:302` ends the cache before the post-update
+     `applyAutomation()` (`:323`). Every automated path then goes through
+     `findTimelineParameter` (`ofxOceanodeContainerPaths.cpp:114`):
+     `ofSplitString`, `dynamic_cast` walks over the macros, and
+     `getEscapedName` scans.
+   - A missing target scans every parameter of every node, every frame.
+   - Fix: a persistent path → pointer cache invalidated by a container
+     graph-generation counter (add, delete, rename, preset or macro load),
+     with misses cached and retried on a throttle.
+2. ✔ **The whole timeline model is hashed about 4 times per frame**,
+   playing or stopped:
+   - `syncPlayer` (`Players.cpp:683`);
+   - the engine's `ensureEvaluationIndexes` (`:812`) and again in
+     `evaluateAutomation`, because `beginParameterCache` resets
+     `evaluationHashedThisPass`;
+   - `adoptInstrumentDurations` (`ofxOceanodeTimeline.cpp:5461`), before
+     its 15-frame gate.
+
+   Each hash covers every note, step and point. It also calls the virtual
+   `getTimelineInstrument` per piano lane, and SampleBox's version allocates
+   names, colours and waveforms. Fix: an edit revision counter bumped by
+   mutators, the editor and history; at minimum, one hash per frame reused
+   by the engines.
+
+### Medium
+
+3. ✔ **MIDI clock re-anchors every synced clock every frame.**
+   - `MidiClockCore.h:204` EMA-smooths bpm on every tick, and
+     `scTransportSync.h:193/265` treats a change above 1e-3 bpm as a tempo
+     change. The result is a new anchor plus resent deadlines:
+     6-control timed `/n_set` per clock per server.
+   - It hits scModulation synced LFOs in every Box, MetroBox, Arp, ChordBox,
+     GrainBox and Bake. Tempo-lane ramps hit the same path.
+   - Fix: a relative threshold (~0.05 %), letting the periodic drift anchor
+     absorb the rest, or quantize the external bpm.
+4. **Automation values make a string round trip** (format, combine,
+   broadcast, clamp, parse), up to 3 times per engine per frame
+   (`Evaluation.cpp:1599`, `:2272`; `ofxOceanodeTimeline.cpp:625`). Fix:
+   compute each path's final value once in `evaluateAutomation`; later
+   passes apply the stored value.
+5. **Scheduler rebuilds string containers every frame while playing**
+   (`Scheduler.cpp:183-425`):
+   - `selectSchedulablePaths` is O(n²) and takes the registry mutex per
+     path;
+   - targets map, active/suppressed sets, `scheduledBackendPaths` copy,
+     latency map over tracks × bindings.
+
+   Fix: cache by evaluation signature and use interned path ids.
+6. **A stopped transport still evaluates everything**: collect plus both
+   apply passes at an unchanged beat. Fix: reuse `activeAutomationValues`
+   when beat, generation, signature and live overrides are unchanged.
+7. **Piano Roll editor draws every note**, about 9 primitives each, with
+   no x culling (`PianoRollEditor.cpp:824`, `drawPreview :1480`). Drum Grid
+   already culls.
+8. **Timeline rows are never culled vertically**
+   (`TimelineController.cpp:4155`). Folder counts are O(n²) per frame
+   (`:4186`).
+9. **LFO Track / Timeline Transport nodes**:
+   - each `lfoTrack::update` runs another `syncPlayer` hash;
+   - the timeline and track lists are rebuilt every frame;
+   - `phaseOut`/`valueOut` are set unguarded (`lfoTrack.cpp:126-127`).
+10. **Wave clips**:
+    - a missing file is stat'ed per clip per server every frame
+      (`timelineWaveTrack.h:327`);
+    - the loop at `ofxOceanodeTimeline.cpp:5767` builds strings and does
+      lookups for every clip, however far from the playhead.
+
+### Low
+
+- **Clips off-screen to the left are still drawn**, since `drawClip`
+  clamps to the scrolling `laneMin.x`. `drawClipMenu` calls `BeginPopup`
+  per clip per frame (`:5602`).
+- **The MIDI clock builds a new `ofxMidiIn` once a second** to list ports
+  (`MidiClock.cpp:92`).
+- **`syncPlayerList` and `pruneMacroSequences` work every frame**:
+  `syncPlayerList` rebuilds per frame, and `pruneMacroSequences` runs 4+
+  times per frame over undo histories.
+- **LFO lane evaluation**: about 9 linear name lookups, and a curve-cycle
+  cache keyed by lane id that macro copies thrash.
+- **Scheduled notes go value → text → value**, and the input vectors are
+  copied twice per event.
+- **The Drum Grid rebuilds row colours and sounds per frame.**
+
+### Already cheap
+
+- The scheduling registry, transport latch, Follower with a steady tempo,
+  `updateTransportGates` and Global Pitch buses.
+- Hidden timeline windows, bounded waveform drawing, and Drum Grid x
+  culling.
+- The cursor-based scheduler window and `upper_bound` curve evaluation.
+- The `setBpm` change guards.
+
+### Status after the timeline/transport fix pass (2026-11-22)
+
+Repositories: ofxOceanodeTimeline, ofxOceanode and ofxOceanodeSuperCollider.
+Every touched file was syntax-checked with the BLOOBS flags. Tests:
+
+- The ofxOceanodeTimeline suite: 57/60 before and after. The three failures
+  were already there: attachment, controller_clarity, unsaved_changes.
+- `tools/transport_sync_test`, extended with a clock-jitter case that fails
+  on the old code.
+- 12 screenshots of folder rows and clips, before vs after: byte-identical.
+
+`tests/perf_benchmark.py` (eight instruments × 400 notes, playing):
+`update()` went from about 337 µs to about 264 µs. The machine was loaded, so
+the figure is noisy. **Nothing has been run in the app.**
+
+Done:
+
+- **1 Persistent path → parameter cache**, kept across frames and across the
+  post-update apply pass.
+  - It is cleared when the node graph generation (node constructor and
+    destructor) or the canvas-id generation changes.
+  - An entry is trusted only while three things hold: the group's lifetime
+    token is alive, the parameter sits at the same index, and it has the
+    same name (a rename in place re-resolves it).
+  - Misses hold for one pass; the apply path keeps its 30-frame retry.
+  - New core overload `findTimelineParameter(path, weak_ptr<void>& alive)`.
+  - An independent review traced every deletion path and found no
+    use-after-free.
+- **2 One model hash per frame for the source**, through the
+  `sourceSequenceSignature` memo used by syncPlayer, adopt and LFO Track.
+  The engine copy is hashed once instead of twice.
+- **4 The blend is cached per path** by `activeValuesRevision`. Broadcast
+  and clamp still run per pass, because they read the live width and range.
+- **5 Scheduler**:
+  - a set instead of the O(n²) find;
+  - targets as a vector in path order;
+  - `scheduledBackendPaths` moved, not copied;
+  - a null-parameter guard.
+- **3 MIDI clock re-anchoring**: `scTransportSync` compares against the
+  tempo of the last sent anchor, with a 0.05 % relative threshold. The
+  periodic anchor (every 2 s) absorbs the rest, about 1 ms.
+- **MIDI clock port check** uses the open input's own client instead of a new
+  CoreMIDI client every second.
+- **Wave clips**: a missing file is retried every 2 s, not stat'ed per clip
+  per server per frame. The per-track key and `isTrackAudible` are hoisted.
+- **LFO Track** reuses the frame's signature and rebuilds its track list only
+  on change.
+- **LFO cycles cache** is keyed by lane pointer (content-checked).
+- **Rests** are built only for heard lanes.
+- **Editor drawing**:
+  - Piano Roll notes culled by x (canvas and preview);
+  - the folder-count index is built once per frame;
+  - folder rows and `drawGrid` skip drawing when out of view (interaction
+    kept);
+  - clips outside the lane's visible area return early, with hit rects still
+    recorded;
+  - clip menus are drawn only while a popup is open.
+
+Held:
+
+- **Edit revision counter instead of hashing**: the signature also covers
+  node-derived voice counts and engine overrides.
+- **Stopped-transport reuse**: `collectActiveValues` reads live ranges, solo,
+  retrigger gaps and rolls.
+- **Scheduler caching by signature**: `hasParameterTarget` has no revision.
+- **Vertical culling of whole track rows**: the row body builds drop
+  targets, hit rects and editor spans used later in the frame.
+- **Drum Grid row cache**: a delayed refresh would show pad changes late, and
+  the instrument holds raw pointers.
+- **`phaseOut` / `valueOut` guard**: the policy is that read outputs notify
+  every frame.
+- **Skipping inactive wave clips**: `updateWaveClip` preloads voices.
+- **Smaller items**: `syncPlayerList` / `pruneMacroSequences` rebuild
+  signals, and the scheduled-note text round trip (crosses into
+  `scScheduledInputs`).
+
+Known side effects:
+
+- A parameter that appears without a node being created is still found the
+  next pass on the scheduler and GUI paths, but up to 30 frames late on the
+  apply path, as before.
+- An edit made to a sequence during node updates is seen one frame later.
