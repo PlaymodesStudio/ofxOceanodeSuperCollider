@@ -133,7 +133,7 @@ private:
 
     // the bands' pitches and everything static per band (computed here, sent on change)
     struct BandState {
-        std::array<float, MAX_BANDS> pitch{}, idxNorm{}, detune{}, vibRate{}, panA{}, panB{}, damp{};
+        std::array<float, MAX_BANDS> pitch{}, idx{}, idxNorm{}, detune{}, vibRate{}, panA{}, panB{}, damp{};
         std::array<bool, MAX_BANDS> sounding{};
     } bandState;
     std::mt19937 rng{12345};
@@ -190,6 +190,7 @@ private:
     void drawBandsTab(float w);
     void drawFxTab(float w);
     void drawBandView(float w, float h);
+    void drawIndexView(float w, float h);
     void sectionHeader(const char*, float, ofParameter<bool>* = nullptr, ImU32 = 0);
     void slider(ofParameter<float>&, const char*, float, const char* = "%.2f", bool = false);
     void sliderInt(ofParameter<int>&, const char*, float);

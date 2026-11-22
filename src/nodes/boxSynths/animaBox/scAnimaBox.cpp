@@ -407,6 +407,7 @@ void scAnimaBox::computeBands() {
         p += trans + modOffset + det * detuneDraw[i];
         bs.pitch[i] = std::clamp(p, 0.0f, 140.0f);
         bs.sounding[i] = ok && i < B;
+        bs.idx[i] = idx;
         bs.idxNorm[i] = std::clamp(idx / maxIdx, 0.0f, 1.0f);
         bs.vibRate[i] = ofLerp(vibF, vibF * vibDraw[i], poly);
         // the ensemble's placement: each band's A filter at w x U(v), B at 1 - w x U(v + 120)
@@ -1049,6 +1050,7 @@ void scAnimaBox::drawSoundTab(float w) {
     sectionHeader("Pitch Index", cw);
     for(auto* n : {"Step", "Index Cycles", "Index Offset", "Repeat", "Comb", "Index Invert", "Symmetry", "Index Random",
                    "Index Pow", "Index Quantize", "Index Skew", "Index Round", "Index Edge"}) control(n, cw);
+    drawIndexView(cw, 70 * zoom());
     nextCol();
     sectionHeader("Pitch Modifiers", cw);
     control("Band Octave", cw, "Octave", "%.0f"); control("Semitone", cw, nullptr, "%.0f st"); control("Fine", cw, nullptr, "%.2f st");
@@ -1074,6 +1076,33 @@ void scAnimaBox::drawSoundTab(float w) {
     labelW = 70;
     ImGui::Spacing();
     drawBandView(w, 150 * zoom());
+}
+// the Pitch Index scheme, as the ensemble's display: a bar per band (in band order) as high as
+// its pitch index; hover for the band's index, degree and pitch
+void scAnimaBox::drawIndexView(float w, float h) {
+    const float z = zoom();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + w, a.y + h);
+    ImGui::InvisibleButton("##indexView", ImVec2(w, h));
+    dl->AddRectFilled(a, b, pal::canvas, 3 * z); dl->AddRect(a, b, pal::border, 3 * z);
+    const int B = std::max(1, bands.get());
+    float top = 1;
+    for(int i = 0; i < B; ++i) top = std::max(top, bandState.idx[i]);
+    const float bw = (w - 4 * z) / B, pad = 2 * z;
+    for(int i = 0; i < B; ++i) {
+        const float x0 = a.x + pad + i * bw, x1 = x0 + std::max(1.0f, bw - (bw > 3 * z ? 1 * z : 0));
+        const float t = ofClamp(bandState.idx[i] / top, 0.0f, 1.0f);
+        const float level = i < (int)live.size() ? ofClamp(live[i], 0.0f, 1.0f) : 0.0f;
+        const ImU32 col = bandState.sounding[i] ? (ImU32)ImColor(0.47f + 0.5f * level, 0.78f, 0.75f, 0.55f + 0.45f * level) : IM_COL32(90, 90, 100, 120);
+        dl->AddRectFilled(ImVec2(x0, b.y - pad - t * (h - 2 * pad)), ImVec2(x1, b.y - pad), col);
+    }
+    if(ImGui::IsItemHovered()) {
+        const int i = std::clamp(int((ImGui::GetMousePos().x - a.x - pad) / bw), 0, B - 1);
+        const float p = bandState.pitch[i];
+        const int note = (int)std::round(p);
+        ImGui::SetTooltip("Band %d: index %.0f, degree %.0f\npitch %.2f (%s%d)", i + 1, bandState.idx[i],
+                          bandState.idx[i] + std::round(v("Key")) + std::round(v("Mode")), p, NOTE_NAMES[(note % 12 + 12) % 12], note / 12 - 1);
+    }
 }
 // every band at its pitch (x), its level now (height), Bands' range lit
 void scAnimaBox::drawBandView(float w, float h) {
