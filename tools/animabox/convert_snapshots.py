@@ -69,13 +69,17 @@ def lfo(prefix, ids, s, bands):
     # the indexer centres voice i at (i + 0.5) / n of Spread, Reaktor's band v at v / n of Len:
     # half a band more phase. And its Invert 0 counts down, Reaktor's button 0 counts up.
     phase = (phase + 0.5 * spread / max(1, bands)) % 1.0
+    # monobrownian: band 1's random curve DELAYED by len x idx / n cycles per band (a lag, where
+    # the other waves lead): the shared series must be read with the indexer counting the other way
+    invert = (0.0 if x['inv'] > 0 else 1.0) if mode != 4 else (1.0 if x['inv'] > 0 else 0.0)
+    if mode == 4: phase = (x['ph'] - spread - 0.5 * spread / max(1, bands)) % 1.0
     # Reaktor's Slow Random (the rate wobble): control-rate (400 Hz) random +-1 through a one-pole at
     # Vibf: its swing is 0.577 sqrt(k / (2 - k)) of VibA, k = 1 - exp(-2 pi Vibf / 400); LFNoise2's ~0.47
     k = 1 - math.exp(-2 * math.pi * max(0.0001, x['vibF']) / 400.0)
     wander = x['vibA'] * 0.577 * math.sqrt(k / (2 - k)) / 0.47
     out = {
         prefix + 'Sync': True, prefix + 'Beats': [round(beats, 5)], prefix + 'Spread': round(spread, 5),
-        prefix + 'Invert': 0.0 if x['inv'] > 0 else 1.0, prefix + 'Symmetry': int(round(x['sym'])),
+        prefix + 'Invert': invert, prefix + 'Symmetry': int(round(x['sym'])),
         prefix + 'Random': round(min(1.0, x['rnd'] / max(1, bands)), 5),
         prefix + 'Quantize': 128 if x['iq'] <= 0 else max(1, int(round(bands / x['iq']))),
         prefix + 'Modulo': 128 if x['mod'] >= 120.5 else max(1, int(round(x['mod']))),

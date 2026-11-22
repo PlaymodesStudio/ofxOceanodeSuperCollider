@@ -28,14 +28,14 @@ def reaktor(s, P, nv, t):
         w = math.copysign(abs(2 * Lv - 1) ** e, 2 * Lv - 1)
         out.append(tension((w + 1) / 2, g('pow')))
     return out
-def indexer(n, spread, invert):
+def indexer(n, spread, invert, wrap=True):
     vals = []
     for i in range(n):
         index = n - i; indexf = index
         noninv = indexf - 1.0; inv = n - indexf
         indexf = invert * inv + (1 - invert) * noninv + 0.5
         val = indexf / n * spread
-        if val > 1: tr = math.trunc(val); val -= (tr - 1) if tr == val else tr
+        if wrap and val > 1: tr = math.trunc(val); val -= (tr - 1) if tr == val else tr
         vals.append(val)
     return vals
 def ours(v, pre, nv, t):
@@ -65,6 +65,27 @@ for s, snap in enumerate(F):
     v = snap['values']; nv = v['Bands']; line = '%-24s' % snap['name']
     for pre, P in IDS.items():
         mode = int(round(float(V[str(P['mode'])][s])))
+        if mode == 4:
+            # monobrownian on one shared random table (both models read the same values): Reaktor's
+            # band v = band 1's curve len x idx_v / nv cycles earlier; ours = the series at its phase
+            import random
+            rng = random.Random(5); table = [rng.random() for _ in range(4096)]
+            def curve(x):
+                c = math.floor(x); f = x - c
+                v0, v1, v2, v3 = (table[int(c - 3 + k) % 4096] for k in range(4))
+                return min(1, max(0, v1 + 0.5 * f * ((v2 - v0) + f * ((2 * v0 - 5 * v1 + 4 * v2 - v3) + f * (3 * (v1 - v2) + v3 - v0)))))
+            g = lambda k: float(V[str(P[k])][s])
+            L = g('len'); ln = L + 1 if L <= 0 else math.floor(15 * L + 1 + 0.5)
+            Fq = 2.0 / g('div') * g('bpm'); hz = 2.0 / v[pre + 'Beats'][0]
+            ph0 = indexer(nv, v[pre + 'Spread'], v[pre + 'Invert'], wrap=False)   # Random Same: unwrapped
+            ts = [100 + k * 0.01 for k in range(400)]
+            rarg = lambda t, b: Fq * t - ln * ((nv - (b - 1)) if g('inv') > 0 else b) / nv
+            oarg = lambda t, b: hz * t + v[pre + 'Phase'] + ph0[b - 1]
+            shift = oarg(0, 1) - rarg(0, 1)          # one time shift: band 1 aligned (the start is free)
+            R = [[curve(rarg(t, b) + shift) for b in range(1, nv + 1)] for t in ts]
+            O = [[curve(oarg(t, b)) for b in range(1, nv + 1)] for t in ts]
+            cs = [corr([r[b] for r in R], [o[b] for o in O]) for b in range(nv)]
+            line += '  %s mono corr %5.2f      ' % (pre[:4], sum(cs) / nv); continue
         if mode != 1: line += '  %s mode %d (random)        ' % (pre[:4], mode); continue
         ts = [k * 0.01 for k in range(400)]
         R = [reaktor(s, P, nv, t) for t in ts]; O = [ours(v, pre, nv, t) for t in ts]

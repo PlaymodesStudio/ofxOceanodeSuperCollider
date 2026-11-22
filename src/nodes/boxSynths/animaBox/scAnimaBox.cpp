@@ -293,9 +293,9 @@ void scAnimaBox::setup() {
     };
     snaps.setup(sh);
     // The factory sounds were converted again (FACTORY_REVISION): a library written from older
-    // ones is backed up and replaced once (2: the LFOs' band direction, phase and rate wobble)
+    // ones is backed up and replaced once (2: the LFOs' band direction, phase and rate wobble; 3: monobrownian lag)
     {
-        static constexpr int FACTORY_REVISION = 2;
+        static constexpr int FACTORY_REVISION = 3;
         const std::filesystem::path dir = ofToDataPath("nodeSnapshots/AnimaBox", true);
         int written = 0;
         try { written = std::stoi(ofBufferFromFile((dir / "factoryRevision.txt").string()).getText()); } catch(...) {}

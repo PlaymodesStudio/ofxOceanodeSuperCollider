@@ -405,7 +405,7 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
     controls.set("shglide", lfoSHGlide[li].get());
     controls.set("nscale", perVoice ? lfoNScale[li].get() : 0.0f);
     controls.set("seed",lfoNoiseSeed(li));
-    controls.set("phoff", perVoice && !held ? slice(lfoPhases[li], c) : zero);
+    controls.set("phoff", perVoice && !held ? slice(sentPhases(li), c) : zero);
     controls.set("reset", (float)resetCounter);
     controls.set("gate", float(st.gateBus + c * CHUNK));
     controls.set("trigmode", float(lfoTrigger[li].get()));
@@ -1049,14 +1049,27 @@ void scModulation::updatePhases() {
         if(!resized && phaseKeyValid[li] && key == phaseKeys[li]) continue;
         phaseKeys[li] = key; phaseKeyValid[li] = true;
         ix.recomputeIndexs();
+        // The same offsets unwrapped (the indexer wraps them into 0..1): a Random Same LFO reads
+        // one random series at each voice's offset, so Spread 6 must reach 6 cycles further on
+        // (a curve travelling across the voices), not repeat every sixth of them. The indexer is
+        // linear in its wave count: run it with fewer waves (no wrap) and scale back up.
+        {
+            baseIndexer u = ix;
+            const float k = std::ceil(std::max(1.0f, ix.numWaves_Param * float(ix.symmetry_Param + 1)
+                                               * float(n()) / float(std::max(1, ix.indexQuant_Param)))) + 1.0f;
+            u.numWaves_Param = ix.numWaves_Param / k;
+            u.recomputeIndexs();
+            lfoTravel[li] = expand(u.getIndexs(), n());
+            for(auto& x : lfoTravel[li]) x *= k;
+        }
         // Called on every afterLoad (each frame of a morph): send the phases
         // only when they moved. A new LFO synth gets them from sendLfoPart.
         auto phases = expand(ix.getIndexs(), n());
-        if(phases == lfoPhases[li]) continue;
+        if(phases == lfoPhases[li] && !travelling(li)) continue;
         lfoPhases[li] = std::move(phases);
         forStates([this, li](ofxSCServer*, ServerState& st){
             for(int c = 0; c < (int)st.lfo[li].size(); c++) if(st.lfo[li][c]){
-                st.lfo[li][c]->set("phoff", perVoice ? slice(lfoPhases[li], c) : std::vector<float>(chunkN(c), 0.0f));
+                st.lfo[li][c]->set("phoff", perVoice ? slice(sentPhases(li), c) : std::vector<float>(chunkN(c), 0.0f));
                 if(c < (int)st.lfoSent[li].size()) st.lfoSent[li][c].erase("phoff");
             }
         });

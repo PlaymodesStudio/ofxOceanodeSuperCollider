@@ -406,6 +406,10 @@ private:
     std::array<ofParameter<int>, MAX_LFOS> lfoSym, lfoQuant, lfoModulo;
     std::array<baseIndexer, MAX_LFOS> lfoIndexers;
     std::array<std::vector<float>, MAX_LFOS> lfoPhases;
+    // the offsets unwrapped, for a Random Same LFO (one series travelling across the voices)
+    std::array<std::vector<float>, MAX_LFOS> lfoTravel;
+    bool travelling(int li) const { return perVoice && lfoRndSame[li].get() && effectiveRandom(li) > 0 && !lfoTravel[li].empty(); }
+    const std::vector<float>& sentPhases(int li) const { return travelling(li) ? lfoTravel[li] : lfoPhases[li]; }
     std::array<std::string, MAX_LFOS> lfoNoiseKeys;          // lfoNoise's escaped names: generatorMorph's keys
     // updatePhases: the indexer inputs each LFO's phases were computed from
     std::array<std::array<float, 11>, MAX_LFOS> phaseKeys{};
