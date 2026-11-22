@@ -21,7 +21,7 @@ public:
 
     void set(const std::string& name, float value) {
         if(!synth) return;
-        if(cache && !changed(name, {value})) return;
+        if(cache && !changedScalar(name, value)) return;
         if(!server || !synth->isCreated()) { synth->set(name, value); return; }
         reserveControl(name, 1);
         message.addStringArg(name);
@@ -34,7 +34,7 @@ public:
 
     void set(const std::string& name, int value) {
         if(!synth) return;
-        if(cache && !changed(name, {static_cast<float>(value)})) return;
+        if(cache && !changedScalar(name, static_cast<float>(value))) return;
         if(!server || !synth->isCreated()) { synth->set(name, value); return; }
         reserveControl(name, 1);
         message.addStringArg(name);
@@ -76,11 +76,23 @@ private:
         if(pending && estimatedBytes + bytes > 4096) send();
         estimatedBytes += bytes;
     }
+    // One map lookup, and no temporary vector for scalars: these run for
+    // every control of every batched synth on every morph/glide frame.
+    bool changedScalar(const std::string& name, float value) {
+        if(!cache) return true;
+        auto previous = cache->find(name);
+        if(previous == cache->end()){ cache->emplace(name, std::vector<float>{value}); return true; }
+        auto& stored = previous->second;
+        if(stored.size() == 1 && stored[0] == value) return false;
+        stored.assign(1, value);
+        return true;
+    }
     bool changed(const std::string& name, const std::vector<float>& values) {
         if(!cache) return true;
-        const auto previous = cache->find(name);
-        if(previous != cache->end() && previous->second == values) return false;
-        (*cache)[name] = values;
+        auto previous = cache->find(name);
+        if(previous == cache->end()){ cache->emplace(name, values); return true; }
+        if(previous->second == values) return false;
+        previous->second = values;
         return true;
     }
     ofxSCSynth* synth;
