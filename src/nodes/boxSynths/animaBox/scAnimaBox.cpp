@@ -266,7 +266,7 @@ void scAnimaBox::setup() {
     mod.unifiedLfoModels = false;
     mod.maxVoices = 128;
     mod.busWidth = 128;
-    mod.setup(h, {{"Energy", 1, "", true}, {"Reso", 100, "dB"}, {"Pitch", 48, "st"}}, true, true, true);
+    mod.setup(h, {{"Energy", 1, "", true}, {"Reso", 100, "dB"}, {"Pitch", 48, "st"}, {"Amp", 1, "", true}}, true, true, true);
     mod.targetOfKey[P("Energy").getEscapedName()] = Energy;
     mod.targetOfKey[P("Reso").getEscapedName()] = Reso;
     mod.changed = [this](){ if(!restoring) sendAll(); };
@@ -423,6 +423,13 @@ void scAnimaBox::computeBands() {
 }
 
 // ── Server ───────────────────────────────────────────────────────────────────
+// An envelope routed to Amp is the VCA: the Body's level (the exciter keeps exciting the bands
+// through the envelope's release), in place of its own ADSR
+bool scAnimaBox::liveVca() const {
+    for(int e = 0; e < mod.envCount; ++e)
+        if(std::abs(mod.matrix[size_t(scModulation::SRC_ENV + e) * NUM_TARGETS + Amp]) > 0.0001f) return true;
+    return false;
+}
 void scAnimaBox::sendBody(ofxSCServer* server, State& st) {
     if(!st.created || !st.body) return;
     scSynthControlBatch b(st.body, server);
@@ -448,6 +455,7 @@ void scAnimaBox::sendBody(ofxSCServer* server, State& st) {
     set("out", st.exc->index); set("gatebus", st.gates->index);
     set("vel", mod.sourceBus(server, scModulation::SRC_VEL)); set("rnd", mod.sourceBus(server, scModulation::SRC_RND));
     set("vis", st.vis->index + VIS_BODY);
+    set("vca", liveVca() ? 1.0f : 0.0f); set("mamp", (float)mod.targetBus(server, Amp));
     b.send();
 }
 void scAnimaBox::sendBank(ofxSCServer* server, State& st) {

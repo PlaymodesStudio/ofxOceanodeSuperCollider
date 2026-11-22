@@ -67,7 +67,9 @@ public:
 #endif
 private:
     // modulation targets: one value per band (bands are the modulation's voices)
-    enum Target { Energy, Reso, Pitch, NUM_TARGETS };
+    // (append new targets: saved matrices keep their columns)
+    enum Target { Energy, Reso, Pitch, Amp, NUM_TARGETS };
+    bool liveVca() const;   // an envelope routed to Amp: the Body's level
     struct SoundControl {
         ofParameter<float> p;
         std::string group, help;

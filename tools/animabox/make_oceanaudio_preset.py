@@ -4,7 +4,7 @@ Init sound's two harmony layers) -> AnimaBox Scale; AnimaBox (the Init sound, Dr
   make_oceanaudio_preset.py <OceanAudio bin/data/Presets/<bank>/<NN--name>> [chordbox json to copy]"""
 import sys, json, pathlib
 HERE = pathlib.Path(__file__).resolve().parent
-NUM_SOURCES, NUM_TARGETS = 23, 3
+NUM_SOURCES, NUM_TARGETS = 23, 4
 def main():
     out = pathlib.Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)
     src = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else None

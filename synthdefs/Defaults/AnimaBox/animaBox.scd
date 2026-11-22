@@ -4,7 +4,8 @@
 //
 //   AnimaBody          the exciter ("Body"): two sides A / B (Reaktor's L / R), each an
 //                      oscillator (noise, saw, pulse, impulse, geiger) or the live input,
-//                      an ADSR on the note gate (Reaktor log times: 10^(x/20) ms).
+//                      an ADSR on the note gate (Reaktor log times: 10^(x/20) ms), or (\vca 1) the
+//                      Amp modulation target (an envelope routed to Amp) on the whole exciter.
 //                      -> \out (audio, 2). Also fans the gate / velocity / a per-note random
 //                      out to the modulation buses (one value for every band).
 //   AnimaBank16_<n>    16 bands from \first (the node runs ceil(Bands / 16) of them): per band
@@ -49,6 +50,10 @@ SynthDef(\AnimaBody, {
 	var note = gq.(Select.kr(\pitch_sel.kr(0), [\pitch.kr(48), A2K.kr(\pitch_ar.ar(48))]));
 	var p = note + (12 * \oct.kr(-3)) + \trans.kr(0), det = \det.kr(0.24);
 	var env = EnvGen.ar(Env.adsr(logT.(\atk.kr(25)), 5 * logT.(\dec.kr(40)), \sus.kr(0.5), 5 * logT.(\rel.kr(15)), 1, [0, -5, -5]), gate) * level;
+	// Amp (a modulation envelope routed to Amp, \vca 1): the exciter's level instead of the ADSR, on
+	// the oscillators and the live input alike, so the Body keeps exciting the bands through its release
+	var vca = \vca.kr(0) > 0.5, amp = K2A.ar(In.kr(\mamp.kr(0), 1)).clip(0, 1);
+	var oscEnv = Select.ar(vca, [env, DC.ar(1)]), vcaGain = Select.ar(vca, [DC.ar(1), amp]);
 	var live = [In.ar(\livein.kr(0), 1), In.ar(\livein.kr(0) + (\livech.kr(1) > 1), 1)] * (\livein.kr(0) > 0) * \livegain.kr(1);
 	var sides = [p + det, p - det].collect { |pp, side|
 		var f = hz.(pp).clip(0.01, SampleRate.ir * 0.45);
@@ -61,15 +66,15 @@ SynthDef(\AnimaBody, {
 			// Geiger: random clicks around the pitch's rate; Rnd 1 = regular
 			LinXFade2.ar(Dust.ar(f), Impulse.ar(f), (\geiger.kr(0) * 2 - 1))
 		];
-		var osc = SelectX.ar(NamedControl.kr(\osc, [1, 1])[side].clip(0, 4), oscs) * env;
-		LinXFade2.ar(osc, live[side], NamedControl.kr(\src, [0, 0])[side].clip(0, 1) * 2 - 1)
+		var osc = SelectX.ar(NamedControl.kr(\osc, [1, 1])[side].clip(0, 4), oscs) * oscEnv;
+		LinXFade2.ar(osc, live[side], NamedControl.kr(\src, [0, 0])[side].clip(0, 1) * 2 - 1) * vcaGain
 	};
 	Out.ar(\out.kr(0), sides * \level.kr(1));
 	// the modulation sources: every band follows the one note
 	Out.ar(\gatebus.kr(0), (gate * level) ! 128);
 	Out.kr(\vel.kr(0), A2K.kr(level) ! 128);
 	Out.kr(\rnd.kr(0), A2K.kr(TRand.ar(-1, 1, trig)) ! 128);
-	Out.kr(\vis.kr(0), [A2K.kr(env), A2K.kr(Amplitude.ar(sides[0])), A2K.kr(Amplitude.ar(sides[1])), note]);
+	Out.kr(\vis.kr(0), [A2K.kr(Select.ar(vca, [env, amp])), A2K.kr(Amplitude.ar(sides[0])), A2K.kr(Amplitude.ar(sides[1])), note]);
 }).writeDefFile(dir);
 
 (1..16).do { |n|
