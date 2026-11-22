@@ -493,3 +493,30 @@ seeks, loops and stop/start, produces no past anchors.
 The timeline suite missed the bug. The root-cause investigation is in
 progress; the engine work comes back only with a regression test that fails
 on 969fe10.
+
+### Resolution (2026-11-22, night): it was Spotlight; everything restored
+
+The late bundles and the slow server start were a Spotlight indexing storm,
+not code:
+
+- `mds` plus a dozen `mdworker_shared`, load average about 30, after a day of
+  builds and test runs;
+- scsynth sat at 0 % CPU, its NRT thread blocked in `open()` during the
+  SynthDef tree load and in `sendto()` during playback;
+- so all three servers stalled together, shown by a `/status` probe with
+  0.3–3.6 s reply gaps.
+
+With indexing off (`sudo mdutil -a -i off`), the same probe shows no gaps.
+
+Both suspects were restored and tested with that probe:
+
+- **Silent-voice pausing**: STEAMING_STONES, no gaps, worst reply 62 ms.
+- **The timeline engine commit**: re-applied as ofxOceanodeTimeline 93b9b30
+  and ac17606, with ofxOceanode fe91c08. Tested on SPECTRAL_TECH_MACRO_TIMELINE
+  after a clean build: no gaps, no `late` lines.
+
+All of today's work is in. Items 1, 2, 4 and 5 of the timeline pass are back.
+
+For the next time `late` bursts or a slow init appear, check Spotlight and
+the load first. Exclude `~/Documents/OF` in System Settings → Spotlight →
+Search Privacy.
