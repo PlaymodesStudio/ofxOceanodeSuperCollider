@@ -553,16 +553,24 @@ final class NRKTParser {
 
     private func parseMacroMetadata(_ module: ModuleNode) {
         do {
-            let nameOffset = module.offset + (module.signature == 0x00228D00 ? 0xf0 : 0x104)
-                + (module.kind == 7 && module.signature == 0x00228D00 ? 4 : 0)
+            // Stacked Macros (kind 7) carry one extra word before the name: seen in
+            // 0x228D00 (aliasing synth) and 0x22EF00 (AnimaMundi). Try it first,
+            // then the plain layout, keeping whichever closes with a valid trailer.
+            let baseOffset = module.offset + (module.signature == 0x00228D00 ? 0xf0 : 0x104)
             let trailerVersion: UInt32 = module.signature == 0x00228D00 ? 2 : [0x0022EF00, 0x0022F200].contains(module.signature) ? 3 : 4
-            let (name, afterName) = try nrktString(nameOffset)
-            let (detail, afterDetail) = try nrktString(afterName)
-            let limit = min(data.count, afterDetail + 32)
-            guard afterDetail < limit,
-                  let close = data[afterDetail..<limit].firstIndex(of: 0x5d),
-                  close + 9 <= data.count,
-                  try u32(close + 1) == trailerVersion else { return }
+            var found: (String, String, Int)? = nil
+            for extra in (module.kind == 7 ? [4, 0] : [0]) {
+                guard let (name, afterName) = try? nrktString(baseOffset + extra),
+                      let (detail, afterDetail) = try? nrktString(afterName) else { continue }
+                let limit = min(data.count, afterDetail + 32)
+                guard afterDetail < limit,
+                      let close = data[afterDetail..<limit].firstIndex(of: 0x5d),
+                      close + 9 <= data.count,
+                      (try? u32(close + 1)) == trailerVersion else { continue }
+                found = (name, detail, close)
+                break
+            }
+            guard let (name, detail, close) = found else { return }
             module.name = name
             module.detail = detail.isEmpty ? nil : detail
             module.childCount = Int(try u32(close + 5))
