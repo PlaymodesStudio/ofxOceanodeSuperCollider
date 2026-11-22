@@ -176,6 +176,7 @@ public:
         bool        solo           = false;  // per-track solo (isolates this track)
 
         int getNumSteps() const { return std::min(numBeats * stepsPerBeat, MAX_STEPS); }
+        bool operator==(const TrackConfig&) const = default;
     };
 
     /// Per-track per-slot data — shift, step patterns and arpeggiator settings.
@@ -236,6 +237,7 @@ public:
             stepCombPitch   .resize(MAX_STEPS, 0.0f);
             stepCombDecay   .resize(MAX_STEPS, 0.0f);
         }
+        bool operator==(const TrackData&) const = default;
     };
 
     /// One slot holds per-slot step/shift data for all tracks.
@@ -407,6 +409,17 @@ private:
     std::vector<std::string> legacyControlKeys;
     std::array<std::map<std::string, std::string>, MAX_TRACKS> trackControlKeys;
     std::vector<std::function<void()>> trackControlPulls;
+    // The same pulls by track, and what each track's config and slot data were
+    // when last pulled: update() pulls a track only when one of them changed,
+    // one of its controls was set, or the track count changed (plus a full
+    // pass every kFullPullFrames as a safety net), not ~100 calls per frame.
+    std::array<std::vector<std::function<void()>>, MAX_TRACKS> trackPulls;
+    std::array<TrackConfig, MAX_TRACKS> pulledConfig;
+    std::array<TrackData, MAX_TRACKS> pulledData;
+    std::array<bool, MAX_TRACKS> pullNeeded = [](){ std::array<bool, MAX_TRACKS> a; a.fill(true); return a; }();
+    int pulledNumTracks = -1, framesSinceFullPull = 0;
+    static constexpr int kFullPullFrames = 60;
+    void pullChangedTrackControls();
     bool trackControlsDirty = false, legacyPublishing = false;
     // Per track: 1 = a config field changed, 2 = a step array changed (a
     // cabled control used to reload the whole slot for every track each frame)
@@ -457,6 +470,7 @@ private:
         trackControlKeys[ti][field] = p->getEscapedName();
         const bool stepField = field.rfind("step", 0) == 0;   // a step array (2) or a config field (1)
         nodeListeners.push(p->newListener([this, ti, set, lo, hi, stepField](T& value){
+            pullNeeded[ti] = true;   // the parameter moved: pull it back from the data
             if(ti >= numTracks) return;
             T sanitized = value;
             if constexpr(std::is_same_v<T, std::vector<float>> || std::is_same_v<T, std::vector<int>>) {
@@ -467,11 +481,13 @@ private:
                 if(ti < numTracks) { set(sanitized); trackDirty[ti] |= stepField ? 2 : 1; }
             });
         }));
-        trackControlPulls.push_back([this, ti, p, get](){
+        auto pull = [this, ti, p, get](){
             if(ti >= numTracks) return;
             const T v = get();
             if(p->get() != v) p->setWithoutEventNotifications(v);   // no copy, no notification when unchanged
-        });
+        };
+        trackControlPulls.push_back(pull);
+        trackPulls[ti].push_back(pull);
     }
 
     // ── Sample embed helpers (mirrors scBuffer pattern) ───────────────────────

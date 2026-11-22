@@ -503,14 +503,15 @@ void scRhythmBox::update(ofEventArgs& /*args*/) {
             }
         }
     }
-    for(auto& pull : trackControlPulls) pull();
+    pullChangedTrackControls();
     snaps.update();
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
         const auto& names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) { auto it = snapPublished.find(key); if(it != snapPublished.end()) scDropdowns::setNames(it->second, names); }
     }
     // Poll KR buses on the primary server for playhead and gate readback.
-    if(!stepBuses.empty()) {
+    // currentStep only draws the playhead: no step readback with the window closed.
+    if(showWindow.get() && !stepBuses.empty()) {
         auto& busList = stepBuses.begin()->second;
         for(int ti = 0; ti < numTracks && ti < (int)busList.size(); ti++) {
             if(!busList[ti]) continue;
@@ -6157,6 +6158,20 @@ void scRhythmBox::initializeTrackControls() {
             [this, ti](){ return track(ti).stepCombPitch; }, [this, ti](const auto& v){ track(ti).stepCombPitch = v; track(ti).resizeSteps(); });
         bindTrackControl(ti, "stepCombDecay", std::vector<float> {0.0f}, std::vector<float> {8.0f},
             [this, ti](){ return track(ti).stepCombDecay; }, [this, ti](const auto& v){ track(ti).stepCombDecay = v; track(ti).resizeSteps(); });
+    }
+}
+
+void scRhythmBox::pullChangedTrackControls() {
+    const bool all = numTracks != pulledNumTracks || ++framesSinceFullPull >= kFullPullFrames;
+    if(all) { pulledNumTracks = numTracks; framesSinceFullPull = 0; }
+    for(int ti = 0; ti < numTracks && ti < MAX_TRACKS; ++ti) {
+        const TrackConfig& config = trackConfigs[ti];
+        const TrackData& data = track(ti);
+        if(!all && !pullNeeded[ti] && config == pulledConfig[ti] && data == pulledData[ti]) continue;
+        for(auto& pull : trackPulls[ti]) pull();
+        pulledConfig[ti] = config;
+        pulledData[ti] = data;
+        pullNeeded[ti] = false;
     }
 }
 
