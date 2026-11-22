@@ -13,6 +13,7 @@
 #include "synthdefs/scSynthdefCompiler.h"
 #include "ofxOceanodeSuperColliderConfig.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -21,6 +22,12 @@
 #include "ofxOceanodeTime.h"
 #include "ofxOceanodeColors.h"
 #include "ofxOceanodeShared.h"
+#if __has_include("ofxOceanodeTimelineRender.h")
+#include "ofxOceanodeTimelineRender.h"
+#define SC_HAS_TIMELINE_RENDER 1
+#else
+#define SC_HAS_TIMELINE_RENDER 0
+#endif
 #include <array>
 #include <cstring>
 
@@ -38,9 +45,49 @@ ofxOceanodeSuperColliderController::ofxOceanodeSuperColliderController() : ofxOc
 	mute = false;
 	
 	reloadAudioDevices();
+
+#if SC_HAS_TIMELINE_RENDER
+    // "Render Audio..." in the timeline's actions menu
+    ofxOceanodeTimelineRender::menuProvider() = [this](const ofxOceanodeTimelineRenderRange& range){
+        const bool running = isTimelineRendering();
+        if(ImGui::MenuItem(running ? "Render Audio (running)..." : "Render Audio...")){
+            if(running){
+                timelineRenderWindowOpen = true;
+            }else{
+                TimelineRenderSettings settings = timelineRender;   // tail, channels... as last time
+                const bool renamed = settings.timelineName != range.timelineName;
+                settings.timelineName = range.timelineName;
+                if(range.hasRange){
+                    settings.inBeat = range.inBeat;
+                    settings.outBeat = range.outBeat;
+                }
+                settings.beatsPerBar = std::max(0.25, range.beatsPerBar);
+                settings.bpm = std::max(1.0f, range.bpm);
+                settings.onGlobalClock = range.onGlobalClock;
+                if(settings.path.empty() || renamed){
+                    std::string name = range.timelineName.empty() ? std::string("Timeline") : range.timelineName;
+                    for(char& c : name) if(!std::isalnum((unsigned char)c) && c != '-' && c != '_') c = '_';
+                    const std::string folder = settings.path.empty()
+                        ? ofToDataPath("Supercollider/Renders", true)
+                        : ofFilePath::getEnclosingDirectory(settings.path, false);
+                    settings.path = ofFilePath::join(folder, name + ".wav");
+                }
+                openTimelineRender(settings);
+            }
+        }
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Render the SuperCollider master to a WAV, offline,\n"
+                              "between this timeline's In and Out (its loop range)");
+    };
+#endif
 }
 
 ofxOceanodeSuperColliderController::~ofxOceanodeSuperColliderController(){
+#if SC_HAS_TIMELINE_RENDER
+    ofxOceanodeTimelineRender::menuProvider() = nullptr;
+    if(timelineRenderState != TimelineRenderState::Idle && ofxOceanodeTimelineRender::host().suspendLoops)
+        ofxOceanodeTimelineRender::host().suspendLoops(false);
+#endif
     if(nrtCaptureActive) completeNRTCapture(true);
     if(nrtRenderThread.joinable()) nrtRenderThread.join();
 }
@@ -109,6 +156,7 @@ void ofxOceanodeSuperColliderController::update(){
     joinFinishedNRTThread();
     updateNRTArming();
     updateNRTBake();
+    updateTimelineRender();
     if(!nrtCaptureActive) return;
 
     // update() runs after the nodes. On the first frame after recording
@@ -137,6 +185,7 @@ void ofxOceanodeSuperColliderController::joinFinishedNRTThread(){
             if(complete) finishNRTBake(true, "Rendered");
             else finishNRTBake(false, "scsynth could not render the bake (see the .log beside it)");
         }
+        if(timelineRenderState == TimelineRenderState::Rendering) completeTimelineRender();
     }
 }
 
@@ -1032,6 +1081,73 @@ bool ofxOceanodeSuperColliderController::sumFloatWavs(const std::vector<std::str
     return out.good();
 }
 
+bool ofxOceanodeSuperColliderController::trimFloatWav(const std::string& input, const std::string& output,
+                                                      double startSeconds, double seconds, double& peak){
+    peak = 0.0;
+    std::ifstream in(input, std::ios::binary);
+    floatWavLayout layout;
+    if(!in.is_open() || !readFloatWavLayout(in, layout)){
+        ofLogWarning("ofxOceanodeSuperColliderController") << "WAV trim: cannot read " << input << " as a 32-bit float WAV";
+        return false;
+    }
+    const std::uint16_t channels = layout.channels;
+    const std::uint64_t first = (std::uint64_t)std::llround(std::max(0.0, startSeconds) * (double)layout.sampleRate);
+    const std::uint64_t frames = (std::uint64_t)std::llround(std::max(0.0, seconds) * (double)layout.sampleRate);
+    if(frames == 0) return false;
+    const std::uint64_t dataBytes = frames * (std::uint64_t)channels * 4ull;
+    const std::uint64_t riffSize = 4 + (8 + 18) + (8 + 4) + (8 + dataBytes);
+    if(riffSize > 0xFFFFFFFFull){
+        ofLogWarning("ofxOceanodeSuperColliderController")
+            << "WAV trim: " << output << " would pass the 4 GB limit of a WAV file";
+        return false;
+    }
+    std::ofstream out(output, std::ios::binary | std::ios::trunc);
+    if(!out.is_open()){
+        ofLogWarning("ofxOceanodeSuperColliderController") << "WAV trim: cannot write " << output;
+        return false;
+    }
+    // Same header as sumFloatWavs: float data wants the 18-byte fmt and a fact chunk.
+    out.write("RIFF", 4);
+    writeLE32(out, (std::uint32_t)riffSize);
+    out.write("WAVE", 4);
+    out.write("fmt ", 4);
+    writeLE32(out, 18);
+    writeLE16(out, 3);                                  // WAVE_FORMAT_IEEE_FLOAT
+    writeLE16(out, channels);
+    writeLE32(out, layout.sampleRate);
+    writeLE32(out, layout.sampleRate * (std::uint32_t)channels * 4u);
+    writeLE16(out, (std::uint16_t)(channels * 4u));
+    writeLE16(out, 32);
+    writeLE16(out, 0);
+    out.write("fact", 4);
+    writeLE32(out, 4);
+    writeLE32(out, (std::uint32_t)frames);
+    out.write("data", 4);
+    writeLE32(out, (std::uint32_t)dataBytes);
+
+    in.clear();
+    in.seekg(layout.dataStart + (std::streamoff)(std::min(first, layout.frames) * channels * 4ull), std::ios::beg);
+    const std::size_t blockFrames = 16384;
+    std::vector<float> block(blockFrames * channels);
+    std::uint64_t done = 0;
+    while(done < frames){
+        const std::size_t count = (std::size_t)std::min<std::uint64_t>(blockFrames, frames - done);
+        const std::uint64_t at = first + done;
+        const std::size_t available = at >= layout.frames ? 0
+            : (std::size_t)std::min<std::uint64_t>(count, layout.frames - at);
+        std::fill(block.begin(), block.begin() + (std::ptrdiff_t)(count * channels), 0.0f);
+        if(available > 0 && !in.read(reinterpret_cast<char*>(block.data()), (std::streamsize)(available * channels * sizeof(float)))){
+            ofLogWarning("ofxOceanodeSuperColliderController") << "WAV trim: read failed in " << input;
+            return false;
+        }
+        for(std::size_t i = 0; i < count * channels; i++) peak = std::max(peak, (double)std::abs(block[i]));
+        out.write(reinterpret_cast<const char*>(block.data()), (std::streamsize)(count * channels * sizeof(float)));
+        done += count;
+    }
+    out.flush();
+    return out.good();
+}
+
 bool ofxOceanodeSuperColliderController::removeDCOffsetInPlace(const std::string& wavPath,
                                                                double cornerHz){
     std::fstream file(wavPath, std::ios::in | std::ios::out | std::ios::binary);
@@ -1323,6 +1439,7 @@ void ofxOceanodeSuperColliderController::drawPopups(){
     scSynthdefCompiler::get().drawPopups();
     synthdefSync.drawPopup();
     presetShare.drawPopup();
+    drawTimelineRenderWindow();
 }
 
 void ofxOceanodeSuperColliderController::draw(){
@@ -1357,13 +1474,7 @@ void ofxOceanodeSuperColliderController::draw(){
 
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);
         ImGui::InputInt("WAV channels", &nrtOutputChannels);
-        // Every server renders the same width, so the narrowest one sets it.
-        int maxNrtChannels = std::numeric_limits<int>::max();
-        for(auto s : outputServers){
-            if(s != nullptr) maxNrtChannels = std::min(maxNrtChannels, std::max(1, s->preferences.numOutputBusChannels));
-        }
-        if(maxNrtChannels == std::numeric_limits<int>::max()) maxNrtChannels = 128;
-        nrtOutputChannels = std::max(1, std::min(nrtOutputChannels, maxNrtChannels));
+        nrtOutputChannels = std::max(1, std::min(nrtOutputChannels, maxNRTChannels()));
 
         std::array<char, 512> outputBuffer{};
         std::strncpy(outputBuffer.data(), nrtOutputPath.c_str(), outputBuffer.size() - 1);
@@ -1809,4 +1920,343 @@ void ofxOceanodeSuperColliderController::applyAudioDeviceToServers(bool restartS
         for(auto s : outputServers) s->prepareForRestart();
         for(auto s : outputServers) s->boot();
     }
+}
+
+// ---- Render Audio (the timeline's actions menu) ----------------------------
+
+namespace {
+std::string clockText(double seconds){
+    seconds = std::max(0.0, seconds);
+    const int minutes = (int)(seconds / 60.0);
+    char text[32];
+    std::snprintf(text, sizeof(text), "%d:%04.1f", minutes, seconds - minutes * 60.0);
+    return text;
+}
+} // namespace
+
+int ofxOceanodeSuperColliderController::maxNRTChannels() const{
+    // Every server renders the same width, so the narrowest one sets it.
+    int channels = std::numeric_limits<int>::max();
+    for(auto s : outputServers){
+        if(s != nullptr) channels = std::min(channels, std::max(1, s->preferences.numOutputBusChannels));
+    }
+    return channels == std::numeric_limits<int>::max() ? 128 : channels;
+}
+
+void ofxOceanodeSuperColliderController::openTimelineRender(const TimelineRenderSettings& settings){
+    timelineRenderWindowOpen = true;
+    if(isTimelineRendering()) return;
+    timelineRender = settings;
+    timelineRender.channels = std::max(1, std::min(timelineRender.channels, maxNRTChannels()));
+    timelineRenderMessage.clear();
+    timelineRenderFailed = false;
+}
+
+void ofxOceanodeSuperColliderController::startTimelineRender(){
+#if SC_HAS_TIMELINE_RENDER
+    auto& host = ofxOceanodeTimelineRender::host();
+    timelineRenderFailed = true;
+    if(!host.globalBeat || !host.suspendLoops){ timelineRenderMessage = "The timeline is not available"; return; }
+    if(isNRTBusy()){ timelineRenderMessage = "Another offline capture, render or bake is running"; return; }
+    const auto& s = timelineRender;
+    if(!s.onGlobalClock){ timelineRenderMessage = "This timeline runs on a clock of its own"; return; }
+    if(s.outBeat <= s.inBeat + 1e-6){ timelineRenderMessage = "Out must come after In"; return; }
+    if(s.path.empty()){ timelineRenderMessage = "Choose a file to render to"; return; }
+    joinFinishedNRTThread();
+
+    timelineRenderRun = s;
+    timelineRenderRun.channels = std::max(1, std::min(s.channels, maxNRTChannels()));
+    ofDirectory::createDirectory(ofFilePath::getEnclosingDirectory(timelineRenderRun.path, false), false, true);
+    timelineRenderTempPath = ofFilePath::removeExt(timelineRenderRun.path) + "_fullrender.wav";
+
+    // The recorder's choices would add stems and server masters: set aside.
+    timelineRenderSavedSourceLabels = nrtSourceLabels;
+    timelineRenderSavedRecordStems = nrtRecordStems;
+    timelineRenderSavedServerMasters = nrtServerMasters;
+    timelineRenderSavedRemoveDC = nrtRemoveDC;
+    timelineRenderSavedDuration = nrtDuration;
+    nrtSourceLabels.clear();
+    nrtRecordStems = false;
+    nrtServerMasters = false;
+    // Over the whole render, before the cut: the filter has settled by In.
+    nrtRemoveDC = timelineRenderRun.removeDC;
+
+    // Before arming: the timelines schedule ahead, across a loop's wrap too.
+    host.suspendLoops(true);
+    timelineRenderState = TimelineRenderState::Arming;
+    timelineRenderMessage.clear();
+    timelineRenderFailed = false;
+    if(!armNRTRecording(0, timelineRenderRun.channels, timelineRenderTempPath))
+        finishTimelineRender(false, nrtStatus.empty() ? "Could not prepare the render" : nrtStatus);
+#endif
+}
+
+void ofxOceanodeSuperColliderController::updateTimelineRender(){
+#if SC_HAS_TIMELINE_RENDER
+    if(timelineRenderState == TimelineRenderState::Arming){
+        if(isNRTSettling()) return;
+        if(!isNRTArmed()){
+            finishTimelineRender(false, "The patch changed while the render was being prepared");
+            return;
+        }
+        // The capture starts at the transport's start: beat 0 at time 0.
+        timelineRenderPrevTime = 0.0;
+        timelineRenderPrevBeat = 0.0;
+        timelineRenderInTime = timelineRenderRun.inBeat <= 1e-9 ? 0.0 : -1.0;
+        timelineRenderOutTime = -1.0;
+        timelineRenderLastMoveTime = 0.0;
+        timelineRenderState = TimelineRenderState::Capturing;
+        if(!beginNRTRecording(0, timelineRenderRun.channels, timelineRenderTempPath, true)){
+            disarmNRTRecording();
+            finishTimelineRender(false, nrtStatus.empty() ? "Could not start the capture" : nrtStatus);
+        }
+        return;
+    }
+    if(timelineRenderState != TimelineRenderState::Capturing) return;
+    if(!nrtCaptureActive){
+        finishTimelineRender(false, "The capture was stopped");
+        return;
+    }
+    auto& host = ofxOceanodeTimelineRender::host();
+    const double time = ofxOceanodeTime::getInstance()->getGlobalTimeState().time;
+    const double beat = host.globalBeat ? host.globalBeat() : 0.0;
+    // Where the transport crossed a beat, inside this frame: the cut is not
+    // held to the frame rate, and a tempo curve is followed as it plays.
+    auto crossing = [&](double target, double& at){
+        if(at >= 0.0 || beat < target) return;
+        if(beat > timelineRenderPrevBeat + 1e-12 && timelineRenderPrevBeat < target)
+            at = timelineRenderPrevTime + (target - timelineRenderPrevBeat) / (beat - timelineRenderPrevBeat)
+                                        * (time - timelineRenderPrevTime);
+        else at = time;
+    };
+    const bool reachedOut = timelineRenderOutTime >= 0.0;
+    crossing(timelineRenderRun.inBeat, timelineRenderInTime);
+    crossing(timelineRenderRun.outBeat, timelineRenderOutTime);
+    if(beat > timelineRenderPrevBeat + 1e-9) timelineRenderLastMoveTime = time;
+    timelineRenderPrevTime = time;
+    timelineRenderPrevBeat = beat;
+    // The offline clock runs on with the transport stopped: the tail is the
+    // patch ringing out, with no new notes and the automation held.
+    if(!reachedOut && timelineRenderOutTime >= 0.0 && timelineRenderRun.stopAtOut)
+        ofxOceanodeTime::getInstance()->setIsPlaying(false);
+
+    if(timelineRenderOutTime >= 0.0 && time >= timelineRenderOutTime + timelineRenderRun.tailSeconds + 0.05){
+        endNRTRecording(false);
+        if(nrtRenderThread.joinable()) timelineRenderState = TimelineRenderState::Rendering;
+        else finishTimelineRender(false, nrtStatus.empty() ? "Nothing was rendered" : nrtStatus);
+        return;
+    }
+    // A transport that stopped or never moved before Out (an external clock
+    // that is not running, a node stopping it) would capture forever.
+    if(timelineRenderOutTime < 0.0 && time - timelineRenderLastMoveTime > 5.0){
+        endNRTRecording(true);
+        finishTimelineRender(false, "The transport stopped before Out (stopped by the patch, or following an external clock?)");
+    }
+#endif
+}
+
+void ofxOceanodeSuperColliderController::completeTimelineRender(){
+    // scsynth can crash on its way out (VSTPlugin loaded twice) with the
+    // file already complete: judge the file, not the exit code.
+    const long long expected = nrtRenderExpectedBytes.load();
+    long long size = -1;
+    {
+        std::ifstream in(timelineRenderTempPath, std::ios::binary | std::ios::ate);
+        if(in) size = (long long)in.tellg();
+    }
+    if(size < 0 || size < expected - 64 * 1024){
+        finishTimelineRender(false, "scsynth could not render (see the .log beside " +
+                             ofFilePath::getFileName(timelineRenderTempPath) + ")");
+        return;
+    }
+    const double start = std::max(0.0, timelineRenderInTime);
+    const double length = timelineRenderOutTime + timelineRenderRun.tailSeconds - start;
+    double peak = 0.0;
+    if(timelineRenderInTime < 0.0 || length <= 0.0 ||
+       !trimFloatWav(timelineRenderTempPath, timelineRenderRun.path, start, length, peak)){
+        finishTimelineRender(false, "Could not cut the render to In..Out; the whole render is in " +
+                             timelineRenderTempPath);
+        return;
+    }
+    std::remove(timelineRenderTempPath.c_str());
+    std::remove((timelineRenderTempPath + ".osc").c_str());
+    // With several servers, each rendered its own master from its own score
+    for(std::size_t i = 0; i < outputServers.size(); i++)
+        std::remove((ofFilePath::removeExt(timelineRenderTempPath) + "_S" + ofToString((int)i) + "_MasterMix.wav.osc").c_str());
+    std::string message = "Rendered " + clockText(length) + " to " + timelineRenderRun.path;
+    if(peak > 0.0){
+        char db[48];
+        std::snprintf(db, sizeof(db), ", peak %.1f dBFS", 20.0 * std::log10(peak));
+        message += db;
+        if(peak > 1.0) message += " (32-bit float keeps it; fixed point would clip)";
+    }else{
+        message += " -- it is silent";
+    }
+    // In and Out as measured, beside where the starting tempo would put them
+    const double secondsPerBeat = 60.0 / std::max(1.0f, timelineRenderRun.bpm);
+    ofLogNotice("ofxOceanodeSuperColliderController") << "Render Audio: In at " << timelineRenderInTime
+        << " s (" << timelineRenderRun.inBeat * secondsPerBeat << " s at the starting tempo), Out at "
+        << timelineRenderOutTime << " s (" << timelineRenderRun.outBeat * secondsPerBeat << " s)";
+    finishTimelineRender(true, message);
+}
+
+void ofxOceanodeSuperColliderController::finishTimelineRender(bool ok, const std::string& message){
+    nrtSourceLabels = timelineRenderSavedSourceLabels;
+    nrtRecordStems = timelineRenderSavedRecordStems;
+    nrtServerMasters = timelineRenderSavedServerMasters;
+    nrtRemoveDC = timelineRenderSavedRemoveDC;
+    nrtDuration = timelineRenderSavedDuration;
+#if SC_HAS_TIMELINE_RENDER
+    if(ofxOceanodeTimelineRender::host().suspendLoops) ofxOceanodeTimelineRender::host().suspendLoops(false);
+#endif
+    timelineRenderState = TimelineRenderState::Idle;
+    timelineRenderMessage = message;
+    timelineRenderFailed = !ok;
+    timelineRenderWindowOpen = true;
+    if(ok) ofLogNotice("ofxOceanodeSuperColliderController") << "Render Audio: " << message;
+    else ofLogWarning("ofxOceanodeSuperColliderController") << "Render Audio: " << message;
+}
+
+void ofxOceanodeSuperColliderController::cancelTimelineRender(){
+    if(timelineRenderState == TimelineRenderState::Arming){
+        disarmNRTRecording();
+        finishTimelineRender(false, "Cancelled");
+    }else if(timelineRenderState == TimelineRenderState::Capturing){
+        endNRTRecording(true);
+        finishTimelineRender(false, "Cancelled");
+    }
+}
+
+void ofxOceanodeSuperColliderController::drawTimelineRenderWindow(){
+#if SC_HAS_TIMELINE_RENDER
+    if(!timelineRenderWindowOpen) return;
+    const float em = ImGui::GetFontSize();
+    ImGui::SetNextWindowSize(ImVec2(em * 30.0f, 0.0f), ImGuiCond_Appearing);
+    if(!ImGui::Begin("Render Audio##scTimelineRender", &timelineRenderWindowOpen,
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)){
+        ImGui::End();
+        return;
+    }
+    const ImVec4 warn(1.0f, 0.75f, 0.3f, 1.0f);
+    auto& s = timelineRender;
+    const bool idle = timelineRenderState == TimelineRenderState::Idle;
+    const auto& shown = idle ? s : timelineRenderRun;
+    ImGui::Text("Timeline: %s", shown.timelineName.empty() ? "(main)" : shown.timelineName.c_str());
+
+    if(idle){
+        const double bpb = std::max(0.25, s.beatsPerBar);
+        float inBar = (float)(s.inBeat / bpb + 1.0);
+        float outBar = (float)(s.outBeat / bpb + 1.0);
+        ImGui::PushItemWidth(em * 8.0f);
+        if(ImGui::InputFloat("In (bar)", &inBar, 1.0f, 4.0f, "%.2f"))
+            s.inBeat = std::max(0.0, ((double)inBar - 1.0) * bpb);
+        ImGui::SameLine();
+        if(ImGui::InputFloat("Out (bar)", &outBar, 1.0f, 4.0f, "%.2f"))
+            s.outBeat = std::max(0.0, ((double)outBar - 1.0) * bpb);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("Filled from the timeline's loop range. The tail runs past Out\n"
+                              "for releases and reverbs (see Stop at Out).");
+        ImGui::InputFloat("Tail (s)", &s.tailSeconds, 0.5f, 2.0f, "%.1f");
+        s.tailSeconds = std::max(0.0f, std::min(120.0f, s.tailSeconds));
+        ImGui::SameLine();
+        ImGui::InputInt("Channels", &s.channels);
+        s.channels = std::max(1, std::min(s.channels, maxNRTChannels()));
+        ImGui::PopItemWidth();
+        const double secondsPerBeat = 60.0 / std::max(1.0f, s.bpm);
+        ImGui::TextDisabled("%s to %s at %.1f BPM (a tempo curve is followed as it plays)",
+                            clockText(s.inBeat * secondsPerBeat).c_str(),
+                            clockText(s.outBeat * secondsPerBeat).c_str(), s.bpm);
+
+        std::array<char, 1024> pathBuffer{};
+        std::strncpy(pathBuffer.data(), s.path.c_str(), pathBuffer.size() - 1);
+        ImGui::SetNextItemWidth(em * 22.0f);
+        if(ImGui::InputText("##renderPath", pathBuffer.data(), pathBuffer.size())) s.path = pathBuffer.data();
+        ImGui::SameLine();
+        if(ImGui::Button("Choose...")){
+            ofFileDialogResult result = ofSystemSaveDialog(ofFilePath::getFileName(s.path), "Render audio as");
+            if(result.bSuccess){
+                s.path = result.getPath();
+                if(ofToLower(ofFilePath::getFileExt(s.path)) != "wav") s.path += ".wav";
+            }
+        }
+        if(!s.path.empty() && ofFile::doesFileExist(s.path, false))
+            ImGui::TextColored(warn, "The file exists and will be replaced.");
+        ImGui::Checkbox("Stop at Out", &s.stopAtOut);
+        if(ImGui::IsItemHovered())
+            ImGui::SetTooltip("On: the transport stops at Out and the tail is only releases and\n"
+                              "reverbs ringing out. Off: the project plays on through the tail.");
+        ImGui::SameLine();
+        ImGui::Checkbox("Remove DC", &s.removeDC);
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("A 3.5 Hz DC blocker over the render (LeakDC-style)");
+
+        ImGui::TextDisabled("Offline, frame by frame from the start of the project, so everything\n"
+                            "reaches In as it would playing: the capture takes about as long as\n"
+                            "bar 1 to Out plays (longer if the app runs below its frame rate).\n"
+                            "32-bit float WAV of the master, after the master volume.");
+        bool blocked = false;
+        if(!s.onGlobalClock){
+            ImGui::TextColored(warn, "This timeline runs on a clock of its own (Free, or placed on\n"
+                                     "another timeline). Render from a timeline on the global transport.");
+            blocked = true;
+        }
+        if(mute){
+            ImGui::TextColored(warn, "Master Mute is on: the render would be silent.");
+            blocked = true;
+        }else if(volume < 0.999f){
+            ImGui::TextColored(warn, "Master volume is at %d%%: the render follows it.", (int)std::lround(volume * 100.0f));
+        }
+        if(s.outBeat <= s.inBeat + 1e-6){
+            ImGui::TextColored(warn, "Out must come after In.");
+            blocked = true;
+        }
+        const bool busy = isNRTBusy();
+        if(busy) ImGui::TextColored(warn, "Another offline capture, render or bake is running.");
+        ImGui::BeginDisabled(blocked || busy || s.path.empty());
+        if(ImGui::Button("Render")) startTimelineRender();
+        ImGui::EndDisabled();
+    }else{
+        const double total = std::max(1e-6, timelineRenderRun.outBeat);
+        float fraction = 0.0f;
+        std::string stage;
+        if(timelineRenderState == TimelineRenderState::Arming){
+            stage = "Preparing the patch...";
+        }else if(timelineRenderState == TimelineRenderState::Capturing){
+            const double beat = ofxOceanodeTimelineRender::host().globalBeat
+                ? ofxOceanodeTimelineRender::host().globalBeat() : 0.0;
+            const double bpb = std::max(0.25, timelineRenderRun.beatsPerBar);
+            fraction = (float)std::min(1.0, std::max(0.0, beat / total));
+            char text[96];
+            if(timelineRenderOutTime < 0.0)
+                std::snprintf(text, sizeof(text), "Capturing: bar %.1f of %.1f%s", beat / bpb + 1.0,
+                              timelineRenderRun.outBeat / bpb + 1.0, timelineRenderInTime < 0.0 ? " (before In)" : "");
+            else std::snprintf(text, sizeof(text), "Capturing the tail");
+            stage = text;
+        }else{
+            stage = "Rendering with scsynth...";
+            fraction = std::max(0.0f, getNRTRenderProgress());
+        }
+        ImGui::TextUnformatted(stage.c_str());
+        ImGui::ProgressBar(fraction, ImVec2(em * 26.0f, 0.0f));
+        if(timelineRenderState != TimelineRenderState::Rendering && ImGui::Button("Cancel")) cancelTimelineRender();
+    }
+
+    if(!timelineRenderMessage.empty()){
+        ImGui::Separator();
+        if(timelineRenderFailed) ImGui::TextColored(warn, "%s", timelineRenderMessage.c_str());
+        else ImGui::TextWrapped("%s", timelineRenderMessage.c_str());
+#ifdef TARGET_OSX
+        if(!timelineRenderFailed && idle && ofFile::doesFileExist(timelineRenderRun.path, false) &&
+           ImGui::Button("Show in Finder")){
+            std::string quoted = "'";
+            for(char c : timelineRenderRun.path){
+                if(c == '\'') quoted += "'\\''";
+                else quoted += c;
+            }
+            quoted += "'";
+            ofSystem("open -R " + quoted);
+        }
+#endif
+    }
+    ImGui::End();
+#endif
 }

@@ -217,6 +217,35 @@ private:
     // the file untouched if it is not a format this understands, so an
     // unexpected file is never half-rewritten.
     static bool removeDCOffsetInPlace(const std::string& wavPath, double cornerHz = 3.5);
+    // Copies `seconds` of a 32-bit float WAV from `startSeconds` on into a
+    // new one, streamed (frames rounded at the file's own rate); past the
+    // input's end counts as silence. peak: the copy's highest absolute sample.
+    static bool trimFloatWav(const std::string& input, const std::string& output,
+                             double startSeconds, double seconds, double& peak);
+
+    // Render Audio... in the timeline's actions menu. The master, offline,
+    // between the shown timeline's In and Out (its loop range) plus a tail.
+    // The capture always starts at the global transport's start, so the patch
+    // reaches In in the state the project puts it in; In and Out are found
+    // by watching the transport cross them (tempo automation included), and
+    // the file is cut to them afterwards. Every timeline's loop is suspended
+    // for the capture so it plays straight through Out.
+    struct TimelineRenderSettings {
+        std::string timelineName;
+        double inBeat = 0.0, outBeat = 16.0;
+        double beatsPerBar = 4.0;
+        float bpm = 120.0f;
+        float tailSeconds = 2.0f;
+        int channels = 2;
+        bool removeDC = false;
+        // Stop the transport at Out, so the tail is only releases and
+        // reverbs ringing out; off, the project plays on through the tail.
+        bool stopAtOut = true;
+        bool onGlobalClock = true;
+        std::string path;   // absolute .wav
+    };
+    void openTimelineRender(const TimelineRenderSettings& settings);
+    bool isTimelineRendering() const { return timelineRenderState != TimelineRenderState::Idle; }
 
     float volume;
     bool mute;
@@ -316,6 +345,33 @@ private:
     void updateNRTBake();
     void resolveBakeBus();
     void finishNRTBake(bool ok, const std::string& message);
+
+    enum class TimelineRenderState { Idle, Arming, Capturing, Rendering };
+    TimelineRenderState timelineRenderState = TimelineRenderState::Idle;
+    TimelineRenderSettings timelineRender;      // what the window edits
+    TimelineRenderSettings timelineRenderRun;   // what the running render uses
+    bool timelineRenderWindowOpen = false;
+    std::string timelineRenderMessage;
+    bool timelineRenderFailed = false;
+    std::string timelineRenderTempPath;
+    // The transport seen on the previous captured frame, and the capture's
+    // time at In and at Out once crossed (-1 before).
+    double timelineRenderPrevTime = 0.0, timelineRenderPrevBeat = 0.0;
+    double timelineRenderInTime = -1.0, timelineRenderOutTime = -1.0;
+    // Capture time the transport last moved at: a stalled one fails the render.
+    double timelineRenderLastMoveTime = 0.0;
+    // The recorder's choices, put back when the render ends.
+    std::vector<std::string> timelineRenderSavedSourceLabels;
+    bool timelineRenderSavedRecordStems = false, timelineRenderSavedServerMasters = false,
+         timelineRenderSavedRemoveDC = false;
+    float timelineRenderSavedDuration = 10.0f;
+    void drawTimelineRenderWindow();
+    void startTimelineRender();
+    void updateTimelineRender();
+    void completeTimelineRender();
+    void finishTimelineRender(bool ok, const std::string& message);
+    void cancelTimelineRender();
+    int maxNRTChannels() const;
 };
 
 #endif /* ofxOceanodeSuperColliderController_h */
