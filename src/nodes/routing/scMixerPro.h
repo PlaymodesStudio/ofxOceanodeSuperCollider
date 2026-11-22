@@ -189,6 +189,13 @@ private:
     // Master section stages
     enum MasterStage { MST_HP = 0, MST_EQ, MST_MAX, MST_LIM, MST_COUNT };
 
+    struct NChanCache {
+        scNode* node = nullptr;
+        size_t pos = 0;
+        int kind = 0;                        // 0 none, 1 int, 2 float
+        ofParameter<int> i;                  // handles share the source's value
+        ofParameter<float> f;
+    };
     struct Track {
         int index = 0;
         std::string name;
@@ -251,6 +258,7 @@ private:
         int  adaptInputs = 0;                // M of the adapter synth
         bool adaptRunning = false;
         int  detectedInputs = 0;             // last effective M, polled in update()
+        NChanCache nChan;                    // sourceChannels' lookup of the source's N_Chan
         std::vector<float> sentMatrix;
         bool insertRunning = false;
         FxStage fx[FX_COUNT];
@@ -400,6 +408,13 @@ private:
     void removeLastBus();
     void setStripServer(Track& tr, int server);
     std::vector<Track*> allStrips();
+    // allStrips() order without building the vector; for per-frame loops whose
+    // bodies add or remove no strips
+    template<class F> void forEachStrip(F&& f) {
+        for(auto& t : tracks) f(t.get());
+        for(auto& b : buses) f(b.get());
+        for(auto& r : returns) f(r.get());
+    }
     Track* busFor(const Track& tr) const;    // the live-able bus a track goes to
     bool routedToBus(const Track& tr) const; // ... and that bus is running
     int  trackOutBus(Track& tr);

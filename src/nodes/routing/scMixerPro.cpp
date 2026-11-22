@@ -1494,10 +1494,14 @@ bool scMixerPro::isSilenced(const Track& tr) const {
 bool scMixerPro::stripNeedsSource(const Track& tr) {
     if(!isSilenced(tr)) return true;
     if(tr.isBus || tr.isReturn) return true;
-    for(Track* other : allStrips()) {
-        if(other == &tr || other->scKeyTap.get() != 0 || other->scStrength.get() <= 0.0f) continue;
-        if(other->scSource.get() - 1 == tr.index) return true;
-    }
+    // (all strips, without building allStrips(): this runs per track per frame)
+    auto ducksTo = [&tr](const Track& other) {
+        if(&other == &tr || other.scKeyTap.get() != 0 || other.scStrength.get() <= 0.0f) return false;
+        return other.scSource.get() - 1 == tr.index;
+    };
+    for(const auto& t : tracks) if(ducksTo(*t)) return true;
+    for(const auto& b : buses) if(ducksTo(*b)) return true;
+    for(const auto& r : returns) if(ducksTo(*r)) return true;
     return false;
 }
 
@@ -1515,11 +1519,15 @@ bool scMixerPro::needsInputAudio(ofxSCServer* server, const nodePort& source) {
 // Tells the servers when what the strips need has changed (mute, solo, a
 // ducking source, the option itself): they work out who is still heard.
 void scMixerPro::updateSourcePausing() {
-    std::vector<bool> needs;
-    needs.reserve(tracks.size());
-    for(const auto& tr : tracks) needs.push_back(!pauseMuted.get() || stripNeedsSource(*tr));
-    if(needs == sentNeedsSource) return;
-    sentNeedsSource = std::move(needs);
+    // Compared in place (no per-frame vector): changed if the size or any entry differs
+    const bool pause = pauseMuted.get();
+    bool changed = sentNeedsSource.size() != tracks.size();
+    if(changed) sentNeedsSource.resize(tracks.size());
+    for(size_t t = 0; t < tracks.size(); t++) {
+        const bool need = !pause || stripNeedsSource(*tracks[t]);
+        if(sentNeedsSource[t] != need) { sentNeedsSource[t] = need; changed = true; }
+    }
+    if(!changed) return;
     for(auto* manager : servers) if(manager) manager->requestSuspendUpdate();
 }
 
@@ -1736,16 +1744,30 @@ int scMixerPro::sourceChannels(Track& tr) {
         scNode* node = availableInputs[tr.index]->getNodeRef();
         if(node) {
             auto& group = node->getParameterGroup();
-            if(group.contains("N_Chan")) {
-                // Oceanode keeps its own wrapper in the group, not the ofParameter
-                ofAbstractParameter& param = group.get("N_Chan");
-                if(auto* p = dynamic_cast<ofxOceanodeParameter<int>*>(&param))
-                    return ofClamp(p->getParameter().get(), 1, MAX_CHANNELS);
-                if(auto* p = dynamic_cast<ofxOceanodeParameter<float>*>(&param))
-                    return ofClamp((int)std::round(p->getParameter().get()), 1, MAX_CHANNELS);
-                if(auto* p = dynamic_cast<ofParameter<int>*>(&param))
-                    return ofClamp(p->get(), 1, MAX_CHANNELS);
+            // Polled per track per frame: reuse the last lookup while the same
+            // parameter object still sits at its position in this node's group
+            // (the held handle keeps its value object alive, so a match can't
+            // be a new parameter at a reused address)
+            NChanCache& c = tr.nChan;
+            const bool cached = c.kind != 0 && c.node == node && c.pos < group.size()
+                && group.get(c.pos).isReferenceTo(c.kind == 2 ? static_cast<ofAbstractParameter&>(c.f)
+                                                                : static_cast<ofAbstractParameter&>(c.i));
+            if(!cached) {
+                // (makeReferenceTo, never operator=: that would write the value)
+                c.kind = 0;
+                c.node = nullptr;
+                if(group.contains("N_Chan")) {
+                    // Oceanode keeps its own wrapper in the group, not the ofParameter
+                    const int pos = group.getPosition("N_Chan");
+                    ofAbstractParameter& param = group.get(pos);
+                    if(auto* p = dynamic_cast<ofxOceanodeParameter<int>*>(&param)) { c.kind = 1; c.i.makeReferenceTo(p->getParameter()); }
+                    else if(auto* p = dynamic_cast<ofxOceanodeParameter<float>*>(&param)) { c.kind = 2; c.f.makeReferenceTo(p->getParameter()); }
+                    else if(auto* p = dynamic_cast<ofParameter<int>*>(&param)) { c.kind = 1; c.i.makeReferenceTo(*p); }
+                    if(c.kind != 0) { c.node = node; c.pos = (size_t)pos; }
+                }
             }
+            if(c.kind == 1) return ofClamp(c.i.get(), 1, MAX_CHANNELS);
+            if(c.kind == 2) return ofClamp((int)std::round(c.f.get()), 1, MAX_CHANNELS);
         }
     }
     return currentChannels;
@@ -2244,7 +2266,7 @@ void scMixerPro::sendSidechainShape(Track& tr) {
 // remain SC control-rate; across servers the chosen held key is relayed.
 void scMixerPro::routeSidechains() {
     for(auto& tr : tracks) tr->keyNeededMask = 0;
-    for(Track* trp : allStrips()) {
+    forEachStrip([&](Track* trp) {
         Track& tr = *trp;
         const int s = tr.scSource.get() - 1;
         Track* src = (s >= 0 && s < (int)tracks.size() && (tr.isBus || s != tr.index) && tr.scStrength.get() > 0.0f)
@@ -2275,13 +2297,13 @@ void scMixerPro::routeSidechains() {
             tr.synth->set("scGain", gain);
             tr.sentScGain = gain;
         }
-    }
+    });
 }
 
 void scMixerPro::sendSidechainKeys() {
-    for(Track* trp : allStrips()) {
+    forEachStrip([&](Track* trp) {
         Track& tr = *trp;
-        if(!tr.synth) continue;
+        if(!tr.synth) return;
         float key = 0.0f;
         if(tr.scMode == 2) {
             const int s = tr.scSource.get() - 1;
@@ -2292,7 +2314,7 @@ void scMixerPro::sendSidechainKeys() {
             tr.synth->set("scKey", key);
             tr.sentScKey = key;
         }
-    }
+    });
 }
 
 void scMixerPro::resendParametersForNRT() {
@@ -3014,7 +3036,7 @@ void scMixerPro::update(ofEventArgs&) {
     if(readMeters) nextMeterRead = now + 1.0f / 30.0f;
 
     const float dt = std::min(0.1f, (float)ofGetLastFrameTime());
-    for(Track* tr : allStrips()) {
+    forEachStrip([&](Track* tr) {
         if(tr->vuBus && tr->synth) {
             if(meters || tr->keyNeededMask) {
                 const auto& v = tr->vuBus->readValues;
@@ -3039,7 +3061,7 @@ void scMixerPro::update(ofEventArgs&) {
             tr->key = {0.0f, 0.0f};
         }
         if(meters) updatePeaks(tr->vu, tr->peak, tr->peakAge, dt);
-    }
+    });
     sendSidechainKeys();
     if(!meters) return;
 
@@ -3061,10 +3083,10 @@ void scMixerPro::update(ofEventArgs&) {
         return it != serverStates.end() && it->second.master.active;
     };
     // (tracks into a running bus are counted through the bus)
-    for(Track* tr : allStrips()) {
-        if(!tr->synth || isSilenced(*tr) || routedToBus(*tr) || meteredAfterMaster(*tr)) continue;
+    forEachStrip([&](Track* tr) {
+        if(!tr->synth || isSilenced(*tr) || routedToBus(*tr) || meteredAfterMaster(*tr)) return;
         for(int c = 0; c < currentChannels && c < (int)tr->vu.size(); c++) masterVU[c] += tr->vu[c];
-    }
+    });
     for(int c = 0; c < currentChannels; c++) {
         const float level = m.empty() ? 1.0f : m[std::min(c, (int)m.size() - 1)];
         masterVU[c] = masterVU[c] * level;
