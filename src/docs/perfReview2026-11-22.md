@@ -468,3 +468,28 @@ Known side effects:
   next pass on the scheduler and GUI paths, but up to 30 frames late on the
   apply path, as before.
 - An edit made to a sequence during node updates is seen one frame later.
+
+### Correction (2026-11-22, evening): timeline engine commit reverted
+
+In the app (Lightnet, project GENERATIVE_MUSIC/181--SPECTRAL_TECH_MACRO_TIMELINE),
+the timeline engine commit made scsynth log `late` for bundles stamped 1–17 s
+in the past, with audible timing errors. The commit is ofxOceanodeTimeline
+969fe10 (persistent parameter cache, source signature memo, blend cache,
+scheduler changes), together with its core lookup ofxOceanode bc8eb19.
+
+Both are reverted (ofxOceanodeTimeline 77ae0a0, ofxOceanode 54da1ef), and the
+benchmark commit with them. Items 1, 2, 4 and 5 above are therefore **not in**.
+
+The other commits of that pass are back in and tested clean in the app:
+
+- editor drawing;
+- MIDI clock port listing;
+- the scTransportSync relative tempo threshold;
+- the wave-clip missing-file throttle.
+
+A simulation of the old and new transport follower, through ramps, jitter,
+seeks, loops and stop/start, produces no past anchors.
+
+The timeline suite missed the bug. The root-cause investigation is in
+progress; the engine work comes back only with a regression test that fails
+on 969fe10.
