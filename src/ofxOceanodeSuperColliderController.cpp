@@ -1160,6 +1160,11 @@ float ofxOceanodeSuperColliderController::getNRTRenderProgress() const{
     const long long expected = nrtRenderExpectedBytes.load();
     if(expected <= 0) return ofClamp((float)nrtRenderJobsDone.load() / (float)count, 0.0f, 1.0f);
 
+    const float now = ofGetElapsedTimef();
+    if(nrtProgressCachedAt >= 0.0f && now - nrtProgressCachedAt < 0.2f && now >= nrtProgressCachedAt &&
+       nrtProgressCachedExpected == expected && nrtProgressCachedFirst == nrtRenderOutputs.front())
+        return nrtProgressCached;
+
     // Summing every file's own fraction works whether the jobs run one after
     // another or side by side; a file not started yet simply contributes zero.
     float total = 0.0f;
@@ -1168,7 +1173,11 @@ float ofxOceanodeSuperColliderController::getNRTRenderProgress() const{
         if(!file.exists()) continue;
         total += ofClamp((float)((double)file.getSize() / (double)expected), 0.0f, 1.0f);
     }
-    return ofClamp(total / (float)count, 0.0f, 1.0f);
+    nrtProgressCached = ofClamp(total / (float)count, 0.0f, 1.0f);
+    nrtProgressCachedAt = now;
+    nrtProgressCachedExpected = expected;
+    nrtProgressCachedFirst = nrtRenderOutputs.front();
+    return nrtProgressCached;
 }
 
 float ofxOceanodeSuperColliderController::getNRTCaptureProgress() const{

@@ -280,6 +280,12 @@ private:
     // Bumped by whichever worker finishes a file, read by the GUI.
     std::atomic<int> nrtRenderJobsDone{0};
     std::atomic<long long> nrtRenderExpectedBytes{0};
+    // getNRTRenderProgress stats every output file: at most 5 times a second
+    // (a bake window asks every frame). Keyed by the render it belongs to.
+    mutable float nrtProgressCached = -1.0f;
+    mutable float nrtProgressCachedAt = -1.0f;
+    mutable long long nrtProgressCachedExpected = -1;
+    mutable std::string nrtProgressCachedFirst;
     int nrtMaxParallelRenders = 4;
     bool nrtRemoveDC = false;
     std::string nrtCaptureOutputPath;

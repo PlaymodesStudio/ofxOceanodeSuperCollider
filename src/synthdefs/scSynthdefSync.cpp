@@ -18,6 +18,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <tuple>
 
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
@@ -1626,6 +1627,24 @@ void scPresetShare::drawMenuItem(){
     if(ImGui::MenuItem("Share Presets to Git...", nullptr, false, stage != Stage::Running)) openRequested = true;
 }
 
+// scan() runs every time the menu opens and hashed every preset again: the
+// SHA is kept per (path, size, mtime). GUI thread only.
+static std::string presetShareBlobSha(const fs::path& path){
+    static std::map<std::string, std::tuple<uintmax_t, fs::file_time_type, std::string>> cache;
+    std::error_code ec;
+    const uintmax_t size = fs::file_size(path, ec);
+    if(ec) return scSynthdefSync::gitBlobSha(path.string());
+    const fs::file_time_type mtime = fs::last_write_time(path, ec);
+    if(ec) return scSynthdefSync::gitBlobSha(path.string());
+    const std::string key = path.string();
+    const auto it = cache.find(key);
+    if(it != cache.end() && std::get<0>(it->second) == size && std::get<1>(it->second) == mtime)
+        return std::get<2>(it->second);
+    std::string sha = scSynthdefSync::gitBlobSha(key);
+    if(!sha.empty()) cache[key] = std::make_tuple(size, mtime, sha);
+    return sha;
+}
+
 void scPresetShare::scan(){
     candidates.clear();
     problem.clear();
@@ -1648,16 +1667,16 @@ void scPresetShare::scan(){
     } catch(...) {}
     for(const auto& rel : sharablePresets(data)){
         const fs::path local = data / rel, shared = fs::path(addonRoot) / "presets" / rel;
-        const std::string localSha = scSynthdefSync::gitBlobSha(local.string());
+        const std::string localSha = presetShareBlobSha(local);
         const auto last = synced.find(rel);
         Candidate candidate;
         candidate.rel = rel;
         if(last != synced.end()){
             if(localSha == last->second) continue;
             candidate.isNew = false;
-            candidate.sharedChanged = fs::exists(shared) && scSynthdefSync::gitBlobSha(shared.string()) != last->second;
+            candidate.sharedChanged = fs::exists(shared) && presetShareBlobSha(shared) != last->second;
         }else{
-            if(fs::exists(shared) && scSynthdefSync::gitBlobSha(shared.string()) == localSha) continue;
+            if(fs::exists(shared) && presetShareBlobSha(shared) == localSha) continue;
             candidate.isNew = !fs::exists(shared);
             candidate.sharedChanged = !candidate.isNew;
         }

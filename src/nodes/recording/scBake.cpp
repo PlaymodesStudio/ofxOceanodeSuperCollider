@@ -155,6 +155,13 @@ void scBake::setup(){
 std::string scBake::synthdefFolder(){
     static std::string cached;
     if(!cached.empty()) return cached;
+    // A miss walks the whole SynthDef tree, and this is asked on every graph
+    // rebuild: look again at most every few seconds (a sync may install it).
+    static float missedAt = -1.0f;
+    constexpr float kRetryAfterSec = 5.0f;
+    const float now = ofGetElapsedTimef();
+    if(missedAt >= 0.0f && now - missedAt < kRetryAfterSec) return {};
+    missedAt = -1.0f;
     namespace fs = std::filesystem;
     const std::string expected = "BakeLoop2.scsyndef";
     try {
@@ -173,6 +180,7 @@ std::string scBake::synthdefFolder(){
         ofLogWarning("scBake") << e.what();
     }
     ofLogError("scBake") << "BakeLoop/BakeTap SynthDefs not found: compile synthdefs/Defaults/Bake/bake.scd";
+    missedAt = now;
     return {};
 }
 
