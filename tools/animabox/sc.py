@@ -12,6 +12,7 @@ SCLANG = ROOT / 'sclang/osx/sclang'
 SCSYNTH = '/Applications/SuperCollider.app/Contents/Resources/scsynth'
 PLUGINS = '/Applications/SuperCollider.app/Contents/Resources/plugins:' + str(ROOT / 'ugens/OceanodeAnalog')
 SR = 48000
+LAST = ''
 
 
 def _run(work, body, timeout=1800):
@@ -73,9 +74,10 @@ def render(score, wav, channels, inputs=None):
     wav = pathlib.Path(wav)
     osc = wav.with_suffix('.osc'); osc.write_bytes(score)
     cmd = [SCSYNTH, '-N', str(osc), str(inputs) if inputs else '_', str(wav), str(SR), 'WAV', 'float',
-           '-o', str(channels), '-U', PLUGINS]
+           '-o', str(channels), '-m', '2097152', '-U', PLUGINS]   # OceanAudio's real-time memory
     if inputs: cmd[-4:-4] = []
     r = subprocess.run(cmd, capture_output=True, text=True)
+    global LAST; LAST = r.stdout + r.stderr
     if not wav.exists(): raise RuntimeError(r.stdout[-3000:] + r.stderr[-2000:])
     return read_wav(wav)
 

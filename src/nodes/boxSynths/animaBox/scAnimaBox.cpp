@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 
 namespace {
 namespace pal {
@@ -291,6 +292,28 @@ void scAnimaBox::setup() {
         auto it = published.find(k); return it != published.end() && it->second->hasInConnection();
     };
     snaps.setup(sh);
+    // The factory sounds were converted again (FACTORY_REVISION): a library written from older
+    // ones is backed up and replaced once (2: the LFOs' band direction, phase and rate wobble)
+    {
+        static constexpr int FACTORY_REVISION = 2;
+        const std::filesystem::path dir = ofToDataPath("nodeSnapshots/AnimaBox", true);
+        int written = 0;
+        try { written = std::stoi(ofBufferFromFile((dir / "factoryRevision.txt").string()).getText()); } catch(...) {}
+        if(written < FACTORY_REVISION) {
+            try {
+                const auto backup = dir / ("Backup before factory " + ofToString(FACTORY_REVISION) + " - " + ofGetTimestampString("%Y%m%d-%H%M%S"));
+                bool any = false;
+                for(const auto& e : std::filesystem::directory_iterator(dir))
+                    if(e.is_regular_file() && e.path().filename().string().rfind("snapshot_", 0) == 0) {
+                        if(!any) std::filesystem::create_directories(backup);
+                        std::filesystem::copy_file(e.path(), backup / e.path().filename());
+                        any = true;
+                    }
+            } catch(const std::exception& e) { ofLogWarning("animaBox") << "snapshot backup: " << e.what(); }
+            snaps.loadFactory();
+            std::ofstream((dir / "factoryRevision.txt").string()) << FACTORY_REVISION;
+        }
+    }
     if(snaps.active < 0 && snaps.used[0]) { snaps.active = 0; snaps.snapshotP.setWithoutEventNotifications(1); }
     redrawDetune(); redrawIndexRandom();
     for(auto& d : vibDraw) d = std::uniform_real_distribution<float>(0, 1)(rng);

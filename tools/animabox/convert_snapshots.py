@@ -60,17 +60,26 @@ LFO = {
               round=7810, pwm=7841, pow=7889, vibA=7875, vibF=7878, inv=7680, mod=7682, sym=7684, rnd=7690, iq=7697)}
 def lfo(prefix, ids, s, bands):
     x = {k: g(i, s) for k, i in ids.items()}
-    L = x['len']; spread = L + 1 if L <= 0 else float(round(15 * L + 1))
+    L = x['len']; spread = L + 1 if L <= 0 else float(math.floor(15 * L + 1 + 0.5))
     mode = int(round(x['mode']))                           # 1 det, 2 random, 3 brownian, 4 monobrownian
     beats = max(0.125, x['div'] / max(0.01, x['bpm']))      # F = bps x BPM* / Div -> Beats per cycle
-    if mode == 2: beats = max(0.125, beats / 2)             # random: two new values per cycle
+    phase = x['ph']
+    if mode == 2:                                           # random: two new values per cycle -> twice the
+        beats = max(0.125, beats / 2); spread *= 2; phase *= 2   # rate, offsets and phase in its cycles
+    # the indexer centres voice i at (i + 0.5) / n of Spread, Reaktor's band v at v / n of Len:
+    # half a band more phase. And its Invert 0 counts down, Reaktor's button 0 counts up.
+    phase = (phase + 0.5 * spread / max(1, bands)) % 1.0
+    # Reaktor's Slow Random (the rate wobble): control-rate (400 Hz) random +-1 through a one-pole at
+    # Vibf: its swing is 0.577 sqrt(k / (2 - k)) of VibA, k = 1 - exp(-2 pi Vibf / 400); LFNoise2's ~0.47
+    k = 1 - math.exp(-2 * math.pi * max(0.0001, x['vibF']) / 400.0)
+    wander = x['vibA'] * 0.577 * math.sqrt(k / (2 - k)) / 0.47
     out = {
         prefix + 'Sync': True, prefix + 'Beats': [round(beats, 5)], prefix + 'Spread': round(spread, 5),
-        prefix + 'Invert': x['inv'] > 0 and 1.0 or 0.0, prefix + 'Symmetry': int(round(x['sym'])),
+        prefix + 'Invert': 0.0 if x['inv'] > 0 else 1.0, prefix + 'Symmetry': int(round(x['sym'])),
         prefix + 'Random': round(min(1.0, x['rnd'] / max(1, bands)), 5),
         prefix + 'Quantize': 128 if x['iq'] <= 0 else max(1, int(round(bands / x['iq']))),
         prefix + 'Modulo': 128 if x['mod'] >= 120.5 else max(1, int(round(x['mod']))),
-        prefix + 'Phase': round(x['ph'] % 1.0, 5),
+        prefix + 'Phase': round(phase, 5),
         prefix + 'Noise': False,
         prefix + 'Random_Type': 0 if mode == 1 else (1 if mode == 2 else 2),
         prefix + 'Random_Same': mode == 4,
@@ -80,7 +89,7 @@ def lfo(prefix, ids, s, bands):
         prefix + 'Steps': 0 if x['q'] <= 0 else int(round(1 / x['q'])) + 1,
         prefix + 'Smooth': round(x['smooth'] / 1000.0, 5) if x['smooth'] > 0.01 else 0.0,
         prefix + 'Detune': [round(x['frn'], 5)],
-        prefix + 'Wander': round(x['vibA'], 5), prefix + 'Wander_Rate': round(max(0.0001, x['vibF']), 5),
+        prefix + 'Wander': round(wander, 5), prefix + 'Wander_Rate': round(max(0.0001, x['vibF']), 5),
     }
     return out, x['scale']
 
