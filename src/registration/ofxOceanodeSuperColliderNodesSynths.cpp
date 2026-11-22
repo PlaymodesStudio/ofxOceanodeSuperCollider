@@ -26,6 +26,7 @@
 #include "../nodes/boxSynths/physicalBox/scPhysicalBox.h"
 #include "../nodes/boxSynths/steamPipeBox/scSteamPipeBox.h"
 #include "../nodes/boxSynths/animaBox/scAnimaBox.h"
+#include "../nodes/boxSynths/synthPercBox/scSynthPercBox.h"
 #include "../nodes/boxSynths/slicerBox/scSlicerBox.h"
 
 namespace ofxOceanodeSuperCollider{
@@ -51,6 +52,7 @@ void registerSynthNodes(ofxOceanode &o){
 	o.registerModel<scPhysicalBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scSteamPipeBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scAnimaBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
+	o.registerModel<scSynthPercBox>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 	o.registerModel<scPolyComb>("SuperCollider/boxSynths", ofxOceanodeNodeRegistrationFlags::NoNodeSnapshots, controller->getServers());
 }
 

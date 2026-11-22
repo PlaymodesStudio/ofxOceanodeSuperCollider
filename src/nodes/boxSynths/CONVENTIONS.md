@@ -370,6 +370,11 @@ through the float Gate level. A kit sets `kit = true`:
 MIDI key 36 / C1 maps to slot 0, with
 successive keys selecting successive slots.
 
+A kit whose rows each hold several sounds fills `out.rowVariants` (per row, the
+sound names; SynthPercBox: each generator's 16 pads). The Drum Grid then shows and
+picks a sound per hit (Alt+drag, right-click, the row header's current sound) and
+plays sound k with that row's Pitch = 60 + k.
+
 A kit can also fill `out.rowNames` (slot names: DrumKitBox's pad names) and
 set `out.pitch` to a per-slot Pitch vector; the timeline's Drum Grid lane
 names its rows from them and writes a pitch per step (60 = the pad's own
