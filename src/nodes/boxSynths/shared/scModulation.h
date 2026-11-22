@@ -394,6 +394,12 @@ private:
     std::array<ofParameter<std::vector<float>>, MAX_LFOS> lfoBeats, lfoHz, lfoDetune, lfoRound, lfoSkew, lfoPw,
                                                           lfoPow, lfoBiPow, lfoSH;
     std::array<ofParameter<float>, MAX_LFOS> lfoPSpread, lfoPRand, lfoSHGlide;
+    // Smooth: a one-pole on the output (s, 0 off). Wander: Hz of per-voice
+    // random rate wobble (free-running only) at Wander Rate Hz. Damp: a static
+    // taper across the voices (Curve: its tension; Invert: 1 - taper).
+    std::array<ofParameter<float>, MAX_LFOS> lfoSmooth, lfoWander, lfoWanderRate, lfoDampCurve;
+    std::array<ofParameter<bool>, MAX_LFOS> lfoDamp, lfoDampInvert;
+    std::vector<float> lfoDampGains(int li) const;           // one per voice (n), all 1 when off
     std::array<ofParameter<bool>, MAX_LFOS> lfoRegion;
     std::array<ofParameter<int>, MAX_LFOS> lfoSteps;
     std::array<ofParameter<float>, MAX_LFOS> lfoNScale, lfoInit, lfoNWaves, lfoInvert, lfoShuffle, lfoRand, lfoOffset, lfoComb;

@@ -192,6 +192,15 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
         lfoNoiseKeys[li] = lfoNoise[li].getEscapedName();         // the generator state's key, read per send
         lfoSHGlide[li].set(L + "S&H Glide" + X, 0.0f, 0.0f, 10.0f); host.regF(lfoSHGlide[li], toLfo);
         lfoNScale[li].set(L + "Noise Scale" + X, 1.0f, 0.0f, 10.0f); host.regF(lfoNScale[li], toLfo);
+        // Smooth (s): a one-pole low-pass on the output, cutoff 1 / Smooth Hz (0: off)
+        lfoSmooth[li].set(L + "Smooth" + X, 0.0f, 0.0f, 4.0f);   host.regF(lfoSmooth[li], toLfo);
+        // Rate Wander: each voice's free-running rate + Wander x its own slow noise (Hz)
+        lfoWander[li].set(L + "Wander" + X, 0.0f, 0.0f, 16.0f);  host.regF(lfoWander[li], toLfo);
+        lfoWanderRate[li].set(L + "Wander Rate" + X, 0.5f, 0.0001f, 4.0f); host.regF(lfoWanderRate[li], toLfo);
+        // Damp: a static gain across the voices, 1 at voice 1 falling to the last
+        lfoDamp[li].set(L + "Damp" + X, false);                  host.regB(lfoDamp[li], toLfo);
+        lfoDampCurve[li].set(L + "Damp Curve" + X, 0.0f, -1.0f, 1.0f); host.regF(lfoDampCurve[li], toLfo);
+        lfoDampInvert[li].set(L + "Damp Invert" + X, false);     host.regB(lfoDampInvert[li], toLfo);
         // Random: each voice a new value per cycle (at its own phase): another SynthDef
         auto toRnd = [this, toLfo]() { forStates([this](ofxSCServer* sv, ServerState& st){ updateSources(sv, st); }); toLfo(); };
         lfoRndType[li].set(L + "Random Type" + X, 0, 0, 3);      host.regI(lfoRndType[li], toRnd);
@@ -255,7 +264,8 @@ void scModulation::setup(Host h, std::vector<Target> t, bool perVoiceLfo, bool h
                 &lfoDetune[li], &lfoInit[li], &lfoRound[li], &lfoSkew[li], &lfoPw[li], &lfoCentered[li], &lfoGain[li],
                 &lfoPow[li], &lfoBiPow[li], &lfoNoise[li], &lfoSHGlide[li], &lfoNScale[li], &lfoRegion[li], &lfoSteps[li],
                 &lfoPSpread[li], &lfoPRand[li], &lfoNWaves[li], &lfoNorm[li], &lfoInvert[li], &lfoSym[li], &lfoShuffle[li],
-                &lfoRand[li], &lfoOffset[li], &lfoQuant[li], &lfoComb[li], &lfoModulo[li], &lfoRndType[li], &lfoRndSmooth[li], &lfoRndSame[li]}) own(*q);
+                &lfoRand[li], &lfoOffset[li], &lfoQuant[li], &lfoComb[li], &lfoModulo[li], &lfoRndType[li], &lfoRndSmooth[li], &lfoRndSame[li],
+                &lfoSmooth[li], &lfoWander[li], &lfoWanderRate[li], &lfoDamp[li], &lfoDampCurve[li], &lfoDampInvert[li]}) own(*q);
         if(unifiedLfoModels){ own(lfoModel[li]); own(lfoManual[li]); }
     }
     for(auto& E : envs) for(auto* q : std::initializer_list<ofAbstractParameter*>{&E.a, &E.d, &E.s, &E.r, &E.ca, &E.cd, &E.cr, &E.vt, &E.beats, &E.transport}) own(*q);
@@ -408,6 +418,12 @@ void scModulation::sendLfoPart(ofxSCServer* server, ServerState& st, int li, int
     controls.set("hold", held ? 1.0f : 0.0f);
     controls.set("modeweights", lfoModeWeights(li));
     controls.set("manualvalue", lfoManualValue(li));
+    // Smooth, Rate Wander, Damp (ModLfoX; their defaults leave the output untouched).
+    // One LFO for all voices (perVoice false): no per-voice wander or taper.
+    controls.set("smooth", lfoSmooth[li].get());
+    controls.set("wander", perVoice && !held ? lfoWander[li].get() : 0.0f);
+    controls.set("wanderrate", lfoWanderRate[li].get());
+    controls.set("vgain", slice(lfoDampGains(li), c));
     controls.send();
 }
 
@@ -970,6 +986,20 @@ float scModulation::lfoVoiceOffset(int li, int voice) const {
 std::vector<float> scModulation::lfoVoiceOffsets(int li) const {
     return perVoice ? expand(lfoPhases[li], n()) : std::vector<float>(n(), 0.0f);
 }
+// Damp (Reaktor's): d = 1 - v / n (1 at voice 0), bent by the tension
+// x (1 + a) / (1 + a |x|), a = 2k / (1 - k), k = 0.999 x Curve. Invert: 1 - that.
+std::vector<float> scModulation::lfoDampGains(int li) const {
+    const int count = n();
+    std::vector<float> g(count, 1.0f);
+    if(!perVoice || !lfoDamp[li].get()) return g;
+    const float k = 0.999f * ofClamp(lfoDampCurve[li].get(), -1.0f, 1.0f), a = 2.0f * k / (1.0f - k);
+    for(int v = 0; v < count; v++){
+        const float d = 1.0f - float(v) / count;
+        const float dp = d * (1.0f + a) / std::max(1.0e-6f, 1.0f + a * std::abs(d));
+        g[v] = lfoDampInvert[li].get() ? 1.0f - dp : dp;
+    }
+    return g;
+}
 float scModulation::lfoSampleHold(int li) const {
     const auto sh = lfoShFor(li);
     return sh.empty() ? 0.0f : sh[0];
@@ -1273,6 +1303,13 @@ void scModulation::loadState(const ofJson& j, const std::string& prefix, bool ge
         if(!j.contains(lfoTrigger[li].getEscapedName())) lfoTrigger[li]=0;
         if(!j.contains(lfoRestartBeats[li].getEscapedName())) lfoRestartBeats[li]=0;
         if(!j.contains(lfoPhasePower[li].getEscapedName())) lfoPhasePower[li]=1;
+        // saved before Smooth / Wander / Damp existed: off
+        if(!j.contains(lfoSmooth[li].getEscapedName())) lfoSmooth[li]=0;
+        if(!j.contains(lfoWander[li].getEscapedName())) lfoWander[li]=0;
+        if(!j.contains(lfoWanderRate[li].getEscapedName())) lfoWanderRate[li]=0.5f;
+        if(!j.contains(lfoDamp[li].getEscapedName())) lfoDamp[li]=false;
+        if(!j.contains(lfoDampCurve[li].getEscapedName())) lfoDampCurve[li]=0;
+        if(!j.contains(lfoDampInvert[li].getEscapedName())) lfoDampInvert[li]=false;
     }
     for(auto& E:envs) {if(!j.contains(E.beats.getEscapedName())) E.beats=false;
         if(!j.contains(E.transport.getEscapedName())) E.transport=false;}
@@ -2098,7 +2135,13 @@ void scModulation::drawLfoCard(int li, float w) {
     if(region) sliderVec(lfoBeats[li], "Regs", half, "%.3f", true);
     else if(lfoSync[li].get()) sliderVec(lfoBeats[li], "Beats", half, "%.3f", true);
     else sliderVec(lfoHz[li], "Rate", half, "%.3fHz", true);
-    if(perVoice && !followsTransport(li)) sliderVec(lfoDetune[li], "Detune", half, "%.2f");
+    if(perVoice && !followsTransport(li)) {
+        sliderVec(lfoDetune[li], "Detune", half, "%.2f");
+        slider(lfoWander[li], "Wander", half, "%.3fHz", true);
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Rate Wander: each voice's rate drifts by up to this many Hz,\nfollowing a slow random curve of its own (0: off; free-running only)");
+        slider(lfoWanderRate[li], "W.Rate", half, "%.4fHz", true);
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("How fast the rate wander moves");
+    }
     slider(lfoInit[li], "Phase", half, "%.2f");
     ImGui::SetNextItemWidth(half);
     int trigger=lfoTrigger[li].get();
@@ -2190,6 +2233,9 @@ void scModulation::drawLfoCard(int li, float w) {
         if(ImGui::IsItemHovered())ImGui::SetTooltip("S&H glide: each held value slides to the next over this time (0: steps)");
     }
     if(!effectiveNoise(li) && !random) toggle(lfoCentered[li], "Centered");
+    ImGui::Spacing();ImGui::TextColored(ImColor(pal::textDim),"Output");
+    slider(lfoSmooth[li], "Smooth", half, "%.3f s", true);
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Low-pass on the LFO's output (after Steps): a one-pole of this time,\ncutoff 1 / time Hz, per voice (0: off)");
     ImGui::EndGroup();
     if(perVoice){
         ImGui::SameLine();
@@ -2206,6 +2252,15 @@ void scModulation::drawLfoCard(int li, float w) {
         slider(lfoComb[li], "Comb", half, "%.2f");
         sliderInt(lfoModulo[li], "Mod", half);
         toggle(lfoNorm[li], "Normalize");
+        toggle(lfoDamp[li], "Damp");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("A fixed gain across the voices: 1 at voice 1, falling towards the last");
+        if(lfoDamp[li].get()){
+            ImGui::SameLine(0,4*z);
+            toggle(lfoDampInvert[li], "Invert##damp");
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Invert the taper: 0 at voice 1, rising towards the last");
+            slider(lfoDampCurve[li], "Curve", half, "%+.2f");
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Bends the taper (0: linear)");
+        }
         if(partialLfos){
             ImGui::TextColored(ImColor(pal::textDim), "Partials");
             slider(lfoPSpread[li], "Spread", half, "%+.2f");

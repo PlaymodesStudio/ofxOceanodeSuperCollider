@@ -9,6 +9,15 @@
 // The random values are a hash of the cycle number (and \seed) and, unless
 // \rshare 1 (one series for every voice, each at its own phase), of the
 // voice's index: each voice its own random.
+//
+//   \wander, \wanderrate  Rate Wander: Hz added to each voice's free-running
+//             rate, wander x an LFNoise2 of its own per voice (at wanderrate
+//             Hz). The sum may go below 0 (the phase then runs backwards).
+//             Transport-locked sweeps ignore it. 0: no effect.
+//   \smooth   a one-pole low-pass on the output (time T s, cutoff 1/T Hz:
+//             coef exp(-2pi / (T x ControlRate))), per voice. 0: bypass.
+//   \vgain    per voice gain (Damp: a static taper across the voices), after
+//             \smooth. 1: no effect.
 (
 var root, dir, valueNoise2;
 root = if(thisProcess.nowExecutingPath.notNil,
@@ -51,7 +60,9 @@ valueNoise2 = { |x, y, salt = 0|
         var reset = manualReset + gateRise + periodic;
         var freq = kv.(\freq, 1), detune = kv.(\freqdetune, 0);
         var spread = n.collect { |i| TRand.kr(0, 1, reset.asArray.wrapAt(i) + Impulse.kr(0)) };
-        var freeSweep = Sweep.kr(reset, freq + (spread * detune));
+        // Rate Wander: each voice its own slow noise (n LFNoise2s, not one copied)
+        var wander = \wander.kr(0) * n.collect { LFNoise2.kr(\wanderrate.kr(0.5)) };
+        var freeSweep = Sweep.kr(reset, freq + (spread * detune) + wander);
         var clock=In.kr(\transportbus.kr(0),4), linked=\transport.kr(0);
         var absolute=clock[0]*kv.(\cpb,1);
         var origin=Latch.kr(absolute.ceil,reset+(Changed.kr(clock[2])*clock[1])+Impulse.kr(0));
@@ -146,6 +157,14 @@ valueNoise2 = { |x, y, salt = 0|
             (quantize.(low) * (1 - q.frac)) + (quantize.((low + 1).min(32)) * q.frac)
         }.value;
         out = (out * (1 - manualWeight)) + (\manualvalue.kr(0).clip(0, 1) * manualWeight);
+        // Smooth (s): a one-pole low-pass, cutoff 1 / T Hz; 0 passes out untouched.
+        // The filter runs (on the sanitized value) even at 0, so turning it on is seamless.
+        out = {
+            var t = \smooth.kr(0);
+            Select.kr(t > 0, [out, OnePole.kr(Sanitize.kr(out), exp(-2pi / (t.max(1.0e-4) * ControlRate.ir)))])
+        }.value;
+        // Damp: a per voice gain (computed by the node), 1 = none
+        out = out * kv.(\vgain, 1);
         Out.kr(\out.kr(0), Sanitize.kr(out) * Select.kr(mode > 0,[1,gate]));
     }).writeDefFile(dir);
 };
