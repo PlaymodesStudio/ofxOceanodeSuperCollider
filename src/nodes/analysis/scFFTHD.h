@@ -22,6 +22,7 @@
 #include "ofxOceanodeShared.h"
 #include "../../scNode.h"
 #include "scAnalyzerBinding.h"
+#include "scOutputDemand.h"
 #include "../../serverManager.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -65,10 +66,10 @@ public:
         addParameter(dbFloor.set("dB Floor", -80.0f, -120.0f, -40.0f));
         addParameter(smoothing.set("Smooth",  0.7f,    0.0f,   0.99f));
 
-        addOutputParameter(spectrumData.set("Spectrum",
+        demand.watch(addOutputParameter(spectrumData.set("Spectrum",
             vector<float>(NUM_BANDS, 0.0f),
             vector<float>(NUM_BANDS, 0.0f),
-            vector<float>(NUM_BANDS, 1.0f)));
+            vector<float>(NUM_BANDS, 1.0f))));
         spectrumData.setSerializable(false); // never save 1080 stale floats to preset JSON
 
         addInspectorParameter(widgetWidth.set("Widget Width",  240.0f, 100.0f, 800.0f));
@@ -114,6 +115,8 @@ public:
 
     void update(ofEventArgs &) override {
         if(!synth || !fftBus || !enabled.get()) return;
+        // Not shown and Spectrum not read: no poll or notify (resumes when needed)
+        if(!demand.needed(*this)) return;
 
         const vector<float>& raw = fftBus->readValues;
         if((int)raw.size() == NUM_BANDS) {
@@ -124,7 +127,7 @@ public:
                                      + raw[i] * oneMinusCoeff;
                 outputBuffer[i] = displayMagnitudes[i];
             }
-            spectrumData = outputBuffer;
+            spectrumData = outputBuffer;   // every frame while read: listeners may step per notification
         }
         fftBus->requestValues();
     }
@@ -150,6 +153,7 @@ private:
     ofxSCSynth* synth  = nullptr;
     ofxSCBus*   fftBus = nullptr;
     scAnalyzerBinding binding;
+    scOutputDemand    demand;
 
     // ── Parameters ─────────────────────────────────────────────────────────
     ofParameter<bool>     showWindow;
@@ -243,6 +247,7 @@ private:
 
     // ── Visualization ───────────────────────────────────────────────────────
     void drawSpectrumFull(ImDrawList* dl, float xS, float yS, float W, float totalH) {
+        demand.markShown();
         static constexpr float LABEL_H = 14.0f;
         const float specH     = totalH - LABEL_H;
         const float xE        = xS + W;

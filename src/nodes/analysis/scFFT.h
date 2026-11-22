@@ -15,6 +15,7 @@
 #include "ofxOceanodeNodeModel.h"
 #include "../../scNode.h"
 #include "scAnalyzerBinding.h"
+#include "scOutputDemand.h"
 #include "../../serverManager.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -39,6 +40,7 @@ public:
         , servers(outputServers)
     {
         displayMagnitudes.fill(0.0f);
+        outputBuffer.assign(NUM_BINS, 0.0f);
     }
 
     ~scFFT() {
@@ -59,10 +61,10 @@ public:
         addParameter(smoothing.set("Smooth",   0.7f,    0.0f,   0.99f));
         addParameter(lineMode.set("Line Mode", false));
 
-        addOutputParameter(spectrumData.set("Spectrum",
+        demand.watch(addOutputParameter(spectrumData.set("Spectrum",
             vector<float>(NUM_BINS, 0.0f),
             vector<float>(NUM_BINS, 0.0f),
-            vector<float>(NUM_BINS, 1.0f)));
+            vector<float>(NUM_BINS, 1.0f))));
 
         addInspectorParameter(widgetWidth.set("Widget Width",  240.0f, 100.0f, 800.0f));
         addInspectorParameter(widgetHeight.set("Widget Height", 140.0f,  60.0f, 400.0f));
@@ -110,17 +112,18 @@ public:
 
     void update(ofEventArgs &args) override {
         if(!synth || !fftBus || !enabled.get()) return;
+        // Not shown and Spectrum not read: no poll or notify (resumes when needed)
+        if(!demand.needed(*this)) return;
 
         const vector<float>& raw = fftBus->readValues;
         if((int)raw.size() == NUM_BINS) {
             float coeff = smoothing.get();
-            vector<float> out(NUM_BINS);
             for(int i = 0; i < NUM_BINS; i++) {
                 displayMagnitudes[i] = displayMagnitudes[i] * coeff
                                      + raw[i] * (1.0f - coeff);
-                out[i] = displayMagnitudes[i];
+                outputBuffer[i] = displayMagnitudes[i];
             }
-            spectrumData = out;
+            spectrumData = outputBuffer;   // every frame while read: listeners may step per notification
         }
         fftBus->requestValues();
     }
@@ -146,6 +149,7 @@ private:
     ofxSCSynth* synth  = nullptr;
     ofxSCBus*   fftBus = nullptr;
     scAnalyzerBinding binding;
+    scOutputDemand    demand;
 
     // ── Parameters ─────────────────────────────────────────────────────────
     ofParameter<bool>     showWindow;
@@ -169,6 +173,7 @@ private:
 
     // ── State ──────────────────────────────────────────────────────────────
     std::array<float, NUM_BINS> displayMagnitudes;
+    vector<float>               outputBuffer;   // reused: no per-frame allocation
     vector<serverManager*>      servers;
 
     float getCurrentSampleRate() const {
@@ -250,6 +255,7 @@ private:
                           float W,  float totalH,
                           float labelH = 14.0f)
     {
+        demand.markShown();
         const float LABEL_H = labelH;
 
         const float specH     = totalH - LABEL_H;   // height of bars area

@@ -18,6 +18,7 @@
 #include "ofxOceanodeShared.h"
 #include "../../scNode.h"
 #include "scAnalyzerBinding.h"
+#include "scOutputDemand.h"
 #include "../../serverManager.h"
 #include "ofxSCSynth.h"
 #include "ofxSCBus.h"
@@ -66,7 +67,7 @@ public:
         addParameter(dbCeil.set("dB Ceil",     0.0f,  -60.0f, 0.0f));
         addParameter(colormapIdx.set("Colormap", 0, 0, 3)); // 0=Hot 1=Viridis 2=Phosphor 3=Gray
 
-        addOutputParameter(textureOut.set("Texture", nullptr, nullptr, nullptr));
+        demand.watch(addOutputParameter(textureOut.set("Texture", nullptr, nullptr, nullptr)));
         textureOut.setSerializable(false); // raw pointer — meaningless to serialize
 
         addInspectorParameter(widgetWidth.set("Widget Width",   480.0f, 100.0f, 1920.0f));
@@ -114,6 +115,9 @@ public:
 
     void update(ofEventArgs &) override {
         if(!synth || !fftBus || !enabled.get()) return;
+        // Not shown and Texture not read: no poll, scroll pass or notify.
+        // It resumes (from the frozen history) once something needs it.
+        if(!demand.needed(*this)) return;
 
         const vector<float>& raw = fftBus->readValues;
         if((int)raw.size() == NUM_BANDS) {
@@ -155,6 +159,7 @@ private:
     ofxSCSynth* synth  = nullptr;
     ofxSCBus*   fftBus = nullptr;
     scAnalyzerBinding binding;
+    scOutputDemand    demand;
 
     // ── Parameters ─────────────────────────────────────────────────────────
     ofParameter<nodePort> input;
@@ -384,6 +389,7 @@ void main() {
     // Orientation is baked into the FBO (high freq at GL y=0 bottom).
     // UV (0,0)→(1,1): AddImage maps GL y=0 → screen top → high freq at top everywhere.
     void drawSpectrogramImage(float x, float y, float W, float H) {
+        demand.markShown();
         GLuint texId = fbos[ping].getTexture().getTextureData().textureID;
         ImVec2 p0(x, y);
         ImVec2 p1(x + W, y + H);

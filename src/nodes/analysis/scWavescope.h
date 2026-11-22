@@ -6,6 +6,7 @@
 #include "ofxOceanodeShared.h"
 #include "../../serverManager.h"
 #include "scAnalyzerBinding.h"
+#include "scOutputDemand.h"
 #include "ofxSCBus.h"
 #include "ofxSCSynth.h"
 
@@ -71,7 +72,7 @@ public:
 		addInspectorParameter(headerThickness.set("HeaderTh", {0.01f}, {0.f}, {1.f}));
 		addInspectorParameter(headerOpacity.set("HeaderOp", {1.f}, {0.f}, {1.f}));
 
-		addOutputParameter(previewOut.set("Output", nullptr, nullptr, nullptr));
+		demand.watch(addOutputParameter(previewOut.set("Output", nullptr, nullptr, nullptr)));
 		ensurePreviewAllocated();
 
 		listeners.push(input.newListener([this](nodePort& port) {
@@ -112,6 +113,9 @@ public:
 
 	void update(ofEventArgs&) override {
 		if(synths.empty() || sampleBuses.empty() || freeze.get()) return;
+		// Not shown and Output not read: no polling. Auto Gain keeps polling,
+		// since it writes the (saved) Gain parameter.
+		if(!autoGain.get() && !demand.needed(*this)) return;
 
 		bool copiedSamples = false;
 		int firstChannel = 0;
@@ -146,6 +150,7 @@ public:
 			ImGui::SetNextWindowSize(ImVec2(900.0f, 440.0f), ImGuiCond_FirstUseEver);
 			if(ImGui::Begin(title.c_str(), &open,
 				ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+				demand.markShown();
 				const ImVec2 available = ImGui::GetContentRegionAvail();
 				const float propertiesWidth = std::min(260.0f,
 					std::max(190.0f, available.x * 0.28f));
@@ -165,7 +170,9 @@ public:
 			if(open != showWindow.get()) showWindow.set(open);
 		}
 
-		renderPreview();
+		// The window draws with ImGui; the preview FBO and its notify (the
+		// consumers' new-frame signal) are only for Output's readers
+		if(demand.outputRead(*this)) renderPreview();
 	}
 
 	void activate() override {
@@ -185,6 +192,7 @@ private:
 	ofEventListeners listeners;
 	ofEventListener serverGraphListener;
 	scAnalyzerBinding binding;
+	scOutputDemand demand;
 
 	ofParameter<nodePort> input;
 	ofParameter<int> serverIndex;
@@ -470,7 +478,8 @@ private:
 		const float targetSpan = std::max(std::abs(range.minimum), std::abs(range.maximum));
 		const float targetGain = targetSpan * 0.7f / rms;
 		const float smoothedGain = gain.get() * 0.95f + targetGain * 0.05f;
-		gain.set(ofClamp(smoothedGain, gain.getMin(), gain.getMax()));
+		const float newGain = ofClamp(smoothedGain, gain.getMin(), gain.getMax());
+		if(newGain != gain.get()) gain.set(newGain);
 	}
 
 	void ensurePreviewAllocated() {
