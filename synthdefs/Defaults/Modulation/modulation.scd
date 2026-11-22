@@ -171,22 +171,39 @@ SynthDef(\ModTransportClockV2, {
             // velocity tracking: \veltrack 0 (the same every note) .. 1 (scaled by
             // the note's velocity, \velbus: control, n)
             var vt = \veltrack.kr(0).clip(0, 1);
-            var vel = K2A.ar(In.kr(\velbus.kr(0), n));   // held per note by the gates
+            var vel = In.kr(\velbus.kr(0), n);   // held per note by the gates
             var atk = kv.(\atk,0.01).asArray, dec = kv.(\dec,0.3).asArray;
             var sus = kv.(\sus,0.8).asArray, rel = kv.(\rel,1).asArray;
             var curves = [kv.(\cA,-4),kv.(\cD,-4),kv.(\cR,-4)].collect(_.asArray);
-            var env = n.collect { |i|
+            var rate = if(audio, \ar, \kr), env, gk;
+            if(audio.not) {
+                // Control rate: one gate value per block that loses no edge,
+                // read at the block's last sample (Amplitude 0 0: that sample;
+                // ModGate's gates rise one sample into a block). A note that
+                // rose and closed within the block still opens the gate for
+                // that block; a note that closed and rose again while the
+                // gate was open closes it for one block (a restart).
+                var level = Amplitude.kr(gate, 0, 0).asArray;
+                var rise = Changed.kr(Amplitude.kr(PulseCount.ar(gate), 0, 0)).asArray;
+                var fb = LocalIn.kr(2 * n), prev = fb[0 .. (n - 1)], pending = fb[n ..];
+                var restart = rise * prev;
+                gk = ((pending + (((level + rise) > 0) * (1 - restart))) > 0);
+                LocalOut.kr(gk ++ restart);
+            } {
+                gk = gate.asArray;
+                vel = K2A.ar(vel);
+            };
+            env = n.collect { |i|
                 // EnvGen latches a segment's target. Two shared-clock ADSRs
                 // span the sustain range; their live blend follows snapshot
                 // Sustain changes even on held notes, without retriggering.
-                var low = EnvGen.ar(Env.adsr(atk[i].max(0.001),dec[i].max(0.001),0,rel[i].max(0.001),1,
-                    curves.collect { |c| c[i].clip(-12,12) }),gate.asArray[i]);
-                var high = EnvGen.ar(Env.adsr(atk[i].max(0.001),dec[i].max(0.001),1,rel[i].max(0.001),1,
-                    curves.collect { |c| c[i].clip(-12,12) }),gate.asArray[i]);
+                var low = EnvGen.perform(rate, Env.adsr(atk[i].max(0.001),dec[i].max(0.001),0,rel[i].max(0.001),1,
+                    curves.collect { |c| c[i].clip(-12,12) }),gk[i]);
+                var high = EnvGen.perform(rate, Env.adsr(atk[i].max(0.001),dec[i].max(0.001),1,rel[i].max(0.001),1,
+                    curves.collect { |c| c[i].clip(-12,12) }),gk[i]);
                 low + ((high - low) * sus[i].clip(0,1))
             } * (1-vt+(vt*vel));
-            Out.kr(\out.kr(0), A2K.kr(env));
-            if(audio) { Out.ar(\aout.kr(0), env) };
+            if(audio) { Out.kr(\out.kr(0), A2K.kr(env)); Out.ar(\aout.kr(0), env) } { Out.kr(\out.kr(0), env) };
         }).writeDefFile(dir);
     };
 
