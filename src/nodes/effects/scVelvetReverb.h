@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 #include <random>
+#include <future>
 
 class ofxSCServer;
 class ofxSCSynth;
@@ -66,7 +67,24 @@ private:
         IRState      irState           = kIdle;
         float        timer             = 0.0f;
         bool         prepConvSent      = false;
+        bool         pendingAlloc      = false;  // RT60 changed: new irBuffer once settled
     };
+
+    // What generateIR is given: servers asking for the same IR share one result
+    struct IRKey {
+        int          frames = 0;
+        float        sr = 0.0f, brt = 0.0f, dmp = 0.0f, diff = 0.0f;
+        unsigned int seed = 0;
+        bool operator==(const IRKey& o) const {
+            return frames == o.frames && sr == o.sr && brt == o.brt
+                && dmp == o.dmp && diff == o.diff && seed == o.seed;
+        }
+    };
+    std::future<std::vector<float>> irFuture;     // generateIR off the main thread
+    IRKey                           irFutureKey;
+    std::vector<float>              irCache;      // last generated IR
+    IRKey                           irCacheKey;
+    bool                            irCacheValid = false;
 
     std::map<ofxSCServer*, ofxSCSynth*>            synthInstances;
     std::map<ofxSCServer*, std::map<scNode*, int>> inputBuses;
@@ -92,8 +110,8 @@ private:
     void               drawStatusWidget();
 
     // C++ velvet noise IR generation (replaces scconvIRGen synth)
-    std::vector<float> generateIR(int frames, float brt, float dmp,
-                                   float diff, float sr, unsigned int seed);
+    static std::vector<float> generateIR(int frames, float brt, float dmp,
+                                          float diff, float sr, unsigned int seed);
     void               sendIRData(ofxSCServer* srv, ofxSCBuffer* buf,
                                    const std::vector<float>& data);
 };

@@ -138,17 +138,47 @@ void scVelvetReverb::update(ofEventArgs& args) {
         // ── kLoadingIR ────────────────────────────────────────────────────────
         if(s.irState == kLoadingIR) {
             s.timer += dt;
+            // RT60 ticks only restart this wait; the buffer of the new size is
+            // allocated once they settle, and then waited for like any other
+            if(s.timer >= 0.3f && s.pendingAlloc) {
+                cancelLoad(srv);
+                const float sr = (float)serverManager::getSampleRateForServer(srv);
+                s.irBuffer = new ofxSCBuffer((int)(rt60.get() * sr) + 512, 1, srv);
+                s.irBuffer->alloc();
+                s.timer = 0.0f;
+                continue;
+            }
             // Wait 300 ms for /b_alloc to complete on SC's NRT thread,
             // then generate IR in C++ and upload via /b_setn.
             if(s.timer >= 0.3f) {
                  if(s.irBuffer) {
-                    const float  sr   = (float)serverManager::getSampleRateForServer(srv);
-                    unsigned int seed = (unsigned int)(rt60.get()        * 1000.0f)
-                                      ^ (unsigned int)(brightness.get()  * 10000.0f)
-                                      ^ (unsigned int)(damping.get()     * 100000.0f);
-                    auto ir = generateIR(s.irBuffer->frames, brightness.get(),
-                                          damping.get(), diffusion.get(), sr, seed);
-                    sendIRData(srv, s.irBuffer, ir);
+                    IRKey key;
+                    key.frames = s.irBuffer->frames;
+                    key.sr     = (float)serverManager::getSampleRateForServer(srv);
+                    key.brt    = brightness.get();
+                    key.dmp    = damping.get();
+                    key.diff   = diffusion.get();
+                    key.seed   = (unsigned int)(rt60.get()        * 1000.0f)
+                               ^ (unsigned int)(brightness.get()  * 10000.0f)
+                               ^ (unsigned int)(damping.get()     * 100000.0f);
+                    // Generated on a worker, once for all servers asking for
+                    // the same IR; this server waits here until it is ready
+                    if(!(irCacheValid && irCacheKey == key)) {
+                        if(irFuture.valid()) {
+                            if(irFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
+                            irCache      = irFuture.get();
+                            irCacheKey   = irFutureKey;
+                            irCacheValid = true;
+                        }
+                        if(!(irCacheValid && irCacheKey == key)) {
+                            irFutureKey = key;
+                            irFuture = std::async(std::launch::async, [key]() {
+                                return generateIR(key.frames, key.brt, key.dmp, key.diff, key.sr, key.seed);
+                            });
+                            continue;
+                        }
+                    }
+                    sendIRData(srv, s.irBuffer, irCache);
                 }
                 s.irState      = kPreparingSpec;
                 s.timer        = 0.0f;
@@ -287,15 +317,27 @@ void scVelvetReverb::cancelLoad(ofxSCServer* srv) {
     if(s.irBuffer)          { s.irBuffer->free();          delete s.irBuffer;         s.irBuffer         = nullptr; }
     if(s.pendingSpecBuffer) { s.pendingSpecBuffer->free(); delete s.pendingSpecBuffer; s.pendingSpecBuffer = nullptr; }
     s.prepConvSent = false;
+    s.pendingAlloc = false;
 }
 
 void scVelvetReverb::startSyntheticIRForServer(ofxSCServer* srv) {
     serverStates[srv]; // ensure entry exists
-    cancelLoad(srv);
 
     ServerState& s  = serverStates[srv];
     const float sr  = (float)serverManager::getSampleRateForServer(srv);
     int irFrames    = (int)(rt60.get() * sr) + 512;
+
+    // A parameter tick keeps the IR buffer (it is rewritten in full once the
+    // ticks settle) unless a PreparePartConv may still be reading it. Only a
+    // new size needs a new buffer, and that waits for the ticks to settle too.
+    if(s.irBuffer && (s.irState == kLoadingIR || s.irState == kReady)) {
+        s.pendingAlloc = (s.irBuffer->frames != irFrames);
+        s.irState      = kLoadingIR;
+        s.timer        = 0.0f;
+        s.prepConvSent = false;
+        return;
+    }
+    cancelLoad(srv);
     s.irBuffer      = new ofxSCBuffer(irFrames, 1, srv);
     s.irBuffer->alloc();
 
