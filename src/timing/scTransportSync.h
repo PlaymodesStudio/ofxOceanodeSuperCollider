@@ -187,13 +187,19 @@ public:
 		pending.erase(std::remove_if(pending.begin(), pending.end(), [&](const Anchor& a) {
 			return a.steadyTimeUs <= cur.steadyTimeUs;
 		}), pending.end());
+		// Against the tempo of the last anchor sent, with a relative threshold:
+		// an external MIDI clock smooths its tempo on every tick, and a 1e-3
+		// BPM test re-anchored every follower on every frame. A slower drift
+		// still re-anchors once it moves this far from the anchored tempo; the
+		// periodic anchor (every periodicSeconds) absorbs the rest.
+		const bool tempoMoved = std::abs(cur.bpm - lastBpm) > std::max(1e-3f, std::abs(lastBpm) * 5e-4f);
 		const bool loopChanged = initialized && (cur.loopEnabled != lastLoopEnabled ||
 			cur.loopStartBeat != lastLoopStart || cur.loopEndBeat != lastLoopEnd);
 		const bool changed = !initialized || forceNext || cur.generation != lastGeneration ||
-			cur.isPlaying != lastPlaying || std::abs(cur.bpm - lastBpm) > 1e-3f || loopChanged ||
+			cur.isPlaying != lastPlaying || tempoMoved || loopChanged ||
 			cur.driverMode != lastDriver;
 		if(!initialized || cur.generation != lastGeneration || loopChanged || cur.driverMode != lastDriver ||
-		   cur.isPlaying != lastPlaying || std::abs(cur.bpm - lastBpm) > 1e-3f)
+		   cur.isPlaying != lastPlaying || tempoMoved)
 			wrapScheduledFor = 0;
 		auto anchorNow = [&](bool discontinuity) {
 			Anchor a;
@@ -262,7 +268,7 @@ public:
 			out.push_back(a);
 		} else if(forceNext) {
 			anchorNow(false);
-		} else if(std::abs(cur.bpm - lastBpm) > 1e-3f || loopChanged || cur.driverMode != lastDriver) {
+		} else if(tempoMoved || loopChanged || cur.driverMode != lastDriver) {
 			anchorNow(false);
 		} else if(cur.loopCount != lastLoopCount && !wrapSentFor(cur.loopCount)) {
 			// A realtime wrap missed by a stalled frame remains a timing error.
@@ -359,7 +365,7 @@ public:
 		initialized = true;
 		lastGeneration = cur.generation;
 		lastPlaying = cur.isPlaying;
-		lastBpm = cur.bpm;
+		if(!out.empty()) lastBpm = cur.bpm;   // every anchor of this poll carries cur.bpm
 		lastLoopCount = cur.loopCount;
 		lastLoopEnabled = cur.loopEnabled;
 		lastLoopStart = cur.loopStartBeat;
