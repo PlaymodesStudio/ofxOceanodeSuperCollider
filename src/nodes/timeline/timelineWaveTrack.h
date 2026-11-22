@@ -83,7 +83,7 @@ public:
     void activate() override {
         for(auto& serverVoices : voices)
             for(auto& entry : serverVoices.second)
-                if(entry.second.synth != nullptr) entry.second.synth->run(true);
+                if(entry.second.synth != nullptr && !entry.second.paused) entry.second.synth->run(true);
     }
 
     void deactivate() override {
@@ -217,6 +217,19 @@ private:
         bool tailing = false;
         double tailUntil = 0.0;
         bool created = false;
+        // Inactive (play=0) values last sent with /n_set: an idle clip resends
+        // nothing until one of them changes. Cleared on (re)creation and by
+        // every active message.
+        std::vector<float> inactiveSent;
+        // When play=0 first went out, and the inactive frames since. Once the
+        // synth's 3 ms release is long over it is paused (/n_run 0); the next
+        // active message runs it again just before its reset.
+        double playZeroSince = -1.0;
+        int inactiveFrames = 0;
+        bool paused = false;
+        // After a resume /n_run 1 is repeated with each active message for a
+        // moment, so a pause that reached the server late cannot stick.
+        double resumeRepeatUntil = -1.0;
     };
 
     std::vector<serverManager*> servers;
@@ -338,6 +351,11 @@ private:
         if(voice.synth == nullptr || voice.created) return;
         voice.synth->createAndRun(0, 1, getActive());
         voice.created = true;
+        voice.paused = false;
+        voice.resumeRepeatUntil = -1.0;
+        voice.inactiveSent.clear();
+        voice.playZeroSince = -1.0;
+        voice.inactiveFrames = 0;
         auto stateIt = states.find(key);
         if(stateIt != states.end()) applyState(voice, stateIt->second);
     }
@@ -351,8 +369,16 @@ private:
     // position before it is treated as a seek.
     static constexpr double kJumpToleranceSec = 0.1;
 
-    void sendParams(Voice& voice, const std::vector<std::pair<std::string, float>>& params) {
-        if(voice.synth == nullptr) return;
+    // Delay after the first play=0 before a voice is paused: far past the
+    // synth's 3 ms release, and at least two inactive frames later.
+    static constexpr double kPauseAfterSec = 0.1;
+
+    // True when the values went out as one /n_set to the created synth.
+    // resume: run the paused synth again just before the values. Both go
+    // through sendMsg, the path (and latency timetag) the values always took;
+    // ofxSCServer::sendBundle would nest them in an immediate bundle instead.
+    bool sendParams(Voice& voice, const std::vector<std::pair<std::string, float>>& params, bool resume = false) {
+        if(voice.synth == nullptr) return false;
         auto* server = voice.server;
         if(voice.created && voice.synth->isCreated() && server != nullptr) {
             // One /n_set message: every value (in particular beatTransport
@@ -365,11 +391,19 @@ private:
                 m.addStringArg(param.first);
                 m.addFloatArg(param.second);
             }
+            if(resume) {
+                ofxOscMessage runMsg;
+                runMsg.setAddress("/n_run");
+                runMsg.addIntArg(voice.synth->nodeID);
+                runMsg.addIntArg(1);
+                server->sendMsg(runMsg);
+            }
             server->sendMsg(m);
-        } else {
-            for(const auto& param : params)
-                voice.synth->set(param.first, static_cast<double>(param.second));
+            return true;
         }
+        for(const auto& param : params)
+            voice.synth->set(param.first, static_cast<double>(param.second));
+        return false;
     }
 
     void applyState(Voice& voice, const DesiredState& state) {
@@ -405,7 +439,7 @@ private:
                 return; // leave play=1; the synth's own end fade closes it
             }
             voice.tailing = false;
-            sendParams(voice, {
+            const std::vector<std::pair<std::string, float>> params{
                 {"clipStartBeat", 0.0f},
                 {"clipLenBeats", static_cast<float>(state.contentDurationBeats)},
                 {"sourceStartBeat", static_cast<float>(state.sourceStartBeat)},
@@ -415,7 +449,32 @@ private:
                 {"reverse", state.reverse ? 1.0f : 0.0f},
                 {"gain", state.gain},
                 {"play", 0.0f}
-            });
+            };
+            bool same = voice.inactiveSent.size() == params.size();
+            for(size_t i = 0; same && i < params.size(); ++i)
+                same = voice.inactiveSent[i] == params[i].second;
+            if(!same) {
+                voice.inactiveSent.clear();
+                if(sendParams(voice, params)) {
+                    for(const auto& param : params) voice.inactiveSent.push_back(param.second);
+                    if(voice.playZeroSince < 0.0) {
+                        voice.playZeroSince = now;
+                        voice.inactiveFrames = 0;
+                    }
+                }
+            }
+            // Not while an offline render is captured: its score time is
+            // frame-stepped, not the wall clock this delay is measured in.
+            // Not the stretch player either: Warp1's grains in flight would be
+            // frozen and heard again at the next entry (the plain player reads
+            // its buffer statelessly, so a paused voice resumes identically).
+            if(!voice.timestretch &&
+               !voice.paused && voice.playZeroSince >= 0.0 && ++voice.inactiveFrames >= 2 &&
+               now - voice.playZeroSince >= kPauseAfterSec &&
+               voice.server != nullptr && !voice.server->isNRTCapturing()) {
+                voice.synth->run(false);
+                voice.paused = true;
+            }
             return;
         }
 
@@ -442,6 +501,15 @@ private:
 
         // beatTransport is sent in the same message as the reset request;
         // otherwise it only feeds the legacy in-range gate.
+        // A paused voice always arrives here with jumped set (play=0 cleared
+        // lastSourceBeat), so the reset below goes out right behind its /n_run 1.
+        // A deactivated node stays paused; activate() runs the voice again.
+        if(voice.paused && getActive()) voice.resumeRepeatUntil = now + 0.5;
+        const bool resume = (voice.paused || now < voice.resumeRepeatUntil) && getActive();
+        voice.paused = false;
+        voice.inactiveSent.clear();
+        voice.playZeroSince = -1.0;
+        voice.inactiveFrames = 0;
         sendParams(voice, {
             {"clipStartBeat", 0.0f},
             {"clipLenBeats", static_cast<float>(state.contentDurationBeats)},
@@ -454,7 +522,7 @@ private:
             {"beatTransport", static_cast<float>(resetSourceBeat)},
             {"jump", static_cast<float>(voice.jumpCounter)},
             {"play", 1.0f}
-        });
+        }, resume);
         voice.lastSourceBeat = state.sourceBeat;
     }
 
@@ -475,6 +543,11 @@ private:
         voice.lastSourceBeat = -1.0;
         voice.lastUpdateTime = -1.0;
         voice.tailing = false;
+        voice.inactiveSent.clear();
+        voice.playZeroSince = -1.0;
+        voice.inactiveFrames = 0;
+        voice.paused = false;
+        voice.resumeRepeatUntil = -1.0;
     }
 };
 
