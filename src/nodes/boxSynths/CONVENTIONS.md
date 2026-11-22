@@ -256,6 +256,11 @@ Reuse shared LFO cards: synced beats or free Hz, phase, waveform shape,
 noise/random behavior, shaping and quantization, as supported by the host.
 Per-voice hosts also expose phase distribution/indexer controls. AdditiveBox's
 per-partial spread and GrainBox's sample-region timing are engine extensions.
+Every LFO also has **Smooth** (a one-pole on its output, seconds), **Wander** /
+**Wander Rate** (a slow random rate wobble per voice, free-running LFOs only)
+and **Damp** (a fixed gain across the voices, 1 at voice 1, with a curve and an
+invert). They came from AnimaMundi's spatial LFOs (AnimaBox, where the voices
+are filter bands) and default to off, leaving older sounds unchanged.
 
 The graph shows the shape, live bars show source values, and markers show voice
 phase offsets. Reset existing LFOs without rebuilding the entire sound graph.
@@ -553,6 +558,7 @@ LFO/envelope/Routing module; specialized processing may exist independently.
 | Nodes | Shared snapshots | Shared modulation | Piano | Instrument descriptor |
 | --- | --- | --- | --- | --- |
 | AdditiveBox, AliasingBox, AnalogBox, FMBox, PhysicalBox, PulsarBox, SteamPipeBox | Yes | Yes | Yes | Yes |
+| AnimaBox | Yes | Yes (voices = bands) | Yes (one note: Body gate, bank transposition) | Yes, 1 voice |
 | GrainBox | Yes | Per engine | Per engine | First engine, MIDI pitch mode |
 | GrainFxBox | Yes | Per engine | Per engine | As GrainBox; its Gate also drives Wet Mode Gated and Gate Motion |
 | SampleBox | Yes | Per pad | Selected pad/channel | Kit channels |

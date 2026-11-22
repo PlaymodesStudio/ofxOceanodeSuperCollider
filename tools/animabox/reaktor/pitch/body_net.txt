@@ -1,0 +1,97 @@
+== 2696 Instrument /Instrument#2696
+  2697 Noise
+  2699 Sawtooth
+  2702 Switch [0..1]
+  2703 Pulse
+  2704 Note Pitch props={"pitch_offset_semitones": 0}
+  2705 Gate
+  2707 ADSR
+  2708 Fader [0..80]
+  2709 Fader [0..80]
+  2710 Fader [0..1]
+  2711 Fader [0..80]
+  2712 +
+  2713 X
+  2714 Constant =12
+  2715 Fader [-4..4]
+  2716 Impulse
+  2717 Out <>
+  2718 Audio Voice Combiner
+  2736 Macro 'Scales'
+  2746 In <scale>
+  3130 Fader [-48..48]
+  5741 Switch [0..1]
+  5742 In <>
+  8035 Noise
+  8036 Sawtooth
+  8037 Switch [0..1]
+  8038 Pulse
+  8039 Impulse
+  8040 Out <>
+  8041 Audio Voice Combiner
+  8042 Switch [0..1]
+  8043 In <>
+  8044 +
+  8045 Fader [0..1]
+  8046 -
+  8051 Geiger
+  8052 Geiger
+  8053 Fader [0..1]
+  8054 X
+  8055 X
+   Noise#2697.Out -> Switch#2702.In
+   Sawtooth#2699.Out -> Switch#2702.saw
+   Switch#2702.0 -> Audio Voice Comb#2718.0
+   Pulse#2703.Out -> Switch#2702.sq
+   Note Pitch#2704.0 -> Scales#2736.0
+   Gate#2705.0 -> ADSR#2707.G
+   ADSR#2707.Out -> Pulse#2703.A
+   ADSR#2707.Out -> Sawtooth#2699.A
+   ADSR#2707.Out -> Noise#2697.A
+   ADSR#2707.Out -> Impulse#2716.A
+   ADSR#2707.Out -> Noise#8035.A
+   ADSR#2707.Out -> Sawtooth#8036.A
+   ADSR#2707.Out -> Pulse#8038.A
+   ADSR#2707.Out -> Impulse#8039.A
+   ADSR#2707.Out -> X#8054.1
+   ADSR#2707.Out -> X#8055.1
+   Fader#2708.0 -> ADSR#2707.A
+   Fader#2709.0 -> ADSR#2707.D
+   Fader#2710.0 -> ADSR#2707.S
+   Fader#2711.0 -> ADSR#2707.R
+   +#2712.0 -> +#8044.1
+   +#2712.0 -> -#8046.0
+   X#2713.0 -> +#2712.1
+   Constant#2714.0 -> X#2713.0
+   Fader#2715.0 -> X#2713.1
+   Impulse#2716.Out -> Switch#2702.imp
+   Audio Voice Comb#2718.0 -> Switch#5741.In
+   Scales#2736.0 -> +#2712.0
+   In<scale>#2746.0 -> Scales#2736.scale
+   Fader#3130.0 -> +#2712.2
+   Switch#5741.0 -> Out<>#2717.0
+   In<>#5742.0 -> Switch#5741.IN
+   Noise#8035.Out -> Switch#8037.In
+   Sawtooth#8036.Out -> Switch#8037.saw
+   Switch#8037.0 -> Audio Voice Comb#8041.0
+   Pulse#8038.Out -> Switch#8037.sq
+   Impulse#8039.Out -> Switch#8037.imp
+   Audio Voice Comb#8041.0 -> Switch#8042.In
+   Switch#8042.0 -> Out<>#8040.0
+   In<>#8043.0 -> Switch#8042.IN
+   +#8044.0 -> Sawtooth#2699.P
+   +#8044.0 -> Pulse#2703.P
+   +#8044.0 -> Impulse#2716.P
+   +#8044.0 -> Geiger#8051.P
+   Fader#8045.0 -> +#8044.0
+   Fader#8045.0 -> -#8046.1
+   -#8046.0 -> Sawtooth#8036.P
+   -#8046.0 -> Pulse#8038.P
+   -#8046.0 -> Impulse#8039.P
+   -#8046.0 -> Geiger#8052.P
+   Geiger#8051.Clk -> X#8054.0
+   Geiger#8052.Clk -> X#8055.0
+   Fader#8053.0 -> Geiger#8051.Rnd
+   Fader#8053.0 -> Geiger#8052.Rnd
+   X#8054.0 -> Switch#2702.geiger
+   X#8055.0 -> Switch#8037.4
