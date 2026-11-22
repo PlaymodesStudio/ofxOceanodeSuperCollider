@@ -27,3 +27,4 @@ ugens/**/*.scx
 
 !ugens/OceanodeSteamPipe/OceanodeSteamPipe.scx
 !ugens/OceanodePrimitives/OceanodePrimitives.scx
+!ugens/OceanodeTwanger/OceanodeTwanger.scx
