@@ -3128,6 +3128,8 @@ void scGrainBoxPoly::update(ofEventArgs& /*args*/) {
         if(scVoiceCountMorph::single(ph->voiceMorphWeights))ph->voiceMorphWeights.clear();
     }
     timeline.update();
+    pumpWaveformPeaks(mainSample);
+    for(auto& ph : playheads) pumpWaveformPeaks(ph->own);
     {   // the snapshot names, to a published Snapshot / Morph A / B dropdown
         const auto& names = snaps.slotNames();
         for(const auto& key : snaps.slotKeys()) {
@@ -3504,24 +3506,30 @@ void scGrainBoxPoly::reloadSampleBuffersForServer(SampleData& sd, ofxSCServer* s
 }
 
 
-void scGrainBoxPoly::loadWaveformData(SampleData& sd, const std::string& path) {
-    if(path.empty()) return;
-    ++sd.waveformRevision;
-    sd.peaks.assign(WAVEFORM_BINS, 0.0f);
-    sd.durationSecs = 0.0f;
+// The WAV header (channels, duration) and, withPeaks, the first channel's
+// peak per bin. Touches nothing but its arguments: it also runs on a worker.
+struct gbpWavScan {
+    int numChannels = 0;        // 0: the header never got that far
+    float durationSecs = 0.0f;
+    std::vector<float> peaks;   // bins values when withPeaks, else empty
+};
+static gbpWavScan gbpScanWav(const std::string& path, bool withPeaks, int bins, int maxChannels) {
+    gbpWavScan sd;
+    if(withPeaks) sd.peaks.assign(bins, 0.0f);
+    const int WAVEFORM_BINS = bins;
 
     std::ifstream f(path, std::ios::binary);
-    if(!f.is_open()) return;
+    if(!f.is_open()) return sd;
 
     f.seekg(0, std::ios::end);
     const std::streamoff fileSize = (std::streamoff)f.tellg();
     f.seekg(0, std::ios::beg);
-    if(fileSize < 12) return;
+    if(fileSize < 12) return sd;
 
     // RIFF / WAVE: walk the chunks for "fmt " and "data" (they need not come
     // first: broadcast WAVs open with "bext", others with "JUNK" / "LIST")
     char riff[12]; f.read(riff, 12);
-    if(std::string(riff, 4) != "RIFF" || std::string(riff + 8, 4) != "WAVE") return;
+    if(std::string(riff, 4) != "RIFF" || std::string(riff + 8, 4) != "WAVE") return sd;
     uint16_t fmtTag = 0, numCh = 0, bitDepth = 0;
     uint32_t sampleRate = 0;
     std::streamoff dataOffset = -1, dataSize = 0;
@@ -3549,18 +3557,19 @@ void scGrainBoxPoly::loadWaveformData(SampleData& sd, const std::string& path) {
         }
         at = body + (std::streamoff)sz + (sz & 1);   // chunks are word aligned
     }
-    if(dataOffset < 0 || dataSize <= 0 || numCh == 0 || bitDepth == 0) return;
+    if(dataOffset < 0 || dataSize <= 0 || numCh == 0 || bitDepth == 0) return sd;
     const bool isFloat = fmtTag == 3;
     // Only GrainBox_1_N and GrainBox_2_N exist: files with more channels use
     // their first two (averaged in the SynthDef, like any stereo file).
-    sd.numChannels = std::max(1, std::min((int)numCh, MAX_SAMPLE_CHANNELS));
+    sd.numChannels = std::max(1, std::min((int)numCh, maxChannels));
 
     const int bytesPerSample = std::max(1, (int)bitDepth / 8);
     const int frameBytes     = bytesPerSample * (int)numCh;
     const int totalFrames    = (int)(dataSize / frameBytes);
-    if(totalFrames <= 0) return;
+    if(totalFrames <= 0) return sd;
 
     sd.durationSecs = (sampleRate > 0) ? (float)totalFrames / (float)sampleRate : 0.0f;
+    if(!withPeaks) return sd;
 
     int framesPerBin = std::max(1, totalFrames / WAVEFORM_BINS);
     std::vector<char> buf((size_t)framesPerBin * frameBytes);
@@ -3595,6 +3604,42 @@ void scGrainBoxPoly::loadWaveformData(SampleData& sd, const std::string& path) {
             if(std::isfinite(sample)) peak = std::max(peak, sample);
         }
         sd.peaks[bin] = std::min(1.0f, peak);
+    }
+    return sd;
+}
+
+void scGrainBoxPoly::loadWaveformData(SampleData& sd, const std::string& path) {
+    if(path.empty()) return;
+    ++sd.waveformRevision;
+    sd.peaks.assign(WAVEFORM_BINS, 0.0f);
+    // The header now: the buffers and the SynthDef variant depend on it
+    const gbpWavScan header = gbpScanWav(path, false, WAVEFORM_BINS, MAX_SAMPLE_CHANNELS);
+    sd.durationSecs = header.durationSecs;
+    if(header.numChannels > 0) sd.numChannels = header.numChannels;
+    // The peaks (a read of the whole file) on a worker: update() collects them
+    sd.peaksPendingPath = path;
+    pumpWaveformPeaks(sd);
+}
+
+void scGrainBoxPoly::pumpWaveformPeaks(SampleData& sd) {
+    if(sd.peaksTask && sd.peaksTask->valid() &&
+       sd.peaksTask->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        std::vector<float> peaks = sd.peaksTask->get();
+        sd.peaksTask.reset();
+        // A newer file asked for meanwhile: its own scan follows, this one is stale
+        if(sd.peaksPendingPath.empty()) {
+            sd.peaks = std::move(peaks);
+            ++sd.waveformRevision;
+        }
+    }
+    // Never replace a running future (that would wait for it): the next one starts once it is done.
+    // A SampleData destroyed mid-scan waits for it (the worker holds only its path).
+    if(!sd.peaksTask && !sd.peaksPendingPath.empty()) {
+        const std::string path = std::move(sd.peaksPendingPath);
+        sd.peaksPendingPath.clear();
+        sd.peaksTask = std::make_shared<std::future<std::vector<float>>>(std::async(std::launch::async, [path](){
+            return gbpScanWav(path, true, WAVEFORM_BINS, MAX_SAMPLE_CHANNELS).peaks;
+        }));
     }
 }
 
@@ -3679,9 +3724,12 @@ void scGrainBoxPoly::sendAllParams(Playhead& ph) {
 // ════════════════════════════════════════════════════════════════════════════
 
 void scGrainBoxPoly::setBpm(float bpm) {
+    // Out of sync mode every synth already holds currentBpm (created with it,
+    // sendAllParams, sync off): the same tempo again sends nothing.
+    const bool unchanged = bpm == currentBpm;
     currentBpm = bpm;
     // In Sync To Transport mode the tempo arrives with the anchors instead.
-    if(isSyncing()) return;
+    if(isSyncing() || unchanged) return;
     for(auto& ph : playheads)
         for(auto& [srv, s] : ph->synths) if(s) s->set("bpm", bpm);
 }

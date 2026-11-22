@@ -64,6 +64,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <future>
 
 class scGrainBoxPoly : public scNode {
 public:
@@ -146,6 +147,10 @@ private:
         float              durationSecs = 0.0f;
         int                numChannels  = 1;  // from the WAV header, 1..MAX_SAMPLE_CHANNELS
         std::map<ofxSCServer*, std::vector<ofxSCBuffer*>> bufs;
+        // The peaks are read off the main thread (the whole file): the scan in
+        // flight, and the file asked for after it (its result is then dropped)
+        std::shared_ptr<std::future<std::vector<float>>> peaksTask;
+        std::string peaksPendingPath;
     };
     SampleData mainSample;   // playhead 1's sample, shared by "Shared" playheads
 
@@ -436,6 +441,7 @@ private:
 
     // ── Waveform display ──────────────────────────────────────────────────────
     void loadWaveformData(SampleData& sd, const std::string& path);
+    void pumpWaveformPeaks(SampleData& sd);   // start / collect the async peak scan
 
     float waveZoom   = 1.0f;   // 1=full sample visible; 64=1/64th
     float waveScroll = 0.0f;   // 0=left edge, 1=right edge
