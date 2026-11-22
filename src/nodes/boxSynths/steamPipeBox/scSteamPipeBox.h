@@ -99,6 +99,8 @@ private:
         int out = -1, builtVoices = 0, builtChannels = 0;
         bool created = false;
         int droneSent = -1;
+        float pauser = -1;                   // \pauser sent to the voices (-1: not yet)
+        std::array<float,16> wokeAt{};       // per voice: the last \wake (s)
     };
     ofParameter<bool> eqOn;
     ofParameter<float> eqGain[5], eqFreq[5], eqShape[5];
@@ -184,6 +186,8 @@ private:
     void mark(const std::string&);
     enum NoteFields { NoteGate=1, NotePitch=2, NoteRouting=4, NoteAll=7 };
     void sendNotes(ofxSCServer*, State&, unsigned fields=NoteAll);
+    bool canPause(ofxSCServer*, State&);
+    void syncPause(ofxSCServer*, State&);
     void sendSound(ofxSCServer*, State&);
     bool soundOn(const std::string&);
     bool soundDirty = false, stagesDirty = false;   // the voices / only the effect stages

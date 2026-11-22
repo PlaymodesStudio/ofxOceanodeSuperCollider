@@ -22,6 +22,24 @@ notes=function('void scFMBox::sendNotes(')
 sound_queue=function('void scFMBox::sendAll()')+function('void scFMBox::flushSound()')
 stage_queue=function('void scFMBox::sendStageAll(')
 replay=function('void scFMBox::resendParametersForNRT()')
+PAUSE_TEST = r'''
+    {
+        // Silent voices pause themselves: a note's gate resumes its voice in the
+        // same timestamped packet, the other voices and pitch events stay untouched.
+        gate.created=true;for(auto&v:voices)v.created=true;
+        box.pauseOn=true;server.packets.clear();
+        server.tag=5000;box.gate.value={1,0,0.5f,0,0};box.sendNotes(&server,st,scFMBox::NoteGate);
+        assert(server.packets.size()==1 && server.packets[0].first==5000);
+        const auto&g=server.packets[0].second.messages;
+        assert(g.size()==3 && g[0].address=="/n_run" && g[0].args[0]=="101" && g[1].args[0]=="103" && g[2].address=="/n_setn");
+        server.packets.clear();box.pitch.value={61};box.sendNotes(&server,st,scFMBox::NotePitch);
+        for(const auto&p:server.packets)for(const auto&m:p.second.messages)assert(m.address!="/n_run");
+        server.packets.clear();box.gate.value={0};box.sendNotes(&server,st,scFMBox::NoteGate);
+        assert(server.packets.size()==1 && server.packets[0].second.messages.size()==1);
+        box.pauseOn=false;
+        std::cout<<"PASS: a note resumes its paused voice in the gate's own timestamped packet; note-offs and pitch events send no /n_run.\n";
+    }
+'''
 cpp = r'''
 #include <array>
 #include <cassert>
@@ -59,15 +77,17 @@ struct ofxSCSynth {
         for(float v:values)m.addFloatArg(v);server->sendMsg(m);
     }
     void mapan(const std::string& key,int bus,int){set(key,bus);}
+    void run(bool b){ofxOscMessage m;m.setAddress("/n_run");m.addIntArg(nodeID);m.addIntArg(b?1:0);server->sendMsg(m);}
 };
 #include "audio/scSynthControlBatch.h"
 #include "audio/scControlBusBatch.h"
 template<class T>struct Param {T value;const T&get()const{return value;}};
 struct scModulation {enum {SRC_VEL,SRC_RND};int sourceBus(ofxSCServer*,int){return 32;}void resend(){}};
+struct scGlobalPitch {template<class T>static int bus(T*,ofxSCServer*){return -1;}};
 struct scFMBox {
     enum NoteFields {NoteGate=1,NotePitch=2,NoteRouting=4,NoteAll=7};
     struct State {
-        bool created=true;
+        bool created=true;float pauser=-1;
         ofxSCSynth* gate=nullptr;int builtVoices=5,droneSent=-1;
         std::array<ofxSCSynth*,16> voices{};
         std::array<std::map<std::string,float>,16> sent;
@@ -90,6 +110,8 @@ struct scFMBox {
     } pulse;
     scModulation mod;bool soundDirty=false,stagesDirty=false;int soundSends=0,fxSends=0;
     bool droning()const{return false;}
+    bool pauseOn=false;   // the production syncPause decides; here the test does
+    void syncPause(ofxSCServer*,State& st){st.pauser=pauseOn?1.f:0.f;}
     static float first(const std::vector<float>&v,int i,float fallback){return v.empty()?fallback:v[i%v.size()];}
     void sendNotes(ofxSCServer*,State&,unsigned fields=NoteAll);
     void sendSound(ofxSCServer*,State&){++soundSends;}
@@ -170,6 +192,7 @@ int main(){
     // Offline capture explicitly flushes sound and restores full note/routing state.
     const auto before=box.soundSends;box.resendParametersForNRT();
     assert(box.soundSends==before+1 && gate.queued.count("gate"));
+PAUSE_TEST
 #ifdef BOX_OSC_PULSE
     gate.created=true;for(auto&v:voices)v.created=true;
     server.packets.clear();box.pulse.busValue=128;
@@ -184,7 +207,7 @@ int main(){
 #endif
     std::cout<<"PASS: five voices use one pitch packet and one gate packet; 200 automation callbacks coalesce to one sound send with zero note writes; note-offs, creation, routing and NRT replay preserved.\n";
 }
-'''.replace('NOTES', notes).replace('QUEUE', sound_queue).replace('STAGE', stage_queue).replace('REPLAY', replay)
+'''.replace('PAUSE_TEST', PAUSE_TEST if 'syncPause(' in notes else '').replace('NOTES', notes).replace('QUEUE', sound_queue).replace('STAGE', stage_queue).replace('REPLAY', replay)
 if 'stagesDirty = true' in stage_queue:
     cpp=cpp.replace('    server.tag=3000;', '''    const auto fullBefore=box.soundSends;
     for(int j=0;j<100;++j)box.sendStageAll(j%4);

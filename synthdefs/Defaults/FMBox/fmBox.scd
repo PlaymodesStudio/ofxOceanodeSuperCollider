@@ -4,13 +4,23 @@
 // Oceanode adaptation: persistent voices, scheduled/audio gates, shared native
 // LFO, live controls, editable algorithms, modulation buses and Box effects.
 (
-var root, dir, data;
+var root, dir, data, pause;
 root = if(thisProcess.nowExecutingPath.notNil,
     { thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs" },
     { Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs" });
 dir = root +/+ "FMBox";
 data = (thisProcess.nowExecutingPath.dirname +/+ "dx7Data.inc").load;
 File.mkdir(root); File.mkdir(dir);
+// A voice silent (before its VCA) with its gate down for 0.1 s pauses itself;
+// re-armed 4 x / s, so a resume while still silent pauses it again. The node
+// resumes it with the gate of its next note and wakes it (\wake) when its
+// controls change, so their lags settle before it pauses. \pauser 0 (the
+// default, and wherever the node cannot see a gate open): never.
+pause = { |sig, thr = 1e-5|
+    var closed = A2K.kr(In.ar(\gatebus.kr(0), 1)) <= 0;
+    var awake = Sweep.kr(\wake.tr(0), 1) < 0.2;   // each \wake: 0.2 s more
+    PauseSelf.kr(closed * A2K.kr(DetectSilence.ar(sig, thr, 0.1)) * (1 - awake) * LFPulse.kr(4) * \pauser.kr(0));
+};
 SynthDef(\FMBoxDX7LFO, {
     var table = { |key, index| Select.kr(index.round.clip(0,data[key].size-1),data[key]) };
     var gates = In.ar(\gatebus.kr(0),16);
@@ -176,7 +186,9 @@ SynthDef(\FMBoxVoice, {
     var ampMod=m.(\mamp);
     var amp=((1+ampMod).clip(0,2)*(1-vca))+(ampMod.clip(0,1)*vca);
     var sig=Sanitize.ar((FM7.ar(ctls,matrix)*carriers).sum)*(-12).dbamp/carriers.sum.max(1);
-    sig=LeakDC.ar(sig)*amp*\master.kr(0.6,0.02)*\normalization.kr(1);
+    sig=LeakDC.ar(sig);
+    pause.(sig, 1e-4);   // DX7 envelopes rest at about -74 dB (level 0), never below 1e-5
+    sig=sig*amp*\master.kr(0.6,0.02)*\normalization.kr(1);
     Out.ar(\out.kr(0),sig);
     Out.kr(\vis.kr(0)+(\voice.kr(0)*6),envs);
 }).writeDefFile(dir);

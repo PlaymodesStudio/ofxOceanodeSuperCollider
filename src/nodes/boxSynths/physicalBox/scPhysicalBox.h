@@ -113,6 +113,9 @@ private:
         int out = -1, in = -1, inChannels = 1, builtVoices = 0, builtChannels = 0;
         bool created = false;
         int droneSent = -1;
+        float pauser = -1;                   // \pauser sent to the voices (-1: not yet)
+        std::array<float,16> wokeAt{};       // per voice: the last \wake (s)
+        std::array<std::vector<float>,16> familyWake;   // per voice: the family weights last seen (for \wake)
     };
     static constexpr int VIS_VOICE = 4;                // per voice: level, gate, note, -
     static constexpr int VIS_PAN = 16 * VIS_VOICE;     // the spreader's 16 positions
@@ -217,6 +220,8 @@ private:
     void mark(const std::string&);
     enum NoteFields { NoteGate=1, NotePitch=2, NoteRouting=4, NoteAll=7 };
     void sendNotes(ofxSCServer*, State&, unsigned fields=NoteAll);
+    bool canPause(ofxSCServer*, State&);
+    void syncPause(ofxSCServer*, State&);
     void sendSound(ofxSCServer*, State&);
     bool soundDirty = false, stagesDirty = false;   // the voices / only the effect stages
     void sendAll();

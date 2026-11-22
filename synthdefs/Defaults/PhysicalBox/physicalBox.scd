@@ -23,7 +23,7 @@
 //                      the C channels (pairs for C > 2): \mix \time \damp \hp
 //                      \diff \freeze, \on crossfades it out (the node pauses it).
 (
-var root, dir, names, defs, d;
+var root, dir, names, defs, d, pause;
 root = if(thisProcess.nowExecutingPath.notNil,
     { thisProcess.nowExecutingPath.dirname +/+ "CompiledSynthdefs" },
     { Platform.userAppSupportDir +/+ "SuperCollider/CompiledSynthdefs" });
@@ -32,6 +32,17 @@ File.mkdir(root); File.mkdir(dir);
 names = PhysicalVoice.names;
 defs = PhysicalVoice.defaults;
 d = { |name| defs[names.indexOf(name)] };
+// A voice silent (both pickups, before its VCA) with its gate down for 0.1 s
+// pauses itself; re-armed 4 x / s, so a resume while still silent pauses it
+// again (an audio input on \in: the node sends \pauser 0). The node
+// resumes it with the gate of its next note and wakes it (\wake) when its
+// controls change, so their lags settle before it pauses. \pauser 0 (the
+// default, and wherever the node cannot see a gate open): never.
+pause = { |sig|
+    var closed = A2K.kr(In.ar(\gatebus.kr(0), 1)) <= 0;
+    var awake = Sweep.kr(\wake.tr(0), 1) < 0.2;   // each \wake: 0.2 s more
+    PauseSelf.kr(closed * A2K.kr(DetectSilence.ar(sig.asArray.collect(_.abs).sum, 1e-5, 0.1)) * (1 - awake) * LFPulse.kr(4) * \pauser.kr(0));
+};
 
 SynthDef(\PhysicalBoxVoice, {
     var m = { |name| In.kr(NamedControl.kr(name, 0), 1) };
@@ -69,7 +80,9 @@ SynthDef(\PhysicalBoxVoice, {
     var sig = PhysicalVoice.ar(ext, pairs, NamedControl.kr(\bfweights,0!6).lag(0.03));
     var vca = \vca.kr(0, 1/30, fixedLag: true).clip(0, 1);   // fractional: a snapshot morph crossfades the paths
     var amp = ((1 + m.(\mamp)).clip(0, 2) * (1 - vca)) + (m.(\mamp).clip(0, 1) * vca);
-    sig = LeakDC.ar(Sanitize.ar(sig)) * amp * \level.kr(0).dbamp * \master.kr(0.6, 0.02) * \normalization.kr(0.25);
+    sig = LeakDC.ar(Sanitize.ar(sig));
+    pause.(sig);
+    sig = sig * amp * \level.kr(0).dbamp * \master.kr(0.6, 0.02) * \normalization.kr(0.25);
     Out.ar(\out.kr(0), sig);
     Out.kr(\vis.kr(0) + (\voice.kr(0) * 4), [Amplitude.kr(sig.sum * 0.5, 0.01, 0.2), A2K.kr(gate), note, 0]);
 }).writeDefFile(dir);

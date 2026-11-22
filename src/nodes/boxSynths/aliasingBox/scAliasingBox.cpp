@@ -239,8 +239,35 @@ void scAliasingBox::setup() {
     requireSynthdefs();
 }
 
+// A voice silent with its gate down pauses itself (\pauser 1, aliasingBox.scd),
+// and the gate of its next note resumes it in the same packet. Not where a
+// gate opens out of the node's sight (a gate cable), nor droning (no gate
+// closes), nor with a free-running filter LFO (below).
+bool scAliasingBox::canPause(ofxSCServer* server, State& st) {
+    if(gateIn.bus(server) >= 0 || droning()) return false;
+    // a free-running filter LFO (no Gate Sync) keeps its place in the bar
+    // from one note to the next: a paused voice would lose it
+    for(int i=0;i<st.builtVoices;++i) {
+        const auto& sent=st.sent[i];
+        auto a=sent.find("filter_lfo_amount"), g=sent.find("filter_lfo_gate_sync");
+        const float amount=a!=sent.end() ? a->second : soundParam("filter_lfo_amount").get();
+        const float sync=g!=sent.end() ? g->second : soundParam("filter_lfo_gate_sync").get();
+        if(amount!=0 && sync<=0) return false;
+    }
+    return true;
+}
+void scAliasingBox::syncPause(ofxSCServer* server, State& st) {
+    const float p = canPause(server, st) ? 1.0f : 0.0f;
+    if(p == st.pauser) return;
+    st.pauser = p;
+    for(int i=0;i<st.builtVoices;++i) if(auto* v=st.voices[i]) {
+        v->set("pauser", p);
+        if(p == 0 && v->isCreated()) v->run(true);
+    }
+}
 void scAliasingBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
     if(!st.gate) return;
+    syncPause(server, st);
     auto now = scheduled.inEffectNow();   // not a scheduled send: the notes as they stand now
     const int n = st.builtVoices;
     // A pitch event must never resend Gate, nor a gate event resend Pitch.
@@ -257,6 +284,11 @@ void scAliasingBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
             bundle.addMessage(message);
         }
         if(fields & NoteGate) {
+            if(st.pauser > 0) for(int i=0;i<n;++i) if(first(gate.get(),i,0) > 0) {
+                ofxOscMessage run;
+                run.setAddress("/n_run"); run.addIntArg(st.voices[i]->nodeID); run.addIntArg(1);
+                bundle.addMessage(run);
+            }
             ofxOscMessage message;
             message.setAddress("/n_setn"); message.addIntArg(st.gate->nodeID);
             message.addStringArg("gate"); message.addIntArg(n);
@@ -271,7 +303,11 @@ void scAliasingBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
         std::vector<float> out(n); for(int i=0;i<n;++i) out[i] = first(v,i,fallback);
         st.gate->set(name,out);
     };
-    if(fields & NoteGate) vec("gate",gate.get(),0);
+    if(fields & NoteGate) {
+        vec("gate",gate.get(),0);
+        if(st.pauser > 0) for(int i=0;i<n;++i)
+            if(first(gate.get(),i,0) > 0 && st.voices[i] && st.voices[i]->isCreated()) st.voices[i]->run(true);
+    }
     if(fields & NoteRouting) {
         vec("velocity",{1.0f},1); // Gate carries note velocity.
         st.gate->set("out", st.gates->index);
@@ -300,12 +336,14 @@ void scAliasingBox::sendSound(ofxSCServer* server, State& st) {
     static const char* names[NUM_TARGETS] = {"mpitch","mwrite","mread","msym","mlp","mhp","mlpres","mhpres","mlpfm","mhpfm","mdrive","mamp","mpan"};
     const float vcaW = ampMorph.vcaAmount(liveVca());
     const float comp=1.0f/std::sqrt(std::max(1.0f,float(st.builtVoices)/st.builtChannels));
+    const float clock=ofGetElapsedTimef();
     for(int i=0;i<st.builtVoices;++i) if(auto* v=st.voices[i]) {
         scSynthControlBatch updates(v,server);
+        bool changed=false;
         auto set = [&](const std::string& name,float value) {
             auto& sent=st.sent[i];auto it=sent.find(name);
             if(it!=sent.end()&&it->second==value) return;
-            sent[name]=value;updates.set(name,value);
+            sent[name]=value;updates.set(name,value);changed=true;
         };
         for(const auto& c : sound) if(c->sc!="stereo") {
             set(c->sc, (c->sc=="filter_on" || c->sc=="notch_on" || c->sc=="dc_block" || c->sc=="read_bidirectional")
@@ -327,8 +365,18 @@ void scAliasingBox::sendSound(ofxSCServer* server, State& st) {
         set("vca", vcaW);
         set("vis",st.vis->index);
         for(int t=0;t<NUM_TARGETS-1;++t) set(names[t],mod.targetBus(server,t)+i);
+        // A control changed: a voice paused in silence runs until its lags
+        // settle (\wake holds it 0.2 s), as if it had never paused
+        bool resume=false;
+        if(changed && st.pauser > 0 && v->isCreated()) {
+            updates.set("wake",1.0f);
+            resume=st.wokeAt[i] <= 0 || clock-st.wokeAt[i] > 0.15f;
+            st.wokeAt[i]=clock;
+        }
         updates.send();
+        if(resume) v->run(true);
     }
+    syncPause(server,st);   // the filter LFO's controls may have just changed
     if(st.spread) {
         scSynthControlBatch spread(st.spread,server);
         spread.set("in",st.audio->index);
@@ -388,6 +436,7 @@ void scAliasingBox::release(ofxSCServer* server, State& st) {
     for(auto& cache:st.sent) cache.clear();
     for(auto*& g:st.groups) { delete g; g=nullptr; }
     delete st.root; st.root=nullptr; st.created=false;st.droneSent=-1;
+    st.pauser=-1; st.wokeAt.fill(0);
     dropBus(server,st.gates,true); dropBus(server,st.audio,true); dropBus(server,st.vis,false);
 }
 void scAliasingBox::free(ofxSCServer* s) { auto it=states.find(s); if(it!=states.end()) { release(s,it->second); it->second.out=-1; } }
@@ -416,9 +465,21 @@ void scAliasingBox::setInputBus(ofxSCServer* s,scNode* node,int bus) { auto& st=
 void scAliasingBox::resetInputBusses(ofxSCServer* s,int) { gateIn.reset(s);pitchIn.reset(s);sendNotes(s,states[s]); }
 void scAliasingBox::activate() { for(auto& [s,st]:states) if(st.created) st.root->run(runsOn(s)); }
 void scAliasingBox::deactivate() { for(auto& [s,st]:states) if(st.created) st.root->run(false); }
-void scAliasingBox::setBpm(float v) { bpm=std::max(1.0f,v);mod.setBpm(bpm);sendAll(); }
+// Tempo: only what follows it (the voices' \bpm, the synced echo), not
+// the whole sound frame on every step of a tempo ramp
+void scAliasingBox::setBpm(float v) {
+    const float b=std::max(1.0f,v);
+    if(b==bpm) return;
+    bpm=b; mod.setBpm(bpm);
+    for(auto& [s,st]:states) if(st.created) for(int i=0;i<st.builtVoices;++i) if(auto* voice=st.voices[i]) {
+        auto& sent=st.sent[i]; auto it=sent.find("bpm");
+        if(it!=sent.end() && it->second==bpm) continue;
+        sent["bpm"]=bpm; voice->set("bpm",bpm);
+    }
+    stagesDirty=true;
+}
 void scAliasingBox::resendParametersForNRT() {
-    for(auto& [s,st]:states) { for(auto& cache:st.sent)cache.clear();sendNotes(s,st); }
+    for(auto& [s,st]:states) { for(auto& cache:st.sent)cache.clear();st.pauser=-1;sendNotes(s,st); }
     mod.resend();sendAll();flushSound();
 }
 #ifdef OFXOCEANODE_HAS_TIMELINE_INSTRUMENT

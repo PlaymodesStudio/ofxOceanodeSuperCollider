@@ -286,8 +286,22 @@ void scFMBox::setup() {
     requireSynthdefs();
 }
 
+// A voice silent with its gate down pauses itself (\pauser 1, fmBox.scd), and
+// the gate of its next note resumes it in the same packet. Not where a gate
+// opens out of the node's sight (a cable), nor droning (no gate closes).
+bool scFMBox::canPause(ofxSCServer* server) { return gateIn.bus(server) < 0 && !droning(); }
+void scFMBox::syncPause(ofxSCServer* server, State& st) {
+    const float p = canPause(server) ? 1.0f : 0.0f;
+    if(p == st.pauser) return;
+    st.pauser = p;
+    for(int i=0;i<st.builtVoices;++i) if(auto* v=st.voices[i]) {
+        v->set("pauser", p);
+        if(p == 0 && v->isCreated()) v->run(true);
+    }
+}
 void scFMBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
     if(!st.gate) return;
+    syncPause(server, st);
     auto now = scheduled.inEffectNow();   // not a scheduled send: the notes as they stand now
     const int n = st.builtVoices;
     // A pitch event must never resend Gate, nor a gate event resend Pitch.
@@ -304,6 +318,11 @@ void scFMBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
             bundle.addMessage(message);
         }
         if(fields & NoteGate) {
+            if(st.pauser > 0) for(int i=0;i<n;++i) if(first(gate.get(),i,0) > 0) {
+                ofxOscMessage run;
+                run.setAddress("/n_run"); run.addIntArg(st.voices[i]->nodeID); run.addIntArg(1);
+                bundle.addMessage(run);
+            }
             ofxOscMessage message;
             message.setAddress("/n_setn"); message.addIntArg(st.gate->nodeID);
             message.addStringArg("gate"); message.addIntArg(n);
@@ -317,7 +336,11 @@ void scFMBox::sendNotes(ofxSCServer* server, State& st, unsigned fields) {
         std::vector<float> out(n); for(int i=0;i<n;++i) out[i] = first(v,i,fallback);
         st.gate->set(name,out);
     };
-    if(fields & NoteGate) vec("gate",gate.get(),0);
+    if(fields & NoteGate) {
+        vec("gate",gate.get(),0);
+        if(st.pauser > 0) for(int i=0;i<n;++i)
+            if(first(gate.get(),i,0) > 0 && st.voices[i] && st.voices[i]->isCreated()) st.voices[i]->run(true);
+    }
     if(fields & NoteRouting) {
         vec("velocity",{1.0f},1); // Gate carries note velocity.
         st.gate->set("out", st.gates->index);
@@ -378,12 +401,14 @@ void scFMBox::sendSound(ofxSCServer* server, State& st) {
     }
     // FMBox sound frame prepared.
     std::vector<float> morphControls(93,0);
+    const float clock=ofGetElapsedTimef();
     for(int i=0;i<st.builtVoices;++i) if(auto* v=st.voices[i]) {
         scSynthControlBatch batch(v,server);
+        bool changed=false;
         auto set = [&](const std::string& name,float value) {
             auto& sent=st.sent[i];auto it=sent.find(name);
             if(it!=sent.end()&&it->second==value) return;
-            sent[name]=value;batch.set(name,value);
+            sent[name]=value;batch.set(name,value);changed=true;
         };
         std::fill(morphControls.begin(),morphControls.end(),0);
         morphControls[0]=mod.voiceValue(soundParam("algorithm"),i);
@@ -414,7 +439,7 @@ void scFMBox::sendSound(ofxSCServer* server, State& st) {
             }
         }
         // FMBox voice controls end.
-        if(st.morphSent[i]!=morphControls){st.morphSent[i]=morphControls;batch.set("algorithm",morphControls);}
+        if(st.morphSent[i]!=morphControls){st.morphSent[i]=morphControls;batch.set("algorithm",morphControls);changed=true;}
         set("gatebus",st.gates->index+i);
         set("nativebus",st.nativeBus->index);
         set("velbus",mod.sourceBus(server,scModulation::SRC_VEL)+i);
@@ -430,7 +455,16 @@ void scFMBox::sendSound(ofxSCServer* server, State& st) {
             set("mdetune"+ofToString(op),mod.targetBus(server,Detune+op)+i);
             set("mlevel"+ofToString(op),mod.targetBus(server,Level+op)+i);
         }
+        // A control changed: a voice paused in silence runs until its lags
+        // settle (\wake holds it 0.2 s), as if it had never paused
+        bool resume=false;
+        if(changed && st.pauser > 0 && v->isCreated()) {
+            batch.set("wake",1.0f);
+            resume=st.wokeAt[i] <= 0 || clock-st.wokeAt[i] > 0.15f;
+            st.wokeAt[i]=clock;
+        }
         batch.send();
+        if(resume) v->run(true);
     }
     if(st.native) {
         scSynthControlBatch native(st.native,server,&st.nativeSent);
@@ -500,6 +534,7 @@ void scFMBox::release(ofxSCServer* server, State& st) {
     for(auto& cache:st.sent) cache.clear();
     for(auto& cache:st.morphSent) cache.clear();
     st.nativeSent.clear();st.spreadSent.clear();st.spreadOutSent=-1;
+    st.pauser=-1; st.wokeAt.fill(0);
     for(auto*& g:st.groups) { delete g; g=nullptr; }
     delete st.root; st.root=nullptr; st.created=false;st.droneSent=-1;
     dropBus(server,st.gates,true); dropBus(server,st.audio,true); dropBus(server,st.vis,false);
@@ -530,13 +565,26 @@ void scFMBox::setInputBus(ofxSCServer* s,scNode* node,int bus) { auto& st=states
 void scFMBox::resetInputBusses(ofxSCServer* s,int) { gateIn.reset(s);pitchIn.reset(s);sendNotes(s,states[s]); }
 void scFMBox::activate() { for(auto& [s,st]:states) if(st.created) st.root->run(runsOn(s)); }
 void scFMBox::deactivate() { for(auto& [s,st]:states) if(st.created) st.root->run(false); }
-void scFMBox::setBpm(float v) { bpm=std::max(1.0f,v);mod.setBpm(bpm);sendAll(); }
+// Tempo: only what follows it (the voices' \bpm, the synced echo), not
+// the whole sound frame on every step of a tempo ramp
+void scFMBox::setBpm(float v) {
+    const float b=std::max(1.0f,v);
+    if(b==bpm) return;
+    bpm=b; mod.setBpm(bpm);
+    for(auto& [s,st]:states) if(st.created) for(int i=0;i<st.builtVoices;++i) if(auto* voice=st.voices[i]) {
+        auto& sent=st.sent[i]; auto it=sent.find("bpm");
+        if(it!=sent.end() && it->second==bpm) continue;
+        sent["bpm"]=bpm; voice->set("bpm",bpm);
+    }
+    stagesDirty=true;
+}
 void scFMBox::resendParametersForNRT() {
     for(auto& [s,st]:states) {
         for(auto& cache:st.sent) cache.clear();
         for(auto& cache:st.morphSent) cache.clear();
         st.nativeSent.clear();st.spreadSent.clear();st.spreadOutSent=-1;
         for(auto& f:st.fx) { f.sent.clear();f.outSent=-1; }
+        st.pauser=-1;
         sendNotes(s,st);
     }
     mod.resend();sendAll();flushSound();
