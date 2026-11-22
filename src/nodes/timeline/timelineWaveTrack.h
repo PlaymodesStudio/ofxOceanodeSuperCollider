@@ -243,7 +243,6 @@ private:
     std::map<ofxSCServer*, int> outputBuses;
     std::map<ofxSCServer*, bool> serverReady;
     std::set<std::string> warnedMissingPaths;
-    std::map<std::string, uint64_t> missingCheckedMs;   // file path -> last failed lookup
     // The timeline keys a Wave track's voices by its timeline and track id
     // (as its engine reports them to this provider), and a clip by its id.
     static std::string makeKey(const std::string& trackKey, const std::string& clipId) {
@@ -325,19 +324,12 @@ private:
                                       voice.timestretch != state.timestretch))
             freeVoice(voice);
         if(voice.synth != nullptr) return;
-        // A missing file is looked for again every 2 s, not stat'ed per clip
-        // per server on every frame.
-        const uint64_t nowMs = ofGetElapsedTimeMillis();
-        auto missing = missingCheckedMs.find(state.filePath);
-        if(missing != missingCheckedMs.end() && nowMs - missing->second < 2000) return;
         const std::string path = resolvePath(state.filePath);
         if(!ofFile::doesFileExist(path)) {
-            missingCheckedMs[state.filePath] = nowMs;
             if(warnedMissingPaths.insert(path).second)
                 ofLogWarning("timelineWaveTrack") << "Wave file is unavailable to SuperCollider: " << path;
             return;
         }
-        if(missing != missingCheckedMs.end()) missingCheckedMs.erase(missing);
         voice.filePath = state.filePath;
         voice.numChannels = state.numChannels;
         voice.timestretch = state.timestretch;
