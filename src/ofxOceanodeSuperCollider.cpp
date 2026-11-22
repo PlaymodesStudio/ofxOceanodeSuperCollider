@@ -187,13 +187,9 @@ void setup(ofxOceanode &o){
 	for(size_t i = 0; i < servers.size(); ++i){
 		auto *server = servers[i]->getServer();
 		if(server == nullptr) continue;
-		const std::string name = label(i);
 		o.holdStartupSplash();
-		startupSplashListeners.push(server->serverBootedEvent.newListener([name]{
-			ofLogNotice(name) << "Server Booted";
-		}));
-		startupSplashListeners.push(server->serverInitializedEvent.newListener([&o, released, i, name]{
-			ofLogNotice(name) << "Server Initialized";
+		// (ofxSCServer logs "Server <port> booted / initialized" itself)
+		startupSplashListeners.push(server->serverInitializedEvent.newListener([&o, released, i]{
 			if(!(*released)[i]){
 				(*released)[i] = true;
 				o.releaseStartupSplash();
