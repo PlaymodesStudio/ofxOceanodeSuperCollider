@@ -11,10 +11,18 @@
 //    Server      — server index
 //    Time Window — how many seconds of history to display (0.001–1 s)
 //    Gain        — scale factor applied to both axes
-//    Trails      — number of frames to keep (persistence / afterglow)
-//    Dot Size    — radius of each plotted point
+//    Trails      — most frames kept (a cap for Fade)
+//    Fade        — seconds a drawn trace takes to fade out
+//    Stroke      — line width / point size in screen pixels (1 = one pixel at any size)
+//    Draw        — "Lines" joins the samples; "Points" plots each sample as a dot
+//                  (like Reaktor's XY scope)
+//    Dot Size    — radius of the newest point
 //    Color       — line/dot colour
+//    Axes        — "X / Y": channel 0 across, channel 1 up;
+//                  "L / R-L": channel 0 across, channel 1 minus channel 0 up,
+//                  the XY display of the Reaktor ensemble t'wanGer
 //
+//  In a custom GUI's CustomRegion widget the display fills the region.
 //  Inspector parameters:
 //    Widget Width / Height
 //
@@ -55,8 +63,12 @@ public:
             servers.empty() ? 0 : (int)servers.size() - 1));
         addParameter(timeWindow.set("Time Window", 0.02f, 0.001f, 1.0f));
         addParameter(gain.set("Gain",       1.0f,  0.01f, 10.0f));
-        addParameter(trails.set("Trails",   8,     1,     64));
+        addParameter(trails.set("Trails",   256,   1,     1024));
+        addParameter(fade.set("Fade",       0.25f, 0.f,   10.f));
+        addParameter(stroke.set("Stroke",   1.f,   0.5f,  10.f));
         addParameter(dotSize.set("Dot Size",2.0f,  0.5f,  10.0f));
+        addParameterDropdown(axes, "Axes", 0, {"X / Y", "L / R-L"});
+        addParameterDropdown(drawMode, "Draw", 0, {"Lines", "Points"});
         addParameter(lineColor.set("Color",
             ofColor(0, 220, 180, 200),
             ofColor(0,   0,   0, 0),
@@ -115,9 +127,13 @@ public:
         }
 
         // Push frame into trail deque
-        history.push_back({ xBuf, yBuf });
+        const float now = ofGetElapsedTimef();
+        history.push_back({ xBuf, yBuf, now });
         int maxTrails = trails.get();
         while((int)history.size() > maxTrails)
+            history.pop_front();
+        // frames older than Fade are gone (Fade 0 keeps only the newest)
+        while(history.size() > 1 && now - history.front().time > fade.get())
             history.pop_front();
     }
 
@@ -136,8 +152,12 @@ private:
     ofParameter<float>      timeWindow;
     ofParameter<float>      gain;
     ofParameter<int>        trails;
+    ofParameter<float>      fade;
+    ofParameter<float>      stroke;
     ofParameter<float>      dotSize;
     ofParameter<ofColor>    lineColor;
+    ofParameter<int>        axes;
+    ofParameter<int>        drawMode;
     ofParameter<float>      widgetWidth;
     ofParameter<float>      widgetHeight;
 
@@ -148,6 +168,7 @@ private:
     // ── State ───────────────────────────────────────────────────────────────
     struct Frame {
         std::array<float, SAMPLES_PER_CH> x, y;
+        float time = 0;
     };
     std::deque<Frame>       history;
     vector<serverManager*>  servers;
@@ -210,8 +231,9 @@ private:
         ImDrawList* dl     = ImGui::GetWindowDrawList();
         ImVec2      cursor = ImGui::GetCursorScreenPos();
 
-        const float W  = widgetWidth.get() * zoom;
-        const float H  = widgetHeight.get() * zoom;
+        const auto& region = ofxOceanodeShared::getCustomRegionRenderContext();
+        const float W  = region.active ? std::max(1.f, region.width - 4.f * zoom) : widgetWidth.get() * zoom;
+        const float H  = region.active ? std::max(1.f, region.height - 8.f * zoom) : widgetHeight.get() * zoom;
         const float xS = cursor.x + 2.f * zoom;
         const float yS = cursor.y + 2.f * zoom;
         const float xE = xS + W;
@@ -239,35 +261,49 @@ private:
         }
 
         const float g     = gain.get();
+        const bool  diffY = axes.get() == 1;   // Y = channel 1 - channel 0
         const float ds    = dotSize.get();
         const int   nFr   = (int)history.size();
         const ofColor& col = lineColor.get();
-        const int maxTrailFrames = trails.get();
+        const float now = ofGetElapsedTimef();
+        const float fadeTime = fade.get();
+        const float lineW = stroke.get();
 
         for(int fi = 0; fi < nFr; fi++) {
             const Frame& fr = history[fi];
-            // Older frames are more transparent
-            float ageFrac = (float)(fi + 1) / (float)nFr; // 0=oldest, 1=newest
-            ImU32 c = IM_COL32(
-                col.r,
-                col.g,
-                col.b,
-                (int)(col.a * ageFrac * ageFrac)  // quadratic fade
-            );
+            // a trace fades out linearly over Fade seconds
+            const float life = (fi == nFr - 1 || fadeTime <= 0.f) ? 1.f
+                             : ofClamp(1.f - (now - fr.time) / fadeTime, 0.f, 1.f);
+            if(life <= 0.f) continue;
+            ImU32 c = IM_COL32(col.r, col.g, col.b, (int)(col.a * life));
 
+            if(drawMode.get() == 1) {
+                // one dot per sample, Stroke pixels square
+                const float h = std::max(0.5f, lineW * 0.5f);
+                for(int s = 0; s < SAMPLES_PER_CH; s++) {
+                    const float yv = diffY ? fr.y[s] - fr.x[s] : fr.y[s];
+                    const float px = cx + ofClamp(fr.x[s] * g, -1.f, 1.f) * rx;
+                    const float py = cy - ofClamp(yv * g, -1.f, 1.f) * ry;
+                    dl->AddRectFilled(ImVec2(px - h, py - h), ImVec2(px + h, py + h), c);
+                }
+                continue;
+            }
             // Draw polyline connecting the 64 samples in this frame
             for(int s = 0; s < SAMPLES_PER_CH - 1; s++) {
+                const float ya = diffY ? fr.y[s]   - fr.x[s]   : fr.y[s];
+                const float yb = diffY ? fr.y[s+1] - fr.x[s+1] : fr.y[s+1];
                 float x1 = cx + ofClamp(fr.x[s]   * g, -1.f, 1.f) * rx;
-                float y1 = cy - ofClamp(fr.y[s]   * g, -1.f, 1.f) * ry;
+                float y1 = cy - ofClamp(ya * g, -1.f, 1.f) * ry;
                 float x2 = cx + ofClamp(fr.x[s+1] * g, -1.f, 1.f) * rx;
-                float y2 = cy - ofClamp(fr.y[s+1] * g, -1.f, 1.f) * ry;
-                dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), c, ds * 0.5f * zoom);
+                float y2 = cy - ofClamp(yb * g, -1.f, 1.f) * ry;
+                dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), c, lineW);
             }
 
             // Brightest dot at the newest sample of newest frame
             if(fi == nFr - 1) {
                 float xp = cx + ofClamp(fr.x[SAMPLES_PER_CH-1] * g, -1.f, 1.f) * rx;
-                float yp = cy - ofClamp(fr.y[SAMPLES_PER_CH-1] * g, -1.f, 1.f) * ry;
+                const float yl = diffY ? fr.y[SAMPLES_PER_CH-1] - fr.x[SAMPLES_PER_CH-1] : fr.y[SAMPLES_PER_CH-1];
+                float yp = cy - ofClamp(yl * g, -1.f, 1.f) * ry;
                 dl->AddCircleFilled(ImVec2(xp, yp), ds * zoom, IM_COL32(col.r, col.g, col.b, col.a));
             }
         }
