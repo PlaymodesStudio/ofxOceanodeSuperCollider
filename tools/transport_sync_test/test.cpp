@@ -131,6 +131,19 @@ int main(){
         }
         assert(count==4);
     }
+    // An external clock's smoothed tempo jitters every frame: only the
+    // periodic corrections go out (not one anchor per frame), while a real
+    // tempo change still anchors at once.
+    {
+        Follower follower;int anchors=0;
+        for(int i=0;i<600;++i){
+            const float bpm=120.f+((i%2)?0.02f:-0.02f);
+            anchors+=int(follower.poll(frame(i/60.,bpm)).size());
+        }
+        assert(anchors<=8);
+        auto out=follower.poll(frame(10.0,121));
+        assert(!out.empty() && out[0].bpm==121.f);
+    }
     assert(ofxSCServer::tag==0 && ofxSCServer::offset==0);
-    std::cout<<"PASS: periodic deadlines at 30/135/240 BPM, exact loop wraps, short loops, pending-anchor replacement for six edits, loop removal/refresh, genuine late deadlines and NRT cadence.\n";
+    std::cout<<"PASS: periodic deadlines at 30/135/240 BPM, exact loop wraps, short loops, pending-anchor replacement for six edits, loop removal/refresh, genuine late deadlines, NRT cadence and no re-anchoring on clock jitter.\n";
 }
