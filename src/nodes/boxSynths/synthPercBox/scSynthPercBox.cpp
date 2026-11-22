@@ -26,6 +26,9 @@ ImU32 genCol(int g, int a = 255, float k = 1.0f) {
     return IM_COL32(int(GEN_RGB[g][0] * k), int(GEN_RGB[g][1] * k), int(GEN_RGB[g][2] * k), a);
 }
 float zoom() { return ofxOceanodeShared::getZoomLevel(); }
+// the rows' own scale: knobs, pads, envelopes (user: a third bigger than the first version)
+constexpr float ROW_SCALE = 1.33f;
+float ui() { return zoom() * ROW_SCALE; }
 bool liveBus(ofxSCServer* s, ofxSCBus* b, bool audio) {
     if(!s || !b || b->index < 0) return false;
     auto& buses = audio ? s->audioBusses : s->controlBusses;
@@ -432,7 +435,7 @@ void scSynthPercBox::presetRecallAfterSettingParameters(ofJson& j) {
 // A small knob: drag up / down (Shift: fine), double-click: the factory pad 1 value,
 // right-click: type a value. Returns true when changed.
 bool scSynthPercBox::knob(const char* id, float& v, float lo, float hi, float step, const char* label, const char* tip, float defValue) {
-    const float z = zoom();
+    const float z = ui();
     const float r = 9.0f * z, cellW = 34.0f * z, cellH = 2 * r + 13.0f * z;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -469,7 +472,7 @@ bool scSynthPercBox::knob(const char* id, float& v, float lo, float hi, float st
     dl->PathStroke(ImGui::GetColorU32(ImGuiCol_SliderGrabActive), 0, 2.0f * z);
     dl->AddLine(c, ImVec2(c.x + std::cos(a) * (r - 2.5f * z), c.y + std::sin(a) * (r - 2.5f * z)), pal::needle, 1.5f * z);
     ImFont* font = ImGui::GetFont();
-    const float fs = ImGui::GetFontSize() * 0.78f;
+    const float fs = ImGui::GetFontSize() * 0.95f;
     const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0, label);
     dl->AddText(font, fs, ImVec2(c.x - ts.x * 0.5f, p.y + 2 * r + 2.0f * z), pal::textDim, label);
     if(ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetTooltip("%s", tip);
@@ -481,7 +484,7 @@ bool scSynthPercBox::knob(const char* id, float& v, float lo, float hi, float st
 // ks = the generator's A, D, [S], R parameter indices (Reaktor log times; S linear).
 bool scSynthPercBox::envelope(int g, const std::vector<int>& ks, float w, float h) {
     auto& gen = gens[g];
-    const float z = zoom();
+    const float z = ui();
     const bool hasS = ks.size() == 4;
     const int kA = ks[0], kD = ks[1], kS = hasS ? ks[2] : -1, kR = ks.back();
     const auto& P = gen.data->params;
@@ -551,7 +554,7 @@ bool scSynthPercBox::envelope(int g, const std::vector<int>& ks, float w, float 
 
 void scSynthPercBox::drawWindow() {
     const float z = zoom();
-    ImGui::SetNextWindowSize(ImVec2(1180 * z, 720 * z), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1500 * z, 900 * z), ImGuiCond_FirstUseEver);
     bool open = show.get();
     if(!ImGui::Begin(getWindowId().c_str(), &open)) { ImGui::End(); if(!open) show = false; return; }
     if(!open) { show = false; ImGui::End(); return; }
@@ -579,7 +582,7 @@ void scSynthPercBox::drawWindow() {
 void scSynthPercBox::drawRow(int g, float w) {
     auto& gen = gens[g];
     const auto& P = gen.data->params;
-    const float z = zoom();
+    const float z = ui();
     const float knobH = 2 * 9.0f * z + 13.0f * z, rowH = 2 * knobH + 16.0f * z;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 o = ImGui::GetCursorScreenPos();
@@ -639,7 +642,7 @@ void scSynthPercBox::drawRow(int g, float w) {
         if(lit > 0) dl->AddRectFilled(a, b, genCol(g, int(220 * lit)), 3.0f * z);
         dl->AddRect(a, b, sel ? pal::needle : pal::border, 3.0f * z, 0, sel ? 1.5f * z : 1.0f);
         const std::string num = ofToString(p + 1);
-        const float fs = ImGui::GetFontSize() * 0.7f;
+        const float fs = ImGui::GetFontSize() * 0.9f;
         const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, num.c_str());
         dl->AddText(ImGui::GetFont(), fs, ImVec2(a.x + (cell - ts.x) * 0.5f, a.y + (cell - ts.y) * 0.5f),
                     gen.stored[p] ? pal::text : pal::textDim, num.c_str());
@@ -683,7 +686,7 @@ void scSynthPercBox::drawRow(int g, float w) {
         const int cols = (int(ks.size()) + 1) / 2;
         const float envW = env.empty() ? 0 : 86 * z;
         const float secW = cols * cellW + envW + (cols && !env.empty() ? 4 * z : 0);
-        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.75f, ImVec2(x, o.y + 3 * z), genCol(g, 200), sec.c_str());
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.95f, ImVec2(x, o.y + 3 * z), genCol(g, 200), sec.c_str());
         dl->AddLine(ImVec2(x + secW + 5 * z, o.y + 6 * z), ImVec2(x + secW + 5 * z, o.y + rowH - 6 * z), pal::border);
         float ex = x;
         for(int i = 0; i < int(ks.size()); ++i) {
@@ -701,7 +704,7 @@ void scSynthPercBox::drawRow(int g, float w) {
                 const ImVec2 bs(cellW - 3 * z, 18 * z);
                 ImGui::SetCursorScreenPos(ImVec2(cpos.x, cpos.y + 2 * z));
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1, 1));
-                ImGui::SetWindowFontScale(0.78f);
+                ImGui::SetWindowFontScale(0.95f);
                 if(ImGui::Button(opts[idx].c_str(), bs)) edit(g, k, float((idx + 1) % int(opts.size())));
                 ImGui::SetWindowFontScale(1.0f);
                 ImGui::PopStyleVar();
@@ -710,7 +713,7 @@ void scSynthPercBox::drawRow(int g, float w) {
                     for(int o2 = 0; o2 < int(opts.size()); ++o2) if(ImGui::MenuItem(opts[o2].c_str(), nullptr, o2 == idx)) edit(g, k, float(o2));
                     ImGui::EndPopup();
                 }
-                const float fs = ImGui::GetFontSize() * 0.78f;
+                const float fs = ImGui::GetFontSize() * 0.95f;
                 const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, p.label);
                 dl->AddText(ImGui::GetFont(), fs, ImVec2(cpos.x + (cellW - ts.x) * 0.5f, cpos.y + 2 * 9.0f * z + 2 * z), pal::textDim, p.label);
             } else if(p.kind == 't') {
@@ -718,7 +721,7 @@ void scSynthPercBox::drawRow(int g, float w) {
                 ImGui::SetCursorScreenPos(ImVec2(cpos.x + (cellW - ImGui::GetFrameHeight()) * 0.5f, cpos.y + 1 * z));
                 if(ImGui::Checkbox("##t", &on)) edit(g, k, on ? 1.0f : 0.0f);
                 if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s %s", p.label, on ? "on" : "off");
-                const float fs = ImGui::GetFontSize() * 0.78f;
+                const float fs = ImGui::GetFontSize() * 0.95f;
                 const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, p.label);
                 dl->AddText(ImGui::GetFont(), fs, ImVec2(cpos.x + (cellW - ts.x) * 0.5f, cpos.y + 2 * 9.0f * z + 2 * z), pal::textDim, p.label);
             } else {
