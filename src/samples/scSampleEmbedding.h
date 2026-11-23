@@ -44,6 +44,69 @@ inline std::string resolve(const std::string& stored, const std::string& presetR
     return ofToDataPath(stored, true);
 }
 
+// ── Folders (a sample browser's folder) ─────────────────────────────────────
+// A project's data folder may be shared between machines (Dropbox), where its
+// absolute path differs. A folder inside it is saved relative to it; any
+// other folder keeps its absolute path.
+
+// The data folder, absolute, without a trailing separator.
+inline std::filesystem::path dataRoot() {
+    namespace fs = std::filesystem;
+    fs::path data = fs::path(ofToDataPath("", true)).lexically_normal();
+    if(!data.has_filename()) data = data.parent_path();
+    return data;
+}
+
+// `dir` as it is saved: relative to the data folder when inside it.
+inline std::string portableDir(const std::string& dir) {
+    namespace fs = std::filesystem;
+    if(dir.empty() || !fs::path(dir).is_absolute()) return dir;
+    // presetSave runs often (the preset's edit state): one answer per folder.
+    static std::map<std::string, std::string> cache;
+    const fs::path data = dataRoot();
+    const std::string key = data.string() + "\n" + dir;
+    const auto found = cache.find(key);
+    if(found != cache.end()) return found->second;
+    const auto inside = [](const fs::path& relative) {
+        return !relative.empty() && relative != "." && *relative.begin() != "..";
+    };
+    std::string result = dir;
+    fs::path given = fs::path(dir).lexically_normal();
+    if(!given.has_filename()) given = given.parent_path();
+    fs::path relative = given.lexically_relative(data);
+    if(!inside(relative)) {
+        // The same place by another name (a linked data folder).
+        std::error_code ec;
+        const fs::path realDir = fs::weakly_canonical(given, ec);
+        const fs::path realData = ec ? fs::path() : fs::weakly_canonical(data, ec);
+        relative = ec ? fs::path() : realDir.lexically_relative(realData);
+    }
+    if(inside(relative)) result = relative.generic_string();
+    if(cache.size() > 256) cache.clear();
+    cache[key] = result;
+    return result;
+}
+
+// Where a saved folder is on this machine. A relative one is inside the data
+// folder. An absolute one that is missing here, saved on another machine
+// inside its data folder (.../data/Supercollider/Samples), is the same folder
+// in this one. Anything else is returned as stored.
+inline std::string resolveDir(const std::string& stored) {
+    namespace fs = std::filesystem;
+    if(stored.empty()) return stored;
+    if(!fs::path(stored).is_absolute()) return ofToDataPath(stored, true);
+    std::error_code ec;
+    if(fs::exists(stored, ec)) return stored;
+    const fs::path data = dataRoot();
+    const std::string text = fs::path(stored).generic_string();
+    const std::string marker = "/" + data.filename().generic_string() + "/";
+    for(size_t at = text.find(marker); at != std::string::npos; at = text.find(marker, at + 1)) {
+        const fs::path here = data / text.substr(at + marker.size());
+        if(fs::is_directory(here, ec)) return here.string();
+    }
+    return stored;
+}
+
 // An embedded name: 16 lowercase hex digits (the content hash) + extension.
 inline bool isHashName(const std::filesystem::path& file) {
     const std::string stem = file.stem().string();

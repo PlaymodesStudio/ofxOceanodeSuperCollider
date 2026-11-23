@@ -45,12 +45,15 @@ private:
         std::string fullPath;
     };
     std::string              currentBrowseDir;
+    std::string              missingStoredDir;     // a loaded folder that is not on this machine...
+    std::string              dirShownForMissing;   // ...and the folder left open in its place
     std::vector<BrowseEntry> browseEntries;
     int                      focusIndex = -1;  // keyboard cursor in browseEntries
 
     // By value on purpose: callers pass entry.fullPath, a string inside the
     // very list this function clears first.
     void refreshBrowseDir(std::string dir);
+    void loadSavedBrowseDir(const std::string& stored);
 
     // ── Multi-selection ─────────────────────────────────────────────────────
     // Tracks which file entries are selected (indices into browseEntries).

@@ -269,12 +269,7 @@ void scBufferBrowser::presetSave(ofJson& json) {
 
 void scBufferBrowser::loadBeforeConnections(ofJson& json) {
     // Restore browse dir early so it's visible immediately
-    if(json.contains("browseDir")) {
-        std::string dir = json["browseDir"].get<std::string>();
-        if(std::filesystem::exists(dir)) {
-            refreshBrowseDir(dir);
-        }
-    }
+    if(json.contains("browseDir") && json["browseDir"].is_string()) loadSavedBrowseDir(json["browseDir"].get<std::string>());
     // Restore loadedFiles list so presetRecallAfterSettingParameters can use it
     if(json.contains("loadedFiles")) readFiles(json);
 }
@@ -284,7 +279,10 @@ void scBufferBrowser::loadBeforeConnections(ofJson& json) {
 // A temporary save (clipboard, encapsulate, canvas undo) keeps the plain
 // paths: its folder is deleted afterwards. Same rule as scRhythmBox.
 void scBufferBrowser::saveFiles(ofJson& json, const std::string& folder) {
-    json["browseDir"] = currentBrowseDir;
+    // Portable: relative inside the data folder. A saved folder that is
+    // missing here is saved back as it was stored, until another is opened.
+    json["browseDir"] = (!missingStoredDir.empty() && currentBrowseDir == dirShownForMissing)
+        ? missingStoredDir : scSampleEmbedding::portableDir(currentBrowseDir);
     std::string root;
     if(embedSamples.get() && !folder.empty() && scSampleEmbedding::isDurableSaveFolder(folder)) {
         // Under Presets/ (the patch itself or a local macro in it) the samples
@@ -316,12 +314,7 @@ void scBufferBrowser::macroSave(ofJson& json, string path) {
 }
 
 void scBufferBrowser::macroLoad(ofJson& json, string /*path*/) {
-    if(json.contains("browseDir")) {
-        std::string dir = json["browseDir"].get<std::string>();
-        if(std::filesystem::exists(dir)) {
-            refreshBrowseDir(dir);
-        }
-    }
+    if(json.contains("browseDir") && json["browseDir"].is_string()) loadSavedBrowseDir(json["browseDir"].get<std::string>());
     if(json.contains("loadedFiles")) {
         readFiles(json);
         // Reload buffers from restored file list
@@ -382,6 +375,22 @@ void scBufferBrowser::presetRecallAfterSettingParameters(ofJson& json) {
 // ════════════════════════════════════════════════════════════════════════════
 // File browser
 // ════════════════════════════════════════════════════════════════════════════
+
+// The saved folder (relative to the data folder, or an absolute path from an
+// older save, maybe another machine's). One that is missing here leaves the
+// current folder open, and is kept to be saved back unchanged.
+void scBufferBrowser::loadSavedBrowseDir(const std::string& stored) {
+    if(stored.empty()) return;
+    const std::string dir = scSampleEmbedding::resolveDir(stored);
+    std::error_code ec;
+    if(std::filesystem::is_directory(dir, ec)) {
+        missingStoredDir.clear();
+        refreshBrowseDir(dir);
+    } else {
+        missingStoredDir   = stored;
+        dirShownForMissing = currentBrowseDir;
+    }
+}
 
 void scBufferBrowser::refreshBrowseDir(std::string dir) {
     browseEntries.clear();

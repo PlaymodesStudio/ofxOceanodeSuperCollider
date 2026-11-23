@@ -4323,7 +4323,7 @@ void scGrainBoxPoly::presetSave(ofJson& j) {
     Playhead& p0 = ph0();
     j["embedSamples"] = embedSamples.get();
     j["samplePath"] = mainSample.path;   // embedded in macroSave (it knows the folder)
-    j["browseDir"]   = browser.getDir();
+    j["browseDir"]   = browser.getSavedDir();   // portable: relative inside the data folder
     // Playheads 2+: sample mode and own sample ("sampleOwn 2", "samplePath 2"...)
     for(auto& ph : playheads) {
         if(ph->index == 0) continue;
@@ -4405,10 +4405,7 @@ void scGrainBoxPoly::loadBeforeConnections(ofJson& j) {
     scDroneMode::migrate(j);
     loadingPreset = true;    // cleared in presetRecallAfterSettingParameters / presetHasLoaded
     deserializeParameter(j, syncToTransportP);
-    if(j.contains("browseDir") && j["browseDir"].is_string()) {
-        std::string d = j["browseDir"].get<std::string>();
-        if(std::filesystem::exists(d)) browser.refresh(d);
-    }
+    if(j.contains("browseDir") && j["browseDir"].is_string()) browser.loadSavedDir(j["browseDir"].get<std::string>());
     // Playheads first: their published parameters must exist before connections.
     int n = 1;
     if(j.contains("numPlayheads") && j["numPlayheads"].is_number()) n = j["numPlayheads"].get<int>();
@@ -4575,10 +4572,7 @@ void scGrainBoxPoly::presetRecallAfterSettingParameters(ofJson& j) {
                 if(!srv || !b || b->index < 0 || b->index >= (int)srv->buffers.size() || srv->buffers[b->index] != b) live = false;
         if(path != mainSample.path || !live) loadSample(path);
     }
-    if(j.contains("browseDir") && j["browseDir"].is_string()) {
-        std::string d = j["browseDir"].get<std::string>();
-        if(std::filesystem::exists(d)) browser.refresh(d);
-    }
+    if(j.contains("browseDir") && j["browseDir"].is_string()) browser.loadSavedDir(j["browseDir"].get<std::string>());
     // Live input (any playhead; "sampleLive", "sampleLive 2"...; old presets: off)
     for(auto& ph : playheads) {
         const std::string liveKey = "sampleLive" + ph->sfx;

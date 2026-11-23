@@ -5161,7 +5161,7 @@ static int inferRhythmBoxTrackCount(const ofJson& j, int fallback) {
 }
 
 void scRhythmBox::serializeSlots(ofJson& j) const {
-    j["browseDir"]   = browser.getDir();
+    j["browseDir"]   = browser.getSavedDir();   // portable: relative inside the data folder
     j["currentSlot"] = currentSlotP.get();
     j["numTracks"]   = numTracks;
     j["swingAmount"] = swingP.get();
@@ -5191,10 +5191,7 @@ void scRhythmBox::serializeSlots(ofJson& j) const {
 }
 
 void scRhythmBox::deserializeSlots(const ofJson& j) {
-    if(j.contains("browseDir")) {
-        std::string d = j["browseDir"].get<std::string>();
-        if(std::filesystem::exists(d)) refreshBrowse(d);
-    }
+    if(j.contains("browseDir") && j["browseDir"].is_string()) browser.loadSavedDir(j["browseDir"].get<std::string>());
 
     const int savedTrackCount = inferRhythmBoxTrackCount(j, numTracks);
     if(savedTrackCount != numTracks)
@@ -5301,10 +5298,7 @@ void scRhythmBox::loadBeforeConnections(ofJson& j) {
     timeline.load(j, "rhythmBoxTimeline");
     if(j.contains("rhythmBoxSnapPublished") && j["rhythmBoxSnapPublished"].is_array())
         for(const auto& k : j["rhythmBoxSnapPublished"]) if(k.is_string()) publishSnap(k.get<std::string>());
-    if(j.contains("browseDir")) {
-        std::string d = j["browseDir"].get<std::string>();
-        if(std::filesystem::exists(d)) refreshBrowse(d);
-    }
+    if(j.contains("browseDir") && j["browseDir"].is_string()) browser.loadSavedDir(j["browseDir"].get<std::string>());
     // Output ports (Out 1..N) must exist before Oceanode reconstructs connections.
     // numTracksP listener fires during presetRecallAfterSettingParameters which is
     // called AFTER connections are remade, so we must add the ports here instead.

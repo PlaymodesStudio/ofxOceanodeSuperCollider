@@ -36,6 +36,7 @@
 #include "ofxSCBuffer.h"
 #include "imgui.h"
 #include "scFreesound.h"
+#include "scSampleEmbedding.h"
 #include <algorithm>
 #include <filesystem>
 #include <functional>
@@ -69,6 +70,31 @@ public:
     bool isFreesoundMode() const                   { return freesoundMode; }
     void setFreesoundMode(bool on)                 { freesoundMode = on; }
     void setSelection(int i)                       { browserSel = i; }
+
+    // The folder as a node saves it: relative to the data folder when inside
+    // it, so a project shared between machines holds no machine's own path
+    // (scSampleEmbedding::portableDir). A saved folder that is missing here
+    // is saved back as it was stored, until the user browses elsewhere.
+    std::string getSavedDir() const {
+        if(!missingStoredDir.empty() && browseDir == dirShownForMissing) return missingStoredDir;
+        return scSampleEmbedding::portableDir(browseDir);
+    }
+
+    // Open the folder a node saved (getSavedDir, or an absolute path from an
+    // older save, maybe another machine's). One that is missing here leaves
+    // the current folder open.
+    void loadSavedDir(const std::string& stored) {
+        if(stored.empty()) return;
+        const std::string dir = scSampleEmbedding::resolveDir(stored);
+        std::error_code ec;
+        if(std::filesystem::is_directory(dir, ec)) {
+            missingStoredDir.clear();
+            refresh(dir);
+        } else {
+            missingStoredDir   = stored;
+            dirShownForMissing = browseDir;
+        }
+    }
 
     // List `dir` (the current folder becomes `dir` even if it does not exist,
     // which then simply lists nothing).
@@ -332,6 +358,8 @@ private:
     std::string              payloadType;
 
     std::string        browseDir;
+    std::string        missingStoredDir;     // a loaded folder that is not on this machine...
+    std::string        dirShownForMissing;   // ...and the folder left open in its place
     std::vector<Entry> browseEntries;
     int                browserSel = -1;   // keyboard-selected entry index (-1 = none)
 

@@ -1614,7 +1614,7 @@ void scSampleBox::presetSave(ofJson& j) {
     j["embedSamples"] = embedSamples.get();   // the paths are embedded in macroSave
     j["sampleBoxPads"] = arr;
     j["sampleBoxSelected"] = selected;
-    j["sampleBoxBrowseDir"] = browser.getDir();
+    j["sampleBoxBrowseDir"] = browser.getSavedDir();   // portable: relative inside the data folder
     j["sampleBoxPublished"] = publishedKeys;
     timeline.save(j, "sampleBoxTimeline");
     // the snapshot settings (not pad controls: saved here unless published)
@@ -1664,7 +1664,7 @@ void scSampleBox::presetRecallAfterSettingParameters(ofJson& j) {
     if(j.contains("sampleBoxWaveformHeight") && j["sampleBoxWaveformHeight"].is_number())
         waveformHeight = std::max(0.0f, j["sampleBoxWaveformHeight"].get<float>()) * ofxOceanodeShared::getZoomLevel();
     if(j.contains("sampleBoxBrowseDir") && j["sampleBoxBrowseDir"].is_string())
-        browser.refresh(j["sampleBoxBrowseDir"].get<std::string>());
+        browser.loadSavedDir(j["sampleBoxBrowseDir"].get<std::string>());
     if(j.contains("sampleBoxSnapshots")) snaps.loadSettings(j["sampleBoxSnapshots"]);
 }
 

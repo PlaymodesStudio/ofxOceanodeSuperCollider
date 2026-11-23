@@ -1358,7 +1358,7 @@ void scSlicerBox::presetSave(ofJson& json){
     const auto file = audio.path.empty() ? pendingPath : audio.path;
     json["file"] = file;   // embedded in macroSave (it knows the folder)
     json["points"] = points;
-    json["browseDir"] = browser.getDir();
+    json["browseDir"] = browser.getSavedDir();   // portable: relative inside the data folder
     storePattern();
     json["seqSlice"] = seqSlice;            // the shown pattern (presets from before patterns read only this)
     json["seqLen"] = seqLen;
@@ -1405,7 +1405,7 @@ void scSlicerBox::presetRecallAfterSettingParameters(ofJson& json){
         if(!file.empty() && file != audio.path) pendingDroppedFile = file;
         else if(file == audio.path) pointsFromPreset = false;
     }
-    if(json.contains("browseDir") && json["browseDir"].is_string()) browser.refresh(json["browseDir"].get<std::string>());
+    if(json.contains("browseDir") && json["browseDir"].is_string()) browser.loadSavedDir(json["browseDir"].get<std::string>());
     // the pattern bank; an older preset (one pattern) puts it in the
     // selected slot and leaves the others empty
     for(auto& p : seqBank) p = SeqNotes();

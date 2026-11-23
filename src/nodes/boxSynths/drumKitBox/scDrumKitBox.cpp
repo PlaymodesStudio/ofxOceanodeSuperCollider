@@ -1439,7 +1439,7 @@ void scDrumKitBox::presetSave(ofJson& j) {
     j["embedSamples"] = embedSamples.get();   // the paths are embedded in macroSave
     j["drumKitBoxPads"] = arr;
     j["drumKitBoxSelected"] = selected;
-    j["drumKitBoxBrowseDir"] = browser.getDir();
+    j["drumKitBoxBrowseDir"] = browser.getSavedDir();   // portable: relative inside the data folder
     j["drumKitBoxPublished"] = publishedKeys;
     timeline.save(j, "drumKitBoxTimeline");
     j["drumKitBoxSnapshots"] = snaps.settingsJson();
@@ -1486,7 +1486,7 @@ void scDrumKitBox::presetRecallAfterSettingParameters(ofJson& j) {
     if(j.contains("drumKitBoxBrowserWidth") && j["drumKitBoxBrowserWidth"].is_number())
         browserWidth = j["drumKitBoxBrowserWidth"].get<float>();
     if(j.contains("drumKitBoxBrowseDir") && j["drumKitBoxBrowseDir"].is_string())
-        browser.refresh(j["drumKitBoxBrowseDir"].get<std::string>());
+        browser.loadSavedDir(j["drumKitBoxBrowseDir"].get<std::string>());
     if(j.contains("drumKitBoxSnapshots")) snaps.loadSettings(j["drumKitBoxSnapshots"]);
 }
 
