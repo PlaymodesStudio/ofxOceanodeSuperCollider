@@ -23,7 +23,10 @@
 //    (4 written: the bass alone). The voices follow the music: Voice
 //    Mode Fixed, chord tone n on channel n (Polyphony + Extra on accents
 //    channels) and one per stacked bass octave; Round robin, as many more as
-//    notes overlap (longer than a step: each chord on the next voices). The GUI node's vectors
+//    notes overlap (longer than a step: each chord on the next voices); or
+//    when Voices is set, the vectors are exactly that many channels, bass
+//    included (the chords go round the rest: a synth with that many channels
+//    lets each release ring on). The GUI node's vectors
 //    (PitchOut, GateOut, VelOut, DurOut, GateVelOut: voices then bass;
 //    Total Voices: their size; EucGateOut / EucAccOut / EucDurOut: the
 //    cycle's lanes) at frame rate.
@@ -657,6 +660,7 @@ private:
         ctlI("polyInterval", polyInterval.set("Poly Interval", 2, 1, 24));
         ctlI("polyAccent", polyAccent.set("Poly Accent", 0, 0, MAX_POLY - 1));
         ctlI("voiceMode", voiceMode.set("Voice Mode", 0, 0, 1), voiceModeNames());
+        ctlI("rrVoices", rrVoices.set("Voices", 0, 0, NV));
         ctlB("trigAmp", trigAmp.set("Trig Amp", false));
         // bass
         ctlB("addBass", addBass.set("Add Bass", false));
@@ -830,10 +834,19 @@ private:
         const int bv = bassVoiceCount();
         return "Voices " + ofToString(chordVoices()) + (bv > 0 ? " + bass " + ofToString(bv) : "");
     }
+    static const char* rrVoicesTip(){
+        return "The vectors' size, fixed (0: as many as the notes need): give the synth\n"
+               "as many channels. With the bass on, its channels (one per octave stacked)\n"
+               "are the last of them; the chords go round the others, each note on the\n"
+               "next voice, so a voice comes round again only after (Voices - bass) /\n"
+               "chord size steps: room for the synth's release.\n"
+               "More notes than voices at once: the oldest is cut.";
+    }
     static const char* voicesTip(){
         return "Set by the music: one per chord tone (Polyphony + Extra on accents),\n"
                "then one per bass octave stacked (Add bass), last in the vectors.\n"
-               "Round robin: more only when notes outlast a step (to overlap, not cut).\n"
+               "Round robin: more when notes outlast a step (to overlap, not cut),\n"
+               "or, when Voices is set, exactly that many in all (bass included).\n"
                "Audio: Pitch / Gate carry both (as the vectors),\n"
                "Bass Pitch / Gate the bass alone.";
     }
@@ -843,10 +856,17 @@ private:
     // the next voices, not cut by the next one; up to a step: the same)
     int chordTones() const { return std::clamp(polyphony.get() + std::max(0, polyAccent.get()), 1, NV); }
     int voiceOverlap() const { return voiceMode.get() == 0 ? 1 : engine.overlap(); }
-    int chordVoices() const { return std::min(NV, chordTones() * voiceOverlap()); }
+    // Round robin with Voices set: the vectors are that many channels whatever
+    // the music (a synth's channels can't follow a changing count): the bass's
+    // (one per octave stacked) are taken from them, the chords go round the rest
+    bool fixedRoundRobin() const { return voiceMode.get() == 1 && rrVoices.get() > 0; }
+    int chordVoices() const {
+        if(fixedRoundRobin()) return std::clamp(rrVoices.get() - bassVoiceCount(), 1, NV);
+        return std::min(NV, chordTones() * voiceOverlap());
+    }
     int bassVoiceCount() const {
         if(!addBass) return 0;
-        return std::min(NB, std::clamp(bassPoly.get(), 1, NB) * voiceOverlap());
+        return std::min(NB, std::clamp(bassPoly.get(), 1, NB) * (fixedRoundRobin() ? 1 : voiceOverlap()));
     }
     // A bass slot's channel in Trig / Gate / Pitch too, after the chord voices
     // (as in the vectors), when it fits in their 16; else (and for a chord slot) -1
@@ -1513,11 +1533,12 @@ private:
     }
     ofJson captureValues() const {
         ofJson v = ofJson::object();
-        for(const auto& c : controls) if(c.key != "morphTime" && c.key != "voices" && c.key != "clockMode") v[c.key] = c.save();
+        for(const auto& c : controls) if(recalled(c.key)) v[c.key] = c.save();
         return v;
     }
     // the clock, the outputs stay as set
-    static bool recalled(const std::string& key){ return key != "morphTime" && key != "voices" && key != "clockMode"; }
+    // (and Voices: set for the synth it drives, like its N Chan)
+    static bool recalled(const std::string& key){ return key != "morphTime" && key != "voices" && key != "clockMode" && key != "rrVoices"; }
     // A blend of two snapshots: numbers glide, the rest switch at the switch point
     void applySnapshots(const ofJson& a, const ofJson& b, float t, bool sw){
         static const ofJson none = ofJson::object();
@@ -1749,7 +1770,15 @@ private:
         int vm = voiceMode.get();
         if(ImGui::Combo("##abVM", &vm, "Voices: fixed\0Voices: round robin\0")) voiceMode = vm;
         controlMenu("voiceMode");
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Fixed: chord tone n on channel n (a long note is cut by the next)\nRound robin: notes longer than a step take the next voices (no cut)");
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("Fixed: chord tone n on channel n (a long note is cut by the next)\nRound robin: each note on the next voice (Voices: exactly that many, round them all)");
+        if(voiceMode.get() == 1){
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(90);
+            int mv = rrVoices.get();
+            if(ImGui::SliderInt("##abRRV", &mv, 0, NV, mv == 0 ? "Voices: auto" : "Voices: %d")) rrVoices = mv;
+            controlMenu("rrVoices");
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", rrVoicesTip());
+        }
         ImGui::SameLine(0, 16);
         if(ImGui::Button("Reset")) doReset(true);
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("Step 0 on the next pulse (re-arms One Shot)");
@@ -2286,6 +2315,10 @@ private:
                 ImGui::Spacing();
                 heading("Outputs");
                 combo("voiceMode", voiceMode, "Voice mode", voiceModeNames());
+                if(voiceMode.get() == 1){
+                    sliderI("rrVoices", rrVoices, "Voices");
+                    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", rrVoicesTip());
+                }
                 ImGui::TextDisabled("%s", voicesText().c_str());
                 if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s", voicesTip());
                 check("trigAmp", trigAmp, "Trig carries velocity");
@@ -2558,7 +2591,7 @@ private:
     ofParameter<int> octave, octaveFold, expandStep, transpose, octaveDevRng, idxDevRng, pitchDevRng;
     ofParameter<bool> foldPoly, pitchExpand;
     ofParameter<float> octaveDev, idxDev, pitchDev;
-    ofParameter<int> polyphony, polyInterval, polyAccent, voiceMode;
+    ofParameter<int> polyphony, polyInterval, polyAccent, voiceMode, rrVoices;
     ofParameter<bool> trigAmp;
     ofParameter<bool> addBass, bassInvert, bassOctRndCycle, bassPitchMod;
     ofParameter<int> bassMode, bassEvery, bassShift, bassEucLen, bassEucHits, bassEucOff, bassOctave, bassOctRnd, bassOctRndSeed, bassPoly;
